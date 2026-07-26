@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Mission Control · Inbox Zero — Concept</title>
+<meta name="viewport" content="width=1440">
+<!-- No external font loading — the app's CSP blocks Google Fonts. -->
+<style>
+  :root {
+    --canvas: #f6f6f8; --canvas-sunken: #eeeef1;
+    --surface: #fdfdfd; --surface-hover: #f4f4f5; --sidebar: #f4f4f6; --topbar: #fbfbfc;
+    --border-hairline: rgba(15, 15, 20, 0.06); --border-default: rgba(15, 15, 20, 0.10); --border-strong: rgba(15, 15, 20, 0.16);
+    --text-primary: #17181b; --text-secondary: rgba(23, 24, 27, 0.72); --text-muted: rgba(23, 24, 27, 0.55); --text-subtle: rgba(23, 24, 27, 0.38); --text-inverse: #fdfdfe;
+    --success: #166534; --success-bg: rgba(22, 101, 52, 0.10);
+    --warning: #b45309; --warning-bg: rgba(180, 83, 9, 0.10);
+    --accent: #2f5832; --accent-hover: #213a22; --accent-soft: rgba(47, 88, 50, 0.10); --accent-ring: rgba(47, 88, 50, 0.28);
+    --radius-card: 10px; --radius-pill: 999px; --radius-button: 6px;
+    --sans: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; font-feature-settings: "cv11" 1, "ss01" 1; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; }
+
+  /* Shell — same as index.html */
+  .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--border-hairline); display: flex; flex-direction: column; }
+  .sidebar .id { padding: 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-hairline); }
+  .sidebar .id .avatar { width: 32px; height: 32px; border-radius: 6px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+  .sidebar .id .wm { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+  .sidebar .id .name { margin-top: 2px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .sidebar .search-btn { margin: 12px 12px 4px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border-default); color: var(--text-muted); font-size: 13px; }
+  .sidebar .search-btn .kbd { margin-left: auto; padding: 2px 6px; font-family: var(--mono); font-size: 11px; background: var(--surface); border: 1px solid var(--border-default); border-radius: 4px; }
+  .sidebar nav { padding: 8px 8px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 2px 0; border-radius: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 500; position: relative; }
+  .nav-item.active { background: var(--accent-soft); color: var(--text-primary); }
+  .nav-item.active::before { content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); }
+  .nav-item.active .icon { color: var(--accent); }
+  .nav-item .icon { width: 16px; height: 16px; opacity: 0.72; }
+  .nav-section-h { padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--text-muted); }
+  .topbar { height: 64px; display: flex; align-items: center; padding: 0 16px; background: var(--topbar); border-bottom: 1px solid var(--border-hairline); gap: 12px; }
+  .crumbs { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 13px; flex: 1; }
+  .crumbs .sep { color: var(--text-subtle); }
+  .crumbs .leaf { color: var(--text-primary); font-weight: 500; }
+  .topbar .controls { display: flex; align-items: center; gap: 4px; }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: transparent; border: none; color: var(--text-secondary); }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .avatar-btn { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border-radius: 6px; background: transparent; border: none; color: var(--text-primary); font-size: 13px; font-weight: 500; }
+  .avatar-btn:hover { background: var(--surface-hover); }
+  .avatar-btn .a { width: 24px; height: 24px; border-radius: 999px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
+  .divider-v { width: 1px; height: 20px; background: var(--border-hairline); margin: 0 6px; }
+  main { padding: 24px 32px 40px; }
+  .page-header { margin-bottom: 20px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .page-header h1 { font-size: 24px; line-height: 32px; letter-spacing: -0.015em; font-weight: 600; color: var(--text-primary); }
+  .page-header .sub { margin-top: 2px; font-size: 13px; color: var(--text-secondary); }
+  .page-header .status { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .page-header .status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--success); }
+
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 24px; align-items: start; }
+
+  /* Zero state — the signature moment */
+  .zero {
+    background: var(--surface);
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-card);
+    padding: 56px 56px 48px;
+    min-height: 560px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+  }
+  .zero::before {
+    content: "";
+    position: absolute; top: 24px; left: 24px;
+    width: 8px; height: 8px; border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .zero .headline {
+    font-size: 32px; line-height: 40px; letter-spacing: -0.02em; font-weight: 600; color: var(--text-primary);
+    max-width: 620px;
+  }
+  .zero .lead {
+    margin-top: 12px; font-size: 15px; line-height: 24px; color: var(--text-secondary); max-width: 640px;
+  }
+  .zero .breakdown {
+    margin-top: 40px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border-hairline);
+  }
+  .zero .breakdown .col .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
+  .zero .breakdown .col .n { margin-top: 4px; font-size: 22px; line-height: 1; letter-spacing: -0.015em; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .zero .breakdown .col .n.auto { color: var(--success); }
+  .zero .breakdown .col .n.approved { color: var(--accent); }
+  .zero .breakdown .col .meta { margin-top: 3px; font-size: 12px; color: var(--text-muted); line-height: 16px; }
+  .zero .next {
+    margin-top: 40px;
+    padding: 14px 18px;
+    background: var(--canvas-sunken);
+    border-radius: var(--radius-card);
+    font-size: 13px; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .zero .next .k {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600;
+  }
+  .zero .next .body { flex: 1; color: var(--text-primary); }
+  .zero .next .body strong { font-weight: 600; }
+  .zero .next .t { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
+
+  /* Rail — same as index.html */
+  .rail { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 24px; }
+  .rail-card { background: var(--surface); border: 1px solid var(--border-hairline); border-radius: var(--radius-card); padding: 16px 18px; }
+  .rail-h { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+  .rail-h .now { font-family: var(--mono); font-size: 10px; color: var(--text-muted); font-weight: 500; }
+  .position .row { display: flex; align-items: baseline; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-hairline); }
+  .position .row:last-child { border-bottom: none; }
+  .position .row .k { font-size: 12px; color: var(--text-muted); }
+  .position .row .v { font-size: 14px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .position .row .v .tone { font-size: 11px; font-weight: 500; margin-left: 4px; }
+  .position .row .v .tone.good { color: var(--success); }
+  .insight .text { font-size: 13px; line-height: 19px; color: var(--text-primary); }
+  .insight .source { margin-top: 10px; font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .insight .link { color: var(--accent); font-weight: 500; text-decoration: none; }
+  .commit .row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-hairline); align-items: baseline; }
+  .commit .row:last-child { border-bottom: none; }
+  .commit .row .t { font-family: var(--mono); font-size: 11px; color: var(--text-muted); min-width: 46px; }
+  .commit .row .body { flex: 1; min-width: 0; }
+  .commit .row .body .title { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+  .commit .row .body .meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="id">
+      <div class="avatar">S</div>
+      <div><div class="wm">Spectre</div><div class="name">Silver Springs</div></div>
+    </div>
+    <button class="search-btn"><span>🔍</span><span>Search</span><span class="kbd">⌘K</span></button>
+    <nav>
+      <a class="nav-item active"><span class="icon">◈</span><span>Mission Control</span></a>
+      <div class="nav-section-h">Domains</div>
+      <a class="nav-item"><span class="icon">○</span><span>Membership</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Finance</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Operations</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Governance</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Hospitality</span></a>
+      <div class="nav-section-h">Personal</div>
+      <a class="nav-item"><span class="icon">○</span><span>My MFA</span></a>
+    </nav>
+  </aside>
+  <div>
+    <header class="topbar">
+      <nav class="crumbs">
+        <span>App</span><span class="sep">›</span><span>Admin</span><span class="sep">›</span><span class="leaf">Mission Control</span>
+      </nav>
+      <div class="controls">
+        <button class="icon-btn" title="Search">🔍</button>
+        <button class="icon-btn" title="Notifications">🔔</button>
+        <button class="icon-btn" title="Theme">☀</button>
+        <div class="divider-v"></div>
+        <button class="avatar-btn"><span class="a">PB</span><span>Patricia Bell</span><span>▾</span></button>
+      </div>
+    </header>
+    <main>
+      <div class="page-header">
+        <div>
+          <h1>Mission Control</h1>
+          <p class="sub">Today's incoming work, interpreted and prepared. Handle it here.</p>
+        </div>
+        <div class="status">Feed synced 15:42 EDT · every 60 sec</div>
+      </div>
+
+      <div class="grid">
+        <!-- ZERO STATE — the signature moment -->
+        <section class="zero" aria-label="Inbox zero">
+          <div class="headline">You're at zero.</div>
+          <p class="lead">
+            Everything that arrived today has been completed, delegated, scheduled, or intentionally deferred. Operational uncertainty for today is resolved.
+          </p>
+          <div class="breakdown">
+            <div class="col">
+              <div class="label">Arrived</div>
+              <div class="n">14</div>
+              <div class="meta">since 00:00 EDT</div>
+            </div>
+            <div class="col">
+              <div class="label">Completed automatically</div>
+              <div class="n auto">5</div>
+              <div class="meta">no action needed</div>
+            </div>
+            <div class="col">
+              <div class="label">Approved by you</div>
+              <div class="n approved">7</div>
+              <div class="meta">last: 15:38 EDT</div>
+            </div>
+            <div class="col">
+              <div class="label">Deferred by you</div>
+              <div class="n">2</div>
+              <div class="meta">to tomorrow 09:00</div>
+            </div>
+          </div>
+          <div class="next">
+            <span class="k">Next expected</span>
+            <div class="body">
+              <strong>Overnight bank reconciliation</strong> — approximately 02:00 EDT. You'll see the outcome on tomorrow's feed.
+            </div>
+            <span class="t">02:00 EDT</span>
+          </div>
+        </section>
+
+        <!-- Rail continues even at zero — situational awareness never goes away -->
+        <aside class="rail" aria-label="Executive rail">
+          <section class="rail-card position">
+            <div class="rail-h"><span>Today's position</span><span class="now">15:42 EDT</span></div>
+            <div class="row"><span class="k">Member AR</span><span class="v">$5,562</span></div>
+            <div class="row"><span class="k">Over 60 days</span><span class="v">$2,540</span></div>
+            <div class="row"><span class="k">Cash on hand</span><span class="v">$144,830</span></div>
+            <div class="row"><span class="k">Tee times today</span><span class="v">148<span class="tone good"> · closed</span></span></div>
+            <div class="row"><span class="k">Reservations tonight</span><span class="v">12</span></div>
+          </section>
+          <section class="rail-card insight">
+            <div class="rail-h"><span>Executive insight</span></div>
+            <div class="text">
+              Three of today's approvals came in before 10:00 EDT — 40 minutes faster than the last four weeks. Batching intake in the morning window continues to work.
+            </div>
+            <div class="source">
+              <span>Source:</span>
+              <a class="link">Approval time-to-decision · last 4 weeks</a>
+            </div>
+          </section>
+          <section class="rail-card commit">
+            <div class="rail-h"><span>Today's remaining commitments</span></div>
+            <div class="row"><span class="t">17:00</span><div class="body"><div class="title">May Board Package — sign-off</div><div class="meta">Draft approved 11:12 EDT · package ready</div></div></div>
+            <div class="row"><span class="t">18:30</span><div class="body"><div class="title">Founders' evening walk-through</div><div class="meta">Dining room · with F&B manager</div></div></div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

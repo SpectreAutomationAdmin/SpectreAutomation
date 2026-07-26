@@ -1,0 +1,78 @@
+# Phase 8I — Local development infra.
+# `docker compose up` brings up Postgres + Redis + web + worker.
+#
+# For local dev you may prefer to keep `npm run dev` outside Docker and only
+# run Postgres + Redis here:
+#   docker compose up postgres redis
+#
+# Production stacks (k8s / ECS / Fly) compose the web and worker images from
+# the Dockerfiles directly; this file is meant as a development/staging stub.
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spectre
+      POSTGRES_PASSWORD: spectre_dev_password
+      POSTGRES_DB: spectre
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spectre"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://spectre:spectre_dev_password@postgres:5432/spectre?schema=public
+      REDIS_URL: redis://redis:6379
+      SPECTRE_SESSION_SECRET: ${SPECTRE_SESSION_SECRET}
+      TRUST_PROXY: "true"
+    ports:
+      - "3000:3000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://spectre:spectre_dev_password@postgres:5432/spectre?schema=public
+      REDIS_URL: redis://redis:6379
+      SPECTRE_SESSION_SECRET: ${SPECTRE_SESSION_SECRET}
+
+volumes:
+  postgres_data:

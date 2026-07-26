@@ -1,0 +1,2366 @@
+﻿@tailwind base;
+  @tailwind components;
+  @tailwind utilities;:root {
+    --color-bg: #f8f5ef;
+    --color-ink: #1a1f1a;
+    /* ================================================================   * Spectre Design Language â€” Phase 1 (Foundation)   *   * The full source of truth for these tokens is   * `docs/design/Spectre Design Language.md`. Every value here is a   * neutral-first surface / border / text / status token. There is no   * green in the shell, no editorial vocabulary, and no glow.   *   * Every `--spectre-*` token is namespaced so it cannot collide with   * the legacy `--color-*` vars, `.card`, `.btn`, `.page-title`, or   * any other surface. The Monthly Reporting Package, the POS lounge,   * the Member Portal, and every un-migrated admin route render   * through their own existing styles â€” untouched by this block.   *   * The LIGHT theme is the default (declared at `:root`). The DARK   * theme is declared under `[data-theme="dark"]` below and overrides   * only the semantic surface / border / text / status tokens â€” no   * duplication of radius, shadow, motion, or typography values.   *   * The theme attribute is stamped on `<html>` by the no-FOUC   * bootstrap script in `src/app/layout.tsx` before hydration.   * ================================================================ */
+  /* --- Surfaces (light default) ---------------------------------- */  --spectre-canvas: #f6f6f8;
+    --spectre-canvas-sunken: #eeeef1;
+    --spectre-surface: #fdfdfd;
+    --spectre-surface-hover: #f4f4f5;
+    --spectre-surface-elevated: #fdfdfe;
+    --spectre-sidebar: #f4f4f6;
+    --spectre-topbar: #fbfbfc;
+    /* --- Borders (light default) ----------------------------------- */  --spectre-border-hairline: rgba(15, 15, 20, 0.06);
+    --spectre-border-default: rgba(15, 15, 20, 0.10);
+    --spectre-border-strong: rgba(15, 15, 20, 0.16);
+    /* --- Text (light default) -------------------------------------- */  --spectre-text-primary: #17181b;
+    --spectre-text-secondary: rgba(23, 24, 27, 0.72);
+    --spectre-text-muted: rgba(23, 24, 27, 0.55);
+    --spectre-text-subtle: rgba(23, 24, 27, 0.38);
+    --spectre-text-inverse: #fdfdfe;
+    /* --- Status (light default) ------------------------------------ */  --spectre-status-success: #166534;
+    --spectre-status-warning: #b45309;
+    --spectre-status-error: #b91c1c;
+    --spectre-status-info: #1d4ed8;
+    --spectre-status-success-bg: rgba(22, 101, 52, 0.10);
+    --spectre-status-warning-bg: rgba(180, 83, 9, 0.10);
+    --spectre-status-error-bg: rgba(185, 28, 28, 0.10);
+    --spectre-status-info-bg: rgba(29, 78, 216, 0.10);
+    /* --- Accent (per-club, data-driven) ---------------------------- */
+  /* Populated at request time from `Club.primaryColor`. Default is   * Silver Springs green so tokens work before the wrapper stamps the   * real value. The accent never glows â€” no blur > 4px is used on   * accent-coloured elements. See Design Language Â§2.3. */  --spectre-accent: #2f5832;
+    --spectre-accent-hover: #213a22;
+    --spectre-accent-soft: rgba(47, 88, 50, 0.10);
+    --spectre-accent-ring: rgba(47, 88, 50, 0.28);
+    /* --- Shadows (theme-invariant token names;
+   light values here) --- */  --spectre-shadow-subtle: 0 1px 2px rgba(15, 17, 21, 0.04);
+    --spectre-shadow-elevated: 0 1px 3px rgba(15, 17, 21, 0.06), 0 4px 12px rgba(15, 17, 21, 0.04);
+    --spectre-shadow-floating: 0 4px 12px rgba(15, 17, 21, 0.08), 0 12px 32px rgba(15, 17, 21, 0.06);
+    --spectre-shadow-dialog: 0 8px 24px rgba(15, 17, 21, 0.14), 0 24px 48px rgba(15, 17, 21, 0.12);
+    --spectre-shadow-focus: 0 0 0 3px var(--spectre-accent-ring);
+    /* --- Radius ---------------------------------------------------- */  --spectre-radius-button: 6px;
+    --spectre-radius-input: 6px;
+    --spectre-radius-card: 10px;
+    --spectre-radius-panel: 10px;
+    --spectre-radius-dialog: 14px;
+    --spectre-radius-table: 8px;
+    --spectre-radius-pill: 999px;
+    /* --- Motion ---------------------------------------------------- */  --spectre-motion-fast: 120ms;
+    --spectre-motion-base: 160ms;
+    --spectre-motion-slow: 200ms;
+    --spectre-ease: cubic-bezier(0.4, 0, 0.2, 1);
+    --spectre-ease-in-out: cubic-bezier(0.4, 0, 0.6, 1);
+    /* --- Typography (size + line-height pairs) --------------------- */  --spectre-type-display-size: 32px;
+   --spectre-type-display-line: 40px;
+    --spectre-type-h1-size:      24px;
+   --spectre-type-h1-line:      32px;
+    --spectre-type-h2-size:      20px;
+   --spectre-type-h2-line:      28px;
+    --spectre-type-h3-size:      16px;
+   --spectre-type-h3-line:      24px;
+    --spectre-type-body-size:    14px;
+   --spectre-type-body-line:    22px;
+    --spectre-type-body-sm-size: 13px;
+   --spectre-type-body-sm-line: 20px;
+    --spectre-type-caption-size: 12px;
+   --spectre-type-caption-line: 16px;
+    --spectre-type-label-size:   11px;
+   --spectre-type-label-line:   14px;
+    --spectre-type-data-size:    15px;
+   --spectre-type-data-line:    20px;
+    --spectre-type-table-size:   13px;
+   --spectre-type-table-line:   20px;
+    --spectre-type-nav-size:     13px;
+   --spectre-type-nav-line:     20px;
+    --spectre-type-button-size:  13px;
+   --spectre-type-button-line:  16px;
+    /* --- Spacing (per Design Language Â§4) -------------------------- */  --spectre-space-1:  4px;
+    --spectre-space-2:  8px;
+    --spectre-space-3:  12px;
+    --spectre-space-4:  16px;
+    --spectre-space-6:  24px;
+    --spectre-space-8:  32px;
+    --spectre-space-10: 40px;
+    --spectre-space-12: 48px;
+    --spectre-space-16: 64px;
+    --spectre-space-24: 96px;
+    /* --- Shell geometry ------------------------------------------- */  --spectre-sidebar-w-expanded: 248px;
+    --spectre-sidebar-w-collapsed: 72px;
+    --spectre-topbar-h: 64px;
+    --spectre-workspace-pad-x: 32px;
+    --spectre-workspace-pad-y: 32px;}
+/* ================================================================ * Dark theme â€” overrides ONLY the semantic surface/border/text/ * status/accent/shadow tokens. Every token name is unchanged;
+   only * values swap. Radius, motion, typography, and spacing are theme- * invariant. * ================================================================ */
+[data-theme="dark"] {
+    /* Surfaces */  --spectre-canvas: #0f1012;
+    --spectre-canvas-sunken: #0a0a0c;
+    --spectre-surface: #17181b;
+    --spectre-surface-hover: #1c1d21;
+    --spectre-surface-elevated: #1e1f24;
+    --spectre-sidebar: #131418;
+    --spectre-topbar: #141519;
+    /* Borders */  --spectre-border-hairline: rgba(255, 255, 255, 0.06);
+    --spectre-border-default: rgba(255, 255, 255, 0.10);
+    --spectre-border-strong: rgba(255, 255, 255, 0.18);
+    /* Text */  --spectre-text-primary: #ececec;
+    --spectre-text-secondary: rgba(236, 236, 236, 0.74);
+    --spectre-text-muted: rgba(236, 236, 236, 0.55);
+    --spectre-text-subtle: rgba(236, 236, 236, 0.38);
+    --spectre-text-inverse: #0f1012;
+    /* Status (lightened for dark surfaces) */  --spectre-status-success: #4ade80;
+    --spectre-status-warning: #fbbf24;
+    --spectre-status-error: #f87171;
+    --spectre-status-info: #60a5fa;
+    --spectre-status-success-bg: rgba(74, 222, 128, 0.14);
+    --spectre-status-warning-bg: rgba(251, 191, 36, 0.14);
+    --spectre-status-error-bg: rgba(248, 113, 113, 0.14);
+    --spectre-status-info-bg: rgba(96, 165, 250, 0.14);
+    /* Accent â€” lightened for dark surfaces so contrast holds */  --spectre-accent: #5a8f5e;
+    --spectre-accent-hover: #4a7c4e;
+    --spectre-accent-soft: rgba(90, 143, 94, 0.14);
+    --spectre-accent-ring: rgba(90, 143, 94, 0.36);
+    /* Shadows â€” pure-black layers because the surfaces are already dark */  --spectre-shadow-subtle: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --spectre-shadow-elevated: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+    --spectre-shadow-floating: 0 4px 12px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.3);
+    --spectre-shadow-dialog: 0 8px 24px rgba(0, 0, 0, 0.55), 0 24px 48px rgba(0, 0, 0, 0.5);
+    --spectre-shadow-focus: 0 0 0 3px var(--spectre-accent-ring);}
+html, body {  background: var(--color-bg);
+    color: var(--color-ink);
+    min-height: 100%;}
+body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;}
+/* Executive Reporting Theme â€” editorial serif scope. * * Source Serif 4 (Adobe's editorial display family) is loaded globally * by next/font in src/app/layout.tsx and exposed via the * --font-source-serif-4 CSS variable. We resolve `font-serif` to that * variable ONLY within the report-theme scope, so: *   - reporting surfaces (/app/admin/reporting/**) inherit the *     premium editorial serif on every chapter title, KPI value, *     framing lead, and ornament caption *   - everything else in the project (POS, member portal, *     operational admin) keeps the Georgia fallback unchanged * * This closes the typography gap identified in the Saguaro * comparison audit (test-results/cmp-*.png) without risking visual * regression on the 69 non-reporting files that consume `font-serif`. */
+[data-report-theme="executive"] .font-serif {  font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;}
+@layer components {  .card {    @apply rounded-xl border border-stone-200 bg-white shadow-card;  }
+  .card-body {    @apply p-6;  }
+  .card-title {    @apply text-sm font-medium uppercase tracking-wide text-stone-500;  }
+  .stat-number {    @apply mt-2 text-3xl font-semibold text-club-ink font-serif;  }
+  .btn {    @apply inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed;  }
+  .btn-primary {    @apply bg-club-green-700 text-white hover:bg-club-green-800;  }
+  .btn-secondary {    @apply bg-white border border-stone-300 text-club-ink hover:bg-stone-50;  }
+  .btn-danger {    @apply bg-red-600 text-white hover:bg-red-700;  }
+  .btn-ghost {    @apply text-club-green-700 hover:bg-club-green-50;  }
+  .badge {    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset;  }
+  .input, .select, .textarea {    @apply block w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm shadow-sm placeholder:text-stone-400 focus:border-club-green-500 focus:outline-none focus:ring-1 focus:ring-club-green-500;  }
+  .label {    @apply block text-sm font-medium text-stone-700 mb-1;  }
+  .table-base {    @apply w-full text-sm text-left;  }
+  .table-base th {    @apply px-4 py-3 text-xs font-semibold uppercase tracking-wide text-stone-500 border-b border-stone-200 bg-stone-50;  }
+  .table-base td {    @apply px-4 py-3 border-b border-stone-100 text-club-ink;  }
+  .section-title {    @apply text-2xl font-serif text-club-ink;  }
+  .page-title {    @apply text-3xl font-serif text-club-ink;  }}
+/* ============================================================ * Spectre Design Language â€” Phase 1 component classes * * The full authoring guidance for these classes lives in * `docs/design/Spectre Design Language.md`. Every class references * the semantic `--spectre-*` tokens above;
+   nothing hardcodes a hex. * * Legacy classes (`.card`, `.btn`, `.page-title`, `.table-base`, * etc.) are UNTOUCHED and continue to serve every un-migrated * surface. The Monthly Reporting Package, POS lounge, Member * Portal, and every other admin route render pixel-identical * before and after this file changes. * ============================================================ */
+@layer components {
+    /* --- Shell + workspace ---------------------------------------- */
+  .spectre-shell {    background-color: var(--spectre-canvas);
+      color: var(--spectre-text-primary);
+      min-height: 100vh;
+      font-family: var(--font-inter), Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-feature-settings: "cv11" 1, "ss01" 1;  }
+  .spectre-sidebar {    background-color: var(--spectre-sidebar);
+      border-right: 1px solid var(--spectre-border-hairline);
+      color: var(--spectre-text-primary);
+      display: flex;
+      flex-direction: column;
+      width: var(--spectre-sidebar-w-expanded);
+      transition: width var(--spectre-motion-slow) var(--spectre-ease);
+      flex-shrink: 0;  }
+  .spectre-sidebar[data-collapsed="true"] {    width: var(--spectre-sidebar-w-collapsed);  }
+  .spectre-topbar {    background-color: var(--spectre-topbar);
+      border-bottom: 1px solid var(--spectre-border-hairline);
+      color: var(--spectre-text-primary);
+      height: var(--spectre-topbar-h);
+      display: flex;
+      align-items: center;
+      padding: 0 var(--spectre-space-4);
+      gap: var(--spectre-space-3);  }
+  .spectre-workspace {    background-color: var(--spectre-canvas);
+      color: var(--spectre-text-primary);
+      padding: var(--spectre-workspace-pad-y) var(--spectre-workspace-pad-x);
+      min-height: calc(100vh - var(--spectre-topbar-h));  }
+  @media (max-width: 1023px) {    .spectre-workspace { padding: 20px; }  }
+  @media (max-width: 767px) {    .spectre-workspace { padding: 16px; }  }
+  /* --- Nav items ------------------------------------------------- */
+  .spectre-nav-item {    display: flex;
+      align-items: center;
+      gap: var(--spectre-space-3);
+      padding: 8px 12px;
+      margin: 1px 8px;
+      color: var(--spectre-text-secondary);
+      border-radius: var(--spectre-radius-button);
+      font-size: var(--spectre-type-nav-size);
+      line-height: var(--spectre-type-nav-line);
+      font-weight: 500;
+      text-decoration: none;
+      transition:      background-color var(--spectre-motion-fast) var(--spectre-ease),      color var(--spectre-motion-fast) var(--spectre-ease);
+      position: relative;
+      white-space: nowrap;  }
+  .spectre-nav-item:hover {    background-color: var(--spectre-surface-hover);
+      color: var(--spectre-text-primary);  }
+  .spectre-nav-item.spectre-nav-item--active {    background-color: var(--spectre-accent-soft);
+      color: var(--spectre-text-primary);  }
+  .spectre-nav-item.spectre-nav-item--active::before {    content: "";
+      position: absolute;
+      left: -8px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      border-radius: 0 2px 2px 0;
+      background: var(--spectre-accent);  }
+  .spectre-nav-item .spectre-nav-icon {    flex-shrink: 0;
+      width: 16px;
+      height: 16px;
+      color: currentColor;
+      opacity: 0.72;  }
+  .spectre-nav-item.spectre-nav-item--active .spectre-nav-icon {    opacity: 1;
+      color: var(--spectre-accent);  }
+  .spectre-nav-section-header {    padding: 12px 20px 4px;
+      font-size: var(--spectre-type-label-size);
+      line-height: var(--spectre-type-label-line);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+      color: var(--spectre-text-muted);  }
+  /* --- Buttons --------------------------------------------------- */
+  .spectre-btn {    display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--spectre-space-2);
+      padding: 8px 14px;
+      font-size: var(--spectre-type-button-size);
+      line-height: var(--spectre-type-button-line);
+      font-weight: 500;
+      border-radius: var(--spectre-radius-button);
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--spectre-text-primary);
+      cursor: pointer;
+      text-decoration: none;
+      transition:      background-color var(--spectre-motion-fast) var(--spectre-ease),      border-color var(--spectre-motion-fast) var(--spectre-ease),      color var(--spectre-motion-fast) var(--spectre-ease);
+      font-family: inherit;  }
+  .spectre-btn:disabled,  .spectre-btn[aria-disabled="true"] {    opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;  }
+  .spectre-btn:focus-visible {    outline: none;
+      box-shadow: var(--spectre-shadow-focus);  }
+  .spectre-btn--primary {    background: var(--spectre-accent);
+      color: var(--spectre-text-inverse);  }
+  .spectre-btn--primary:hover { background: var(--spectre-accent-hover); }
+  .spectre-btn--secondary {    background: var(--spectre-surface);
+      color: var(--spectre-text-primary);
+      border-color: var(--spectre-border-default);  }
+  .spectre-btn--secondary:hover {    background: var(--spectre-surface-hover);
+      border-color: var(--spectre-border-strong);  }
+  .spectre-btn--ghost { background: transparent;
+   color: var(--spectre-text-secondary); }
+  .spectre-btn--ghost:hover { background: var(--spectre-surface-hover);
+   color: var(--spectre-text-primary); }
+  .spectre-btn--danger { background: var(--spectre-status-error);
+   color: var(--spectre-text-inverse); }
+  .spectre-btn--danger:hover { filter: brightness(0.94); }
+  .spectre-btn--sm { padding: 5px 10px;
+   font-size: 12px;
+   line-height: 14px; }
+  .spectre-btn--lg { padding: 10px 18px;
+   font-size: 14px;
+   line-height: 18px; }
+  .spectre-btn--icon { padding: 7px; }
+  .spectre-btn--loading { position: relative;
+   color: transparent !important; }
+  .spectre-btn--loading::after {    content: "";
+      position: absolute;
+      width: 14px;
+   height: 14px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 999px;
+      color: var(--spectre-text-primary);
+      animation: spectre-spin 900ms linear infinite;  }
+  .spectre-btn--primary.spectre-btn--loading::after { color: var(--spectre-text-inverse); }
+  /* --- Inputs ---------------------------------------------------- */
+  .spectre-input,  .spectre-textarea,  .spectre-select {    display: block;
+      width: 100%;
+      padding: 8px 12px;
+      font-size: var(--spectre-type-body-size);
+      line-height: var(--spectre-type-body-line);
+      color: var(--spectre-text-primary);
+      background: var(--spectre-surface);
+      border: 1px solid var(--spectre-border-default);
+      border-radius: var(--spectre-radius-input);
+      font-family: inherit;
+      transition:      border-color var(--spectre-motion-fast) var(--spectre-ease),      background-color var(--spectre-motion-fast) var(--spectre-ease);  }
+  .spectre-input::placeholder,  .spectre-textarea::placeholder { color: var(--spectre-text-subtle); }
+  .spectre-input:hover,  .spectre-textarea:hover,  .spectre-select:hover { border-color: var(--spectre-border-strong); }
+  .spectre-input:focus,  .spectre-textarea:focus,  .spectre-select:focus {    outline: none;
+      border-color: var(--spectre-accent);
+      box-shadow: var(--spectre-shadow-focus);  }
+  .spectre-input:disabled,  .spectre-textarea:disabled,  .spectre-select:disabled {    background: var(--spectre-canvas-sunken);
+      color: var(--spectre-text-subtle);
+      cursor: not-allowed;  }
+  .spectre-textarea { min-height: 88px;
+   resize: vertical; }
+  .spectre-search {    padding-left: 34px;
+      background-image: none;  }
+  .spectre-label {    display: block;
+      font-size: var(--spectre-type-label-size);
+      line-height: var(--spectre-type-label-line);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: var(--spectre-text-muted);
+      margin-bottom: var(--spectre-space-2);  }
+  .spectre-help {    font-size: var(--spectre-type-caption-size);
+      line-height: var(--spectre-type-caption-line);
+      color: var(--spectre-text-muted);
+      margin-top: 6px;  }
+  .spectre-help--error { color: var(--spectre-status-error); }
+  /* --- Checkbox / Radio / Toggle -------------------------------- */
+  .spectre-check,  .spectre-radio {    appearance: none;
+      display: inline-block;
+      width: 16px;
+   height: 16px;
+      border: 1px solid var(--spectre-border-strong);
+      background: var(--spectre-surface);
+      cursor: pointer;
+      transition: background-color var(--spectre-motion-fast) var(--spectre-ease), border-color var(--spectre-motion-fast) var(--spectre-ease);
+      position: relative;
+      vertical-align: middle;  }
+  .spectre-check { border-radius: 4px; }
+  .spectre-radio { border-radius: 999px; }
+  .spectre-check:hover, .spectre-radio:hover { border-color: var(--spectre-accent); }
+  .spectre-check:focus-visible, .spectre-radio:focus-visible { outline: none;
+   box-shadow: var(--spectre-shadow-focus); }
+  .spectre-check:checked, .spectre-radio:checked {    background: var(--spectre-accent);
+      border-color: var(--spectre-accent);  }
+  .spectre-check:checked::after {    content: "";
+      position: absolute;
+      left: 4px;
+   top: 1px;
+      width: 5px;
+   height: 9px;
+      border: solid var(--spectre-text-inverse);
+      border-width: 0 1.75px 1.75px 0;
+      transform: rotate(45deg);  }
+  .spectre-radio:checked::after {    content: "";
+      position: absolute;
+      left: 4px;
+   top: 4px;
+      width: 6px;
+   height: 6px;
+      background: var(--spectre-text-inverse);
+      border-radius: 999px;  }
+  .spectre-toggle {    appearance: none;
+      position: relative;
+      width: 34px;
+   height: 20px;
+      border-radius: 999px;
+      background: var(--spectre-border-default);
+      cursor: pointer;
+      transition: background-color var(--spectre-motion-fast) var(--spectre-ease);
+      vertical-align: middle;
+      border: none;  }
+  .spectre-toggle::after {    content: "";
+      position: absolute;
+      top: 2px;
+   left: 2px;
+      width: 16px;
+   height: 16px;
+      border-radius: 999px;
+      background: var(--spectre-surface);
+      box-shadow: 0 1px 2px rgba(15, 17, 21, 0.15);
+      transition: transform var(--spectre-motion-fast) var(--spectre-ease);  }
+  .spectre-toggle:checked { background: var(--spectre-accent); }
+  .spectre-toggle:checked::after { transform: translateX(14px); }
+  .spectre-toggle:focus-visible { outline: none;
+   box-shadow: var(--spectre-shadow-focus); }
+  /* --- Badges --------------------------------------------------- */
+  .spectre-badge {    display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      font-size: var(--spectre-type-caption-size);
+      line-height: var(--spectre-type-caption-line);
+      font-weight: 500;
+      border-radius: var(--spectre-radius-pill);
+      background: var(--spectre-canvas-sunken);
+      color: var(--spectre-text-secondary);
+      border: 1px solid var(--spectre-border-hairline);  }
+  .spectre-badge--success { background: var(--spectre-status-success-bg);
+   color: var(--spectre-status-success);
+   border-color: transparent; }
+  .spectre-badge--warning { background: var(--spectre-status-warning-bg);
+   color: var(--spectre-status-warning);
+   border-color: transparent; }
+  .spectre-badge--error   { background: var(--spectre-status-error-bg);
+     color: var(--spectre-status-error);
+     border-color: transparent; }
+  .spectre-badge--info    { background: var(--spectre-status-info-bg);
+      color: var(--spectre-status-info);
+      border-color: transparent; }
+  .spectre-badge--accent  { background: var(--spectre-accent-soft);
+         color: var(--spectre-accent);
+           border-color: transparent; }
+  /* --- Cards + Panels ------------------------------------------- */
+  .spectre-card {    background: var(--spectre-surface);
+      border: 1px solid var(--spectre-border-hairline);
+      border-radius: var(--spectre-radius-card);
+      box-shadow: var(--spectre-shadow-subtle);
+      transition: box-shadow var(--spectre-motion-base) var(--spectre-ease), border-color var(--spectre-motion-fast) var(--spectre-ease);  }
+  .spectre-card--interactive:hover {    box-shadow: var(--spectre-shadow-elevated);
+      border-color: var(--spectre-border-default);  }
+  .spectre-card-header {    padding: var(--spectre-space-4) var(--spectre-space-6);
+      border-bottom: 1px solid var(--spectre-border-hairline);
+      display: flex;
+   align-items: center;
+   justify-content: space-between;  }
+  .spectre-card-body { padding: var(--spectre-space-6); }
+  .spectre-card-footer {    padding: var(--spectre-space-3) var(--spectre-space-6);
+      border-top: 1px solid var(--spectre-border-hairline);
+      display: flex;
+   align-items: center;
+   justify-content: flex-end;
+   gap: var(--spectre-space-2);  }
+  .spectre-panel {    background: var(--spectre-surface);
+      border: 1px solid var(--spectre-border-hairline);
+      border-radius: var(--spectre-radius-panel);
+      padding: var(--spectre-space-6);  }
+  /* --- Dialog + Drawer + Popover + Tooltip ---------------------- */
+  .spectre-dialog-backdrop {    position: fixed;
+   inset: 0;
+      background: rgba(0, 0, 0, 0.42);
+      display: flex;
+   align-items: center;
+   justify-content: center;
+      padding: var(--spectre-space-4);
+      z-index: 60;
+      animation: spectre-fade-in var(--spectre-motion-base) var(--spectre-ease) both;  }
+  .spectre-dialog {    background: var(--spectre-surface-elevated);
+      color: var(--spectre-text-primary);
+      border-radius: var(--spectre-radius-dialog);
+      box-shadow: var(--spectre-shadow-dialog);
+      border: 1px solid var(--spectre-border-hairline);
+      width: 100%;
+      max-width: 480px;
+      animation: spectre-dialog-in var(--spectre-motion-slow) var(--spectre-ease) both;  }
+  .spectre-dialog-header {    padding: var(--spectre-space-4) var(--spectre-space-6);
+      border-bottom: 1px solid var(--spectre-border-hairline);
+      font-size: var(--spectre-type-h3-size);
+      line-height: var(--spectre-type-h3-line);
+      font-weight: 600;  }
+  .spectre-dialog-body { padding: var(--spectre-space-6); }
+  .spectre-dialog-footer {    padding: var(--spectre-space-3) var(--spectre-space-6);
+      border-top: 1px solid var(--spectre-border-hairline);
+      display: flex;
+   justify-content: flex-end;
+   gap: var(--spectre-space-2);  }
+  .spectre-popover {    background: var(--spectre-surface-elevated);
+      border: 1px solid var(--spectre-border-hairline);
+      border-radius: var(--spectre-radius-panel);
+      box-shadow: var(--spectre-shadow-floating);
+      padding: var(--spectre-space-3);
+      animation: spectre-pop-in var(--spectre-motion-base) var(--spectre-ease) both;  }
+  .spectre-tooltip {    background: var(--spectre-text-primary);
+      color: var(--spectre-text-inverse);
+      padding: 5px 8px;
+      font-size: var(--spectre-type-caption-size);
+      line-height: 1;
+      border-radius: 5px;
+      white-space: nowrap;
+      box-shadow: var(--spectre-shadow-floating);
+      animation: spectre-fade-in var(--spectre-motion-fast) var(--spectre-ease) both;  }
+  /* --- Tabs ----------------------------------------------------- */
+  .spectre-tabs {    display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--spectre-border-hairline);  }
+  .spectre-tab {    padding: 8px 14px;
+      font-size: var(--spectre-type-body-sm-size);
+      line-height: var(--spectre-type-body-sm-line);
+      color: var(--spectre-text-secondary);
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 500;
+      transition: color var(--spectre-motion-fast) var(--spectre-ease), border-color var(--spectre-motion-fast) var(--spectre-ease);
+      margin-bottom: -1px;  }
+  .spectre-tab:hover { color: var(--spectre-text-primary); }
+  .spectre-tab[aria-selected="true"] {    color: var(--spectre-text-primary);
+      border-bottom-color: var(--spectre-accent);  }
+  .spectre-tab:focus-visible { outline: none;
+   box-shadow: var(--spectre-shadow-focus);
+   border-radius: 4px 4px 0 0; }
+  /* --- Breadcrumbs --------------------------------------------- */
+  .spectre-crumbs {    display: flex;
+   align-items: center;
+   gap: 6px;
+      font-size: var(--spectre-type-body-sm-size);
+      color: var(--spectre-text-muted);  }
+  .spectre-crumbs a { color: var(--spectre-text-muted);
+   text-decoration: none;
+   transition: color var(--spectre-motion-fast) var(--spectre-ease); }
+  .spectre-crumbs a:hover { color: var(--spectre-text-primary); }
+  .spectre-crumbs .sep { color: var(--spectre-text-subtle); }
+  .spectre-crumbs [aria-current="page"] { color: var(--spectre-text-primary);
+   font-weight: 500; }
+  /* --- Pagination ---------------------------------------------- */
+  .spectre-pager { display: inline-flex;
+   gap: 2px;
+   align-items: center; }
+  .spectre-pager button, .spectre-pager a {    min-width: 32px;
+   height: 32px;
+      display: inline-flex;
+   align-items: center;
+   justify-content: center;
+      padding: 0 8px;
+      font-size: var(--spectre-type-body-sm-size);
+      color: var(--spectre-text-secondary);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--spectre-radius-button);
+      cursor: pointer;
+      transition: background-color var(--spectre-motion-fast) var(--spectre-ease), color var(--spectre-motion-fast) var(--spectre-ease);
+      font-family: inherit;
+      text-decoration: none;  }
+  .spectre-pager button:hover, .spectre-pager a:hover { background: var(--spectre-surface-hover);
+   color: var(--spectre-text-primary); }
+  .spectre-pager [aria-current="page"] { background: var(--spectre-accent-soft);
+   color: var(--spectre-accent);
+   font-weight: 500; }
+  .spectre-pager :focus-visible { outline: none;
+   box-shadow: var(--spectre-shadow-focus); }
+  /* --- Toast + Alert ------------------------------------------- */
+  .spectre-toast {    display: flex;
+   gap: var(--spectre-space-3);
+      padding: var(--spectre-space-3) var(--spectre-space-4);
+      background: var(--spectre-surface-elevated);
+      color: var(--spectre-text-primary);
+      border: 1px solid var(--spectre-border-default);
+      border-radius: var(--spectre-radius-panel);
+      box-shadow: var(--spectre-shadow-floating);
+      min-width: 280px;
+      max-width: 400px;
+      animation: spectre-toast-in var(--spectre-motion-slow) var(--spectre-ease) both;  }
+  .spectre-toast--success { border-left: 3px solid var(--spectre-status-success); }
+  .spectre-toast--warning { border-left: 3px solid var(--spectre-status-warning); }
+  .spectre-toast--error   { border-left: 3px solid var(--spectre-status-error); }
+  .spectre-toast--info    { border-left: 3px solid var(--spectre-status-info); }
+  .spectre-alert {    display: flex;
+   gap: var(--spectre-space-3);
+      padding: var(--spectre-space-3) var(--spectre-space-4);
+      border-radius: var(--spectre-radius-panel);
+      background: var(--spectre-surface);
+      border: 1px solid var(--spectre-border-hairline);
+      color: var(--spectre-text-primary);
+      font-size: var(--spectre-type-body-size);
+      line-height: var(--spectre-type-body-line);  }
+  .spectre-alert--success { background: var(--spectre-status-success-bg);
+   border-color: transparent;
+   color: var(--spectre-status-success); }
+  .spectre-alert--warning { background: var(--spectre-status-warning-bg);
+   border-color: transparent;
+   color: var(--spectre-status-warning); }
+  .spectre-alert--error   { background: var(--spectre-status-error-bg);
+     border-color: transparent;
+   color: var(--spectre-status-error); }
+  .spectre-alert--info    { background: var(--spectre-status-info-bg);
+      border-color: transparent;
+   color: var(--spectre-status-info); }
+  /* --- Progress + Spinner + Skeleton --------------------------- */
+  .spectre-progress {    height: 6px;
+   width: 100%;
+      background: var(--spectre-canvas-sunken);
+      border-radius: 999px;
+      overflow: hidden;  }
+  .spectre-progress-bar {    height: 100%;
+      background: var(--spectre-accent);
+      border-radius: 999px;
+      transition: width var(--spectre-motion-slow) var(--spectre-ease);  }
+  .spectre-spinner {    display: inline-block;
+      width: 16px;
+   height: 16px;
+      border: 2px solid var(--spectre-border-default);
+      border-top-color: var(--spectre-accent);
+      border-radius: 999px;
+      animation: spectre-spin 900ms linear infinite;
+      vertical-align: middle;  }
+  .spectre-skeleton {    background: linear-gradient(90deg,      var(--spectre-canvas-sunken) 0%,      var(--spectre-surface-hover) 50%,      var(--spectre-canvas-sunken) 100%);
+      background-size: 200% 100%;
+      animation: spectre-shimmer 1600ms linear infinite;
+      border-radius: var(--spectre-radius-input);  }
+  /* --- Table ---------------------------------------------------- */
+  .spectre-table {    width: 100%;
+      border-collapse: collapse;
+      font-size: var(--spectre-type-table-size);
+      line-height: var(--spectre-type-table-line);
+      color: var(--spectre-text-primary);
+      font-variant-numeric: tabular-nums;  }
+  .spectre-table thead th {    padding: 10px 16px;
+      text-align: left;
+      font-size: var(--spectre-type-label-size);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: var(--spectre-text-muted);
+      background: var(--spectre-canvas-sunken);
+      border-bottom: 1px solid var(--spectre-border-default);
+      white-space: nowrap;  }
+  .spectre-table thead th button {    display: inline-flex;
+   align-items: center;
+   gap: 4px;
+      background: transparent;
+   border: none;
+   padding: 0;
+      color: inherit;
+   font: inherit;
+   letter-spacing: inherit;
+   text-transform: inherit;
+      cursor: pointer;  }
+  .spectre-table tbody td {    padding: 12px 16px;
+      border-bottom: 1px solid var(--spectre-border-hairline);
+      vertical-align: middle;  }
+  .spectre-table tbody tr:hover { background: var(--spectre-surface-hover); }
+  .spectre-table tbody tr[data-selected="true"] { background: var(--spectre-accent-soft); }
+  .spectre-table--dense thead th { padding: 8px 12px; }
+  .spectre-table--dense tbody td { padding: 8px 12px; }
+  .spectre-table-empty {    padding: var(--spectre-space-12) var(--spectre-space-6);
+      text-align: center;
+      color: var(--spectre-text-muted);  }
+  /* --- Chart placeholder --------------------------------------- */
+  .spectre-chart-placeholder {    background: repeating-linear-gradient(      45deg,      var(--spectre-canvas-sunken) 0px,      var(--spectre-canvas-sunken) 6px,      transparent 6px,      transparent 12px    );
+      border: 1px dashed var(--spectre-border-default);
+      border-radius: var(--spectre-radius-panel);
+      color: var(--spectre-text-muted);
+      display: flex;
+   align-items: center;
+   justify-content: center;
+      font-size: var(--spectre-type-caption-size);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 600;  }
+  /* --- Divider --------------------------------------------------- */
+  .spectre-divider {    height: 1px;
+      background: var(--spectre-border-hairline);
+      border: none;
+      margin: var(--spectre-space-4) 0;  }
+  /* --- Kbd hint pill for keyboard shortcuts --------------------- */
+  .spectre-kbd {    display: inline-flex;
+   align-items: center;
+   gap: 2px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+      color: var(--spectre-text-muted);
+      background: var(--spectre-surface);
+      border: 1px solid var(--spectre-border-default);
+      border-radius: 4px;
+      line-height: 1.2;  }}
+@keyframes spectre-spin {  to { transform: rotate(360deg); }}
+@keyframes spectre-shimmer {  0%   { background-position: 200% 0; }  100% { background-position: -200% 0; }}
+@keyframes spectre-fade-in {  from { opacity: 0; }
+  to   { opacity: 1; }}
+@keyframes spectre-dialog-in {  from { opacity: 0;
+   transform: translateY(-4px); }
+  to   { opacity: 1;
+   transform: translateY(0); }}
+@keyframes spectre-pop-in {  from { opacity: 0;
+   transform: translateY(-4px); }
+  to   { opacity: 1;
+   transform: translateY(0); }}
+@keyframes spectre-toast-in {  from { opacity: 0;
+   transform: translateX(6px); }
+  to   { opacity: 1;
+   transform: translateX(0); }}
+/* Scoped reduced-motion â€” ONLY zeroes transitions on `spectre-*` * classes. Legacy chart animations, reporting transitions, and any * non-`spectre-*` motion elsewhere are unaffected. */
+@media (prefers-reduced-motion: reduce) {  [class*="spectre-"] {    animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      transition-delay: 0ms !important;  }}
+/* ============================================================ * Print Mode â€” Spectre Executive Reporting * * Two activation paths, same rules: *   1. The Print Mode toggle in the reporting shell header sets *      `data-print-mode="true"` on the shell root. Selectors below *      that target `[data-print-mode="true"] ...` apply to the *      on-screen preview. *   2. `@media print` applies the same intent during the browser's *      native Print / Save-as-PDF flow regardless of the toggle. * * What we change: *   - Hide non-essential chrome (shell header, chapter rail, package *     controls strip, the toggle itself, executive commentary's demo *     chip). *   - Widen the reading column so the document uses the full page. *   - Apply `break-inside: avoid` to articles, cards, charts so they *     don't split awkwardly across page boundaries. *   - Force `print-color-adjust: exact` so the deep-green/ivory/gold *     palette renders accurately (browsers strip backgrounds by *     default during print to save ink). * ============================================================ */
+/* On-screen preview when the toggle is active. */
+[data-print-mode="true"] [data-testid="reporting-shell-header"],[data-print-mode="true"] [data-testid="reporting-shell-chapters"] {  display: none !important;}
+[data-print-mode="true"] [data-testid="reporting-shell"] > div:last-of-type {  grid-template-columns: 1fr;
+    max-width: none;
+    padding-left: 24px;
+    padding-right: 24px;}
+[data-print-mode="true"] [data-testid="reporting-shell-body"] {  max-width: 880px;
+    margin: 0 auto;}
+[data-print-mode="true"] article,[data-print-mode="true"] section,[data-print-mode="true"] svg {  break-inside: avoid;
+    page-break-inside: avoid;}
+/* Browser native print pass. */
+@media print {
+    /* Hide both layers of admin chrome and the reporting shell's own     interactive chrome. The cover panel + report content remain. */
+  aside, nav,  [data-testid="reporting-shell-header"],  [data-testid="reporting-shell-chapters"],  [data-testid="print-mode-toggle"] {    display: none !important;  }
+  /* Print-friendly page setup. */
+  @page {    margin: 18mm 14mm;  }
+  html, body {    background: #f8f5ef;  }
+  /* Collapse the 200px chapter rail column from the shell grid so the     content uses the full page width. */
+  [data-testid="reporting-shell"] > div:last-of-type {    grid-template-columns: 1fr !important;
+      max-width: none;
+      padding: 0;
+      gap: 0;  }
+  [data-testid="reporting-shell-body"] {    max-width: none;  }
+  /* Cover is one full page;
+   subsequent sections start on a new page. */
+  [data-testid="monthly-cover"] {    page-break-after: always;
+      break-after: page;
+      min-height: auto;  }
+  /* Each chapter section starts on its own page where reasonable. */
+  section[id="board-briefing"],  section[id="at-a-glance"],  section[id="stewardship"],  section[id="financial-statements"],  section[id="operations"],  section[id="payroll"],  section[id="fb-hospitality"],  section[id="capital-projects"],  section[id="ar-collections"] {    page-break-before: auto;
+      break-before: auto;  }
+  /* Keep individual cards / charts together. */
+  article,  svg,  [data-testid^="briefing-"],  [data-testid^="exec-kpi-"],  [data-testid^="stewardship-"],  [data-testid$="-commentary"],  [data-testid$="-summary"],  [data-testid$="-variances"],  [data-testid$="-detail"] {    break-inside: avoid;
+      page-break-inside: avoid;  }
+  /* Render colour accurately â€” Chromium prints with backgrounds     stripped by default to save ink. Override that for the report's     executive theme. */  * {
+      -webkit-print-color-adjust: exact;
+      color-adjust: exact;
+      print-color-adjust: exact;  }}
+/* COA mapping table â€” error-row flash. Triggered when an invalid   row is scrolled into view via the auto-scroll-to-first-error or   Next-error jump. ~1.6 s, two pulses;
+   the row's permanent red   tint + left border remain after the animation. */
+@keyframes spectre-pulse-error {  0%   { background-color: rgba(239, 68, 68, 0.20); }  40%  { background-color: rgba(239, 68, 68, 0.45); }  100% { background-color: rgba(254, 226, 226, 0.60); }}
+.animate-pulse-error {  animation: spectre-pulse-error 1.6s ease-out 2;}
+/* ------------------------------------------------------------------   Founder rule 2026-07-13 v15.13 â†’ v15.13.1 â€” Editorial chart   reveal animations.   Every chart primitive (`EditorialLineChart`, `EditorialBarChart`,   `EditorialGroupedBarChart`, `EditorialDonut`) tags its animated   descendants with one of the `chart-anim-*` classes below. The   parent `EditorialChartReveal` client wrapper toggles a single   `data-editorial-chart-revealed` attribute on its root <div>, and   these selectors gate the animation off that attribute:     - `data-editorial-chart-revealed="false"` â†’ element is pinned       to its "pre-draw" state (bars scaled to 0 from the correct       baseline, line paths fully offset, markers / donut / area       invisible). This state is reached at initial mount AND after       a hysteresis-driven reset when the chart drops below the       reset threshold â€” the wrapper's replay-on-reenter behaviour.     - `data-editorial-chart-revealed="true"` â†’ element plays its       animation to its final state. `animation-fill-mode: both`       freezes the ending frame while the chart remains visible. If       the wrapper resets the attribute back to `false`, the CSS       animation is removed and the element snaps back to the       pending pinned state, ready to replay on the next entry.   Duration is CONFIGURABLE â€” the wrapper threads a   `--editorial-chart-reveal-duration` CSS custom property onto its   root <div>, and every keyframe rule below reads it via   `var(--editorial-chart-reveal-duration, 1600ms)`. The founder-   approved default is 1600 ms (v15.13.1);
+   a config override lets a   locked hero card slow to 2000 ms or speed up to 1200 ms without   touching this file.   Marker fade-in uses its own shorter variable so per-marker fades   don't get uncomfortably slow at the default duration. Defaults to   `calc(main * 0.4)` â€” 640 ms at the shared 1600 ms base.   Reduced-motion override at the bottom collapses every rule to a   no-op so the chart renders in its completed state without any   motion the moment the OS accessibility setting requests it. */
+@keyframes editorial-chart-bar-grow-up {  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }}
+@keyframes editorial-chart-bar-grow-down {  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }}
+@keyframes editorial-chart-line-draw {  from { stroke-dashoffset: var(--editorial-line-length, 1000); }
+  to   { stroke-dashoffset: 0; }}
+@keyframes editorial-chart-marker-in {  from { opacity: 0;
+   transform: scale(0.6); }
+  to   { opacity: 1;
+   transform: scale(1); }}
+@keyframes editorial-chart-area-in {  from { opacity: 0; }
+  to   { opacity: 1; }}
+@keyframes editorial-chart-donut-sweep {  from { opacity: 0;
+   transform: rotate(-18deg); }
+  to   { opacity: 1;
+   transform: rotate(0deg); }}
+/* Pre-reveal (pending) state â€” pinned to the pre-draw frame. Also   the target state after a hysteresis-driven reset (v15.13.1). */
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-bar-up {  transform: scaleY(0);
+    transform-box: fill-box;
+    transform-origin: bottom;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-bar-down {  transform: scaleY(0);
+    transform-box: fill-box;
+    transform-origin: top;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-line {  stroke-dashoffset: var(--editorial-line-length, 1000);}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-marker {  opacity: 0;
+    transform: scale(0.6);
+    transform-box: fill-box;
+    transform-origin: center;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-area {  opacity: 0;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="false"] .chart-anim-donut {  opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    transform: rotate(-18deg);}
+/* Revealed state â€” animation duration driven by the wrapper's   `--editorial-chart-reveal-duration` CSS variable (default 1600   ms). `both` fill mode preserves the final frame after the   animation ends while the chart remains visible. */
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-bar-up {  transform-box: fill-box;
+    transform-origin: bottom;
+    animation: editorial-chart-bar-grow-up var(--editorial-chart-reveal-duration, 1600ms) cubic-bezier(0.22, 1, 0.36, 1) both;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-bar-down {  transform-box: fill-box;
+    transform-origin: top;
+    animation: editorial-chart-bar-grow-down var(--editorial-chart-reveal-duration, 1600ms) cubic-bezier(0.22, 1, 0.36, 1) both;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-line {  animation: editorial-chart-line-draw var(--editorial-chart-reveal-duration, 1600ms) cubic-bezier(0.22, 1, 0.36, 1) both;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-marker {  transform-box: fill-box;
+    transform-origin: center;
+    animation: editorial-chart-marker-in calc(var(--editorial-chart-reveal-duration, 1600ms) * 0.4) cubic-bezier(0.22, 1, 0.36, 1) both;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-area {  animation: editorial-chart-area-in var(--editorial-chart-reveal-duration, 1600ms) cubic-bezier(0.22, 1, 0.36, 1) both;}
+.editorial-chart-reveal-root[data-editorial-chart-revealed="true"] .chart-anim-donut {  transform-box: fill-box;
+    transform-origin: center;
+    animation: editorial-chart-donut-sweep calc(var(--editorial-chart-reveal-duration, 1600ms) * 0.85) cubic-bezier(0.22, 1, 0.36, 1) both;}
+/* Reduced-motion â€” hard override. Every animated element renders   immediately in its final state with zero motion. IMPORTANT: this   override MUST also collapse the pending state, so a reduced-motion   user never sees the reset-to-invisible flash if the wrapper ever   drops back to `data-editorial-chart-revealed="false"`. The wrapper   itself avoids installing the observer under reduced motion, so   this override is a defence-in-depth guarantee. */
+@media (prefers-reduced-motion: reduce) {  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-bar-up,  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-bar-down {    transform: none;
+      animation: none;  }
+  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-line {    stroke-dashoffset: 0;
+      animation: none;  }
+  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-marker,  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-area {    opacity: 1;
+      transform: none;
+      animation: none;  }
+  .editorial-chart-reveal-root[data-editorial-chart-revealed] .chart-anim-donut {    opacity: 1;
+      transform: none;
+      animation: none;  }}
+
+/* ================================================================
+ * Mission Control — Foundation v1.0 (2026-07-18)
+ *
+ * The founder-approved production surface for `/app/admin`. Composes
+ * with the existing `--spectre-*` token layer; adds only component
+ * classes (`.spectre-mc-*`). No token values change.
+ *
+ * Structural intent (from Variant D — Professional Instrument):
+ *   • three-plane material: sidebar (Plane 1) / canvas (Plane 2) /
+ *     workspaces (Plane 3) already exist via the token layer. This
+ *     block only styles the CONTENT that lives inside Plane 3.
+ *   • instrument-panel briefing (5-cell readout, click-through)
+ *   • bounded feed items with a coloured left-edge status stripe
+ *   • inset data readouts inside each item
+ *   • three-tier action affordance: primary / secondary / tertiary
+ *   • rail cards with visible chrome + aligned tabular numerals
+ * ================================================================ */
+
+@layer components {
+  /* --- Header line (greeting + sync) ----------------------------- */
+  .spectre-mc-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--spectre-space-6); margin-bottom: var(--spectre-space-4);
+  }
+  .spectre-mc-greeting {
+    font-size: 22px; line-height: 28px; letter-spacing: -0.014em;
+    font-weight: 600; color: var(--spectre-text-primary);
+  }
+  .spectre-mc-greeting .club {
+    color: var(--spectre-text-secondary); font-weight: 500;
+    margin-left: var(--spectre-space-2);
+  }
+  .spectre-mc-header-meta {
+    display: flex; align-items: center; gap: var(--spectre-space-3);
+    font-size: 12px; color: var(--spectre-text-muted);
+    font-variant-numeric: tabular-nums; font-weight: 500;
+  }
+  .spectre-mc-header-meta .date { color: var(--spectre-text-secondary); }
+  .spectre-mc-sync-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px 3px 6px;
+    background: var(--spectre-status-success-bg);
+    border: 1px solid var(--spectre-status-success);
+    border-radius: var(--spectre-radius-button);
+    color: var(--spectre-status-success); font-weight: 600; font-size: 11px;
+  }
+  .spectre-mc-sync-chip::before {
+    content: ""; width: 6px; height: 6px; border-radius: 999px;
+    background: var(--spectre-status-success);
+  }
+
+  .spectre-mc-state {
+    margin-bottom: var(--spectre-space-4);
+    font-size: 13px; color: var(--spectre-text-secondary); font-weight: 500;
+  }
+  .spectre-mc-state b { color: var(--spectre-text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .spectre-mc-state .dot {
+    display: inline-block; width: 5px; height: 5px; border-radius: 999px;
+    background: var(--spectre-status-success);
+    margin: 0 8px 2px 0; vertical-align: 1px;
+  }
+  .spectre-mc-state.spectre-mc-state--attention .dot { background: var(--spectre-status-warning); }
+
+  /* --- Executive briefing (instrument-panel readout) ------------- */
+  .spectre-mc-briefing {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: var(--spectre-shadow-subtle);
+    margin-bottom: var(--spectre-space-6);
+    display: grid; grid-template-columns: repeat(5, 1fr);
+  }
+  .spectre-mc-briefing .cell {
+    padding: 16px 20px;
+    display: flex; flex-direction: column; gap: 4px;
+    border-right: 1px solid var(--spectre-border-hairline);
+    background: transparent; color: inherit; text-align: left;
+    transition: background var(--spectre-motion-base) var(--spectre-ease);
+    cursor: pointer;
+    font: inherit;
+  }
+  .spectre-mc-briefing .cell:last-child { border-right: none; }
+  .spectre-mc-briefing .cell:hover { background: var(--spectre-surface-hover); }
+  .spectre-mc-briefing .cell:focus-visible { outline: 2px solid var(--spectre-accent); outline-offset: -2px; }
+  .spectre-mc-briefing .cell .k {
+    display: flex; align-items: center; gap: 6px;
+    font-size: var(--spectre-type-label-size); letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 700;
+  }
+  .spectre-mc-briefing .cell .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .spectre-mc-briefing .cell.arrived  .swatch { background: var(--spectre-text-muted); }
+  .spectre-mc-briefing .cell.auto     .swatch { background: var(--spectre-status-success); opacity: 0.42; }
+  .spectre-mc-briefing .cell.approval .swatch { background: var(--spectre-status-success); }
+  .spectre-mc-briefing .cell.judgment .swatch { background: var(--spectre-status-warning); }
+  .spectre-mc-briefing .cell.info     .swatch { background: var(--spectre-text-subtle); }
+  .spectre-mc-briefing .cell .v {
+    font-size: 28px; line-height: 32px; font-weight: 600;
+    color: var(--spectre-text-primary);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .spectre-mc-briefing .cell.judgment .v { color: var(--spectre-status-warning); }
+  .spectre-mc-briefing .cell .s { font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; }
+
+  /* --- Two-column grid: feed + executive rail ------------------- */
+  .spectre-mc-grid {
+    display: grid; grid-template-columns: minmax(0, 1fr) 336px;
+    gap: var(--spectre-space-6); align-items: start;
+  }
+  @media (max-width: 1279px) {
+    .spectre-mc-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  /* --- Feed header --------------------------------------------- */
+  .spectre-mc-feed-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: var(--spectre-space-3);
+    padding: 0 var(--spectre-space-1);
+  }
+  .spectre-mc-feed-head h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-feed-head h2 .count {
+    color: var(--spectre-text-muted); font-weight: 500;
+    margin-left: 6px; font-variant-numeric: tabular-nums;
+  }
+  .spectre-mc-feed-head .controls { display: flex; align-items: center; gap: 6px; }
+
+  .spectre-mc-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: var(--spectre-radius-button);
+    font-size: 12px; color: var(--spectre-text-secondary); font-weight: 500;
+    transition: background var(--spectre-motion-base) var(--spectre-ease),
+                border-color var(--spectre-motion-base) var(--spectre-ease),
+                color var(--spectre-motion-base) var(--spectre-ease);
+  }
+  .spectre-mc-chip:hover { border-color: var(--spectre-border-strong); color: var(--spectre-text-primary); }
+  .spectre-mc-chip svg { width: 11px; height: 11px; color: var(--spectre-text-muted); }
+  .spectre-mc-chip.on {
+    background: var(--spectre-status-success-bg);
+    border-color: var(--spectre-status-success);
+    color: var(--spectre-status-success);
+    font-weight: 600;
+  }
+  .spectre-mc-chip.on svg { color: var(--spectre-status-success); }
+  .spectre-mc-chip .k { color: var(--spectre-text-muted); font-weight: 500; }
+  .spectre-mc-chip .v { color: currentColor; font-weight: 600; }
+
+  /* --- Feed item ---------------------------------------------- */
+  .spectre-mc-item {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: var(--spectre-shadow-subtle);
+    margin-bottom: var(--spectre-space-3);
+    padding: 16px 20px;
+    border-left-width: 3px;
+    border-left-color: var(--spectre-border-strong);
+    transition: border-color var(--spectre-motion-slow) var(--spectre-ease),
+                box-shadow  var(--spectre-motion-slow) var(--spectre-ease);
+  }
+  .spectre-mc-item:hover {
+    border-color: var(--spectre-border-strong);
+    box-shadow: var(--spectre-shadow-elevated);
+  }
+  .spectre-mc-item.judgment { border-left-color: var(--spectre-status-warning); }
+  .spectre-mc-item.approval { border-left-color: var(--spectre-status-success); }
+  .spectre-mc-item.comm     { border-left-color: var(--spectre-status-info); }
+  .spectre-mc-item.done     { border-left-color: var(--spectre-status-success); opacity: 0.86; padding: 12px 20px; }
+  .spectre-mc-item.info-item{ border-left-color: var(--spectre-border-strong); padding: 12px 20px; }
+
+  .spectre-mc-item-head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: var(--spectre-space-2);
+    flex-wrap: wrap;
+  }
+  .spectre-mc-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: var(--spectre-radius-pill);
+    font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase;
+    font-weight: 700; color: var(--spectre-text-secondary);
+  }
+  .spectre-mc-pill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; display: inline-block; background: var(--spectre-text-muted); }
+  .spectre-mc-pill.judgment { background: var(--spectre-status-warning-bg); border-color: var(--spectre-status-warning); color: var(--spectre-status-warning); }
+  .spectre-mc-pill.judgment::before { background: var(--spectre-status-warning); }
+  .spectre-mc-pill.approval { background: var(--spectre-status-success-bg); border-color: var(--spectre-status-success); color: var(--spectre-status-success); }
+  .spectre-mc-pill.approval::before { background: var(--spectre-status-success); }
+  .spectre-mc-pill.comm     { background: var(--spectre-status-info-bg); border-color: var(--spectre-status-info); color: var(--spectre-status-info); }
+  .spectre-mc-pill.comm::before { background: var(--spectre-status-info); }
+  .spectre-mc-pill.auto     { background: transparent; border-color: var(--spectre-border-strong); color: var(--spectre-text-muted); }
+  .spectre-mc-pill.auto::before { background: transparent; border: 1px solid var(--spectre-status-success); box-sizing: border-box; }
+  .spectre-mc-pill.info     { background: transparent; border-color: var(--spectre-border-default); color: var(--spectre-text-muted); }
+  .spectre-mc-pill.info::before { background: transparent; border: 1px solid var(--spectre-text-subtle); box-sizing: border-box; }
+
+  .spectre-mc-id-tag {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; color: var(--spectre-text-muted);
+    letter-spacing: 0.02em; font-weight: 500;
+  }
+  .spectre-mc-flag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 6px;
+    background: var(--spectre-status-warning-bg);
+    border: 1px solid var(--spectre-status-warning);
+    border-radius: 4px;
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--spectre-status-warning); font-weight: 700;
+  }
+  .spectre-mc-ts {
+    margin-left: auto;
+    font-size: 11.5px; color: var(--spectre-text-muted);
+    font-variant-numeric: tabular-nums; font-weight: 500;
+  }
+
+  .spectre-mc-item h3 {
+    font-size: 15.5px; line-height: 22px;
+    letter-spacing: -0.008em; font-weight: 600;
+    color: var(--spectre-text-primary);
+    margin-bottom: 4px;
+  }
+  .spectre-mc-sender {
+    display: flex; align-items: baseline; gap: 6px;
+    font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500;
+    flex-wrap: wrap;
+  }
+  .spectre-mc-sender .from {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-mc-sender .sep { color: var(--spectre-text-subtle); }
+
+  .spectre-mc-work {
+    margin-top: var(--spectre-space-3);
+    font-size: 13px; line-height: 20px; color: var(--spectre-text-secondary);
+    max-width: 780px;
+  }
+  .spectre-mc-work .a { color: var(--spectre-text-primary); font-weight: 600; }
+  .spectre-mc-work b { color: var(--spectre-text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .spectre-mc-work .ref {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; color: var(--spectre-text-primary);
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-default);
+    padding: 1px 5px; border-radius: 3px;
+    letter-spacing: -0.01em; font-weight: 600;
+  }
+
+  /* --- Data readout ------------------------------------------ */
+  .spectre-mc-readout {
+    margin-top: var(--spectre-space-3);
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-button);
+  }
+  .spectre-mc-readout .cell {
+    padding: 10px 14px;
+    border-right: 1px solid var(--spectre-border-hairline);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .spectre-mc-readout .cell:last-child { border-right: none; }
+  .spectre-mc-readout .k {
+    font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 700;
+  }
+  .spectre-mc-readout .v {
+    font-size: 14px; font-weight: 600;
+    color: var(--spectre-text-primary);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.008em;
+  }
+  .spectre-mc-readout .v .cents { color: var(--spectre-text-muted); font-weight: 500; font-size: 12px; letter-spacing: 0; }
+  .spectre-mc-readout .v.observation { color: var(--spectre-status-warning); }
+  .spectre-mc-readout .v.confidence  { color: var(--spectre-status-success); }
+
+  /* --- Recommendation ---------------------------------------- */
+  .spectre-mc-rec {
+    margin-top: var(--spectre-space-3);
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 8px 12px;
+    background: var(--spectre-accent-soft);
+    border-left: 2px solid var(--spectre-accent);
+    border-radius: 3px;
+  }
+  .spectre-mc-rec .k {
+    color: var(--spectre-status-success);
+    font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase;
+    font-weight: 700; flex-shrink: 0; padding-top: 2px;
+  }
+  .spectre-mc-rec .v { font-size: 12.5px; color: var(--spectre-text-primary); line-height: 18px; font-weight: 500; }
+  .spectre-mc-rec .v b { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  /* --- Actions ------------------------------------------------ */
+  .spectre-mc-actions {
+    margin-top: var(--spectre-space-3);
+    display: flex; align-items: center; gap: 8px;
+    flex-wrap: wrap;
+  }
+  .spectre-mc-actions .grow { flex: 1; }
+  .spectre-mc-actions .aux {
+    font-size: 11px; color: var(--spectre-text-muted); font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+  }
+  .spectre-mc-actions .aux:hover { color: var(--spectre-text-secondary); }
+  .spectre-mc-actions .aux svg { width: 11px; height: 11px; }
+
+  /* --- Sprint 2 Checkpoint 14B — Email intake accents ----------- */
+  /* Unread accent: 4px left border in muted green + subject
+     semi-bold (already the default weight for h3 inside item). */
+  .spectre-mc-item--unread {
+    border-left-width: 4px;
+    border-left-color: var(--spectre-status-success);
+  }
+  .spectre-mc-pill-unread {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--spectre-status-success);
+    background: color-mix(in oklab, var(--spectre-status-success) 12%, transparent);
+    padding: 2px 7px; border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--spectre-status-success) 24%, transparent);
+  }
+  .spectre-mc-convo-count {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em;
+    color: var(--spectre-text-muted); text-transform: uppercase;
+    padding: 1px 6px; border-radius: 3px;
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-hairline);
+  }
+
+  /* --- C14C: operational synopsis + evidence strip -------------- */
+  .spectre-mc-synopsis {
+    margin: 6px 0 10px 0;
+    font-size: 13px; line-height: 19px;
+    color: var(--spectre-text-primary);
+    font-weight: 500;
+  }
+  .spectre-mc-evidence {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: var(--spectre-space-3);
+    border-top: 1px solid var(--spectre-border-hairline);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    padding: 10px 0;
+  }
+  .spectre-mc-evidence .cell {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 0;
+  }
+  .spectre-mc-evidence .cell .k {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-mc-evidence .cell .v {
+    font-size: 12.5px; font-weight: 600;
+    color: var(--spectre-text-primary);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .spectre-mc-evidence .cell.state-not-found .v,
+  .spectre-mc-evidence .cell.state-not-extracted .v,
+  .spectre-mc-evidence .cell.state-no-data .v {
+    color: var(--spectre-text-muted); font-weight: 500;
+  }
+  .spectre-mc-evidence .cell.state-ambiguous .v,
+  .spectre-mc-evidence .cell.state-duplicate .v {
+    color: var(--spectre-status-warning, #b78c00);
+  }
+  .spectre-mc-evidence .cell.state-found .v,
+  .spectre-mc-evidence .cell.state-extracted .v {
+    color: var(--spectre-text-primary);
+  }
+
+  /* --- Sprint 2 Checkpoint 14B — Inline expansion --------------- */
+  .spectre-mc-inline-expansion {
+    margin-top: var(--spectre-space-3);
+    padding-top: var(--spectre-space-3);
+    border-top: 1px solid var(--spectre-border-hairline);
+    display: flex; flex-direction: column; gap: var(--spectre-space-3);
+  }
+  .spectre-mc-inline-status {
+    font-size: 12px; color: var(--spectre-text-muted);
+    padding: 12px 14px;
+    background: var(--spectre-canvas-sunken);
+    border: 1px dashed var(--spectre-border-default);
+    border-radius: 6px;
+  }
+  .spectre-mc-inline-status--error {
+    color: var(--spectre-status-danger, #a13030);
+    background: color-mix(in oklab, var(--spectre-status-danger, #a13030) 6%, transparent);
+    border-color: color-mix(in oklab, var(--spectre-status-danger, #a13030) 30%, transparent);
+    border-style: solid;
+  }
+
+  /* --- C14C: Inline conversation thread ------------------------- */
+  .spectre-mc-inline-thread {
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .spectre-mc-inline-thread-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
+  }
+  .spectre-mc-inline-thread-eyebrow {
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    font-weight: 700; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-thread-meta {
+    font-size: 11px; color: var(--spectre-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .spectre-mc-inline-thread-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .spectre-mc-inline-thread-item {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .spectre-mc-inline-thread-item.open {
+    border-color: var(--spectre-border-default);
+  }
+  .spectre-mc-inline-thread-summary {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto auto auto;
+    gap: 10px; align-items: baseline;
+    width: 100%;
+    background: none; border: none; text-align: left; cursor: pointer;
+    padding: 8px 12px;
+    font-family: inherit;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-inline-thread-summary:hover { background: var(--spectre-canvas-sunken); }
+  .spectre-mc-inline-thread-summary .pos {
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 700; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-thread-summary .sender {
+    font-size: 12.5px; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .spectre-mc-inline-thread-summary .sender .addr {
+    font-weight: 400; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-thread-summary .subj {
+    font-size: 12px; color: var(--spectre-text-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .spectre-mc-inline-thread-summary .ts {
+    font-size: 11px; color: var(--spectre-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .spectre-mc-inline-thread-summary .attach {
+    font-size: 11px; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-thread-summary .chev {
+    font-size: 10px; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-thread-body {
+    padding: 4px 14px 14px 14px;
+    border-top: 1px dashed var(--spectre-border-hairline);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .spectre-mc-inline-thread-meta-block {
+    display: grid; grid-template-columns: 60px 1fr;
+    row-gap: 3px; column-gap: 12px; margin: 0;
+    font-size: 12px;
+  }
+  .spectre-mc-inline-thread-meta-block .row { display: contents; }
+  .spectre-mc-inline-thread-meta-block dt {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    color: var(--spectre-text-muted); letter-spacing: 0.04em;
+  }
+  .spectre-mc-inline-thread-meta-block dd { margin: 0; overflow-wrap: anywhere; }
+  .spectre-mc-inline-thread-attach {
+    font-size: 11.5px; color: var(--spectre-text-secondary);
+    padding: 6px 10px;
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 3px;
+  }
+  .spectre-mc-inline-thread-body-html {
+    font-size: 13px; line-height: 20px; color: var(--spectre-text-primary);
+    max-height: 360px; overflow-y: auto;
+    padding-right: 4px;
+  }
+  .spectre-mc-inline-thread-body-html img {
+    max-width: 100%; height: auto;
+    background: var(--spectre-canvas-sunken);
+    border: 1px dashed var(--spectre-border-default);
+  }
+  .spectre-mc-inline-thread-body-html a {
+    color: var(--spectre-status-info); text-decoration: underline;
+  }
+  .spectre-mc-inline-thread-body-text {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 18px;
+    white-space: pre-wrap; word-break: break-word;
+    color: var(--spectre-text-primary); margin: 0;
+    max-height: 360px; overflow-y: auto;
+  }
+  .spectre-mc-inline-thread-nobody {
+    font-style: italic; color: var(--spectre-text-muted); font-size: 12px;
+    margin: 0;
+  }
+
+  /* --- C14C: composer additions (consent + confirm + sent) ------ */
+  .spectre-mc-inline-composer-consent {
+    font-size: 12px; padding: 8px 12px;
+    background: color-mix(in oklab, var(--spectre-status-warning, #b78c00) 6%, transparent);
+    border-left: 3px solid var(--spectre-status-warning, #b78c00);
+    border-radius: 3px;
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-mc-inline-composer-confirm {
+    font-size: 12.5px; padding: 8px 12px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 4px;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-inline-composer-confirm .lead {
+    font-weight: 600; margin-bottom: 4px;
+  }
+  .spectre-mc-inline-composer-confirm ul {
+    list-style: disc; padding-left: 18px; margin: 0;
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-mc-inline-composer-error {
+    font-size: 12px; padding: 8px 12px;
+    background: color-mix(in oklab, var(--spectre-status-danger, #a13030) 6%, transparent);
+    border-left: 3px solid var(--spectre-status-danger, #a13030);
+    border-radius: 3px;
+    color: var(--spectre-status-danger, #a13030);
+  }
+  .spectre-mc-inline-composer-truthful-note {
+    font-size: 12.5px; color: var(--spectre-text-secondary);
+    padding: 8px 12px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 3px;
+  }
+  .spectre-mc-inline-composer--sent { border-color: var(--spectre-border-strong); }
+
+  /* --- Legacy C14B single-email panel (retained styles for
+       backward compatibility with the WorkIntake detail route.
+       The C14B panel is no longer used by Mission Control) ------- */
+  .spectre-mc-inline-email {
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .spectre-mc-inline-email-head { display: flex; align-items: center; }
+  .spectre-mc-inline-email-eyebrow {
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    font-weight: 700; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-email-meta {
+    display: grid; grid-template-columns: 90px 1fr;
+    row-gap: 5px; column-gap: 12px; margin: 0;
+    font-size: 12.5px; line-height: 18px;
+  }
+  .spectre-mc-inline-email-meta .row { display: contents; }
+  .spectre-mc-inline-email-meta dt {
+    color: var(--spectre-text-muted);
+    font-weight: 600; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.03em;
+    padding-top: 1px;
+  }
+  .spectre-mc-inline-email-meta dd {
+    margin: 0; color: var(--spectre-text-primary);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+  .spectre-mc-inline-email-meta dd .name { font-weight: 600; }
+  .spectre-mc-inline-email-meta dd .addr { color: var(--spectre-text-muted); font-weight: 500; }
+
+  .spectre-mc-inline-email-attach {
+    font-size: 11.5px; color: var(--spectre-text-secondary);
+    padding: 8px 10px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 4px;
+  }
+
+  .spectre-mc-inline-email-body {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 4px;
+    padding: 12px 14px;
+    max-height: 520px; overflow-y: auto;
+  }
+  .spectre-mc-inline-email-body-html {
+    font-size: 13px; line-height: 20px; color: var(--spectre-text-primary);
+  }
+  .spectre-mc-inline-email-body-html img {
+    /* Sanitizer already replaces remote src with about:blank; enforce
+       that broken image placeholders don't blow the layout. */
+    max-width: 100%; height: auto;
+    background: var(--spectre-canvas-sunken);
+    border: 1px dashed var(--spectre-border-default);
+  }
+  .spectre-mc-inline-email-body-html a {
+    color: var(--spectre-status-info); text-decoration: underline;
+  }
+  .spectre-mc-inline-email-body-text {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 18px;
+    white-space: pre-wrap; word-break: break-word;
+    color: var(--spectre-text-primary); margin: 0;
+  }
+  .spectre-mc-inline-email-nobody {
+    font-style: italic; color: var(--spectre-text-muted); font-size: 12px;
+    margin: 0;
+  }
+  .spectre-mc-inline-email-notice {
+    font-size: 12.5px; color: var(--spectre-text-secondary);
+    padding: 10px 12px;
+    background: color-mix(in oklab, var(--spectre-status-warning, #b78c00) 8%, transparent);
+    border-left: 3px solid var(--spectre-status-warning, #b78c00);
+    border-radius: 3px;
+  }
+  .spectre-mc-inline-email-weblink { font-size: 11.5px; margin: 0; }
+  .spectre-mc-inline-email-weblink a { color: var(--spectre-text-secondary); }
+
+  /* --- Inline reply composer ------------------------------------ */
+  .spectre-mc-inline-composer {
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .spectre-mc-inline-composer-head { display: flex; align-items: center; justify-content: space-between; }
+  .spectre-mc-inline-composer-eyebrow {
+    font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    font-weight: 700; color: var(--spectre-text-muted);
+  }
+  .spectre-mc-inline-composer-status {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em;
+    color: var(--spectre-text-muted); text-transform: uppercase;
+  }
+  .spectre-mc-inline-composer-textarea {
+    width: 100%;
+    min-height: 140px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-family: inherit; font-size: 13px; line-height: 20px;
+    color: var(--spectre-text-primary);
+    resize: vertical;
+  }
+  .spectre-mc-inline-composer-textarea:focus {
+    outline: 2px solid color-mix(in oklab, var(--spectre-status-info) 40%, transparent);
+    outline-offset: -1px;
+  }
+  .spectre-mc-inline-composer-controls {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .spectre-mc-inline-composer-unavailable {
+    font-size: 11px; color: var(--spectre-text-muted);
+    font-style: italic;
+    flex-basis: 100%;
+  }
+  .spectre-mc-inline-composer-ack {
+    font-size: 11.5px; color: var(--spectre-text-secondary);
+    padding: 4px 8px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 3px;
+  }
+
+  /* Disabled variant of spectre-btn — used by the send button in
+     the reply composer to make the "not available" state visually
+     unambiguous. */
+  .spectre-btn.spectre-btn--disabled,
+  .spectre-btn[disabled] {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: auto; /* keep clickable for the acknowledge no-op */
+  }
+
+  /* --- done + info items ------------------------------------- */
+  .spectre-mc-item.done h3 {
+    font-size: 13.5px; font-weight: 600;
+    color: var(--spectre-text-secondary);
+    line-height: 18px; margin-bottom: 3px;
+  }
+  .spectre-mc-done-meta {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    font-size: 11.5px; color: var(--spectre-text-muted);
+    font-variant-numeric: tabular-nums; font-weight: 500;
+  }
+  .spectre-mc-done-meta .val {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--spectre-text-secondary);
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-default);
+    padding: 1px 5px; border-radius: 3px;
+    font-size: 10.5px; letter-spacing: -0.01em; font-weight: 600;
+  }
+  .spectre-mc-item.info-item h3 {
+    font-size: 13px; font-weight: 500;
+    color: var(--spectre-text-primary);
+    margin-bottom: 3px; line-height: 18px;
+  }
+  .spectre-mc-info-meta { font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; }
+  .spectre-mc-info-meta b { color: var(--spectre-text-secondary); font-weight: 600; }
+
+  /* --- Executive rail ---------------------------------------- */
+  .spectre-mc-rail {
+    display: flex; flex-direction: column; gap: var(--spectre-space-3);
+    position: sticky; top: var(--spectre-space-4);
+  }
+  .spectre-mc-rail-card {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: var(--spectre-shadow-subtle);
+    padding: 14px 16px 16px;
+  }
+  .spectre-mc-rail-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: var(--spectre-space-3);
+    padding-bottom: var(--spectre-space-2);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-mc-rail-head .t {
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--spectre-text-primary); font-weight: 700;
+  }
+  .spectre-mc-rail-head .a { font-size: 11px; color: var(--spectre-text-muted); font-weight: 500; text-decoration: none; }
+  .spectre-mc-rail-head .a:hover { color: var(--spectre-text-primary); }
+
+  .spectre-mc-rail-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 5px 0;
+  }
+  .spectre-mc-rail-row + .spectre-mc-rail-row {
+    border-top: 1px dashed var(--spectre-border-hairline);
+  }
+  .spectre-mc-rail-row .k { font-size: 12.5px; color: var(--spectre-text-secondary); font-weight: 500; }
+  .spectre-mc-rail-row .v {
+    font-size: 13.5px; font-weight: 600; color: var(--spectre-text-primary);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.008em;
+  }
+  .spectre-mc-rail-row .v .cents { color: var(--spectre-text-muted); font-weight: 500; font-size: 11.5px; letter-spacing: 0; }
+  .spectre-mc-rail-row .v .flag {
+    display: inline-flex; align-items: center;
+    padding: 1px 5px; margin-left: 6px;
+    background: var(--spectre-status-warning-bg);
+    border: 1px solid var(--spectre-status-warning);
+    border-radius: 3px;
+    font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--spectre-status-warning); font-weight: 700;
+  }
+  .spectre-mc-rail-row .v .flag.ok {
+    background: var(--spectre-status-success-bg);
+    border-color: var(--spectre-status-success);
+    color: var(--spectre-status-success);
+  }
+
+  .spectre-mc-insight p {
+    font-size: 12.5px; line-height: 18px;
+    color: var(--spectre-text-primary); font-weight: 500;
+  }
+  .spectre-mc-insight p b { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .spectre-mc-insight .src {
+    margin-top: var(--spectre-space-2);
+    padding-top: var(--spectre-space-2);
+    border-top: 1px dashed var(--spectre-border-hairline);
+    font-size: 10.5px; color: var(--spectre-text-muted); font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .spectre-mc-insight .src svg { width: 11px; height: 11px; color: var(--spectre-text-muted); }
+  .spectre-mc-insight .src a { color: var(--spectre-text-secondary); font-weight: 600; text-decoration: none; }
+  .spectre-mc-insight .src a:hover { color: var(--spectre-text-primary); }
+}
+
+/* ================================================================
+ * Data Workspace — Foundation v1.0 (2026-07-18)
+ *
+ * Founder-approved production surface for /app/admin/coa (extends to
+ * Trial Balance, Vendors, Members, Employees, Fixed Assets,
+ * Inventory, Budgeting, Journal Entries). Composes with the existing
+ * `--spectre-*` token layer; adds only component classes (`spectre-dw-*`).
+ * No token values change.
+ *
+ * Structural intent (from the approved concept):
+ *   • workspace header — title + meta line + secondary/primary actions
+ *   • toolbar — search + saved view + filter chips + density segment
+ *   • fund-applicability progress ribbon (view-conditional)
+ *   • selection bar — visible + hidden count + explicit actions
+ *   • bounded grouped table with left-edge status stripes on rows
+ *   • read-only inspector panel (edit still routes to the legacy modal
+ *     during Phase A; inspector editing is Phase B)
+ *   • empty-state and no-results affordances
+ * ================================================================ */
+
+@layer components {
+  /* Sprint 1 reopened acceptance correction (2026-07-19). The
+     previous CSS collapsed the grid to a single column whenever no
+     account was selected (`[data-inspector-open="false"]`), hiding
+     the inspector entirely. That does NOT match the founder-approved
+     concept, which reserves the right-hand inspector column at every
+     desktop viewport regardless of selection state. The rule below
+     always renders `1fr 400px` at ≥ 1280px; the tablet breakpoint
+     is the only place the inspector collapses off-screen. */
+  /* Sprint 1 acceptance repair (2026-07-19) — REGRESSION FIX (2026-07-19b).
+     Previously `.spectre-dw-root` was a `flex-direction: column` with
+     `min-height` and `.spectre-dw-body` used `flex: 1`. That is NOT a
+     definite-height parent for the aside's `align-self: stretch`, so
+     `.spectre-dw-inspector { height: 100%; }` (line ~1524) resolved
+     against an indefinite parent and the empty-state / reader-state
+     content rendered at 0 height — a blank ivory pane on the right.
+     This matches the founder-approved concept HTML exactly, which
+     uses:
+       .workspace { display: grid; grid-template-rows: auto auto auto 1fr;
+                    height: calc(100vh - 56px); }
+       .dw-main   { display: grid; grid-template-columns: minmax(0, 1fr) 400px;
+                    height: 100%; min-height: 0; }
+     The `1fr` row is what makes the body pane fill remaining height
+     even when the fund-mode progress ribbon or the selection bar are
+     absent (auto-flow places body in whichever row is the last one).
+     Anchoring `.spectre-dw-body` at `grid-row: -1` guarantees it lands
+     in the `1fr` track regardless of how many `auto` rows are present
+     above it. */
+  .spectre-dw-root { display: grid; grid-template-rows: repeat(3, auto) 1fr; height: calc(100vh - var(--spectre-topbar-h, 64px)); overflow: hidden; }
+  .spectre-dw-body { grid-row: -1; display: grid; grid-template-columns: minmax(0, 1fr) 400px; height: 100%; min-height: 0; overflow: hidden; }
+  .spectre-dw-main { min-width: 0; background: var(--spectre-canvas); border-right: 1px solid var(--spectre-border-hairline); display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+  .spectre-dw-inspector-slot { background: var(--spectre-surface); border-left: 1px solid var(--spectre-border-hairline); overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  @media (max-width: 1279px) { .spectre-dw-body { grid-template-columns: minmax(0, 1fr); } .spectre-dw-inspector-slot { display: none; } }
+
+  /* Header --------------------------------------------------------- */
+  .spectre-dw-header { padding: 18px 32px 14px; background: var(--spectre-canvas); border-bottom: 1px solid var(--spectre-border-hairline); }
+  .spectre-dw-header-crumb { font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; letter-spacing: 0.02em; margin-bottom: 4px; }
+  .spectre-dw-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+  .spectre-dw-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.014em; color: var(--spectre-text-primary); }
+  .spectre-dw-title-meta { margin-top: 4px; font-size: 12.5px; color: var(--spectre-text-secondary); font-weight: 500; }
+  .spectre-dw-title-meta .k { color: var(--spectre-text-muted); }
+  .spectre-dw-title-meta .sep { color: var(--spectre-text-subtle); margin: 0 6px; }
+  .spectre-dw-title-meta b { color: var(--spectre-text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .spectre-dw-header-actions { display: flex; align-items: center; gap: 8px; padding-top: 2px; flex-wrap: wrap; }
+
+  /* Diagnostic + result banners live above the header. */
+  .spectre-dw-banner { padding: 10px 32px; font-size: 12.5px; font-weight: 500; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--spectre-border-hairline); }
+  .spectre-dw-banner b { font-weight: 700; }
+  .spectre-dw-banner.ok    { background: var(--spectre-status-success-bg); color: var(--spectre-status-success); border-bottom-color: rgba(22, 101, 52, 0.32); }
+  .spectre-dw-banner.warn  { background: var(--spectre-status-warning-bg); color: var(--spectre-status-warning); border-bottom-color: rgba(180, 83, 9, 0.32); }
+  .spectre-dw-banner.error { background: var(--spectre-status-error-bg);   color: var(--spectre-status-error);   border-bottom-color: rgba(185, 28, 28, 0.32); }
+
+  /* Toolbar ------------------------------------------------------- */
+  .spectre-dw-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 32px; background: var(--spectre-surface); border-bottom: 1px solid var(--spectre-border-hairline); flex-wrap: wrap; }
+  .spectre-dw-search { display: flex; align-items: center; gap: 8px; width: 300px; padding: 6px 10px; background: var(--spectre-canvas-sunken); border: 1px solid var(--spectre-border-hairline); border-radius: var(--spectre-radius-button); font-size: 12.5px; color: var(--spectre-text-muted); font-weight: 500; }
+  .spectre-dw-search:focus-within { border-color: var(--spectre-accent); background: var(--spectre-surface); box-shadow: 0 0 0 3px var(--spectre-accent-ring); }
+  .spectre-dw-search input { flex: 1; background: transparent; border: none; outline: none; color: var(--spectre-text-primary); font: inherit; }
+  .spectre-dw-search input::placeholder { color: var(--spectre-text-muted); }
+  .spectre-dw-search svg { width: 13px; height: 13px; color: var(--spectre-text-muted); flex-shrink: 0; }
+  .spectre-dw-search .kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10px; color: var(--spectre-text-subtle); background: var(--spectre-surface); border: 1px solid var(--spectre-border-hairline); border-radius: 3px; padding: 1px 5px; }
+  .spectre-dw-search .clear { display: none; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--spectre-text-muted); border-radius: 999px; background: transparent; border: none; padding: 0; cursor: pointer; }
+  .spectre-dw-search[data-active="true"] .clear { display: inline-flex; }
+  .spectre-dw-search[data-active="true"] .kbd { display: none; }
+  .spectre-dw-search .clear:hover { color: var(--spectre-text-primary); background: rgba(15, 15, 20, 0.06); }
+
+  .spectre-dw-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-hairline); border-radius: var(--spectre-radius-button); font-size: 12px; color: var(--spectre-text-secondary); font-weight: 500; white-space: nowrap; text-decoration: none; cursor: pointer; }
+  .spectre-dw-chip:hover { border-color: var(--spectre-border-strong); color: var(--spectre-text-primary); }
+  .spectre-dw-chip svg { width: 11px; height: 11px; color: var(--spectre-text-muted); }
+  .spectre-dw-chip.on { background: var(--spectre-status-success-bg); border-color: var(--spectre-status-success); color: var(--spectre-status-success); font-weight: 600; }
+  .spectre-dw-chip.on svg { color: var(--spectre-status-success); }
+  .spectre-dw-chip .k { color: var(--spectre-text-muted); font-weight: 500; }
+  .spectre-dw-chip .v { color: currentColor; font-weight: 600; }
+  .spectre-dw-chip .n { color: var(--spectre-text-muted); font-weight: 500; font-variant-numeric: tabular-nums; padding-left: 6px; border-left: 1px solid var(--spectre-border-hairline); margin-left: 6px; }
+  .spectre-dw-chip[data-disabled="true"] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+
+  .spectre-dw-toolbar .grow { flex: 1; }
+  .spectre-dw-toolbar .divider { width: 1px; height: 18px; background: var(--spectre-border-hairline); margin: 0 4px; }
+
+  .spectre-dw-density-seg { display: inline-flex; padding: 2px; background: var(--spectre-canvas-sunken); border: 1px solid var(--spectre-border-hairline); border-radius: var(--spectre-radius-button); }
+  .spectre-dw-density-seg button { padding: 3px 10px; font-size: 11.5px; font-weight: 600; color: var(--spectre-text-muted); border-radius: 4px; letter-spacing: -0.002em; background: transparent; border: none; cursor: pointer; }
+  .spectre-dw-density-seg button:hover { color: var(--spectre-text-primary); }
+  .spectre-dw-density-seg button[aria-pressed="true"] { background: var(--spectre-surface); color: var(--spectre-text-primary); box-shadow: 0 1px 0 rgba(20,18,12,0.04); border: 1px solid var(--spectre-border-hairline); }
+
+  .spectre-dw-view-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-hairline); border-radius: var(--spectre-radius-button); font-size: 12px; color: var(--spectre-text-secondary); font-weight: 500; cursor: pointer; font-family: inherit; }
+  .spectre-dw-view-chip:hover { border-color: var(--spectre-border-strong); color: var(--spectre-text-primary); }
+  .spectre-dw-view-chip .active-view { color: var(--spectre-text-primary); font-weight: 600; }
+  .spectre-dw-view-chip svg { width: 11px; height: 11px; color: var(--spectre-text-muted); }
+
+  .spectre-dw-view-menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 220px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-strong); border-radius: var(--spectre-radius-panel); box-shadow: var(--spectre-shadow-floating); padding: 4px; z-index: 20; }
+  .spectre-dw-view-menu a { display: block; padding: 6px 10px; font-size: 12.5px; color: var(--spectre-text-primary); border-radius: 4px; text-decoration: none; font-weight: 500; }
+  .spectre-dw-view-menu a:hover { background: var(--spectre-surface-hover); }
+  .spectre-dw-view-menu a[data-active="true"] { background: var(--spectre-status-success-bg); color: var(--spectre-status-success); font-weight: 600; }
+
+  /* Fund-applicability progress ribbon ---------------------------- */
+  .spectre-dw-progress { display: flex; align-items: center; gap: 16px; padding: 10px 32px; background: var(--spectre-canvas); border-bottom: 1px solid var(--spectre-border-hairline); font-size: 12.5px; color: var(--spectre-text-secondary); font-weight: 500; }
+  .spectre-dw-progress .stat { display: inline-flex; align-items: baseline; gap: 6px; }
+  .spectre-dw-progress .stat b { font-variant-numeric: tabular-nums; color: var(--spectre-text-primary); font-weight: 700; font-size: 14px; }
+  .spectre-dw-progress .stat.unassigned b { color: var(--spectre-status-warning); }
+  .spectre-dw-progress .bar { flex: 1; height: 6px; background: var(--spectre-canvas-sunken); border-radius: 3px; overflow: hidden; max-width: 400px; }
+  .spectre-dw-progress .bar .fill { height: 100%; background: var(--spectre-status-success); border-radius: 3px; }
+
+  /* Selection bar ------------------------------------------------- */
+  .spectre-dw-selection { display: flex; align-items: center; gap: 12px; padding: 8px 32px; background: var(--spectre-status-success-bg); border-bottom: 1px solid rgba(22,101,52,0.32); font-size: 12.5px; color: var(--spectre-status-success); font-weight: 600; }
+  .spectre-dw-selection[data-hidden="true"] { background: var(--spectre-status-warning-bg); border-bottom-color: rgba(180,83,9,0.32); color: var(--spectre-status-warning); }
+  .spectre-dw-selection .count { font-variant-numeric: tabular-nums; }
+  .spectre-dw-selection .hidden-note { font-weight: 500; color: currentColor; font-variant-numeric: tabular-nums; }
+  .spectre-dw-selection .grow { flex: 1; }
+
+  /* Buttons (Data Workspace variants) ---------------------------- */
+  .spectre-dw-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; border-radius: var(--spectre-radius-button); letter-spacing: -0.002em; transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease; text-decoration: none; cursor: pointer; border: 1px solid transparent; font-family: inherit; }
+  .spectre-dw-btn svg { width: 12px; height: 12px; }
+  .spectre-dw-btn:focus-visible { outline: 2px solid var(--spectre-accent); outline-offset: 2px; }
+  .spectre-dw-btn.primary { background: var(--spectre-accent); color: var(--spectre-text-inverse); border-color: var(--spectre-accent); box-shadow: 0 1px 0 rgba(20,18,12,0.06); }
+  .spectre-dw-btn.primary:hover { background: var(--spectre-accent-hover); border-color: var(--spectre-accent-hover); }
+  .spectre-dw-btn.primary[disabled], .spectre-dw-btn.primary[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+  .spectre-dw-btn.secondary { background: var(--spectre-surface); color: var(--spectre-text-primary); border-color: var(--spectre-border-strong); }
+  .spectre-dw-btn.secondary:hover { background: var(--spectre-surface-hover); border-color: rgba(15,15,20,0.24); }
+  .spectre-dw-btn.tertiary { background: transparent; color: var(--spectre-text-secondary); padding: 7px 8px; }
+  .spectre-dw-btn.tertiary:hover { color: var(--spectre-text-primary); background: rgba(15, 15, 20, 0.05); }
+  .spectre-dw-btn.destructive { background: transparent; color: var(--spectre-status-error); padding: 7px 12px; }
+  .spectre-dw-btn.destructive:hover { background: var(--spectre-status-error-bg); border-color: rgba(185,28,28,0.32); }
+  .spectre-dw-btn.sm { padding: 4px 10px; font-size: 11.5px; }
+
+  /* Table --------------------------------------------------------- */
+  .spectre-dw-table-wrap { flex: 1; overflow: auto; background: var(--spectre-surface); min-height: 0; }
+  table.spectre-dw-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--spectre-text-primary); font-variant-numeric: tabular-nums; }
+  table.spectre-dw-table thead th { position: sticky; top: 0; z-index: 3; padding: 8px 12px; background: var(--spectre-canvas-sunken); border-bottom: 1px solid var(--spectre-border-hairline); font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; text-align: left; }
+  table.spectre-dw-table thead th.num { text-align: right; }
+  table.spectre-dw-table thead th.sortable button.sort { display: inline-flex; align-items: center; gap: 5px; padding: 0; background: transparent; border: none; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; font-weight: inherit; cursor: pointer; }
+  table.spectre-dw-table thead th.sortable button.sort svg { width: 10px; height: 10px; opacity: 0.4; }
+  table.spectre-dw-table thead th.sortable button.sort.active { color: var(--spectre-text-primary); }
+  table.spectre-dw-table thead th.sortable button.sort.active svg { opacity: 1; }
+
+  tr.spectre-dw-group-header td { padding: 8px 12px; background: var(--spectre-canvas); border-bottom: 1px solid var(--spectre-border-hairline); font-size: 11.5px; letter-spacing: 0.05em; color: var(--spectre-text-primary); font-weight: 700; text-transform: none; cursor: pointer; }
+  tr.spectre-dw-group-header td .grp-title { text-transform: uppercase; letter-spacing: 0.14em; font-size: 11px; }
+  tr.spectre-dw-group-header td .grp-meta { color: var(--spectre-text-muted); font-weight: 500; letter-spacing: 0.005em; margin-left: 10px; font-variant-numeric: tabular-nums; }
+  tr.spectre-dw-group-header td .grp-total { float: right; font-weight: 600; color: var(--spectre-text-primary); font-variant-numeric: tabular-nums; letter-spacing: -0.005em; }
+  tr.spectre-dw-group-header td .toggle { width: 10px; height: 10px; margin-right: 8px; color: var(--spectre-text-muted); display: inline-block; vertical-align: -1px; transition: transform 160ms ease; }
+  tr.spectre-dw-group-header.collapsed td .toggle { transform: rotate(-90deg); }
+  tr.spectre-dw-group-header td .val-count { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; padding: 1px 6px; background: var(--spectre-status-warning-bg); border: 1px solid rgba(180,83,9,0.32); border-radius: 3px; color: var(--spectre-status-warning); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+  tr.spectre-dw-group-header td .val-count.err { background: var(--spectre-status-error-bg); border-color: rgba(185,28,28,0.32); color: var(--spectre-status-error); }
+
+  tr.spectre-dw-sub-header td { padding: 5px 12px; background: var(--spectre-surface); border-bottom: 1px dashed var(--spectre-border-hairline); font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; }
+  tr.spectre-dw-sub-header td .sg-count { color: var(--spectre-text-muted); font-weight: 500; text-transform: none; letter-spacing: 0.005em; margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+  /* Density-driven row height */
+  table.spectre-dw-table[data-density="comfortable"] tbody tr.spectre-dw-row td { padding: 12px 12px; }
+  table.spectre-dw-table[data-density="standard"]     tbody tr.spectre-dw-row td { padding: 8px 12px; }
+  table.spectre-dw-table[data-density="compact"]      tbody tr.spectre-dw-row td { padding: 4px 12px; }
+
+  tr.spectre-dw-row td { border-bottom: 1px solid var(--spectre-border-hairline); vertical-align: middle; }
+  tr.spectre-dw-row:hover td { background: var(--spectre-surface-hover); cursor: pointer; }
+  tr.spectre-dw-row[data-selected="true"] td { background: var(--spectre-status-success-bg); }
+  tr.spectre-dw-row[data-active-inspector="true"] td { box-shadow: inset 3px 0 0 var(--spectre-accent); }
+  tr.spectre-dw-row[data-inactive="true"] td { color: var(--spectre-text-muted); opacity: 0.65; }
+  tr.spectre-dw-row[data-validation="warn"] td:first-child { box-shadow: inset 3px 0 0 var(--spectre-status-warning); }
+  tr.spectre-dw-row[data-validation="blocked"] td:first-child { box-shadow: inset 3px 0 0 var(--spectre-status-error); }
+  tr.spectre-dw-row[data-hidden="true"] { display: none; }
+
+  /* Select column — Sprint 1 acceptance correction (2026-07-18).
+     The header select-all cell must be optically identical to the row
+     select cells so the checkbox column reads as one continuous column,
+     not a header+body split with a darker chunk on top. Both selectors
+     declare the same width + padding here; the header cell also
+     explicitly overrides the sunken sticky-header background because
+     the select column is chrome, not content.
+
+     Note: the body-cell padding here is intentionally NOT more specific
+     than the density rule (`tbody tr.spectre-dw-row td { padding: … }`).
+     Body cells inherit the density's horizontal padding (12px) so the
+     header at 12px matches them exactly across Comfy / Standard / Compact. */
+  /* Sprint 1 reopened acceptance correction (2026-07-19).
+     The previous rule used `td.select` / `th.select` — those class
+     names COLLIDE with the legacy Tailwind `.input, .select, .textarea`
+     form-control rule at globals.css:145, which applies:
+       display: block; width: 100%; border-radius: 0.375rem;
+       border: 1px solid stone-300; background: white;
+       padding: 8px 12px; box-shadow: 0 1px 2px …
+     That legacy rule was inheriting into every `<td class="select">`
+     and rendering each checkbox cell as a heavy rounded rectangular
+     form-input box — the "unfinished heavy vertical stack of outlined
+     boxes" the founder reported. Renaming the class to a fully
+     `.spectre-dw-select-cell` prefix eliminates the collision without
+     touching the legacy form-input rule (which is still used by
+     legacy `<select>` elements). */
+  table.spectre-dw-table td.spectre-dw-select-cell,
+  table.spectre-dw-table thead th.spectre-dw-select-cell {
+    width: 40px;
+    padding-left: 12px;
+    padding-right: 12px;
+    vertical-align: middle;
+    text-align: left;
+    /* Explicitly neutralise the legacy form-input styling that the
+       Tailwind `.input, .select, .textarea` rule would otherwise
+       inject through the ancestor cascade (belt + braces alongside
+       the class rename). */
+    border-radius: 0;
+    border: 0;
+    box-shadow: none;
+    display: table-cell;
+  }
+  /* Sprint 1 acceptance repair (2026-07-19).
+     Previously this override set `background: var(--spectre-surface)`
+     (white) — the founder called this out as reading like a card or
+     tile pinned on top of the header. The rest of `thead th` uses
+     `--spectre-canvas-sunken`; the select-all cell must inherit that
+     same tone so the header reads as ONE continuous grey strip. This
+     rule now only nudges the vertical padding — everything else
+     falls through to the base `thead th` rule above. */
+  table.spectre-dw-table thead th.spectre-dw-select-cell {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  table.spectre-dw-table td.actions { width: 40px; text-align: right; padding-right: 12px; }
+  table.spectre-dw-table td.num-col { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; letter-spacing: -0.005em; color: var(--spectre-text-primary); font-weight: 600; width: 82px; }
+  table.spectre-dw-table td.name { font-weight: 500; }
+  table.spectre-dw-table td.name .name-text { color: var(--spectre-text-primary); font-weight: 500; }
+  table.spectre-dw-table td.name .desc { display: block; font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 400; margin-top: 1px; }
+  table.spectre-dw-table[data-density="compact"] td.name .desc { display: none; }
+  table.spectre-dw-table td.name .desc.err { color: var(--spectre-status-error); font-weight: 500; }
+  table.spectre-dw-table td.tag { color: var(--spectre-text-secondary); font-size: 12.5px; }
+
+  /* Balance column — Sprint 1 acceptance repair (2026-07-19).
+     Balances render right-aligned, tabular, currency-formatted.
+     Zeros are subdued to an em-dash so the eye lands on the accounts
+     that have activity. Negatives (contra accounts, credit balances)
+     use the same red-toned status colour used elsewhere for warning
+     variance so the sign reads as a semantic signal, not a typo.
+     The `.cents` span keeps the ".00" one shade lighter so whole
+     dollars pop first — a small editorial detail borrowed from the
+     concept HTML. */
+  table.spectre-dw-table td.spectre-dw-balance-cell { width: 118px; padding-right: 16px; text-align: right; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; letter-spacing: -0.005em; color: var(--spectre-text-primary); font-weight: 500; }
+  .spectre-dw-balance { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .spectre-dw-balance .cents { color: var(--spectre-text-muted); font-weight: 400; }
+  .spectre-dw-balance.zero { color: var(--spectre-text-subtle); font-weight: 400; }
+  .spectre-dw-balance.negative { color: var(--spectre-status-error); }
+  .spectre-dw-balance.bold { font-weight: 600; color: var(--spectre-text-primary); }
+  tr.spectre-dw-sub-header td .sg-total { float: right; color: var(--spectre-text-secondary); font-weight: 500; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: none; letter-spacing: -0.005em; }
+  tr.spectre-dw-sub-header td .sg-total .spectre-dw-balance { font-size: 11.5px; }
+  tr.spectre-dw-group-header td .grp-total .spectre-dw-balance { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* Review-states design QA panel — Sprint 1 acceptance repair (2026-07-19).
+     Rendered ONLY when the server flagged reviewMode=true. Real
+     production users never see this — see the ReviewStatesPanel
+     component gate in ChartOfAccountsClient.tsx. */
+  .spectre-dw-review-root { position: fixed; right: 20px; bottom: 20px; z-index: 60; pointer-events: none; }
+  .spectre-dw-review-root > * { pointer-events: auto; }
+  .spectre-dw-review-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: rgba(20,18,12,0.86); color: #f6efe1; border: 1px solid rgba(255,255,255,0.08); border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.01em; cursor: pointer; box-shadow: 0 8px 22px rgba(0,0,0,0.28); font-family: inherit; }
+  .spectre-dw-review-toggle:hover { background: rgba(20,18,12,0.94); }
+  .spectre-dw-review-toggle svg { width: 12px; height: 12px; opacity: 0.85; }
+  .spectre-dw-review-panel { position: absolute; right: 0; bottom: 44px; width: 260px; padding: 14px 14px 12px; background: rgba(20,18,12,0.94); color: #f6efe1; border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,0.36); border: 1px solid rgba(255,255,255,0.06); }
+  .spectre-dw-review-close { position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: rgba(246,239,225,0.55); cursor: pointer; padding: 4px; }
+  .spectre-dw-review-close:hover { color: #f6efe1; }
+  .spectre-dw-review-panel .grp { margin-bottom: 12px; }
+  .spectre-dw-review-panel .grp:last-child { margin-bottom: 0; }
+  .spectre-dw-review-panel h5 { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(246,239,225,0.55); font-weight: 700; margin: 0 0 6px; }
+  .spectre-dw-review-panel .btns { display: flex; flex-direction: column; gap: 2px; }
+  .spectre-dw-review-panel .btns a { display: block; padding: 4px 8px; font-size: 11.5px; color: #f6efe1; border-radius: 5px; text-decoration: none; font-weight: 500; }
+  .spectre-dw-review-panel .btns a:hover { background: rgba(255,255,255,0.06); }
+
+  /* Chart of Accounts Import Modal — Sprint 1 correction (2026-07-19d).
+     A URL-addressable modal at `?modal=import` on `/app/admin/coa`.
+     The modal sits over the workspace like `AccountModal` (new-account)
+     but is styled specifically for a file upload: strong title,
+     dropzone with clear affordances, guidance panel below. It never
+     leaves the CoA workspace; on submit the server action redirects
+     to the existing batch-detail page. */
+  .spectre-dw-import-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(20,18,12,0.42); display: flex; align-items: flex-start; justify-content: center; padding: 68px 20px 40px; overflow-y: auto; }
+  .spectre-dw-import-modal { width: 100%; max-width: 560px; background: var(--spectre-surface); border-radius: 12px; box-shadow: 0 24px 60px rgba(20,18,12,0.28); border: 1px solid var(--spectre-border-hairline); overflow: hidden; }
+  .spectre-dw-import-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 14px; border-bottom: 1px solid var(--spectre-border-hairline); }
+  .spectre-dw-import-eyebrow { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; margin-bottom: 4px; }
+  .spectre-dw-import-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.014em; color: var(--spectre-text-primary); margin: 0 0 6px; line-height: 24px; }
+  .spectre-dw-import-head p { font-size: 12.5px; color: var(--spectre-text-secondary); font-weight: 500; line-height: 18px; margin: 0; max-width: 44em; }
+  .spectre-dw-import-close { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; color: var(--spectre-text-muted); background: transparent; border: none; text-decoration: none; flex-shrink: 0; }
+  .spectre-dw-import-close:hover { background: var(--spectre-surface-hover); color: var(--spectre-text-primary); }
+  .spectre-dw-import-close:focus-visible { outline: 2px solid var(--spectre-accent); outline-offset: 2px; }
+
+  .spectre-dw-import-body { padding: 20px 24px 22px; display: flex; flex-direction: column; gap: 16px; }
+
+  .spectre-dw-import-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 6px; padding: 34px 20px; background: var(--spectre-canvas-sunken); border: 1.5px dashed var(--spectre-border-strong); border-radius: 10px; color: var(--spectre-text-secondary); cursor: pointer; transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
+  .spectre-dw-import-drop:hover { border-color: var(--spectre-accent); color: var(--spectre-text-primary); }
+  .spectre-dw-import-drop:focus-visible { outline: none; border-color: var(--spectre-accent); box-shadow: 0 0 0 3px var(--spectre-accent-ring); }
+  .spectre-dw-import-drop.on { border-color: var(--spectre-accent); background: var(--spectre-accent-ring); color: var(--spectre-text-primary); }
+  .spectre-dw-import-drop.err { border-color: var(--spectre-status-error); }
+  .spectre-dw-import-drop .ic { color: var(--spectre-text-muted); margin-bottom: 4px; }
+  .spectre-dw-import-drop.on .ic { color: var(--spectre-accent); }
+  .spectre-dw-import-drop .primary { font-size: 14px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.006em; }
+  .spectre-dw-import-drop .secondary { font-size: 12.5px; color: var(--spectre-text-secondary); font-weight: 500; }
+  .spectre-dw-import-drop .secondary .link { color: var(--spectre-accent); text-decoration: underline; font-weight: 600; }
+  .spectre-dw-import-drop .hint { font-size: 11px; color: var(--spectre-text-muted); font-weight: 500; margin-top: 8px; letter-spacing: 0.02em; }
+
+  /* Hidden native file input — the drop zone / browse-files link
+     forwards clicks to it. Keeps the visual language consistent
+     with the founder-approved concept and avoids the generic
+     browser file-input appearance. */
+  .spectre-dw-import-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  .spectre-dw-import-file { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-hairline); border-radius: 10px; }
+  .spectre-dw-import-file .ic { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 40px; background: var(--spectre-canvas-sunken); border-radius: 6px; color: var(--spectre-accent); flex-shrink: 0; }
+  .spectre-dw-import-file .meta { flex: 1; min-width: 0; }
+  .spectre-dw-import-file .name { font-size: 13.5px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.006em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spectre-dw-import-file .sub { font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+  .spectre-dw-import-error { padding: 10px 12px; background: var(--spectre-status-error-bg); border: 1px solid rgba(185,28,28,0.32); border-radius: 8px; color: var(--spectre-status-error); font-size: 12.5px; font-weight: 500; line-height: 17px; }
+
+  .spectre-dw-import-guide { padding: 14px 16px; background: var(--spectre-canvas-sunken); border-radius: 8px; }
+  .spectre-dw-import-guide-heading { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; margin-bottom: 6px; }
+  .spectre-dw-import-guide ul { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-direction: column; gap: 5px; }
+  .spectre-dw-import-guide ul li { font-size: 12.5px; color: var(--spectre-text-secondary); line-height: 18px; padding-left: 14px; position: relative; }
+  .spectre-dw-import-guide ul li::before { content: "·"; position: absolute; left: 4px; color: var(--spectre-text-muted); }
+  .spectre-dw-import-guide ul li b { color: var(--spectre-text-primary); font-weight: 600; }
+  .spectre-dw-import-template-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--spectre-accent); text-decoration: none; font-weight: 600; }
+  .spectre-dw-import-template-link:hover { text-decoration: underline; }
+
+  .spectre-dw-import-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 4px; border-top: 1px solid var(--spectre-border-hairline); margin-top: 4px; padding: 14px 0 0; }
+
+  /* Fund chip */
+  .spectre-dw-fund-chip { display: inline-flex; align-items: center; padding: 1px 7px; border: 1px solid var(--spectre-border-hairline); border-radius: 3px; font-size: 10.5px; letter-spacing: 0.04em; color: var(--spectre-text-secondary); font-weight: 600; background: var(--spectre-surface); white-space: nowrap; }
+  .spectre-dw-fund-chip.op { color: var(--spectre-text-primary); }
+  .spectre-dw-fund-chip.cap { color: var(--spectre-text-primary); background: var(--spectre-canvas-sunken); }
+  .spectre-dw-fund-chip.both { color: var(--spectre-text-primary); }
+  .spectre-dw-fund-chip.none { border: 1px dashed rgba(180,83,9,0.32); color: var(--spectre-status-warning); background: var(--spectre-status-warning-bg); }
+  .spectre-dw-fund-chip.na { color: var(--spectre-text-muted); background: transparent; }
+
+  /* Status pill + validation badge */
+  .spectre-dw-status-cell { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .spectre-dw-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--spectre-border-hairline); color: var(--spectre-text-secondary); background: transparent; white-space: nowrap; }
+  .spectre-dw-pill::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--spectre-text-muted); display: inline-block; }
+  .spectre-dw-pill.active { background: var(--spectre-status-success-bg); border-color: rgba(22,101,52,0.32); color: var(--spectre-status-success); }
+  .spectre-dw-pill.active::before { background: var(--spectre-status-success); }
+  .spectre-dw-pill.inactive { color: var(--spectre-text-muted); }
+  .spectre-dw-pill.archived { color: var(--spectre-text-muted); }
+  .spectre-dw-pill.archived::before { background: transparent; border: 1px solid var(--spectre-text-muted); box-sizing: border-box; }
+  .spectre-dw-pill.control { background: var(--spectre-status-info-bg); border-color: rgba(29,78,216,0.32); color: var(--spectre-status-info); }
+  .spectre-dw-pill.control::before { background: var(--spectre-status-info); }
+  .spectre-dw-val-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border: 1px solid var(--spectre-border-hairline); border-radius: 3px; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; white-space: nowrap; }
+  .spectre-dw-val-badge svg { width: 9px; height: 9px; }
+  .spectre-dw-val-badge.warn { background: var(--spectre-status-warning-bg); border-color: rgba(180,83,9,0.32); color: var(--spectre-status-warning); }
+  .spectre-dw-val-badge.blocked { background: var(--spectre-status-error-bg); border-color: rgba(185,28,28,0.32); color: var(--spectre-status-error); }
+
+  /* Checkbox */
+  .spectre-dw-check { appearance: none; width: 14px; height: 14px; border: 1.5px solid var(--spectre-border-strong); border-radius: 3px; background: var(--spectre-surface); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background 160ms ease, border-color 160ms ease; vertical-align: middle; margin: 0; padding: 0; box-sizing: border-box; flex-shrink: 0; }
+  .spectre-dw-check:not(:disabled):hover { border-color: var(--spectre-accent); }
+  .spectre-dw-check:focus-visible { outline: 2px solid var(--spectre-accent); outline-offset: 2px; }
+  .spectre-dw-check:checked { background: var(--spectre-accent); border-color: var(--spectre-accent); }
+  .spectre-dw-check:checked::after { content: ""; width: 8px; height: 8px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") no-repeat center / 8px; }
+  .spectre-dw-check:indeterminate { background: var(--spectre-accent); border-color: var(--spectre-accent); }
+  .spectre-dw-check:indeterminate::after { content: ""; width: 8px; height: 2px; background: white; border-radius: 1px; }
+
+  /* Row action overflow */
+  .spectre-dw-row-actions { position: relative; display: inline-block; }
+  .spectre-dw-row-actions .trigger { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 4px; color: var(--spectre-text-muted); background: transparent; border: none; cursor: pointer; }
+  .spectre-dw-row-actions .trigger:hover { background: var(--spectre-canvas-sunken); color: var(--spectre-text-primary); }
+  .spectre-dw-row-actions .trigger svg { width: 14px; height: 14px; }
+  .spectre-dw-row-actions .menu { display: none; position: absolute; right: 0; top: 100%; min-width: 200px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-strong); border-radius: var(--spectre-radius-panel); box-shadow: var(--spectre-shadow-floating); padding: 4px; z-index: 20; }
+  .spectre-dw-row-actions[data-open="true"] .menu { display: block; }
+  .spectre-dw-row-actions .menu button, .spectre-dw-row-actions .menu a, .spectre-dw-row-actions .menu form button { display: block; width: 100%; text-align: left; padding: 6px 10px; font-size: 12.5px; color: var(--spectre-text-primary); background: transparent; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; font-weight: 500; font-family: inherit; }
+  .spectre-dw-row-actions .menu button:hover, .spectre-dw-row-actions .menu a:hover, .spectre-dw-row-actions .menu form button:hover { background: var(--spectre-surface-hover); }
+  .spectre-dw-row-actions .menu .destructive { color: var(--spectre-status-error); }
+  .spectre-dw-row-actions .menu .destructive:hover { background: var(--spectre-status-error-bg); }
+  .spectre-dw-row-actions .menu .disabled { color: var(--spectre-text-subtle); cursor: not-allowed; }
+  .spectre-dw-row-actions .menu form { display: block; margin: 0; }
+  .spectre-dw-row-actions .menu hr { border: none; border-top: 1px solid var(--spectre-border-hairline); margin: 4px 0; }
+
+  /* Fund-mode assign column */
+  table.spectre-dw-table td.fund-assign { width: 96px; }
+  .spectre-dw-fund-assign-pair { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--spectre-text-secondary); font-weight: 500; }
+  .spectre-dw-fund-assign-pair label { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--spectre-border-hairline); border-radius: 4px; cursor: pointer; background: var(--spectre-surface); }
+  .spectre-dw-fund-assign-pair label:has(input:checked) { border-color: var(--spectre-accent); color: var(--spectre-text-primary); background: var(--spectre-accent-soft); font-weight: 700; }
+
+  /* Empty & no-results state */
+  .spectre-dw-empty { padding: 48px 32px; }
+  .spectre-dw-empty h3 { font-size: 15px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.008em; margin-bottom: 8px; }
+  .spectre-dw-empty p { font-size: 12.5px; color: var(--spectre-text-secondary); line-height: 18px; margin-bottom: 12px; max-width: 640px; }
+  .spectre-dw-empty .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Inspector ----------------------------------------------------- */
+  .spectre-dw-inspector { display: grid; grid-template-rows: auto auto 1fr auto; height: 100%; overflow: hidden; }
+  .spectre-dw-inspector[data-mode="empty"] { grid-template-rows: 1fr; }
+  .spectre-dw-inspector-head { padding: 14px 20px 12px; border-bottom: 1px solid var(--spectre-border-hairline); }
+  .spectre-dw-inspector-eyebrow { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
+  .spectre-dw-inspector-eyebrow .close-btn { color: var(--spectre-text-muted); display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 3px; text-decoration: none; }
+  .spectre-dw-inspector-eyebrow .close-btn:hover { background: var(--spectre-canvas-sunken); color: var(--spectre-text-primary); }
+  .spectre-dw-inspector-eyebrow .close-btn svg { width: 12px; height: 12px; }
+  .spectre-dw-inspector-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+  .spectre-dw-inspector-title .num { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 14px; font-weight: 700; color: var(--spectre-text-primary); letter-spacing: -0.01em; }
+  .spectre-dw-inspector-title .name { font-size: 15px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.008em; line-height: 20px; }
+  .spectre-dw-inspector-meta { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--spectre-text-muted); flex-wrap: wrap; }
+  .spectre-dw-inspector-meta .spectre-dw-pill { padding: 1px 6px; font-size: 9.5px; }
+
+  .spectre-dw-inspector-tabs { display: flex; padding: 0 20px; gap: 20px; border-bottom: 1px solid var(--spectre-border-hairline); background: var(--spectre-surface); }
+  .spectre-dw-inspector-tabs button { padding: 10px 0; font-size: 12.5px; font-weight: 600; color: var(--spectre-text-muted); border-bottom: 2px solid transparent; margin-bottom: -1px; letter-spacing: -0.002em; background: transparent; border-top: none; border-left: none; border-right: none; cursor: pointer; font-family: inherit; }
+  .spectre-dw-inspector-tabs button:hover { color: var(--spectre-text-secondary); }
+  .spectre-dw-inspector-tabs button[aria-selected="true"] { color: var(--spectre-text-primary); border-color: var(--spectre-accent); }
+  .spectre-dw-inspector-tabs button .count { color: var(--spectre-text-muted); font-weight: 500; margin-left: 4px; font-variant-numeric: tabular-nums; font-size: 11px; }
+
+  .spectre-dw-inspector-body { padding: 14px 20px; overflow: auto; }
+
+  .spectre-dw-field { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px dashed var(--spectre-border-hairline); }
+  .spectre-dw-field:last-child { border-bottom: none; }
+  .spectre-dw-field .lbl { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; padding-top: 4px; }
+  .spectre-dw-field .val { font-size: 12.5px; color: var(--spectre-text-primary); font-weight: 500; word-break: break-word; }
+  .spectre-dw-field .val .help { display: block; font-size: 11px; color: var(--spectre-text-muted); font-weight: 400; margin-top: 3px; }
+  .spectre-dw-flags-list { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+
+  .spectre-dw-inspector-foot { padding: 10px 20px; border-top: 1px solid var(--spectre-border-hairline); background: var(--spectre-canvas-sunken); display: flex; align-items: center; gap: 8px; }
+  .spectre-dw-inspector-foot .status-text { flex: 1; font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; }
+  .spectre-dw-inspector-foot .actions { display: flex; gap: 6px; }
+
+  /* Inspector empty state */
+  .spectre-dw-inspector-empty { display: flex; flex-direction: column; justify-content: center; padding: 32px 24px; height: 100%; }
+  .spectre-dw-inspector-empty h3 { font-size: 15px; font-weight: 600; color: var(--spectre-text-primary); letter-spacing: -0.008em; margin-bottom: 8px; }
+  .spectre-dw-inspector-empty p { font-size: 12.5px; color: var(--spectre-text-secondary); line-height: 18px; margin-bottom: 10px; }
+  .spectre-dw-inspector-empty ul { list-style: none; padding: 0; margin: 12px 0 20px; font-size: 12px; color: var(--spectre-text-secondary); }
+  .spectre-dw-inspector-empty ul li { padding: 5px 0 5px 22px; position: relative; }
+  .spectre-dw-inspector-empty ul li::before { content: "→"; position: absolute; left: 4px; color: var(--spectre-text-muted); }
+  .spectre-dw-kbd { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 10.5px; padding: 1px 5px; background: var(--spectre-canvas-sunken); border: 1px solid var(--spectre-border-hairline); border-radius: 3px; color: var(--spectre-text-primary); font-weight: 600; vertical-align: 1px; }
+
+  /* Phase B — inspector editing */
+  .spectre-dw-inspector-banner { display: flex; align-items: baseline; gap: 8px; padding: 10px 20px; font-size: 12px; font-weight: 500; line-height: 17px; border-bottom: 1px solid var(--spectre-border-hairline); }
+  .spectre-dw-inspector-banner svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 2px; }
+  .spectre-dw-inspector-banner.ok   { background: var(--spectre-status-success-bg); color: var(--spectre-status-success); border-bottom-color: rgba(22,101,52,0.32); }
+  .spectre-dw-inspector-banner.err  { background: var(--spectre-status-error-bg);   color: var(--spectre-status-error);   border-bottom-color: rgba(185,28,28,0.32); }
+  .spectre-dw-inspector-banner.warn { background: var(--spectre-status-warning-bg); color: var(--spectre-status-warning); border-bottom-color: rgba(180,83,9,0.32); }
+
+  .spectre-dw-input { width: 100%; padding: 5px 8px; background: var(--spectre-surface); border: 1px solid var(--spectre-border-strong); border-radius: var(--spectre-radius-input); font: inherit; color: inherit; outline: none; font-size: 12.5px; }
+  .spectre-dw-input:focus { border-color: var(--spectre-accent); box-shadow: 0 0 0 3px var(--spectre-accent-ring); }
+  .spectre-dw-input:disabled { background: var(--spectre-canvas-sunken); color: var(--spectre-text-muted); cursor: not-allowed; }
+  textarea.spectre-dw-input { resize: vertical; min-height: 44px; font-family: inherit; }
+
+  .spectre-dw-inspector-foot .status-text[data-tone="warn"] { color: var(--spectre-status-warning); }
+  .spectre-dw-inspector-foot .status-text[data-tone="ok"]   { color: var(--spectre-status-success); }
+  .spectre-dw-inspector-foot .status-text[data-tone="err"]  { color: var(--spectre-status-error); }
+}
+
+
+/* ---------------------------------------------------------------------------
+   Sprint 3 Checkpoint 15H (2026-07-25) — Intelligence review pane styles.
+   Used by <IntelligenceReviewCard> for AP invoice + vendor statement review
+   panes. Tokens only — no stone / club-green.
+   --------------------------------------------------------------------------- */
+@layer components {
+  .spectre-review-pane {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spectre-space-4);
+    padding: var(--spectre-space-3) 0;
+  }
+  .spectre-review-section {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    padding: var(--spectre-space-3) var(--spectre-space-4);
+  }
+  .spectre-review-section > h4 {
+    margin: 0 0 var(--spectre-space-2);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--spectre-text-primary);
+    letter-spacing: 0.01em;
+  }
+  .spectre-review-doc-preview {
+    margin-top: var(--spectre-space-3);
+  }
+  .spectre-review-doc-actions {
+    display: flex;
+    gap: var(--spectre-space-2);
+    margin-top: var(--spectre-space-2);
+  }
+  .spectre-review-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: var(--spectre-space-2) var(--spectre-space-4);
+    margin: 0;
+  }
+  .spectre-review-facts--tight {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+  .spectre-review-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--spectre-space-1) 0;
+    border-bottom: 1px dashed var(--spectre-border-hairline);
+  }
+  .spectre-review-fact dt {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--spectre-text-muted);
+    margin: 0;
+  }
+  .spectre-review-fact dd {
+    font-size: 0.9rem;
+    color: var(--spectre-text-primary);
+    margin: 0;
+  }
+  .spectre-review-fact--strong dd { font-weight: 600; }
+  .spectre-review-fact--ok dd    { color: var(--spectre-status-success); }
+  .spectre-review-fact--warn dd  { color: var(--spectre-status-warning); }
+  .spectre-review-muted {
+    color: var(--spectre-text-muted);
+    font-size: 0.82rem;
+  }
+  .spectre-review-hint {
+    background: var(--spectre-accent-soft);
+    border-left: 3px solid var(--spectre-accent);
+    padding: var(--spectre-space-2) var(--spectre-space-3);
+    border-radius: var(--spectre-radius-button);
+    margin: var(--spectre-space-2) 0 0;
+    font-size: 0.85rem;
+  }
+  .spectre-review-warnings {
+    background: color-mix(in oklab, var(--spectre-status-warning) 10%, transparent);
+    border: 1px solid var(--spectre-status-warning);
+    border-radius: var(--spectre-radius-button);
+    padding: var(--spectre-space-2) var(--spectre-space-3);
+    margin-top: var(--spectre-space-3);
+    font-size: 0.85rem;
+  }
+  .spectre-review-warnings ul { margin: var(--spectre-space-1) 0 0; padding-left: 20px; }
+
+  .spectre-review-list { margin: 0; padding-left: 20px; font-size: 0.88rem; }
+  .spectre-review-list li { margin: var(--spectre-space-1) 0; }
+  .spectre-review-sev {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: var(--spectre-radius-pill);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-right: var(--spectre-space-1);
+    background: var(--spectre-canvas-sunken);
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-review-sev--critical, .spectre-review-sev--high {
+    background: color-mix(in oklab, var(--spectre-status-error) 20%, transparent);
+    color: var(--spectre-status-error);
+  }
+  .spectre-review-sev--medium {
+    background: color-mix(in oklab, var(--spectre-status-warning) 20%, transparent);
+    color: var(--spectre-status-warning);
+  }
+  .spectre-review-sev--low, .spectre-review-sev--info {
+    background: color-mix(in oklab, var(--spectre-accent) 12%, transparent);
+    color: var(--spectre-accent);
+  }
+  .spectre-review-verdict {
+    font-size: 1rem;
+    margin: 0 0 var(--spectre-space-2);
+  }
+  .spectre-review-verdict--capital     { color: var(--spectre-status-warning); }
+  .spectre-review-verdict--operating   { color: var(--spectre-status-success); }
+  .spectre-review-verdict--ambiguous   { color: var(--spectre-text-secondary); }
+  .spectre-review-reason {
+    font-size: 0.9rem;
+    color: var(--spectre-text-secondary);
+    margin: 0 0 var(--spectre-space-2);
+  }
+  .spectre-review-filters {
+    display: flex;
+    gap: var(--spectre-space-1);
+    flex-wrap: wrap;
+    margin-bottom: var(--spectre-space-2);
+  }
+  .spectre-review-table-wrap {
+    overflow-x: auto;
+    max-width: 100%;
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-button);
+  }
+  .spectre-review-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .spectre-review-table th,
+  .spectre-review-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    text-align: left;
+    vertical-align: top;
+  }
+  .spectre-review-table thead th {
+    background: var(--spectre-canvas-sunken);
+    font-weight: 600;
+    color: var(--spectre-text-secondary);
+    position: sticky;
+    top: 0;
+  }
+  .spectre-review-table tbody tr:hover { background: var(--spectre-surface-hover); }
+  .spectre-review-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spectre-space-2);
+    margin-top: var(--spectre-space-2);
+  }
+  .spectre-review-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Responsive — laptop / compact desktop. */
+  @media (max-width: 1279px) {
+    .spectre-review-facts { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+    .spectre-review-doc-preview iframe { min-height: 360px; }
+  }
+  @media (max-width: 1023px) {
+    .spectre-review-facts { grid-template-columns: 1fr 1fr; }
+    .spectre-review-doc-preview iframe { min-height: 280px; }
+    .spectre-review-table { font-size: 0.8rem; }
+  }
+
+  /* Sprint 3 Checkpoint 15H Remediation (2026-07-25) — work-type
+     eyebrow labels. Restrained, single-line, tokens only. Renders
+     BEFORE the pill so the reviewer scans the card TYPE first.
+     Uses left-edge accents per type so email/AP/AR/statement are
+     visually distinct at a glance. */
+  .spectre-mc-worktype {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: var(--spectre-radius-pill);
+    background: var(--spectre-canvas-sunken);
+    color: var(--spectre-text-secondary);
+    border-left: 3px solid var(--spectre-border-default);
+    margin-right: var(--spectre-space-1);
+  }
+  .spectre-mc-worktype--ap-invoice      { border-left-color: var(--spectre-status-warning); color: var(--spectre-status-warning); }
+  .spectre-mc-worktype--vendor-statement { border-left-color: var(--spectre-accent);          color: var(--spectre-accent); }
+  .spectre-mc-worktype--ar-collections  { border-left-color: var(--spectre-status-error);   color: var(--spectre-status-error); }
+  .spectre-mc-worktype--vendor-review   { border-left-color: var(--spectre-status-info);    color: var(--spectre-status-info); }
+  .spectre-mc-worktype--email           { border-left-color: var(--spectre-text-secondary); color: var(--spectre-text-secondary); }
+  .spectre-mc-worktype--general         { border-left-color: var(--spectre-border-strong);  color: var(--spectre-text-muted); }
+
+  /* Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) —
+     Tab bar + document preview modal + attachment list. All tokens. */
+  .spectre-mc-tabs {
+    display: flex;
+    gap: var(--spectre-space-1);
+    flex-wrap: wrap;
+    margin: var(--spectre-space-2) 0;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    padding-bottom: 0;
+  }
+  .spectre-mc-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    color: var(--spectre-text-secondary);
+    padding: var(--spectre-space-1) var(--spectre-space-3);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-top-left-radius: var(--spectre-radius-button);
+    border-top-right-radius: var(--spectre-radius-button);
+    position: relative;
+    top: 1px;
+  }
+  .spectre-mc-tab:hover { background: var(--spectre-surface-hover); color: var(--spectre-text-primary); }
+  .spectre-mc-tab--active {
+    background: var(--spectre-surface);
+    color: var(--spectre-text-primary);
+    border-color: var(--spectre-border-hairline);
+    border-bottom-color: var(--spectre-surface);
+    font-weight: 600;
+  }
+  .spectre-mc-unified-body {
+    padding: var(--spectre-space-3) 0;
+    min-height: 200px;
+  }
+  .spectre-mc-attachment-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .spectre-mc-attachment-list li {
+    padding: var(--spectre-space-2) var(--spectre-space-3);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-button);
+    margin-bottom: var(--spectre-space-2);
+    background: var(--spectre-surface);
+  }
+  .spectre-mc-attachment-list li > div:last-child {
+    margin-top: var(--spectre-space-1);
+    display: flex;
+    gap: var(--spectre-space-1);
+  }
+
+  /* Document preview modal. Full-viewport backdrop; preview area
+     dominates the modal so a PDF renders large. */
+  .spectre-doc-preview-backdrop {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in oklab, var(--spectre-text-primary) 60%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    padding: var(--spectre-space-4);
+  }
+  .spectre-doc-preview-dialog {
+    background: var(--spectre-canvas);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    width: 100%;
+    height: 100%;
+    max-width: 1200px;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+  }
+  .spectre-doc-preview-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spectre-space-3) var(--spectre-space-4);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    gap: var(--spectre-space-2);
+  }
+  .spectre-doc-preview-titles h2 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-doc-preview-context {
+    margin: 2px 0 0;
+    font-size: 0.78rem;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-doc-preview-actions {
+    display: flex;
+    gap: var(--spectre-space-1);
+  }
+  .spectre-doc-preview-body {
+    flex: 1;
+    padding: var(--spectre-space-3);
+    background: var(--spectre-canvas-sunken);
+    overflow: hidden;
+  }
+
+  /* Sprint 3 Checkpoint 15H-1 (2026-07-25) — MC live-refresh chip. */
+  .spectre-mc-live-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spectre-space-2);
+    font-size: 0.78rem;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-mc-live-refresh-status {
+    padding: 2px 8px;
+    background: var(--spectre-canvas-sunken);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-pill);
+    color: var(--spectre-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .spectre-mc-live-refresh-error {
+    color: var(--spectre-status-error);
+    font-weight: 600;
+  }
+  .spectre-mc-live-refresh-new-items {
+    animation: spectre-mc-pulse 2s ease-in-out infinite;
+  }
+  @keyframes spectre-mc-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--spectre-accent) 45%, transparent); }
+    50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--spectre-accent)  0%, transparent); }
+  }
+}

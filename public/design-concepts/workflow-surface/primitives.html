@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflow Surface · Primitives Reference</title>
+<meta name="viewport" content="width=1440">
+<style>
+  :root {
+    --canvas:           #f6f6f8;
+    --canvas-sunken:    #eeeef1;
+    --surface:          #ffffff;
+    --surface-hover:    #f4f4f5;
+    --edge:             rgba(15, 15, 20, 0.09);
+    --edge-strong:      rgba(15, 15, 20, 0.16);
+    --edge-workspace:   rgba(15, 15, 20, 0.06);
+    --micro-shadow:     0 1px 0 rgba(20, 18, 12, 0.03);
+    --text-primary:     #17181b;
+    --text-secondary:   rgba(23, 24, 27, 0.72);
+    --text-muted:       rgba(23, 24, 27, 0.55);
+    --text-subtle:      rgba(23, 24, 27, 0.38);
+    --text-inverse:     #fdfdfe;
+    --confidence:       #166534;
+    --confidence-tint:  rgba(22, 101, 52, 0.09);
+    --confidence-edge:  rgba(22, 101, 52, 0.32);
+    --observation:      #b45309;
+    --observation-tint: rgba(180, 83, 9, 0.09);
+    --observation-edge: rgba(180, 83, 9, 0.32);
+    --problem:          #b91c1c;
+    --problem-tint:     rgba(185, 28, 28, 0.09);
+    --problem-edge:     rgba(185, 28, 28, 0.32);
+    --info:             #1d4ed8;
+    --info-tint:        rgba(29, 78, 216, 0.09);
+    --info-edge:        rgba(29, 78, 216, 0.32);
+    --ai:               #4c1d95;
+    --ai-tint:          rgba(76, 29, 149, 0.09);
+    --ai-edge:          rgba(76, 29, 149, 0.32);
+    --accent:           #2f5832;
+    --sans: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; background: transparent; border: none; padding: 0; color: inherit; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 32px 96px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; }
+  h1 { font-size: 28px; line-height: 34px; letter-spacing: -0.018em; font-weight: 600; margin-top: 8px; }
+  .lede { margin-top: 12px; font-size: 14px; line-height: 22px; color: var(--text-secondary); max-width: 720px; }
+
+  h2 { font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin: 40px 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--edge); }
+  h2 .n { color: var(--text-muted); font-weight: 500; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  h3 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 20px 0 6px; }
+  p.spec { font-size: 12.5px; color: var(--text-secondary); line-height: 18px; margin-bottom: 12px; max-width: 720px; }
+  p.spec code { font-family: var(--mono); font-size: 12px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 3px; padding: 1px 5px; color: var(--text-primary); }
+
+  .card { background: var(--surface); border: 1px solid var(--edge); border-radius: 8px; padding: 20px; box-shadow: var(--micro-shadow); margin-bottom: 8px; }
+  .card-eyebrow { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; }
+
+  /* === STATE CHIP === */
+  .state-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--edge); background: transparent; color: var(--text-secondary); white-space: nowrap; }
+  .state-pill::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--text-muted); display: inline-block; }
+  .state-pill.intake { color: var(--text-muted); }
+  .state-pill.classified { color: var(--text-secondary); }
+  .state-pill.enriched { color: var(--text-secondary); }
+  .state-pill.recommended { background: var(--ai-tint); border-color: var(--ai-edge); color: var(--ai); }
+  .state-pill.recommended::before { background: var(--ai); }
+  .state-pill.pending { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .state-pill.pending::before { background: var(--observation); }
+  .state-pill.in-review { background: var(--info-tint); border-color: var(--info-edge); color: var(--info); }
+  .state-pill.in-review::before { background: var(--info); }
+  .state-pill.approved { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .state-pill.approved::before { background: var(--confidence); }
+  .state-pill.rejected { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .state-pill.rejected::before { background: var(--problem); }
+  .state-pill.completed { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .state-pill.completed::before { background: transparent; border: 1px solid var(--confidence); box-sizing: border-box; }
+  .state-pill.reverted { color: var(--text-muted); }
+  .state-pill.reverted::before { background: transparent; border: 1px solid var(--text-muted); box-sizing: border-box; }
+  .state-pill.archived { color: var(--text-muted); opacity: 0.7; }
+  .state-pill.archived::before { background: transparent; border: 1px solid var(--text-muted); box-sizing: border-box; opacity: 0.7; }
+  .state-pill.exception { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .state-pill.exception::before { background: var(--problem); }
+  .state-pill.hold { color: var(--text-muted); }
+  .state-pill.escalated { background: var(--info-tint); border-color: var(--info-edge); color: var(--info); }
+  .state-pill.escalated::before { background: var(--info); }
+  .state-pill.reassigned { color: var(--text-secondary); }
+
+  .row-inline { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  /* === RECOMMENDATION CARD === */
+  .rc-card { background: var(--surface); border: 1px solid var(--ai-edge); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 16px; margin-bottom: 12px; max-width: 480px; }
+  .rc-eyebrow { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: var(--ai-tint); border: 1px solid var(--ai-edge); border-radius: 4px; font-size: 9.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--ai); font-weight: 700; margin-bottom: 10px; }
+  .rc-eyebrow svg { width: 10px; height: 10px; }
+  .rc-eyebrow .conf { padding-left: 8px; margin-left: 4px; border-left: 1px solid var(--ai-edge); }
+  .rc-card.reject { border-color: var(--problem-edge); }
+  .rc-card.reject .rc-eyebrow { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .rc-card.judgment { border-color: var(--observation-edge); }
+  .rc-card.judgment .rc-eyebrow { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .rc-headline { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.008em; margin-bottom: 10px; }
+  .rc-reasoning { font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 6px; }
+  .rc-reasoning-list { list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--text-secondary); line-height: 17px; }
+  .rc-reasoning-list li { position: relative; padding: 3px 0 3px 16px; }
+  .rc-reasoning-list li::before { content: "→"; position: absolute; left: 4px; top: 3px; color: currentColor; font-weight: 700; opacity: 0.7; }
+  .rc-reasoning-list li b { color: var(--text-primary); font-weight: 600; }
+
+  /* === APPROVAL BAR === */
+  .approval-bar { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px; max-width: 480px; }
+  .approval-bar-title { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-family: inherit; }
+  .btn svg { width: 12px; height: 12px; }
+  .btn.primary { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); box-shadow: 0 1px 0 rgba(20,18,12,0.06); width: 100%; justify-content: center; padding: 9px 14px; font-size: 13px; }
+  .btn.secondary { background: var(--surface); color: var(--text-primary); border-color: var(--edge-strong); }
+  .btn.sm { padding: 5px 10px; font-size: 11.5px; }
+  .approval-bar .primary-row { margin-bottom: 10px; }
+  .approval-bar .secondary-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .approval-bar .kbd-hint { display: block; margin-top: 8px; font-size: 10.5px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.02em; }
+  .kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 3px; color: var(--text-primary); font-weight: 600; }
+
+  /* === EVIDENCE PANEL SECTION === */
+  .evidence-section { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); max-width: 620px; margin-bottom: 12px; }
+  .evidence-section > header { padding: 10px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--edge-workspace); }
+  .evidence-section > header h3 { margin: 0; font-size: 12px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; flex: 1; }
+  .evidence-section > header .conf { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; padding: 1px 6px; border: 1px solid var(--edge); border-radius: 4px; background: var(--canvas-sunken); }
+  .evidence-section > header .conf.hi { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .evidence-section .body { padding: 12px 16px 14px; font-size: 12.5px; color: var(--text-secondary); line-height: 18px; }
+
+  /* === ACTIVITY TIMELINE === */
+  .timeline-card { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px 8px; max-width: 480px; }
+  .timeline-title { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .tl-row { display: grid; grid-template-columns: 46px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--edge-workspace); }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-when { font-family: var(--mono); font-size: 10.5px; color: var(--text-muted); font-weight: 500; padding-top: 2px; }
+  .tl-body { font-size: 12px; color: var(--text-secondary); line-height: 17px; }
+  .tl-body .actor { font-weight: 600; color: var(--text-primary); }
+  .tl-body .actor.spectre { color: var(--ai); }
+  .tl-body .verb { color: var(--text-primary); font-weight: 500; }
+  .tl-body .reason { display: block; margin-top: 2px; font-size: 11.5px; color: var(--text-muted); }
+  .tl-body .revert { display: inline-block; margin-left: 8px; padding: 1px 5px; font-size: 10px; font-weight: 700; color: var(--observation); background: var(--observation-tint); border: 1px solid var(--observation-edge); border-radius: 3px; letter-spacing: 0.02em; text-transform: uppercase; cursor: pointer; }
+
+  /* === CONVERSATION THREAD === */
+  .conv-card { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px; max-width: 480px; }
+  .conv-title { display: flex; align-items: baseline; justify-content: space-between; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .conv-msg { display: grid; grid-template-columns: 32px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--edge-workspace); }
+  .conv-msg .a { width: 28px; height: 28px; border-radius: 999px; background: var(--info-tint); color: var(--info); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+  .conv-msg.spectre .a { background: var(--ai-tint); color: var(--ai); }
+  .conv-msg.external .a { background: var(--observation-tint); color: var(--observation); }
+  .conv-msg .who-when { font-size: 11.5px; color: var(--text-muted); margin-bottom: 2px; }
+  .conv-msg .who-when b { color: var(--text-primary); font-weight: 600; }
+  .conv-msg .body { font-size: 12.5px; color: var(--text-primary); line-height: 17px; }
+  .conv-compose { display: flex; gap: 6px; padding-top: 10px; }
+  .conv-compose input { flex: 1; padding: 6px 10px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 6px; font: inherit; font-size: 12.5px; color: var(--text-primary); outline: none; }
+
+  /* === WORKFLOW BANNER === */
+  .ws-banner { padding: 8px 16px; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; border-radius: 6px; margin-bottom: 8px; max-width: 620px; }
+  .ws-banner svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .ws-banner .grow { flex: 1; }
+  .ws-banner.ok   { background: var(--confidence-tint); border: 1px solid var(--confidence-edge); color: var(--confidence); }
+  .ws-banner.warn { background: var(--observation-tint); border: 1px solid var(--observation-edge); color: var(--observation); }
+  .ws-banner.err  { background: var(--problem-tint); border: 1px solid var(--problem-edge); color: var(--problem); }
+  .ws-banner.info { background: var(--info-tint); border: 1px solid var(--info-edge); color: var(--info); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Sprint 2 · Workflow Surface</div>
+  <h1>Primitives reference</h1>
+  <p class="lede">Every workflow-shaped surface in Spectre composes from the nine primitives on this page. New workflow types add configuration, not primitives. This page is the visual contract every implementation must respect.</p>
+
+  <!-- 1. STATE CHIP -->
+  <h2><span class="n">01</span>State chip</h2>
+  <p class="spec">The workflow state indicator. Fifteen states across four categories. Never colour alone — every chip carries text + a coloured shape.</p>
+  <h3>Active (in-flight)</h3>
+  <div class="row-inline"><span class="state-pill intake">Intake</span><span class="state-pill classified">Classified</span><span class="state-pill enriched">Enriched</span><span class="state-pill recommended">Recommended</span><span class="state-pill pending">Pending</span><span class="state-pill in-review">In review</span></div>
+  <h3>Terminal</h3>
+  <div class="row-inline"><span class="state-pill approved">Approved</span><span class="state-pill rejected">Rejected</span><span class="state-pill completed">Completed</span><span class="state-pill reverted">Reverted</span><span class="state-pill archived">Archived</span></div>
+  <h3>Exception</h3>
+  <div class="row-inline"><span class="state-pill exception">Exception</span><span class="state-pill hold">On hold</span><span class="state-pill escalated">Escalated</span><span class="state-pill reassigned">Reassigned</span></div>
+
+  <!-- 2. RECOMMENDATION CARD -->
+  <h2><span class="n">02</span>Recommendation card</h2>
+  <p class="spec">The AI's stated recommendation. <b>Cannot render without <code>reasoning</code> and <code>confidence</code>.</b> Three tones: recommend approve, recommend reject, needs judgment. A low-confidence recommend-approve falls back to Needs judgment (default threshold 70 %).</p>
+
+  <div class="rc-card">
+    <div class="rc-eyebrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M5 5l2 2"/><path d="M17 17l2 2"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>SPECTRE · RECOMMEND<span class="conf">CONFIDENCE 96 %</span></div>
+    <div class="rc-headline">Approve &amp; post to GL 5200 · Kitchen supplies</div>
+    <div class="rc-reasoning">Reasoning</div>
+    <ul class="rc-reasoning-list">
+      <li><b>PO exact match</b> ($2,340.00, 14 of 14 line items)</li>
+      <li><b>Variance:</b> $0.00 vs PO</li>
+      <li><b>GST verified</b> at 5 %</li>
+      <li><b>Vendor active</b> · net-30 · 100 % on-time</li>
+    </ul>
+  </div>
+
+  <div class="rc-card reject">
+    <div class="rc-eyebrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/></svg>SPECTRE · RECOMMEND<span class="conf">CONFIDENCE 88 %</span></div>
+    <div class="rc-headline">Reject — vendor not onboarded</div>
+    <div class="rc-reasoning">Reasoning</div>
+    <ul class="rc-reasoning-list">
+      <li><b>No vendor record</b> for sender domain <code style="font-family: var(--mono); font-size: 11px; color: var(--text-primary);">unknown-vendor.co</code></li>
+      <li><b>No matching PO</b> issued in the last 90 days</li>
+      <li>Amount ($612.00) is outside historical range for unknown-sender intake</li>
+    </ul>
+  </div>
+
+  <div class="rc-card judgment">
+    <div class="rc-eyebrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.7" fill="currentColor"/></svg>SPECTRE · NEEDS JUDGMENT<span class="conf">CONFIDENCE 54 %</span></div>
+    <div class="rc-headline">This one is your call — Spectre isn't confident enough to recommend</div>
+    <div class="rc-reasoning">What Spectre observed</div>
+    <ul class="rc-reasoning-list">
+      <li><b>No matching PO</b> — repair work often invoiced without a PO</li>
+      <li>Vendor <b>active</b>; 3 similar invoices approved in last 12 months</li>
+      <li>Amount ($14,220.00) is <b>above the auto-approve threshold</b> for this vendor</li>
+    </ul>
+  </div>
+
+  <!-- 3. APPROVAL BAR -->
+  <h2><span class="n">03</span>Approval bar</h2>
+  <p class="spec">Always renders every workflow-appropriate action. The primary button is the workflow's default approval verb. Secondary actions are always visible — the human is one click from disagreeing with Spectre.</p>
+
+  <div class="approval-bar">
+    <div class="approval-bar-title">Your decision</div>
+    <div class="primary-row">
+      <button class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve &amp; post</button>
+    </div>
+    <div class="secondary-row">
+      <button class="btn secondary">Reject with reason</button>
+      <button class="btn secondary">Reassign</button>
+      <button class="btn secondary">Hold</button>
+      <button class="btn secondary">Ask</button>
+    </div>
+    <span class="kbd-hint"><span class="kbd">A</span> approve · <span class="kbd">R</span> reject · <span class="kbd">?</span> ask · <span class="kbd">↑↓</span> queue</span>
+  </div>
+
+  <!-- 4. EVIDENCE PANEL -->
+  <h2><span class="n">04</span>Evidence panel</h2>
+  <p class="spec">Renders the raw material the AI reasoned over. Per-section collapse; collapsed by default when overall confidence is high. Every extracted field carries per-field confidence where applicable. Six section kinds: <code>document</code>, <code>extracted</code>, <code>match</code>, <code>context</code>, <code>preview</code>, <code>history</code>.</p>
+
+  <div class="evidence-section">
+    <header>
+      <h3>Purchase order match</h3>
+      <span class="conf hi">Exact</span>
+    </header>
+    <div class="body">
+      PO #4832 · issued 2026-07-08 by A. Cho · $2,340.00 · 14 of 14 line items match · variance $0.00.
+    </div>
+  </div>
+
+  <!-- 5. ACTIVITY TIMELINE -->
+  <h2><span class="n">05</span>Activity timeline</h2>
+  <p class="spec"><b>The primitive that enforces AI transparency.</b> Every event — human or AI — appends a row with actor, verb, timestamp, and reason. Append-only; reverts do not delete rows, they add new ones. This is what auditors read.</p>
+
+  <div class="timeline-card">
+    <div class="timeline-title">Activity</div>
+    <div class="tl-row">
+      <div class="tl-when">09:14</div>
+      <div class="tl-body"><span class="actor">Patricia Bell</span> <span class="verb">approved</span> · posted JE-8241 <span class="revert">Revert</span><span class="reason">Reversible for 7 days</span></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">09:12</div>
+      <div class="tl-body"><span class="actor">Patricia Bell</span> <span class="verb">opened this item</span></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">06:44</div>
+      <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">recommended approve</span> · 96 % confidence<span class="reason">PO exact match, variance $0.00, vendor active</span></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">06:43</div>
+      <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">enriched</span> · matched PO #4832 &amp; verified vendor</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">06:42</div>
+      <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">classified as AP invoice</span> · 98 % confidence</div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-when">06:41</div>
+      <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">intake</span> · email from billing@acefoods.com</div>
+    </div>
+  </div>
+
+  <!-- 6. CONVERSATION THREAD -->
+  <h2><span class="n">06</span>Conversation thread</h2>
+  <p class="spec">Human-to-human (or human-to-AI) messaging when the operator needs clarification. Three recipient kinds: external (vendor / applicant), internal (another Spectre user), Spectre (asks the AI to re-run enrichment with a hint). Every message writes to the timeline.</p>
+
+  <div class="conv-card">
+    <div class="conv-title"><span>Conversation</span><span>2 messages</span></div>
+    <div class="conv-msg">
+      <span class="a">PB</span>
+      <div>
+        <div class="who-when"><b>Patricia Bell</b> → Ace Foods · 09:18</div>
+        <div class="body">Can you confirm the delivery dates for PO #4832? The invoice ships everything on the 12th but the PO expected a split.</div>
+      </div>
+    </div>
+    <div class="conv-msg external">
+      <span class="a">AF</span>
+      <div>
+        <div class="who-when"><b>billing@acefoods.com</b> · 10:32</div>
+        <div class="body">Correct — the split was cancelled last week (see PO revision B). Full delivery on the 12th as invoiced.</div>
+      </div>
+    </div>
+    <div class="conv-compose">
+      <input type="text" placeholder="Reply…" />
+      <button class="btn secondary sm">Send</button>
+    </div>
+  </div>
+
+  <!-- 7. WORKFLOW BANNER -->
+  <h2><span class="n">07</span>Workflow banner</h2>
+  <p class="spec">Compact top-of-detail banners for one-shot state announcements. Composes with the Data Workspace inspector banner styles (<code>ok</code> / <code>warn</code> / <code>err</code>). Persistent for <code>exception</code> and <code>hold</code>; transient for the rest.</p>
+
+  <div class="ws-banner ok">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+    <span>Approved and posted at 09:14 EDT · JE-8241 · Reversible for 7 days.</span>
+    <div class="grow"></div>
+    <button class="btn secondary sm">Revert</button>
+  </div>
+
+  <div class="ws-banner info">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.7" fill="currentColor"/></svg>
+    <span>Reassigned to Alex Cho at 09:22 EDT.</span>
+  </div>
+
+  <div class="ws-banner warn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.7" fill="currentColor"/></svg>
+    <span>Held until Aug 1 · pending pro-shop review.</span>
+  </div>
+
+  <div class="ws-banner err">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.7" fill="currentColor"/></svg>
+    <span>Cannot post — GL 5310 is inactive.</span>
+    <div class="grow"></div>
+    <button class="btn secondary sm">Fix mapping</button>
+  </div>
+
+  <!-- 8. WORKFLOW QUEUE (linked) -->
+  <h2><span class="n">08</span>Workflow queue</h2>
+  <p class="spec">A Data Workspace consumer for one workflow type. Inherits every Data Workspace primitive (search, saved views, density, selection, keyboard model). Grouped by AI recommendation strength, not by state. See the standalone <a href="queue.html" style="color: var(--info); text-decoration: underline;">queue.html</a> concept.</p>
+
+  <!-- 9. WORKFLOW DETAIL (linked) -->
+  <h2><span class="n">09</span>Workflow detail</h2>
+  <p class="spec">The single-item surface. Two columns: <b>Evidence Panel</b> (left, dominant) + <b>Workflow Rail</b> (right, stable). Evidence dominates because it is what the human is judging. See the standalone <a href="detail.html" style="color: var(--info); text-decoration: underline;">detail.html</a> concept.</p>
+
+  <h2><span class="n">·</span>Forbidden by the primitive contract</h2>
+  <p class="spec">The primitives enforce these anti-patterns at the type level:</p>
+  <ul class="rc-reasoning-list" style="font-size: 12.5px; max-width: 720px;">
+    <li>❌ RecommendationCard without <code>reasoning</code> or <code>confidence</code></li>
+    <li>❌ ApprovalBar without every workflow-appropriate action visible</li>
+    <li>❌ ActivityTimeline missing an entry for any state transition</li>
+    <li>❌ StateChip conveying state by colour alone</li>
+    <li>❌ AI actions writing to a domain row without a timeline row</li>
+    <li>❌ "Recommend approve" tone when confidence is below the workflow's threshold</li>
+    <li>❌ Irreversible action without a declared revert window (or explicit founder exemption)</li>
+    <li>❌ Modal-only detail views</li>
+    <li>❌ Bulk actions that hide per-item results</li>
+    <li>❌ Autosave on approval fields</li>
+  </ul>
+</div>
+</body>
+</html>

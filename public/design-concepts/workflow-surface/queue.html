@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflow Surface · AP Invoice Approval — Queue</title>
+<meta name="viewport" content="width=1440">
+<style>
+  :root {
+    --canvas:           #f6f6f8;
+    --canvas-sunken:    #eeeef1;
+    --surface:          #ffffff;
+    --surface-hover:    #f4f4f5;
+    --sidebar:          #f4f4f6;
+    --topbar:           #fbfbfc;
+    --edge:             rgba(15, 15, 20, 0.09);
+    --edge-strong:      rgba(15, 15, 20, 0.16);
+    --edge-workspace:   rgba(15, 15, 20, 0.06);
+    --micro-shadow:     0 1px 0 rgba(20, 18, 12, 0.03);
+
+    --text-primary:     #17181b;
+    --text-secondary:   rgba(23, 24, 27, 0.72);
+    --text-muted:       rgba(23, 24, 27, 0.55);
+    --text-subtle:      rgba(23, 24, 27, 0.38);
+    --text-inverse:     #fdfdfe;
+
+    --confidence:       #166534;
+    --confidence-tint:  rgba(22, 101, 52, 0.09);
+    --confidence-edge:  rgba(22, 101, 52, 0.32);
+    --observation:      #b45309;
+    --observation-tint: rgba(180, 83, 9, 0.09);
+    --observation-edge: rgba(180, 83, 9, 0.32);
+    --problem:          #b91c1c;
+    --problem-tint:     rgba(185, 28, 28, 0.09);
+    --problem-edge:     rgba(185, 28, 28, 0.32);
+    --info:             #1d4ed8;
+    --info-tint:        rgba(29, 78, 216, 0.09);
+    --info-edge:        rgba(29, 78, 216, 0.32);
+    --ai:               #4c1d95;
+    --ai-tint:          rgba(76, 29, 149, 0.09);
+    --ai-edge:          rgba(76, 29, 149, 0.32);
+    --accent:           #2f5832;
+
+    --sans: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; background: transparent; border: none; padding: 0; color: inherit; }
+
+  .shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+  .rail-nav { background: var(--sidebar); border-right: 1px solid var(--edge); padding: 18px 12px 20px 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 16px; }
+  .brand .mark { width: 24px; height: 24px; border-radius: 5px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+  .brand .wm { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; }
+  .club { margin: 0 6px 14px; padding-bottom: 14px; border-bottom: 1px solid var(--edge); font-size: 11.5px; color: var(--text-muted); }
+  .club b { display: block; color: var(--text-primary); font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .nav-section { padding: 16px 10px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-subtle); font-weight: 700; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; margin: 1px -2px; border-radius: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+  .nav-item svg { width: 15px; height: 15px; color: var(--text-muted); }
+  .nav-item.active { background: var(--surface); color: var(--text-primary); font-weight: 600; box-shadow: inset 0 0 0 1px var(--edge); }
+  .nav-item.active svg { color: var(--accent); }
+  .nav-child { display: block; margin-left: 24px; padding: 4px 10px; font-size: 12.5px; color: var(--text-secondary); border-radius: 4px; font-weight: 500; }
+  .nav-child.active { color: var(--text-primary); font-weight: 600; background: var(--surface); box-shadow: inset 0 0 0 1px var(--edge); }
+
+  .topbar { height: 56px; display: flex; align-items: center; padding: 0 32px; gap: 4px; background: var(--topbar); border-bottom: 1px solid var(--edge); }
+  .crumbs { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; flex: 1; font-weight: 500; }
+  .crumbs .sep { color: var(--text-subtle); font-size: 9px; }
+  .crumbs .leaf { color: var(--text-primary); font-weight: 600; }
+  .u-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; color: var(--text-secondary); }
+  .u-btn:hover { background: rgba(20, 18, 12, 0.06); color: var(--text-primary); }
+  .u-btn svg { width: 16px; height: 16px; }
+  .u-divider { width: 1px; height: 20px; background: var(--edge); margin: 0 8px; }
+  .who { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 1px solid var(--edge); border-radius: 8px; font-size: 13px; color: var(--text-primary); font-weight: 500; }
+  .who .a { width: 24px; height: 24px; border-radius: 999px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; }
+  .who svg { width: 12px; height: 12px; color: var(--text-muted); }
+
+  /* Data Workspace header + toolbar (inherited from locked foundation) */
+  .dw-header { padding: 18px 32px 14px; background: var(--canvas); border-bottom: 1px solid var(--edge-workspace); }
+  .dw-header-crumb { font-size: 11.5px; color: var(--text-muted); font-weight: 500; margin-bottom: 4px; }
+  .dw-header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+  .dw-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.014em; color: var(--text-primary); }
+  .dw-title-meta { margin-top: 4px; font-size: 12.5px; color: var(--text-secondary); font-weight: 500; }
+  .dw-title-meta b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .dw-title-meta .sep { color: var(--text-subtle); margin: 0 6px; }
+  .dw-header-actions { display: flex; align-items: center; gap: 8px; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-family: inherit; }
+  .btn svg { width: 12px; height: 12px; }
+  .btn.primary { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); }
+  .btn.primary:hover { background: #213a22; }
+  .btn.secondary { background: var(--surface); color: var(--text-primary); border-color: var(--edge-strong); }
+  .btn.secondary:hover { background: var(--surface-hover); }
+  .btn.tertiary { color: var(--text-secondary); padding: 7px 8px; }
+  .btn.sm { padding: 5px 10px; font-size: 11.5px; }
+
+  .dw-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 32px; background: var(--surface); border-bottom: 1px solid var(--edge); flex-wrap: wrap; }
+  .dw-search { display: flex; align-items: center; gap: 8px; width: 300px; padding: 6px 10px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 6px; font-size: 12.5px; color: var(--text-muted); font-weight: 500; }
+  .dw-search svg { width: 13px; height: 13px; color: var(--text-muted); }
+  .dw-search input { flex: 1; background: transparent; border: none; outline: none; color: var(--text-primary); font: inherit; }
+  .dw-search .kbd { font-family: var(--mono); font-size: 10px; color: var(--text-subtle); background: var(--surface); border: 1px solid var(--edge); border-radius: 3px; padding: 1px 5px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; background: var(--surface); border: 1px solid var(--edge); border-radius: 6px; font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+  .chip.on { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); font-weight: 600; }
+  .chip .k { color: var(--text-muted); font-weight: 500; }
+  .chip .v { color: currentColor; font-weight: 600; }
+  .chip svg { width: 11px; height: 11px; color: currentColor; opacity: 0.7; }
+  .grow { flex: 1; }
+  .density-seg { display: inline-flex; padding: 2px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 6px; }
+  .density-seg button { padding: 3px 10px; font-size: 11.5px; font-weight: 600; color: var(--text-muted); border-radius: 4px; }
+  .density-seg button[aria-pressed="true"] { background: var(--surface); color: var(--text-primary); box-shadow: 0 1px 0 rgba(20,18,12,0.04); border: 1px solid var(--edge); }
+
+  /* Table */
+  .dw-table-wrap { overflow: auto; background: var(--surface); }
+  table.dw { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  table.dw thead th { position: sticky; top: 0; z-index: 3; padding: 8px 12px; background: var(--canvas-sunken); border-bottom: 1px solid var(--edge); font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; text-align: left; }
+  table.dw thead th.num { text-align: right; }
+  table.dw thead th.sortable button { display: inline-flex; align-items: center; gap: 5px; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; font-weight: inherit; }
+  table.dw thead th.sortable button svg { width: 10px; height: 10px; opacity: 0.5; }
+  table.dw thead th.sortable button.active { color: var(--text-primary); }
+  table.dw thead th.sortable button.active svg { opacity: 1; }
+
+  /* Group header (grouped by recommendation strength) */
+  tr.gh td { padding: 8px 12px; background: var(--canvas); border-bottom: 1px solid var(--edge); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; }
+  tr.gh td .grp-count { color: var(--text-muted); font-weight: 500; letter-spacing: 0.005em; margin-left: 10px; font-variant-numeric: tabular-nums; text-transform: none; }
+  tr.gh td .grp-total { float: right; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; letter-spacing: -0.005em; text-transform: none; }
+  tr.gh td .toggle { width: 10px; height: 10px; margin-right: 8px; color: var(--text-muted); display: inline-block; vertical-align: -1px; }
+
+  tr.row td { padding: 10px 12px; border-bottom: 1px solid var(--edge-workspace); vertical-align: middle; }
+  tr.row:hover td { background: var(--surface-hover); cursor: pointer; }
+  tr.row.selected td { background: var(--confidence-tint); }
+
+  td.select { width: 40px; padding-left: 18px; padding-right: 4px; }
+  td.actions { width: 40px; text-align: right; padding-right: 12px; }
+  td.num-col { font-family: var(--mono); font-size: 12px; letter-spacing: -0.005em; color: var(--text-primary); font-weight: 600; width: 88px; }
+  td.item-name { font-weight: 500; }
+  td.item-name .n { color: var(--text-primary); font-weight: 500; }
+  td.item-name .d { display: block; font-size: 11.5px; color: var(--text-muted); font-weight: 400; margin-top: 1px; }
+  td.amount { text-align: right; font-weight: 600; letter-spacing: -0.005em; color: var(--text-primary); }
+  td.amount .cents { color: var(--text-muted); font-weight: 500; font-size: 12px; }
+  td.state { }
+  td.assignee { color: var(--text-secondary); font-size: 12px; }
+  td.assignee .a { display: inline-flex; align-items: center; gap: 6px; }
+  td.assignee .a .av { width: 20px; height: 20px; border-radius: 999px; background: var(--info-tint); color: var(--info); display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; }
+  td.actions button { width: 24px; height: 24px; border-radius: 4px; color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; }
+  td.actions button:hover { background: var(--canvas-sunken); color: var(--text-primary); }
+  td.actions button svg { width: 14px; height: 14px; }
+
+  input.check { appearance: none; width: 14px; height: 14px; border: 1.5px solid var(--edge-strong); border-radius: 3px; background: var(--surface); display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; margin: 0; cursor: pointer; }
+  input.check:checked { background: var(--accent); border-color: var(--accent); }
+  input.check:checked::after { content: ""; width: 8px; height: 8px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E") no-repeat center / 8px; }
+
+  /* Recommendation column: text + tint */
+  .rc-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--edge); background: transparent; color: var(--text-secondary); white-space: nowrap; }
+  .rc-tag svg { width: 9px; height: 9px; }
+  .rc-tag.approve { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .rc-tag.reject { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .rc-tag.judgment { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .rc-tag.exception { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .rc-tag.hold { color: var(--text-muted); }
+  .rc-tag .conf { padding-left: 6px; margin-left: 4px; border-left: 1px solid currentColor; opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+  .state-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--edge); background: transparent; color: var(--text-secondary); white-space: nowrap; }
+  .state-pill::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--text-muted); }
+  .state-pill.pending { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .state-pill.pending::before { background: var(--observation); }
+  .state-pill.exception { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .state-pill.exception::before { background: var(--problem); }
+  .state-pill.hold { color: var(--text-muted); }
+  .state-pill.escalated { background: var(--info-tint); border-color: var(--info-edge); color: var(--info); }
+  .state-pill.escalated::before { background: var(--info); }
+
+  /* Selection bar (Data Workspace primitive) */
+  .selection-bar { display: flex; align-items: center; gap: 12px; padding: 8px 32px; background: var(--confidence-tint); border-bottom: 1px solid var(--confidence-edge); font-size: 12.5px; color: var(--confidence); font-weight: 600; }
+  .selection-bar .grow { flex: 1; }
+  .selection-bar .btn.secondary { background: var(--surface); border-color: var(--confidence-edge); color: var(--confidence); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail-nav">
+    <div class="brand"><div class="mark">S</div><div class="wm">Spectre</div></div>
+    <div class="club"><b>Silver Springs</b>Golf &amp; Country Club</div>
+    <nav>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg><span>Mission Control</span></a>
+      <div class="nav-section">Domains</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 5-6 8-6s6.5 2 8 6"/></svg><span>Membership</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V9"/><path d="M9 20V4"/><path d="M14 20V13"/><path d="M19 20V7"/></svg><span>Finance</span></a>
+      <a class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13l3 3v13H4z"/><path d="M4 9h13"/></svg><span>Accounts Payable</span></a>
+      <a class="nav-child">Invoices</a>
+      <a class="nav-child">Vendors</a>
+      <a class="nav-child active">Invoice Approval</a>
+      <a class="nav-child">Payment Batches</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M5 5l2.1 2.1"/><path d="M16.9 16.9L19 19"/><path d="M3 12h3"/><path d="M18 12h3"/></svg><span>Operations</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V8l8-4 8 4v13"/><path d="M9 21v-7h6v7"/></svg><span>Governance</span></a>
+    </nav>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <nav class="crumbs"><span>Admin</span><span class="sep">›</span><span>Accounts Payable</span><span class="sep">›</span><span class="leaf">Invoice Approval</span></nav>
+      <button class="u-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+      <button class="u-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l1.5 2h-15L6 13z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
+      <div class="u-divider"></div>
+      <button class="who"><span class="a">PB</span><span>Patricia Bell</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+    </header>
+
+    <!-- Header -->
+    <div class="dw-header">
+      <div class="dw-header-crumb">Accounts Payable · Workflow</div>
+      <div class="dw-header-row">
+        <div>
+          <h1 class="dw-title">AP Invoice Approval</h1>
+          <div class="dw-title-meta">
+            <span>Spectre inbox</span>
+            <span class="sep">·</span>
+            <span><b>18</b> awaiting review, <b>2</b> exception, <b>3</b> on hold</span>
+            <span class="sep">·</span>
+            <span>Assigned to you: <b>4</b></span>
+            <span class="sep">·</span>
+            <span>Last intake <b>07:42 EDT</b></span>
+          </div>
+        </div>
+        <div class="dw-header-actions">
+          <button class="btn secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h9"/></svg>Upload invoice</button>
+          <button class="btn secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/><path d="M12 3v13"/><path d="M7 8l5-5 5 5"/></svg>Export</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toolbar (Data Workspace primitive) -->
+    <div class="dw-toolbar">
+      <div class="dw-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input type="search" placeholder="Search vendor, invoice #, PO, amount…" />
+        <span class="kbd">⌘F</span>
+      </div>
+      <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h10l4 4v12H4z"/><path d="M9 4v6h7"/></svg><span class="k">View:</span><span class="v">Assigned to me</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      <span class="chip on"><span class="k">Recommendation:</span><span class="v">Any</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      <span class="chip"><span class="k">Vendor:</span><span class="v">Any</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      <span class="chip"><span class="k">Amount:</span><span class="v">Any</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      <div class="grow"></div>
+      <div class="density-seg" role="group">
+        <button>Comfy</button>
+        <button aria-pressed="true">Standard</button>
+        <button>Compact</button>
+      </div>
+    </div>
+
+    <!-- Selection bar (contextual, 2 selected) -->
+    <div class="selection-bar">
+      <span><b style="font-variant-numeric: tabular-nums;">2</b> invoices selected · both AI-recommended approve</span>
+      <div class="grow"></div>
+      <button class="btn secondary sm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+        Bulk approve
+      </button>
+      <button class="btn secondary sm">Reassign</button>
+      <button class="btn secondary sm">Hold</button>
+      <button class="btn tertiary sm" style="color: var(--problem);">Clear</button>
+    </div>
+
+    <!-- Grouped queue table -->
+    <div class="dw-table-wrap">
+      <table class="dw">
+        <thead>
+          <tr>
+            <th class="select"><input type="checkbox" class="check" /></th>
+            <th class="sortable"><button class="active">Item <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 10l4-4 4 4"/></svg></button></th>
+            <th>Vendor · Description</th>
+            <th class="num sortable"><button>Amount <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 10l4 4 4-4"/></svg></button></th>
+            <th>Spectre recommends</th>
+            <th>State</th>
+            <th>Assignee</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <!-- NEEDS YOUR JUDGMENT -->
+          <tr class="gh"><td colspan="8">
+            <svg class="toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            Needs your judgment
+            <span class="grp-count">2 items · $18,832.00 · Spectre confidence &lt; 70 %</span>
+          </td></tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8256</td>
+            <td class="item-name"><span class="n">GreenTurf Landscaping — irrigation repair</span><span class="d">Repair — no matching PO · vendor active</span></td>
+            <td class="amount">$14,220<span class="cents">.00</span></td>
+            <td><span class="rc-tag judgment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.7" fill="currentColor"/></svg>Needs judgment<span class="conf">54 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8253</td>
+            <td class="item-name"><span class="n">Prostyle Golf Supplies — pro shop restock</span><span class="d">PO variance $612.00 (+15%) · vendor active</span></td>
+            <td class="amount">$4,612<span class="cents">.00</span></td>
+            <td><span class="rc-tag judgment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="0.7" fill="currentColor"/></svg>Needs judgment<span class="conf">62 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <!-- AI RECOMMENDED APPROVE -->
+          <tr class="gh"><td colspan="8">
+            <svg class="toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            Spectre recommends approve
+            <span class="grp-count">12 items · $18,942.83 · confidence 85 %+</span>
+            <span class="grp-total">Ready for bulk approve</span>
+          </td></tr>
+
+          <tr class="row selected">
+            <td class="select"><input type="checkbox" class="check" checked /></td>
+            <td class="num-col">INV-8241</td>
+            <td class="item-name"><span class="n">Ace Foods · Kitchen supplies</span><span class="d">PO exact match · 3rd this quarter</span></td>
+            <td class="amount">$2,340<span class="cents">.00</span></td>
+            <td><span class="rc-tag approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve<span class="conf">96 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <tr class="row selected">
+            <td class="select"><input type="checkbox" class="check" checked /></td>
+            <td class="num-col">INV-8244</td>
+            <td class="item-name"><span class="n">Bluewater Beverage · Wine order</span><span class="d">PO exact match · monthly recurrence</span></td>
+            <td class="amount">$4,187<span class="cents">.20</span></td>
+            <td><span class="rc-tag approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve<span class="conf">94 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8248</td>
+            <td class="item-name"><span class="n">City Water Services · Utilities</span><span class="d">Recurring · no PO required</span></td>
+            <td class="amount">$1,240<span class="cents">.00</span></td>
+            <td><span class="rc-tag approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve<span class="conf">92 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">AC</span>Alex Cho</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8250</td>
+            <td class="item-name"><span class="n">Course Chem · Herbicide </span><span class="d">PO exact match</span></td>
+            <td class="amount">$820<span class="cents">.00</span></td>
+            <td><span class="rc-tag approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve<span class="conf">98 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">AC</span>Alex Cho</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <!-- AI RECOMMENDED REJECT -->
+          <tr class="gh"><td colspan="8">
+            <svg class="toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            Spectre recommends reject
+            <span class="grp-count">1 item · $612.00 · confidence 88 %</span>
+          </td></tr>
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8237</td>
+            <td class="item-name"><span class="n">Unknown Vendor Inc. · No matching PO</span><span class="d">Vendor not onboarded · unusual sender domain</span></td>
+            <td class="amount">$612<span class="cents">.00</span></td>
+            <td><span class="rc-tag reject"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/></svg>Reject<span class="conf">88 %</span></span></td>
+            <td><span class="state-pill pending">Pending</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <!-- EXCEPTION -->
+          <tr class="gh"><td colspan="8">
+            <svg class="toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            Exception — cannot route
+            <span class="grp-count">2 items · $3,412.90 · needs unblock</span>
+          </td></tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8232</td>
+            <td class="item-name"><span class="n">Facilities Repair Co. — HVAC service</span><span class="d" style="color: var(--problem);">GL account 5310 is archived · cannot post</span></td>
+            <td class="amount">$2,880<span class="cents">.00</span></td>
+            <td><span class="rc-tag exception"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.7" fill="currentColor"/></svg>Fix mapping</span></td>
+            <td><span class="state-pill exception">Exception</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8229</td>
+            <td class="item-name"><span class="n">Silverline Cleaning · Reference vendor missing</span><span class="d" style="color: var(--problem);">Vendor is BLOCKED · cannot post</span></td>
+            <td class="amount">$532<span class="cents">.90</span></td>
+            <td><span class="rc-tag exception"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.7" fill="currentColor"/></svg>Unblock vendor</span></td>
+            <td><span class="state-pill exception">Exception</span></td>
+            <td class="assignee"><span class="a"><span class="av">AC</span>Alex Cho</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+
+          <!-- ON HOLD -->
+          <tr class="gh"><td colspan="8">
+            <svg class="toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            On hold
+            <span class="grp-count">3 items · deferred by operator</span>
+          </td></tr>
+          <tr class="row">
+            <td class="select"><input type="checkbox" class="check" /></td>
+            <td class="num-col">INV-8225</td>
+            <td class="item-name"><span class="n">Prostyle Golf Supplies — clubhead order</span><span class="d">Held until Aug 1 · pending pro-shop review</span></td>
+            <td class="amount">$3,120<span class="cents">.00</span></td>
+            <td><span class="rc-tag approve"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>Approve<span class="conf">91 %</span></span></td>
+            <td><span class="state-pill hold">On hold</span></td>
+            <td class="assignee"><span class="a"><span class="av">PB</span>Patricia Bell</span></td>
+            <td class="actions"><button><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>

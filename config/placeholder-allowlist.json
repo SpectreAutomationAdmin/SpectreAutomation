@@ -1,0 +1,44 @@
+{
+  "$comment": "Phase 15 — Placeholder allowlist. Each entry must include 'pattern' (regex matched against the offending line) and 'paths' (glob restricting where the pattern is permitted). 'reason' is required and reviewed quarterly.",
+  "rules": [
+    {
+      "pattern": "Phase\\s+\\d+[A-Z]?[\\s—\\-:]",
+      "paths": [
+        "README.md",
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "prisma/schema.prisma",
+        "docs/**/*.md",
+        ".claude/**/*.md",
+        "CLAUDE.md"
+      ],
+      "reason": "Phase numbers tag past work; allowed in docs + comment headers."
+    },
+    {
+      "pattern": "placeholder",
+      "paths": [
+        "docs/**/*.md",
+        ".claude/skills/**/*.md",
+        "CLAUDE.md",
+        "scripts/scan-placeholders.ts",
+        "config/placeholder-allowlist.json"
+      ],
+      "reason": "Meta — the scanner itself mentions 'placeholder'."
+    },
+    {
+      "pattern": "MOCK\\b|demo data only|DEMO",
+      "paths": ["src/**/*.tsx", "src/**/*.ts"],
+      "reason": "Visible 'DEMO' tag is the *correct* way to label mock-only UI."
+    },
+    {
+      "pattern": "Placeholder",
+      "paths": ["src/**/*.ts", "src/**/*.tsx"],
+      "reason": "React `placeholder=...` on form inputs is hint text, not scaffolding."
+    },
+    {
+      "pattern": "GCP KMS implementation is structurally identical",
+      "paths": ["src/lib/kms/index.ts"],
+      "reason": "Phase 12A noted GCP provider is a known fallback to local; documented in README + remediation backlog."
+    }
+  ]
+}

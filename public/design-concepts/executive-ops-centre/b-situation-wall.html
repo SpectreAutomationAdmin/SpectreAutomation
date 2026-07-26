@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Executive Operations Centre — Concept B · The Situation Wall</title>
+<meta name="viewport" content="width=1440">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --shell: #121314;
+    --shell-2: #191b1d;
+    --shell-line: rgba(255,255,255,0.06);
+    --workspace: #f8f5ef;
+    --ink: #1a1f1a;
+    --ink-2: rgba(26,31,26,0.72);
+    --ink-3: rgba(26,31,26,0.52);
+    --gold: #b08a4a;
+    --gold-2: #6b5028;
+    --accent: #2f5832;
+    --accent-glow: rgba(47,88,50,0.32);
+    --dom-membership: #2f5832;
+    --dom-finance: #7a5b1d;
+    --dom-ops: #455a64;
+    --dom-gov: #5a3a2a;
+    --dom-hosp: #874a2a;
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--shell); color: #e7e3da; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .rail { background: #16181a; border-right: 1px solid var(--shell-line); padding: 24px 20px; }
+  .rail-eyebrow { font-size: 10px; letter-spacing: 0.18em; color: rgba(231,227,218,0.5); text-transform: uppercase; font-weight: 600; }
+  .rail-club { margin-top: 4px; font-family: var(--serif); font-size: 18px; color: #fff; line-height: 1.15; }
+  .rail-dept { margin-top: 4px; font-size: 12px; color: rgba(231,227,218,0.55); }
+  .rail-nav { margin-top: 28px; }
+  .rail-item { display: block; padding: 8px 4px; color: rgba(231,227,218,0.75); text-decoration: none; font-size: 13px; position: relative; letter-spacing: -0.005em; }
+  .rail-item.active { color: #fff; }
+  .rail-item.active::before { content: ''; position: absolute; left: -20px; top: 12px; bottom: 12px; width: 3px; background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); border-radius: 0 3px 3px 0; }
+  .rail-section-h { margin-top: 24px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: rgba(231,227,218,0.4); }
+  .main { padding: 24px 24px 32px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 6px; }
+  .topbar-brand { font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.55); font-size: 13px; }
+  .avatar { height: 32px; width: 32px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; box-shadow: 0 0 12px var(--accent-glow); }
+  .workspace {
+    margin-top: 20px;
+    background: var(--workspace);
+    color: var(--ink);
+    border-radius: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.20), 0 30px 60px rgba(0,0,0,0.16);
+    padding: 30px 34px 26px;
+  }
+  .status-strap { display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid rgba(0,0,0,0.06); }
+  .status-strap .left { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .status-strap .left .live { color: var(--accent); }
+  .status-strap .right { font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px; }
+
+  .wall { margin-top: 22px; display: grid; grid-template-columns: 1.35fr 1fr; gap: 22px; }
+  .featured { position: relative; padding: 26px 28px 24px; background: #fff; border: 1px solid rgba(0,0,0,0.06); border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 12px 30px rgba(0,0,0,0.04); display: flex; flex-direction: column; overflow: hidden; }
+  .featured::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--dom-membership); box-shadow: 0 0 12px rgba(47,88,50,0.34); }
+  .featured-tag { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dom-membership); font-weight: 600; }
+  .featured-title { margin-top: 8px; font-family: var(--serif); font-size: 28px; line-height: 1.12; letter-spacing: -0.012em; color: var(--ink); font-weight: 500; }
+  .featured-state { margin-top: 14px; font-family: var(--serif); font-size: 18px; line-height: 1.5; color: var(--ink-2); max-width: 560px; }
+  .featured-nums { margin-top: 26px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; padding-top: 22px; border-top: 1px solid rgba(0,0,0,0.06); }
+  .featured-nums .cell .label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .featured-nums .cell .value { margin-top: 5px; font-family: var(--serif); font-size: 32px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.015em; line-height: 1; }
+  .featured-cta { margin-top: 22px; display: inline-flex; align-items: center; gap: 10px; padding: 11px 16px; background: var(--dom-membership); color: #fff; border-radius: 8px; text-decoration: none; font-size: 13px; font-weight: 500; align-self: flex-start; box-shadow: 0 4px 14px rgba(47,88,50,0.28); }
+
+  .bays { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .bay { position: relative; background: #fff; border: 1px solid rgba(0,0,0,0.06); border-radius: 12px; padding: 18px 18px 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 6px 18px rgba(0,0,0,0.03); overflow: hidden; }
+  .bay::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+  .bay.finance::before { background: var(--dom-finance); }
+  .bay.ops::before { background: var(--dom-ops); }
+  .bay.gov::before { background: var(--dom-gov); }
+  .bay.hosp::before { background: var(--dom-hosp); }
+  .bay-h { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 600; }
+  .bay.finance .bay-h { color: var(--dom-finance); }
+  .bay.ops .bay-h { color: var(--dom-ops); }
+  .bay.gov .bay-h { color: var(--dom-gov); }
+  .bay.hosp .bay-h { color: var(--dom-hosp); }
+  .bay-title { margin-top: 4px; font-family: var(--serif); font-size: 16px; color: var(--ink); font-weight: 500; }
+  .bay-cond { margin-top: 4px; font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12px; line-height: 1.4; min-height: 34px; }
+  .bay-num { margin-top: 12px; display: flex; align-items: baseline; gap: 8px; }
+  .bay-num .value { font-family: var(--serif); font-size: 26px; font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: -0.008em; line-height: 1; }
+  .bay-num .value .dec { color: var(--ink-3); font-size: 17px; }
+  .bay-sublabel { margin-top: 8px; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+
+  .queue { margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(0,0,0,0.06); }
+  .queue-h { display: flex; align-items: baseline; gap: 12px; }
+  .queue-h .lead { font-family: var(--serif); font-size: 16px; color: var(--ink); font-weight: 500; }
+  .queue-h .meta { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .queue-items { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .queue-chip { display: inline-flex; align-items: center; gap: 9px; padding: 8px 13px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.05); border-radius: 999px; font-size: 12px; color: var(--ink-2); }
+  .queue-chip .dot { width: 6px; height: 6px; border-radius: 999px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-eyebrow">Spectre</div>
+    <div class="rail-club">Silver Springs<br>Golf &amp; Country Club</div>
+    <div class="rail-dept">Administration</div>
+    <div class="rail-nav">
+      <a class="rail-item active" href="#">Situation Wall</a>
+      <a class="rail-item" href="#">Search</a>
+      <div class="rail-section-h">Domains</div>
+      <a class="rail-item" href="#">Membership</a>
+      <a class="rail-item" href="#">Finance</a>
+      <a class="rail-item" href="#">Operations</a>
+      <a class="rail-item" href="#">Governance</a>
+      <a class="rail-item" href="#">Hospitality</a>
+      <div class="rail-section-h">Personal</div>
+      <a class="rail-item" href="#">My MFA</a>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-brand">Situation Wall · Executive Operations Centre</div>
+      <div class="avatar">PB</div>
+    </div>
+    <div class="workspace">
+      <div class="status-strap">
+        <div class="left"><span class="live">● Live</span> · Situation · Mon Jul 14 · 08:14 EDT · Club Admin on Deck</div>
+        <div class="right">Silver Springs Golf &amp; Country Club · Est. 1958 · Calgary, Alberta</div>
+      </div>
+      <div class="wall">
+        <div class="featured">
+          <div class="featured-tag">Lead Domain · Membership</div>
+          <div class="featured-title">Two applications require decisions before Friday.</div>
+          <div class="featured-state">The queue is quiet otherwise. The Hendrick and DuPont applications have been under review for six days; both households completed onboarding.</div>
+          <div class="featured-nums">
+            <div class="cell"><div class="label">Pending decisions</div><div class="value">2</div></div>
+            <div class="cell"><div class="label">Approved / waitlisted</div><div class="value">1</div></div>
+            <div class="cell"><div class="label">Onboarding gap</div><div class="value">9</div></div>
+          </div>
+          <a href="#" class="featured-cta">Review the two applications →</a>
+        </div>
+        <div class="bays">
+          <div class="bay finance">
+            <div class="bay-h">II · Finance</div>
+            <div class="bay-title">Steady</div>
+            <div class="bay-cond">AR inside policy; over-60 accumulating.</div>
+            <div class="bay-num"><span class="value">$5,902<span class="dec">.50</span></span></div>
+            <div class="bay-sublabel">Member AR</div>
+          </div>
+          <div class="bay ops">
+            <div class="bay-h">III · Operations</div>
+            <div class="bay-title">On plan</div>
+            <div class="bay-cond">Tee sheet full through Thursday.</div>
+            <div class="bay-num"><span class="value">148</span></div>
+            <div class="bay-sublabel">Tee times today</div>
+          </div>
+          <div class="bay gov">
+            <div class="bay-h">IV · Governance</div>
+            <div class="bay-title">Two decisions</div>
+            <div class="bay-cond">May package published; committee meets Friday.</div>
+            <div class="bay-num"><span class="value">2</span></div>
+            <div class="bay-sublabel">Board decisions</div>
+          </div>
+          <div class="bay hosp">
+            <div class="bay-h">V · Hospitality</div>
+            <div class="bay-title">Twelve tonight</div>
+            <div class="bay-cond">Founders' evening this week.</div>
+            <div class="bay-num"><span class="value">12</span></div>
+            <div class="bay-sublabel">Reservations tonight</div>
+          </div>
+        </div>
+      </div>
+      <div class="queue">
+        <div class="queue-h">
+          <div class="lead">Today's queue</div>
+          <div class="meta">6 items · in order of urgency</div>
+        </div>
+        <div class="queue-items">
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-membership)"></span>Approve Hendrick application</span>
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-membership)"></span>Approve DuPont application</span>
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-finance)"></span>Send 3 collections notices</span>
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-gov)"></span>Finalize committee items (4)</span>
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-hosp)"></span>Confirm Founders' evening seating</span>
+          <span class="queue-chip"><span class="dot" style="background: var(--dom-ops)"></span>Address failed payment (1)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

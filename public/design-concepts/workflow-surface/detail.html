@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflow Surface · AP Invoice Approval — Detail</title>
+<meta name="viewport" content="width=1440">
+<style>
+  :root {
+    --canvas:           #f6f6f8;
+    --canvas-sunken:    #eeeef1;
+    --surface:          #ffffff;
+    --surface-hover:    #f4f4f5;
+    --sidebar:          #f4f4f6;
+    --topbar:           #fbfbfc;
+    --edge:             rgba(15, 15, 20, 0.09);
+    --edge-strong:      rgba(15, 15, 20, 0.16);
+    --edge-workspace:   rgba(15, 15, 20, 0.06);
+    --micro-shadow:     0 1px 0 rgba(20, 18, 12, 0.03);
+    --shadow-panel:     0 1px 2px rgba(15, 17, 21, 0.04);
+
+    --text-primary:     #17181b;
+    --text-secondary:   rgba(23, 24, 27, 0.72);
+    --text-muted:       rgba(23, 24, 27, 0.55);
+    --text-subtle:      rgba(23, 24, 27, 0.38);
+    --text-inverse:     #fdfdfe;
+
+    --confidence:       #166534;
+    --confidence-tint:  rgba(22, 101, 52, 0.09);
+    --confidence-edge:  rgba(22, 101, 52, 0.32);
+    --observation:      #b45309;
+    --observation-tint: rgba(180, 83, 9, 0.09);
+    --observation-edge: rgba(180, 83, 9, 0.32);
+    --problem:          #b91c1c;
+    --problem-tint:     rgba(185, 28, 28, 0.09);
+    --problem-edge:     rgba(185, 28, 28, 0.32);
+    --info:             #1d4ed8;
+    --info-tint:        rgba(29, 78, 216, 0.09);
+    --info-edge:        rgba(29, 78, 216, 0.32);
+    --ai:               #4c1d95;
+    --ai-tint:          rgba(76, 29, 149, 0.09);
+    --ai-edge:          rgba(76, 29, 149, 0.32);
+    --accent:           #2f5832;
+
+    --sans: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; background: transparent; border: none; padding: 0; color: inherit; }
+
+  .shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+
+  /* Sidebar */
+  .rail-nav { background: var(--sidebar); border-right: 1px solid var(--edge); padding: 18px 12px 20px 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 6px 16px; }
+  .brand .mark { width: 24px; height: 24px; border-radius: 5px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+  .brand .wm { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; }
+  .club { margin: 0 6px 14px; padding-bottom: 14px; border-bottom: 1px solid var(--edge); font-size: 11.5px; color: var(--text-muted); }
+  .club b { display: block; color: var(--text-primary); font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .nav-section { padding: 16px 10px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-subtle); font-weight: 700; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; margin: 1px -2px; border-radius: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+  .nav-item svg { width: 15px; height: 15px; color: var(--text-muted); }
+  .nav-item.active { background: var(--surface); color: var(--text-primary); font-weight: 600; box-shadow: inset 0 0 0 1px var(--edge); }
+  .nav-item.active svg { color: var(--accent); }
+  .nav-child { display: block; margin-left: 24px; padding: 4px 10px; font-size: 12.5px; color: var(--text-secondary); border-radius: 4px; font-weight: 500; }
+  .nav-child.active { color: var(--text-primary); font-weight: 600; background: var(--surface); box-shadow: inset 0 0 0 1px var(--edge); }
+
+  /* Top bar */
+  .topbar { height: 56px; display: flex; align-items: center; padding: 0 32px; gap: 4px; background: var(--topbar); border-bottom: 1px solid var(--edge); }
+  .crumbs { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; flex: 1; font-weight: 500; }
+  .crumbs .sep { color: var(--text-subtle); font-size: 9px; }
+  .crumbs .leaf { color: var(--text-primary); font-weight: 600; }
+  .u-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; color: var(--text-secondary); position: relative; }
+  .u-btn:hover { background: rgba(20, 18, 12, 0.06); color: var(--text-primary); }
+  .u-btn svg { width: 16px; height: 16px; }
+  .u-divider { width: 1px; height: 20px; background: var(--edge); margin: 0 8px; }
+  .who { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 1px solid var(--edge); border-radius: 8px; font-size: 13px; color: var(--text-primary); font-weight: 500; }
+  .who .a { width: 24px; height: 24px; border-radius: 999px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; }
+  .who svg { width: 12px; height: 12px; color: var(--text-muted); }
+
+  /* Header */
+  .ws-header { padding: 18px 32px 14px; background: var(--canvas); border-bottom: 1px solid var(--edge-workspace); display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+  .ws-header-crumb { font-size: 11.5px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.02em; margin-bottom: 4px; }
+  .ws-header h1 { font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.014em; color: var(--text-primary); }
+  .ws-header .h1-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .ws-header .id-tag { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
+  .ws-header .subrow { font-size: 12.5px; color: var(--text-secondary); font-weight: 500; }
+  .ws-header .subrow b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .queue-nav { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); font-weight: 500; }
+  .queue-nav .btn { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--edge); background: var(--surface); }
+  .queue-nav .btn svg { width: 12px; height: 12px; color: var(--text-secondary); }
+  .queue-nav .btn:hover { background: var(--surface-hover); border-color: var(--edge-strong); }
+  .queue-nav .pos { padding: 0 4px; }
+
+  /* Reverting banner */
+  .ws-revert-banner { padding: 8px 32px; background: var(--confidence-tint); border-bottom: 1px solid var(--confidence-edge); font-size: 12.5px; color: var(--confidence); font-weight: 600; display: none; align-items: center; gap: 8px; }
+  [data-state="approved"] .ws-revert-banner { display: flex; }
+  .ws-revert-banner svg { width: 12px; height: 12px; }
+  .ws-revert-banner .grow { flex: 1; }
+
+  /* State pill */
+  .state-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--edge); background: transparent; color: var(--text-secondary); }
+  .state-pill::before { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--text-muted); display: inline-block; }
+  .state-pill.pending { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .state-pill.pending::before { background: var(--observation); }
+  .state-pill.in-review { background: var(--info-tint); border-color: var(--info-edge); color: var(--info); }
+  .state-pill.in-review::before { background: var(--info); }
+  .state-pill.approved { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .state-pill.approved::before { background: var(--confidence); }
+  .state-pill.rejected { background: var(--problem-tint); border-color: var(--problem-edge); color: var(--problem); }
+  .state-pill.rejected::before { background: var(--problem); }
+
+  /* Main two-column layout */
+  .ws-main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 0; background: var(--canvas); }
+  @media (max-width: 1279px) { .ws-main { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Evidence panel (left) */
+  .evidence { padding: 20px 32px 40px; overflow: auto; }
+  .evidence-section { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); margin-bottom: 14px; }
+  .evidence-section > header { padding: 10px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--edge-workspace); }
+  .evidence-section > header h3 { font-size: 12px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; flex: 1; }
+  .evidence-section > header .conf { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; padding: 1px 6px; border: 1px solid var(--edge); border-radius: 4px; background: var(--canvas-sunken); }
+  .evidence-section > header .conf.hi { background: var(--confidence-tint); border-color: var(--confidence-edge); color: var(--confidence); }
+  .evidence-section > header .conf.mid { background: var(--observation-tint); border-color: var(--observation-edge); color: var(--observation); }
+  .evidence-section > header .toggle { color: var(--text-muted); }
+  .evidence-section > header .toggle svg { width: 11px; height: 11px; }
+  .evidence-section .body { padding: 12px 16px 14px; }
+
+  /* Document viewer */
+  .doc-viewer { background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 6px; height: 340px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+  .doc-viewer .doc-mock { font-family: var(--mono); font-size: 11px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--edge); border-radius: 4px; padding: 20px 24px; width: 320px; min-height: 300px; line-height: 18px; box-shadow: var(--shadow-panel); }
+  .doc-viewer .doc-mock h4 { font-family: var(--sans); font-size: 12px; color: var(--text-primary); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 8px; }
+  .doc-viewer .doc-mock table { width: 100%; font-family: var(--mono); font-size: 10px; margin: 8px 0; border-collapse: collapse; }
+  .doc-viewer .doc-mock table td { padding: 2px 0; color: var(--text-secondary); }
+  .doc-viewer .doc-mock table td:last-child { text-align: right; }
+  .doc-viewer .doc-mock .total { border-top: 1px solid var(--edge); margin-top: 4px; padding-top: 4px; font-weight: 700; color: var(--text-primary); }
+  .doc-viewer .doc-tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+  .doc-viewer .doc-tools button { width: 24px; height: 24px; border-radius: 4px; background: var(--surface); border: 1px solid var(--edge); color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; }
+  .doc-viewer .doc-tools button svg { width: 12px; height: 12px; }
+
+  /* Extracted fields */
+  .fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 20px; }
+  .field-row { display: flex; align-items: baseline; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed var(--edge-workspace); font-size: 12.5px; }
+  .field-row .k { color: var(--text-muted); font-weight: 500; letter-spacing: 0.01em; font-size: 11px; text-transform: uppercase; }
+  .field-row .v { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 6px; }
+  .field-row .v .fconf { font-size: 9.5px; color: var(--text-muted); font-weight: 500; padding: 1px 4px; border: 1px solid var(--edge); border-radius: 3px; background: var(--canvas-sunken); font-variant-numeric: tabular-nums; }
+  .field-row .v .fconf.low { color: var(--observation); border-color: var(--observation-edge); background: var(--observation-tint); }
+
+  /* Match row */
+  .match-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 8px 12px; background: var(--canvas-sunken); border-radius: 4px; margin-top: 4px; font-size: 12.5px; }
+  .match-row .lbl { color: var(--text-secondary); font-weight: 500; }
+  .match-row .val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .match-row.ok { background: var(--confidence-tint); }
+  .match-row.ok .val { color: var(--confidence); }
+
+  /* JE preview mini table */
+  .je-preview { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .je-preview th, .je-preview td { padding: 5px 10px; text-align: left; }
+  .je-preview thead th { font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; background: var(--canvas-sunken); border-bottom: 1px solid var(--edge); }
+  .je-preview tbody td { border-bottom: 1px solid var(--edge-workspace); color: var(--text-secondary); }
+  .je-preview tbody td.debit, .je-preview tbody td.credit { text-align: right; color: var(--text-primary); font-weight: 600; }
+  .je-preview tfoot td { border-top: 2px solid var(--edge-strong); font-weight: 700; color: var(--text-primary); }
+
+  /* History */
+  .history-row { display: grid; grid-template-columns: 92px 1fr auto auto; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--edge-workspace); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .history-row .h-date { font-family: var(--mono); color: var(--text-muted); font-size: 11px; }
+  .history-row .h-name { color: var(--text-primary); font-weight: 500; }
+  .history-row .h-amount { color: var(--text-primary); font-weight: 600; }
+  .history-row .h-status { padding: 1px 6px; font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; border: 1px solid var(--confidence-edge); background: var(--confidence-tint); color: var(--confidence); border-radius: 3px; }
+
+  /* -------- WORKFLOW RAIL (right) -------- */
+  .rail { border-left: 1px solid var(--edge); background: var(--canvas); padding: 20px 20px 40px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Recommendation card */
+  .rc-card { background: var(--surface); border: 1px solid var(--ai-edge); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 16px; }
+  .rc-eyebrow { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: var(--ai-tint); border: 1px solid var(--ai-edge); border-radius: 4px; font-size: 9.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--ai); font-weight: 700; margin-bottom: 10px; }
+  .rc-eyebrow svg { width: 10px; height: 10px; }
+  .rc-eyebrow .conf { padding-left: 8px; margin-left: 4px; border-left: 1px solid var(--ai-edge); color: var(--ai); }
+  .rc-headline { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.008em; margin-bottom: 12px; }
+  .rc-reasoning { font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; }
+  .rc-reasoning-list { list-style: none; padding: 0; margin: 0 0 12px; font-size: 12.5px; color: var(--text-secondary); line-height: 18px; }
+  .rc-reasoning-list li { position: relative; padding: 4px 0 4px 18px; }
+  .rc-reasoning-list li::before { content: "→"; position: absolute; left: 4px; top: 4px; color: var(--ai); font-weight: 700; }
+  .rc-reasoning-list li b { color: var(--text-primary); font-weight: 600; }
+  .rc-reasoning-list li .link { color: var(--info); text-decoration: underline; cursor: pointer; font-weight: 500; }
+  .rc-links { font-size: 11px; color: var(--text-muted); padding-top: 10px; margin-top: 10px; border-top: 1px dashed var(--edge-workspace); font-weight: 500; }
+  .rc-links a { color: var(--text-secondary); text-decoration: underline; margin-right: 12px; cursor: pointer; }
+
+  /* Approval bar */
+  .approval-bar { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px; }
+  .approval-bar-title { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12.5px; font-weight: 600; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-family: inherit; letter-spacing: -0.002em; }
+  .btn svg { width: 12px; height: 12px; }
+  .btn.primary { background: var(--accent); color: var(--text-inverse); border-color: var(--accent); box-shadow: 0 1px 0 rgba(20,18,12,0.06); width: 100%; justify-content: center; padding: 9px 14px; font-size: 13px; }
+  .btn.primary:hover { background: #213a22; }
+  .btn.secondary { background: var(--surface); color: var(--text-primary); border-color: var(--edge-strong); }
+  .btn.secondary:hover { background: var(--surface-hover); }
+  .btn.tertiary { background: transparent; color: var(--text-secondary); padding: 6px 8px; }
+  .btn.tertiary:hover { background: rgba(15, 15, 20, 0.05); color: var(--text-primary); }
+  .btn.destructive { color: var(--problem); }
+  .btn.destructive:hover { background: var(--problem-tint); border-color: var(--problem-edge); }
+  .btn.sm { padding: 5px 10px; font-size: 11.5px; }
+  .approval-bar .primary-row { margin-bottom: 10px; }
+  .approval-bar .secondary-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .approval-bar .kbd-hint { display: block; margin-top: 8px; font-size: 10.5px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.02em; }
+  .kbd { font-family: var(--mono); font-size: 10px; padding: 1px 5px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 3px; color: var(--text-primary); font-weight: 600; }
+
+  /* Conversation thread */
+  .conv-card { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px; }
+  .conv-title { display: flex; align-items: baseline; justify-content: space-between; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .conv-title .n { color: var(--text-muted); font-weight: 500; }
+  .conv-empty { font-size: 12px; color: var(--text-muted); font-weight: 500; padding: 6px 0 10px; }
+  .conv-compose { display: flex; gap: 6px; }
+  .conv-compose input { flex: 1; padding: 6px 10px; background: var(--canvas-sunken); border: 1px solid var(--edge); border-radius: 6px; font: inherit; font-size: 12.5px; color: var(--text-primary); outline: none; }
+  .conv-compose input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 88, 50, 0.15); }
+
+  /* Activity timeline */
+  .timeline-card { background: var(--surface); border: 1px solid var(--edge-workspace); border-radius: 8px; box-shadow: var(--micro-shadow); padding: 14px 16px 8px; }
+  .timeline-title { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-primary); font-weight: 700; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--edge-workspace); }
+  .tl-row { display: grid; grid-template-columns: 46px 1fr; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--edge-workspace); }
+  .tl-row:last-child { border-bottom: none; }
+  .tl-when { font-family: var(--mono); font-size: 10.5px; color: var(--text-muted); font-weight: 500; padding-top: 2px; }
+  .tl-body { font-size: 12px; color: var(--text-secondary); line-height: 17px; }
+  .tl-body .actor { font-weight: 600; color: var(--text-primary); }
+  .tl-body .actor.spectre { color: var(--ai); }
+  .tl-body .verb { color: var(--text-primary); font-weight: 500; }
+  .tl-body .reason { display: block; margin-top: 2px; font-size: 11.5px; color: var(--text-muted); }
+  .tl-body .ref { font-family: var(--mono); font-size: 11px; color: var(--text-primary); background: var(--canvas-sunken); border: 1px solid var(--edge); padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body data-state="in-review">
+<div class="shell">
+  <!-- Sidebar -->
+  <aside class="rail-nav">
+    <div class="brand"><div class="mark">S</div><div class="wm">Spectre</div></div>
+    <div class="club"><b>Silver Springs</b>Golf &amp; Country Club</div>
+    <nav>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/></svg><span>Mission Control</span></a>
+      <div class="nav-section">Domains</div>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.5-4 5-6 8-6s6.5 2 8 6"/></svg><span>Membership</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V9"/><path d="M9 20V4"/><path d="M14 20V13"/><path d="M19 20V7"/></svg><span>Finance</span></a>
+      <a class="nav-item active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13l3 3v13H4z"/><path d="M4 9h13"/></svg><span>Accounts Payable</span></a>
+      <a class="nav-child">Invoices</a>
+      <a class="nav-child">Vendors</a>
+      <a class="nav-child active">Invoice Approval</a>
+      <a class="nav-child">Payment Batches</a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M5 5l2.1 2.1"/><path d="M16.9 16.9L19 19"/><path d="M3 12h3"/><path d="M18 12h3"/></svg><span>Operations</span></a>
+      <a class="nav-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V8l8-4 8 4v13"/><path d="M9 21v-7h6v7"/></svg><span>Governance</span></a>
+    </nav>
+  </aside>
+
+  <div>
+    <!-- Top bar -->
+    <header class="topbar">
+      <nav class="crumbs">
+        <span>Admin</span><span class="sep">›</span><span>Accounts Payable</span><span class="sep">›</span><span>Invoice Approval</span><span class="sep">›</span><span class="leaf">INV-8241</span>
+      </nav>
+      <button class="u-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+      <button class="u-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0v5l1.5 2h-15L6 13z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></button>
+      <div class="u-divider"></div>
+      <button class="who"><span class="a">PB</span><span>Patricia Bell</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+    </header>
+
+    <!-- Post-approval revert banner (visible only on data-state=approved) -->
+    <div class="ws-revert-banner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+      <span>Approved and posted at 09:14 EDT. Journal entry <b>JE-8241</b>. Reversible for 7 days.</span>
+      <div class="grow"></div>
+      <button class="btn secondary sm">Revert</button>
+    </div>
+
+    <!-- Workflow header -->
+    <div class="ws-header">
+      <div>
+        <div class="ws-header-crumb">AP Invoice Approval</div>
+        <div class="h1-row">
+          <h1>Ace Foods — $2,340.00 · Kitchen supplies</h1>
+          <span class="id-tag">INV-8241</span>
+          <span class="state-pill in-review">In review</span>
+        </div>
+        <div class="subrow">
+          Submitted <b>06:41 EDT</b> · Vendor invoice <b>#A-8241</b> · Assigned to <b>Patricia Bell</b> · Due <b>Aug 12</b>
+        </div>
+      </div>
+      <div class="queue-nav">
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <span class="pos"><b style="color: var(--text-primary); font-weight: 600;">1</b> of 4 in your queue</span>
+        <button class="btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+      </div>
+    </div>
+
+    <!-- Main two-column -->
+    <div class="ws-main">
+      <!-- EVIDENCE PANEL -->
+      <section class="evidence" aria-label="Evidence">
+        <!-- Original document -->
+        <div class="evidence-section">
+          <header>
+            <h3>Original invoice · PDF</h3>
+            <span class="conf hi">98 % text extracted</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <div class="doc-viewer">
+              <div class="doc-tools">
+                <button title="Download"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/><path d="M12 3v13"/><path d="M7 8l5-5 5 5"/></svg></button>
+                <button title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4L10 14"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4"/></svg></button>
+              </div>
+              <div class="doc-mock">
+                <h4>Ace Foods Ltd.</h4>
+                <div>1240 Industrial Rd, Vancouver BC · GST 122334455 RT0001</div>
+                <div style="margin-top: 8px; font-family: var(--sans); color: var(--text-primary); font-weight: 600;">Invoice #A-8241 · 2026-07-14</div>
+                <div>Silver Springs Golf &amp; Country Club</div>
+                <div>Attn: Kitchen · Alex Cho</div>
+                <table>
+                  <tr><td>3× Wagyu striploin (kg)</td><td>$1,120.00</td></tr>
+                  <tr><td>12× Sourdough loaves</td><td>$96.00</td></tr>
+                  <tr><td>2× Aged parmesan wheel</td><td>$340.00</td></tr>
+                  <tr><td>Produce · box grade A</td><td>$672.58</td></tr>
+                  <tr class="total"><td>Subtotal</td><td>$2,228.58</td></tr>
+                  <tr><td>GST @ 5%</td><td>$111.42</td></tr>
+                  <tr class="total"><td>Total due</td><td>$2,340.00</td></tr>
+                </table>
+                <div style="margin-top: 10px; font-family: var(--sans); font-size: 10.5px; color: var(--text-muted);">Terms: Net 30 · Due Aug 12, 2026</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Extracted fields -->
+        <div class="evidence-section">
+          <header>
+            <h3>Spectre-extracted fields</h3>
+            <span class="conf hi">96 % overall</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <div class="fields">
+              <div class="field-row"><span class="k">Vendor</span><span class="v">Ace Foods Ltd. <span class="fconf">99 %</span></span></div>
+              <div class="field-row"><span class="k">Vendor invoice #</span><span class="v">A-8241 <span class="fconf">99 %</span></span></div>
+              <div class="field-row"><span class="k">Invoice date</span><span class="v">2026-07-14 <span class="fconf">99 %</span></span></div>
+              <div class="field-row"><span class="k">Due date</span><span class="v">2026-08-12 <span class="fconf">96 %</span></span></div>
+              <div class="field-row"><span class="k">Subtotal</span><span class="v">$2,228.58 <span class="fconf">98 %</span></span></div>
+              <div class="field-row"><span class="k">GST (5 %)</span><span class="v">$111.42 <span class="fconf">98 %</span></span></div>
+              <div class="field-row"><span class="k">Total</span><span class="v">$2,340.00 <span class="fconf">99 %</span></span></div>
+              <div class="field-row"><span class="k">Attention</span><span class="v">A. Cho (kitchen) <span class="fconf low">82 %</span></span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Purchase order match -->
+        <div class="evidence-section">
+          <header>
+            <h3>Purchase order match</h3>
+            <span class="conf hi">Exact</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <div class="match-row ok"><span class="lbl">PO #4832 · <span style="color:var(--text-secondary); font-weight: 500;">issued 2026-07-08 by A. Cho</span></span><span class="val">$2,340.00</span></div>
+            <div class="match-row"><span class="lbl">Ordered items match invoice</span><span class="val">14 of 14</span></div>
+            <div class="match-row"><span class="lbl">Variance to PO</span><span class="val">$0.00</span></div>
+            <div class="match-row"><span class="lbl">Receiving record</span><span class="val">Received 2026-07-13 (A. Cho)</span></div>
+          </div>
+        </div>
+
+        <!-- Vendor context -->
+        <div class="evidence-section">
+          <header>
+            <h3>Vendor context</h3>
+            <span class="conf hi">Active · net-30</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <div class="fields">
+              <div class="field-row"><span class="k">Status</span><span class="v" style="color: var(--confidence);">Active</span></div>
+              <div class="field-row"><span class="k">Terms</span><span class="v">Net 30</span></div>
+              <div class="field-row"><span class="k">Onboarded</span><span class="v">2021-03-14</span></div>
+              <div class="field-row"><span class="k">GST reg.</span><span class="v">122334455 RT0001</span></div>
+              <div class="field-row"><span class="k">3-mo. avg. invoice</span><span class="v">$2,120.00</span></div>
+              <div class="field-row"><span class="k">On-time payment rate</span><span class="v">100 %</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Journal entry preview -->
+        <div class="evidence-section">
+          <header>
+            <h3>Journal entry preview (posts on approval)</h3>
+            <span class="conf hi">Balances</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <table class="je-preview">
+              <thead><tr><th>Account</th><th>Description</th><th style="text-align:right;">Debit</th><th style="text-align:right;">Credit</th></tr></thead>
+              <tbody>
+                <tr><td><b style="color: var(--text-primary);">5200</b> · Kitchen supplies</td><td>Ace Foods · #A-8241</td><td class="debit">$2,228.58</td><td></td></tr>
+                <tr><td><b style="color: var(--text-primary);">2100</b> · GST recoverable</td><td>GST 5 %</td><td class="debit">$111.42</td><td></td></tr>
+                <tr><td><b style="color: var(--text-primary);">2000</b> · Accounts payable</td><td>Ace Foods Ltd.</td><td></td><td class="credit">$2,340.00</td></tr>
+              </tbody>
+              <tfoot><tr><td colspan="2" style="text-align:right;">Totals</td><td class="debit">$2,340.00</td><td class="credit">$2,340.00</td></tr></tfoot>
+            </table>
+          </div>
+        </div>
+
+        <!-- Historical similar invoices -->
+        <div class="evidence-section">
+          <header>
+            <h3>Historical invoices from this vendor</h3>
+            <span class="conf">Last 3 months</span>
+            <button class="toggle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </header>
+          <div class="body">
+            <div class="history-row"><span class="h-date">2026-06-14</span><span class="h-name">#A-8207 · Kitchen supplies</span><span class="h-amount">$2,110.00</span><span class="h-status">Paid</span></div>
+            <div class="history-row"><span class="h-date">2026-05-14</span><span class="h-name">#A-8172 · Kitchen supplies</span><span class="h-amount">$2,080.00</span><span class="h-status">Paid</span></div>
+            <div class="history-row"><span class="h-date">2026-04-14</span><span class="h-name">#A-8138 · Kitchen supplies</span><span class="h-amount">$2,170.00</span><span class="h-status">Paid</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- WORKFLOW RAIL -->
+      <aside class="rail" aria-label="Workflow controls">
+        <!-- Recommendation card -->
+        <div class="rc-card" data-testid="recommendation">
+          <div class="rc-eyebrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M5 5l2 2"/><path d="M17 17l2 2"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>
+            SPECTRE · RECOMMEND
+            <span class="conf">CONFIDENCE 96 %</span>
+          </div>
+          <div class="rc-headline">Approve &amp; post to <b style="font-family: var(--mono); font-weight: 700;">GL 5200 · Kitchen supplies</b></div>
+          <div class="rc-reasoning">Reasoning</div>
+          <ul class="rc-reasoning-list">
+            <li><b>PO #4832 match:</b> <span class="link">exact — $2,340.00, 14 of 14 line items</span></li>
+            <li><b>Variance:</b> <span class="link">$0.00 vs PO</span></li>
+            <li><b>GST verified</b> at 5 % ($111.42)</li>
+            <li><b>Vendor active</b> · net-30 · 100 % on-time payment rate</li>
+            <li><b>Journal entry balances</b> · <span class="link">preview available</span></li>
+          </ul>
+          <div class="rc-links">
+            Evidence: <a>PO document</a><a>Vendor profile</a><a>JE preview</a>
+          </div>
+        </div>
+
+        <!-- Approval bar -->
+        <div class="approval-bar">
+          <div class="approval-bar-title">Your decision</div>
+          <div class="primary-row">
+            <button class="btn primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+              Approve &amp; post
+            </button>
+          </div>
+          <div class="secondary-row">
+            <button class="btn secondary">Reject with reason</button>
+            <button class="btn secondary">Reassign</button>
+            <button class="btn secondary">Hold</button>
+            <button class="btn secondary">Ask</button>
+          </div>
+          <span class="kbd-hint">
+            <span class="kbd">A</span> approve · <span class="kbd">R</span> reject · <span class="kbd">?</span> ask · <span class="kbd">↑↓</span> queue
+          </span>
+        </div>
+
+        <!-- Conversation thread -->
+        <div class="conv-card">
+          <div class="conv-title"><span>Conversation</span><span class="n">0 messages</span></div>
+          <div class="conv-empty">Nothing yet. Ask the vendor, a teammate, or Spectre.</div>
+          <div class="conv-compose">
+            <input type="text" placeholder="Ask a question…" />
+            <button class="btn secondary sm">Send</button>
+          </div>
+        </div>
+
+        <!-- Activity timeline -->
+        <div class="timeline-card">
+          <div class="timeline-title">Activity</div>
+          <div class="tl-row">
+            <div class="tl-when">09:12</div>
+            <div class="tl-body"><span class="actor">Patricia Bell</span> <span class="verb">opened this item</span></div>
+          </div>
+          <div class="tl-row">
+            <div class="tl-when">06:44</div>
+            <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">recommended approve</span> · 96 % confidence<span class="reason">Reasoning: PO exact match, variance $0.00, vendor active</span></div>
+          </div>
+          <div class="tl-row">
+            <div class="tl-when">06:43</div>
+            <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">enriched</span> · matched <span class="ref">PO #4832</span>, verified vendor <span class="ref">Ace Foods</span>, computed variance</div>
+          </div>
+          <div class="tl-row">
+            <div class="tl-when">06:42</div>
+            <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">classified as AP invoice</span> · 98 % confidence<span class="reason">Sender is a known vendor · PDF matches invoice template</span></div>
+          </div>
+          <div class="tl-row">
+            <div class="tl-when">06:41</div>
+            <div class="tl-body"><span class="actor spectre">Spectre</span> <span class="verb">intake</span> · email from <span class="ref">billing@acefoods.com</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+</body>
+</html>

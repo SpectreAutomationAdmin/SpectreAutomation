@@ -1,0 +1,11 @@
+import { balanceSheet } from '../src/lib/accounting/reports.ts';
+import { PrismaClient } from '@prisma/client';
+const p = new PrismaClient();
+const c = await p.club.findFirst({ where: { name: { contains: "Silver Springs" } } });
+const asOf = new Date(Date.UTC(2026, 4, 31));
+const bs = await balanceSheet(c.id, asOf);
+console.log("totalEquity:", bs.totalEquity.toString());
+console.log("totalAssets:", bs.totalAssets.toString());
+console.log("totalLiabilities:", bs.totalLiabilities.toString());
+console.log("currentYearEarnings:", bs.currentYearEarnings.toString());
+await p.$disconnect();

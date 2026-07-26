@@ -1,0 +1,19 @@
+# Phase 8I — Production Dockerfile (worker tier).
+# Polls the BackgroundJob table + drains the BullMQ queue on Upstash.
+#
+# Sprint 2 Step 7B (2026-07-20) — Postgres-safe Prisma path (same
+# rationale as the web Dockerfile). Ignores postinstall so the
+# SQLite dev schema never produces a client here.
+
+FROM node:20-alpine
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl
+COPY package.json package-lock.json* ./
+RUN npm ci --ignore-scripts
+COPY . .
+# Generate the Postgres Prisma client (NOT SQLite).
+RUN npx prisma generate --schema prisma-postgres/schema.prisma
+ENV NODE_ENV=production
+ENV WORKER_POLL_MS=1000
+USER node
+CMD ["npx", "tsx", "bin/worker.ts"]

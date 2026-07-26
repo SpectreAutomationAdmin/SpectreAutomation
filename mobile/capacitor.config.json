@@ -1,0 +1,20 @@
+{
+  "appId": "club.spectre.app",
+  "appName": "Spectre",
+  "webDir": "../public",
+  "bundledWebRuntime": false,
+  "server": {
+    "url": "https://app.example.club",
+    "cleartext": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#fafaf9",
+      "androidScaleType": "CENTER_CROP"
+    },
+    "PushNotifications": {
+      "presentationOptions": ["alert", "sound", "badge"]
+    }
+  }
+}

@@ -1,0 +1,65 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+*.log
+
+# --- Environment / secrets ------------------------------------------------
+# Only `.env.example` is intentionally committed. Every real `.env*` variant
+# is machine-local and MUST NOT enter source control.
+.env
+.env.local
+.env*.local
+.env.staging
+.env.production
+
+# --- Databases + journals -------------------------------------------------
+prisma/dev.db
+prisma/dev.db-journal
+prisma/dev.db-shm
+prisma/dev.db-wal
+prisma/test.db
+prisma/test.db-journal
+prisma/test.db-shm
+prisma/test.db-wal
+*.sqlite
+*.sqlite-journal
+
+# --- Test / CI artefacts --------------------------------------------------
+test-results/
+playwright-report/
+playwright/.cache/
+
+# --- Local deploy scratch (Neon schema snapshots, pg-validate scratch) ----
+.neondeploy/
+.pgvalidate/
+
+# --- OS / IDE ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Credentials / private keys (defense-in-depth) ------------------------
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_rsa.*
+*.pass
+credentials.json
+service-account*.json
+
+# --- Local claude/session scratch ----------------------------------------
+.claude/local/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# --- Generated / build caches -------------------------------------------
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+nav-audit.out
+scan-placeholders.out

@@ -1,0 +1,316 @@
+"use client";
+
+// Spectre Design Language — sidebar (Phase 1).
+//
+// 248 px expanded, 72 px collapsed. Smooth width transition on collapse.
+// Section headings, per-item icons, clean active state (accent-soft
+// background + 2-px accent bar on the left edge — NO glow). Reads
+// the same nav data catalogue as the legacy Sidebar so permission
+// gating + section grouping + active-route resolution are identical.
+//
+// A search entry sits at the top of the sidebar with a ⌘K hint. It's
+// wired to a no-op in Phase 1; the actual command palette is a
+// future slice.
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { cn } from "@/lib/ui";
+import {
+  ADMIN_TOP_LEVEL,
+  ADMIN_SECTIONS,
+  ADMIN_PERSONAL,
+  type NavItem,
+  type NavSection,
+  type PermCheck,
+} from "@/components/sidebar-nav-data";
+import {
+  IconChevronRight,
+  IconChevronLeft,
+  IconSearch,
+  IconHome,
+  IconInbox,
+  IconCog,
+  IconFileText,
+  IconPanelLeft,
+  IconUser,
+} from "./icons";
+
+function canSee(perm: PermCheck | undefined, perms: Set<string>, isSuper: boolean): boolean {
+  if (!perm) return true;
+  if (perm === "SUPER_ONLY") return isSuper;
+  if (Array.isArray(perm)) return isSuper || perm.some((p) => perms.has(p));
+  return isSuper || perms.has(perm);
+}
+
+function resolveActiveHref(items: NavItem[], pathname: string): string | null {
+  let best: { href: string; len: number } | null = null;
+  for (const item of items) {
+    if (pathname === item.href) return item.href;
+    if (item.href === "/app/admin" || item.href === "/app/member") continue;
+    if (pathname.startsWith(item.href + "/")) {
+      if (!best || item.href.length > best.len) best = { href: item.href, len: item.href.length };
+    }
+  }
+  return best?.href ?? null;
+}
+
+function findSectionForHref(href: string | null, sections: NavSection[]): string | null {
+  if (!href) return null;
+  for (const s of sections) if (s.items.some((it) => it.href === href)) return s.id;
+  return null;
+}
+
+// A minimal icon lookup so the top-level items + personal items have
+// glyphs. Sub-items are text-only by design — nested icons would
+// visually flatten the hierarchy the accordion establishes.
+function iconForHref(href: string): React.ReactNode {
+  if (href === "/app/admin") return <IconHome className="spectre-nav-icon" />;
+  if (href.includes("/notifications")) return <IconInbox className="spectre-nav-icon" />;
+  if (href.includes("/settings") || href.includes("/mfa")) return <IconCog className="spectre-nav-icon" />;
+  if (href.includes("/design-system")) return <IconFileText className="spectre-nav-icon" />;
+  return <IconUser className="spectre-nav-icon" />;
+}
+
+export function SpectreSidebar({
+  clubName,
+  permissions,
+  isSuperAdmin,
+}: {
+  clubName: string;
+  permissions: string[];
+  isSuperAdmin: boolean;
+}) {
+  const pathname = usePathname() ?? "";
+  const [collapsed, setCollapsed] = useState(false);
+  const perms = useMemo(() => new Set(permissions), [permissions]);
+
+  const visibleTopLevel = useMemo(
+    () => ADMIN_TOP_LEVEL.filter((it) => canSee(it.perm, perms, isSuperAdmin)),
+    [perms, isSuperAdmin],
+  );
+  const visibleSections = useMemo(
+    () =>
+      ADMIN_SECTIONS.map((section) => ({
+        ...section,
+        items: section.items.filter((it) => canSee(it.perm, perms, isSuperAdmin)),
+      })).filter((s) => s.items.length > 0),
+    [perms, isSuperAdmin],
+  );
+
+  const allItems = useMemo(
+    () => [
+      ...visibleTopLevel,
+      ...visibleSections.flatMap((s) => s.items),
+      ...ADMIN_PERSONAL.filter((it) => canSee(it.perm, perms, isSuperAdmin)),
+    ],
+    [visibleTopLevel, visibleSections, perms, isSuperAdmin],
+  );
+  const activeHref = useMemo(() => resolveActiveHref(allItems, pathname), [allItems, pathname]);
+  const activeSectionId = useMemo(
+    () => findSectionForHref(activeHref, visibleSections),
+    [activeHref, visibleSections],
+  );
+
+  const [openSectionId, setOpenSectionId] = useState<string | null>(activeSectionId);
+  useEffect(() => {
+    if (activeSectionId !== null) setOpenSectionId(activeSectionId);
+  }, [activeSectionId]);
+
+  return (
+    <aside
+      className="spectre-sidebar"
+      data-testid="spectre-sidebar"
+      data-collapsed={collapsed ? "true" : "false"}
+    >
+      {/* Identity block */}
+      <div
+        className={cn(
+          "flex items-center gap-3 px-4 py-4 border-b border-[color:var(--spectre-border-hairline)]",
+          collapsed && "justify-center px-2",
+        )}
+      >
+        <div
+          aria-hidden="true"
+          className="h-8 w-8 rounded-md flex items-center justify-center text-xs font-semibold shrink-0"
+          style={{
+            background: "var(--spectre-accent)",
+            color: "var(--spectre-text-inverse)",
+          }}
+        >
+          S
+        </div>
+        {!collapsed && (
+          <div className="min-w-0">
+            <div
+              className="text-[10px] uppercase tracking-[0.14em] font-semibold"
+              style={{ color: "var(--spectre-text-muted)" }}
+            >
+              Spectre
+            </div>
+            <div className="text-[13px] font-semibold leading-tight truncate" style={{ color: "var(--spectre-text-primary)" }}>
+              {clubName}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Search entry (⌘K) */}
+      <div className={cn("px-3 pt-3", collapsed && "px-2")}>
+        {collapsed ? (
+          <button
+            type="button"
+            aria-label="Search (⌘K)"
+            className="spectre-btn spectre-btn--ghost w-full h-9"
+          >
+            <IconSearch size={16} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label="Search (⌘K)"
+            className={cn(
+              "flex items-center gap-2 w-full px-3 h-9 rounded-spectre-input border transition-colors duration-spectre-fast ease-spectre",
+            )}
+            style={{
+              background: "var(--spectre-surface)",
+              borderColor: "var(--spectre-border-default)",
+              color: "var(--spectre-text-muted)",
+            }}
+          >
+            <IconSearch size={14} />
+            <span className="text-[13px]">Search</span>
+            <span className="spectre-kbd ml-auto">⌘K</span>
+          </button>
+        )}
+      </div>
+
+      {/* Nav */}
+      <nav className="mt-3 flex-1 overflow-y-auto pb-3">
+        <div className="space-y-0.5">
+          {visibleTopLevel.map((item) => {
+            const active = item.href === activeHref;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "spectre-nav-item",
+                  active && "spectre-nav-item--active",
+                )}
+                title={collapsed ? item.label : undefined}
+                aria-current={active ? "page" : undefined}
+              >
+                {iconForHref(item.href)}
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </Link>
+            );
+          })}
+        </div>
+
+        {visibleSections.map((section) => {
+          const isOpen = openSectionId === section.id;
+          const containsActive = activeSectionId === section.id;
+          if (collapsed) {
+            // Collapsed: render section as a list of icon buttons, no header.
+            return (
+              <div key={section.id} className="pt-2">
+                {section.items.map((item) => {
+                  const active = item.href === activeHref;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn("spectre-nav-item", active && "spectre-nav-item--active")}
+                      title={item.label}
+                    >
+                      {iconForHref(item.href)}
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          }
+          return (
+            <div key={section.id} className="pt-3">
+              <button
+                type="button"
+                onClick={() => setOpenSectionId((prev) => (prev === section.id ? null : section.id))}
+                aria-expanded={isOpen}
+                aria-controls={`spectre-nav-section-${section.id}`}
+                data-testid={`nav-section-toggle-${section.id}`}
+                data-open={isOpen ? "true" : "false"}
+                data-contains-active={containsActive ? "true" : "false"}
+                className={cn(
+                  "spectre-nav-section-header w-full flex items-center justify-between",
+                  "hover:text-[color:var(--spectre-text-primary)] transition-colors duration-spectre-fast ease-spectre",
+                )}
+              >
+                <span>{section.label}</span>
+                <span
+                  className="transition-transform duration-spectre-fast ease-spectre"
+                  style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
+                >
+                  <IconChevronRight size={12} />
+                </span>
+              </button>
+              {isOpen && (
+                <div id={`spectre-nav-section-${section.id}`} className="mt-1 space-y-0.5">
+                  {section.items.map((item) => {
+                    const active = item.href === activeHref;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn("spectre-nav-item", active && "spectre-nav-item--active")}
+                        aria-current={active ? "page" : undefined}
+                      >
+                        <span
+                          className="spectre-nav-icon"
+                          aria-hidden="true"
+                          style={{ width: 16, height: 16 }}
+                        />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {!collapsed && (
+          <div className="mt-3 pt-3 border-t border-[color:var(--spectre-border-hairline)] space-y-0.5">
+            {ADMIN_PERSONAL.filter((it) => canSee(it.perm, perms, isSuperAdmin)).map((item) => {
+              const active = item.href === activeHref;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn("spectre-nav-item", active && "spectre-nav-item--active")}
+                  aria-current={active ? "page" : undefined}
+                >
+                  {iconForHref(item.href)}
+                  <span className="truncate">{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </nav>
+
+      {/* Collapse toggle */}
+      <div className={cn("border-t border-[color:var(--spectre-border-hairline)] p-2 flex", collapsed ? "justify-center" : "justify-end")}>
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="spectre-btn spectre-btn--ghost spectre-btn--sm"
+        >
+          {collapsed ? <IconChevronRight size={14} /> : <IconPanelLeft size={14} />}
+        </button>
+      </div>
+    </aside>
+  );
+}

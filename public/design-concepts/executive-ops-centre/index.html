@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Executive Operations Centre — Concept Gallery</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --shell: #121314;
+    --shell-2: #191b1d;
+    --shell-line: rgba(255,255,255,0.06);
+    --workspace: #f8f5ef;
+    --ink: #1a1f1a;
+    --ink-2: rgba(26,31,26,0.72);
+    --ink-3: rgba(26,31,26,0.5);
+    --gold: #b08a4a;
+    --gold-2: #6b5028;
+    --accent: #2f5832;
+    --accent-glow: rgba(47,88,50,0.32);
+    --err: #8b2f22;
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--shell); color: #e7e3da; min-height: 100vh; -webkit-font-smoothing: antialiased; padding: 48px 40px 80px; }
+  .container { max-width: 1360px; margin: 0 auto; }
+  .header { text-align: left; margin-bottom: 48px; }
+  .header .eyebrow { font-size: 11px; letter-spacing: 0.24em; text-transform: uppercase; color: rgba(231,227,218,0.55); font-weight: 600; }
+  .header .h1 { margin-top: 12px; font-family: var(--serif); font-size: 42px; line-height: 1.05; letter-spacing: -0.015em; color: #fff; }
+  .header .sub { margin-top: 12px; font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.75); font-size: 17px; line-height: 1.5; max-width: 780px; }
+  .header .note { margin-top: 14px; padding: 12px 16px; background: rgba(176,138,74,0.08); border: 1px solid rgba(176,138,74,0.24); border-radius: 8px; font-size: 13px; color: rgba(231,227,218,0.82); max-width: 780px; }
+  .header .note strong { color: var(--gold); font-weight: 500; }
+
+  .concepts { display: grid; grid-template-columns: 1fr; gap: 40px; }
+  .concept { background: rgba(255,255,255,0.02); border: 1px solid var(--shell-line); border-radius: 20px; overflow: hidden; }
+  .concept-shot { position: relative; background: #000; }
+  .concept-shot img { display: block; width: 100%; height: auto; }
+  .concept-shot .open { position: absolute; top: 16px; right: 16px; padding: 8px 14px; background: rgba(0,0,0,0.72); color: #fff; border-radius: 999px; text-decoration: none; font-size: 12px; font-weight: 500; border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(6px); }
+  .concept-shot .badge { position: absolute; top: 16px; left: 20px; padding: 6px 12px; background: rgba(0,0,0,0.72); color: #fff; border-radius: 6px; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 600; border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(6px); }
+  .concept-body { padding: 30px 32px 32px; display: grid; grid-template-columns: 1.15fr 1fr; gap: 40px; }
+  .concept-h { margin: 0; }
+  .concept-h .name { font-family: var(--serif); font-size: 30px; line-height: 1.1; letter-spacing: -0.012em; color: #fff; font-weight: 500; }
+  .concept-h .tag { margin-top: 6px; font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.65); font-size: 14.5px; }
+  .concept-body .prose { color: rgba(231,227,218,0.85); font-size: 14px; line-height: 1.6; }
+  .concept-body .prose p { margin-top: 12px; }
+  .concept-body .prose p:first-of-type { margin-top: 20px; }
+  .concept-body .prose strong { color: #fff; font-weight: 500; }
+
+  .review-list { list-style: none; padding: 0; margin: 0; }
+  .review-list li { border-top: 1px solid rgba(255,255,255,0.06); padding: 12px 0 12px; display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: baseline; }
+  .review-list li:first-child { border-top: none; }
+  .review-list .q { font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(231,227,218,0.55); font-weight: 600; }
+  .review-list .a { color: rgba(231,227,218,0.88); font-size: 13.5px; line-height: 1.55; }
+  .review-list .a .verdict { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 8px; }
+  .verdict.yes { background: rgba(47,88,50,0.24); color: #7fbc82; border: 1px solid rgba(47,88,50,0.4); }
+  .verdict.partial { background: rgba(176,138,74,0.16); color: var(--gold); border: 1px solid rgba(176,138,74,0.32); }
+  .verdict.no { background: rgba(139,47,34,0.20); color: #d68577; border: 1px solid rgba(139,47,34,0.36); }
+
+  .recos { margin-top: 60px; padding: 32px; background: rgba(176,138,74,0.06); border: 1px solid rgba(176,138,74,0.24); border-radius: 16px; }
+  .recos h2 { font-family: var(--serif); font-size: 26px; letter-spacing: -0.01em; color: #fff; font-weight: 500; }
+  .recos .grid { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .reco-card { padding: 20px 22px; background: rgba(0,0,0,0.24); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; }
+  .reco-card .name { font-family: var(--serif); font-size: 16px; color: #fff; }
+  .reco-card .verdict-line { margin-top: 8px; font-size: 12px; }
+  .reco-card .rationale { margin-top: 10px; color: rgba(231,227,218,0.72); font-size: 13px; line-height: 1.55; }
+
+  .my-take { margin-top: 40px; padding: 32px; background: rgba(47,88,50,0.10); border: 1px solid rgba(47,88,50,0.36); border-radius: 16px; }
+  .my-take h2 { font-family: var(--serif); font-size: 26px; letter-spacing: -0.01em; color: #fff; font-weight: 500; }
+  .my-take .lead { margin-top: 12px; font-family: var(--serif); font-style: italic; font-size: 16px; color: rgba(231,227,218,0.9); line-height: 1.55; max-width: 900px; }
+  .my-take ul { margin-top: 18px; padding-left: 20px; color: rgba(231,227,218,0.85); font-size: 14px; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="eyebrow">Spectre · Design Exploration · Slice 1a</div>
+    <h1 class="h1">Executive Operations Centre — three concepts for the flagship</h1>
+    <p class="sub">Three high-fidelity 1440×900 static mockups exploring different compositions for the Admin Dashboard as the club's executive operations centre. All three share the same underlying design system — warm-charcoal shell, Source Serif 4 display type, gold-hairline detailing, per-club accent — and diverge on hierarchy, information architecture, and signature composition.</p>
+    <div class="note"><strong>Not production.</strong> No React, no migration, no design-system propagation. These are static HTML mockups intended to reach the creative bar before any code is written. All Silver Springs figures are exemplar — a real build would source from ClubProfile + the live projections. Once you select or combine concepts, only then does implementation begin.</div>
+  </div>
+
+  <div class="concepts">
+    <!-- ================= CONCEPT A ================= -->
+    <div class="concept">
+      <div class="concept-shot">
+        <span class="badge">Concept A</span>
+        <a class="open" href="a-council-table.html" target="_blank">Open full 1440 ↗</a>
+        <img src="captures/a-council-table-1440.png" alt="Concept A — The Council Table">
+      </div>
+      <div class="concept-body">
+        <div>
+          <div class="concept-h">
+            <div class="name">The Council Table</div>
+            <div class="tag">Five columns · Roman numerals · italic conditions · one focus per domain</div>
+          </div>
+          <div class="prose">
+            <p><strong>Metaphor.</strong> The mahogany conference table at a Board meeting — a formal placement of each domain side by side, presented for review. No hierarchy imposed; equal ceremony given to each pillar.</p>
+            <p><strong>Signature elements.</strong> Roman numerals (I–V) in gold-700; italic serif "conditions" as one-liners under each domain header ("Attentive — two applications await…"); trailing-decimal treatment on currency ($5,902 large + .50 muted); a single per-column "Focus" affordance that names one action; gold hairlines top + bottom + between columns; no cards, no icons, no colored badges.</p>
+            <p><strong>Intended emotional response.</strong> Ceremony. Boardroom formality. Confidence expressed as calm restraint.</p>
+            <p><strong>Why it is not a conventional SaaS dashboard.</strong> No card containers, no icon column, no coloured status pills. The layout reads as printed stationery, not software chrome. Roman numerals are unheard of on a dashboard.</p>
+          </div>
+        </div>
+        <div>
+          <ul class="review-list">
+            <li><span class="q">Feels like Spectre?</span><span class="a"><span class="verdict yes">Yes</span>The typographic five-column arrangement + italic conditions read as proprietary from first glance.</span></li>
+            <li><span class="q">Recognisable without logo?</span><span class="a"><span class="verdict yes">Yes</span>The Roman numerals + gold hairlines + italic serif conditions are unmistakable.</span></li>
+            <li><span class="q">Signature moment</span><span class="a">The italic serif <em>condition</em> under each column header — "Attentive — two applications await your decision by Friday" — no other dashboard writes like this.</span></li>
+            <li><span class="q">Premium enough for executive users?</span><span class="a"><span class="verdict yes">Yes</span>Reads as club stationery on club letterhead.</span></li>
+            <li><span class="q">What still feels generic?</span><span class="a">The value stack in each column is still label→value→label→value. The "Focus" affordance is clever but risks repetition across five columns.</span></li>
+            <li><span class="q">Compromises made</span><span class="a">Density is deliberately low — each column shows 3 numerics. Some information density from the pre-migration dashboard was traded for calm.</span></li>
+            <li><span class="q">Would a customer remember it after one viewing?</span><span class="a"><span class="verdict yes">Yes</span>"The club dashboard that reads like a Board-meeting agenda in serif type."</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= CONCEPT B ================= -->
+    <div class="concept">
+      <div class="concept-shot">
+        <span class="badge">Concept B</span>
+        <a class="open" href="b-situation-wall.html" target="_blank">Open full 1440 ↗</a>
+        <img src="captures/b-situation-wall-1440.png" alt="Concept B — The Situation Wall">
+      </div>
+      <div class="concept-body">
+        <div>
+          <div class="concept-h">
+            <div class="name">The Situation Wall</div>
+            <div class="tag">Lead domain featured · secondary bays with top-lip stripes · queue ribbon</div>
+          </div>
+          <div class="prose">
+            <p><strong>Metaphor.</strong> A private-club situation room. One domain takes the wall today — the one that most needs attention. Others compress into secondary bays. A ribbon of "today's queue" chips runs beneath.</p>
+            <p><strong>Signature elements.</strong> The "LEAD DOMAIN · MEMBERSHIP" tag paired with a large editorial state statement ("Two applications require decisions before Friday."); a single primary CTA that names the specific action ("Review the two applications →"); top-lip accent stripes (3px) in domain-specific colours (green / gold / slate / burgundy / terracotta); a bottom queue-chip ribbon with domain-colour dots.</p>
+            <p><strong>Intended emotional response.</strong> Alert, attentive, in-charge. Duty officer at the wall.</p>
+            <p><strong>Why it is not a conventional SaaS dashboard.</strong> Asymmetric hierarchy — one domain dominates. The state statement is one editorial sentence, not a KPI. The queue chips read as intent, not filters.</p>
+          </div>
+        </div>
+        <div>
+          <ul class="review-list">
+            <li><span class="q">Feels like Spectre?</span><span class="a"><span class="verdict yes">Yes</span>The lead-domain paradigm + editorial state statement are distinct.</span></li>
+            <li><span class="q">Recognisable without logo?</span><span class="a"><span class="verdict partial">Partial</span>The featured bay + state statement is unusual, but the four secondary card bays read close to conventional dashboard grids.</span></li>
+            <li><span class="q">Signature moment</span><span class="a">"Two applications require decisions before Friday." — a serif editorial sentence in place of a headline number.</span></li>
+            <li><span class="q">Premium enough for executive users?</span><span class="a"><span class="verdict yes">Yes</span>Featured bay feels editorial and specific.</span></li>
+            <li><span class="q">What still feels generic?</span><span class="a">Four secondary bays as a 2×2 card grid is closer to convention. Top-lip stripes are refined but similar patterns exist elsewhere (Linear, Notion).</span></li>
+            <li><span class="q">Compromises made</span><span class="a">"Lead domain" only works when there IS one. Quiet mornings need a fallback lead so the featured bay doesn't feel manufactured.</span></li>
+            <li><span class="q">Would a customer remember it after one viewing?</span><span class="a"><span class="verdict partial">Partial</span>"The dashboard with a big featured story and small tiles" — memorable, but the pattern exists elsewhere.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= CONCEPT C ================= -->
+    <div class="concept">
+      <div class="concept-shot">
+        <span class="badge">Concept C</span>
+        <a class="open" href="c-club-statement.html" target="_blank">Open full 1440 ↗</a>
+        <img src="captures/c-club-statement-1440.png" alt="Concept C — The Club Statement">
+      </div>
+      <div class="concept-body">
+        <div>
+          <div class="concept-h">
+            <div class="name">The Club Statement</div>
+            <div class="tag">Document paradigm · masthead + editorial opening · roman-numeral ribbons</div>
+          </div>
+          <div class="prose">
+            <p><strong>Metaphor.</strong> A private-banking client's monthly portfolio statement — but delivered fresh each morning. The dashboard <em>is</em> a document. Volume XVIII, Reading No. 195. An editorial opening paragraph. Horizontal ribbons per domain. Very subtle trend indicators.</p>
+            <p><strong>Signature elements.</strong> The masthead ("Statement of the Club · Volume XVIII · Reading No. 195") — no other SaaS product identifies itself as an issue. The editorial opening paragraph with gold-highlighted key phrases ("two open applications", "two board decisions"). Horizontal domain ribbons with Roman numerals as the anchor. Extremely subtle trend indicators (▲ green up, ● neutral, ▲ gold attention).</p>
+            <p><strong>Intended emotional response.</strong> Private-banking gravitas. Stewardship. Confident restraint.</p>
+            <p><strong>Why it is not a conventional SaaS dashboard.</strong> Reads as a document, not a UI. No CTAs. No cards. No coloured badges. The "action" is in the prose — "two open applications that require your decision before Friday" — the reader knows what to do because they read.</p>
+          </div>
+        </div>
+        <div>
+          <ul class="review-list">
+            <li><span class="q">Feels like Spectre?</span><span class="a"><span class="verdict yes">Yes — strongly</span>The document paradigm is the most differentiated of the three.</span></li>
+            <li><span class="q">Recognisable without logo?</span><span class="a"><span class="verdict yes">Yes</span>"Statement of the Club · Volume XVIII" is unmistakable. No other SaaS opens like this.</span></li>
+            <li><span class="q">Signature moment</span><span class="a">The masthead paired with the editorial opening paragraph — the whole workspace is a signature moment. Second: the gold-highlighted keyphrases inside prose.</span></li>
+            <li><span class="q">Premium enough for executive users?</span><span class="a"><span class="verdict yes">Yes</span>Private-wealth-statement gravitas.</span></li>
+            <li><span class="q">What still feels generic?</span><span class="a">The horizontal ribbons risk reading as table rows once you focus on them. The Roman-numeral column is distinctive but might feel decorative on a repeat visit.</span></li>
+            <li><span class="q">Compromises made</span><span class="a">Zero direct action affordances. The intent is that prose <em>tells</em> the executive what to do — but a busy admin may want a click-through, not a paragraph.</span></li>
+            <li><span class="q">Would a customer remember it after one viewing?</span><span class="a"><span class="verdict yes">Yes — strongly</span>"The dashboard that reads like a private wealth statement."</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="my-take">
+    <h2>My candid take</h2>
+    <p class="lead">Concept C is the most creatively ambitious and the most memorable — it feels genuinely proprietary in a way A doesn't quite reach and B doesn't attempt. But it carries a real UX risk: no action affordances. Concept A is the safest bet — proprietary <em>and</em> operational, but slightly closer to a "beautifully typeset dashboard" than a paradigm shift. Concept B is the weakest of the three creatively; the secondary bays pull it back toward convention.</p>
+    <ul>
+      <li><strong>If forced to pick one:</strong> Concept C — but only if we introduce a single, restrained action affordance inside the prose paragraph (e.g. the highlighted key phrases become actual links, and a small "Today's actions" ribbon appears above the footer). That preserves the document paradigm while restoring operability.</li>
+      <li><strong>If hybridising:</strong> C's masthead + editorial opening + Roman numerals, layered over A's five-column council table (not C's ribbons) for the operational body, with B's specific-action CTA ("Review the two applications →") appearing once, at the bottom of the workspace, tied to the most urgent open item.</li>
+      <li><strong>What I would <em>not</em> recommend:</strong> shipping B as the flagship. It's the closest to what I built the first time — an incremental improvement on a card grid, not a paradigm shift.</li>
+    </ul>
+  </div>
+
+  <div class="recos">
+    <h2>Propagation recommendation (per concept, if selected)</h2>
+    <div class="grid">
+      <div class="reco-card">
+        <div class="name">Concept A — Council Table</div>
+        <div class="verdict-line"><span class="verdict partial">Ready with minor refinement</span></div>
+        <div class="rationale">Density calibration (some columns feel light at 3 numerics); the "Focus" affordance should be tightened so it doesn't repeat verbatim × 5. Once refined, ready for platform rollout.</div>
+      </div>
+      <div class="reco-card">
+        <div class="name">Concept B — Situation Wall</div>
+        <div class="verdict-line"><span class="verdict no">Do not propagate — continue exploration</span></div>
+        <div class="rationale">Secondary bays are too close to conventional card idiom; featured bay alone is not a strong-enough signature to carry the whole platform.</div>
+      </div>
+      <div class="reco-card">
+        <div class="name">Concept C — Club Statement</div>
+        <div class="verdict-line"><span class="verdict partial">Ready with minor refinement</span></div>
+        <div class="rationale">Add a restrained action affordance (linked keyphrases + a "Today's actions" ribbon). Once operable, this is the strongest proprietary identity of the three.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

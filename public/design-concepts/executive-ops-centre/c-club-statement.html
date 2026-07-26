@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Executive Operations Centre — Concept C · The Club Statement</title>
+<meta name="viewport" content="width=1440">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --shell: #121314;
+    --shell-2: #191b1d;
+    --shell-line: rgba(255,255,255,0.06);
+    --workspace: #f8f5ef;
+    --ink: #1a1f1a;
+    --ink-2: rgba(26,31,26,0.74);
+    --ink-3: rgba(26,31,26,0.52);
+    --gold: #b08a4a;
+    --gold-2: #6b5028;
+    --accent: #2f5832;
+    --accent-glow: rgba(47,88,50,0.32);
+    --err: #8b2f22;
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--shell); color: #e7e3da; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .rail { background: #16181a; border-right: 1px solid var(--shell-line); padding: 24px 20px; }
+  .rail-eyebrow { font-size: 10px; letter-spacing: 0.18em; color: rgba(231,227,218,0.5); text-transform: uppercase; font-weight: 600; }
+  .rail-club { margin-top: 4px; font-family: var(--serif); font-size: 18px; color: #fff; line-height: 1.15; }
+  .rail-dept { margin-top: 4px; font-size: 12px; color: rgba(231,227,218,0.55); }
+  .rail-nav { margin-top: 28px; }
+  .rail-item { display: block; padding: 8px 4px; color: rgba(231,227,218,0.75); text-decoration: none; font-size: 13px; position: relative; letter-spacing: -0.005em; }
+  .rail-item.active { color: #fff; }
+  .rail-item.active::before { content: ''; position: absolute; left: -20px; top: 12px; bottom: 12px; width: 3px; background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); border-radius: 0 3px 3px 0; }
+  .rail-section-h { margin-top: 24px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: rgba(231,227,218,0.4); }
+  .main { padding: 24px 24px 32px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 6px; }
+  .topbar-brand { font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.55); font-size: 13px; }
+  .avatar { height: 32px; width: 32px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; box-shadow: 0 0 12px var(--accent-glow); }
+  .workspace {
+    margin-top: 20px;
+    background: var(--workspace);
+    color: var(--ink);
+    border-radius: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.20), 0 30px 60px rgba(0,0,0,0.16);
+    padding: 52px 64px 34px;
+    background-image: radial-gradient(ellipse 60% 40% at 8% 0%, rgba(176,138,74,0.08), transparent 60%);
+  }
+  .doc-eyebrow { font-size: 10px; letter-spacing: 0.32em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .doc-title { margin-top: 10px; font-family: var(--serif); font-size: 46px; line-height: 1.02; letter-spacing: -0.02em; color: var(--ink); font-weight: 400; }
+  .doc-asof { margin-top: 8px; font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--ink-3); letter-spacing: 0.01em; }
+  .doc-open { margin-top: 24px; font-family: var(--serif); font-size: 17.5px; line-height: 1.6; color: var(--ink); max-width: 920px; font-weight: 400; }
+  .doc-open .highlight { color: var(--gold-2); font-weight: 500; }
+  .doc-rule { margin-top: 34px; height: 1px; background: linear-gradient(to right, transparent, var(--gold) 15%, var(--gold) 85%, transparent); }
+  .ribbons { margin-top: 0; }
+  .ribbon { display: grid; grid-template-columns: 56px 240px 1fr 40px; align-items: center; padding: 22px 0; border-bottom: 1px solid rgba(107,80,40,0.22); gap: 24px; }
+  .ribbon:last-child { border-bottom: none; }
+  .ribbon-num { font-family: var(--serif); font-size: 28px; color: var(--gold-2); letter-spacing: 0.05em; text-align: center; }
+  .ribbon-h .name { font-family: var(--serif); font-size: 21px; color: var(--ink); font-weight: 500; letter-spacing: -0.005em; }
+  .ribbon-h .cond { margin-top: 4px; font-family: var(--serif); font-style: italic; color: var(--ink-2); font-size: 13px; line-height: 1.4; }
+  .ribbon-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .rn .label { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .rn .value { margin-top: 3px; font-family: var(--serif); font-size: 22px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.008em; line-height: 1.05; font-weight: 500; }
+  .rn .value .dec { color: var(--ink-3); font-size: 14px; }
+  .rn .value.small { font-size: 15px; font-weight: 400; }
+  .ribbon-trend { text-align: right; font-family: var(--serif); font-size: 18px; color: var(--ink-3); }
+  .ribbon-trend.up { color: var(--accent); }
+  .ribbon-trend.attn { color: var(--gold-2); }
+  .doc-foot { margin-top: 28px; padding-top: 18px; display: flex; justify-content: space-between; font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12px; border-top: 1px solid rgba(0,0,0,0.05); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-eyebrow">Spectre</div>
+    <div class="rail-club">Silver Springs<br>Golf &amp; Country Club</div>
+    <div class="rail-dept">Administration</div>
+    <div class="rail-nav">
+      <a class="rail-item active" href="#">Club Statement</a>
+      <a class="rail-item" href="#">Search</a>
+      <div class="rail-section-h">Domains</div>
+      <a class="rail-item" href="#">Membership</a>
+      <a class="rail-item" href="#">Finance</a>
+      <a class="rail-item" href="#">Operations</a>
+      <a class="rail-item" href="#">Governance</a>
+      <a class="rail-item" href="#">Hospitality</a>
+      <div class="rail-section-h">Personal</div>
+      <a class="rail-item" href="#">My MFA</a>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-brand">Club Statement · Executive Operations Centre</div>
+      <div class="avatar">PB</div>
+    </div>
+    <div class="workspace">
+      <div class="doc-eyebrow">Statement of the Club · Volume XVIII · Reading No. 195</div>
+      <h1 class="doc-title">The Club, this morning</h1>
+      <div class="doc-asof">As of 08:14 EDT · Monday, July 14, 2026</div>
+      <p class="doc-open">
+        The club is on plan. Membership is holding steady with <span class="highlight">two open applications</span> that require your decision before Friday. Finance is quiet; AR ageing has trended upward slightly but sits inside policy. Governance carries <span class="highlight">two board decisions</span> and four committee items this week. Operations remains on schedule; the Founders' evening carries hospitality through the weekend.
+      </p>
+      <div class="doc-rule"></div>
+      <div class="ribbons">
+        <div class="ribbon">
+          <div class="ribbon-num">I</div>
+          <div class="ribbon-h">
+            <div class="name">Membership</div>
+            <div class="cond">Attentive — two decisions by Friday.</div>
+          </div>
+          <div class="ribbon-nums">
+            <div class="rn"><div class="label">Pending</div><div class="value">2</div></div>
+            <div class="rn"><div class="label">Approved / waitlisted</div><div class="value">1</div></div>
+            <div class="rn"><div class="label">Onboarding gap</div><div class="value">9</div></div>
+            <div class="rn"><div class="label">Households</div><div class="value">318</div></div>
+          </div>
+          <div class="ribbon-trend attn">▲</div>
+        </div>
+        <div class="ribbon">
+          <div class="ribbon-num">II</div>
+          <div class="ribbon-h">
+            <div class="name">Finance</div>
+            <div class="cond">Steady — inside policy.</div>
+          </div>
+          <div class="ribbon-nums">
+            <div class="rn"><div class="label">Member AR</div><div class="value">$5,902<span class="dec">.50</span></div></div>
+            <div class="rn"><div class="label">Over 60 days</div><div class="value">$2,880<span class="dec">.00</span></div></div>
+            <div class="rn"><div class="label">Financing receivable</div><div class="value">$19,600<span class="dec">.00</span></div></div>
+            <div class="rn"><div class="label">Failed payments</div><div class="value">1</div></div>
+          </div>
+          <div class="ribbon-trend">●</div>
+        </div>
+        <div class="ribbon">
+          <div class="ribbon-num">III</div>
+          <div class="ribbon-h">
+            <div class="name">Operations</div>
+            <div class="cond">On plan — tee sheet full through Thursday.</div>
+          </div>
+          <div class="ribbon-nums">
+            <div class="rn"><div class="label">Tee times today</div><div class="value">148</div></div>
+            <div class="rn"><div class="label">Rounds YTD</div><div class="value">21,904</div></div>
+            <div class="rn"><div class="label">Notices pending</div><div class="value">3</div></div>
+            <div class="rn"><div class="label">Missing payment method</div><div class="value">9</div></div>
+          </div>
+          <div class="ribbon-trend up">▲</div>
+        </div>
+        <div class="ribbon">
+          <div class="ribbon-num">IV</div>
+          <div class="ribbon-h">
+            <div class="name">Governance</div>
+            <div class="cond">Two board decisions this week.</div>
+          </div>
+          <div class="ribbon-nums">
+            <div class="rn"><div class="label">Board decisions</div><div class="value">2</div></div>
+            <div class="rn"><div class="label">Committee items</div><div class="value">4</div></div>
+            <div class="rn"><div class="label">May package</div><div class="value small">Published</div></div>
+            <div class="rn"><div class="label">Next reading</div><div class="value small">Jul 17</div></div>
+          </div>
+          <div class="ribbon-trend">●</div>
+        </div>
+        <div class="ribbon">
+          <div class="ribbon-num">V</div>
+          <div class="ribbon-h">
+            <div class="name">Hospitality</div>
+            <div class="cond">Twelve tonight; Founders' evening on Friday.</div>
+          </div>
+          <div class="ribbon-nums">
+            <div class="rn"><div class="label">Reservations tonight</div><div class="value">12</div></div>
+            <div class="rn"><div class="label">Events this week</div><div class="value">4</div></div>
+            <div class="rn"><div class="label">Feedback awaiting</div><div class="value">6</div></div>
+            <div class="rn"><div class="label">Covers this month</div><div class="value">1,406</div></div>
+          </div>
+          <div class="ribbon-trend up">▲</div>
+        </div>
+      </div>
+      <div class="doc-foot">
+        <span>Prepared for Patricia Bell · Club Admin · Silver Springs Golf &amp; Country Club</span>
+        <span>Next reading: 10:00 EDT</span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

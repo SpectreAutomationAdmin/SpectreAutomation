@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Executive Operations Centre — Concept A · The Council Table</title>
+<meta name="viewport" content="width=1440">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --shell: #121314;
+    --shell-2: #191b1d;
+    --shell-line: rgba(255,255,255,0.06);
+    --workspace: #f8f5ef;
+    --ink: #1a1f1a;
+    --ink-2: rgba(26,31,26,0.72);
+    --ink-3: rgba(26,31,26,0.5);
+    --gold: #b08a4a;
+    --gold-2: #6b5028;
+    --accent: #2f5832;
+    --accent-glow: rgba(47,88,50,0.32);
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--shell); color: #e7e3da; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  .rail { background: #16181a; border-right: 1px solid var(--shell-line); padding: 24px 20px; }
+  .rail-eyebrow { font-size: 10px; letter-spacing: 0.18em; color: rgba(231,227,218,0.5); text-transform: uppercase; font-weight: 600; }
+  .rail-club { margin-top: 4px; font-family: var(--serif); font-size: 18px; color: #fff; line-height: 1.15; }
+  .rail-dept { margin-top: 4px; font-size: 12px; color: rgba(231,227,218,0.55); }
+  .rail-nav { margin-top: 28px; }
+  .rail-item { display: block; padding: 8px 4px; color: rgba(231,227,218,0.75); text-decoration: none; font-size: 13px; position: relative; letter-spacing: -0.005em; }
+  .rail-item.active { color: #fff; }
+  .rail-item.active::before { content: ''; position: absolute; left: -20px; top: 12px; bottom: 12px; width: 3px; background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); border-radius: 0 3px 3px 0; }
+  .rail-section-h { margin-top: 24px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: rgba(231,227,218,0.4); }
+  .main { padding: 24px 24px 32px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 6px; }
+  .topbar-brand { font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.55); font-size: 13px; letter-spacing: 0.01em; }
+  .avatar { height: 32px; width: 32px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; box-shadow: 0 0 12px var(--accent-glow); }
+  .workspace {
+    margin-top: 20px;
+    background: var(--workspace);
+    color: var(--ink);
+    border-radius: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.20), 0 30px 60px rgba(0,0,0,0.16);
+    padding: 44px 48px 32px;
+  }
+  .head-line-1 { display: flex; justify-content: space-between; align-items: baseline; }
+  .head-eyebrow { font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .head-time { font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px; }
+  .head-title { margin-top: 10px; font-family: var(--serif); font-size: 44px; line-height: 1; letter-spacing: -0.018em; font-weight: 400; color: var(--ink); }
+  .head-sub { margin-top: 12px; color: var(--ink-2); font-family: var(--serif); font-style: italic; font-size: 16px; max-width: 760px; line-height: 1.5; }
+  .table { margin-top: 44px; display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--gold); border-bottom: 1px solid var(--gold); }
+  .col { padding: 26px 22px 22px; border-right: 1px solid rgba(107,80,40,0.28); display: flex; flex-direction: column; }
+  .col:last-child { border-right: none; }
+  .col-numeral { font-family: var(--serif); font-size: 14px; color: var(--gold-2); letter-spacing: 0.08em; }
+  .col-title { margin-top: 4px; font-family: var(--serif); font-size: 20px; color: var(--ink); letter-spacing: -0.005em; font-weight: 500; }
+  .col-cond { margin-top: 8px; font-family: var(--serif); font-style: italic; color: var(--ink-2); font-size: 13px; line-height: 1.45; min-height: 56px; }
+  .col-rows { margin-top: 20px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+  .row-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .row-value { margin-top: 3px; font-family: var(--serif); font-size: 24px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; line-height: 1.05; }
+  .row-value .dec { color: var(--ink-3); font-size: 15px; margin-left: 1px; }
+  .row-value.small { font-size: 17px; }
+  .col-focus { margin-top: 22px; padding-top: 14px; border-top: 1px solid rgba(107,80,40,0.24); display: flex; justify-content: space-between; align-items: center; }
+  .col-focus a { color: var(--accent); font-weight: 500; text-decoration: none; font-size: 12.5px; letter-spacing: -0.005em; }
+  .col-focus small { color: var(--ink-3); font-size: 9.5px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 600; }
+  .foot { margin-top: 28px; padding-top: 18px; border-top: 1px solid rgba(0,0,0,0.05); font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12px; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-eyebrow">Spectre</div>
+    <div class="rail-club">Silver Springs<br>Golf &amp; Country Club</div>
+    <div class="rail-dept">Administration</div>
+    <div class="rail-nav">
+      <a class="rail-item active" href="#">Council Table</a>
+      <a class="rail-item" href="#">Search</a>
+      <div class="rail-section-h">Domains</div>
+      <a class="rail-item" href="#">Membership</a>
+      <a class="rail-item" href="#">Finance</a>
+      <a class="rail-item" href="#">Operations</a>
+      <a class="rail-item" href="#">Governance</a>
+      <a class="rail-item" href="#">Hospitality</a>
+      <div class="rail-section-h">Personal</div>
+      <a class="rail-item" href="#">My MFA</a>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-brand">Council Table · Executive Operations Centre</div>
+      <div class="avatar">PB</div>
+    </div>
+    <div class="workspace">
+      <div class="head-line-1">
+        <div class="head-eyebrow">The Council Table · Monday</div>
+        <div class="head-time">at 08:14 EDT · July 14, 2026</div>
+      </div>
+      <h1 class="head-title">The Club, this morning</h1>
+      <p class="head-sub">Membership requires your attention; the balance is steady. Governance carries two board decisions before the week's end.</p>
+      <div class="table">
+        <div class="col">
+          <div class="col-numeral">I</div>
+          <div class="col-title">Membership</div>
+          <div class="col-cond">Attentive — two applications await your decision by Friday.</div>
+          <div class="col-rows">
+            <div><div class="row-label">Pending decisions</div><div class="row-value">2</div></div>
+            <div><div class="row-label">Approved / waitlisted</div><div class="row-value">1</div></div>
+            <div><div class="row-label">Onboarding gap</div><div class="row-value">9</div></div>
+          </div>
+          <div class="col-focus"><a href="#">Review applications →</a><small>Focus</small></div>
+        </div>
+        <div class="col">
+          <div class="col-numeral">II</div>
+          <div class="col-title">Finance</div>
+          <div class="col-cond">Steady — inside policy; over-60 has begun to accumulate.</div>
+          <div class="col-rows">
+            <div><div class="row-label">Member AR</div><div class="row-value">$5,902<span class="dec">.50</span></div></div>
+            <div><div class="row-label">Over 60 days</div><div class="row-value">$2,880<span class="dec">.00</span></div></div>
+            <div><div class="row-label">Financing receivable</div><div class="row-value small">$19,600<span class="dec">.00</span></div></div>
+          </div>
+          <div class="col-focus"><a href="#">Open the ledger →</a><small>Focus</small></div>
+        </div>
+        <div class="col">
+          <div class="col-numeral">III</div>
+          <div class="col-title">Operations</div>
+          <div class="col-cond">On plan — tee sheet full through Thursday; kitchen prep on schedule.</div>
+          <div class="col-rows">
+            <div><div class="row-label">Tee times today</div><div class="row-value">148</div></div>
+            <div><div class="row-label">Failed payments</div><div class="row-value">1</div></div>
+            <div><div class="row-label">Missing payment method</div><div class="row-value">9</div></div>
+          </div>
+          <div class="col-focus"><a href="#">Work the queue →</a><small>Focus</small></div>
+        </div>
+        <div class="col">
+          <div class="col-numeral">IV</div>
+          <div class="col-title">Governance</div>
+          <div class="col-cond">Two board decisions before Friday's committee session; May package is published.</div>
+          <div class="col-rows">
+            <div><div class="row-label">Board decisions</div><div class="row-value">2</div></div>
+            <div><div class="row-label">Committee items</div><div class="row-value">4</div></div>
+            <div><div class="row-label">May package</div><div class="row-value small">Published</div></div>
+          </div>
+          <div class="col-focus"><a href="#">Open governance →</a><small>Focus</small></div>
+        </div>
+        <div class="col">
+          <div class="col-numeral">V</div>
+          <div class="col-title">Hospitality</div>
+          <div class="col-cond">Twelve covers tonight; the Founders' evening carries the week.</div>
+          <div class="col-rows">
+            <div><div class="row-label">Reservations tonight</div><div class="row-value">12</div></div>
+            <div><div class="row-label">Events this week</div><div class="row-value">4</div></div>
+            <div><div class="row-label">Feedback awaiting</div><div class="row-value">6</div></div>
+          </div>
+          <div class="col-focus"><a href="#">Open hospitality →</a><small>Focus</small></div>
+        </div>
+      </div>
+      <div class="foot">
+        <span>Prepared for Patricia Bell · Club Admin · Silver Springs Golf &amp; Country Club</span>
+        <span>Next reading: 10:00 EDT</span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

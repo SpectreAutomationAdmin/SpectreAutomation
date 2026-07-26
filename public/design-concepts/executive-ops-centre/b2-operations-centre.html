@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · The Executive Operations Centre — Concept B, evolved</title>
+<meta name="viewport" content="width=1440">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,300;8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --shell: #121314;
+    --shell-2: #191b1d;
+    --shell-line: rgba(255,255,255,0.06);
+    --workspace: #f8f5ef;
+    --ink: #1a1f1a;
+    --ink-2: rgba(26,31,26,0.72);
+    --ink-3: rgba(26,31,26,0.52);
+    --ink-4: rgba(26,31,26,0.36);
+    --gold: #b08a4a;
+    --gold-2: #6b5028;
+    --accent: #2f5832;
+    --accent-glow: rgba(47,88,50,0.32);
+    --dom-membership: #2f5832;
+    --dom-finance: #7a5b1d;
+    --dom-ops: #455a64;
+    --dom-gov: #5a3a2a;
+    --dom-hosp: #874a2a;
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--sans); background: var(--shell); color: #e7e3da; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+  .shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+
+  /* --- Rail (same as B1) --- */
+  .rail { background: #16181a; border-right: 1px solid var(--shell-line); padding: 24px 20px; }
+  .rail-eyebrow { font-size: 10px; letter-spacing: 0.18em; color: rgba(231,227,218,0.5); text-transform: uppercase; font-weight: 600; }
+  .rail-club { margin-top: 4px; font-family: var(--serif); font-size: 18px; color: #fff; line-height: 1.15; }
+  .rail-dept { margin-top: 4px; font-size: 12px; color: rgba(231,227,218,0.55); }
+  .rail-nav { margin-top: 28px; }
+  .rail-item { display: block; padding: 8px 4px; color: rgba(231,227,218,0.75); text-decoration: none; font-size: 13px; position: relative; letter-spacing: -0.005em; }
+  .rail-item.active { color: #fff; }
+  .rail-item.active::before { content: ''; position: absolute; left: -20px; top: 12px; bottom: 12px; width: 3px; background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); border-radius: 0 3px 3px 0; }
+  .rail-section-h { margin-top: 24px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: rgba(231,227,218,0.4); }
+
+  .main { padding: 24px 24px 32px; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; height: 40px; padding: 0 6px; }
+  .topbar-brand { font-family: var(--serif); font-style: italic; color: rgba(231,227,218,0.55); font-size: 13px; }
+  .avatar { height: 32px; width: 32px; border-radius: 999px; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; box-shadow: 0 0 12px var(--accent-glow); }
+
+  .workspace {
+    margin-top: 20px;
+    background: var(--workspace);
+    color: var(--ink);
+    border-radius: 20px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.20), 0 30px 60px rgba(0,0,0,0.16);
+    padding: 30px 36px 32px;
+    background-image: radial-gradient(ellipse 55% 40% at 5% 0%, rgba(176,138,74,0.06), transparent 55%);
+  }
+
+  /* ================================================================
+   *  MASTHEAD — the Executive Operations Centre identity
+   *  A newspaper-style masthead at the top of the workspace. The
+   *  identity is asserted directly — this is not "a dashboard for
+   *  your club", this IS the club's operations centre.
+   * ================================================================ */
+  .masthead {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(107,80,40,0.28);
+  }
+  .masthead-title {
+    font-family: var(--serif);
+    font-size: 15px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .masthead-title .amp { font-style: italic; font-weight: 400; text-transform: none; letter-spacing: 0; padding: 0 4px; color: var(--gold-2); }
+  .masthead-meta {
+    display: flex; align-items: center; gap: 22px;
+    font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 13px;
+  }
+  .masthead-meta .live { font-style: normal; font-family: var(--sans); font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--accent); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .masthead-meta .live::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+
+  /* ================================================================
+   *  BODY GRID — main column + activity rail
+   * ================================================================ */
+  .body {
+    margin-top: 22px;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 32px;
+  }
+
+  /* --- Section header treatment (shared) --- */
+  .section-h {
+    display: flex; align-items: baseline; gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .section-h .q {
+    font-family: var(--serif);
+    font-size: 17px;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    font-weight: 500;
+  }
+  .section-h .q-hint {
+    font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px;
+  }
+  .section-h .q-num {
+    font-family: var(--serif); font-size: 15px; color: var(--gold-2); letter-spacing: 0.08em;
+  }
+  .section { }
+  .section + .section { margin-top: 28px; }
+
+  /* ================================================================
+   *  SECTION 1 — ATTENTION (the featured Lead Domain, kept from B1)
+   * ================================================================ */
+  .attn-body {
+    padding-top: 20px;
+  }
+  .attn-tag {
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dom-membership); font-weight: 600;
+  }
+  .attn-title {
+    margin-top: 8px;
+    font-family: var(--serif);
+    font-size: 30px; line-height: 1.12; letter-spacing: -0.014em; color: var(--ink); font-weight: 500;
+    max-width: 640px;
+  }
+  .attn-state {
+    margin-top: 12px;
+    font-family: var(--serif); font-size: 16.5px; line-height: 1.5; color: var(--ink-2);
+    max-width: 640px;
+  }
+  .attn-nums {
+    margin-top: 22px;
+    display: grid; grid-template-columns: repeat(3, auto);
+    gap: 48px;
+  }
+  .attn-nums .cell .l { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .attn-nums .cell .v { margin-top: 4px; font-family: var(--serif); font-size: 34px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.015em; line-height: 1; }
+  .attn-cta {
+    margin-top: 22px;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 11px 18px;
+    background: var(--dom-membership);
+    color: #fff;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 14px rgba(47,88,50,0.28);
+  }
+
+  /* ================================================================
+   *  SECTION 2 — HEALTHY (vitals rows, NOT cards)
+   *  Each domain reads as a horizontal vital-sign row. No borders,
+   *  no card containers. Just typography + a very thin hairline
+   *  between rows. The distinctive detail is the italic-serif
+   *  condition line under each domain name, echoing the Council
+   *  Table language.
+   * ================================================================ */
+  .vitals { padding-top: 6px; }
+  .vital {
+    display: grid;
+    grid-template-columns: 40px 1fr auto;
+    gap: 20px;
+    align-items: baseline;
+    padding: 18px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .vital:last-child { border-bottom: none; }
+  .vital .v-num { font-family: var(--serif); font-size: 19px; color: var(--gold-2); letter-spacing: 0.05em; }
+  .vital .v-body { }
+  .vital .v-name-row { display: flex; align-items: baseline; gap: 12px; }
+  .vital .v-name {
+    font-family: var(--serif); font-size: 20px; color: var(--ink); letter-spacing: -0.005em; font-weight: 500;
+  }
+  .vital .v-status {
+    font-family: var(--serif); font-style: italic; color: var(--ink-2); font-size: 13px;
+  }
+  .vital .v-cond {
+    margin-top: 4px;
+    font-family: var(--serif); font-style: italic; color: var(--ink-2); font-size: 14px; line-height: 1.45;
+  }
+  /* Pulse line — a subtle horizontal indicator per domain. Reads as
+   * a vital sign monitor without becoming decorative. Uses the
+   * domain colour for the marker; the resting bar is a thin
+   * hairline. */
+  .vital .v-pulse {
+    margin-top: 10px;
+    position: relative;
+    height: 2px;
+    width: 180px;
+    background: rgba(0,0,0,0.06);
+    border-radius: 999px;
+  }
+  .vital .v-pulse::after {
+    content: '';
+    position: absolute;
+    top: -3px;
+    height: 8px;
+    width: 8px;
+    border-radius: 999px;
+  }
+  .vital.finance .v-pulse::after { left: 70%; background: var(--dom-finance); box-shadow: 0 0 6px rgba(122,91,29,0.4); }
+  .vital.ops .v-pulse::after { left: 88%; background: var(--dom-ops); box-shadow: 0 0 6px rgba(69,90,100,0.4); }
+  .vital.gov .v-pulse::after { left: 45%; background: var(--dom-gov); box-shadow: 0 0 6px rgba(90,58,42,0.4); }
+  .vital.hosp .v-pulse::after { left: 78%; background: var(--dom-hosp); box-shadow: 0 0 6px rgba(135,74,42,0.4); }
+  .vital .v-right { text-align: right; }
+  .vital .v-value { font-family: var(--serif); font-size: 26px; color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; line-height: 1; }
+  .vital .v-value .dec { color: var(--ink-3); font-size: 17px; }
+  .vital .v-value-label { margin-top: 5px; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+
+  /* ================================================================
+   *  SECTION 3 — NAVIGATE (where you might go)
+   *  Not a card grid. A single horizontal ribbon of five destinations,
+   *  each with its Roman numeral, domain name, quick state, and a
+   *  hover-underlined arrow. Reads as a chapter index at the end of
+   *  a document.
+   * ================================================================ */
+  .nav-ribbon {
+    margin-top: 20px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-top: 1px solid rgba(107,80,40,0.24);
+    border-bottom: 1px solid rgba(107,80,40,0.24);
+  }
+  .nav-cell {
+    padding: 18px 14px;
+    border-right: 1px solid rgba(107,80,40,0.14);
+    text-decoration: none; color: inherit;
+    display: block;
+  }
+  .nav-cell:last-child { border-right: none; }
+  .nav-cell .nc-num { font-family: var(--serif); font-size: 14px; color: var(--gold-2); letter-spacing: 0.06em; }
+  .nav-cell .nc-name { margin-top: 4px; font-family: var(--serif); font-size: 16px; color: var(--ink); font-weight: 500; }
+  .nav-cell .nc-meta { margin-top: 4px; font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px; }
+  .nav-cell .nc-go { margin-top: 10px; display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 12px; font-weight: 500; text-decoration: none; }
+
+  /* ================================================================
+   *  ACTIVITY RAIL — the living organisation
+   *  Right-hand rail running full height of the workspace body.
+   *  Reads like a Bloomberg terminal news feed but in editorial
+   *  serif type. Timestamps in italic, domain-coloured dot, plain
+   *  operational description.
+   * ================================================================ */
+  .activity-rail {
+    padding: 0 0 0 24px;
+    border-left: 1px solid rgba(0,0,0,0.06);
+    display: flex; flex-direction: column;
+  }
+  .ar-h {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .ar-h .ar-title {
+    font-family: var(--serif); font-size: 15px; color: var(--ink); font-weight: 500; letter-spacing: -0.005em;
+  }
+  .ar-h .ar-live {
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent); font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .ar-h .ar-live::before { content: ''; width: 5px; height: 5px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  .ar-hint { padding-top: 8px; font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px; }
+
+  .ar-entries { margin-top: 12px; display: flex; flex-direction: column; }
+  .ar-entry {
+    display: grid;
+    grid-template-columns: 20px 46px 1fr;
+    gap: 10px;
+    align-items: baseline;
+    padding: 12px 0;
+    border-bottom: 1px dashed rgba(0,0,0,0.06);
+  }
+  .ar-entry:last-child { border-bottom: none; }
+  .ar-dot { width: 7px; height: 7px; border-radius: 999px; align-self: center; justify-self: end; }
+  .ar-dot.d-mem { background: var(--dom-membership); }
+  .ar-dot.d-fin { background: var(--dom-finance); }
+  .ar-dot.d-ops { background: var(--dom-ops); }
+  .ar-dot.d-gov { background: var(--dom-gov); }
+  .ar-dot.d-hosp { background: var(--dom-hosp); }
+  .ar-time { font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  .ar-body { }
+  .ar-body .title { font-size: 12.5px; color: var(--ink); line-height: 1.35; }
+  .ar-body .meta { margin-top: 2px; font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 11.5px; line-height: 1.35; }
+
+  .ar-foot {
+    margin-top: 18px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(0,0,0,0.06);
+    font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 11.5px;
+    display: flex; justify-content: space-between;
+  }
+
+  .colophon {
+    margin-top: 24px;
+    padding-top: 14px;
+    display: flex; justify-content: space-between;
+    font-family: var(--serif); font-style: italic; color: var(--ink-3); font-size: 12px;
+    border-top: 1px solid rgba(0,0,0,0.05);
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="rail-eyebrow">Spectre</div>
+    <div class="rail-club">Silver Springs<br>Golf &amp; Country Club</div>
+    <div class="rail-dept">Administration</div>
+    <div class="rail-nav">
+      <a class="rail-item active" href="#">Operations Centre</a>
+      <a class="rail-item" href="#">Search</a>
+      <div class="rail-section-h">Domains</div>
+      <a class="rail-item" href="#">Membership</a>
+      <a class="rail-item" href="#">Finance</a>
+      <a class="rail-item" href="#">Operations</a>
+      <a class="rail-item" href="#">Governance</a>
+      <a class="rail-item" href="#">Hospitality</a>
+      <div class="rail-section-h">Personal</div>
+      <a class="rail-item" href="#">My MFA</a>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-brand">The Executive Operations Centre</div>
+      <div class="avatar">PB</div>
+    </div>
+    <div class="workspace">
+      <div class="masthead">
+        <div class="masthead-title">The Executive Operations Centre<span class="amp"> · </span>Silver Springs</div>
+        <div class="masthead-meta">
+          <span class="live">Live</span>
+          <span>Monday, July 14, 2026 · 08:14 EDT</span>
+        </div>
+      </div>
+
+      <div class="body">
+        <div class="body-main">
+          <!-- ============= I · ATTENTION ============= -->
+          <section class="section">
+            <div class="section-h">
+              <span class="q-num">I</span>
+              <span class="q">What needs your attention</span>
+              <span class="q-hint">One domain today.</span>
+            </div>
+            <div class="attn-body">
+              <div class="attn-tag">Lead Domain · Membership</div>
+              <h2 class="attn-title">Two applications require decisions before Friday.</h2>
+              <p class="attn-state">The queue is quiet otherwise. The Hendrick and DuPont applications have been under review for six days; both households completed onboarding, and both carry references from existing seat-holders.</p>
+              <div class="attn-nums">
+                <div class="cell"><div class="l">Pending decisions</div><div class="v">2</div></div>
+                <div class="cell"><div class="l">Approved / waitlisted</div><div class="v">1</div></div>
+                <div class="cell"><div class="l">Onboarding gap</div><div class="v">9</div></div>
+              </div>
+              <a href="#" class="attn-cta">Review the two applications →</a>
+            </div>
+          </section>
+
+          <!-- ============= II · HEALTHY ============= -->
+          <section class="section">
+            <div class="section-h">
+              <span class="q-num">II</span>
+              <span class="q">What is healthy</span>
+              <span class="q-hint">Steady across four domains.</span>
+            </div>
+            <div class="vitals">
+              <div class="vital finance">
+                <div class="v-num">II</div>
+                <div class="v-body">
+                  <div class="v-name-row">
+                    <span class="v-name">Finance</span>
+                    <span class="v-status">Steady</span>
+                  </div>
+                  <div class="v-cond">Inside policy; over-60 has begun to accumulate — no notices required yet.</div>
+                  <div class="v-pulse"></div>
+                </div>
+                <div class="v-right">
+                  <div class="v-value">$5,902<span class="dec">.50</span></div>
+                  <div class="v-value-label">Member AR</div>
+                </div>
+              </div>
+              <div class="vital ops">
+                <div class="v-num">III</div>
+                <div class="v-body">
+                  <div class="v-name-row">
+                    <span class="v-name">Operations</span>
+                    <span class="v-status">On plan</span>
+                  </div>
+                  <div class="v-cond">Tee sheet full through Thursday; kitchen prep on schedule; grounds crew ahead.</div>
+                  <div class="v-pulse"></div>
+                </div>
+                <div class="v-right">
+                  <div class="v-value">148</div>
+                  <div class="v-value-label">Tee times today</div>
+                </div>
+              </div>
+              <div class="vital gov">
+                <div class="v-num">IV</div>
+                <div class="v-body">
+                  <div class="v-name-row">
+                    <span class="v-name">Governance</span>
+                    <span class="v-status">Two decisions</span>
+                  </div>
+                  <div class="v-cond">May package published; four committee items sit before Friday's session.</div>
+                  <div class="v-pulse"></div>
+                </div>
+                <div class="v-right">
+                  <div class="v-value">2</div>
+                  <div class="v-value-label">Board decisions</div>
+                </div>
+              </div>
+              <div class="vital hosp">
+                <div class="v-num">V</div>
+                <div class="v-body">
+                  <div class="v-name-row">
+                    <span class="v-name">Hospitality</span>
+                    <span class="v-status">Twelve tonight</span>
+                  </div>
+                  <div class="v-cond">Founders' evening carries the week; six member notes await response.</div>
+                  <div class="v-pulse"></div>
+                </div>
+                <div class="v-right">
+                  <div class="v-value">12</div>
+                  <div class="v-value-label">Reservations tonight</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============= III · NAVIGATE ============= -->
+          <section class="section">
+            <div class="section-h">
+              <span class="q-num">III</span>
+              <span class="q">Where you might go</span>
+              <span class="q-hint">Five domains, in order.</span>
+            </div>
+            <div class="nav-ribbon">
+              <a class="nav-cell" href="#">
+                <div class="nc-num">I</div>
+                <div class="nc-name">Membership</div>
+                <div class="nc-meta">2 open decisions</div>
+                <div class="nc-go">Enter →</div>
+              </a>
+              <a class="nav-cell" href="#">
+                <div class="nc-num">II</div>
+                <div class="nc-name">Finance</div>
+                <div class="nc-meta">Steady · inside policy</div>
+                <div class="nc-go">Enter →</div>
+              </a>
+              <a class="nav-cell" href="#">
+                <div class="nc-num">III</div>
+                <div class="nc-name">Operations</div>
+                <div class="nc-meta">On plan · 148 today</div>
+                <div class="nc-go">Enter →</div>
+              </a>
+              <a class="nav-cell" href="#">
+                <div class="nc-num">IV</div>
+                <div class="nc-name">Governance</div>
+                <div class="nc-meta">2 decisions · Fri cmte</div>
+                <div class="nc-go">Enter →</div>
+              </a>
+              <a class="nav-cell" href="#">
+                <div class="nc-num">V</div>
+                <div class="nc-name">Hospitality</div>
+                <div class="nc-meta">12 tonight · Founders' Fri</div>
+                <div class="nc-go">Enter →</div>
+              </a>
+            </div>
+          </section>
+        </div>
+
+        <!-- ============= ACTIVITY RAIL — the living club ============= -->
+        <aside class="activity-rail">
+          <div class="ar-h">
+            <span class="ar-title">The club, right now</span>
+            <span class="ar-live">Live</span>
+          </div>
+          <div class="ar-hint">A living record of the last hour of operations.</div>
+          <div class="ar-entries">
+            <div class="ar-entry">
+              <span class="ar-dot d-fin"></span>
+              <div class="ar-time">08:12</div>
+              <div class="ar-body">
+                <div class="title">Payment received · $2,340</div>
+                <div class="meta">James Kowalski · membership dues</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-mem"></span>
+              <div class="ar-time">07:58</div>
+              <div class="ar-body">
+                <div class="title">Application submitted</div>
+                <div class="meta">Hendrick household · full package</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-hosp"></span>
+              <div class="ar-time">07:41</div>
+              <div class="ar-body">
+                <div class="title">Kitchen prep started</div>
+                <div class="meta">Founders' evening service, 84 covers</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-hosp"></span>
+              <div class="ar-time">07:24</div>
+              <div class="ar-body">
+                <div class="title">Reservation confirmed</div>
+                <div class="meta">Chen party of six · 19:30 tonight</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-ops"></span>
+              <div class="ar-time">07:16</div>
+              <div class="ar-body">
+                <div class="title">Tee sheet closed for the day</div>
+                <div class="meta">148 tee times · full to 15:20</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-gov"></span>
+              <div class="ar-time">06:58</div>
+              <div class="ar-body">
+                <div class="title">Board package published</div>
+                <div class="meta">May 2026 · sent to five committee chairs</div>
+              </div>
+            </div>
+            <div class="ar-entry">
+              <span class="ar-dot d-fin"></span>
+              <div class="ar-time">06:41</div>
+              <div class="ar-body">
+                <div class="title">Overnight batch reconciled</div>
+                <div class="meta">Zero variance · sixty-three lines</div>
+              </div>
+            </div>
+          </div>
+          <div class="ar-foot">
+            <span>Since 07:00 EDT · 24 events</span>
+            <span>Refreshes every 30 sec</span>
+          </div>
+        </aside>
+      </div>
+
+      <div class="colophon">
+        <span>Prepared for Patricia Bell · Club Admin · Silver Springs Golf &amp; Country Club</span>
+        <span>Next reading: 10:00 EDT</span>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

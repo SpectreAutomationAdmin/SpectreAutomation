@@ -1,0 +1,102 @@
+# Sprint 2 B4 — staging web app deployment config.
+#
+# Deploy target: staging.spectreautomation.com
+# App: spectre-staging (web tier)
+#
+# This file is deliberately kept minimal. Every secret is injected
+# via `fly secrets set`; nothing sensitive lives here.
+
+app = "spectre-staging"
+primary_region = "iad"  # us-east; adjust if the customer geography changes.
+
+kill_signal = "SIGINT"
+kill_timeout = 30
+
+[build]
+  # Path is resolved relative to THIS toml file's directory (deploy/),
+  # not the CWD. The Dockerfile lives at the repo root.
+  dockerfile = "../Dockerfile"
+
+[deploy]
+  # Sprint 2 Step 7B (2026-07-20) — Postgres migrations, explicit
+  # schema. Runs ONLY on the web app (worker fly.toml has no release
+  # command) so migrations never race between two apps. Uses the
+  # checked-in Postgres schema + baseline migration at
+  # prisma-postgres/. A failed migration prevents promotion, so
+  # app traffic never sees a half-migrated schema.
+  #
+  # Sprint 2 Checkpoint 11 (2026-07-20) — Prisma's session-level
+  # advisory lock (SELECT pg_advisory_lock(...)) deadlocks against
+  # Neon's pgBouncer pooler (which multiplexes sessions), producing
+  # P1002 lock-acquisition timeouts on every deploy. Runtime traffic
+  # STILL uses the pooled DATABASE_URL for connection efficiency, but
+  # migrations run against DIRECT_DATABASE_URL (Neon's unpooled
+  # endpoint) so the advisory lock works. Fail-fast if the direct
+  # URL is missing — better to abort the deploy than fall back to the
+  # pooled URL and hang for 10 minutes on the lock.
+  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" npx prisma migrate deploy --schema prisma-postgres/schema.prisma'"
+  strategy = "rolling"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  # Non-secret defaults. Every value that could be sensitive is
+  # injected via `fly secrets set`.
+  #
+  # Sprint 2 Step 7B — MAILBOX_INTEGRATION_ENABLED starts FALSE for
+  # the first deployment. The Entra app registration + staging
+  # redirect URI (Step 9 + 10 of the Founder Action Sheet) must land
+  # BEFORE this flips to "true". Flipping it via
+  # `flyctl secrets set MAILBOX_INTEGRATION_ENABLED=true` is a
+  # zero-downtime env update; no redeploy needed.
+  MAILBOX_INTEGRATION_ENABLED = "false"
+  MICROSOFT_GRAPH_AUTHORITY_HOST = "https://login.microsoftonline.com"
+  MICROSOFT_GRAPH_AUTHORITY_AUDIENCE = "organizations"
+  APP_URL = "https://staging.spectreautomation.com"
+  NEXT_PUBLIC_APP_URL = "https://staging.spectreautomation.com"
+  MAILBOX_MAX_ATTACHMENT_MB = "25"
+  # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. The
+  # account-scoped values (KMS key ARN, R2 endpoint, R2 bucket) and
+  # the access-key pairs are injected via `flyctl secrets set` and
+  # never checked into this file.
+  AWS_REGION = "us-east-2"
+  SPECTRE_KMS_PROVIDER = "aws"
+  S3_FORCE_PATH_STYLE = "true"
+  # Sprint 2 Step 8/Checkpoint 7 (2026-07-20) — tenant-resolver platform
+  # host. When set, resolveClubByHost() returns { mode: "platform" } for
+  # this exact hostname (case-insensitive, port-stripped). This is the
+  # smallest safe way to associate the staging custom domain with the
+  # Spectre platform mode without inserting a ClubDomain row (which
+  # would either hard-code a real club, weaken multi-tenant isolation,
+  # or require a synthetic "staging club"). Unset in prod until a
+  # production-specific platform host is chosen.
+  SPECTRE_PLATFORM_HOST = "staging.spectreautomation.com"
+
+[processes]
+  app = "npm run start"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 250
+    soft_limit = 200
+
+  # Liveness — process is up.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "15s"
+    method = "GET"
+    timeout = "5s"
+    path = "/api/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024

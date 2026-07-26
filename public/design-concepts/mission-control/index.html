@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spectre · Mission Control — Concept</title>
+<meta name="viewport" content="width=1440">
+<!-- No external font loading — the app's CSP blocks Google Fonts.
+     Uses `system-ui` for text and the OS mono for code. -->
+<style>
+  /* Tokens copied from src/app/globals.css (Phase 1 Design Language,
+   * light theme). This is a static mockup — the real page would
+   * consume the tokens directly. */
+  :root {
+    --canvas: #f6f6f8;
+    --canvas-sunken: #eeeef1;
+    --surface: #fdfdfd;
+    --surface-hover: #f4f4f5;
+    --surface-elevated: #fdfdfe;
+    --sidebar: #f4f4f6;
+    --topbar: #fbfbfc;
+    --border-hairline: rgba(15, 15, 20, 0.06);
+    --border-default: rgba(15, 15, 20, 0.10);
+    --border-strong: rgba(15, 15, 20, 0.16);
+    --text-primary: #17181b;
+    --text-secondary: rgba(23, 24, 27, 0.72);
+    --text-muted: rgba(23, 24, 27, 0.55);
+    --text-subtle: rgba(23, 24, 27, 0.38);
+    --text-inverse: #fdfdfe;
+    --success: #166534;
+    --success-bg: rgba(22, 101, 52, 0.10);
+    --warning: #b45309;
+    --warning-bg: rgba(180, 83, 9, 0.10);
+    --error: #b91c1c;
+    --error-bg: rgba(185, 28, 28, 0.10);
+    --info: #1d4ed8;
+    --info-bg: rgba(29, 78, 216, 0.10);
+    --accent: #2f5832;
+    --accent-hover: #213a22;
+    --accent-soft: rgba(47, 88, 50, 0.10);
+    --accent-ring: rgba(47, 88, 50, 0.28);
+    --shadow-subtle: 0 1px 2px rgba(15, 17, 21, 0.04);
+    --shadow-elevated: 0 1px 3px rgba(15, 17, 21, 0.06), 0 4px 12px rgba(15, 17, 21, 0.04);
+    --shadow-floating: 0 4px 12px rgba(15, 17, 21, 0.08), 0 12px 32px rgba(15, 17, 21, 0.06);
+    --shadow-focus: 0 0 0 3px var(--accent-ring);
+    --radius-button: 6px;
+    --radius-input: 6px;
+    --radius-card: 10px;
+    --radius-panel: 10px;
+    --radius-pill: 999px;
+    --serif: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --sans:  system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; font-feature-settings: "cv11" 1, "ss01" 1; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; cursor: pointer; }
+
+  /* ================================================================
+   *  SHELL
+   * ================================================================ */
+  .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--border-hairline); display: flex; flex-direction: column; }
+  .sidebar .id { padding: 16px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-hairline); }
+  .sidebar .id .avatar { width: 32px; height: 32px; border-radius: 6px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+  .sidebar .id .wm { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+  .sidebar .id .name { margin-top: 2px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .sidebar .search-btn { margin: 12px 12px 4px; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border-default); color: var(--text-muted); font-size: 13px; }
+  .sidebar .search-btn .kbd { margin-left: auto; padding: 2px 6px; font-family: var(--mono); font-size: 11px; background: var(--surface); border: 1px solid var(--border-default); border-radius: 4px; }
+  .sidebar nav { padding: 8px 8px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 2px 0; border-radius: 6px; color: var(--text-secondary); font-size: 13px; font-weight: 500; position: relative; }
+  .nav-item.active { background: var(--accent-soft); color: var(--text-primary); }
+  .nav-item.active::before { content: ""; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); }
+  .nav-item.active .icon { color: var(--accent); }
+  .nav-item .icon { width: 16px; height: 16px; opacity: 0.72; }
+  .nav-section-h { padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--text-muted); }
+
+  .topbar { height: 64px; display: flex; align-items: center; padding: 0 16px; background: var(--topbar); border-bottom: 1px solid var(--border-hairline); gap: 12px; }
+  .crumbs { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 13px; flex: 1; }
+  .crumbs .sep { color: var(--text-subtle); }
+  .crumbs .leaf { color: var(--text-primary); font-weight: 500; }
+  .topbar .controls { display: flex; align-items: center; gap: 4px; }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: transparent; border: none; color: var(--text-secondary); position: relative; }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .icon-btn .dot { position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border-radius: 999px; background: var(--accent); }
+  .avatar-btn { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border-radius: 6px; background: transparent; border: none; color: var(--text-primary); font-size: 13px; font-weight: 500; }
+  .avatar-btn:hover { background: var(--surface-hover); }
+  .avatar-btn .a { width: 24px; height: 24px; border-radius: 999px; background: var(--accent); color: var(--text-inverse); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; }
+  .divider-v { width: 1px; height: 20px; background: var(--border-hairline); margin: 0 6px; }
+
+  main { padding: 24px 32px 40px; }
+
+  /* ================================================================
+   *  PAGE HEADER
+   * ================================================================ */
+  .page-header { margin-bottom: 20px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .page-header h1 { font-size: 24px; line-height: 32px; letter-spacing: -0.015em; font-weight: 600; color: var(--text-primary); }
+  .page-header .sub { margin-top: 2px; font-size: 13px; color: var(--text-secondary); }
+  .page-header .status { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .page-header .status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--success); }
+
+  /* ================================================================
+   *  EXECUTIVE BRIEFING
+   *  Compact, factual, no editorial voice. Traces to real counts.
+   * ================================================================ */
+  .briefing {
+    background: var(--surface);
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-card);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 20px;
+  }
+  .briefing .col { min-width: 0; }
+  .briefing .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
+  .briefing .n { margin-top: 4px; font-size: 24px; line-height: 1; letter-spacing: -0.015em; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .briefing .n .u { margin-left: 4px; font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .briefing .col.attention .n { color: var(--warning); }
+  .briefing .col.judgment .n { color: var(--error); }
+  .briefing .col.auto .n { color: var(--success); }
+  .briefing .meta { margin-top: 3px; font-size: 12px; color: var(--text-muted); }
+
+  /* ================================================================
+   *  MAIN GRID — feed + rail
+   *  Feed occupies ~66% of the main content area.
+   * ================================================================ */
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 24px; align-items: start; }
+
+  /* ================================================================
+   *  FEED
+   * ================================================================ */
+  .feed-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-hairline);
+    margin-bottom: 12px;
+  }
+  .feed-controls .title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-right: 8px; }
+  .seg { display: inline-flex; background: var(--canvas-sunken); border-radius: 6px; padding: 2px; }
+  .seg button { padding: 5px 10px; font-size: 12px; font-weight: 500; color: var(--text-muted); background: transparent; border: none; border-radius: 4px; }
+  .seg button.on { background: var(--surface); color: var(--text-primary); box-shadow: 0 1px 2px rgba(15,17,21,0.06); }
+  .feed-controls .sort { margin-left: auto; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .feed-controls .filter { padding: 6px 10px; font-size: 12px; color: var(--text-secondary); background: var(--surface); border: 1px solid var(--border-default); border-radius: 6px; display: inline-flex; align-items: center; gap: 6px; }
+
+  .feed { display: flex; flex-direction: column; gap: 12px; }
+
+  .item {
+    background: var(--surface);
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-card);
+    padding: 18px 20px;
+    transition: box-shadow 160ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .item.actionable:hover { box-shadow: var(--shadow-elevated); }
+
+  .item .head { display: flex; align-items: center; gap: 12px; }
+  .item .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--radius-pill);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    border: 1px solid transparent;
+  }
+  .badge.approval { background: var(--accent-soft); color: var(--accent); }
+  .badge.judgment { background: var(--warning-bg); color: var(--warning); }
+  .badge.comm { background: var(--info-bg); color: var(--info); }
+  .badge.auto { background: var(--success-bg); color: var(--success); }
+  .badge.info { background: var(--canvas-sunken); color: var(--text-muted); border-color: var(--border-hairline); }
+  .item .sender {
+    font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .item .sender .from { color: var(--text-primary); font-weight: 500; }
+  .item .sender .via { color: var(--text-muted); }
+  .item .sender .ctx { color: var(--text-muted); font-size: 12px; }
+  .item .ts { margin-left: auto; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .item .confidence { font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px; }
+  .item .confidence::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--success); }
+  .item.judgment .confidence::before { background: var(--warning); }
+
+  .item h3 {
+    margin-top: 12px;
+    font-size: 16px; line-height: 22px;
+    letter-spacing: -0.005em;
+    font-weight: 600; color: var(--text-primary);
+  }
+  .item .work {
+    margin-top: 8px;
+    font-size: 13px; line-height: 20px; color: var(--text-secondary);
+  }
+  .item .work .actor { color: var(--text-primary); font-weight: 500; }
+  .item .work code {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--canvas-sunken); padding: 1px 5px;
+    border-radius: 4px; color: var(--text-primary);
+  }
+
+  .item .data {
+    margin-top: 14px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--canvas-sunken);
+    border-radius: 8px;
+  }
+  .item .data .cell .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
+  .item .data .cell .val { margin-top: 2px; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 500; }
+
+  .item .recommend {
+    margin-top: 14px;
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .item .recommend .label { text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; font-size: 10px; }
+  .item .recommend .text { color: var(--text-primary); font-size: 13px; font-weight: 500; }
+
+  .item .actions {
+    margin-top: 14px;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; font-size: 12px; font-weight: 500; border-radius: 6px; border: 1px solid transparent; }
+  .btn.primary { background: var(--accent); color: var(--text-inverse); }
+  .btn.primary:hover { background: var(--accent-hover); }
+  .btn.secondary { background: var(--surface); color: var(--text-primary); border-color: var(--border-default); }
+  .btn.secondary:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+  .btn.ghost { background: transparent; color: var(--text-secondary); }
+  .btn.ghost:hover { background: var(--surface-hover); color: var(--text-primary); }
+
+  /* Completed automatically — reduced visual weight */
+  .item.done {
+    background: transparent;
+    border-color: var(--border-hairline);
+    padding: 12px 16px;
+  }
+  .item.done h3 { margin-top: 6px; font-size: 14px; color: var(--text-secondary); font-weight: 500; }
+  .item.done .work { display: none; }
+  .item.done .data { display: none; }
+  .item.done .recommend { display: none; }
+  .item.done .actions { margin-top: 8px; }
+  .item.done .actions .btn.primary { display: none; }
+  .item.done .actions .btn:not(.ghost) { display: none; }
+  .item.done .done-meta { display: flex; align-items: center; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+
+  /* Informational — lowest weight, single line */
+  .item.info-item {
+    padding: 12px 16px;
+    background: transparent;
+  }
+  .item.info-item .head { align-items: baseline; }
+  .item.info-item h3 { margin-top: 6px; font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+  .item.info-item .work { display: none; }
+  .item.info-item .data { display: none; }
+  .item.info-item .recommend { display: none; }
+  .item.info-item .actions { display: none; }
+
+  /* ================================================================
+   *  EXECUTIVE RAIL
+   * ================================================================ */
+  .rail { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 24px; }
+  .rail-card {
+    background: var(--surface);
+    border: 1px solid var(--border-hairline);
+    border-radius: var(--radius-card);
+    padding: 16px 18px;
+  }
+  .rail-h {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-muted); font-weight: 600;
+    margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .rail-h .now { font-family: var(--mono); font-size: 10px; color: var(--text-muted); font-weight: 500; }
+
+  /* Today's Position — small stat rows, no chart */
+  .position .row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-hairline);
+  }
+  .position .row:last-child { border-bottom: none; }
+  .position .row .k { font-size: 12px; color: var(--text-muted); }
+  .position .row .v { font-size: 14px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .position .row .v .tone { font-size: 11px; font-weight: 500; margin-left: 4px; }
+  .position .row .v .tone.good { color: var(--success); }
+  .position .row .v .tone.warn { color: var(--warning); }
+
+  /* Executive Insight — one sentence, traceable */
+  .insight .text {
+    font-size: 13px; line-height: 19px; color: var(--text-primary);
+  }
+  .insight .source {
+    margin-top: 10px; font-size: 11px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .insight .link { color: var(--accent); font-weight: 500; text-decoration: none; }
+
+  /* Today's Commitments — time-anchored */
+  .commit .row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-hairline); align-items: baseline; }
+  .commit .row:last-child { border-bottom: none; }
+  .commit .row .t { font-family: var(--mono); font-size: 11px; color: var(--text-muted); min-width: 46px; }
+  .commit .row .body { flex: 1; min-width: 0; }
+  .commit .row .body .title { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+  .commit .row .body .meta { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="id">
+      <div class="avatar">S</div>
+      <div>
+        <div class="wm">Spectre</div>
+        <div class="name">Silver Springs</div>
+      </div>
+    </div>
+    <button class="search-btn"><span>🔍</span><span>Search</span><span class="kbd">⌘K</span></button>
+    <nav>
+      <a class="nav-item active">
+        <span class="icon">◈</span>
+        <span>Mission Control</span>
+      </a>
+      <div class="nav-section-h">Domains</div>
+      <a class="nav-item"><span class="icon">○</span><span>Membership</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Finance</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Operations</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Governance</span></a>
+      <a class="nav-item"><span class="icon">○</span><span>Hospitality</span></a>
+      <div class="nav-section-h">Personal</div>
+      <a class="nav-item"><span class="icon">○</span><span>My MFA</span></a>
+    </nav>
+  </aside>
+
+  <div>
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <nav class="crumbs">
+        <span>App</span><span class="sep">›</span><span>Admin</span><span class="sep">›</span><span class="leaf">Mission Control</span>
+      </nav>
+      <div class="controls">
+        <button class="icon-btn" title="Search">🔍</button>
+        <button class="icon-btn" title="Notifications">🔔<span class="dot"></span></button>
+        <button class="icon-btn" title="Theme">☀</button>
+        <div class="divider-v"></div>
+        <button class="avatar-btn"><span class="a">PB</span><span>Patricia Bell</span><span>▾</span></button>
+      </div>
+    </header>
+
+    <main>
+      <!-- PAGE HEADER -->
+      <div class="page-header">
+        <div>
+          <h1>Mission Control</h1>
+          <p class="sub">Today's incoming work, interpreted and prepared. Handle it here.</p>
+        </div>
+        <div class="status">Feed synced 08:14 EDT · every 60 sec</div>
+      </div>
+
+      <!-- EXECUTIVE BRIEFING -->
+      <section class="briefing" aria-label="Executive briefing">
+        <div class="col">
+          <div class="label">Arrived today</div>
+          <div class="n">12<span class="u">items</span></div>
+          <div class="meta">since 00:00 EDT</div>
+        </div>
+        <div class="col auto">
+          <div class="label">Completed automatically</div>
+          <div class="n">4<span class="u">items</span></div>
+          <div class="meta">no action needed</div>
+        </div>
+        <div class="col attention">
+          <div class="label">Ready for your approval</div>
+          <div class="n">4<span class="u">items</span></div>
+          <div class="meta">$21,152 total value</div>
+        </div>
+        <div class="col judgment">
+          <div class="label">Need your judgment</div>
+          <div class="n">2<span class="u">items</span></div>
+          <div class="meta">Spectre uncertain</div>
+        </div>
+        <div class="col">
+          <div class="label">Informational</div>
+          <div class="n">2<span class="u">items</span></div>
+          <div class="meta">no action required</div>
+        </div>
+      </section>
+
+      <!-- MAIN GRID -->
+      <div class="grid">
+        <!-- FEED -->
+        <section aria-label="Work intake feed">
+          <div class="feed-controls">
+            <span class="title">Work Intake</span>
+            <div class="seg" role="tablist">
+              <button class="on">All</button>
+              <button>Attention</button>
+              <button>Auto</button>
+              <button>Info</button>
+            </div>
+            <div class="sort">
+              <button class="filter">Sort: Priority ▾</button>
+              <button class="filter">Filters</button>
+            </div>
+          </div>
+
+          <div class="feed">
+            <!-- 1. NEEDS JUDGMENT (highest priority — genuine ambiguity) -->
+            <article class="item actionable">
+              <div class="head">
+                <span class="badge judgment">Needs judgment</span>
+                <div class="sender">
+                  <span class="from">chair@membership.silversprings.club</span>
+                  <span class="via">· via email</span>
+                  <span class="ctx">· Membership Committee · escalation</span>
+                </div>
+                <span class="ts">42 min ago</span>
+              </div>
+              <h3>Hendrick household — waiver of two-referral requirement?</h3>
+              <p class="work">
+                <span class="actor">Spectre</span> matched the application against policy §4.2 (two active-member referrals). The Hendrick household submitted <strong>one</strong> referral (Robert Kowalski, Category A, in good standing) and cites the sponsor's death of the intended second referrer in April. Prior committee decisions show <span class="confidence">2 similar waivers in the last 24 months</span>. No automatic call — policy exceptions require your judgment.
+              </p>
+              <div class="data">
+                <div class="cell"><div class="label">Household</div><div class="val">Hendrick · 2 + 1</div></div>
+                <div class="cell"><div class="label">Referrals on file</div><div class="val">1 of 2</div></div>
+                <div class="cell"><div class="label">Sponsor</div><div class="val">R. Kowalski</div></div>
+                <div class="cell"><div class="label">Policy citation</div><div class="val">§4.2</div></div>
+              </div>
+              <div class="recommend">
+                <span class="label">Recommended</span>
+                <span class="text">Waive the second referral OR return to committee — Spectre confidence 61%, request judgment.</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary">Waive & advance</button>
+                <button class="btn secondary">Return to committee</button>
+                <button class="btn ghost">Request clarification</button>
+                <button class="btn ghost">Defer to Friday</button>
+              </div>
+            </article>
+
+            <!-- 2. READY FOR APPROVAL — AP invoice -->
+            <article class="item actionable">
+              <div class="head">
+                <span class="badge approval">Ready for approval</span>
+                <div class="sender">
+                  <span class="from">billing@acefoods.com</span>
+                  <span class="via">· via email</span>
+                  <span class="ctx">· 3rd invoice this quarter</span>
+                </div>
+                <span class="ts">1 hr ago</span>
+              </div>
+              <h3>Ace Foods invoice #A-8241 — $2,340.00 · Kitchen supplies</h3>
+              <p class="work">
+                <span class="actor">Spectre</span> matched against <code>PO #4832</code>, extracted 14 line items, verified GST at 5%, checked vendor status (active · net-30), and drafted a journal entry to post <code>$2,340.00</code> to <code>GL 5200 Kitchen supplies</code>. Approval required per policy: single invoices ≥ $1,000 need controller sign-off.
+              </p>
+              <div class="data">
+                <div class="cell"><div class="label">Amount</div><div class="val">$2,340.00</div></div>
+                <div class="cell"><div class="label">PO</div><div class="val">#4832</div></div>
+                <div class="cell"><div class="label">Category</div><div class="val">Kitchen supplies</div></div>
+                <div class="cell"><div class="label">Confidence</div><div class="val">96%</div></div>
+              </div>
+              <div class="recommend">
+                <span class="label">Recommended</span>
+                <span class="text">Approve and post to GL 5200 — variance from PO is $0.00.</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary">Approve & post</button>
+                <button class="btn secondary">Reply to vendor</button>
+                <button class="btn ghost">Assign to A. Cho</button>
+                <button class="btn ghost">Defer 24 hr</button>
+              </div>
+            </article>
+
+            <!-- 3. COMMUNICATION REQUIRED — reply draft -->
+            <article class="item actionable">
+              <div class="head">
+                <span class="badge comm">Communication required</span>
+                <div class="sender">
+                  <span class="from">j.mackenzie@example.com</span>
+                  <span class="via">· via email</span>
+                  <span class="ctx">· Member · 12 years · Category A</span>
+                </div>
+                <span class="ts">2 hr ago</span>
+              </div>
+              <h3>Locker-fee dispute — proposed reply drafted</h3>
+              <p class="work">
+                <span class="actor">Spectre</span> identified the member's account (locker 042A, annual renewal Jul 1), confirmed the disputed $220 charge is correct per the current fee schedule (§C-14), and drafted a plain-language reply that references the schedule + offers a call with the GM. The member's tenure and Category-A standing meet the criteria for direct-response handling.
+              </p>
+              <div class="data">
+                <div class="cell"><div class="label">Member since</div><div class="val">2014</div></div>
+                <div class="cell"><div class="label">Locker</div><div class="val">042A</div></div>
+                <div class="cell"><div class="label">Charge</div><div class="val">$220.00</div></div>
+                <div class="cell"><div class="label">Policy</div><div class="val">§C-14</div></div>
+              </div>
+              <div class="recommend">
+                <span class="label">Recommended</span>
+                <span class="text">Review the drafted reply, adjust the tone if needed, and send.</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary">Review & send reply</button>
+                <button class="btn secondary">Escalate to GM</button>
+                <button class="btn ghost">Rewrite</button>
+                <button class="btn ghost">Defer</button>
+              </div>
+            </article>
+
+            <!-- 4. READY FOR APPROVAL — payroll batch -->
+            <article class="item actionable">
+              <div class="head">
+                <span class="badge approval">Ready for approval</span>
+                <div class="sender">
+                  <span class="from">Payroll batch — period ending 2026-07-12</span>
+                  <span class="via">· system</span>
+                  <span class="ctx">· 87 employees</span>
+                </div>
+                <span class="ts">3 hr ago</span>
+              </div>
+              <h3>Payroll batch PR-2026-14 — $18,472.83 · 87 employees</h3>
+              <p class="work">
+                <span class="actor">Spectre</span> ran the standard validations: rate table current, no unusual hours (>60 flagged: 0), no missing timesheets, statutory holidays applied, deductions total to variance $0.00. Compared to prior period: −0.4% (expected: seasonal). Zero exceptions.
+              </p>
+              <div class="data">
+                <div class="cell"><div class="label">Gross</div><div class="val">$18,472.83</div></div>
+                <div class="cell"><div class="label">Employees</div><div class="val">87</div></div>
+                <div class="cell"><div class="label">vs. prior</div><div class="val">−0.4%</div></div>
+                <div class="cell"><div class="label">Exceptions</div><div class="val">0</div></div>
+              </div>
+              <div class="recommend">
+                <span class="label">Recommended</span>
+                <span class="text">Approve and release for direct deposit Friday 07:00 EDT.</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary">Approve batch</button>
+                <button class="btn secondary">Review exceptions</button>
+                <button class="btn ghost">Assign to A. Cho</button>
+                <button class="btn ghost">Hold for review</button>
+              </div>
+            </article>
+
+            <!-- 5. NEEDS JUDGMENT — AR write-off -->
+            <article class="item actionable">
+              <div class="head">
+                <span class="badge judgment">Needs judgment</span>
+                <div class="sender">
+                  <span class="from">AR ageing report — automated</span>
+                  <span class="via">· system</span>
+                  <span class="ctx">· Threshold 180 days</span>
+                </div>
+                <span class="ts">4 hr ago</span>
+              </div>
+              <h3>Chen · $340.00 outstanding for 187 days — write off?</h3>
+              <p class="work">
+                <span class="actor">Spectre</span> found no active payment plan, three unanswered notices (Apr 12, May 8, Jun 3), and one bounced email (Jun 3). Member Chen's account is inactive since Feb 2026. Standard write-off threshold is 180 days; account meets the threshold but Chen has no prior write-offs and paid consistently 2020–2025, which does not fit the policy's clean-cut disposition criteria.
+              </p>
+              <div class="data">
+                <div class="cell"><div class="label">Balance</div><div class="val">$340.00</div></div>
+                <div class="cell"><div class="label">Age</div><div class="val">187 days</div></div>
+                <div class="cell"><div class="label">Notices sent</div><div class="val">3</div></div>
+                <div class="cell"><div class="label">Confidence</div><div class="val">64%</div></div>
+              </div>
+              <div class="recommend">
+                <span class="label">Recommended</span>
+                <span class="text">Attempt one live call before writing off — history suggests recovery is possible.</span>
+              </div>
+              <div class="actions">
+                <button class="btn primary">Log call attempt</button>
+                <button class="btn secondary">Write off $340</button>
+                <button class="btn ghost">Send final notice</button>
+                <button class="btn ghost">Defer 30 days</button>
+              </div>
+            </article>
+
+            <!-- 6. COMPLETED AUTOMATICALLY (compact) -->
+            <article class="item done">
+              <div class="head">
+                <span class="badge auto">Completed automatically</span>
+                <div class="sender"><span class="from">Overnight bank reconciliation</span><span class="via">· system</span></div>
+                <span class="ts">06:41 EDT</span>
+              </div>
+              <h3>63 lines reconciled · zero variance · batch closed</h3>
+              <div class="done-meta">
+                <span>Ran 06:38–06:41 EDT · Duration 3m 12s</span>
+                <span>Batch: <code style="font-family:var(--mono);font-size:11px;background:var(--canvas-sunken);padding:1px 5px;border-radius:4px;">rec-3427</code></span>
+              </div>
+              <div class="actions">
+                <button class="btn ghost">Open batch</button>
+                <button class="btn ghost">Archive</button>
+              </div>
+            </article>
+
+            <!-- 7. COMPLETED AUTOMATICALLY -->
+            <article class="item done">
+              <div class="head">
+                <span class="badge auto">Completed automatically</span>
+                <div class="sender"><span class="from">Monthly board package · May 2026</span><span class="via">· system</span></div>
+                <span class="ts">05:15 EDT</span>
+              </div>
+              <h3>Draft prepared · all sections reconcile · awaiting your review</h3>
+              <div class="done-meta">
+                <span>7 chapters generated · commentary drafted</span>
+                <span>Reconciliation: Balanced · $0.00 variance</span>
+              </div>
+              <div class="actions">
+                <button class="btn ghost">Open in Monthly Reporting Package</button>
+                <button class="btn ghost">Archive</button>
+              </div>
+            </article>
+
+            <!-- 8. INFORMATIONAL -->
+            <article class="item info-item">
+              <div class="head">
+                <span class="badge info">Informational</span>
+                <div class="sender"><span class="from">Governance calendar</span><span class="via">· system</span></div>
+                <span class="ts">Friday</span>
+              </div>
+              <h3>Finance Committee meets Friday 10:00 EDT · 4 members RSVP'd · agenda auto-prepared</h3>
+            </article>
+
+            <!-- 9. INFORMATIONAL -->
+            <article class="item info-item">
+              <div class="head">
+                <span class="badge info">Informational</span>
+                <div class="sender"><span class="from">Operations · Kitchen prep</span><span class="via">· system</span></div>
+                <span class="ts">07:41 EDT</span>
+              </div>
+              <h3>Founders' evening service prep started · 84 covers · on schedule</h3>
+            </article>
+
+          </div>
+        </section>
+
+        <!-- EXECUTIVE RAIL -->
+        <aside class="rail" aria-label="Executive rail">
+          <!-- Today's Position -->
+          <section class="rail-card position">
+            <div class="rail-h">
+              <span>Today's position</span>
+              <span class="now">08:14 EDT</span>
+            </div>
+            <div class="row">
+              <span class="k">Member AR</span>
+              <span class="v">$5,902<span class="tone">.50</span></span>
+            </div>
+            <div class="row">
+              <span class="k">Over 60 days</span>
+              <span class="v">$2,880<span class="tone warn"> · policy 60</span></span>
+            </div>
+            <div class="row">
+              <span class="k">Cash on hand</span>
+              <span class="v">$142,410</span>
+            </div>
+            <div class="row">
+              <span class="k">Tee times today</span>
+              <span class="v">148<span class="tone good"> · full</span></span>
+            </div>
+            <div class="row">
+              <span class="k">Reservations tonight</span>
+              <span class="v">12</span>
+            </div>
+          </section>
+
+          <!-- Executive Insight -->
+          <section class="rail-card insight">
+            <div class="rail-h">
+              <span>Executive insight</span>
+            </div>
+            <div class="text">
+              AR ageing crossed the 60-day policy line for two accounts this week. Both are in the feed above (Chen, Nakamura). Recovery in the last three quarters was 71% on accounts flagged at this age.
+            </div>
+            <div class="source">
+              <span>Source:</span>
+              <a class="link">AR aging report · 08:14 EDT</a>
+            </div>
+          </section>
+
+          <!-- Today's Commitments -->
+          <section class="rail-card commit">
+            <div class="rail-h">
+              <span>Today's commitments</span>
+            </div>
+            <div class="row">
+              <span class="t">09:30</span>
+              <div class="body">
+                <div class="title">GM sync · weekly</div>
+                <div class="meta">Boardroom · Alex Cho</div>
+              </div>
+            </div>
+            <div class="row">
+              <span class="t">11:00</span>
+              <div class="body">
+                <div class="title">Vendor call — Ace Foods renewal</div>
+                <div class="meta">Zoom · relates to invoice above</div>
+              </div>
+            </div>
+            <div class="row">
+              <span class="t">14:00</span>
+              <div class="body">
+                <div class="title">Membership committee — 2 decisions</div>
+                <div class="meta">Boardroom · agenda auto-prepared</div>
+              </div>
+            </div>
+            <div class="row">
+              <span class="t">17:00</span>
+              <div class="body">
+                <div class="title">May Board Package — sign-off deadline</div>
+                <div class="meta">Draft prepared this morning</div>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spectre — Offline</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; background: #fafaf9; color: #111; margin: 0; padding: 4rem 1.5rem; }
+      .card { max-width: 28rem; margin: 0 auto; text-align: center; }
+      h1 { font-family: Georgia, serif; font-size: 1.75rem; margin: 0 0 0.5rem; color: #2f5832; }
+      p { color: #555; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>You're offline</h1>
+      <p>Spectre needs a connection to fetch live data. Please reconnect and try again — the page will reload automatically when service returns.</p>
+    </div>
+    <script>
+      window.addEventListener("online", () => location.reload());
+    </script>
+  </body>
+</html>

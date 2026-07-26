@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission Control — Three Variants</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --canvas: #fafaf7;
+    --hairline: rgba(15, 15, 20, 0.08);
+    --text-primary: #17181b;
+    --text-secondary: rgba(23, 24, 27, 0.72);
+    --text-muted: rgba(23, 24, 27, 0.52);
+    --confidence: #2f5832;
+    --sans: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+    --serif: "New York", ui-serif, Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--canvas); color: var(--text-primary); min-height: 100vh; font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 72px 32px 96px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.20em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+  h1 { font-family: var(--serif); font-size: 40px; line-height: 48px; letter-spacing: -0.02em; font-weight: 500; margin-top: 12px; }
+  .lede { margin-top: 20px; font-size: 16px; line-height: 26px; color: var(--text-secondary); max-width: 720px; letter-spacing: -0.002em; }
+  .card-grid { margin-top: 64px; display: grid; grid-template-columns: 1fr; gap: 24px; }
+  .card { padding: 32px; border: 1px solid var(--hairline); border-radius: 12px; background: #ffffff; display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: start; }
+  .card .title { font-family: var(--serif); font-size: 22px; line-height: 30px; letter-spacing: -0.014em; font-weight: 500; }
+  .card .badge { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
+  .card .desc { margin-top: 10px; font-size: 14px; line-height: 22px; color: var(--text-secondary); max-width: 640px; letter-spacing: -0.002em; }
+  .card .moves { margin-top: 18px; font-size: 13px; color: var(--text-secondary); line-height: 22px; }
+  .card .moves b { color: var(--text-primary); font-weight: 500; }
+  .card .cta { align-self: center; padding: 10px 20px; background: var(--confidence); color: #fdfdfe; font-size: 13px; font-weight: 500; border-radius: 4px; }
+  .card .cta:hover { background: #213a22; }
+  .card.recommended { border-color: rgba(47, 88, 50, 0.4); box-shadow: 0 1px 0 rgba(47, 88, 50, 0.06); }
+  .card.recommended .badge { color: var(--confidence); }
+  .card.recommended .badge::before { content: "★  "; letter-spacing: 0; }
+  .footer { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--hairline); font-size: 12px; color: var(--text-muted); line-height: 20px; letter-spacing: -0.002em; }
+  .footer a { color: var(--text-secondary); border-bottom: 1px solid var(--hairline); padding-bottom: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Mission Control · executive visual refactor</div>
+  <h1>Three variants, same information architecture.</h1>
+  <p class="lede">The current Mission Control layout is approved. The current appearance is not. Below are three progressively more ambitious executions of the Executive Interface Standards — same page anatomy, same feed, same rail, same content. What changes is the visual language: typography, whitespace, chrome, and colour restraint.</p>
+
+  <div class="card-grid">
+    <a class="card" href="variant-a-conservative.html">
+      <div>
+        <div class="badge">Variant A · Conservative</div>
+        <div class="title">Refines the existing design while minimising visual change.</div>
+        <div class="desc">The card structure, sidebar shape, briefing strip, and rail widgets are retained — with the changes required to pass the Standards's most basic tests. Recognisable as an evolution of the current mockup.</div>
+        <div class="moves"><b>Key moves.</b> Emoji icons replaced with a monochrome SVG family. "Mission Control" heading replaced with a human greeting. Card borders softened. Coloured briefing numbers desaturated. Filters and secondary buttons quieter. Same shape, less noise.</div>
+      </div>
+      <div class="cta">Open Variant A</div>
+    </a>
+
+    <a class="card" href="variant-b-executive.html">
+      <div>
+        <div class="badge">Variant B · Executive</div>
+        <div class="title">Applies the Executive Interface Standards fully while preserving the layout.</div>
+        <div class="desc">Cards give way to architecture. Typography becomes the primary hierarchy mechanism. The page begins with the day rather than with software. Feed items are separated by whitespace and hairlines, not boxes. The rail reads as an executive briefing notebook rather than three widgets. <b>Superseded by Variant D</b> — this reading of the standards proved to sacrifice affordance and scanning speed for editorial restraint.</div>
+        <div class="moves"><b>Key moves.</b> Human briefing replaces the KPI strip. Feed items lose card fills; separation is rhythm. Data cells are typographic — no filled panels. Secondary actions are quiet text links; one primary action per item. Sidebar and top bar drop to near-invisible framing.</div>
+      </div>
+      <div class="cta">Open Variant B</div>
+    </a>
+
+    <a class="card" href="variant-c-aspirational.html">
+      <div>
+        <div class="badge">Variant C · Aspirational</div>
+        <div class="title">Pushes the editorial language as far as possible without changing the information architecture.</div>
+        <div class="desc">A serif display face is introduced for the greeting, state, feed headlines, and rail headings — treating Mission Control as an editorial briefing rather than a screen. Vertical rhythm expanded; cents desaturated; secondary actions become underlined text. <b>Rejected</b> — proved that pushing editorial restraint further only worsens the scanability problem.</div>
+        <div class="moves"><b>Key moves.</b> Display serif for greeting, state, item titles, rail headings. Warmer canvas (ivory). Larger gutters. Cents in a lighter weight, one size down. Rail headings become italic captions with hairlines beneath.</div>
+      </div>
+      <div class="cta">Open Variant C</div>
+    </a>
+
+    <a class="card recommended" href="variant-d-instrument.html">
+      <div>
+        <div class="badge">Variant D · Professional Instrument (recommended)</div>
+        <div class="title">Recovers the original's clarity, adds craftsmanship, drops the editorial pretence.</div>
+        <div class="desc">Clarity beats minimalism. This variant reads the standards as Bloomberg / Leica / Porsche cockpit — <em>not</em> Apple Settings. Three-plane material system (shell / canvas / workspace) creates visible depth without floating Material cards. The original's KPI-strip briefing is restored as an instrument-panel readout. Feed items are bounded workspaces with left-edge status stripes, disciplined data readouts, primary + secondary + tertiary action tiers, and traceable IDs. The rail is three distinct sections with visible chrome and aligned numerals. Every control has an unmistakable affordance.</div>
+        <div class="moves"><b>Key moves.</b> Warmer canvas + warmer shell + workspace lift (three visible planes). 5-cell instrument briefing with status swatches. Feed items regain card boundaries + left status stripe + ID tag + policy flag. Data readouts return as inset panels with column dividers. Recommendation set in a green-tinted attention band. One filled primary + two bordered secondary + one tertiary text button per item. Top bar gains help + notification-count badge. Sidebar adds a persistent user block. Two full items visible without scrolling at 1440.</div>
+      </div>
+      <div class="cta">Open Variant D</div>
+    </a>
+  </div>
+
+  <div class="footer">
+    Hard constraint reminder · none of these variants changes the information architecture, the work-intake concept, the executive rail, the page anatomy, or the workflow. Every difference is visual only.<br>
+    Source of authority · <a href="../../../docs/design/Spectre%20Executive%20Interface%20Standards.md">Spectre Executive Interface Standards</a> · <a href="../../../docs/design/Spectre%20Design%20Language.md">Design Language (tokens)</a> · <a href="../../../docs/design/Spectre%20Product%20Language.md">Product Language (grammar)</a>.
+  </div>
+</div>
+</body>
+</html>

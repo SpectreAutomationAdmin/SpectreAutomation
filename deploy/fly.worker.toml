@@ -1,0 +1,58 @@
+# Sprint 2 B4 — staging background worker deployment config.
+#
+# Deploy target: internal (no public HTTP)
+# App: spectre-staging-worker
+#
+# Runs bin/worker.ts to consume MAILBOX_INITIAL_SYNC and future
+# MAILBOX_* jobs from the queue. No inbound HTTP surface. Scales to
+# a single machine in staging; multiple machines are safe (BullMQ
+# distributes work) but not required.
+
+app = "spectre-staging-worker"
+primary_region = "iad"
+
+kill_signal = "SIGINT"
+kill_timeout = 60
+
+[build]
+  # Path is resolved relative to THIS toml file's directory (deploy/),
+  # not the CWD. The Dockerfile.worker lives at the repo root.
+  dockerfile = "../Dockerfile.worker"
+
+[deploy]
+  # Sprint 2 Step 7B (2026-07-20) — DELIBERATELY no `release_command`.
+  # The WEB app owns Prisma migrations against Neon. Having a release
+  # command here would race the web app on the same DB during a
+  # simultaneous deploy. Deploy the web app first (which runs
+  # migrations), then the worker.
+  strategy = "rolling"
+
+[env]
+  NODE_ENV = "production"
+  # Sprint 2 Step 7B — mailbox integration OFF until Entra callback
+  # URI exists. Matches the web app default.
+  MAILBOX_INTEGRATION_ENABLED = "false"
+  MICROSOFT_GRAPH_AUTHORITY_HOST = "https://login.microsoftonline.com"
+  MICROSOFT_GRAPH_AUTHORITY_AUDIENCE = "organizations"
+  APP_URL = "https://staging.spectreautomation.com"
+  NEXT_PUBLIC_APP_URL = "https://staging.spectreautomation.com"
+  MAILBOX_MAX_ATTACHMENT_MB = "25"
+  WORKER_POLL_MS = "1000"
+  # Sprint 2 Step 7B — non-secret AWS/R2 runtime configuration. Values
+  # match the web app; both processes must resolve KMS + R2 identically.
+  AWS_REGION = "us-east-2"
+  SPECTRE_KMS_PROVIDER = "aws"
+  S3_FORCE_PATH_STYLE = "true"
+
+[processes]
+  # bin/worker.ts is TypeScript; tsx runs it directly. Both prisma
+  # and tsx are devDependencies but the Dockerfile.worker installs
+  # devDeps (no --omit=dev) so this is safe. Previous value
+  # `node bin/worker.js` referenced a file that does not exist and
+  # would have crashed the container.
+  worker = "npx tsx bin/worker.ts"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024

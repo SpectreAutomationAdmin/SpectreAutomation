@@ -1,0 +1,28 @@
+node_modules
+.next
+.git
+.env
+.env.local
+.env.*.local
+.env.staging.local
+dist
+prisma/dev.db*
+prisma/test.db*
+.data
+*.log
+.DS_Store
+coverage
+# Sprint 2 Step 8 — trim build context. test-results/ is ~383 MB of
+# Playwright screenshots + traces from local dev runs; never needed in
+# the production image.
+#
+# NOTE: tests/ and docs/ MUST stay in the context — scripts/measure-resetdb.ts
+# does `await import("../tests/util/db")` and Next.js's tsc pass will fail
+# to resolve the module if tests/ is excluded. The runtime cost is ~5 MB.
+test-results
+playwright-report
+scripts/*.spec.ts
+.claude
+.vscode
+*.md
+!README.md

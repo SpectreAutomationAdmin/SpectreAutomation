@@ -1,0 +1,112 @@
+# Phase 14G — Android Capacitor build pipeline.
+#
+# This workflow is `workflow_dispatch` only by design: real release builds
+# need the upload keystore that must never live in git. The first pilot's
+# implementation team triggers it manually before pushing to the Play
+# Console internal track.
+#
+# Required GitHub secrets:
+#   ANDROID_KEYSTORE_BASE64        — base64 of the upload keystore (.jks/.keystore)
+#   ANDROID_KEYSTORE_PASSWORD      — password for the keystore
+#   ANDROID_KEY_ALIAS              — key alias inside the keystore
+#   ANDROID_KEY_PASSWORD           — password for the key
+#   PLAY_SERVICE_ACCOUNT_JSON      — Google Play API service-account JSON (only
+#                                    needed if you wire auto-publish below)
+
+name: Mobile — Android build
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Build environment"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      version_name:
+        description: "Version name (e.g. 1.0.3)"
+        required: true
+        type: string
+      version_code:
+        description: "Version code (monotonic integer)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Use JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ENV: ${{ github.event.inputs.environment }}
+
+      - name: Capacitor sync
+        run: |
+          cd mobile
+          npm install -g @capacitor/cli
+          npx cap sync android
+
+      - name: Install Android signing keystore
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 not configured — building unsigned debug APK."
+            exit 78
+          fi
+          mkdir -p mobile/android/app
+          echo "$KEYSTORE" | base64 -d > mobile/android/app/upload-keystore.jks
+
+      - name: Inject version + signing config into gradle.properties
+        working-directory: mobile/android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          {
+            echo "SPECTRE_VERSION_NAME=${{ github.event.inputs.version_name }}"
+            echo "SPECTRE_VERSION_CODE=${{ github.event.inputs.version_code }}"
+            echo "SPECTRE_UPLOAD_STORE_FILE=upload-keystore.jks"
+            echo "SPECTRE_UPLOAD_STORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "SPECTRE_UPLOAD_KEY_ALIAS=$KEY_ALIAS"
+            echo "SPECTRE_UPLOAD_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> gradle.properties
+
+      - name: Build release AAB
+        working-directory: mobile/android
+        run: ./gradlew bundleRelease
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectre-android-${{ github.event.inputs.environment }}-${{ github.event.inputs.version_name }}-${{ github.event.inputs.version_code }}
+          path: mobile/android/app/build/outputs/bundle/release/*.aab
+
+      - name: Manual approval gate before Play Console upload
+        if: github.event.inputs.environment == 'production'
+        run: |
+          echo "::notice::Play Console upload requires manual sign-off — download the AAB from this run's Artifacts panel."

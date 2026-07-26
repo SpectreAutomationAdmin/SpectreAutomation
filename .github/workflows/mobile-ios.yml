@@ -1,0 +1,130 @@
+# Phase 14G — iOS Capacitor build pipeline.
+#
+# This workflow is `workflow_dispatch` only by design: real native builds need
+# signing certificates and provisioning profiles that must not run on every
+# push. The first pilot's implementation team triggers it manually before
+# distributing a TestFlight build.
+#
+# Required GitHub secrets (configure under Settings → Secrets and variables):
+#   APPLE_TEAM_ID                  — your Apple Developer team ID
+#   APPLE_CERT_P12_BASE64          — distribution certificate (.p12) base64
+#   APPLE_CERT_P12_PASSWORD        — password for the .p12
+#   APPLE_PROVISIONING_PROFILE_B64 — base64 of the App Store provisioning profile
+#   ASC_API_KEY_ID                 — App Store Connect API key id
+#   ASC_API_ISSUER_ID              — App Store Connect API issuer id
+#   ASC_API_PRIVATE_KEY            — App Store Connect API .p8 contents
+#
+# No secret material lives in this repo. The signing keychain is created in
+# the workflow at runtime and discarded when the runner ends.
+
+name: Mobile — iOS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Build environment"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: "Marketing version (e.g. 1.0.3)"
+        required: true
+        type: string
+      build_number:
+        description: "Build number (CFBundleVersion)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js for static export
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BUILD_ENV: ${{ github.event.inputs.environment }}
+
+      - name: Capacitor sync
+        run: |
+          cd mobile
+          npm install -g @capacitor/cli
+          npx cap sync ios
+
+      - name: Install Apple signing materials
+        env:
+          P12: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          P12_PWD: ${{ secrets.APPLE_CERT_P12_PASSWORD }}
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE_B64 }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$PROFILE" ]; then
+            echo "Apple signing secrets not configured — skipping signed build."
+            exit 78  # workflow neutral exit
+          fi
+          KEYCHAIN_PWD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          echo "$P12" | base64 -d > /tmp/dist.p12
+          security import /tmp/dist.p12 -k build.keychain -P "$P12_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PWD" build.keychain
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$PROFILE" | base64 -d > "$HOME/Library/MobileDevice/Provisioning Profiles/spectre.mobileprovision"
+
+      - name: Build & archive (xcodebuild)
+        working-directory: mobile/ios/App
+        env:
+          MARKETING_VERSION: ${{ github.event.inputs.version }}
+          CURRENT_PROJECT_VERSION: ${{ github.event.inputs.build_number }}
+        run: |
+          xcodebuild -workspace App.xcworkspace -scheme App \
+            -configuration Release -sdk iphoneos \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$CURRENT_PROJECT_VERSION" \
+            archive
+
+      - name: Export IPA
+        working-directory: mobile/ios/App
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>signingStyle</key><string>manual</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/App.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectre-ios-${{ github.event.inputs.environment }}-${{ github.event.inputs.version }}-${{ github.event.inputs.build_number }}
+          path: ${{ runner.temp }}/export/*.ipa
+
+      - name: Manual approval gate before TestFlight upload
+        if: github.event.inputs.environment == 'production'
+        run: |
+          echo "::notice::TestFlight upload requires manual sign-off — re-run this workflow with auto_publish=true to push."
+          echo "Artifact is ready under the run's Artifacts panel."
