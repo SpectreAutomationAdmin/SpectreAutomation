@@ -1060,6 +1060,15 @@ export async function commitBatch(
         });
       }
       return entry;
+    }, {
+      // Sprint 3 · Checkpoint 15I-5 — same rationale as the COA
+      // commit transaction below (~ N ImportRow updates in a
+      // loop plus one JE + N JEL createMany). Prior-live reversal
+      // adds another round-trip per pre-existing line. A 200-line
+      // TB comfortably exceeds Prisma's 5s default; raise the
+      // window in lockstep with the COA path.
+      timeout: 120_000,
+      maxWait: 30_000,
     });
     const updated = await prisma.importBatch.update({
       where: { id: batch.id },
@@ -1154,6 +1163,26 @@ async function commitCoaBatchAsReplacement(
   archivedPriorBatches: number;
 }> {
   if (!batch) throw new NotFoundError("ImportBatch");
+  // Sprint 3 · Checkpoint 15I-5 — explicit transaction timeout.
+  // Prisma's default $transaction timeout is 5 seconds. A COA
+  // commit does 3-4 DB round-trips per row (upsert account +
+  // deleteMany accountDepartments + optional createMany +
+  // importRow.update), so a full 237-account chart runs ~700-900
+  // round-trips. On a hosted Postgres (Neon) that comfortably
+  // exceeds 5s and Prisma throws P2028 — "Transaction not found"
+  // — the moment the deadline passes, which reaches Next.js as a
+  // generic server-side exception. The failed batch on staging
+  // (2026-07-26T21:02:07 UTC, digest 3147618077) hit exactly this
+  // limit. Postgres rolls back cleanly so no partial data exists,
+  // but the founder sees an unhelpful error and the batch can't
+  // commit.
+  //
+  // Timeout raised to 120s (well beyond any real COA volume — a
+  // 1000-account chart still fits inside 30s). maxWait 30s gives
+  // enough headroom for connection-pool acquisition on cold
+  // starts. Bulk COA imports are infrequent, non-user-blocking
+  // (async server action), and safely serialised — the wider
+  // window carries no downside.
   return prisma.$transaction(async (tx) => {
     let committed = 0;
     const seenNumbers = new Set<string>();
@@ -1279,6 +1308,10 @@ async function commitCoaBatchAsReplacement(
     // record. Keeping the parameter makes the contract explicit.
     void plan;
     return { batch: updated, committed, deactivated, archivedPriorBatches: archived.count };
+  }, {
+    // See comment above the transaction opening for rationale.
+    timeout: 120_000,
+    maxWait: 30_000,
   });
 }
 
