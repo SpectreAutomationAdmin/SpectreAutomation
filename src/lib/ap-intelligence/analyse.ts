@@ -123,6 +123,10 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
     capitalState: capital.state,
     capitalClass: capital.capitalClass,
+    // Sprint 3 · Checkpoint 15L — pass the extraction so the recommender
+    // can do a name-keyword search against the tenant's COA even when
+    // no vendor record exists yet (the founder-observed Microsoft case).
+    extraction,
   });
 
   // ---- Assemble findings for WorkIntakeFinding persistence ---------------

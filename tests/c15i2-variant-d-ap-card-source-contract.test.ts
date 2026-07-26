@@ -154,10 +154,13 @@ describe("Variant D AP card — collapsed body regions", () => {
 });
 
 describe("AP action row — Ace Foods layout", () => {
-  it("primary action label follows the workflow state (Approve & post / Match vendor / …)", () => {
+  it("primary action label follows the workflow state (Approve & post / Create vendor & post / …)", () => {
     expect(CARD).toMatch(/function primaryActionForApWorkflow/);
     expect(CARD).toMatch(/"Approve & post"/);
-    expect(CARD).toMatch(/"Match vendor"/);
+    // Sprint 3 · Checkpoint 15L — the founder renamed the
+    // VENDOR_MATCH_REQUIRED primary from "Match vendor" to
+    // "Create vendor & post" once the vendor-first modal shipped.
+    expect(CARD).toMatch(/"Create vendor & post"/);
     expect(CARD).toMatch(/"Request information"/);
     expect(CARD).toMatch(/"Review duplicate"/);
     expect(CARD).toMatch(/data-testid="ap-action-primary"/);

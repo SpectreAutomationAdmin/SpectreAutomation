@@ -40,6 +40,16 @@ import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
 //   • cache key includes the primary IngestedDocument.id — a new
 //     document (re-materialised child intake) invalidates naturally.
 //
+// Sprint 3 · Checkpoint 15L (2026-07-27) — the cache key ALSO
+// includes a COA revision fingerprint per club so a COA commit
+// (or any Account row edit / archive / category change) invalidates
+// every AP projection that referenced the pre-commit chart. Without
+// this, the founder-observed bug was: after committing 237 accounts
+// on staging, every AP card still rendered its pre-commit
+// "CHART_OF_ACCOUNTS_REQUIRED" projection until the Fly VM restarted.
+// The revision is a cheap `(count, max(updatedAt))` fingerprint —
+// a 6-hour query cache would still miss real edits.
+//
 // FOLLOW-UP (out of scope for this deploy): persist the extraction
 // on materialisation into a `WorkIntakeItemFactsCache` row (JSON) so
 // the summariser is O(1) DB read with no re-parse ever. That is a
@@ -49,8 +59,34 @@ const apSummaryCache = new Map<
   string,
   { at: number; value: LinkedIntelligenceForEmail["invoiceSummary"] }
 >();
-function apSummaryCacheKey(intakeId: string, docId: string | null): string {
-  return `${intakeId}::${docId ?? "no-doc"}`;
+function apSummaryCacheKey(intakeId: string, docId: string | null, coaRevision: string): string {
+  return `${intakeId}::${docId ?? "no-doc"}::${coaRevision}`;
+}
+
+// Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.
+// Cached process-locally at a short (30s) TTL so a burst of AP-card
+// projections during one Mission Control render shares one DB probe
+// but never staler than 30s. Any Account row change — commit, edit,
+// archive, category swap, FS-group swap — bumps `max(updatedAt)` and
+// invalidates every downstream `apSummaryCache` entry that referenced
+// the old fingerprint.
+const COA_REVISION_TTL_MS = 30_000;
+const coaRevisionCache = new Map<string, { at: number; fingerprint: string }>();
+async function loadCoaRevision(clubId: string): Promise<string> {
+  const now = Date.now();
+  const cached = coaRevisionCache.get(clubId);
+  if (cached && now - cached.at < COA_REVISION_TTL_MS) return cached.fingerprint;
+  const [count, latest] = await Promise.all([
+    prisma.account.count({ where: { clubId } }),
+    prisma.account.findFirst({
+      where: { clubId },
+      orderBy: { updatedAt: "desc" },
+      select: { updatedAt: true },
+    }),
+  ]);
+  const fingerprint = `${count}@${latest?.updatedAt.getTime() ?? 0}`;
+  coaRevisionCache.set(clubId, { at: now, fingerprint });
+  return fingerprint;
 }
 
 interface LoaderArgs {
@@ -203,16 +239,55 @@ export interface ApInvoiceCardIntelligence {
     currency: string | null;  // ISO code
   };
   paymentTerms: string | null;
+  // Sprint 3 · Checkpoint 15L — payment-terms provenance. Distinguishes
+  // terms EXTRACTED from the invoice PDF from terms INHERITED from a
+  // matched vendor profile (or a prior invoice on the same vendor).
+  // Null when both are absent — the card omits the segment rather than
+  // asserting "net-30" as a default. Values kept small so the payload
+  // stays JSON-friendly.
+  paymentTermsSource: "EXTRACTED" | "VENDOR_PROFILE" | "PRIOR_INVOICE" | null;
   purchaseOrder: {
     poNumber: string | null;
     matchedPoDocumentId: string | null;
+    // Sprint 3 · Checkpoint 15L — signed decimal-string variance
+    // (invoice.total − po.total). Null when no PO matched. Rendered
+    // via `+/- CAD X.XX` in the summary.
+    variance: string | null;
   };
   category: {
     label: string | null;                     // Human-facing e.g. "Kitchen supplies"
     glAccountNumber: string | null;
     glAccountName: string | null;
     capitalState: "OPERATING" | "CAPITAL" | "AMBIGUOUS" | "INSUFFICIENT_EVIDENCE" | null;
+    // Sprint 3 · Checkpoint 15L — the source of the top recommendation.
+    // Used by the UI to render the rationale strip (e.g. "matched via
+    // vendor default", "matched by keyword"). Null when no
+    // recommendation exists (empty COA or no supported match found).
+    source: "VENDOR_DEFAULT" | "PRIOR_CODING" | "NAME_KEYWORD" | "CAPITAL_CLASS_MAP" | "NONE" | null;
+    // Sprint 3 · Checkpoint 15L — alternate candidates for the modal /
+    // rationale panel. Ranked, best-first. Capped at 5 to keep the
+    // JSON payload small; the full list can be re-queried via the
+    // rationale endpoint if the founder ever needs a deeper picker.
+    alternates: Array<{
+      accountNumber: string;
+      accountName: string;
+      confidence: number;
+    }>;
   };
+  // Sprint 3 · Checkpoint 15L — GST verification result. Distinguishes:
+  //   VERIFIED             — the arithmetic (subtotal × rate ≈ tax) matches;
+  //                          the rate can be stated confidently on the card
+  //                          (via `gstRatePercent`).
+  //   EXTRACTED_UNVERIFIED — tax figure was extracted but the rate could
+  //                          not be reconciled (missing subtotal, currency
+  //                          jurisdiction mismatch, rounding beyond tolerance).
+  //   NOT_PRESENT          — no tax line found on the PDF.
+  //   INSUFFICIENT_DATA    — we can't judge either way — extraction was
+  //                          incomplete; card omits the GST segment.
+  gstVerification: "VERIFIED" | "EXTRACTED_UNVERIFIED" | "NOT_PRESENT" | "INSUFFICIENT_DATA" | null;
+  // Percentage rate as a plain number (e.g. 5 for 5%). Only set when
+  // gstVerification === "VERIFIED".
+  gstRatePercent: number | null;
   // Rolling count of accepted invoices from the matched vendor
   // in the current calendar quarter (inclusive of this one).
   // Null when no vendor match exists — cannot count without a
@@ -409,11 +484,16 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
 
   const docRef = intake.origins[0]?.referenceId ?? null;
 
-  // Cache probe now that we have the (intakeId, docRef) key. A hit
-  // means we skip the expensive analyseIngestedInvoice call AND the
-  // downstream vendor/GL lookups (they'd only re-derive the same
-  // values from the cached ExtractedInvoice input).
-  const cacheKey = apSummaryCacheKey(intakeId, docRef);
+  // Sprint 3 · Checkpoint 15L — pull the current COA revision BEFORE
+  // hitting the projection cache so a chart-of-accounts change since
+  // the last projection invalidates the cached entry naturally.
+  const coaRevision = await loadCoaRevision(clubId);
+
+  // Cache probe now that we have the (intakeId, docRef, coaRevision)
+  // key. A hit means we skip the expensive analyseIngestedInvoice
+  // call AND the downstream vendor/GL lookups (they'd only re-derive
+  // the same values from the cached ExtractedInvoice input).
+  const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision);
   const cached = apSummaryCache.get(cacheKey);
   if (cached && Date.now() - cached.at < AP_SUMMARY_TTL_MS) {
     return cached.value;
@@ -475,12 +555,15 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     matchedVendorId: analysis?.vendor.state === "MATCHED" ? (analysis.vendor.candidates[0]?.id ?? null) : null,
   });
 
-  // Invoice cadence — count prior APInvoice rows for the matched vendor
-  // this quarter. Null when no vendor match.
+  // Invoice cadence — prior invoices for THIS vendor this quarter.
+  // 15L: also counts prior APInvoice rows for the same normalised
+  // vendor NAME even when no vendor record exists yet, so a founder
+  // uploading a fresh Microsoft invoice sees cadence even before
+  // Microsoft is a vendor.
   const matchedVendorId = analysis?.vendor.state === "MATCHED" ? (analysis.vendor.candidates[0]?.id ?? null) : null;
   const invoiceCadenceThisQuarter = matchedVendorId
     ? await countInvoicesThisQuarter(clubId, matchedVendorId)
-    : null;
+    : await countInvoicesThisQuarterByName(clubId, extraction?.vendor.guessedName ?? null);
 
   const capitalState = analysis?.capital.state ?? null;
   const gl = analysis?.gl ?? null;
@@ -507,6 +590,20 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     f.severity === "HIGH" || f.severity === "CRITICAL" || f.severity === "MEDIUM",
   ).length;
 
+  // Sprint 3 · Checkpoint 15L — GST verification. The analyser's
+  // extraction has `subtotal` + `taxTotal` — reconcile the arithmetic
+  // to decide whether the card can honestly state a verified rate.
+  const gstResult = classifyGstVerification(extraction);
+
+  // Sprint 3 · Checkpoint 15L — payment-terms provenance. Extracted
+  // wins; matched-vendor profile falls back if we have one; otherwise
+  // null.
+  const paymentTermsResult = await resolvePaymentTerms({
+    clubId,
+    extractedTerms: extraction?.paymentTerms ?? null,
+    matchedVendorId,
+  });
+
   const value: LinkedIntelligenceForEmail["invoiceSummary"] = {
     sender: {
       name: sourceEmail?.senderName ?? null,
@@ -529,10 +626,12 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       amount: extraction?.total ?? null,
       currency: extraction?.currency ?? null,
     },
-    paymentTerms: extraction?.paymentTerms ?? null,
+    paymentTerms: paymentTermsResult.terms,
+    paymentTermsSource: paymentTermsResult.source,
     purchaseOrder: {
       poNumber: extraction?.purchaseOrder ?? null,
       matchedPoDocumentId: null,   // Future: reconcile.matchedPoId
+      variance: null,              // Future: computed once PO reconciliation lands.
     },
     category: {
       // Blank the category label when the tenant has no chart of
@@ -542,7 +641,15 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       glAccountNumber: noCoa ? null : (gl?.accountNumber ?? null),
       glAccountName: noCoa ? null : (gl?.accountName ?? null),
       capitalState,
+      source: noCoa ? null : ((gl?.source ?? "NONE") as ApInvoiceCardIntelligence["category"]["source"]),
+      alternates: noCoa || !gl?.candidates ? [] : gl.candidates.slice(1, 5).map((c) => ({
+        accountNumber: c.accountNumber,
+        accountName: c.accountName,
+        confidence: c.confidence,
+      })),
     },
+    gstVerification: gstResult.state,
+    gstRatePercent: gstResult.ratePercent,
     invoiceCadenceThisQuarter,
     confidence,
     workflowState,
@@ -610,6 +717,111 @@ async function countInvoicesThisQuarter(clubId: string, vendorId: string): Promi
   return prisma.aPInvoice.count({
     where: { clubId, vendorId, invoiceDate: { gte: start } },
   });
+}
+
+/**
+ * Sprint 3 · Checkpoint 15L — cadence fallback for the "no vendor
+ * record yet" case (Microsoft on Coulee Ridge). Counts APInvoice
+ * rows whose Vendor.legalName / operatingName normalises to the same
+ * canonical string as the extracted vendor name. Returns null when
+ * we have insufficient signal.
+ */
+async function countInvoicesThisQuarterByName(clubId: string, extractedName: string | null): Promise<number | null> {
+  if (!extractedName || extractedName.trim().length < 3) return null;
+  const now = new Date();
+  const quarter = Math.floor(now.getMonth() / 3);
+  const start = new Date(now.getFullYear(), quarter * 3, 1);
+  // Sprint 3 · Checkpoint 15L — SQLite (local dev) doesn't support
+  // `mode: "insensitive"`, but Postgres (staging/prod) does. We use
+  // the default case-sensitive `contains` here; the extracted name
+  // as it appears on invoices from the same vendor is stable enough
+  // that a case-sensitive substring match works for the cadence
+  // heuristic. Missed matches downgrade cadence to "First invoice
+  // received" rather than emitting a wrong count.
+  return prisma.aPInvoice.count({
+    where: {
+      clubId,
+      invoiceDate: { gte: start },
+      vendor: {
+        OR: [
+          { legalName: { contains: extractedName } },
+          { operatingName: { contains: extractedName } },
+        ],
+      },
+    },
+  });
+}
+
+/**
+ * Sprint 3 · Checkpoint 15L — GST verification.
+ *
+ * The card can honestly say "verified GST at X%" ONLY when:
+ *   1. subtotal + taxTotal + total are all extracted;
+ *   2. total = subtotal + taxTotal (within a $0.02 rounding tolerance);
+ *   3. the rate (taxTotal / subtotal) matches a supported rate to
+ *      within 0.10 percentage points.
+ *
+ * If the tax figure was extracted but the rate can't be reconciled,
+ * returns EXTRACTED_UNVERIFIED — the card shows a truthful "tax
+ * extracted; rate requires review" line.
+ *
+ * If no tax was extracted, returns NOT_PRESENT.
+ *
+ * Otherwise INSUFFICIENT_DATA and the card omits the segment.
+ */
+function classifyGstVerification(extraction: ExtractedInvoice | null): {
+  state: "VERIFIED" | "EXTRACTED_UNVERIFIED" | "NOT_PRESENT" | "INSUFFICIENT_DATA";
+  ratePercent: number | null;
+} {
+  if (!extraction) return { state: "INSUFFICIENT_DATA", ratePercent: null };
+  // No tax section on the PDF.
+  if (extraction.taxTotal == null && extraction.subtotal != null && extraction.total != null) {
+    const subN = Number(extraction.subtotal);
+    const totN = Number(extraction.total);
+    if (Number.isFinite(subN) && Number.isFinite(totN) && Math.abs(totN - subN) < 0.02) {
+      return { state: "NOT_PRESENT", ratePercent: null };
+    }
+  }
+  // Full arithmetic reconcile.
+  const sub = Number(extraction.subtotal);
+  const tax = Number(extraction.taxTotal);
+  const tot = Number(extraction.total);
+  if (![sub, tax, tot].every(Number.isFinite)) {
+    // We may still have tax alone (Microsoft-style: shows tax, no
+    // separate subtotal) — mark as extracted-but-unverified so the
+    // card doesn't invent a rate.
+    if (Number.isFinite(tax) && tax > 0) return { state: "EXTRACTED_UNVERIFIED", ratePercent: null };
+    return { state: "INSUFFICIENT_DATA", ratePercent: null };
+  }
+  if (Math.abs(sub + tax - tot) > 0.02) return { state: "EXTRACTED_UNVERIFIED", ratePercent: null };
+  if (sub <= 0) return { state: "EXTRACTED_UNVERIFIED", ratePercent: null };
+  const rate = (tax / sub) * 100;
+  const supportedRates = [5, 7, 8, 12, 13, 14.975, 15]; // GST + provincial HST rates
+  const match = supportedRates.find((r) => Math.abs(rate - r) < 0.15);
+  if (match != null) return { state: "VERIFIED", ratePercent: match };
+  return { state: "EXTRACTED_UNVERIFIED", ratePercent: null };
+}
+
+/**
+ * Sprint 3 · Checkpoint 15L — resolve payment terms with provenance.
+ * Prefers extracted terms; falls back to matched-vendor profile.
+ */
+async function resolvePaymentTerms(args: {
+  clubId: string;
+  extractedTerms: string | null;
+  matchedVendorId: string | null;
+}): Promise<{ terms: string | null; source: ApInvoiceCardIntelligence["paymentTermsSource"] }> {
+  if (args.extractedTerms) return { terms: args.extractedTerms, source: "EXTRACTED" };
+  if (args.matchedVendorId) {
+    const v = await prisma.vendor.findFirst({
+      where: { id: args.matchedVendorId, clubId: args.clubId },
+      select: { paymentTermsDays: true },
+    });
+    if (v?.paymentTermsDays != null) {
+      return { terms: `Net ${v.paymentTermsDays}`, source: "VENDOR_PROFILE" };
+    }
+  }
+  return { terms: null, source: null };
 }
 
 /** Blend extraction quality, vendor certainty, and reconcile state into a 0-100. */

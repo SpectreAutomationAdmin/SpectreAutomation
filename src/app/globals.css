@@ -1113,11 +1113,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     outline-offset: 2px;
     border-radius: 4px;
   }
+  /* Sprint 3 · Checkpoint 15L — the surface hover MUST NOT wash the
+     card body in a grey fill. The founder-approved behaviour: the
+     card body colour is unchanged, only the edge shadow / left rail
+     may subtly strengthen (that treatment lives on `.spectre-mc-item`
+     itself). Keyboard focus visibility comes from the
+     `:focus-visible` outline above. */
   .spectre-mc-item-surface:hover {
-    /* Subtle only — Variant D's own item hover already darkens the
-       border; this layer keeps the click-target feedback distinct. */
-    background: color-mix(in oklab, var(--spectre-text-primary) 1.5%, transparent);
-    border-radius: 4px;
+    background: transparent;
   }
   .spectre-mc-item-expanded {
     margin-top: var(--spectre-space-3);
@@ -2462,5 +2465,81 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   @keyframes spectre-mc-pulse {
     0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--spectre-accent) 45%, transparent); }
     50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--spectre-accent)  0%, transparent); }
+  }
+
+  /* Sprint 3 · Checkpoint 15L — Create Vendor & Post modal.
+     Reuses the doc-preview backdrop; adds its own dialog surface
+     so the vendor form + coding review get the right density. */
+  .spectre-cvap-dialog {
+    background: var(--spectre-canvas);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    width: 100%;
+    max-width: 780px;
+    max-height: 90vh;
+    overflow-y: auto;
+    outline: none;
+    padding: 0;
+  }
+  .spectre-cvap-head {
+    display: flex; justify-content: space-between; gap: var(--spectre-space-3);
+    padding: var(--spectre-space-3) var(--spectre-space-4);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-cvap-head h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .spectre-cvap-sub { margin: 4px 0 0; color: var(--spectre-text-secondary); font-size: 12.5px; }
+  .spectre-cvap-section {
+    padding: var(--spectre-space-3) var(--spectre-space-4);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-cvap-section:last-of-type { border-bottom: none; }
+  .spectre-cvap-section h3 {
+    margin: 0 0 var(--spectre-space-2); font-size: 12px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-note {
+    margin: 4px 0; color: var(--spectre-text-secondary); font-size: 12.5px;
+  }
+  .spectre-cvap-note--warn { color: var(--spectre-status-warning); }
+  .spectre-cvap-matches { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .spectre-cvap-matches li {
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-md, 6px);
+    padding: 8px 12px;
+  }
+  .spectre-cvap-matches li.picked { border-color: var(--spectre-accent); background: var(--spectre-surface); }
+  .spectre-cvap-matches label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  .spectre-cvap-matches .name { font-weight: 600; }
+  .spectre-cvap-matches .evidence { font-size: 12px; color: var(--spectre-text-secondary); }
+  .spectre-cvap-matches .ts { font-size: 11.5px; color: var(--spectre-text-muted); margin-top: 2px; }
+  .spectre-cvap-choose-new {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed var(--spectre-border-hairline);
+  }
+  .spectre-cvap-choose-new label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .spectre-cvap-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;
+  }
+  .spectre-cvap-field { display: flex; flex-direction: column; gap: 4px; }
+  .spectre-cvap-field .k {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-field .provenance { font-size: 11px; color: var(--spectre-text-muted); }
+  .spectre-cvap-field--wide { grid-column: span 2; }
+  .spectre-cvap-alt { margin-top: 10px; font-size: 12.5px; }
+  .spectre-cvap-alt summary { cursor: pointer; color: var(--spectre-text-secondary); }
+  .spectre-cvap-alt ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+  .spectre-cvap-error {
+    margin: 0 var(--spectre-space-4); padding: 8px 12px;
+    border: 1px solid var(--spectre-status-error);
+    background: var(--spectre-status-error-bg, transparent);
+    border-radius: var(--spectre-radius-md, 6px);
+    color: var(--spectre-status-error); font-size: 12.5px;
+  }
+  .spectre-cvap-foot {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: var(--spectre-space-3) var(--spectre-space-4);
+    border-top: 1px solid var(--spectre-border-hairline);
   }
 }

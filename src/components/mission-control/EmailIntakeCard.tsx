@@ -41,6 +41,7 @@ import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
 import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
+import CreateVendorAndPostModal from "./CreateVendorAndPostModal";
 import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/lib/mission-control";
 
 // -------------------------------------------------------------------------
@@ -101,6 +102,8 @@ export default function EmailIntakeCard({ data }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [replyOpen, setReplyOpen] = useState(false);
   const [pdfModal, setPdfModal] = useState<null | { documentId: string; filename: string }>(null);
+  // Sprint 3 · Checkpoint 15L — vendor-first modal open state.
+  const [cvapModalOpen, setCvapModalOpen] = useState(false);
   const [apEvidence, setApEvidence] = useState<unknown | null>(null);
   const [statementEvidence, setStatementEvidence] = useState<unknown | null>(null);
   const [attachments, setAttachments] = useState<
@@ -319,13 +322,18 @@ export default function EmailIntakeCard({ data }: Props) {
             workIntakeItemId={data.workIntakeItemId}
             onDefer={handleDefer24h}
             onPrimary={() => {
-              // Sprint 3 Checkpoint 15I-2 (2026-07-27) — primary
-              // AP action is truthful even when the domain button-
-              // level wiring lives inside the Invoice Review tab.
-              // Clicking Match vendor / Approve & post / Request
-              // information / Review coding EXPANDS the card, marks
-              // it read, and jumps directly to the Invoice Review
-              // tab where the canonical workflow controls live.
+              // Sprint 3 · Checkpoint 15L — routing for the AP primary
+              // action. When the workflow state is VENDOR_MATCH_REQUIRED
+              // the founder-approved primary is "Create vendor & post"
+              // and clicking it opens the dedicated modal. All other
+              // states retain the pre-15L behaviour — expand the card,
+              // mark read, jump to the Invoice Review tab where the
+              // canonical Approve / Request / Review controls live.
+              if (ap?.workflowState === "VENDOR_MATCH_REQUIRED") {
+                setCvapModalOpen(true);
+                if (!expanded) void markReadOnce();
+                return;
+              }
               if (!expanded) {
                 setExpanded(true);
                 void markReadOnce();
@@ -475,6 +483,15 @@ export default function EmailIntakeCard({ data }: Props) {
           open={true}
           onClose={() => setPdfModal(null)}
           contextLabel={`From: ${data.contextLine} · ${data.timestampLabel}`}
+        />
+      ) : null}
+
+      {ap ? (
+        <CreateVendorAndPostModal
+          open={cvapModalOpen}
+          onClose={() => setCvapModalOpen(false)}
+          ap={ap}
+          workIntakeItemId={data.workIntakeItemId}
         />
       ) : null}
     </article>
@@ -667,7 +684,6 @@ function renderApCollapsedBody(
   const pill = pillForApWorkflow(ap.workflowState);
   const title = buildApTitle(ap);
   const senderLine = buildApSenderLine(ap);
-  const work = buildApWorkSummary(ap);
 
   return (
     <>
@@ -689,7 +705,7 @@ function renderApCollapsedBody(
       </div>
 
       <p className="spectre-mc-work" data-testid="ap-work-summary">
-        {work}
+        <ApWorkSummary ap={ap} />
       </p>
 
       <div className="spectre-mc-readout" data-testid="ap-readout">
@@ -856,38 +872,91 @@ function ordinal(n: number): string {
 }
 
 /**
- * Accounting-specific work summary. Only mentions work Spectre
- * actually completed — never invented cadence, never a generic
- * "vendor reports invoice unpaid" narrative.
+ * Sprint 3 · Checkpoint 15L — accounting-specific work summary
+ * rendered as a React fragment so we can emphasise the Ace Foods
+ * reference tokens the founder approved:
+ *   • bold "Spectre" attribution at the start
+ *   • emphasised gross amount as a chip / ref
+ *   • emphasised GL account number+name as a chip / ref
+ *   • emphasised PO reference where matched
+ *   • emphasised PO variance where present
+ *
+ * Only mentions work Spectre actually completed. Never invents
+ * cadence, never a generic "vendor reports invoice unpaid" line.
+ * GST language appears ONLY when the GST rate was verified via the
+ * extracted subtotal + tax arithmetic (see ap.gstVerification).
  */
-function buildApWorkSummary(ap: ApInvoiceCardIntelligence): string {
+function ApWorkSummary({ ap }: { ap: ApInvoiceCardIntelligence }) {
   const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name ?? "the vendor";
-  const bits: string[] = [];
-  bits.push(`Spectre classified the attached PDF as an invoice and extracted the vendor as ${vendor}.`);
-  if (ap.invoiceNumber && ap.gross.amount && ap.gross.currency) {
-    bits.push(`Invoice #${ap.invoiceNumber}, gross ${ap.gross.currency} ${formatDecimal(ap.gross.amount)}.`);
-  } else if (ap.invoiceNumber) {
-    bits.push(`Invoice #${ap.invoiceNumber}.`);
-  }
-  switch (ap.vendorMatch.state) {
-    case "MATCHED":
-      bits.push(`Matched to Spectre vendor ${ap.vendorMatch.matchedName}.`); break;
-    case "AMBIGUOUS":
-      bits.push(`Multiple Spectre vendor candidates matched — reviewer must select the correct one.`); break;
-    case "NOT_FOUND":
-      bits.push(`No matching Spectre vendor on file.`); break;
-    case "INSUFFICIENT_SIGNAL":
-      bits.push(`Vendor match indeterminate — extracted signals were insufficient.`); break;
-  }
-  if (ap.category.glAccountNumber && ap.category.glAccountName) {
-    bits.push(`GL recommendation: ${ap.category.glAccountNumber} ${ap.category.glAccountName}.`);
-  } else if (ap.category.label) {
-    bits.push(`Recommended category: ${ap.category.label}.`);
-  }
-  if (ap.unresolvedFindingCount > 0) {
-    bits.push(`${ap.unresolvedFindingCount} finding${ap.unresolvedFindingCount === 1 ? "" : "s"} for review.`);
-  }
-  return bits.join(" ");
+  const grossToken = ap.gross.amount && ap.gross.currency
+    ? `${ap.gross.currency} ${formatDecimal(ap.gross.amount)}`
+    : null;
+  const glToken = ap.category.glAccountNumber && ap.category.glAccountName
+    ? `GL ${ap.category.glAccountNumber} ${ap.category.glAccountName}`
+    : null;
+
+  return (
+    <>
+      <span className="a" data-testid="ap-work-attribution"><strong>Spectre</strong></span>{" "}
+      classified the attached PDF as an invoice and extracted the vendor as {vendor}.
+      {ap.invoiceNumber ? <>{" "}Invoice #{ap.invoiceNumber}.</> : null}
+      {ap.gstVerification === "VERIFIED" && ap.gstRatePercent != null
+        ? <>{" "}Verified GST at {formatRate(ap.gstRatePercent)} %.</>
+        : ap.gstVerification === "EXTRACTED_UNVERIFIED"
+        ? <>{" "}Tax was extracted from the PDF but the rate could not be reconciled — reviewer must confirm.</>
+        : ap.gstVerification === "NOT_PRESENT"
+        ? <>{" "}No GST detected on the PDF.</>
+        : null}
+      {(() => {
+        switch (ap.vendorMatch.state) {
+          case "MATCHED":
+            return <>{" "}Matched to Spectre vendor <strong>{ap.vendorMatch.matchedName}</strong>.</>;
+          case "AMBIGUOUS":
+            return <>{" "}Multiple Spectre vendor candidates matched — reviewer must select the correct one.</>;
+          case "NOT_FOUND":
+            return <>{" "}No matching vendor record exists.</>;
+          case "INSUFFICIENT_SIGNAL":
+            return <>{" "}Vendor match indeterminate — extracted signals were insufficient.</>;
+        }
+      })()}
+      {grossToken && glToken ? (
+        <>
+          {" "}Prepared a proposed entry to post{" "}
+          <span className="ref" data-testid="ap-work-gross-ref"><strong>{grossToken}</strong></span>{" "}
+          to <span className="ref" data-testid="ap-work-gl-ref"><strong>{glToken}</strong></span>.
+        </>
+      ) : glToken ? (
+        <>{" "}Draft GL: <span className="ref" data-testid="ap-work-gl-ref"><strong>{glToken}</strong></span>.</>
+      ) : ap.category.label ? (
+        <>{" "}Recommended category: <strong>{ap.category.label}</strong>.</>
+      ) : null}
+      {ap.purchaseOrder.poNumber ? (
+        <>{" "}Matched to <span className="ref"><strong>PO #{ap.purchaseOrder.poNumber}</strong></span>.
+          {ap.purchaseOrder.variance != null
+            ? <> Variance from PO: <strong data-testid="ap-work-po-variance">{formatVariance(ap.purchaseOrder.variance, ap.gross.currency ?? "CAD")}</strong>.</>
+            : null}
+        </>
+      ) : (
+        <>{" "}No purchase order was identified.</>
+      )}
+      {ap.paymentTerms
+        ? <>{" "}Payment terms: <strong>{ap.paymentTerms}</strong>.</>
+        : null}
+      {ap.unresolvedFindingCount > 0
+        ? <>{" "}<strong>{ap.unresolvedFindingCount}</strong> finding{ap.unresolvedFindingCount === 1 ? "" : "s"} for review.</>
+        : null}
+    </>
+  );
+}
+
+function formatRate(v: number): string {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+function formatVariance(v: string, currency: string): string {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return `${currency} ${v}`;
+  const sign = n === 0 ? "" : n > 0 ? "+" : "";
+  return `${sign}${currency} ${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatAmountReadout(amount: string | null, currency: string | null): string {
@@ -990,7 +1059,15 @@ function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowSt
   { label: string; onClick?: (ctx: { workIntakeItemId: string }) => void } {
   switch (state) {
     case "READY_FOR_APPROVAL":         return { label: "Approve & post" };
-    case "VENDOR_MATCH_REQUIRED":      return { label: "Match vendor" };
+    // Sprint 3 · Checkpoint 15L — the workflow is vendor-first + AP-
+    // second. When the vendor is missing, the primary action reads
+    // "Create vendor & post" so the operator knows the modal will
+    // (a) let them create the vendor or accept a proposed match,
+    // (b) show the drafted GL coding, and (c) still require a final
+    // confirmation before posting. The label does NOT bypass any
+    // confirmation — it names the end-to-end workflow the button
+    // opens, not the immediate side effect. See CreateVendorAndPostModal.
+    case "VENDOR_MATCH_REQUIRED":      return { label: "Create vendor & post" };
     case "MISSING_INFORMATION":        return { label: "Request information" };
     case "POSSIBLE_DUPLICATE":         return { label: "Review duplicate" };
     case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Import chart of accounts" };
