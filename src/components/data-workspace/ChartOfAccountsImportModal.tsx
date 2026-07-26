@@ -189,17 +189,29 @@ export default function ChartOfAccountsImportModal({ closeHref, initialError }: 
 
   const canProceed = !!file && validation.kind === "none" && !pending;
 
-  const handleSubmit = (form: HTMLFormElement) => {
+  const handleSubmit = () => {
     if (!file || validation.kind !== "none") {
       setClientError("Choose a valid .xlsx or .csv file first.");
       return;
     }
-    // The server action reads `file` from the FormData. React will
-    // submit the form via `startTransition` so `pending` toggles the
-    // loading state on the primary button; the action redirects on
-    // success and bounces back to `?modal=import&error=...` on failure.
+    // Sprint 3 Checkpoint 15I-3 (2026-07-27) — Build FormData from
+    // the React `file` state, NOT `new FormData(form)`.
+    //
+    // Why: `new FormData(form)` reads `<input type="file">.files`,
+    // which browsers only populate when the user picks via the
+    // native file picker. Files added via drag-and-drop live only
+    // in component state — the input's FileList stays empty because
+    // the DataTransfer API doesn't cross into <input>. That meant
+    // the visible "selected file" card came from React state, the
+    // submitted FormData was empty, and the server correctly bounced
+    // with "Choose an .xlsx or .csv file before submitting."
+    //
+    // Building the FormData manually from state closes both the
+    // drop path and the click path with a single guarantee: whatever
+    // the user visibly selected is what gets uploaded.
+    const fd = new FormData();
+    fd.append("file", file, file.name);
     startTransition(() => {
-      const fd = new FormData(form);
       void createCoaImportBatchFromModalAction(fd);
     });
   };
@@ -240,7 +252,7 @@ export default function ChartOfAccountsImportModal({ closeHref, initialError }: 
           className="spectre-dw-import-body"
           onSubmit={(e) => {
             e.preventDefault();
-            handleSubmit(e.currentTarget);
+            handleSubmit();
           }}
           data-testid="coa-import-modal-form"
         >

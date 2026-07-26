@@ -292,7 +292,14 @@ async function loadOverdueMemberARItems(
       flag: "policy-threshold" as const,
       title: `${memberName} — ${whole}${cents} outstanding · ${ageBucket}`,
       sender: {
-        from: acc.member?.email ?? "ar@silversprings.club",
+        // Sprint 3 Checkpoint 15I-3 (2026-07-27) — removed the
+        // hardcoded `ar@silversprings.club` fallback. That address
+        // rendered on tenants that are not Silver Springs (e.g.
+        // Coulee Ridge on staging) and misrepresented the source
+        // of the AR-aging card. When the member has no email on
+        // file, show the AR context explicitly instead of a
+        // fabricated tenant-specific address.
+        from: acc.member?.email ?? "Accounts receivable",
         ctx: `Member since ${memberSince}`,
       },
       timestamp: (acc.lastRecomputedAt ?? acc.createdAt).toISOString(),

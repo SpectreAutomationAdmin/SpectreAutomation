@@ -223,12 +223,20 @@ export interface ApInvoiceCardIntelligence {
   confidence: number | null;
   // Precomputed workflow state — drives the pill, primary action,
   // and recommendation branch on the card. See deriveWorkflowState.
+  //
+  // Sprint 3 Checkpoint 15I-3 (2026-07-27) — CHART_OF_ACCOUNTS_REQUIRED
+  // is a runtime-only override applied when the tenant has zero
+  // Account rows. The AP card must NOT invent a GL account when the
+  // chart is empty. Truthful language: "GL coding unavailable — no
+  // chart of accounts is loaded". No persisted enum change; this is
+  // a rendering blocker computed per snapshot.
   workflowState:
     | "READY_FOR_APPROVAL"
     | "VENDOR_MATCH_REQUIRED"
     | "MISSING_INFORMATION"
     | "NEEDS_JUDGMENT"
-    | "POSSIBLE_DUPLICATE";
+    | "POSSIBLE_DUPLICATE"
+    | "CHART_OF_ACCOUNTS_REQUIRED";
   // Compact human-facing reason for the current workflowState —
   // used verbatim in the recommendation strip.
   workflowReason: string;
@@ -479,9 +487,21 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   const categoryLabel = gl?.accountName
     ?? (analysis?.capital.capitalClass ? humanCapitalClass(analysis.capital.capitalClass) : null);
 
+  // Sprint 3 Checkpoint 15I-3 (2026-07-27) — no-COA truthful state.
+  // If the tenant has zero Account rows, the GL recommender cannot
+  // produce a coding recommendation. The AP card must NOT invent a
+  // GL category. Override the workflow state to a runtime
+  // CHART_OF_ACCOUNTS_REQUIRED signal and clear the category label.
+  const accountCount = await prisma.account.count({ where: { clubId } });
+  const noCoa = accountCount === 0;
+
   const confidence = deriveApCardConfidence(analysis);
-  const workflowState = deriveApWorkflowState(analysis);
-  const workflowReason = deriveApWorkflowReason(workflowState, analysis);
+  const workflowState = noCoa
+    ? "CHART_OF_ACCOUNTS_REQUIRED" as const
+    : deriveApWorkflowState(analysis);
+  const workflowReason = noCoa
+    ? "GL coding unavailable — no chart of accounts is loaded for this club. Import the club's chart of accounts before approving any AP posting."
+    : deriveApWorkflowReason(workflowState, analysis);
 
   const unresolvedFindingCount = intake.findings.filter((f) =>
     f.severity === "HIGH" || f.severity === "CRITICAL" || f.severity === "MEDIUM",
@@ -515,9 +535,12 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       matchedPoDocumentId: null,   // Future: reconcile.matchedPoId
     },
     category: {
-      label: categoryLabel,
-      glAccountNumber: gl?.accountNumber ?? null,
-      glAccountName: gl?.accountName ?? null,
+      // Blank the category label when the tenant has no chart of
+      // accounts — we cannot honestly recommend a category. The
+      // recommendation strip carries the truthful no-COA message.
+      label: noCoa ? null : categoryLabel,
+      glAccountNumber: noCoa ? null : (gl?.accountNumber ?? null),
+      glAccountName: noCoa ? null : (gl?.accountName ?? null),
       capitalState,
     },
     invoiceCadenceThisQuarter,

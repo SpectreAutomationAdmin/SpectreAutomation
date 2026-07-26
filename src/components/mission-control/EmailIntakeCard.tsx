@@ -790,12 +790,13 @@ function ReadoutCell({ k, v, tone, testid }: { k: string; v: string; tone?: "obs
 
 function pillForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]): { label: string; tone: string } {
   switch (state) {
-    case "READY_FOR_APPROVAL":    return { label: "Ready for approval",    tone: "approval" };
-    case "VENDOR_MATCH_REQUIRED": return { label: "Vendor match required", tone: "judgment" };
-    case "MISSING_INFORMATION":   return { label: "Missing information",   tone: "judgment" };
-    case "POSSIBLE_DUPLICATE":    return { label: "Possible duplicate",    tone: "judgment" };
+    case "READY_FOR_APPROVAL":         return { label: "Ready for approval",       tone: "approval" };
+    case "VENDOR_MATCH_REQUIRED":      return { label: "Vendor match required",    tone: "judgment" };
+    case "MISSING_INFORMATION":        return { label: "Missing information",      tone: "judgment" };
+    case "POSSIBLE_DUPLICATE":         return { label: "Possible duplicate",       tone: "judgment" };
+    case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Chart of accounts required", tone: "judgment" };
     case "NEEDS_JUDGMENT":
-    default:                      return { label: "Needs judgment",        tone: "judgment" };
+    default:                           return { label: "Needs judgment",           tone: "judgment" };
   }
 }
 
@@ -988,11 +989,12 @@ function ApActionRow({
 function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]):
   { label: string; onClick?: (ctx: { workIntakeItemId: string }) => void } {
   switch (state) {
-    case "READY_FOR_APPROVAL":    return { label: "Approve & post" };
-    case "VENDOR_MATCH_REQUIRED": return { label: "Match vendor" };
-    case "MISSING_INFORMATION":   return { label: "Request information" };
-    case "POSSIBLE_DUPLICATE":    return { label: "Review duplicate" };
+    case "READY_FOR_APPROVAL":         return { label: "Approve & post" };
+    case "VENDOR_MATCH_REQUIRED":      return { label: "Match vendor" };
+    case "MISSING_INFORMATION":        return { label: "Request information" };
+    case "POSSIBLE_DUPLICATE":         return { label: "Review duplicate" };
+    case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Import chart of accounts" };
     case "NEEDS_JUDGMENT":
-    default:                      return { label: "Review coding" };
+    default:                           return { label: "Review coding" };
   }
 }
