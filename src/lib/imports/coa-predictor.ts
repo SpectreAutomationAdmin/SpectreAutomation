@@ -77,6 +77,15 @@ export type PredictionSource =
   // conventional bracket is "expense OR other revenue"); never
   // overrides a keyword or existing-account match.
   | "balance-sign-supported"
+  // Sprint 3 · Checkpoint 15K — chart-level reassessment. Fires
+  // when the batch-level second-pass detects an implausible
+  // omission (e.g. 20+ revenue accounts with shareholder/member
+  // class terminology, but zero mapped to membership dues) and
+  // promotes those rows from the generic "Other Revenue" bucket
+  // to the domain-plausible one. Surfaced separately so the UI /
+  // audit trail can distinguish a per-row keyword hit from a
+  // chart-level reassessment.
+  | "chart-reassessment"
   | "default";
 
 export type CoaPrediction = {
@@ -419,10 +428,103 @@ const NAME_KEYWORD_RULES: Array<KeywordRule> = [
   { test: /bad\s*debt|allowance\s*for\s*doubtful|shrinkage/i, fsGroupKey: "IS_OTHER_EXPENSES", type: "EXPENSE" },
 
   // REVENUE ---------------------------------------------------------------
+  // Sprint 3 · Checkpoint 15K — private-club membership-dues recognition.
+  //
+  // Private clubs (especially member-owned "shareholder" corporations)
+  // structure their dues revenue as a taxonomy of member classes: golf
+  // shareholder, ladies shareholder, corporate shareholder, senior
+  // shareholder, designate golfer, junior tier, intermediate tier,
+  // social class, spousal add-on, etc. Coulee Ridge's chart has 30+
+  // such accounts in the 4xxx block. The pre-15K rule only matched
+  // literal "membership/monthly/annual dues" phrases, so the whole
+  // block fell to Other Revenue — implausible for a private-club COA.
+  //
+  // The rules below are ordered from most-specific to most-general
+  // and are all REVENUE-typed. Bracket typing keeps them from
+  // hijacking asset/liability/equity lines with similar words
+  // (Shareholder Equity, Member Accounts Receivable, Membership
+  // Deposits) — those match their own bracket-specific rules first.
+  //
+  // False-positive guards preserved by the rule ORDER upstream:
+  //   • "Capital Assessment" hits IS_CAPITAL_ASSESSMENTS BEFORE
+  //     these membership rules (line order matters).
+  //   • "Initiation Fee" / "Entrance Fee" hit IS_ENTRANCE_FEES
+  //     via the rule below.
+  //   • "Share Transfer Fee" hits IS_OTHER_REVENUE via its own
+  //     dedicated rule further down (line 451).
+  //   • "Member Refunds" and "Membership Deposits" belong in
+  //     LIABILITY/contra territory, not REVENUE — this rule is
+  //     REVENUE-typed and won't fire on them.
   { test: /membership\s*dues|monthly\s*dues|annual\s*dues|member\s*dues/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Shareholder class dues — the canonical private-club pattern.
+  // Matches any "[Adjective ]Shareholder[ - Modifier]" form; the
+  // bare "shareholder" token in a REVENUE-typed bracket carries
+  // enough signal on its own (EQUITY bracket handles "Shareholder
+  // Equity" via BS_SHARE_CAPITAL).
+  { test: /\bshareholder(?!\s+equity)\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // "Designate Golfer" / "Designated Golfer" — a member class
+  // where a shareholder designates a family member as the active
+  // golfer. Private-club-specific vocabulary.
+  { test: /\bdesignate[ds]?\s+golfer\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Spousal / partner dues attached to a primary membership.
+  // Requires "spouse" in a REVENUE-typed bracket AND either
+  // "golf" or a class qualifier (male, senior, lady) — bare
+  // "spouse" alone could appear in payroll/benefits contexts
+  // that this rule must not touch.
+  { test: /(?:golf|male|senior|lady)\s+(?:golf\s+)?spouse\b|\bspouse\s+(?:membership|dues)\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Intermediate class — a member tier between junior and full.
+  // Fires on bare "Intermediate", plus "Sponsored Intermediate"
+  // and "Junior Intermediate" variants. REVENUE-typed so it
+  // won't touch an "Intermediate loan" liability line.
+  { test: /(?:sponsored\s+|junior\s+)?intermediate\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Age-graduated Junior tiers ("Junior I (16-18)", "Junior II
+  // (12-15)", "Junior III (9-11)", "Junior IV (5-8)"). Also
+  // catches "Junior Member" and "Junior Dues". Explicit Roman
+  // numeral or age-parenthesis suffix disambiguates from Junior
+  // as an expense-side program label.
+  { test: /\bjunior\s+(?:i{1,4}|iv|v|\d+|member|dues|shareholder|class)\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Social class dues — "Social - Silver Club", "Social - Public",
+  // "Social Member", "Social Dues". Anchored to a "social + X"
+  // compound so "social event" (which is a marketing expense)
+  // stays out.
+  { test: /\bsocial\s*[-—]\s*|social\s+(?:member|dues|shareholder|silver|public|club)/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Wait-list dues (a percentage-rate wait-list class charged
+  // reduced dues until a full share opens). Coulee Ridge names
+  // this "Wait List full golf 5-10%".
+  { test: /wait\s*list.{0,30}(?:golf|shareholder|member|dues|%)/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Regional / affiliation golf dues — e.g. "Alberta Golf Dues"
+  // are provincial-body dues passed through to the province.
+  // These are membership-related revenue collected from members
+  // and paid on to the association.
+  { test: /(?:alberta|bc|ontario|quebec|manitoba|saskatchewan|nova\s+scotia|new\s+brunswick|pei|northern|yukon|provincial|regional|national)\s+golf\s*(?:dues|fee)?\b/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // "Premium Dues" / "Monthly Premium Dues" / "Premium Membership".
+  // The word "premium" combined with any dues/membership token is
+  // unambiguously a membership-revenue signal.
+  { test: /premium\s+(?:dues|membership|shareholder|member)|(?:monthly|annual)\s+premium/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Inactive / honorary / life member classes — clubs often keep
+  // reduced-rate or nominal dues for these categories.
+  { test: /\b(?:inactive|honorary|life|associate|founding)\s+(?:member|shareholder|dues)/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
+  // Family / spousal / dependent-membership dues — these are add-on
+  // memberships attached to a primary member's account and are
+  // still membership revenue. Placed AFTER the shareholder /
+  // designate / spouse rules above so more-specific patterns win,
+  // and BEFORE the entrance-fee rule so "family membership" isn't
+  // mistaken for an initiation event.
+  { test: /family\s+membership|family\s+dues|spousal\s+membership|dependent\s+membership|spousal\s+dues/i, fsGroupKey: "IS_MEMBERSHIP_DUES", type: "REVENUE" },
   { test: /initiation\s*fee|entrance\s*fee/i, fsGroupKey: "IS_ENTRANCE_FEES", type: "REVENUE" },
-  { test: /capital\s*assess|special\s*assess|capital\s*lev/i, fsGroupKey: "IS_CAPITAL_ASSESSMENTS", type: "REVENUE" },
-  { test: /annual\s*fee|locker\s*revenue|locker\s*fee|cart\s*storage|handicap\s*fee/i, fsGroupKey: "IS_ANNUAL_FEES", type: "REVENUE" },
+  // Assessments — capital, special, and project-tagged capital
+  // assessments ("Irrigation Assessment", "Clubhouse Assessment",
+  // "Course Assessment"). These are one-off levies raised for
+  // specific capital projects and belong in the capital-assessment
+  // revenue bucket, not membership dues.
+  { test: /capital\s*assess|special\s*assess|capital\s*lev|(?:irrigation|clubhouse|course|building|facility|project)\s+assessment/i, fsGroupKey: "IS_CAPITAL_ASSESSMENTS", type: "REVENUE" },
+  // Annual / service fees — locker, cart storage, club storage,
+  // bag storage, trail fees, handicap. Sprint 3 · 15K: the
+  // "locker" pattern now allows a word between "locker" and
+  // "fee" (e.g. "Locker Rental Fees"), and adds "club storage",
+  // "bag storage", and "trail fee" as the canonical private-
+  // club service-fee vocabulary.
+  { test: /annual\s*fee|locker\s+(?:\w+\s+)?(?:fee|rental|revenue)|locker\s*revenue|locker\s*fee|cart\s*storage|club\s*storage|bag\s*storage|trail\s*fee|handicap\s*fee/i, fsGroupKey: "IS_ANNUAL_FEES", type: "REVENUE" },
   { test: /green\s*fee|guest\s*fee|tee.?time/i, fsGroupKey: "IS_GREEN_FEES", type: "REVENUE" },
   // Founder rule 2026-07-01 v14.18 — cart revenue accepts:
   //   • singular / plural ("Cart Rental", "Carts Rental",
@@ -580,7 +682,12 @@ const NAME_KEYWORD_RULES: Array<KeywordRule> = [
   { test: /\bland\b|building(?!\s*repair)|course\s*improve|leasehold\s*improve|capital\s*improve|equipment\s*(?:&|and)\s*(?:fixtures?|furniture|vehicles?|machinery|tools?)|furniture\s*(?:&|and)\s*fixtures?|equipment\s+under\s+financing|computer\s*(?:equipment|hardware)|machinery|accumulated\s*deprec|capital(?!\s*(?:assess|lease|contrib|fund|reserve))\s*asset|property\s*&\s*equipment|fixed\s*asset|\bvehicles?\b/i, fsGroupKey: "BS_CAPITAL_ASSETS", type: "ASSET" },
 
   // EQUITY ----------------------------------------------------------------
-  { test: /share\s*capital|member\s*share|paid.?in\s*capital/i, fsGroupKey: "BS_SHARE_CAPITAL", type: "EQUITY" },
+  // Share capital / member equity. Sprint 3 · 15K: "Shareholder
+  // Equity" and "Shareholders' Equity" are common summary account
+  // names on member-owned club balance sheets and should route to
+  // BS_SHARE_CAPITAL. Bracket is EQUITY so this cannot fire on a
+  // REVENUE-side "Shareholder ..." dues line.
+  { test: /share\s*capital|member\s*share|paid.?in\s*capital|shareholders?'?\s*equity|shareholder\s*capital/i, fsGroupKey: "BS_SHARE_CAPITAL", type: "EQUITY" },
   { test: /retained\s*earning/i, fsGroupKey: "BS_RETAINED_EARNINGS", type: "EQUITY" },
   { test: /current.?year\s*earning|net\s*income\s*current/i, fsGroupKey: "BS_CURRENT_YEAR_EARNINGS", type: "EQUITY" },
   { test: /capital\s*reserve|capital\s*fund|reserve\s*fund/i, fsGroupKey: "BS_CAPITAL_RESERVE", type: "EQUITY" },
@@ -987,13 +1094,115 @@ export function predictCoaRow(
 }
 
 /**
- * Predict mappings for a whole batch in one call. Pure function;
- * the caller supplies the existing-account snapshot map so this
- * stays unit-testable without a DB.
+ * Predict mappings for a whole batch in one call. Runs the pure
+ * per-row predictor for every row, then applies a chart-level
+ * reasonableness pass that catches implausible mapping outcomes a
+ * private-club COA cannot legitimately produce (Sprint 3 · 15K).
+ *
+ * The reasonableness pass is intentionally narrow: it only
+ * PROMOTES rows that a specialised classifier would have caught if
+ * its rule set were exhaustive. It NEVER downgrades a per-row
+ * high-confidence match, and it NEVER writes into a category the
+ * per-row engine hasn't already vetted. The output is an audit-
+ * ready contract: a `chart-reassessment` source labels every row
+ * the pass touched, so the UI + audit log can explain to the
+ * founder why a "shareholder" account moved out of Other Revenue.
  */
 export function predictCoaBatch(
   rows: ReadonlyArray<CoaPredictorInputRow>,
   existingByNumber: ReadonlyMap<string, ExistingAccountSnapshot> = new Map(),
 ): CoaPrediction[] {
-  return rows.map((r) => predictCoaRow(r, existingByNumber));
+  const predictions = rows.map((r) => predictCoaRow(r, existingByNumber));
+  return applyChartReasonablenessPass(rows, predictions);
+}
+
+// ---------------------------------------------------------------------------
+// Chart-level reasonableness pass (Sprint 3 · Checkpoint 15K)
+// ---------------------------------------------------------------------------
+//
+// Detects private-club-specific implausible mapping outcomes and
+// promotes clearly-attributable rows out of the generic "Other
+// Revenue / Other Expense" catch-all bucket. Currently detects:
+//
+//   1. Membership-dues omission.
+//      Trigger: ≥ 3 revenue rows whose names contain private-club
+//        membership-class terminology (shareholder, designate
+//        golfer, member dues, monthly/annual dues, or a graduated
+//        Junior tier), AND 0 rows currently classified on
+//        IS_MEMBERSHIP_DUES.
+//      Action: promote every matching row from OTHER_REVENUE /
+//        IS_OTHER_REVENUE to MEMBERSHIP_REVENUE / IS_MEMBERSHIP_DUES
+//        with source `chart-reassessment` and confidence downgraded
+//        to `medium` (the per-row engine considered it a Miss;
+//        promotion is a defensible inference, not a direct match).
+//
+// Future omissions to detect (structure ready; not implemented yet):
+//   • No cash accounts despite bank / petty cash names.
+//   • No accounts receivable despite Member A/R names.
+//   • No accumulated depreciation despite Accum Deprec names.
+//   • No food/beverage revenue despite F&B account names.
+//   • No salaries expense despite wage/payroll account names.
+//
+// Each detection lives in its own function so tests + tuning stay
+// scoped. `applyChartReasonablenessPass` composes them.
+
+const MEMBERSHIP_CLASS_HINT =
+  /\bshareholder\b|\bdesignate[ds]?\s+golfer\b|membership\s*dues|monthly\s*dues|annual\s*dues|member\s*dues|(?:golf|male|senior|lady)\s+(?:golf\s+)?spouse\b|(?:sponsored\s+|junior\s+)?intermediate\b|\bjunior\s+(?:i{1,4}|iv|v|\d+|member|dues|class)\b|\bsocial\s+(?:member|dues|shareholder|silver|public|club)\b|premium\s+(?:dues|membership)\b|(?:inactive|honorary|life|associate|founding)\s+(?:member|shareholder|dues)/i;
+
+function isMembershipHintName(name: string): boolean {
+  const { normalized } = normalizeAccountNameForPredictionWithFlag(name);
+  return MEMBERSHIP_CLASS_HINT.test(normalized);
+}
+
+/**
+ * Returns a NEW prediction array with the chart-level pass applied.
+ * Never mutates the input.
+ */
+function applyChartReasonablenessPass(
+  rows: ReadonlyArray<CoaPredictorInputRow>,
+  predictions: ReadonlyArray<CoaPrediction>,
+): CoaPrediction[] {
+  const out = predictions.map((p) => ({ ...p }));
+
+  // ---- 1. Membership-dues omission --------------------------------
+  const hintIndices: number[] = [];
+  let hasMembershipDues = false;
+  for (let i = 0; i < rows.length; i++) {
+    const p = out[i];
+    if (p.fsGroupKey === "IS_MEMBERSHIP_DUES") hasMembershipDues = true;
+    // Only consider REVENUE-bracket rows currently sitting on the
+    // generic "Other Revenue" bucket — those are the ones the per-
+    // row engine gave up on. Rows that ALREADY landed on a specific
+    // revenue bucket (green fees, cart, food, entrance) are left
+    // alone.
+    if (
+      p.type === "REVENUE" &&
+      p.fsGroupKey === "IS_OTHER_REVENUE" &&
+      isMembershipHintName(rows[i].name)
+    ) {
+      hintIndices.push(i);
+    }
+  }
+  // Trigger: ≥ 3 shareholder/member-class rows fell to Other Revenue
+  // AND the chart has zero membership-dues classifications. A single
+  // stray shareholder-named account (e.g. a one-off transfer fee)
+  // isn't enough to justify a chart-wide promotion.
+  if (!hasMembershipDues && hintIndices.length >= 3) {
+    for (const i of hintIndices) {
+      out[i] = {
+        type: "REVENUE",
+        categoryKey: "MEMBERSHIP_REVENUE",
+        fsGroupKey: "IS_MEMBERSHIP_DUES",
+        defaultDepartmentCode: null,
+        fundApplicability: fundForPrediction("REVENUE", "IS_MEMBERSHIP_DUES"),
+        // A batch-level defensible inference, not a direct per-row
+        // match — downgraded to medium so the UI still flags it for
+        // review.
+        confidence: "medium",
+        source: "chart-reassessment",
+      };
+    }
+  }
+
+  return out;
 }
