@@ -153,25 +153,21 @@ describe("MC loaders — reverse-chronological ordering via sortTimestamp", () =
   });
 });
 
-describe("Work-type visual system — eyebrow labels on every card renderer", () => {
-  it("IntelligenceReviewCard renders AP INVOICE / VENDOR STATEMENT eyebrow", () => {
-    expect(REVIEW_CARD).toMatch(/spectre-mc-worktype--/);
-    expect(REVIEW_CARD).toMatch(/AP INVOICE/);
-    expect(REVIEW_CARD).toMatch(/VENDOR STATEMENT/);
+describe("Work-type visual system — category communicated via .spectre-mc-pill (Variant D)", () => {
+  // Sprint 3 Checkpoint 15I (2026-07-26) — the founder-approved
+  // Variant D design REMOVED the `.spectre-mc-worktype` eyebrow. The
+  // pill (`.spectre-mc-pill --judgment|approval|comm|info|auto`)
+  // communicates the category directly. The prior 15H eyebrow class
+  // is deliberately absent from both cards.
+  it("IntelligenceReviewCard uses .spectre-mc-pill for category (no worktype eyebrow)", () => {
+    expect(REVIEW_CARD).toMatch(/spectre-mc-pill/);
+    expect(REVIEW_CARD).not.toMatch(/spectre-mc-worktype/);
   });
-  it("EmailIntakeCard renders EMAIL CORRESPONDENCE eyebrow (default when no linked intel)", () => {
-    // Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) — the
-    // eyebrow slug is now templated off worktypeSlug(linked), which
-    // returns "email" when linked is undefined → the rendered class
-    // remains `spectre-mc-worktype--email` and the label remains
-    // "EMAIL CORRESPONDENCE" for plain email intakes.
-    expect(EMAIL_CARD).toMatch(/spectre-mc-worktype--\$\{worktypeSlug\(linked\)\}/);
-    expect(EMAIL_CARD).toMatch(/function worktypeSlug\(/);
-    expect(EMAIL_CARD).toMatch(/return f === "invoice" \? "ap-invoice"/);
-    expect(EMAIL_CARD).toMatch(/: "email"/);
-    expect(EMAIL_CARD).toMatch(/EMAIL CORRESPONDENCE/);
+  it("EmailIntakeCard uses .spectre-mc-pill for category (no worktype eyebrow)", () => {
+    expect(EMAIL_CARD).toMatch(/spectre-mc-pill/);
+    expect(EMAIL_CARD).not.toMatch(/spectre-mc-worktype/);
   });
-  it("FeedItem picks a work-type slug from classification / idTag prefix", () => {
+  it("FeedItem (legacy system-generated) still picks a work-type slug from classification / idTag prefix", () => {
     expect(MC_PAGE).toMatch(/feedItemWorkTypeSlug/);
     expect(MC_PAGE).toMatch(/AP INVOICE/);
     expect(MC_PAGE).toMatch(/AR COLLECTIONS/);
@@ -197,11 +193,24 @@ describe("AP evidence route — cross-links to source email correspondence", () 
   });
 });
 
-describe("Card primary-action wording matches work type", () => {
-  it("AP card primary action reads 'Review invoice'", () => {
-    expect(MC_LOADERS).toMatch(/label:\s*"Review invoice"/);
+describe("Card primary action — queue-level (Variant D §3.4 supersedes label wording)", () => {
+  // Sprint 3 Checkpoint 15I (2026-07-26) — the loader no longer
+  // emits `actions: [{ label: "Review invoice" }]` etc. The Variant
+  // D card synthesises queue-level actions (Resolve) at UI level
+  // from workIntakeStatus. Domain actions live inside the expanded
+  // tabs. See §3.4 of the founder brief.
+  it("AP loader emits no card-level actions (actions synthesised by the card)", () => {
+    // The AP loader block ends with `actions: [],` — the card
+    // provides Resolve via `<button data-testid=\"card-resolve\">`.
+    const apBlock = MC_LOADERS.slice(MC_LOADERS.indexOf("classification: \"AP_INVOICE_REVIEW\""));
+    expect(apBlock).toMatch(/actions:\s*\[\]/);
   });
-  it("Statement card primary action reads 'Reconcile statement'", () => {
-    expect(MC_LOADERS).toMatch(/label:\s*"Reconcile statement"/);
+  it("Statement loader emits no card-level actions (actions synthesised by the card)", () => {
+    const stBlock = MC_LOADERS.slice(MC_LOADERS.indexOf("classification: \"VENDOR_STATEMENT_REVIEW\""));
+    expect(stBlock).toMatch(/actions:\s*\[\]/);
+  });
+  it("(rev) loader-emitted 'Review invoice' + 'Reconcile statement' labels removed", () => {
+    expect(MC_LOADERS).not.toMatch(/label:\s*"Review invoice"/);
+    expect(MC_LOADERS).not.toMatch(/label:\s*"Reconcile statement"/);
   });
 });

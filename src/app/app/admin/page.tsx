@@ -30,7 +30,11 @@ import MissionControlLiveRefresh from "@/components/mission-control/MissionContr
 
 export const dynamic = "force-dynamic";
 
-export default async function MissionControlPage() {
+export default async function MissionControlPage({
+  searchParams,
+}: {
+  searchParams?: { view?: string };
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const principal = await getCurrentPrincipal();
@@ -42,7 +46,12 @@ export default async function MissionControlPage() {
     ? branding.wordmark
     : (user.club?.name ?? (await prisma.club.findFirst({ where: { id: clubId } }))?.name ?? "");
 
-  const snapshot = await loadMissionControlSnapshot(principal, clubId);
+  // Sprint 3 Checkpoint 15I — history-filter toggle. `?view=history`
+  // shows only RESOLVED items so the operator can review completed
+  // work without repopulating the default active queue.
+  const view: "active" | "history" = searchParams?.view === "history" ? "history" : "active";
+
+  const snapshot = await loadMissionControlSnapshot(principal, clubId, { feedFilter: view });
   const connectPrompt = await loadMissionControlConnectPromptSpec({ principal, clubId });
 
   const firstName = user.name?.split(" ")[0] ?? "there";
@@ -124,20 +133,28 @@ export default async function MissionControlPage() {
       <div className="spectre-mc-grid">
         <section>
           <div className="spectre-mc-feed-head">
-            <h2>Work intake<span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span></h2>
+            <h2>
+              Work intake
+              <span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span>
+            </h2>
             <div className="controls">
-              <button className="spectre-mc-chip on" type="button">
-                <SortIcon />
-                <span className="k">Sort:</span><span className="v">Priority</span>
-              </button>
-              <button className="spectre-mc-chip" type="button">
-                <FilterIcon />
-                <span>Filter</span>
-              </button>
-              <button className="spectre-mc-chip" type="button">
-                <ClockIcon />
-                <span>Today</span>
-              </button>
+              {/* Sprint 3 Checkpoint 15I — Active / Completed toggle.
+                  Server-rendered — the loader re-projects based on
+                  ?view=history. */}
+              <Link
+                href="/app/admin"
+                className={`spectre-mc-chip${view === "active" ? " on" : ""}`}
+                data-testid="feed-view-active"
+              >
+                <span className="k">View:</span><span className="v">Active</span>
+              </Link>
+              <Link
+                href="/app/admin?view=history"
+                className={`spectre-mc-chip${view === "history" ? " on" : ""}`}
+                data-testid="feed-view-history"
+              >
+                <span>Completed history</span>
+              </Link>
             </div>
           </div>
 
@@ -255,14 +272,12 @@ function emailFeedData(item: WorkItem): EmailFeedCardData {
     isUnread: !!item.isUnread,
     isHighImportance: !!item.isHighImportance,
     conversationMessageCount: item.conversationMessageCount ?? 1,
-    actions: item.actions.map((a) => ({
-      key: a.key,
-      label: a.label,
-      kind: a.kind,
-      iconKey: a.iconKey,
-      disabledReason: a.disabledReason,
-      onClickAction: a.onClickAction,
-    })),
+    // Sprint 3 Checkpoint 15I — the Variant D card synthesises its
+    // own queue-level actions (Resolve) from workIntakeStatus. Domain
+    // actions (Reply, view PDF, approve) live inside the expanded
+    // tabs. The loader's actions array is intentionally NOT passed
+    // through — the card contract is queue-first.
+    workIntakeStatus: item.workIntakeStatus,
     // Sprint 3 Checkpoint 15H Unified Remediation — attached
     // intelligence facets (invoice / statement child intakes) so the
     // email card can render them as tabs instead of separate cards.

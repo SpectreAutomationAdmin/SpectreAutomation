@@ -166,77 +166,124 @@ export default function IntelligenceReviewCard({ data, kind }: Props) {
     [workIntakeItemId, kind, loadOnce, router],
   );
 
+  // Sprint 3 Checkpoint 15I — Variant D card shell.
+  // Click primary surface → expand + mark read. Nested actions/tabs
+  // stopPropagation. Domain actions (Approve, Match vendor) live INSIDE
+  // the expanded review pane, not on the collapsed row.
+  const isUnread = !!data.isUnread;
+  const isResolved = data.workIntakeStatus === "RESOLVED";
+  const semanticClass = isResolved ? "done" : data.state;
+
+  const handleSurfaceClick = () => {
+    if (expanded) { handleCollapse(); return; }
+    handleOpen();
+    // Fire mark-read via the shared work-intake action endpoint.
+    void fetch("/api/work-intake/action", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workIntakeItemId, action: "mark_read" }),
+    }).catch(() => { /* non-blocking */ });
+  };
+  const [resolving, setResolving] = useState(false);
+  const handleResolve = async (evt: React.MouseEvent) => {
+    evt.stopPropagation();
+    if (resolving) return;
+    setResolving(true);
+    try {
+      const res = await fetch("/api/work-intake/action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workIntakeItemId, action: "resolve" }),
+      });
+      if (res.ok) router.refresh();
+      else setResolving(false);
+    } catch { setResolving(false); }
+  };
+
   return (
     <article
-      className={`spectre-mc-item ${data.state}`}
+      className={`spectre-mc-item ${semanticClass}${isUnread ? " spectre-mc-item--unread" : ""}`}
       data-testid={kind === "AP_INVOICE_REVIEW" ? "ap-review-card" : "statement-review-card"}
       data-work-intake-item-id={workIntakeItemId}
+      data-unread={isUnread ? "true" : "false"}
+      data-expanded={expanded ? "true" : "false"}
+      data-resolved={isResolved ? "true" : "false"}
     >
-      <div className="spectre-mc-item-head">
-        <span className={`spectre-mc-worktype spectre-mc-worktype--${kind === "AP_INVOICE_REVIEW" ? "ap-invoice" : "vendor-statement"}`} data-testid="worktype-eyebrow">
-          {kind === "AP_INVOICE_REVIEW" ? "AP INVOICE" : "VENDOR STATEMENT"}
-        </span>
-        <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state] ?? data.state}</span>
-        <span className="spectre-mc-id-tag">{data.idTag}</span>
-        <span className="spectre-mc-ts">{data.timestampLabel}</span>
-      </div>
-      <h3>{data.title}</h3>
-      <div className="spectre-mc-sender">
-        <span className="from">{data.sender.from}</span>
-        {data.sender.ctx ? <><span className="sep">·</span><span>{data.sender.ctx}</span></> : null}
-      </div>
-      {data.synopsisText ? <p className="spectre-mc-synopsis">{data.synopsisText}</p> : null}
-      {data.evidence && data.evidence.length > 0 ? (
-        <div className="spectre-mc-evidence">
-          {data.evidence.map((c) => (
-            <div key={c.label} className={`cell state-${c.state ?? "info"}`}>
-              <div className="k">{c.label}</div>
-              <div className="v">{c.value}</div>
-            </div>
-          ))}
+      <div
+        className="spectre-mc-item-surface"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handleSurfaceClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSurfaceClick(); } }}
+        data-testid="card-surface"
+      >
+        <div className="spectre-mc-item-head">
+          <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state] ?? data.state}</span>
+          <span className="spectre-mc-id-tag">{data.idTag}</span>
+          <span className="spectre-mc-ts">{data.timestampLabel}</span>
         </div>
-      ) : null}
-      {data.recommendation ? (
-        <div className="spectre-mc-rec">
-          <span className="k">Recommended</span>
-          <span className="v">{data.recommendation}</span>
+        <h3>{data.title}</h3>
+        <div className="spectre-mc-sender">
+          <span className="from">{data.sender.from}</span>
+          {data.sender.ctx ? <><span className="sep">·</span><span>{data.sender.ctx}</span></> : null}
         </div>
-      ) : null}
+        {data.synopsisText ? <p className="spectre-mc-work">{data.synopsisText}</p> : null}
+        {data.evidence && data.evidence.length > 0 ? (
+          <div className="spectre-mc-readout">
+            {data.evidence.slice(0, 4).map((c) => (
+              <div key={c.label} className="cell">
+                <div className="k">{c.label}</div>
+                <div className={`v${c.state === "not_found" || c.state === "not_extracted" ? " observation" : ""}${c.state === "found" ? " confidence" : ""}`}>
+                  {c.value}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {data.recommendation ? (
+          <div className="spectre-mc-rec">
+            <span className="k">Recommended</span>
+            <span className="v">{data.recommendation}</span>
+          </div>
+        ) : null}
+      </div>
 
-      <div className="spectre-mc-actions">
-        {!expanded ? (
-          <>
-            <button
-              type="button"
-              className="spectre-btn spectre-btn--primary"
-              onClick={handleOpen}
-              data-testid={`${kind.toLowerCase()}-open-review`}
-            >
-              Open review
-            </button>
-            <button
-              type="button"
-              className="spectre-btn spectre-btn--ghost"
-              onClick={() => runAction("DEFER_REVIEW")}
-              disabled={actionInFlight !== null}
-            >
-              Defer
-            </button>
-          </>
+      <div className="spectre-mc-actions" onClick={(e) => e.stopPropagation()} role="presentation">
+        {isResolved ? (
+          <span className="spectre-mc-aux" data-testid="card-resolved-marker">
+            Resolved · in Completed history
+          </span>
         ) : (
           <button
             type="button"
-            className="spectre-btn spectre-btn--ghost"
-            onClick={handleCollapse}
-            data-testid={`${kind.toLowerCase()}-collapse`}
+            className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+            onClick={handleResolve}
+            disabled={resolving}
+            data-testid="card-resolve"
           >
-            Collapse
+            {resolving ? "Resolving…" : "Resolve"}
           </button>
         )}
+        <div className="grow" />
+        <button
+          type="button"
+          className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+          onClick={handleSurfaceClick}
+          data-testid="card-toggle"
+          aria-expanded={expanded}
+        >
+          {expanded ? "Collapse" : "Open"}
+        </button>
       </div>
 
       {expanded ? (
-        <div className="spectre-mc-inline-expansion" data-testid="review-inline-expansion">
+        <div
+          className="spectre-mc-item-expanded"
+          data-testid="review-inline-expansion"
+          onClick={(e) => e.stopPropagation()}
+          role="presentation"
+        >
           {actionBanner ? (
             <div
               className={`spectre-mc-inline-status${actionBanner.tone === "error" ? " spectre-mc-inline-status--error" : ""}`}

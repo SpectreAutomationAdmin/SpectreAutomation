@@ -1,62 +1,75 @@
 "use client";
 
-// Sprint 2 Checkpoint 14C (2026-07-23) — Mission Control email-derived
-// Work Intake card with inline expansion.
+// Sprint 3 Checkpoint 15I (2026-07-26) — Variant D card body.
 //
-// Design revision from C14B (per founder review):
-//   1. Removed "Open detail" — the card must not navigate away.
-//      Mission Control is the primary work surface.
-//   2. Removed the raw email-body preview. The card renders a
-//      structured operational synopsis composed by the deterministic
-//      invoice-analysis pipeline. Every finding is grounded in real
-//      data — no fabricated invoices, vendors, GST, or GL accounts.
-//   3. Card actions carry crisp Spectre icons (mail / reply / edit).
-//   4. Expanded panel shows the FULL conversation newest-first (not
-//      just one email). No "Open in Outlook on the web" exit.
-//   5. Reply composer sends a real reply in Phase 14C-B if the
-//      Mail.Send scope has been consented. Fail-closed until then.
+// Founder-approved design reference:
+//   public/design-concepts/mission-control/variant-d-instrument.html
 //
-// The card is a natural extension of the existing Mission Control
-// anatomy. It does not look like Outlook embedded inside Spectre.
+// This component renders an email-derived Work Intake item using the
+// Variant D card shell: `.spectre-mc-item` outer, `.spectre-mc-pill`
+// eyebrow, `h3` operational headline, `.spectre-mc-sender` metadata
+// line, `.spectre-mc-work` prose, `.spectre-mc-readout` instrument-
+// panel metric strip, `.spectre-mc-rec` recommendation strip, and a
+// compact `.spectre-mc-actions` row with queue-level actions only.
+//
+// Interaction contract (Checkpoint 15I):
+//   • Clicking the primary card surface marks-read AND expands the
+//     card in place (accordion). Nested buttons/tabs `stopPropagation`.
+//   • Read state is per-user (WorkIntakeItemRead table). The card
+//     calls POST /api/work-intake/action { action: "mark_read" } on
+//     first expand.
+//   • Merely rendering the feed does NOT flip read state.
+//   • Contextual tabs — Conversation | Attachments | Invoice Review |
+//     Statement Review | Activity. Only the tabs relevant to the
+//     linked intelligence render.
+//   • Resolve fires POST { action: "resolve" } and triggers a
+//     router.refresh() so the item drops from the active feed.
+//
+// Preserves all Sprint 3 Checkpoint 15H behaviour:
+//   • One canonical parent card per email conversation (loader-level
+//     suppression of child AP / Statement intakes)
+//   • Blob-URL PDF preview via DocumentPreviewModal (CSP object-src +
+//     frame-src permit `blob:` per src/middleware.ts)
+//   • Sender identity remains SEPARATE from extracted vendor identity:
+//     the sender-line in the collapsed body shows the email `from`
+//     name; the Invoice Review tab shows the PDF-extracted vendor
+//     name. They are never conflated.
+//   • Tenant isolation preserved end-to-end.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
-import ReplyComposer, { type ReplyComposerConsentState } from "./ReplyComposer";
-import { IconMail, IconReply, IconEdit, IconClock, IconCheck, IconUserPlus, IconSend } from "@/components/spectre/icons";
+import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
+
+// -------------------------------------------------------------------------
+// Public props
+// -------------------------------------------------------------------------
 
 export interface EmailFeedCardData {
   workIntakeItemId: string;
   emailMessageId: string;
+  // Semantic state → left rail colour + pill variant (Variant D §3.6).
   state: "judgment" | "info" | "comm";
   idTag: string;
   situationTitle: string;
-  contextLine: string;
+  contextLine: string;           // Sender line — the raw email `from` metadata.
   timestampLabel: string;
   synopsisText: string;
   evidence: Array<{
+    // Existing label vocabulary — projected by the loader from the
+    // analyser. Rendered as the 4-cell instrument-panel readout in
+    // Variant D style. See src/lib/mission-control/index.ts →
+    // WorkItemEvidenceCell.
     label: string;
     value: string;
     state: "found" | "ambiguous" | "not_found" | "not_extracted" | "extracted" | "duplicate" | "no_data";
   }>;
   recommendation?: string;
-  isUnread: boolean;
+  isUnread: boolean;             // Projected per-user by the loader (Checkpoint 15I).
   isHighImportance: boolean;
   conversationMessageCount: number;
-  actions: Array<{
-    key: string;
-    label: string;
-    kind: "primary" | "secondary" | "tertiary";
-    iconKey?: "mail" | "reply" | "edit" | "clock" | "check" | "user-plus" | "send";
-    disabledReason?: string;
-    onClickAction?: "expand-view" | "expand-reply" | "expand-both";
-  }>;
-  // Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) —
-  // Attached intelligence facets from AP/Statement child intakes that
-  // originated from the same inbound email. When present, the card
-  // renders tabs (Conversation | Attachments | Invoice Review |
-  // Statement Review | Activity) instead of the collapsed synopsis-only
-  // view — one card per inbound conversation.
+  workIntakeStatus?: string;     // OPEN | IN_PROGRESS | DEFERRED | RESOLVED | INFORMATIONAL | SUPPRESSED
   linkedIntelligence?: {
     apReviewIntakeIds: string[];
     statementReviewIntakeIds: string[];
@@ -82,16 +95,8 @@ export interface EmailFeedCardData {
   };
 }
 
-interface Props {
-  data: EmailFeedCardData;
-}
+interface Props { data: EmailFeedCardData }
 
-// Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) —
-// Tab-based expansion. When the email carries linkedIntelligence
-// facets, the expansion switches to a tabbed layout. Legacy
-// "view"/"reply" modes still work when there's no attached
-// accounting content.
-type ExpandMode = "collapsed" | "view" | "reply";
 type Tab = "conversation" | "attachments" | "invoice" | "statement" | "activity";
 
 const PILL_LABEL: Record<EmailFeedCardData["state"], string> = {
@@ -100,41 +105,42 @@ const PILL_LABEL: Record<EmailFeedCardData["state"], string> = {
   comm: "Communication required",
 };
 
-const EVIDENCE_STATE_CLASS: Record<EmailFeedCardData["evidence"][number]["state"], string> = {
-  found: "found",
-  ambiguous: "ambiguous",
-  not_found: "not-found",
-  not_extracted: "not-extracted",
-  extracted: "extracted",
-  duplicate: "duplicate",
-  no_data: "no-data",
-};
+// -------------------------------------------------------------------------
+// Card
+// -------------------------------------------------------------------------
 
 export default function EmailIntakeCard({ data }: Props) {
-  const [mode, setMode] = useState<ExpandMode>("collapsed");
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(false);
+  const [readLocal, setReadLocal] = useState(!data.isUnread);
+  const [tab, setTab] = useState<Tab>(defaultTabFor(data));
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Sprint 3 Checkpoint 15H Unified Remediation state.
-  const linked = data.linkedIntelligence;
-  const hasInvoice = (linked?.invoiceAttachmentCount ?? 0) > 0;
-  const hasStatement = (linked?.statementAttachmentCount ?? 0) > 0;
-  const hasAnyAttachment = (linked?.attachmentCount ?? 0) > 0;
-  const useTabbedLayout = !!linked && (hasInvoice || hasStatement || linked.attachmentCount > 0);
-  const defaultTab: Tab = hasInvoice ? "invoice" : hasStatement ? "statement" : "conversation";
-  const [tab, setTab] = useState<Tab>(defaultTab);
+  const [replyOpen, setReplyOpen] = useState(false);
   const [pdfModal, setPdfModal] = useState<null | { documentId: string; filename: string }>(null);
   const [apEvidence, setApEvidence] = useState<unknown | null>(null);
   const [statementEvidence, setStatementEvidence] = useState<unknown | null>(null);
-  const [attachments, setAttachments] = useState<Array<{ id: string; filename: string; mimeType: string; byteLength: number; classification: string; receivedAt: string }> | null>(null);
+  const [attachments, setAttachments] = useState<
+    Array<{ id: string; filename: string; mimeType: string; byteLength: number; classification: string; receivedAt: string }> | null
+  >(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const isUnread = !readLocal;
+  const isResolved = data.workIntakeStatus === "RESOLVED";
+  const linked = data.linkedIntelligence;
+
+  const availableTabs = tabsFor(data);
 
   useEffect(() => {
-    // Reset the default tab if the linked facets change (e.g. an
-    // analysis completes after the first render).
-    if (mode === "collapsed") setTab(defaultTab);
-  }, [defaultTab, mode]);
+    // If the linked intelligence changes and the current tab is no
+    // longer in the available set, snap back to the default.
+    if (!availableTabs.includes(tab)) setTab(availableTabs[0] ?? "activity");
+  }, [availableTabs, tab]);
 
-  const loadDetailOnce = useCallback(async () => {
+  const loadConversationOnce = useCallback(async () => {
     if (detail || loading) return;
     setLoading(true);
     setError(null);
@@ -151,246 +157,324 @@ export default function EmailIntakeCard({ data }: Props) {
     finally { setLoading(false); }
   }, [data.workIntakeItemId, detail, loading]);
 
-  const handleExpand = useCallback(
-    (target: "view" | "reply") => {
-      setMode(target);
-      void loadDetailOnce();
-    },
-    [loadDetailOnce],
-  );
-  const handleCollapse = useCallback(() => { setMode("collapsed"); }, []);
+  const loadAttachmentsOnce = useCallback(async () => {
+    if (attachments !== null) return;
+    try {
+      const res = await fetch(
+        `/api/mission-control/work-intake/${encodeURIComponent(data.workIntakeItemId)}/documents`,
+        { method: "GET" },
+      );
+      if (!res.ok) { setAttachments([]); return; }
+      const body = await res.json();
+      setAttachments(body.documents ?? []);
+    } catch { setAttachments([]); }
+  }, [data.workIntakeItemId, attachments]);
 
-  const accentClass = data.isUnread ? " spectre-mc-item--unread" : "";
+  const loadApEvidenceOnce = useCallback(async () => {
+    if (apEvidence !== null || !linked || linked.apReviewIntakeIds.length === 0) return;
+    try {
+      const apIntakeId = linked.apReviewIntakeIds[0];
+      const res = await fetch(
+        `/api/mission-control/work-intake/${encodeURIComponent(apIntakeId)}/ap-evidence`,
+        { method: "GET" },
+      );
+      if (!res.ok) { setApEvidence({ error: "load_failed" }); return; }
+      setApEvidence(await res.json());
+    } catch { setApEvidence({ error: "network" }); }
+  }, [apEvidence, linked]);
+
+  const loadStatementEvidenceOnce = useCallback(async () => {
+    if (statementEvidence !== null || !linked || linked.statementReviewIntakeIds.length === 0) return;
+    try {
+      const stIntakeId = linked.statementReviewIntakeIds[0];
+      const res = await fetch(
+        `/api/mission-control/work-intake/${encodeURIComponent(stIntakeId)}/statement-evidence`,
+        { method: "GET" },
+      );
+      if (!res.ok) { setStatementEvidence({ error: "load_failed" }); return; }
+      setStatementEvidence(await res.json());
+    } catch { setStatementEvidence({ error: "network" }); }
+  }, [statementEvidence, linked]);
+
+  // Fire the mark-read side effect the first time the user opens the
+  // card. Idempotent server-side — repeated calls are no-ops.
+  const markReadOnce = useCallback(async () => {
+    if (readLocal || !data.workIntakeItemId) return;
+    setReadLocal(true);
+    try {
+      await fetch("/api/work-intake/action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workIntakeItemId: data.workIntakeItemId, action: "mark_read" }),
+      });
+    } catch {
+      // Non-blocking. If the mark-read call fails, the UI state still
+      // flips locally — a subsequent snapshot load will re-derive.
+    }
+  }, [readLocal, data.workIntakeItemId]);
+
+  const handlePrimarySurfaceClick = useCallback(() => {
+    if (expanded) { setExpanded(false); return; }
+    setExpanded(true);
+    void markReadOnce();
+    // Lazy-load the initial tab's data on first expand.
+    const initial = defaultTabFor(data);
+    setTab(initial);
+    if (initial === "conversation") void loadConversationOnce();
+    if (initial === "attachments") void loadAttachmentsOnce();
+    if (initial === "invoice") void loadApEvidenceOnce();
+    if (initial === "statement") void loadStatementEvidenceOnce();
+  }, [expanded, markReadOnce, data, loadConversationOnce, loadAttachmentsOnce, loadApEvidenceOnce, loadStatementEvidenceOnce]);
+
+  const handleResolve = useCallback(async (evt: React.MouseEvent) => {
+    evt.stopPropagation();
+    if (resolving) return;
+    setResolving(true);
+    setResolveError(null);
+    try {
+      const res = await fetch("/api/work-intake/action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workIntakeItemId: data.workIntakeItemId, action: "resolve" }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setResolveError(body.error ?? "resolve_failed");
+        setResolving(false);
+        return;
+      }
+      // Re-fetch the RSC snapshot. The active-feed filter will drop
+      // this card automatically (loader now excludes RESOLVED). The
+      // underlying WorkIntakeItem row + email + documents + findings
+      // are preserved — resolve is a status transition, not a delete.
+      router.refresh();
+    } catch {
+      setResolveError("network");
+      setResolving(false);
+    }
+  }, [resolving, data.workIntakeItemId, router]);
+
+  // --- render ------------------------------------------------------------
+  const semanticClass = isResolved ? "done" : data.state;
 
   return (
     <article
-      className={`spectre-mc-item ${data.state}${accentClass}`}
+      className={`spectre-mc-item ${semanticClass}${isUnread ? " spectre-mc-item--unread" : ""}`}
       data-testid="email-intake-card"
       data-work-intake-item-id={data.workIntakeItemId}
       data-email-id={data.emailMessageId}
+      data-unread={isUnread ? "true" : "false"}
+      data-expanded={expanded ? "true" : "false"}
+      data-resolved={isResolved ? "true" : "false"}
+      aria-labelledby={`title-${data.workIntakeItemId}`}
     >
-      <div className="spectre-mc-item-head">
-        <span
-          className={`spectre-mc-worktype spectre-mc-worktype--${worktypeSlug(linked)}`}
-          data-testid="worktype-eyebrow"
-        >
-          {worktypeLabel(linked)}
-        </span>
-        <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state]}</span>
-        <span className="spectre-mc-id-tag">{data.idTag}</span>
-        {data.isHighImportance ? (
-          <span className="spectre-mc-flag" data-testid="email-importance-high" title="High importance in the source mailbox">
-            High importance
-          </span>
-        ) : null}
-        {data.isUnread ? (
-          <span className="spectre-mc-pill-unread" data-testid="email-unread">Unread</span>
-        ) : null}
-        {data.conversationMessageCount > 1 ? (
-          <span className="spectre-mc-convo-count" data-testid="email-convo-count">
-            {data.conversationMessageCount} messages
-          </span>
-        ) : null}
-        <span className="spectre-mc-ts">{data.timestampLabel}</span>
-      </div>
-
-      <h3>{data.situationTitle}</h3>
-
-      <div className="spectre-mc-sender">
-        <span className="from">{data.contextLine}</span>
-      </div>
-
-      {/* Sprint 2 Checkpoint 14C — structured operational synopsis in
-          place of the raw email preview. */}
-      <p className="spectre-mc-synopsis" data-testid="email-synopsis">{data.synopsisText}</p>
-
-      {data.evidence && data.evidence.length > 0 ? (
-        <div className="spectre-mc-evidence" data-testid="email-evidence">
-          {data.evidence.map((cell) => (
-            <div key={cell.label} className={`cell state-${EVIDENCE_STATE_CLASS[cell.state]}`} data-testid={`evidence-${cell.label.toLowerCase().replace(/\s+/g, "-")}`}>
-              <div className="k">{cell.label}</div>
-              <div className="v">{cell.value}</div>
-            </div>
-          ))}
+      {/* Primary click surface — everything visible in Variant D up to
+          the recommendation strip. Not a <button> to preserve inner
+          semantic content (h3, dl, etc.); role/keyboard support wired
+          explicitly. */}
+      <div
+        className="spectre-mc-item-surface"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={handlePrimarySurfaceClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handlePrimarySurfaceClick();
+          }
+        }}
+        ref={openButtonRef as unknown as React.Ref<HTMLDivElement>}
+        data-testid="card-surface"
+      >
+        <div className="spectre-mc-item-head">
+          <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state]}</span>
+          <span className="spectre-mc-id-tag">{data.idTag}</span>
+          {data.isHighImportance ? (
+            <span className="spectre-mc-flag" data-testid="email-importance-high" title="High importance in the source mailbox">
+              High importance
+            </span>
+          ) : null}
+          {data.conversationMessageCount > 1 ? (
+            <span className="spectre-mc-convo-count" data-testid="email-convo-count">
+              {data.conversationMessageCount} messages
+            </span>
+          ) : null}
+          <span className="spectre-mc-ts">{data.timestampLabel}</span>
         </div>
-      ) : null}
 
-      {data.recommendation ? (
-        <div className="spectre-mc-rec">
-          <span className="k">Recommended</span>
-          <span className="v">{data.recommendation}</span>
+        <h3 id={`title-${data.workIntakeItemId}`}>{data.situationTitle}</h3>
+
+        <div className="spectre-mc-sender">
+          <span className="from">{data.contextLine}</span>
         </div>
-      ) : null}
 
-      <div className="spectre-mc-actions">
-        {mode === "collapsed" ? (
-          <>
-            {useTabbedLayout ? (
-              <button
-                type="button"
-                className="spectre-btn spectre-btn--primary"
-                onClick={() => handleExpand("view")}
-                data-testid="unified-open-review"
-              >
-                Open review
-              </button>
-            ) : null}
-            {useTabbedLayout && hasAnyAttachment ? (
-              <button
-                type="button"
-                className="spectre-btn spectre-btn--secondary"
-                onClick={async () => {
-                  await ensureAttachmentsLoaded();
-                  // Pick the first attached PDF invoice/statement doc.
-                  const first = (attachments ?? []).find((a) =>
-                    a.mimeType === "application/pdf" &&
-                    (a.classification === "INVOICE" || a.classification === "STATEMENT" || a.classification === "UNKNOWN" || a.classification === "OTHER"),
-                  );
-                  if (first) setPdfModal({ documentId: first.id, filename: first.filename });
-                }}
-                data-testid="unified-view-pdf"
-              >
-                View PDF
-              </button>
-            ) : null}
-            {data.actions.map((a) => (
-              <ActionButton key={a.key} action={a} onExpand={handleExpand} />
+        <p className="spectre-mc-work" data-testid="email-synopsis">
+          {data.synopsisText}
+        </p>
+
+        {data.evidence.length > 0 ? (
+          <div className="spectre-mc-readout" data-testid="email-readout">
+            {data.evidence.slice(0, 4).map((cell) => (
+              <div key={cell.label} className="cell" data-testid={`readout-${cell.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                <div className="k">{cell.label}</div>
+                <div className={`v${cell.state === "not_found" || cell.state === "not_extracted" ? " observation" : ""}${cell.state === "found" ? " confidence" : ""}`}>
+                  {cell.value}
+                </div>
+              </div>
             ))}
-          </>
+          </div>
+        ) : null}
+
+        {data.recommendation ? (
+          <div className="spectre-mc-rec">
+            <span className="k">Recommended</span>
+            <span className="v">{data.recommendation}</span>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Actions — queue-level only. Domain actions live inside the
+          expanded tabs (§3.4 of Checkpoint 15I). */}
+      <div
+        className="spectre-mc-actions"
+        onClick={(e) => e.stopPropagation()}
+        role="presentation"
+      >
+        {isResolved ? (
+          <span className="spectre-mc-aux" data-testid="card-resolved-marker">
+            Resolved · in Completed history
+          </span>
         ) : (
           <>
             <button
               type="button"
-              className="spectre-btn spectre-btn--ghost"
-              onClick={handleCollapse}
-              data-testid="email-action-collapse"
+              className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+              onClick={handleResolve}
+              disabled={resolving}
+              data-testid="card-resolve"
             >
-              Collapse
+              {resolving ? "Resolving…" : "Resolve"}
             </button>
-            {mode === "view" && !useTabbedLayout ? (
-              <button
-                type="button"
-                className="spectre-btn spectre-btn--secondary"
-                onClick={() => handleExpand("reply")}
-                data-testid="email-action-open-composer"
-              >
-                <IconReply size={12} />
-                Review &amp; send reply
-              </button>
+            {resolveError ? (
+              <span className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">
+                Could not resolve — please retry.
+              </span>
             ) : null}
-            {data.actions
-              .filter((a) => a.kind === "tertiary")
-              .map((a) => <ActionButton key={a.key} action={a} onExpand={handleExpand} />)}
           </>
         )}
+        <div className="grow" />
+        <button
+          type="button"
+          className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+          onClick={handlePrimarySurfaceClick}
+          data-testid="card-toggle"
+          aria-expanded={expanded}
+        >
+          {expanded ? "Collapse" : "Open"}
+        </button>
       </div>
 
-      {mode !== "collapsed" ? (
-        <div className="spectre-mc-inline-expansion" data-testid="email-inline-expansion">
-          {useTabbedLayout ? (
-            <>
-              <TabBar
-                available={tabsFor(linked)}
-                active={tab}
-                onChange={(t) => {
-                  setTab(t);
-                  if (t === "conversation" || t === "activity") void loadDetailOnce();
-                  if (t === "attachments") void ensureAttachmentsLoaded();
-                  if (t === "invoice") void ensureApEvidenceLoaded();
-                  if (t === "statement") void ensureStatementEvidenceLoaded();
-                }}
-              />
-              <div className="spectre-mc-unified-body" data-testid="unified-tab-body">
-                {tab === "conversation" && (
-                  loading ? <div className="spectre-mc-inline-status" role="status">Loading conversation…</div>
-                  : error ? <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">Could not load the conversation.</div>
-                  : detail ? <InlineConversationPanel detail={detail} />
-                  : null
-                )}
-                {tab === "attachments" && (
-                  attachments === null ? <div className="spectre-mc-inline-status" role="status">Loading attachments…</div>
-                  : (
-                    <ul className="spectre-mc-attachment-list" data-testid="unified-attachment-list">
-                      {attachments.length === 0 ? <li>No attachments.</li> : null}
-                      {attachments.map((a) => (
-                        <li key={a.id} data-testid={`unified-attachment-${a.id}`}>
-                          <div><strong>{a.filename}</strong></div>
-                          <div className="spectre-review-muted">{a.classification} · {a.mimeType} · {Math.round(a.byteLength / 1024)} KB</div>
-                          <div>
-                            <button
-                              type="button"
-                              className="spectre-btn spectre-btn--sm spectre-btn--secondary"
-                              onClick={() => setPdfModal({ documentId: a.id, filename: a.filename })}
-                              data-testid={`unified-attachment-preview-${a.id}`}
-                            >
-                              View PDF
-                            </button>
-                            <a
-                              href={`/api/documents/${encodeURIComponent(a.id)}/download`}
-                              className="spectre-btn spectre-btn--sm spectre-btn--ghost"
-                              download={a.filename}
-                            >
-                              Download
-                            </a>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )
-                )}
-                {tab === "invoice" && (
-                  apEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading invoice review…</div>
-                  : <InvoiceFacetPane payload={apEvidence as ApEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
-                )}
-                {tab === "statement" && (
-                  statementEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading statement reconciliation…</div>
-                  : <StatementFacetPane payload={statementEvidence as StatementEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
-                )}
-                {tab === "activity" && (
-                  loading ? <div className="spectre-mc-inline-status" role="status">Loading activity…</div>
-                  : detail ? <p className="spectre-review-muted">See conversation tab for message history. Full activity timeline coming in a follow-up.</p>
-                  : null
-                )}
-              </div>
-              {mode === "reply" ? (
-                loading ? null : detail ? (
-                  <ReplyComposer
-                    workIntakeItemId={data.workIntakeItemId}
-                    emailMessageId={data.emailMessageId}
-                    seedRecommendation={data.recommendation}
-                    consentState={detail.replyConsent}
-                    onCancel={handleCollapse}
-                  />
-                ) : null
-              ) : null}
-            </>
-          ) : (
-            // Legacy layout for emails with no linked intelligence.
-            loading ? (
-              <div className="spectre-mc-inline-status" role="status">Loading conversation…</div>
-            ) : error ? (
-              <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">
-                {error === "not_found"
-                  ? "The conversation is no longer available."
-                  : "Could not load the conversation. Please try again."}
-              </div>
-            ) : detail ? (
-              <>
-                <InlineConversationPanel detail={detail} />
-                {mode === "reply" ? (
-                  <ReplyComposer
-                    workIntakeItemId={data.workIntakeItemId}
-                    emailMessageId={data.emailMessageId}
-                    seedRecommendation={data.recommendation}
-                    consentState={detail.replyConsent}
-                    onCancel={handleCollapse}
-                  />
-                ) : null}
-              </>
-            ) : null
-          )}
+      {/* Expanded region — tabs + tab body. All clicks here stop
+          propagating so they don't re-collapse the card. */}
+      {expanded ? (
+        <div
+          className="spectre-mc-item-expanded"
+          onClick={(e) => e.stopPropagation()}
+          role="presentation"
+          data-testid="email-inline-expansion"
+        >
+          <TabBar
+            available={availableTabs}
+            active={tab}
+            onChange={(next) => {
+              setTab(next);
+              if (next === "conversation" || next === "activity") void loadConversationOnce();
+              if (next === "attachments") void loadAttachmentsOnce();
+              if (next === "invoice") void loadApEvidenceOnce();
+              if (next === "statement") void loadStatementEvidenceOnce();
+            }}
+          />
+          <div className="spectre-mc-tab-body" data-testid="unified-tab-body">
+            {tab === "conversation" && (
+              loading ? <div className="spectre-mc-inline-status" role="status">Loading conversation…</div>
+              : error ? <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">Could not load the conversation.</div>
+              : detail ? (
+                <>
+                  <InlineConversationPanel detail={detail} />
+                  {replyOpen ? (
+                    <ReplyComposer
+                      workIntakeItemId={data.workIntakeItemId}
+                      emailMessageId={data.emailMessageId}
+                      seedRecommendation={data.recommendation}
+                      consentState={detail.replyConsent}
+                      onCancel={() => setReplyOpen(false)}
+                    />
+                  ) : (
+                    <div className="spectre-mc-tab-actions">
+                      <button
+                        type="button"
+                        className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+                        onClick={() => setReplyOpen(true)}
+                        data-testid="tab-conversation-reply"
+                      >
+                        Reply
+                      </button>
+                    </div>
+                  )}
+                </>
+              )
+              : null
+            )}
+            {tab === "attachments" && (
+              attachments === null ? <div className="spectre-mc-inline-status" role="status">Loading attachments…</div>
+              : (
+                <ul className="spectre-mc-attachment-list" data-testid="unified-attachment-list">
+                  {attachments.length === 0 ? <li>No attachments.</li> : null}
+                  {attachments.map((a) => (
+                    <li key={a.id} data-testid={`unified-attachment-${a.id}`}>
+                      <div><strong>{a.filename}</strong></div>
+                      <div className="spectre-review-muted">{a.classification} · {a.mimeType} · {Math.round(a.byteLength / 1024)} KB</div>
+                      <div>
+                        <button
+                          type="button"
+                          className="spectre-btn spectre-btn--sm spectre-btn--secondary"
+                          onClick={() => setPdfModal({ documentId: a.id, filename: a.filename })}
+                          data-testid={`unified-attachment-preview-${a.id}`}
+                        >
+                          View PDF
+                        </button>
+                        <a
+                          href={`/api/documents/${encodeURIComponent(a.id)}/download`}
+                          className="spectre-btn spectre-btn--sm spectre-btn--ghost"
+                          download={a.filename}
+                        >
+                          Download
+                        </a>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
+            {tab === "invoice" && (
+              apEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading invoice review…</div>
+              : <InvoiceFacetPane payload={apEvidence as ApEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
+            )}
+            {tab === "statement" && (
+              statementEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading statement reconciliation…</div>
+              : <StatementFacetPane payload={statementEvidence as StatementEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
+            )}
+            {tab === "activity" && (
+              detail ? (
+                <p className="spectre-review-muted">See conversation tab for message history. Item-level activity timeline arrives in the follow-up entity-timeline checkpoint.</p>
+              ) : loading ? <div className="spectre-mc-inline-status" role="status">Loading activity…</div>
+              : <p className="spectre-review-muted">No activity to show yet.</p>
+            )}
+          </div>
         </div>
       ) : null}
+
       {pdfModal ? (
         <DocumentPreviewModal
           documentId={pdfModal.documentId}
@@ -402,111 +486,27 @@ export default function EmailIntakeCard({ data }: Props) {
       ) : null}
     </article>
   );
-
-  // ------------------------------------------------------------------
-  // Attached-facet fetchers (each fires on first tab activation).
-  // ------------------------------------------------------------------
-  async function ensureAttachmentsLoaded() {
-    if (attachments !== null) return;
-    try {
-      const res = await fetch(`/api/mission-control/work-intake/${encodeURIComponent(data.workIntakeItemId)}/documents`, { method: "GET" });
-      if (!res.ok) { setAttachments([]); return; }
-      const body = await res.json();
-      setAttachments(body.documents ?? []);
-    } catch { setAttachments([]); }
-  }
-  async function ensureApEvidenceLoaded() {
-    if (apEvidence !== null || !linked || linked.apReviewIntakeIds.length === 0) return;
-    try {
-      const apIntakeId = linked.apReviewIntakeIds[0];
-      const res = await fetch(`/api/mission-control/work-intake/${encodeURIComponent(apIntakeId)}/ap-evidence`, { method: "GET" });
-      if (!res.ok) { setApEvidence({ error: "load_failed" }); return; }
-      setApEvidence(await res.json());
-    } catch { setApEvidence({ error: "network" }); }
-  }
-  async function ensureStatementEvidenceLoaded() {
-    if (statementEvidence !== null || !linked || linked.statementReviewIntakeIds.length === 0) return;
-    try {
-      const stIntakeId = linked.statementReviewIntakeIds[0];
-      const res = await fetch(`/api/mission-control/work-intake/${encodeURIComponent(stIntakeId)}/statement-evidence`, { method: "GET" });
-      if (!res.ok) { setStatementEvidence({ error: "load_failed" }); return; }
-      setStatementEvidence(await res.json());
-    } catch { setStatementEvidence({ error: "network" }); }
-  }
 }
 
-function ActionButton({
-  action,
-  onExpand,
-}: {
-  action: EmailFeedCardData["actions"][number];
-  onExpand: (mode: "view" | "reply") => void;
-}) {
-  const disabled = !!action.disabledReason;
-  const handleClick = () => {
-    if (disabled) return;
-    if (action.onClickAction === "expand-view") { onExpand("view"); return; }
-    if (action.onClickAction === "expand-reply") { onExpand("reply"); return; }
-  };
-  const className =
-    action.kind === "primary" ? "spectre-btn spectre-btn--primary" :
-    action.kind === "secondary" ? "spectre-btn spectre-btn--secondary" :
-    "spectre-btn spectre-btn--ghost";
-  return (
-    <button
-      type="button"
-      className={disabled ? `${className} spectre-btn--disabled` : className}
-      disabled={disabled}
-      aria-disabled={disabled ? "true" : undefined}
-      title={action.disabledReason}
-      onClick={handleClick}
-      data-testid={`email-action-${action.key}`}
-    >
-      <ActionIcon iconKey={action.iconKey} />
-      {action.label}
-    </button>
-  );
-}
+// -------------------------------------------------------------------------
+// Tab plumbing (contextual — Variant D §3.3)
+// -------------------------------------------------------------------------
 
-function ActionIcon({ iconKey }: { iconKey?: EmailFeedCardData["actions"][number]["iconKey"] }) {
-  switch (iconKey) {
-    case "mail":      return <IconMail size={12} />;
-    case "reply":     return <IconReply size={12} />;
-    case "edit":      return <IconEdit size={12} />;
-    case "clock":     return <IconClock size={12} />;
-    case "check":     return <IconCheck size={12} />;
-    case "user-plus": return <IconUserPlus size={12} />;
-    case "send":      return <IconSend size={12} />;
-    default:          return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) — helpers
-// ---------------------------------------------------------------------------
-type LinkedIntel = EmailFeedCardData["linkedIntelligence"];
-
-function worktypeSlug(linked: LinkedIntel | undefined): string {
-  const f = linked?.dominantFacet ?? "email";
-  return f === "invoice" ? "ap-invoice"
-    : f === "statement" ? "vendor-statement"
-    : f === "invoice+statement" ? "ap-invoice"
-    : "email";
-}
-function worktypeLabel(linked: LinkedIntel | undefined): string {
-  const f = linked?.dominantFacet ?? "email";
-  return f === "invoice" ? "EMAIL · AP INVOICE"
-    : f === "statement" ? "EMAIL · VENDOR STATEMENT"
-    : f === "invoice+statement" ? "EMAIL · AP INVOICE + STATEMENT"
-    : "EMAIL CORRESPONDENCE";
-}
-function tabsFor(linked: LinkedIntel | undefined): Tab[] {
+function tabsFor(data: EmailFeedCardData): Tab[] {
+  const linked = data.linkedIntelligence;
   const tabs: Tab[] = ["conversation"];
   if ((linked?.attachmentCount ?? 0) > 0) tabs.push("attachments");
   if ((linked?.invoiceAttachmentCount ?? 0) > 0) tabs.push("invoice");
   if ((linked?.statementAttachmentCount ?? 0) > 0) tabs.push("statement");
   tabs.push("activity");
   return tabs;
+}
+
+function defaultTabFor(data: EmailFeedCardData): Tab {
+  const linked = data.linkedIntelligence;
+  if ((linked?.invoiceAttachmentCount ?? 0) > 0) return "invoice";
+  if ((linked?.statementAttachmentCount ?? 0) > 0) return "statement";
+  return "conversation";
 }
 
 function TabBar({ available, active, onChange }: { available: Tab[]; active: Tab; onChange: (t: Tab) => void }) {
@@ -526,7 +526,7 @@ function TabBar({ available, active, onChange }: { available: Tab[]; active: Tab
           role="tab"
           aria-selected={active === t}
           className={`spectre-mc-tab${active === t ? " spectre-mc-tab--active" : ""}`}
-          onClick={() => onChange(t)}
+          onClick={(e) => { e.stopPropagation(); onChange(t); }}
           data-testid={`unified-tab-${t}`}
         >
           {LABEL[t]}
@@ -536,8 +536,10 @@ function TabBar({ available, active, onChange }: { available: Tab[]; active: Tab
   );
 }
 
-// Minimal typed shapes for the two evidence payloads — kept narrow so
-// changes to the API don't cascade.
+// -------------------------------------------------------------------------
+// Invoice + Statement facet panes (preserved from Checkpoint 15H)
+// -------------------------------------------------------------------------
+
 interface ApEvidence {
   document: { id: string; filename: string; mimeType: string; byteLength: number };
   extraction: {

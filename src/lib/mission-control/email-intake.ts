@@ -169,12 +169,20 @@ async function toWorkItem(
     recommendation: analysis.recommendation,
     emailMessageId: newestEmail.id,
     workIntakeItemId: it.id,
+    // Sprint 3 Checkpoint 15I — isUnread is now projected by the
+    // snapshot loader from WorkIntakeItemRead (per-user). The value
+    // seeded here is a fallback for callers that skip that projection.
     isUnread: !newestEmail.isRead,
     isHighImportance: newestEmail.importance === "high",
     synopsisText: analysis.synopsis,
     evidence: analysis.evidence.map((e) => ({ label: e.label, value: e.value, state: e.state })),
     conversationMessageCount: emails.length,
+    // Sprint 3 Checkpoint 15I — Variant D card synthesises its own
+    // queue-level actions (Resolve / Snooze) from lifecycle state.
+    // Domain actions (Reply, View email, etc.) now live inside the
+    // expanded tabs, per founder Phase 3.4 requirement.
     actions,
+    workIntakeStatus: it.status,
   };
 }
 

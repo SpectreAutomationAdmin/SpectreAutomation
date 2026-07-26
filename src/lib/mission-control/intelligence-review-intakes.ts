@@ -351,6 +351,7 @@ export async function loadApReviewIntakeItems(args: LoaderArgs & { suppressedIds
     cards.push({
       id: i.id,
       workIntakeItemId: i.id,
+      workIntakeStatus: i.status,   // Sprint 3 Checkpoint 15I
       state: dominant?.severity === "HIGH" || dominant?.severity === "CRITICAL" ? "approval" : "info",
       idTag: `AP-${i.id.slice(-6).toUpperCase()}`,
       title: `AP Invoice Review — ${i.displaySubject ?? doc.filename}`,
@@ -364,10 +365,7 @@ export async function loadApReviewIntakeItems(args: LoaderArgs & { suppressedIds
       evidence,
       recommendation: dominant ? shorten(dominant.statement, 140) : "Open the review pane to see extracted invoice facts.",
       classification: "AP_INVOICE_REVIEW",
-      actions: [
-        { key: "review", label: "Review invoice", kind: "primary" },
-        { key: "defer", label: "Defer", kind: "tertiary" },
-      ],
+      actions: [],
     });
   }
   logger.info("mission-control.ap-review.loaded", { clubId: args.clubId, count: cards.length });
@@ -430,6 +428,7 @@ export async function loadStatementReviewIntakeItems(args: LoaderArgs & { suppre
     cards.push({
       id: i.id,
       workIntakeItemId: i.id,
+      workIntakeStatus: i.status,   // Sprint 3 Checkpoint 15I
       state: exceptionCount > 0 ? "approval" : "info",
       idTag: `STMT-${i.id.slice(-6).toUpperCase()}`,
       title: `Vendor Statement Review — ${vendorName}`,
@@ -441,10 +440,7 @@ export async function loadStatementReviewIntakeItems(args: LoaderArgs & { suppre
       evidence,
       recommendation: dominant ? shorten(dominant.statement, 140) : "Open the pane to review line-by-line reconciliation.",
       classification: "VENDOR_STATEMENT_REVIEW",
-      actions: [
-        { key: "review", label: "Reconcile statement", kind: "primary" },
-        { key: "defer", label: "Defer", kind: "tertiary" },
-      ],
+      actions: [],
     });
   }
   logger.info("mission-control.statement-review.loaded", { clubId: args.clubId, count: cards.length });

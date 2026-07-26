@@ -546,6 +546,7 @@ model User {
   resolvedWorkIntakeItems  WorkIntakeItem[]     @relation("WorkIntakeResolvedBy")
   overriddenClassifications WorkIntakeItem[]    @relation("WorkIntakeClassOverride")
   workIntakeActivity       WorkIntakeActivity[] @relation("WorkIntakeActivityActor")
+  workIntakeReads          WorkIntakeItemRead[] @relation("WorkIntakeItemReadUser")
   mailboxConnections       MailboxConnection[]
   mailboxDisconnections    MailboxConnection[]  @relation("MailboxDisconnectedBy")
   mailboxAccesses          MailboxAccess[]      @relation("MailboxAccessUser")
@@ -8608,6 +8609,7 @@ model WorkIntakeItem {
   origins        WorkIntakeOrigin[]
   findings       WorkIntakeFinding[]
   activity       WorkIntakeActivity[]
+  reads          WorkIntakeItemRead[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
@@ -8698,6 +8700,22 @@ model WorkIntakeActivity {
   createdAt  DateTime @default(now())
 
   @@index([workIntakeItemId, createdAt])
+}
+
+// Sprint 3 Checkpoint 15I — per-user "have I read this Work Intake item"
+// state. Independent from EmailMessage.isRead (which mirrors the shared
+// mailbox's global flag). Two admins working the same queue see their
+// own unread counts. Loading the feed does NOT mark items read — a
+// card becomes read only when the user intentionally opens it.
+model WorkIntakeItemRead {
+  workIntakeItemId String
+  workIntakeItem   WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User           @relation("WorkIntakeItemReadUser", fields: [userId], references: [id], onDelete: Cascade)
+  readAt           DateTime       @default(now())
+
+  @@id([workIntakeItemId, userId])
+  @@index([userId, readAt])
 }
 
 // Link between an email and one intake item.

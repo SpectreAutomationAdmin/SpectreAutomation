@@ -139,6 +139,17 @@ export type WorkItem = {
       unresolvedFindingCount: number;
     };
   };
+  // Sprint 3 Checkpoint 15I (2026-07-26) — per-user read state
+  // projected by the loader from WorkIntakeItemRead. True when the
+  // viewer has clicked-open this card at least once. The card's
+  // isUnread flag mirrors !viewerHasRead. Loading the feed does NOT
+  // flip this — only the click-to-expand action does.
+  viewerHasRead?: boolean;
+  // Live WorkIntakeItem.status ("OPEN" | "IN_PROGRESS" | "DEFERRED" |
+  // "RESOLVED" | "INFORMATIONAL" | "SUPPRESSED"). Populated when the
+  // item was materialised on the WorkIntakeItem canonical table. Some
+  // loader-only paths (ap-adapter, ar-adapter) leave this undefined.
+  workIntakeStatus?: string;
 };
 
 export type BriefingCounts = {
@@ -456,11 +467,47 @@ async function loadEmailIntakeItemsSafe(principal: Principal, clubId: string, no
   }
 }
 
+// Sprint 3 Checkpoint 15I (2026-07-26) — projects per-user read state
+// (via the new WorkIntakeItemRead table) onto every WorkItem before
+// returning the snapshot. Loading the feed does NOT insert a read row;
+// the mark-read action fires on the first click-to-expand.
+async function projectViewerReadState(
+  workItems: WorkItem[],
+  userId: string,
+): Promise<void> {
+  const intakeIds = workItems
+    .map((w) => w.workIntakeItemId)
+    .filter((id): id is string => !!id);
+  if (intakeIds.length === 0) return;
+  const rows = await prisma.workIntakeItemRead.findMany({
+    where: { userId, workIntakeItemId: { in: intakeIds } },
+    select: { workIntakeItemId: true },
+  });
+  const readSet = new Set(rows.map((r) => r.workIntakeItemId));
+  for (const item of workItems) {
+    if (!item.workIntakeItemId) continue;
+    item.viewerHasRead = readSet.has(item.workIntakeItemId);
+    // The card's isUnread flag now reflects the per-user state.
+    // The prior EmailMessage.isRead-derived value is superseded.
+    item.isUnread = !item.viewerHasRead;
+  }
+}
+
+export interface LoadMissionControlOptions {
+  // "active" (default): hide RESOLVED, SUPPRESSED, and DISMISSED items —
+  // matches the existing loader's implicit contract.
+  // "history": show ONLY RESOLVED items so the founder can review what
+  // was cleared from the queue without repopulating the default view.
+  feedFilter?: "active" | "history";
+}
+
 export async function loadMissionControlSnapshot(
   principal: Principal,
   clubId: string,
+  options: LoadMissionControlOptions = {},
 ): Promise<MissionControlSnapshot> {
   const now = new Date();
+  const feedFilter = options.feedFilter ?? "active";
   // Sprint 3 Checkpoint 15B (2026-07-24) — AR-aging items are now
   // loaded from persisted WorkIntakeItem + WorkIntakeFinding via
   // loadArIntakeItems (read-only). The legacy ad-hoc
@@ -520,12 +567,27 @@ export async function loadMissionControlSnapshot(
     return b.id.localeCompare(a.id);
   });
 
+  // Sprint 3 Checkpoint 15I — per-user read state.
+  await projectViewerReadState(workItems, principal.id);
+
+  // Sprint 3 Checkpoint 15I — history filter.
+  // ACTIVE (default): filter out RESOLVED so the queue stays focused
+  //   on unresolved work. The underlying loader intake queries already
+  //   filter status: notIn ["RESOLVED", "SUPPRESSED"], but AP-adapter
+  //   and email items may include statuses outside that filter; a
+  //   secondary UI-layer pass belt-and-suspenders it.
+  // HISTORY: show ONLY resolved items so the operator can review the
+  //   completed queue without dumping them back into the active view.
+  const visibleWorkItems: WorkItem[] = feedFilter === "history"
+    ? workItems.filter((w) => w.workIntakeStatus === "RESOLVED" || w.state === "auto")
+    : workItems.filter((w) => w.workIntakeStatus !== "RESOLVED");
+
   const [briefing, position] = await Promise.all([
     loadBriefingCounts(principal, clubId, workItems),
     loadPosition(principal, clubId),
   ]);
 
-  const insight = buildInsight(position, workItems, now);
+  const insight = buildInsight(position, visibleWorkItems, now);
 
-  return { briefing, workItems, position, insight, syncedAt: now };
+  return { briefing, workItems: visibleWorkItems, position, insight, syncedAt: now };
 }

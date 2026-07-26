@@ -161,3 +161,30 @@ export async function assignToSelf(ctx: ActionCtx): Promise<void> {
     }),
   ]);
 }
+
+/**
+ * Sprint 3 Checkpoint 15I — per-user read state.
+ * Upsert a WorkIntakeItemRead row for (workIntakeItemId, userId).
+ * Idempotent: repeated calls do NOT bump readAt and do NOT append
+ * activity — read is a UI hint, not a domain state change. Absence
+ * of a row = unread for that user; presence = read.
+ *
+ * Tenant guard applies via loadAuthorisedIntake — a user can only
+ * mark-read intakes they can already see.
+ */
+export async function markWorkIntakeRead(ctx: ActionCtx): Promise<void> {
+  const it = await loadAuthorisedIntake(ctx);
+  await prisma.workIntakeItemRead.upsert({
+    where: {
+      workIntakeItemId_userId: {
+        workIntakeItemId: it.id,
+        userId: ctx.principal.id,
+      },
+    },
+    update: {}, // idempotent — do not bump readAt on repeat
+    create: {
+      workIntakeItemId: it.id,
+      userId: ctx.principal.id,
+    },
+  });
+}

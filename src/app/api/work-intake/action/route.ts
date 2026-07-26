@@ -15,6 +15,7 @@ import {
   markInformational,
   deferIntake,
   assignToSelf,
+  markWorkIntakeRead,
   WorkIntakeActionError,
 } from "@/lib/work-intake/actions";
 import { MAILBOX_ERROR_CODE } from "@/lib/mailbox/errors";
@@ -56,6 +57,10 @@ export async function POST(req: NextRequest) {
       }
       case "assign_self":
         await assignToSelf(ctx);
+        break;
+      case "mark_read":
+        // Sprint 3 Checkpoint 15I — per-user read state. Idempotent.
+        await markWorkIntakeRead(ctx);
         break;
       default:
         return NextResponse.json({ error: "unknown_action" }, { status: 400 });

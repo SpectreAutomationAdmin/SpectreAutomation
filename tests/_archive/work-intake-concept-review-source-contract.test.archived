@@ -1,0 +1,188 @@
+// Sprint 3 Checkpoint 15I — Work Intake concept-review source-contract locks.
+//
+// These tests hold the shape of the dev-only concept review environment
+// so that future edits cannot silently:
+//   • let the review route render in production
+//   • drop the shared ConceptProps contract that every concept implements
+//   • introduce an "Invoice Review" tab on a non-AP fixture (misleading UI)
+//   • collapse the card when a user clicks inside a tab
+//   • lose the read/unread/expanded/resolved data-attributes the tests rely on
+//   • use invented lifecycle state values that don't match production
+//
+// Vitest runs in "node" env — no DOM. Assertions read source files.
+
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const DIR = "src/app/app/admin/review/work-intake-concepts";
+const PAGE      = read(`${DIR}/page.tsx`);
+const CLIENT    = read(`${DIR}/review-client.tsx`);
+const FIXTURES  = read(`${DIR}/fixtures.ts`);
+const TABHOST   = read(`${DIR}/shared/TabHost.tsx`);
+const CONCEPT_A = read(`${DIR}/concepts/ConceptA_CorrespondenceQueue.tsx`);
+const CONCEPT_B = read(`${DIR}/concepts/ConceptB_ExecutiveBriefing.tsx`);
+const CONCEPT_C = read(`${DIR}/concepts/ConceptC_IntelligenceCaseFile.tsx`);
+const CONCEPT_D = read(`${DIR}/concepts/ConceptD_DecisionSentence.tsx`);
+const CONCEPT_E = read(`${DIR}/concepts/ConceptE_TimelineAnchor.tsx`);
+const ALL_CONCEPTS: Array<[string, string]> = [
+  ["A", CONCEPT_A], ["B", CONCEPT_B], ["C", CONCEPT_C], ["D", CONCEPT_D], ["E", CONCEPT_E],
+];
+
+function read(p: string) {
+  return readFileSync(join(process.cwd(), p), "utf8");
+}
+
+describe("dev-only review route", () => {
+  it("returns 404 when NODE_ENV === 'production'", () => {
+    // Exact string match — a refactor that removes this line breaks the guard.
+    expect(PAGE).toMatch(/process\.env\.NODE_ENV\s*===\s*"production"/);
+    expect(PAGE).toMatch(/notFound\(\)/);
+  });
+  it("requires an authenticated session (redirects to /login when absent)", () => {
+    expect(PAGE).toMatch(/getCurrentUser\(\)/);
+    expect(PAGE).toMatch(/redirect\("\/login"\)/);
+  });
+  it("does not import Prisma or any DB layer (fixture-only)", () => {
+    expect(PAGE).not.toMatch(/@\/lib\/prisma/);
+    expect(CLIENT).not.toMatch(/@\/lib\/prisma/);
+    expect(FIXTURES).not.toMatch(/@\/lib\/prisma|from ['"](@prisma\/client|@\/lib\/prisma)/);
+  });
+  it("uses the same dev-gate pattern as the existing design-system gallery (comment says NOT production)", () => {
+    // Not a mechanical assertion; the comment is doc-quality. This test
+    // just ensures we haven't reworded away the intent marker.
+    expect(PAGE).toMatch(/DEV-ONLY|NOT production|dev-only/i);
+  });
+});
+
+describe("fixtures", () => {
+  it("uses ONLY the live production status vocabulary", () => {
+    // Live values verified against src/lib/work-intake/actions.ts.
+    // No invented states like PENDING/APPROVED/COMPLETED/EXCEPTION.
+    expect(FIXTURES).toMatch(/type LifecycleState =[\s\S]*?"OPEN"[\s\S]*?"IN_PROGRESS"[\s\S]*?"DEFERRED"[\s\S]*?"RESOLVED"[\s\S]*?"INFORMATIONAL"[\s\S]*?"SUPPRESSED"/);
+    expect(FIXTURES).not.toMatch(/lifecycleState:\s*"PENDING"|"APPROVED"|"COMPLETED"|"EXCEPTION"|"RECOMMENDED"|"IN_REVIEW"|"ON_HOLD"|"REJECTED"|"ARCHIVED"/);
+  });
+  it("mirrors the real schema's judgmentRequired boolean", () => {
+    expect(FIXTURES).toMatch(/judgmentRequired:\s*boolean/);
+  });
+  it("carries all 5 required fixtures by id", () => {
+    for (const id of [
+      "fx-microsoft-invoice",
+      "fx-member-matter",
+      "fx-operational-matter",
+      "fx-resolved-invoice",
+      "fx-uncertain-classification",
+    ]) {
+      expect(FIXTURES).toMatch(new RegExp(`id:\\s*"${id}"`));
+    }
+  });
+  it("Microsoft fixture keeps sender != vendor (guards against the founder-flagged confusion)", () => {
+    const block = FIXTURES.slice(FIXTURES.indexOf('"fx-microsoft-invoice"'), FIXTURES.indexOf('"fx-member-matter"'));
+    expect(block).toMatch(/from:\s*"Chris Turcato"/);
+    expect(block).toMatch(/vendorGuess:\s*"Microsoft Corporation"/);
+    expect(block).toMatch(/vendorMatchedToSpectreRecord:\s*false/);
+  });
+  it("member fixture's availableTabs does NOT include 'invoice'", () => {
+    const block = FIXTURES.slice(FIXTURES.indexOf('"fx-member-matter"'), FIXTURES.indexOf('"fx-operational-matter"'));
+    const tabs = block.match(/availableTabs:\s*\[[^\]]*\]/)?.[0] ?? "";
+    expect(tabs).not.toMatch(/invoice/);
+    // The founder called out that non-AP items must not show a misleading
+    // empty Invoice Review tab.
+  });
+  it("operational fixture is system-generated (no conversation)", () => {
+    const block = FIXTURES.slice(FIXTURES.indexOf('"fx-operational-matter"'), FIXTURES.indexOf('"fx-resolved-invoice"'));
+    expect(block).toMatch(/conversation:\s*null/);
+  });
+  it("resolved fixture uses RESOLVED and has judgmentRequired=false", () => {
+    const block = FIXTURES.slice(FIXTURES.indexOf('"fx-resolved-invoice"'), FIXTURES.indexOf('"fx-uncertain-classification"'));
+    expect(block).toMatch(/lifecycleState:\s*"RESOLVED"/);
+    expect(block).toMatch(/judgmentRequired:\s*false/);
+  });
+  it("uncertain fixture reports confidence === 'low'", () => {
+    const block = FIXTURES.slice(FIXTURES.indexOf('"fx-uncertain-classification"'));
+    expect(block).toMatch(/confidence:\s*"low"/);
+  });
+});
+
+describe("shared TabHost — contextual-tab + stopPropagation contract", () => {
+  it("only renders tabs listed in fixture.availableTabs", () => {
+    expect(TABHOST).toMatch(/fixture\.availableTabs\.map/);
+  });
+  it("stopPropagation is applied to tab clicks and the tab body", () => {
+    // If this ever regresses, clicking a tab inside an already-expanded
+    // card will fire the outer card open/collapse handler and jump the
+    // page unpredictably.
+    expect(TABHOST).toMatch(/e\.stopPropagation\(\)/);
+    expect(TABHOST).toMatch(/const stopBubble = useCallback/);
+  });
+  it("invoice tab body warns if rendered without an invoice (defence-in-depth)", () => {
+    expect(TABHOST).toMatch(/No invoice extraction on this item/);
+  });
+  it("conversation tab body handles system-generated items (null conversation)", () => {
+    expect(TABHOST).toMatch(/generated by Spectre or by another system/);
+  });
+});
+
+describe("shared concept contract — every concept implements the same interaction hooks", () => {
+  it.each(ALL_CONCEPTS)("concept %s consumes the shared ConceptProps", (key, src) => {
+    // Function signature: destructures fixture, state, onOpen, onCollapse, onResolve, resolveVerb.
+    expect(src).toMatch(/fixture,\s*state,\s*onOpen,\s*onCollapse,\s*onResolve,\s*resolveVerb/);
+  });
+  it.each(ALL_CONCEPTS)("concept %s wires primary click to open-when-collapsed / collapse-when-expanded", (key, src) => {
+    // Grep both hooks used in the same click handler.
+    expect(src).toMatch(/isExpanded \? onCollapse\(\) : onOpen\(\)/);
+  });
+  it.each(ALL_CONCEPTS)("concept %s exposes data-testid + data-unread + data-expanded + data-resolved on the outer element", (key, src) => {
+    expect(src).toMatch(/data-testid=\{`concept-[a-e]-\$\{fixture\.id\}`\}/i);
+    expect(src).toMatch(/data-unread=/);
+    expect(src).toMatch(/data-expanded=/);
+    expect(src).toMatch(/data-resolved=/);
+  });
+  it.each(ALL_CONCEPTS)("concept %s renders TabHost inside its expanded body", (key, src) => {
+    expect(src).toMatch(/import TabHost from ["']\.\.\/shared\/TabHost["']/);
+    expect(src).toMatch(/<TabHost/);
+  });
+  it.each(ALL_CONCEPTS)("concept %s exposes an outer resolve button with data-testid='resolve'", (key, src) => {
+    expect(src).toMatch(/data-testid="resolve"/);
+    expect(src).toMatch(/onClick=\{onResolve\}/);
+  });
+  it.each(ALL_CONCEPTS)("concept %s renders no legacy inline buttons (Open Review / View PDF / View Email / Review & send reply) on the collapsed surface", (key, src) => {
+    // The collapsed surface is the <button className="c?__surface|__row">.
+    // The forbidden buttons should not appear ANYWHERE in the concept —
+    // "View PDF" is legitimately in TabHost (in the Attachments tab), not
+    // in these concept files.
+    expect(src).not.toMatch(/>Open review<|>View PDF<|>View email<|>Review & send reply</i);
+  });
+  it.each(ALL_CONCEPTS)("concept %s does NOT import Prisma or any DB layer", (key, src) => {
+    expect(src).not.toMatch(/@\/lib\/prisma|@prisma\/client/);
+  });
+});
+
+describe("concept switcher & comparison mode", () => {
+  it("declares the 5 concepts A B C D E", () => {
+    for (const k of ["A", "B", "C", "D", "E"]) {
+      expect(FIXTURES).toMatch(new RegExp(`key:\\s*"${k}"`));
+    }
+  });
+  it("client harness offers both single-concept and compare-all views", () => {
+    expect(CLIENT).toMatch(/data-testid="view-single"/);
+    expect(CLIENT).toMatch(/data-testid="view-compare"/);
+  });
+  it("client harness offers active vs completed-history feed filters", () => {
+    expect(CLIENT).toMatch(/data-testid="feed-active"/);
+    expect(CLIENT).toMatch(/data-testid="feed-history"/);
+  });
+  it("resolve action removes the fixture from the active feed", () => {
+    // Active filter shows: !resolved. History filter shows: resolved.
+    // The onResolve handler flips isResolved true; the visibleFixtures
+    // filter re-derives from that.
+    expect(CLIENT).toMatch(/return feedFilter === "active" \? !resolved : resolved/);
+    expect(CLIENT).toMatch(/onResolve.*isResolved:\s*true/s);
+  });
+  it("read state does NOT flip back on collapse (persistence contract)", () => {
+    // The onCollapse handler must only change isExpanded, never re-set isUnread.
+    const block = CLIENT.slice(CLIENT.indexOf("const onCollapse"), CLIENT.indexOf("const onCollapse") + 400);
+    expect(block).toMatch(/isExpanded:\s*false/);
+    expect(block).not.toMatch(/isUnread:\s*true/);
+  });
+});

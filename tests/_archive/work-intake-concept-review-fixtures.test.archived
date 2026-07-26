@@ -1,0 +1,140 @@
+// Sprint 3 Checkpoint 15I — Runtime tests over the fixture data.
+//
+// These execute the fixtures module (unlike the source-contract tests
+// which regex the file) and assert semantic properties: the 5 required
+// scenarios all resolve, categories are consistent, no fixture points
+// at Prisma models, resolve verbs are one of a small set.
+
+import { describe, expect, it } from "vitest";
+import {
+  FIXTURES,
+  CONCEPTS,
+  CATEGORY_OF,
+  RESOLVE_ACTIONS,
+  formatBytes,
+  formatCurrency,
+  relativeFromISO,
+} from "@/app/app/admin/review/work-intake-concepts/fixtures";
+
+describe("fixtures — required scenarios", () => {
+  it("exports exactly 5 fixture scenarios", () => {
+    expect(FIXTURES).toHaveLength(5);
+  });
+  it("every fixture has a unique id, a label, and a description", () => {
+    const ids = new Set(FIXTURES.map((f) => f.id));
+    expect(ids.size).toBe(FIXTURES.length);
+    for (const f of FIXTURES) {
+      expect(f.fixtureLabel.length).toBeGreaterThan(0);
+      expect(f.fixtureDescription.length).toBeGreaterThan(0);
+    }
+  });
+  it("Microsoft fixture — sender is a person, extracted vendor is Microsoft Corporation, not matched", () => {
+    const f = FIXTURES.find((x) => x.id === "fx-microsoft-invoice")!;
+    expect(f.conversation?.from).toBe("Chris Turcato");
+    expect(f.invoice?.vendorGuess).toBe("Microsoft Corporation");
+    expect(f.invoice?.vendorMatchedToSpectreRecord).toBe(false);
+    expect(f.invoice?.invoiceNumber).toBe("E0701097E3");
+    expect(f.invoice?.currency).toBe("CAD");
+  });
+  it("Member fixture — non-AP; availableTabs must NOT include 'invoice'", () => {
+    const f = FIXTURES.find((x) => x.id === "fx-member-matter")!;
+    expect(f.entity.type).toBe("member");
+    expect(f.availableTabs).not.toContain("invoice");
+    expect(f.invoice).toBeNull();
+  });
+  it("Operational fixture — no conversation (system-generated); no invoice tab", () => {
+    const f = FIXTURES.find((x) => x.id === "fx-operational-matter")!;
+    expect(f.conversation).toBeNull();
+    expect(f.availableTabs).not.toContain("invoice");
+    expect(f.availableTabs).not.toContain("attachments");
+  });
+  it("Resolved fixture — lifecycleState = 'RESOLVED', judgmentRequired = false, vendor matched", () => {
+    const f = FIXTURES.find((x) => x.id === "fx-resolved-invoice")!;
+    expect(f.lifecycleState).toBe("RESOLVED");
+    expect(f.judgmentRequired).toBe(false);
+    expect(f.invoice?.vendorMatchedToSpectreRecord).toBe(true);
+  });
+  it("Uncertain fixture — low confidence, unresolved external contact", () => {
+    const f = FIXTURES.find((x) => x.id === "fx-uncertain-classification")!;
+    expect(f.intelligence.confidence).toBe("low");
+    expect(f.entity.type).toBe("external-contact");
+    expect(f.entity.timelineHref).toBeNull();
+  });
+});
+
+describe("lifecycle vocabulary matches live production", () => {
+  it("every fixture's lifecycleState is in the live production vocabulary", () => {
+    const live = new Set(["OPEN", "IN_PROGRESS", "DEFERRED", "RESOLVED", "INFORMATIONAL", "SUPPRESSED"]);
+    for (const f of FIXTURES) {
+      expect(live.has(f.lifecycleState), `${f.id} uses invalid state ${f.lifecycleState}`).toBe(true);
+    }
+  });
+  it("CATEGORY_OF covers every state used by any fixture", () => {
+    for (const f of FIXTURES) {
+      expect(CATEGORY_OF[f.lifecycleState]).toBeDefined();
+    }
+  });
+});
+
+describe("concepts", () => {
+  it("exports exactly 5 concept descriptors (A–E)", () => {
+    expect(CONCEPTS).toHaveLength(5);
+    expect(CONCEPTS.map((c) => c.key)).toEqual(["A", "B", "C", "D", "E"]);
+  });
+  it("each concept descriptor has a name and a thesis sentence", () => {
+    for (const c of CONCEPTS) {
+      expect(c.name.length).toBeGreaterThan(4);
+      expect(c.thesis.length).toBeGreaterThan(20);
+      expect(c.slug).toMatch(/^[a-z-]+$/);
+    }
+  });
+});
+
+describe("resolve verbs — bounded set", () => {
+  it("RESOLVE_ACTIONS exposes 4 candidate verbs; the winning concept's verb becomes production terminology", () => {
+    expect(RESOLVE_ACTIONS).toStrictEqual({
+      RESOLVE: "Resolve",
+      COMPLETE: "Complete",
+      CLEAR: "Clear from Work Intake",
+      DISMISS: "Dismiss",
+    });
+  });
+});
+
+describe("display helpers", () => {
+  it("formatBytes handles B/KB/MB", () => {
+    expect(formatBytes(500)).toBe("500 B");
+    expect(formatBytes(2048)).toBe("2 KB");
+    expect(formatBytes(3_500_000)).toBe("3.3 MB");
+  });
+  it("formatCurrency renders a locale-aware number with currency prefix", () => {
+    expect(formatCurrency("31.29", "CAD")).toContain("CAD");
+    expect(formatCurrency("31.29", "CAD")).toContain("31.29");
+  });
+  it("relativeFromISO produces stable relative strings against a fixed 'now'", () => {
+    const now = new Date("2026-07-25T15:20:00Z");
+    // 30s → rounds to 1m per Math.round; "just now" requires strictly < 1 min after rounding.
+    expect(relativeFromISO("2026-07-25T15:19:50Z", now)).toBe("just now");
+    expect(relativeFromISO("2026-07-25T15:00:00Z", now)).toBe("20m ago");
+    expect(relativeFromISO("2026-07-25T13:20:00Z", now)).toBe("2h ago");
+  });
+});
+
+describe("intelligence hierarchy — clean separation of the five slots", () => {
+  it("every fixture answers all five hierarchy slots", () => {
+    for (const f of FIXTURES) {
+      expect(f.intelligence.happened.length).toBeGreaterThan(0);
+      expect(f.intelligence.spectreFound.length).toBeGreaterThan(0);
+      expect(f.intelligence.whyItMatters.length).toBeGreaterThan(0);
+      expect(f.intelligence.recommendedAction.length).toBeGreaterThan(0);
+      expect(["high", "medium", "low", "unresolved"]).toContain(f.intelligence.confidence);
+    }
+  });
+  it("issue is nullable — only fixtures with an actual blocker set it", () => {
+    const withIssue = FIXTURES.filter((f) => f.intelligence.issue !== null).length;
+    const withoutIssue = FIXTURES.filter((f) => f.intelligence.issue === null).length;
+    expect(withIssue + withoutIssue).toBe(FIXTURES.length);
+    expect(withIssue).toBeGreaterThan(0);   // Microsoft + uncertain
+    expect(withoutIssue).toBeGreaterThan(0);  // member + operational + resolved
+  });
+});

@@ -125,8 +125,13 @@ describe("EmailIntakeCard — tabbed layout + work-type eyebrow + View PDF", () 
   it("declares the tab set: conversation | attachments | invoice | statement | activity", () => {
     expect(EMAIL_CARD).toMatch(/type Tab = "conversation" \| "attachments" \| "invoice" \| "statement" \| "activity"/);
   });
-  it("switches to tabbed layout when linkedIntelligence has invoice/statement or attachments", () => {
-    expect(EMAIL_CARD).toMatch(/const useTabbedLayout =/);
+  it("expanded state reveals the tab body (Variant D collapsed body is always visible; tabs sit below it)", () => {
+    // Sprint 3 Checkpoint 15I supersedes the 15H "useTabbedLayout"
+    // switch — the Variant D card always renders its collapsed body,
+    // and the expanded region below it houses the tab set.
+    expect(EMAIL_CARD).toMatch(/const availableTabs = tabsFor\(data\)/);
+    expect(EMAIL_CARD).toMatch(/\{expanded \?/);
+    expect(EMAIL_CARD).toMatch(/spectre-mc-item-expanded/);
   });
   it("renders a TabBar sub-component with role=tablist / role=tab", () => {
     expect(EMAIL_CARD).toMatch(/function TabBar\(/);
@@ -134,19 +139,18 @@ describe("EmailIntakeCard — tabbed layout + work-type eyebrow + View PDF", () 
     expect(EMAIL_CARD).toMatch(/role="tab"/);
     expect(EMAIL_CARD).toMatch(/aria-selected/);
   });
-  it("emits the correct work-type eyebrow labels for each dominant facet", () => {
-    expect(EMAIL_CARD).toMatch(/EMAIL · AP INVOICE/);
-    expect(EMAIL_CARD).toMatch(/EMAIL · VENDOR STATEMENT/);
-    expect(EMAIL_CARD).toMatch(/EMAIL · AP INVOICE \+ STATEMENT/);
-    expect(EMAIL_CARD).toMatch(/EMAIL CORRESPONDENCE/);
+  it("tab-label vocab preserved on the TabBar", () => {
+    // 15I removed the worktype eyebrow, but the tab body still uses
+    // the same tab labels for continuity with 15H.
+    expect(EMAIL_CARD).toMatch(/conversation:\s*"Conversation"/);
+    expect(EMAIL_CARD).toMatch(/attachments:\s*"Attachments"/);
+    expect(EMAIL_CARD).toMatch(/invoice:\s*"Invoice Review"/);
+    expect(EMAIL_CARD).toMatch(/statement:\s*"Statement Review"/);
+    expect(EMAIL_CARD).toMatch(/activity:\s*"Activity"/);
   });
-  it("has worktypeSlug + worktypeLabel helpers driven off dominantFacet", () => {
-    expect(EMAIL_CARD).toMatch(/function worktypeSlug\(/);
-    expect(EMAIL_CARD).toMatch(/function worktypeLabel\(/);
-    expect(EMAIL_CARD).toMatch(/dominantFacet/);
-  });
-  it("exposes a 'View PDF' action that opens DocumentPreviewModal", () => {
-    expect(EMAIL_CARD).toMatch(/View PDF/);
+  it("PDF preview is offered via the DocumentPreviewModal (moved into the Attachments + Invoice/Statement tabs)", () => {
+    // The collapsed-row "View PDF" button was removed per §3.4;
+    // the modal itself is still wired inside the tab bodies.
     expect(EMAIL_CARD).toMatch(/import DocumentPreviewModal/);
     expect(EMAIL_CARD).toMatch(/<DocumentPreviewModal/);
   });
@@ -155,9 +159,11 @@ describe("EmailIntakeCard — tabbed layout + work-type eyebrow + View PDF", () 
     expect(EMAIL_CARD).toMatch(/function StatementFacetPane\(/);
   });
   it("lazy-loads AP evidence, statement evidence, and attachments from their respective endpoints", () => {
-    expect(EMAIL_CARD).toMatch(/ensureApEvidenceLoaded/);
-    expect(EMAIL_CARD).toMatch(/ensureStatementEvidenceLoaded/);
-    expect(EMAIL_CARD).toMatch(/ensureAttachmentsLoaded/);
+    // Sprint 3 Checkpoint 15I renamed the closures from `ensureXLoaded`
+    // to `loadXOnce` — same one-shot lazy-load semantics.
+    expect(EMAIL_CARD).toMatch(/loadApEvidenceOnce/);
+    expect(EMAIL_CARD).toMatch(/loadStatementEvidenceOnce/);
+    expect(EMAIL_CARD).toMatch(/loadAttachmentsOnce/);
     // AP + Statement evidence are fetched from the CHILD intake id
     // (not the email intake), because that's where the AP/Statement
     // findings + extraction live in the DB.

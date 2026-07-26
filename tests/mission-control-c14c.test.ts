@@ -328,17 +328,20 @@ describe("EmailIntakeCard — Checkpoint 14C", () => {
     expect(CARD_TSX).not.toMatch(/data-testid="email-preview"/);
   });
 
-  it("renders the four-column evidence strip when evidence is present", () => {
-    expect(CARD_TSX).toMatch(/data-testid="email-evidence"/);
-    expect(CARD_TSX).toMatch(/data\.evidence\.map/);
+  it("renders the four-cell instrument-panel readout when evidence is present (Variant D §3.6)", () => {
+    // Sprint 3 Checkpoint 15I (2026-07-26) — the pre-Variant-D
+    // `.spectre-mc-evidence` grid was replaced with the Variant D
+    // `.spectre-mc-readout` 4-cell instrument-panel strip.
+    expect(CARD_TSX).toMatch(/data-testid="email-readout"/);
+    expect(CARD_TSX).toMatch(/data\.evidence\.slice\(0, 4\)\.map/);
+    expect(CARD_TSX).not.toMatch(/data-testid="email-evidence"/);
   });
 
-  it("primary action buttons carry crisp icons from the Spectre icon system", () => {
-    expect(CARD_TSX).toMatch(/import \{[^}]*IconMail[^}]*\} from "@\/components\/spectre\/icons"/);
-    expect(CARD_TSX).toMatch(/IconReply/);
-    expect(CARD_TSX).toMatch(/IconEdit/);
-    expect(CARD_TSX).toMatch(/IconSend/);
-    // Emoji negative — no emoji glyphs
+  it("no emoji glyphs anywhere in the card", () => {
+    // 15I dropped the crisp-icon-per-action pattern because the
+    // collapsed row no longer carries Reply/Edit/Send/Mail buttons
+    // (§3.4 removed them; actions live inside the tabs). The
+    // emoji-negative assertion stays as a defence-in-depth guard.
     expect(CARD_TSX).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
   });
 
@@ -360,9 +363,13 @@ describe("EmailIntakeCard — Checkpoint 14C", () => {
     expect(CARD_TSX).toMatch(/data\.conversationMessageCount > 1/);
   });
 
-  it("disabled action buttons carry a tooltip explaining why", () => {
-    expect(CARD_TSX).toMatch(/aria-disabled=\{disabled \? "true" : undefined\}/);
-    expect(CARD_TSX).toMatch(/title=\{action\.disabledReason\}/);
+  it("card-level Resolve is present (Variant D §4.2 — replaces the old ActionButton row)", () => {
+    // 15I dropped the ActionButton sub-component + `disabledReason`
+    // tooltip pattern because those actions moved into the tabs.
+    // The queue-level Resolve control is what the collapsed card
+    // now exposes; the same disabled-during-network pattern applies.
+    expect(CARD_TSX).toMatch(/data-testid="card-resolve"/);
+    expect(CARD_TSX).toMatch(/disabled=\{resolving\}/);
   });
 });
 
