@@ -81,14 +81,28 @@ describe("Linked-intelligence resolver — tab facets for the unified card", () 
     expect(MC_LOADERS).toMatch(/statementAttachmentCount:\s*number/);
     expect(MC_LOADERS).toMatch(/dominantFacet:\s*"email"\s*\|\s*"invoice"\s*\|\s*"statement"\s*\|\s*"invoice\+statement"/);
   });
-  it("carries invoiceSummary (vendor, invoice #, total, currency, capital state, unresolved findings)", () => {
-    const iface = MC_LOADERS.slice(MC_LOADERS.indexOf("invoiceSummary?"));
-    expect(iface).toMatch(/vendorGuess:\s*string\s*\|\s*null/);
-    expect(iface).toMatch(/invoiceNumber:\s*string\s*\|\s*null/);
-    expect(iface).toMatch(/total:\s*string\s*\|\s*null/);
-    expect(iface).toMatch(/currency:\s*string\s*\|\s*null/);
-    expect(iface).toMatch(/capitalState:\s*string\s*\|\s*null/);
-    expect(iface).toMatch(/unresolvedFindingCount:\s*number/);
+  it("carries invoiceSummary via the typed ApInvoiceCardIntelligence shape (15I-2)", () => {
+    // Sprint 3 Checkpoint 15I-2 (2026-07-27) — the loader now
+    // exports a typed ApInvoiceCardIntelligence with a richer shape
+    // (extractedVendor.name, vendorMatch.state, gross.amount,
+    // gross.currency, category.label, category.glAccountNumber,
+    // capitalState, workflowState, etc.). The pre-15I-2 flat shape
+    // is deliberately superseded.
+    expect(MC_LOADERS).toMatch(/export interface ApInvoiceCardIntelligence/);
+    expect(MC_LOADERS).toMatch(/invoiceSummary\?:\s*ApInvoiceCardIntelligence/);
+    // Every field the AP card renders is present on the shape.
+    for (const f of [
+      "extractedVendor",
+      "vendorMatch",
+      "invoiceNumber",
+      "gross:",
+      "workflowState",
+      "workflowReason",
+      "primaryAttachment",
+      "unresolvedFindingCount",
+    ]) {
+      expect(MC_LOADERS).toMatch(new RegExp(f.replace(/([.*+?^${}()|[\]\\])/g, "\\$1")));
+    }
   });
   it("carries statementSummary (closing balance, reconciliation state, unresolved findings)", () => {
     const iface = MC_LOADERS.slice(MC_LOADERS.indexOf("statementSummary?"));
@@ -241,10 +255,12 @@ describe("Wiring — MC page passes linkedIntelligence through to EmailIntakeCar
   it("page.tsx emailFeedData copies item.linkedIntelligence into the card payload", () => {
     expect(MC_PAGE).toMatch(/linkedIntelligence:\s*item\.linkedIntelligence/);
   });
-  it("EmailFeedCardData interface carries linkedIntelligence with the same shape", () => {
-    expect(EMAIL_CARD).toMatch(/linkedIntelligence\?:/);
-    expect(EMAIL_CARD).toMatch(/apReviewIntakeIds:\s*string\[\]/);
-    expect(EMAIL_CARD).toMatch(/statementReviewIntakeIds:\s*string\[\]/);
-    expect(EMAIL_CARD).toMatch(/dominantFacet:\s*"email"\s*\|\s*"invoice"\s*\|\s*"statement"\s*\|\s*"invoice\+statement"/);
+  it("EmailFeedCardData interface consumes the typed LinkedIntelligenceForEmail (15I-2)", () => {
+    // Sprint 3 Checkpoint 15I-2 — the card's linkedIntelligence
+    // prop is now the exported LinkedIntelligenceForEmail type
+    // (which itself carries the typed ApInvoiceCardIntelligence).
+    // Direct inline field enumeration is superseded.
+    expect(EMAIL_CARD).toMatch(/linkedIntelligence\?:\s*LinkedIntelligenceForEmail/);
+    expect(EMAIL_CARD).toMatch(/import type \{ LinkedIntelligenceForEmail, ApInvoiceCardIntelligence \}/);
   });
 });

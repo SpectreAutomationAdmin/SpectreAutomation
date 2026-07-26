@@ -17,6 +17,41 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
 import type { WorkItem, WorkItemEvidenceCell } from "./index";
+import { analyseIngestedInvoice } from "@/lib/ap-intelligence/analyse";
+import type { ApAnalyseResult } from "@/lib/ap-intelligence/analyse";
+import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
+
+// Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
+// for the AP-card intelligence projection.
+//
+// WHY: `summariseApIntake` runs `analyseIngestedInvoice` which
+// fetches the invoice PDF from object storage + runs `pdf-parse`
+// + queries vendors + reconciles + recommends a GL account. On a
+// Mission Control render with N AP cards, that's N × object-store
+// round-trip + N × CPU-bound PDF parse. Unbounded, that adds
+// multiple seconds per page load and hammers R2 unnecessarily.
+//
+// This cache is intentionally minimal:
+//   • per Fly VM (not shared across replicas) — deploys and machine
+//     restarts start with a cold cache, which is acceptable;
+//   • fixed 90-second TTL — long enough that page-refresh burst
+//     traffic hits the cache, short enough that a re-analysis
+//     triggered elsewhere is picked up within a minute;
+//   • cache key includes the primary IngestedDocument.id — a new
+//     document (re-materialised child intake) invalidates naturally.
+//
+// FOLLOW-UP (out of scope for this deploy): persist the extraction
+// on materialisation into a `WorkIntakeItemFactsCache` row (JSON) so
+// the summariser is O(1) DB read with no re-parse ever. That is a
+// small schema change and belongs to a separate checkpoint.
+const AP_SUMMARY_TTL_MS = 90_000;
+const apSummaryCache = new Map<
+  string,
+  { at: number; value: LinkedIntelligenceForEmail["invoiceSummary"] }
+>();
+function apSummaryCacheKey(intakeId: string, docId: string | null): string {
+  return `${intakeId}::${docId ?? "no-doc"}`;
+}
 
 interface LoaderArgs {
   clubId: string;
@@ -119,14 +154,13 @@ export interface LinkedIntelligenceForEmail {
   invoiceAttachmentCount: number;
   statementAttachmentCount: number;
   dominantFacet: "email" | "invoice" | "statement" | "invoice+statement";
-  invoiceSummary?: {
-    vendorGuess: string | null;
-    invoiceNumber: string | null;
-    total: string | null;
-    currency: string | null;
-    capitalState: string | null;
-    unresolvedFindingCount: number;
-  };
+  // Sprint 3 Checkpoint 15I-2 (2026-07-27) — typed AP-card
+  // intelligence projection. The Variant D AP invoice card
+  // renders EVERY collapsed field from this shape; the card
+  // does not re-parse the PDF or re-query the extraction on
+  // its own. Absence of `invoiceSummary` → card falls back to
+  // the email-only projection.
+  invoiceSummary?: ApInvoiceCardIntelligence;
   statementSummary?: {
     vendorGuess: string | null;
     closingBalance: string | null;
@@ -134,6 +168,79 @@ export interface LinkedIntelligenceForEmail {
     reconciliationState: string | null;
     unresolvedFindingCount: number;
   };
+}
+
+// Sprint 3 Checkpoint 15I-2 — the operational-intelligence
+// projection the Variant D AP invoice card consumes. Every field
+// is nullable — a missing field means "not confidently derived",
+// NEVER "guessed". Card renders each region conditionally.
+export interface ApInvoiceCardIntelligence {
+  // Sender identity is provenance-only. It NEVER labels the vendor.
+  sender: {
+    name: string | null;
+    email: string | null;
+    // VENDOR: the message came from the vendor's own domain.
+    // EMPLOYEE_FORWARD: the sender is a club user forwarding a
+    //   vendor invoice (e.g. a staff member forwarding a bill).
+    // OTHER: unclassifiable — treat as provenance only.
+    relationship: "VENDOR" | "EMPLOYEE_FORWARD" | "OTHER";
+  };
+  // PDF-extracted vendor identity. Distinct from the Spectre
+  // vendor-record match state.
+  extractedVendor: {
+    name: string | null;
+  };
+  // Whether the extracted vendor was resolved to a Spectre vendor
+  // record. If MATCHED, `matchedName` carries the record's
+  // operating/legal name.
+  vendorMatch: {
+    state: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "INSUFFICIENT_SIGNAL";
+    matchedName: string | null;
+  };
+  invoiceNumber: string | null;
+  gross: {
+    amount: string | null;    // Decimal-safe string
+    currency: string | null;  // ISO code
+  };
+  paymentTerms: string | null;
+  purchaseOrder: {
+    poNumber: string | null;
+    matchedPoDocumentId: string | null;
+  };
+  category: {
+    label: string | null;                     // Human-facing e.g. "Kitchen supplies"
+    glAccountNumber: string | null;
+    glAccountName: string | null;
+    capitalState: "OPERATING" | "CAPITAL" | "AMBIGUOUS" | "INSUFFICIENT_EVIDENCE" | null;
+  };
+  // Rolling count of accepted invoices from the matched vendor
+  // in the current calendar quarter (inclusive of this one).
+  // Null when no vendor match exists — cannot count without a
+  // vendor id.
+  invoiceCadenceThisQuarter: number | null;
+  // Confidence blended from extraction state + vendor match
+  // certainty + reconcile state, expressed as a 0-100 integer.
+  confidence: number | null;
+  // Precomputed workflow state — drives the pill, primary action,
+  // and recommendation branch on the card. See deriveWorkflowState.
+  workflowState:
+    | "READY_FOR_APPROVAL"
+    | "VENDOR_MATCH_REQUIRED"
+    | "MISSING_INFORMATION"
+    | "NEEDS_JUDGMENT"
+    | "POSSIBLE_DUPLICATE";
+  // Compact human-facing reason for the current workflowState —
+  // used verbatim in the recommendation strip.
+  workflowReason: string;
+  // Count of unresolved MEDIUM+ analyser findings.
+  unresolvedFindingCount: number;
+  // The primary invoice attachment — used by the collapsed card's
+  // "Invoice · PDF" footer aux link. Null when the child intake
+  // has no ingested PDF (shouldn't happen in practice).
+  primaryAttachment: {
+    documentId: string;
+    filename: string;
+  } | null;
 }
 export async function loadLinkedIntelligenceForEmailIntakes(args: {
   clubId: string;
@@ -200,7 +307,12 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       })
     : [];
 
-  for (const emailIntakeId of args.emailIntakeIds) {
+  // Sprint 3 Checkpoint 15I-2 — parallelise the per-email projection
+  // fan-out. Each iteration runs the AP + Statement summarisers, each
+  // of which is itself cached process-locally to bound the PDF
+  // re-parse cost on repeat loads.
+  const projectionStart = Date.now();
+  await Promise.all(args.emailIntakeIds.map(async (emailIntakeId) => {
     const atts = emailIntakeToAttachments.get(emailIntakeId) ?? [];
     // Skip inline images (isInline=true is a signature/logo attachment).
     const realAtts = atts.filter((a) => !a.isInline);
@@ -212,12 +324,13 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     const apIds = ownedReviews.filter((r) => r.classification === "AP_INVOICE_REVIEW").map((r) => r.id);
     const stIds = ownedReviews.filter((r) => r.classification === "VENDOR_STATEMENT_REVIEW").map((r) => r.id);
 
-    const invoiceSummary = apIds.length > 0
-      ? await summariseApIntake(args.clubId, apIds[0])
-      : undefined;
-    const statementSummary = stIds.length > 0
-      ? await summariseStatementIntake(args.clubId, stIds[0])
-      : undefined;
+    // Sprint 3 Checkpoint 15I-2 — projections run in parallel per
+    // email intake. Each `summariseApIntake` is cached process-locally
+    // to bound the PDF re-parse cost on repeat loads.
+    const [invoiceSummary, statementSummary] = await Promise.all([
+      apIds.length > 0 ? summariseApIntake(args.clubId, apIds[0]) : Promise.resolve(undefined),
+      stIds.length > 0 ? summariseStatementIntake(args.clubId, stIds[0]) : Promise.resolve(undefined),
+    ]);
 
     const dominantFacet: LinkedIntelligenceForEmail["dominantFacet"] =
       invoiceAttCount > 0 && statementAttCount > 0 ? "invoice+statement"
@@ -235,33 +348,320 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       invoiceSummary,
       statementSummary,
     });
-  }
+  }));
+  logger.info("mission-control.linked-intelligence.projected", {
+    clubId: args.clubId,
+    emailIntakeCount: args.emailIntakeIds.length,
+    apSummaryCacheSize: apSummaryCache.size,
+    elapsedMs: Date.now() - projectionStart,
+  });
   return map;
 }
 
 async function summariseApIntake(clubId: string, intakeId: string): Promise<LinkedIntelligenceForEmail["invoiceSummary"]> {
+  // Sprint 3 Checkpoint 15I-2 (2026-07-27) — real AP-card
+  // intelligence projection with a process-local TTL cache.
+  //
+  // The previous implementation returned null for every extracted
+  // field, so the Variant D card had nothing PDF-derived to render.
+  // This projection now:
+  //   1. Loads the child intake's primary IngestedDocument.
+  //   2. Runs analyseIngestedInvoice() — deterministic, no LLM/OCR.
+  //   3. Loads the source EmailMessage (via the parent's
+  //      EmailWorkIntakeOrigin) so the sender line can distinguish
+  //      forwarding employees from the vendor itself.
+  //   4. Counts prior invoices from the matched vendor this quarter
+  //      to derive the cadence line ("3rd invoice this quarter").
+  //   5. Derives the AP workflow state (READY_FOR_APPROVAL,
+  //      VENDOR_MATCH_REQUIRED, MISSING_INFORMATION, NEEDS_JUDGMENT,
+  //      POSSIBLE_DUPLICATE) from vendor + reconcile + extraction
+  //      states — this drives the card's status pill + primary
+  //      action + recommendation wording.
+  //
+  // Cost + bound: one PDF re-parse per (intakeId, docId) per 90s
+  // per Fly VM. Repeated Mission Control page loads within that
+  // window hit the cache. Cold on deploy and every 90s thereafter.
+  // Steady-state: 0 re-parses. See apSummaryCache above.
+
+  // Fast path — return the cached projection if still fresh.
+  // Key includes the doc id below; we defer key resolution until after
+  // we have the intake's origin.
   const intake = await prisma.workIntakeItem.findFirst({
     where: { id: intakeId, clubId },
     select: {
       findings: { where: { state: { in: ["CONFIRMED", "OBSERVED"] } }, select: { key: true, severity: true, statement: true } },
+      origins: {
+        where: { kind: "INGESTED_DOCUMENT", role: "PRIMARY" },
+        select: { referenceId: true },
+        take: 1,
+      },
     },
   });
   if (!intake) return undefined;
-  // Statement text on ap.invoice.capital_candidate / operating_candidate carries reasoning; extract fields from persisted findings if present.
-  const capitalFinding = intake.findings.find((f) => f.key === "ap.invoice.capital_candidate")
-    ?? intake.findings.find((f) => f.key === "ap.invoice.operating_candidate")
-    ?? intake.findings.find((f) => f.key === "ap.invoice.requires_review");
-  const capitalState = capitalFinding?.key === "ap.invoice.capital_candidate" ? "CAPITAL"
-    : capitalFinding?.key === "ap.invoice.operating_candidate" ? "OPERATING"
-    : capitalFinding?.key === "ap.invoice.requires_review" ? "AMBIGUOUS"
+
+  const docRef = intake.origins[0]?.referenceId ?? null;
+
+  // Cache probe now that we have the (intakeId, docRef) key. A hit
+  // means we skip the expensive analyseIngestedInvoice call AND the
+  // downstream vendor/GL lookups (they'd only re-derive the same
+  // values from the cached ExtractedInvoice input).
+  const cacheKey = apSummaryCacheKey(intakeId, docRef);
+  const cached = apSummaryCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < AP_SUMMARY_TTL_MS) {
+    return cached.value;
+  }
+
+  // Analyser — deterministic PDF parse. Wrapped in try/catch so a
+  // parse failure never breaks the whole feed load.
+  let analysis: ApAnalyseResult | null = null;
+  if (docRef) {
+    try {
+      analysis = await analyseIngestedInvoice({ clubId, ingestedDocumentId: docRef });
+    } catch (e) {
+      logger.warn("mission-control.ap-card-summary.analyse_failed", {
+        clubId, intakeId, docRef, error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  const extraction: ExtractedInvoice | null = analysis?.extraction ?? null;
+
+  // Document metadata (filename for the aux link) + sourceReferenceId
+  // (the EmailAttachment.id — IngestedDocument.sourceReferenceId is a
+  // plain string, not a Prisma relation, so we walk it manually).
+  const doc = docRef
+    ? await prisma.ingestedDocument.findFirst({
+        where: { id: docRef, clubId },
+        select: { id: true, filename: true, sourceKind: true, sourceReferenceId: true },
+      })
     : null;
+
+  // Source email — for sender name + email + forwarding-employee
+  // detection. Walk: WorkIntakeItem → IngestedDocument →
+  // EmailAttachment (via sourceReferenceId) → EmailMessage.
+  let sourceEmail: { senderName: string; senderAddress: string; internetMessageId: string | null } | null = null;
+  if (doc?.sourceKind === "EMAIL_ATTACHMENT" && doc.sourceReferenceId) {
+    const attachment = await prisma.emailAttachment.findFirst({
+      where: { id: doc.sourceReferenceId, emailMessage: { clubId } },
+      select: {
+        emailMessage: {
+          select: { senderName: true, senderAddress: true, internetMessageId: true, clubId: true },
+        },
+      },
+    });
+    if (attachment?.emailMessage && attachment.emailMessage.clubId === clubId) {
+      sourceEmail = {
+        senderName: attachment.emailMessage.senderName,
+        senderAddress: attachment.emailMessage.senderAddress,
+        internetMessageId: attachment.emailMessage.internetMessageId,
+      };
+    }
+  }
+
+  // Sender relationship — is the email from the vendor's own domain,
+  // or from a Spectre club user (employee forward), or unknown?
+  const senderRelationship = await classifySenderRelationship({
+    clubId,
+    senderAddress: sourceEmail?.senderAddress ?? null,
+    extractedVendorDomain: extraction?.vendor.guessedDomain ?? null,
+    matchedVendorId: analysis?.vendor.state === "MATCHED" ? (analysis.vendor.candidates[0]?.id ?? null) : null,
+  });
+
+  // Invoice cadence — count prior APInvoice rows for the matched vendor
+  // this quarter. Null when no vendor match.
+  const matchedVendorId = analysis?.vendor.state === "MATCHED" ? (analysis.vendor.candidates[0]?.id ?? null) : null;
+  const invoiceCadenceThisQuarter = matchedVendorId
+    ? await countInvoicesThisQuarter(clubId, matchedVendorId)
+    : null;
+
+  const capitalState = analysis?.capital.state ?? null;
+  const gl = analysis?.gl ?? null;
+  const categoryLabel = gl?.accountName
+    ?? (analysis?.capital.capitalClass ? humanCapitalClass(analysis.capital.capitalClass) : null);
+
+  const confidence = deriveApCardConfidence(analysis);
+  const workflowState = deriveApWorkflowState(analysis);
+  const workflowReason = deriveApWorkflowReason(workflowState, analysis);
+
   const unresolvedFindingCount = intake.findings.filter((f) =>
     f.severity === "HIGH" || f.severity === "CRITICAL" || f.severity === "MEDIUM",
   ).length;
-  return {
-    vendorGuess: null, invoiceNumber: null, total: null, currency: null,
-    capitalState, unresolvedFindingCount,
+
+  const value: LinkedIntelligenceForEmail["invoiceSummary"] = {
+    sender: {
+      name: sourceEmail?.senderName ?? null,
+      email: sourceEmail?.senderAddress ?? null,
+      relationship: senderRelationship,
+    },
+    extractedVendor: {
+      name: extraction?.vendor.guessedName ?? null,
+    },
+    vendorMatch: {
+      state: analysis?.vendor.state ?? "INSUFFICIENT_SIGNAL",
+      matchedName: matchedVendorId
+        ? (analysis?.vendor.candidates[0]?.operatingName
+          ?? analysis?.vendor.candidates[0]?.legalName
+          ?? null)
+        : null,
+    },
+    invoiceNumber: extraction?.invoiceNumber ?? null,
+    gross: {
+      amount: extraction?.total ?? null,
+      currency: extraction?.currency ?? null,
+    },
+    paymentTerms: extraction?.paymentTerms ?? null,
+    purchaseOrder: {
+      poNumber: extraction?.purchaseOrder ?? null,
+      matchedPoDocumentId: null,   // Future: reconcile.matchedPoId
+    },
+    category: {
+      label: categoryLabel,
+      glAccountNumber: gl?.accountNumber ?? null,
+      glAccountName: gl?.accountName ?? null,
+      capitalState,
+    },
+    invoiceCadenceThisQuarter,
+    confidence,
+    workflowState,
+    workflowReason,
+    unresolvedFindingCount,
+    primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
   };
+
+  // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission
+  // Control renders within this window skip the re-parse entirely.
+  apSummaryCache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}
+
+/**
+ * Classify how the sender relates to the invoice.
+ *   VENDOR — sender's email domain matches the extracted vendor's domain
+ *     OR the matched Spectre vendor's contact email domain.
+ *   EMPLOYEE_FORWARD — sender is a User of this club.
+ *   OTHER — anything else. Card treats this as provenance only.
+ * Never confuses a forwarding staff member with the vendor.
+ */
+async function classifySenderRelationship(args: {
+  clubId: string;
+  senderAddress: string | null;
+  extractedVendorDomain: string | null;
+  matchedVendorId: string | null;
+}): Promise<"VENDOR" | "EMPLOYEE_FORWARD" | "OTHER"> {
+  const addr = args.senderAddress?.toLowerCase().trim() ?? "";
+  if (!addr) return "OTHER";
+  const senderDomain = addr.split("@")[1] ?? "";
+
+  // 1. Extracted-vendor domain match.
+  if (args.extractedVendorDomain && senderDomain === args.extractedVendorDomain.toLowerCase()) {
+    return "VENDOR";
+  }
+  // 2. Matched-Spectre-vendor contact email domain match.
+  if (args.matchedVendorId) {
+    const vendor = await prisma.vendor.findFirst({
+      where: { id: args.matchedVendorId, clubId: args.clubId },
+      select: { email: true },
+    });
+    const vDomain = vendor?.email?.toLowerCase().split("@")[1] ?? "";
+    if (vDomain && senderDomain === vDomain) return "VENDOR";
+  }
+  // 3. Sender is a club User (employee forward).
+  //    Uses the canonical UserClubRole junction (User.clubRoles).
+  const user = await prisma.user.findFirst({
+    where: { email: addr, clubRoles: { some: { clubId: args.clubId } } },
+    select: { id: true },
+  });
+  if (user) return "EMPLOYEE_FORWARD";
+  return "OTHER";
+}
+
+/**
+ * Count APInvoice rows for a vendor this calendar quarter (matched
+ * vendor's own invoices only). Feeds the "3rd invoice this quarter"
+ * sender-line cadence copy.
+ */
+async function countInvoicesThisQuarter(clubId: string, vendorId: string): Promise<number> {
+  const now = new Date();
+  const quarter = Math.floor(now.getMonth() / 3);
+  const start = new Date(now.getFullYear(), quarter * 3, 1);
+  return prisma.aPInvoice.count({
+    where: { clubId, vendorId, invoiceDate: { gte: start } },
+  });
+}
+
+/** Blend extraction quality, vendor certainty, and reconcile state into a 0-100. */
+function deriveApCardConfidence(a: ApAnalyseResult | null): number | null {
+  if (!a) return null;
+  let score = 0;
+  if (a.extraction.state === "STRUCTURED") score += 40;
+  else if (a.extraction.state === "PARTIAL") score += 20;
+  if (a.vendor.state === "MATCHED") score += 30;
+  else if (a.vendor.state === "AMBIGUOUS") score += 15;
+  if (a.reconcile.state === "MATCH") score += 20;
+  else if (a.reconcile.state === "AMOUNT_MISMATCH" || a.reconcile.state === "DATE_MISMATCH") score += 10;
+  if (a.gl.accountNumber) score += 10;
+  return Math.max(0, Math.min(100, score));
+}
+
+/**
+ * The workflow-state decision tree. Drives the pill, primary action,
+ * and recommendation branch. Order matters — first matching rule wins.
+ */
+function deriveApWorkflowState(a: ApAnalyseResult | null):
+  ApInvoiceCardIntelligence["workflowState"] {
+  if (!a) return "NEEDS_JUDGMENT";
+  if (a.reconcile.state === "DUPLICATE" || a.reconcile.state === "HASH_DUPLICATE") return "POSSIBLE_DUPLICATE";
+  if (a.extraction.state === "DOCUMENT_UNREADABLE") return "MISSING_INFORMATION";
+  const missingCore =
+    !a.extraction.invoiceNumber || !a.extraction.total || !a.extraction.currency;
+  if (missingCore) return "MISSING_INFORMATION";
+  if (a.vendor.state === "NOT_FOUND" || a.vendor.state === "AMBIGUOUS") return "VENDOR_MATCH_REQUIRED";
+  if (a.vendor.state === "INSUFFICIENT_SIGNAL") return "VENDOR_MATCH_REQUIRED";
+  // Everything the analyser needs to code the invoice was found.
+  // If reconcile confirmed a match to an existing APInvoice, we
+  // already have a coding path — ready for approval.
+  if (a.reconcile.state === "MATCH") return "READY_FOR_APPROVAL";
+  // Extraction + vendor are OK but reconcile has a variance the
+  // reviewer must judge (amount/date mismatch or PO variance).
+  if (a.reconcile.state === "AMOUNT_MISMATCH" || a.reconcile.state === "DATE_MISMATCH"
+      || a.reconcile.state === "VENDOR_MISMATCH") {
+    return "NEEDS_JUDGMENT";
+  }
+  // No AP row exists yet but coding is clean → ready to draft + post.
+  return "READY_FOR_APPROVAL";
+}
+
+function deriveApWorkflowReason(
+  state: ApInvoiceCardIntelligence["workflowState"],
+  a: ApAnalyseResult | null,
+): string {
+  if (!a) return "Analysis unavailable — open review to inspect.";
+  const vendor = a.extraction.vendor.guessedName ?? "the vendor";
+  const gl = a.gl.accountName ? `GL ${a.gl.accountNumber} ${a.gl.accountName}` : "the recommended GL account";
+  switch (state) {
+    case "READY_FOR_APPROVAL":
+      return `Approve and post to ${gl}. No exceptions detected.`;
+    case "VENDOR_MATCH_REQUIRED":
+      return a.vendor.state === "AMBIGUOUS"
+        ? `Select the correct vendor from the extracted candidates, then confirm the proposed coding.`
+        : `Match ${vendor} to an existing vendor or onboard it, then confirm the proposed coding.`;
+    case "MISSING_INFORMATION":
+      return a.extraction.state === "DOCUMENT_UNREADABLE"
+        ? `The attached PDF could not be parsed. Request a legible copy from the sender.`
+        : `The extractor could not confidently read every required field. Open review to fill in the missing values.`;
+    case "POSSIBLE_DUPLICATE":
+      return `Spectre already has this invoice on the AP subledger. Confirm this is a duplicate before dismissing.`;
+    case "NEEDS_JUDGMENT":
+    default:
+      if (a.reconcile.state === "AMOUNT_MISMATCH") return `Total on the PDF does not match the existing AP row. Reconcile the variance.`;
+      if (a.reconcile.state === "DATE_MISMATCH") return `Invoice date on the PDF does not match the existing AP row. Reconcile the variance.`;
+      if (a.reconcile.state === "VENDOR_MISMATCH") return `Invoice reference already exists on a different vendor. Investigate before approving.`;
+      return `Review the extracted invoice facts before advancing.`;
+  }
+}
+
+function humanCapitalClass(cls: string): string {
+  return cls.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
 async function summariseStatementIntake(clubId: string, intakeId: string): Promise<LinkedIntelligenceForEmail["statementSummary"]> {

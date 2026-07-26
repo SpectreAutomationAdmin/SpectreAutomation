@@ -41,6 +41,7 @@ import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
 import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
+import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/lib/mission-control";
 
 // -------------------------------------------------------------------------
 // Public props
@@ -70,29 +71,10 @@ export interface EmailFeedCardData {
   isHighImportance: boolean;
   conversationMessageCount: number;
   workIntakeStatus?: string;     // OPEN | IN_PROGRESS | DEFERRED | RESOLVED | INFORMATIONAL | SUPPRESSED
-  linkedIntelligence?: {
-    apReviewIntakeIds: string[];
-    statementReviewIntakeIds: string[];
-    attachmentCount: number;
-    invoiceAttachmentCount: number;
-    statementAttachmentCount: number;
-    dominantFacet: "email" | "invoice" | "statement" | "invoice+statement";
-    invoiceSummary?: {
-      vendorGuess: string | null;
-      invoiceNumber: string | null;
-      total: string | null;
-      currency: string | null;
-      capitalState: string | null;
-      unresolvedFindingCount: number;
-    };
-    statementSummary?: {
-      vendorGuess: string | null;
-      closingBalance: string | null;
-      currency: string | null;
-      reconciliationState: string | null;
-      unresolvedFindingCount: number;
-    };
-  };
+  // Sprint 3 Checkpoint 15I-2 (2026-07-27) — typed AP-card
+  // projection. The card's Variant D AP body consumes this shape
+  // directly instead of the generic email-derived `evidence` array.
+  linkedIntelligence?: LinkedIntelligenceForEmail;
 }
 
 interface Props { data: EmailFeedCardData }
@@ -131,6 +113,12 @@ export default function EmailIntakeCard({ data }: Props) {
   const isUnread = !readLocal;
   const isResolved = data.workIntakeStatus === "RESOLVED";
   const linked = data.linkedIntelligence;
+  // Sprint 3 Checkpoint 15I-2 (2026-07-27) — AP-mode gate.
+  //   `ap` is defined only when the loader projected a real
+  //   ApInvoiceCardIntelligence (i.e. the intake has an attached
+  //   invoice PDF that the analyser could process). Everything the
+  //   AP-mode body renders is projected — no re-parse here.
+  const ap: ApInvoiceCardIntelligence | null = linked?.invoiceSummary ?? null;
 
   const availableTabs = tabsFor(data);
 
@@ -254,6 +242,26 @@ export default function EmailIntakeCard({ data }: Props) {
     }
   }, [resolving, data.workIntakeItemId, router]);
 
+  // Sprint 3 Checkpoint 15I-2 — Defer 24 hr. Uses the existing
+  // `defer` action + WorkIntakeItem.deferredUntil. Loader excludes
+  // items whose deferredUntil > now from the active feed; the item
+  // remains fully preserved and reappears automatically after 24h.
+  const [deferring, setDeferring] = useState(false);
+  const handleDefer24h = useCallback(async (evt: React.MouseEvent) => {
+    evt.stopPropagation();
+    if (deferring) return;
+    setDeferring(true);
+    try {
+      const until = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const res = await fetch("/api/work-intake/action", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workIntakeItemId: data.workIntakeItemId, action: "defer", until }),
+      });
+      if (res.ok) router.refresh(); else setDeferring(false);
+    } catch { setDeferring(false); }
+  }, [deferring, data.workIntakeItemId, router]);
+
   // --- render ------------------------------------------------------------
   const semanticClass = isResolved ? "done" : data.state;
 
@@ -287,55 +295,15 @@ export default function EmailIntakeCard({ data }: Props) {
         ref={openButtonRef as unknown as React.Ref<HTMLDivElement>}
         data-testid="card-surface"
       >
-        <div className="spectre-mc-item-head">
-          <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state]}</span>
-          <span className="spectre-mc-id-tag">{data.idTag}</span>
-          {data.isHighImportance ? (
-            <span className="spectre-mc-flag" data-testid="email-importance-high" title="High importance in the source mailbox">
-              High importance
-            </span>
-          ) : null}
-          {data.conversationMessageCount > 1 ? (
-            <span className="spectre-mc-convo-count" data-testid="email-convo-count">
-              {data.conversationMessageCount} messages
-            </span>
-          ) : null}
-          <span className="spectre-mc-ts">{data.timestampLabel}</span>
-        </div>
-
-        <h3 id={`title-${data.workIntakeItemId}`}>{data.situationTitle}</h3>
-
-        <div className="spectre-mc-sender">
-          <span className="from">{data.contextLine}</span>
-        </div>
-
-        <p className="spectre-mc-work" data-testid="email-synopsis">
-          {data.synopsisText}
-        </p>
-
-        {data.evidence.length > 0 ? (
-          <div className="spectre-mc-readout" data-testid="email-readout">
-            {data.evidence.slice(0, 4).map((cell) => (
-              <div key={cell.label} className="cell" data-testid={`readout-${cell.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                <div className="k">{cell.label}</div>
-                <div className={`v${cell.state === "not_found" || cell.state === "not_extracted" ? " observation" : ""}${cell.state === "found" ? " confidence" : ""}`}>
-                  {cell.value}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {data.recommendation ? (
-          <div className="spectre-mc-rec">
-            <span className="k">Recommended</span>
-            <span className="v">{data.recommendation}</span>
-          </div>
-        ) : null}
+        {ap
+          ? renderApCollapsedBody(data, ap, expanded)
+          : renderEmailCollapsedBody(data)}
       </div>
 
-      {/* Actions — queue-level only. Domain actions live inside the
-          expanded tabs (§3.4 of Checkpoint 15I). */}
+      {/* Actions — queue-level (AP mode: primary is the AP workflow
+          domain action; Resolve is a secondary overflow). Interior
+          clicks stopPropagation so nested buttons never toggle the
+          accordion. */}
       <div
         className="spectre-mc-actions"
         onClick={(e) => e.stopPropagation()}
@@ -345,6 +313,31 @@ export default function EmailIntakeCard({ data }: Props) {
           <span className="spectre-mc-aux" data-testid="card-resolved-marker">
             Resolved · in Completed history
           </span>
+        ) : ap ? (
+          <ApActionRow
+            ap={ap}
+            workIntakeItemId={data.workIntakeItemId}
+            onDefer={handleDefer24h}
+            onPrimary={() => {
+              // Sprint 3 Checkpoint 15I-2 (2026-07-27) — primary
+              // AP action is truthful even when the domain button-
+              // level wiring lives inside the Invoice Review tab.
+              // Clicking Match vendor / Approve & post / Request
+              // information / Review coding EXPANDS the card, marks
+              // it read, and jumps directly to the Invoice Review
+              // tab where the canonical workflow controls live.
+              if (!expanded) {
+                setExpanded(true);
+                void markReadOnce();
+              }
+              setTab("invoice");
+              void loadApEvidenceOnce();
+            }}
+            onOpenPdf={ap.primaryAttachment
+              ? () => setPdfModal({ documentId: ap.primaryAttachment!.documentId, filename: ap.primaryAttachment!.filename })
+              : undefined
+            }
+          />
         ) : (
           <>
             <button
@@ -645,4 +638,361 @@ function StatementFacetPane({ payload, onOpenPdf }: { payload: StatementEvidence
       </section>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 Checkpoint 15I-2 (2026-07-27) — Variant D AP-invoice card body.
+//
+// This helper renders the collapsed AP-mode body for cards that have a
+// linked AP child intake (invoice PDF attached to the email). It renders
+// EVERY visible cell from the typed ApInvoiceCardIntelligence projection —
+// no re-parse of the PDF, no fallback to email-only heuristics.
+//
+// Region mapping (Ace Foods reference · variant-d-instrument.html):
+//   status pill · id tag · timestamp
+//   h3: <Vendor> invoice #<Number> — <Currency Amount> · <Category>
+//   sender line: <address> · <cadence> · <terms>
+//   work paragraph: accounting-specific narrative
+//   4-cell readout: AMOUNT · PO/INVOICE · CATEGORY · CONFIDENCE
+//   recommendation strip: workflow-specific action language
+//
+// Sender identity is provenance only — it NEVER labels the vendor.
+// ---------------------------------------------------------------------------
+
+function renderApCollapsedBody(
+  data: EmailFeedCardData,
+  ap: ApInvoiceCardIntelligence,
+  expanded: boolean,
+) {
+  const pill = pillForApWorkflow(ap.workflowState);
+  const title = buildApTitle(ap);
+  const senderLine = buildApSenderLine(ap);
+  const work = buildApWorkSummary(ap);
+
+  return (
+    <>
+      <div className="spectre-mc-item-head">
+        <span className={`spectre-mc-pill ${pill.tone}`} data-testid="ap-workflow-pill">{pill.label}</span>
+        <span className="spectre-mc-id-tag">{data.idTag}</span>
+        {data.conversationMessageCount > 1 ? (
+          <span className="spectre-mc-convo-count" data-testid="email-convo-count">
+            {data.conversationMessageCount} messages
+          </span>
+        ) : null}
+        <span className="spectre-mc-ts">{data.timestampLabel}</span>
+      </div>
+
+      <h3 id={`title-${data.workIntakeItemId}`} data-testid="ap-title">{title}</h3>
+
+      <div className="spectre-mc-sender" data-testid="ap-sender-line">
+        <span className="from">{senderLine}</span>
+      </div>
+
+      <p className="spectre-mc-work" data-testid="ap-work-summary">
+        {work}
+      </p>
+
+      <div className="spectre-mc-readout" data-testid="ap-readout">
+        <ReadoutCell k="Amount" v={formatAmountReadout(ap.gross.amount, ap.gross.currency)} testid="ap-readout-amount" />
+        <ReadoutCell
+          k={ap.purchaseOrder.poNumber ? "PO" : "Invoice"}
+          v={ap.purchaseOrder.poNumber
+            ? `#${ap.purchaseOrder.poNumber}`
+            : (ap.invoiceNumber ? `#${ap.invoiceNumber}` : "—")}
+          tone={ap.purchaseOrder.poNumber || ap.invoiceNumber ? undefined : "observation"}
+          testid="ap-readout-po-or-invoice"
+        />
+        <ReadoutCell
+          k="Category"
+          v={ap.category.label ?? "—"}
+          tone={ap.category.label ? undefined : "observation"}
+          testid="ap-readout-category"
+        />
+        <ReadoutCell
+          k="Confidence"
+          v={ap.confidence != null ? `${ap.confidence} %` : "—"}
+          tone={
+            ap.confidence == null ? "observation"
+            : ap.confidence >= 85 ? "confidence"
+            : ap.confidence >= 60 ? undefined
+            : "observation"
+          }
+          testid="ap-readout-confidence"
+        />
+      </div>
+
+      <div className="spectre-mc-rec" data-testid="ap-recommendation">
+        <span className="k">Recommended</span>
+        <span className="v">{ap.workflowReason}</span>
+      </div>
+    </>
+  );
+}
+
+// Fallback renderer — for email-derived cards that do NOT have an AP
+// child (member correspondence, informational email, etc.). Preserves
+// the pre-15I-2 rendering path unchanged.
+function renderEmailCollapsedBody(data: EmailFeedCardData) {
+  return (
+    <>
+      <div className="spectre-mc-item-head">
+        <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state]}</span>
+        <span className="spectre-mc-id-tag">{data.idTag}</span>
+        {data.isHighImportance ? (
+          <span className="spectre-mc-flag" data-testid="email-importance-high" title="High importance in the source mailbox">
+            High importance
+          </span>
+        ) : null}
+        {data.conversationMessageCount > 1 ? (
+          <span className="spectre-mc-convo-count" data-testid="email-convo-count">
+            {data.conversationMessageCount} messages
+          </span>
+        ) : null}
+        <span className="spectre-mc-ts">{data.timestampLabel}</span>
+      </div>
+      <h3 id={`title-${data.workIntakeItemId}`}>{data.situationTitle}</h3>
+      <div className="spectre-mc-sender">
+        <span className="from">{data.contextLine}</span>
+      </div>
+      <p className="spectre-mc-work" data-testid="email-synopsis">{data.synopsisText}</p>
+      {data.evidence.length > 0 ? (
+        <div className="spectre-mc-readout" data-testid="email-readout">
+          {data.evidence.slice(0, 4).map((cell) => (
+            <div key={cell.label} className="cell" data-testid={`readout-${cell.label.toLowerCase().replace(/\s+/g, "-")}`}>
+              <div className="k">{cell.label}</div>
+              <div className={`v${cell.state === "not_found" || cell.state === "not_extracted" ? " observation" : ""}${cell.state === "found" ? " confidence" : ""}`}>
+                {cell.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {data.recommendation ? (
+        <div className="spectre-mc-rec">
+          <span className="k">Recommended</span>
+          <span className="v">{data.recommendation}</span>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ReadoutCell({ k, v, tone, testid }: { k: string; v: string; tone?: "observation" | "confidence"; testid?: string }) {
+  return (
+    <div className="cell" data-testid={testid}>
+      <div className="k">{k}</div>
+      <div className={`v${tone ? ` ${tone}` : ""}`}>{v}</div>
+    </div>
+  );
+}
+
+// ---- Pill / title / sender / work helpers ---------------------------------
+
+function pillForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]): { label: string; tone: string } {
+  switch (state) {
+    case "READY_FOR_APPROVAL":    return { label: "Ready for approval",    tone: "approval" };
+    case "VENDOR_MATCH_REQUIRED": return { label: "Vendor match required", tone: "judgment" };
+    case "MISSING_INFORMATION":   return { label: "Missing information",   tone: "judgment" };
+    case "POSSIBLE_DUPLICATE":    return { label: "Possible duplicate",    tone: "judgment" };
+    case "NEEDS_JUDGMENT":
+    default:                      return { label: "Needs judgment",        tone: "judgment" };
+  }
+}
+
+/**
+ * Factual title: `<Vendor> invoice #<Number> — <Currency Amount> · <Category>`
+ * Omits any segment whose data is genuinely absent — never inserts an
+ * em dash into an otherwise factual title.
+ */
+function buildApTitle(ap: ApInvoiceCardIntelligence): string {
+  const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
+  const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendor ? "invoice" : null);
+  const amount = ap.gross.amount && ap.gross.currency
+    ? `${ap.gross.currency} ${formatDecimal(ap.gross.amount)}`
+    : null;
+  const category = ap.category.label ?? null;
+
+  const head = vendor
+    ? (invoiceNumber ? `${vendor} ${invoiceNumber}` : `${vendor} — invoice`)
+    : (invoiceNumber ? `Invoice ${invoiceNumber}` : "AP invoice");
+
+  const parts: string[] = [head];
+  if (amount) parts.push(`— ${amount}`);
+  if (category) parts.push(`· ${category}`);
+  return parts.join(" ");
+}
+
+/**
+ * Source and relationship line. When the sender is a forwarding
+ * employee, clearly label them — never let sender-as-vendor confusion
+ * back in.
+ */
+function buildApSenderLine(ap: ApInvoiceCardIntelligence): string {
+  const bits: string[] = [];
+  if (ap.sender.relationship === "EMPLOYEE_FORWARD" && ap.sender.email) {
+    bits.push(`Forwarded by ${ap.sender.email}`);
+    if (ap.extractedVendor.name) bits.push(`PDF vendor: ${ap.extractedVendor.name}`);
+  } else if (ap.sender.email) {
+    bits.push(ap.sender.email);
+  } else if (ap.sender.name) {
+    bits.push(ap.sender.name);
+  }
+  if (ap.invoiceCadenceThisQuarter != null && ap.invoiceCadenceThisQuarter >= 1) {
+    bits.push(cadenceLabel(ap.invoiceCadenceThisQuarter));
+  }
+  if (ap.paymentTerms) bits.push(ap.paymentTerms);
+  return bits.join(" · ") || "Accounts payable · pending analysis";
+}
+
+function cadenceLabel(n: number): string {
+  const ord = ordinal(n);
+  return `${ord} invoice this quarter`;
+}
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
+}
+
+/**
+ * Accounting-specific work summary. Only mentions work Spectre
+ * actually completed — never invented cadence, never a generic
+ * "vendor reports invoice unpaid" narrative.
+ */
+function buildApWorkSummary(ap: ApInvoiceCardIntelligence): string {
+  const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name ?? "the vendor";
+  const bits: string[] = [];
+  bits.push(`Spectre classified the attached PDF as an invoice and extracted the vendor as ${vendor}.`);
+  if (ap.invoiceNumber && ap.gross.amount && ap.gross.currency) {
+    bits.push(`Invoice #${ap.invoiceNumber}, gross ${ap.gross.currency} ${formatDecimal(ap.gross.amount)}.`);
+  } else if (ap.invoiceNumber) {
+    bits.push(`Invoice #${ap.invoiceNumber}.`);
+  }
+  switch (ap.vendorMatch.state) {
+    case "MATCHED":
+      bits.push(`Matched to Spectre vendor ${ap.vendorMatch.matchedName}.`); break;
+    case "AMBIGUOUS":
+      bits.push(`Multiple Spectre vendor candidates matched — reviewer must select the correct one.`); break;
+    case "NOT_FOUND":
+      bits.push(`No matching Spectre vendor on file.`); break;
+    case "INSUFFICIENT_SIGNAL":
+      bits.push(`Vendor match indeterminate — extracted signals were insufficient.`); break;
+  }
+  if (ap.category.glAccountNumber && ap.category.glAccountName) {
+    bits.push(`GL recommendation: ${ap.category.glAccountNumber} ${ap.category.glAccountName}.`);
+  } else if (ap.category.label) {
+    bits.push(`Recommended category: ${ap.category.label}.`);
+  }
+  if (ap.unresolvedFindingCount > 0) {
+    bits.push(`${ap.unresolvedFindingCount} finding${ap.unresolvedFindingCount === 1 ? "" : "s"} for review.`);
+  }
+  return bits.join(" ");
+}
+
+function formatAmountReadout(amount: string | null, currency: string | null): string {
+  if (!amount || !currency) return "—";
+  return `${currency} ${formatDecimal(amount)}`;
+}
+
+function formatDecimal(raw: string): string {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return raw;
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ---- AP action row --------------------------------------------------------
+// Primary action is the domain action for the current workflow state.
+// Assignment + Defer + attachment aux link follow the Ace Foods layout.
+
+function ApActionRow({
+  ap,
+  workIntakeItemId,
+  onDefer,
+  onPrimary,
+  onOpenPdf,
+}: {
+  ap: ApInvoiceCardIntelligence;
+  workIntakeItemId: string;
+  onDefer: (e: React.MouseEvent) => void;
+  onPrimary: () => void;
+  onOpenPdf?: () => void;
+}) {
+  const primary = primaryActionForApWorkflow(ap.workflowState);
+  return (
+    <>
+      <button
+        type="button"
+        className="spectre-btn spectre-btn--primary spectre-btn--sm"
+        data-testid="ap-action-primary"
+        data-workflow-state={ap.workflowState}
+        // Sprint 3 Checkpoint 15I-2 (2026-07-27) — the primary AP
+        // action expands the card and switches directly to the
+        // Invoice Review tab where the canonical domain workflow
+        // controls live (matched to the founder's brief §3.7:
+        // "It is acceptable for the collapsed primary button to
+        // expand the card and activate the correct Invoice Review
+        // subsection if the final accounting transaction requires
+        // a deeper confirmation.").
+        //
+        // The Invoice Review tab is the same real UI already
+        // exercised by Checkpoint 15H — Approve & post, Match
+        // vendor, Request information all live there and remain
+        // wired to their real server actions.
+        onClick={(e) => { e.stopPropagation(); onPrimary(); }}
+        aria-label={primary.label}
+      >
+        {primary.label}
+      </button>
+      {/* Sprint 3 Checkpoint 15I-2 — Assign is a real capability
+          on the founder-approved gold standard, but full delegation
+          (user picker + tenant-scoped user list + audited ownership
+          transition) is scoped to a follow-up ticket. Rather than
+          ship a button that does nothing, the control is rendered
+          visibly DISABLED with an accessible explanation. Truthful
+          omission is better than a false control. */}
+      <button
+        type="button"
+        className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+        data-testid="ap-action-assign"
+        disabled
+        aria-disabled="true"
+        title="Assignment to another Spectre user lands in a follow-up ticket. This control is intentionally disabled — click Match vendor or Approve & post above to advance the item."
+        onClick={(e) => e.stopPropagation()}
+      >
+        Assign
+      </button>
+      <button
+        type="button"
+        className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+        data-testid="ap-action-defer"
+        onClick={onDefer}
+      >
+        Defer 24 hr
+      </button>
+      <div className="grow" />
+      {onOpenPdf ? (
+        <button
+          type="button"
+          className="spectre-mc-aux-link"
+          data-testid="ap-attachment-footer"
+          onClick={(e) => { e.stopPropagation(); onOpenPdf(); }}
+          title="Open the invoice PDF"
+        >
+          Invoice · PDF
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]):
+  { label: string; onClick?: (ctx: { workIntakeItemId: string }) => void } {
+  switch (state) {
+    case "READY_FOR_APPROVAL":    return { label: "Approve & post" };
+    case "VENDOR_MATCH_REQUIRED": return { label: "Match vendor" };
+    case "MISSING_INFORMATION":   return { label: "Request information" };
+    case "POSSIBLE_DUPLICATE":    return { label: "Review duplicate" };
+    case "NEEDS_JUDGMENT":
+    default:                      return { label: "Review coding" };
+  }
 }

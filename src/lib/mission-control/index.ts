@@ -23,6 +23,8 @@
 import { prisma } from "@/lib/prisma";
 import { tenantWhere } from "@/lib/services/tenant";
 import type { Principal } from "@/lib/rbac";
+import type { LinkedIntelligenceForEmail } from "./intelligence-review-intakes";
+export type { ApInvoiceCardIntelligence, LinkedIntelligenceForEmail } from "./intelligence-review-intakes";
 
 // -------------------------------------------------------------------------
 // Types
@@ -114,31 +116,11 @@ export type WorkItem = {
   // suppressed at feed-render time and rendered inside the parent's
   // tabs. Standalone uploads without an email origin keep their own
   // cards (see loader logic).
-  linkedIntelligence?: {
-    apReviewIntakeIds: string[];
-    statementReviewIntakeIds: string[];
-    attachmentCount: number;
-    invoiceAttachmentCount: number;
-    statementAttachmentCount: number;
-    dominantFacet: "email" | "invoice" | "statement" | "invoice+statement";
-    // Aggregated summary — the card renders these instead of duplicating
-    // the child intake's evidence cells.
-    invoiceSummary?: {
-      vendorGuess: string | null;
-      invoiceNumber: string | null;
-      total: string | null;
-      currency: string | null;
-      capitalState: string | null;
-      unresolvedFindingCount: number;
-    };
-    statementSummary?: {
-      vendorGuess: string | null;
-      closingBalance: string | null;
-      currency: string | null;
-      reconciliationState: string | null;
-      unresolvedFindingCount: number;
-    };
-  };
+  // Sprint 3 Checkpoint 15I-2 (2026-07-27) — the invoiceSummary
+  // shape is now the typed ApInvoiceCardIntelligence exported from
+  // intelligence-review-intakes. The Variant D AP card consumes it
+  // directly; the previous inline scaffold has been replaced.
+  linkedIntelligence?: LinkedIntelligenceForEmail;
   // Sprint 3 Checkpoint 15I (2026-07-26) — per-user read state
   // projected by the loader from WorkIntakeItemRead. True when the
   // viewer has clicked-open this card at least once. The card's
