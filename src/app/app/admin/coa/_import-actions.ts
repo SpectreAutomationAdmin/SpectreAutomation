@@ -39,6 +39,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { isAppError } from "@/lib/errors";
+import { ensureStandardAccountingConfiguration } from "@/lib/accounting/ensure-standard-configuration";
 
 // Same 10 MB cap the generic action uses. Keep these two constants
 // in lockstep — if one moves, move the other.
@@ -65,6 +66,17 @@ export async function createCoaImportBatchFromModalAction(
   if (!hasPermission(principal, clubId, "settings:write")) {
     bounceWithError("Your role does not have permission to import accounts.");
   }
+
+  // Defensive tenant bootstrap. If this club was provisioned before the
+  // standard-accounting-configuration bootstrap existed, or was created
+  // outside the onboarding path, its AccountCategory / FinancialStatementGroup
+  // / Department tables can be empty. In that state EVERY canonical
+  // categoryKey / fsGroupKey on the uploaded CSV would fail validation
+  // with "not configured for this club" — misleading the founder into
+  // thinking the file is bad when the tenant is simply missing its
+  // taxonomy. This call is idempotent + non-destructive: it inserts only
+  // the missing canonical rows and preserves any founder-customised names.
+  await ensureStandardAccountingConfiguration(clubId);
 
   const fileEntry = formData.get("file");
   if (!(fileEntry instanceof File) || fileEntry.size === 0 || fileEntry.name.length === 0) {

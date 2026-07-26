@@ -242,6 +242,15 @@ export function resolveCoaRow(
     });
   }
 
+  // Detect the tenant-bootstrap defect: a club whose AccountCategory /
+  // FinancialStatementGroup tables were never seeded will fail every
+  // canonical row with "not configured for this club". Emit a more
+  // truthful message pointing at the tenant configuration in that
+  // state — the row itself is fine; the tenant is missing its
+  // standard taxonomy. See ensureStandardAccountingConfiguration.
+  const tenantMissingCategories = options.categories.length === 0;
+  const tenantMissingFsGroups = options.fsGroups.length === 0;
+
   let category: CoaCategoryOption | undefined;
   if (!row.categoryKey) {
     errors.push({ code: "REQUIRED", message: "categoryKey is required", columnName: "categoryKey" });
@@ -250,7 +259,9 @@ export function resolveCoaRow(
     if (!category) {
       errors.push({
         code: "UNKNOWN_CATEGORY",
-        message: `categoryKey "${row.categoryKey}" is not configured for this club`,
+        message: tenantMissingCategories
+          ? `Chart-of-accounts categories are not installed on this club — reload the import after the standard taxonomy is bootstrapped, or contact support. (categoryKey "${row.categoryKey}")`
+          : `categoryKey "${row.categoryKey}" is not configured for this club`,
         columnName: "categoryKey",
       });
     } else if (typeKey && category.accountType !== typeKey) {
@@ -270,7 +281,9 @@ export function resolveCoaRow(
     if (!fsGroup) {
       errors.push({
         code: "UNKNOWN_FS_GROUP",
-        message: `fsGroupKey "${row.fsGroupKey}" is not configured for this club`,
+        message: tenantMissingFsGroups
+          ? `Chart-of-accounts financial statement groups are not installed on this club — reload the import after the standard taxonomy is bootstrapped, or contact support. (fsGroupKey "${row.fsGroupKey}")`
+          : `fsGroupKey "${row.fsGroupKey}" is not configured for this club`,
         columnName: "fsGroupKey",
       });
     }
@@ -316,6 +329,25 @@ export function resolveCoaRow(
       departmentCodes,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Tenant-bootstrap detection
+// ---------------------------------------------------------------------------
+
+/**
+ * True when the tenant is missing the minimum standard COA taxonomy
+ * (no AccountCategory rows AND/OR no FinancialStatementGroup rows).
+ *
+ * Use this on the mapping page to render a page-level banner that
+ * distinguishes a broken tenant bootstrap from a row-level operator
+ * mapping error. When true, EVERY canonical categoryKey / fsGroupKey
+ * on the upload will fail validation regardless of the file quality.
+ */
+export function isTenantMissingStandardTaxonomy(
+  options: Pick<CoaMappingOptions, "categories" | "fsGroups">,
+): boolean {
+  return options.categories.length === 0 || options.fsGroups.length === 0;
 }
 
 // ---------------------------------------------------------------------------

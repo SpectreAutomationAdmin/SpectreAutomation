@@ -21,6 +21,7 @@ import { cookies } from "next/headers";
 import { getActiveClubId } from "@/lib/active-club";
 import { isAppError } from "@/lib/errors";
 import { createBatch, deleteDraftBatch, validateBatch, applyCoaAutoMapping } from "@/lib/imports";
+import { ensureStandardAccountingConfiguration } from "@/lib/accounting/ensure-standard-configuration";
 import { parseCsvRows, parseTrialBalanceCsv } from "@/lib/imports/csv-parse";
 import { parseXlsxRows, parseTrialBalanceXlsx, looksLikeXlsx, isLikelyTextual } from "@/lib/imports/xlsx-parse";
 import { IMPORT_TEMPLATE_METADATA, supportsXlsx, type ImportDomain } from "@/lib/imports/templates";
@@ -82,6 +83,17 @@ export async function createBatchAction(formData: FormData): Promise<void> {
   const isCoa = domain === "COA";
   const isTb = domain === "OPENING_TRIAL_BALANCE";
   const xlsxOk = supportsXlsx(domain);
+
+  // Defensive tenant bootstrap for COA uploads. A club provisioned
+  // before the standard-accounting-configuration bootstrap existed can
+  // have zero AccountCategory / FinancialStatementGroup rows — in that
+  // state every canonical categoryKey / fsGroupKey on the CSV would
+  // fail validation with "not configured for this club" and mislead
+  // the founder. Idempotent + non-destructive; a fully-configured
+  // tenant is a no-op.
+  if (isCoa) {
+    await ensureStandardAccountingConfiguration(clubId);
+  }
   const metadata = IMPORT_TEMPLATE_METADATA[domain];
   if (hasFile && hasText) {
     setError(
