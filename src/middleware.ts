@@ -23,7 +23,19 @@ function buildCsp(nonce: string, isDev: boolean): string {
     `connect-src 'self' ${TRUSTED_DOMAINS.join(" ")}`.trim(),
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "object-src 'none'",
+    // Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) — the
+    // DocumentPreviewModal renders PDFs into an <iframe src=blob:...>.
+    // Chrome's built-in PDF viewer draws the PDF into an <embed>
+    // element inside that iframe. `object-src 'none'` was blocking
+    // that <embed>, so the iframe opened but the PDF was invisible.
+    // `object-src 'self' blob:` still forbids third-party plugins /
+    // Flash / cross-origin <embed>, but lets Chrome's own PDF plugin
+    // render same-origin + blob content. `frame-src 'self' blob:` is
+    // added explicitly so browsers that don't inherit frame-src from
+    // default-src (Safari/Firefox variants) still allow the blob
+    // iframe navigation itself.
+    "object-src 'self' blob:",
+    "frame-src 'self' blob:",
   ];
   return directives.join("; ");
 }
