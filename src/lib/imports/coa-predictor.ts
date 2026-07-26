@@ -176,6 +176,29 @@ const ABBREVIATION_SUBSTITUTIONS: Array<[RegExp, string]> = [
   [/\bPP\s*&\s*E\b/gi, "Property Plant and Equipment"],
   [/\bPPE\b/g, "Property Plant and Equipment"],
   [/\bCapex\b/gi, "Capital Expenditure"],
+  // Sprint 3 · Checkpoint 15J — "Furn" / "Furn." / "Furnit" is
+  // the Jonas shorthand for "Furniture" that appears in tight
+  // COA column widths (e.g. "Furn & Fixtures - Clubhouse").
+  // Expanding to "Furniture" here lets the capital-asset rule
+  // match without adding a parallel `furn` branch to the regex.
+  // Scoped with word boundaries so "burn" / "spurn" / "return"
+  // never expand.
+  [/\bfurn(?:it)?\b/gi, "Furniture"],
+  // "Equip" is the widely-used Jonas / Sage abbreviation for
+  // "Equipment" (e.g. "Ground Equip", "Accum Deprec - Equip
+  // under financin"). Word-bounded so "equipped" / "equipping"
+  // never expand.
+  [/\bequip\b/gi, "Equipment"],
+  // "Eqp" — even shorter shorthand ("Grounds Eqp & Fix",
+  // "Clubhouse Eqp & Fix") — expands the same way.
+  [/\beqp\b/gi, "Equipment"],
+  // "Fix" as shorthand for "Fixtures" only when paired with
+  // Equipment / Furniture context. Matching `\bfix\b` broadly
+  // would false-positive on "Fix Cost" / "Fix Assets", so we
+  // scope it to the compound form. Two variants: with & without
+  // ampersand.
+  [/\b(equipment|furniture)\s*&\s*fix\b/gi, "$1 & Fixtures"],
+  [/\b(equipment|furniture)\s+and\s+fix\b/gi, "$1 and Fixtures"],
 
   // Depreciation / Amortization.
   // Founder rule 2026-07-01 v14.18 — "Accum Deprec" / "Accum Depr"
@@ -514,12 +537,47 @@ const NAME_KEYWORD_RULES: Array<KeywordRule> = [
   // never accidentally match. Cash / AR / Inventory / Prepaid
   // live at the top of the list instead.) -------------------------------
   { test: /\binvest(ment)?\b|marketable\s*secur|\bgic\b|long.?term\s*invest/i, fsGroupKey: "BS_INVESTMENTS", type: "ASSET" },
-  { test: /construction\s*in\s*progress|\bcip\b|\bwip\b|work\s*in\s*progress/i, fsGroupKey: "BS_CIP", type: "ASSET" },
+  // Construction in Progress (CIP) — the specific FS group for
+  // unfinished capital projects. Recognises the full phrase
+  // ("Construction in Progress"), the founder-observed shorthand
+  // ("Construct in Progress") — a Jonas TB convention where the
+  // -ion suffix was dropped for column-width reasons — and the
+  // classical abbreviations ("CIP", "WIP", "Work in Progress",
+  // "Capital Work in Progress"). Sub-classifiers on the tail
+  // ("Teeboxes", "Irrigation", "Clubhouse") are captured as
+  // department / project context downstream; they never displace
+  // the primary CIP grouping while the asset is still under
+  // construction.
+  { test: /(?:construction|construct)\s*in\s*progress|capital\s*work\s*in\s*progress|\bcip\b|\bwip\b|work\s*in\s*progress/i, fsGroupKey: "BS_CIP", type: "ASSET" },
   { test: /right.?of.?use|rou\s*asset/i, fsGroupKey: "BS_ROU_ASSETS", type: "ASSET" },
   { test: /intangible|goodwill|trademark|software\s*licen[sc]e/i, fsGroupKey: "BS_INTANGIBLES", type: "ASSET" },
   // Capital assets — explicit asset language only (so "Vehicle
-  // Fuel" hit IS_VEHICLE_EQUIPMENT above, not this).
-  { test: /\bland\b|building(?!\s*repair)|course\s*improve|equipment\s*&\s*vehicle|machinery|accumulated\s*deprec|capital\s*asset|property\s*&\s*equipment|fixed\s*asset/i, fsGroupKey: "BS_CAPITAL_ASSETS", type: "ASSET" },
+  // Fuel" hits IS_VEHICLE_EQUIPMENT above, not this).
+  //
+  // The pattern captures the canonical private-club capital-asset
+  // vocabulary. Any single hit is enough — the founder's rule is
+  // "obvious accounting terminology should never fall to Current
+  // Assets / Other Assets". Guards:
+  //   • building(?!\s*repair)              — "Building Repairs" stays with IS_REPAIRS_MAINTENANCE
+  //   • capital(?!\s*(?:assess|lease|contrib|fund|reserve))
+  //                                         — "Capital Assessment" (revenue), "Capital Lease" (liability),
+  //                                           "Capital Contribution" (equity/liability),
+  //                                           "Capital Fund" (equity), "Capital Reserve" (equity)
+  //                                           are handled by their own dedicated rules.
+  //   • equipment\s*(?:&|and)\s*(?:fixtures?|furniture|vehicles?|machinery|tools?)
+  //                                         — asset-side "Equipment & Fixtures", "Equipment and Furniture", etc.
+  //                                           Bracket-typed to ASSET, so operational lines like "Equipment
+  //                                           Rental" (expense) can't match this rule.
+  //   • furniture\s*(?:&|and)\s*fixtures?   — "Furniture & Fixtures" / "Furn & Fixtures"
+  //   • equipment\s+under\s+financing       — asset side of financed equipment (the paired liability is
+  //                                           "Capital Lease Liability" / "Lease Obligation").
+  //   • leasehold\s*improve                 — leasehold improvements
+  //   • computer\s*(?:equipment|hardware)   — capital IT (bare "computer" without "equipment" stays with
+  //                                           IS_IT_SOFTWARE via the expense bracket).
+  //   • \bvehicles?\b                       — bare "Vehicles" (asset context; expense-side "Vehicle Fuel /
+  //                                           Repair / Maintenance / Rental" already matched IS_VEHICLE_EQUIPMENT
+  //                                           via the earlier expense rule).
+  { test: /\bland\b|building(?!\s*repair)|course\s*improve|leasehold\s*improve|capital\s*improve|equipment\s*(?:&|and)\s*(?:fixtures?|furniture|vehicles?|machinery|tools?)|furniture\s*(?:&|and)\s*fixtures?|equipment\s+under\s+financing|computer\s*(?:equipment|hardware)|machinery|accumulated\s*deprec|capital(?!\s*(?:assess|lease|contrib|fund|reserve))\s*asset|property\s*&\s*equipment|fixed\s*asset|\bvehicles?\b/i, fsGroupKey: "BS_CAPITAL_ASSETS", type: "ASSET" },
 
   // EQUITY ----------------------------------------------------------------
   { test: /share\s*capital|member\s*share|paid.?in\s*capital/i, fsGroupKey: "BS_SHARE_CAPITAL", type: "EQUITY" },
