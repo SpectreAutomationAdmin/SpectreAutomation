@@ -213,9 +213,27 @@ describe("15P-2 · server posting hardening", () => {
     expect(POST_ACTION).toMatch(/status: "POSTED", postedJournalEntryId: je\.id/);
   });
   it("resolveControlAccounts returns a config-error result — never fabricates an account", () => {
-    for (const code of ["AP_CONTROL_MISSING","AP_CONTROL_INACTIVE","TAX_CODE_MISSING","TAX_RECOVERABLE_MISSING"]) {
+    for (const code of ["AP_CONTROL_MISSING","AP_CONTROL_AMBIGUOUS","TAX_CODE_MISSING","TAX_RECOVERABLE_MISSING"]) {
       expect(CONTROL_ACC).toContain(`"${code}"`);
     }
+  });
+  it("resolveControlAccounts uses semantic identity (name + type), not hardcoded numbers", () => {
+    // The tenant's real 'Accounts Payable' account may not be 2010.
+    // On Coulee Ridge staging it's actually 2009. The resolver must
+    // match by NAME + TYPE first; number-based fallback is only a
+    // tie-breaker.
+    expect(CONTROL_ACC).toMatch(/const AP_NAME_RE =/);
+    expect(CONTROL_ACC).toMatch(/const GST_RECOVERABLE_NAME_RE =/);
+    // Well-known numbers appear ONLY as tie-breakers, never as sole signal.
+    expect(CONTROL_ACC).toMatch(/const KNOWN_AP_NUMBERS = \[/);
+    // The founder rule: never fabricate. All failure branches must
+    // return ok:false, never a synthetic Account row.
+    expect(CONTROL_ACC).not.toMatch(/id: "cuid_fake"/);
+    // The word "fabricate" appears only in the doc-comment header
+    // (once). Any occurrence of "fabricated:" (as a value) or
+    // "return \{[^}]*fabricated: true" would indicate a fabrication
+    // path — must NOT exist.
+    expect(CONTROL_ACC).not.toMatch(/fabricated:\s*true/);
   });
 });
 
