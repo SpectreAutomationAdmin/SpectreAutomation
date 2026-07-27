@@ -304,8 +304,14 @@ describe("15P — wiring: extraction → projection → modal", () => {
     expect(MODAL).toMatch(/taxRegistrationNumber: extracted\?\.taxRegistrationNumber\?\.value \?\? null/);
     expect(MODAL).toMatch(/arEmail: extracted\?\.arEmail\?\.value \?\? null/);
     expect(MODAL).toMatch(/apRemittanceEmail: extracted\?\.remittanceEmail\?\.value \?\? null/);
-    // Payment-terms conversion via the Net-N shorthand.
-    expect(MODAL).toMatch(/const paymentTermsDaysFromExtracted =/);
+    // 15P-2: payment-terms initialisation moved from a one-off
+    // `paymentTermsDaysFromExtracted` local into the shared
+    // `resolvePaymentTerms` precedence resolver (extractor is one
+    // of five sources — invoice PDF, vendor profile, prior invoice,
+    // club default, Spectre default). Assertion now checks the
+    // resolver's contract instead of the removed local.
+    expect(MODAL).toMatch(/import \{[\s\S]{0,120}resolvePaymentTerms,\s*parseExtractedTermsValue/);
+    expect(MODAL).toMatch(/parseExtractedTermsValue\(extracted\?\.paymentTerms\?\.value \?\? null\)/);
   });
   it("modal renders a provenance chip per pre-populated field", () => {
     expect(MODAL).toMatch(/function provenanceLabel/);

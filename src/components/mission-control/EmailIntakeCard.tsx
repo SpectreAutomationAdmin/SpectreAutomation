@@ -104,6 +104,16 @@ export default function EmailIntakeCard({ data }: Props) {
   const [pdfModal, setPdfModal] = useState<null | { documentId: string; filename: string }>(null);
   // Sprint 3 · Checkpoint 15L — vendor-first modal open state.
   const [cvapModalOpen, setCvapModalOpen] = useState(false);
+  // 15P-2: when the AP primary is "Approve & post" (or "Review
+  // coding") and the vendor is already matched, we open the same
+  // modal directly at Step 2 with the matched vendor preselected.
+  // For a new vendor the modal opens at Step 1 as before. Kept as a
+  // discriminated shape so the props threaded to the modal are
+  // never partially set.
+  const [cvapModalMode, setCvapModalMode] = useState<
+    | { kind: "STEP_1" }
+    | { kind: "STEP_2"; vendorId: string; vendorName: string }
+  >({ kind: "STEP_1" });
   const [apEvidence, setApEvidence] = useState<unknown | null>(null);
   const [statementEvidence, setStatementEvidence] = useState<unknown | null>(null);
   const [attachments, setAttachments] = useState<
@@ -322,17 +332,50 @@ export default function EmailIntakeCard({ data }: Props) {
             workIntakeItemId={data.workIntakeItemId}
             onDefer={handleDefer24h}
             onPrimary={() => {
-              // Sprint 3 · Checkpoint 15L — routing for the AP primary
-              // action. When the workflow state is VENDOR_MATCH_REQUIRED
-              // the founder-approved primary is "Create vendor & post"
-              // and clicking it opens the dedicated modal. All other
-              // states retain the pre-15L behaviour — expand the card,
-              // mark read, jump to the Invoice Review tab where the
-              // canonical Approve / Request / Review controls live.
+              // Sprint 3 · Checkpoint 15P-2 — routing for the AP
+              // primary action. The founder rule: every actionable
+              // workflow state MUST open the shared modal (never
+              // "does nothing"); no state posts from the collapsed
+              // card without operator review.
+              //
+              //   VENDOR_MATCH_REQUIRED  → Step 1 (create vendor,
+              //                            then Step 2)
+              //   READY_FOR_APPROVAL     → Step 2 directly, vendor
+              //                            pre-selected from the
+              //                            match  (Approve & post)
+              //   NEEDS_JUDGMENT         → Step 2 directly (Review
+              //                            coding) — same shared
+              //                            modal, different starting
+              //                            label upstream
+              //   POSSIBLE_DUPLICATE     → keep the pre-15L expand
+              //                            path (duplicate needs
+              //                            evidence review, not
+              //                            direct posting)
+              //   MISSING_INFORMATION    → expand path for now (email
+              //                            reply flow lives on the
+              //                            Invoice tab)
+              //   CHART_OF_ACCOUNTS_REQUIRED → expand path (guidance
+              //                            surface, not postable)
+              const openStep2WithMatch = () => {
+                const v = ap?.vendorMatch;
+                if (!v || !v.matchedVendorId) return false;
+                setCvapModalMode({
+                  kind: "STEP_2",
+                  vendorId: v.matchedVendorId,
+                  vendorName: v.matchedName ?? "Selected vendor",
+                });
+                setCvapModalOpen(true);
+                if (!expanded) void markReadOnce();
+                return true;
+              };
               if (ap?.workflowState === "VENDOR_MATCH_REQUIRED") {
+                setCvapModalMode({ kind: "STEP_1" });
                 setCvapModalOpen(true);
                 if (!expanded) void markReadOnce();
                 return;
+              }
+              if (ap?.workflowState === "READY_FOR_APPROVAL" || ap?.workflowState === "NEEDS_JUDGMENT") {
+                if (openStep2WithMatch()) return;
               }
               if (!expanded) {
                 setExpanded(true);
@@ -489,9 +532,17 @@ export default function EmailIntakeCard({ data }: Props) {
       {ap ? (
         <CreateVendorAndPostModal
           open={cvapModalOpen}
-          onClose={() => setCvapModalOpen(false)}
+          onClose={() => {
+            setCvapModalOpen(false);
+            // Reset mode so the next open (unless explicitly set by
+            // a primary-action click) starts at Step 1 again.
+            setCvapModalMode({ kind: "STEP_1" });
+          }}
           ap={ap}
           workIntakeItemId={data.workIntakeItemId}
+          initialStep={cvapModalMode.kind === "STEP_2" ? "AP_CODING" : "PROFILE"}
+          preselectedVendorId={cvapModalMode.kind === "STEP_2" ? cvapModalMode.vendorId : undefined}
+          preselectedVendorName={cvapModalMode.kind === "STEP_2" ? cvapModalMode.vendorName : undefined}
         />
       ) : null}
     </article>

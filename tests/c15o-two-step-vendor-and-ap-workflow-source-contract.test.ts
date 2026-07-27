@@ -83,7 +83,11 @@ describe("15O — vendor name click behaviour on the AP card", () => {
 describe("15O — modal is a two-step guided flow", () => {
   it("modal defines a Step union of PROFILE / AP_CODING / SAVED_FOR_LATER", () => {
     expect(MODAL).toMatch(/type Step = "PROFILE" \| "AP_CODING" \| "SAVED_FOR_LATER"/);
-    expect(MODAL).toMatch(/const \[step, setStep\] = useState<Step>\("PROFILE"\)/);
+    // 15P-2: the initial step is now conditional so the caller can
+    // open the same shared modal directly at AP_CODING for an
+    // already-matched vendor (Approve & post). Default when
+    // openDirectAtStep2 is falsy remains "PROFILE".
+    expect(MODAL).toMatch(/useState<Step>\(openDirectAtStep2 \? "AP_CODING" : "PROFILE"\)/);
   });
   it("step indicator renders 1 Vendor profile / 2 AP coding", () => {
     expect(MODAL).toMatch(/data-testid="cvap-step-indicator"/);
@@ -118,7 +122,11 @@ describe("15O — modal is a two-step guided flow", () => {
     expect(MODAL).toMatch(/\{submitting \? "Posting…" : "Post invoice"\}/);
   });
   it("Step 2 is only reachable AFTER createdVendorId is set (guarded)", () => {
-    expect(MODAL).toMatch(/if \(!createdVendorId \|\| !canStep2Post\) return/);
+    // 15P-2: the post handler also guards on `!preview` — the
+    // server-computed proposed accounting entry must be present and
+    // balanced before posting is allowed. The createdVendorId +
+    // canStep2Post guard predates that check and stays.
+    expect(MODAL).toMatch(/if \(!createdVendorId \|\| !canStep2Post \|\| !preview\) return/);
   });
   it("Step 2 has a 'Back to vendor profile' secondary action", () => {
     expect(MODAL).toMatch(/data-testid="cvap-back-to-profile"/);

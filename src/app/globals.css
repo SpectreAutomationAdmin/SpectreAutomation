@@ -2752,6 +2752,90 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
   .spectre-cvap-field--span2 { grid-column: span 2; }
   .spectre-cvap-field--span3 { grid-column: 1 / -1; }
+
+  /* Sprint 3 · Checkpoint 15P-2 — Step 2 (AP coding) chrome.
+     Summary cells + proposed-accounting-entry table. Reuses the
+     3-col compressed layout established in 15P-1. */
+  .spectre-cvap-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px 14px;
+  }
+  @media (max-width: 900px) {
+    .spectre-cvap-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .spectre-cvap-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .spectre-cvap-summary-cell {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 8px 10px;
+    background: var(--spectre-canvas-sunken, var(--spectre-surface));
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 6px;
+    min-width: 0;
+  }
+  .spectre-cvap-summary-cell .k {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 700; color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-summary-cell .v {
+    font-size: 14px; font-weight: 600; color: var(--spectre-text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .spectre-cvap-summary-cell .provenance {
+    font-size: 11px; color: var(--spectre-text-muted);
+  }
+
+  .spectre-cvap-journal {
+    width: 100%;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+  }
+  .spectre-cvap-journal thead th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 700; color: var(--spectre-text-secondary);
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-cvap-journal thead th.num { text-align: right; }
+  .spectre-cvap-journal tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    vertical-align: baseline;
+  }
+  .spectre-cvap-journal .acct-num {
+    font-family: var(--spectre-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-weight: 700; color: var(--spectre-text-primary);
+  }
+  .spectre-cvap-journal .acct-name {
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-journal .dim { color: var(--spectre-text-secondary); font-size: 12px; }
+  .spectre-cvap-journal .num { text-align: right; }
+  .spectre-cvap-journal tfoot td {
+    padding: 8px 10px;
+    font-weight: 700;
+    border-top: 1px solid var(--spectre-border);
+  }
+  .spectre-cvap-journal tfoot .total-label {
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: 11px; color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-journal tfoot .balanced { color: var(--spectre-status-success); }
+  .spectre-cvap-journal tfoot .unbalanced { color: var(--spectre-status-danger); }
+
+  .spectre-cvap-warnings {
+    margin: 8px 0 0; padding: 8px 12px;
+    list-style: none;
+    background: var(--spectre-status-warning-bg, var(--spectre-surface));
+    border-left: 3px solid var(--spectre-status-warning, currentColor);
+    border-radius: 4px;
+    font-size: 12px; color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-warnings li + li { margin-top: 4px; }
   .spectre-cvap-alt { margin-top: 10px; font-size: 12.5px; }
   .spectre-cvap-alt summary { cursor: pointer; color: var(--spectre-text-secondary); }
   .spectre-cvap-alt ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }

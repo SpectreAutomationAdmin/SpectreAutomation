@@ -145,8 +145,13 @@ describe("15L — primary action + modal wiring", () => {
     // shape; the label invariant stays.
     expect(CARD).toMatch(/"VENDOR_MATCH_REQUIRED":\s+return \{ label: "Create vendor & post",\s+icon: "vendor-plus" \}/);
   });
-  it("card wires the modal only for VENDOR_MATCH_REQUIRED; other workflows keep the pre-15L expand path", () => {
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s+setCvapModalOpen\(true\)/);
+  it("card wires the shared modal for VENDOR_MATCH_REQUIRED → Step 1 (superseded by 15P-2)", () => {
+    // 15P-2: VENDOR_MATCH_REQUIRED still opens the shared modal, but
+    // now sets modal-mode explicitly to STEP_1 so a subsequent
+    // reuse doesn't leak Step-2 state. READY_FOR_APPROVAL +
+    // NEEDS_JUDGMENT open the SAME modal directly at Step 2 with the
+    // matched vendor preselected (see 15P-2 contract suite).
+    expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s*setCvapModalMode\(\{ kind: "STEP_1" \}\);\s*setCvapModalOpen\(true\)/);
   });
   it("the modal opens without creating or posting — Step 1 primary is disabled until a legal name is present (superseded by 15O two-step split, refined in 15P-1)", () => {
     // 15P-1: the radio-gate was removed. CREATE_NEW is now the
