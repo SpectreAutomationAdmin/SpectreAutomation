@@ -13,8 +13,17 @@
 // A string or string[] is a permission key (or any-of when array).
 // Undefined means visible to every admin who reached the layout.
 export type PermCheck = string | string[] | "SUPER_ONLY";
-export type NavItem = { href: string; label: string; perm?: PermCheck };
-export type NavSection = { id: string; label: string; items: NavItem[] };
+
+// Sprint 3 · Checkpoint 15N — the Variant D sidebar icon system.
+// Every top-level nav item, every section group, and every personal
+// item carries a typed icon key. Sub-items inside a section stay
+// text-only (their parent's icon carries the section identity —
+// duplicating icons on children flattens the hierarchy the
+// accordion establishes). See SidebarIcon.tsx for the SVG set.
+import type { NavigationIconKey } from "./spectre/SidebarIcon";
+
+export type NavItem = { href: string; label: string; perm?: PermCheck; icon?: NavigationIconKey };
+export type NavSection = { id: string; label: string; items: NavItem[]; icon?: NavigationIconKey };
 
 // ---------- Admin nav: top-level (no section) ----------
 // Sprint 3 · Checkpoint 15M — "Dashboard" is renamed to "Mission
@@ -26,7 +35,7 @@ export type NavSection = { id: string; label: string; items: NavItem[] };
 // affordance at the top of the sidebar (see `SpectreSidebar.tsx`),
 // so surfacing another one under Mission Control was noise.
 export const ADMIN_TOP_LEVEL: NavItem[] = [
-  { href: "/app/admin", label: "Mission Control" },
+  { href: "/app/admin", label: "Mission Control", icon: "mission-control" },
 ];
 
 // ---------- Admin nav: grouped sections ----------
@@ -34,6 +43,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "membership",
     label: "Membership",
+    icon: "membership",
     items: [
       { href: "/app/admin/applications", label: "Applications", perm: "applications:read" },
       { href: "/app/admin/members", label: "Members", perm: "members:read" },
@@ -44,6 +54,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "finance",
     label: "Finance",
+    icon: "finance",
     items: [
       { href: "/app/admin/finance", label: "Overview", perm: "ar:read" },
       { href: "/app/admin/collections", label: "Collections", perm: ["collections:work", "ar:read"] },
@@ -59,6 +70,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "ap",
     label: "Accounts Payable",
+    icon: "accounts-payable",
     items: [
       { href: "/app/admin/ap", label: "Overview", perm: "ap:read" },
       { href: "/app/admin/ap/vendors", label: "Vendors", perm: "vendor:view" },
@@ -69,6 +81,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "operations",
     label: "Operations",
+    icon: "operations",
     items: [
       { href: "/app/admin/ops", label: "Overview", perm: ["inventory:read", "inventory:view", "events:read", "lessons:view", "payroll:read", "assets:read"] },
       { href: "/app/admin/hospitality/reservations/floor", label: "Point of Sale", perm: ["inventory:read", "inventory:view"] },
@@ -90,6 +103,9 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "hospitality",
     label: "Hospitality",
+    // Sprint 3 · Checkpoint 15N — founder-required restrained
+    // wine-glass glyph. Outline only, same 1.9 stroke as the rest.
+    icon: "hospitality",
     items: [
       { href: "/app/admin/hospitality", label: "Overview", perm: "reservations:read" },
       { href: "/app/admin/hospitality/reservations", label: "Reservations", perm: "reservations:read" },
@@ -101,6 +117,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "governance",
     label: "Governance & Reporting",
+    icon: "governance-reporting",
     items: [
       // Routes to the period-selection launcher, NOT directly to a
       // hardcoded reporting period. The launcher links into
@@ -119,6 +136,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "analytics",
     label: "Analytics",
+    icon: "analytics",
     items: [
       { href: "/app/admin/analytics", label: "Overview", perm: "kpi:read" },
       { href: "/app/admin/analytics/hospitality/prep-times", label: "Hospitality prep times", perm: "kpi:read" },
@@ -127,6 +145,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "communications",
     label: "Communications",
+    icon: "communications",
     items: [
       { href: "/app/admin/notifications", label: "Notifications", perm: "notifications:read" },
       { href: "/app/admin/notifications/email-health", label: "Email health", perm: "notifications:read" },
@@ -136,6 +155,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "data",
     label: "Data",
+    icon: "data",
     items: [
       { href: "/app/admin/imports", label: "Imports", perm: "settings:write" },
       { href: "/app/admin/imports/jonas", label: "Imports · Jonas GL", perm: "settings:write" },
@@ -145,6 +165,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "configuration",
     label: "Configuration",
+    icon: "configuration",
     items: [
       { href: "/app/admin/settings", label: "Settings", perm: "settings:read" },
       { href: "/app/admin/club-settings", label: "Club Settings", perm: "settings:read" },
@@ -162,6 +183,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
   {
     id: "platform",
     label: "Spectre Platform",
+    icon: "settings",
     items: [
       { href: "/app/admin/queues", label: "Queues", perm: "SUPER_ONLY" },
       { href: "/app/admin/pilot", label: "Pilot & Flags", perm: "SUPER_ONLY" },
@@ -183,7 +205,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
 // reconnect workflow, but is reached via the header status pill
 // instead of a sidebar entry.
 export const ADMIN_PERSONAL: NavItem[] = [
-  { href: "/app/admin/mfa", label: "My MFA" },
+  { href: "/app/admin/mfa", label: "My MFA", icon: "mfa" },
 ];
 
 // ---------- Member portal nav (unchanged from prior behavior) ----------

@@ -208,11 +208,17 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
       width: 2px;
       border-radius: 0 2px 2px 0;
       background: var(--spectre-accent);  }
+  /* Sprint 3 · Checkpoint 15N — Variant D reference specification:
+     15px icon at stroke 1.9, muted default, currentColor. Aligned
+     left of the label with a consistent gap that the section
+     accordion also honours (so expanding a section does not shift
+     the icon). Active-state colour comes from the accent token. */
   .spectre-nav-item .spectre-nav-icon {    flex-shrink: 0;
-      width: 16px;
-      height: 16px;
+      width: 15px;
+      height: 15px;
       color: currentColor;
       opacity: 0.72;  }
+  .spectre-nav-item:hover .spectre-nav-icon {    opacity: 0.92;  }
   .spectre-nav-item.spectre-nav-item--active .spectre-nav-icon {    opacity: 1;
       color: var(--spectre-accent);  }
   .spectre-nav-section-header {    padding: 12px 20px 4px;
@@ -222,6 +228,18 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
       letter-spacing: 0.06em;
       font-weight: 600;
       color: var(--spectre-text-muted);  }
+  /* Sprint 3 · Checkpoint 15N — Variant D section-header lede.
+     Icon left, label centre, chevron right. The icon aligns
+     against the same left edge as the child .spectre-nav-item
+     rows so opening / closing the accordion does not shift
+     anything. `data-contains-active="true"` gently strengthens
+     the muted colour so the operator sees which section owns
+     the active route without a full accent-fill treatment. */
+  .spectre-nav-section-header-lede { display: inline-flex; align-items: center; gap: var(--spectre-space-3); }
+  .spectre-nav-section-header .spectre-nav-section-icon { opacity: 0.68; }
+  .spectre-nav-section-header:hover .spectre-nav-section-icon { opacity: 0.9; }
+  .spectre-nav-section-header[data-contains-active="true"] { color: var(--spectre-text-primary); }
+  .spectre-nav-section-header[data-contains-active="true"] .spectre-nav-section-icon { opacity: 1; color: var(--spectre-accent); }
   /* --- Buttons --------------------------------------------------- */
   .spectre-btn {    display: inline-flex;
       align-items: center;

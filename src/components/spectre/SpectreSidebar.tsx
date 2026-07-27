@@ -35,6 +35,7 @@ import {
   IconPanelLeft,
   IconUser,
 } from "./icons";
+import SidebarIcon, { type NavigationIconKey } from "./SidebarIcon";
 
 function canSee(perm: PermCheck | undefined, perms: Set<string>, isSuper: boolean): boolean {
   if (!perm) return true;
@@ -61,14 +62,25 @@ function findSectionForHref(href: string | null, sections: NavSection[]): string
   return null;
 }
 
-// A minimal icon lookup so the top-level items + personal items have
-// glyphs. Sub-items are text-only by design — nested icons would
-// visually flatten the hierarchy the accordion establishes.
-function iconForHref(href: string): React.ReactNode {
-  if (href === "/app/admin") return <IconHome className="spectre-nav-icon" />;
-  if (href.includes("/notifications")) return <IconInbox className="spectre-nav-icon" />;
-  if (href.includes("/settings") || href.includes("/mfa")) return <IconCog className="spectre-nav-icon" />;
-  if (href.includes("/design-system")) return <IconFileText className="spectre-nav-icon" />;
+// Sprint 3 · Checkpoint 15N — Variant D icon resolution.
+//
+// Every nav item / section / personal item carries a typed `icon`
+// key on its data-catalog entry (see sidebar-nav-data.ts). This
+// helper prefers that explicit key and falls back to a best-effort
+// URL-shape lookup so any nav entry the founder adds without an
+// icon key still gets a sensible glyph until it's assigned one.
+//
+// The fallback uses the legacy Spectre icon set (IconHome, IconInbox,
+// IconCog, IconFileText, IconUser). Only nav items that pre-date the
+// 15N migration and haven't been assigned an explicit `icon` key
+// hit this branch — the audit-covered items in sidebar-nav-data.ts
+// all resolve through the typed path.
+function renderNavIcon(item: { href: string; icon?: NavigationIconKey }): React.ReactNode {
+  if (item.icon) return <SidebarIcon name={item.icon} className="spectre-nav-icon" />;
+  if (item.href === "/app/admin") return <IconHome className="spectre-nav-icon" />;
+  if (item.href.includes("/notifications")) return <IconInbox className="spectre-nav-icon" />;
+  if (item.href.includes("/settings") || item.href.includes("/mfa")) return <IconCog className="spectre-nav-icon" />;
+  if (item.href.includes("/design-system")) return <IconFileText className="spectre-nav-icon" />;
   return <IconUser className="spectre-nav-icon" />;
 }
 
@@ -201,7 +213,7 @@ export function SpectreSidebar({
                 title={collapsed ? item.label : undefined}
                 aria-current={active ? "page" : undefined}
               >
-                {iconForHref(item.href)}
+                {renderNavIcon(item)}
                 {!collapsed && <span className="truncate">{item.label}</span>}
               </Link>
             );
@@ -224,7 +236,13 @@ export function SpectreSidebar({
                       className={cn("spectre-nav-item", active && "spectre-nav-item--active")}
                       title={item.label}
                     >
-                      {iconForHref(item.href)}
+                      {/* Sprint 3 · Checkpoint 15N — in collapsed mode
+                          each section item is icon-only. The item itself
+                          rarely carries its own icon key (children stay
+                          text-only in expanded mode), so fall back to
+                          the section's icon so the operator still sees
+                          a coherent glyph per row. */}
+                      {renderNavIcon({ href: item.href, icon: item.icon ?? section.icon })}
                     </Link>
                   );
                 })}
@@ -246,7 +264,20 @@ export function SpectreSidebar({
                   "hover:text-[color:var(--spectre-text-primary)] transition-colors duration-spectre-fast ease-spectre",
                 )}
               >
-                <span>{section.label}</span>
+                {/* Sprint 3 · Checkpoint 15N — section header carries
+                    the Variant D icon. Icon left, label centre,
+                    chevron right — the alignment matches the reference
+                    and stays consistent whether the section is open or
+                    closed (chevron rotates, icon does not shift). */}
+                <span className="spectre-nav-section-header-lede">
+                  {section.icon ? (
+                    <SidebarIcon
+                      name={section.icon}
+                      className="spectre-nav-icon spectre-nav-section-icon"
+                    />
+                  ) : null}
+                  <span>{section.label}</span>
+                </span>
                 <span
                   className="transition-transform duration-spectre-fast ease-spectre"
                   style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
@@ -291,7 +322,7 @@ export function SpectreSidebar({
                   className={cn("spectre-nav-item", active && "spectre-nav-item--active")}
                   aria-current={active ? "page" : undefined}
                 >
-                  {iconForHref(item.href)}
+                  {renderNavIcon(item)}
                   <span className="truncate">{item.label}</span>
                 </Link>
               );
