@@ -119,21 +119,35 @@ export default function CreateVendorAndPostModal({
   const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
   const [createdVendorName, setCreatedVendorName] = useState<string | null>(null);
 
+  // Sprint 3 · Checkpoint 15P — pull the extracted vendor profile
+  // and use it to pre-populate every field the invoice PDF supports.
+  // Each populated field also gets a provenance chip below the input
+  // so the operator can see what came from the PDF vs what they
+  // typed. Fields with confidence < the extractor's threshold are
+  // returned as null and stay blank (the founder's "never guess"
+  // rule).
+  const extracted = ap.extractedVendorProfile;
+  const paymentTermsDaysFromExtracted = (() => {
+    const t = extracted?.paymentTerms?.value ?? "";
+    const m = t.match(/^Net\s*(\d{1,3})/i);
+    return m ? parseInt(m[1], 10) : null;
+  })();
+
   // Step 1 — vendor profile draft.
   const [profile, setProfile] = useState<VendorProfileDraft>(() => ({
     legalName: ap.extractedVendor.name ?? "",
     operatingName: null,
-    email: null,
-    phone: null,
-    addressLine1: null,
-    addressLine2: null,
-    city: null,
-    provinceOrState: null,
-    postalCode: null,
-    country: null,
-    taxRegistrationNumber: null,
-    website: null,
-    paymentTermsDays: null,
+    email: extracted?.customerSupportEmail?.value ?? null,
+    phone: extracted?.phone?.value ?? null,
+    addressLine1: extracted?.address?.line1?.value ?? null,
+    addressLine2: extracted?.address?.line2?.value ?? null,
+    city: extracted?.address?.city?.value ?? null,
+    provinceOrState: extracted?.address?.provinceState?.value ?? null,
+    postalCode: extracted?.address?.postalCode?.value ?? null,
+    country: extracted?.address?.country?.value ?? null,
+    taxRegistrationNumber: extracted?.taxRegistrationNumber?.value ?? null,
+    website: extracted?.website?.value ?? null,
+    paymentTermsDays: paymentTermsDaysFromExtracted,
     currency: ap.gross.currency,
     notes: null,
     // Internal-forwarder rule (§Phase 4): EMPLOYEE_FORWARD senders
@@ -144,8 +158,8 @@ export default function CreateVendorAndPostModal({
     mainContactTitle: null,
     mainContactEmail: ap.sender.relationship === "VENDOR" ? ap.sender.email : null,
     mainContactPhone: null,
-    arEmail: null,
-    apRemittanceEmail: null,
+    arEmail: extracted?.arEmail?.value ?? null,
+    apRemittanceEmail: extracted?.remittanceEmail?.value ?? null,
   }));
 
   // Step 2 — AP coding draft.
@@ -228,11 +242,35 @@ export default function CreateVendorAndPostModal({
     setSubmitError(null);
     try {
       const { createVendorAction } = await import("@/app/app/admin/ap/_create-vendor-actions");
+      // Sprint 3 · Checkpoint 15P — pass the per-field provenance so
+      // the audit log records which values came from the extractor
+      // (and at what confidence) vs. which the operator typed. Only
+      // fields with a non-null source are included.
+      const provenance: Record<string, { source: string | null; confidence: number }> = {};
+      if (extracted) {
+        const add = (k: string, f?: { value: string | null; confidence: number; source: string | null }) => {
+          if (f?.value && f.source) provenance[k] = { source: f.source, confidence: f.confidence };
+        };
+        add("addressLine1",         extracted.address.line1);
+        add("addressLine2",         extracted.address.line2);
+        add("city",                 extracted.address.city);
+        add("provinceOrState",      extracted.address.provinceState);
+        add("postalCode",           extracted.address.postalCode);
+        add("country",              extracted.address.country);
+        add("phone",                extracted.phone);
+        add("website",              extracted.website);
+        add("taxRegistrationNumber", extracted.taxRegistrationNumber);
+        add("arEmail",              extracted.arEmail);
+        add("apRemittanceEmail",    extracted.remittanceEmail);
+        add("email",                extracted.customerSupportEmail);
+        add("paymentTerms",         extracted.paymentTerms);
+      }
       const result = await createVendorAction({
         workIntakeItemId,
         vendorMode: vendorMode!,
         existingVendorId: chosenMatchId ?? undefined,
         vendorProfile: profile,
+        provenance,
         finishLater,
       });
       if (!result.ok) { setSubmitError(result.message); return; }
@@ -426,27 +464,33 @@ export default function CreateVendorAndPostModal({
 
           <div className="spectre-cvap-subheading">Address</div>
           <div className="spectre-cvap-grid">
-            <ProfileField label="Address line 1" wide>
+            <ProfileField label="Address line 1" wide
+              provenance={provenanceLabel(extracted?.address?.line1)}>
               <input type="text" className="spectre-input" value={profile.addressLine1 ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, addressLine1: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Address line 2" wide>
+            <ProfileField label="Address line 2" wide
+              provenance={provenanceLabel(extracted?.address?.line2)}>
               <input type="text" className="spectre-input" value={profile.addressLine2 ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, addressLine2: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="City">
+            <ProfileField label="City"
+              provenance={provenanceLabel(extracted?.address?.city)}>
               <input type="text" className="spectre-input" value={profile.city ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, city: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Province / state">
+            <ProfileField label="Province / state"
+              provenance={provenanceLabel(extracted?.address?.provinceState)}>
               <input type="text" className="spectre-input" value={profile.provinceOrState ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, provinceOrState: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Postal / ZIP">
+            <ProfileField label="Postal / ZIP"
+              provenance={provenanceLabel(extracted?.address?.postalCode)}>
               <input type="text" className="spectre-input" value={profile.postalCode ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, postalCode: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Country">
+            <ProfileField label="Country"
+              provenance={provenanceLabel(extracted?.address?.country)}>
               <input type="text" className="spectre-input" value={profile.country ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value || null }))} />
             </ProfileField>
@@ -463,7 +507,8 @@ export default function CreateVendorAndPostModal({
               <input type="text" className="spectre-input" value={profile.mainContactTitle ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, mainContactTitle: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Main contact phone">
+            <ProfileField label="Main contact phone"
+              provenance={provenanceLabel(extracted?.phone)}>
               <input type="tel" className="spectre-input" value={profile.mainContactPhone ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, mainContactPhone: e.target.value || null }))} />
             </ProfileField>
@@ -473,23 +518,28 @@ export default function CreateVendorAndPostModal({
                 onChange={(e) => setProfile((p) => ({ ...p, mainContactEmail: e.target.value || null }))}
                 data-testid="cvap-profile-main-contact-email" />
             </ProfileField>
-            <ProfileField label="Vendor email (general)">
+            <ProfileField label="Vendor email (general)"
+              provenance={provenanceLabel(extracted?.customerSupportEmail)}>
               <input type="email" className="spectre-input" value={profile.email ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Phone (general)">
+            <ProfileField label="Phone (general)"
+              provenance={provenanceLabel(extracted?.phone)}>
               <input type="tel" className="spectre-input" value={profile.phone ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="AR email">
+            <ProfileField label="AR email"
+              provenance={provenanceLabel(extracted?.arEmail)}>
               <input type="email" className="spectre-input" value={profile.arEmail ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, arEmail: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="AP / remittance email">
+            <ProfileField label="AP / remittance email"
+              provenance={provenanceLabel(extracted?.remittanceEmail)}>
               <input type="email" className="spectre-input" value={profile.apRemittanceEmail ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, apRemittanceEmail: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Website">
+            <ProfileField label="Website"
+              provenance={provenanceLabel(extracted?.website)}>
               <input type="url" className="spectre-input" value={profile.website ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, website: e.target.value || null }))} />
             </ProfileField>
@@ -497,11 +547,13 @@ export default function CreateVendorAndPostModal({
 
           <div className="spectre-cvap-subheading">Payment &amp; tax</div>
           <div className="spectre-cvap-grid">
-            <ProfileField label="Payment terms (days)">
+            <ProfileField label="Payment terms (days)"
+              provenance={provenanceLabel(extracted?.paymentTerms)}>
               <input type="number" className="spectre-input" min={0} value={profile.paymentTermsDays ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))} />
             </ProfileField>
-            <ProfileField label="Tax registration #">
+            <ProfileField label="Tax registration #"
+              provenance={provenanceLabel(extracted?.taxRegistrationNumber)}>
               <input type="text" className="spectre-input" value={profile.taxRegistrationNumber ?? ""}
                 onChange={(e) => setProfile((p) => ({ ...p, taxRegistrationNumber: e.target.value || null }))} />
             </ProfileField>
@@ -703,6 +755,27 @@ function ProfileField({
       {provenance ? <span className="provenance">{provenance}</span> : null}
     </label>
   );
+}
+
+// Sprint 3 · Checkpoint 15P — build the small provenance chip that
+// sits below every pre-populated field. Renders both the human-
+// readable source ("From invoice PDF" / "From email signature" /
+// "From prior invoice") AND the extractor's per-field confidence
+// so the operator can see WHY a value showed up + how much Spectre
+// trusts it. Returns null when the field is blank (below threshold)
+// so the chip stays hidden.
+function provenanceLabel(f: { value: string | null; confidence: number; source: string | null } | undefined | null): string | null {
+  if (!f || !f.value || !f.source) return null;
+  const sourceHuman: Record<string, string> = {
+    "invoice-pdf":      "From invoice PDF",
+    "email-signature":  "From email signature",
+    "email-header":     "From email header",
+    "ocr":              "From OCR",
+    "prior-invoice":    "From a prior invoice",
+    "vendor-profile":   "From existing vendor profile",
+  };
+  const label = sourceHuman[f.source] ?? `From ${f.source}`;
+  return f.confidence > 0 ? `${label} · ${f.confidence}%` : label;
 }
 
 function sourceLabel(s: ApInvoiceCardIntelligence["category"]["source"]): string {

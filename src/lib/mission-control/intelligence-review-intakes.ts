@@ -20,6 +20,7 @@ import type { WorkItem, WorkItemEvidenceCell } from "./index";
 import { analyseIngestedInvoice } from "@/lib/ap-intelligence/analyse";
 import type { ApAnalyseResult } from "@/lib/ap-intelligence/analyse";
 import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
+import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
 // for the AP-card intelligence projection.
@@ -300,6 +301,14 @@ export interface ApInvoiceCardIntelligence {
   // monthly reporting package has its own money helpers. Default
   // true for Coulee Ridge; the club can flip it via Settings.
   currencyShowCode?: boolean;
+  // Sprint 3 · Checkpoint 15P — second-pass vendor-profile extraction.
+  // Populated per-field with (value, confidence, source) so the
+  // Create Vendor modal Step 1 can pre-fill every field the invoice
+  // supports AND render provenance chips beside each populated field.
+  // Absent (null) only when the analyser could not read the PDF at
+  // all; individual fields inside are null when below the extraction
+  // confidence threshold.
+  extractedVendorProfile: ExtractedVendorProfile | null;
   // Rolling count of accepted invoices from the matched vendor
   // in the current calendar quarter (inclusive of this one).
   // Null when no vendor match exists — cannot count without a
@@ -666,6 +675,8 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     // Sprint 3 · Checkpoint 15M — Club currency-suffix preference.
     // Read once per projection from the tenant's ClubSetting record.
     currencyShowCode: await loadCurrencyShowCode(clubId),
+    // Sprint 3 · Checkpoint 15P — vendor-profile extraction result.
+    extractedVendorProfile: analysis?.vendorProfile ?? null,
     invoiceCadenceThisQuarter,
     confidence,
     workflowState,

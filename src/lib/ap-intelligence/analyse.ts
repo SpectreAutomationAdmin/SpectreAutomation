@@ -22,6 +22,7 @@ import { resolveVendorForExtraction, type VendorResolveResult } from "./vendor-r
 import { reconcileAgainstAp, type ReconcileResult } from "./reconcile";
 import { classifyCapitalVsOperating, type CapitalVsOperatingRecommendation } from "./capital-vs-operating";
 import { recommendGlAccount, type GlRecommendation } from "./gl-recommend";
+import { extractVendorProfile, type ExtractedVendorProfile } from "./vendor-profile-extract";
 import { resolveDocumentStorage } from "@/lib/documents/storage";
 import { getSetting } from "@/lib/enterprise/settings";
 import type { ExtractedInvoice, ParseHint } from "./types";
@@ -53,6 +54,12 @@ export interface ApAnalyseResult {
   gl: GlRecommendation;
   findings: FindingInput[];
   extractionTextLength: number;
+  // Sprint 3 · Checkpoint 15P — second-pass vendor-profile extraction.
+  // Runs against the same PDF text as the AP pipeline but populates
+  // the vendor's permanent profile (address, phone, website, tax
+  // registration, terms). Every field carries per-field confidence
+  // + provenance so the Create Vendor modal can render trust chips.
+  vendorProfile: ExtractedVendorProfile;
 }
 
 export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAnalyseResult> {
@@ -211,6 +218,27 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     findingsCount: findings.length,
   });
 
+  // Sprint 3 · Checkpoint 15P — second-pass vendor-profile extraction.
+  // Runs on the same PDF text that the AP pipeline just parsed. Cheap
+  // (regex-only, no I/O) so we don't need a cache layer.
+  const vendorProfile: ExtractedVendorProfile = pdfOk
+    ? extractVendorProfile(pdfText)
+    : {
+        address: { line1: { value: null, confidence: 0, source: null }, line2: { value: null, confidence: 0, source: null },
+                   city: { value: null, confidence: 0, source: null }, provinceState: { value: null, confidence: 0, source: null },
+                   postalCode: { value: null, confidence: 0, source: null }, country: { value: null, confidence: 0, source: null },
+                   blockConfidence: 0 },
+        phone:                 { value: null, confidence: 0, source: null },
+        fax:                   { value: null, confidence: 0, source: null },
+        website:               { value: null, confidence: 0, source: null },
+        customerSupportEmail:  { value: null, confidence: 0, source: null },
+        arEmail:               { value: null, confidence: 0, source: null },
+        remittanceEmail:       { value: null, confidence: 0, source: null },
+        taxRegistrationNumber: { value: null, confidence: 0, source: null },
+        vatNumber:             { value: null, confidence: 0, source: null },
+        paymentTerms:          { value: null, confidence: 0, source: null },
+      };
+
   return {
     documentId: doc.id,
     ruleVersion: EXTRACTION_RULE_VERSION,
@@ -222,6 +250,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     gl,
     findings,
     extractionTextLength: extraction.extractedTextChars,
+    vendorProfile,
   };
 }
 

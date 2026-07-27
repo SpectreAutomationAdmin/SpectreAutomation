@@ -55,11 +55,25 @@ const profileSchema = z.object({
   apRemittanceEmail: z.string().nullable().optional(),
 });
 
+// Sprint 3 · Checkpoint 15P — per-field provenance the client sends
+// back with the profile so the audit log records which values came
+// from the invoice extraction vs. which the operator typed. Not
+// enforced (extension-only) — a client that omits provenance still
+// creates the vendor.
+const provenanceSchema = z.record(
+  z.string(),
+  z.object({
+    source: z.string().nullable(),
+    confidence: z.number().min(0).max(100),
+  }),
+);
+
 const schema = z.object({
   workIntakeItemId: z.string().min(1),
   vendorMode: z.enum(["CREATE_NEW", "USE_EXISTING"]),
   existingVendorId: z.string().optional(),
   vendorProfile: profileSchema,
+  provenance: provenanceSchema.optional(),
   finishLater: z.boolean().optional(),   // Save vendor and finish later — Step 2 skipped.
 });
 
@@ -203,6 +217,11 @@ export async function createVendorAction(
           source: "mission-control:create-vendor-step-1",
           workIntakeItemId: result.workIntakeItemId,
           finishedLater: result.finishedLater,
+          // Sprint 3 · Checkpoint 15P — record which fields were
+          // pre-populated by the extractor (source + confidence)
+          // vs. which the operator typed. Useful for the follow-up
+          // enrichment / correction-learning loop.
+          provenance: input.provenance ?? null,
         },
       });
     }

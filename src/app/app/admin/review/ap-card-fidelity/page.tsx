@@ -83,6 +83,10 @@ function baseApFacts(): ApInvoiceCardIntelligence {
     },
     gstVerification: null,
     gstRatePercent: null,
+    // Sprint 3 · Checkpoint 15P — fidelity fixture has no PDF, so
+    // the extracted profile is null (matches the real DOCUMENT_UNREADABLE
+    // path).
+    extractedVendorProfile: null,
     invoiceCadenceThisQuarter: null,
     confidence: 62,
     workflowState: "VENDOR_MATCH_REQUIRED",
