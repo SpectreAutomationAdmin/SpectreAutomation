@@ -133,7 +133,9 @@ describe("15L — card render matches the Ace Foods intelligence model", () => {
 
 describe("15L — primary action + modal wiring", () => {
   it("VENDOR_MATCH_REQUIRED primary action is 'Create vendor & post' (Phase 5)", () => {
-    expect(CARD).toMatch(/"VENDOR_MATCH_REQUIRED":\s+return \{ label: "Create vendor & post" \}/);
+    // Sprint 3 · Checkpoint 15M added an `icon` field to the return
+    // shape; the label invariant stays.
+    expect(CARD).toMatch(/"VENDOR_MATCH_REQUIRED":\s+return \{ label: "Create vendor & post",\s+icon: "vendor-plus" \}/);
   });
   it("card wires the modal only for VENDOR_MATCH_REQUIRED; other workflows keep the pre-15L expand path", () => {
     expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s+setCvapModalOpen\(true\)/);

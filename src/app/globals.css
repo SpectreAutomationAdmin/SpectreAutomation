@@ -2467,6 +2467,77 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     50%      { box-shadow: 0 0 0 6px color-mix(in oklab, var(--spectre-accent)  0%, transparent); }
   }
 
+  /* Sprint 3 · Checkpoint 15M — Feed Synced header pill.
+     Colour treatment matches the existing pill vocabulary but
+     leans on the tenant status tokens so themes stay consistent. */
+  .spectre-feed-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: var(--spectre-radius-pill);
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    font-weight: 700;
+    border: 1px solid var(--spectre-border-hairline);
+    text-decoration: none;
+    background: var(--spectre-surface);
+    color: var(--spectre-text-secondary);
+    transition: box-shadow var(--spectre-motion-quick) var(--spectre-ease);
+  }
+  .spectre-feed-pill:hover { box-shadow: var(--spectre-shadow-subtle); }
+  .spectre-feed-pill__dot {
+    width: 7px; height: 7px; border-radius: 999px;
+    background: var(--spectre-text-muted);
+  }
+  .spectre-feed-pill--synced {
+    color: var(--spectre-status-success);
+    border-color: var(--spectre-status-success);
+    background: var(--spectre-status-success-bg);
+  }
+  .spectre-feed-pill--synced .spectre-feed-pill__dot {
+    background: var(--spectre-status-success);
+  }
+  .spectre-feed-pill--delayed {
+    color: var(--spectre-status-warning);
+    border-color: var(--spectre-status-warning);
+    background: var(--spectre-status-warning-bg);
+  }
+  .spectre-feed-pill--delayed .spectre-feed-pill__dot {
+    background: var(--spectre-status-warning);
+  }
+  .spectre-feed-pill--reconnect {
+    color: var(--spectre-status-error);
+    border-color: var(--spectre-status-error);
+    background: var(--spectre-status-error-bg, var(--spectre-surface));
+  }
+  .spectre-feed-pill--reconnect .spectre-feed-pill__dot {
+    background: var(--spectre-status-error);
+  }
+  .spectre-feed-pill--none {
+    color: var(--spectre-text-muted);
+  }
+  /* Sprint 3 · Checkpoint 15M — inline icon on dark-green primary
+     Work Intake actions (Approve & post, Create vendor & post, etc.).
+     White on dark-green button, compact, aligned with the label. */
+  .spectre-mc-action-icon {
+    width: 14px; height: 14px;
+    margin-right: 6px;
+    vertical-align: -2px;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .spectre-btn.spectre-btn--primary .spectre-mc-action-icon {
+    color: #fff;
+  }
+  .spectre-mc-vendor-link {
+    color: inherit; text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
+    transition: text-decoration-color var(--spectre-motion-quick) var(--spectre-ease);
+  }
+  .spectre-mc-vendor-link:hover {
+    text-decoration-color: currentColor;
+  }
+
   /* Sprint 3 · Checkpoint 15L — Create Vendor & Post modal.
      Reuses the doc-preview backdrop; adds its own dialog surface
      so the vendor form + coding review get the right density. */

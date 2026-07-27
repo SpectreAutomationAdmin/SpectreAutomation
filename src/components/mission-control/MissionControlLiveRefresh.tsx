@@ -120,11 +120,26 @@ export default function MissionControlLiveRefresh({
 
   const ageLabel = relTimeLabel(syncedAt.getTime(), nowTick);
 
+  // Sprint 3 · Checkpoint 15M — the "Last refreshed X ago" count-up
+  // label is intentionally suppressed. The founder-approved header
+  // renders the connection health via `<FeedSyncedStatusPill>`
+  // (loaded on the Mission Control page) — the running seconds
+  // ticker was distracting and duplicated that surface. The value
+  // is still computed for the aria-live announcement (once when a
+  // refresh completes) but not rendered as a visible ticker.
+  void ageLabel;
+
   return (
     <div className="spectre-mc-live-refresh" data-testid="mc-live-refresh">
-      <span className="spectre-mc-live-refresh-status" aria-live="polite" data-testid="mc-live-refresh-status">
-        {refreshing ? "Refreshing…" : `Last refreshed ${ageLabel}`}
-      </span>
+      {refreshing ? (
+        <span
+          className="spectre-mc-live-refresh-status"
+          aria-live="polite"
+          data-testid="mc-live-refresh-status"
+        >
+          Refreshing…
+        </span>
+      ) : null}
       <button
         type="button"
         className="spectre-btn spectre-btn--sm spectre-btn--ghost"

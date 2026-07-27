@@ -232,6 +232,12 @@ export interface ApInvoiceCardIntelligence {
   vendorMatch: {
     state: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "INSUFFICIENT_SIGNAL";
     matchedName: string | null;
+    // Sprint 3 · Checkpoint 15M — the underlying vendor row id when
+    // state === "MATCHED", so the AP card's vendor-name link can
+    // route straight to that vendor's permanent timeline. null in
+    // every other state (the card falls back to a provisional
+    // timeline keyed to the extracted name + work-intake id).
+    matchedVendorId: string | null;
   };
   invoiceNumber: string | null;
   gross: {
@@ -288,6 +294,12 @@ export interface ApInvoiceCardIntelligence {
   // Percentage rate as a plain number (e.g. 5 for 5%). Only set when
   // gstVerification === "VERIFIED".
   gstRatePercent: number | null;
+  // Sprint 3 · Checkpoint 15M — per-club "show currency code beside
+  // monetary amounts" preference. When true → `$31.29 CAD`; when
+  // false → `$31.29`. Applies to operational surfaces only; the
+  // monthly reporting package has its own money helpers. Default
+  // true for Coulee Ridge; the club can flip it via Settings.
+  currencyShowCode?: boolean;
   // Rolling count of accepted invoices from the matched vendor
   // in the current calendar quarter (inclusive of this one).
   // Null when no vendor match exists — cannot count without a
@@ -620,6 +632,7 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           ?? analysis?.vendor.candidates[0]?.legalName
           ?? null)
         : null,
+      matchedVendorId,
     },
     invoiceNumber: extraction?.invoiceNumber ?? null,
     gross: {
@@ -650,6 +663,9 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     },
     gstVerification: gstResult.state,
     gstRatePercent: gstResult.ratePercent,
+    // Sprint 3 · Checkpoint 15M — Club currency-suffix preference.
+    // Read once per projection from the tenant's ClubSetting record.
+    currencyShowCode: await loadCurrencyShowCode(clubId),
     invoiceCadenceThisQuarter,
     confidence,
     workflowState,
@@ -800,6 +816,24 @@ function classifyGstVerification(extraction: ExtractedInvoice | null): {
   const match = supportedRates.find((r) => Math.abs(rate - r) < 0.15);
   if (match != null) return { state: "VERIFIED", ratePercent: match };
   return { state: "EXTRACTED_UNVERIFIED", ratePercent: null };
+}
+
+/**
+ * Sprint 3 · Checkpoint 15M — read the per-club "show currency
+ * code beside monetary amounts" preference. Default TRUE so the
+ * pre-preference behaviour ($31.29 CAD) is preserved for every
+ * club that hasn't opted out. Read via the existing club-settings
+ * layer; failures degrade to the default rather than crashing the
+ * projection.
+ */
+async function loadCurrencyShowCode(clubId: string): Promise<boolean> {
+  try {
+    const { getSetting } = await import("@/lib/enterprise/settings");
+    const v = await getSetting<boolean>(clubId, "OPERATIONAL_UI", "currency_show_code");
+    return v == null ? true : v;
+  } catch {
+    return true;
+  }
 }
 
 /**

@@ -67,7 +67,7 @@ function baseApFacts(): ApInvoiceCardIntelligence {
       relationship: "EMPLOYEE_FORWARD",
     },
     extractedVendor: { name: "Microsoft Corporation" },
-    vendorMatch: { state: "NOT_FOUND", matchedName: null },
+    vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
     invoiceNumber: "E0701097E3",
     gross: { amount: "31.29", currency: "CAD" },
     paymentTerms: null,
@@ -114,7 +114,7 @@ const SCENARIOS: Scenario[] = [
     note: "Vendor onboarded; GL coding + amount confirmed; no reconcile variance.",
     ap: {
       ...baseApFacts(),
-      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation" },
+      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation", matchedVendorId: "fx-vendor-msft" },
       paymentTerms: "Net 30",
       category: {
         label: "Software subscriptions",
@@ -137,7 +137,7 @@ const SCENARIOS: Scenario[] = [
     note: "Vendor + coding confirmed; PO reference extracted and matched to an internal PO doc.",
     ap: {
       ...baseApFacts(),
-      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation" },
+      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation", matchedVendorId: "fx-vendor-msft" },
       paymentTerms: "Net 30",
       purchaseOrder: { poNumber: "PO-4832", matchedPoDocumentId: "fx-po-4832", variance: "0.00" },
       category: {
@@ -161,7 +161,7 @@ const SCENARIOS: Scenario[] = [
     note: "Vendor + amount confirmed but no PO reference — readout shows invoice # instead.",
     ap: {
       ...baseApFacts(),
-      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation" },
+      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation", matchedVendorId: "fx-vendor-msft" },
       paymentTerms: "Net 30",
       category: {
         label: "Software subscriptions",
@@ -184,7 +184,7 @@ const SCENARIOS: Scenario[] = [
     note: "Extraction succeeded but the GL/category recommender is uncertain — reviewer confirms coding.",
     ap: {
       ...baseApFacts(),
-      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation" },
+      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation", matchedVendorId: "fx-vendor-msft" },
       category: {
         label: null,
         glAccountNumber: null,
@@ -206,7 +206,7 @@ const SCENARIOS: Scenario[] = [
     note: "Card is currently owned by another admin. Assign display remains available; primary action unchanged.",
     ap: {
       ...baseApFacts(),
-      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation" },
+      vendorMatch: { state: "MATCHED", matchedName: "Microsoft Corporation", matchedVendorId: "fx-vendor-msft" },
       workflowState: "READY_FOR_APPROVAL",
       workflowReason: "Approve and post. Currently assigned to another reviewer.",
     },

@@ -121,19 +121,28 @@ describe("Variant D AP card — collapsed body regions", () => {
     expect(CARD).toMatch(/"Missing information"/);
     expect(CARD).toMatch(/data-testid="ap-workflow-pill"/);
   });
-  it("factual title builder concatenates <Vendor> invoice #<N> — <Amount> · <Category>", () => {
-    expect(CARD).toMatch(/function buildApTitle/);
-    expect(CARD).toMatch(/`\$\{vendor\} \$\{invoiceNumber\}`/);
-    expect(CARD).toMatch(/`— \$\{amount\}`/);
-    expect(CARD).toMatch(/`· \$\{category\}`/);
+  it("factual title component renders <Vendor> invoice #<N> — <Amount> · <Category>", () => {
+    // Sprint 3 · Checkpoint 15M — the pre-15M string builder
+    // `buildApTitle` became a React component `ApTitle` so the
+    // vendor-name segment could be an anchor link. Functional
+    // invariants preserved: vendor + invoice # + amount + category
+    // concatenated in the same order with the same separators.
+    expect(CARD).toMatch(/function ApTitle/);
+    expect(CARD).toMatch(/\{invoiceNumber \? <>\s*\{invoiceNumber\}/);
+    expect(CARD).toMatch(/\{amount \? <>\s* — \{amount\}/);
+    expect(CARD).toMatch(/\{category \? <>\s* · \{category\}/);
     expect(CARD).toMatch(/data-testid="ap-title"/);
   });
   it("factual title omits missing segments cleanly (no em-dash-into-nothing)", () => {
-    // The title never inserts "—" unless the following segment
-    // actually resolved. Rule: guarded by `if (amount) parts.push(...)`.
-    const fn = CARD.slice(CARD.indexOf("function buildApTitle"), CARD.indexOf("function buildApSenderLine"));
-    expect(fn).toMatch(/if \(amount\) parts\.push\(`— \$\{amount\}`\)/);
-    expect(fn).toMatch(/if \(category\) parts\.push\(`· \$\{category\}`\)/);
+    // Each segment is guarded by `<segment> ? <> ... </> : null`
+    // so an absent value never renders its separator.
+    const fn = CARD.slice(CARD.indexOf("function ApTitle"), CARD.indexOf("function formatOperationalMoney"));
+    // No unguarded literal "— " or "· " appears in the render.
+    // Every optional segment is wrapped by a ternary.
+    expect(fn).toMatch(/\{amount \? <>\s* — \{amount\}/);
+    expect(fn).toMatch(/\{category \? <>\s* · \{category\}/);
+    // The pre-15M imperative pattern `parts.push(...)` is gone.
+    expect(fn).not.toMatch(/parts\.push\(/);
   });
   it("4-cell readout renders AMOUNT · PO/INVOICE · CATEGORY · CONFIDENCE (Ace Foods layout)", () => {
     expect(CARD).toMatch(/data-testid="ap-readout"/);

@@ -492,6 +492,21 @@ export default function EmailIntakeCard({ data }: Props) {
           onClose={() => setCvapModalOpen(false)}
           ap={ap}
           workIntakeItemId={data.workIntakeItemId}
+          onConfirm={async (payload) => {
+            // Sprint 3 · Checkpoint 15M — the real handler. Server
+            // action creates the vendor (or reuses the selected one)
+            // + posts the AP invoice + resolves the Work Intake item
+            // atomically. On success we refresh the router so the
+            // resolved item drops out of the feed and the vendor
+            // timeline picks up the new event.
+            const { createVendorAndPostAction } = await import("@/app/app/admin/ap/_create-vendor-and-post-actions");
+            const result = await createVendorAndPostAction(payload);
+            if (result.ok) {
+              router.refresh();
+              return { ok: true } as const;
+            }
+            return { ok: false, message: result.message } as const;
+          }}
         />
       ) : null}
     </article>
@@ -682,7 +697,6 @@ function renderApCollapsedBody(
   expanded: boolean,
 ) {
   const pill = pillForApWorkflow(ap.workflowState);
-  const title = buildApTitle(ap);
   const senderLine = buildApSenderLine(ap);
 
   return (
@@ -698,7 +712,9 @@ function renderApCollapsedBody(
         <span className="spectre-mc-ts">{data.timestampLabel}</span>
       </div>
 
-      <h3 id={`title-${data.workIntakeItemId}`} data-testid="ap-title">{title}</h3>
+      <h3 id={`title-${data.workIntakeItemId}`} data-testid="ap-title">
+        <ApTitle ap={ap} workIntakeItemId={data.workIntakeItemId} />
+      </h3>
 
       <div className="spectre-mc-sender" data-testid="ap-sender-line">
         <span className="from">{senderLine}</span>
@@ -709,7 +725,7 @@ function renderApCollapsedBody(
       </p>
 
       <div className="spectre-mc-readout" data-testid="ap-readout">
-        <ReadoutCell k="Amount" v={formatAmountReadout(ap.gross.amount, ap.gross.currency)} testid="ap-readout-amount" />
+        <ReadoutCell k="Amount" v={formatAmountReadout(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)} testid="ap-readout-amount" />
         <ReadoutCell
           k={ap.purchaseOrder.poNumber ? "PO" : "Invoice"}
           v={ap.purchaseOrder.poNumber
@@ -817,26 +833,74 @@ function pillForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]): {
 }
 
 /**
- * Factual title: `<Vendor> invoice #<Number> — <Currency Amount> · <Category>`
- * Omits any segment whose data is genuinely absent — never inserts an
- * em dash into an otherwise factual title.
+ * Sprint 3 · Checkpoint 15M — factual title as a React fragment so
+ * the vendor name segment can be an anchor. When the vendor exists,
+ * it links to the permanent vendor timeline; when the vendor is
+ * only extracted (no record yet), it links to the provisional
+ * timeline view keyed to the extracted identity + Work Intake id
+ * so the pre-creation history survives vendor creation.
+ *
+ * Only the vendor-name span is interactive — the invoice number,
+ * amount, and category are plain text (§Phase 2: "Only Microsoft
+ * Corporation should act as the vendor link.").
+ *
+ * Sprint 3 · Checkpoint 15M currency (Phase 8): amount renders as
+ * `$31.29 CAD` (locale-aware symbol + trailing code) via the
+ * shared money formatter, not the pre-15M `CAD 31.29` shape.
  */
-function buildApTitle(ap: ApInvoiceCardIntelligence): string {
-  const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
-  const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendor ? "invoice" : null);
+function ApTitle({ ap, workIntakeItemId }: { ap: ApInvoiceCardIntelligence; workIntakeItemId: string }) {
+  const vendorLabel = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
+  const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendorLabel ? "invoice" : null);
   const amount = ap.gross.amount && ap.gross.currency
-    ? `${ap.gross.currency} ${formatDecimal(ap.gross.amount)}`
+    ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
     : null;
   const category = ap.category.label ?? null;
 
-  const head = vendor
-    ? (invoiceNumber ? `${vendor} ${invoiceNumber}` : `${vendor} — invoice`)
-    : (invoiceNumber ? `Invoice ${invoiceNumber}` : "AP invoice");
+  // Vendor name link target.
+  const vendorHref =
+    vendorLabel && ap.vendorMatch.state === "MATCHED" && ap.vendorMatch.matchedVendorId
+      ? `/app/admin/ap/vendors/${encodeURIComponent(ap.vendorMatch.matchedVendorId)}/timeline`
+      : vendorLabel
+      ? `/app/admin/ap/vendors/provisional?name=${encodeURIComponent(vendorLabel)}&workIntakeItemId=${encodeURIComponent(workIntakeItemId)}`
+      : null;
 
-  const parts: string[] = [head];
-  if (amount) parts.push(`— ${amount}`);
-  if (category) parts.push(`· ${category}`);
-  return parts.join(" ");
+  return (
+    <>
+      {vendorHref && vendorLabel ? (
+        <a
+          href={vendorHref}
+          className="spectre-mc-vendor-link"
+          data-testid="ap-title-vendor-link"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {vendorLabel}
+        </a>
+      ) : (
+        vendorLabel ?? "AP invoice"
+      )}
+      {invoiceNumber ? <> {invoiceNumber}</> : null}
+      {amount ? <> — {amount}</> : null}
+      {category ? <> · {category}</> : null}
+    </>
+  );
+}
+
+// Sprint 3 · Checkpoint 15M money formatter for operational surfaces
+// (Mission Control cards, AP screens, vendor timelines, transaction
+// previews). Locale-aware currency symbol + optional trailing ISO
+// code. Never used inside the monthly reporting package (which has
+// its own bg-club-cream / bg-club-green palette + its own money
+// helpers).
+function formatOperationalMoney(rawAmount: string, currency: string, showCurrencyCode: boolean): string {
+  const n = Number(rawAmount);
+  if (!Number.isFinite(n)) return `${currency} ${rawAmount}`;
+  // For CAD/USD/AUD/NZD — all use `$`. For EUR — €. For GBP — £.
+  const localized = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    currencyDisplay: "narrowSymbol",
+  }).format(n);
+  return showCurrencyCode ? `${localized} ${currency}` : localized;
 }
 
 /**
@@ -889,7 +953,7 @@ function ordinal(n: number): string {
 function ApWorkSummary({ ap }: { ap: ApInvoiceCardIntelligence }) {
   const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name ?? "the vendor";
   const grossToken = ap.gross.amount && ap.gross.currency
-    ? `${ap.gross.currency} ${formatDecimal(ap.gross.amount)}`
+    ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
     : null;
   const glToken = ap.category.glAccountNumber && ap.category.glAccountName
     ? `GL ${ap.category.glAccountNumber} ${ap.category.glAccountName}`
@@ -959,9 +1023,9 @@ function formatVariance(v: string, currency: string): string {
   return `${sign}${currency} ${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function formatAmountReadout(amount: string | null, currency: string | null): string {
+function formatAmountReadout(amount: string | null, currency: string | null, showCurrencyCode: boolean): string {
   if (!amount || !currency) return "—";
-  return `${currency} ${formatDecimal(amount)}`;
+  return formatOperationalMoney(amount, currency, showCurrencyCode);
 }
 
 function formatDecimal(raw: string): string {
@@ -1011,6 +1075,10 @@ function ApActionRow({
         onClick={(e) => { e.stopPropagation(); onPrimary(); }}
         aria-label={primary.label}
       >
+        {/* Sprint 3 · Checkpoint 15M — inline white icon matching
+            the Ace Foods reference. Icon is decorative (label
+            carries the action name); rendered with aria-hidden. */}
+        <PrimaryActionIcon kind={primary.icon} />
         {primary.label}
       </button>
       {/* Sprint 3 Checkpoint 15I-2 — Assign is a real capability
@@ -1055,10 +1123,12 @@ function ApActionRow({
   );
 }
 
+type PrimaryIconKind = "check" | "vendor-plus" | "envelope" | "document-check" | "duplicate" | "coa";
+
 function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]):
-  { label: string; onClick?: (ctx: { workIntakeItemId: string }) => void } {
+  { label: string; icon: PrimaryIconKind; onClick?: (ctx: { workIntakeItemId: string }) => void } {
   switch (state) {
-    case "READY_FOR_APPROVAL":         return { label: "Approve & post" };
+    case "READY_FOR_APPROVAL":         return { label: "Approve & post",            icon: "check" };
     // Sprint 3 · Checkpoint 15L — the workflow is vendor-first + AP-
     // second. When the vendor is missing, the primary action reads
     // "Create vendor & post" so the operator knows the modal will
@@ -1067,11 +1137,72 @@ function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowSt
     // confirmation before posting. The label does NOT bypass any
     // confirmation — it names the end-to-end workflow the button
     // opens, not the immediate side effect. See CreateVendorAndPostModal.
-    case "VENDOR_MATCH_REQUIRED":      return { label: "Create vendor & post" };
-    case "MISSING_INFORMATION":        return { label: "Request information" };
-    case "POSSIBLE_DUPLICATE":         return { label: "Review duplicate" };
-    case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Import chart of accounts" };
+    case "VENDOR_MATCH_REQUIRED":      return { label: "Create vendor & post",      icon: "vendor-plus" };
+    case "MISSING_INFORMATION":        return { label: "Request information",       icon: "envelope" };
+    case "POSSIBLE_DUPLICATE":         return { label: "Review duplicate",          icon: "duplicate" };
+    case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Import chart of accounts",  icon: "coa" };
     case "NEEDS_JUDGMENT":
-    default:                           return { label: "Review coding" };
+    default:                           return { label: "Review coding",             icon: "document-check" };
+  }
+}
+
+// Sprint 3 · Checkpoint 15M — the small white inline icon that sits
+// at the start of every dark-green Work Intake primary action.
+// Matches the icon family used by the Variant D reference: stroke
+// 2.2, square line caps, currentColor. Sized to match the button
+// text (14px). aria-hidden — the label carries the semantic action.
+function PrimaryActionIcon({ kind }: { kind: PrimaryIconKind }) {
+  const common = {
+    className: "spectre-mc-action-icon",
+    "aria-hidden": true,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2.2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  switch (kind) {
+    case "check":
+      return <svg {...common}><path d="M5 12l5 5L20 7" /></svg>;
+    case "vendor-plus":
+      // Person + small plus — vendor create/onboard glyph.
+      return (
+        <svg {...common}>
+          <circle cx="9" cy="8" r="3.5" />
+          <path d="M3 20c0-3.5 3-6 6-6s6 2.5 6 6" />
+          <path d="M18 6v6M15 9h6" />
+        </svg>
+      );
+    case "envelope":
+      return (
+        <svg {...common}>
+          <path d="M3 6h18v12H3z" />
+          <path d="M3 6l9 7 9-7" />
+        </svg>
+      );
+    case "document-check":
+      return (
+        <svg {...common}>
+          <path d="M6 3h9l4 4v14H6z" />
+          <path d="M9 14l2 2 4-4" />
+        </svg>
+      );
+    case "duplicate":
+      return (
+        <svg {...common}>
+          <path d="M9 4h9v13H9z" />
+          <path d="M4 8h9v13H4z" />
+        </svg>
+      );
+    case "coa":
+      // Ledger — three horizontal rules inside a book/spine.
+      return (
+        <svg {...common}>
+          <path d="M4 4h14v16H4z" />
+          <path d="M8 4v16" />
+          <path d="M11 9h5M11 12h5M11 15h5" />
+        </svg>
+      );
   }
 }

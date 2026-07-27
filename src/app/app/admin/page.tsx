@@ -27,6 +27,8 @@ import MissionControlConnectPrompt, { loadMissionControlConnectPromptSpec } from
 import EmailIntakeCard, { type EmailFeedCardData } from "@/components/mission-control/EmailIntakeCard";
 import IntelligenceReviewCard from "@/components/mission-control/IntelligenceReviewCard";
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
+import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
+import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +55,9 @@ export default async function MissionControlPage({
 
   const snapshot = await loadMissionControlSnapshot(principal, clubId, { feedFilter: view });
   const connectPrompt = await loadMissionControlConnectPromptSpec({ principal, clubId });
+  // Sprint 3 · Checkpoint 15M — Feed Synced header pill (replaces
+  // the removed "Connected accounts" sidebar entry).
+  const feedSyncedStatus = await loadFeedSyncedStatus(clubId, principal.id);
 
   const firstName = user.name?.split(" ")[0] ?? "there";
   const greetingWord = greetingForHour(snapshot.syncedAt);
@@ -77,6 +82,7 @@ export default async function MissionControlPage({
         </h1>
         <div className="spectre-mc-header-meta">
           <span className="date">{dateLabel} · {timeLabel}</span>
+          <FeedSyncedStatusPill status={feedSyncedStatus} />
           <MissionControlLiveRefresh
             initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
             initialSyncedAt={snapshot.syncedAt.toISOString()}

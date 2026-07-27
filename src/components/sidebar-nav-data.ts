@@ -17,9 +17,16 @@ export type NavItem = { href: string; label: string; perm?: PermCheck };
 export type NavSection = { id: string; label: string; items: NavItem[] };
 
 // ---------- Admin nav: top-level (no section) ----------
+// Sprint 3 · Checkpoint 15M — "Dashboard" is renamed to "Mission
+// Control" to match the founder-approved Variant D reference. The
+// URL stays `/app/admin` so every existing bookmark, breadcrumb,
+// and internal link keeps working; only the visible label + a11y
+// label change. The duplicate top-level `Search` entry is also
+// removed — the Spectre sidebar already renders a single search
+// affordance at the top of the sidebar (see `SpectreSidebar.tsx`),
+// so surfacing another one under Mission Control was noise.
 export const ADMIN_TOP_LEVEL: NavItem[] = [
-  { href: "/app/admin", label: "Dashboard" },
-  { href: "/app/admin/search", label: "Search", perm: "search:read" },
+  { href: "/app/admin", label: "Mission Control" },
 ];
 
 // ---------- Admin nav: grouped sections ----------
@@ -169,12 +176,14 @@ export const ADMIN_SECTIONS: NavSection[] = [
 ];
 
 // Personal items — always visible to every admin, unsectioned at the bottom.
-// Sprint 2 B3 (2026-07-19) — Connected accounts entry hides itself
-// when MAILBOX_INTEGRATION_ENABLED is false. Server-side page
-// enforces the flag; sidebar suppression is a nicety.
+// Sprint 3 · Checkpoint 15M — "Connected accounts" is removed from
+// the sidebar. The mailbox connection is now surfaced in the Mission
+// Control header as a "Feed synced" status pill; the underlying
+// /app/user/settings/connected-accounts route still exists for the
+// reconnect workflow, but is reached via the header status pill
+// instead of a sidebar entry.
 export const ADMIN_PERSONAL: NavItem[] = [
   { href: "/app/admin/mfa", label: "My MFA" },
-  { href: "/app/user/settings/connected-accounts", label: "Connected accounts" },
 ];
 
 // ---------- Member portal nav (unchanged from prior behavior) ----------
