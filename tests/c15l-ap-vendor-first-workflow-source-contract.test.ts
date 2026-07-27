@@ -196,15 +196,29 @@ describe("15L — hover-fill removal", () => {
   });
 });
 
-describe("15L — vendor search endpoint is tenant-scoped and never exposes bank details", () => {
+describe("15L + 15P-3 — vendor search endpoint is tenant-scoped and never exposes bank details", () => {
   it("filters by activeClubId and returns 401 without a principal", () => {
+    // 15P-3: same tenant-isolation invariants, now on the POST
+    // endpoint that scores the full extracted profile against
+    // every persisted field it can compare.
     expect(VENDORS_SEARCH).toMatch(/const principal = await getCurrentPrincipal\(\)/);
     expect(VENDORS_SEARCH).toMatch(/if \(!principal\) return NextResponse\.json\(\{ matches: \[\] \}, \{ status: 401 \}\)/);
-    expect(VENDORS_SEARCH).toMatch(/clubId,\s*OR: \[/);
+    expect(VENDORS_SEARCH).toMatch(/const clubId = principal\.activeClubId/);
+    // The candidate-retrieval helper always threads clubId through:
+    expect(VENDORS_SEARCH).toMatch(/retrieveCandidates\(\{ clubId, extracted \}\)/);
   });
-  it("select clause never asks for banking / EFT fields", () => {
-    // The select is explicit. Grepping the FULL select block:
-    const selectBlock = VENDORS_SEARCH.slice(VENDORS_SEARCH.indexOf("select: {"), VENDORS_SEARCH.indexOf("take: 10"));
-    expect(selectBlock).not.toMatch(/bank|routing|iban|eft|remit/i);
+  it("15P-3: endpoint is POST-only (no GET path), body is Zod-validated", () => {
+    expect(VENDORS_SEARCH).toMatch(/export async function POST\(req: Request\)/);
+    expect(VENDORS_SEARCH).not.toMatch(/export async function GET\b/);
+    expect(VENDORS_SEARCH).toMatch(/const bodySchema = z\.object\(/);
+  });
+  it("no `bank`, `routing`, `iban`, or `eft` field is referenced in the endpoint (strip comments)", () => {
+    // The endpoint delegates the DB read to retrieveCandidates —
+    // so we assert the endpoint file itself never references those
+    // fields (it doesn't even name-check them). The safety-comment
+    // header is allowed to name what's forbidden, so we strip
+    // comments before scanning.
+    const withoutComments = VENDORS_SEARCH.replace(/\/\/[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(withoutComments).not.toMatch(/bank|routing|iban|eft/i);
   });
 });

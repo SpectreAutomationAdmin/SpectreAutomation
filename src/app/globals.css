@@ -2836,6 +2836,86 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     font-size: 12px; color: var(--spectre-text-secondary);
   }
   .spectre-cvap-warnings li + li { margin-top: 4px; }
+
+  /* Sprint 3 · Checkpoint 15P-3 — evidence-based match chip.
+     Replaces the pre-15P-3 flat "matched on name · 65 %" chip with
+     a two-line chip + disclosure of matched / differing / not-
+     compared fields. No percentage is shown to the user. */
+  .spectre-cvap-match-chip-wrapper {
+    display: inline-flex; flex-direction: column;
+    align-items: flex-start; gap: 4px;
+    max-width: 100%;
+  }
+  .spectre-cvap-match-chip .evidence {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    font-size: 10.5px; color: var(--spectre-text-muted);
+    line-height: 1.3;
+  }
+  .spectre-cvap-classification {
+    font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; font-size: 10px;
+  }
+  .spectre-cvap-classification.classification-exact {
+    color: var(--spectre-status-success);
+  }
+  .spectre-cvap-classification.classification-strong {
+    color: var(--spectre-status-success);
+    opacity: 0.85;
+  }
+  .spectre-cvap-classification.classification-possible {
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-cvap-classification.classification-conflicting {
+    color: var(--spectre-status-warning);
+  }
+  .spectre-cvap-match-chip.classification-exact {
+    border-color: var(--spectre-status-success);
+  }
+  .spectre-cvap-match-chip.classification-conflicting {
+    border-color: var(--spectre-status-warning);
+  }
+  .spectre-cvap-match-details {
+    font-size: 11px; color: var(--spectre-text-secondary);
+    padding: 0 6px;
+  }
+  .spectre-cvap-match-details summary {
+    cursor: pointer;
+    list-style: none;
+    color: var(--spectre-text-muted);
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 0;
+  }
+  .spectre-cvap-match-details summary::-webkit-details-marker { display: none; }
+  .spectre-cvap-match-details summary::before {
+    content: "▸ "; display: inline-block;
+    transition: transform 0.15s ease;
+  }
+  .spectre-cvap-match-details[open] summary::before {
+    transform: rotate(90deg);
+  }
+  .spectre-cvap-match-details dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 3px 10px;
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    background: var(--spectre-canvas-sunken, var(--spectre-surface));
+    border-radius: 4px;
+    max-width: 40ch;
+  }
+  .spectre-cvap-match-details dt {
+    font-weight: 700; text-transform: uppercase;
+    font-size: 10px; letter-spacing: 0.04em;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-cvap-match-details dd {
+    margin: 0;
+    color: var(--spectre-text-primary);
+    word-break: break-word;
+  }
+  .spectre-cvap-match-details dd.dim {
+    color: var(--spectre-text-muted);
+  }
   .spectre-cvap-alt { margin-top: 10px; font-size: 12.5px; }
   .spectre-cvap-alt summary { cursor: pointer; color: var(--spectre-text-secondary); }
   .spectre-cvap-alt ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }

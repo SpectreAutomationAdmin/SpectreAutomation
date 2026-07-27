@@ -188,8 +188,12 @@ describe("15O — internal-forwarder rule preserved", () => {
 // ---------------------------------------------------------------------------
 
 describe("15O + 15P-1 — possible existing matches", () => {
-  it("Step 1 loads possible matches from the tenant-scoped API", () => {
-    expect(MODAL).toMatch(/\/api\/vendors\/search\?q=/);
+  it("Step 1 loads possible matches from the tenant-scoped API (15P-3: POST endpoint)", () => {
+    // 15P-3 replaced the GET /api/vendors/search?q= endpoint with a
+    // POST endpoint that carries the full extracted profile. Same
+    // URL, different method. The tenant / auth invariants are
+    // preserved and re-asserted in the 15P-3 source-contract suite.
+    expect(MODAL).toMatch(/fetch\(`\/api\/vendors\/search`, \{\s*method: "POST"/);
   });
   it("15P-1: no radio 'Create new vendor' gate — CREATE_NEW is the default and the profile is visible on open", () => {
     // The pre-15P-1 radio gate is gone. The profile grid must not

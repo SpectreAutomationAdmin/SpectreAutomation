@@ -126,8 +126,17 @@ interface PossibleMatch {
   id: string;
   legalName: string;
   operatingName: string | null;
+  // 15P-3: evidence-based match result.
   matchEvidence: string;
-  confidence: number;
+  classification: "exact" | "strong" | "possible" | "conflicting";
+  matchedFields: string[];
+  differedFields: string[];
+  notComparableFields: string[];
+  fieldsCompared: number;
+  matchedWeight: number;
+  differedWeight: number;
+  availableEvidenceWeight: number;
+  rankingScore: number;
   lastInvoiceDate: string | null;
 }
 
@@ -300,19 +309,49 @@ export default function CreateVendorAndPostModal({
   }, [open, onClose]);
 
   // Load possible matches on open.
+  //
+  // 15P-3: switched from GET `?q=<name>` to POST with the FULL
+  // extracted vendor profile. The server now scores every candidate
+  // against every persisted field it can compare — no more
+  // hardcoded 65 % name-only ceiling.
   const loadMatches = useCallback(async () => {
     if (matchesLoading) return;
     setMatchesLoading(true);
     try {
-      const q = ap.extractedVendor.name ?? "";
-      if (!q) { setMatches([]); return; }
-      const res = await fetch(`/api/vendors/search?q=${encodeURIComponent(q)}`, { method: "GET" });
+      const legalName = ap.extractedVendor.name ?? "";
+      if (!legalName) { setMatches([]); return; }
+      const body = {
+        extracted: {
+          legalName,
+          operatingName:         null,
+          addressLine1:          extracted?.address?.line1?.value ?? null,
+          addressLine2:          extracted?.address?.line2?.value ?? null,
+          city:                  extracted?.address?.city?.value ?? null,
+          provinceState:         extracted?.address?.provinceState?.value ?? null,
+          postalCode:            extracted?.address?.postalCode?.value ?? null,
+          country:               extracted?.address?.country?.value ?? null,
+          phone:                 extracted?.phone?.value ?? null,
+          website:               extracted?.website?.value ?? null,
+          email:                 extracted?.customerSupportEmail?.value ?? null,
+          arEmail:               extracted?.arEmail?.value ?? null,
+          apRemittanceEmail:     extracted?.remittanceEmail?.value ?? null,
+          taxRegistrationNumber: extracted?.taxRegistrationNumber?.value ?? null,
+          paymentTermsDays:      paymentTermsDaysInitial ?? null,
+          mainContactName:       ap.sender.relationship === "VENDOR" ? ap.sender.name : null,
+          mainContactEmail:      ap.sender.relationship === "VENDOR" ? ap.sender.email : null,
+        },
+      };
+      const res = await fetch(`/api/vendors/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
       if (!res.ok) { setMatches([]); return; }
-      const body = (await res.json()) as { matches: PossibleMatch[] };
-      setMatches(body.matches ?? []);
+      const json = (await res.json()) as { matches: PossibleMatch[] };
+      setMatches(json.matches ?? []);
     } catch { setMatches([]); }
     finally { setMatchesLoading(false); }
-  }, [ap.extractedVendor.name, matchesLoading]);
+  }, [ap.extractedVendor.name, ap.sender.relationship, ap.sender.name, ap.sender.email, extracted, paymentTermsDaysInitial, matchesLoading]);
   useEffect(() => {
     if (open) void loadMatches();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -612,22 +651,18 @@ export default function CreateVendorAndPostModal({
                 </div>
                 <div className="spectre-cvap-match-strip-items">
                   {matches.map((m) => (
-                    <button
-                      type="button"
+                    <MatchChip
                       key={m.id}
-                      className={`spectre-cvap-match-chip ${chosenMatchId === m.id ? "is-picked" : ""}`}
-                      onClick={() => {
+                      match={m}
+                      picked={chosenMatchId === m.id}
+                      onToggle={() => {
                         if (chosenMatchId === m.id) {
                           setChosenMatchId(null); setVendorMode("CREATE_NEW");
                         } else {
                           setChosenMatchId(m.id); setVendorMode("USE_EXISTING");
                         }
                       }}
-                      data-testid={`cvap-match-${m.id}`}
-                    >
-                      <span className="name">{m.operatingName ?? m.legalName}</span>
-                      <span className="evidence">{m.matchEvidence} · {m.confidence}%</span>
-                    </button>
+                    />
                   ))}
                 </div>
               </div>
@@ -1066,6 +1101,120 @@ export default function CreateVendorAndPostModal({
       </>
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// 15P-3: Match chip — replaces the pre-15P-3 hardcoded "N %"
+// display with an evidence-based summary + disclosure that lists
+// matched / differing / not-compared fields.
+//
+// The chip does NOT show a percentage. The founder rule: "Do not
+// display a percentage unless it is clearly labelled as an internal
+// match score and product review establishes that it is more useful
+// than the plain-language evidence. The preferred implementation is
+// to remove the percentage from the user-facing chip."
+// ---------------------------------------------------------------------------
+function humaniseFieldName(k: string): string {
+  const map: Record<string, string> = {
+    legalName: "legal name",
+    operatingName: "operating name",
+    addressLine1: "address line 1",
+    addressLine2: "address line 2",
+    city: "city",
+    provinceState: "province / state",
+    postalCode: "postal / ZIP",
+    country: "country",
+    phone: "phone",
+    website: "website",
+    email: "email",
+    arEmail: "AR email",
+    apRemittanceEmail: "AP remittance email",
+    taxRegistrationNumber: "tax registration #",
+    paymentTermsDays: "payment terms",
+    mainContactName: "main contact",
+    mainContactEmail: "main contact email",
+  };
+  return map[k] ?? k;
+}
+
+function MatchChip({
+  match, picked, onToggle,
+}: {
+  match: {
+    id: string; legalName: string; operatingName: string | null;
+    matchEvidence: string;
+    classification: "exact" | "strong" | "possible" | "conflicting";
+    matchedFields: string[]; differedFields: string[]; notComparableFields: string[];
+    lastInvoiceDate: string | null;
+  };
+  picked: boolean;
+  onToggle: () => void;
+}) {
+  const stateLabel = (
+    match.classification === "exact"       ? "Exact match"
+    : match.classification === "strong"    ? "Strong match"
+    : match.classification === "possible"  ? (match.matchedFields.length === 1 ? "Exact name match" : "Possible match")
+    : "Conflicting match"
+  );
+  const stateSummary = (
+    match.classification === "conflicting"
+      ? `${match.differedFields.length} field${match.differedFields.length === 1 ? "" : "s"} differ`
+      : match.classification === "possible" && match.matchedFields.length === 1
+      ? "limited evidence"
+      : `${match.matchedFields.length} field${match.matchedFields.length === 1 ? "" : "s"} verified`
+  );
+  return (
+    <div
+      className={`spectre-cvap-match-chip-wrapper ${picked ? "is-picked" : ""}`}
+      data-classification={match.classification}
+      data-testid={`cvap-match-${match.id}`}
+    >
+      <button
+        type="button"
+        className={`spectre-cvap-match-chip ${picked ? "is-picked" : ""} classification-${match.classification}`}
+        onClick={onToggle}
+        data-testid={`cvap-match-chip-${match.id}`}
+      >
+        <span className="name">{match.operatingName ?? match.legalName}</span>
+        <span className="evidence">
+          <span className={`spectre-cvap-classification classification-${match.classification}`}>{stateLabel}</span>
+          <span className="separator"> · </span>
+          <span className="summary">{stateSummary}</span>
+        </span>
+      </button>
+      <details className="spectre-cvap-match-details" data-testid={`cvap-match-details-${match.id}`}>
+        <summary>Evidence</summary>
+        <dl>
+          <dt>Matched</dt>
+          <dd data-testid={`cvap-match-matched-${match.id}`}>
+            {match.matchedFields.length
+              ? match.matchedFields.map(humaniseFieldName).join(", ")
+              : "—"}
+          </dd>
+          {match.differedFields.length > 0 ? (
+            <>
+              <dt>Differs</dt>
+              <dd data-testid={`cvap-match-differed-${match.id}`}>
+                {match.differedFields.map(humaniseFieldName).join(", ")}
+              </dd>
+            </>
+          ) : null}
+          <dt>Not compared</dt>
+          <dd className="dim">
+            {match.notComparableFields.length
+              ? match.notComparableFields.map(humaniseFieldName).join(", ")
+              : "—"}
+          </dd>
+          {match.lastInvoiceDate ? (
+            <>
+              <dt>Last invoice</dt>
+              <dd>{match.lastInvoiceDate}</dd>
+            </>
+          ) : null}
+        </dl>
+      </details>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
