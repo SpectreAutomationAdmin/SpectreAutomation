@@ -1134,6 +1134,64 @@ A feature is done when ALL are true:
    `.claude/skills/ui-product-design/SKILL.md` has been run, the
    screen was opened in a browser, and the final summary reports
    what was measured.
+10. **Deployed to staging.** See "Staging is the founder acceptance
+    environment" below — the change is on `spectre-staging` and
+    `/api/health` returned 200 before the checkpoint is reported
+    complete.
+
+## Staging is the founder acceptance environment — Mandatory
+
+Localhost is an engineering environment only. It is used for coding,
+fixtures, unit tests, browser smoke tests, and visual comparison.
+It is **not** the environment where the founder reviews a change.
+
+The founder is non-technical and does not run a local dev server.
+A change that only exists on localhost is invisible to her.
+
+Standard workflow for every authorised checkpoint / code change:
+
+  Implement → risk-based tests → commit → push → deploy to staging
+  → verify health → founder reviews staging
+
+Once a checkpoint is authorised, deploying to `spectre-staging` is
+part of "done." Do **not** stop at "ready to deploy" and ask for
+separate permission to run `flyctl deploy`. Only pause before the
+staging deploy when there is a genuine safety blocker:
+
+- relevant tests are failing;
+- unexplained, unrelated files are present in the diff;
+- secrets, uploaded PDFs, screenshots, credentials, tokens, private
+  keys, local databases, or Claude-local settings would be committed;
+- a destructive migration has not been approved;
+- the deployment target cannot be verified;
+- production rather than staging may be affected;
+- rollback cannot be performed safely.
+
+A preference to wait for founder confirmation is **not** a blocker.
+
+Deployment targets:
+
+- **Staging (default for every code change):** `spectre-staging`
+  (web) and `spectre-staging-worker` (only when worker code
+  changed). Config: `deploy/fly.web.toml`, `deploy/fly.worker.toml`.
+  URL: `https://staging.spectreautomation.com`.
+- **Production:** the public Spectre application. **Never deploy
+  without explicit founder authorisation on the specific change.**
+  A prior "you can deploy staging" does not authorise production.
+
+Every deploy must record, in the final report:
+
+- rollback anchor (prior release version + image);
+- new release version + image;
+- worker deploy decision (yes / no + reason);
+- migration outcome;
+- `/api/health` response code;
+- log scan result (errors / warnings) for a bounded window after
+  the release.
+
+See `docs/reference/staging-deploy-runbook.md` if / when it exists;
+otherwise follow the flow captured in
+`~/.claude/projects/c--dev-SpectreAutomation/memory/reference_staging_infra.md`.
 
 ## Forbidden shortcuts
 - No `--no-verify`, `--force`, `--skip-generate` to push past failing checks.
