@@ -160,7 +160,19 @@ export function SpectreSidebar({
             >
               Spectre
             </div>
-            <div className="text-[13px] font-semibold leading-tight truncate" style={{ color: "var(--spectre-text-primary)" }}>
+            {/* Sprint 3 · Checkpoint 15O — the club identity may wrap
+                to two lines so long names like "Coulee Ridge Golf &
+                Country Club" fit legibly on the widened 288px
+                sidebar. `truncate` was rejected because it silently
+                dropped "& Country Club". Line-clamp caps at two
+                lines so an unusually long identity still can't push
+                the search / nav below the fold. */}
+            <div
+              className="text-[13px] font-semibold leading-tight spectre-sidebar-club-name"
+              style={{ color: "var(--spectre-text-primary)" }}
+              data-testid="spectre-sidebar-club-name"
+              title={clubName}
+            >
               {clubName}
             </div>
           </div>

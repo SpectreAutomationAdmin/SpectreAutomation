@@ -32,75 +32,62 @@ const MC_PAGE      = read("src/app/app/admin/page.tsx");
 const CVAP_ACTION  = read("src/app/app/admin/ap/_create-vendor-and-post-actions.ts");
 const TIMELINE_LIB = read("src/lib/vendor-timeline.ts");
 const TIMELINE_PG  = read("src/app/app/admin/ap/vendors/[id]/timeline/page.tsx");
-const PROV_PG      = read("src/app/app/admin/ap/vendors/provisional/page.tsx");
+// Sprint 3 · Checkpoint 15O — the provisional page was removed;
+// this constant is intentionally left empty so the file still
+// parses. Tests that referenced PROV_PG have been rewritten below
+// to lock the 15O contract (provisional route gone; unmatched vendor
+// name opens the modal instead of a URL).
+const PROV_PG      = "";
 const FEED_PILL    = read("src/components/mission-control/FeedSyncedStatusPill.tsx");
 const FEED_LOADER  = read("src/lib/mission-control/feed-synced-status.ts");
 const LIVE_REFRESH = read("src/components/mission-control/MissionControlLiveRefresh.tsx");
 const IRI          = read("src/lib/mission-control/intelligence-review-intakes.ts");
 
-describe("15M — real Create Vendor & Post transaction", () => {
-  it("server action exists and is 'use server'", () => {
-    expect(CVAP_ACTION).toMatch(/"use server"/);
-    expect(CVAP_ACTION).toMatch(/export async function createVendorAndPostAction/);
+describe("15M — real Create Vendor & Post transaction (SUPERSEDED by 15O two-step split)", () => {
+  // Sprint 3 · Checkpoint 15O rejected the combined single-transaction
+  // path. The same safety invariants (permission gates, WI re-fetch,
+  // GL validation, tx timeout, dup detection, WI resolve, audits,
+  // timeline link) are now locked against the SPLIT files in
+  // tests/c15o-two-step-vendor-and-ap-workflow-source-contract.test.ts:
+  //     • src/app/app/admin/ap/_create-vendor-actions.ts     (Step 1)
+  //     • src/app/app/admin/ap/_post-ap-invoice-actions.ts   (Step 2)
+  //
+  // The pre-15O combined action is a compile-time stub — kept only so
+  // a stale import errors loudly. Assert that stub shape here so a
+  // future regression that reintroduces the combined path is caught
+  // by BOTH suites.
+  it("the pre-15O combined action is retired (throws on call, references the 15O replacements in-comment)", () => {
+    expect(CVAP_ACTION).toMatch(/createVendorAndPostAction was retired in Checkpoint 15O/);
+    expect(CVAP_ACTION).toMatch(/throw new Error/);
   });
-  it("enforces vendor:create + ap:invoice:create permissions before doing any work", () => {
-    expect(CVAP_ACTION).toMatch(/hasPermission\(principal, clubId, "vendor:create"\)/);
-    expect(CVAP_ACTION).toMatch(/hasPermission\(principal, clubId, "ap:invoice:create"\)/);
-  });
-  it("re-fetches the Work Intake item server-side (client cannot be trusted)", () => {
-    expect(CVAP_ACTION).toMatch(/prisma\.workIntakeItem\.findFirst/);
-    expect(CVAP_ACTION).toMatch(/where: \{ id: input\.workIntakeItemId, clubId \}/);
-  });
-  it("validates that the target GL is active + EXPENSE-or-ASSET-typed on this club", () => {
-    expect(CVAP_ACTION).toMatch(/isActive: true/);
-    expect(CVAP_ACTION).toMatch(/account\.type !== "EXPENSE" && account\.type !== "ASSET"/);
-  });
-  it("wraps vendor + AP + WorkIntake resolution in one $transaction with 15I-5 timeout", () => {
-    expect(CVAP_ACTION).toMatch(/prisma\.\$transaction\(async \(tx\) =>/);
-    expect(CVAP_ACTION).toMatch(/timeout: 60_000/);
-    expect(CVAP_ACTION).toMatch(/maxWait: 15_000/);
-  });
-  it("detects duplicate invoice (same vendor + same vendorReference) BEFORE writing anything else", () => {
-    const dup = CVAP_ACTION.indexOf("dupInv");
-    const create = CVAP_ACTION.indexOf("tx.aPInvoice.create");
-    expect(dup).toBeGreaterThan(0);
-    expect(create).toBeGreaterThan(dup);
-  });
-  it("resolves the Work Intake item to RESOLVED with resolvedAt + resolvedByUserId stamped", () => {
-    expect(CVAP_ACTION).toMatch(/tx\.workIntakeItem\.update\(\{\s+where: \{ id: wi\.id \},[\s\S]{0,300}status: "RESOLVED"[\s\S]{0,200}resolvedAt: new Date\(\)/);
-  });
-  it("audits vendor creation, AP invoice creation, and work-intake resolution separately", () => {
-    expect(CVAP_ACTION).toMatch(/action: "vendor\.create"/);
-    expect(CVAP_ACTION).toMatch(/action: "ap\.invoice\.create"/);
-    expect(CVAP_ACTION).toMatch(/action: "work-intake\.resolve"/);
-  });
-  it("returns a link to the vendor timeline and the created AP invoice on success", () => {
-    expect(CVAP_ACTION).toMatch(/timelineUrl: `\/app\/admin\/ap\/vendors\/\$\{encodeURIComponent\(result\.vendorId\)\}`/);
-    expect(CVAP_ACTION).toMatch(/apInvoiceUrl:\s+`\/app\/admin\/ap\/invoices\/\$\{encodeURIComponent\(result\.invoiceId\)\}`/);
-  });
-  it("card's onConfirm handler wires directly to the server action", () => {
-    expect(CARD).toMatch(/import\(.*_create-vendor-and-post-actions.*\)/);
-    expect(CARD).toMatch(/createVendorAndPostAction\(payload\)/);
-    // Success path refreshes the router so the resolved item drops
-    // from the feed AND the vendor timeline picks up the new event.
-    expect(CARD).toMatch(/router\.refresh\(\)/);
+  it("card no longer imports the retired combined action", () => {
+    // The card now delegates to the two step actions via the modal
+    // itself — see tests/c15o-*.test.ts for the current wiring.
+    expect(CARD).not.toMatch(/import\(.*_create-vendor-and-post-actions.*\)/);
   });
 });
 
 describe("15M — vendor timeline architecture", () => {
-  it("loader lives in a reusable module (not vendor-specific to one page)", () => {
+  it("loader lives in a reusable module (matched-vendor path; provisional path removed in 15O)", () => {
     expect(TIMELINE_LIB).toMatch(/export async function loadVendorTimeline/);
-    expect(TIMELINE_LIB).toMatch(/export async function loadProvisionalVendorTimeline/);
+    // Sprint 3 · Checkpoint 15O rejected the provisional loader.
+    // Kept as a superseded-marker guard so a future regression is
+    // caught by both this suite and c15o.
+    expect(TIMELINE_LIB).not.toMatch(/export async function loadProvisionalVendorTimeline/);
   });
-  it("returns a NEWEST-FIRST event stream", () => {
-    expect(TIMELINE_LIB).toMatch(/events\.sort\(\(a, b\) => b\.ts\.localeCompare\(a\.ts\)\)/);
+  it("returns a NEWEST-FIRST event stream (15O renamed the local from events → clamped)", () => {
+    // Sprint 3 · Checkpoint 15O added a lower-bound clamp before the
+    // sort. The invariant (newest-first) is preserved; the local
+    // is now called `clamped`.
+    expect(TIMELINE_LIB).toMatch(/clamped\.sort\(\(a, b\) => b\.ts\.localeCompare\(a\.ts\)\)/);
   });
   it("aggregates events from EmailMessage + IngestedDocument + APInvoice + Vendor + WorkIntake — no dedicated event table", () => {
     expect(TIMELINE_LIB).toMatch(/prisma\.emailMessage\.findMany/);
     expect(TIMELINE_LIB).toMatch(/prisma\.ingestedDocument\.findMany/);
     expect(TIMELINE_LIB).toMatch(/prisma\.aPInvoice\.findMany/);
-    // Explicit note about not duplicating source data.
-    expect(TIMELINE_LIB).toMatch(/No new event table introduced/);
+    // Explicit note about not duplicating source data (comment
+    // preserved through 15O — wording slightly reworded).
+    expect(TIMELINE_LIB).toMatch(/No new event table is introduced/);
   });
   it("every DOMAIN query is tenant-scoped by clubId (no cross-tenant leakage)", () => {
     // Grep every findMany / findFirst / count on the DOMAIN tables
@@ -124,20 +111,24 @@ describe("15M — vendor timeline architecture", () => {
     // Cross-tenant vendor id returns 404 — loader returns null for
     // wrong-tenant, page then calls notFound().
   });
-  it("provisional route survives vendor-creation (keyed to extracted name + workIntakeItemId)", () => {
-    expect(PROV_PG).toMatch(/searchParams:.*name/);
-    expect(PROV_PG).toMatch(/workIntakeItemId/);
-    expect(PROV_PG).toMatch(/loadProvisionalVendorTimeline/);
-    expect(TIMELINE_LIB).toMatch(/loadProvisionalVendorTimeline/);
+  it("provisional route + loader are REMOVED in Checkpoint 15O (superseded by two-step modal)", () => {
+    // 15O rejected the provisional model entirely. The route file
+    // is gone and the loader is no longer exported.
+    void PROV_PG;
+    expect(TIMELINE_LIB).not.toMatch(/export async function loadProvisionalVendorTimeline/);
   });
-  it("card title's vendor name is an anchor — matched vendors route to the timeline, unmatched to the provisional view", () => {
+  it("card title vendor-name behaviour (superseded by 15O): matched → /timeline link, unmatched → opens modal", () => {
+    // See tests/c15o-*.test.ts for the current contract. Kept here
+    // as a superseded-marker so a future regression to the pre-15O
+    // provisional route is caught by BOTH suites.
     expect(CARD).toMatch(/function ApTitle/);
-    // Matched → vendor timeline route.
-    expect(CARD).toMatch(/ap\.vendorMatch\.matchedVendorId\s*\?\s*[`\s\S]*\/timeline/);
-    // Unmatched → provisional route with extracted name + workIntakeItemId.
-    expect(CARD).toMatch(/\/app\/admin\/ap\/vendors\/provisional\?name=/);
-    // Nested link never toggles the card's accordion.
-    expect(CARD).toMatch(/data-testid="ap-title-vendor-link"[\s\S]{0,120}onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
+    // Matched vendor path — anchor element with href built from matchedVendorId.
+    expect(CARD).toMatch(/matchedVendorId\)\s*\}\/timeline/);
+    expect(CARD).toMatch(/data-testid="ap-title-vendor-link"/);
+    // Unmatched vendor path — button element that opens the modal.
+    expect(CARD).toMatch(/data-testid="ap-title-vendor-button"/);
+    // Provisional route removed entirely.
+    expect(CARD).not.toMatch(/\/app\/admin\/ap\/vendors\/provisional/);
   });
 });
 

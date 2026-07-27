@@ -1,69 +1,65 @@
 "use client";
 
-// Sprint 3 · Checkpoint 15L (2026-07-27) — Create Vendor & Post modal.
+// Sprint 3 · Checkpoint 15O (2026-07-27) — two-step Create Vendor &
+// Post modal.
 //
-// Rendered when the operator clicks the "Create vendor & post" primary
-// action on an AP intake card whose vendor is not on file. Combines
-// four review steps into one focused modal so the founder can complete
-// vendor onboarding + AP drafting + posting confirmation without
-// hopping between screens:
+// Founder rule: the modal is a GUIDED FLOW.
+//   Step 1 · Vendor profile
+//     Review + edit the full vendor profile. Choose an existing
+//     match OR create a new vendor. Actions:
+//       • Create vendor            (primary; new vendor path)
+//       • Use selected vendor      (primary; existing-match path)
+//       • Save vendor and finish later  (secondary; stops after Step 1)
+//     Does NOT post anything. Does NOT resolve the Work Intake.
 //
-//   1. Vendor profile   — pre-populated with everything the analyser
-//                          extracted from the PDF; every field labelled
-//                          with provenance so the operator can trust
-//                          or correct it.
-//   2. Possible matches — same-tenant existing vendors that look like
-//                          the same entity (normalised name + email
-//                          domain + tax id).
-//   3. Proposed coding  — the AP transaction the analyser drafted
-//                          (invoice #, amount, tax, GL, department,
-//                          fund), editable inline before commit.
-//   4. Final confirmation — a clear, blocking confirmation. Nothing
-//                          happens until this button is clicked. Even
-//                          then, the modal's real posting hook (a
-//                          server action in a follow-up ticket) is
-//                          gated by the same posting-permission,
-//                          duplicate-check, and validation rules the
-//                          existing Approve & post path uses.
+//   Step 2 · AP coding
+//     Only reachable after Step 1 succeeded (unless finish-later).
+//     Review the drafted AP invoice, edit the GL / dates / terms,
+//     then post. This step DOES resolve the Work Intake.
+//     Actions:
+//       • Post invoice             (primary)
+//       • Back to vendor profile   (secondary; read-only re-visit)
 //
-// SAFETY:
+// Server actions live in:
+//   src/app/app/admin/ap/_create-vendor-actions.ts    (Step 1)
+//   src/app/app/admin/ap/_post-ap-invoice-actions.ts  (Step 2)
+//
+// Safety invariants:
 //   • Opening the modal creates nothing and posts nothing.
-//   • The primary "Confirm" button is disabled until:
-//       (a) the operator has explicitly picked "Create new vendor" or
-//           "Use this existing vendor";
-//       (b) the vendor name is non-empty;
-//       (c) the GL account is present.
-//   • Sender identity (Chris @ spectreautomation) is NEVER auto-
-//     populated as the vendor's main contact when the sender is an
-//     EMPLOYEE_FORWARD. The Source line above the modal explains why.
+//   • Step 1 primary is DISABLED until the vendor mode is chosen
+//     AND the required fields are filled.
+//   • Step 2 is only reachable after Step 1 returned ok=true and
+//     the user did NOT click Save-and-finish-later.
+//   • Step 2 primary is DISABLED until the coding fields resolve.
+//   • Sender identity from an internal forwarder (EMPLOYEE_FORWARD)
+//     is NEVER auto-populated as the vendor's main contact.
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import type { ApInvoiceCardIntelligence } from "@/lib/mission-control";
+
+// ---------------------------------------------------------------------------
+// Props
+// ---------------------------------------------------------------------------
 
 export interface CreateVendorAndPostModalProps {
   open: boolean;
   onClose: () => void;
   ap: ApInvoiceCardIntelligence;
   workIntakeItemId: string;
-  // Optional server-action handler. When absent, the modal shows a
-  // "Confirmation wiring pending" state instead of a broken submit.
-  // Real posting is a follow-up ticket — the founder's brief allows
-  // the modal to open first (§6 "Do not create the vendor or post
-  // merely by opening the modal.").
-  onConfirm?: (payload: {
-    workIntakeItemId: string;
-    vendorMode: "CREATE_NEW" | "USE_EXISTING";
-    existingVendorId?: string;
-    vendorProfile: VendorProfileDraft;
-    coding: CodingDraft;
-  }) => Promise<{ ok: true } | { ok: false; message: string }>;
 }
 
-export interface VendorProfileDraft {
+// ---------------------------------------------------------------------------
+// Local shapes
+// ---------------------------------------------------------------------------
+
+interface VendorProfileDraft {
   legalName: string;
   operatingName: string | null;
   email: string | null;
+  phone: string | null;
   addressLine1: string | null;
+  addressLine2: string | null;
   city: string | null;
   provinceOrState: string | null;
   postalCode: string | null;
@@ -73,17 +69,28 @@ export interface VendorProfileDraft {
   paymentTermsDays: number | null;
   currency: string | null;
   notes: string | null;
+  // Contact fields — captured for the audit trail + follow-up
+  // "vendor contacts" model. Not persisted to the current Vendor
+  // schema (see docs) but still user-editable in Step 1.
+  mainContactName: string | null;
+  mainContactTitle: string | null;
+  mainContactEmail: string | null;
+  mainContactPhone: string | null;
+  arEmail: string | null;
+  apRemittanceEmail: string | null;
 }
 
-export interface CodingDraft {
+interface CodingDraft {
   invoiceNumber: string;
   gross: string;
   currency: string;
   glAccountNumber: string;
   glAccountName: string;
+  taxTotal: string;
+  paymentTermsDays: number | null;
 }
 
-export interface PossibleMatch {
+interface PossibleMatch {
   id: string;
   legalName: string;
   operatingName: string | null;
@@ -92,21 +99,34 @@ export interface PossibleMatch {
   lastInvoiceDate: string | null;
 }
 
+type Step = "PROFILE" | "AP_CODING" | "SAVED_FOR_LATER";
+
 // ---------------------------------------------------------------------------
 
 export default function CreateVendorAndPostModal({
-  open, onClose, ap, workIntakeItemId, onConfirm,
+  open, onClose, ap, workIntakeItemId,
 }: CreateVendorAndPostModalProps) {
+  const router = useRouter();
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousActive = useRef<HTMLElement | null>(null);
 
-  // Editable vendor profile — pre-populated from the extraction,
-  // NEVER from the sender identity (see safety note above).
+  const [step, setStep] = useState<Step>("PROFILE");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Vendor id resolved by Step 1 (either newly created or a picked
+  // existing match). Null until Step 1 succeeds.
+  const [createdVendorId, setCreatedVendorId] = useState<string | null>(null);
+  const [createdVendorName, setCreatedVendorName] = useState<string | null>(null);
+
+  // Step 1 — vendor profile draft.
   const [profile, setProfile] = useState<VendorProfileDraft>(() => ({
     legalName: ap.extractedVendor.name ?? "",
     operatingName: null,
     email: null,
+    phone: null,
     addressLine1: null,
+    addressLine2: null,
     city: null,
     provinceOrState: null,
     postalCode: null,
@@ -116,27 +136,36 @@ export default function CreateVendorAndPostModal({
     paymentTermsDays: null,
     currency: ap.gross.currency,
     notes: null,
+    // Internal-forwarder rule (§Phase 4): EMPLOYEE_FORWARD senders
+    // must NOT be pre-populated as the vendor's main contact. When
+    // the sender is on the vendor's own domain (relationship: "VENDOR")
+    // we DO pre-populate the contact fields.
+    mainContactName: ap.sender.relationship === "VENDOR" ? ap.sender.name : null,
+    mainContactTitle: null,
+    mainContactEmail: ap.sender.relationship === "VENDOR" ? ap.sender.email : null,
+    mainContactPhone: null,
+    arEmail: null,
+    apRemittanceEmail: null,
   }));
 
-  // Editable AP coding — pre-populated from the projection.
+  // Step 2 — AP coding draft.
   const [coding, setCoding] = useState<CodingDraft>(() => ({
     invoiceNumber: ap.invoiceNumber ?? "",
     gross: ap.gross.amount ?? "",
     currency: ap.gross.currency ?? "CAD",
     glAccountNumber: ap.category.glAccountNumber ?? "",
     glAccountName: ap.category.glAccountName ?? "",
+    taxTotal: "",
+    paymentTermsDays: null,
   }));
 
-  // Possible existing matches — the loader hits an API on modal open.
+  // Possible existing matches.
   const [matches, setMatches] = useState<PossibleMatch[]>([]);
   const [matchesLoading, setMatchesLoading] = useState(false);
   const [vendorMode, setVendorMode] = useState<"CREATE_NEW" | "USE_EXISTING" | null>(null);
   const [chosenMatchId, setChosenMatchId] = useState<string | null>(null);
 
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  // Focus + trap + Esc-to-close.
+  // Focus + Esc-to-close.
   useEffect(() => {
     if (!open) return;
     previousActive.current = document.activeElement as HTMLElement | null;
@@ -151,17 +180,14 @@ export default function CreateVendorAndPostModal({
     };
   }, [open, onClose]);
 
-  // Load possible existing vendor matches when the modal opens.
+  // Load possible matches on open.
   const loadMatches = useCallback(async () => {
     if (matchesLoading) return;
     setMatchesLoading(true);
     try {
       const q = ap.extractedVendor.name ?? "";
       if (!q) { setMatches([]); return; }
-      const res = await fetch(
-        `/api/vendors/search?q=${encodeURIComponent(q)}`,
-        { method: "GET" },
-      );
+      const res = await fetch(`/api/vendors/search?q=${encodeURIComponent(q)}`, { method: "GET" });
       if (!res.ok) { setMatches([]); return; }
       const body = (await res.json()) as { matches: PossibleMatch[] };
       setMatches(body.matches ?? []);
@@ -170,42 +196,90 @@ export default function CreateVendorAndPostModal({
   }, [ap.extractedVendor.name, matchesLoading]);
   useEffect(() => {
     if (open) void loadMatches();
-    // Intentionally: only re-load when the modal opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // Reset internal state when the modal closes.
+  useEffect(() => {
+    if (open) return;
+    setStep("PROFILE");
+    setSubmitError(null);
+    setCreatedVendorId(null);
+    setCreatedVendorName(null);
   }, [open]);
 
   if (!open) return null;
 
-  const canConfirm =
+  // ---- Validation ---------------------------------------------------------
+  const canStep1Continue =
     vendorMode !== null &&
-    (vendorMode === "USE_EXISTING" ? chosenMatchId != null : profile.legalName.trim().length > 0) &&
+    (vendorMode === "USE_EXISTING" ? chosenMatchId != null : profile.legalName.trim().length > 0);
+
+  const canStep2Post =
     coding.invoiceNumber.trim().length > 0 &&
     coding.gross.trim().length > 0 &&
     coding.glAccountNumber.trim().length > 0;
 
-  const primaryLabel =
-    vendorMode === "USE_EXISTING" ? "Use selected vendor & post" : "Create vendor & post";
+  // ---- Handlers -----------------------------------------------------------
 
-  async function handleConfirm() {
-    if (!onConfirm || !canConfirm) return;
+  async function handleStep1(finishLater: boolean) {
+    if (!canStep1Continue) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const result = await onConfirm({
+      const { createVendorAction } = await import("@/app/app/admin/ap/_create-vendor-actions");
+      const result = await createVendorAction({
         workIntakeItemId,
         vendorMode: vendorMode!,
         existingVendorId: chosenMatchId ?? undefined,
         vendorProfile: profile,
-        coding,
+        finishLater,
       });
-      if (result.ok) { onClose(); return; }
-      setSubmitError(result.message);
+      if (!result.ok) { setSubmitError(result.message); return; }
+      setCreatedVendorId(result.vendorId);
+      setCreatedVendorName(result.vendorLegalName);
+      if (result.finishedLater) {
+        setStep("SAVED_FOR_LATER");
+      } else {
+        setStep("AP_CODING");
+      }
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Confirmation failed");
+      setSubmitError(e instanceof Error ? e.message : "Vendor creation failed.");
     } finally {
       setSubmitting(false);
     }
   }
+
+  async function handleStep2Post() {
+    if (!createdVendorId || !canStep2Post) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const { postApInvoiceAction } = await import("@/app/app/admin/ap/_post-ap-invoice-actions");
+      const result = await postApInvoiceAction({
+        workIntakeItemId,
+        vendorId: createdVendorId,
+        coding: {
+          invoiceNumber: coding.invoiceNumber,
+          gross: coding.gross,
+          currency: coding.currency,
+          glAccountNumber: coding.glAccountNumber,
+          glAccountName: coding.glAccountName,
+          taxTotal: coding.taxTotal || null,
+          paymentTermsDays: coding.paymentTermsDays,
+        },
+      });
+      if (!result.ok) { setSubmitError(result.message); return; }
+      router.refresh();
+      onClose();
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "Post failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ---- Render -------------------------------------------------------------
 
   return (
     <div
@@ -219,9 +293,17 @@ export default function CreateVendorAndPostModal({
       <div ref={dialogRef} tabIndex={-1} className="spectre-cvap-dialog">
         <header className="spectre-cvap-head">
           <div>
-            <h2 id="cvap-title">Create vendor &amp; post</h2>
+            <h2 id="cvap-title" data-testid="cvap-step-title">
+              {step === "PROFILE" ? "Create vendor"
+                : step === "AP_CODING" ? "Review and post invoice"
+                : "Vendor saved"}
+            </h2>
             <p className="spectre-cvap-sub">
-              Review the drafted vendor profile and AP coding. Nothing is created or posted until you confirm below.
+              {step === "PROFILE"
+                ? "Review and complete the vendor profile before creating the AP transaction."
+                : step === "AP_CODING"
+                ? `Review the AP coding for ${createdVendorName ?? "the vendor"} and post the invoice.`
+                : `Vendor "${createdVendorName}" saved. Return to the Work Intake to complete the AP posting.`}
             </p>
           </div>
           <button
@@ -235,6 +317,34 @@ export default function CreateVendorAndPostModal({
           </button>
         </header>
 
+        {/* Step indicator */}
+        <div className="spectre-cvap-steps" data-testid="cvap-step-indicator" data-active={step}>
+          <span className={`spectre-cvap-step ${step === "PROFILE" ? "is-active" : createdVendorId ? "is-done" : ""}`}>
+            <span className="num">1</span>
+            <span className="lbl">Vendor profile</span>
+          </span>
+          <span className="spectre-cvap-step-sep" aria-hidden="true" />
+          <span className={`spectre-cvap-step ${step === "AP_CODING" ? "is-active" : ""} ${!createdVendorId ? "is-disabled" : ""}`}>
+            <span className="num">2</span>
+            <span className="lbl">AP coding</span>
+          </span>
+        </div>
+
+        {step === "PROFILE" ? renderStep1() : step === "AP_CODING" ? renderStep2() : renderSavedForLater()}
+
+        {submitError ? (
+          <div className="spectre-cvap-error" role="alert" data-testid="cvap-error">
+            {submitError}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  // ---- Step 1 body --------------------------------------------------------
+  function renderStep1() {
+    return (
+      <>
         <section className="spectre-cvap-section" data-testid="cvap-source">
           <h3>Source</h3>
           {ap.sender.relationship === "EMPLOYEE_FORWARD" ? (
@@ -296,103 +406,206 @@ export default function CreateVendorAndPostModal({
 
         <section className="spectre-cvap-section" data-testid="cvap-profile" hidden={vendorMode !== "CREATE_NEW"}>
           <h3>Vendor profile</h3>
+
+          <div className="spectre-cvap-subheading">Identity</div>
           <div className="spectre-cvap-grid">
-            <label className="spectre-cvap-field spectre-cvap-field--wide">
-              <span className="k">Legal name</span>
-              <input
-                type="text" className="spectre-input"
-                value={profile.legalName}
+            <ProfileField label="Legal name" wide provenance={ap.extractedVendor.name ? "From invoice PDF" : null}>
+              <input type="text" className="spectre-input" value={profile.legalName}
                 onChange={(e) => setProfile((p) => ({ ...p, legalName: e.target.value }))}
-                data-testid="cvap-profile-legal"
-              />
-              {ap.extractedVendor.name ? (
-                <span className="provenance">Pre-populated from the invoice PDF.</span>
-              ) : null}
-            </label>
-            <label className="spectre-cvap-field">
-              <span className="k">Operating name</span>
-              <input
-                type="text" className="spectre-input"
-                value={profile.operatingName ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, operatingName: e.target.value || null }))}
-              />
-            </label>
-            <label className="spectre-cvap-field">
-              <span className="k">Currency</span>
-              <input
-                type="text" className="spectre-input" maxLength={3}
-                value={profile.currency ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, currency: e.target.value.toUpperCase() || null }))}
-              />
-            </label>
-            <label className="spectre-cvap-field spectre-cvap-field--wide">
-              <span className="k">Email</span>
-              <input
-                type="email" className="spectre-input"
-                value={profile.email ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value || null }))}
-              />
-            </label>
-            <label className="spectre-cvap-field">
-              <span className="k">Tax registration #</span>
-              <input
-                type="text" className="spectre-input"
-                value={profile.taxRegistrationNumber ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, taxRegistrationNumber: e.target.value || null }))}
-              />
-            </label>
-            <label className="spectre-cvap-field">
-              <span className="k">Payment terms (days)</span>
-              <input
-                type="number" className="spectre-input" min={0}
-                value={profile.paymentTermsDays ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))}
-              />
-            </label>
+                data-testid="cvap-profile-legal" />
+            </ProfileField>
+            <ProfileField label="Operating name">
+              <input type="text" className="spectre-input" value={profile.operatingName ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, operatingName: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Currency" provenance={ap.gross.currency ? "From invoice PDF" : null}>
+              <input type="text" className="spectre-input" maxLength={3} value={profile.currency ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, currency: e.target.value.toUpperCase() || null }))} />
+            </ProfileField>
           </div>
+
+          <div className="spectre-cvap-subheading">Address</div>
+          <div className="spectre-cvap-grid">
+            <ProfileField label="Address line 1" wide>
+              <input type="text" className="spectre-input" value={profile.addressLine1 ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, addressLine1: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Address line 2" wide>
+              <input type="text" className="spectre-input" value={profile.addressLine2 ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, addressLine2: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="City">
+              <input type="text" className="spectre-input" value={profile.city ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, city: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Province / state">
+              <input type="text" className="spectre-input" value={profile.provinceOrState ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, provinceOrState: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Postal / ZIP">
+              <input type="text" className="spectre-input" value={profile.postalCode ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, postalCode: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Country">
+              <input type="text" className="spectre-input" value={profile.country ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value || null }))} />
+            </ProfileField>
+          </div>
+
+          <div className="spectre-cvap-subheading">Contact</div>
+          <div className="spectre-cvap-grid">
+            <ProfileField label="Main contact name"
+              provenance={ap.sender.relationship === "VENDOR" ? "From email sender" : null}>
+              <input type="text" className="spectre-input" value={profile.mainContactName ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, mainContactName: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Main contact title">
+              <input type="text" className="spectre-input" value={profile.mainContactTitle ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, mainContactTitle: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Main contact phone">
+              <input type="tel" className="spectre-input" value={profile.mainContactPhone ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, mainContactPhone: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Main contact email" wide
+              provenance={ap.sender.relationship === "VENDOR" ? "From email sender" : null}>
+              <input type="email" className="spectre-input" value={profile.mainContactEmail ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, mainContactEmail: e.target.value || null }))}
+                data-testid="cvap-profile-main-contact-email" />
+            </ProfileField>
+            <ProfileField label="Vendor email (general)">
+              <input type="email" className="spectre-input" value={profile.email ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Phone (general)">
+              <input type="tel" className="spectre-input" value={profile.phone ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="AR email">
+              <input type="email" className="spectre-input" value={profile.arEmail ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, arEmail: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="AP / remittance email">
+              <input type="email" className="spectre-input" value={profile.apRemittanceEmail ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, apRemittanceEmail: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="Website">
+              <input type="url" className="spectre-input" value={profile.website ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, website: e.target.value || null }))} />
+            </ProfileField>
+          </div>
+
+          <div className="spectre-cvap-subheading">Payment &amp; tax</div>
+          <div className="spectre-cvap-grid">
+            <ProfileField label="Payment terms (days)">
+              <input type="number" className="spectre-input" min={0} value={profile.paymentTermsDays ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))} />
+            </ProfileField>
+            <ProfileField label="Tax registration #">
+              <input type="text" className="spectre-input" value={profile.taxRegistrationNumber ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, taxRegistrationNumber: e.target.value || null }))} />
+            </ProfileField>
+          </div>
+
+          <div className="spectre-cvap-subheading">EFT / remittance</div>
           <p className="spectre-cvap-note">
-            Banking / EFT details are NOT collected in this modal — add them later on the vendor detail page.
+            EFT details can be added after vendor creation. Banking fields are stored via the encrypted vendor-banking flow, not in this modal.
+          </p>
+
+          <div className="spectre-cvap-subheading">Notes</div>
+          <div className="spectre-cvap-grid">
+            <ProfileField label="Notes" wide>
+              <textarea className="spectre-input" rows={2} value={profile.notes ?? ""}
+                onChange={(e) => setProfile((p) => ({ ...p, notes: e.target.value || null }))} />
+            </ProfileField>
+          </div>
+        </section>
+
+        <footer className="spectre-cvap-foot">
+          <button
+            type="button"
+            className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+            onClick={onClose}
+            data-testid="cvap-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+            onClick={() => void handleStep1(true)}
+            disabled={!canStep1Continue || submitting}
+            data-testid="cvap-save-and-finish-later"
+            title="Create the vendor but do NOT post the invoice — you can return later to complete AP coding."
+          >
+            Save vendor and finish later
+          </button>
+          <button
+            type="button"
+            className="spectre-btn spectre-btn--primary spectre-btn--sm"
+            onClick={() => void handleStep1(false)}
+            disabled={!canStep1Continue || submitting}
+            aria-disabled={!canStep1Continue || submitting}
+            data-testid="cvap-step1-primary"
+          >
+            {submitting ? "Working…" : vendorMode === "USE_EXISTING" ? "Use selected vendor" : "Create vendor"}
+          </button>
+        </footer>
+      </>
+    );
+  }
+
+  // ---- Step 2 body --------------------------------------------------------
+  function renderStep2() {
+    return (
+      <>
+        <section className="spectre-cvap-section" data-testid="cvap-step2-vendor">
+          <h3>Vendor</h3>
+          <p className="spectre-cvap-note" data-testid="cvap-step2-vendor-name">
+            <strong>{createdVendorName}</strong>{" "}
+            <span className="spectre-cvap-note--dim">(id: {createdVendorId})</span>
           </p>
         </section>
 
         <section className="spectre-cvap-section" data-testid="cvap-coding">
           <h3>Proposed AP coding</h3>
           <div className="spectre-cvap-grid">
-            <label className="spectre-cvap-field">
-              <span className="k">Invoice #</span>
-              <input
-                type="text" className="spectre-input"
-                value={coding.invoiceNumber}
+            <ProfileField label="Invoice #">
+              <input type="text" className="spectre-input" value={coding.invoiceNumber}
                 onChange={(e) => setCoding((c) => ({ ...c, invoiceNumber: e.target.value }))}
-                data-testid="cvap-coding-invoice"
-              />
-            </label>
-            <label className="spectre-cvap-field">
-              <span className="k">Gross amount</span>
-              <input
-                type="text" className="spectre-input"
-                value={coding.gross}
+                data-testid="cvap-coding-invoice" />
+            </ProfileField>
+            <ProfileField label="Gross amount">
+              <input type="text" className="spectre-input" value={coding.gross}
                 onChange={(e) => setCoding((c) => ({ ...c, gross: e.target.value }))}
-                data-testid="cvap-coding-gross"
-              />
-            </label>
-            <label className="spectre-cvap-field spectre-cvap-field--wide">
-              <span className="k">GL account</span>
-              <input
-                type="text" className="spectre-input"
+                data-testid="cvap-coding-gross" />
+            </ProfileField>
+            <ProfileField label="Tax total">
+              <input type="text" className="spectre-input" value={coding.taxTotal}
+                onChange={(e) => setCoding((c) => ({ ...c, taxTotal: e.target.value }))} />
+            </ProfileField>
+            <ProfileField label="Currency">
+              <input type="text" className="spectre-input" maxLength={3} value={coding.currency}
+                onChange={(e) => setCoding((c) => ({ ...c, currency: e.target.value.toUpperCase() }))} />
+            </ProfileField>
+            <ProfileField label="Payment terms (days)">
+              <input type="number" className="spectre-input" min={0}
+                value={coding.paymentTermsDays ?? ""}
+                onChange={(e) => setCoding((c) => ({ ...c, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))} />
+            </ProfileField>
+            <ProfileField label="GL account" wide>
+              <input type="text" className="spectre-input"
                 value={coding.glAccountNumber ? `${coding.glAccountNumber} · ${coding.glAccountName}` : ""}
-                readOnly
-                data-testid="cvap-coding-gl"
-              />
+                readOnly data-testid="cvap-coding-gl" />
               {ap.category.source ? (
                 <span className="provenance">
                   Recommended via {sourceLabel(ap.category.source)} — confidence {ap.confidence ?? "—"}%.
                 </span>
               ) : null}
-            </label>
+            </ProfileField>
           </div>
           {ap.category.alternates.length > 0 ? (
-            <details className="spectre-cvap-alt">
+            <details className="spectre-cvap-alt" data-testid="cvap-alternates">
               <summary>Alternate GL candidates ({ap.category.alternates.length})</summary>
               <ul>
                 {ap.category.alternates.map((a) => (
@@ -417,45 +630,88 @@ export default function CreateVendorAndPostModal({
           ) : null}
         </section>
 
-        {submitError ? (
-          <div className="spectre-cvap-error" role="alert" data-testid="cvap-error">
-            {submitError}
-          </div>
-        ) : null}
-
         <footer className="spectre-cvap-foot">
           <button
             type="button"
             className="spectre-btn spectre-btn--secondary spectre-btn--sm"
-            onClick={onClose}
-            data-testid="cvap-cancel"
+            onClick={() => setStep("PROFILE")}
+            data-testid="cvap-back-to-profile"
           >
-            Cancel
+            Back to vendor profile
+          </button>
+          <button
+            type="button"
+            className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+            onClick={onClose}
+          >
+            Finish later
           </button>
           <button
             type="button"
             className="spectre-btn spectre-btn--primary spectre-btn--sm"
-            onClick={() => void handleConfirm()}
-            disabled={!canConfirm || submitting || !onConfirm}
-            aria-disabled={!canConfirm || submitting || !onConfirm}
-            title={!onConfirm ? "The posting handler is wired in a follow-up ticket — the modal opens for founder review but does not commit." : undefined}
-            data-testid="cvap-confirm"
+            onClick={() => void handleStep2Post()}
+            disabled={!canStep2Post || submitting}
+            aria-disabled={!canStep2Post || submitting}
+            data-testid="cvap-post-invoice"
           >
-            {submitting ? "Confirming…" : primaryLabel}
+            {submitting ? "Posting…" : "Post invoice"}
           </button>
         </footer>
-      </div>
-    </div>
+      </>
+    );
+  }
+
+  // ---- Save-and-finish-later confirmation --------------------------------
+  function renderSavedForLater() {
+    return (
+      <>
+        <section className="spectre-cvap-section" data-testid="cvap-saved-later">
+          <p className="spectre-cvap-note">
+            <strong>{createdVendorName}</strong> was created and linked to this Work Intake item. The item stays open so you can return later and post the AP invoice.
+          </p>
+        </section>
+        <footer className="spectre-cvap-foot">
+          <button
+            type="button"
+            className="spectre-btn spectre-btn--primary spectre-btn--sm"
+            onClick={() => { router.refresh(); onClose(); }}
+            data-testid="cvap-saved-close"
+          >
+            Return to Mission Control
+          </button>
+        </footer>
+      </>
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Field wrapper — keeps label + input + provenance consistent
+// ---------------------------------------------------------------------------
+function ProfileField({
+  label, wide, provenance, children,
+}: {
+  label: string;
+  wide?: boolean;
+  provenance?: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`spectre-cvap-field ${wide ? "spectre-cvap-field--wide" : ""}`}>
+      <span className="k">{label}</span>
+      {children}
+      {provenance ? <span className="provenance">{provenance}</span> : null}
+    </label>
   );
 }
 
 function sourceLabel(s: ApInvoiceCardIntelligence["category"]["source"]): string {
   switch (s) {
-    case "VENDOR_DEFAULT":     return "the vendor's default expense account";
-    case "PRIOR_CODING":       return "the vendor's prior coding history";
-    case "NAME_KEYWORD":       return "an invoice + account-name keyword match";
-    case "CAPITAL_CLASS_MAP":  return "the capital-class classifier";
+    case "VENDOR_DEFAULT":    return "the vendor's default expense account";
+    case "PRIOR_CODING":      return "the vendor's prior coding history";
+    case "NAME_KEYWORD":      return "an invoice + account-name keyword match";
+    case "CAPITAL_CLASS_MAP": return "the capital-class classifier";
     case "NONE":
-    case null:                 return "no supported match";
+    case null:                return "no supported match";
   }
 }

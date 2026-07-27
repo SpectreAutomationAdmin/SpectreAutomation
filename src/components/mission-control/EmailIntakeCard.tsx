@@ -299,7 +299,7 @@ export default function EmailIntakeCard({ data }: Props) {
         data-testid="card-surface"
       >
         {ap
-          ? renderApCollapsedBody(data, ap, expanded)
+          ? renderApCollapsedBody(data, ap, expanded, () => setCvapModalOpen(true))
           : renderEmailCollapsedBody(data)}
       </div>
 
@@ -492,21 +492,6 @@ export default function EmailIntakeCard({ data }: Props) {
           onClose={() => setCvapModalOpen(false)}
           ap={ap}
           workIntakeItemId={data.workIntakeItemId}
-          onConfirm={async (payload) => {
-            // Sprint 3 · Checkpoint 15M — the real handler. Server
-            // action creates the vendor (or reuses the selected one)
-            // + posts the AP invoice + resolves the Work Intake item
-            // atomically. On success we refresh the router so the
-            // resolved item drops out of the feed and the vendor
-            // timeline picks up the new event.
-            const { createVendorAndPostAction } = await import("@/app/app/admin/ap/_create-vendor-and-post-actions");
-            const result = await createVendorAndPostAction(payload);
-            if (result.ok) {
-              router.refresh();
-              return { ok: true } as const;
-            }
-            return { ok: false, message: result.message } as const;
-          }}
         />
       ) : null}
     </article>
@@ -695,6 +680,7 @@ function renderApCollapsedBody(
   data: EmailFeedCardData,
   ap: ApInvoiceCardIntelligence,
   expanded: boolean,
+  onOpenCreateVendor: () => void,
 ) {
   const pill = pillForApWorkflow(ap.workflowState);
   const senderLine = buildApSenderLine(ap);
@@ -713,7 +699,7 @@ function renderApCollapsedBody(
       </div>
 
       <h3 id={`title-${data.workIntakeItemId}`} data-testid="ap-title">
-        <ApTitle ap={ap} workIntakeItemId={data.workIntakeItemId} />
+        <ApTitle ap={ap} onVendorClick={onOpenCreateVendor} />
       </h3>
 
       <div className="spectre-mc-sender" data-testid="ap-sender-line">
@@ -848,7 +834,13 @@ function pillForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]): {
  * `$31.29 CAD` (locale-aware symbol + trailing code) via the
  * shared money formatter, not the pre-15M `CAD 31.29` shape.
  */
-function ApTitle({ ap, workIntakeItemId }: { ap: ApInvoiceCardIntelligence; workIntakeItemId: string }) {
+function ApTitle({
+  ap,
+  onVendorClick,
+}: {
+  ap: ApInvoiceCardIntelligence;
+  onVendorClick: () => void;
+}) {
   const vendorLabel = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
   const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendorLabel ? "invoice" : null);
   const amount = ap.gross.amount && ap.gross.currency
@@ -856,28 +848,56 @@ function ApTitle({ ap, workIntakeItemId }: { ap: ApInvoiceCardIntelligence; work
     : null;
   const category = ap.category.label ?? null;
 
-  // Vendor name link target.
-  const vendorHref =
-    vendorLabel && ap.vendorMatch.state === "MATCHED" && ap.vendorMatch.matchedVendorId
-      ? `/app/admin/ap/vendors/${encodeURIComponent(ap.vendorMatch.matchedVendorId)}/timeline`
-      : vendorLabel
-      ? `/app/admin/ap/vendors/provisional?name=${encodeURIComponent(vendorLabel)}&workIntakeItemId=${encodeURIComponent(workIntakeItemId)}`
-      : null;
-
-  return (
-    <>
-      {vendorHref && vendorLabel ? (
+  // Sprint 3 · Checkpoint 15O — vendor-name click behaviour.
+  //
+  //   MATCHED       → link to /app/admin/ap/vendors/[id]/timeline
+  //                    (the real, permanent vendor timeline).
+  //   NOT_FOUND / AMBIGUOUS / INSUFFICIENT_SIGNAL
+  //                 → button that OPENS the Create Vendor modal.
+  //                    No provisional route, no fake vendor entity.
+  //                    (§Phase 1 — provisional timeline REMOVED.)
+  //
+  // The vendor label is always visually emphasised — the linked-vs-
+  // action distinction is only in the underlying element.
+  if (vendorLabel && ap.vendorMatch.state === "MATCHED" && ap.vendorMatch.matchedVendorId) {
+    const href = `/app/admin/ap/vendors/${encodeURIComponent(ap.vendorMatch.matchedVendorId)}/timeline`;
+    return (
+      <>
         <a
-          href={vendorHref}
+          href={href}
           className="spectre-mc-vendor-link"
           data-testid="ap-title-vendor-link"
           onClick={(e) => e.stopPropagation()}
         >
           {vendorLabel}
         </a>
-      ) : (
-        vendorLabel ?? "AP invoice"
-      )}
+        {invoiceNumber ? <> {invoiceNumber}</> : null}
+        {amount ? <> — {amount}</> : null}
+        {category ? <> · {category}</> : null}
+      </>
+    );
+  }
+  if (vendorLabel) {
+    return (
+      <>
+        <button
+          type="button"
+          className="spectre-mc-vendor-link"
+          data-testid="ap-title-vendor-button"
+          onClick={(e) => { e.stopPropagation(); onVendorClick(); }}
+          title="Open Create Vendor — this vendor is not yet on file"
+        >
+          {vendorLabel}
+        </button>
+        {invoiceNumber ? <> {invoiceNumber}</> : null}
+        {amount ? <> — {amount}</> : null}
+        {category ? <> · {category}</> : null}
+      </>
+    );
+  }
+  return (
+    <>
+      AP invoice
       {invoiceNumber ? <> {invoiceNumber}</> : null}
       {amount ? <> — {amount}</> : null}
       {category ? <> · {category}</> : null}

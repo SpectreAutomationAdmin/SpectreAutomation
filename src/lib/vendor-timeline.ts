@@ -1,18 +1,24 @@
-// Sprint 3 · Checkpoint 15M (2026-07-27) — Vendor relationship
+// Sprint 3 · Checkpoint 15O (2026-07-27) — Vendor relationship
 // timeline loader.
 //
-// Aggregates events from existing tenant-scoped tables into a single
-// newest-first stream keyed to a vendor. No new event table introduced
-// — the source-of-truth records (EmailMessage, APInvoice, IngestedDocument,
-// AuditLog, WorkIntakeItem) already exist. The timeline is a view, not
-// a duplicate store.
+// A vendor timeline exists ONLY when a real Vendor record exists.
+// The 15M provisional route + `loadProvisionalVendorTimeline` are
+// rejected by the founder — that helper is removed in this file and
+// the corresponding /app/admin/ap/vendors/provisional page is deleted.
 //
-// Every event carries a `sourceKind` + `sourceId` so links back to the
-// original record work uniformly. Tenant scope enforced on every query.
+// PRODUCT RULE (§Phase 10 of Checkpoint 15O): the timeline's oldest
+// event is always the `Vendor created` event. Nothing may predate it.
+// The source email, invoice PDF, and Work Intake records associated
+// with the vendor by the Create Vendor workflow appear on the
+// timeline via their existing tenant-scoped queries, but their
+// displayed timestamps are CLAMPED to Vendor.createdAt so the
+// visible ordering matches "the vendor's story starts here."
 //
-// Reusable: while this file targets vendors first, the shape (events
-// keyed to an entity + tenant + optional filters) applies verbatim to
-// members / employees / committees / projects in a follow-up.
+// Reusable: while this file targets vendors first, the shape
+// (events keyed to an entity + tenant + optional filters) applies
+// verbatim to members / employees / committees / projects in
+// follow-ups. No new event table is introduced; source records are
+// aggregated at read time.
 
 import { prisma } from "@/lib/prisma";
 
@@ -32,7 +38,7 @@ export type VendorTimelineEventKind =
 export interface VendorTimelineEvent {
   id: string;
   kind: VendorTimelineEventKind;
-  ts: string;                           // ISO
+  ts: string;                           // ISO — clamped to vendor.createdAt on read
   actorLabel: string | null;            // "System" / user name / vendor
   title: string;
   detail: string | null;
@@ -55,28 +61,23 @@ export interface VendorTimelineHeader {
 }
 
 export interface VendorTimelineResult {
-  header: VendorTimelineHeader | null;   // Null for provisional (unmatched) vendors.
-  provisional?: {
-    // Sprint 3 · Checkpoint 15M — the "no vendor record yet" view.
-    // Timeline still renders whatever pre-creation history exists,
-    // keyed to the extracted vendor identity, so nothing is lost
-    // when the vendor is finally created.
-    extractedName: string;
-    workIntakeItemId: string | null;
-  };
+  header: VendorTimelineHeader;
   events: VendorTimelineEvent[];
 }
 
 // ---------------------------------------------------------------------------
-// Matched vendor path
+// Matched vendor path (the ONLY path since 15O)
 // ---------------------------------------------------------------------------
 
-export async function loadVendorTimeline(clubId: string, vendorId: string): Promise<VendorTimelineResult | null> {
+export async function loadVendorTimeline(
+  clubId: string,
+  vendorId: string,
+): Promise<VendorTimelineResult | null> {
   const vendor = await prisma.vendor.findFirst({
     where: { id: vendorId, clubId },
     select: {
       id: true, legalName: true, operatingName: true, status: true,
-      paymentTermsDays: true, createdAt: true,
+      paymentTermsDays: true, createdAt: true, createdByUserId: true,
     },
   });
   if (!vendor) return null;
@@ -107,9 +108,24 @@ export async function loadVendorTimeline(clubId: string, vendorId: string): Prom
     lastInvoiceDate: lastInvoice?.invoiceDate ? lastInvoice.invoiceDate.toISOString().slice(0, 10) : null,
   };
 
-  const events = await gatherVendorEvents(clubId, vendorId, vendor.legalName, vendor.operatingName);
-  events.sort((a, b) => b.ts.localeCompare(a.ts));
-  return { header, events };
+  const events = await gatherVendorEvents(
+    clubId, vendorId, vendor.legalName, vendor.operatingName,
+    vendor.createdAt, vendor.createdByUserId,
+  );
+  // Sprint 3 · Checkpoint 15O — LOWER BOUND: never surface an event
+  // dated before Vendor.createdAt. The source records (email, PDF,
+  // Work Intake) may have real timestamps that predate vendor
+  // creation; they still appear on the timeline (the workflow linked
+  // them at creation) but their displayed `ts` is clamped so the
+  // ordering matches the founder's rule: nothing predates
+  // Vendor created.
+  const clamped = events.map((e) => {
+    const eventTs = new Date(e.ts).getTime();
+    const floor = vendor.createdAt.getTime();
+    return eventTs < floor ? { ...e, ts: vendor.createdAt.toISOString() } : e;
+  });
+  clamped.sort((a, b) => b.ts.localeCompare(a.ts));
+  return { header, events: clamped };
 }
 
 async function gatherVendorEvents(
@@ -117,30 +133,26 @@ async function gatherVendorEvents(
   vendorId: string,
   legalName: string,
   operatingName: string | null,
+  vendorCreatedAt: Date,
+  vendorCreatedByUserId: string | null,
 ): Promise<VendorTimelineEvent[]> {
   const events: VendorTimelineEvent[] = [];
 
   // ---- Vendor creation event -------------------------------------
-  const vendorRow = await prisma.vendor.findFirst({
-    where: { id: vendorId, clubId },
-    select: { createdAt: true, createdByUserId: true },
+  const actorName = vendorCreatedByUserId
+    ? (await prisma.user.findFirst({ where: { id: vendorCreatedByUserId }, select: { name: true } }))?.name ?? "System"
+    : "System";
+  events.push({
+    id: `vendor-created-${vendorId}`,
+    kind: "VENDOR_CREATED",
+    ts: vendorCreatedAt.toISOString(),
+    actorLabel: actorName,
+    title: `Vendor created`,
+    detail: null,
+    sourceKind: "Vendor",
+    sourceId: vendorId,
+    href: `/app/admin/ap/vendors/${vendorId}`,
   });
-  if (vendorRow) {
-    const actorName = vendorRow.createdByUserId
-      ? (await prisma.user.findFirst({ where: { id: vendorRow.createdByUserId }, select: { name: true } }))?.name ?? "System"
-      : "System";
-    events.push({
-      id: `vendor-created-${vendorId}`,
-      kind: "VENDOR_CREATED",
-      ts: vendorRow.createdAt.toISOString(),
-      actorLabel: actorName,
-      title: `Vendor record created`,
-      detail: null,
-      sourceKind: "Vendor",
-      sourceId: vendorId,
-      href: `/app/admin/ap/vendors/${vendorId}`,
-    });
-  }
 
   // ---- APInvoice creation / status transitions --------------------
   const invoices = await prisma.aPInvoice.findMany({
@@ -180,10 +192,10 @@ async function gatherVendorEvents(
     }
   }
 
-  // ---- Email messages (sender or recipient side) ------------------
+  // ---- Email messages associated with this vendor -----------------
   // Match by extracted vendor name in the message OR by matching
-  // sender domain. Simple contains fallback for the WHERE — this
-  // vendor timeline is best-effort for pre-vendor-creation history.
+  // sender domain. Simple contains fallback for the WHERE — a
+  // structured Email ↔ Vendor join is a follow-up ticket.
   const emails = await prisma.emailMessage.findMany({
     where: {
       clubId,
@@ -216,7 +228,6 @@ async function gatherVendorEvents(
   const docs = await prisma.ingestedDocument.findMany({
     where: {
       clubId,
-      // Best-effort tie via filename contains.
       OR: [
         { filename: { contains: legalName } },
         operatingName ? { filename: { contains: operatingName } } : { id: "__never__" },
@@ -241,116 +252,4 @@ async function gatherVendorEvents(
   }
 
   return events;
-}
-
-// ---------------------------------------------------------------------------
-// Provisional (unmatched) vendor path
-// ---------------------------------------------------------------------------
-// When the founder clicks a vendor name that has no Vendor row yet
-// (Microsoft on Coulee Ridge), we still want to show the pre-creation
-// history — the email, the PDF, the Work Intake item — so nothing is
-// lost the moment the vendor IS created.
-
-export async function loadProvisionalVendorTimeline(
-  clubId: string,
-  args: { extractedName: string; workIntakeItemId?: string | null },
-): Promise<VendorTimelineResult> {
-  const events: VendorTimelineEvent[] = [];
-
-  // Work intake item + linked email + doc.
-  if (args.workIntakeItemId) {
-    const wi = await prisma.workIntakeItem.findFirst({
-      where: { id: args.workIntakeItemId, clubId },
-      select: {
-        id: true, status: true, classification: true, createdAt: true, resolvedAt: true,
-        displaySubject: true, displaySender: true,
-        origins: {
-          where: { kind: "INGESTED_DOCUMENT", role: "PRIMARY" },
-          select: { referenceId: true },
-          take: 1,
-        },
-      },
-    });
-    if (wi) {
-      events.push({
-        id: `wi-opened-${wi.id}`,
-        kind: "WORK_INTAKE_OPENED",
-        ts: wi.createdAt.toISOString(),
-        actorLabel: wi.displaySender ?? "Mailbox",
-        title: `Work Intake opened: ${wi.displaySubject ?? "(no subject)"}`,
-        detail: `Classification ${wi.classification ?? "unclassified"}`,
-        sourceKind: "WorkIntakeItem",
-        sourceId: wi.id,
-        href: `/app/admin`,
-      });
-      if (wi.resolvedAt) {
-        events.push({
-          id: `wi-resolved-${wi.id}`,
-          kind: "WORK_INTAKE_RESOLVED",
-          ts: wi.resolvedAt.toISOString(),
-          actorLabel: null,
-          title: `Work Intake resolved`,
-          detail: null,
-          sourceKind: "WorkIntakeItem",
-          sourceId: wi.id,
-          href: `/app/admin`,
-        });
-      }
-      const docId = wi.origins[0]?.referenceId ?? null;
-      if (docId) {
-        const doc = await prisma.ingestedDocument.findFirst({
-          where: { id: docId, clubId },
-          select: { id: true, filename: true, receivedAt: true, classification: true, sourceReferenceId: true },
-        });
-        if (doc) {
-          events.push({
-            id: `doc-${doc.id}`,
-            kind: "INVOICE_INGESTED",
-            ts: doc.receivedAt.toISOString(),
-            actorLabel: null,
-            title: `${doc.classification === "INVOICE" ? "Invoice PDF" : "Document"} ingested: ${doc.filename}`,
-            detail: null,
-            sourceKind: "IngestedDocument",
-            sourceId: doc.id,
-            href: `/api/documents/${doc.id}/preview`,
-          });
-          // Source email attached to this document?
-          if (doc.sourceReferenceId) {
-            const attachment = await prisma.emailAttachment.findFirst({
-              where: { id: doc.sourceReferenceId, emailMessage: { clubId } },
-              select: {
-                emailMessage: {
-                  select: { id: true, senderName: true, senderAddress: true, subject: true, receivedAt: true, clubId: true },
-                },
-              },
-            });
-            const email = attachment?.emailMessage;
-            if (email && email.clubId === clubId) {
-              events.push({
-                id: `email-${email.id}`,
-                kind: "EMAIL_RECEIVED",
-                ts: email.receivedAt.toISOString(),
-                actorLabel: email.senderName ?? email.senderAddress,
-                title: `Email received: ${email.subject ?? "(no subject)"}`,
-                detail: email.senderAddress,
-                sourceKind: "EmailMessage",
-                sourceId: email.id,
-                href: null,
-              });
-            }
-          }
-        }
-      }
-    }
-  }
-
-  events.sort((a, b) => b.ts.localeCompare(a.ts));
-  return {
-    header: null,
-    provisional: {
-      extractedName: args.extractedName,
-      workIntakeItemId: args.workIntakeItemId ?? null,
-    },
-    events,
-  };
 }
