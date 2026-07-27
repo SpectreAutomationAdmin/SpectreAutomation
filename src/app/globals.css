@@ -2667,6 +2667,91 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
   .spectre-cvap-field .provenance { font-size: 11px; color: var(--spectre-text-muted); }
   .spectre-cvap-field--wide { grid-column: span 2; }
+
+  /* Sprint 3 · Checkpoint 15P-1 — compressed Create Vendor modal.
+     A wider dialog, a single 3-col profile grid (no ADDRESS/CONTACT/
+     PAYMENT subheadings), a clickable "Source · filename" chip that
+     opens the invoice PDF, and a compact existing-match strip. */
+  .spectre-cvap-dialog {
+    /* widened from 780px so the 3-col profile grid breathes on
+       admin displays; still capped so the dialog reads as a modal,
+       not a page. */
+    max-width: 1080px;
+  }
+  .spectre-cvap-title-row {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  }
+  .spectre-cvap-source-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-pill);
+    font-size: 11px; color: var(--spectre-text-secondary);
+    cursor: pointer;
+    text-decoration: none;
+  }
+  .spectre-cvap-source-link:hover {
+    background: var(--spectre-canvas-sunken, var(--spectre-surface));
+    color: var(--spectre-text-primary);
+    border-color: var(--spectre-accent);
+  }
+  .spectre-cvap-source-link .spectre-cvap-source-label {
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .spectre-cvap-source-link .spectre-cvap-source-filename {
+    font-family: var(--spectre-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .spectre-cvap-section--tight {
+    padding-top: var(--spectre-space-2); padding-bottom: var(--spectre-space-2);
+  }
+  .spectre-cvap-section--dim { opacity: 0.55; pointer-events: none; }
+  .spectre-cvap-match-strip {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .spectre-cvap-match-strip-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    font-weight: 700; color: var(--spectre-text-secondary);
+    white-space: nowrap;
+  }
+  .spectre-cvap-match-strip-items {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .spectre-cvap-match-chip {
+    display: inline-flex; flex-direction: column; align-items: flex-start;
+    gap: 1px;
+    padding: 5px 10px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 6px;
+    font-size: 12px; text-align: left;
+    cursor: pointer;
+  }
+  .spectre-cvap-match-chip .name { font-weight: 600; }
+  .spectre-cvap-match-chip .evidence {
+    font-size: 10.5px; color: var(--spectre-text-muted);
+  }
+  .spectre-cvap-match-chip.is-picked {
+    border-color: var(--spectre-accent);
+    background: var(--spectre-canvas-sunken, var(--spectre-surface));
+    color: var(--spectre-text-primary);
+  }
+  .spectre-cvap-profile-grid {
+    display: grid;
+    /* 3 equal columns on wide viewports; falls to 2 then 1 as
+       the dialog is capped or narrowed. */
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 14px;
+  }
+  @media (max-width: 900px) {
+    .spectre-cvap-profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .spectre-cvap-profile-grid { grid-template-columns: 1fr; }
+  }
+  .spectre-cvap-field--span2 { grid-column: span 2; }
+  .spectre-cvap-field--span3 { grid-column: 1 / -1; }
   .spectre-cvap-alt { margin-top: 10px; font-size: 12.5px; }
   .spectre-cvap-alt summary { cursor: pointer; color: var(--spectre-text-secondary); }
   .spectre-cvap-alt ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }

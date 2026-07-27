@@ -20,6 +20,7 @@ import type { WorkItem, WorkItemEvidenceCell } from "./index";
 import { analyseIngestedInvoice } from "@/lib/ap-intelligence/analyse";
 import type { ApAnalyseResult } from "@/lib/ap-intelligence/analyse";
 import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
+import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-intelligence/vendor-profile-extract";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
@@ -60,8 +61,17 @@ const apSummaryCache = new Map<
   string,
   { at: number; value: LinkedIntelligenceForEmail["invoiceSummary"] }
 >();
-function apSummaryCacheKey(intakeId: string, docId: string | null, coaRevision: string): string {
-  return `${intakeId}::${docId ?? "no-doc"}::${coaRevision}`;
+// Sprint 3 · Checkpoint 15P-1 — include the vendor-profile
+// EXTRACTOR_VERSION in the cache key. A redeploy that ships new
+// extractor rules bumps the version constant, which naturally
+// invalidates every AP projection cached under the old rules. No
+// Fly restart required. See src/lib/ap-intelligence/vendor-profile-extract.ts.
+function apSummaryCacheKey(
+  intakeId: string,
+  docId: string | null,
+  coaRevision: string,
+): string {
+  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}`;
 }
 
 // Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.

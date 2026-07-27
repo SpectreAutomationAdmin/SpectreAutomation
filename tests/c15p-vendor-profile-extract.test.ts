@@ -280,7 +280,11 @@ describe("15P — wiring: extraction → projection → modal", () => {
   it("analyse.ts runs extractVendorProfile and returns it on ApAnalyseResult.vendorProfile", () => {
     expect(ANALYSE).toMatch(/import \{ extractVendorProfile, type ExtractedVendorProfile \} from ".\/vendor-profile-extract"/);
     expect(ANALYSE).toMatch(/vendorProfile: ExtractedVendorProfile/);
-    expect(ANALYSE).toMatch(/const vendorProfile: ExtractedVendorProfile = pdfOk[\s\S]{0,100}\? extractVendorProfile\(pdfText\)/);
+    // 15P-1: analyse.ts now threads the guessed vendor legal name
+    // into the extractor so address candidate scoring can boost
+    // segments adjacent to it (the Microsoft footer wins over 3×
+    // customer blocks).
+    expect(ANALYSE).toMatch(/const vendorProfile: ExtractedVendorProfile = pdfOk[\s\S]{0,180}\? extractVendorProfile\(pdfText,\s*\{\s*vendorLegalName:/);
   });
   it("Mission Control projection carries extractedVendorProfile on ApInvoiceCardIntelligence", () => {
     expect(IRI).toMatch(/extractedVendorProfile: ExtractedVendorProfile \| null/);

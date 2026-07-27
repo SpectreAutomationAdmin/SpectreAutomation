@@ -222,7 +222,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // Runs on the same PDF text that the AP pipeline just parsed. Cheap
   // (regex-only, no I/O) so we don't need a cache layer.
   const vendorProfile: ExtractedVendorProfile = pdfOk
-    ? extractVendorProfile(pdfText)
+    ? extractVendorProfile(pdfText, { vendorLegalName: extraction.vendor.guessedName })
     : {
         address: { line1: { value: null, confidence: 0, source: null }, line2: { value: null, confidence: 0, source: null },
                    city: { value: null, confidence: 0, source: null }, provinceState: { value: null, confidence: 0, source: null },

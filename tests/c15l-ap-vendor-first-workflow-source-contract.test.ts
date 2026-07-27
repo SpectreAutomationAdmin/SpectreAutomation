@@ -72,10 +72,18 @@ describe("15L — GL recommender must run without a vendor record", () => {
   });
 });
 
-describe("15L — AP projection cache must invalidate when the COA changes", () => {
+describe("15L + 15P-1 — AP projection cache must invalidate when the COA OR extractor changes", () => {
   it("cache key includes a per-club COA revision fingerprint", () => {
-    expect(IRI).toMatch(/apSummaryCacheKey\(intakeId: string, docId: string \| null, coaRevision: string\)/);
-    expect(IRI).toMatch(/`\$\{intakeId\}::\$\{docId \?\? "no-doc"\}::\$\{coaRevision\}`/);
+    // 15P-1: the signature is unchanged (intakeId, docId, coaRevision)
+    // but the returned key now also embeds the extractor version so
+    // a new deploy invalidates every AP projection cached under the
+    // pre-15P-1 extractor without a Fly restart.
+    expect(IRI).toMatch(/function apSummaryCacheKey\(\s*intakeId: string,\s*docId: string \| null,\s*coaRevision: string,\s*\)/);
+    expect(IRI).toMatch(/coa=\$\{coaRevision\}::vpx=\$\{VENDOR_PROFILE_EXTRACTOR_VERSION\}/);
+  });
+
+  it("15P-1: vendor-profile extractor version is imported and threaded into the cache key", () => {
+    expect(IRI).toMatch(/import \{ EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION \} from "@\/lib\/ap-intelligence\/vendor-profile-extract"/);
   });
 
   it("loadCoaRevision computes count@max(updatedAt) — any Account change bumps the fingerprint", () => {
@@ -140,32 +148,28 @@ describe("15L — primary action + modal wiring", () => {
   it("card wires the modal only for VENDOR_MATCH_REQUIRED; other workflows keep the pre-15L expand path", () => {
     expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s+setCvapModalOpen\(true\)/);
   });
-  it("the modal opens without creating or posting — Step 1 primary is disabled until vendor mode is chosen (superseded by 15O two-step split)", () => {
-    // Sprint 3 · Checkpoint 15O reshaped the modal from one confirm
-    // button to a two-step flow. Invariant preserved: nothing runs
-    // until the user picks vendor mode AND fills required fields.
-    // The current gate lives on `canStep1Continue` in the 15O modal;
-    // this test now asserts that shape instead of the pre-15O
-    // `canConfirm`.
-    expect(MODAL).toMatch(/useState<"CREATE_NEW" \| "USE_EXISTING" \| null>/);
-    expect(MODAL).toMatch(/const canStep1Continue =[\s\S]{0,400}vendorMode !== null/);
+  it("the modal opens without creating or posting — Step 1 primary is disabled until a legal name is present (superseded by 15O two-step split, refined in 15P-1)", () => {
+    // 15P-1: the radio-gate was removed. CREATE_NEW is now the
+    // default mode, so the profile grid is visible on open. The
+    // "nothing runs until valid" invariant is preserved via the
+    // legal-name / picked-match check on canStep1Continue.
+    expect(MODAL).toMatch(/useState<"CREATE_NEW" \| "USE_EXISTING">\("CREATE_NEW"\)/);
+    expect(MODAL).toMatch(/const canStep1Continue =\s+vendorMode === "USE_EXISTING"[\s\S]{0,200}profile\.legalName\.trim\(\)\.length > 0/);
     expect(MODAL).toMatch(/disabled=\{!canStep1Continue \|\| submitting\}/);
   });
-  it("the modal NEVER auto-populates an employee-forward sender as the vendor's main contact (superseded by 15O)", () => {
-    // Explicit safety comment preserved so a future refactor can't
-    // regress the founder-observed rule (spectreautomation.admin@…
-    // must not become Microsoft's main contact).
-    expect(MODAL).toMatch(/internal forwarders are provenance only/i);
+  it("the modal NEVER auto-populates an employee-forward sender as the vendor's main contact (superseded by 15O, refined in 15P-1)", () => {
+    // 15P-1 replaced the standalone "Source" section with an
+    // inline dim note. The rule and the wording still hold.
+    expect(MODAL).toMatch(/internal forwarder, not populated as vendor contact/i);
     // 15O initialises the main-contact fields via a ternary on
     // sender.relationship — only VENDOR-domain senders populate.
     expect(MODAL).toMatch(/mainContactName: ap\.sender\.relationship === "VENDOR" \? ap\.sender\.name : null/);
     expect(MODAL).toMatch(/mainContactEmail: ap\.sender\.relationship === "VENDOR" \? ap\.sender\.email : null/);
   });
-  it("Step 1 primary label adapts: 'Create vendor' vs 'Use selected vendor' (superseded by 15O)", () => {
-    // 15O renames the pre-15O combined labels ("Create vendor & post" /
-    // "Use selected vendor & post") to Step 1 labels — posting now
-    // lives on Step 2 exclusively.
-    expect(MODAL).toMatch(/vendorMode === "USE_EXISTING" \? "Use selected vendor" : "Create vendor"/);
+  it("Step 1 primary label adapts: 'Create vendor & continue' vs 'Use selected vendor' (superseded by 15O, refined in 15P-1)", () => {
+    // 15P-1: the primary is now "Create vendor & continue" to make
+    // it explicit the flow proceeds to AP coding.
+    expect(MODAL).toMatch(/usingExisting \? "Use selected vendor" : "Create vendor & continue"/);
   });
 });
 

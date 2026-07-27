@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import type { ApInvoiceCardIntelligence } from "@/lib/mission-control";
+import DocumentPreviewModal from "./DocumentPreviewModal";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -176,8 +177,19 @@ export default function CreateVendorAndPostModal({
   // Possible existing matches.
   const [matches, setMatches] = useState<PossibleMatch[]>([]);
   const [matchesLoading, setMatchesLoading] = useState(false);
-  const [vendorMode, setVendorMode] = useState<"CREATE_NEW" | "USE_EXISTING" | null>(null);
+  // Sprint 3 · Checkpoint 15P-1 — the profile is visible the moment
+  // the modal opens; CREATE_NEW is the default so the founder never
+  // has to click a radio to "reveal" it. If existing matches surface
+  // and the operator picks one, vendorMode flips to USE_EXISTING and
+  // the profile block dims.
+  const [vendorMode, setVendorMode] = useState<"CREATE_NEW" | "USE_EXISTING">("CREATE_NEW");
   const [chosenMatchId, setChosenMatchId] = useState<string | null>(null);
+
+  // Sprint 3 · Checkpoint 15P-1 — clickable "Source" chip in the
+  // Step-1 header opens the invoice PDF preview inline (blob URL,
+  // same DocumentPreviewModal the AP card uses).
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const primaryDoc = ap.primaryAttachment;
 
   // Focus + Esc-to-close.
   useEffect(() => {
@@ -225,9 +237,13 @@ export default function CreateVendorAndPostModal({
   if (!open) return null;
 
   // ---- Validation ---------------------------------------------------------
+  // 15P-1: default mode is CREATE_NEW, so the check reduces to
+  //   USE_EXISTING → require a picked match id
+  //   CREATE_NEW   → require a legal name
   const canStep1Continue =
-    vendorMode !== null &&
-    (vendorMode === "USE_EXISTING" ? chosenMatchId != null : profile.legalName.trim().length > 0);
+    vendorMode === "USE_EXISTING"
+      ? chosenMatchId != null
+      : profile.legalName.trim().length > 0;
 
   const canStep2Post =
     coding.invoiceNumber.trim().length > 0 &&
@@ -331,14 +347,29 @@ export default function CreateVendorAndPostModal({
       <div ref={dialogRef} tabIndex={-1} className="spectre-cvap-dialog">
         <header className="spectre-cvap-head">
           <div>
-            <h2 id="cvap-title" data-testid="cvap-step-title">
-              {step === "PROFILE" ? "Create vendor"
-                : step === "AP_CODING" ? "Review and post invoice"
-                : "Vendor saved"}
-            </h2>
+            <div className="spectre-cvap-title-row">
+              <h2 id="cvap-title" data-testid="cvap-step-title">
+                {step === "PROFILE" ? "Vendor profile"
+                  : step === "AP_CODING" ? "Review and post invoice"
+                  : "Vendor saved"}
+              </h2>
+              {step === "PROFILE" && primaryDoc ? (
+                <button
+                  type="button"
+                  className="spectre-cvap-source-link"
+                  onClick={() => setPreviewOpen(true)}
+                  data-testid="cvap-source-link"
+                  aria-label={`Preview source document ${primaryDoc.filename}`}
+                  title="Preview the source invoice PDF"
+                >
+                  <span className="spectre-cvap-source-label">Source</span>
+                  <span className="spectre-cvap-source-filename">{primaryDoc.filename}</span>
+                </button>
+              ) : null}
+            </div>
             <p className="spectre-cvap-sub">
               {step === "PROFILE"
-                ? "Review and complete the vendor profile before creating the AP transaction."
+                ? "Review the extracted profile. Every populated field came from the invoice — chips beside each field show the source and confidence."
                 : step === "AP_CODING"
                 ? `Review the AP coding for ${createdVendorName ?? "the vendor"} and post the invoice.`
                 : `Vendor "${createdVendorName}" saved. Return to the Work Intake to complete the AP posting.`}
@@ -354,6 +385,16 @@ export default function CreateVendorAndPostModal({
             Close
           </button>
         </header>
+
+        {previewOpen && primaryDoc ? (
+          <DocumentPreviewModal
+            documentId={primaryDoc.documentId}
+            filename={primaryDoc.filename}
+            open={previewOpen}
+            onClose={() => setPreviewOpen(false)}
+            contextLabel="Vendor-profile source"
+          />
+        ) : null}
 
         {/* Step indicator */}
         <div className="spectre-cvap-steps" data-testid="cvap-step-indicator" data-active={step}>
@@ -380,197 +421,183 @@ export default function CreateVendorAndPostModal({
   );
 
   // ---- Step 1 body --------------------------------------------------------
+  // Sprint 3 · Checkpoint 15P-1 — the entire profile is visible the
+  // moment the modal opens. No radio gate. Existing matches (if any)
+  // sit in a compact chooser strip at the top; picking one flips to
+  // USE_EXISTING mode and dims the profile grid. The profile grid
+  // itself is one 3-column layout — no ADDRESS / CONTACT / PAYMENT
+  // subheadings — with every populated field carrying an inline
+  // provenance chip below the input.
   function renderStep1() {
+    const usingExisting = vendorMode === "USE_EXISTING";
     return (
       <>
-        <section className="spectre-cvap-section" data-testid="cvap-source">
-          <h3>Source</h3>
-          {ap.sender.relationship === "EMPLOYEE_FORWARD" ? (
-            <p className="spectre-cvap-note">
-              Forwarded by <strong>{ap.sender.email}</strong>. Not populated as the vendor&apos;s main contact — internal forwarders are provenance only.
-            </p>
-          ) : ap.sender.email ? (
-            <p className="spectre-cvap-note">
-              From <strong>{ap.sender.email}</strong>{ap.sender.relationship === "VENDOR" ? " (sender is on the vendor's own domain)" : ""}.
-            </p>
-          ) : (
-            <p className="spectre-cvap-note">No sender identified.</p>
-          )}
-        </section>
-
-        <section className="spectre-cvap-section" data-testid="cvap-matches">
-          <h3>Possible existing matches</h3>
-          {matchesLoading ? (
-            <p className="spectre-cvap-note">Searching…</p>
-          ) : matches.length === 0 ? (
-            <p className="spectre-cvap-note">No same-tenant vendors matched the extracted name, tax number, or email domain.</p>
-          ) : (
-            <ul className="spectre-cvap-matches">
-              {matches.map((m) => (
-                <li key={m.id} className={chosenMatchId === m.id ? "picked" : ""}>
-                  <label>
-                    <input
-                      type="radio"
-                      name="cvap-existing-match"
-                      value={m.id}
-                      checked={chosenMatchId === m.id}
-                      onChange={() => { setChosenMatchId(m.id); setVendorMode("USE_EXISTING"); }}
+        {matchesLoading || matches.length > 0 ? (
+          <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-matches">
+            {matchesLoading ? (
+              <p className="spectre-cvap-note">Checking for existing vendor matches…</p>
+            ) : (
+              <div className="spectre-cvap-match-strip">
+                <div className="spectre-cvap-match-strip-label">
+                  Existing match{matches.length > 1 ? "es" : ""}
+                </div>
+                <div className="spectre-cvap-match-strip-items">
+                  {matches.map((m) => (
+                    <button
+                      type="button"
+                      key={m.id}
+                      className={`spectre-cvap-match-chip ${chosenMatchId === m.id ? "is-picked" : ""}`}
+                      onClick={() => {
+                        if (chosenMatchId === m.id) {
+                          setChosenMatchId(null); setVendorMode("CREATE_NEW");
+                        } else {
+                          setChosenMatchId(m.id); setVendorMode("USE_EXISTING");
+                        }
+                      }}
                       data-testid={`cvap-match-${m.id}`}
-                    />
-                    <div>
-                      <div className="name">{m.operatingName ?? m.legalName}</div>
-                      <div className="evidence">{m.matchEvidence} · confidence {m.confidence}%</div>
-                      {m.lastInvoiceDate ? <div className="ts">Last invoice {m.lastInvoiceDate}</div> : null}
-                    </div>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="spectre-cvap-choose-new">
-            <label>
-              <input
-                type="radio"
-                name="cvap-existing-match"
-                value="__new__"
-                checked={vendorMode === "CREATE_NEW"}
-                onChange={() => { setVendorMode("CREATE_NEW"); setChosenMatchId(null); }}
-                data-testid="cvap-choose-new"
-              />
-              Create a new vendor with the profile below
-            </label>
-          </div>
-        </section>
+                    >
+                      <span className="name">{m.operatingName ?? m.legalName}</span>
+                      <span className="evidence">{m.matchEvidence} · {m.confidence}%</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        ) : null}
 
-        <section className="spectre-cvap-section" data-testid="cvap-profile" hidden={vendorMode !== "CREATE_NEW"}>
-          <h3>Vendor profile</h3>
-
-          <div className="spectre-cvap-subheading">Identity</div>
-          <div className="spectre-cvap-grid">
-            <ProfileField label="Legal name" wide provenance={ap.extractedVendor.name ? "From invoice PDF" : null}>
+        <section
+          className={`spectre-cvap-section ${usingExisting ? "spectre-cvap-section--dim" : ""}`}
+          data-testid="cvap-profile"
+          aria-disabled={usingExisting}
+        >
+          <div className="spectre-cvap-profile-grid" data-testid="cvap-profile-grid">
+            <ProfileField label="Legal name" span={2} provenance={ap.extractedVendor.name ? "invoice PDF" : null}>
               <input type="text" className="spectre-input" value={profile.legalName}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, legalName: e.target.value }))}
                 data-testid="cvap-profile-legal" />
             </ProfileField>
             <ProfileField label="Operating name">
               <input type="text" className="spectre-input" value={profile.operatingName ?? ""}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, operatingName: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Currency" provenance={ap.gross.currency ? "From invoice PDF" : null}>
-              <input type="text" className="spectre-input" maxLength={3} value={profile.currency ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, currency: e.target.value.toUpperCase() || null }))} />
-            </ProfileField>
-          </div>
 
-          <div className="spectre-cvap-subheading">Address</div>
-          <div className="spectre-cvap-grid">
-            <ProfileField label="Address line 1" wide
-              provenance={provenanceLabel(extracted?.address?.line1)}>
+            <ProfileField label="Address line 1" span={2} provenance={provenanceLabel(extracted?.address?.line1)}>
               <input type="text" className="spectre-input" value={profile.addressLine1 ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, addressLine1: e.target.value || null }))} />
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, addressLine1: e.target.value || null }))}
+                data-testid="cvap-profile-address-line1" />
             </ProfileField>
-            <ProfileField label="Address line 2" wide
-              provenance={provenanceLabel(extracted?.address?.line2)}>
+            <ProfileField label="Address line 2" provenance={provenanceLabel(extracted?.address?.line2)}>
               <input type="text" className="spectre-input" value={profile.addressLine2 ?? ""}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, addressLine2: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="City"
-              provenance={provenanceLabel(extracted?.address?.city)}>
-              <input type="text" className="spectre-input" value={profile.city ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, city: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Province / state"
-              provenance={provenanceLabel(extracted?.address?.provinceState)}>
-              <input type="text" className="spectre-input" value={profile.provinceOrState ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, provinceOrState: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Postal / ZIP"
-              provenance={provenanceLabel(extracted?.address?.postalCode)}>
-              <input type="text" className="spectre-input" value={profile.postalCode ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, postalCode: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Country"
-              provenance={provenanceLabel(extracted?.address?.country)}>
-              <input type="text" className="spectre-input" value={profile.country ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value || null }))} />
-            </ProfileField>
-          </div>
 
-          <div className="spectre-cvap-subheading">Contact</div>
-          <div className="spectre-cvap-grid">
-            <ProfileField label="Main contact name"
-              provenance={ap.sender.relationship === "VENDOR" ? "From email sender" : null}>
-              <input type="text" className="spectre-input" value={profile.mainContactName ?? ""}
+            <ProfileField label="City" provenance={provenanceLabel(extracted?.address?.city)}>
+              <input type="text" className="spectre-input" value={profile.city ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, city: e.target.value || null }))}
+                data-testid="cvap-profile-city" />
+            </ProfileField>
+            <ProfileField label="Province / state" provenance={provenanceLabel(extracted?.address?.provinceState)}>
+              <input type="text" className="spectre-input" value={profile.provinceOrState ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, provinceOrState: e.target.value || null }))}
+                data-testid="cvap-profile-province" />
+            </ProfileField>
+            <ProfileField label="Postal / ZIP" provenance={provenanceLabel(extracted?.address?.postalCode)}>
+              <input type="text" className="spectre-input" value={profile.postalCode ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, postalCode: e.target.value || null }))}
+                data-testid="cvap-profile-postal" />
+            </ProfileField>
+
+            <ProfileField label="Country" provenance={provenanceLabel(extracted?.address?.country)}>
+              <input type="text" className="spectre-input" value={profile.country ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value || null }))}
+                data-testid="cvap-profile-country" />
+            </ProfileField>
+            <ProfileField label="Phone" provenance={provenanceLabel(extracted?.phone)}>
+              <input type="tel" className="spectre-input" value={profile.phone ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value || null }))}
+                data-testid="cvap-profile-phone" />
+            </ProfileField>
+            <ProfileField label="Website" provenance={provenanceLabel(extracted?.website)}>
+              <input type="url" className="spectre-input" value={profile.website ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, website: e.target.value || null }))}
+                data-testid="cvap-profile-website" />
+            </ProfileField>
+
+            <ProfileField label="Vendor email" provenance={provenanceLabel(extracted?.customerSupportEmail)}>
+              <input type="email" className="spectre-input" value={profile.email ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="AR email" provenance={provenanceLabel(extracted?.arEmail)}>
+              <input type="email" className="spectre-input" value={profile.arEmail ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, arEmail: e.target.value || null }))} />
+            </ProfileField>
+            <ProfileField label="AP remittance email" provenance={provenanceLabel(extracted?.remittanceEmail)}>
+              <input type="email" className="spectre-input" value={profile.apRemittanceEmail ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, apRemittanceEmail: e.target.value || null }))} />
+            </ProfileField>
+
+            <ProfileField label="Payment terms (days)" provenance={provenanceLabel(extracted?.paymentTerms)}>
+              <input type="number" className="spectre-input" min={0} value={profile.paymentTermsDays ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))}
+                data-testid="cvap-profile-terms" />
+            </ProfileField>
+            <ProfileField label="Tax registration #" provenance={provenanceLabel(extracted?.taxRegistrationNumber)}>
+              <input type="text" className="spectre-input" value={profile.taxRegistrationNumber ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, taxRegistrationNumber: e.target.value || null }))}
+                data-testid="cvap-profile-tax-reg" />
+            </ProfileField>
+            <ProfileField label="Currency" provenance={ap.gross.currency ? "invoice PDF" : null}>
+              <input type="text" className="spectre-input" maxLength={3} value={profile.currency ?? ""}
+                disabled={usingExisting}
+                onChange={(e) => setProfile((p) => ({ ...p, currency: e.target.value.toUpperCase() || null }))} />
+            </ProfileField>
+
+            <ProfileField
+              label="Main contact"
+              span={2}
+              provenance={ap.sender.relationship === "VENDOR" ? "email sender" : null}
+            >
+              <input type="text" className="spectre-input" placeholder="Name"
+                value={profile.mainContactName ?? ""}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, mainContactName: e.target.value || null }))} />
             </ProfileField>
-            <ProfileField label="Main contact title">
-              <input type="text" className="spectre-input" value={profile.mainContactTitle ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, mainContactTitle: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Main contact phone"
-              provenance={provenanceLabel(extracted?.phone)}>
-              <input type="tel" className="spectre-input" value={profile.mainContactPhone ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, mainContactPhone: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Main contact email" wide
-              provenance={ap.sender.relationship === "VENDOR" ? "From email sender" : null}>
+            <ProfileField label="Main contact email"
+              provenance={ap.sender.relationship === "VENDOR" ? "email sender" : null}>
               <input type="email" className="spectre-input" value={profile.mainContactEmail ?? ""}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, mainContactEmail: e.target.value || null }))}
                 data-testid="cvap-profile-main-contact-email" />
             </ProfileField>
-            <ProfileField label="Vendor email (general)"
-              provenance={provenanceLabel(extracted?.customerSupportEmail)}>
-              <input type="email" className="spectre-input" value={profile.email ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Phone (general)"
-              provenance={provenanceLabel(extracted?.phone)}>
-              <input type="tel" className="spectre-input" value={profile.phone ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="AR email"
-              provenance={provenanceLabel(extracted?.arEmail)}>
-              <input type="email" className="spectre-input" value={profile.arEmail ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, arEmail: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="AP / remittance email"
-              provenance={provenanceLabel(extracted?.remittanceEmail)}>
-              <input type="email" className="spectre-input" value={profile.apRemittanceEmail ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, apRemittanceEmail: e.target.value || null }))} />
-            </ProfileField>
-            <ProfileField label="Website"
-              provenance={provenanceLabel(extracted?.website)}>
-              <input type="url" className="spectre-input" value={profile.website ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, website: e.target.value || null }))} />
-            </ProfileField>
-          </div>
 
-          <div className="spectre-cvap-subheading">Payment &amp; tax</div>
-          <div className="spectre-cvap-grid">
-            <ProfileField label="Payment terms (days)"
-              provenance={provenanceLabel(extracted?.paymentTerms)}>
-              <input type="number" className="spectre-input" min={0} value={profile.paymentTermsDays ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))} />
-            </ProfileField>
-            <ProfileField label="Tax registration #"
-              provenance={provenanceLabel(extracted?.taxRegistrationNumber)}>
-              <input type="text" className="spectre-input" value={profile.taxRegistrationNumber ?? ""}
-                onChange={(e) => setProfile((p) => ({ ...p, taxRegistrationNumber: e.target.value || null }))} />
-            </ProfileField>
-          </div>
-
-          <div className="spectre-cvap-subheading">EFT / remittance</div>
-          <p className="spectre-cvap-note">
-            EFT details can be added after vendor creation. Banking fields are stored via the encrypted vendor-banking flow, not in this modal.
-          </p>
-
-          <div className="spectre-cvap-subheading">Notes</div>
-          <div className="spectre-cvap-grid">
-            <ProfileField label="Notes" wide>
+            <ProfileField label="Notes" span={3}>
               <textarea className="spectre-input" rows={2} value={profile.notes ?? ""}
+                disabled={usingExisting}
                 onChange={(e) => setProfile((p) => ({ ...p, notes: e.target.value || null }))} />
             </ProfileField>
           </div>
+
+          {ap.sender.relationship === "EMPLOYEE_FORWARD" ? (
+            <p className="spectre-cvap-note spectre-cvap-note--dim">
+              Forwarded by <strong>{ap.sender.email}</strong> — internal forwarder, not populated as vendor contact.
+            </p>
+          ) : null}
         </section>
 
         <footer className="spectre-cvap-foot">
@@ -590,7 +617,7 @@ export default function CreateVendorAndPostModal({
             data-testid="cvap-save-and-finish-later"
             title="Create the vendor but do NOT post the invoice — you can return later to complete AP coding."
           >
-            Save vendor and finish later
+            Save and finish later
           </button>
           <button
             type="button"
@@ -600,7 +627,7 @@ export default function CreateVendorAndPostModal({
             aria-disabled={!canStep1Continue || submitting}
             data-testid="cvap-step1-primary"
           >
-            {submitting ? "Working…" : vendorMode === "USE_EXISTING" ? "Use selected vendor" : "Create vendor"}
+            {submitting ? "Working…" : usingExisting ? "Use selected vendor" : "Create vendor & continue"}
           </button>
         </footer>
       </>
@@ -741,15 +768,23 @@ export default function CreateVendorAndPostModal({
 // Field wrapper — keeps label + input + provenance consistent
 // ---------------------------------------------------------------------------
 function ProfileField({
-  label, wide, provenance, children,
+  label, wide, span, provenance, children,
 }: {
   label: string;
   wide?: boolean;
+  // 15P-1: explicit column span for the 3-col compressed grid. Overrides
+  // `wide` when provided. Values: 1 (default), 2, or 3.
+  span?: 1 | 2 | 3;
   provenance?: string | null;
   children: React.ReactNode;
 }) {
+  const spanClass =
+    span === 3 ? "spectre-cvap-field--span3"
+    : span === 2 ? "spectre-cvap-field--span2"
+    : wide ? "spectre-cvap-field--wide"
+    : "";
   return (
-    <label className={`spectre-cvap-field ${wide ? "spectre-cvap-field--wide" : ""}`}>
+    <label className={`spectre-cvap-field ${spanClass}`}>
       <span className="k">{label}</span>
       {children}
       {provenance ? <span className="provenance">{provenance}</span> : null}

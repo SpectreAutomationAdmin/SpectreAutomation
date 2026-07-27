@@ -187,6 +187,52 @@ export async function createVendorAction(
         vendorId = created.id;
         vendorLegalName = created.legalName;
         vendorCreated = true;
+
+        // Sprint 3 · Checkpoint 15P-1 — persist the contact fields
+        // the operator confirmed in Step 1. VendorContact already
+        // exists (see prisma/schema.prisma); we insert a row per
+        // distinct contact address so nothing captured in the modal
+        // is silently dropped. Each row is tenant-scoped and cascade-
+        // deletes with the vendor. The AR + AP-remittance addresses
+        // become their own contact rows so the AP module can find
+        // them later.
+        const contacts: Array<{ name: string; role: string; email: string | null; phone: string | null; isPrimary: boolean }> = [];
+        if (input.vendorProfile.mainContactName || input.vendorProfile.mainContactEmail || input.vendorProfile.mainContactPhone) {
+          contacts.push({
+            name: input.vendorProfile.mainContactName || input.vendorProfile.mainContactEmail || "Main contact",
+            role: input.vendorProfile.mainContactTitle || "MAIN",
+            email: input.vendorProfile.mainContactEmail ?? null,
+            phone: input.vendorProfile.mainContactPhone ?? null,
+            isPrimary: true,
+          });
+        }
+        if (input.vendorProfile.arEmail) {
+          contacts.push({
+            name: "Accounts Receivable", role: "AR",
+            email: input.vendorProfile.arEmail, phone: null,
+            isPrimary: false,
+          });
+        }
+        if (input.vendorProfile.apRemittanceEmail) {
+          contacts.push({
+            name: "AP Remittance", role: "REMITTANCE",
+            email: input.vendorProfile.apRemittanceEmail, phone: null,
+            isPrimary: false,
+          });
+        }
+        for (const c of contacts) {
+          await tx.vendorContact.create({
+            data: {
+              clubId,
+              vendorId: created.id,
+              name: c.name,
+              role: c.role,
+              email: c.email,
+              phone: c.phone,
+              isPrimary: c.isPrimary,
+            },
+          });
+        }
       }
 
       // Step 1 does NOT resolve the Work Intake item — Step 2 does.

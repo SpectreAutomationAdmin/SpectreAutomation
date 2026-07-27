@@ -90,18 +90,26 @@ describe("15O — modal is a two-step guided flow", () => {
     expect(MODAL).toMatch(/<span className="lbl">Vendor profile<\/span>/);
     expect(MODAL).toMatch(/<span className="lbl">AP coding<\/span>/);
   });
-  it("modal renders a distinct title per step", () => {
-    expect(MODAL).toMatch(/step === "PROFILE" \? "Create vendor"/);
+  it("modal renders a distinct title per step (15P-1 renamed Step 1 to 'Vendor profile')", () => {
+    // 15P-1 renamed the Step 1 title from "Create vendor" to
+    // "Vendor profile" — the profile is now visible on open, so
+    // the title should read as the view, not the action.
+    expect(MODAL).toMatch(/step === "PROFILE" \? "Vendor profile"/);
     expect(MODAL).toMatch(/step === "AP_CODING" \? "Review and post invoice"/);
   });
-  it("Step 1 primary action is 'Create vendor' OR 'Use selected vendor', NOT 'Create vendor & post'", () => {
-    expect(MODAL).toMatch(/vendorMode === "USE_EXISTING" \? "Use selected vendor" : "Create vendor"/);
+  it("Step 1 primary action is 'Create vendor & continue' OR 'Use selected vendor'", () => {
+    // 15P-1 renamed the primary from "Create vendor" to "Create
+    // vendor & continue" to make it clear the flow proceeds to
+    // Step 2 (AP coding).
+    expect(MODAL).toMatch(/usingExisting \? "Use selected vendor" : "Create vendor & continue"/);
     // The combined 15M label must not appear as a primary Step 1 action.
     expect(MODAL).not.toMatch(/data-testid="cvap-step1-primary"[\s\S]{0,200}Create vendor & post/);
   });
-  it("Step 1 has a secondary 'Save vendor and finish later' action", () => {
+  it("Step 1 has a secondary 'Save and finish later' action", () => {
+    // 15P-1 shortened the label from "Save vendor and finish later"
+    // to "Save and finish later" for the compact footer.
     expect(MODAL).toMatch(/data-testid="cvap-save-and-finish-later"/);
-    expect(MODAL).toMatch(/Save vendor and finish later/);
+    expect(MODAL).toMatch(/Save and finish later/);
     // Finish-later sets step to SAVED_FOR_LATER, not AP_CODING.
     expect(MODAL).toMatch(/if \(result\.finishedLater\) \{\s*setStep\("SAVED_FOR_LATER"\)/);
   });
@@ -121,24 +129,33 @@ describe("15O — modal is a two-step guided flow", () => {
 // Vendor profile fields (Phase 3)
 // ---------------------------------------------------------------------------
 
-describe("15O — Step 1 vendor profile fields", () => {
+describe("15O + 15P-1 — Step 1 vendor profile fields (compressed labels)", () => {
+  // 15P-1 collapsed the modal from four labelled subsections
+  // (IDENTITY / ADDRESS / CONTACT / PAYMENT & TAX / NOTES) into a
+  // single 3-column grid. Some field labels were shortened to
+  // match ("Phone" instead of "Phone (general)", "Vendor email"
+  // instead of "Vendor email (general)", etc.). The founder
+  // rejected the pre-15P-1 modal explicitly because "there is too
+  // much scrolling and redundant labels".
   const requiredFields: Array<string> = [
     "Legal name", "Operating name", "Currency",
     "Address line 1", "Address line 2", "City", "Province / state", "Postal / ZIP", "Country",
-    "Main contact name", "Main contact title", "Main contact phone", "Main contact email",
-    "Vendor email (general)", "Phone (general)", "AR email", "AP / remittance email", "Website",
+    "Phone", "Website",
+    "Vendor email", "AR email", "AP remittance email",
+    "Main contact", "Main contact email",
     "Payment terms (days)", "Tax registration #",
     "Notes",
   ];
   for (const label of requiredFields) {
     it(`Step 1 renders the "${label}" field`, () => {
-      // Each label appears verbatim inside a ProfileField label prop.
       expect(MODAL).toContain(`label="${label}"`);
     });
   }
-  it("EFT / remittance subsection is present with the honest 'add after creation' message", () => {
-    expect(MODAL).toMatch(/EFT \/ remittance/);
-    expect(MODAL).toMatch(/EFT details can be added after vendor creation/);
+  it("EFT / remittance subsection is REMOVED in 15P-1 (unimplemented; do not display)", () => {
+    // 15P-1: unimplemented sections violate the no-placeholder rule
+    // and inflate scroll. Removed until the encrypted vendor-banking
+    // flow ships.
+    expect(MODAL).not.toMatch(/EFT \/ remittance/);
   });
 });
 
@@ -151,8 +168,10 @@ describe("15O — internal-forwarder rule preserved", () => {
     expect(MODAL).toMatch(/mainContactName: ap\.sender\.relationship === "VENDOR" \? ap\.sender\.name : null/);
     expect(MODAL).toMatch(/mainContactEmail: ap\.sender\.relationship === "VENDOR" \? ap\.sender\.email : null/);
   });
-  it("Source section explains the forwarder is provenance only", () => {
-    expect(MODAL).toMatch(/internal forwarders are provenance only/);
+  it("Modal explains the forwarder is provenance only (15P-1: inline note, not a subsection)", () => {
+    // 15P-1 replaced the standalone "Source" section with an
+    // inline dim note below the grid — still truthful, no scroll cost.
+    expect(MODAL).toMatch(/internal forwarder, not populated as vendor contact/);
   });
 });
 
@@ -160,11 +179,24 @@ describe("15O — internal-forwarder rule preserved", () => {
 // Possible matches (Phase 5)
 // ---------------------------------------------------------------------------
 
-describe("15O — possible existing matches", () => {
+describe("15O + 15P-1 — possible existing matches", () => {
   it("Step 1 loads possible matches from the tenant-scoped API", () => {
     expect(MODAL).toMatch(/\/api\/vendors\/search\?q=/);
-    // The choose-new option flips vendorMode to CREATE_NEW.
-    expect(MODAL).toMatch(/data-testid="cvap-choose-new"/);
+  });
+  it("15P-1: no radio 'Create new vendor' gate — CREATE_NEW is the default and the profile is visible on open", () => {
+    // The pre-15P-1 radio gate is gone. The profile grid must not
+    // require any click to be visible.
+    expect(MODAL).not.toMatch(/data-testid="cvap-choose-new"/);
+    // Default vendorMode is CREATE_NEW (not null).
+    expect(MODAL).toMatch(/useState<"CREATE_NEW" \| "USE_EXISTING">\("CREATE_NEW"\)/);
+    // The profile section is NEVER hidden — no `hidden=` on it.
+    expect(MODAL).not.toMatch(/data-testid="cvap-profile"[^>]*hidden=/);
+  });
+  it("15P-1: existing matches render as a compact click-to-select chip strip", () => {
+    expect(MODAL).toMatch(/spectre-cvap-match-strip/);
+    expect(MODAL).toMatch(/spectre-cvap-match-chip/);
+    // Clicking a picked chip toggles it back to CREATE_NEW.
+    expect(MODAL).toMatch(/if \(chosenMatchId === m\.id\) \{\s*setChosenMatchId\(null\); setVendorMode\("CREATE_NEW"\);/);
   });
   it("USE_EXISTING mode goes straight to Step 2 without a fresh Vendor create", () => {
     // The Step 1 action supports USE_EXISTING via existingVendorId
