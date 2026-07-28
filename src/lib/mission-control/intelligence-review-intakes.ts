@@ -61,17 +61,28 @@ const apSummaryCache = new Map<
   string,
   { at: number; value: LinkedIntelligenceForEmail["invoiceSummary"] }
 >();
-// Sprint 3 · Checkpoint 15P-1 — include the vendor-profile
-// EXTRACTOR_VERSION in the cache key. A redeploy that ships new
-// extractor rules bumps the version constant, which naturally
-// invalidates every AP projection cached under the old rules. No
-// Fly restart required. See src/lib/ap-intelligence/vendor-profile-extract.ts.
+// Sprint 3 · Checkpoint 15P-5 — the cache key now fingerprints
+// canonical state on THREE axes:
+//
+//   coa=<coaRevision>       Chart of Accounts (any Account row change)
+//   vpx=<extractor version> Vendor-profile extractor code version
+//   vend=<vendorRevision>   Vendor + VendorContact table state
+//   apinv=<apInvRevision>   APInvoice table state (post/void)
+//
+// The vendor + AP-invoice fingerprints eliminate the founder-observed
+// 15P-4 defects where the projection stayed warm across vendor
+// create / delete / post operations. NO writer needs an explicit
+// `apSummaryCache.delete(...)` call — bumping the underlying table's
+// max(updatedAt) is sufficient. Same self-invalidation shape as the
+// existing coaRevision.
 function apSummaryCacheKey(
   intakeId: string,
   docId: string | null,
   coaRevision: string,
+  vendorRevision: string,
+  apInvRevision: string,
 ): string {
-  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}`;
+  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}`;
 }
 
 // Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.
@@ -97,6 +108,56 @@ async function loadCoaRevision(clubId: string): Promise<string> {
   ]);
   const fingerprint = `${count}@${latest?.updatedAt.getTime() ?? 0}`;
   coaRevisionCache.set(clubId, { at: now, fingerprint });
+  return fingerprint;
+}
+
+// Sprint 3 · Checkpoint 15P-5 — vendor-table revision fingerprint.
+// Same shape as loadCoaRevision. Any vendor create / update /
+// delete for the club bumps `max(updatedAt)`. Same 30-second TTL —
+// worst-case a Mission Control render made within 30s of a vendor
+// mutation sees the pre-mutation projection; every render after
+// that reflects the change. In practice `router.refresh()` from
+// the modal fires after createVendor / deleteVendor / postApInvoice,
+// but the modal fires those AFTER the vendor row updatedAt bumps —
+// so even the immediate refresh gets a fresh fingerprint.
+//
+// Includes VendorContact because that's how AR / remittance emails
+// get bound and the AP card projection reads them via VendorContact
+// rows.
+const VENDOR_REVISION_TTL_MS = 30_000;
+const vendorRevisionCache = new Map<string, { at: number; fingerprint: string }>();
+async function loadVendorRevision(clubId: string): Promise<string> {
+  const now = Date.now();
+  const cached = vendorRevisionCache.get(clubId);
+  if (cached && now - cached.at < VENDOR_REVISION_TTL_MS) return cached.fingerprint;
+  const [vCount, vLatest, cCount, cLatest] = await Promise.all([
+    prisma.vendor.count({ where: { clubId } }),
+    prisma.vendor.findFirst({ where: { clubId }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
+    prisma.vendorContact.count({ where: { clubId } }),
+    prisma.vendorContact.findFirst({ where: { clubId }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+  ]);
+  const fingerprint = `v${vCount}@${vLatest?.updatedAt.getTime() ?? 0};c${cCount}@${cLatest?.createdAt.getTime() ?? 0}`;
+  vendorRevisionCache.set(clubId, { at: now, fingerprint });
+  return fingerprint;
+}
+
+// Sprint 3 · Checkpoint 15P-5 — AP-invoice revision fingerprint.
+// A post OR void OR reversal bumps `max(updatedAt)` on the table.
+// The projection includes reconcile state which reads APInvoice rows,
+// so a fresh invoice for the same vendor / hash SHOULD invalidate
+// any dependent cached card.
+const AP_INV_REVISION_TTL_MS = 30_000;
+const apInvRevisionCache = new Map<string, { at: number; fingerprint: string }>();
+async function loadApInvRevision(clubId: string): Promise<string> {
+  const now = Date.now();
+  const cached = apInvRevisionCache.get(clubId);
+  if (cached && now - cached.at < AP_INV_REVISION_TTL_MS) return cached.fingerprint;
+  const [count, latest] = await Promise.all([
+    prisma.aPInvoice.count({ where: { clubId } }),
+    prisma.aPInvoice.findFirst({ where: { clubId }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } }),
+  ]);
+  const fingerprint = `${count}@${latest?.updatedAt.getTime() ?? 0}`;
+  apInvRevisionCache.set(clubId, { at: now, fingerprint });
   return fingerprint;
 }
 
@@ -515,16 +576,18 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
 
   const docRef = intake.origins[0]?.referenceId ?? null;
 
-  // Sprint 3 · Checkpoint 15L — pull the current COA revision BEFORE
-  // hitting the projection cache so a chart-of-accounts change since
-  // the last projection invalidates the cached entry naturally.
-  const coaRevision = await loadCoaRevision(clubId);
+  // Sprint 3 · Checkpoint 15P-5 — pull ALL revision fingerprints
+  // BEFORE hitting the projection cache so any canonical change
+  // since the last projection naturally invalidates the cached
+  // entry. In particular vendor create / delete / update / post
+  // MUST invalidate the AP card (founder-observed 15P-4 defects).
+  const [coaRevision, vendorRevision, apInvRevision] = await Promise.all([
+    loadCoaRevision(clubId),
+    loadVendorRevision(clubId),
+    loadApInvRevision(clubId),
+  ]);
 
-  // Cache probe now that we have the (intakeId, docRef, coaRevision)
-  // key. A hit means we skip the expensive analyseIngestedInvoice
-  // call AND the downstream vendor/GL lookups (they'd only re-derive
-  // the same values from the cached ExtractedInvoice input).
-  const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision);
+  const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision, vendorRevision, apInvRevision);
   const cached = apSummaryCache.get(cacheKey);
   if (cached && Date.now() - cached.at < AP_SUMMARY_TTL_MS) {
     return cached.value;

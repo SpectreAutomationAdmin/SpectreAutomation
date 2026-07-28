@@ -163,15 +163,20 @@ describe("Variant D AP card — collapsed body regions", () => {
 });
 
 describe("AP action row — Ace Foods layout", () => {
-  it("primary action label follows the workflow state (Approve & post / Create vendor & post / …)", () => {
-    expect(CARD).toMatch(/function primaryActionForApWorkflow/);
-    expect(CARD).toMatch(/"Approve & post"/);
+  it("primary action label follows the workflow state (Approve & post / Create vendor & post / …) — 15P-5: via deriveApAction", () => {
+    // 15P-5 retired primaryActionForApWorkflow. The label + icon
+    // now live on the shared `deriveApAction` in
+    // src/lib/mission-control/ap-action.ts, and the card consumes
+    // it via `const primary = deriveApAction(ap)`.
+    expect(CARD).toMatch(/const primary = deriveApAction\(ap\)/);
+    const APACTION = readFileSync(join(process.cwd(), "src/lib/mission-control/ap-action.ts"), "utf8");
+    expect(APACTION).toMatch(/"Approve & post"/);
     // Sprint 3 · Checkpoint 15L — the founder renamed the
     // VENDOR_MATCH_REQUIRED primary from "Match vendor" to
     // "Create vendor & post" once the vendor-first modal shipped.
-    expect(CARD).toMatch(/"Create vendor & post"/);
-    expect(CARD).toMatch(/"Request information"/);
-    expect(CARD).toMatch(/"Review duplicate"/);
+    expect(APACTION).toMatch(/"Create vendor & post"/);
+    expect(APACTION).toMatch(/"Request information"/);
+    expect(APACTION).toMatch(/"Review duplicate"/);
     expect(CARD).toMatch(/data-testid="ap-action-primary"/);
     expect(CARD).toMatch(/data-workflow-state=\{ap\.workflowState\}/);
   });

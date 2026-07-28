@@ -72,14 +72,13 @@ describe("15L — GL recommender must run without a vendor record", () => {
   });
 });
 
-describe("15L + 15P-1 — AP projection cache must invalidate when the COA OR extractor changes", () => {
-  it("cache key includes a per-club COA revision fingerprint", () => {
-    // 15P-1: the signature is unchanged (intakeId, docId, coaRevision)
-    // but the returned key now also embeds the extractor version so
-    // a new deploy invalidates every AP projection cached under the
-    // pre-15P-1 extractor without a Fly restart.
-    expect(IRI).toMatch(/function apSummaryCacheKey\(\s*intakeId: string,\s*docId: string \| null,\s*coaRevision: string,\s*\)/);
-    expect(IRI).toMatch(/coa=\$\{coaRevision\}::vpx=\$\{VENDOR_PROFILE_EXTRACTOR_VERSION\}/);
+describe("15L + 15P-1 + 15P-5 — AP projection cache invalidates on canonical state change", () => {
+  it("cache key includes COA + vendor + AP-invoice revision fingerprints (15P-5)", () => {
+    // 15P-5 extended the signature. The cache is now self-invalidating
+    // on any vendor create / delete / update AND on any AP-invoice
+    // post / void — the fingerprint bump forces a fresh projection.
+    expect(IRI).toMatch(/function apSummaryCacheKey\(\s*intakeId: string,\s*docId: string \| null,\s*coaRevision: string,\s*vendorRevision: string,\s*apInvRevision: string,\s*\)/);
+    expect(IRI).toMatch(/coa=\$\{coaRevision\}[\s\S]{0,80}vpx=\$\{VENDOR_PROFILE_EXTRACTOR_VERSION\}[\s\S]{0,80}vend=\$\{vendorRevision\}[\s\S]{0,80}apinv=\$\{apInvRevision\}/);
   });
 
   it("15P-1: vendor-profile extractor version is imported and threaded into the cache key", () => {
@@ -93,11 +92,11 @@ describe("15L + 15P-1 — AP projection cache must invalidate when the COA OR ex
     expect(IRI).toMatch(/`\$\{count\}@\$\{latest\?\.updatedAt\.getTime\(\) \?\? 0\}`/);
   });
 
-  it("the summariser pulls the revision BEFORE probing the cache", () => {
-    const order = IRI.indexOf("const coaRevision = await loadCoaRevision(clubId);");
-    const probe = IRI.indexOf("const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision);");
-    expect(order).toBeGreaterThan(0);
-    expect(probe).toBeGreaterThan(order);
+  it("the summariser pulls ALL revisions BEFORE probing the cache (15P-5 parallel load)", () => {
+    const load = IRI.indexOf("const [coaRevision, vendorRevision, apInvRevision] = await Promise.all([");
+    const probe = IRI.indexOf("const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision, vendorRevision, apInvRevision);");
+    expect(load).toBeGreaterThan(0);
+    expect(probe).toBeGreaterThan(load);
   });
 });
 
@@ -139,19 +138,26 @@ describe("15L — card render matches the Ace Foods intelligence model", () => {
   });
 });
 
-describe("15L — primary action + modal wiring", () => {
-  it("VENDOR_MATCH_REQUIRED primary action is 'Create vendor & post' (Phase 5)", () => {
-    // Sprint 3 · Checkpoint 15M added an `icon` field to the return
-    // shape; the label invariant stays.
-    expect(CARD).toMatch(/"VENDOR_MATCH_REQUIRED":\s+return \{ label: "Create vendor & post",\s+icon: "vendor-plus" \}/);
+describe("15L + 15P-5 — primary action + modal wiring (single derivation)", () => {
+  it("VENDOR_MATCH_REQUIRED primary action is 'Create vendor & post' (15P-5: via deriveApAction)", () => {
+    // 15P-5 retired the switch-based primaryActionForApWorkflow and
+    // moved the label/icon/modal decision into the shared
+    // `deriveApAction` at src/lib/mission-control/ap-action.ts.
+    // That module carries the `Create vendor & post` label on the
+    // CREATE_VENDOR_AND_POST variant. The card reads label + modal
+    // from the SAME function call — see the 15P-5 source-contract
+    // suite for the structural lock.
+    const APACTION = read("src/lib/mission-control/ap-action.ts");
+    expect(APACTION).toMatch(/label: "Create vendor & post"/);
+    expect(APACTION).toMatch(/kind: "CREATE_VENDOR_AND_POST"/);
   });
-  it("card wires the shared modal for VENDOR_MATCH_REQUIRED → Step 1 (superseded by 15P-2)", () => {
-    // 15P-2: VENDOR_MATCH_REQUIRED still opens the shared modal, but
-    // now sets modal-mode explicitly to STEP_1 so a subsequent
-    // reuse doesn't leak Step-2 state. READY_FOR_APPROVAL +
-    // NEEDS_JUDGMENT open the SAME modal directly at Step 2 with the
-    // matched vendor preselected (see 15P-2 contract suite).
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s*setCvapModalMode\(\{ kind: "STEP_1" \}\);\s*setCvapModalOpen\(true\)/);
+  it("card's onPrimary consults deriveApAction and opens the modal by action.modal.initialStep (15P-5)", () => {
+    // 15P-5 removed the workflow-state-specific branches from the
+    // card. The click handler now reads `action.modal` and opens
+    // the right modal shape by construction.
+    expect(CARD).toMatch(/const action = deriveApAction\(ap\)/);
+    expect(CARD).toMatch(/if \(action\.modal\.open\)/);
+    expect(CARD).toMatch(/action\.modal\.initialStep === "AP_CODING"/);
   });
   it("the modal opens without creating or posting — Step 1 primary is disabled until a legal name is present (superseded by 15O two-step split, refined in 15P-1)", () => {
     // 15P-1: the radio-gate was removed. CREATE_NEW is now the

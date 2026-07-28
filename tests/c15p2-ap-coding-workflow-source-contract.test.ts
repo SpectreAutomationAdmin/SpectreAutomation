@@ -28,7 +28,10 @@ function read(p: string) { return readFileSync(join(process.cwd(), p), "utf8"); 
 const MODAL         = read("src/components/mission-control/CreateVendorAndPostModal.tsx");
 const CARD          = read("src/components/mission-control/EmailIntakeCard.tsx");
 const POST_ACTION   = read("src/app/app/admin/ap/_post-ap-invoice-actions.ts");
-const PREVIEW_ACT   = read("src/app/app/admin/ap/_preview-ap-entry-actions.ts");
+// 15P-5: the preview server action was retired and replaced by a
+// plain POST API route with a stable URL. The route file is the
+// new canonical location; the old file is a loud-throw stub.
+const PREVIEW_API   = read("src/app/api/mission-control/ap-preview/route.ts");
 const BUILDER       = read("src/lib/ap-intelligence/proposed-ap-entry.ts");
 const TERMS_RESOLVE = read("src/lib/ap-intelligence/payment-terms-resolve.ts");
 const DUE_RESOLVE   = read("src/lib/ap-intelligence/due-date-resolve.ts");
@@ -79,9 +82,9 @@ describe("15P-2 · defect 2 — Step 2 shows the full debit/credit entry", () =>
     expect(BUILDER).toMatch(/role: "TAX_RECOVERABLE"/);
     expect(BUILDER).toMatch(/role: "AP_CONTROL"/);
   });
-  it("preview server action calls buildProposedApEntry (single source of truth)", () => {
-    expect(PREVIEW_ACT).toMatch(/import \{ buildProposedApEntry,/);
-    expect(PREVIEW_ACT).toMatch(/const entry = buildProposedApEntry\(/);
+  it("preview API route calls buildProposedApEntry (single source of truth) — 15P-5 migrated from server action", () => {
+    expect(PREVIEW_API).toMatch(/import \{ buildProposedApEntry,/);
+    expect(PREVIEW_API).toMatch(/const entry = buildProposedApEntry\(/);
   });
   it("post action ALSO calls buildProposedApEntry (single source of truth)", () => {
     expect(POST_ACTION).toMatch(/import \{ buildProposedApEntry,/);
@@ -115,9 +118,14 @@ describe("15P-2 · defect 2 — Step 2 shows the full debit/credit entry", () =>
     expect(MODAL).toMatch(/<option value="NON_RECOVERABLE"/);
     expect(MODAL).toMatch(/<option value="NONE"/);
   });
-  it("modal fetches the preview via the previewApEntryAction server action (not local math)", () => {
-    expect(MODAL).toMatch(/import\("@\/app\/app\/admin\/ap\/_preview-ap-entry-actions"\)/);
-    expect(MODAL).toMatch(/const result = await previewApEntryAction\(/);
+  it("modal fetches the preview via the POST API route (15P-5) — not local math, not a server action", () => {
+    // 15P-5 migrated the preview from a Next.js server action to a
+    // plain POST API route with a stable URL. Server actions rehash
+    // their id on every deploy, which produced the founder-observed
+    // "Preview unavailable" state across deploys. API route paths
+    // are stable.
+    expect(MODAL).toMatch(/fetch\(`\/api\/mission-control\/ap-preview`, \{\s*method: "POST"/);
+    expect(MODAL).not.toMatch(/import\("@\/app\/app\/admin\/ap\/_preview-ap-entry-actions"\)/);
   });
 });
 
@@ -146,18 +154,22 @@ describe("15P-2 · defect 3 — Approve & post opens the shared modal at Step 2"
     // now shows the back button + supports free navigation.
     expect(MODAL).toMatch(/!isAutoResolvedSingleStep \? \(\s*<button[\s\S]{0,500}data-testid="cvap-back-to-profile"/);
   });
-  it("card's primary-action handler covers READY_FOR_APPROVAL + NEEDS_JUDGMENT → Step 2 (15P-4 split branches)", () => {
-    // 15P-4 split the shared "READY_FOR_APPROVAL || NEEDS_JUDGMENT"
-    // branch into two so the auto-resolved single-step modal only
-    // opens for READY_FOR_APPROVAL. NEEDS_JUDGMENT still routes to
-    // the shared modal, but with the two-step-opened-at-Step-2
-    // shape (autoResolvedVendor: false).
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "READY_FOR_APPROVAL"\)/);
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "NEEDS_JUDGMENT"\)/);
-    expect(CARD).toMatch(/setCvapModalMode\(\{\s*kind: "STEP_2",\s*vendorId:/);
+  it("card's primary-action handler consults deriveApAction (15P-5 single derivation)", () => {
+    // 15P-5 replaced the workflow-state-specific `if` branches with
+    // a single derivation. `action.modal.initialStep` decides which
+    // modal shape opens; `action.modal.autoResolved` decides the
+    // single-step vs two-step-opened-at-Step-2 presentation. Same
+    // function that produces the button label.
+    expect(CARD).toMatch(/const action = deriveApAction\(ap\)/);
+    expect(CARD).toMatch(/setCvapModalMode\(\{\s*kind: "STEP_2",\s*vendorId: action\.modal\.vendorId/);
   });
-  it("VENDOR_MATCH_REQUIRED still opens at Step 1 (new-vendor path unchanged)", () => {
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "VENDOR_MATCH_REQUIRED"\) \{\s*setCvapModalMode\(\{ kind: "STEP_1" \}\)/);
+  it("VENDOR_MATCH_REQUIRED still opens at Step 1 — enforced by the derivation (15P-5)", () => {
+    // The shared derivation returns `initialStep: "PROFILE"` for
+    // CREATE_VENDOR_AND_POST (which is what VENDOR_MATCH_REQUIRED
+    // maps to). The click handler reads that value directly.
+    const APACTION = read("src/lib/mission-control/ap-action.ts");
+    expect(APACTION).toMatch(/case "VENDOR_MATCH_REQUIRED":[\s\S]{0,400}initialStep: "PROFILE"/);
+    expect(CARD).toMatch(/setCvapModalMode\(\{ kind: "STEP_1" \}\)/);
   });
   it("card threads initialStep + preselectedVendorId + preselectedVendorName into the shared modal", () => {
     expect(CARD).toMatch(/initialStep=\{cvapModalMode\.kind === "STEP_2" \? "AP_CODING" : "PROFILE"\}/);

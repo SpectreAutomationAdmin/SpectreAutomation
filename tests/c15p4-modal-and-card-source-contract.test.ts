@@ -56,9 +56,15 @@ describe("15P-4 · auto-resolved vendor gets a single-step AP-coding modal", () 
     // is in the single-step auto-resolved shape.
     expect(MODAL).toMatch(/!isAutoResolvedSingleStep \? \(/);
   });
-  it("card threads `autoResolvedVendor: true` on READY_FOR_APPROVAL, false on NEEDS_JUDGMENT", () => {
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "READY_FOR_APPROVAL"\)[\s\S]{0,200}openStep2WithMatch\(true\)/);
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "NEEDS_JUDGMENT"\)[\s\S]{0,200}openStep2WithMatch\(false\)/);
+  it("card threads `autoResolvedVendor: true` for APPROVE_AND_POST, false for REVIEW_CODING (15P-5: via deriveApAction)", () => {
+    // 15P-5 replaced the workflow-state-specific `if` branches with
+    // a single derivation. The shared function encodes the
+    // autoResolved flag per ApAction variant.
+    const APACTION = read("src/lib/mission-control/ap-action.ts");
+    expect(APACTION).toMatch(/kind: "APPROVE_AND_POST"[\s\S]{0,600}autoResolved: true/);
+    expect(APACTION).toMatch(/kind: "REVIEW_CODING"[\s\S]{0,600}autoResolved: false/);
+    // The card still threads `autoResolvedVendor` to the modal from
+    // whatever the derivation returned via cvapModalMode.
     expect(CARD).toMatch(/autoResolvedVendor=\{cvapModalMode\.kind === "STEP_2" \? cvapModalMode\.autoResolved : false\}/);
   });
 });
@@ -88,22 +94,17 @@ describe("15P-4 · two-way navigation preserves state + never re-creates vendor"
 // Fix 4 — Proposed Accounting Entry crash defence
 // ---------------------------------------------------------------------------
 
-describe("15P-4 · Proposed Accounting Entry never surfaces a raw JS exception", () => {
-  it("`staleDeploy` state exists + drives an actionable panel", () => {
-    expect(MODAL).toMatch(/const \[staleDeploy, setStaleDeploy\] = useState\(false\)/);
-    expect(MODAL).toMatch(/data-testid="cvap-journal-stale"/);
-    expect(MODAL).toMatch(/data-testid="cvap-journal-stale-refresh"/);
-    expect(MODAL).toMatch(/Preview unavailable/);
-  });
-  it("preview useEffect detects the three stale-hash symptoms (missing export + undefined result + framework error)", () => {
-    // Symptom A: import returned no callable export.
-    expect(MODAL).toMatch(/typeof previewApEntryAction !== "function"/);
-    // Symptom B: dynamic import returned undefined result — the
-    // undefined branch flips setStaleDeploy(true). (Regex allows
-    // a large safety-comment gap between the guard and the setter.)
-    expect(MODAL).toMatch(/if \(!result\) \{[\s\S]{0,700}setStaleDeploy\(true\)/);
-    // Symptom C: framework rethrow message.
-    expect(MODAL).toMatch(/Failed to find Server Action/);
+describe("15P-4 → 15P-5 · Proposed Accounting Entry uses a stable API route (no server-action hash class)", () => {
+  it("preview is a plain fetch() against a stable POST URL (15P-5 retired the stale-deploy defensive UI)", () => {
+    // The pre-15P-5 defensive `staleDeploy` state was there to
+    // catch Next.js server-action-hash mismatches after a deploy.
+    // 15P-5 moved the preview to a POST API route with a stable URL,
+    // so the defensive UI is no longer needed AND has been removed —
+    // the render tree now has three legitimate states: loading,
+    // error, preview.
+    expect(MODAL).toMatch(/fetch\(`\/api\/mission-control\/ap-preview`, \{\s*method: "POST"/);
+    expect(MODAL).not.toMatch(/const \[staleDeploy/);
+    expect(MODAL).not.toMatch(/data-testid="cvap-journal-stale"/);
   });
   it("handleStep1 + handleStep2Post also defend against the same stale-hash class", () => {
     // Same defence on the two write paths.

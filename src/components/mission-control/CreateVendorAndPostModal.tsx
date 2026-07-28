@@ -291,11 +291,6 @@ export default function CreateVendorAndPostModal({
   const [preview, setPreview] = useState<ProposedApEntry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  // 15P-4: when Next.js can't find a server-action hash (stale
-  // deploy race) the client gets undefined back from the RPC. The
-  // preview useEffect flips this on and renders an actionable
-  // "Refresh the page" panel instead of a raw exception.
-  const [staleDeploy, setStaleDeploy] = useState(false);
 
   // Possible existing matches.
   const [matches, setMatches] = useState<PossibleMatch[]>([]);
@@ -391,7 +386,6 @@ export default function CreateVendorAndPostModal({
     setCreatedVendorName(preselectedVendorName ?? null);
     setPreview(null);
     setPreviewError(null);
-    setStaleDeploy(false);
     setReviewingVendor(false);
   }, [open, openDirectAtStep2, preselectedVendorId, preselectedVendorName]);
 
@@ -409,62 +403,58 @@ export default function CreateVendorAndPostModal({
     const tax = coding.tax.trim();
     const gross = coding.gross.trim();
     if (!gl || !inv || !subtotal || !gross) { setPreview(null); return; }
+    // 15P-5: switched from dynamic-import of a Next.js server action
+    // to a plain fetch() against a stable API-route URL. Server-
+    // action ids get rehashed on every deploy; API route paths do
+    // not. Founder-observed "Preview unavailable" after every deploy
+    // is eliminated by construction — the URL is stable, so a
+    // pre-deploy browser session posts to the same handler and
+    // either succeeds or gets a plain 4xx / 5xx with an actionable
+    // JSON message.
     const controller = new AbortController();
     const t = window.setTimeout(async () => {
       setPreviewLoading(true);
       setPreviewError(null);
-      setStaleDeploy(false);
       try {
-        const { previewApEntryAction } = await import("@/app/app/admin/ap/_preview-ap-entry-actions");
-        if (typeof previewApEntryAction !== "function") {
-          // 15P-4 defence: the dynamic import returned no symbol.
-          // Almost always a stale bundle from a prior deploy.
-          setPreview(null);
-          setStaleDeploy(true);
-          return;
-        }
-        const result = await previewApEntryAction({
-          workIntakeItemId,
-          vendorId: createdVendorId,
-          coding: {
-            invoiceNumber: inv,
-            subtotal,
-            tax: tax || "0",
-            gross,
-            currency: coding.currency,
-            glAccountNumber: gl,
-            taxTreatment: coding.taxTreatment,
-            taxCodeKey: coding.taxCodeKey,
-          },
+        const res = await fetch(`/api/mission-control/ap-preview`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            workIntakeItemId,
+            vendorId: createdVendorId,
+            coding: {
+              invoiceNumber: inv,
+              subtotal,
+              tax: tax || "0",
+              gross,
+              currency: coding.currency,
+              glAccountNumber: gl,
+              taxTreatment: coding.taxTreatment,
+              taxCodeKey: coding.taxCodeKey,
+            },
+          }),
         });
         if (controller.signal.aborted) return;
+        // Both success and business-error responses are valid JSON
+        // bodies with `{ ok: boolean, ... }`. Only genuine network /
+        // transport failures throw.
+        const result = (await res.json().catch(() => null)) as
+          | { ok: true; entry: import("@/lib/ap-intelligence/proposed-ap-entry").ProposedApEntry }
+          | { ok: false; message: string; code: string }
+          | null;
         if (!result) {
-          // 15P-4 defence: Next.js returns `undefined` from a client
-          // call when the server-action-hash registry can't find the
-          // action id. This happens whenever the browser has a page
-          // loaded from an older deploy and the newer bundle rehashed
-          // the action. Detected + surfaced as an actionable message
-          // instead of a raw `Cannot read properties of undefined
-          // (reading 'ok')` exception. Founder acceptance:
-          // "It must never show a raw JavaScript exception."
+          // Server returned a non-JSON body — rare, but treat as an
+          // actionable validation error rather than a raw exception.
           setPreview(null);
-          setStaleDeploy(true);
+          setPreviewError(`Preview request returned an unexpected response (HTTP ${res.status}).`);
           return;
         }
         if (!result.ok) { setPreview(null); setPreviewError(result.message); return; }
         setPreview(result.entry);
       } catch (e) {
         if (controller.signal.aborted) return;
-        const msg = e instanceof Error ? e.message : String(e);
-        // Framework-side stale-action failures come back with a
-        // recognisable message; catch them here as well as the
-        // undefined-result path above.
-        if (/Failed to find Server Action|reading .*'ok'|_workers/.test(msg)) {
-          setPreview(null);
-          setStaleDeploy(true);
-        } else {
-          setPreviewError(msg);
-        }
+        setPreviewError(e instanceof Error ? e.message : String(e));
       } finally {
         if (!controller.signal.aborted) setPreviewLoading(false);
       }
@@ -1143,29 +1133,19 @@ export default function CreateVendorAndPostModal({
           ) : null}
         </section>
 
-        {/* 4. Proposed accounting entry — debit/credit table */}
+        {/* 4. Proposed accounting entry — debit/credit table.
+             15P-5: stale-deploy defence removed — the preview is
+             now a plain POST API route with a stable URL, so the
+             class of bug that produced "Preview unavailable" no
+             longer exists. The three legitimate render states are:
+                loading — preview request in flight
+                error   — server returned a validation / config problem
+                preview — a balanced (or unbalanced) proposed entry
+             plus the empty-inputs "Enter GL, subtotal, and gross"
+             placeholder. */}
         <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-journal">
           <div className="spectre-cvap-subheading">Proposed accounting entry</div>
-          {staleDeploy ? (
-            // 15P-4: stale Next.js server-action hash after a deploy.
-            // The client received undefined from the RPC. Actionable
-            // copy + a Refresh button instead of a raw JS exception.
-            <div className="spectre-cvap-note spectre-cvap-note--warn" data-testid="cvap-journal-stale">
-              <p style={{ margin: 0 }}>
-                <strong>Preview unavailable.</strong> Spectre has been updated since this page was opened, so the accounting entry can&apos;t be re-generated in this browser session.
-              </p>
-              <p style={{ marginTop: 6 }}>Refresh the page to reload the latest version, then reopen this invoice.</p>
-              <button
-                type="button"
-                className="spectre-btn spectre-btn--secondary spectre-btn--sm"
-                style={{ marginTop: 8 }}
-                onClick={() => { if (typeof window !== "undefined") window.location.reload(); }}
-                data-testid="cvap-journal-stale-refresh"
-              >
-                Refresh page
-              </button>
-            </div>
-          ) : previewLoading ? (
+          {previewLoading ? (
             <p className="spectre-cvap-note">Rebuilding preview…</p>
           ) : previewError ? (
             <p className="spectre-cvap-note spectre-cvap-note--warn" data-testid="cvap-journal-error">{previewError}</p>

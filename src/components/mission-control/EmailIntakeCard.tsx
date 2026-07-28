@@ -43,6 +43,10 @@ import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import CreateVendorAndPostModal from "./CreateVendorAndPostModal";
 import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/lib/mission-control";
+// 15P-5: the one canonical AP-action derivation. Both the primary-
+// button label and the modal-open decision come from this function
+// so they can never drift.
+import { deriveApAction, type ApAction } from "@/lib/mission-control/ap-action";
 
 // -------------------------------------------------------------------------
 // Public props
@@ -335,73 +339,34 @@ export default function EmailIntakeCard({ data }: Props) {
             workIntakeItemId={data.workIntakeItemId}
             onDefer={handleDefer24h}
             onPrimary={() => {
-              // Sprint 3 · Checkpoint 15P-2 — routing for the AP
-              // primary action. The founder rule: every actionable
-              // workflow state MUST open the shared modal (never
-              // "does nothing"); no state posts from the collapsed
-              // card without operator review.
-              //
-              //   VENDOR_MATCH_REQUIRED  → Step 1 (create vendor,
-              //                            then Step 2)
-              //   READY_FOR_APPROVAL     → Step 2 directly, vendor
-              //                            pre-selected from the
-              //                            match  (Approve & post)
-              //   NEEDS_JUDGMENT         → Step 2 directly (Review
-              //                            coding) — same shared
-              //                            modal, different starting
-              //                            label upstream
-              //   POSSIBLE_DUPLICATE     → keep the pre-15L expand
-              //                            path (duplicate needs
-              //                            evidence review, not
-              //                            direct posting)
-              //   MISSING_INFORMATION    → expand path for now (email
-              //                            reply flow lives on the
-              //                            Invoice tab)
-              //   CHART_OF_ACCOUNTS_REQUIRED → expand path (guidance
-              //                            surface, not postable)
-              // 15P-4 routing — the founder rule: one authoritative
-              // decision lives in `lib/vendor-matching/resolve-modal-entry`.
-              // Here on the card we use the coarse projection signal
-              // that the vendor is already matched (READY_FOR_APPROVAL
-              // implies match + no reconcile blockers). The modal ALSO
-              // runs the shared resolver against the live search
-              // response for a final say — this hop is only about
-              // choosing which of the two initial modal shapes to open:
-              //
-              //   READY_FOR_APPROVAL  → autoResolved single-step
-              //                         (compact vendor header + AP coding)
-              //   NEEDS_JUDGMENT      → two-step, opened at Step 2
-              //                         (matched but coding needs review)
-              //   VENDOR_MATCH_REQUIRED → two-step, opened at Step 1
-              const openStep2WithMatch = (autoResolved: boolean) => {
-                const v = ap?.vendorMatch;
-                if (!v || !v.matchedVendorId) return false;
-                setCvapModalMode({
-                  kind: "STEP_2",
-                  vendorId: v.matchedVendorId,
-                  vendorName: v.matchedName ?? "Selected vendor",
-                  autoResolved,
-                });
-                setCvapModalOpen(true);
-                if (!expanded) void markReadOnce();
-                return true;
-              };
-              if (ap?.workflowState === "VENDOR_MATCH_REQUIRED") {
-                setCvapModalMode({ kind: "STEP_1" });
+              // Sprint 3 · Checkpoint 15P-5 — click handler consults
+              // the SAME `deriveApAction` function that renders the
+              // button. Founder rule: "the action button and the
+              // modal must never disagree." The derivation is pure —
+              // no client state, no cached decision — so a re-render
+              // driven by a fresh projection (post vendor create /
+              // delete / post) yields a NEW action whose `.modal`
+              // block dictates the correct shape.
+              if (!ap) return;
+              const action = deriveApAction(ap);
+              if (action.modal.open) {
+                if (action.modal.initialStep === "AP_CODING") {
+                  setCvapModalMode({
+                    kind: "STEP_2",
+                    vendorId: action.modal.vendorId,
+                    vendorName: action.modal.vendorName,
+                    autoResolved: action.modal.autoResolved,
+                  });
+                } else {
+                  setCvapModalMode({ kind: "STEP_1" });
+                }
                 setCvapModalOpen(true);
                 if (!expanded) void markReadOnce();
                 return;
               }
-              if (ap?.workflowState === "READY_FOR_APPROVAL") {
-                // Auto-resolved: single-step AP-coding modal with
-                // "Review / change vendor" affordance for reveal.
-                if (openStep2WithMatch(true)) return;
-              }
-              if (ap?.workflowState === "NEEDS_JUDGMENT") {
-                // Matched but coding warrants review — two-step modal
-                // opened at Step 2 with normal back-and-forth navigation.
-                if (openStep2WithMatch(false)) return;
-              }
+              // Non-modal actions (duplicate, missing info,
+              // COA required) still expand the card + jump to the
+              // Invoice Review tab where their workflows live.
               if (!expanded) {
                 setExpanded(true);
                 void markReadOnce();
@@ -1148,7 +1113,10 @@ function ApActionRow({
   onPrimary: () => void;
   onOpenPdf?: () => void;
 }) {
-  const primary = primaryActionForApWorkflow(ap.workflowState);
+  // 15P-5: label + icon derive from the SAME shared function the
+  // card's onPrimary click handler consults — see EmailIntakeCard
+  // §onPrimary. Guarantees the button and the modal never disagree.
+  const primary = deriveApAction(ap);
   return (
     <>
       <button
@@ -1222,26 +1190,10 @@ function ApActionRow({
 
 type PrimaryIconKind = "check" | "vendor-plus" | "envelope" | "document-check" | "duplicate" | "coa";
 
-function primaryActionForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]):
-  { label: string; icon: PrimaryIconKind; onClick?: (ctx: { workIntakeItemId: string }) => void } {
-  switch (state) {
-    case "READY_FOR_APPROVAL":         return { label: "Approve & post",            icon: "check" };
-    // Sprint 3 · Checkpoint 15L — the workflow is vendor-first + AP-
-    // second. When the vendor is missing, the primary action reads
-    // "Create vendor & post" so the operator knows the modal will
-    // (a) let them create the vendor or accept a proposed match,
-    // (b) show the drafted GL coding, and (c) still require a final
-    // confirmation before posting. The label does NOT bypass any
-    // confirmation — it names the end-to-end workflow the button
-    // opens, not the immediate side effect. See CreateVendorAndPostModal.
-    case "VENDOR_MATCH_REQUIRED":      return { label: "Create vendor & post",      icon: "vendor-plus" };
-    case "MISSING_INFORMATION":        return { label: "Request information",       icon: "envelope" };
-    case "POSSIBLE_DUPLICATE":         return { label: "Review duplicate",          icon: "duplicate" };
-    case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Import chart of accounts",  icon: "coa" };
-    case "NEEDS_JUDGMENT":
-    default:                           return { label: "Review coding",             icon: "document-check" };
-  }
-}
+// Sprint 3 · Checkpoint 15P-5 — `primaryActionForApWorkflow` is
+// retired. The card now consumes `deriveApAction` (imported at the
+// top of the file) so the button label AND the modal-open decision
+// come from the same function. See src/lib/mission-control/ap-action.ts.
 
 // Sprint 3 · Checkpoint 15M — the small white inline icon that sits
 // at the start of every dark-green Work Intake primary action.

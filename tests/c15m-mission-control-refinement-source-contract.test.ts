@@ -178,11 +178,16 @@ describe("15M — Feed synced header pill", () => {
 });
 
 describe("15M — icons on dark-green primary actions", () => {
-  it("primaryActionForApWorkflow returns { label, icon } for every state", () => {
+  it("action derivation returns { label, icon } for every state (15P-5: via deriveApAction)", () => {
+    // 15P-5 retired primaryActionForApWorkflow — the label + icon
+    // now live on the shared `deriveApAction` in
+    // src/lib/mission-control/ap-action.ts. The card's PrimaryIconKind
+    // type is still there for the icon-component prop.
+    const APACTION = readFileSync(join(process.cwd(), "src/lib/mission-control/ap-action.ts"), "utf8");
     expect(CARD).toMatch(/type PrimaryIconKind =/);
-    expect(CARD).toMatch(/label: "Approve & post",\s+icon: "check"/);
-    expect(CARD).toMatch(/label: "Create vendor & post",\s+icon: "vendor-plus"/);
-    expect(CARD).toMatch(/label: "Request information",\s+icon: "envelope"/);
+    expect(APACTION).toMatch(/label: "Approve & post"[\s\S]{0,80}icon: "check"/);
+    expect(APACTION).toMatch(/label: "Create vendor & post"[\s\S]{0,80}icon: "vendor-plus"/);
+    expect(APACTION).toMatch(/label: "Request information"[\s\S]{0,80}icon: "envelope"/);
   });
   it("PrimaryActionIcon component is rendered inside the primary button", () => {
     expect(CARD).toMatch(/<PrimaryActionIcon kind=\{primary\.icon\} \/>/);
