@@ -62,7 +62,17 @@ export default async function VendorsPage({ searchParams }: { searchParams: { st
               <tr key={v.id}>
                 <td className="font-mono text-xs">{v.vendorNumber}</td>
                 <td>
-                  <Link href={`/app/admin/ap/vendors/${v.id}`} className="font-medium hover:text-club-green-700">{v.legalName}</Link>
+                  {/* 15P-7: vendor row now opens the relationship
+                      timeline as the primary destination. Settings
+                      remain reachable via the gear icon on the
+                      timeline header. */}
+                  <Link
+                    href={`/app/admin/ap/vendors/${v.id}/timeline`}
+                    className="font-medium hover:text-club-green-700"
+                    data-testid={`vendor-row-link-${v.id}`}
+                  >
+                    {v.legalName}
+                  </Link>
                   {v.operatingName && <div className="text-xs text-stone-500">{v.operatingName}</div>}
                 </td>
                 <td><Badge status={v.status} /></td>

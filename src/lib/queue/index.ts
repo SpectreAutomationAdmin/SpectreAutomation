@@ -39,7 +39,14 @@ export type JobKind =
   | "MAILBOX_DELTA_SYNC"
   | "MAILBOX_RENEW_SUBSCRIPTION"
   | "MAILBOX_ATTACHMENT_FETCH"
-  | "MAILBOX_RECONCILIATION_HEARTBEAT";
+  | "MAILBOX_RECONCILIATION_HEARTBEAT"
+  // Sprint 3 · Checkpoint 15P-7 — post-commit Outlook archive of
+  // the source email after an AP invoice is successfully posted.
+  // Idempotent per invoiceId: rerunning with the same payload is a
+  // no-op if the message has already been archived (best-effort
+  // check via the mailbox integration when it lands). See
+  // src/lib/queue/handlers.ts for the handler.
+  | "MAILBOX_ARCHIVE_MESSAGE";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

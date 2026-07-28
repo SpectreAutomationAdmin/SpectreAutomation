@@ -32,11 +32,20 @@ export default async function VendorTimelinePage({ params }: { params: { id: str
             <div className="text-sm text-[var(--spectre-text-secondary)]">Trading as {header.operatingName}</div>
           ) : null}
         </div>
+        {/* 15P-7: gear icon links to the existing vendor settings
+             page. Founder rule: the relationship timeline is the
+             primary destination; settings sit behind the gear. */}
         <Link
           href={`/app/admin/ap/vendors/${params.id}`}
-          className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+          className="spectre-vendor-gear"
+          data-testid="vendor-timeline-settings-gear"
+          aria-label="Vendor settings"
+          title="Vendor settings"
         >
-          Vendor profile
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
         </Link>
       </div>
 

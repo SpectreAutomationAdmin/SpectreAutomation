@@ -117,9 +117,15 @@ describe("15O — modal is a two-step guided flow", () => {
     // Finish-later sets step to SAVED_FOR_LATER, not AP_CODING.
     expect(MODAL).toMatch(/if \(result\.finishedLater\) \{\s*setStep\("SAVED_FOR_LATER"\)/);
   });
-  it("Step 2 primary action is 'Post invoice'", () => {
+  it("Step 2 primary action is 'Post & clear work item' (15P-7 rename with atomic posting)", () => {
+    // 15P-7 renamed the primary from "Post invoice" to
+    // "Post & clear work item" so the operator understands the
+    // atomic transaction: posting the accounting entry also removes
+    // the Work Intake from the active feed. Loading text is
+    // "Posting and clearing…" to signal both sides.
     expect(MODAL).toMatch(/data-testid="cvap-post-invoice"/);
-    expect(MODAL).toMatch(/\{submitting \? "Posting…" : "Post invoice"\}/);
+    expect(MODAL).toMatch(/"Post & clear work item"/);
+    expect(MODAL).toMatch(/Posting and clearing…/);
   });
   it("Step 2 is only reachable AFTER createdVendorId is set (guarded)", () => {
     // 15P-2: the post handler also guards on `!preview` — the
@@ -261,9 +267,11 @@ describe("15O — Step 2 server action", () => {
     expect(tx).toMatch(/tx\.aPInvoice\.findFirst/);
     expect(tx).toMatch(/vendorReference: input\.coding\.invoiceNumber/);
   });
-  it("Step 2 resolves the Work Intake item (RESOLVED + resolvedAt + resolvedByUserId)", () => {
+  it("Step 2 resolves the Work Intake item (RESOLVED + resolvedAt + resolvedByUserId) — 15P-7 uses nowTs constant", () => {
+    // 15P-7 hoisted `const nowTs = new Date()` to the top of the tx
+    // so postedAt / resolvedAt share the same timestamp.
     expect(STEP2_ACTION).toMatch(/status: "RESOLVED"/);
-    expect(STEP2_ACTION).toMatch(/resolvedAt: new Date\(\)/);
+    expect(STEP2_ACTION).toMatch(/resolvedAt: nowTs/);
     expect(STEP2_ACTION).toMatch(/resolvedByUserId: principal\.id/);
   });
   it("Step 2 wraps its writes in prisma.$transaction with explicit timeout options", () => {
@@ -271,8 +279,12 @@ describe("15O — Step 2 server action", () => {
     expect(STEP2_ACTION).toMatch(/timeout: 60_000/);
     expect(STEP2_ACTION).toMatch(/maxWait: 15_000/);
   });
-  it("Step 2 audits the AP invoice + WI resolution separately", () => {
-    expect(STEP2_ACTION).toMatch(/action: "ap\.invoice\.create"/);
+  it("Step 2 audits the AP invoice + WI resolution separately (15P-7 renames ap.invoice.create → ap.invoice.post)", () => {
+    // 15P-7 renamed the audit action for the atomic-posting flow
+    // from `ap.invoice.create` to `ap.invoice.post` so the audit
+    // trail truthfully reflects that this action posts (not just
+    // creates a draft).
+    expect(STEP2_ACTION).toMatch(/action: "ap\.invoice\.post"/);
     expect(STEP2_ACTION).toMatch(/action: "work-intake\.resolve"/);
   });
   it("Step 2 returns links to the vendor timeline and the AP invoice", () => {

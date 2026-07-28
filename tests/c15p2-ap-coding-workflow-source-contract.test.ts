@@ -226,10 +226,18 @@ describe("15P-2 · server posting hardening", () => {
   it("post action sets taxCodeId when treatment is RECOVERABLE (so postInvoiceToGl can split ITC)", () => {
     expect(POST_ACTION).toMatch(/taxCodeId: treatment\.kind === "RECOVERABLE" \? control\.gstTaxCodeId : null/);
   });
-  it("post action journalizes via postInvoiceToGl and flips status to POSTED", () => {
-    expect(POST_ACTION).toMatch(/import \{ postInvoiceToGl \}/);
-    expect(POST_ACTION).toMatch(/const je = await postInvoiceToGl\(principal, result\.invoiceId\)/);
-    expect(POST_ACTION).toMatch(/status: "POSTED", postedJournalEntryId: je\.id/);
+  it("post action creates the AP invoice as POSTED and the journal entry INSIDE the same $transaction (15P-7 atomicity)", () => {
+    // 15P-7 replaced the post-tx `postInvoiceToGl` call with
+    // atomic in-tx JE creation via `nextEntryNumberTx` +
+    // `tx.journalEntry.create` + `tx.journalEntryLine.createMany`.
+    // The old outer-tx race that produced Draft-with-no-JE is gone.
+    expect(POST_ACTION).not.toMatch(/postInvoiceToGl\(/);
+    expect(POST_ACTION).toMatch(/import \{ nextEntryNumberTx \} from "@\/lib\/accounting\/journal"/);
+    // Invoice is created directly as POSTED.
+    expect(POST_ACTION).toMatch(/status: "POSTED",\s*postedAt: nowTs,\s*postedByUserId: principal\.id/);
+    // JE is created inside the tx and its id is backfilled.
+    expect(POST_ACTION).toMatch(/tx\.journalEntry\.create\(/);
+    expect(POST_ACTION).toMatch(/tx\.aPInvoice\.update\(\{[\s\S]{0,200}postedJournalEntryId: je\.id/);
   });
   it("resolveControlAccounts returns a config-error result — never fabricates an account", () => {
     for (const code of ["AP_CONTROL_MISSING","AP_CONTROL_AMBIGUOUS","TAX_CODE_MISSING","TAX_RECOVERABLE_MISSING"]) {

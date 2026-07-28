@@ -534,8 +534,8 @@ export async function createPostedFromAdapter(
 async function nextEntryNumber(clubId: string): Promise<string> {
   return nextEntryNumberTx(prisma, clubId);
 }
-type AnyTx = Prisma.TransactionClient | typeof prisma;
-async function nextEntryNumberTx(tx: AnyTx, clubId: string): Promise<string> {
+export type AnyTx = Prisma.TransactionClient | typeof prisma;
+export async function nextEntryNumberTx(tx: AnyTx, clubId: string): Promise<string> {
   const year = new Date().getFullYear();
   const count = await tx.journalEntry.count({
     where: { clubId, createdAt: { gte: new Date(year, 0, 1) } },

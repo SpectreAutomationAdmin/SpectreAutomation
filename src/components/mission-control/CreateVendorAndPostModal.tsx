@@ -291,6 +291,24 @@ export default function CreateVendorAndPostModal({
   const [preview, setPreview] = useState<ProposedApEntry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // 15P-7 success-confirmation state. Set on a successful post
+  // response so the modal renders the "Invoice posted" panel with
+  // the lifecycle summary before auto-closing.
+  const [postResult, setPostResult] = useState<{
+    ok: true;
+    invoiceNumber: string;
+    journalEntryId: string;
+    lifecycle: {
+      apInvoicePosted: true;
+      journalEntryPosted: true;
+      workIntakeResolved: true;
+      emailArchive:
+        | { status: "QUEUED"; jobId: string }
+        | { status: "NOT_APPLICABLE"; reason: string }
+        | { status: "ENQUEUE_FAILED"; error: string };
+      fiscalPeriodBootstrapped: boolean;
+    };
+  } | null>(null);
 
   // Possible existing matches.
   const [matches, setMatches] = useState<PossibleMatch[]>([]);
@@ -386,6 +404,7 @@ export default function CreateVendorAndPostModal({
     setCreatedVendorName(preselectedVendorName ?? null);
     setPreview(null);
     setPreviewError(null);
+    setPostResult(null);
     setReviewingVendor(false);
   }, [open, openDirectAtStep2, preselectedVendorId, preselectedVendorName]);
 
@@ -609,8 +628,17 @@ export default function CreateVendorAndPostModal({
         return;
       }
       if (!result.ok) { setSubmitError(result.message); return; }
-      router.refresh();
-      onClose();
+      // 15P-7 success confirmation — render an unmistakable panel
+      // BEFORE closing the modal. Preserves the lifecycle summary
+      // (JE posted, WI cleared, email archive status) so the
+      // operator sees exactly what happened. Modal closes after
+      // ~1.8s so the confirmation is visible but doesn't force a
+      // manual dismissal step.
+      setPostResult(result);
+      window.setTimeout(() => {
+        router.refresh();
+        onClose();
+      }, 1800);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Post failed.";
       if (/Failed to find Server Action/.test(msg)) {
@@ -1224,8 +1252,9 @@ export default function CreateVendorAndPostModal({
             type="button"
             className="spectre-btn spectre-btn--primary spectre-btn--sm"
             onClick={() => void handleStep2Post()}
-            disabled={!canStep2Post || submitting}
-            aria-disabled={!canStep2Post || submitting}
+            disabled={!canStep2Post || submitting || postResult != null}
+            aria-disabled={!canStep2Post || submitting || postResult != null}
+            aria-busy={submitting}
             data-testid="cvap-post-invoice"
             title={
               !preview ? "Preview loading — please wait" :
@@ -1233,9 +1262,55 @@ export default function CreateVendorAndPostModal({
               undefined
             }
           >
-            {submitting ? "Posting…" : "Post invoice"}
+            {/* 15P-7: label + loading state.
+                Founder brief: rename primary "Post invoice" →
+                "Post & clear work item" so the operator understands
+                that posting completes the accounting transaction AND
+                removes the item from the active Work Intake feed.
+                Loading text "Posting and clearing…" signals both
+                sides of the atomic transaction. Post-success the
+                confirmation panel takes over — the button gets
+                disabled so no double-submit is possible. */}
+            {submitting ? (
+              <>
+                <span className="spectre-cvap-spinner" aria-hidden="true" />
+                Posting and clearing…
+              </>
+            ) : postResult ? "Posted" : "Post & clear work item"}
           </button>
         </footer>
+
+        {/* 15P-7 success confirmation. Rendered after handleStep2Post
+             sets postResult; visible for ~1.8s before the modal
+             auto-closes. Distinguishes accounting-side success from
+             email-archive status. */}
+        {postResult ? (
+          <div
+            className="spectre-cvap-post-success"
+            role="status"
+            aria-live="polite"
+            data-testid="cvap-post-success"
+          >
+            <div className="spectre-cvap-post-success-headline">
+              Invoice posted
+              <span className="spectre-cvap-post-success-ref"> · {postResult.invoiceNumber}</span>
+            </div>
+            <div className="spectre-cvap-post-success-detail">
+              Journal entry balanced and Work Intake item cleared.
+            </div>
+            <div
+              className="spectre-cvap-post-success-archive"
+              data-testid="cvap-post-success-archive"
+              data-archive-status={postResult.lifecycle.emailArchive.status}
+            >
+              {postResult.lifecycle.emailArchive.status === "QUEUED"
+                ? "Source email queued for archive."
+                : postResult.lifecycle.emailArchive.status === "NOT_APPLICABLE"
+                ? "No linked source email to archive."
+                : "Email archive queue temporarily unavailable — will retry."}
+            </div>
+          </div>
+        ) : null}
       </>
     );
   }

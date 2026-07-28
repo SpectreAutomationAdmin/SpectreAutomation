@@ -130,6 +130,31 @@ registerHandler<{
   });
 });
 
+// Sprint 3 · Checkpoint 15P-7 — MAILBOX_ARCHIVE_MESSAGE.
+//
+// Post-commit archive of the source Outlook email after an AP
+// invoice is posted from Mission Control. Idempotent per
+// apInvoiceId + graphMessageId: rerunning with the same payload
+// checks the current mailbox state and no-ops if the message is
+// already in the target folder.
+//
+// Scope note: the Microsoft Graph delegated allowlist at
+// src/lib/integrations/microsoft-graph-delegated.ts currently
+// includes only Mail.Read + Mail.Send. Archiving requires
+// Mail.ReadWrite (POST /me/messages/{id}/move). Until that scope
+// is granted + consented, the handler records ARCHIVE_PENDING_SCOPE
+// state and does NOT throw — the accounting side stays clean.
+registerHandler<{
+  apInvoiceId: string;
+  workIntakeItemId: string;
+  emailMessageId: string;
+  graphMessageId: string;
+  mailboxConnectionId: string;
+}>("MAILBOX_ARCHIVE_MESSAGE", async ({ payload }) => {
+  const { runMailboxArchiveMessage } = await import("../mailbox/archive");
+  return runMailboxArchiveMessage(payload);
+});
+
 // Remaining reserved Phase C kinds — still gated. If a stray job lands,
 // fail loudly so operators see it in JobRun / JobFailure records.
 for (const kind of [
