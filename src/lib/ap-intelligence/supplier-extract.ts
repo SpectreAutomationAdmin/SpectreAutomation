@@ -185,6 +185,18 @@ export function extractSupplier(
     // are section chrome, not suppliers. Reject both categorically.
     if (LABEL_TAIL_RE.test(line)) continue;
     if (FORM_HEADER_RE.test(line)) continue;
+    // Sprint 3 · Checkpoint 15Q (revised) — never accept a monetary /
+    // numeric / punctuation-only line as a supplier candidate. The
+    // founder observed the card title rendering "$810.00 invoice
+    // #1007565767" in place of the vendor — this was possible
+    // because a line containing "$", "%", or pure digits could
+    // otherwise slip through. A real supplier name must contain at
+    // least ONE alphabetic run of 2+ letters.
+    if (/[\$€£%]/.test(line)) continue;
+    if (!/[A-Za-z]{2,}/.test(line)) continue;
+    // Also reject lines dominated by punctuation / digits (>60%).
+    const letters = (line.match(/[A-Za-z]/g) ?? []).length;
+    if (letters < line.length * 0.4) continue;
 
     // Positive: issuer language on the previous line ("Invoice from")
     if (i > 0 && ISSUER_LANGUAGE_RE.test(lines[i - 1])) {

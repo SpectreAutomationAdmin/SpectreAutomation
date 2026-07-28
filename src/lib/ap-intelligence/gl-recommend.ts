@@ -18,7 +18,7 @@
 
 import { prisma } from "@/lib/prisma";
 import type { CapitalClass, CapitalVsOperatingState, ExtractedInvoice } from "./types";
-import { classifyEconomicPurpose, type EconomicPurpose, type PurposeCandidate } from "./economic-purpose";
+import { classifyEconomicPurpose, type PurposeCandidate } from "./economic-purpose";
 
 const RULE_VERSION = 2;
 
@@ -32,8 +32,7 @@ export interface GlEvidence {
     | "CATEGORY_MATCH"         // Category-key contains the semantic term (e.g. "PROFESSIONAL_SERVICES")
     | "FS_GROUP_MATCH"         // FS-Group key contains the semantic term (e.g. "IS_IT_SOFTWARE")
     | "CAPITAL_CLASS_MAP"      // Static capital-class → GL keyword map
-    | "ECONOMIC_PURPOSE"       // Sprint 3 · 15Q — classified economic purpose boosts/penalises accounts
-    | "ECONOMIC_PURPOSE_CONTRA";
+    | "ECONOMIC_PURPOSE";      // Sprint 3 · 15Q — classified economic purpose BOOSTS matching accounts (no contradiction penalty; see gl-recommend.ts revised block)
   description: string;
   score: number;               // 0-100 contribution
 }
@@ -46,7 +45,21 @@ export interface GlCandidate {
   fsGroupKey: string | null;
   confidence: number;          // 0-100 blended from evidence
   evidence: GlEvidence[];
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — posting
+  // eligibility per candidate. `postable` means a journal entry
+  // CAN be posted to this account today. `postingBlockers` names
+  // the specific validation failures if not. Semantic ranking is
+  // INDEPENDENT of postability: the best-semantic account remains
+  // the leader even when blocked (see founder rule).
+  postable: boolean;
+  postingBlockers: PostingBlocker[];
 }
+
+export type PostingBlocker =
+  | "INACTIVE"                       // Account.isActive === false
+  | "HEADER_ACCOUNT"                 // Account.isHeader === true (aggregation only)
+  | "MANUAL_POSTING_DISALLOWED"      // Account.allowManualPosting === false (control-only)
+  | "FUND_APPLICABILITY_UNMAPPED";   // P&L account with fundApplicability === null
 
 export interface GlRecommendation {
   ruleVersion: number;
@@ -57,8 +70,19 @@ export interface GlRecommendation {
   fsGroupKey: string | null;
   confidence: number | null;
   reason: string;
-  source: "CAPITAL_CLASS_MAP" | "VENDOR_DEFAULT" | "PRIOR_CODING" | "NAME_KEYWORD" | "NONE";
+  source: "CAPITAL_CLASS_MAP" | "VENDOR_DEFAULT" | "PRIOR_CODING" | "NAME_KEYWORD" | "ECONOMIC_PURPOSE" | "NONE";
   candidates: GlCandidate[];   // Ranked; first entry mirrors the best-candidate fields above.
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the three
+  // concepts the founder rule separates:
+  //   (1) semantic match      — WHICH account best fits the invoice
+  //   (2) posting eligibility — CAN we post there today
+  //   (3) auto-approval       — MAY we skip human review
+  // `leaderIsPostable` mirrors the leader's `postable` flag for
+  // convenience. `autoApprovalEligible` is TRUE only when the
+  // leader is postable AND confidence >= AUTO_APPROVAL_MIN_CONFIDENCE.
+  leaderIsPostable: boolean;
+  leaderPostingBlockers: PostingBlocker[];
+  autoApprovalEligible: boolean;
 }
 
 export interface GlRecommendationArgs {
@@ -131,22 +155,18 @@ const SEMANTIC_GROUPS: SemanticGroup[] = [
   },
   {
     key: "PROFESSIONAL",
-    // Sprint 3 · Checkpoint 15Q — the bare token "cpa" was removed
-    // from this pattern. It conflated:
-    //   (a) a Chartered Professional Accountants MEMBER ASSOCIATION
-    //       — a licensing body billing its members for annual dues,
-    //   (b) an accounting FIRM — an external service provider.
-    // Category (b) is a professional-fees expense; category (a) is
-    // professional-membership dues (a distinct concept — see
-    // src/lib/ap-intelligence/economic-purpose.ts). Matching (a)
-    // as (b) is the founder-observed 6061 defect. The economic-
-    // purpose classifier now determines which concept applies and
-    // this recommender consults it.
-    //
-    // Firm-naming shapes ("LLP", partnership language, big-4 names)
-    // stay — they're unambiguous accounting firms.
+    // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — "cpa" is
+    // RESTORED to the pattern. Removing it caused a regression:
+    // for tenants WITHOUT a proper Membership Dues account, the
+    // CPA invoice fell through to a less-related account (e.g.
+    // "Score Cards & Printing"). Pre-15Q behaviour was to route
+    // to Accounting Fees — wrong for the actual purpose (membership
+    // dues) but at least in the right family (professional expenses).
+    // The economic-purpose classifier (economic-purpose.ts) still
+    // BOOSTS Membership Dues accounts when the tenant has one, so
+    // improvement is additive — never a regression.
     vendorPatterns: [
-      /\b(law|legal|attorneys?|counsel|accounting\s+services|accounting\s+firm|auditor|kpmg|deloitte|pwc|grant\s*thornton|bdo|LLP)\b/i,
+      /\b(law|legal|attorneys?|counsel|accounting\s+services|accounting\s+firm|auditor|kpmg|deloitte|pwc|grant\s*thornton|bdo|LLP|CPA|cpa)\b/i,
     ],
     accountNamePatterns: [
       /professional\s*fee|legal\s*fee|audit\s*fee|accounting\s*fee|consulting/i,
@@ -253,6 +273,13 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
   // Snapshot the live COA once. All downstream scoring runs off this
   // in-memory list — one DB round-trip per recommendation regardless
   // of how many candidates we consider.
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — retain the
+  // isActive filter (isActive=false means the admin archived the
+  // account; it must not resurface as a recommendation). BUT: the
+  // recommender now surfaces posting-eligibility separately from
+  // semantic match, so an account that is active + best-semantic +
+  // has an unmapped fundApplicability still wins the recommendation
+  // and the caller sees the specific posting blocker to resolve.
   const accounts = await prisma.account.findMany({
     where: { clubId: args.clubId, isActive: true },
     include: {
@@ -283,6 +310,8 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
         defaultExpenseAccount: {
           select: {
             id: true, accountNumber: true, name: true,
+            type: true, isActive: true, isHeader: true,
+            allowManualPosting: true, fundApplicability: true,
             category: { select: { key: true } },
             fsGroup: { select: { key: true } },
           },
@@ -290,18 +319,22 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
       },
     });
     if (vendor?.defaultExpenseAccount) {
+      const dea = vendor.defaultExpenseAccount;
+      const blockers = accountPostingBlockers(dea);
       const c: GlCandidate = {
-        accountId: vendor.defaultExpenseAccount.id,
-        accountNumber: vendor.defaultExpenseAccount.accountNumber,
-        accountName: vendor.defaultExpenseAccount.name,
-        categoryKey: vendor.defaultExpenseAccount.category?.key ?? null,
-        fsGroupKey: vendor.defaultExpenseAccount.fsGroup?.key ?? null,
+        accountId: dea.id,
+        accountNumber: dea.accountNumber,
+        accountName: dea.name,
+        categoryKey: dea.category?.key ?? null,
+        fsGroupKey: dea.fsGroup?.key ?? null,
         confidence: 92,
         evidence: [{
           kind: "VENDOR_DEFAULT",
           description: `Vendor ${vendor.legalName} has this GL as its default expense account.`,
           score: 92,
         }],
+        postable: blockers.length === 0,
+        postingBlockers: blockers,
       };
       return finaliseRecommendation([c], "VENDOR_DEFAULT",
         `Operating expense; using ${vendor.legalName}'s default GL (${c.accountNumber} — ${c.accountName}).`);
@@ -320,6 +353,7 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
       const [topId, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
       const acct = topId ? candidates.find((a) => a.id === topId) : null;
       if (acct && count >= 2) {
+        const blockers = accountPostingBlockers(acct);
         const c: GlCandidate = {
           accountId: acct.id,
           accountNumber: acct.accountNumber,
@@ -332,6 +366,8 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
             description: `Vendor has been coded to ${acct.accountNumber} ${acct.name} on ${count} prior invoice line${count === 1 ? "" : "s"}.`,
             score: Math.min(88, 60 + count * 3),
           }],
+          postable: blockers.length === 0,
+          postingBlockers: blockers,
         };
         return finaliseRecommendation([c], "PRIOR_CODING",
           `Operating expense; vendor's recent coding history points to ${c.accountNumber} — ${c.accountName}.`);
@@ -407,6 +443,8 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
           fsGroupKey: a.fsGroup?.key ?? null,
           confidence: Math.min(95, score),
           evidence,
+          postable: true,           // filled by the post-loop enrichment pass
+          postingBlockers: [],
         });
       }
     }
@@ -421,19 +459,32 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
   // ROLES. Role → account-name matching is a small lookup below.
   const purposeCandidates = classifyPurposeFromExtraction(args.extraction);
   const topPurpose = purposeCandidates[0] ?? null;
-  if (topPurpose && topPurpose.score >= 20) {
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — raised the
+  // confidence gate from 20 to 60. Below 60 the classifier is
+  // seeing partial evidence (e.g. line language without supplier
+  // context, or supplier context without matching line language).
+  // Firing the +55 boost on partial evidence can misroute an
+  // ambiguous invoice (e.g. an AP-received "Member annual dues"
+  // line with no supplier — likely mis-routed member revenue —
+  // would otherwise land on the employee-membership expense
+  // account). The legitimate professional-body membership invoice
+  // scores 75+, comfortably above the gate.
+  if (topPurpose && topPurpose.score >= 60) {
     for (const a of candidates) {
-      const nameHay = `${a.name ?? ""}`.toLowerCase();
-      const roleHit = topPurpose.suggestedAccountRoles.find((role) => {
-        const roleRe = ROLE_NAME_PATTERNS[role];
-        return roleRe && roleRe.test(nameHay);
-      });
+      const roleHit = topPurpose.suggestedAccountRoles.find((role) => accountMatchesRole(role, a));
       if (roleHit) {
-        const boost = 25;
+        // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the boost
+        // is now large enough to promote a matched role above a
+        // legacy NAME_KEYWORD match. Semantic role match on FS Group
+        // or category is the STRONGEST signal — a professional-body
+        // membership invoice landing on account 6064 Membership &
+        // Dues (in FS Group IS_MEMBERSHIPS_SUBS) should always
+        // outrank Accounting Fees or Score Cards & Printing.
+        const boost = 55;
         const existing = scored.get(a.id);
         const evidence: GlEvidence = {
           kind: "ECONOMIC_PURPOSE",
-          description: `Classified purpose "${topPurpose.classificationConcept}" — account name matches role "${roleHit}".`,
+          description: `Classified purpose "${topPurpose.classificationConcept}" — account matches role "${roleHit}" (via name / FS Group / category).`,
           score: boost,
         };
         if (existing) {
@@ -448,34 +499,23 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
             fsGroupKey: a.fsGroup?.key ?? null,
             confidence: Math.min(95, 40 + boost),
             evidence: [evidence],
+            postable: true,           // filled by the post-loop enrichment pass
+            postingBlockers: [],
           });
         }
       }
     }
-    // Contradiction penalty — accounts matching a role that is
-    // CONTRADICTED by the top classifier lose confidence. e.g. when
-    // the top classification is "employee_professional_membership_dues",
-    // any account named "accounting fee" / "audit fee" is penalised.
-    const contradictedRoles = collectContradictedRoles(topPurpose.purpose);
-    for (const a of candidates) {
-      const nameHay = `${a.name ?? ""}`.toLowerCase();
-      const contraHit = contradictedRoles.find((role) => {
-        const re = ROLE_NAME_PATTERNS[role];
-        return re && re.test(nameHay);
-      });
-      if (contraHit) {
-        const existing = scored.get(a.id);
-        if (existing) {
-          const penalty = 25;
-          existing.confidence = Math.max(0, existing.confidence - penalty);
-          existing.evidence.push({
-            kind: "ECONOMIC_PURPOSE_CONTRA",
-            description: `Classified purpose "${topPurpose.classificationConcept}" contradicts role "${contraHit}" — confidence reduced.`,
-            score: -penalty,
-          });
-        }
-      }
-    }
+    // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the
+    // contradiction penalty (-25 on accounts matching a
+    // classifier-contradicted role) was REMOVED. It demoted the
+    // pre-15Q wrong-but-close answer (Accounting Fees for CPA
+    // Alberta on a tenant without Membership Dues) far enough to
+    // let unrelated accounts win (Score Cards & Printing) — a
+    // regression from wrong-but-close to wrong-and-far. The
+    // positive boost above is retained so tenants WITH a proper
+    // Membership Dues account still route to it. When no such
+    // account exists, we don't manufacture demotion — we let the
+    // pre-15Q keyword ranking stand.
   }
 
   // Signal 4: capital-class hints. Only fires when the analyser
@@ -500,8 +540,25 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
             description: `Analyser classified this invoice as ${hint.label}; account name matches the canonical capital-asset vocabulary.`,
             score,
           }],
+          postable: true,           // filled by the post-loop enrichment pass
+          postingBlockers: [],
         });
       }
+    }
+  }
+
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — populate
+  // posting-eligibility on every candidate BEFORE sorting so the
+  // caller can distinguish semantic match from postability.
+  const accountsById = new Map(accounts.map((a) => [a.id, a]));
+  for (const c of scored.values()) {
+    const acct = accountsById.get(c.accountId);
+    if (acct) {
+      c.postingBlockers = accountPostingBlockers(acct);
+      c.postable = c.postingBlockers.length === 0;
+    } else {
+      c.postable = false;
+      c.postingBlockers = [];
     }
   }
 
@@ -514,7 +571,9 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
 
   const best = ranked[0];
   const source: GlRecommendation["source"] =
-    best.evidence.some((e) => e.kind === "CAPITAL_CLASS_MAP") ? "CAPITAL_CLASS_MAP" : "NAME_KEYWORD";
+    best.evidence.some((e) => e.kind === "CAPITAL_CLASS_MAP") ? "CAPITAL_CLASS_MAP"
+    : best.evidence.some((e) => e.kind === "ECONOMIC_PURPOSE") ? "ECONOMIC_PURPOSE"
+    : "NAME_KEYWORD";
   return finaliseRecommendation(
     ranked.slice(0, 5),
     source,
@@ -522,12 +581,23 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
   );
 }
 
+// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — auto-approval
+// requires a postable leader AND high confidence. Threshold is
+// intentionally strict; when in doubt, human review.
+const AUTO_APPROVAL_MIN_CONFIDENCE = 85;
+
 function finaliseRecommendation(
   candidates: GlCandidate[],
   source: GlRecommendation["source"],
   reason: string,
 ): GlRecommendation {
   const best = candidates[0];
+  // Leader posting-eligibility flows through. `autoApprovalEligible`
+  // AND-gates postability with a strict confidence floor: the leader
+  // must be both usable and reliably identified.
+  const leaderIsPostable = best.postable;
+  const leaderPostingBlockers = best.postingBlockers;
+  const autoApprovalEligible = leaderIsPostable && best.confidence >= AUTO_APPROVAL_MIN_CONFIDENCE;
   return {
     ruleVersion: RULE_VERSION,
     accountNumber: best.accountNumber,
@@ -535,9 +605,14 @@ function finaliseRecommendation(
     categoryKey: best.categoryKey,
     fsGroupKey: best.fsGroupKey,
     confidence: best.confidence,
-    reason,
+    reason: leaderIsPostable
+      ? reason
+      : `${reason} Leader account is not currently postable — resolve ${leaderPostingBlockers.join(", ")} before posting.`,
     source,
     candidates,
+    leaderIsPostable,
+    leaderPostingBlockers,
+    autoApprovalEligible,
   };
 }
 
@@ -552,7 +627,32 @@ function emptyRecommendation(reason: string): GlRecommendation {
     reason,
     source: "NONE",
     candidates: [],
+    leaderIsPostable: false,
+    leaderPostingBlockers: [],
+    autoApprovalEligible: false,
   };
+}
+
+// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — posting-blocker
+// derivation. Runs on the full Account row so we can inspect
+// isHeader, allowManualPosting, and fundApplicability (the field
+// the COA UI labels "BLOCKED" when null on a P&L account).
+function accountPostingBlockers(a: {
+  type: string;
+  isActive: boolean;
+  isHeader: boolean;
+  allowManualPosting: boolean;
+  fundApplicability: string | null;
+}): PostingBlocker[] {
+  const blockers: PostingBlocker[] = [];
+  if (!a.isActive) blockers.push("INACTIVE");
+  if (a.isHeader) blockers.push("HEADER_ACCOUNT");
+  if (!a.allowManualPosting) blockers.push("MANUAL_POSTING_DISALLOWED");
+  const isPL = a.type === "REVENUE" || a.type === "EXPENSE";
+  if (isPL && (!a.fundApplicability || a.fundApplicability.trim() === "")) {
+    blockers.push("FUND_APPLICABILITY_UNMAPPED");
+  }
+  return blockers;
 }
 
 function humanReason(c: GlCandidate): string {
@@ -570,13 +670,41 @@ function humaniseMatch(hay: string, pattern: RegExp): string {
 //
 // Role → account-name pattern lookup. When the classifier says the
 // invoice is `employee_professional_membership_dues`, any tenant
-// account named "Membership dues", "Professional development",
-// "Training and dues", etc. becomes a plausible destination. The
-// mapping is generic — no vendor-specific rules — and additive.
+// account named "Membership & Dues", "Memberships & Subscriptions",
+// "Professional Development", "Training & Dues", etc. becomes a
+// plausible destination. The mapping is generic — no vendor-
+// specific rules, no account-number literals — and additive.
+//
+// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — patterns are
+// ORDERING-INVARIANT and connector-agnostic (space / `&` / `and` /
+// hyphen) to match real-club account names like:
+//   "Membership & Dues", "Membership and Dues", "Dues and Memberships",
+//   "Memberships & Subscriptions", "Professional Dues", "Membership Fee",
+//   "Professional Development", "Training & Dues", ...
+// The pre-15Q-revised regex required "membership" and "dues" to be
+// consecutive OR "dues" before "membership" — it missed
+// "Membership & Dues" (Coulee Ridge's actual account 6064) because
+// `&` isn't whitespace + membership came before dues.
+const CONNECTOR = "(?:\\s*[&/-]\\s*|\\s+(?:and|&)\\s+|\\s+)"; // `&`, `-`, ` and `, whitespace
 const ROLE_NAME_PATTERNS: Record<string, RegExp> = {
-  EMPLOYEE_MEMBERSHIP_DUES: /(?:membership\s*(?:dues|fee)|employee\s*(?:membership|dues)|dues\s*(?:and|&)\s*(?:memberships?|subscriptions?))/i,
-  PROFESSIONAL_DEVELOPMENT: /professional\s*(?:development|dues|memberships?)/i,
-  TRAINING_AND_DUES: /training\s*(?:and|&)\s*(?:dues|memberships?)/i,
+  // Any of: "membership(s)", "professional/employee dues", or the
+  // full ordering-invariant "membership & dues" / "dues & memberships".
+  EMPLOYEE_MEMBERSHIP_DUES: new RegExp(
+    `\\bmembership(?:s)?${CONNECTOR}(?:dues|fee|subscription(?:s)?)\\b`
+    + `|\\b(?:dues|subscription(?:s)?)${CONNECTOR}membership(?:s)?\\b`
+    + `|\\bprofessional\\s+dues\\b`
+    + `|\\bemployee\\s+(?:membership|dues)\\b`
+    + `|\\bmembership(?:s)?\\s+(?:dues|fee|expense)\\b`,
+    "i",
+  ),
+  PROFESSIONAL_DEVELOPMENT: /\bprofessional\s*(?:development|dues|memberships?)\b|\bcontinuing\s+(?:education|professional)\b/i,
+  TRAINING_AND_DUES: new RegExp(
+    `\\btraining${CONNECTOR}(?:dues|memberships?|subscription(?:s)?)\\b`
+    + `|\\btraining\\s+(?:and\\s+)?education\\b`,
+    "i",
+  ),
+  SUBSCRIPTIONS: /\bsubscription(?:s)?\b/i,
+  LICENCES_AND_CERTIFICATIONS: /\blicen[sc]e(?:s)?\b|\bcertificat(?:e|ion)(?:s)?\b|\bpermit(?:s)?\b/i,
   ACCOUNTING_AND_AUDIT_FEES: /(?:accounting\s*(?:fee|services?)|audit(?:ing|or)?\s*(?:fee|services?))/i,
   PROFESSIONAL_FEES: /professional\s*fee/i,
   MEMBER_DUES_REVENUE: /member(?:ship)?\s*dues\s*revenue|dues\s*revenue|member\s*revenue/i,
@@ -591,20 +719,57 @@ const ROLE_NAME_PATTERNS: Record<string, RegExp> = {
   GENERAL_EXPENSES: /(?:general\s*(?:expense|admin)|miscellaneous)/i,
 };
 
-// Mapping of concept → the OTHER concept's roles that must be
-// penalised when this concept is the classifier's top pick. This is
-// where the founder-observed misclassification is defended against:
-// membership dues NEVER routes to accounting fees + vice-versa.
-const CONTRADICTED_ROLES_MAP: Partial<Record<EconomicPurpose, string[]>> = {
-  employee_professional_membership_dues: ["ACCOUNTING_AND_AUDIT_FEES"],
-  external_accounting_or_audit_services: ["EMPLOYEE_MEMBERSHIP_DUES", "PROFESSIONAL_DEVELOPMENT"],
-  member_dues_charged_by_club: ["EMPLOYEE_MEMBERSHIP_DUES", "ACCOUNTING_AND_AUDIT_FEES"],
-  penalties_and_late_fees: ["EMPLOYEE_MEMBERSHIP_DUES", "ACCOUNTING_AND_AUDIT_FEES"],
+// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — canonical FS
+// Group + Category keys that should ALSO trigger a role match, in
+// addition to account.name. The recommender previously matched only
+// account.name — accounts whose name doesn't include a hit keyword
+// but which sit in a canonically-labelled group / category were
+// invisible to the boost. Coulee Ridge's 6064 "Membership & Dues"
+// is in FS Group IS_MEMBERSHIPS_SUBS ("Memberships & Subscriptions")
+// — surfacing that group makes the role match land regardless of
+// how the tenant spells the account name.
+const ROLE_TAXONOMY_KEYS: Record<string, { fsGroupKeys: string[]; categoryKeys: string[] }> = {
+  EMPLOYEE_MEMBERSHIP_DUES: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: ["MEMBERSHIPS_SUBSCRIPTIONS"] },
+  PROFESSIONAL_DEVELOPMENT: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: ["PROFESSIONAL_DEVELOPMENT"] },
+  TRAINING_AND_DUES:        { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  SUBSCRIPTIONS:            { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  LICENCES_AND_CERTIFICATIONS: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  ACCOUNTING_AND_AUDIT_FEES: { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: ["PROFESSIONAL_SERVICES"] },
+  PROFESSIONAL_FEES:         { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: ["PROFESSIONAL_SERVICES"] },
+  MEMBER_DUES_REVENUE:       { fsGroupKeys: ["IS_MEMBERSHIP_DUES"],  categoryKeys: ["MEMBERSHIP_REVENUE"] },
+  MEMBERSHIP_REVENUE:        { fsGroupKeys: ["IS_MEMBERSHIP_DUES"],  categoryKeys: ["MEMBERSHIP_REVENUE"] },
+  INTEREST_AND_PENALTIES:    { fsGroupKeys: ["IS_INTEREST_EXPENSE", "IS_BANK_CHARGES"], categoryKeys: [] },
+  BANK_CHARGES:              { fsGroupKeys: ["IS_BANK_CHARGES"],     categoryKeys: [] },
+  TRAINING_AND_EDUCATION:    { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  LICENCES_AND_PERMITS:      { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  REGULATORY_FEES:           { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
+  LEGAL_FEES:                { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
+  CONSULTING_FEES:           { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
+  GENERAL_EXPENSES:          { fsGroupKeys: [], categoryKeys: [] },
 };
 
-function collectContradictedRoles(purpose: EconomicPurpose): string[] {
-  return CONTRADICTED_ROLES_MAP[purpose] ?? [];
+// Does an account (name + FS Group key + category key) match the
+// given role? Any of the three signals is sufficient.
+function accountMatchesRole(
+  role: string,
+  a: { name: string; category: { key: string } | null; fsGroup: { key: string } | null },
+): boolean {
+  const re = ROLE_NAME_PATTERNS[role];
+  if (re && re.test(a.name)) return true;
+  const tax = ROLE_TAXONOMY_KEYS[role];
+  if (tax) {
+    if (a.fsGroup && tax.fsGroupKeys.includes(a.fsGroup.key)) return true;
+    if (a.category && tax.categoryKeys.includes(a.category.key)) return true;
+  }
+  return false;
 }
+
+// Sprint 3 · Checkpoint 15Q (revised) — CONTRADICTED_ROLES_MAP +
+// collectContradictedRoles were REMOVED. They implemented a
+// penalty that regressed the recommendation from "wrong-but-close"
+// (Accounting Fees) to "wrong-and-far" (Score Cards & Printing)
+// on tenants without a Membership Dues account. Positive boost is
+// retained above.
 
 // Derive the classifier inputs from the ExtractedInvoice. Direction
 // defaults to "club_pays_vendor" — every AP-analyser path is AP.

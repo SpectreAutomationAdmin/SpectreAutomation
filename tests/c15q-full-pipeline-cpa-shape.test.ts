@@ -28,7 +28,11 @@ import { prisma } from "@/lib/prisma";
 import { analyseIngestedInvoice } from "@/lib/ap-intelligence/analyse";
 import { ingestAttachment } from "@/lib/documents/ingest";
 import { memoryDocumentStorageAdapter, _resetMemoryDocumentStorage_TEST_ONLY } from "@/lib/documents/storage";
-import { summariseApIntakeForTest } from "@/lib/mission-control/intelligence-review-intakes";
+// Sprint 3 · Checkpoint 15Q (revised) — the card-projection helper
+// (summariseApIntakeForTest) was removed when the presentation
+// layer was reverted per founder direction. Intelligence-engine
+// improvements remain; assertions now target the analyser output
+// directly (ApAnalyseResult), not the card projection.
 
 // Fictional professional-membership-body invoice — SAME SHAPE as the
 // founder-observed regulatory-body member-dues invoice.
@@ -259,30 +263,23 @@ describe("15Q · full-pipeline reprocessing on a professional-body invoice", () 
     }
   });
 
-  it("card projection exposes decomposed confidence + tax + economic-purpose", async () => {
+  it("analyser output contains decomposed confidence + tax + economic-purpose (engine-only; no presentation-layer surface)", async () => {
     const docId = await ingestFixtureDoc();
     const a = await analyseIngestedInvoice({
       clubId: CLUB, ingestedDocumentId: docId,
       extractedTextOverride: PROFESSIONAL_BODY_TEXT,
       emailSenderAddress: "kelly.wentworth@example.com",
     });
-    // The projection is called with an intake-id in production; the
-    // exported helper takes an analysis directly for this test.
-    const projection = summariseApIntakeForTest({
-      clubId: CLUB,
-      analysis: a,
-      senderName: "Kelly Wentworth",
-      senderAddress: "kelly.wentworth@example.com",
-      primaryAttachment: { documentId: docId, filename: "member-dues.pdf" },
-    });
-    expect(projection.confidenceDimensions).not.toBeNull();
-    expect(projection.confidenceDimensions!.supplier.source).toBe("invoice_document");
-    expect(projection.confidenceDimensions!.supplier.confidence).toBeGreaterThan(30);
-    expect(projection.taxReconciliation).not.toBeNull();
-    expect(projection.taxReconciliation!.taxableSubtotal).toBeGreaterThanOrEqual(500);
-    expect(projection.economicPurpose?.top?.purpose).toBe("employee_professional_membership_dues");
-    expect(projection.extractedLineItems?.length ?? 0).toBeGreaterThanOrEqual(3);
-    const invoiceId = projection.identifiers?.find((i) => i.kind === "invoice_number");
+    // Founder rule: the intelligence engine and presentation layer
+    // are independent. The engine MUST compute these dimensions;
+    // the card MUST NOT render them (that's a separate UI checkpoint).
+    // This test asserts the engine only.
+    expect(a.confidenceDimensions.supplier.source).toBe("invoice_document");
+    expect(a.confidenceDimensions.supplier.confidence).toBeGreaterThan(30);
+    expect(a.taxReconciliation.taxableSubtotal).toBeGreaterThanOrEqual(500);
+    expect(a.economicPurpose[0]?.purpose).toBe("employee_professional_membership_dues");
+    expect(a.lineItemsExtracted.length).toBeGreaterThanOrEqual(3);
+    const invoiceId = a.identifiers.find((i) => i.kind === "invoice_number");
     expect(invoiceId?.value).toBe("2026-77812");
   });
 });

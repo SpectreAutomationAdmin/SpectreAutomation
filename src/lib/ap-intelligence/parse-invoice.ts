@@ -11,6 +11,27 @@ import type { ExtractedInvoice, ParseHint } from "./types";
 import { EXTRACTION_RULE_VERSION } from "./types";
 import { extractSupplier, type SupplierExtraction } from "./supplier-extract";
 
+// Sprint 3 · Checkpoint 15Q (revised) — hard reject a supplier-name
+// candidate that contains monetary symbols, is dominantly numeric,
+// or matches an invoice-number shape. This is the last line of
+// defence between the extractors and the card projection, so no
+// downstream renderer ever displays "$810.00" in the vendor slot.
+function isPlausibleSupplierName(value: string): boolean {
+  const s = value.trim();
+  if (!s) return false;
+  if (/[\$€£%]/.test(s)) return false;
+  // Must contain a substantive alphabetic run.
+  if (!/[A-Za-z]{2,}/.test(s)) return false;
+  // Reject invoice-number shapes ("INV-1234567", "1007565767",
+  // "A-20260714") — anything ≥ 5 digits with only optional
+  // dashes / short letter prefix.
+  if (/^[A-Z]{0,4}[-\s]?\d{5,}$/i.test(s)) return false;
+  // Reject if letters are less than 40% of characters.
+  const letters = (s.match(/[A-Za-z]/g) ?? []).length;
+  if (letters < s.length * 0.4) return false;
+  return true;
+}
+
 const CURRENCY_HINTS: Record<string, string> = {
   "USD": "USD",
   "US$": "USD",
@@ -360,29 +381,51 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
 
   const vendorEmail = record("vendor.email", extractVendorEmail(text));
   const vendorTax = record("vendor.taxNumber", extractVendorTaxNumber(text));
-  // Sprint 3 · Checkpoint 15Q — the pre-15Q `extractVendorName` was a
-  // regex-only picker that could return a Bill-To recipient or a
-  // form-header string. The new `extractSupplier` builds a scored
-  // candidate list with positive/negative evidence per candidate,
-  // so the leader is chosen by weight of signals — not "first
-  // corp-suffix line wins". The legacy regex is used only as a
-  // last-ditch tie-breaker when the scored extractor returns null.
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — dual-extractor
+  // strategy. The founder-observed regression: the card title showed
+  // "$810.00 invoice #1007565767" for the CPA Alberta invoice,
+  // which means the extractor returned a value that beat the legacy
+  // regex + failed the card's null-fallback path. To be safe:
+  //   1. Run BOTH the scored extractor and the legacy regex.
+  //   2. Prefer the scored value ONLY when it (a) is non-null, (b)
+  //      passes the plausibility check (no monetary chars, ≥ 2
+  //      letters, at least one substantive positive signal) and
+  //      (c) has confidence ≥ 40. Otherwise defer to the legacy
+  //      value.
+  //   3. NEVER emit a value that starts with "$" / "%" / is
+  //      purely numeric / matches an invoice-number shape — such
+  //      values are junk regardless of which extractor produced them.
   const supplier = extractSupplier(text, {
     senderName: null,   // sender is not passed here — analyse.ts is where sender fallback happens
     senderEmail: args.emailSenderAddress ?? null,
   });
-  let vendorNameFromText: string | null = supplier.value;
-  if (vendorNameFromText) {
+  const legacyName = extractVendorName(text);
+  const scoredCandidateIsSafe =
+    supplier.value != null
+    && supplier.confidence >= 40
+    && isPlausibleSupplierName(supplier.value);
+  let vendorNameFromText: string | null;
+  if (scoredCandidateIsSafe) {
+    vendorNameFromText = supplier.value;
     hints.push({
       field: "vendor.name",
       ruleKey: `supplier.${supplier.reasoningCode}`,
       matchedText: (vendorNameFromText ?? "").slice(0, 120),
     });
+  } else if (legacyName && isPlausibleSupplierName(legacyName.value)) {
+    vendorNameFromText = legacyName.value;
+    hints.push({ ...legacyName.hint, field: "vendor.name" });
+  } else if (supplier.value && isPlausibleSupplierName(supplier.value)) {
+    // Last resort: use the scored extractor even at low confidence,
+    // as long as the value itself is plausible.
+    vendorNameFromText = supplier.value;
+    hints.push({
+      field: "vendor.name",
+      ruleKey: `supplier.${supplier.reasoningCode}.low_confidence`,
+      matchedText: supplier.value.slice(0, 120),
+    });
   } else {
-    // No document-supported supplier — fall back to the legacy
-    // regex hit for backwards compatibility. A `null` return simply
-    // leaves guessedName null for downstream to handle.
-    vendorNameFromText = record("vendor.name", extractVendorName(text));
+    vendorNameFromText = null;
   }
 
   const description = record("description", extractDescription(text) ? {

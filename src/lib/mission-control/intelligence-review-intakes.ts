@@ -278,16 +278,6 @@ export interface LinkedIntelligenceForEmail {
   };
 }
 
-// Sprint 3 · Checkpoint 15Q — per-dimension confidence chip. Every
-// dimension the reviewer needs to trust gets one of these.
-export interface DimensionChip {
-  confidence: number;              // 0..100
-  // Where the value came from — invoice_document, email_sender,
-  // vendor_history, vendor_profile, computed, system_default.
-  source: string;
-  reason: string;
-}
-
 // Sprint 3 Checkpoint 15I-2 — the operational-intelligence
 // projection the Variant D AP invoice card consumes. Every field
 // is nullable — a missing field means "not confidently derived",
@@ -398,61 +388,6 @@ export interface ApInvoiceCardIntelligence {
   // Confidence blended from extraction state + vendor match
   // certainty + reconcile state, expressed as a 0-100 integer.
   confidence: number | null;
-  // Sprint 3 · Checkpoint 15Q — decomposed confidence + provenance.
-  // The founder-rejected pre-15Q behaviour: a single flat 30 %
-  // confidence with no breakdown. Now the card renders one chip per
-  // dimension with the source category next to it. Absent (null) only
-  // when the analyser could not read the PDF.
-  confidenceDimensions: {
-    supplier:              DimensionChip;
-    invoiceNumber:         DimensionChip;
-    dates:                 DimensionChip;
-    lineItemCompleteness:  DimensionChip;
-    taxReconciliation:     DimensionChip;
-    totalReconciliation:   DimensionChip;
-    vendorMatch:           DimensionChip;
-    glClassification:      DimensionChip;
-  } | null;
-  // Sprint 3 · Checkpoint 15Q — tax reconciliation summary. One
-  // outcome per invoice; the numeric breakdown lives here so the
-  // card can render "5% GST on $800 taxable, $75 penalty exempt".
-  taxReconciliation: {
-    outcome: string;
-    taxableSubtotal: number;
-    nonTaxableSubtotal: number;
-    unknownSubtotal: number;
-    inferredRate: number | null;
-    inferredTax: number | null;
-    printedTax: number | null;
-    message: string;
-    actionable: string | null;
-  } | null;
-  // Sprint 3 · Checkpoint 15Q — economic-purpose classification.
-  // The top-1 concept + its supporting signals; alternates are
-  // included so the review UI can offer them if the reviewer
-  // disagrees with the top pick.
-  economicPurpose: {
-    top: { purpose: string; concept: string; score: number; supporting: string[] } | null;
-    alternates: Array<{ purpose: string; concept: string; score: number }>;
-  } | null;
-  // Sprint 3 · Checkpoint 15Q — extracted line items with per-line
-  // tax treatment. Small subset for card rendering (first 8); the
-  // full list is available via the analyser.
-  extractedLineItems: Array<{
-    description: string;
-    amount: number;
-    taxTreatment: string;
-    taxAmount: number | null;
-    evidence: string[];
-  }> | null;
-  // Sprint 3 · Checkpoint 15Q — labelled identifiers. Ensures the
-  // card shows "Invoice Number 92348" separately from "Member
-  // Number 55321" without conflating them.
-  identifiers: Array<{
-    value: string;
-    kind: string;
-    confidence: number;
-  }> | null;
   // Precomputed workflow state — drives the pill, primary action,
   // and recommendation branch on the card. See deriveWorkflowState.
   //
@@ -596,95 +531,6 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     elapsedMs: Date.now() - projectionStart,
   });
   return map;
-}
-
-// Sprint 3 · Checkpoint 15Q — pure projection of analyser outputs
-// into the four card-visible fields (confidence dimensions, tax
-// reconciliation, economic purpose, extracted line items,
-// identifiers). Extracted so both the production summariser and
-// the isolated pipeline test can use it — no DB, no I/O, no cache.
-export function projectAnalyserToCardIntelligence15Q(analysis: ApAnalyseResult | null): {
-  confidenceDimensions: ApInvoiceCardIntelligence["confidenceDimensions"];
-  taxReconciliation: ApInvoiceCardIntelligence["taxReconciliation"];
-  economicPurpose: ApInvoiceCardIntelligence["economicPurpose"];
-  extractedLineItems: ApInvoiceCardIntelligence["extractedLineItems"];
-  identifiers: ApInvoiceCardIntelligence["identifiers"];
-} {
-  return {
-    confidenceDimensions: analysis?.confidenceDimensions ?? null,
-    taxReconciliation: analysis?.taxReconciliation
-      ? {
-          outcome: analysis.taxReconciliation.outcome,
-          taxableSubtotal: analysis.taxReconciliation.taxableSubtotal,
-          nonTaxableSubtotal: analysis.taxReconciliation.nonTaxableSubtotal,
-          unknownSubtotal: analysis.taxReconciliation.unknownSubtotal,
-          inferredRate: analysis.taxReconciliation.inferredRate,
-          inferredTax: analysis.taxReconciliation.inferredTax,
-          printedTax: analysis.taxReconciliation.printedTax,
-          message: analysis.taxReconciliation.message,
-          actionable: analysis.taxReconciliation.actionable,
-        }
-      : null,
-    economicPurpose: analysis?.economicPurpose && analysis.economicPurpose.length > 0
-      ? {
-          top: {
-            purpose: analysis.economicPurpose[0].purpose,
-            concept: analysis.economicPurpose[0].classificationConcept,
-            score: analysis.economicPurpose[0].score,
-            supporting: analysis.economicPurpose[0].supporting.map((s) => s.kind),
-          },
-          alternates: analysis.economicPurpose.slice(1, 4).map((c) => ({
-            purpose: c.purpose,
-            concept: c.classificationConcept,
-            score: c.score,
-          })),
-        }
-      : null,
-    extractedLineItems: analysis?.lineItemsExtracted
-      ? analysis.lineItemsExtracted.slice(0, 8).map((l) => ({
-          description: l.description,
-          amount: l.amount,
-          taxTreatment: l.taxTreatment,
-          taxAmount: l.taxAmount,
-          evidence: l.evidence,
-        }))
-      : null,
-    identifiers: analysis?.identifiers
-      ? analysis.identifiers.slice(0, 8).map((i) => ({
-          value: i.value, kind: i.kind, confidence: i.confidence,
-        }))
-      : null,
-  };
-}
-
-// Test-only projection helper — same shape as summariseApIntake but
-// takes the analyser output directly, skipping the DB lookup and
-// cache. NOT called from production code. Only for the 15Q
-// full-pipeline test to assert the projection contract without
-// requiring a full WorkIntakeItem + Origin fixture graph.
-export function summariseApIntakeForTest(args: {
-  clubId: string;
-  analysis: ApAnalyseResult;
-  senderName: string | null;
-  senderAddress: string | null;
-  primaryAttachment: { documentId: string; filename: string } | null;
-}): Pick<ApInvoiceCardIntelligence,
-  "confidenceDimensions" | "taxReconciliation" | "economicPurpose" | "extractedLineItems" | "identifiers"
-  | "extractedVendor" | "invoiceNumber" | "vendorMatch"
-> {
-  const p = projectAnalyserToCardIntelligence15Q(args.analysis);
-  return {
-    ...p,
-    extractedVendor: { name: args.analysis.extraction.vendor.guessedName ?? null },
-    invoiceNumber: args.analysis.extraction.invoiceNumber ?? null,
-    vendorMatch: {
-      state: args.analysis.vendor.state,
-      matchedName: args.analysis.vendor.state === "MATCHED"
-        ? args.analysis.vendor.candidates[0]?.operatingName ?? args.analysis.vendor.candidates[0]?.legalName ?? null
-        : null,
-      matchedVendorId: args.analysis.vendor.state === "MATCHED" ? args.analysis.vendor.candidates[0]?.id ?? null : null,
-    },
-  };
 }
 
 async function summariseApIntake(clubId: string, intakeId: string): Promise<LinkedIntelligenceForEmail["invoiceSummary"]> {
@@ -906,10 +752,6 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     extractedVendorProfile: analysis?.vendorProfile ?? null,
     invoiceCadenceThisQuarter,
     confidence,
-    // Sprint 3 · Checkpoint 15Q — decomposed confidence + tax +
-    // economic-purpose + line items + identifiers. Pure projection
-    // of the analyser output (see projectAnalyserToCardIntelligence15Q).
-    ...projectAnalyserToCardIntelligence15Q(analysis),
     workflowState,
     workflowReason,
     unresolvedFindingCount,
