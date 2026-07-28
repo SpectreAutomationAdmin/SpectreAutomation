@@ -95,4 +95,74 @@ describe("15Q · no acceptance-invoice hardcoding in production code", () => {
       expect(scanFor(new RegExp(`\\b${amt}\\b`, "g"))).toEqual([]);
     }
   });
+
+  it("no tenant-specific account mappings appear in classifier / recommender code", () => {
+    // The founder rule: GL candidates come from the tenant's actual
+    // Chart of Accounts. Production code must NOT contain any
+    // `clubId === "some-slug"` branch that assigns a specific
+    // GL account number to a specific tenant for this invoice.
+    // This guard catches the shape `clubId === "<literal>"` and
+    // any conditional keyed on a tenant slug like "coulee-ridge".
+    expect(scanFor(/clubId\s*===\s*["'][a-z0-9-]{2,}["']/g)).toEqual([]);
+    expect(scanFor(/\bclubSlug\s*===\s*["'][a-z0-9-]{2,}["']/g)).toEqual([]);
+    // Also: assigning a specific accountNumber to a specific vendor
+    // by name (e.g. `if (vendor === "Provincial Institute") accountNumber = "6070"`).
+    expect(scanFor(/accountNumber\s*=\s*["'][0-9]{4,}["']/g)).toEqual([]);
+  });
+
+  it("no fixture-specific branches (test-only strings) leak into production", () => {
+    // Test fixtures may say "Provincial Institute of Professional Sciences"
+    // or "Institute for Public Accounting Professionals" — production
+    // classifier / recommender code must NOT branch on any such
+    // fixture-specific string. This catches literal-string equality
+    // checks against known test-fixture supplier names.
+    const testFixtureSupplierNames = [
+      "Provincial Institute of Professional Sciences",
+      "Institute for Public Accounting Professionals",
+      "Smith Rowley & Partners LLP",
+      "Riverbend Utilities Inc",
+      "Foothills Landscape Services",
+      "Northland Grounds Supply",
+      "Northside Course Maintenance",
+      "Lakeshore Grounds Services",
+      "Meadowbrook Turf Supplies",
+    ];
+    // Files EXCLUDED from this scan — a small, documented list.
+    // Each entry MUST be a genuine mock / dev-only fixture whose
+    // string literals will be replaced when the real integration
+    // lands. If a new production classifier ever needs a vendor
+    // literal, it must NOT be added here — it must move to config.
+    const EXCLUDED_MOCK_FILES: Array<{ file: string; reason: string }> = [
+      { file: "src/lib/ap/ocr.ts", reason: "Mock OCR adapter (Dext/Veryfi/Textract wires in Phase 7). Dev capture UI needs a stable synthetic vendor set." },
+    ];
+    for (const name of testFixtureSupplierNames) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const hits = scanFor(new RegExp(`\\b${escaped}\\b`, "g"));
+      const productionHits = hits.filter((h) => {
+        const rel = h.file.split(/[\\/]/).slice(-3).join("/");
+        return !EXCLUDED_MOCK_FILES.some((ex) => h.file.replace(/\\/g, "/").endsWith(ex.file));
+      });
+      expect(productionHits, `Fixture supplier name "${name}" leaked into production code`).toEqual([]);
+    }
+  });
+
+  it("no sender email addresses appear as literals in production code", () => {
+    // Founder rule: production code must not branch on the acceptance
+    // sender email. This catches any specific email domain / address
+    // that would function as a per-invoice router.
+    // Legitimate email addresses may appear in fixtures + docs; this
+    // scan is production-only via SCAN_DIRS.
+    // The pattern catches ANY specific email-looking literal in code,
+    // then the assertion filters out KNOWN-OK addresses (e.g. system
+    // service emails, `noreply@`, etc.). Currently no allowlist is
+    // needed — production classifier code should have NO email
+    // literals at all.
+    const hits = scanFor(/["']([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})["']/g);
+    // Filter out obviously-safe hits: none currently. Any future
+    // legitimate email literal (e.g. a "from" address on an outbound
+    // email template) should be moved to config and this guard kept
+    // strict.
+    const forbidden = hits.filter((h) => !h.file.endsWith(".test.ts"));
+    expect(forbidden).toEqual([]);
+  });
 });

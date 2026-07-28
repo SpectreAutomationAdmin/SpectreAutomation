@@ -91,9 +91,18 @@ function baseApFacts(): ApInvoiceCardIntelligence {
     confidence: 62,
     workflowState: "VENDOR_MATCH_REQUIRED",
     workflowReason:
-      "Match Microsoft Corporation to an existing vendor or onboard it, then confirm the proposed coding.",
+      "Match this vendor to an existing record or onboard it, then confirm the proposed coding.",
     unresolvedFindingCount: 1,
-    primaryAttachment: { documentId: "fx-doc-93458", filename: "93458725404.pdf" },
+    // Sprint 3 · Checkpoint 15Q — fidelity fixture is not driven by
+    // the real analyser, so the new decomposed-confidence fields are
+    // absent. The card renders the pre-15Q compact confidence when
+    // this bundle is null.
+    confidenceDimensions: null,
+    taxReconciliation: null,
+    economicPurpose: null,
+    extractedLineItems: null,
+    identifiers: null,
+    primaryAttachment: { documentId: "fx-doc-fidelity", filename: "fidelity-fixture.pdf" },
   };
 }
 

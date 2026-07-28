@@ -785,8 +785,93 @@ function renderApCollapsedBody(
         <span className="k">Recommended</span>
         <span className="v">{ap.workflowReason}</span>
       </div>
+
+      {ap.confidenceDimensions || ap.taxReconciliation || ap.economicPurpose ? (
+        <ApReasoningPanel ap={ap} />
+      ) : null}
     </>
   );
+}
+
+// Sprint 3 · Checkpoint 15Q — decomposed-confidence + reasoning
+// panel. Renders per-dimension confidence chips + tax reconciliation
+// + top economic purpose so the reviewer can see WHY the intelligence
+// layer reached its recommendation. Hidden entirely when the analyser
+// did not populate any of these fields (older DOCUMENT_UNREADABLE
+// paths, fidelity fixtures).
+function ApReasoningPanel({ ap }: { ap: ApInvoiceCardIntelligence }) {
+  const cd = ap.confidenceDimensions;
+  const dims: Array<{ key: string; label: string; chip: { confidence: number; source: string; reason: string } } > = cd
+    ? [
+        { key: "supplier",             label: "Supplier",             chip: cd.supplier },
+        { key: "invoice-number",       label: "Invoice #",            chip: cd.invoiceNumber },
+        { key: "dates",                label: "Dates",                chip: cd.dates },
+        { key: "line-items",           label: "Line items",           chip: cd.lineItemCompleteness },
+        { key: "tax-reconcile",        label: "Tax reconcile",        chip: cd.taxReconciliation },
+        { key: "total-reconcile",      label: "Total reconcile",      chip: cd.totalReconciliation },
+        { key: "vendor-match",         label: "Vendor match",         chip: cd.vendorMatch },
+        { key: "gl-classification",    label: "GL classification",    chip: cd.glClassification },
+      ]
+    : [];
+  return (
+    <div className="spectre-mc-reasoning" data-testid="ap-reasoning-panel" style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--stroke, #e5e7eb)" }}>
+      <div className="spectre-mc-reasoning-title" style={{ fontSize: 11, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--muted, #6b7280)", marginBottom: 6 }}>
+        Reasoning
+      </div>
+      {dims.length > 0 ? (
+        <div className="spectre-mc-reasoning-chips" data-testid="ap-reasoning-chips" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {dims.map((d) => (
+            <span key={d.key} title={`${d.chip.reason} (source: ${d.chip.source})`}
+                  data-testid={`ap-chip-${d.key}`}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 4,
+                    padding: "3px 8px", borderRadius: 999,
+                    fontSize: 11, lineHeight: 1.2,
+                    background: chipBg(d.chip.confidence), color: chipFg(d.chip.confidence),
+                  }}>
+              <span style={{ fontWeight: 600 }}>{d.label}</span>
+              <span>{d.chip.confidence}%</span>
+              <span style={{ opacity: 0.7 }}>· {shortSource(d.chip.source)}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {ap.taxReconciliation ? (
+        <div className="spectre-mc-reasoning-tax" data-testid="ap-reasoning-tax" style={{ fontSize: 12, marginBottom: 6 }}>
+          <strong>Tax:</strong>{" "}
+          {ap.taxReconciliation.message}
+          {ap.taxReconciliation.inferredRate != null && ap.taxReconciliation.taxableSubtotal > 0
+            ? <> Taxable subtotal <strong>${ap.taxReconciliation.taxableSubtotal.toFixed(2)}</strong> @ {ap.taxReconciliation.inferredRate}% = ${(ap.taxReconciliation.inferredTax ?? 0).toFixed(2)} tax.</>
+            : null}
+          {ap.taxReconciliation.nonTaxableSubtotal > 0
+            ? <> Non-taxable subtotal <strong>${ap.taxReconciliation.nonTaxableSubtotal.toFixed(2)}</strong>.</>
+            : null}
+          {ap.taxReconciliation.actionable
+            ? <> <em style={{ color: "var(--warn, #b45309)" }}>{ap.taxReconciliation.actionable}</em></>
+            : null}
+        </div>
+      ) : null}
+      {ap.economicPurpose?.top ? (
+        <div className="spectre-mc-reasoning-purpose" data-testid="ap-reasoning-purpose" style={{ fontSize: 12 }}>
+          <strong>Purpose:</strong> {ap.economicPurpose.top.concept}{" "}
+          <span style={{ opacity: 0.7 }}>({ap.economicPurpose.top.supporting.join(", ") || "no supporting signals"})</span>
+          {ap.economicPurpose.alternates.length > 0
+            ? <> · Alternates: {ap.economicPurpose.alternates.map((a) => a.concept).join(" / ")}</>
+            : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function chipBg(c: number): string {
+  return c >= 85 ? "#dcfce7" : c >= 60 ? "#fef9c3" : "#fee2e2";
+}
+function chipFg(c: number): string {
+  return c >= 85 ? "#166534" : c >= 60 ? "#854d0e" : "#991b1b";
+}
+function shortSource(s: string): string {
+  return s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
 
 // Fallback renderer — for email-derived cards that do NOT have an AP

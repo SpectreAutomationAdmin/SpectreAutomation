@@ -9,7 +9,7 @@
 
 import type { ExtractedInvoice, ParseHint } from "./types";
 import { EXTRACTION_RULE_VERSION } from "./types";
-import { extractSupplier } from "./supplier-extract";
+import { extractSupplier, type SupplierExtraction } from "./supplier-extract";
 
 const CURRENCY_HINTS: Record<string, string> = {
   "USD": "USD",
@@ -124,12 +124,41 @@ function normaliseDateToIso(raw: string): string | null {
 
 function extractMoney(text: string, labels: string[], ruleKeyBase: string) {
   const labelAlt = labels.map((l) => l.replace(/\s+/g, "\\s+")).join("|");
-  // Word-boundary BEFORE the label prevents "Total" from matching
-  // "Subtotal". Non-greedy up-to-20-chars between label and money
-  // supports "HST (5%): 58.50", "Tax @13%: 130.00", etc.
-  return firstMatch(text, [
-    { ruleKey: `${ruleKeyBase}.labeled`, regex: new RegExp(`\\b(?:${labelAlt})\\b[^\\n\\r]{0,20}?${MONEY_TOKEN.source}`, "i") },
-  ]);
+  // Sprint 3 · Checkpoint 15Q — line-scan the labels rather than the
+  // whole-text non-greedy match. The pre-15Q whole-text regex
+  // (`\b(labels)\b[^\n\r]{0,20}?MONEY`) would misfire on
+  // "Tax return preparation                     500.00" — the 20-char
+  // gap allowance is enough to reach the amount, so the tax
+  // extractor mis-attributed a service LINE to the invoice tax
+  // total. The line-scan requires the label to be the leading
+  // significant token on the line AND the tail to end with money.
+  //
+  // Accepted shapes:
+  //   "Subtotal:  7000.00"           labeled + colon
+  //   "GST 5 %:  350.00"             labeled + rate + colon
+  //   "HST (13%): 260.00"            labeled + parenthetical rate
+  //   "Sales Tax  50.00"             labeled + amount only
+  // Rejected:
+  //   "Tax return preparation  500.00" — label followed by word chars
+  // The lookahead forbids the label from being followed by another
+  // ALPHABETIC word (which would make the label part of a longer
+  // phrase like "Tax return preparation"). Space-then-word is
+  // rejected; space-then-digit / colon / paren / % / dash / end is
+  // allowed. This distinguishes "Tax:" from "Tax return".
+  const lineRegex = new RegExp(
+    `^\\s*(?:${labelAlt})(?=\\s*(?:[:=(%\\d\\$\\-]|$))\\s*[^\\n\\r]{0,20}?${MONEY_TOKEN.source}\\s*$`,
+    "i",
+  );
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(lineRegex);
+    if (m && m[1]) {
+      return {
+        value: m[1].trim(),
+        hint: { field: "", ruleKey: `${ruleKeyBase}.labeled`, matchedText: raw.trim().slice(0, 120) },
+      };
+    }
+  }
+  return null;
 }
 
 function extractCurrency(text: string): { value: string; hint: ParseHint } | null {
@@ -266,6 +295,11 @@ export interface ParseArgs {
 export interface ParseResult {
   invoice: ExtractedInvoice;
   hints: ParseHint[];
+  // Sprint 3 · Checkpoint 15Q — the scored supplier extraction that
+  // produced (or failed to produce) vendor.guessedName. Retained on
+  // the parse result so the orchestrator + card projection can render
+  // per-field provenance without re-running the extractor.
+  supplier: SupplierExtraction;
 }
 
 export function parseInvoiceText(args: ParseArgs): ParseResult {
@@ -275,6 +309,10 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
 
   if (text.trim().length === 0) {
     return {
+      supplier: {
+        value: null, normalized: null, source: "system_default",
+        confidence: 0, reasoningCode: "empty_document", candidates: [], alternates: [],
+      },
       invoice: {
         state: "DOCUMENT_UNREADABLE",
         ruleVersion: EXTRACTION_RULE_VERSION,
@@ -310,7 +348,11 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   const purchaseOrder = record("purchaseOrder", extractPurchaseOrder(text));
   const currency = record("currency", extractCurrency(text));
   const subtotalHit = extractMoney(text, ["Subtotal", "Sub Total", "Net", "Charges", "Net Amount", "Sub-Total"], "subtotal");
-  const taxHit = extractMoney(text, ["Sales Tax", "HST", "GST", "Tax Total", "Tax"], "tax");
+  // Sprint 3 · Checkpoint 15Q — accept compound "GST/HST" labels used
+  // by Microsoft-format invoices. Order matters: longest / most-specific
+  // patterns first (GST/HST, HST, GST) so extractMoney picks the correct
+  // one rather than falling through to bare "GST" or "HST".
+  const taxHit = extractMoney(text, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "GST", "HST", "Tax Total", "Tax"], "tax");
   const totalHit = extractMoney(text, ["Invoice Total", "Total Due", "Total", "Amount Due", "Balance Due"], "total");
   if (subtotalHit) { hints.push({ ...subtotalHit.hint, field: "subtotal" }); }
   if (taxHit)      { hints.push({ ...taxHit.hint, field: "taxTotal" }); }
@@ -395,5 +437,6 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
       warnings,
     },
     hints,
+    supplier,
   };
 }

@@ -49,11 +49,37 @@ export interface LineItem {
 
 // A line is a plausible ITEM row when it ends with a currency-like
 // amount and starts with a non-empty description that isn't a
-// summary label.
-const AMOUNT_TAIL_RE = /([+-]?\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\s*$/;
+// summary label. `\d+` (not `\d{1,3}`) allows 4+ digit amounts like
+// 6500.00 to match without being truncated to their last 3 digits.
+const AMOUNT_TAIL_RE = /([+-]?\$?\s*\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*$/;
 
-const SUMMARY_LABEL_RE =
-  /^\s*(?:sub[-\s]?total|tax|total|balance\s+due|amount\s+due|invoice\s+total|payment|thank\s+you|please\s+remit|amount\s+enclosed|balance|make\s+cheque)\b/i;
+// A summary-label row is one whose leading token names a total /
+// subtotal / tax / summary line AND ends with a colon or percentage
+// before the amount. "Tax return preparation  500.00" is NOT such a
+// row — it's a genuine service line. "GST 5 %:  30.00" is.
+const SUMMARY_LEADING_RE =
+  /^\s*(?:sub[-\s]?total|tax|total|balance\s+due|amount\s+due|invoice\s+total|payment|thank\s+you|please\s+remit|amount\s+enclosed|balance|make\s+cheque|penalty|discount|credit|GST|HST|VAT|QST|PST|charges?|shipping|handling)\b/i;
+// The description AFTER the trailing amount is stripped — if it
+// ends with `:` or `%` it's a total / summary line.
+const SUMMARY_TAIL_RE = /[:%]\s*$/;
+function isSummaryRow(line: string, descAfterStrip: string): boolean {
+  if (!SUMMARY_LEADING_RE.test(line)) return false;
+  return SUMMARY_TAIL_RE.test(descAfterStrip);
+}
+
+// Sprint 3 · Checkpoint 15Q — LABEL-VALUE header line rejects.
+// A form-field label with a value on the same line
+// ("Invoice Number: A-20260714", "Invoice Date: 2026-06-01",
+// "GST/HST 234567891RT0001") produces spurious "amounts" for the
+// line-item extractor because the trailing digits satisfy
+// AMOUNT_TAIL_RE. These are NEVER line items.
+const HEADER_LABEL_RE =
+  /^\s*(?:invoice|due|order|customer|po|purchase|reference|ref|member|account|statement|bill\s*to|sold\s*to|ship\s*to|remit|remittance|attn|attention|for|GST|HST|BN|business\s*number|tax\s*(?:registration|id|no)|Vendor\s*id|batch|receipt|voucher|check|cheque)\s*(?:number|no\.?|#|id|date)?\s*[:.]/i;
+
+// A line whose "amount" is actually a date (e.g. 2026 or 2025-12-31)
+// or a phone/order token — reject.
+const DATE_LIKE_LINE_RE = /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{4}\b\s*$|\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b/;
+const IDLIKE_TAIL_RE = /[-A-Z]\d{4,}\s*$/;
 
 // Row wording that means "not taxable" in Canadian tax practice.
 const PENALTY_RE = /\b(?:penalty|late[-\s]?fee|late[-\s]?payment|finance\s+charge|interest|nsf|returned\s+cheque)\b/i;
@@ -97,8 +123,11 @@ export function extractLineItems(text: string): LineItem[] {
     if (GROUP_TAXABLE_HEADER_RE.test(line)) { groupContext.push({ from: i, kind: "taxable" }); continue; }
     if (GROUP_NON_TAXABLE_HEADER_RE.test(line)) { groupContext.push({ from: i, kind: "non_taxable" }); continue; }
 
-    // Skip summary rows entirely.
-    if (SUMMARY_LABEL_RE.test(line)) continue;
+    // Skip label:value header rows ("Invoice Number: X", "Due Date: Y",
+    // "GST/HST 234567891RT0001") — the trailing digits are IDs / dates,
+    // not amounts.
+    if (HEADER_LABEL_RE.test(line)) continue;
+    if (IDLIKE_TAIL_RE.test(line)) continue;
 
     // A candidate line item ends with a currency-like tail.
     const tail = line.match(AMOUNT_TAIL_RE);
@@ -106,12 +135,19 @@ export function extractLineItems(text: string): LineItem[] {
     const amountStr = tail[1];
     const amount = Number(amountStr.replace(/[$,\s]/g, ""));
     if (!Number.isFinite(amount) || amount === 0) continue;
+    // Amounts MUST have a decimal component (real invoice line items
+    // carry cents). Bare integers appearing at the end of a line are
+    // usually part of an identifier ("PO 4400", "Order #202"), not
+    // a monetary value.
+    if (!amountStr.includes(".")) continue;
 
     // Description = everything before the trailing amount.
     const description = line.slice(0, line.length - amountStr.length).trim();
     if (!description || description.length > MAX_DESCRIPTION_LEN) continue;
-    // Reject rows whose description IS just a label / date.
-    if (SUMMARY_LABEL_RE.test(description)) continue;
+    // Skip summary rows: leading token is a summary label AND
+    // description ends with `:` or `%`. "Tax return preparation" is
+    // a genuine service line even though it starts with "tax".
+    if (isSummaryRow(line, description)) continue;
 
     // Extract optional qty and unit price from within the description
     // (only when at least two currency-like tokens live in the middle).

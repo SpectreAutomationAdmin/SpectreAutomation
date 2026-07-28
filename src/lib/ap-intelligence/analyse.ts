@@ -29,6 +29,14 @@ import type { ExtractedInvoice, ParseHint } from "./types";
 import { EXTRACTION_RULE_VERSION } from "./types";
 import type { FindingInput } from "@/lib/intelligence/types";
 import type { DocumentStorageAdapter } from "@/lib/documents/types";
+// Sprint 3 · Checkpoint 15Q — orchestrator now consumes the four
+// generalized invoice-intelligence modules directly (previously they
+// were unit-tested helpers). Their outputs become card provenance.
+import type { SupplierExtraction } from "./supplier-extract";
+import { extractLineItems, type LineItem } from "./line-items-extract";
+import { reconcileTax, type TaxReconciliation } from "./tax-reconcile";
+import { extractIdentifiers, type IdentifierCandidate } from "./identifier-taxonomy";
+import { classifyEconomicPurpose, type PurposeCandidate } from "./economic-purpose";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -60,7 +68,45 @@ export interface ApAnalyseResult {
   // registration, terms). Every field carries per-field confidence
   // + provenance so the Create Vendor modal can render trust chips.
   vendorProfile: ExtractedVendorProfile;
+  // Sprint 3 · Checkpoint 15Q — the four generalized invoice-
+  // intelligence outputs, wired through to the card projection so
+  // the review UI can render per-dimension confidence + provenance.
+  supplier: SupplierExtraction;
+  lineItemsExtracted: LineItem[];
+  taxReconciliation: TaxReconciliation;
+  identifiers: IdentifierCandidate[];
+  economicPurpose: PurposeCandidate[];
+  // Decomposed confidence — one integer per dimension. Card renders
+  // each as a chip; the founder can see WHY overall confidence is
+  // whatever it is instead of a single opaque number.
+  confidenceDimensions: ConfidenceDimensions;
 }
+
+// Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
+// per operational judgement the reviewer needs to trust. Each is a
+// 0-100 integer; the card renders per-dimension chips.
+export interface ConfidenceDimensions {
+  supplier: DimensionResult;
+  invoiceNumber: DimensionResult;
+  dates: DimensionResult;
+  lineItemCompleteness: DimensionResult;
+  taxReconciliation: DimensionResult;
+  totalReconciliation: DimensionResult;
+  vendorMatch: DimensionResult;
+  glClassification: DimensionResult;
+}
+export interface DimensionResult {
+  confidence: number;              // 0..100
+  source: DimensionSource;
+  reason: string;
+}
+export type DimensionSource =
+  | "invoice_document"
+  | "email_sender"
+  | "vendor_history"
+  | "vendor_profile"
+  | "computed"
+  | "system_default";
 
 export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAnalyseResult> {
   const doc = await prisma.ingestedDocument.findFirst({
@@ -167,6 +213,46 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     extraction,
   });
 
+  // Sprint 3 · Checkpoint 15Q — run the four generalized modules on
+  // the same source text so the card projection can render per-
+  // dimension confidence + provenance. Each of these is deterministic
+  // and side-effect-free; safe to run inside the analyser.
+  const supplierExtraction = parsed.supplier;
+  const lineItemsExtracted: LineItem[] = pdfOk ? extractLineItems(pdfText) : [];
+  const identifiers: IdentifierCandidate[] = pdfOk ? extractIdentifiers(pdfText) : [];
+  const printedSubtotal = extraction.subtotal ? Number(extraction.subtotal) : null;
+  const printedTax = extraction.taxTotal ? Number(extraction.taxTotal) : null;
+  const printedTotal = extraction.total ? Number(extraction.total) : null;
+  const taxReconciliation = reconcileTax({
+    lines: lineItemsExtracted,
+    printedSubtotal,
+    printedTax,
+    printedTotal,
+  });
+  const economicPurpose = classifyEconomicPurpose({
+    supplierName: extraction.vendor.guessedName,
+    lineDescriptions: lineItemsExtracted.map((l) => l.description),
+    paymentDirection: "club_pays_vendor",
+    hasPenaltyLine: lineItemsExtracted.some(
+      (l) => l.taxTreatment === "exempt" && l.evidence.includes("penalty_or_finance_charge"),
+    ),
+    hasMembershipLine: lineItemsExtracted.some((l) => /\b(?:membership|annual\s+dues|professional\s+dues|member(?:ship)?\s+fee)\b/i.test(l.description)),
+    hasProfessionalCredentialContext:
+      extraction.vendor.guessedName != null
+      && /\b(?:association|society|college|institute|order\s+of|academy|federation|chartered)\b/i.test(extraction.vendor.guessedName),
+  });
+  const confidenceDimensions = computeConfidenceDimensions({
+    supplierExtraction,
+    extraction,
+    lineItemsExtracted,
+    taxReconciliation,
+    printedSubtotal,
+    printedTax,
+    printedTotal,
+    vendorResolve: vendor,
+    gl,
+  });
+
   // ---- Assemble findings for WorkIntakeFinding persistence ---------------
   const findings: FindingInput[] = [];
   const evidenceRefs = [
@@ -267,8 +353,152 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     findings,
     extractionTextLength: extraction.extractedTextChars,
     vendorProfile,
+    supplier: supplierExtraction,
+    lineItemsExtracted,
+    taxReconciliation,
+    identifiers,
+    economicPurpose,
+    confidenceDimensions,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 15Q — per-dimension confidence
+// ---------------------------------------------------------------------------
+//
+// Each dimension is a 0-100 integer with a named source. Two design
+// rules:
+//   1. Never invent a confidence — return 0/system_default when the
+//      underlying signal is missing.
+//   2. The source category is the AUTHORITATIVE origin of the value
+//      (invoice_document, email_sender, vendor_history, vendor_profile,
+//      computed, system_default). The card renders this alongside
+//      the score so the reviewer sees WHERE the extraction came from.
+
+function computeConfidenceDimensions(args: {
+  supplierExtraction: SupplierExtraction;
+  extraction: ExtractedInvoice;
+  lineItemsExtracted: LineItem[];
+  taxReconciliation: TaxReconciliation;
+  printedSubtotal: number | null;
+  printedTax: number | null;
+  printedTotal: number | null;
+  vendorResolve: VendorResolveResult;
+  gl: GlRecommendation;
+}): ConfidenceDimensions {
+  const {
+    supplierExtraction, extraction, lineItemsExtracted, taxReconciliation,
+    printedSubtotal, printedTax, printedTotal, vendorResolve, gl,
+  } = args;
+
+  const supplier: DimensionResult = {
+    confidence: supplierExtraction.confidence,
+    source: supplierExtraction.source === "invoice_document" ? "invoice_document"
+      : supplierExtraction.source === "email_sender" ? "email_sender"
+      : "system_default",
+    reason: `Supplier reasoning: ${supplierExtraction.reasoningCode}.`,
+  };
+
+  const invoiceNumberHint = extraction.invoiceNumber ? 85 : 0;
+  const invoiceNumber: DimensionResult = {
+    confidence: invoiceNumberHint,
+    source: extraction.invoiceNumber ? "invoice_document" : "system_default",
+    reason: extraction.invoiceNumber
+      ? "Invoice number matched a labelled 'Invoice Number' / 'INV-…' pattern."
+      : "No invoice number extracted from the document.",
+  };
+
+  const hasBothDates = extraction.invoiceDate && extraction.dueDate;
+  const dates: DimensionResult = {
+    confidence: hasBothDates ? 90 : extraction.invoiceDate || extraction.dueDate ? 65 : 0,
+    source: extraction.invoiceDate || extraction.dueDate ? "invoice_document" : "system_default",
+    reason: hasBothDates
+      ? "Invoice date and due date extracted."
+      : extraction.invoiceDate
+        ? "Invoice date extracted; due date not found."
+        : extraction.dueDate
+          ? "Due date extracted; invoice date not found."
+          : "Neither invoice nor due date extracted.",
+  };
+
+  const linesCount = lineItemsExtracted.length;
+  const hasSubtotal = printedSubtotal != null;
+  const lineItemCompleteness: DimensionResult = {
+    confidence: linesCount === 0 ? 0
+      : hasSubtotal && Math.abs(sum(lineItemsExtracted.map((l) => l.amount)) - printedSubtotal) < 0.02 ? 92
+      : linesCount >= 1 ? 55
+      : 0,
+    source: linesCount > 0 ? "invoice_document" : "system_default",
+    reason: linesCount === 0
+      ? "No line items extracted from the invoice body."
+      : hasSubtotal
+        ? `${linesCount} line item(s) extracted; sum reconciles to printed subtotal within tolerance.`
+        : `${linesCount} line item(s) extracted; no printed subtotal to reconcile against.`,
+  };
+
+  const taxRec: DimensionResult = {
+    confidence: taxReconciliation.outcome === "reconciled_single_rate" ? 90
+      : taxReconciliation.outcome === "reconciled_no_tax" ? 85
+      : taxReconciliation.outcome === "unresolved_ambiguous" ? 45
+      : 30,
+    source: taxReconciliation.outcome.startsWith("reconciled") ? "computed" : "system_default",
+    reason: taxReconciliation.message,
+  };
+
+  const totalReconcile: DimensionResult = (() => {
+    if (printedSubtotal == null || printedTax == null || printedTotal == null) {
+      return {
+        confidence: 0,
+        source: "system_default",
+        reason: "Insufficient printed totals to reconcile.",
+      };
+    }
+    const derived = round2(printedSubtotal + printedTax);
+    const diff = Math.abs(derived - printedTotal);
+    if (diff <= 0.02) {
+      return {
+        confidence: 95,
+        source: "computed",
+        reason: `Subtotal + tax = ${derived.toFixed(2)} reconciles to printed total ${printedTotal.toFixed(2)}.`,
+      };
+    }
+    return {
+      confidence: 35,
+      source: "computed",
+      reason: `Printed total ${printedTotal.toFixed(2)} does not match subtotal + tax = ${derived.toFixed(2)} (diff ${diff.toFixed(2)}).`,
+    };
+  })();
+
+  const vendorMatch: DimensionResult = (() => {
+    switch (vendorResolve.state) {
+      case "MATCHED":
+        return { confidence: 90, source: "vendor_history", reason: `Matched to Spectre vendor ${vendorResolve.candidates[0]?.legalName ?? "record"}.` };
+      case "AMBIGUOUS":
+        return { confidence: 45, source: "computed", reason: `${vendorResolve.candidates.length} vendor candidates — reviewer must disambiguate.` };
+      case "NOT_FOUND":
+        return { confidence: 20, source: "computed", reason: "No matching Spectre vendor record — will create one." };
+      case "INSUFFICIENT_SIGNAL":
+      default:
+        return { confidence: 0, source: "system_default", reason: "Insufficient extraction signal to attempt vendor match." };
+    }
+  })();
+
+  const glClassification: DimensionResult = (() => {
+    if (gl.source === "NONE" || gl.confidence == null) {
+      return { confidence: 0, source: "system_default", reason: gl.reason };
+    }
+    const src: DimensionSource =
+      gl.source === "VENDOR_DEFAULT" ? "vendor_profile"
+      : gl.source === "PRIOR_CODING" ? "vendor_history"
+      : "computed";
+    return { confidence: gl.confidence, source: src, reason: gl.reason };
+  })();
+
+  return { supplier, invoiceNumber, dates, lineItemCompleteness, taxReconciliation: taxRec, totalReconciliation: totalReconcile, vendorMatch, glClassification };
+}
+
+function sum(nums: number[]): number { return nums.reduce((a, n) => a + n, 0); }
+function round2(n: number): number { return Math.round(n * 100) / 100; }
 
 async function loadBytes(clubId: string, storageKey: string, override: DocumentStorageAdapter | undefined): Promise<Buffer | null> {
   if (override) return override.get({ storageKey });
