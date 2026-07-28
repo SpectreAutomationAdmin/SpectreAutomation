@@ -68,6 +68,11 @@ export const PERMISSIONS = {
   "vendor:approve":           { name: "Approve vendors for use",              category: "AP" },
   "vendor:banking:edit":      { name: "Add/modify vendor banking",            category: "AP" },
   "vendor:banking:approve":   { name: "Verify and activate vendor banking",   category: "AP" },
+  // 15P-4: vendor deletion is a distinct grant from vendor:edit.
+  // The server-side action refuses hard-delete on vendors with
+  // financial history; roles without this permission cannot invoke
+  // the delete action at all.
+  "vendor:delete":            { name: "Delete vendors (safe-delete only)",    category: "AP" },
   "ap:invoice:view":          { name: "View AP invoices",                     category: "AP" },
   "ap:invoice:create":        { name: "Create AP invoice drafts",             category: "AP" },
   "ap:invoice:edit":          { name: "Edit AP invoice drafts",               category: "AP" },
@@ -239,7 +244,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // delegation works without code changes.
     "gl:read", "coa:read",
     "ap:read",
-    "vendor:view", "vendor:create", "vendor:edit", "vendor:approve",
+    "vendor:view", "vendor:create", "vendor:edit", "vendor:approve", "vendor:delete",
     "vendor:banking:edit", "vendor:banking:approve",
     "ap:invoice:view", "ap:invoice:create", "ap:invoice:edit", "ap:invoice:approve",
     "ap:invoice:post", "ap:invoice:void",
@@ -323,7 +328,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "gl:read", "gl:post", "gl:reverse", "gl:close_period",
     "coa:read", "coa:write",
     "ap:read",
-    "vendor:view", "vendor:create", "vendor:edit", "vendor:approve",
+    "vendor:view", "vendor:create", "vendor:edit", "vendor:approve", "vendor:delete",
     "vendor:banking:edit", "vendor:banking:approve",
     "ap:invoice:view", "ap:invoice:create", "ap:invoice:edit",
     "ap:invoice:approve", "ap:invoice:post", "ap:invoice:void",

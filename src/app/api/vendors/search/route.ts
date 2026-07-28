@@ -69,7 +69,7 @@ export interface VendorSearchMatch {
   fieldsCompared: number;
   matchedWeight: number;
   differedWeight: number;
-  availableEvidenceWeight: number;
+  netEvidenceWeight: number;
   rankingScore: number;   // integer 0..100, for sort tie-breaking only
 
   // Human-facing summary (kept for backward compatibility with
@@ -106,7 +106,7 @@ export async function POST(req: Request) {
       fieldsCompared: ev.fieldsCompared,
       matchedWeight: ev.matchedWeight,
       differedWeight: ev.differedWeight,
-      availableEvidenceWeight: ev.availableEvidenceWeight,
+      netEvidenceWeight: ev.netEvidenceWeight,
       rankingScore: ev.rankingScore,
       matchEvidence: buildEvidenceSummary(ev.classification, ev.matchedFields.length, ev.differedFields.length),
     };

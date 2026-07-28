@@ -51,6 +51,15 @@ const HUMAN: Record<PaymentTermsSource, string> = {
   SPECTRE_DEFAULT: "Spectre default",
 };
 
+// 15P-4: auto-pay carries its own provenance label. Founder-observed
+// defect: displaying "Net 0 · From invoice PDF" when the extractor
+// actually detected AUTO_PAY misrepresents the evidence. Auto-pay is
+// a payment METHOD, not a payment TERMS window — the vendor charges
+// automatically, so from the AP module's perspective the due date IS
+// the invoice date, but the user-facing label must read "Auto-pay"
+// rather than "Net 0" so the operator understands why.
+const AUTO_PAY_PROVENANCE = "Auto-pay — charged automatically";
+
 export interface ResolvePaymentTermsInput {
   // Vendor row's own paymentTermsDays (already-agreed policy). Null
   // when the vendor doesn't exist yet OR when the vendor row leaves
@@ -101,7 +110,9 @@ export function resolvePaymentTerms(
         source: "INVOICE_PDF",
         label: "Auto-pay",
         isAutoPay: true,
-        provenanceHuman: HUMAN.INVOICE_PDF,
+        // 15P-4: honest provenance — the extractor found auto-pay
+        // wording, not literally Net 0 terms.
+        provenanceHuman: AUTO_PAY_PROVENANCE,
       };
     }
     if (input.extractedTerms.kind === "NET_DAYS" && Number.isFinite(input.extractedTerms.days)) {

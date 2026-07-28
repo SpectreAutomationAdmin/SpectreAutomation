@@ -232,6 +232,134 @@ export async function deactivateVendor(principal: Principal, vendorId: string) {
   return updated;
 }
 
+// Sprint 3 · Checkpoint 15P-4 (2026-07-28) — vendor deletion with a
+// hard safe-delete gate.
+//
+// Founder rule (§Safe deletion behaviour): "Do not blindly hard-
+// delete a vendor with financial history." We enumerate every
+// foreign-key reference before deciding:
+//
+//   • no financial / operational history  → hard delete (cascades
+//     VendorContact rows via the existing schema onDelete:Cascade;
+//     everything else is guaranteed empty by the pre-check)
+//   • ANY posted invoice, payment, banking profile, penny test,
+//     inventory receiving, purchase-order-like record, or non-DRAFT
+//     status flip                          → refuse, tell the
+//     caller to deactivate instead
+//
+// The dependency probe runs BEFORE the delete so we never begin a
+// destructive transaction that has to be rolled back.
+export type VendorDependencyDetail = {
+  invoices: number;
+  payments: number;
+  bankingProfiles: number;
+  pennyTests: number;
+  inventoryReceivings: number;
+  inventoryItems: number;
+  aliases: number;
+  statementReconciliations: number;
+  documents: number;
+  riskFlags: number;
+};
+export interface VendorDeleteBlocked {
+  ok: false;
+  reason: "HAS_FINANCIAL_HISTORY";
+  details: VendorDependencyDetail;
+  message: string;
+}
+export interface VendorDeleteSuccess {
+  ok: true;
+  vendorId: string;
+  vendorLegalName: string;
+}
+
+export async function probeVendorDependencies(clubId: string, vendorId: string): Promise<VendorDependencyDetail> {
+  // Tenant-scoped counts — never leak cross-tenant references. Kept
+  // to a single Promise.all round-trip.
+  const [
+    invoices, payments, bankingProfiles, pennyTests,
+    inventoryReceivings, inventoryItems, aliases, statementReconciliations,
+    documents, riskFlags,
+  ] = await Promise.all([
+    prisma.aPInvoice.count({                     where: { clubId, vendorId } }),
+    prisma.vendorPayment.count({                 where: { clubId, vendorId } }),
+    prisma.vendorBankingProfile.count({          where: { clubId, vendorId } }),
+    prisma.pennyTest.count({                     where: { clubId, vendorId } }),
+    prisma.inventoryReceiving.count({            where: { clubId, vendorId } }),
+    prisma.inventoryItem.count({                 where: { clubId, preferredVendorId: vendorId } }),
+    prisma.vendorAlias.count({                   where: { canonicalVendorId: vendorId } }),
+    prisma.vendorStatementReconciliation.count({ where: { clubId, canonicalVendorId: vendorId } }),
+    prisma.vendorDocument.count({                where: { clubId, vendorId } }),
+    prisma.vendorRiskFlag.count({                where: { clubId, vendorId } }),
+  ]);
+  return {
+    invoices, payments, bankingProfiles, pennyTests,
+    inventoryReceivings, inventoryItems, aliases,
+    statementReconciliations, documents, riskFlags,
+  };
+}
+
+/**
+ * Delete a vendor. Refuses when the vendor has any financial or
+ * operational history. Success cascades VendorContact rows via the
+ * schema (onDelete: Cascade). Audited either way.
+ *
+ * RBAC gate: `vendor:delete` (granted to CLUB_ADMIN + CONTROLLER by
+ * default; NOT granted to AP reviewer / auditor roles).
+ */
+export async function deleteVendor(
+  principal: Principal,
+  vendorId: string,
+): Promise<VendorDeleteSuccess | VendorDeleteBlocked> {
+  const vendor = await prisma.vendor.findUnique({
+    where: { id: vendorId },
+    select: { id: true, clubId: true, legalName: true, status: true },
+  });
+  assertTenantOwned(vendor, principal);
+  requirePermission(principal, vendor.clubId, "vendor:delete");
+
+  const deps = await probeVendorDependencies(vendor.clubId, vendor.id);
+  const totalRefs =
+    deps.invoices + deps.payments + deps.bankingProfiles + deps.pennyTests +
+    deps.inventoryReceivings + deps.inventoryItems + deps.aliases +
+    deps.statementReconciliations + deps.documents + deps.riskFlags;
+
+  if (totalRefs > 0) {
+    // Emit an audit trail for the REFUSED attempt so blocked
+    // deletions are still visible in the tenant's audit history.
+    await audit(principal, {
+      action: "vendor.delete.blocked",
+      entityType: "Vendor", entityId: vendor.id, clubId: vendor.clubId,
+      after: { reason: "HAS_FINANCIAL_HISTORY", dependencies: deps },
+    });
+    return {
+      ok: false,
+      reason: "HAS_FINANCIAL_HISTORY",
+      details: deps,
+      message: `${vendor.legalName} has posted financial or operational history and cannot be deleted. Deactivate the vendor instead.`,
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // VendorContact rows cascade via schema. Explicit contact
+    // wipe kept as belt-and-braces so tenants that migrated from a
+    // schema without onDelete:Cascade still delete cleanly.
+    await tx.vendorContact.deleteMany({ where: { vendorId: vendor.id } });
+    await tx.vendor.delete({ where: { id: vendor.id } });
+  }, { timeout: 30_000, maxWait: 10_000 });
+
+  await audit(principal, {
+    action: "vendor.delete",
+    entityType: "Vendor", entityId: vendor.id, clubId: vendor.clubId,
+    before: {
+      legalName: vendor.legalName, status: vendor.status,
+    },
+    after: null,
+  });
+
+  return { ok: true, vendorId: vendor.id, vendorLegalName: vendor.legalName };
+}
+
 // ---------- Banking ----------
 export const bankingCreateSchema = z.object({
   type: z.enum(["EFT", "WIRE", "CHEQUE"]).default("EFT"),

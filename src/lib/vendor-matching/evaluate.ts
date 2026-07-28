@@ -19,9 +19,11 @@
 //
 //   evidenceCoverage       = matchedWeight / MAX_POSSIBLE_WEIGHT
 //
-//   availableEvidenceWeight = matchedWeight − differedWeight
+//   netEvidenceWeight       = matchedWeight − differedWeight
 //                             (kept in the response so clients can
 //                              display a signed "net evidence" figure)
+//                             15P-4 rename from the misleading
+//                             `netEvidenceWeight`.
 //
 //   rankingScore           = round( 100 · agreement · sqrt(evidenceCoverage) )
 //
@@ -82,7 +84,7 @@ export interface VendorMatchEvaluation {
   matchedWeight: number;
   differedWeight: number;
   comparableWeight: number;
-  availableEvidenceWeight: number;   // matched - differed
+  netEvidenceWeight: number;   // matched - differed
   agreement: number;                 // 0..1
   evidenceCoverage: number;          // 0..1
   rankingScore: number;              // integer 0..100 — for internal sorting
@@ -107,7 +109,7 @@ export function evaluateVendorMatch(
   const matchedWeight    = matched.reduce((a, r) => a + r.weight, 0);
   const differedWeight   = differed.reduce((a, r) => a + r.weight, 0);
   const comparableWeight = matchedWeight + differedWeight;
-  const availableEvidenceWeight = matchedWeight - differedWeight;
+  const netEvidenceWeight = matchedWeight - differedWeight;
 
   const agreement = comparableWeight > 0 ? matchedWeight / comparableWeight : 0;
   const evidenceCoverage = matchedWeight / MAX_POSSIBLE_WEIGHT;
@@ -136,7 +138,7 @@ export function evaluateVendorMatch(
     matchedWeight,
     differedWeight,
     comparableWeight,
-    availableEvidenceWeight,
+    netEvidenceWeight,
     agreement,
     evidenceCoverage,
     rankingScore,

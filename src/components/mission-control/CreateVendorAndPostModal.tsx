@@ -71,6 +71,12 @@ export interface CreateVendorAndPostModalProps {
   // matched vendor row that Step 2 codes against.
   preselectedVendorId?: string;
   preselectedVendorName?: string;
+  // 15P-4: when the AP card auto-resolved the vendor via the shared
+  // `resolveModalEntry` rule, this flag switches the modal to the
+  // single-step AP-Coding-only presentation (no two-step progress
+  // header, compact vendor summary + "Review/change vendor" action).
+  // When true, `preselectedVendorId` MUST be set.
+  autoResolvedVendor?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +141,7 @@ interface PossibleMatch {
   fieldsCompared: number;
   matchedWeight: number;
   differedWeight: number;
-  availableEvidenceWeight: number;
+  netEvidenceWeight: number;
   rankingScore: number;
   lastInvoiceDate: string | null;
 }
@@ -147,6 +153,7 @@ type Step = "PROFILE" | "AP_CODING" | "SAVED_FOR_LATER";
 export default function CreateVendorAndPostModal({
   open, onClose, ap, workIntakeItemId,
   initialStep, preselectedVendorId, preselectedVendorName,
+  autoResolvedVendor,
 }: CreateVendorAndPostModalProps) {
   const router = useRouter();
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -156,6 +163,15 @@ export default function CreateVendorAndPostModal({
   // vendor id, skip Step 1 entirely and open on the coding review.
   const openDirectAtStep2 =
     initialStep === "AP_CODING" && !!preselectedVendorId;
+
+  // 15P-4: auto-resolved vendors get a SINGLE-STEP modal (no two-
+  // step progress header). The user can reveal Vendor Profile via
+  // the "Review / change vendor" action at the top of AP Coding.
+  // `reviewingVendor` tracks whether the user chose to review; once
+  // true, the modal renders the two-step header + supports free
+  // back-and-forth navigation between the two steps.
+  const [reviewingVendor, setReviewingVendor] = useState(false);
+  const isAutoResolvedSingleStep = !!autoResolvedVendor && openDirectAtStep2 && !reviewingVendor;
 
   const [step, setStep] = useState<Step>(openDirectAtStep2 ? "AP_CODING" : "PROFILE");
   const [submitting, setSubmitting] = useState(false);
@@ -275,6 +291,11 @@ export default function CreateVendorAndPostModal({
   const [preview, setPreview] = useState<ProposedApEntry | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // 15P-4: when Next.js can't find a server-action hash (stale
+  // deploy race) the client gets undefined back from the RPC. The
+  // preview useEffect flips this on and renders an actionable
+  // "Refresh the page" panel instead of a raw exception.
+  const [staleDeploy, setStaleDeploy] = useState(false);
 
   // Possible existing matches.
   const [matches, setMatches] = useState<PossibleMatch[]>([]);
@@ -370,6 +391,8 @@ export default function CreateVendorAndPostModal({
     setCreatedVendorName(preselectedVendorName ?? null);
     setPreview(null);
     setPreviewError(null);
+    setStaleDeploy(false);
+    setReviewingVendor(false);
   }, [open, openDirectAtStep2, preselectedVendorId, preselectedVendorName]);
 
   // 15P-2: fetch (or refresh) the journal preview whenever we're
@@ -390,8 +413,16 @@ export default function CreateVendorAndPostModal({
     const t = window.setTimeout(async () => {
       setPreviewLoading(true);
       setPreviewError(null);
+      setStaleDeploy(false);
       try {
         const { previewApEntryAction } = await import("@/app/app/admin/ap/_preview-ap-entry-actions");
+        if (typeof previewApEntryAction !== "function") {
+          // 15P-4 defence: the dynamic import returned no symbol.
+          // Almost always a stale bundle from a prior deploy.
+          setPreview(null);
+          setStaleDeploy(true);
+          return;
+        }
         const result = await previewApEntryAction({
           workIntakeItemId,
           vendorId: createdVendorId,
@@ -407,10 +438,33 @@ export default function CreateVendorAndPostModal({
           },
         });
         if (controller.signal.aborted) return;
+        if (!result) {
+          // 15P-4 defence: Next.js returns `undefined` from a client
+          // call when the server-action-hash registry can't find the
+          // action id. This happens whenever the browser has a page
+          // loaded from an older deploy and the newer bundle rehashed
+          // the action. Detected + surfaced as an actionable message
+          // instead of a raw `Cannot read properties of undefined
+          // (reading 'ok')` exception. Founder acceptance:
+          // "It must never show a raw JavaScript exception."
+          setPreview(null);
+          setStaleDeploy(true);
+          return;
+        }
         if (!result.ok) { setPreview(null); setPreviewError(result.message); return; }
         setPreview(result.entry);
       } catch (e) {
-        if (!controller.signal.aborted) setPreviewError(e instanceof Error ? e.message : "Preview failed.");
+        if (controller.signal.aborted) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        // Framework-side stale-action failures come back with a
+        // recognisable message; catch them here as well as the
+        // undefined-result path above.
+        if (/Failed to find Server Action|reading .*'ok'|_workers/.test(msg)) {
+          setPreview(null);
+          setStaleDeploy(true);
+        } else {
+          setPreviewError(msg);
+        }
       } finally {
         if (!controller.signal.aborted) setPreviewLoading(false);
       }
@@ -446,10 +500,26 @@ export default function CreateVendorAndPostModal({
 
   async function handleStep1(finishLater: boolean) {
     if (!canStep1Continue) return;
+    // 15P-4: two-way navigation guard. Once the vendor is created
+    // (or preselected via auto-resolution), Step 1's "Create vendor
+    // & continue" must NOT invoke createVendorAction a second time —
+    // that would either throw a duplicate error or create an
+    // orphaned second vendor. The correct behaviour on re-visit is
+    // a plain navigation to Step 2 with all state preserved.
+    if (createdVendorId) {
+      if (finishLater) { setStep("SAVED_FOR_LATER"); return; }
+      setStep("AP_CODING");
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
       const { createVendorAction } = await import("@/app/app/admin/ap/_create-vendor-actions");
+      if (typeof createVendorAction !== "function") {
+        // 15P-4 defence — stale bundle after a deploy race.
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+        return;
+      }
       // Sprint 3 · Checkpoint 15P — pass the per-field provenance so
       // the audit log records which values came from the extractor
       // (and at what confidence) vs. which the operator typed. Only
@@ -481,6 +551,10 @@ export default function CreateVendorAndPostModal({
         provenance,
         finishLater,
       });
+      if (!result) {
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+        return;
+      }
       if (!result.ok) { setSubmitError(result.message); return; }
       setCreatedVendorId(result.vendorId);
       setCreatedVendorName(result.vendorLegalName);
@@ -490,7 +564,12 @@ export default function CreateVendorAndPostModal({
         setStep("AP_CODING");
       }
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Vendor creation failed.");
+      const msg = e instanceof Error ? e.message : "Vendor creation failed.";
+      if (/Failed to find Server Action/.test(msg)) {
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+      } else {
+        setSubmitError(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -502,6 +581,10 @@ export default function CreateVendorAndPostModal({
     setSubmitError(null);
     try {
       const { postApInvoiceAction } = await import("@/app/app/admin/ap/_post-ap-invoice-actions");
+      if (typeof postApInvoiceAction !== "function") {
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+        return;
+      }
       // 15P-2: send the full split (subtotal + tax + gross), the
       // resolved terms provenance, dates, tax treatment, and the
       // client's snapshot of the totals so the server can log any
@@ -531,11 +614,20 @@ export default function CreateVendorAndPostModal({
           recommendationAccepted: (ap.category.glAccountNumber ?? "") === coding.glAccountNumber,
         },
       });
+      if (!result) {
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+        return;
+      }
       if (!result.ok) { setSubmitError(result.message); return; }
       router.refresh();
       onClose();
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Post failed.");
+      const msg = e instanceof Error ? e.message : "Post failed.";
+      if (/Failed to find Server Action/.test(msg)) {
+        setSubmitError("Spectre has been updated. Please refresh the page and try again.");
+      } else {
+        setSubmitError(msg);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -604,18 +696,36 @@ export default function CreateVendorAndPostModal({
           />
         ) : null}
 
-        {/* Step indicator */}
-        <div className="spectre-cvap-steps" data-testid="cvap-step-indicator" data-active={step}>
-          <span className={`spectre-cvap-step ${step === "PROFILE" ? "is-active" : createdVendorId ? "is-done" : ""}`}>
-            <span className="num">1</span>
-            <span className="lbl">Vendor profile</span>
-          </span>
-          <span className="spectre-cvap-step-sep" aria-hidden="true" />
-          <span className={`spectre-cvap-step ${step === "AP_CODING" ? "is-active" : ""} ${!createdVendorId ? "is-disabled" : ""}`}>
-            <span className="num">2</span>
-            <span className="lbl">AP coding</span>
-          </span>
-        </div>
+        {/* Step indicator — hidden entirely when the vendor was
+            auto-resolved by the shared VendorResolution rule. In that
+            single-step mode the modal presents only AP Coding + a
+            compact vendor summary at the top; the "Review / change
+            vendor" action inside Step 2 flips `reviewingVendor` and
+            reveals the two-step header + interactive navigation. */}
+        {isAutoResolvedSingleStep ? null : (
+          <div className="spectre-cvap-steps" data-testid="cvap-step-indicator" data-active={step}>
+            <button
+              type="button"
+              className={`spectre-cvap-step spectre-cvap-step-btn ${step === "PROFILE" ? "is-active" : createdVendorId ? "is-done" : ""}`}
+              onClick={() => setStep("PROFILE")}
+              data-testid="cvap-step-1-btn"
+            >
+              <span className="num">1</span>
+              <span className="lbl">Vendor profile</span>
+            </button>
+            <span className="spectre-cvap-step-sep" aria-hidden="true" />
+            <button
+              type="button"
+              className={`spectre-cvap-step spectre-cvap-step-btn ${step === "AP_CODING" ? "is-active" : ""} ${!createdVendorId ? "is-disabled" : ""}`}
+              onClick={() => { if (createdVendorId) setStep("AP_CODING"); }}
+              disabled={!createdVendorId}
+              data-testid="cvap-step-2-btn"
+            >
+              <span className="num">2</span>
+              <span className="lbl">AP coding</span>
+            </button>
+          </div>
+        )}
 
         {step === "PROFILE" ? renderStep1() : step === "AP_CODING" ? renderStep2() : renderSavedForLater()}
 
@@ -857,8 +967,54 @@ export default function CreateVendorAndPostModal({
     const humanShort = (iso: string) => new Date(iso).toISOString().slice(0, 10);
     const money = (v: string | number, cur = coding.currency) => `${cur} ${Number(v).toFixed(2)}`;
 
+    // 15P-4: Payment-terms display label — distinguish AUTO_PAY
+    // from a literal Net 0. The resolver already flags isAutoPay
+    // and sets a distinct provenance string; we mirror that in the
+    // summary cell so the operator sees "Auto-pay" not "Net 0".
+    const paymentTermsLabel =
+      resolvedTerms.isAutoPay
+        ? "Auto-pay"
+        : coding.paymentTermsDays != null ? `Net ${coding.paymentTermsDays}` : "—";
+    const dueDateProvenance =
+      coding.explicitInvoiceDueDateIso ? "Due date on invoice"
+      : resolvedTerms.isAutoPay ? "Auto-pay — charged automatically"
+      : `Invoice date + ${coding.paymentTermsDays ?? 30} days`;
+
     return (
       <>
+        {/* 15P-4: compact vendor header — shown ONLY when the modal
+             opened directly on AP Coding via auto-resolution. Gives
+             the operator a one-line record of who they're posting
+             against + a "Review / change vendor" action that reveals
+             the two-step Vendor Profile flow with interactive
+             navigation. */}
+        {isAutoResolvedSingleStep ? (
+          <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-vendor-header">
+            <div className="spectre-cvap-vendor-header">
+              <div className="spectre-cvap-vendor-header-body">
+                <div className="spectre-cvap-vendor-header-label">Vendor</div>
+                <div className="spectre-cvap-vendor-header-name">{createdVendorName ?? "—"}</div>
+                <div className="spectre-cvap-vendor-header-hint">Auto-resolved from existing record · matched on invoice fields</div>
+              </div>
+              <button
+                type="button"
+                className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+                onClick={() => {
+                  // Reveal the two-step header + drop the operator
+                  // on Vendor Profile. The vendor is already resolved,
+                  // so we DON'T re-run createVendorAction on return —
+                  // the interactive step buttons handle navigation.
+                  setReviewingVendor(true);
+                  setStep("PROFILE");
+                }}
+                data-testid="cvap-review-vendor"
+              >
+                Review / change vendor
+              </button>
+            </div>
+          </section>
+        ) : null}
+
         {/* 1. Summary */}
         <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-summary">
           <div className="spectre-cvap-summary-grid" data-testid="cvap-summary-grid">
@@ -867,9 +1023,9 @@ export default function CreateVendorAndPostModal({
             <SummaryCell label="Invoice date" value={humanShort(coding.invoiceDateIso)} testid="cvap-summary-inv-date" />
             <SummaryCell label="Due date"
               value={humanShort(dueDatePreviewIso)}
-              provenance={coding.explicitInvoiceDueDateIso ? "Due date on invoice" : `Invoice date + ${coding.paymentTermsDays ?? 30} days`}
+              provenance={dueDateProvenance}
               testid="cvap-summary-due-date" />
-            <SummaryCell label="Payment terms" value={coding.paymentTermsDays != null ? `Net ${coding.paymentTermsDays}` : "—"}
+            <SummaryCell label="Payment terms" value={paymentTermsLabel}
               provenance={paymentTermsProvenanceHuman}
               testid="cvap-summary-terms" />
             <SummaryCell label="Gross" value={money(coding.gross || "0")} testid="cvap-summary-gross" />
@@ -990,7 +1146,26 @@ export default function CreateVendorAndPostModal({
         {/* 4. Proposed accounting entry — debit/credit table */}
         <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-journal">
           <div className="spectre-cvap-subheading">Proposed accounting entry</div>
-          {previewLoading ? (
+          {staleDeploy ? (
+            // 15P-4: stale Next.js server-action hash after a deploy.
+            // The client received undefined from the RPC. Actionable
+            // copy + a Refresh button instead of a raw JS exception.
+            <div className="spectre-cvap-note spectre-cvap-note--warn" data-testid="cvap-journal-stale">
+              <p style={{ margin: 0 }}>
+                <strong>Preview unavailable.</strong> Spectre has been updated since this page was opened, so the accounting entry can&apos;t be re-generated in this browser session.
+              </p>
+              <p style={{ marginTop: 6 }}>Refresh the page to reload the latest version, then reopen this invoice.</p>
+              <button
+                type="button"
+                className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+                style={{ marginTop: 8 }}
+                onClick={() => { if (typeof window !== "undefined") window.location.reload(); }}
+                data-testid="cvap-journal-stale-refresh"
+              >
+                Refresh page
+              </button>
+            </div>
+          ) : previewLoading ? (
             <p className="spectre-cvap-note">Rebuilding preview…</p>
           ) : previewError ? (
             <p className="spectre-cvap-note spectre-cvap-note--warn" data-testid="cvap-journal-error">{previewError}</p>
@@ -1042,7 +1217,13 @@ export default function CreateVendorAndPostModal({
         </section>
 
         <footer className="spectre-cvap-foot">
-          {openDirectAtStep2 ? null : (
+          {/* 15P-4: the "Back to vendor profile" button is present
+              whenever the two-step header is visible — i.e. either
+              (a) the operator arrived via the new-vendor Step 1 flow
+              OR (b) they auto-resolved and then clicked "Review /
+              change vendor". Auto-resolved SINGLE-STEP mode hides
+              the button (they never went through Step 1). */}
+          {!isAutoResolvedSingleStep ? (
             <button
               type="button"
               className="spectre-btn spectre-btn--secondary spectre-btn--sm"
@@ -1051,7 +1232,7 @@ export default function CreateVendorAndPostModal({
             >
               Back to vendor profile
             </button>
-          )}
+          ) : null}
           <button
             type="button"
             className="spectre-btn spectre-btn--tertiary spectre-btn--sm"

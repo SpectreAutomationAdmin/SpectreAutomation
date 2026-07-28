@@ -112,7 +112,10 @@ export default function EmailIntakeCard({ data }: Props) {
   // never partially set.
   const [cvapModalMode, setCvapModalMode] = useState<
     | { kind: "STEP_1" }
-    | { kind: "STEP_2"; vendorId: string; vendorName: string }
+    // 15P-4: `autoResolved` distinguishes the single-step AP-coding
+    // modal (READY_FOR_APPROVAL) from the two-step-opened-at-Step-2
+    // form used for NEEDS_JUDGMENT.
+    | { kind: "STEP_2"; vendorId: string; vendorName: string; autoResolved: boolean }
   >({ kind: "STEP_1" });
   const [apEvidence, setApEvidence] = useState<unknown | null>(null);
   const [statementEvidence, setStatementEvidence] = useState<unknown | null>(null);
@@ -356,13 +359,28 @@ export default function EmailIntakeCard({ data }: Props) {
               //                            Invoice tab)
               //   CHART_OF_ACCOUNTS_REQUIRED → expand path (guidance
               //                            surface, not postable)
-              const openStep2WithMatch = () => {
+              // 15P-4 routing — the founder rule: one authoritative
+              // decision lives in `lib/vendor-matching/resolve-modal-entry`.
+              // Here on the card we use the coarse projection signal
+              // that the vendor is already matched (READY_FOR_APPROVAL
+              // implies match + no reconcile blockers). The modal ALSO
+              // runs the shared resolver against the live search
+              // response for a final say — this hop is only about
+              // choosing which of the two initial modal shapes to open:
+              //
+              //   READY_FOR_APPROVAL  → autoResolved single-step
+              //                         (compact vendor header + AP coding)
+              //   NEEDS_JUDGMENT      → two-step, opened at Step 2
+              //                         (matched but coding needs review)
+              //   VENDOR_MATCH_REQUIRED → two-step, opened at Step 1
+              const openStep2WithMatch = (autoResolved: boolean) => {
                 const v = ap?.vendorMatch;
                 if (!v || !v.matchedVendorId) return false;
                 setCvapModalMode({
                   kind: "STEP_2",
                   vendorId: v.matchedVendorId,
                   vendorName: v.matchedName ?? "Selected vendor",
+                  autoResolved,
                 });
                 setCvapModalOpen(true);
                 if (!expanded) void markReadOnce();
@@ -374,8 +392,15 @@ export default function EmailIntakeCard({ data }: Props) {
                 if (!expanded) void markReadOnce();
                 return;
               }
-              if (ap?.workflowState === "READY_FOR_APPROVAL" || ap?.workflowState === "NEEDS_JUDGMENT") {
-                if (openStep2WithMatch()) return;
+              if (ap?.workflowState === "READY_FOR_APPROVAL") {
+                // Auto-resolved: single-step AP-coding modal with
+                // "Review / change vendor" affordance for reveal.
+                if (openStep2WithMatch(true)) return;
+              }
+              if (ap?.workflowState === "NEEDS_JUDGMENT") {
+                // Matched but coding warrants review — two-step modal
+                // opened at Step 2 with normal back-and-forth navigation.
+                if (openStep2WithMatch(false)) return;
               }
               if (!expanded) {
                 setExpanded(true);
@@ -543,6 +568,7 @@ export default function EmailIntakeCard({ data }: Props) {
           initialStep={cvapModalMode.kind === "STEP_2" ? "AP_CODING" : "PROFILE"}
           preselectedVendorId={cvapModalMode.kind === "STEP_2" ? cvapModalMode.vendorId : undefined}
           preselectedVendorName={cvapModalMode.kind === "STEP_2" ? cvapModalMode.vendorName : undefined}
+          autoResolvedVendor={cvapModalMode.kind === "STEP_2" ? cvapModalMode.autoResolved : false}
         />
       ) : null}
     </article>

@@ -139,14 +139,21 @@ describe("15P-2 · defect 3 — Approve & post opens the shared modal at Step 2"
     expect(MODAL).toMatch(/useState<string \| null>\(preselectedVendorId \?\? null\)/);
     expect(MODAL).toMatch(/useState<string \| null>\(preselectedVendorName \?\? null\)/);
   });
-  it("when opened at Step 2 the 'Back to vendor profile' button is HIDDEN", () => {
-    // The direct-to-Step-2 case must not offer a way back to Step 1
-    // — the vendor already exists, and Step 1 would confuse the flow.
-    expect(MODAL).toMatch(/openDirectAtStep2 \? null : \(\s*<button[\s\S]{0,500}data-testid="cvap-back-to-profile"/);
+  it("when the modal is in single-step auto-resolved mode, 'Back to vendor profile' is HIDDEN (15P-4)", () => {
+    // 15P-4 refined the guard: back-to-profile is hidden ONLY when
+    // the modal is in the single-step auto-resolved shape (no Step 1
+    // was traversed). Two-step-opened-at-Step-2 for NEEDS_JUDGMENT
+    // now shows the back button + supports free navigation.
+    expect(MODAL).toMatch(/!isAutoResolvedSingleStep \? \(\s*<button[\s\S]{0,500}data-testid="cvap-back-to-profile"/);
   });
-  it("card's primary-action handler covers READY_FOR_APPROVAL + NEEDS_JUDGMENT → Step 2", () => {
-    expect(CARD).toMatch(/if \(ap\?\.workflowState === "READY_FOR_APPROVAL" \|\| ap\?\.workflowState === "NEEDS_JUDGMENT"\)/);
-    // openStep2WithMatch sets kind:"STEP_2" with the matched vendor id.
+  it("card's primary-action handler covers READY_FOR_APPROVAL + NEEDS_JUDGMENT → Step 2 (15P-4 split branches)", () => {
+    // 15P-4 split the shared "READY_FOR_APPROVAL || NEEDS_JUDGMENT"
+    // branch into two so the auto-resolved single-step modal only
+    // opens for READY_FOR_APPROVAL. NEEDS_JUDGMENT still routes to
+    // the shared modal, but with the two-step-opened-at-Step-2
+    // shape (autoResolvedVendor: false).
+    expect(CARD).toMatch(/if \(ap\?\.workflowState === "READY_FOR_APPROVAL"\)/);
+    expect(CARD).toMatch(/if \(ap\?\.workflowState === "NEEDS_JUDGMENT"\)/);
     expect(CARD).toMatch(/setCvapModalMode\(\{\s*kind: "STEP_2",\s*vendorId:/);
   });
   it("VENDOR_MATCH_REQUIRED still opens at Step 1 (new-vendor path unchanged)", () => {

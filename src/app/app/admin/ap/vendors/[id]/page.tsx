@@ -6,6 +6,8 @@ import { hasPermission } from "@/lib/rbac";
 import {
   getVendor, submitVendorForApproval, activateVendor, blockVendor, deactivateVendor,
   addBankingProfile, submitBankingForApproval, verifyBanking, rejectBanking, initiatePennyTest, confirmPennyTest, getVendorBalance,
+  // 15P-4: vendor delete + dependency probe.
+  deleteVendor, probeVendorDependencies,
 } from "@/lib/ap/vendors";
 import { getRequestForEntity } from "@/lib/ap/approvals";
 import { isAppError } from "@/lib/errors";
@@ -41,6 +43,24 @@ async function deactivateAction(id: string) {
   const p = await getCurrentPrincipal(); if (!p) redirect("/login");
   try { await deactivateVendor(p, id); } catch (err) { bounce(id, err); }
   revalidatePath(`/app/admin/ap/vendors/${id}`);
+}
+
+// 15P-4: hard-delete a vendor. Blocked server-side when the vendor
+// has ANY financial or operational history — in which case we
+// redirect back with an actionable error so the founder sees why.
+// Successful deletion redirects to the vendor list.
+async function deleteAction(id: string, _formData: FormData) {
+  "use server";
+  const p = await getCurrentPrincipal(); if (!p) redirect("/login");
+  try {
+    const result = await deleteVendor(p, id);
+    if (!result.ok) {
+      redirect(`/app/admin/ap/vendors/${id}?error=${encodeURIComponent(result.message)}`);
+    }
+  } catch (err) {
+    bounce(id, err);
+  }
+  redirect(`/app/admin/ap/vendors?deleted=1`);
 }
 
 async function addBankingAction(id: string, formData: FormData) {
@@ -101,9 +121,17 @@ export default async function VendorDetailPage({ params, searchParams }: { param
   const canBankEdit = hasPermission(p, vendor.clubId, "vendor:banking:edit");
   const canBankApprove = hasPermission(p, vendor.clubId, "vendor:banking:approve");
   const canEdit = hasPermission(p, vendor.clubId, "vendor:edit");
+  const canDelete = hasPermission(p, vendor.clubId, "vendor:delete");
 
   const balance = await getVendorBalance(vendor.clubId, vendor.id);
   const approvalReq = await getRequestForEntity(vendor.clubId, "VENDOR", vendor.id);
+  // 15P-4: probe the delete dependencies so the confirmation copy
+  // honestly reflects whether hard delete is possible right now.
+  const deleteDeps = canDelete ? await probeVendorDependencies(vendor.clubId, vendor.id) : null;
+  const canHardDelete = !!deleteDeps && Object.values(deleteDeps).every((n) => n === 0);
+  const blockingRefs = deleteDeps
+    ? Object.entries(deleteDeps).filter(([, n]) => n > 0).map(([k, n]) => ({ label: k, count: n as number }))
+    : [];
 
   return (
     <div>
@@ -273,6 +301,43 @@ export default async function VendorDetailPage({ params, searchParams }: { param
               <button className="btn btn-secondary mt-3 w-full">Deactivate</button>
             </form>
           )}
+          {/* 15P-4: safe-delete panel. Rendered only when the caller
+              has vendor:delete. Confirmation copy tells the truth
+              about whether hard delete is possible right now — if
+              the vendor has any financial or operational history,
+              the button is disabled and the panel points the user
+              at Deactivate instead. */}
+          {canDelete && (
+            <form action={deleteAction.bind(null, vendor.id)} className="card card-body" data-testid="vendor-delete-panel">
+              <h3 className="font-medium">Delete vendor</h3>
+              {canHardDelete ? (
+                <>
+                  <p className="mt-1 text-sm text-stone-500" data-testid="vendor-delete-hint">
+                    Delete <strong>{vendor.legalName}</strong>? This vendor has no posted transactions and will be permanently removed.
+                  </p>
+                  <label className="mt-3 flex items-center gap-2 text-sm">
+                    <input type="checkbox" name="confirm" required />
+                    <span>Yes, delete this vendor permanently</span>
+                  </label>
+                  <button className="btn btn-danger mt-3 w-full" data-testid="vendor-delete-submit">Delete vendor</button>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1 text-sm text-stone-500" data-testid="vendor-delete-blocked">
+                    <strong>{vendor.legalName}</strong> has posted financial or operational activity and cannot be deleted. Deactivate the vendor instead.
+                  </p>
+                  {blockingRefs.length > 0 && (
+                    <ul className="mt-2 text-xs text-stone-500 list-disc list-inside space-y-0.5" data-testid="vendor-delete-blocked-refs">
+                      {blockingRefs.map((r) => (
+                        <li key={r.label}>{r.count} {humanizeDep(r.label)}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <button className="btn btn-danger mt-3 w-full opacity-50 cursor-not-allowed" disabled>Delete blocked</button>
+                </>
+              )}
+            </form>
+          )}
         </div>
       </div>
 
@@ -300,4 +365,22 @@ export default async function VendorDetailPage({ params, searchParams }: { param
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><dt className="text-xs uppercase tracking-wide text-stone-500">{label}</dt><dd className="mt-0.5 text-club-ink">{children}</dd></div>;
+}
+
+// 15P-4: human-readable labels for the delete-blocked panel's
+// dependency-count list.
+function humanizeDep(key: string): string {
+  const map: Record<string, string> = {
+    invoices: "posted invoice(s)",
+    payments: "vendor payment(s)",
+    bankingProfiles: "banking profile(s)",
+    pennyTests: "penny test(s)",
+    inventoryReceivings: "inventory receiving(s)",
+    inventoryItems: "inventory item(s) preferring this vendor",
+    aliases: "vendor alias(es)",
+    statementReconciliations: "statement reconciliation(s)",
+    documents: "vendor document(s)",
+    riskFlags: "risk flag(s)",
+  };
+  return map[key] ?? key;
 }
