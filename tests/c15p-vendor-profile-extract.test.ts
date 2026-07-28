@@ -284,7 +284,13 @@ describe("15P — wiring: extraction → projection → modal", () => {
     // into the extractor so address candidate scoring can boost
     // segments adjacent to it (the Microsoft footer wins over 3×
     // customer blocks).
-    expect(ANALYSE).toMatch(/const vendorProfile: ExtractedVendorProfile = pdfOk[\s\S]{0,180}\? extractVendorProfile\(pdfText,\s*\{\s*vendorLegalName:/);
+    // 15P-6: the local variable was renamed from `vendorProfile`
+    // to `vendorProfileExtracted` when the extraction was reordered
+    // to run BEFORE resolveVendorForExtraction. The alias
+    // `const vendorProfile = vendorProfileExtracted` preserves the
+    // pre-15P-6 return-shape name.
+    expect(ANALYSE).toMatch(/const vendorProfileExtracted: ExtractedVendorProfile = pdfOk[\s\S]{0,180}\? extractVendorProfile\(pdfText,\s*\{\s*vendorLegalName:/);
+    expect(ANALYSE).toMatch(/const vendorProfile = vendorProfileExtracted/);
   });
   it("Mission Control projection carries extractedVendorProfile on ApInvoiceCardIntelligence", () => {
     expect(IRI).toMatch(/extractedVendorProfile: ExtractedVendorProfile \| null/);

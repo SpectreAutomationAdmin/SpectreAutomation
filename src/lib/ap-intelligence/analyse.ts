@@ -113,7 +113,38 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const capitalMinCents = Math.round(capitalMin * 100);
 
   const arithmetic = validateExtractedArithmetic(extraction);
-  const vendor = await resolveVendorForExtraction({ clubId: args.clubId, extraction });
+
+  // Sprint 3 · Checkpoint 15P-6 — compute the vendor-profile
+  // extraction FIRST so the resolver can consume its richer field
+  // set (address, phone, website, tax id from the 15P-1 extractor).
+  // Pre-15P-6 order was: resolve vendor (with only parse-invoice
+  // guesses) THEN extract profile. That produced founder-observed
+  // drift for the Microsoft record — projection said NOT_FOUND
+  // while the modal's own POST endpoint (which uses the richer
+  // profile) saw an EXACT match.
+  const vendorProfileExtracted: ExtractedVendorProfile = pdfOk
+    ? extractVendorProfile(pdfText, { vendorLegalName: extraction.vendor.guessedName })
+    : {
+        address: { line1: { value: null, confidence: 0, source: null }, line2: { value: null, confidence: 0, source: null },
+                   city: { value: null, confidence: 0, source: null }, provinceState: { value: null, confidence: 0, source: null },
+                   postalCode: { value: null, confidence: 0, source: null }, country: { value: null, confidence: 0, source: null },
+                   blockConfidence: 0 },
+        phone:                 { value: null, confidence: 0, source: null },
+        fax:                   { value: null, confidence: 0, source: null },
+        website:               { value: null, confidence: 0, source: null },
+        customerSupportEmail:  { value: null, confidence: 0, source: null },
+        arEmail:               { value: null, confidence: 0, source: null },
+        remittanceEmail:       { value: null, confidence: 0, source: null },
+        taxRegistrationNumber: { value: null, confidence: 0, source: null },
+        vatNumber:             { value: null, confidence: 0, source: null },
+        paymentTerms:          { value: null, confidence: 0, source: null },
+      };
+
+  const vendor = await resolveVendorForExtraction({
+    clubId: args.clubId,
+    extraction,
+    extractedProfile: vendorProfileExtracted,
+  });
   const reconcile = await reconcileAgainstAp({
     clubId: args.clubId,
     extraction,
@@ -218,26 +249,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     findingsCount: findings.length,
   });
 
-  // Sprint 3 · Checkpoint 15P — second-pass vendor-profile extraction.
-  // Runs on the same PDF text that the AP pipeline just parsed. Cheap
-  // (regex-only, no I/O) so we don't need a cache layer.
-  const vendorProfile: ExtractedVendorProfile = pdfOk
-    ? extractVendorProfile(pdfText, { vendorLegalName: extraction.vendor.guessedName })
-    : {
-        address: { line1: { value: null, confidence: 0, source: null }, line2: { value: null, confidence: 0, source: null },
-                   city: { value: null, confidence: 0, source: null }, provinceState: { value: null, confidence: 0, source: null },
-                   postalCode: { value: null, confidence: 0, source: null }, country: { value: null, confidence: 0, source: null },
-                   blockConfidence: 0 },
-        phone:                 { value: null, confidence: 0, source: null },
-        fax:                   { value: null, confidence: 0, source: null },
-        website:               { value: null, confidence: 0, source: null },
-        customerSupportEmail:  { value: null, confidence: 0, source: null },
-        arEmail:               { value: null, confidence: 0, source: null },
-        remittanceEmail:       { value: null, confidence: 0, source: null },
-        taxRegistrationNumber: { value: null, confidence: 0, source: null },
-        vatNumber:             { value: null, confidence: 0, source: null },
-        paymentTerms:          { value: null, confidence: 0, source: null },
-      };
+  // 15P-6: vendorProfile is already computed at the top of the
+  // function (moved up so the resolver can consume it). Alias so the
+  // return object keeps the pre-15P-6 field name that downstream
+  // consumers depend on.
+  const vendorProfile = vendorProfileExtracted;
 
   return {
     documentId: doc.id,
