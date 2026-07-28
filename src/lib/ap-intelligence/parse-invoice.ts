@@ -9,6 +9,7 @@
 
 import type { ExtractedInvoice, ParseHint } from "./types";
 import { EXTRACTION_RULE_VERSION } from "./types";
+import { extractSupplier } from "./supplier-extract";
 
 const CURRENCY_HINTS: Record<string, string> = {
   "USD": "USD",
@@ -317,7 +318,30 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
 
   const vendorEmail = record("vendor.email", extractVendorEmail(text));
   const vendorTax = record("vendor.taxNumber", extractVendorTaxNumber(text));
-  const vendorNameFromText = record("vendor.name", extractVendorName(text));
+  // Sprint 3 · Checkpoint 15Q — the pre-15Q `extractVendorName` was a
+  // regex-only picker that could return a Bill-To recipient or a
+  // form-header string. The new `extractSupplier` builds a scored
+  // candidate list with positive/negative evidence per candidate,
+  // so the leader is chosen by weight of signals — not "first
+  // corp-suffix line wins". The legacy regex is used only as a
+  // last-ditch tie-breaker when the scored extractor returns null.
+  const supplier = extractSupplier(text, {
+    senderName: null,   // sender is not passed here — analyse.ts is where sender fallback happens
+    senderEmail: args.emailSenderAddress ?? null,
+  });
+  let vendorNameFromText: string | null = supplier.value;
+  if (vendorNameFromText) {
+    hints.push({
+      field: "vendor.name",
+      ruleKey: `supplier.${supplier.reasoningCode}`,
+      matchedText: (vendorNameFromText ?? "").slice(0, 120),
+    });
+  } else {
+    // No document-supported supplier — fall back to the legacy
+    // regex hit for backwards compatibility. A `null` return simply
+    // leaves guessedName null for downstream to handle.
+    vendorNameFromText = record("vendor.name", extractVendorName(text));
+  }
 
   const description = record("description", extractDescription(text) ? {
     value: extractDescription(text)!,

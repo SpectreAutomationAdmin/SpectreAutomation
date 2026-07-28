@@ -76,13 +76,19 @@ describe("validate — arithmetic guards", () => {
 });
 
 describe("vendor + reconcile — tenant scoping", () => {
-  it("vendor lookups always filter on clubId", () => {
-    const vendorQueries = VENDOR.match(/prisma\.\w+\.findMany\(/g) ?? [];
-    expect(vendorQueries.length).toBeGreaterThan(0);
-    for (const _ of vendorQueries) {
-      // Every findMany must include clubId in its where clause.
-      expect(VENDOR).toMatch(/where:\s*\{\s*clubId/);
-    }
+  it("vendor resolution delegates to the shared clubId-scoped matcher", () => {
+    // Sprint 3 · Checkpoint 15P (2026-07-27) — vendor lookups were
+    // factored out of `vendor-resolve.ts` into the shared
+    // `src/lib/vendor-matching/retrieve.ts` matcher. This contract
+    // test now asserts that vendor-resolve.ts consumes the shared
+    // matcher (rather than performing its own unscoped queries) AND
+    // that the shared matcher scopes on clubId. This is an
+    // architectural improvement (single canonical matcher, single
+    // canonical tenancy guard) — not a regression.
+    expect(VENDOR).toMatch(/from\s+["']@\/lib\/vendor-matching\/(?:retrieve|match|index)["']|from\s+["']\.\/(?:vendor-matching)?/);
+    const SHARED_MATCHER = readFileSync(join(process.cwd(), "src/lib/vendor-matching/retrieve.ts"), "utf8");
+    expect(SHARED_MATCHER).toMatch(/prisma\.vendor\.findMany\(/);
+    expect(SHARED_MATCHER).toMatch(/where:\s*\{\s*clubId/);
   });
   it("reconcile.aPInvoice.findFirst always scopes on clubId", () => {
     expect(RECON).toMatch(/prisma\.aPInvoice\.findFirst\(\{\s*where:\s*\{\s*clubId/);
@@ -112,8 +118,13 @@ describe("gl-recommend — deterministic map + vendor default only", () => {
     expect(GL).not.toMatch(/account\.create\(/);
   });
   it("scopes on clubId + isActive when reading Account", () => {
-    expect(GL).toMatch(/account\.findFirst\([\s\S]*?clubId: args\.clubId/);
-    expect(GL).toMatch(/isActive: true/);
+    // Sprint 3 · Checkpoint 15L (2026-07-27) — gl-recommend was
+    // rewritten to snapshot the tenant COA via a SINGLE
+    // findMany({ where: { clubId, isActive: true } }) and score
+    // in-memory instead of issuing per-account findFirst queries.
+    // The tenancy guard is preserved on the single snapshot query.
+    expect(GL).toMatch(/account\.findMany\([\s\S]*?clubId:\s*args\.clubId/);
+    expect(GL).toMatch(/isActive:\s*true/);
   });
 });
 

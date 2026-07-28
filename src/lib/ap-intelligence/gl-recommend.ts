@@ -18,6 +18,7 @@
 
 import { prisma } from "@/lib/prisma";
 import type { CapitalClass, CapitalVsOperatingState, ExtractedInvoice } from "./types";
+import { classifyEconomicPurpose, type EconomicPurpose, type PurposeCandidate } from "./economic-purpose";
 
 const RULE_VERSION = 2;
 
@@ -30,7 +31,9 @@ export interface GlEvidence {
     | "NAME_KEYWORD"           // Invoice vendor / description keyword hit an Account.name substring
     | "CATEGORY_MATCH"         // Category-key contains the semantic term (e.g. "PROFESSIONAL_SERVICES")
     | "FS_GROUP_MATCH"         // FS-Group key contains the semantic term (e.g. "IS_IT_SOFTWARE")
-    | "CAPITAL_CLASS_MAP";     // Static capital-class → GL keyword map
+    | "CAPITAL_CLASS_MAP"      // Static capital-class → GL keyword map
+    | "ECONOMIC_PURPOSE"       // Sprint 3 · 15Q — classified economic purpose boosts/penalises accounts
+    | "ECONOMIC_PURPOSE_CONTRA";
   description: string;
   score: number;               // 0-100 contribution
 }
@@ -128,8 +131,22 @@ const SEMANTIC_GROUPS: SemanticGroup[] = [
   },
   {
     key: "PROFESSIONAL",
+    // Sprint 3 · Checkpoint 15Q — the bare token "cpa" was removed
+    // from this pattern. It conflated:
+    //   (a) a Chartered Professional Accountants MEMBER ASSOCIATION
+    //       — a licensing body billing its members for annual dues,
+    //   (b) an accounting FIRM — an external service provider.
+    // Category (b) is a professional-fees expense; category (a) is
+    // professional-membership dues (a distinct concept — see
+    // src/lib/ap-intelligence/economic-purpose.ts). Matching (a)
+    // as (b) is the founder-observed 6061 defect. The economic-
+    // purpose classifier now determines which concept applies and
+    // this recommender consults it.
+    //
+    // Firm-naming shapes ("LLP", partnership language, big-4 names)
+    // stay — they're unambiguous accounting firms.
     vendorPatterns: [
-      /\b(law|legal|attorneys?|counsel|accounting|cpa|auditor|kpmg|deloitte|pwc|ey|grant\s*thornton|bdo)\b/i,
+      /\b(law|legal|attorneys?|counsel|accounting\s+services|accounting\s+firm|auditor|kpmg|deloitte|pwc|grant\s*thornton|bdo|LLP)\b/i,
     ],
     accountNamePatterns: [
       /professional\s*fee|legal\s*fee|audit\s*fee|accounting\s*fee|consulting/i,
@@ -395,6 +412,72 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     }
   }
 
+  // Sprint 3 · Checkpoint 15Q — economic-purpose classifier signal.
+  // The pre-15Q recommender matched vendor-name keywords ("cpa" →
+  // accounting firm). The classifier reasons about what the
+  // expenditure IS FOR (professional membership dues vs external
+  // accounting services vs member-charged revenue) and boosts /
+  // penalises accounts according to the top purpose's SUGGESTED
+  // ROLES. Role → account-name matching is a small lookup below.
+  const purposeCandidates = classifyPurposeFromExtraction(args.extraction);
+  const topPurpose = purposeCandidates[0] ?? null;
+  if (topPurpose && topPurpose.score >= 20) {
+    for (const a of candidates) {
+      const nameHay = `${a.name ?? ""}`.toLowerCase();
+      const roleHit = topPurpose.suggestedAccountRoles.find((role) => {
+        const roleRe = ROLE_NAME_PATTERNS[role];
+        return roleRe && roleRe.test(nameHay);
+      });
+      if (roleHit) {
+        const boost = 25;
+        const existing = scored.get(a.id);
+        const evidence: GlEvidence = {
+          kind: "ECONOMIC_PURPOSE",
+          description: `Classified purpose "${topPurpose.classificationConcept}" — account name matches role "${roleHit}".`,
+          score: boost,
+        };
+        if (existing) {
+          existing.confidence = Math.min(95, existing.confidence + boost);
+          existing.evidence.push(evidence);
+        } else {
+          scored.set(a.id, {
+            accountId: a.id,
+            accountNumber: a.accountNumber,
+            accountName: a.name,
+            categoryKey: a.category?.key ?? null,
+            fsGroupKey: a.fsGroup?.key ?? null,
+            confidence: Math.min(95, 40 + boost),
+            evidence: [evidence],
+          });
+        }
+      }
+    }
+    // Contradiction penalty — accounts matching a role that is
+    // CONTRADICTED by the top classifier lose confidence. e.g. when
+    // the top classification is "employee_professional_membership_dues",
+    // any account named "accounting fee" / "audit fee" is penalised.
+    const contradictedRoles = collectContradictedRoles(topPurpose.purpose);
+    for (const a of candidates) {
+      const nameHay = `${a.name ?? ""}`.toLowerCase();
+      const contraHit = contradictedRoles.find((role) => {
+        const re = ROLE_NAME_PATTERNS[role];
+        return re && re.test(nameHay);
+      });
+      if (contraHit) {
+        const existing = scored.get(a.id);
+        if (existing) {
+          const penalty = 25;
+          existing.confidence = Math.max(0, existing.confidence - penalty);
+          existing.evidence.push({
+            kind: "ECONOMIC_PURPOSE_CONTRA",
+            description: `Classified purpose "${topPurpose.classificationConcept}" contradicts role "${contraHit}" — confidence reduced.`,
+            score: -penalty,
+          });
+        }
+      }
+    }
+  }
+
   // Signal 4: capital-class hints. Only fires when the analyser
   // already classified the invoice as CAPITAL and identified a class.
   if (args.capitalState === "CAPITAL" && args.capitalClass) {
@@ -479,4 +562,72 @@ function humanReason(c: GlCandidate): string {
 function humaniseMatch(hay: string, pattern: RegExp): string {
   const m = pattern.exec(hay);
   return m?.[0] ?? "";
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 15Q — economic-purpose helpers
+// ---------------------------------------------------------------------------
+//
+// Role → account-name pattern lookup. When the classifier says the
+// invoice is `employee_professional_membership_dues`, any tenant
+// account named "Membership dues", "Professional development",
+// "Training and dues", etc. becomes a plausible destination. The
+// mapping is generic — no vendor-specific rules — and additive.
+const ROLE_NAME_PATTERNS: Record<string, RegExp> = {
+  EMPLOYEE_MEMBERSHIP_DUES: /(?:membership\s*(?:dues|fee)|employee\s*(?:membership|dues)|dues\s*(?:and|&)\s*(?:memberships?|subscriptions?))/i,
+  PROFESSIONAL_DEVELOPMENT: /professional\s*(?:development|dues|memberships?)/i,
+  TRAINING_AND_DUES: /training\s*(?:and|&)\s*(?:dues|memberships?)/i,
+  ACCOUNTING_AND_AUDIT_FEES: /(?:accounting\s*(?:fee|services?)|audit(?:ing|or)?\s*(?:fee|services?))/i,
+  PROFESSIONAL_FEES: /professional\s*fee/i,
+  MEMBER_DUES_REVENUE: /member(?:ship)?\s*dues\s*revenue|dues\s*revenue|member\s*revenue/i,
+  MEMBERSHIP_REVENUE: /membership\s*revenue|initiation\s*fee\s*revenue/i,
+  INTEREST_AND_PENALTIES: /(?:interest\s*(?:and|&)\s*penalt|late\s*(?:fee|payment)|finance\s*charge)/i,
+  BANK_CHARGES: /bank\s*(?:charge|fee)|nsf\s*fee/i,
+  TRAINING_AND_EDUCATION: /training\s*(?:and|&)\s*education|continuing\s*education|education\s*and\s*training/i,
+  LICENCES_AND_PERMITS: /licen[sc]es?\s*(?:and|&)\s*permits?|permit\s*fee/i,
+  REGULATORY_FEES: /regulatory\s*fee/i,
+  LEGAL_FEES: /legal\s*fee/i,
+  CONSULTING_FEES: /consulting\s*fee/i,
+  GENERAL_EXPENSES: /(?:general\s*(?:expense|admin)|miscellaneous)/i,
+};
+
+// Mapping of concept → the OTHER concept's roles that must be
+// penalised when this concept is the classifier's top pick. This is
+// where the founder-observed misclassification is defended against:
+// membership dues NEVER routes to accounting fees + vice-versa.
+const CONTRADICTED_ROLES_MAP: Partial<Record<EconomicPurpose, string[]>> = {
+  employee_professional_membership_dues: ["ACCOUNTING_AND_AUDIT_FEES"],
+  external_accounting_or_audit_services: ["EMPLOYEE_MEMBERSHIP_DUES", "PROFESSIONAL_DEVELOPMENT"],
+  member_dues_charged_by_club: ["EMPLOYEE_MEMBERSHIP_DUES", "ACCOUNTING_AND_AUDIT_FEES"],
+  penalties_and_late_fees: ["EMPLOYEE_MEMBERSHIP_DUES", "ACCOUNTING_AND_AUDIT_FEES"],
+};
+
+function collectContradictedRoles(purpose: EconomicPurpose): string[] {
+  return CONTRADICTED_ROLES_MAP[purpose] ?? [];
+}
+
+// Derive the classifier inputs from the ExtractedInvoice. Direction
+// defaults to "club_pays_vendor" — every AP-analyser path is AP.
+// A future member-portal / AR pipeline that reuses this classifier
+// can pass an override.
+function classifyPurposeFromExtraction(
+  extraction: GlRecommendationArgs["extraction"],
+): PurposeCandidate[] {
+  if (!extraction) return [];
+  const supplierName = extraction.vendor?.guessedName ?? null;
+  const lineDescriptions = (extraction.lineItems ?? []).map((l) => l.description || "");
+  const combinedText = `${supplierName ?? ""} ${extraction.description ?? ""} ${lineDescriptions.join(" ")}`.toLowerCase();
+  const hasPenaltyLine = /\b(?:penalty|late[-\s]?fee|late[-\s]?payment|finance\s+charge|interest\s+charge|nsf)\b/i.test(combinedText);
+  const hasMembershipLine = /\b(?:membership|annual\s+dues|professional\s+dues|member(?:ship)?\s+fee)\b/i.test(combinedText);
+  const hasProfessionalCredentialContext =
+    supplierName != null &&
+    /\b(?:association|society|college|institute|order\s+of|academy|federation|chartered\s+(?:professional|accountants?|engineers?|surveyors?)|regulatory\s+body|professional\s+body)\b/i.test(supplierName);
+  return classifyEconomicPurpose({
+    supplierName,
+    lineDescriptions,
+    paymentDirection: "club_pays_vendor",
+    hasPenaltyLine,
+    hasMembershipLine,
+    hasProfessionalCredentialContext,
+  });
 }
