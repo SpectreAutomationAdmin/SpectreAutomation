@@ -15,6 +15,71 @@ import { classifyEconomicPurpose } from "@/lib/ap-intelligence/economic-purpose"
 // -----------------------------------------------------------------------------
 
 describe("15Q · supplier extractor — the document is primary evidence", () => {
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — regression
+  // cases mirroring the ACTUAL professional-body member-dues PDF
+  // structure the founder observed on staging (see engineering
+  // notes). All fixtures are synthetic; no acceptance strings.
+  it("REGRESSION: professional-body dues invoice with addressee 'PersonName, CPA' at line 2 must pick the issuer at line 3, not the addressee", () => {
+    // This layout matches the shape of the PDF output pdf-parse
+    // produces for a Canadian professional-body member-dues
+    // invoice (addressee first, issuer name second, address block
+    // third). Extractor must reject line 2 as a person-with-
+    // credential and pick line 3 which carries a REGION suffix.
+    const text = [
+      "",
+      "",
+      "Bill Recipient, CPA",              // person-with-credential (addressee)
+      "Provincial CPA Body",              // actual issuer (region suffix)
+      "Suite 800, 444 - 7th Ave SW Calgary, AB T2P 0X8 Canada",
+      "",
+      "Invoice To :",
+      "Invoice #:",
+      "2026-77812",
+      "Date:",
+      "Oct 07, 2025",
+      "",
+      "Member Dues for Bill Recipient (Calgary year 2025)",
+      "Member #:",
+      "1006061",
+      "Provincial CPA Body Fee",
+      "$500.00",
+      "Penalty",
+      "$40.00",
+      "GST #:",
+      "123456789 RT0003",
+    ].join("\n");
+    const r = extractSupplier(text);
+    expect(r.value?.toLowerCase()).not.toContain("bill recipient");
+    expect(r.value?.toLowerCase()).toContain("provincial cpa body");
+    expect(r.source).toBe("invoice_document");
+  });
+
+  it("REGRESSION: person-with-credential shape covers common suffixes (CPA, MBA, PhD, MD, LLB, PEng)", () => {
+    // Each candidate must be rejected; the second line (a real org
+    // with corp suffix) must win.
+    const cases = ["CPA", "MBA", "PhD", "MD", "LLB", "PEng"];
+    for (const cred of cases) {
+      const text = [
+        `Jane Doe, ${cred}`,
+        "Meadowbrook Turf Supplies Ltd.",
+        "GST/HST 123456789 RT0001",
+      ].join("\n");
+      const r = extractSupplier(text);
+      expect(r.value, `credential ${cred}: expected org, got '${r.value}'`).toBe("Meadowbrook Turf Supplies Ltd.");
+    }
+  });
+
+  it("REGRESSION: recognises 'ORG REGION' patterns like 'CPA ALBERTA' / 'TELUS Canada' as candidates via CORP_SUFFIX_RE", () => {
+    const text = [
+      "Jane Doe, CPA",                       // person, must be rejected
+      "TELUS Canada",                        // ORG + REGION suffix
+      "Suite 200, 200 Main St",
+      "GST/HST 987654321 RT0001",
+    ].join("\n");
+    const r = extractSupplier(text);
+    expect(r.value?.toLowerCase()).toContain("telus canada");
+  });
+
   it("selects the issuer even when a Bill-To recipient contains an org-like name", () => {
     const text = [
       "Acme Golf & Country Club",   // header — could be misread as issuer

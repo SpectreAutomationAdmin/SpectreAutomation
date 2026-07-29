@@ -86,8 +86,34 @@ export interface SupplierExtraction {
 // on a single line — the suffix appears mid-line, followed by an
 // address. We anchor at start-of-line + capture through the
 // suffix, then TOLERATE any trailing address / punctuation.
+//
+// Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — added REGION
+// tokens to the suffix alternation. Real professional-body / utility
+// / regulatory org names frequently take a REGION suffix instead of
+// a Corp/Inc/Ltd suffix (e.g. "CPA ALBERTA", "TELUS Canada",
+// "Shaw Communications", "Enmax Ontario"). Without this, the
+// extractor missed the actual issuer on the CPA Alberta member-
+// dues invoice and picked the addressee (a person-with-credential
+// line) instead.
 const CORP_SUFFIX_RE =
-  /^\s*([A-Z][A-Za-z0-9&.,'\-\s/]{2,60}?(?:\s+(?:Corporation|Corp|Company|Co|Inc|Incorporated|Ltd|Limited|LLC|LLP|LP|ULC|PLC|GmbH|AG|SA|BV|NV|Pty|Association|Society|Foundation|Institute|Group|Holdings)\.?))(?:\b|,|\s|$)/;
+  /^\s*([A-Z][A-Za-z0-9&.,'\-\s/]{2,60}?(?:\s+(?:Corporation|Corp|Company|Co|Inc|Incorporated|Ltd|Limited|LLC|LLP|LP|ULC|PLC|GmbH|AG|SA|BV|NV|Pty|Association|Society|Foundation|Institute|Group|Holdings|Alberta|Ontario|BC|British\s+Columbia|Quebec|Manitoba|Saskatchewan|Nova\s+Scotia|New\s+Brunswick|PEI|Newfoundland|Yukon|Nunavut|NWT|Canada|America|USA|International|Global|Worldwide|National|Regional)\.?))(?:\b|,|\s|$)/i;
+
+// Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — person-with-
+// professional-credential shape. Real invoices frequently address
+// the recipient as "Firstname LASTNAME, CPA" / "Jane Smith, PhD"
+// / "John Doe, MBA, MD". These lines are the ADDRESSEE (the member
+// being billed), not the supplier. The pre-15Q PERSON_NAME_RE only
+// caught first+last with a lowercase last name — "TURCATO" all-caps
+// fell through.
+//
+// GENERALIZED — covers ~20 common Anglo/Canadian credentials. Not
+// a CPA-specific rule; matches any of the listed suffixes uniformly.
+const CREDENTIAL_SUFFIX_ALT =
+  "CPA|CA|CGA|CMA|CFA|MBA|Ph\\.?D|EdD|DDS|DVM|MD|M\\.?D|RN|LPN|NP|RPh|PharmD|P\\.?Eng|LL\\.?B|LL\\.?M|JD|K\\.?C|Q\\.?C|MSc|BSc|BA|MA|MEng|BEng|CIM|CFP|CBV|CIRP|EA|CPP|CPHR|SHRM|CISA|CISSP|PMP|CSCP";
+const PERSON_WITH_CREDENTIAL_RE = new RegExp(
+  `^\\s*[A-Z][A-Za-z'\\-]+(?:\\s+[A-Z][A-Za-z'\\-]+){0,4}\\s*,\\s*(?:${CREDENTIAL_SUFFIX_ALT})(?:\\s*,\\s*(?:${CREDENTIAL_SUFFIX_ALT}))*\\.?\\s*$`,
+  "i",
+);
 
 // Line-shape rejects — labels ("Customer PO Number:"), pure header
 // strings ("Order Details", "Billing Summary"), inline summary
@@ -123,8 +149,16 @@ const REMITTANCE_RE = /\b(?:remit\s+to|make\s+cheque(?:s)?\s+payable\s+to|paymen
 // generic "Tax Registration" / "GST/HST" / "BN" prefix.
 const TAX_ID_RE = /\b(?:GST\/?HST|HST|GST|BN|Business\s*Number|Tax\s*Registration)\b/i;
 
-// Address block — a numbered street or postal code near the candidate.
-const ADDRESS_LINE_RE = /^\s*(?:\d+\s+\w|PO\s+Box\b|P\.\s*O\.\s*Box\b|\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s*\d[A-Z]\d)\b/i;
+// Address block — a numbered street, postal code, or building /
+// suite prefix near the candidate. Sprint 3 · Checkpoint 15Q
+// (revised 2026-07-28) — added Suite / Unit / Apt / Bldg / Floor /
+// Ste prefixes so "Suite 800, 444 - 7th Ave SW Calgary, AB T2P 0X8
+// Canada" is recognised as an address. Without this, the line
+// slipped past the address reject AND matched the corp-suffix
+// alternation via its terminal `Canada` region token, so the
+// full address became a supplier candidate.
+const ADDRESS_LINE_RE =
+  /^\s*(?:\d+\s+\w|(?:Suite|Unit|Apt|Bldg|Floor|Level|Ste)\s*\.?\s*\d+|PO\s+Box\b|P\.\s*O\.\s*Box\b|\d{5}(?:-\d{4})?|[A-Z]\d[A-Z]\s*\d[A-Z]\d)\b/i;
 
 // Common non-issuer line shapes to exclude.
 const DATE_ISH_RE = /\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/;
@@ -197,6 +231,26 @@ export function extractSupplier(
     // Also reject lines dominated by punctuation / digits (>60%).
     const letters = (line.match(/[A-Za-z]/g) ?? []).length;
     if (letters < line.length * 0.4) continue;
+    // Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — reject
+    // person-with-professional-credential lines outright. "Jane Doe,
+    // CPA" / "John Smith, PhD, MBA" is the ADDRESSEE / member being
+    // billed by a professional body — NEVER the supplier. Without
+    // this reject, the extractor scored the addressee line the same
+    // as the actual issuer (both got issuer_header + adjacent_
+    // address) and tie-broke toward whichever appeared first.
+    if (PERSON_WITH_CREDENTIAL_RE.test(line)) {
+      negative.push({ kind: "person_name_shape", detail: "person_with_credential" });
+      continue;
+    }
+    // Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — a real
+    // supplier name is almost always multi-word (2+ words) OR
+    // contains a canonical corp suffix. Single-word summary tokens
+    // like "Penalty", "Subtotal", "Fee", "Amount" appearing near
+    // a tax id / address block would otherwise sneak in as
+    // candidates. Requiring a minimum word count filters them
+    // out without over-rejecting real org names.
+    const wordCount = line.split(/\s+/).filter((w) => /[A-Za-z]/.test(w)).length;
+    if (wordCount < 2 && !CORP_SUFFIX_RE.test(line)) continue;
 
     // Positive: issuer language on the previous line ("Invoice from")
     if (i > 0 && ISSUER_LANGUAGE_RE.test(lines[i - 1])) {

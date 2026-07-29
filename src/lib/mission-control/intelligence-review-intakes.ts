@@ -21,6 +21,7 @@ import { analyseIngestedInvoice } from "@/lib/ap-intelligence/analyse";
 import type { ApAnalyseResult } from "@/lib/ap-intelligence/analyse";
 import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
 import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-intelligence/vendor-profile-extract";
+import { EXTRACTION_RULE_VERSION } from "@/lib/ap-intelligence/types";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
@@ -82,7 +83,16 @@ function apSummaryCacheKey(
   vendorRevision: string,
   apInvRevision: string,
 ): string {
-  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}`;
+  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the ap-intelligence
+  // rule version is now part of the cache key. Bumping EXTRACTION_RULE_
+  // VERSION on any analyser change auto-invalidates every warm entry
+  // on the next request — no process-restart or manual cache purge
+  // needed. Pre-15Q-revised the key only fingerprinted VENDOR_PROFILE_
+  // EXTRACTOR_VERSION, so changes to parse-invoice / supplier-extract /
+  // gl-recommend / line-items-extract / tax-reconcile / economic-purpose
+  // did NOT invalidate the cache, contributing to founder-observed
+  // stale card output within the 90s TTL after a deploy.
+  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::apix=${EXTRACTION_RULE_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}`;
 }
 
 // Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.

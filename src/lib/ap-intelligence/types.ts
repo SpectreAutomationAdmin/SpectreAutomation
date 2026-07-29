@@ -16,7 +16,17 @@ export const EXTRACTION_STATES = [
 export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 
 // The extraction rule version — bump when the parser regex set changes.
-export const EXTRACTION_RULE_VERSION = 1;
+// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — bumped from 1 to
+// 2 so the ap-summary projection cache (which now fingerprints this
+// version — see apSummaryCacheKey) invalidates on deploy and every
+// warm request re-analyses against the latest rules. Before the
+// bump + cache-key inclusion, live projections could serve pre-15Q
+// output within the 90s TTL after a v46 deploy, contributing to the
+// founder-observed stale card. Bump this integer whenever any
+// analyser-touching module changes (parse-invoice / supplier-extract
+// / gl-recommend / line-items-extract / tax-reconcile / economic-
+// purpose / analyse).
+export const EXTRACTION_RULE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.
