@@ -182,6 +182,7 @@ model Club {
   ingestedDocuments          IngestedDocument[]
   ingestedDocumentEvidenceLinks IngestedDocumentEvidenceLink[]
   ingestedDocumentAuditLogs  IngestedDocumentAuditLog[]
+  apIntakeSources            ApIntakeSource[]
   vendorAliases              VendorAlias[]
   vendorMergeRecords         VendorMergeRecord[]
   vendorStatementReconciliations VendorStatementReconciliation[]
@@ -8601,6 +8602,14 @@ model WorkIntakeItem {
   // until the first analysis run persists findings.
   lastAnalysedAt DateTime?
 
+  // Sprint 3 · Checkpoint 15S (2026-07-29) — composite analyser
+  // version at time of the most-recent successful analysis. See
+  // src/lib/ap-intelligence/analysis-version.ts for the composite
+  // spec. Projection compares stored value against the current
+  // composite: mismatch triggers controlled reanalysis rather than
+  // mixing old + new logic silently.
+  analysisVersion String?
+
   emailOrigins   EmailWorkIntakeOrigin[]
   // Sprint 3 Checkpoint 15B — generic source-independent origin
   // relation. Coexists with the email-only EmailWorkIntakeOrigin
@@ -8610,6 +8619,7 @@ model WorkIntakeItem {
   findings       WorkIntakeFinding[]
   activity       WorkIntakeActivity[]
   reads          WorkIntakeItemRead[]
+  apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
@@ -8779,6 +8789,7 @@ model IngestedDocument {
   auditLogs     IngestedDocumentAuditLog[]
   // Sprint 3 Checkpoint 15G — 0..1 statement reconciliation per doc.
   statementReconciliation VendorStatementReconciliation?
+  apIntakeSources         ApIntakeSource[]
 
   @@unique([clubId, sha256Hash])
   @@index([clubId, receivedAt])
@@ -9153,6 +9164,7 @@ model EmailMessage {
 
   attachments        EmailAttachment[]
   workIntakeOrigins  EmailWorkIntakeOrigin[]
+  apIntakeSources    ApIntakeSource[]
 
   // Sprint 2 B4.1 (2026-07-19) — quarantine flag. A message that
   // failed to ingest N times in a row is marked here and skipped by
@@ -9270,6 +9282,40 @@ model EmailAttachment {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  apIntakeSources       ApIntakeSource[] @relation("ApIntakeSourceByAttachment")
+
   @@unique([emailMessageId, graphAttachmentId])
+}
+
+// Sprint 3 · Checkpoint 15S (2026-07-29) — persistent source-to-
+// canonical-AP relationship. See prisma/schema.prisma for the
+// canonical doc block. Tenant-scoped (`clubId`), one row per
+// EmailAttachment, resolves to one canonical AP WorkIntakeItem.
+model ApIntakeSource {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+
+  emailAttachmentId      String   @unique
+  emailAttachment        EmailAttachment @relation("ApIntakeSourceByAttachment", fields: [emailAttachmentId], references: [id], onDelete: Cascade)
+  emailMessageId         String
+  emailMessage           EmailMessage    @relation(fields: [emailMessageId], references: [id], onDelete: Cascade)
+  ingestedDocumentId     String
+  ingestedDocument       IngestedDocument @relation(fields: [ingestedDocumentId], references: [id], onDelete: Cascade)
+
+  canonicalApIntakeId    String
+  canonicalApIntake      WorkIntakeItem  @relation("ApIntakeSourceCanonical", fields: [canonicalApIntakeId], references: [id], onDelete: Cascade)
+
+  // ORIGINAL_SUBMISSION | RETRANSMISSION | FORWARDED_COPY | POSSIBLE_DUPLICATE
+  relationship           String
+  reason                 String?
+  analysisVersionAtLink  String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId, canonicalApIntakeId])
+  @@index([clubId, emailMessageId])
+  @@index([clubId, ingestedDocumentId])
 }
 

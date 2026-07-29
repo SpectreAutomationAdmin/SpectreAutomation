@@ -186,11 +186,18 @@ export async function loadChildReviewIntakesToSuppress(clubId: string): Promise<
   suppressedApIntakeIds: Set<string>;
   suppressedStatementIntakeIds: Set<string>;
 }> {
-  // An AP or Statement intake is a "child of an email intake" IFF:
-  //   1. It has an INGESTED_DOCUMENT PRIMARY origin.
-  //   2. That IngestedDocument was ingested from EMAIL_ATTACHMENT.
-  //   3. The parent EmailMessage has a PRIMARY EmailWorkIntakeOrigin
-  //      (i.e. there's a canonical email intake owning that email).
+  // Sprint 3 · Checkpoint 15S (2026-07-29) — the primary source is
+  // now the ApIntakeSource table. An AP intake is suppressed IFF
+  // any ApIntakeSource row references it — that row's EmailMessage
+  // deterministically resolves to the founder-visible email intake.
+  //
+  // Bounded legacy fallback: for AP intakes with NO ApIntakeSource
+  // rows (pre-15S materialisations), fall back to the original walk
+  // (AP → INGESTED_DOCUMENT → EmailAttachment → EmailMessage →
+  // EmailWorkIntakeOrigin). Legacy is retained so historic intakes
+  // continue to project correctly; new materialisations always take
+  // the explicit path.
+
   const reviews = await prisma.workIntakeItem.findMany({
     where: {
       clubId,
@@ -205,57 +212,85 @@ export async function loadChildReviewIntakesToSuppress(clubId: string): Promise<
       },
     },
   });
-  const docIds = reviews.flatMap((r) => r.origins.map((o) => o.referenceId));
-  if (docIds.length === 0) {
+  if (reviews.length === 0) {
     return { suppressedApIntakeIds: new Set(), suppressedStatementIntakeIds: new Set() };
   }
-  const docs = await prisma.ingestedDocument.findMany({
-    where: { clubId, id: { in: docIds }, sourceKind: "EMAIL_ATTACHMENT" },
-    select: { id: true, sourceReferenceId: true },
-  });
-  const attachmentIds = docs.map((d) => d.sourceReferenceId).filter(Boolean);
-  if (attachmentIds.length === 0) {
-    return { suppressedApIntakeIds: new Set(), suppressedStatementIntakeIds: new Set() };
-  }
-  const attachments = await prisma.emailAttachment.findMany({
-    // clubId scope enforced via the parent emailMessage — attachments
-    // do not carry clubId directly, so we route the tenant guard
-    // through the message relation.
-    where: { id: { in: attachmentIds }, emailMessage: { clubId } },
-    select: {
-      id: true,
-      emailMessage: {
+
+  // Explicit path — ApIntakeSource rows. One query per club.
+  const apIntakeIds = reviews
+    .filter((r) => r.classification === "AP_INVOICE_REVIEW")
+    .map((r) => r.id);
+  const explicitLinks = apIntakeIds.length > 0
+    ? await prisma.apIntakeSource.findMany({
+        where: { clubId, canonicalApIntakeId: { in: apIntakeIds } },
+        select: { canonicalApIntakeId: true },
+      })
+    : [];
+  const explicitlyLinkedApIntakes = new Set(explicitLinks.map((l) => l.canonicalApIntakeId));
+
+  // Legacy fallback — AP intakes that have no ApIntakeSource but
+  // whose old walk resolves to an email intake. Bounded to the
+  // reviews with no explicit link.
+  const legacyReviews = reviews.filter((r) =>
+    r.classification !== "AP_INVOICE_REVIEW" || !explicitlyLinkedApIntakes.has(r.id),
+  );
+  const legacyDocIds = legacyReviews.flatMap((r) => r.origins.map((o) => o.referenceId));
+  const legacyDocToParent = new Map<string, string>();
+  if (legacyDocIds.length > 0) {
+    const docs = await prisma.ingestedDocument.findMany({
+      where: { clubId, id: { in: legacyDocIds }, sourceKind: "EMAIL_ATTACHMENT" },
+      select: { id: true, sourceReferenceId: true },
+    });
+    const attachmentIds = docs.map((d) => d.sourceReferenceId).filter(Boolean);
+    if (attachmentIds.length > 0) {
+      const attachments = await prisma.emailAttachment.findMany({
+        where: { id: { in: attachmentIds }, emailMessage: { clubId } },
         select: {
-          id: true, clubId: true,
-          workIntakeOrigins: {
-            where: { role: "PRIMARY" },
-            select: { workIntakeItemId: true },
-            take: 1,
+          id: true,
+          emailMessage: {
+            select: {
+              id: true, clubId: true,
+              workIntakeOrigins: {
+                where: { role: "PRIMARY" },
+                select: { workIntakeItemId: true },
+                take: 1,
+              },
+            },
           },
         },
-      },
-    },
-  });
-  // Build attachmentId → parent email intake id map.
-  const attToParent = new Map<string, string>();
-  for (const a of attachments) {
-    if (!a.emailMessage || a.emailMessage.clubId !== clubId) continue;
-    const parent = a.emailMessage.workIntakeOrigins[0]?.workIntakeItemId;
-    if (parent) attToParent.set(a.id, parent);
+      });
+      const attToParent = new Map<string, string>();
+      for (const a of attachments) {
+        if (!a.emailMessage || a.emailMessage.clubId !== clubId) continue;
+        const parent = a.emailMessage.workIntakeOrigins[0]?.workIntakeItemId;
+        if (parent) attToParent.set(a.id, parent);
+      }
+      for (const d of docs) {
+        const parent = attToParent.get(d.sourceReferenceId);
+        if (parent) legacyDocToParent.set(d.id, parent);
+      }
+    }
   }
-  const docToParent = new Map<string, string>();
-  for (const d of docs) {
-    const parent = attToParent.get(d.sourceReferenceId);
-    if (parent) docToParent.set(d.id, parent);
-  }
+
   const suppressedApIntakeIds = new Set<string>();
   const suppressedStatementIntakeIds = new Set<string>();
   for (const r of reviews) {
-    const primaryDocId = r.origins[0]?.referenceId;
-    if (!primaryDocId) continue;
-    if (!docToParent.has(primaryDocId)) continue;
-    if (r.classification === "AP_INVOICE_REVIEW") suppressedApIntakeIds.add(r.id);
-    else suppressedStatementIntakeIds.add(r.id);
+    if (r.classification === "AP_INVOICE_REVIEW") {
+      // Prefer explicit link. Fall back to legacy walk.
+      if (explicitlyLinkedApIntakes.has(r.id)) {
+        suppressedApIntakeIds.add(r.id);
+        continue;
+      }
+      const primaryDocId = r.origins[0]?.referenceId;
+      if (primaryDocId && legacyDocToParent.has(primaryDocId)) {
+        suppressedApIntakeIds.add(r.id);
+      }
+    } else {
+      const primaryDocId = r.origins[0]?.referenceId;
+      if (primaryDocId && legacyDocToParent.has(primaryDocId)) {
+        suppressedStatementIntakeIds.add(r.id);
+      }
+    }
   }
   return { suppressedApIntakeIds, suppressedStatementIntakeIds };
 }
@@ -470,19 +505,59 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     }
     return map;
   }
-  const docs = await prisma.ingestedDocument.findMany({
-    where: { clubId: args.clubId, sourceKind: "EMAIL_ATTACHMENT", sourceReferenceId: { in: attachmentIds } },
-    select: { id: true, sourceReferenceId: true, classification: true },
+  // Sprint 3 · Checkpoint 15S (2026-07-29) — attachment → doc
+  // resolution. The legacy walk used
+  // IngestedDocument.sourceReferenceId, which is set ONCE at
+  // initial ingestion (SHA dedup). When a fresh email attachment
+  // shares a SHA with an existing document, the reused doc's
+  // sourceReferenceId still names the ORIGINAL attachment — the
+  // legacy walk from the NEW attachment to the reused doc thus
+  // returned empty, which is exactly why Pt2 email intake fell
+  // back to the sender-name label.
+  //
+  // The explicit path uses the new ApIntakeSource table: per-
+  // attachment, always current, deterministic.
+  const explicitSources = await prisma.apIntakeSource.findMany({
+    where: { clubId: args.clubId, emailAttachmentId: { in: attachmentIds } },
+    select: {
+      emailAttachmentId: true, ingestedDocumentId: true, canonicalApIntakeId: true,
+      canonicalApIntake: { select: { classification: true } },
+    },
   });
   const docsByAttachment = new Map<string, { id: string; classification: string }>();
-  for (const d of docs) docsByAttachment.set(d.sourceReferenceId, d);
+  const canonicalApByAttachment = new Map<string, string>();
+  for (const s of explicitSources) {
+    docsByAttachment.set(s.emailAttachmentId, {
+      id: s.ingestedDocumentId,
+      classification: s.canonicalApIntake.classification === "AP_INVOICE_REVIEW" ? "INVOICE" : "UNKNOWN",
+    });
+    canonicalApByAttachment.set(s.emailAttachmentId, s.canonicalApIntakeId);
+  }
 
-  const reviewIntakes = docs.length > 0
+  // Legacy fallback — pre-15S rows without ApIntakeSource. Bounded
+  // to attachments the explicit path didn't cover.
+  const legacyAttachmentIds = attachmentIds.filter((id) => !docsByAttachment.has(id));
+  if (legacyAttachmentIds.length > 0) {
+    const legacyDocs = await prisma.ingestedDocument.findMany({
+      where: { clubId: args.clubId, sourceKind: "EMAIL_ATTACHMENT", sourceReferenceId: { in: legacyAttachmentIds } },
+      select: { id: true, sourceReferenceId: true, classification: true },
+    });
+    for (const d of legacyDocs) {
+      docsByAttachment.set(d.sourceReferenceId, { id: d.id, classification: d.classification });
+    }
+  }
+
+  const allDocIds = Array.from(new Set(Array.from(docsByAttachment.values()).map((d) => d.id)));
+  const allExplicitApIntakeIds = Array.from(new Set(Array.from(canonicalApByAttachment.values())));
+  const reviewIntakes = allDocIds.length > 0 || allExplicitApIntakeIds.length > 0
     ? await prisma.workIntakeItem.findMany({
         where: {
           clubId: args.clubId,
           classification: { in: ["AP_INVOICE_REVIEW", "VENDOR_STATEMENT_REVIEW"] },
-          origins: { some: { kind: "INGESTED_DOCUMENT", role: "PRIMARY", referenceId: { in: docs.map((d) => d.id) } } },
+          OR: [
+            { id: { in: allExplicitApIntakeIds } },
+            { origins: { some: { kind: "INGESTED_DOCUMENT", role: "PRIMARY", referenceId: { in: allDocIds } } } },
+          ],
         },
         select: {
           id: true, classification: true,
@@ -505,8 +580,20 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     const invoiceAttCount = attDocs.filter((d) => d.classification === "INVOICE").length;
     const statementAttCount = attDocs.filter((d) => d.classification === "STATEMENT").length;
     const attDocIds = new Set(attDocs.map((d) => d.id));
+    // Sprint 3 · Checkpoint 15S (2026-07-29) — collect canonical AP
+    // intake ids from BOTH the explicit ApIntakeSource path AND the
+    // legacy INGESTED_DOCUMENT origin walk. The explicit path is
+    // authoritative for post-15S materialisations; the legacy path
+    // covers older records.
+    const explicitApIds = realAtts
+      .map((a) => canonicalApByAttachment.get(a.id))
+      .filter((v): v is string => v != null);
+    const legacyApIds = reviewIntakes
+      .filter((r) => r.classification === "AP_INVOICE_REVIEW"
+        && r.origins.some((o) => attDocIds.has(o.referenceId)))
+      .map((r) => r.id);
+    const apIds = Array.from(new Set([...explicitApIds, ...legacyApIds]));
     const ownedReviews = reviewIntakes.filter((r) => r.origins.some((o) => attDocIds.has(o.referenceId)));
-    const apIds = ownedReviews.filter((r) => r.classification === "AP_INVOICE_REVIEW").map((r) => r.id);
     const stIds = ownedReviews.filter((r) => r.classification === "VENDOR_STATEMENT_REVIEW").map((r) => r.id);
 
     // Sprint 3 Checkpoint 15I-2 — projections run in parallel per

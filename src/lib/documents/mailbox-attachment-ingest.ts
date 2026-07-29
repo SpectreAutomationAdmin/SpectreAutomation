@@ -219,10 +219,25 @@ async function maybeMaterialiseInvoiceOrStatement(args: {
     }
   }
   if (!docId) return;
+  // Sprint 3 · Checkpoint 15S (2026-07-29) — resolve the EmailMessage
+  // for this attachment so the AP materialiser can persist the
+  // ApIntakeSource link. Same-tenant guard is enforced downstream
+  // in upsertApIntakeSource.
+  const attMeta = await prisma.emailAttachment.findFirst({
+    where: { id: args.attachmentId },
+    select: { id: true, emailMessageId: true, emailMessage: { select: { clubId: true } } },
+  });
+  const sourceContext = attMeta && attMeta.emailMessage?.clubId === args.clubId
+    ? { emailAttachmentId: attMeta.id, emailMessageId: attMeta.emailMessageId }
+    : undefined;
   if (classification === "INVOICE") {
     try {
       const { materialiseSingleInvoiceDocument } = await import("../ap-intelligence/materialise");
-      await materialiseSingleInvoiceDocument({ clubId: args.clubId, ingestedDocumentId: docId });
+      await materialiseSingleInvoiceDocument({
+        clubId: args.clubId,
+        ingestedDocumentId: docId,
+        sourceContext,
+      });
     } catch (err) {
       logger.warn("documents.mailbox_ingest.ap_materialise_failed", {
         clubId: args.clubId, documentIdTail: docId.slice(-6),

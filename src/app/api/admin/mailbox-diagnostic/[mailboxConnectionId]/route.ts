@@ -267,5 +267,101 @@ export async function POST(req: Request, ctx: { params: Promise<{ mailboxConnect
     return NextResponse.json({ ok: true, enqueued: true });
   }
 
+  if (action === "reanalyse_attachment") {
+    // Sprint 3 · Checkpoint 15S (2026-07-29) — controlled reanalysis
+    // of a specific EmailAttachment. Idempotent — the AP
+    // materialiser uses natural keys on IngestedDocument.id +
+    // EmailAttachment.id; it does NOT create duplicate WorkIntakes,
+    // AP invoices, vendors, or journal entries. When called with
+    // dryRun:true, returns the current + would-be relationship
+    // classification without writing.
+    const bodyExt = body as { attachmentIdHash?: string; dryRun?: boolean };
+    if (!bodyExt.attachmentIdHash) {
+      return NextResponse.json({ error: "attachmentIdHash required" }, { status: 400 });
+    }
+    // Attachments do not carry clubId; walk via emailMessage.clubId.
+    const candidates = await prisma.emailAttachment.findMany({
+      where: { emailMessage: { clubId: conn.clubId, mailboxConnectionId: conn.id } },
+      select: { id: true, emailMessageId: true },
+    });
+    const match = candidates.find((a) => short(a.id) === bodyExt.attachmentIdHash);
+    if (!match) {
+      return NextResponse.json({ error: "attachment_not_found_for_hash" }, { status: 404 });
+    }
+    // Find the linked IngestedDocument (via sourceReferenceId).
+    const doc = await prisma.ingestedDocument.findFirst({
+      where: { clubId: conn.clubId, sourceKind: "EMAIL_ATTACHMENT", sourceReferenceId: match.id },
+      select: { id: true, classification: true },
+    });
+    if (!doc) {
+      return NextResponse.json({ error: "ingested_document_not_found" }, { status: 404 });
+    }
+    if (doc.classification !== "INVOICE") {
+      return NextResponse.json({ error: `document_classification=${doc.classification}; only INVOICE is supported here` }, { status: 400 });
+    }
+    // Peek at current ApIntakeSource for before/after diff.
+    const beforeSource = await prisma.apIntakeSource.findFirst({
+      where: { emailAttachmentId: match.id, clubId: conn.clubId },
+      select: {
+        canonicalApIntakeId: true, relationship: true,
+        analysisVersionAtLink: true, updatedAt: true,
+      },
+    });
+    if (bodyExt.dryRun) {
+      return NextResponse.json({
+        ok: true, dryRun: true,
+        would: {
+          runAnalyseIngestedInvoice: true,
+          runMaterialiser: true,
+          currentApIntakeSource: beforeSource,
+        },
+      });
+    }
+    // Run the AP materialiser end-to-end with sourceContext, which
+    // will re-upsert ApIntakeSource + rewrite findings + stamp
+    // analysisVersion. Idempotent.
+    const { materialiseSingleInvoiceDocument } = await import("@/lib/ap-intelligence/materialise");
+    const result = await materialiseSingleInvoiceDocument({
+      clubId: conn.clubId,
+      ingestedDocumentId: doc.id,
+      sourceContext: {
+        emailAttachmentId: match.id,
+        emailMessageId: match.emailMessageId,
+      },
+    });
+    const afterSource = await prisma.apIntakeSource.findFirst({
+      where: { emailAttachmentId: match.id, clubId: conn.clubId },
+      select: {
+        canonicalApIntakeId: true, relationship: true,
+        analysisVersionAtLink: true, updatedAt: true,
+      },
+    });
+    await audit(principal, {
+      clubId: conn.clubId,
+      action: "MAILBOX_DIAGNOSTIC_REANALYSE_ATTACHMENT",
+      entityType: "EmailAttachment",
+      entityId: match.id,
+      meta: {
+        canonicalApIntakeIdTail: result.intakeId.slice(-6),
+        relationship: result.apIntakeSourceRelationship ?? null,
+      },
+    });
+    logger.info("mailbox.diagnostic.reanalyse_attachment", {
+      mailboxConnectionIdTail: conn.id.slice(-6),
+      attachmentIdTail: match.id.slice(-6),
+      canonicalApIntakeIdTail: result.intakeId.slice(-6),
+      relationship: result.apIntakeSourceRelationship ?? null,
+    });
+    return NextResponse.json({
+      ok: true,
+      canonicalApIntakeId: result.intakeId,
+      relationship: result.apIntakeSourceRelationship ?? null,
+      findingsCreated: result.findingsCreated,
+      findingsPreserved: result.findingsPreserved,
+      beforeSource,
+      afterSource,
+    });
+  }
+
   return NextResponse.json({ error: "unknown_action" }, { status: 400 });
 }

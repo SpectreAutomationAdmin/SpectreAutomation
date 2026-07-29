@@ -411,7 +411,15 @@ export async function analyseInvoiceConversation(args: {
     : { state: "INSUFFICIENT_INFORMATION" as const, invoices: [] };
 
   if (looksLikeInvoiceThread) {
-    return composeInvoiceSynopsis({ ident, vendorMatch, apResult, newestEmail, classificationReason, relTimeLabel });
+    return composeInvoiceSynopsis({
+      ident, vendorMatch, apResult, newestEmail, classificationReason, relTimeLabel,
+      // Sprint 3 · Checkpoint 15S — signal to the vendor-display
+      // helper that this email carries an attachment which the AP
+      // pipeline is (or should be) analysing. Prevents the sender-
+      // as-vendor fallback that mislabelled the founder as vendor
+      // on the Pt2 email.
+      hasPdfInvoiceAttachment: !!newestEmail.hasAttachments,
+    });
   }
   return composeGenericSynopsis({ newestEmail, classificationLabel, classificationReason, relTimeLabel });
 }
@@ -423,6 +431,7 @@ function composeInvoiceSynopsis(args: {
   newestEmail: EmailMessage;
   classificationReason: string | null;
   relTimeLabel: string;
+  hasPdfInvoiceAttachment?: boolean;
 }): OperationalAnalysis {
   const { ident, vendorMatch, apResult, newestEmail, relTimeLabel } = args;
 
@@ -433,7 +442,9 @@ function composeInvoiceSynopsis(args: {
     : `Vendor reports an unpaid invoice`;
 
   // -- Context line --------------------------------------------------
-  const vendorDisplay = pickVendorDisplayName(vendorMatch, ident);
+  const vendorDisplay = pickVendorDisplayName(vendorMatch, ident, {
+    hasPdfInvoiceAttachment: args.hasPdfInvoiceAttachment,
+  });
   const contextLine = `${vendorDisplay} · Accounts payable · received ${relTimeLabel}`;
 
   // -- Evidence strip ------------------------------------------------
@@ -669,9 +680,26 @@ function composeGenericSynopsis(args: {
 // Small formatting helpers
 // ---------------------------------------------------------------------------
 
-function pickVendorDisplayName(match: VendorMatchResult, ident: ExtractedIdentifiers): string {
+function pickVendorDisplayName(
+  match: VendorMatchResult,
+  ident: ExtractedIdentifiers,
+  opts?: { hasPdfInvoiceAttachment?: boolean },
+): string {
   if (match.state === "MATCHED" && match.candidates[0]) {
     return match.candidates[0].operatingName ?? match.candidates[0].legalName;
+  }
+  // Sprint 3 · Checkpoint 15S (2026-07-29) — do NOT fall back to
+  // sender when the email carries a PDF invoice attachment. The
+  // canonical AP analysis is the authoritative source of vendor
+  // identity in that case; the message-level projection MUST NOT
+  // claim the sender IS the vendor. When the AP intake resolves
+  // via ApIntakeSource, the AP card variant renders instead of
+  // this email variant. When the AP variant fails to render for
+  // any reason, showing the em-dash (existing missing-data
+  // convention used by INVOICE / AMOUNT cells) is safer than
+  // silently mislabelling the founder as the vendor.
+  if (opts?.hasPdfInvoiceAttachment) {
+    return "—";
   }
   return ident.senderName || ident.senderEmail || "Unknown sender";
 }
