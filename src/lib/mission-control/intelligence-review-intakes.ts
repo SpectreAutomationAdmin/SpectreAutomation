@@ -461,6 +461,48 @@ export interface ApInvoiceCardIntelligence {
     documentId: string;
     filename: string;
   } | null;
+  // Sprint 3 · Checkpoint 15V — canonical multi-GL allocation output.
+  // Consumed by the AP Coding modal; also drives the card Category
+  // cell (which displays "Multiple" when >=2 material GL allocations
+  // are proposed). Absent (null) when the analyser could not produce
+  // any allocation.
+  allocations: null | {
+    cardCategory: string | null;
+    requiresReview: boolean;
+    totals: {
+      allocationsSubtotal: number;
+      taxTotal: number;
+      creditTotal: number;
+      grossTotal: number;
+      allocationVariance: number;
+    };
+    entries: Array<{
+      id: string;
+      sourceLineItemIds: string[];
+      descriptions: string[];
+      economicPurposeConcept: string;
+      economicPurposeConfidence: number;
+      supportingEvidence: string[];
+      amount: number;
+      taxTreatment: string;
+      taxRate: number | null;
+      taxAmount: number | null;
+      recommendedAccount: null | {
+        accountId: string;
+        accountNumber: string;
+        accountName: string;
+        confidence: number;
+        requiresReview: boolean;
+        postingBlockers: string[];
+      };
+      alternatives: Array<{
+        accountId: string;
+        accountNumber: string;
+        accountName: string;
+        score: number;
+      }>;
+    }>;
+  };
 }
 export async function loadLinkedIntelligenceForEmailIntakes(args: {
   clubId: string;
@@ -834,10 +876,15 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       variance: null,              // Future: computed once PO reconciliation lands.
     },
     category: {
-      // Blank the category label when the tenant has no chart of
-      // accounts — we cannot honestly recommend a category. The
-      // recommendation strip carries the truthful no-COA message.
-      label: noCoa ? null : categoryLabel,
+      // Sprint 3 · Checkpoint 15V — when the multi-GL allocation
+      // engine proposes 2+ material allocations, the card cell
+      // displays "Multiple" per founder rule §8. The user opens the
+      // AP Coding modal to review each debit leg. Single allocations
+      // fall through to the account name; no-allocation cases fall
+      // through to the pre-15V categoryLabel.
+      label: noCoa
+        ? null
+        : (analysis?.allocations?.cardCategory ?? categoryLabel),
       glAccountNumber: noCoa ? null : (gl?.accountNumber ?? null),
       glAccountName: noCoa ? null : (gl?.accountName ?? null),
       capitalState,
@@ -861,6 +908,29 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     workflowReason,
     unresolvedFindingCount,
     primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
+    // Sprint 3 · Checkpoint 15V — surface allocations for the AP
+    // Coding modal. Absent (null) when the analyser produced none.
+    allocations: analysis?.allocations
+      ? {
+          cardCategory: analysis.allocations.cardCategory,
+          requiresReview: analysis.allocations.requiresReview,
+          totals: analysis.allocations.totals,
+          entries: analysis.allocations.allocations.map((a) => ({
+            id: a.id,
+            sourceLineItemIds: a.sourceLineItemIds,
+            descriptions: a.descriptions,
+            economicPurposeConcept: a.economicPurpose.concept,
+            economicPurposeConfidence: a.economicPurpose.confidence,
+            supportingEvidence: a.economicPurpose.supportingEvidence,
+            amount: a.amount,
+            taxTreatment: a.taxTreatment,
+            taxRate: a.taxRate,
+            taxAmount: a.taxAmount,
+            recommendedAccount: a.recommendedAccount,
+            alternatives: a.alternatives,
+          })),
+        }
+      : null,
   };
 
   // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission

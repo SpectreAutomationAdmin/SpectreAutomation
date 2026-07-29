@@ -94,6 +94,7 @@ function baseApFacts(): ApInvoiceCardIntelligence {
       "Match Microsoft Corporation to an existing vendor or onboard it, then confirm the proposed coding.",
     unresolvedFindingCount: 1,
     primaryAttachment: { documentId: "fx-doc-93458", filename: "93458725404.pdf" },
+    allocations: null,
   };
 }
 

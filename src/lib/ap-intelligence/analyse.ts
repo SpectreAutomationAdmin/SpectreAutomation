@@ -40,6 +40,9 @@ import { classifyEconomicPurpose, type PurposeCandidate } from "./economic-purpo
 // Sprint 3 · Checkpoint 15T — amount hierarchy + tax/credit groups.
 import { computeAmountHierarchy, type AmountHierarchyResult } from "./amount-hierarchy";
 import { buildTaxGroups, type TaxGroupsResult } from "./tax-groups";
+// Sprint 3 · Checkpoint 15V — multi-GL allocation engine.
+import { computeAllocations, type AllocationResult } from "./gl-allocations";
+import { extractConceptsForAccount } from "./gl-account-concepts";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -94,6 +97,12 @@ export interface ApAnalyseResult {
   // NOT used to automatically post multiple journal lines this
   // checkpoint.
   splitGlRecommendations: SplitRecommendation[];
+  // Sprint 3 · Checkpoint 15V — canonical multi-GL allocation output.
+  // Every AP invoice now produces a list of per-purpose allocations
+  // with per-allocation recommended account, alternatives, tax
+  // treatment, and confidence. The reconciliation totals prove the
+  // debits + recoverable tax balance the AP credit.
+  allocations: AllocationResult;
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -312,6 +321,50 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     printedTax,
   });
 
+  // Sprint 3 · Checkpoint 15V — multi-GL allocation engine. Runs the
+  // 15U ranker per economic-purpose cluster; the result feeds the
+  // AP Coding modal directly and drives the "Multiple" Category
+  // display on the Work Intake card.
+  const accountsForAllocations = await prisma.account.findMany({
+    where: { clubId: args.clubId, isActive: true, isHeader: false, type: { in: ["EXPENSE", "ASSET"] } },
+    select: {
+      id: true, accountNumber: true, name: true, type: true,
+      allowManualPosting: true, fundApplicability: true,
+      category: { select: { key: true, name: true } },
+      fsGroup: { select: { key: true, name: true } },
+    },
+  });
+  const allocationAccounts = accountsForAllocations.map((a) => ({
+    id: a.id,
+    accountNumber: a.accountNumber,
+    name: a.name,
+    categoryKey: a.category?.key ?? null,
+    categoryName: a.category?.name ?? null,
+    fsGroupKey: a.fsGroup?.key ?? null,
+    fsGroupName: a.fsGroup?.name ?? null,
+  }));
+  const allocationPostingBlockers = new Map<string, Array<import("./gl-recommend").PostingBlocker>>();
+  for (const a of accountsForAllocations) {
+    const blockers: Array<import("./gl-recommend").PostingBlocker> = [];
+    if (!a.allowManualPosting) blockers.push("MANUAL_POSTING_DISALLOWED");
+    const isPL = a.type === "EXPENSE";
+    if (isPL && (!a.fundApplicability || a.fundApplicability.trim() === "")) {
+      blockers.push("FUND_APPLICABILITY_UNMAPPED");
+    }
+    allocationPostingBlockers.set(a.id, blockers);
+  }
+  const allocations = computeAllocations({
+    lineItems: lineItemsExtracted,
+    accounts: allocationAccounts,
+    postingBlockersByAccount: allocationPostingBlockers,
+    economicPurposeCandidates: economicPurpose,
+    fullDocumentText: pdfOk ? pdfText : null,
+    supplierName: extraction.vendor.guessedName,
+    printedSubtotal,
+    printedTax,
+    printedTotal,
+  });
+
   // ---- Assemble findings for WorkIntakeFinding persistence ---------------
   const findings: FindingInput[] = [];
   const evidenceRefs = [
@@ -421,6 +474,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     amountHierarchy,
     taxGroupsResult,
     splitGlRecommendations: gl.splitRecommendations,
+    allocations,
   };
 }
 

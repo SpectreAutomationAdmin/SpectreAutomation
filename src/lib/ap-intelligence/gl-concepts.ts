@@ -448,20 +448,162 @@ export const ACCOUNTING_CONCEPTS: AccountingConcept[] = [
   },
 
   // ================================================================
-  // Food & beverage supplies
+  // Food cost of sales family
   // ================================================================
   {
-    id: "food_and_beverage_supplies",
-    canonicalName: "Food and beverage supplies",
+    id: "food_cost_of_sales",
+    canonicalName: "Food cost of sales",
     synonyms: [
-      "food supplies", "beverage supplies", "grocery", "produce",
+      "food supplies", "grocery", "groceries", "produce",
       "meat", "dairy", "kitchen supplies", "restaurant supplies",
+      "food product", "food products", "food cost", "food ingredients",
+      "vegetables", "fruit", "poultry", "seafood", "bakery",
     ],
     parent: null,
-    contradicts: [],
-    fsGroupKeyHints: ["IS_COGS_FOOD", "IS_COGS_BEV", "IS_FB_SUPPLIES"],
+    contradicts: ["beverage_cost_of_sales", "printing_services"],
+    fsGroupKeyHints: ["IS_COGS_FOOD", "IS_FB_SUPPLIES"],
     categoryKeyHints: [],
     depth: 1,
+  },
+
+  // ================================================================
+  // Beverage cost of sales family (§5 product-form distinctions)
+  // ================================================================
+  {
+    id: "beverage_cost_of_sales",
+    canonicalName: "Beverage cost of sales",
+    // Sprint 3 · Checkpoint 15V — parent-only synonyms. Product-
+    // specific terms (beer, wine, spirits) belong to their
+    // depth-2 sub-concepts (draft/packaged beer, wine, spirits).
+    // Putting them on the parent would make the ranker score every
+    // beverage COGS account equally via the parent match.
+    synonyms: ["beverage supplies", "beverage cost", "beverages", "drinks"],
+    parent: null,
+    contradicts: ["food_cost_of_sales", "printing_services"],
+    fsGroupKeyHints: ["IS_COGS_BEV"],
+    categoryKeyHints: [],
+    depth: 1,
+  },
+  {
+    id: "draft_beer_cost_of_sales",
+    canonicalName: "Draft beer cost of sales",
+    synonyms: [
+      "draft beer", "draught beer", "keg beer", "keg", "half keg",
+      "quarter keg", "sixtel", "on tap", "tap beer",
+    ],
+    parent: "beverage_cost_of_sales",
+    contradicts: ["packaged_beer_cost_of_sales", "wine_cost_of_sales"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    id: "packaged_beer_cost_of_sales",
+    canonicalName: "Packaged beer cost of sales",
+    synonyms: [
+      "packaged beer", "canned beer", "bottled beer", "bottles",
+      "cans", "6-pack", "12-pack", "24-pack", "case of beer",
+    ],
+    parent: "beverage_cost_of_sales",
+    contradicts: ["draft_beer_cost_of_sales", "wine_cost_of_sales"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    id: "wine_cost_of_sales",
+    canonicalName: "Wine cost of sales",
+    synonyms: [
+      "wine", "red wine", "white wine", "champagne",
+      "sparkling wine", "rose wine", "wine bottle", "wine case",
+    ],
+    parent: "beverage_cost_of_sales",
+    contradicts: ["draft_beer_cost_of_sales", "packaged_beer_cost_of_sales", "spirits_cost_of_sales"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    id: "spirits_cost_of_sales",
+    canonicalName: "Spirits cost of sales",
+    synonyms: [
+      "spirits", "liquor", "vodka", "gin", "rum", "whisky",
+      "whiskey", "tequila", "bourbon", "scotch",
+    ],
+    parent: "beverage_cost_of_sales",
+    contradicts: ["wine_cost_of_sales", "draft_beer_cost_of_sales"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+
+  // ================================================================
+  // Delivery / freight / surcharges (§4)
+  // ================================================================
+  {
+    id: "delivery_and_freight",
+    canonicalName: "Delivery and freight",
+    synonyms: [
+      "delivery", "delivery charge", "delivery fee",
+      "freight", "shipping", "shipping charge", "shipping fee",
+      "courier", "transport", "trucking",
+    ],
+    parent: null,
+    contradicts: ["food_cost_of_sales", "beverage_cost_of_sales", "printing_services"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 1,
+  },
+  {
+    id: "fuel_surcharge",
+    canonicalName: "Fuel surcharge",
+    synonyms: ["fuel surcharge", "fuel charge", "fuel adjustment", "fuel"],
+    parent: "delivery_and_freight",
+    contradicts: [],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    id: "environmental_surcharge",
+    canonicalName: "Environmental surcharge",
+    synonyms: ["environmental surcharge", "environmental fee", "green fee (invoice)", "carbon fee"],
+    parent: null,
+    contradicts: [],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 1,
+  },
+
+  // ================================================================
+  // Sub-concepts of interest & penalties (§4 distinguish late fee from interest)
+  // ================================================================
+  {
+    id: "finance_interest_charge",
+    canonicalName: "Finance and interest charges",
+    synonyms: [
+      "interest expense", "interest charge", "finance charge",
+      "interest fee", "financing interest",
+    ],
+    parent: "interest_and_penalties",
+    contradicts: ["professional_membership_dues", "food_cost_of_sales", "beverage_cost_of_sales"],
+    fsGroupKeyHints: ["IS_INTEREST_EXPENSE"],
+    categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    id: "late_payment_penalty",
+    canonicalName: "Late-payment penalty (administrative)",
+    synonyms: [
+      "late payment", "late-payment penalty", "late fee",
+      "late charge", "penalty charge", "administrative penalty",
+      "penalty",
+    ],
+    parent: "interest_and_penalties",
+    contradicts: ["professional_membership_dues", "food_cost_of_sales", "beverage_cost_of_sales"],
+    fsGroupKeyHints: [],
+    categoryKeyHints: [],
+    depth: 2,
   },
 
   // ================================================================

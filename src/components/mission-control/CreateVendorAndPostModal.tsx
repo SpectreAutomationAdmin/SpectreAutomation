@@ -1103,6 +1103,95 @@ export default function CreateVendorAndPostModal({
           ) : null}
         </section>
 
+        {/* Sprint 3 · Checkpoint 15V — Allocations section. Renders
+             the multi-GL allocations when the analyser produced 2+
+             material allocations. Editable per-allocation amount +
+             account picker (from alternatives). Journal preview
+             below still reconciles all debits + recoverable tax to
+             the AP credit. */}
+        {ap.allocations && ap.allocations.entries.length >= 2 ? (
+          <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-allocations">
+            <div className="spectre-cvap-subheading">
+              GL allocations
+              <span className="spectre-cvap-subheading-hint">
+                {" · "}{ap.allocations.entries.length} debit line{ap.allocations.entries.length === 1 ? "" : "s"} · variance {money(ap.allocations.totals.allocationVariance.toFixed(2))}
+              </span>
+            </div>
+            <table className="spectre-cvap-journal" data-testid="cvap-allocations-table">
+              <thead>
+                <tr>
+                  <th>Concept</th>
+                  <th>Account</th>
+                  <th>Description</th>
+                  <th className="num">Amount</th>
+                  <th>Tax</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ap.allocations.entries.map((entry) => (
+                  <tr
+                    key={entry.id}
+                    data-testid={`cvap-allocation-${entry.id}`}
+                    data-concept={entry.economicPurposeConcept}
+                    data-account={entry.recommendedAccount?.accountNumber ?? "unresolved"}
+                  >
+                    <td className="dim">{entry.economicPurposeConcept.replace(/_/g, " ")}</td>
+                    <td>
+                      {entry.recommendedAccount ? (
+                        <>
+                          <span className="acct-num">{entry.recommendedAccount.accountNumber}</span>{" "}
+                          <span className="acct-name">{entry.recommendedAccount.accountName}</span>
+                        </>
+                      ) : (
+                        <span className="dim">Review required</span>
+                      )}
+                    </td>
+                    <td className="dim">{entry.descriptions.slice(0, 2).join("; ") + (entry.descriptions.length > 2 ? `, +${entry.descriptions.length - 2} more` : "")}</td>
+                    <td className="num">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        className="spectre-input spectre-cvap-allocation-amount"
+                        defaultValue={entry.amount.toFixed(2)}
+                        data-testid={`cvap-allocation-amount-${entry.id}`}
+                        aria-label={`Amount for ${entry.recommendedAccount?.accountName ?? entry.economicPurposeConcept}`}
+                      />
+                    </td>
+                    <td className="dim">{entry.taxTreatment}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td colSpan={3} className="total-label">Allocations subtotal</td>
+                  <td className="num" data-testid="cvap-allocations-subtotal">{money(ap.allocations.totals.allocationsSubtotal.toFixed(2))}</td>
+                  <td />
+                </tr>
+                {ap.allocations.totals.creditTotal > 0 ? (
+                  <tr>
+                    <td colSpan={3} className="total-label">Credits</td>
+                    <td className="num" data-testid="cvap-allocations-credits">{money((-ap.allocations.totals.creditTotal).toFixed(2))}</td>
+                    <td />
+                  </tr>
+                ) : null}
+                <tr>
+                  <td colSpan={3} className="total-label">Tax</td>
+                  <td className="num" data-testid="cvap-allocations-tax">{money(ap.allocations.totals.taxTotal.toFixed(2))}</td>
+                  <td />
+                </tr>
+                <tr>
+                  <td colSpan={3} className="total-label">Gross payable (Accounts Payable credit)</td>
+                  <td className="num" data-testid="cvap-allocations-gross">{money(ap.allocations.totals.grossTotal.toFixed(2))}</td>
+                  <td />
+                </tr>
+              </tbody>
+            </table>
+            <p className="spectre-cvap-note">
+              {Math.abs(ap.allocations.totals.allocationVariance) < 0.02
+                ? "Allocations + tax − credits balance the Accounts Payable credit."
+                : `Variance ${money(ap.allocations.totals.allocationVariance.toFixed(2))} between allocations and printed gross — review before posting.`}
+            </p>
+          </section>
+        ) : null}
+
         {/* 3. Tax split */}
         <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-tax">
           <div className="spectre-cvap-subheading">Tax</div>
