@@ -21,7 +21,7 @@ import { validateExtractedArithmetic } from "./validate";
 import { resolveVendorForExtraction, type VendorResolveResult } from "./vendor-resolve";
 import { reconcileAgainstAp, type ReconcileResult } from "./reconcile";
 import { classifyCapitalVsOperating, type CapitalVsOperatingRecommendation } from "./capital-vs-operating";
-import { recommendGlAccount, type GlRecommendation } from "./gl-recommend";
+import { recommendGlAccount, type GlRecommendation, type SplitRecommendation } from "./gl-recommend";
 import { extractVendorProfile, type ExtractedVendorProfile } from "./vendor-profile-extract";
 import { resolveDocumentStorage } from "@/lib/documents/storage";
 import { getSetting } from "@/lib/enterprise/settings";
@@ -88,6 +88,12 @@ export interface ApAnalyseResult {
   // and evidence validation are complete (founder rule §9).
   amountHierarchy: AmountHierarchyResult;
   taxGroupsResult: TaxGroupsResult;
+  // Sprint 3 · Checkpoint 15U — canonical-analysis-only. Split
+  // recommendations surface possible multi-debit-leg coding for a
+  // mixed-purpose invoice. Consumed by future AP Coding modal work;
+  // NOT used to automatically post multiple journal lines this
+  // checkpoint.
+  splitGlRecommendations: SplitRecommendation[];
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -272,6 +278,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // full-document-phrase evidence into the GL boost logic; the
     // recommender's own classifier call cannot see the raw text.
     economicPurposeCandidates: economicPurpose,
+    // Sprint 3 · Checkpoint 15U — pass the full extracted document
+    // text + the richer line items with tax classification. Both
+    // feed the query-concept extractor's document-phrase and line-
+    // item channels respectively.
+    fullDocumentText: pdfOk ? pdfText : null,
+    extractedLineItems: lineItemsExtracted,
   });
   const confidenceDimensions = computeConfidenceDimensions({
     supplierExtraction,
@@ -408,6 +420,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     confidenceDimensions,
     amountHierarchy,
     taxGroupsResult,
+    splitGlRecommendations: gl.splitRecommendations,
   };
 }
 

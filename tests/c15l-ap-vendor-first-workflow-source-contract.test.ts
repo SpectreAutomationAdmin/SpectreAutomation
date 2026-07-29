@@ -35,30 +35,26 @@ const GLOBALS_CSS     = read("src/app/globals.css");
 const VENDORS_SEARCH  = read("src/app/api/vendors/search/route.ts");
 
 describe("15L — GL recommender must run without a vendor record", () => {
-  it("recommends via COA-name search when vendorId is null (Phase 2 + 3)", () => {
-    // The recommender must not short-circuit to NONE just because
-    // no vendor id was supplied. Signal 3 (NAME_KEYWORD) walks every
-    // active Account on the club and scores against SEMANTIC_GROUPS.
-    expect(GL_RECOMMEND).toMatch(/Signal 3: name-keyword semantic search/);
-    expect(GL_RECOMMEND).toMatch(/for \(const group of SEMANTIC_GROUPS\)/);
-    // The IT_SOFTWARE group must catch Microsoft-style vendor names.
-    expect(GL_RECOMMEND).toMatch(/microsoft\|adobe\|google\\s\*workspace/);
-    // The GL recommender must return alternates for the modal.
-    expect(GL_RECOMMEND).toMatch(/candidates: GlCandidate\[\]/);
+  // Sprint 3 · Checkpoint 15U — the 15L SEMANTIC_GROUPS regex loop
+  // was replaced with a deterministic full-tenant token/synonym
+  // ranker. The contract below asserts the NEW architecture: every
+  // eligible account is scored uniformly, VENDOR_DEFAULT + prior
+  // coding remain evidence sources, and the recommender still runs
+  // without a vendor record.
+  it("scores every eligible account with the shared query→account concept model", () => {
+    expect(GL_RECOMMEND).toMatch(/extractQueryConcepts/);
+    expect(GL_RECOMMEND).toMatch(/extractConceptsForAccount/);
+    expect(GL_RECOMMEND).toMatch(/rankAccountsPure/);
   });
 
-  it("consults prior-coding history for matched vendors as a stronger signal than name-keyword", () => {
-    expect(GL_RECOMMEND).toMatch(/prior-coding/);
-    expect(GL_RECOMMEND).toMatch(/PRIOR_CODING/);
-  });
-
-  it("preserves VENDOR_DEFAULT as the top signal when the matched vendor has a default expense account", () => {
-    expect(GL_RECOMMEND).toMatch(/vendor\.defaultExpenseAccount/);
+  it("preserves VENDOR_DEFAULT + PRIOR_CODING as supporting evidence sources", () => {
     expect(GL_RECOMMEND).toMatch(/VENDOR_DEFAULT/);
+    expect(GL_RECOMMEND).toMatch(/PRIOR_CODING/);
+    expect(GL_RECOMMEND).toMatch(/defaultExpenseAccountId/);
   });
 
   it("guards against empty COA — returns a well-formed NONE recommendation instead of crashing", () => {
-    expect(GL_RECOMMEND).toMatch(/if \(accounts\.length === 0\)/);
+    expect(GL_RECOMMEND).toMatch(/if \(accountsRaw\.length === 0\)/);
     expect(GL_RECOMMEND).toMatch(/emptyRecommendation/);
   });
 
@@ -68,7 +64,10 @@ describe("15L — GL recommender must run without a vendor record", () => {
 
   it("passes the extraction into the recommender via analyse.ts", () => {
     const ANALYSE = read("src/lib/ap-intelligence/analyse.ts");
-    expect(ANALYSE).toMatch(/recommendGlAccount\(\{[\s\S]{0,1000}extraction,?\s*\}\)/);
+    expect(ANALYSE).toMatch(/recommendGlAccount\(\{[\s\S]{0,1500}extraction[,\s]/);
+    expect(ANALYSE).toMatch(/economicPurposeCandidates/);
+    expect(ANALYSE).toMatch(/fullDocumentText/);
+    expect(ANALYSE).toMatch(/extractedLineItems/);
   });
 });
 

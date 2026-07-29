@@ -1,40 +1,74 @@
-// Sprint 3 Checkpoint 15L (2026-07-27) — GL-account recommendation
-// rewritten to consult the actual committed Chart of Accounts and to
-// produce a credible recommendation even when NO vendor record exists
-// yet.
+// Sprint 3 · Checkpoint 15U (2026-07-28) — GL-account recommendation
+// rebuilt as a deterministic, full-tenant Chart of Accounts ranking
+// problem.
 //
-// Prior (15E) behaviour dropped every operating invoice with no
-// vendor match onto `{ source: "NONE" }` — that surfaced as
-// "CATEGORY —" on the AP intake card and blocked founder acceptance
-// of the Coulee Ridge Microsoft invoice. The founder rule
-// (Checkpoint 15L Phase 2): draft coding must complete before the
-// vendor record exists; only the actual AP posting requires the
-// vendor.
+// Stage A — eligibility: every active, non-header, EXPENSE or ASSET
+// account on the current tenant enters the ranking. Fund-applicability
+// and other config issues remain SEPARATE posting blockers.
 //
-// This module is deterministic. No LLM, no OCR. Every recommendation
-// exposes the evidence that produced it so the UI can render a
-// rationale strip ("matched keyword 'software' against your GL
-// account 6054 · Computer & IT Services").
+// Stage B — semantic ranking: every eligible account receives a
+// score built from the same normalized evidence model:
+//
+//   Reconstructed invoice line-item descriptions       strongest
+//   Dominant economic-purpose concept                   strong
+//   Account-name semantic similarity                    strong
+//   FS-group and category taxonomy                      supporting
+//   Document section and recurring-service context      medium
+//   Vendor-specific historical coding                   supporting
+//   Tenant-wide posting frequency                       weak tie-break only
+//   Supplier identity                                   weak context only
+//   Filename / sender / email subject                   ZERO
+//
+// Deterministic sort:
+//   1. semanticScore descending
+//   2. specificityScore descending
+//   3. directLineMatch descending
+//   4. taxonomySimilarity descending
+//   5. historicalVendorScore descending
+//   6. accountNumber ascending (final deterministic tie-break;
+//      does NOT influence semantic scoring)
+//
+// No score caps that collapse materially different evidence. No
+// hand-authored SEMANTIC_GROUPS gating whether an account enters
+// meaningful scoring. Every account is scored uniformly.
 
 import { prisma } from "@/lib/prisma";
 import type { CapitalClass, CapitalVsOperatingState, ExtractedInvoice } from "./types";
-import { classifyEconomicPurpose, type PurposeCandidate } from "./economic-purpose";
+import type { PurposeCandidate } from "./economic-purpose";
+import type { LineItem } from "./line-items-extract";
+import {
+  extractQueryConcepts,
+  dominantQueryConcept,
+  type QueryConcept,
+} from "./gl-query-concepts";
+import {
+  extractConceptsForAccount,
+  type AccountView,
+  type AccountConceptMatch,
+} from "./gl-account-concepts";
+import { conceptRelatedness, isContradiction, CONCEPT_BY_ID } from "./gl-concepts";
 
-const RULE_VERSION = 2;
+const RULE_VERSION = 3;
 
-// A captured piece of evidence for a candidate's confidence score.
-// Rendered by the UI when the operator opens the rationale panel.
+// ---------------------------------------------------------------------------
+// Public shape (kept compatible with pre-15U callers)
+// ---------------------------------------------------------------------------
+
 export interface GlEvidence {
   kind:
     | "VENDOR_DEFAULT"
-    | "PRIOR_CODING"           // Vendor previously coded to this account
-    | "NAME_KEYWORD"           // Invoice vendor / description keyword hit an Account.name substring
-    | "CATEGORY_MATCH"         // Category-key contains the semantic term (e.g. "PROFESSIONAL_SERVICES")
-    | "FS_GROUP_MATCH"         // FS-Group key contains the semantic term (e.g. "IS_IT_SOFTWARE")
-    | "CAPITAL_CLASS_MAP"      // Static capital-class → GL keyword map
-    | "ECONOMIC_PURPOSE";      // Sprint 3 · 15Q — classified economic purpose BOOSTS matching accounts (no contradiction penalty; see gl-recommend.ts revised block)
+    | "PRIOR_CODING"
+    | "NAME_KEYWORD"
+    | "CATEGORY_MATCH"
+    | "FS_GROUP_MATCH"
+    | "CAPITAL_CLASS_MAP"
+    | "ECONOMIC_PURPOSE"
+    | "DOCUMENT_PHRASE"
+    | "LINE_ITEM_MATCH"
+    | "SPECIFICITY_BOOST"
+    | "CONTRADICTION_PENALTY";
   description: string;
-  score: number;               // 0-100 contribution
+  score: number;
 }
 
 export interface GlCandidate {
@@ -43,46 +77,66 @@ export interface GlCandidate {
   accountName: string;
   categoryKey: string | null;
   fsGroupKey: string | null;
-  confidence: number;          // 0-100 blended from evidence
+  confidence: number;
   evidence: GlEvidence[];
-  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — posting
-  // eligibility per candidate. `postable` means a journal entry
-  // CAN be posted to this account today. `postingBlockers` names
-  // the specific validation failures if not. Semantic ranking is
-  // INDEPENDENT of postability: the best-semantic account remains
-  // the leader even when blocked (see founder rule).
   postable: boolean;
   postingBlockers: PostingBlocker[];
 }
 
 export type PostingBlocker =
-  | "INACTIVE"                       // Account.isActive === false
-  | "HEADER_ACCOUNT"                 // Account.isHeader === true (aggregation only)
-  | "MANUAL_POSTING_DISALLOWED"      // Account.allowManualPosting === false (control-only)
-  | "FUND_APPLICABILITY_UNMAPPED";   // P&L account with fundApplicability === null
+  | "INACTIVE"
+  | "HEADER_ACCOUNT"
+  | "MANUAL_POSTING_DISALLOWED"
+  | "FUND_APPLICABILITY_UNMAPPED";
+
+// Sprint 3 · Checkpoint 15U — structured rationale (§12). Kept on
+// the analyser output for tests, diagnostics and auditability.
+export interface GlRationale {
+  selectedAccountId: string | null;
+  selectedConcept: string | null;             // dominant query concept id
+  supportingDocumentEvidence: string[];       // human-readable evidence snippets
+  supportingTaxonomyEvidence: string[];       // account-side taxonomy hits
+  contradictedAccountConcepts: string[];      // concept ids present on the account that CONTRADICT the query
+  alternativeAccounts: Array<{
+    accountId: string;
+    accountNumber: string;
+    accountName: string;
+    semanticScore: number;
+    reason: string;
+  }>;
+  requiresReview: boolean;
+  minRelevanceThreshold: number;
+}
+
+// Sprint 3 · Checkpoint 15U — split-account readiness (§13). Optional
+// group-level recommendations for future multi-debit-leg AP posting.
+export interface SplitRecommendation {
+  groupLabel: string;                         // e.g. "Membership fees"
+  lineItemDescriptions: string[];
+  accountId: string;
+  accountNumber: string;
+  accountName: string;
+  amount: number;
+}
 
 export interface GlRecommendation {
   ruleVersion: number;
-  // Best candidate — null when no credible match exists on the tenant.
   accountNumber: string | null;
   accountName: string | null;
   categoryKey: string | null;
   fsGroupKey: string | null;
   confidence: number | null;
   reason: string;
-  source: "CAPITAL_CLASS_MAP" | "VENDOR_DEFAULT" | "PRIOR_CODING" | "NAME_KEYWORD" | "ECONOMIC_PURPOSE" | "NONE";
-  candidates: GlCandidate[];   // Ranked; first entry mirrors the best-candidate fields above.
-  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the three
-  // concepts the founder rule separates:
-  //   (1) semantic match      — WHICH account best fits the invoice
-  //   (2) posting eligibility — CAN we post there today
-  //   (3) auto-approval       — MAY we skip human review
-  // `leaderIsPostable` mirrors the leader's `postable` flag for
-  // convenience. `autoApprovalEligible` is TRUE only when the
-  // leader is postable AND confidence >= AUTO_APPROVAL_MIN_CONFIDENCE.
+  source: "CAPITAL_CLASS_MAP" | "VENDOR_DEFAULT" | "PRIOR_CODING" | "NAME_KEYWORD" | "ECONOMIC_PURPOSE" | "SEMANTIC_MATCH" | "NONE";
+  candidates: GlCandidate[];
   leaderIsPostable: boolean;
   leaderPostingBlockers: PostingBlocker[];
   autoApprovalEligible: boolean;
+  // 15U additions:
+  rationale: GlRationale;
+  totalAccountsEvaluated: number;
+  requiresReview: boolean;
+  splitRecommendations: SplitRecommendation[];
 }
 
 export interface GlRecommendationArgs {
@@ -90,552 +144,615 @@ export interface GlRecommendationArgs {
   vendorId: string | null;
   capitalState: CapitalVsOperatingState;
   capitalClass: CapitalClass | null;
-  // 15L — the raw invoice signals the recommender can now use even
-  // when no vendor record exists yet. Extracted vendor name,
-  // extracted description / line items, extracted domain — anything
-  // that helps identify the semantic category.
   extraction?: Pick<ExtractedInvoice, "vendor" | "description" | "lineItems"> | null;
-  // Sprint 3 · Checkpoint 15T — pre-computed economic-purpose
-  // candidates. When supplied, this recommender skips the internal
-  // classifier call (which cannot see full document text) and uses
-  // these candidates instead. The orchestrator (analyse.ts) is the
-  // right place to run the classifier because it has access to the
-  // full extracted text (needed for the document-phrase evidence
-  // channel — see economic-purpose.ts).
   economicPurposeCandidates?: PurposeCandidate[] | null;
+  // 15U — full extracted PDF text so the ranker's document-phrase
+  // channel can fire. Optional (may be null on non-PDF paths).
+  fullDocumentText?: string | null;
+  // 15U — extracted line items with tax classification. When
+  // supplied, replaces `extraction.lineItems` for query-concept
+  // extraction (the extended LineItem shape carries description +
+  // amount + tax treatment; ExtractedInvoice.lineItems is a
+  // simpler subset).
+  extractedLineItems?: LineItem[] | null;
 }
 
 // ---------------------------------------------------------------------------
-// Semantic vocabulary
+// Score-component shape retained on each ranked candidate for diagnostics
 // ---------------------------------------------------------------------------
-// Each entry maps a family of invoice keywords to (a) canonical FS
-// Groups and Categories the club's COA is likely to contain, and (b)
-// substring patterns that qualify an Account row as a plausible
-// destination even when the account's number differs from the
-// Spectre default template.
-//
-// Order matters — first match wins per keyword pass. Software /
-// SaaS / cloud / subscription lives at the top because it's the
-// tightest bucket; broader terms (office, professional, admin) sit
-// lower. Every group is REVENUE-agnostic and stays inside the
-// EXPENSE bracket except CAPITAL_CLASS which is asset-side.
 
-interface SemanticGroup {
-  key: string;
-  // A vendor-name / description substring that turns this group on.
-  vendorPatterns: RegExp[];
-  // Substring patterns to score an Account.name against.
-  accountNamePatterns: RegExp[];
-  // Canonical FS-Group keys any of which the group can also target
-  // directly (used when the tenant's Account rows use the canonical
-  // labels — a very common case for Spectre-provisioned clubs).
-  fsGroupKeys: string[];
-  // Canonical Category keys the recommender considers matching.
-  categoryKeys: string[];
-  // Human label for the rationale.
-  humanLabel: string;
+interface ScoreComponents {
+  directLineMatch: number;
+  economicPurposeMatch: number;
+  accountNameSimilarity: number;
+  fsGroupTaxonomySimilarity: number;
+  categoryTaxonomySimilarity: number;
+  documentPhraseScore: number;
+  specificityScore: number;
+  historicalVendorScore: number;
+  supplierContextScore: number;
+  contradictionPenalty: number;
+  semanticScore: number;
 }
 
-const SEMANTIC_GROUPS: SemanticGroup[] = [
-  {
-    key: "IT_SOFTWARE",
-    vendorPatterns: [
-      /\b(microsoft|adobe|google\s*workspace|dropbox|salesforce|slack|github|gitlab|atlassian|jira|zoom|okta|aws|amazon\s*web|azure|office\s*365|m365|oracle|sap|quickbooks|xero|freshbooks|sage|jonas)\b/i,
-    ],
-    accountNamePatterns: [
-      /software|saas|subscription|licen[sc]e|cloud|hosting|technology|\bit\b|information\s*technology|computer(?:\s+(?:service|expense|equipment|hardware))?|internet(?:\s+service)?/i,
-    ],
-    fsGroupKeys: ["IS_IT_SOFTWARE", "IS_TELEPHONE_INTERNET"],
-    categoryKeys: ["ADMIN_EXPENSES"],
-    humanLabel: "Software / IT services",
-  },
-  {
-    key: "OFFICE",
-    vendorPatterns: [
-      /\b(staples|office\s*depot|amazon\s*business|costco\s*business)\b/i,
-    ],
-    accountNamePatterns: [
-      /office\s*suppl|office\s*expense|stationery|printing|postage/i,
-    ],
-    fsGroupKeys: ["IS_OFFICE_SUPPLIES"],
-    categoryKeys: ["ADMIN_EXPENSES"],
-    humanLabel: "Office supplies",
-  },
-  {
-    key: "PROFESSIONAL",
-    // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — "cpa" is
-    // RESTORED to the pattern. Removing it caused a regression:
-    // for tenants WITHOUT a proper Membership Dues account, the
-    // CPA invoice fell through to a less-related account (e.g.
-    // "Score Cards & Printing"). Pre-15Q behaviour was to route
-    // to Accounting Fees — wrong for the actual purpose (membership
-    // dues) but at least in the right family (professional expenses).
-    // The economic-purpose classifier (economic-purpose.ts) still
-    // BOOSTS Membership Dues accounts when the tenant has one, so
-    // improvement is additive — never a regression.
-    vendorPatterns: [
-      /\b(law|legal|attorneys?|counsel|accounting\s+services|accounting\s+firm|auditor|kpmg|deloitte|pwc|grant\s*thornton|bdo|LLP|CPA|cpa)\b/i,
-    ],
-    accountNamePatterns: [
-      /professional\s*fee|legal\s*fee|audit\s*fee|accounting\s*fee|consulting/i,
-    ],
-    fsGroupKeys: ["IS_PROFESSIONAL_FEES"],
-    categoryKeys: ["PROFESSIONAL_SERVICES"],
-    humanLabel: "Professional fees",
-  },
-  {
-    key: "UTILITIES",
-    vendorPatterns: [
-      /\b(hydro|enmax|epcor|fortis|atco|shaw|telus|rogers|bell|utility|water|gas\s*company|natural\s*gas|propane)\b/i,
-    ],
-    accountNamePatterns: [
-      /utilit|electric|hydro|natural\s*gas|propane|sewer|water\s*(bill|util)/i,
-    ],
-    fsGroupKeys: ["IS_UTILITIES"],
-    categoryKeys: ["UTILITIES"],
-    humanLabel: "Utilities",
-  },
-  {
-    key: "TELECOM",
-    vendorPatterns: [
-      /\b(telus|shaw|rogers|bell|internet|phone|comcast|verizon|at&t)\b/i,
-    ],
-    accountNamePatterns: [
-      /telephone|internet|phone\s*&\s*internet|cell\s*phone|mobile|data\s*plan/i,
-    ],
-    fsGroupKeys: ["IS_TELEPHONE_INTERNET"],
-    categoryKeys: ["ADMIN_EXPENSES"],
-    humanLabel: "Telephone & internet",
-  },
-  {
-    key: "INSURANCE",
-    vendorPatterns: [
-      /\b(insurance|assurance|mutual|indemnity|marsh|aon|willis|hub\s*insurance)\b/i,
-    ],
-    accountNamePatterns: [
-      /insurance(?!\s*receivable)/i,
-    ],
-    fsGroupKeys: ["IS_INSURANCE"],
-    categoryKeys: ["INSURANCE"],
-    humanLabel: "Insurance",
-  },
-  {
-    key: "REPAIRS",
-    vendorPatterns: [
-      /\b(repair|maintenance|service\s*co|hvac|plumbing|roofing)\b/i,
-    ],
-    accountNamePatterns: [
-      /repair|maintenance|r\s*&\s*m\b|building\s*repair/i,
-    ],
-    fsGroupKeys: ["IS_REPAIRS_MAINTENANCE"],
-    categoryKeys: ["REPAIRS_MAINTENANCE"],
-    humanLabel: "Repairs & maintenance",
-  },
-  {
-    key: "BANK_FEES",
-    vendorPatterns: [
-      /\b(bank\s*of|royal\s*bank|scotiabank|cibc|td\s*bank|hsbc)\b/i,
-    ],
-    accountNamePatterns: [
-      /bank\s*charge|bank\s*fee|wire\s*fee|nsf\s*fee|monthly\s*service\s*charge/i,
-    ],
-    fsGroupKeys: ["IS_BANK_CHARGES"],
-    categoryKeys: ["ADMIN_EXPENSES"],
-    humanLabel: "Bank charges",
-  },
-  {
-    key: "MERCHANT_FEES",
-    vendorPatterns: [
-      /\b(stripe|square|paypal|moneris|global\s*payments|elavon|adyen|first\s*data)\b/i,
-    ],
-    accountNamePatterns: [
-      /merchant\s*(processing\s*)?fee|credit\s*card\s*fee|interchange|payment\s*processing/i,
-    ],
-    fsGroupKeys: ["IS_MERCHANT_FEES"],
-    categoryKeys: ["ADMIN_EXPENSES"],
-    humanLabel: "Merchant / card fees",
-  },
-];
+interface ScoredAccount {
+  account: AccountView;
+  components: ScoreComponents;
+  matchedAccountConcepts: AccountConceptMatch[];
+  strongestQueryEvidence: QueryConcept[];
+  contradictedConcepts: string[];
+  postable: boolean;
+  postingBlockers: PostingBlocker[];
+  evidence: GlEvidence[];
+}
 
-// Capital-class → asset-side keyword hint. Mirrors the pre-15L
-// static map but treated as EVIDENCE instead of a hard route so the
-// COA-search path can override it when a specific tenant Account
-// row is a stronger match.
-const CAPITAL_CLASS_HINTS: Record<CapitalClass, { patterns: RegExp[]; label: string }> = {
-  COURSE_EQUIPMENT:      { patterns: [/course\s*(equipment|machinery)|greens\s*(mower|equipment)/i], label: "Course equipment" },
-  KITCHEN_EQUIPMENT:     { patterns: [/kitchen\s*(equipment|appliance)|oven|refrigerat|walk[-\s]?in\s*cooler/i], label: "Kitchen equipment" },
-  GOLF_EQUIPMENT:        { patterns: [/golf\s*(equipment|cart|bag)|driving\s*range/i], label: "Golf equipment" },
-  BUILDING_IMPROVEMENTS: { patterns: [/building\s*improve|leasehold\s*improve|renovation|clubhouse/i], label: "Building improvements" },
-  FURNITURE:             { patterns: [/furniture\s*(&|and)?\s*fixtures?|furn(iture)?/i], label: "Furniture & fixtures" },
-  COMPUTER_EQUIPMENT:    { patterns: [/computer\s*(equipment|hardware)|laptop|workstation|server(?!\s*fee)/i], label: "Computer equipment" },
-  VEHICLES:              { patterns: [/vehicles?|truck|van|utility\s*vehicle/i], label: "Vehicles" },
-  IRRIGATION:            { patterns: [/irrigation|sprinkler|water(?:ing)?\s*system/i], label: "Irrigation" },
-  OTHER_CAPITAL:         { patterns: [/capital\s*asset|fixed\s*asset|property\s*&\s*equipment/i], label: "Capital assets" },
-};
+// ---------------------------------------------------------------------------
+// Constants (calibrated against the regression suite — see §10 + §15)
+// ---------------------------------------------------------------------------
+
+// Threshold below which no confident recommendation is made. Chosen
+// so the "genuine printing invoice" scenario clears it (score ~50)
+// but the "OXIO recurring service" scenario CANNOT trigger a
+// confident Printing recommendation (score ~10). Verified in
+// tests/c15u-recommender-ranking.test.ts.
+const MIN_RELEVANCE_THRESHOLD = 40;
+
+const AUTO_APPROVAL_MIN_CONFIDENCE = 85;
+
+// Specificity bonus applied when the query's dominant concept
+// matches an account concept at depth >= 2 (a leaf-ish taxonomy
+// node like "professional_membership_dues" beats depth-1 parents
+// like "memberships_and_subscriptions").
+const SPECIFICITY_BONUS_PER_DEPTH = 15;
+
+const CONTRADICTION_PENALTY = 40;
 
 // ---------------------------------------------------------------------------
 // Public entrypoint
 // ---------------------------------------------------------------------------
 
 export async function recommendGlAccount(args: GlRecommendationArgs): Promise<GlRecommendation> {
-  // Snapshot the live COA once. All downstream scoring runs off this
-  // in-memory list — one DB round-trip per recommendation regardless
-  // of how many candidates we consider.
-  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — retain the
-  // isActive filter (isActive=false means the admin archived the
-  // account; it must not resurface as a recommendation). BUT: the
-  // recommender now surfaces posting-eligibility separately from
-  // semantic match, so an account that is active + best-semantic +
-  // has an unmapped fundApplicability still wins the recommendation
-  // and the caller sees the specific posting blocker to resolve.
-  const accounts = await prisma.account.findMany({
-    where: { clubId: args.clubId, isActive: true },
+  // Load the tenant COA once. `orderBy: { accountNumber: 'asc' }` is
+  // COSMETIC only — semantic scoring is independent of order; the
+  // deterministic sort below re-orders anyway. See regression test
+  // c15u-recommender-determinism for proof.
+  const accountsRaw = await prisma.account.findMany({
+    where: { clubId: args.clubId },
     include: {
       category: { select: { key: true, name: true } },
       fsGroup: { select: { key: true, name: true } },
     },
+    orderBy: { accountNumber: "asc" },
+  });
+  if (accountsRaw.length === 0) {
+    return emptyRecommendation("No chart of accounts is loaded on this club — cannot recommend a GL account.", 0);
+  }
+
+  // Stage A — eligibility. Every active, non-header, EXPENSE/ASSET
+  // account is a candidate. Fund-applicability + other posting
+  // blockers do NOT filter eligibility (they surface separately).
+  const eligibleAccounts: AccountView[] = accountsRaw
+    .filter((a) => a.isActive && !a.isHeader && (a.type === "EXPENSE" || a.type === "ASSET"))
+    .map((a) => ({
+      id: a.id,
+      accountNumber: a.accountNumber,
+      name: a.name,
+      categoryKey: a.category?.key ?? null,
+      categoryName: a.category?.name ?? null,
+      fsGroupKey: a.fsGroup?.key ?? null,
+      fsGroupName: a.fsGroup?.name ?? null,
+    }));
+
+  const totalAccountsEvaluated = eligibleAccounts.length;
+
+  // Look up vendor history — for a matched vendor with prior coding
+  // or a default expense account, gather the CONCEPTS observed and
+  // pass them as supporting-tier evidence (§11). New vendors → empty.
+  const { vendorHistoryConceptIds, vendorDefaultAccountId } = await loadVendorHistory(
+    args.clubId,
+    args.vendorId,
+    accountsRaw,
+  );
+
+  // Extract query concepts (weighted by evidence hierarchy §4).
+  // When callers don't supply the richer LineItem[] (with tax
+  // classification etc.) fall back to `extraction.lineItems` — the
+  // description alone is enough for the query-concept token match.
+  const lineItemsForQuery = args.extractedLineItems
+    ?? (args.extraction?.lineItems ?? []).map((l, idx) => ({
+      description: l.description ?? "",
+      quantity: null,
+      unitPrice: null,
+      amount: Number(l.amount ?? "0"),
+      taxRate: null,
+      taxAmount: null,
+      taxTreatment: "unknown" as const,
+      evidence: ["amount_only" as const],
+      confidence: 40,
+      lineNo: idx,
+    }));
+  const queryConcepts = extractQueryConcepts({
+    lineItems: lineItemsForQuery,
+    economicPurposeCandidates: args.economicPurposeCandidates ?? null,
+    fullDocumentText: args.fullDocumentText ?? null,
+    supplierName: args.extraction?.vendor?.guessedName ?? null,
+    vendorHistoryConceptIds,
+  });
+  const dominant = dominantQueryConcept(queryConcepts);
+
+  // Stage B — score every eligible account.
+  const scored: ScoredAccount[] = eligibleAccounts.map((account) => {
+    const acctRaw = accountsRaw.find((a) => a.id === account.id);
+    return scoreAccount({
+      account,
+      queryConcepts,
+      dominant,
+      vendorDefaultAccountId,
+      capitalState: args.capitalState,
+      postingBlockers: acctRaw ? accountPostingBlockers(acctRaw) : [],
+    });
   });
 
-  // Empty COA → the caller (summariseApIntake) applies the runtime
-  // CHART_OF_ACCOUNTS_REQUIRED override; we still return a well-
-  // formed "no candidates" result so the caller doesn't crash.
-  if (accounts.length === 0) {
-    return emptyRecommendation("No chart of accounts is loaded on this club — cannot recommend a GL account.");
-  }
+  // Deterministic sort — six-tier tie-break sequence.
+  scored.sort(deterministicCompare);
 
-  // Only EXPENSE + ASSET accounts are plausible AP-invoice destinations
-  // (a REVENUE / LIABILITY / EQUITY account is never a valid AP debit
-  // leg). Filter early so downstream scoring stays tight.
-  const candidates = accounts.filter((a) => a.type === "EXPENSE" || a.type === "ASSET");
+  const top = scored[0] ?? null;
+  const requiresReview = !top || top.components.semanticScore < MIN_RELEVANCE_THRESHOLD;
+  const topCandidates = scored.slice(0, 5);
 
-  // Signal 1: vendor default GL. Strongest per-club signal — a human
-  // has already made the coding decision at least once for this vendor.
-  if (args.vendorId) {
-    const vendor = await prisma.vendor.findFirst({
-      where: { id: args.vendorId, clubId: args.clubId },
-      select: {
-        legalName: true,
-        defaultExpenseAccount: {
-          select: {
-            id: true, accountNumber: true, name: true,
-            type: true, isActive: true, isHeader: true,
-            allowManualPosting: true, fundApplicability: true,
-            category: { select: { key: true } },
-            fsGroup: { select: { key: true } },
-          },
-        },
-      },
-    });
-    if (vendor?.defaultExpenseAccount) {
-      const dea = vendor.defaultExpenseAccount;
-      const blockers = accountPostingBlockers(dea);
-      const c: GlCandidate = {
-        accountId: dea.id,
-        accountNumber: dea.accountNumber,
-        accountName: dea.name,
-        categoryKey: dea.category?.key ?? null,
-        fsGroupKey: dea.fsGroup?.key ?? null,
-        confidence: 92,
-        evidence: [{
-          kind: "VENDOR_DEFAULT",
-          description: `Vendor ${vendor.legalName} has this GL as its default expense account.`,
-          score: 92,
-        }],
-        postable: blockers.length === 0,
-        postingBlockers: blockers,
-      };
-      return finaliseRecommendation([c], "VENDOR_DEFAULT",
-        `Operating expense; using ${vendor.legalName}'s default GL (${c.accountNumber} — ${c.accountName}).`);
-    }
+  const rationale = buildRationale({
+    scored,
+    dominant,
+    queryConcepts,
+    requiresReview,
+  });
 
-    // Signal 2: prior-coding — the vendor's most-recent APInvoice's
-    // most-common GL. Cheaper than a full history sweep.
-    const priorHistory = await prisma.aPInvoiceLine.findMany({
-      where: { clubId: args.clubId, invoice: { vendorId: args.vendorId } },
-      select: { expenseAccountId: true },
-      take: 50,
-    });
-    if (priorHistory.length > 0) {
-      const counts = new Map<string, number>();
-      for (const l of priorHistory) counts.set(l.expenseAccountId, (counts.get(l.expenseAccountId) ?? 0) + 1);
-      const [topId, count] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
-      const acct = topId ? candidates.find((a) => a.id === topId) : null;
-      if (acct && count >= 2) {
-        const blockers = accountPostingBlockers(acct);
-        const c: GlCandidate = {
-          accountId: acct.id,
-          accountNumber: acct.accountNumber,
-          accountName: acct.name,
-          categoryKey: acct.category?.key ?? null,
-          fsGroupKey: acct.fsGroup?.key ?? null,
-          confidence: Math.min(88, 60 + count * 3),
-          evidence: [{
-            kind: "PRIOR_CODING",
-            description: `Vendor has been coded to ${acct.accountNumber} ${acct.name} on ${count} prior invoice line${count === 1 ? "" : "s"}.`,
-            score: Math.min(88, 60 + count * 3),
-          }],
-          postable: blockers.length === 0,
-          postingBlockers: blockers,
-        };
-        return finaliseRecommendation([c], "PRIOR_CODING",
-          `Operating expense; vendor's recent coding history points to ${c.accountNumber} — ${c.accountName}.`);
-      }
-    }
-  }
+  const splitRecommendations = buildSplitRecommendations({
+    lineItems: args.extractedLineItems ?? [],
+    accounts: eligibleAccounts,
+    accountsRaw,
+    queryConcepts,
+  });
 
-  // Signal 3: name-keyword semantic search. Runs against BOTH the
-  // extracted vendor name / description and every Account name on
-  // the tenant. Scores each account across all matching semantic
-  // groups; the strongest score wins.
-  const vendorHay = `${args.extraction?.vendor.guessedName ?? ""} ${args.extraction?.description ?? ""} ${(args.extraction?.lineItems ?? []).map((l) => l.description).join(" ")}`.trim();
-  const scored = new Map<string, GlCandidate>();
-
-  for (const group of SEMANTIC_GROUPS) {
-    // Does any vendor pattern match the invoice's vendor / description?
-    const vendorHit = group.vendorPatterns.find((p) => p.test(vendorHay));
-    // Also gather every account whose name / category / fs-group matches
-    // the group — even without a vendor hit, a purely account-name match
-    // is a valid weaker signal.
-    for (const a of candidates) {
-      const nameHay = `${a.name ?? ""}`.toLowerCase();
-      const nameHit = group.accountNamePatterns.find((p) => p.test(nameHay));
-      const fsHit = a.fsGroup && group.fsGroupKeys.includes(a.fsGroup.key);
-      const catHit = a.category && group.categoryKeys.includes(a.category.key);
-      if (!nameHit && !fsHit && !catHit) continue;
-
-      // Score: vendor + fs-group match is the strongest combo.
-      let score = 0;
-      const evidence: GlEvidence[] = [];
-      if (vendorHit) {
-        score += 40;
-        evidence.push({
-          kind: "NAME_KEYWORD",
-          description: `Invoice vendor / description matched "${humaniseMatch(vendorHay, vendorHit)}" — a signal for ${group.humanLabel.toLowerCase()}.`,
-          score: 40,
-        });
-      }
-      if (nameHit) {
-        score += 30;
-        evidence.push({
-          kind: "NAME_KEYWORD",
-          description: `Account name "${a.name}" matched keyword "${humaniseMatch(a.name, nameHit)}".`,
-          score: 30,
-        });
-      }
-      if (fsHit) {
-        score += 20;
-        evidence.push({
-          kind: "FS_GROUP_MATCH",
-          description: `Account sits in FS Group ${a.fsGroup!.key} — a canonical ${group.humanLabel.toLowerCase()} bucket.`,
-          score: 20,
-        });
-      }
-      if (catHit) {
-        score += 15;
-        evidence.push({
-          kind: "CATEGORY_MATCH",
-          description: `Account category ${a.category!.key} is a canonical ${group.humanLabel.toLowerCase()} category.`,
-          score: 15,
-        });
-      }
-      // Consolidate — a single account can appear in multiple groups
-      // (e.g. Microsoft matches SOFTWARE + a Computer & IT account
-      // name matches OFFICE via generic keywords). Keep the strongest.
-      const existing = scored.get(a.id);
-      if (!existing || score > existing.confidence) {
-        scored.set(a.id, {
-          accountId: a.id,
-          accountNumber: a.accountNumber,
-          accountName: a.name,
-          categoryKey: a.category?.key ?? null,
-          fsGroupKey: a.fsGroup?.key ?? null,
-          confidence: Math.min(95, score),
-          evidence,
-          postable: true,           // filled by the post-loop enrichment pass
-          postingBlockers: [],
-        });
-      }
-    }
-  }
-
-  // Sprint 3 · Checkpoint 15Q — economic-purpose classifier signal.
-  // The pre-15Q recommender matched vendor-name keywords ("cpa" →
-  // accounting firm). The classifier reasons about what the
-  // expenditure IS FOR (professional membership dues vs external
-  // accounting services vs member-charged revenue) and boosts /
-  // penalises accounts according to the top purpose's SUGGESTED
-  // ROLES. Role → account-name matching is a small lookup below.
-  // Sprint 3 · Checkpoint 15T — prefer pre-computed purpose candidates
-  // when the orchestrator (analyse.ts) supplies them. The orchestrator
-  // has the full extracted text, which the classifier uses for the
-  // document-phrase evidence channel. Falling back to the local
-  // classifier here would silently drop that channel and demote real
-  // matches (e.g. a recurring-service statement whose line items are
-  // sparse but whose body contains "billing cycle" / "ongoing charges"
-  // / bandwidth units).
-  const purposeCandidates =
-    args.economicPurposeCandidates != null && args.economicPurposeCandidates.length > 0
-      ? args.economicPurposeCandidates
-      : classifyPurposeFromExtraction(args.extraction);
-  const topPurpose = purposeCandidates[0] ?? null;
-  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — raised the
-  // confidence gate from 20 to 60. Below 60 the classifier is
-  // seeing partial evidence (e.g. line language without supplier
-  // context, or supplier context without matching line language).
-  // Firing the +55 boost on partial evidence can misroute an
-  // ambiguous invoice (e.g. an AP-received "Member annual dues"
-  // line with no supplier — likely mis-routed member revenue —
-  // would otherwise land on the employee-membership expense
-  // account). The legitimate professional-body membership invoice
-  // scores 75+, comfortably above the gate.
-  if (topPurpose && topPurpose.score >= 60) {
-    for (const a of candidates) {
-      const roleHit = topPurpose.suggestedAccountRoles.find((role) => accountMatchesRole(role, a));
-      if (roleHit) {
-        // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the boost
-        // is now large enough to promote a matched role above a
-        // legacy NAME_KEYWORD match. Semantic role match on FS Group
-        // or category is the STRONGEST signal — a professional-body
-        // membership invoice landing on account 6064 Membership &
-        // Dues (in FS Group IS_MEMBERSHIPS_SUBS) should always
-        // outrank Accounting Fees or Score Cards & Printing.
-        const boost = 55;
-        const existing = scored.get(a.id);
-        const evidence: GlEvidence = {
-          kind: "ECONOMIC_PURPOSE",
-          description: `Classified purpose "${topPurpose.classificationConcept}" — account matches role "${roleHit}" (via name / FS Group / category).`,
-          score: boost,
-        };
-        if (existing) {
-          existing.confidence = Math.min(95, existing.confidence + boost);
-          existing.evidence.push(evidence);
-        } else {
-          scored.set(a.id, {
-            accountId: a.id,
-            accountNumber: a.accountNumber,
-            accountName: a.name,
-            categoryKey: a.category?.key ?? null,
-            fsGroupKey: a.fsGroup?.key ?? null,
-            confidence: Math.min(95, 40 + boost),
-            evidence: [evidence],
-            postable: true,           // filled by the post-loop enrichment pass
-            postingBlockers: [],
-          });
-        }
-      }
-    }
-    // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the
-    // contradiction penalty (-25 on accounts matching a
-    // classifier-contradicted role) was REMOVED. It demoted the
-    // pre-15Q wrong-but-close answer (Accounting Fees for CPA
-    // Alberta on a tenant without Membership Dues) far enough to
-    // let unrelated accounts win (Score Cards & Printing) — a
-    // regression from wrong-but-close to wrong-and-far. The
-    // positive boost above is retained so tenants WITH a proper
-    // Membership Dues account still route to it. When no such
-    // account exists, we don't manufacture demotion — we let the
-    // pre-15Q keyword ranking stand.
-  }
-
-  // Signal 4: capital-class hints. Only fires when the analyser
-  // already classified the invoice as CAPITAL and identified a class.
-  if (args.capitalState === "CAPITAL" && args.capitalClass) {
-    const hint = CAPITAL_CLASS_HINTS[args.capitalClass];
-    for (const a of candidates.filter((a) => a.type === "ASSET")) {
-      const nameHit = hint.patterns.find((p) => p.test(a.name));
-      if (!nameHit) continue;
-      const score = 65;
-      const existing = scored.get(a.id);
-      if (!existing || score > existing.confidence) {
-        scored.set(a.id, {
-          accountId: a.id,
-          accountNumber: a.accountNumber,
-          accountName: a.name,
-          categoryKey: a.category?.key ?? null,
-          fsGroupKey: a.fsGroup?.key ?? null,
-          confidence: score,
-          evidence: [{
-            kind: "CAPITAL_CLASS_MAP",
-            description: `Analyser classified this invoice as ${hint.label}; account name matches the canonical capital-asset vocabulary.`,
-            score,
-          }],
-          postable: true,           // filled by the post-loop enrichment pass
-          postingBlockers: [],
-        });
-      }
-    }
-  }
-
-  // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — populate
-  // posting-eligibility on every candidate BEFORE sorting so the
-  // caller can distinguish semantic match from postability.
-  const accountsById = new Map(accounts.map((a) => [a.id, a]));
-  for (const c of scored.values()) {
-    const acct = accountsById.get(c.accountId);
-    if (acct) {
-      c.postingBlockers = accountPostingBlockers(acct);
-      c.postable = c.postingBlockers.length === 0;
-    } else {
-      c.postable = false;
-      c.postingBlockers = [];
-    }
-  }
-
-  const ranked = [...scored.values()].sort((a, b) => b.confidence - a.confidence);
-  if (ranked.length === 0) {
+  if (!top) {
     return emptyRecommendation(
-      "No sufficiently supported GL match found on this club's chart of accounts.",
+      "No eligible expense or asset accounts on this club's chart of accounts.",
+      totalAccountsEvaluated,
     );
   }
 
-  const best = ranked[0];
-  const source: GlRecommendation["source"] =
-    best.evidence.some((e) => e.kind === "CAPITAL_CLASS_MAP") ? "CAPITAL_CLASS_MAP"
-    : best.evidence.some((e) => e.kind === "ECONOMIC_PURPOSE") ? "ECONOMIC_PURPOSE"
-    : "NAME_KEYWORD";
-  return finaliseRecommendation(
-    ranked.slice(0, 5),
-    source,
-    `${humanReason(best)}.`,
-  );
+  return finaliseRecommendation({
+    top,
+    topCandidates,
+    rationale,
+    totalAccountsEvaluated,
+    requiresReview,
+    splitRecommendations,
+  });
 }
 
-// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — auto-approval
-// requires a postable leader AND high confidence. Threshold is
-// intentionally strict; when in doubt, human review.
-const AUTO_APPROVAL_MIN_CONFIDENCE = 85;
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
 
-function finaliseRecommendation(
-  candidates: GlCandidate[],
-  source: GlRecommendation["source"],
-  reason: string,
-): GlRecommendation {
-  const best = candidates[0];
-  // Leader posting-eligibility flows through. `autoApprovalEligible`
-  // AND-gates postability with a strict confidence floor: the leader
-  // must be both usable and reliably identified.
-  const leaderIsPostable = best.postable;
-  const leaderPostingBlockers = best.postingBlockers;
-  const autoApprovalEligible = leaderIsPostable && best.confidence >= AUTO_APPROVAL_MIN_CONFIDENCE;
+interface ScoreAccountArgs {
+  account: AccountView;
+  queryConcepts: QueryConcept[];
+  dominant: QueryConcept | null;
+  vendorDefaultAccountId: string | null;
+  capitalState: CapitalVsOperatingState;
+  postingBlockers: PostingBlocker[];
+}
+
+function scoreAccount(args: ScoreAccountArgs): ScoredAccount {
+  const { account, queryConcepts, dominant, vendorDefaultAccountId, postingBlockers } = args;
+
+  // Extract the concepts this account SHAPES to (based on its name +
+  // FS group + category). Every account gets a list (may be empty).
+  const accountConcepts = extractConceptsForAccount(account);
+
+  const components: ScoreComponents = {
+    directLineMatch: 0,
+    economicPurposeMatch: 0,
+    accountNameSimilarity: 0,
+    fsGroupTaxonomySimilarity: 0,
+    categoryTaxonomySimilarity: 0,
+    documentPhraseScore: 0,
+    specificityScore: 0,
+    historicalVendorScore: 0,
+    supplierContextScore: 0,
+    contradictionPenalty: 0,
+    semanticScore: 0,
+  };
+  const evidence: GlEvidence[] = [];
+  const contradictedConcepts: string[] = [];
+  const strongestQueryEvidence: QueryConcept[] = [];
+
+  // For each (query concept, account concept) pair, compute a
+  // relatedness score + weight by evidence source. Aggregate into
+  // per-component buckets so diagnostics can explain WHY.
+  for (const qc of queryConcepts) {
+    let bestContribution = 0;
+    let bestAccountConcept: AccountConceptMatch | null = null;
+
+    for (const ac of accountConcepts) {
+      const rel = conceptRelatedness(qc.conceptId, ac.conceptId);
+      if (rel === 0) continue;
+      // Account-side match strength (0..100) × query-side weight
+      // (source-weighted 0..30) × relatedness (0..1). Scaled so a
+      // perfect line-item ↔ account-name match on a specific concept
+      // produces ~90 (from 30 × 100 × 1.0 / 33).
+      const contribution = (qc.weight * ac.totalMatchStrength * rel) / (100 * 33);
+      if (contribution > bestContribution) {
+        bestContribution = contribution;
+        bestAccountConcept = ac;
+      }
+    }
+
+    if (bestContribution > 0 && bestAccountConcept) {
+      // Attribute contribution to the right component bucket.
+      switch (qc.source) {
+        case "line_item_description":
+          components.directLineMatch += bestContribution;
+          break;
+        case "economic_purpose":
+          components.economicPurposeMatch += bestContribution;
+          break;
+        case "document_phrase":
+          components.documentPhraseScore += bestContribution;
+          break;
+        case "vendor_history":
+          components.historicalVendorScore += bestContribution;
+          break;
+        case "supplier_identity":
+          components.supplierContextScore += bestContribution;
+          break;
+      }
+      evidence.push({
+        kind: qc.source === "line_item_description" ? "LINE_ITEM_MATCH"
+          : qc.source === "economic_purpose" ? "ECONOMIC_PURPOSE"
+          : qc.source === "document_phrase" ? "DOCUMENT_PHRASE"
+          : qc.source === "vendor_history" ? "PRIOR_CODING"
+          : "NAME_KEYWORD",
+        description: `${qc.evidenceSnippet} → account concept "${bestAccountConcept.concept.canonicalName}" (relatedness ${Math.round(bestContribution)}).`,
+        score: Math.round(bestContribution),
+      });
+      if (bestContribution >= 8) strongestQueryEvidence.push(qc);
+    }
+  }
+
+  // Account-name + taxonomy similarity to the dominant query concept
+  // (separate from the per-query bucket above so a strong ACCOUNT-side
+  // match still counts even when the query has weaker per-source
+  // matches).
+  if (dominant) {
+    for (const ac of accountConcepts) {
+      const rel = conceptRelatedness(dominant.conceptId, ac.conceptId);
+      if (rel === 0) continue;
+      const contribution = (ac.totalMatchStrength * rel) / 100;
+      components.accountNameSimilarity += ac.nameMatchStrength * rel / 100;
+      components.fsGroupTaxonomySimilarity += ac.fsGroupMatchStrength * rel / 100;
+      components.categoryTaxonomySimilarity += ac.categoryMatchStrength * rel / 100;
+
+      // Specificity bonus — deeper concepts win over parents.
+      if (rel === 100 && ac.concept.depth >= 2) {
+        components.specificityScore += SPECIFICITY_BONUS_PER_DEPTH * (ac.concept.depth - 1);
+      }
+    }
+  }
+
+  // Contradiction penalty — if any account concept contradicts a
+  // strongly-supported query concept, subtract a penalty. Prevents
+  // e.g. Score Cards & Printing (contradicts connectivity/utility)
+  // from winning when the invoice supports connectivity.
+  for (const ac of accountConcepts) {
+    for (const qc of queryConcepts) {
+      if (qc.weight < 6) continue; // ignore weak query signals
+      if (isContradiction(qc.conceptId, ac.conceptId)) {
+        components.contradictionPenalty += CONTRADICTION_PENALTY;
+        contradictedConcepts.push(ac.conceptId);
+        evidence.push({
+          kind: "CONTRADICTION_PENALTY",
+          description: `Account is "${ac.concept.canonicalName}" but invoice supports "${qc.concept.canonicalName}" — subtracting penalty.`,
+          score: -CONTRADICTION_PENALTY,
+        });
+        break;
+      }
+    }
+  }
+
+  // Historical vendor default — applied as a SUPPORTING boost on the
+  // specific historical account. Cap so current invoice evidence can
+  // overcome a contradictory history (§11).
+  if (vendorDefaultAccountId && account.id === vendorDefaultAccountId) {
+    const boost = 15;
+    components.historicalVendorScore += boost;
+    evidence.push({
+      kind: "VENDOR_DEFAULT",
+      description: "Vendor has this GL as its default expense account.",
+      score: boost,
+    });
+  }
+
+  // Capital-class hint (asset-side only, applies only when the
+  // analyser classified this invoice as CAPITAL).
+  if (args.capitalState === "CAPITAL") {
+    // Historical hint retained as a small supporting boost on ASSET
+    // accounts whose names hint at capital vocabulary. Deliberately
+    // conservative — capital classification is a separate signal
+    // handled by classifyCapitalVsOperating.
+    // (No specific implementation this checkpoint — placeholder for
+    // the capital-class role integration.)
+  }
+
+  // Final semantic score — sum of positive components minus the
+  // contradiction penalty. NOT capped at 95 (§2). Reported verbatim
+  // so diagnostics can distinguish materially different candidates.
+  components.semanticScore = Math.max(0, Math.round(
+    components.directLineMatch
+    + components.economicPurposeMatch
+    + components.accountNameSimilarity
+    + components.fsGroupTaxonomySimilarity * 0.5
+    + components.categoryTaxonomySimilarity * 0.3
+    + components.documentPhraseScore
+    + components.specificityScore
+    + components.historicalVendorScore
+    + components.supplierContextScore
+    - components.contradictionPenalty,
+  ));
+
+  return {
+    account,
+    components,
+    matchedAccountConcepts: accountConcepts,
+    strongestQueryEvidence,
+    contradictedConcepts,
+    postable: postingBlockers.length === 0,
+    postingBlockers,
+    evidence,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic sort — six-tier tie-break sequence (§1)
+// ---------------------------------------------------------------------------
+
+function deterministicCompare(a: ScoredAccount, b: ScoredAccount): number {
+  if (b.components.semanticScore !== a.components.semanticScore)
+    return b.components.semanticScore - a.components.semanticScore;
+  if (b.components.specificityScore !== a.components.specificityScore)
+    return b.components.specificityScore - a.components.specificityScore;
+  if (b.components.directLineMatch !== a.components.directLineMatch)
+    return b.components.directLineMatch - a.components.directLineMatch;
+  const bTaxonomy = b.components.fsGroupTaxonomySimilarity + b.components.categoryTaxonomySimilarity;
+  const aTaxonomy = a.components.fsGroupTaxonomySimilarity + a.components.categoryTaxonomySimilarity;
+  if (bTaxonomy !== aTaxonomy) return bTaxonomy - aTaxonomy;
+  if (b.components.historicalVendorScore !== a.components.historicalVendorScore)
+    return b.components.historicalVendorScore - a.components.historicalVendorScore;
+  return a.account.accountNumber.localeCompare(b.account.accountNumber);
+}
+
+// ---------------------------------------------------------------------------
+// Vendor history — load prior coding as SUPPORTING evidence (§11)
+// ---------------------------------------------------------------------------
+
+async function loadVendorHistory(
+  clubId: string,
+  vendorId: string | null,
+  accountsRaw: Array<{ id: string; category: { key: string } | null; fsGroup: { key: string } | null; name: string }>,
+): Promise<{ vendorHistoryConceptIds: string[]; vendorDefaultAccountId: string | null }> {
+  if (!vendorId) return { vendorHistoryConceptIds: [], vendorDefaultAccountId: null };
+  const vendor = await prisma.vendor.findFirst({
+    where: { id: vendorId, clubId },
+    select: { defaultExpenseAccountId: true },
+  });
+  const vendorDefaultAccountId = vendor?.defaultExpenseAccountId ?? null;
+
+  // Also read up to 50 prior invoice lines to gather account CONCEPTS
+  // this vendor has historically been coded to.
+  const priorHistory = await prisma.aPInvoiceLine.findMany({
+    where: { clubId, invoice: { vendorId } },
+    select: { expenseAccountId: true },
+    take: 50,
+  });
+  const conceptIds = new Set<string>();
+  const historicalAccountIds = new Set<string>();
+  if (vendorDefaultAccountId) historicalAccountIds.add(vendorDefaultAccountId);
+  for (const l of priorHistory) historicalAccountIds.add(l.expenseAccountId);
+  for (const accountId of historicalAccountIds) {
+    const raw = accountsRaw.find((a) => a.id === accountId);
+    if (!raw) continue;
+    const av: AccountView = {
+      id: raw.id,
+      accountNumber: "",
+      name: raw.name,
+      categoryKey: raw.category?.key ?? null,
+      categoryName: null,
+      fsGroupKey: raw.fsGroup?.key ?? null,
+      fsGroupName: null,
+    };
+    for (const ac of extractConceptsForAccount(av)) {
+      conceptIds.add(ac.conceptId);
+    }
+  }
+  return { vendorHistoryConceptIds: [...conceptIds], vendorDefaultAccountId };
+}
+
+// ---------------------------------------------------------------------------
+// Structured rationale (§12)
+// ---------------------------------------------------------------------------
+
+function buildRationale(args: {
+  scored: ScoredAccount[];
+  dominant: QueryConcept | null;
+  queryConcepts: QueryConcept[];
+  requiresReview: boolean;
+}): GlRationale {
+  const { scored, dominant, queryConcepts, requiresReview } = args;
+  const top = scored[0] ?? null;
+  const alternatives = scored.slice(1, 6).map((s) => ({
+    accountId: s.account.id,
+    accountNumber: s.account.accountNumber,
+    accountName: s.account.name,
+    semanticScore: s.components.semanticScore,
+    reason: alternativeReason(s),
+  }));
+  return {
+    selectedAccountId: top?.account.id ?? null,
+    selectedConcept: dominant?.conceptId ?? null,
+    supportingDocumentEvidence: queryConcepts
+      .filter((q) => q.source === "line_item_description" || q.source === "economic_purpose" || q.source === "document_phrase")
+      .slice(0, 8)
+      .map((q) => q.evidenceSnippet),
+    supportingTaxonomyEvidence: top
+      ? top.matchedAccountConcepts.slice(0, 5).map((ac) => `${ac.concept.canonicalName} (name ${ac.nameMatchStrength}, fs ${ac.fsGroupMatchStrength}, cat ${ac.categoryMatchStrength})`)
+      : [],
+    contradictedAccountConcepts: top?.contradictedConcepts ?? [],
+    alternativeAccounts: alternatives,
+    requiresReview,
+    minRelevanceThreshold: MIN_RELEVANCE_THRESHOLD,
+  };
+}
+
+function alternativeReason(s: ScoredAccount): string {
+  const primary = s.matchedAccountConcepts[0];
+  return primary
+    ? `${primary.concept.canonicalName} (score ${s.components.semanticScore})`
+    : `Score ${s.components.semanticScore}`;
+}
+
+// ---------------------------------------------------------------------------
+// Split-account readiness (§13) — canonical analysis only; no auto-post
+// ---------------------------------------------------------------------------
+
+function buildSplitRecommendations(args: {
+  lineItems: LineItem[];
+  accounts: AccountView[];
+  accountsRaw: Array<{ id: string; accountNumber: string; name: string; category: { key: string } | null; fsGroup: { key: string } | null }>;
+  queryConcepts: QueryConcept[];
+}): SplitRecommendation[] {
+  const { lineItems } = args;
+  if (lineItems.length < 2) return [];
+  // Group lines by the STRONGEST query-concept match on each line's
+  // description. If all lines resolve to the same concept, no split.
+  const lineConcepts = lineItems.map((l) => ({
+    line: l,
+    qc: args.queryConcepts.find((q) => q.source === "line_item_description" && q.evidenceSnippet.startsWith(`Line "${l.description.slice(0, 60)}"`)) ?? null,
+  }));
+  const distinct = new Set(lineConcepts.map((lc) => lc.qc?.conceptId ?? "unknown"));
+  if (distinct.size < 2) return [];
+
+  const groups = new Map<string, { concept: string; lines: LineItem[]; amount: number }>();
+  for (const { line, qc } of lineConcepts) {
+    const key = qc?.conceptId ?? "unknown";
+    let g = groups.get(key);
+    if (!g) {
+      g = { concept: key, lines: [], amount: 0 };
+      groups.set(key, g);
+    }
+    g.lines.push(line);
+    g.amount += Math.abs(line.amount);
+  }
+
+  const out: SplitRecommendation[] = [];
+  for (const [conceptId, group] of groups) {
+    if (conceptId === "unknown") continue;
+    // Find the best account for this concept using the same
+    // extractConceptsForAccount function.
+    let bestAccount: { id: string; number: string; name: string } | null = null;
+    let bestStrength = 0;
+    for (const a of args.accounts) {
+      const matches = extractConceptsForAccount(a);
+      const hit = matches.find((m) => m.conceptId === conceptId);
+      if (hit && hit.totalMatchStrength > bestStrength) {
+        bestStrength = hit.totalMatchStrength;
+        bestAccount = { id: a.id, number: a.accountNumber, name: a.name };
+      }
+    }
+    if (!bestAccount) continue;
+    const concept = CONCEPT_BY_ID[conceptId];
+    out.push({
+      groupLabel: concept?.canonicalName ?? conceptId,
+      lineItemDescriptions: group.lines.map((l) => l.description),
+      accountId: bestAccount.id,
+      accountNumber: bestAccount.number,
+      accountName: bestAccount.name,
+      amount: Math.round(group.amount * 100) / 100,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Finalisation
+// ---------------------------------------------------------------------------
+
+function finaliseRecommendation(args: {
+  top: ScoredAccount;
+  topCandidates: ScoredAccount[];
+  rationale: GlRationale;
+  totalAccountsEvaluated: number;
+  requiresReview: boolean;
+  splitRecommendations: SplitRecommendation[];
+}): GlRecommendation {
+  const { top, topCandidates, rationale, totalAccountsEvaluated, requiresReview, splitRecommendations } = args;
+  const candidates: GlCandidate[] = topCandidates.map((s) => ({
+    accountId: s.account.id,
+    accountNumber: s.account.accountNumber,
+    accountName: s.account.name,
+    categoryKey: s.account.categoryKey,
+    fsGroupKey: s.account.fsGroupKey,
+    confidence: Math.min(95, s.components.semanticScore),
+    evidence: s.evidence.slice(0, 6),
+    postable: s.postable,
+    postingBlockers: s.postingBlockers,
+  }));
+
+  const leader = candidates[0];
+  const leaderIsPostable = leader.postable;
+  const leaderPostingBlockers = leader.postingBlockers;
+  const autoApprovalEligible =
+    !requiresReview
+    && leaderIsPostable
+    && leader.confidence >= AUTO_APPROVAL_MIN_CONFIDENCE;
+
+  const source: GlRecommendation["source"] = leader.evidence.some((e) => e.kind === "CAPITAL_CLASS_MAP")
+    ? "CAPITAL_CLASS_MAP"
+    : leader.evidence.some((e) => e.kind === "VENDOR_DEFAULT")
+      ? "VENDOR_DEFAULT"
+      : leader.evidence.some((e) => e.kind === "PRIOR_CODING")
+        ? "PRIOR_CODING"
+        : leader.evidence.some((e) => e.kind === "ECONOMIC_PURPOSE" || e.kind === "LINE_ITEM_MATCH" || e.kind === "DOCUMENT_PHRASE" || e.kind === "SPECIFICITY_BOOST")
+          ? "SEMANTIC_MATCH"
+          : "NAME_KEYWORD";
+
+  const reason = requiresReview
+    ? `No confident recommendation — top candidate ${leader.accountNumber} — ${leader.accountName} scored ${top.components.semanticScore}, below the minimum-relevance threshold. Review required.`
+    : leaderIsPostable
+      ? `Draft coding: ${leader.accountNumber} — ${leader.accountName} (confidence ${leader.confidence}%). ${rationale.selectedConcept ? `Concept: ${rationale.selectedConcept}.` : ""}`
+      : `Draft coding: ${leader.accountNumber} — ${leader.accountName} (confidence ${leader.confidence}%). Leader account is not currently postable — resolve ${leaderPostingBlockers.join(", ")} before posting.`;
+
   return {
     ruleVersion: RULE_VERSION,
-    accountNumber: best.accountNumber,
-    accountName: best.accountName,
-    categoryKey: best.categoryKey,
-    fsGroupKey: best.fsGroupKey,
-    confidence: best.confidence,
-    reason: leaderIsPostable
-      ? reason
-      : `${reason} Leader account is not currently postable — resolve ${leaderPostingBlockers.join(", ")} before posting.`,
+    accountNumber: leader.accountNumber,
+    accountName: leader.accountName,
+    categoryKey: leader.categoryKey,
+    fsGroupKey: leader.fsGroupKey,
+    confidence: leader.confidence,
+    reason,
     source,
     candidates,
     leaderIsPostable,
     leaderPostingBlockers,
     autoApprovalEligible,
+    rationale,
+    totalAccountsEvaluated,
+    requiresReview,
+    splitRecommendations,
   };
 }
 
-function emptyRecommendation(reason: string): GlRecommendation {
+function emptyRecommendation(reason: string, totalAccountsEvaluated: number): GlRecommendation {
   return {
     ruleVersion: RULE_VERSION,
     accountNumber: null,
@@ -649,13 +766,26 @@ function emptyRecommendation(reason: string): GlRecommendation {
     leaderIsPostable: false,
     leaderPostingBlockers: [],
     autoApprovalEligible: false,
+    rationale: {
+      selectedAccountId: null,
+      selectedConcept: null,
+      supportingDocumentEvidence: [],
+      supportingTaxonomyEvidence: [],
+      contradictedAccountConcepts: [],
+      alternativeAccounts: [],
+      requiresReview: true,
+      minRelevanceThreshold: MIN_RELEVANCE_THRESHOLD,
+    },
+    totalAccountsEvaluated,
+    requiresReview: true,
+    splitRecommendations: [],
   };
 }
 
-// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — posting-blocker
-// derivation. Runs on the full Account row so we can inspect
-// isHeader, allowManualPosting, and fundApplicability (the field
-// the COA UI labels "BLOCKED" when null on a P&L account).
+// ---------------------------------------------------------------------------
+// Posting-blocker derivation (unchanged from pre-15U)
+// ---------------------------------------------------------------------------
+
 function accountPostingBlockers(a: {
   type: string;
   isActive: boolean;
@@ -674,173 +804,134 @@ function accountPostingBlockers(a: {
   return blockers;
 }
 
-function humanReason(c: GlCandidate): string {
-  return `Draft coding: ${c.accountNumber} — ${c.accountName} (confidence ${c.confidence}%)`;
-}
-
-function humaniseMatch(hay: string, pattern: RegExp): string {
-  const m = pattern.exec(hay);
-  return m?.[0] ?? "";
-}
-
 // ---------------------------------------------------------------------------
-// Sprint 3 · Checkpoint 15Q — economic-purpose helpers
+// Diagnostic export — exposed so staging + regression tests can dump
+// the full ranking without re-implementing the recommender.
 // ---------------------------------------------------------------------------
-//
-// Role → account-name pattern lookup. When the classifier says the
-// invoice is `employee_professional_membership_dues`, any tenant
-// account named "Membership & Dues", "Memberships & Subscriptions",
-// "Professional Development", "Training & Dues", etc. becomes a
-// plausible destination. The mapping is generic — no vendor-
-// specific rules, no account-number literals — and additive.
-//
-// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — patterns are
-// ORDERING-INVARIANT and connector-agnostic (space / `&` / `and` /
-// hyphen) to match real-club account names like:
-//   "Membership & Dues", "Membership and Dues", "Dues and Memberships",
-//   "Memberships & Subscriptions", "Professional Dues", "Membership Fee",
-//   "Professional Development", "Training & Dues", ...
-// The pre-15Q-revised regex required "membership" and "dues" to be
-// consecutive OR "dues" before "membership" — it missed
-// "Membership & Dues" (Coulee Ridge's actual account 6064) because
-// `&` isn't whitespace + membership came before dues.
-const CONNECTOR = "(?:\\s*[&/-]\\s*|\\s+(?:and|&)\\s+|\\s+)"; // `&`, `-`, ` and `, whitespace
-const ROLE_NAME_PATTERNS: Record<string, RegExp> = {
-  // Any of: "membership(s)", "professional/employee dues", or the
-  // full ordering-invariant "membership & dues" / "dues & memberships".
-  EMPLOYEE_MEMBERSHIP_DUES: new RegExp(
-    `\\bmembership(?:s)?${CONNECTOR}(?:dues|fee|subscription(?:s)?)\\b`
-    + `|\\b(?:dues|subscription(?:s)?)${CONNECTOR}membership(?:s)?\\b`
-    + `|\\bprofessional\\s+dues\\b`
-    + `|\\bemployee\\s+(?:membership|dues)\\b`
-    + `|\\bmembership(?:s)?\\s+(?:dues|fee|expense)\\b`,
-    "i",
-  ),
-  PROFESSIONAL_DEVELOPMENT: /\bprofessional\s*(?:development|dues|memberships?)\b|\bcontinuing\s+(?:education|professional)\b/i,
-  TRAINING_AND_DUES: new RegExp(
-    `\\btraining${CONNECTOR}(?:dues|memberships?|subscription(?:s)?)\\b`
-    + `|\\btraining\\s+(?:and\\s+)?education\\b`,
-    "i",
-  ),
-  SUBSCRIPTIONS: /\bsubscription(?:s)?\b/i,
-  LICENCES_AND_CERTIFICATIONS: /\blicen[sc]e(?:s)?\b|\bcertificat(?:e|ion)(?:s)?\b|\bpermit(?:s)?\b/i,
-  ACCOUNTING_AND_AUDIT_FEES: /(?:accounting\s*(?:fee|services?)|audit(?:ing|or)?\s*(?:fee|services?))/i,
-  PROFESSIONAL_FEES: /professional\s*fee/i,
-  MEMBER_DUES_REVENUE: /member(?:ship)?\s*dues\s*revenue|dues\s*revenue|member\s*revenue/i,
-  MEMBERSHIP_REVENUE: /membership\s*revenue|initiation\s*fee\s*revenue/i,
-  INTEREST_AND_PENALTIES: /(?:interest\s*(?:and|&)\s*penalt|late\s*(?:fee|payment)|finance\s*charge)/i,
-  BANK_CHARGES: /bank\s*(?:charge|fee)|nsf\s*fee/i,
-  TRAINING_AND_EDUCATION: /training\s*(?:and|&)\s*education|continuing\s*education|education\s*and\s*training/i,
-  LICENCES_AND_PERMITS: /licen[sc]es?\s*(?:and|&)\s*permits?|permit\s*fee/i,
-  REGULATORY_FEES: /regulatory\s*fee/i,
-  LEGAL_FEES: /legal\s*fee/i,
-  CONSULTING_FEES: /consulting\s*fee/i,
-  GENERAL_EXPENSES: /(?:general\s*(?:expense|admin)|miscellaneous)/i,
-  // Sprint 3 · Checkpoint 15T — recurring-service account patterns.
-  // Every regex matches a family of canonical account names ("Internet",
-  // "Telephone & Internet", "Communications Expense", "Software
-  // Subscriptions"), NEVER a specific vendor.
-  TELECOMMUNICATIONS: /\b(?:telecom|telephone|communications?|mobile|cellular)\b/i,
-  INTERNET_AND_CONNECTIVITY: /\b(?:internet|broadband|fibre|fiber|connectivity|data\s*(?:plan|circuit))\b/i,
-  COMMUNICATIONS_EXPENSE: /\bcommunications?\s*(?:expense|charge)\b|\btelephone\s*(?:and|&)\s*internet\b|\bphone\s*(?:and|&)\s*internet\b/i,
-  IT_SUBSCRIPTIONS: /\bIT\s*subscription|\bsoftware\s*subscription|\bSaaS\b|\bcloud\s*(?:services?|subscription)\b/i,
-  SOFTWARE_SUBSCRIPTIONS: /\bsoftware\s*(?:subscription|licen[sc]e)\b|\bsubscription\s*software\b/i,
-  UTILITIES: /\butilit(?:y|ies)\b/i,
-  ELECTRICITY: /\b(?:electricity|electric\s*(?:power|utility)|hydro)\b/i,
-  NATURAL_GAS: /\bnatural\s*gas\b|\bgas\s*utility\b/i,
-  WATER_AND_SEWER: /\bwater\s*(?:and|&)\s*sewer\b|\bwater\s*(?:bill|utility)\b|\bsewer\b/i,
-  WASTE_REMOVAL: /\bwaste\s*(?:removal|management|disposal)\b|\bgarbage\s*(?:collection|removal)\b|\bsanitation\b/i,
-};
 
-// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — canonical FS
-// Group + Category keys that should ALSO trigger a role match, in
-// addition to account.name. The recommender previously matched only
-// account.name — accounts whose name doesn't include a hit keyword
-// but which sit in a canonically-labelled group / category were
-// invisible to the boost. Coulee Ridge's 6064 "Membership & Dues"
-// is in FS Group IS_MEMBERSHIPS_SUBS ("Memberships & Subscriptions")
-// — surfacing that group makes the role match land regardless of
-// how the tenant spells the account name.
-const ROLE_TAXONOMY_KEYS: Record<string, { fsGroupKeys: string[]; categoryKeys: string[] }> = {
-  EMPLOYEE_MEMBERSHIP_DUES: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: ["MEMBERSHIPS_SUBSCRIPTIONS"] },
-  PROFESSIONAL_DEVELOPMENT: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: ["PROFESSIONAL_DEVELOPMENT"] },
-  TRAINING_AND_DUES:        { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  SUBSCRIPTIONS:            { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  LICENCES_AND_CERTIFICATIONS: { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  ACCOUNTING_AND_AUDIT_FEES: { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: ["PROFESSIONAL_SERVICES"] },
-  PROFESSIONAL_FEES:         { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: ["PROFESSIONAL_SERVICES"] },
-  MEMBER_DUES_REVENUE:       { fsGroupKeys: ["IS_MEMBERSHIP_DUES"],  categoryKeys: ["MEMBERSHIP_REVENUE"] },
-  MEMBERSHIP_REVENUE:        { fsGroupKeys: ["IS_MEMBERSHIP_DUES"],  categoryKeys: ["MEMBERSHIP_REVENUE"] },
-  INTEREST_AND_PENALTIES:    { fsGroupKeys: ["IS_INTEREST_EXPENSE", "IS_BANK_CHARGES"], categoryKeys: [] },
-  BANK_CHARGES:              { fsGroupKeys: ["IS_BANK_CHARGES"],     categoryKeys: [] },
-  TRAINING_AND_EDUCATION:    { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  LICENCES_AND_PERMITS:      { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  REGULATORY_FEES:           { fsGroupKeys: ["IS_MEMBERSHIPS_SUBS"], categoryKeys: [] },
-  LEGAL_FEES:                { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
-  CONSULTING_FEES:           { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
-  GENERAL_EXPENSES:          { fsGroupKeys: [], categoryKeys: [] },
-  // Sprint 3 · Checkpoint 15T — canonical FS-group + category keys
-  // for recurring-service concepts. These map to the standard
-  // Spectre-provisioned COA groups; a tenant whose accounts sit in
-  // those groups will surface as a match regardless of the exact
-  // Account.name spelling.
-  TELECOMMUNICATIONS:        { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
-  INTERNET_AND_CONNECTIVITY: { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
-  COMMUNICATIONS_EXPENSE:    { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
-  IT_SUBSCRIPTIONS:          { fsGroupKeys: ["IS_IT_SOFTWARE"], categoryKeys: ["ADMIN_EXPENSES"] },
-  SOFTWARE_SUBSCRIPTIONS:    { fsGroupKeys: ["IS_IT_SOFTWARE"], categoryKeys: ["ADMIN_EXPENSES"] },
-  UTILITIES:                 { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
-  ELECTRICITY:               { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
-  NATURAL_GAS:               { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
-  WATER_AND_SEWER:           { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
-  WASTE_REMOVAL:             { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
-};
-
-// Does an account (name + FS Group key + category key) match the
-// given role? Any of the three signals is sufficient.
-function accountMatchesRole(
-  role: string,
-  a: { name: string; category: { key: string } | null; fsGroup: { key: string } | null },
-): boolean {
-  const re = ROLE_NAME_PATTERNS[role];
-  if (re && re.test(a.name)) return true;
-  const tax = ROLE_TAXONOMY_KEYS[role];
-  if (tax) {
-    if (a.fsGroup && tax.fsGroupKeys.includes(a.fsGroup.key)) return true;
-    if (a.category && tax.categoryKeys.includes(a.category.key)) return true;
-  }
-  return false;
+export interface RankedAccountDiagnostic {
+  accountNumber: string;
+  accountName: string;
+  categoryKey: string | null;
+  categoryName: string | null;
+  fsGroupKey: string | null;
+  fsGroupName: string | null;
+  directLineMatch: number;
+  economicPurposeMatch: number;
+  accountNameSimilarity: number;
+  fsGroupTaxonomySimilarity: number;
+  categoryTaxonomySimilarity: number;
+  documentPhraseScore: number;
+  specificityScore: number;
+  historicalVendorScore: number;
+  supplierContextScore: number;
+  contradictionPenalty: number;
+  semanticScore: number;
+  postingBlockers: PostingBlocker[];
+  matchedConcepts: string[];
+  rank: number;
 }
 
-// Sprint 3 · Checkpoint 15Q (revised) — CONTRADICTED_ROLES_MAP +
-// collectContradictedRoles were REMOVED. They implemented a
-// penalty that regressed the recommendation from "wrong-but-close"
-// (Accounting Fees) to "wrong-and-far" (Score Cards & Printing)
-// on tenants without a Membership Dues account. Positive boost is
-// retained above.
-
-// Derive the classifier inputs from the ExtractedInvoice. Direction
-// defaults to "club_pays_vendor" — every AP-analyser path is AP.
-// A future member-portal / AR pipeline that reuses this classifier
-// can pass an override.
-function classifyPurposeFromExtraction(
-  extraction: GlRecommendationArgs["extraction"],
-): PurposeCandidate[] {
-  if (!extraction) return [];
-  const supplierName = extraction.vendor?.guessedName ?? null;
-  const lineDescriptions = (extraction.lineItems ?? []).map((l) => l.description || "");
-  const combinedText = `${supplierName ?? ""} ${extraction.description ?? ""} ${lineDescriptions.join(" ")}`.toLowerCase();
-  const hasPenaltyLine = /\b(?:penalty|late[-\s]?fee|late[-\s]?payment|finance\s+charge|interest\s+charge|nsf)\b/i.test(combinedText);
-  const hasMembershipLine = /\b(?:membership|annual\s+dues|professional\s+dues|member(?:ship)?\s+fee)\b/i.test(combinedText);
-  const hasProfessionalCredentialContext =
-    supplierName != null &&
-    /\b(?:association|society|college|institute|order\s+of|academy|federation|chartered\s+(?:professional|accountants?|engineers?|surveyors?)|regulatory\s+body|professional\s+body)\b/i.test(supplierName);
-  return classifyEconomicPurpose({
-    supplierName,
-    lineDescriptions,
-    paymentDirection: "club_pays_vendor",
-    hasPenaltyLine,
-    hasMembershipLine,
-    hasProfessionalCredentialContext,
+export async function diagnosticRankTenantAccounts(args: GlRecommendationArgs): Promise<RankedAccountDiagnostic[]> {
+  const accountsRaw = await prisma.account.findMany({
+    where: { clubId: args.clubId },
+    include: {
+      category: { select: { key: true, name: true } },
+      fsGroup: { select: { key: true, name: true } },
+    },
+    orderBy: { accountNumber: "asc" },
   });
+  const eligibleAccounts: AccountView[] = accountsRaw
+    .filter((a) => a.isActive && !a.isHeader && (a.type === "EXPENSE" || a.type === "ASSET"))
+    .map((a) => ({
+      id: a.id,
+      accountNumber: a.accountNumber,
+      name: a.name,
+      categoryKey: a.category?.key ?? null,
+      categoryName: a.category?.name ?? null,
+      fsGroupKey: a.fsGroup?.key ?? null,
+      fsGroupName: a.fsGroup?.name ?? null,
+    }));
+
+  const { vendorHistoryConceptIds, vendorDefaultAccountId } = await loadVendorHistory(
+    args.clubId,
+    args.vendorId,
+    accountsRaw,
+  );
+  const queryConcepts = extractQueryConcepts({
+    lineItems: args.extractedLineItems ?? [],
+    economicPurposeCandidates: args.economicPurposeCandidates ?? null,
+    fullDocumentText: args.fullDocumentText ?? null,
+    supplierName: args.extraction?.vendor?.guessedName ?? null,
+    vendorHistoryConceptIds,
+  });
+  const dominant = dominantQueryConcept(queryConcepts);
+
+  const scored: ScoredAccount[] = eligibleAccounts.map((account) => {
+    const acctRaw = accountsRaw.find((a) => a.id === account.id);
+    return scoreAccount({
+      account,
+      queryConcepts,
+      dominant,
+      vendorDefaultAccountId,
+      capitalState: args.capitalState,
+      postingBlockers: acctRaw ? accountPostingBlockers(acctRaw) : [],
+    });
+  });
+  scored.sort(deterministicCompare);
+
+  return scored.map((s, idx) => ({
+    accountNumber: s.account.accountNumber,
+    accountName: s.account.name,
+    categoryKey: s.account.categoryKey,
+    categoryName: s.account.categoryName,
+    fsGroupKey: s.account.fsGroupKey,
+    fsGroupName: s.account.fsGroupName,
+    directLineMatch: Math.round(s.components.directLineMatch),
+    economicPurposeMatch: Math.round(s.components.economicPurposeMatch),
+    accountNameSimilarity: Math.round(s.components.accountNameSimilarity),
+    fsGroupTaxonomySimilarity: Math.round(s.components.fsGroupTaxonomySimilarity),
+    categoryTaxonomySimilarity: Math.round(s.components.categoryTaxonomySimilarity),
+    documentPhraseScore: Math.round(s.components.documentPhraseScore),
+    specificityScore: Math.round(s.components.specificityScore),
+    historicalVendorScore: Math.round(s.components.historicalVendorScore),
+    supplierContextScore: Math.round(s.components.supplierContextScore),
+    contradictionPenalty: Math.round(s.components.contradictionPenalty),
+    semanticScore: s.components.semanticScore,
+    postingBlockers: s.postingBlockers,
+    matchedConcepts: s.matchedAccountConcepts.slice(0, 3).map((ac) => ac.conceptId),
+    rank: idx + 1,
+  }));
+}
+
+// Sprint 3 · Checkpoint 15U — pure-function ranker for regression
+// tests. Takes AccountView[] + QueryConcept[] directly (no Prisma)
+// so tests can shuffle input order without touching the DB.
+export function rankAccountsPure(args: {
+  accounts: AccountView[];
+  queryConcepts: QueryConcept[];
+  vendorDefaultAccountId?: string | null;
+  capitalState?: CapitalVsOperatingState;
+  postingBlockersByAccount?: Map<string, PostingBlocker[]>;
+}): Array<{ accountNumber: string; accountName: string; semanticScore: number; rank: number; components: ScoreComponents; postingBlockers: PostingBlocker[] }> {
+  const dominant = dominantQueryConcept(args.queryConcepts);
+  const scored = args.accounts.map((account) =>
+    scoreAccount({
+      account,
+      queryConcepts: args.queryConcepts,
+      dominant,
+      vendorDefaultAccountId: args.vendorDefaultAccountId ?? null,
+      capitalState: args.capitalState ?? "OPERATING",
+      postingBlockers: args.postingBlockersByAccount?.get(account.id) ?? [],
+    }),
+  );
+  scored.sort(deterministicCompare);
+  return scored.map((s, idx) => ({
+    accountNumber: s.account.accountNumber,
+    accountName: s.account.name,
+    semanticScore: s.components.semanticScore,
+    rank: idx + 1,
+    components: s.components,
+    postingBlockers: s.postingBlockers,
+  }));
 }
