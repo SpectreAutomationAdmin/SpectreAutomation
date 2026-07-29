@@ -13,6 +13,16 @@
 // GENERALIZED — no invoice-specific rules, no vendor allowlist, no
 // document-shaped fixtures. The classifier reads signals that
 // appear across many real invoice layouts.
+//
+// Sprint 3 · Checkpoint 15T (2026-07-28) — extraction now flows
+// through the shared document-layout layer's description→amount
+// pairing (associateDescriptionAmounts) FIRST, which handles the
+// label-on-line-N + amount-on-line-N+1 layout that pdf-parse
+// produces for real invoices. The pre-15T same-line regex remains
+// as a fallback so vendor documents that happen to fit that shape
+// still parse cleanly.
+
+import { parseDocumentLayout, associateDescriptionAmounts } from "./document-layout";
 
 export type LineTaxTreatment =
   | "taxable"
@@ -67,6 +77,14 @@ function isSummaryRow(line: string, descAfterStrip: string): boolean {
   return SUMMARY_TAIL_RE.test(descAfterStrip);
 }
 
+// Sprint 3 · Checkpoint 15T — strict standalone rollup labels. When a
+// description-after-strip is exactly one of these (case-insensitive),
+// the row is a subtotal-style rollup, NOT a genuine line item. Applies
+// to invoices that place a rollup total in the "line items" band
+// (recurring-service statements often do this).
+const STRICT_ROLLUP_LABEL_RE =
+  /^\s*(?:ongoing\s+charges|pending\s+payments|previous\s+balance|new\s+charges|taxes?\/fees?|taxes\s*(?:and|&)\s*fees|amount\s+due|balance\s+due|balance|total\s+due|invoice\s+total|total\s+amount(?:\s+due)?|subtotal|sub[-\s]?total|credits?|discount|payment)\s*$/i;
+
 // Sprint 3 · Checkpoint 15Q — LABEL-VALUE header line rejects.
 // A form-field label with a value on the same line
 // ("Invoice Number: A-20260714", "Invoice Date: 2026-06-01",
@@ -103,14 +121,66 @@ const MAX_DESCRIPTION_LEN = 200;
 
 // -----------------------------------------------------------------------------
 
+// Sprint 3 · Checkpoint 15T — classify a description string for the
+// per-row tax treatment classifier. Split out of the loop so it can
+// be applied to layout-layer-produced rows as well as regex rows.
+function classifyLineTax(
+  description: string,
+  context: { kind: "taxable" | "non_taxable" } | null,
+): { treatment: LineTaxTreatment; evidence: LineEvidenceKind[]; confidence: number } {
+  const evidence: LineEvidenceKind[] = ["amount_only"];
+  let treatment: LineTaxTreatment = "unknown";
+  if (context) {
+    evidence.push("adjacent_tax_group_header");
+    treatment = context.kind === "taxable" ? "taxable" : "exempt";
+  }
+  if (PENALTY_RE.test(description)) {
+    evidence.push("penalty_or_finance_charge");
+    treatment = "exempt";
+  } else if (EXEMPT_RE.test(description)) {
+    evidence.push("exempt_language");
+    treatment = "exempt";
+  }
+  if (treatment === "unknown" && TAXABLE_LANGUAGE_RE.test(description)) {
+    treatment = "taxable";
+    evidence.push("member_dues_language");
+  }
+  let confidence = 40;
+  if (evidence.includes("explicit_tax_amount_column")) confidence = 90;
+  else if (evidence.includes("explicit_tax_rate_column")) confidence = 85;
+  else if (evidence.includes("adjacent_tax_group_header")) confidence = 78;
+  else if (evidence.includes("penalty_or_finance_charge")) confidence = 82;
+  else if (evidence.includes("exempt_language")) confidence = 82;
+  else if (evidence.includes("member_dues_language")) confidence = 55;
+  return { treatment, evidence, confidence };
+}
+
 export function extractLineItems(text: string): LineItem[] {
   const lines = text.split(/\r?\n/);
   const items: LineItem[] = [];
+  const consumedLineNos = new Set<number>();
   const groupContext: Array<{ from: number; kind: "taxable" | "non_taxable" }> = [];
   let sawTaxAmountColumn = false;
   let sawTaxRateColumn = false;
 
+  // Sprint 3 · Checkpoint 15T — parse the layout ONCE (reused by
+  // both the fallback guard and the layout-first pass below). The
+  // fallback loop must NOT emit a garbage description from a line
+  // that is ENTIRELY a currency amount ("CA$50.00" → desc="CA"
+  // amt=50) — a set of BARE_AMOUNT indices lets the fallback skip
+  // those cleanly without preventing the layout pass from using
+  // them as the amount half of a cross-line pair.
+  const preLayout = parseDocumentLayout(text);
+  const bareAmountLineNos = new Set<number>();
+  for (const l of preLayout.lines) {
+    if (l.kind === "BARE_AMOUNT") bareAmountLineNos.add(l.index);
+  }
+
   for (let i = 0; i < lines.length && items.length < MAX_ROWS; i++) {
+    if (consumedLineNos.has(i)) continue;
+    // Skip lines that are entirely a currency amount — they belong
+    // to a cross-line pair the layout pass will handle.
+    if (bareAmountLineNos.has(i)) continue;
     const raw = lines[i];
     const line = raw.trim();
     if (!line) continue;
@@ -144,10 +214,23 @@ export function extractLineItems(text: string): LineItem[] {
     // Description = everything before the trailing amount.
     const description = line.slice(0, line.length - amountStr.length).trim();
     if (!description || description.length > MAX_DESCRIPTION_LEN) continue;
+    // Sprint 3 · Checkpoint 15T — reject descriptions that are too
+    // short to be meaningful OR that are just a currency-code
+    // residue ("CA" left over from stripping "$50.00" off
+    // "CA$50.00").
+    if (description.length < 3) continue;
+    if (/^(?:CA|US|EUR|GBP|CAD|USD)$/i.test(description)) continue;
     // Skip summary rows: leading token is a summary label AND
     // description ends with `:` or `%`. "Tax return preparation" is
     // a genuine service line even though it starts with "tax".
     if (isSummaryRow(line, description)) continue;
+    // Sprint 3 · Checkpoint 15T — strict standalone rollup labels
+    // (Ongoing charges / Pending payments / Taxes and Fees / Credits
+    // / Balance / Total / Subtotal). These are rollup rows a
+    // recurring-service statement lays out with the amount on the
+    // same line; the layout layer already filters them out of the
+    // description→amount pass, so the fallback must do the same.
+    if (STRICT_ROLLUP_LABEL_RE.test(description)) continue;
 
     // Extract optional qty and unit price from within the description
     // (only when at least two currency-like tokens live in the middle).
@@ -260,6 +343,50 @@ export function extractLineItems(text: string): LineItem[] {
       confidence,
       lineNo: i,
     });
+    consumedLineNos.add(i);
+  }
+
+  // Sprint 3 · Checkpoint 15T — supplemental layout-first pass.
+  // Runs AFTER the fallback so it preserves the fallback's group-
+  // context + tax-column intelligence. Only picks up description +
+  // amount pairs that span line boundaries (label on one line,
+  // value on the next) — the founder-observed CPA / OXIO shape.
+  if (items.length < MAX_ROWS) {
+    const layout = preLayout;
+    const layoutPairs = associateDescriptionAmounts(layout, {
+      forwardMaxLines: 2,
+      excludeDescription: (line) => {
+        if (consumedLineNos.has(line.index)) return true;
+        if (HEADER_LABEL_RE.test(line.text)) return true;
+        if (IDLIKE_TAIL_RE.test(line.text)) return true;
+        if (DATE_LIKE_LINE_RE.test(line.text)) return true;
+        if (STRICT_ROLLUP_LABEL_RE.test(line.text)) return true;
+        return false;
+      },
+    });
+    for (const pair of layoutPairs) {
+      if (items.length >= MAX_ROWS) break;
+      if (consumedLineNos.has(pair.descriptionLineIndex)) continue;
+      if (consumedLineNos.has(pair.amountLineIndex)) continue;
+      // Same-line pairs are already handled by the fallback; this
+      // supplemental pass focuses on cross-line pairs.
+      if (pair.strategy === "same_line") continue;
+      const { treatment, evidence, confidence } = classifyLineTax(pair.description, null);
+      items.push({
+        description: pair.description,
+        quantity: null,
+        unitPrice: null,
+        amount: pair.negative ? -Math.abs(pair.amount) : Math.abs(pair.amount),
+        taxRate: null,
+        taxAmount: null,
+        taxTreatment: treatment,
+        evidence,
+        confidence: Math.max(confidence, Math.round(pair.confidence * 0.9)),
+        lineNo: pair.descriptionLineIndex,
+      });
+      consumedLineNos.add(pair.descriptionLineIndex);
+      consumedLineNos.add(pair.amountLineIndex);
+    }
   }
 
   return items;

@@ -37,6 +37,9 @@ import { extractLineItems, type LineItem } from "./line-items-extract";
 import { reconcileTax, type TaxReconciliation } from "./tax-reconcile";
 import { extractIdentifiers, type IdentifierCandidate } from "./identifier-taxonomy";
 import { classifyEconomicPurpose, type PurposeCandidate } from "./economic-purpose";
+// Sprint 3 · Checkpoint 15T — amount hierarchy + tax/credit groups.
+import { computeAmountHierarchy, type AmountHierarchyResult } from "./amount-hierarchy";
+import { buildTaxGroups, type TaxGroupsResult } from "./tax-groups";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -80,6 +83,11 @@ export interface ApAnalyseResult {
   // each as a chip; the founder can see WHY overall confidence is
   // whatever it is instead of a single opaque number.
   confidenceDimensions: ConfidenceDimensions;
+  // Sprint 3 · Checkpoint 15T — amount hierarchy + tax/credit groups.
+  // In-memory only this checkpoint; not persisted until arithmetic
+  // and evidence validation are complete (founder rule §9).
+  amountHierarchy: AmountHierarchyResult;
+  taxGroupsResult: TaxGroupsResult;
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -202,17 +210,6 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     extraction,
     clubCapitalMinCents: capitalMinCents,
   });
-  const gl = await recommendGlAccount({
-    clubId: args.clubId,
-    vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
-    capitalState: capital.state,
-    capitalClass: capital.capitalClass,
-    // Sprint 3 · Checkpoint 15L — pass the extraction so the recommender
-    // can do a name-keyword search against the tenant's COA even when
-    // no vendor record exists yet (the founder-observed Microsoft case).
-    extraction,
-  });
-
   // Sprint 3 · Checkpoint 15Q — run the four generalized modules on
   // the same source text so the card projection can render per-
   // dimension confidence + provenance. Each of these is deterministic
@@ -229,17 +226,52 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     printedTax,
     printedTotal,
   });
+  // Sprint 3 · Checkpoint 15T — economic-purpose classifier now
+  // consumes STRUCTURED evidence + full-document phrases in addition
+  // to line-item descriptions. Founder rule (§4): evidence
+  // strength is differentiated inside the classifier — this analyser
+  // just makes sure ALL the signals are present.
+  const membershipLineRe = /\b(?:membership|annual\s+dues|professional\s+dues|member(?:ship)?\s+fee|member\s+dues)\b/i;
+  const professionalBodyRe =
+    /\b(?:association|society|college|institute|order\s+of|academy|federation|chartered\s+(?:professional|accountants?|engineers?|surveyors?))\b/i;
+  // ACRONYM + Region shape — e.g. "CPA ALBERTA", "LSBC BC", "ICABC BC".
+  // Two to six ALL-CAPS letters followed by a Canadian / US region name.
+  // Catches regulatory-body naming conventions without a vendor allowlist.
+  const professionalBodyAcronymRe =
+    /^[A-Z]{2,6}\s+(?:Alberta|Ontario|Manitoba|Saskatchewan|British\s+Columbia|BC|Quebec|Nova\s+Scotia|New\s+Brunswick|Newfoundland|Prince\s+Edward\s+Island|PEI|Yukon|Northwest\s+Territories|NWT|Nunavut|Canada|USA|America)$/i;
+  const supplierName = extraction.vendor.guessedName;
+  const hasMembershipLine =
+    lineItemsExtracted.some((l) => membershipLineRe.test(l.description))
+    || (pdfOk && membershipLineRe.test(pdfText));
+  const hasProfessionalCredentialContext =
+    (supplierName != null && (professionalBodyRe.test(supplierName) || professionalBodyAcronymRe.test(supplierName)))
+    || (pdfOk && professionalBodyRe.test(pdfText));
   const economicPurpose = classifyEconomicPurpose({
-    supplierName: extraction.vendor.guessedName,
+    supplierName,
     lineDescriptions: lineItemsExtracted.map((l) => l.description),
+    fullDocumentText: pdfOk ? pdfText : null,
     paymentDirection: "club_pays_vendor",
     hasPenaltyLine: lineItemsExtracted.some(
       (l) => l.taxTreatment === "exempt" && l.evidence.includes("penalty_or_finance_charge"),
     ),
-    hasMembershipLine: lineItemsExtracted.some((l) => /\b(?:membership|annual\s+dues|professional\s+dues|member(?:ship)?\s+fee)\b/i.test(l.description)),
-    hasProfessionalCredentialContext:
-      extraction.vendor.guessedName != null
-      && /\b(?:association|society|college|institute|order\s+of|academy|federation|chartered)\b/i.test(extraction.vendor.guessedName),
+    hasMembershipLine,
+    hasProfessionalCredentialContext,
+  });
+
+  const gl = await recommendGlAccount({
+    clubId: args.clubId,
+    vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
+    capitalState: capital.state,
+    capitalClass: capital.capitalClass,
+    // Sprint 3 · Checkpoint 15L — pass the extraction so the recommender
+    // can do a name-keyword search against the tenant's COA even when
+    // no vendor record exists yet (the founder-observed Microsoft case).
+    extraction,
+    // Sprint 3 · Checkpoint 15T — hand the recommender the classifier
+    // output produced HERE. This is the only path that carries the
+    // full-document-phrase evidence into the GL boost logic; the
+    // recommender's own classifier call cannot see the raw text.
+    economicPurposeCandidates: economicPurpose,
   });
   const confidenceDimensions = computeConfidenceDimensions({
     supplierExtraction,
@@ -251,6 +283,21 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     printedTotal,
     vendorResolve: vendor,
     gl,
+  });
+
+  // Sprint 3 · Checkpoint 15T — compute amount hierarchy and tax /
+  // credit groups. Printed total is preserved verbatim regardless
+  // of whether the tax allocation reconciles (founder rule §6).
+  const amountHierarchy = computeAmountHierarchy({
+    printedTotal,
+    printedSubtotal,
+    printedTax,
+    lineItems: lineItemsExtracted,
+  });
+  const taxGroupsResult = buildTaxGroups({
+    lines: lineItemsExtracted,
+    printedSubtotal,
+    printedTax,
   });
 
   // ---- Assemble findings for WorkIntakeFinding persistence ---------------
@@ -359,6 +406,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     identifiers,
     economicPurpose,
     confidenceDimensions,
+    amountHierarchy,
+    taxGroupsResult,
   };
 }
 

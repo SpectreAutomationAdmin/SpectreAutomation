@@ -7,9 +7,11 @@
 // specificity — first match wins per field. Currency amounts are kept
 // as strings (Decimal-safe) so no float drift enters accounting math.
 
-import type { ExtractedInvoice, ParseHint } from "./types";
+import type { ExtractedInvoice, ParseHint, PayableReferenceType } from "./types";
 import { EXTRACTION_RULE_VERSION } from "./types";
 import { extractSupplier, type SupplierExtraction } from "./supplier-extract";
+import { parseDocumentLayout, associateLabelValue, associateDescriptionAmounts, type DocumentLayout } from "./document-layout";
+import { extractPayableReference } from "./payable-reference";
 
 // Sprint 3 · Checkpoint 15Q (revised) — hard reject a supplier-name
 // candidate that contains monetary symbols, is dominantly numeric,
@@ -66,6 +68,13 @@ function firstMatch(text: string, patterns: Array<{ ruleKey: string; regex: RegE
 // -----------------------------------------------------------------------------
 
 function extractInvoiceNumber(text: string) {
+  // Sprint 3 · Checkpoint 15T — retained for backwards compatibility.
+  // The main analyser now consults extractPayableReference (which
+  // wraps the shared document-layout layer + supports the full
+  // taxonomy: INVOICE_NUMBER / STATEMENT_NUMBER / BILL_NUMBER /
+  // REFERENCE_NUMBER). This narrow helper only fires when the label
+  // + value sit on the same line — used as a fallback for cases where
+  // the layout layer's stricter guardrails happen to reject a value.
   return firstMatch(text, [
     { ruleKey: "inv_no.labeled", regex: /(?:^|\n)\s*Invoice\s*(?:Number|No\.?|#)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
     { ruleKey: "inv_no.compact", regex: /\bInvoice\s*[#:]\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
@@ -139,6 +148,50 @@ function normaliseDateToIso(raw: string): string | null {
     const day = parseInt(nameMatch[2], 10);
     const year = parseInt(nameMatch[3], 10);
     return `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+  }
+  return null;
+}
+
+// Sprint 3 · Checkpoint 15T — layout-aware money extraction. Wraps
+// the shared document-layout label→value associator, then falls back
+// to the pre-15T line-scan regex so parse-invoice remains resilient
+// when the layout classifier misses (e.g. money on the same line as
+// a fragmentary label). Accepts an optional consumed-line-index set
+// so summary labels never grab amounts already paired with a line-
+// item description.
+//
+// The label list is a STRICT PRIORITY ORDER — most-specific labels
+// first. Each label is tried across the whole document; only if it
+// finds nothing does the next-lower-priority label run. This matters
+// because a document may print BOTH "Amount Due: 0.00" (payment-stub
+// summary) AND "INVOICE TOTAL: $1,650.50" (the real total) — the
+// specific label wins over the generic one regardless of line order.
+function extractMoneyFromLayout(
+  layout: DocumentLayout,
+  labels: string[],
+  ruleKeyBase: string,
+  opts?: { backwardMaxLines?: number; consumedLineIndices?: Set<number> },
+): null | { value: string; hint: ParseHint; valueLineIndex: number } {
+  for (const label of labels) {
+    const match = associateLabelValue(layout, {
+      labels: [label],
+      ruleKeyBase,
+      valueKind: "amount",
+      forwardMaxLines: 4,
+      backwardMaxLines: opts?.backwardMaxLines ?? 0,
+      consumedLineIndices: opts?.consumedLineIndices,
+    });
+    if (match && match.amount != null) {
+      return {
+        value: match.value.replace(/^[+-]?\s*(?:CA\$|US\$|[\$€£])\s*/, "").trim(),
+        hint: {
+          field: "",
+          ruleKey: match.ruleKey,
+          matchedText: `${match.label} = ${match.value} (${match.strategy}, d=${match.distance})`.slice(0, 120),
+        },
+        valueLineIndex: match.valueLineIndex,
+      };
+    }
   }
   return null;
 }
@@ -340,6 +393,7 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
         extractedTextChars: 0,
         vendor: { guessedName: null, guessedEmail: null, guessedTaxNumber: null, guessedDomain: null },
         invoiceNumber: null,
+        payableReferenceType: null,
         invoiceDate: null,
         dueDate: null,
         paymentTerms: null,
@@ -363,18 +417,70 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
     return hit.value;
   };
 
-  const invoiceNumber = record("invoiceNumber", extractInvoiceNumber(text));
+  // Sprint 3 · Checkpoint 15T — parse the document layout ONCE, then
+  // reuse for every label→value association. This is the shared
+  // association layer that handles the label-on-line-N, value-on-line-
+  // N+K layouts pdf-parse frequently produces.
+  const layout = parseDocumentLayout(text);
+  // Pre-compute description→amount pairings so the summary-label
+  // extractors (subtotal / tax / total) skip amounts that already
+  // belong to a line item. Without this, SUBTOTAL / GST could grab
+  // the amount belonging to an adjacent fee row.
+  const descAmountPairs = associateDescriptionAmounts(layout, { forwardMaxLines: 2 });
+  const consumedAmountLineIndices = new Set<number>();
+  for (const p of descAmountPairs) {
+    consumedAmountLineIndices.add(p.amountLineIndex);
+  }
+
+  // Sprint 3 · Checkpoint 15T — payable-reference extraction now goes
+  // through the taxonomy-aware extractor first, then falls back to the
+  // legacy invoice-number regex when the layout layer finds nothing.
+  const payableRefResult = extractPayableReference(layout);
+  let invoiceNumber: string | null;
+  let payableReferenceType: PayableReferenceType | null;
+  if (payableRefResult) {
+    invoiceNumber = payableRefResult.value;
+    payableReferenceType = payableRefResult.type;
+    hints.push({
+      field: "payableReference",
+      ruleKey: payableRefResult.ruleKey,
+      matchedText: `${payableRefResult.type} = ${payableRefResult.value} (${payableRefResult.strategy})`.slice(0, 120),
+    });
+    // Also emit the legacy hint field so existing hint-consumers
+    // (source-contract tests, older projections) see the same value
+    // under the pre-15T field name.
+    hints.push({
+      field: "invoiceNumber",
+      ruleKey: payableRefResult.ruleKey,
+      matchedText: payableRefResult.value.slice(0, 120),
+    });
+  } else {
+    invoiceNumber = record("invoiceNumber", extractInvoiceNumber(text));
+    payableReferenceType = invoiceNumber ? "INVOICE_NUMBER" : null;
+  }
   const invoiceDate = record("invoiceDate", extractDate(text, "invoice"));
   const dueDate = record("dueDate", extractDate(text, "due"));
   const purchaseOrder = record("purchaseOrder", extractPurchaseOrder(text));
   const currency = record("currency", extractCurrency(text));
-  const subtotalHit = extractMoney(text, ["Subtotal", "Sub Total", "Net", "Charges", "Net Amount", "Sub-Total"], "subtotal");
-  // Sprint 3 · Checkpoint 15Q — accept compound "GST/HST" labels used
-  // by Microsoft-format invoices. Order matters: longest / most-specific
-  // patterns first (GST/HST, HST, GST) so extractMoney picks the correct
-  // one rather than falling through to bare "GST" or "HST".
-  const taxHit = extractMoney(text, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "GST", "HST", "Tax Total", "Tax"], "tax");
-  const totalHit = extractMoney(text, ["Invoice Total", "Total Due", "Total", "Amount Due", "Balance Due"], "total");
+  // Sprint 3 · Checkpoint 15T — money extraction now consults the
+  // shared document-layout layer FIRST (handles CPA-style layouts
+  // where SUBTOTAL sits on line 38 and the amount sits on line 41).
+  // If the layout layer finds nothing, we fall back to the pre-15T
+  // line-scan regex so existing tests continue to pass.
+  const subtotalLayout = extractMoneyFromLayout(layout, ["Subtotal", "Sub Total", "Net", "Net Amount", "Sub-Total", "Charges"], "subtotal", { consumedLineIndices: consumedAmountLineIndices });
+  if (subtotalLayout) consumedAmountLineIndices.add(subtotalLayout.valueLineIndex);
+  const subtotalHit = subtotalLayout ?? extractMoney(text, ["Subtotal", "Sub Total", "Net", "Charges", "Net Amount", "Sub-Total"], "subtotal");
+  const taxLayout = extractMoneyFromLayout(layout, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "Taxes/Fees", "Taxes and Fees", "GST", "HST", "Tax Total", "Tax"], "tax", { consumedLineIndices: consumedAmountLineIndices });
+  if (taxLayout) consumedAmountLineIndices.add(taxLayout.valueLineIndex);
+  const taxHit = taxLayout ?? extractMoney(text, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "GST", "HST", "Tax Total", "Tax"], "tax");
+  // Sprint 3 · Checkpoint 15T — the total extractor runs LAST and
+  // treats every subtotal / tax / description-paired amount as
+  // consumed. Backward scan is generous (20 lines) because pdf-parse
+  // often places the printed total on its own line MANY rows above
+  // the "INVOICE TOTAL" label.
+  const totalLayout = extractMoneyFromLayout(layout, ["Invoice Total", "Total Amount Due", "Total Due", "Total Amount", "Balance Due", "Balance Owing", "Amount Due", "Total"], "total", { backwardMaxLines: 20, consumedLineIndices: consumedAmountLineIndices });
+  if (totalLayout) consumedAmountLineIndices.add(totalLayout.valueLineIndex);
+  const totalHit = totalLayout ?? extractMoney(text, ["Invoice Total", "Total Due", "Total", "Amount Due", "Balance Due"], "total");
   if (subtotalHit) { hints.push({ ...subtotalHit.hint, field: "subtotal" }); }
   if (taxHit)      { hints.push({ ...taxHit.hint, field: "taxTotal" }); }
   if (totalHit)    { hints.push({ ...totalHit.hint, field: "total" }); }
@@ -466,6 +572,7 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
         guessedDomain: domain,
       },
       invoiceNumber,
+      payableReferenceType,
       invoiceDate,
       dueDate,
       paymentTerms: null,

@@ -34,6 +34,8 @@ export type EconomicPurpose =
   | "member_dues_charged_by_club"          // REVENUE — club receives dues from members
   | "employee_reimbursement"
   | "legal_or_consulting_services"
+  | "recurring_communications_or_connectivity_service"  // Sprint 3 · Checkpoint 15T — telecom / internet / SaaS subscriptions
+  | "recurring_utility_or_facility_service"             // Sprint 3 · Checkpoint 15T — electricity / gas / water / waste
   | "generic_supplies_or_services";        // fallback
 
 export type PaymentDirection =
@@ -41,9 +43,20 @@ export type PaymentDirection =
   | "member_pays_club"                     // AR revenue
   | "unknown";
 
+// Sprint 3 · Checkpoint 15T — evidence strength differentiates
+// where a signal came from. Founder rule (§4):
+//   * extracted line-item description → STRONG
+//   * structured section/context      → MEDIUM
+//   * repeated document phrase        → MEDIUM
+//   * supplier identity               → WEAK supporting context
+//   * email sender / filename         → NOT DETERMINATIVE
+// A single weak phrase must not determine the GL.
+export type EvidenceStrength = "strong" | "medium" | "weak";
+
 export interface PurposeEvidence {
   kind: string;
   detail?: string;
+  strength?: EvidenceStrength;
 }
 
 export interface PurposeCandidate {
@@ -58,6 +71,11 @@ export interface PurposeCandidate {
 export interface EconomicPurposeInput {
   supplierName: string | null;
   lineDescriptions: string[];
+  // Sprint 3 · Checkpoint 15T — full-document text. Used ONLY to
+  // surface characteristic phrases (billing cycle, ongoing charges,
+  // internet speeds, member dues, penalty). Each phrase counts as
+  // MEDIUM evidence — strictly weaker than a line-item description.
+  fullDocumentText?: string | null;
   paymentDirection: PaymentDirection;
   hasPenaltyLine: boolean;
   hasMembershipLine: boolean;
@@ -88,25 +106,39 @@ interface ConceptRule {
 }
 
 // Small helper — matches ANY line-description against a regex.
+// Line-description evidence is STRONG (§4).
 function anyLineMatches(re: RegExp) {
-  return (input: EconomicPurposeInput) => {
+  return (input: EconomicPurposeInput): PurposeEvidence | null => {
     const hit = input.lineDescriptions.find((d) => re.test(d));
-    return hit ? { kind: "line_description_match", detail: hit.slice(0, 80) } : null;
+    return hit ? { kind: "line_description_match", detail: hit.slice(0, 80), strength: "strong" } : null;
   };
 }
+// Sprint 3 · Checkpoint 15T — full-document phrase match. Weaker
+// than line-item evidence (MEDIUM). Used when line-item extraction
+// is sparse but the document body contains characteristic phrases.
+function documentPhraseMatches(re: RegExp, kind: string) {
+  return (input: EconomicPurposeInput): PurposeEvidence | null => {
+    if (!input.fullDocumentText) return null;
+    const m = input.fullDocumentText.match(re);
+    return m ? { kind, detail: m[0].slice(0, 80), strength: "medium" } : null;
+  };
+}
+// Sprint 3 · Checkpoint 15T — supplier-identity evidence is WEAK.
 function supplierMatches(re: RegExp, kind: string) {
-  return (input: EconomicPurposeInput) => {
+  return (input: EconomicPurposeInput): PurposeEvidence | null => {
     if (input.supplierName && re.test(input.supplierName)) {
-      return { kind, detail: input.supplierName };
+      return { kind, detail: input.supplierName, strength: "weak" };
     }
     return null;
   };
 }
-function directionIs(direction: PaymentDirection, kind: string) {
-  return (input: EconomicPurposeInput) => (input.paymentDirection === direction ? { kind } : null);
+function directionIs(direction: PaymentDirection, kind: string, strength: EvidenceStrength = "weak") {
+  return (input: EconomicPurposeInput): PurposeEvidence | null =>
+    (input.paymentDirection === direction ? { kind, strength } : null);
 }
-function flagIs<K extends keyof EconomicPurposeInput>(flag: K, val: EconomicPurposeInput[K], kind: string) {
-  return (input: EconomicPurposeInput) => (input[flag] === val ? { kind } : null);
+function flagIs<K extends keyof EconomicPurposeInput>(flag: K, val: EconomicPurposeInput[K], kind: string, strength: EvidenceStrength = "medium") {
+  return (input: EconomicPurposeInput): PurposeEvidence | null =>
+    (input[flag] === val ? { kind, strength } : null);
 }
 
 // Concept catalog. Order does not matter — every rule is evaluated.
@@ -125,11 +157,18 @@ const CONCEPT_CATALOG: ConceptRule[] = [
       supplierMatches(/\b(?:association|society|college|institute|order\s+of|academy|federation|chartered|professional)\b/i, "supplier_professional_body_language"),
       anyLineMatches(/\b(?:annual\s+dues|membership\s+dues|member(?:ship)?\s+fee|professional\s+dues|licens[ec]\s+fee)\b/i),
       directionIs("club_pays_vendor", "direction_expense"),
+      // Sprint 3 · Checkpoint 15T — document-phrase signals (§4
+      // "structured section / context" = medium). Catches the shape
+      // where line items are extracted as e.g. "[ACRONYM] [Region]
+      // Fee" but the body of the document literally says "Member
+      // Dues for [Name]" or "Annual dues". No vendor allowlist.
+      documentPhraseMatches(/\b(?:member(?:ship)?|annual|professional)\s+(?:dues|fee|application)\b/i, "phrase_dues_or_fee"),
+      documentPhraseMatches(/\bmember\s+dues\b/i, "phrase_member_dues"),
     ],
     contradicting: [
-      // If the invoice is member→club direction, it's revenue not
-      // expense — very different purpose.
-      directionIs("member_pays_club", "direction_reversed"),
+      // Direction reversal is architecturally definitive — a member
+      // paying the club is REVENUE, not an employee expense (§4).
+      directionIs("member_pays_club", "direction_reversed", "strong"),
       // Pure external service invoice (audit, tax return) has these
       // words which we treat as a strong CONTRA.
       anyLineMatches(/\b(?:audit\s+services|tax\s+return\s+preparation|financial\s+statement\s+preparation|bookkeeping\s+services)\b/i),
@@ -234,6 +273,66 @@ const CONCEPT_CATALOG: ConceptRule[] = [
     suggestedAccountRoles: ["LEGAL_FEES", "CONSULTING_FEES", "PROFESSIONAL_FEES"],
   },
 
+  // --- Recurring communications / connectivity service --------------
+  // Sprint 3 · Checkpoint 15T — telecom / internet / SaaS-style
+  // recurring statements. Characteristic phrases: billing cycle,
+  // ongoing charges, monthly service, upload/download speeds, plan.
+  // No vendor-name allowlist — the signals must come from the
+  // document itself.
+  {
+    purpose: "recurring_communications_or_connectivity_service",
+    classificationConcept: "Recurring communications or connectivity service",
+    expectedDirection: "club_pays_vendor",
+    supporting: [
+      anyLineMatches(/\b(?:ongoing\s+charges|monthly\s+service|internet|broadband|fibre|fiber|mobile|cellular|VoIP|SaaS|subscription|hosting|domain|managed\s+service)\b/i),
+      documentPhraseMatches(/\bbilling\s+cycle\b/i, "phrase_billing_cycle"),
+      documentPhraseMatches(/\bongoing\s+charges\b/i, "phrase_ongoing_charges"),
+      documentPhraseMatches(/\b\d{1,4}\s*(?:mbit|mbps|Mb\/s|gbit|gbps|Gb\/s|kbps)\b/i, "phrase_bandwidth_units"),
+      documentPhraseMatches(/\b(?:upload|download)\s*speed\b/i, "phrase_speed_column"),
+      documentPhraseMatches(/\bpending\s+payments\b/i, "phrase_pending_payments"),
+      documentPhraseMatches(/\brecurring\b/i, "phrase_recurring"),
+    ],
+    contradicting: [
+      flagIs("hasMembershipLine", true, "line_is_membership"),
+      flagIs("hasProfessionalCredentialContext", true, "supplier_is_professional_body"),
+      anyLineMatches(/\b(?:audit\s+services|tax\s+return|legal\s+services|membership\s+dues)\b/i),
+    ],
+    suggestedAccountRoles: [
+      "TELECOMMUNICATIONS",
+      "INTERNET_AND_CONNECTIVITY",
+      "COMMUNICATIONS_EXPENSE",
+      "IT_SUBSCRIPTIONS",
+      "SOFTWARE_SUBSCRIPTIONS",
+    ],
+  },
+
+  // --- Recurring utility / facility service -------------------------
+  // Electricity / gas / water / waste / sanitation — characteristic
+  // phrases include consumption units (kWh, m³, GJ) and utility
+  // vocabulary (meter, service address, delivery charge).
+  {
+    purpose: "recurring_utility_or_facility_service",
+    classificationConcept: "Recurring utility or facility service",
+    expectedDirection: "club_pays_vendor",
+    supporting: [
+      anyLineMatches(/\b(?:electricity|hydro|natural\s+gas|water|sewer|waste|sanitation|garbage|utilities|delivery\s+charge|distribution\s+charge)\b/i),
+      documentPhraseMatches(/\b\d+(?:\.\d+)?\s*(?:kWh|m³|m3|GJ|CCF)\b/i, "phrase_consumption_units"),
+      documentPhraseMatches(/\bservice\s+address\b/i, "phrase_service_address"),
+      documentPhraseMatches(/\bmeter\s+(?:reading|number)\b/i, "phrase_meter"),
+    ],
+    contradicting: [
+      flagIs("hasMembershipLine", true, "line_is_membership"),
+      flagIs("hasProfessionalCredentialContext", true, "supplier_is_professional_body"),
+    ],
+    suggestedAccountRoles: [
+      "UTILITIES",
+      "ELECTRICITY",
+      "NATURAL_GAS",
+      "WATER_AND_SEWER",
+      "WASTE_REMOVAL",
+    ],
+  },
+
   // --- Generic supplies / services (fallback) ----------------------
   {
     purpose: "generic_supplies_or_services",
@@ -247,8 +346,23 @@ const CONCEPT_CATALOG: ConceptRule[] = [
   },
 ];
 
-const SUPPORT_WEIGHT = 15;
-const CONTRADICT_WEIGHT = 20;
+// Sprint 3 · Checkpoint 15T — strength-differentiated weights.
+// Strong evidence outscores medium; medium outscores weak. Contradicts
+// are treated at their own tier so a single weak contradiction cannot
+// kill a strong supporting stack. Weights are calibrated so a concept
+// with three medium signals (fits the founder-observed professional-
+// body invoice) OR one strong signal plus supporting context clears
+// the gl-recommend boost gate at 60.
+const STRENGTH_SUPPORT_WEIGHT: Record<EvidenceStrength, number> = {
+  strong: 25,
+  medium: 15,
+  weak: 8,
+};
+const STRENGTH_CONTRADICT_WEIGHT: Record<EvidenceStrength, number> = {
+  strong: 30,
+  medium: 18,
+  weak: 8,
+};
 
 // -----------------------------------------------------------------------------
 // Classifier
@@ -259,15 +373,23 @@ export function classifyEconomicPurpose(input: EconomicPurposeInput): PurposeCan
   for (const rule of CONCEPT_CATALOG) {
     const supporting: PurposeEvidence[] = [];
     const contradicting: PurposeEvidence[] = [];
+    let supportScore = 0;
+    let contradictScore = 0;
     for (const s of rule.supporting) {
       const ev = s(input);
-      if (ev) supporting.push(ev);
+      if (ev) {
+        supporting.push(ev);
+        supportScore += STRENGTH_SUPPORT_WEIGHT[ev.strength ?? "medium"];
+      }
     }
     for (const c of rule.contradicting) {
       const ev = c(input);
-      if (ev) contradicting.push(ev);
+      if (ev) {
+        contradicting.push(ev);
+        contradictScore += STRENGTH_CONTRADICT_WEIGHT[ev.strength ?? "medium"];
+      }
     }
-    const score = supporting.length * SUPPORT_WEIGHT - contradicting.length * CONTRADICT_WEIGHT;
+    const score = supportScore - contradictScore;
     if (score <= 0 && rule.purpose !== "generic_supplies_or_services") continue;
     candidates.push({
       purpose: rule.purpose,

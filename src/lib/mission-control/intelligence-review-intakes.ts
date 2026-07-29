@@ -814,8 +814,16 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       matchedVendorId,
     },
     invoiceNumber: extraction?.invoiceNumber ?? null,
+    // Sprint 3 · Checkpoint 15T — gross amount follows the amount
+    // hierarchy: printed total > reconciled > subtotal+tax-credits >
+    // line-item sum > null. The printed total is preserved verbatim
+    // even when tax allocation is unresolved (founder rule §6).
     gross: {
-      amount: extraction?.total ?? null,
+      amount:
+        extraction?.total
+        ?? (analysis?.amountHierarchy?.value != null
+          ? analysis.amountHierarchy.value.toFixed(2)
+          : null),
       currency: extraction?.currency ?? null,
     },
     paymentTerms: paymentTermsResult.terms,
@@ -1062,9 +1070,17 @@ function deriveApWorkflowState(a: ApAnalyseResult | null):
   if (!a) return "NEEDS_JUDGMENT";
   if (a.reconcile.state === "DUPLICATE" || a.reconcile.state === "HASH_DUPLICATE") return "POSSIBLE_DUPLICATE";
   if (a.extraction.state === "DOCUMENT_UNREADABLE") return "MISSING_INFORMATION";
-  const missingCore =
-    !a.extraction.invoiceNumber || !a.extraction.total || !a.extraction.currency;
-  if (missingCore) return "MISSING_INFORMATION";
+  // Sprint 3 · Checkpoint 15T — MISSING_INFORMATION is reserved for
+  // cases where the sender must be contacted (founder rule §8):
+  //   * source document unreadable
+  //   * supplier cannot be determined
+  //   * no usable payable reference
+  // Missing total, mixed tax, uncertain GL, or unmapped account
+  // configuration are validation requirements inside the workflow —
+  // they DO NOT change the action to Request information.
+  const supplierUnknown = !a.extraction.vendor?.guessedName;
+  const noPayableReference = !a.extraction.invoiceNumber;
+  if (supplierUnknown || noPayableReference) return "MISSING_INFORMATION";
   if (a.vendor.state === "NOT_FOUND" || a.vendor.state === "AMBIGUOUS") return "VENDOR_MATCH_REQUIRED";
   if (a.vendor.state === "INSUFFICIENT_SIGNAL") return "VENDOR_MATCH_REQUIRED";
   // Everything the analyser needs to code the invoice was found.

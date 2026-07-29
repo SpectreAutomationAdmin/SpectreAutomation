@@ -95,6 +95,14 @@ export interface GlRecommendationArgs {
   // extracted description / line items, extracted domain — anything
   // that helps identify the semantic category.
   extraction?: Pick<ExtractedInvoice, "vendor" | "description" | "lineItems"> | null;
+  // Sprint 3 · Checkpoint 15T — pre-computed economic-purpose
+  // candidates. When supplied, this recommender skips the internal
+  // classifier call (which cannot see full document text) and uses
+  // these candidates instead. The orchestrator (analyse.ts) is the
+  // right place to run the classifier because it has access to the
+  // full extracted text (needed for the document-phrase evidence
+  // channel — see economic-purpose.ts).
+  economicPurposeCandidates?: PurposeCandidate[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +465,18 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
   // accounting services vs member-charged revenue) and boosts /
   // penalises accounts according to the top purpose's SUGGESTED
   // ROLES. Role → account-name matching is a small lookup below.
-  const purposeCandidates = classifyPurposeFromExtraction(args.extraction);
+  // Sprint 3 · Checkpoint 15T — prefer pre-computed purpose candidates
+  // when the orchestrator (analyse.ts) supplies them. The orchestrator
+  // has the full extracted text, which the classifier uses for the
+  // document-phrase evidence channel. Falling back to the local
+  // classifier here would silently drop that channel and demote real
+  // matches (e.g. a recurring-service statement whose line items are
+  // sparse but whose body contains "billing cycle" / "ongoing charges"
+  // / bandwidth units).
+  const purposeCandidates =
+    args.economicPurposeCandidates != null && args.economicPurposeCandidates.length > 0
+      ? args.economicPurposeCandidates
+      : classifyPurposeFromExtraction(args.extraction);
   const topPurpose = purposeCandidates[0] ?? null;
   // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — raised the
   // confidence gate from 20 to 60. Below 60 the classifier is
@@ -717,6 +736,20 @@ const ROLE_NAME_PATTERNS: Record<string, RegExp> = {
   LEGAL_FEES: /legal\s*fee/i,
   CONSULTING_FEES: /consulting\s*fee/i,
   GENERAL_EXPENSES: /(?:general\s*(?:expense|admin)|miscellaneous)/i,
+  // Sprint 3 · Checkpoint 15T — recurring-service account patterns.
+  // Every regex matches a family of canonical account names ("Internet",
+  // "Telephone & Internet", "Communications Expense", "Software
+  // Subscriptions"), NEVER a specific vendor.
+  TELECOMMUNICATIONS: /\b(?:telecom|telephone|communications?|mobile|cellular)\b/i,
+  INTERNET_AND_CONNECTIVITY: /\b(?:internet|broadband|fibre|fiber|connectivity|data\s*(?:plan|circuit))\b/i,
+  COMMUNICATIONS_EXPENSE: /\bcommunications?\s*(?:expense|charge)\b|\btelephone\s*(?:and|&)\s*internet\b|\bphone\s*(?:and|&)\s*internet\b/i,
+  IT_SUBSCRIPTIONS: /\bIT\s*subscription|\bsoftware\s*subscription|\bSaaS\b|\bcloud\s*(?:services?|subscription)\b/i,
+  SOFTWARE_SUBSCRIPTIONS: /\bsoftware\s*(?:subscription|licen[sc]e)\b|\bsubscription\s*software\b/i,
+  UTILITIES: /\butilit(?:y|ies)\b/i,
+  ELECTRICITY: /\b(?:electricity|electric\s*(?:power|utility)|hydro)\b/i,
+  NATURAL_GAS: /\bnatural\s*gas\b|\bgas\s*utility\b/i,
+  WATER_AND_SEWER: /\bwater\s*(?:and|&)\s*sewer\b|\bwater\s*(?:bill|utility)\b|\bsewer\b/i,
+  WASTE_REMOVAL: /\bwaste\s*(?:removal|management|disposal)\b|\bgarbage\s*(?:collection|removal)\b|\bsanitation\b/i,
 };
 
 // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — canonical FS
@@ -746,6 +779,21 @@ const ROLE_TAXONOMY_KEYS: Record<string, { fsGroupKeys: string[]; categoryKeys: 
   LEGAL_FEES:                { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
   CONSULTING_FEES:           { fsGroupKeys: ["IS_PROFESSIONAL_FEES"], categoryKeys: [] },
   GENERAL_EXPENSES:          { fsGroupKeys: [], categoryKeys: [] },
+  // Sprint 3 · Checkpoint 15T — canonical FS-group + category keys
+  // for recurring-service concepts. These map to the standard
+  // Spectre-provisioned COA groups; a tenant whose accounts sit in
+  // those groups will surface as a match regardless of the exact
+  // Account.name spelling.
+  TELECOMMUNICATIONS:        { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
+  INTERNET_AND_CONNECTIVITY: { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
+  COMMUNICATIONS_EXPENSE:    { fsGroupKeys: ["IS_TELEPHONE_INTERNET", "IS_COMMUNICATIONS"], categoryKeys: ["ADMIN_EXPENSES"] },
+  IT_SUBSCRIPTIONS:          { fsGroupKeys: ["IS_IT_SOFTWARE"], categoryKeys: ["ADMIN_EXPENSES"] },
+  SOFTWARE_SUBSCRIPTIONS:    { fsGroupKeys: ["IS_IT_SOFTWARE"], categoryKeys: ["ADMIN_EXPENSES"] },
+  UTILITIES:                 { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
+  ELECTRICITY:               { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
+  NATURAL_GAS:               { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
+  WATER_AND_SEWER:           { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
+  WASTE_REMOVAL:             { fsGroupKeys: ["IS_UTILITIES"],   categoryKeys: ["UTILITIES"] },
 };
 
 // Does an account (name + FS Group key + category key) match the

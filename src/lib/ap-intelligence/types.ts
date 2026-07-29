@@ -16,17 +16,12 @@ export const EXTRACTION_STATES = [
 export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 
 // The extraction rule version — bump when the parser regex set changes.
-// Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — bumped from 1 to
-// 2 so the ap-summary projection cache (which now fingerprints this
-// version — see apSummaryCacheKey) invalidates on deploy and every
-// warm request re-analyses against the latest rules. Before the
-// bump + cache-key inclusion, live projections could serve pre-15Q
-// output within the 90s TTL after a v46 deploy, contributing to the
-// founder-observed stale card. Bump this integer whenever any
-// analyser-touching module changes (parse-invoice / supplier-extract
-// / gl-recommend / line-items-extract / tax-reconcile / economic-
-// purpose / analyse).
-export const EXTRACTION_RULE_VERSION = 2;
+// Sprint 3 · Checkpoint 15T (2026-07-28) — bumped from 2 to 3. The
+// parser now consumes the shared document-layout association layer
+// for label→value pairing across separate lines (subtotal / tax /
+// total / payable-reference). This is a wholesale parsing behaviour
+// change; every projection cache must invalidate on deploy.
+export const EXTRACTION_RULE_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.
@@ -95,6 +90,25 @@ export const AP_CORRECTION_KINDS = [
 export type ApCorrectionKind = (typeof AP_CORRECTION_KINDS)[number];
 
 // ---------------------------------------------------------------------------
+// Payable-reference taxonomy — Sprint 3 · Checkpoint 15T.
+//
+// Different vendor documents identify themselves under different
+// labels. A statement-based service (telecom, utilities, membership
+// billing) prints "Statement number …" instead of "Invoice #". A
+// bill-first vendor prints "Bill number …". The taxonomy preserves
+// WHICH label produced the identifier so downstream consumers can
+// present it accurately.
+// ---------------------------------------------------------------------------
+export const PAYABLE_REFERENCE_TYPES = [
+  "INVOICE_NUMBER",
+  "STATEMENT_NUMBER",
+  "BILL_NUMBER",
+  "REFERENCE_NUMBER",
+  "OTHER",
+] as const;
+export type PayableReferenceType = (typeof PAYABLE_REFERENCE_TYPES)[number];
+
+// ---------------------------------------------------------------------------
 // Extracted invoice shape — everything the parser can populate.
 // Every field is nullable — a missing field means "not confidently
 // extracted", NEVER "guessed".
@@ -111,6 +125,12 @@ export interface ExtractedInvoice {
     guessedDomain: string | null;
   };
   invoiceNumber: string | null;
+  // Sprint 3 · Checkpoint 15T — taxonomy of the payable reference in
+  // invoiceNumber. Preserves whether the identifier came from an
+  // invoice, statement, bill, generic reference, or other label. Null
+  // when no payable reference was extracted. Optional so pre-15T test
+  // fixtures continue to compile — production callers always populate.
+  payableReferenceType?: PayableReferenceType | null;
   invoiceDate: string | null;      // ISO date
   dueDate: string | null;          // ISO date
   paymentTerms: string | null;
