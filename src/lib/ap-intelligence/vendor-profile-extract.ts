@@ -77,6 +77,9 @@ export interface ExtractedVendorProfile {
   paymentTerms: FieldExtraction;
 }
 
+import { extractDocumentEntities } from "./document-entities";
+import { parseAddressBlock } from "./address-parser";
+
 // Bumped for 15P-1. Any AP projection cached under the pre-15P-1
 // version invalidates on the next Mission Control render.
 export const EXTRACTOR_VERSION = 2;
@@ -480,6 +483,40 @@ function extractAddress(text: string, vendorLegalName: string | null): AddressEx
     postalCode: empty, country: empty, blockConfidence: 0,
   };
 
+  // Sprint 3 · Checkpoint 15V Addendum — try the entity-block layer
+  // FIRST. Groups lines into SUPPLIER / RECIPIENT / REMITTANCE
+  // blocks, then parses the SUPPLIER block's address lines with the
+  // spacing-tolerant address-parser (CA_POSTAL_LOOSE + suite/street
+  // recovery). This handles the real-world CPA-shape layout where
+  // the whole address is on one line: "Suite 800, 444 - 7th Ave SW
+  // Calgary, AB T 2P 0X8 Canada".
+  const entities = extractDocumentEntities(text, { supplierLegalName: vendorLegalName });
+  const supplier = entities.find((e) => e.entityType === "SUPPLIER");
+  if (supplier && supplier.addressLines.length > 0) {
+    const parsed = parseAddressBlock(supplier.addressLines);
+    if (parsed.postalCode.value || parsed.city.value) {
+      // Convert to legacy AddressExtraction shape.
+      const blockConfidence = Math.min(99, supplier.confidence + (parsed.postalCode.value ? 15 : 0));
+      const asField = (v: { value: string | null; confidence: number; inferred: boolean }): FieldExtraction =>
+        v.value
+          ? { value: v.value, confidence: v.confidence, source: "invoice-pdf" }
+          : { value: null, confidence: 0, source: null };
+      return {
+        line1: asField(parsed.addressLine1),
+        line2: asField(parsed.addressLine2),
+        city: asField(parsed.city),
+        provinceState: asField(parsed.provinceState),
+        postalCode: asField(parsed.postalCode),
+        country: asField(parsed.country),
+        blockConfidence,
+      };
+    }
+  }
+
+  // Fallback: pre-Addendum candidate-scoring path. Preserved for
+  // documents (like the Microsoft footer) whose supplier address
+  // sits at the very bottom of the page rather than in a
+  // letterhead-style header block.
   const raw = enumerateAddressCandidates(text);
   if (raw.length === 0) return emptyAddr;
   const scored = scoreCandidates(raw, text, vendorLegalName);
