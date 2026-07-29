@@ -1,19 +1,21 @@
-// Sprint 3 · Checkpoint 15M (2026-07-27) — mailbox connection health
-// loader that backs the Mission Control "Feed synced" header pill.
+// Sprint 3 · Checkpoint 15M (2026-07-27), revised 15R (2026-07-29) —
+// mailbox connection health loader that backs the Mission Control
+// "Feed synced" header pill.
 //
-// Reads live signals from MailboxConnection: status, last successful
-// sync timestamp, last attempted sync timestamp, last sync error, and
-// access-token expiry. Returns a compact, presentation-friendly shape
-// the pill component consumes directly.
-//
-// Never returns SYNCED just because a MailboxConnection row exists —
-// the state must reflect actual health.
+// Sprint 3 · Checkpoint 15R (2026-07-29) — REWIRED to derive from
+// the canonical `deriveMailboxHealth` mapper. The pre-15R
+// implementation checked `conn.status !== "CONNECTED"` and
+// `accessTokenExpiresAt < now` — both wrong (see health.ts). The
+// bug produced founder-observed "RECONNECT REQUIRED" pills on
+// mailboxes that were actually healthy in the CONNECTED_PENDING_
+// SYNC or DELAYED states, prompting the founder to repeatedly
+// reconnect and never recover.
 
 import { prisma } from "@/lib/prisma";
 import type { FeedSyncedStatus } from "@/components/mission-control/FeedSyncedStatusPill";
+import { deriveMailboxHealth } from "@/lib/mailbox/health";
 
 const RECONNECT_HREF = "/app/user/settings/connected-accounts";
-const DELAYED_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
 export async function loadFeedSyncedStatus(clubId: string, userId: string): Promise<FeedSyncedStatus> {
   const conn = await prisma.mailboxConnection.findFirst({
@@ -24,12 +26,25 @@ export async function loadFeedSyncedStatus(clubId: string, userId: string): Prom
       lastSuccessfulSyncAt: true,
       lastAttemptedSyncAt: true,
       lastSyncError: true,
-      accessTokenExpiresAt: true,
       connectedEmail: true,
+      refreshTokenSecretRef: true,
     },
   });
 
-  if (!conn) {
+  const health = deriveMailboxHealth(
+    conn
+      ? {
+          status: conn.status,
+          lastSuccessfulSyncAt: conn.lastSuccessfulSyncAt,
+          lastAttemptedSyncAt: conn.lastAttemptedSyncAt,
+          lastSyncError: conn.lastSyncError,
+          connectedEmail: conn.connectedEmail,
+          hasRefreshToken: conn.refreshTokenSecretRef != null,
+        }
+      : null,
+  );
+
+  if (health.credentials === "NONE") {
     return {
       state: "NONE",
       label: "Not connected",
@@ -37,48 +52,50 @@ export async function loadFeedSyncedStatus(clubId: string, userId: string): Prom
       href: RECONNECT_HREF,
     };
   }
-
-  const now = Date.now();
-  const tokenExpired = conn.accessTokenExpiresAt.getTime() < now;
-  const disconnected = conn.status !== "CONNECTED";
-
-  if (disconnected || tokenExpired) {
+  if (health.credentials === "REAUTH_REQUIRED" || health.credentials === "DISCONNECTED") {
     return {
       state: "RECONNECT",
       label: "Reconnect required",
-      detail: disconnected
-        ? `Mailbox status is ${conn.status.toLowerCase().replace(/_/g, " ")} — reconnect ${conn.connectedEmail}.`
-        : `Access token expired for ${conn.connectedEmail}.`,
+      detail: `Mailbox status is ${(health.rawStatus ?? "unknown").toLowerCase().replace(/_/g, " ")} — reconnect ${health.connectedEmail ?? "your mailbox"}.`,
       href: RECONNECT_HREF,
     };
   }
-
-  const lastSync = conn.lastSuccessfulSyncAt?.getTime() ?? 0;
-  const staleSync = lastSync > 0 && now - lastSync > DELAYED_THRESHOLD_MS;
-  const attemptedAfterSuccess =
-    conn.lastAttemptedSyncAt &&
-    conn.lastAttemptedSyncAt.getTime() > lastSync &&
-    conn.lastSyncError != null;
-
-  if (staleSync || attemptedAfterSuccess) {
+  // credentials === "CONNECTED" — sync axis decides the visible pill.
+  if (health.sync === "NEVER") {
+    return {
+      state: "DELAYED",
+      label: "Awaiting first sync",
+      detail: `Mailbox ${health.connectedEmail ?? "connected"} — first sync scheduled.`,
+      href: RECONNECT_HREF,
+    };
+  }
+  if (health.sync === "FAILING") {
     return {
       state: "DELAYED",
       label: "Feed delayed",
-      detail: conn.lastSyncError
-        ? `Last sync attempt failed: ${conn.lastSyncError.slice(0, 120)}`
-        : lastSync > 0
-        ? `Last successful sync ${new Date(lastSync).toISOString().slice(0, 16).replace("T", " ")}`
+      detail: health.lastSyncError
+        ? `Last sync attempt failed: ${health.lastSyncError.slice(0, 120)}`
+        : "Last sync attempt failed — will retry.",
+      href: RECONNECT_HREF,
+    };
+  }
+  if (health.sync === "STALE") {
+    return {
+      state: "DELAYED",
+      label: "Feed delayed",
+      detail: health.lastSuccessfulSyncAt
+        ? `Last successful sync ${health.lastSuccessfulSyncAt.toISOString().slice(0, 16).replace("T", " ")}`
         : "No successful sync yet.",
       href: RECONNECT_HREF,
     };
   }
-
+  // sync === "FRESH".
   return {
     state: "SYNCED",
     label: "Feed synced",
-    detail: lastSync > 0
-      ? `Mailbox ${conn.connectedEmail} · last synced ${new Date(lastSync).toISOString().slice(0, 16).replace("T", " ")}`
-      : `Mailbox ${conn.connectedEmail} connected.`,
+    detail: health.lastSuccessfulSyncAt
+      ? `Mailbox ${health.connectedEmail ?? ""} · last synced ${health.lastSuccessfulSyncAt.toISOString().slice(0, 16).replace("T", " ")}`
+      : `Mailbox ${health.connectedEmail ?? ""} connected.`,
     href: RECONNECT_HREF,
   };
 }

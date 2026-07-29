@@ -18,6 +18,7 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
 import { isMailboxIntegrationEnabled } from "@/lib/env";
+import { MAILBOX_STATUS } from "./status";
 
 let lastTickAt = 0;
 
@@ -55,7 +56,23 @@ export async function tickAutoSync(args: TickArgs = {}): Promise<TickResult> {
 
   const mailboxes = await prisma.mailboxConnection.findMany({
     where: {
-      status: { in: ["CONNECTED", "DELAYED", "PENDING_SYNC"] },
+      // Sprint 3 · Checkpoint 15R (2026-07-29) — status list now uses
+      // the canonical MAILBOX_STATUS constants. The pre-fix filter had
+      // the string "PENDING_SYNC" which does NOT match the actual
+      // enum value "CONNECTED_PENDING_SYNC" (see src/lib/mailbox/
+      // status.ts:38). Real production symptom: on staging, the
+      // Coulee Ridge mailbox was stuck in CONNECTED_PENDING_SYNC
+      // with deltaLink populated + refresh token present + all
+      // scopes granted — but the scheduler never enqueued a delta
+      // job because the string didn't match. The mailbox went
+      // 19+ hours without a sync attempt.
+      status: {
+        in: [
+          MAILBOX_STATUS.CONNECTED,
+          MAILBOX_STATUS.DELAYED,
+          MAILBOX_STATUS.CONNECTED_PENDING_SYNC,
+        ],
+      },
       // Only mailboxes that have completed at least one initial sync
       // (i.e. have a deltaLink) are eligible for delta polling. Fresh
       // connections that only just OAuth'd will be picked up as soon as

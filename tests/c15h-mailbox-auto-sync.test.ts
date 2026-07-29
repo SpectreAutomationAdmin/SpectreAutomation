@@ -40,9 +40,16 @@ describe("auto-sync scheduler — feature-gated + idempotent + bounded", () => {
     expect(SCHEDULER).toMatch(/lastAttemptedSyncAt/);
   });
   it("only enumerates mailboxes with a deltaLink + refresh token + CONNECTED-ish status", () => {
+    // Sprint 3 · Checkpoint 15R (2026-07-29) — the status filter
+    // now uses the canonical MAILBOX_STATUS constants (see
+    // src/lib/mailbox/status.ts). The pre-15R bare-string form
+    // ("PENDING_SYNC") drifted from the actual enum and left
+    // CONNECTED_PENDING_SYNC connections unscheduled.
     expect(SCHEDULER).toMatch(/deltaLink:\s*\{\s*not:\s*null\s*\}/);
     expect(SCHEDULER).toMatch(/refreshTokenSecretRef:\s*\{\s*not:\s*null\s*\}/);
-    expect(SCHEDULER).toMatch(/status:\s*\{\s*in:\s*\[[^\]]*"CONNECTED"[^\]]*\]/);
+    expect(SCHEDULER).toMatch(/MAILBOX_STATUS\.CONNECTED\b/);
+    expect(SCHEDULER).toMatch(/MAILBOX_STATUS\.CONNECTED_PENDING_SYNC/);
+    expect(SCHEDULER).toMatch(/MAILBOX_STATUS\.DELAYED/);
   });
   it("caps the scan at 200 mailboxes per tick", () => {
     expect(SCHEDULER).toMatch(/take: 200/);
