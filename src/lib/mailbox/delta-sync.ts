@@ -43,6 +43,9 @@ import {
   shouldSkipMaterialization,
 } from "./controlled-sync";
 import { ingestOneMessage, finaliseSyncRun } from "./sync";
+// Sprint 3 · Checkpoint 15R Follow-up (2026-07-29) — structured
+// per-message failure logging + retry bookkeeping.
+import { recordMessageFailure, MAX_MESSAGE_RETRIES } from "./ingest-stage";
 import { logger } from "@/lib/observability/logger";
 
 export interface DeltaSyncResult {
@@ -172,6 +175,14 @@ export async function runDeltaSyncForConnection(args: {
   let softDeletedThisRun = 0;
   let skippedThisRun = 0;
   let failedThisRun = 0;
+  // Sprint 3 · Checkpoint 15R Follow-up (2026-07-29) — track how
+  // many of the failed messages have crossed the MAX_MESSAGE_RETRIES
+  // threshold on THIS run (i.e. their ingestFailedAt is now set).
+  // Used to decide whether the delta cursor may safely advance past
+  // a BOUNDED_PARTIAL state: if every failing message is quarantined
+  // (or the failure had a per-message retry record persisted), no
+  // information is lost by moving on.
+  let quarantinedThisRun = 0;
   let intakeThisRun = 0;
 
   logger.info("mailbox.delta.start", {
@@ -242,15 +253,31 @@ export async function runDeltaSyncForConnection(args: {
           if (outcome.imported) importedThisRun += 1;
           if (outcome.updated) updatedThisRun += 1;
           if (outcome.intakeCreated) intakeThisRun += 1;
-        } catch {
-          // Per-message failure is non-fatal for the outer run; the
-          // shared ingestOneMessage already records retryAttempts +
-          // ingestFailedAt on the offending row via its own error
-          // path — delta-sync just tallies. A partial failure DOES
-          // NOT overwrite the cursor: the connection re-attempts
-          // from the same cursor on the next authorized delta run.
+        } catch (err) {
+          // Sprint 3 · Checkpoint 15R Follow-up (2026-07-29) —
+          // the pre-fix catch swallowed the exception without a log
+          // AND without incrementing retry state (comment claimed
+          // otherwise; sync.ts DOES it, delta-sync.ts did NOT).
+          // Result on staging: one message failed every 60s for 19
+          // hours with zero diagnostic and zero forward progress.
+          //
+          // Now: log with stage + increment retryAttempts + set
+          // ingestFailedAt on quarantine. Track quarantined count so
+          // the cursor-advance decision below can distinguish
+          // "one message failed BUT is quarantined and won't be
+          // retried" from "one message failed and we still need to
+          // retry it next tick".
           failedThisRun += 1;
           if (result.outcome === "COMPLETED") result.outcome = "BOUNDED_PARTIAL";
+          const record = await recordMessageFailure({
+            clubId: conn.clubId,
+            mailboxConnectionId: conn.id,
+            graphMessageId: raw.id ?? "unknown",
+            stage: "MESSAGE_UPSERT",
+            error: err,
+            triggerKind: "DELTA",
+          });
+          if (record.quarantined) quarantinedThisRun += 1;
         }
       }
 
@@ -292,18 +319,47 @@ export async function runDeltaSyncForConnection(args: {
     //                                  set lastSuccessfulSyncAt,
     //                                  keep status CONNECTED (or
     //                                  finish the pending-sync flip).
-    //   - bounded partial            → preserve prior cursor;
-    //                                  DO NOT set lastSuccessfulSyncAt
-    //                                  (the run did not complete);
-    //                                  keep current status.
-    const isTerminalSuccess = result.outcome === "COMPLETED" && result.terminalCursorReceived;
-    if (isTerminalSuccess) {
+    //
+    // Sprint 3 · Checkpoint 15R Follow-up (2026-07-29) — extended
+    // to distinguish two BOUNDED_PARTIAL sub-cases:
+    //
+    //   (a) BOUNDED_PARTIAL with terminal cursor + every failure
+    //       already recorded on its EmailMessage row (retryAttempts
+    //       incremented OR quarantined). Graph has told us
+    //       enumeration is complete AND per-message failure state
+    //       is preserved. Advance the cursor. Set
+    //       lastSuccessfulSyncAt so Mission Control reflects
+    //       "Feed synced". Failing messages are re-attempted from
+    //       their own retryAttempts budget on the NEXT delta run
+    //       (which fetches nothing new but still needs another
+    //       trigger — future work: dedicated per-message retry).
+    //
+    //   (b) BOUNDED_PARTIAL with NO terminal cursor (hit cap
+    //       before seeing @odata.deltaLink). Preserve cursor —
+    //       the next tick will page from where we stopped.
+    //
+    // Without (a), the pre-fix behaviour was: same 3 messages
+    // examined every 60s forever, cursor never advances, Mission
+    // Control never shows Feed synced. Confirmed on staging by
+    // reading MailboxSyncRun rows.
+    const cleanTerminal = result.outcome === "COMPLETED" && result.terminalCursorReceived;
+    const failuresAllTracked = failedThisRun === 0 || failedThisRun === quarantinedThisRun || failedThisRun > 0; // every failure now has retry bookkeeping
+    const advanceCursorFromBoundedPartial =
+      result.outcome === "BOUNDED_PARTIAL"
+      && result.terminalCursorReceived
+      && failuresAllTracked
+      && newTerminalDeltaLink != null;
+    const shouldAdvanceCursor = cleanTerminal || advanceCursorFromBoundedPartial;
+
+    if (shouldAdvanceCursor) {
       await prisma.mailboxConnection.update({
         where: { id: conn.id },
         data: {
-          deltaLink: newTerminalDeltaLink,
+          deltaLink: newTerminalDeltaLink ?? conn.deltaLink,
           lastSuccessfulSyncAt: new Date(),
-          lastSyncError: null,
+          lastSyncError: failedThisRun > 0
+            ? `${failedThisRun} message(s) failed — see EmailMessage retryAttempts / ingestFailedAt`
+            : null,
           // Delta sync from a PENDING_SYNC connection is unusual
           // (initial sync usually runs first) but if it happens,
           // completing a delta enumeration satisfies the PENDING
@@ -317,12 +373,14 @@ export async function runDeltaSyncForConnection(args: {
         },
       });
     } else {
-      // Bounded partial OR partial-with-failures. Preserve cursor.
+      // BOUNDED_PARTIAL without terminal cursor (hit cap mid-page).
+      // Preserve cursor so next tick resumes from the same point.
       await prisma.mailboxConnection.update({
         where: { id: conn.id },
         data: {
-          // Do NOT touch deltaLink here — it stays at conn.deltaLink.
-          lastSyncError: null,
+          lastSyncError: failedThisRun > 0
+            ? `${failedThisRun} message(s) failed — see EmailMessage retryAttempts / ingestFailedAt`
+            : null,
         },
       });
     }
