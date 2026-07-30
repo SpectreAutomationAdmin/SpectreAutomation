@@ -215,9 +215,21 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     //     TEXT_FRAGMENTED / MIXED docs (Strategy C)
     //   * abstains truthfully for ENCRYPTED / UNSUPPORTED
     try {
+      // Sprint 3 · Checkpoint 15X continuation — the router now
+      // NEVER invokes a paid provider synchronously. It reads the
+      // persisted DocumentOcrExtraction row (§3-§5) and, if
+      // missing, enqueues one worker job (§2, §4). The web tier
+      // is never blocked on Textract.
+      //
+      // Pass clubId + docId + sha so the enqueue path can persist
+      // idempotently. Without these fields the router falls back to
+      // NOT_ENQUEUED and callers see truthful "pending" state.
       const routed = await runDocumentExtractionStrategy({
         bytes,
         mimeType: doc.mimeType,
+        clubId: args.clubId,
+        ingestedDocumentId: doc.id,
+        documentSha256: doc.sha256Hash,
         correlationHash: doc.sha256Hash?.slice(0, 16),
       });
       pdfPageCount = routed.layout?.pageCount ?? 0;

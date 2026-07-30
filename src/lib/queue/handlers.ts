@@ -167,6 +167,32 @@ for (const kind of [
   });
 }
 
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 15X continuation (2026-07-29) — AP_DOCUMENT_OCR.
+//
+// The single code path allowed to invoke a paid OCR provider. Called
+// only by the worker (bin/worker.ts). Web-tier requests enter via
+// src/lib/ap-intelligence/ocr/enqueue.ts, which persists a PENDING
+// DocumentOcrExtraction row and enqueues one job per identity.
+//
+// Idempotency: DB unique constraint on (clubId, sha, provider,
+// extractionVersion) plus the queue's own (clubId, kind,
+// idempotencyKey) unique constraint. Concurrent enqueues collapse
+// to one PENDING row + one queued job. Concurrent workers race on
+// the atomic PENDING → PROCESSING claim; the loser exits without
+// invoking the provider.
+// ---------------------------------------------------------------------------
+registerHandler<{ extractionRowId: string }>("AP_DOCUMENT_OCR", async ({ payload, jobId }) => {
+  const { runAPDocumentOcrJob } = await import(
+    "../ap-intelligence/ocr/worker"
+  );
+  return runAPDocumentOcrJob({
+    jobId,
+    workerId: "queue",
+    payload,
+  });
+});
+
 /**
  * Sprint 2 B4.1 — Which mailbox JobKinds are implemented today. Used
  * by a future health endpoint to distinguish "reserved" from "live".

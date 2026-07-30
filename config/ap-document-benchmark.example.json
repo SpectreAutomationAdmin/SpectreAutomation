@@ -1,0 +1,39 @@
+{
+  "_note": "Sprint 3 · Checkpoint 15X continuation — AP document benchmark manifest EXAMPLE. Copy to ap-document-benchmark.json and populate with real IngestedDocument IDs after founder approval per document. NEVER commit raw invoice bytes or PII in this file — only IDs, expected class labels, and redacted booleans.",
+  "clubId": "cmrvdeny7000144372ktmmg9c",
+  "documents": [
+    {
+      "documentId": "<paste-IngestedDocument.id-here>",
+      "expectedClass": "IMAGE_ONLY",
+      "expectations": {
+        "hasSupplier": true,
+        "hasPayableReference": true,
+        "hasTotal": true,
+        "documentApproved": false
+      },
+      "notes": "Image-only single-page scan (target: 1087769.pdf-shape)."
+    },
+    {
+      "documentId": "<paste-IngestedDocument.id-here>",
+      "expectedClass": "TEXT_HEALTHY",
+      "expectations": {
+        "hasSupplier": true,
+        "hasPayableReference": true,
+        "hasTotal": true,
+        "documentApproved": false
+      },
+      "notes": "Text-healthy PDF (should never invoke OCR)."
+    },
+    {
+      "documentId": "<paste-IngestedDocument.id-here>",
+      "expectedClass": "TEXT_FRAGMENTED",
+      "expectations": {
+        "hasSupplier": true,
+        "hasPayableReference": true,
+        "hasTotal": true,
+        "documentApproved": false
+      },
+      "notes": "Fragmented-text PDF (mixed scanned + typed)."
+    }
+  ]
+}

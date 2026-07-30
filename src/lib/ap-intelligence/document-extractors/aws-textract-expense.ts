@@ -25,19 +25,26 @@
 
 import { TextractClient, AnalyzeExpenseCommand, type AnalyzeExpenseCommandOutput } from "@aws-sdk/client-textract";
 import { logger } from "@/lib/observability/logger";
+import {
+  OCR_MAX_ATTEMPTS,
+  OCR_MAX_BYTES,
+  OCR_MAX_PAGES_SYNC,
+  OCR_REQUEST_TIMEOUT_MS,
+  OCR_BACKOFF_BASE_MS,
+  resolveTextractCredentials,
+  resolveTextractRegion,
+} from "../ocr/config";
 
 // -----------------------------------------------------------------------------
-// Constants — cost + abuse controls (§10)
+// Constants — cost + abuse controls (§10). Sourced from ocr/config.ts
+// so every consumer reads one canonical value.
 // -----------------------------------------------------------------------------
 
-// AnalyzeExpense synchronous limit — 10 MB per document.
-const MAX_BYTES = 10 * 1024 * 1024;
-// AnalyzeExpense sync-mode page limit — single PDF page. Multi-page
-// docs need async StartExpenseAnalysis (not implemented this checkpoint).
-const MAX_PAGES_SYNC = 1;
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_ATTEMPTS = 2;
-const BACKOFF_BASE_MS = 500;
+const MAX_BYTES = OCR_MAX_BYTES;
+const MAX_PAGES_SYNC = OCR_MAX_PAGES_SYNC;
+const REQUEST_TIMEOUT_MS = OCR_REQUEST_TIMEOUT_MS;
+const MAX_ATTEMPTS = OCR_MAX_ATTEMPTS;
+const BACKOFF_BASE_MS = OCR_BACKOFF_BASE_MS;
 
 // -----------------------------------------------------------------------------
 // Types
@@ -104,15 +111,32 @@ export async function runTextractExpense(input: TextractExpenseInput): Promise<T
     return { ok: false, code: "PROVIDER_MULTI_PAGE_NOT_SUPPORTED", message: `Sync AnalyzeExpense supports single-page documents; this document has ${input.pageCount} pages`, latencyMs: 0, attempts: 0 };
   }
 
-  // Credential + region check — AWS SDK's default credential chain
-  // reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION.
-  const region = process.env.AWS_REGION ?? "us-east-1";
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    return { ok: false, code: "PROVIDER_UNAUTHENTICATED", message: "AWS credentials not configured", latencyMs: Date.now() - started, attempts: 0 };
+  // Region — §7 rule: explicit SPECTRE_TEXTRACT_REGION, NEVER
+  // inherit from AWS_REGION which drives the KMS provider.
+  const regionRes = resolveTextractRegion();
+  if (!regionRes.ok) {
+    return { ok: false, code: "PROVIDER_UNAUTHENTICATED", message: regionRes.reason, latencyMs: Date.now() - started, attempts: 0 };
+  }
+  // Credential — §8 rule: prefer dedicated Textract credentials over
+  // shared KMS credentials. Both are permitted; the "shared" case is
+  // logged as suboptimal so ops can spot it.
+  const credRes = resolveTextractCredentials();
+  if (!credRes.ok) {
+    return { ok: false, code: "PROVIDER_UNAUTHENTICATED", message: credRes.reason, latencyMs: Date.now() - started, attempts: 0 };
+  }
+  if (credRes.source === "shared_with_kms") {
+    logger.warn("ap-intelligence.textract.shared_credential", {
+      correlation: input.correlationHash,
+      hint: "Textract is using AWS_* credentials shared with KMS; migrate to SPECTRE_TEXTRACT_ACCESS_KEY_ID / SECRET for least-privilege.",
+    });
   }
 
   const client = new TextractClient({
-    region,
+    region: regionRes.region,
+    credentials: {
+      accessKeyId: credRes.accessKeyId,
+      secretAccessKey: credRes.secretAccessKey,
+    },
     requestHandler: {
       requestTimeout: REQUEST_TIMEOUT_MS,
       connectionTimeout: 5_000,

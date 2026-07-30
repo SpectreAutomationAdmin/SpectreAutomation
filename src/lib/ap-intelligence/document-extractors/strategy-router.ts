@@ -1,21 +1,32 @@
 // Sprint 3 · Checkpoint 15X (2026-07-30) — deterministic extraction
 // strategy router.
 //
-// Founder rule §1:
-//   Healthy embedded text          → existing text/layout extraction
-//   Embedded text, fragmented      → positioned-text extraction
-//   No usable text layer, renderable → AWS Textract AnalyzeExpense
-//   All supported strategies fail  → truthful unreadable-doc exception
+// Sprint 3 · Checkpoint 15X continuation (2026-07-29) — REBUILT so
+// no browser render can invoke a paid OCR provider.
 //
-// The router NEVER invokes paid OCR for healthy text documents.
+// Founder rules covered:
+//   §1  Text-healthy docs → EMBEDDED_TEXT, no OCR ever.
+//   §2  When OCR is required, the router asks the OCR subsystem for
+//       a persisted extraction. If missing/pending, it enqueues one
+//       worker job (idempotent) and returns without invoking a
+//       provider. The worker (bin/worker.ts) is the ONLY code path
+//       that talks to Textract.
+//   §4  Idempotency is enforced at the persistence layer (DB unique
+//       constraint) AND at the queue layer (idempotencyKey).
+//   §11 Cache invalidation — when the worker persists SUCCEEDED,
+//       the projection cache's docOcrRevision axis flips and the
+//       next render surfaces the canonical extraction.
 
 import { assessPdfExtraction, type PdfExtractionAssessment } from "../document-class";
 import { extractPdfLayout, type PdfLayout } from "../pdf-layout-extract";
-import { runTextractExpense, type TextractExpenseResult } from "./aws-textract-expense";
 import { normalizeTextractExpense } from "./textract-to-canonical";
 import type { CanonicalDocumentExtraction, DocumentExtractionStrategy } from "./canonical-model";
 import { logger } from "@/lib/observability/logger";
 import { createHash } from "node:crypto";
+import { requestOcrExtraction } from "../ocr/enqueue";
+import { findLatestOcrExtractionForDocument, readCanonicalFromRow, type OcrExtractionRow } from "../ocr/persistence";
+import { recordOcrDuplicatePrevented } from "../ocr/telemetry";
+import type { AnalyzeExpenseCommandOutput } from "@aws-sdk/client-textract";
 
 // -----------------------------------------------------------------------------
 // Public entrypoint
@@ -24,16 +35,34 @@ import { createHash } from "node:crypto";
 export interface StrategyRouterInput {
   bytes: Buffer;
   mimeType: string;
-  correlationHash?: string;   // for diagnostics; caller may pass document SHA
+  // Optional context for the enqueue path. When absent, the router
+  // still assesses the document but will NOT enqueue OCR (tests and
+  // ad-hoc callers that lack tenant + document context).
+  clubId?: string;
+  ingestedDocumentId?: string;
+  documentSha256?: string;
+  correlationHash?: string;
 }
+
+export type OcrRequestStatus =
+  | "NOT_REQUIRED"    // document is text-healthy; OCR would be waste
+  | "NOT_ENQUEUED"    // router lacks the clubId/docId/sha context needed to enqueue
+  | "PENDING"         // persisted PENDING or PROCESSING row exists
+  | "SUCCEEDED"       // persisted SUCCEEDED row read from DB
+  | "FAILED_TERMINAL" // persisted terminal row (permission denied, etc.)
+  | "FAILED_RETRYABLE"// persisted retryable row awaiting next retry
+  | "UNREADABLE";     // ENCRYPTED / UNSUPPORTED — OCR would not help
 
 export interface StrategyRouterResult {
   strategy: DocumentExtractionStrategy;
   assessment: PdfExtractionAssessment;
   layout: PdfLayout | null;
   canonicalExtraction: CanonicalDocumentExtraction | null;
-  ocrAttempted: boolean;
-  ocrResult: TextractExpenseResult | null;
+  ocrRequestStatus: OcrRequestStatus;
+  ocrExtractionRowId: string | null;
+  // Provider call counters for tests / diagnostics. The router
+  // itself never invokes Textract in this build — always 0.
+  ocrProviderCallsThisTurn: 0;
 }
 
 export async function runDocumentExtractionStrategy(input: StrategyRouterInput): Promise<StrategyRouterResult> {
@@ -64,75 +93,124 @@ export async function runDocumentExtractionStrategy(input: StrategyRouterInput):
   });
 
   // Step 3 — route.
-  //   TEXT_HEALTHY  → EMBEDDED_TEXT (no OCR needed; caller uses layout.flattenedText)
-  //   TEXT_FRAGMENTED / IMAGE_ONLY / MIXED → try OCR
-  //   ENCRYPTED / UNSUPPORTED → do not attempt OCR (won't help)
-  const shouldTryOcr =
-    assessment.documentClass === "IMAGE_ONLY"
-    || assessment.documentClass === "TEXT_FRAGMENTED"
-    || assessment.documentClass === "MIXED";
-
-  if (!shouldTryOcr) {
-    // Either text is healthy (no OCR needed) OR document is
-    // encrypted / unsupported (OCR won't help). Return without
-    // canonical extraction — the flat-text / layout path is used
-    // by downstream extractors.
+  if (assessment.documentClass === "TEXT_HEALTHY") {
     return {
-      strategy: assessment.documentClass === "TEXT_HEALTHY" ? "EMBEDDED_TEXT" : "UNREADABLE",
+      strategy: "EMBEDDED_TEXT",
       assessment,
       layout,
       canonicalExtraction: null,
-      ocrAttempted: false,
-      ocrResult: null,
+      ocrRequestStatus: "NOT_REQUIRED",
+      ocrExtractionRowId: null,
+      ocrProviderCallsThisTurn: 0,
     };
   }
 
-  // Step 4 — invoke Textract.
-  logger.info("ap-intelligence.strategy-router.ocr-required", {
-    correlation: correlationHash,
-    documentClass: assessment.documentClass,
-    pageCount: layout?.pageCount ?? 0,
-  });
-  const ocrResult = await runTextractExpense({
-    bytes: input.bytes,
-    mimeType: input.mimeType,
-    pageCount: layout?.pageCount ?? 1,
-    correlationHash,
-  });
-
-  if (!ocrResult.ok) {
-    logger.warn("ap-intelligence.strategy-router.ocr-failed", {
-      correlation: correlationHash,
-      code: ocrResult.code,
-      documentClass: assessment.documentClass,
-    });
+  if (assessment.documentClass === "ENCRYPTED" || assessment.documentClass === "UNSUPPORTED") {
+    // OCR would not help. Do NOT enqueue.
     return {
       strategy: "UNREADABLE",
       assessment,
       layout,
       canonicalExtraction: null,
-      ocrAttempted: true,
-      ocrResult,
+      ocrRequestStatus: "UNREADABLE",
+      ocrExtractionRowId: null,
+      ocrProviderCallsThisTurn: 0,
     };
   }
 
-  const canonical = normalizeTextractExpense(ocrResult.response, assessment.documentClass);
-  logger.info("ap-intelligence.strategy-router.ocr-ok", {
-    correlation: correlationHash,
-    confidence: canonical.confidence,
-    warningsCount: canonical.warnings.length,
-    lineItemsCount: canonical.lineItems.length,
-    hasSupplier: !!canonical.fields.supplierName,
-    hasTotal: !!canonical.fields.total,
-    hasPayableRef: !!canonical.fields.payableReference,
+  // TEXT_FRAGMENTED / IMAGE_ONLY / MIXED — OCR may help.
+  //
+  // §1 rule: the render path MUST NEVER invoke a paid provider.
+  // Instead, we look up the persisted extraction for this document
+  // and — if missing — enqueue one worker job. The worker (running
+  // in bin/worker.ts) is the sole caller of AWS Textract.
+
+  // Without full context (clubId + docId + sha) we cannot persist a
+  // job. This branch protects ad-hoc callers (unit tests without a
+  // DB, diagnostic bin scripts).
+  if (!input.clubId || !input.ingestedDocumentId || !input.documentSha256) {
+    logger.info("ap-intelligence.strategy-router.ocr-context-missing", {
+      correlation: correlationHash,
+      documentClass: assessment.documentClass,
+      hasClubId: !!input.clubId,
+      hasDocId: !!input.ingestedDocumentId,
+      hasSha: !!input.documentSha256,
+    });
+    return {
+      strategy: "AWS_TEXTRACT_EXPENSE",
+      assessment,
+      layout,
+      canonicalExtraction: null,
+      ocrRequestStatus: "NOT_ENQUEUED",
+      ocrExtractionRowId: null,
+      ocrProviderCallsThisTurn: 0,
+    };
+  }
+
+  // Read existing extraction first — the common hot path.
+  const latest = await findLatestOcrExtractionForDocument({
+    clubId: input.clubId,
+    ingestedDocumentId: input.ingestedDocumentId,
+  });
+  if (latest && latest.status === "SUCCEEDED") {
+    // §11: no browser refresh triggers the provider — this branch
+    // returns the persisted result and records duplicate-prevented
+    // telemetry so ops can see how many paid calls were avoided.
+    recordOcrDuplicatePrevented({
+      clubId: input.clubId,
+      extractionRowIdTail: latest.id.slice(-8),
+      reason: "already_persisted",
+    });
+    return {
+      strategy: "AWS_TEXTRACT_EXPENSE",
+      assessment,
+      layout,
+      canonicalExtraction: readCanonicalFromRow(latest),
+      ocrRequestStatus: "SUCCEEDED",
+      ocrExtractionRowId: latest.id,
+      ocrProviderCallsThisTurn: 0,
+    };
+  }
+
+  // No persisted extraction yet. Enqueue one (idempotent).
+  const request = await requestOcrExtraction({
+    clubId: input.clubId,
+    ingestedDocumentId: input.ingestedDocumentId,
+    documentSha256: input.documentSha256,
+    documentClass: assessment.documentClass,
+    strategy: "AWS_TEXTRACT_EXPENSE",
   });
 
+  const status = mapRowToStatus(request.row);
   return {
     strategy: "AWS_TEXTRACT_EXPENSE",
     assessment,
     layout,
-    canonicalExtraction: canonical,
-    ocrAttempted: true,
-    ocrResult,
+    canonicalExtraction: readCanonicalFromRow(request.row),
+    ocrRequestStatus: status,
+    ocrExtractionRowId: request.row.id,
+    ocrProviderCallsThisTurn: 0,
   };
 }
+
+function mapRowToStatus(row: OcrExtractionRow): OcrRequestStatus {
+  switch (row.status) {
+    case "SUCCEEDED": return "SUCCEEDED";
+    case "FAILED_TERMINAL": return "FAILED_TERMINAL";
+    case "FAILED_RETRYABLE": return "FAILED_RETRYABLE";
+    case "PENDING":
+    case "PROCESSING":
+    default:
+      return "PENDING";
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Re-exports retained for backwards compatibility with existing
+// import sites in analyse.ts. The router itself no longer calls
+// these — they live on for tests and future controlled reprocessing
+// flows.
+// -----------------------------------------------------------------------------
+
+export type { AnalyzeExpenseCommandOutput };
+export { normalizeTextractExpense };

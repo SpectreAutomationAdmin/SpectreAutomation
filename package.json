@@ -26,6 +26,7 @@
     "scan:placeholders": "tsx scripts/scan-placeholders.ts",
     "ui:audit": "tsx scripts/ui-audit.ts",
     "workflow:audit": "tsx scripts/workflow-audit.ts",
+    "evaluate:ap-documents": "tsx bin/evaluate-ap-documents.ts",
     "mail:dev": "maildev --smtp 1025 --web 8025",
     "dev:reset": "prisma generate && prisma db push --accept-data-loss",
     "dev:reset-monthly-packages": "tsx scripts/dev-reset-monthly-packages.ts",

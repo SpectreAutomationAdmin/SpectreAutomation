@@ -182,6 +182,7 @@ model Club {
   ingestedDocuments          IngestedDocument[]
   ingestedDocumentEvidenceLinks IngestedDocumentEvidenceLink[]
   ingestedDocumentAuditLogs  IngestedDocumentAuditLog[]
+  documentOcrExtractions     DocumentOcrExtraction[]
   apIntakeSources            ApIntakeSource[]
   vendorAliases              VendorAlias[]
   vendorMergeRecords         VendorMergeRecord[]
@@ -8756,6 +8757,9 @@ model IngestedDocument {
   // Sprint 3 Checkpoint 15G — 0..1 statement reconciliation per doc.
   statementReconciliation VendorStatementReconciliation?
   apIntakeSources         ApIntakeSource[]
+  // Sprint 3 Checkpoint 15X continuation — persisted OCR extractions
+  // per (provider, extractionVersion). See DocumentOcrExtraction.
+  ocrExtractions          DocumentOcrExtraction[]
 
   @@unique([clubId, sha256Hash])
   @@index([clubId, receivedAt])
@@ -8795,6 +8799,54 @@ model IngestedDocumentAuditLog {
 
   @@index([ingestedDocumentId, occurredAt])
   @@index([clubId, occurredAt])
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 Checkpoint 15X continuation (2026-07-29) — Persisted OCR
+// extraction results.
+//
+// Founder §3-§5 rules:
+//   §3 status durability: PENDING → PROCESSING → SUCCEEDED /
+//      FAILED_RETRYABLE / FAILED_TERMINAL
+//   §4 idempotency: unique (clubId, documentSha256, provider,
+//      extractionVersion) — at most one paid extraction per identity
+//   §5 controlled reprocessing: bumping extractionVersion creates
+//      one new row per document; prior versions retained for audit
+//
+// The OCR worker is the ONLY code path allowed to invoke a paid
+// provider. Every projection / analyser render reads persisted rows
+// only. See src/lib/ap-intelligence/ocr/persistence.ts.
+// ---------------------------------------------------------------------------
+model DocumentOcrExtraction {
+  id                        String   @id @default(cuid())
+  clubId                    String
+  club                      Club     @relation(fields: [clubId], references: [id])
+  ingestedDocumentId        String
+  ingestedDocument          IngestedDocument @relation(fields: [ingestedDocumentId], references: [id], onDelete: Cascade)
+  documentSha256            String
+  documentClass             String
+  provider                  String
+  providerApi               String
+  providerRegion            String?
+  extractionVersion         Int
+  normalizedSchemaVersion   Int
+  strategy                  String
+  status                    String   @default("PENDING")
+  normalizedExtractionJson  String?
+  confidenceSummaryJson     String?
+  warningsJson              String?
+  sanitizedErrorCode        String?
+  attemptCount              Int      @default(0)
+  nextRetryAt               DateTime?
+  startedAt                 DateTime?
+  completedAt               DateTime?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@unique([clubId, documentSha256, provider, extractionVersion])
+  @@index([clubId, status])
+  @@index([ingestedDocumentId])
+  @@index([clubId, updatedAt])
 }
 
 // ---------------------------------------------------------------------------

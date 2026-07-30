@@ -23,6 +23,7 @@ import type { ExtractedInvoice } from "@/lib/ap-intelligence/types";
 import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-intelligence/vendor-profile-extract";
 import { EXTRACTION_RULE_VERSION } from "@/lib/ap-intelligence/types";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
+import { loadOcrExtractionRevision } from "@/lib/ap-intelligence/ocr/persistence";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
 // for the AP-card intelligence projection.
@@ -82,17 +83,21 @@ function apSummaryCacheKey(
   coaRevision: string,
   vendorRevision: string,
   apInvRevision: string,
+  ocrRevision: string,
 ): string {
   // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — the ap-intelligence
   // rule version is now part of the cache key. Bumping EXTRACTION_RULE_
   // VERSION on any analyser change auto-invalidates every warm entry
   // on the next request — no process-restart or manual cache purge
-  // needed. Pre-15Q-revised the key only fingerprinted VENDOR_PROFILE_
-  // EXTRACTOR_VERSION, so changes to parse-invoice / supplier-extract /
-  // gl-recommend / line-items-extract / tax-reconcile / economic-purpose
-  // did NOT invalidate the cache, contributing to founder-observed
-  // stale card output within the 90s TTL after a deploy.
-  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::apix=${EXTRACTION_RULE_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}`;
+  // needed.
+  //
+  // Sprint 3 · Checkpoint 15X continuation (2026-07-29) — added the
+  // per-club docOcr fingerprint. When the OCR worker persists a
+  // SUCCEEDED extraction, DocumentOcrExtraction.updatedAt bumps and
+  // the next projection sees a new cache key — no browser refresh
+  // required to invoke OCR (already async) AND no stale "pending"
+  // card lingering after the extraction completes.
+  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::apix=${EXTRACTION_RULE_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}::ocr=${ocrRevision}`;
 }
 
 // Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.
@@ -720,13 +725,19 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   // since the last projection naturally invalidates the cached
   // entry. In particular vendor create / delete / update / post
   // MUST invalidate the AP card (founder-observed 15P-4 defects).
-  const [coaRevision, vendorRevision, apInvRevision] = await Promise.all([
+  //
+  // Sprint 3 · Checkpoint 15X continuation — the docOcrRevision
+  // fingerprint invalidates the cache when the OCR worker
+  // persists a new SUCCEEDED extraction (async, no browser refresh
+  // required).
+  const [coaRevision, vendorRevision, apInvRevision, ocrRevision] = await Promise.all([
     loadCoaRevision(clubId),
     loadVendorRevision(clubId),
     loadApInvRevision(clubId),
+    loadOcrExtractionRevision(clubId),
   ]);
 
-  const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision, vendorRevision, apInvRevision);
+  const cacheKey = apSummaryCacheKey(intakeId, docRef, coaRevision, vendorRevision, apInvRevision, ocrRevision);
   const cached = apSummaryCache.get(cacheKey);
   if (cached && Date.now() - cached.at < AP_SUMMARY_TTL_MS) {
     return cached.value;

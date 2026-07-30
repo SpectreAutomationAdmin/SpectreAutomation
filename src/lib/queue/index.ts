@@ -46,7 +46,19 @@ export type JobKind =
   // no-op if the message has already been archived (best-effort
   // check via the mailbox integration when it lands). See
   // src/lib/queue/handlers.ts for the handler.
-  | "MAILBOX_ARCHIVE_MESSAGE";
+  | "MAILBOX_ARCHIVE_MESSAGE"
+  // Sprint 3 · Checkpoint 15X continuation (2026-07-29) — AP
+  // document OCR extraction via AWS Textract AnalyzeExpense.
+  //
+  // Idempotency: enqueue with key
+  //   `ap-doc-ocr:{clubId}:{sha256}:{provider}:{extractionVersion}`
+  // See src/lib/ap-intelligence/ocr/enqueue.ts. The worker uses the
+  // DocumentOcrExtraction table's unique constraint as the durable
+  // safeguard so concurrent workers cannot double-invoke.
+  //
+  // Payload: { extractionRowId: string }
+  // Handler: src/lib/ap-intelligence/ocr/worker.ts#runAPDocumentOcrJob
+  | "AP_DOCUMENT_OCR";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;
