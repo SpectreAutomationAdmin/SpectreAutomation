@@ -254,6 +254,28 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     accountsRaw,
   );
 
+  // Sprint 3 · Checkpoint 15W §5+§6 — if the analyser handed us
+  // nothing (no vendor, no line items, no extraction description,
+  // no full document text, no supplied purpose candidates), the
+  // ranker MUST NOT invent a recommendation. Returning the smallest
+  // account number as a deterministic tie-break was producing
+  // "1000 Petty Cash" for image-only PDFs — a fabricated GL with
+  // ZERO document evidence. Abstain cleanly instead.
+  const noEvidenceProvided =
+    (!args.extraction?.vendor?.guessedName || args.extraction.vendor.guessedName.trim() === "")
+    && (!args.extraction?.description)
+    && (args.extractedLineItems == null || args.extractedLineItems.length === 0)
+    && (args.extraction?.lineItems == null || args.extraction.lineItems.length === 0)
+    && (!args.fullDocumentText || args.fullDocumentText.trim().length === 0)
+    && (args.economicPurposeCandidates == null || args.economicPurposeCandidates.length === 0)
+    && !args.vendorId;
+  if (noEvidenceProvided) {
+    return emptyRecommendation(
+      "No document evidence available — extraction produced no vendor name, line items, or descriptive text. No GL recommendation can be supported.",
+      totalAccountsEvaluated,
+    );
+  }
+
   // Extract query concepts (weighted by evidence hierarchy §4).
   // When callers don't supply the richer LineItem[] (with tax
   // classification etc.) fall back to `extraction.lineItems` — the
@@ -299,6 +321,21 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
   const top = scored[0] ?? null;
   const requiresReview = !top || top.components.semanticScore < MIN_RELEVANCE_THRESHOLD;
   const topCandidates = scored.slice(0, 5);
+
+  // Sprint 3 · Checkpoint 15W §5 — when NO account has any semantic
+  // score, the deterministic accountNumber tie-break was surfacing
+  // "1000 Petty Cash" as a confident recommendation. That is
+  // fabrication. When the ranker cannot support ANY account with
+  // positive evidence, return an empty recommendation rather than
+  // let the leading candidate become the projection's category.
+  const zeroEvidenceEverywhere = queryConcepts.length === 0
+    || scored.every((s) => s.components.semanticScore === 0);
+  if (zeroEvidenceEverywhere) {
+    return emptyRecommendation(
+      "Ranker found no account with supporting evidence — no GL recommendation can be made from this document.",
+      totalAccountsEvaluated,
+    );
+  }
 
   const rationale = buildRationale({
     scored,

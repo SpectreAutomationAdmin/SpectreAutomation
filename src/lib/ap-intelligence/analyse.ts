@@ -47,6 +47,11 @@ import { extractConceptsForAccount } from "./gl-account-concepts";
 // extraction for supplier-block detection.
 import { extractPdfLayout } from "./pdf-layout-extract";
 import { detectLayoutRegions, pickSupplierRegion } from "./layout-regions";
+// Sprint 3 · Checkpoint 15W — document-class assessment so the
+// pipeline distinguishes image-only PDFs from healthy-text PDFs
+// before invoking downstream extractors that could otherwise
+// invent vendor / GL from empty input.
+import { assessPdfExtraction, type PdfExtractionAssessment } from "./document-class";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -107,6 +112,13 @@ export interface ApAnalyseResult {
   // treatment, and confidence. The reconciliation totals prove the
   // debits + recoverable tax balance the AP credit.
   allocations: AllocationResult;
+  // Sprint 3 · Checkpoint 15W — document-class assessment. Callers
+  // (projection layer, tests, diagnostics) can distinguish an image-
+  // only scan (needs OCR) from an unreadable PDF (never parses) from
+  // a text-healthy invoice (structured analysis expected to work).
+  // When documentClass is IMAGE_ONLY or UNSUPPORTED or ENCRYPTED,
+  // no confident supplier or GL recommendation is emitted.
+  documentAssessment: PdfExtractionAssessment | null;
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -163,6 +175,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // region selector so vendor-profile extraction runs against the
   // spatially-selected letterhead rather than the flattened stream.
   let supplierRegionText: string | null = null;
+  // Sprint 3 · Checkpoint 15W — document-class inputs.
+  let positionedItemCount = 0;
+  let positionedTextChars = 0;
+  let pdfPageCount = 0;
+  let parserThrew = false;
+  let parserError: string | null = null;
   if (args.extractedTextOverride != null) {
     pdfText = args.extractedTextOverride;
     pdfOk = pdfText.trim().length > 0;
@@ -176,10 +194,17 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     pdfOk = pdf.ok;
     pdfText = pdf.ok ? pdf.text : "";
     pdfReason = pdf.reason ?? null;
+    if (!pdf.ok) {
+      parserThrew = true;
+      parserError = pdf.reason ?? "parse_failed";
+    }
     // Layout extraction is best-effort: any failure here degrades to
     // the flat-text path without changing the analyser contract.
     try {
       const layout = await extractPdfLayout(bytes);
+      pdfPageCount = layout.pageCount;
+      positionedItemCount = layout.items.length;
+      positionedTextChars = layout.items.reduce((sum, it) => sum + (it.text?.replace(/\s+/g, "").length ?? 0), 0);
       const regions = detectLayoutRegions(layout.visualLines);
       const supplier = pickSupplierRegion(regions);
       if (supplier) supplierRegionText = supplier.text;
@@ -187,6 +212,20 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       supplierRegionText = null;
     }
   }
+  // Sprint 3 · Checkpoint 15W — assess extraction quality up front.
+  // An IMAGE_ONLY scan (0 chars + 0 positioned items) triggers early
+  // abstention so the downstream ranker never surfaces a
+  // fabricated GL. Text-healthy docs proceed unchanged.
+  const documentAssessment: PdfExtractionAssessment | null = args.extractedTextOverride != null
+    ? null
+    : assessPdfExtraction({
+        flattenedText: pdfText,
+        positionedItemCount,
+        positionedTextChars,
+        pageCount: pdfPageCount,
+        parserThrew,
+        parserError,
+      });
   const parsed = parseInvoiceText({
     extractedText: pdfOk ? pdfText : "",
     emailSubject: args.emailSubject ?? null,
@@ -498,6 +537,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     taxGroupsResult,
     splitGlRecommendations: gl.splitRecommendations,
     allocations,
+    documentAssessment,
   };
 }
 
