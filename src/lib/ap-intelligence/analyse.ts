@@ -43,6 +43,10 @@ import { buildTaxGroups, type TaxGroupsResult } from "./tax-groups";
 // Sprint 3 · Checkpoint 15V — multi-GL allocation engine.
 import { computeAllocations, type AllocationResult } from "./gl-allocations";
 import { extractConceptsForAccount } from "./gl-account-concepts";
+// Sprint 3 · Checkpoint 15V Addendum-2 — coordinate-aware layout
+// extraction for supplier-block detection.
+import { extractPdfLayout } from "./pdf-layout-extract";
+import { detectLayoutRegions, pickSupplierRegion } from "./layout-regions";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -153,6 +157,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   let pdfOk = true;
   let pdfText = "";
   let pdfReason: string | null = null;
+  // Sprint 3 · Checkpoint 15V Addendum-2 — coordinate-aware layout
+  // extraction. Populated from the PDF bytes path (not the text-
+  // override path used only by tests). Consumed by the supplier-
+  // region selector so vendor-profile extraction runs against the
+  // spatially-selected letterhead rather than the flattened stream.
+  let supplierRegionText: string | null = null;
   if (args.extractedTextOverride != null) {
     pdfText = args.extractedTextOverride;
     pdfOk = pdfText.trim().length > 0;
@@ -166,6 +176,16 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     pdfOk = pdf.ok;
     pdfText = pdf.ok ? pdf.text : "";
     pdfReason = pdf.reason ?? null;
+    // Layout extraction is best-effort: any failure here degrades to
+    // the flat-text path without changing the analyser contract.
+    try {
+      const layout = await extractPdfLayout(bytes);
+      const regions = detectLayoutRegions(layout.visualLines);
+      const supplier = pickSupplierRegion(regions);
+      if (supplier) supplierRegionText = supplier.text;
+    } catch {
+      supplierRegionText = null;
+    }
   }
   const parsed = parseInvoiceText({
     extractedText: pdfOk ? pdfText : "",
@@ -192,7 +212,10 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // while the modal's own POST endpoint (which uses the richer
   // profile) saw an EXACT match.
   const vendorProfileExtracted: ExtractedVendorProfile = pdfOk
-    ? extractVendorProfile(pdfText, { vendorLegalName: extraction.vendor.guessedName })
+    ? extractVendorProfile(pdfText, {
+        vendorLegalName: extraction.vendor.guessedName,
+        supplierRegionText,
+      })
     : {
         address: { line1: { value: null, confidence: 0, source: null }, line2: { value: null, confidence: 0, source: null },
                    city: { value: null, confidence: 0, source: null }, provinceState: { value: null, confidence: 0, source: null },

@@ -79,6 +79,7 @@ export interface ExtractedVendorProfile {
 
 import { extractDocumentEntities } from "./document-entities";
 import { parseAddressBlock } from "./address-parser";
+import type { LayoutRegion } from "./layout-regions";
 
 // Bumped for 15P-1. Any AP projection cached under the pre-15P-1
 // version invalidates on the next Mission Control render.
@@ -476,12 +477,36 @@ function lineForOffset(text: string, offset: number): number {
   return text.slice(0, offset).split(/\r?\n/).length - 1;
 }
 
-function extractAddress(text: string, vendorLegalName: string | null): AddressExtraction {
+function extractAddress(text: string, vendorLegalName: string | null, supplierRegionText: string | null = null): AddressExtraction {
   const empty: FieldExtraction = { value: null, confidence: 0, source: null };
   const emptyAddr: AddressExtraction = {
     line1: empty, line2: empty, city: empty, provinceState: empty,
     postalCode: empty, country: empty, blockConfidence: 0,
   };
+
+  // Sprint 3 · Checkpoint 15V Addendum-2 — coordinate-aware supplier
+  // region wins over flat-text heuristics. When the caller passed a
+  // spatially-selected supplier region, parse its lines FIRST. Fall
+  // back to the flat-text entity layer only when the region parse
+  // returned no address evidence.
+  if (supplierRegionText) {
+    const regionLines = supplierRegionText.split(/\r?\n/);
+    const parsed = parseAddressBlock(regionLines);
+    if (parsed.postalCode.value || parsed.city.value || parsed.addressLine1.value) {
+      const asField = (v: { value: string | null; confidence: number; inferred: boolean }): FieldExtraction =>
+        v.value ? { value: v.value, confidence: v.confidence, source: "invoice-pdf" } : { value: null, confidence: 0, source: null };
+      // Region-derived confidence: strong (parser had a curated block).
+      return {
+        line1: asField(parsed.addressLine1),
+        line2: asField(parsed.addressLine2),
+        city: asField(parsed.city),
+        provinceState: asField(parsed.provinceState),
+        postalCode: asField(parsed.postalCode),
+        country: asField(parsed.country),
+        blockConfidence: 90,
+      };
+    }
+  }
 
   // Sprint 3 · Checkpoint 15V Addendum — try the entity-block layer
   // FIRST. Groups lines into SUPPLIER / RECIPIENT / REMITTANCE
@@ -548,6 +573,14 @@ function extractAddress(text: string, vendorLegalName: string | null): AddressEx
 
 export interface ExtractOptions {
   vendorLegalName?: string | null;   // strengthens address candidate scoring
+  // Sprint 3 · Checkpoint 15V Addendum-2 — pre-selected supplier
+  // region from the coordinate-aware layout pipeline. When supplied,
+  // parseAddressBlock runs against the region's text FIRST and the
+  // flat-text entity layer becomes the fallback. This is the only
+  // reliable way to distinguish supplier from recipient on real
+  // invoices with two-column headers (e.g. supplier top-right +
+  // recipient top-left).
+  supplierRegionText?: string | null;
 }
 
 /**
@@ -586,7 +619,7 @@ export function extractVendorProfile(text: string, opts: ExtractOptions = {}): E
   const clamp = (f: FieldExtraction): FieldExtraction =>
     f.confidence >= EXTRACTION_THRESHOLD ? f : { value: null, confidence: 0, source: null };
 
-  const address = extractAddress(raw, opts.vendorLegalName ?? null);
+  const address = extractAddress(raw, opts.vendorLegalName ?? null, opts.supplierRegionText ?? null);
   const gated: AddressExtraction = address.blockConfidence >= EXTRACTION_THRESHOLD
     ? {
         line1: clamp(address.line1),

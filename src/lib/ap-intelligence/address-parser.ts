@@ -147,8 +147,10 @@ function splitCitySegment(segment: string): { street: string | null; city: strin
     // cardinal direction, or contains a digit.
     if (STREET_TOKEN_RE.test(prev) || CARDINAL_TOKEN_RE.test(prev) || /\d/.test(prev)) break;
     // Stop when the previous token doesn't look like a city
-    // continuation (must start with capital letter).
-    if (!/^[A-Z]/.test(prev)) break;
+    // continuation (must start with capital letter — accepts both
+    // Title Case "Calgary" and ALL CAPS "MONTREAL").
+    if (!/^[A-Z]/i.test(prev)) break;
+    if (/^[a-z]/.test(prev)) break;
     cityStartIdx--;
   }
   const city = tokens.slice(cityStartIdx, cityEndIdx).join(" ").trim();
@@ -158,19 +160,60 @@ function splitCitySegment(segment: string): { street: string | null; city: strin
 }
 
 // Find PROVINCE + POSTAL on any comma-segment across all lines.
+// Handles two shapes:
+//   Shape A — combined:   "City, Province Postal[ Country]"
+//                          segment N-1 = city
+//                          segment N   = "Province Postal[ Country]"
+//   Shape B — split:      "City, Province, Postal[, Country]"
+//                          segment N-2 = city
+//                          segment N-1 = province alone
+//                          segment N   = postal alone [+ trailing country]
 function findCityProvincePostal(lines: string[]): CityProvincePostal | null {
-  const provincePostalRe = new RegExp(
-    "^\\s*(" + [...CANADIAN_PROVINCES, ...US_STATES].join("|") + "|"
-    + [...CANADIAN_PROVINCE_FULL_NAMES.keys()].map((n) => n.replace(/\s+/g, "\\s+")).join("|")
-    + ")\\s+(" + CA_POSTAL_LOOSE.source + "|" + US_ZIP.source + ")"
+  const provinceAlt = [...CANADIAN_PROVINCES, ...US_STATES].join("|") + "|"
+    + [...CANADIAN_PROVINCE_FULL_NAMES.keys()].map((n) => n.replace(/\s+/g, "\\s+")).join("|");
+  const provincePostalCombinedRe = new RegExp(
+    "^\\s*(" + provinceAlt + ")\\s+(" + CA_POSTAL_LOOSE.source + "|" + US_ZIP.source + ")"
     + "(?:\\s*,?\\s+([A-Z][A-Za-z .]{2,30}))?\\s*$",
     "i",
   );
+  const provinceAloneRe = new RegExp("^\\s*(" + provinceAlt + ")\\s*$", "i");
+  const postalAloneRe = new RegExp(
+    "^\\s*(" + CA_POSTAL_LOOSE.source + "|" + US_ZIP.source + ")"
+    + "(?:\\s*,?\\s+([A-Z][A-Za-z .]{2,30}))?\\s*$",
+    "i",
+  );
+
   for (let i = 0; i < lines.length; i++) {
     const segments = lines[i].split(",").map((s) => s.trim());
-    for (let s = 0; s < segments.length; s++) {
+
+    // Shape B — city, province, postal split across three segments.
+    for (let s = 2; s < segments.length; s++) {
+      const postalSeg = segments[s].match(postalAloneRe);
+      if (!postalSeg) continue;
+      const provinceSeg = segments[s - 1].match(provinceAloneRe);
+      if (!provinceSeg) continue;
+      const provinceNormalized = normalizeProvince(provinceSeg[1]);
+      if (!provinceNormalized) continue;
+      if (!CANADIAN_PROVINCES.has(provinceNormalized) && !US_STATES.has(provinceNormalized)) continue;
+      const citySegment = segments[s - 2];
+      const split = splitCitySegment(citySegment);
+      if (!split) continue;
+      return {
+        cityRaw: split.city,
+        provinceRaw: provinceSeg[1],
+        postalRaw: postalSeg[1],
+        lineIdx: i,
+        citySegmentIdx: s - 2,
+        precedingSegments: segments.slice(0, s - 2),
+        citySegmentTail: split.street,
+        trailingCountry: postalSeg[2]?.trim() ?? null,
+      };
+    }
+
+    // Shape A — city, province+postal combined in one segment.
+    for (let s = 1; s < segments.length; s++) {
       const seg = segments[s];
-      const m = seg.match(provincePostalRe);
+      const m = seg.match(provincePostalCombinedRe);
       if (!m) continue;
       const provinceRaw = m[1].trim();
       const postalRaw = m[2].trim();
@@ -178,8 +221,6 @@ function findCityProvincePostal(lines: string[]): CityProvincePostal | null {
       const provinceNormalized = normalizeProvince(provinceRaw);
       if (!provinceNormalized) continue;
       if (!CANADIAN_PROVINCES.has(provinceNormalized) && !US_STATES.has(provinceNormalized)) continue;
-      // Preceding segment must exist to hold the city.
-      if (s === 0) continue;
       const citySegment = segments[s - 1];
       const split = splitCitySegment(citySegment);
       if (!split) continue;

@@ -49,6 +49,34 @@ describe("15V Addendum · postal-code spacing tolerance (real pdf-parse artefact
     expect(parsed.postalCode.value).toBe("V6B 1A1");
   });
 
+  it("parses a 3-comma-segment address 'City, Province, Postal' (real OXIO-shape)", () => {
+    // The second founder-observed doc has the supplier address as
+    //   "1 PLACE VILLE MARIE #3301\nMONTREAL, QC, H3B 3N2"
+    // three comma-separated segments, ALL-CAPS city.
+    const parsed = parseAddressBlock([
+      "1 PLACE VILLE MARIE #3301",
+      "MONTREAL, QC, H3B 3N2",
+    ]);
+    expect(parsed.city.value).toBe("MONTREAL");
+    expect(parsed.provinceState.value).toBe("QC");
+    expect(parsed.postalCode.value).toBe("H3B 3N2");
+    expect(parsed.addressLine1.value).toMatch(/1\s+PLACE\s+VILLE\s+MARIE/i);
+    expect(parsed.addressLine1.value).toMatch(/#3301/);
+    expect(parsed.country.value).toBe("Canada");
+    expect(parsed.country.inferred).toBe(true);
+  });
+
+  it("parses a 3-comma-segment US address 'City, State, ZIP'", () => {
+    const parsed = parseAddressBlock([
+      "1 SAMPLE AVE",
+      "REDMOND, WA, 98052",
+    ]);
+    expect(parsed.city.value).toBe("REDMOND");
+    expect(parsed.provinceState.value).toBe("WA");
+    expect(parsed.postalCode.value).toBe("98052");
+    expect(parsed.country.value).toBe("United States");
+  });
+
   it("infers country=Canada from CA postal + AB province when country not printed", () => {
     const parsed = parseAddressBlock([
       "Sample Street 500",
