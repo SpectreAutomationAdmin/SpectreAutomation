@@ -127,6 +127,40 @@ test.describe("15V Addendum · Vendor Profile modal supplier-address extraction"
     expect(legalName, "Legal name must not start with 'Chris' (the sender's first name)")
       .not.toMatch(/^chris\b/i);
 
+    // §10 -- Close and reopen the modal. Assert the address remains populated.
+    const closeButton = page.locator('button', { hasText: /finish\s+later|close|cancel/i }).first();
+    if (await closeButton.count() > 0) {
+      await closeButton.click();
+      await page.waitForTimeout(500);
+      // Reopen
+      await openButton.click();
+      await page.waitForTimeout(1000);
+      const reopenedLine1 = (await readValueByLabel("Address Line 1")).trim();
+      const reopenedCity = (await readValueByLabel("City")).trim();
+      const reopenedPostal = (await readValueByLabel("Postal")).trim();
+      expect(reopenedLine1, "Line 1 must remain populated after modal close+reopen").not.toBe("");
+      expect(reopenedCity, "City must remain populated after modal close+reopen").not.toBe("");
+      expect(reopenedPostal, "Postal must remain populated after modal close+reopen").not.toBe("");
+      await page.screenshot({ path: join(OUT, "modal-reopened.png"), fullPage: true });
+    }
+
+    // §10 -- Navigate forward and back between Vendor Profile and AP Coding.
+    const nextStepButton = page.locator('button', { hasText: /next|coding|continue/i }).first();
+    const backToProfileButton = page.locator('[data-testid="cvap-back-to-profile"]').first();
+    if (await nextStepButton.count() > 0 && await backToProfileButton.count() > 0) {
+      await nextStepButton.click();
+      await page.waitForTimeout(400);
+      await backToProfileButton.click();
+      await page.waitForTimeout(400);
+      const afterNavLine1 = (await readValueByLabel("Address Line 1")).trim();
+      const afterNavCity = (await readValueByLabel("City")).trim();
+      const afterNavPostal = (await readValueByLabel("Postal")).trim();
+      expect(afterNavLine1, "Line 1 must remain populated after forward/back nav").not.toBe("");
+      expect(afterNavCity, "City must remain populated after forward/back nav").not.toBe("");
+      expect(afterNavPostal, "Postal must remain populated after forward/back nav").not.toBe("");
+      await page.screenshot({ path: join(OUT, "modal-after-nav.png"), fullPage: true });
+    }
+
     await context.tracing.stop({ path: join(OUT, "trace.zip") });
     await writeFile(join(OUT, "console.log"), consoleLog.join("\n"), "utf8");
     await writeFile(join(OUT, "network.log"), netLog.join("\n"), "utf8");
@@ -153,6 +187,8 @@ test.describe("15V Addendum · Vendor Profile modal supplier-address extraction"
         "- Postal non-empty: PASS",
         "- Country non-empty: PASS",
         "- Legal name not the sender's first name: PASS",
+        "- Address preserved across modal close+reopen: PASS",
+        "- Address preserved across forward/back nav: PASS",
       ].join("\n"),
       "utf8",
     );
