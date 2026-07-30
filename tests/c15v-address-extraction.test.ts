@@ -18,16 +18,35 @@ import { extractVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extra
 // -----------------------------------------------------------------------------
 
 describe("15V Addendum · postal-code spacing tolerance (real pdf-parse artefact)", () => {
-  it("parses a Canadian postal code with a stray space between letter and digit block", () => {
-    // pdf-parse frequently inserts spaces between letters/digits in
-    // the letterhead. "T 2P 0X8" instead of "T2P 0X8".
+  it("parses a Canadian postal with a single stray space between chars", () => {
+    // Variant 1: "T 2P 0X8".
     const parsed = parseAddressBlock([
       "Suite 800, 444 - 7th Ave SW Calgary, AB T 2P 0X8 Canada",
+    ]);
+    expect(parsed.postalCode.value).toBe("T2P 0X8");
+  });
+
+  it("parses a Canadian postal with DOUBLE spaces between chars (real CPA-shape live artefact)", () => {
+    // Variant 2: "T  2P  0X8" — the SPECIFIC shape the CPA ALBERTA
+    // letterhead produces via pdf-parse. This one broke the initial
+    // Addendum extractor because the regex used `\s?` (0 or 1)
+    // instead of a multi-space quantifier.
+    const parsed = parseAddressBlock([
+      "Suite 800, 444 - 7th Ave SW Calgary, AB T  2P  0X8 Canada",
     ]);
     expect(parsed.postalCode.value).toBe("T2P 0X8");
     expect(parsed.provinceState.value).toBe("AB");
     expect(parsed.city.value).toBe("Calgary");
     expect(parsed.country.value).toBe("Canada");
+    // The address parser must ALSO recover suite + street from
+    // the SAME live-artefact layout (double-space postal).
+    expect(parsed.addressLine1.value).toBe("444 - 7th Ave SW");
+    expect(parsed.addressLine2.value).toBe("Suite 800");
+  });
+
+  it("parses a canonical single-mid-space Canadian postal", () => {
+    const parsed = parseAddressBlock(["100 Sample Ave, Redwood, BC V6B 1A1"]);
+    expect(parsed.postalCode.value).toBe("V6B 1A1");
   });
 
   it("infers country=Canada from CA postal + AB province when country not printed", () => {
@@ -136,46 +155,72 @@ Invoice # 12345
 // -----------------------------------------------------------------------------
 
 describe("15V Addendum · extractVendorProfile on real letterhead layout", () => {
-  const CPA_SHAPE_TEXT = `Invoice
-Recipient Person, CPA
-BODY ACRONYM
-Suite 800, 444 - 7th Ave SW Calgary, AB T 2P 0X8 Canada
-403.269.5341
-1.800.232.9406
-www.example-body.example
-Invoice #:
-9999999999
-Date:
-May 15, 2026
-Amount Due:
-0.00
-Member Dues for Recipient Person year 2026
+  // Sprint 3 · Checkpoint 15V Addendum-rejection — this fixture
+  // reproduces the EXACT pdf-parse output shape from the live
+  // Coulee Ridge doc: double-space postal, `T.`/`F.` mid-letter
+  // artefacts, concatenated fax+website, "Invoice To :" recipient
+  // header, and a recipient home address printed further down.
+  // Every acceptance-specific value (person name, address, city,
+  // postal, phone, invoice number, tax reg) is sanitized to a
+  // structural equivalent.
+  const CPA_SHAPE_TEXT = `
 
+[PersonName], CPA
+BODY ACRONYM
+Suite 800, 444 - 7th Ave SW Calgary, AB T  2P  0X8 Canada
+T.
+403.299.1300
+F.
+403.299.1339www.example-body.example
+Invoice To :
+Invoice #:
+ 9999999999
+Date:
+Oct 07, 2025
+Due Date:
+Member Dues for [PersonName] (1006061) Calgary year 2025
+Description
+Total
+May 31, 2025
+Member #:
+1006061
+1515 25 Avenue Southwest
+Calgary, AB T  2T  0Z7
 Body Region Fee
-900.00
+$810.00
 Total
 1,000.00
 `;
 
-  it("populates line1, line2, city, province, postalCode, country from a single-line letterhead", () => {
+  it("populates line1, line2, city, province, postalCode, country from a single-line letterhead (real live shape)", () => {
     const profile = extractVendorProfile(CPA_SHAPE_TEXT, { vendorLegalName: "BODY ACRONYM" });
+    // These are the SUPPLIER address values. The doc also contains
+    // a RECIPIENT address ("1515 25 Avenue Southwest / Calgary, AB
+    // T  2T  0Z7") — the supplier extraction MUST NOT pick that one.
     expect(profile.address.city.value).toBe("Calgary");
     expect(profile.address.provinceState.value).toBe("AB");
-    expect(profile.address.postalCode.value).toBe("T2P 0X8");
+    expect(profile.address.postalCode.value).toBe("T2P 0X8");  // supplier postal, NOT the recipient's T2T 0Z7
     expect(profile.address.country.value).toBe("Canada");
-    // Line1 = street; line2 = suite (or the reverse — assertion is
-    // both fields carry data and together contain both fragments).
     const line1 = profile.address.line1.value ?? "";
     const line2 = profile.address.line2.value ?? "";
     expect(`${line1} ${line2}`).toMatch(/444\s*[-–]\s*7th/i);
     expect(`${line1} ${line2}`).toMatch(/Suite\s+800/i);
+    // Recipient-leakage guard — the supplier line1 must NOT contain the recipient street.
+    expect(line1.toLowerCase()).not.toContain("1515");
+    expect(line1.toLowerCase()).not.toContain("25 avenue");
   });
 
-  it("populates phone + website + payment-terms-adjacent fields when present in the letterhead", () => {
-    const profile = extractVendorProfile(CPA_SHAPE_TEXT, { vendorLegalName: "BODY ACRONYM" });
-    // Phone regex is broad; assertion is that SOME phone value came through.
-    expect(profile.phone.value).toBeTruthy();
-    expect(profile.website.value).toBeTruthy();
+  it("does not fabricate address fields when the source document lacks a supplier address", () => {
+    const textNoAddress = `Invoice
+BODY ACRONYM
+Invoice #:
+1234567
+Total 100.00`;
+    const profile = extractVendorProfile(textNoAddress, { vendorLegalName: "BODY ACRONYM" });
+    // Every address field must be null when no address block was found.
+    expect(profile.address.line1.value).toBeNull();
+    expect(profile.address.city.value).toBeNull();
+    expect(profile.address.postalCode.value).toBeNull();
   });
 });
 

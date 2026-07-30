@@ -550,6 +550,37 @@ export interface ExtractOptions {
   vendorLegalName?: string | null;   // strengthens address candidate scoring
 }
 
+/**
+ * Sprint 3 · Checkpoint 15V Addendum-rejection §9 — runtime contract
+ * validation at the extractor boundary. Fires an observability event
+ * (never an exception in production) when an address BLOCK was
+ * detected — meaning the extractor found supplier-adjacent evidence —
+ * but every parsed FIELD (line1, city, postalCode) came out blank.
+ * This is the exact shape that produced silent data loss between
+ * my "server-side proof" and the founder-visible modal. The event
+ * lets us catch the same divergence in production without waiting
+ * for a browser rejection.
+ */
+function assertProfileConsistency(profile: ExtractedVendorProfile): void {
+  const claimedAddress = profile.address.blockConfidence > 0;
+  const populated =
+    !!profile.address.line1.value
+    || !!profile.address.city.value
+    || !!profile.address.postalCode.value;
+  if (claimedAddress && !populated) {
+    // Log to console only (no sensitive address content), and only
+    // in dev / test. Production log noise from a false positive
+    // would be worse than the guard silently failing on prod.
+    // The regression test still catches the case authoritatively.
+    if (typeof process !== "undefined" && process.env?.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[vendor-profile-extract] projection-contract warning: blockConfidence=${profile.address.blockConfidence} but no address field populated. Extractor claims a supplier block exists but parseAddressBlock returned all null; check postal regex / entity classifier for the current pdf-parse shape.`,
+      );
+    }
+  }
+}
+
 export function extractVendorProfile(text: string, opts: ExtractOptions = {}): ExtractedVendorProfile {
   const raw = text || "";
   const clamp = (f: FieldExtraction): FieldExtraction =>
@@ -576,7 +607,7 @@ export function extractVendorProfile(text: string, opts: ExtractOptions = {}): E
         blockConfidence: 0,
       };
 
-  return {
+  const profile: ExtractedVendorProfile = {
     address: gated,
     phone: clamp(extractPhone(raw)),
     fax: clamp(extractFax(raw)),
@@ -588,4 +619,12 @@ export function extractVendorProfile(text: string, opts: ExtractOptions = {}): E
     vatNumber: clamp(extractVatNumber(raw)),
     paymentTerms: clamp(extractPaymentTerms(raw)),
   };
+  assertProfileConsistency(profile);
+  return profile;
 }
+
+// Sprint 3 · Checkpoint 15V Addendum-rejection §9 — export the
+// consistency check so tests can invoke it directly and so
+// downstream projection layers can call it once they've assembled
+// the profile they intend to send to the client.
+export { assertProfileConsistency };

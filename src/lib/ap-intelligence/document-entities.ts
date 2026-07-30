@@ -90,9 +90,16 @@ const CUSTOMER_HEADER_TOKEN = /\b(?:bill[-\s]?to|ship[-\s]?to|sold[-\s]?to|custo
 // Address structural detection
 // -----------------------------------------------------------------------------
 
-// Canadian postal — TOLERATES optional whitespace between EACH
-// character (the pdf-parse artefact "T 2P 0X8" instead of "T2P 0X8").
-export const CA_POSTAL_LOOSE = /[A-Z]\s?\d\s?[A-Z]\s*\d\s?[A-Z]\s?\d/i;
+// Canadian postal — TOLERATES pdf-parse whitespace artefacts. Real
+// invoices in the wild ship with variants like:
+//   "T2P 0X8"    (canonical, single mid-space)
+//   "T 2P 0X8"   (single space between first char and rest)
+//   "T  2P  0X8" (double spaces — actual CPA ALBERTA letterhead)
+//   "T2P0X8"     (no spaces)
+// The regex allows 0-3 whitespace chars between EACH character so
+// none of the above escape detection. Downstream normalization
+// collapses whitespace and outputs the canonical "T2P 0X8" form.
+export const CA_POSTAL_LOOSE = /[A-Z]\s{0,3}\d\s{0,3}[A-Z]\s{0,3}\d\s{0,3}[A-Z]\s{0,3}\d/i;
 export const US_ZIP = /\d{5}(?:-\d{4})?/;
 
 // Address-line signals
