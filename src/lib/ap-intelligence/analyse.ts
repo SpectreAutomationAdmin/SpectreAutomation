@@ -52,6 +52,12 @@ import { detectLayoutRegions, pickSupplierRegion } from "./layout-regions";
 // before invoking downstream extractors that could otherwise
 // invent vendor / GL from empty input.
 import { assessPdfExtraction, type PdfExtractionAssessment } from "./document-class";
+// Sprint 3 · Checkpoint 15X — extraction strategy router. Routes
+// image-only PDFs through AWS Textract AnalyzeExpense and returns
+// a provider-neutral CanonicalDocumentExtraction that downstream
+// extractors consume as if it were embedded text.
+import { runDocumentExtractionStrategy } from "./document-extractors/strategy-router";
+import type { CanonicalDocumentExtraction } from "./document-extractors/canonical-model";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -181,6 +187,10 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   let pdfPageCount = 0;
   let parserThrew = false;
   let parserError: string | null = null;
+  // Sprint 3 · Checkpoint 15X — canonical extraction from the
+  // strategy router. Populated when the router selected OCR
+  // (AWS Textract) as the winning strategy.
+  let canonicalExtraction: CanonicalDocumentExtraction | null = null;
   if (args.extractedTextOverride != null) {
     pdfText = args.extractedTextOverride;
     pdfOk = pdfText.trim().length > 0;
@@ -198,18 +208,48 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       parserThrew = true;
       parserError = pdf.reason ?? "parse_failed";
     }
-    // Layout extraction is best-effort: any failure here degrades to
-    // the flat-text path without changing the analyser contract.
+    // Sprint 3 · Checkpoint 15X — run the strategy router. It:
+    //   * extracts layout + text (Strategies A + B)
+    //   * assesses document class
+    //   * invokes AWS Textract AnalyzeExpense for IMAGE_ONLY /
+    //     TEXT_FRAGMENTED / MIXED docs (Strategy C)
+    //   * abstains truthfully for ENCRYPTED / UNSUPPORTED
     try {
-      const layout = await extractPdfLayout(bytes);
-      pdfPageCount = layout.pageCount;
-      positionedItemCount = layout.items.length;
-      positionedTextChars = layout.items.reduce((sum, it) => sum + (it.text?.replace(/\s+/g, "").length ?? 0), 0);
-      const regions = detectLayoutRegions(layout.visualLines);
-      const supplier = pickSupplierRegion(regions);
-      if (supplier) supplierRegionText = supplier.text;
-    } catch {
-      supplierRegionText = null;
+      const routed = await runDocumentExtractionStrategy({
+        bytes,
+        mimeType: doc.mimeType,
+        correlationHash: doc.sha256Hash?.slice(0, 16),
+      });
+      pdfPageCount = routed.layout?.pageCount ?? 0;
+      positionedItemCount = routed.layout?.items.length ?? 0;
+      positionedTextChars = routed.layout?.items.reduce((sum, it) => sum + (it.text?.replace(/\s+/g, "").length ?? 0), 0) ?? 0;
+      if (routed.layout) {
+        const regions = detectLayoutRegions(routed.layout.visualLines);
+        const supplier = pickSupplierRegion(regions);
+        if (supplier) supplierRegionText = supplier.text;
+      }
+      // If Textract succeeded, its canonical extraction is the
+      // authoritative source of supplier / payable / total / lines
+      // for downstream consumers. Feed a synthetic pdfText into the
+      // pre-Textract extractors so they can still pull evidence
+      // (concepts, purposes) via their existing regexes.
+      if (routed.canonicalExtraction) {
+        canonicalExtraction = routed.canonicalExtraction;
+        pdfText = synthesizePdfTextFromCanonical(canonicalExtraction, pdfText);
+        pdfOk = pdfText.trim().length > 0;
+        // Supplier region text — assemble from canonical extraction.
+        if (canonicalExtraction.fields.supplierName || canonicalExtraction.fields.supplierAddress) {
+          supplierRegionText = synthesizeSupplierRegionText(canonicalExtraction);
+        }
+      }
+    } catch (e) {
+      // Strategy-router error is non-fatal; existing paths still run
+      // against whatever pdfText was extracted.
+      logger.warn("ap-intelligence.strategy-router.error", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        message: (e as Error).message.slice(0, 200),
+      });
     }
   }
   // Sprint 3 · Checkpoint 15W — assess extraction quality up front.
@@ -539,6 +579,83 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     allocations,
     documentAssessment,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 15X — canonical extraction → synthetic text
+// ---------------------------------------------------------------------------
+//
+// When AWS Textract wins the strategy race, it returns a structured
+// CanonicalDocumentExtraction rather than flat text. Downstream
+// extractors (parseInvoiceText, extractLineItems, classifyEconomicPurpose,
+// etc.) still expect flat text as their primary input. To avoid
+// rewriting every downstream extractor, we synthesize a flat text
+// representation of the canonical extraction and feed it as
+// pdfText. This preserves the existing text-based extraction paths
+// without special-casing OCR upstream of them.
+//
+// The synthetic text keeps the SAME shape a text-based invoice would
+// produce so pre-Textract extractors can pull invoice #, subtotal,
+// tax, total, and line items via their existing patterns. Supplier
+// section is composed separately and passed through supplierRegionText.
+
+function synthesizePdfTextFromCanonical(canonical: CanonicalDocumentExtraction, existingText: string): string {
+  const parts: string[] = [];
+  if (existingText.trim()) parts.push(existingText.trim());
+
+  const f = canonical.fields;
+  if (f.supplierName) parts.push(f.supplierName.value);
+  if (f.supplierAddress) {
+    const addr = f.supplierAddress;
+    if (addr.addressLine1) parts.push(addr.addressLine1.value);
+    if (addr.addressLine2) parts.push(addr.addressLine2.value);
+    const cityLine = [addr.city?.value, addr.provinceState?.value, addr.postalCode?.value].filter(Boolean).join(", ");
+    if (cityLine) parts.push(cityLine);
+    if (addr.country) parts.push(addr.country.value);
+  }
+  if (f.supplierPhone) parts.push(f.supplierPhone.value);
+  if (f.supplierWebsite) parts.push(f.supplierWebsite.value);
+  if (f.supplierEmail) parts.push(f.supplierEmail.value);
+  if (f.taxRegistrationNumber) parts.push(`GST: ${f.taxRegistrationNumber.value}`);
+  if (f.payableReference) {
+    const label = canonical.fields.payableReferenceType === "STATEMENT_NUMBER" ? "Statement Number"
+      : canonical.fields.payableReferenceType === "BILL_NUMBER" ? "Bill Number"
+      : "Invoice Number";
+    parts.push(`${label}: ${f.payableReference.value}`);
+  }
+  if (f.invoiceDate) parts.push(`Invoice Date: ${f.invoiceDate.value}`);
+  if (f.dueDate) parts.push(`Due Date: ${f.dueDate.value}`);
+  if (f.purchaseOrderNumber) parts.push(`PO Number: ${f.purchaseOrderNumber.value}`);
+
+  for (const line of canonical.lineItems) {
+    const desc = line.description.value;
+    const amount = line.amount.value;
+    parts.push(`${desc}  ${amount.toFixed(2)}`);
+  }
+
+  if (f.subtotal) parts.push(`Subtotal: ${f.subtotal.value.toFixed(2)}`);
+  if (f.tax) parts.push(`GST/HST: ${f.tax.value.toFixed(2)}`);
+  if (f.total) parts.push(`Invoice Total: ${f.total.value.toFixed(2)}`);
+  if (f.currency) parts.push(`Currency: ${f.currency.value}`);
+
+  return parts.join("\n");
+}
+
+function synthesizeSupplierRegionText(canonical: CanonicalDocumentExtraction): string {
+  const parts: string[] = [];
+  const f = canonical.fields;
+  if (f.supplierName) parts.push(f.supplierName.value);
+  if (f.supplierAddress) {
+    const addr = f.supplierAddress;
+    if (addr.addressLine1) parts.push(addr.addressLine1.value);
+    if (addr.addressLine2) parts.push(addr.addressLine2.value);
+    const cityLine = [addr.city?.value, addr.provinceState?.value, addr.postalCode?.value].filter(Boolean).join(", ");
+    if (cityLine) parts.push(cityLine);
+    if (addr.country) parts.push(addr.country.value);
+  }
+  if (f.supplierPhone) parts.push(f.supplierPhone.value);
+  if (f.supplierWebsite) parts.push(f.supplierWebsite.value);
+  return parts.join("\n");
 }
 
 // ---------------------------------------------------------------------------
