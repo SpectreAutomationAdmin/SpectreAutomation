@@ -47,6 +47,9 @@ import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/li
 // button label and the modal-open decision come from this function
 // so they can never drift.
 import { deriveApAction, type ApAction } from "@/lib/mission-control/ap-action";
+// Sprint 3 · Checkpoint 16C (2026-08-04) — unified Work Intake
+// amount formatter. Every amount surface routes through this helper.
+import { formatWorkIntakeAmount } from "@/lib/ap-intelligence/format-amount";
 
 // -------------------------------------------------------------------------
 // Public props
@@ -885,11 +888,10 @@ function ApTitle({
 }) {
   const vendorLabel = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
   const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendorLabel ? "invoice" : null);
-  // 15Z §2 — do not hide a reliable gross behind an unresolved currency.
+  // 16C — unified formatter. Same $X,XXX.XX CAD shape as the
+  // Amount readout cell, regardless of currency presence.
   const amount = ap.gross.amount
-    ? (ap.gross.currency
-        ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
-        : formatBareAmount(ap.gross.amount))
+    ? formatWorkIntakeAmount({ amount: ap.gross.amount, currency: ap.gross.currency })
     : null;
   const category = ap.category.label ?? null;
 
@@ -1017,11 +1019,9 @@ function ordinal(n: number): string {
  */
 function ApWorkSummary({ ap }: { ap: ApInvoiceCardIntelligence }) {
   const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name ?? "the vendor";
-  // 15Z §2 — display gross regardless of currency-code presence.
+  // 16C — unified formatter.
   const grossToken = ap.gross.amount
-    ? (ap.gross.currency
-        ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
-        : formatBareAmount(ap.gross.amount))
+    ? formatWorkIntakeAmount({ amount: ap.gross.amount, currency: ap.gross.currency })
     : null;
   const glToken = ap.category.glAccountNumber && ap.category.glAccountName
     ? `GL ${ap.category.glAccountNumber} ${ap.category.glAccountName}`
@@ -1091,22 +1091,19 @@ function formatVariance(v: string, currency: string): string {
   return `${sign}${currency} ${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function formatAmountReadout(amount: string | null, currency: string | null, showCurrencyCode: boolean): string {
-  // Sprint 3 · Checkpoint 15Z (2026-08-04) — a reliable printed
-  // gross must not be hidden because currency is unresolved. When
-  // the analyser has an amount but no ISO currency code (many
-  // invoices don't print USD/CAD explicitly), display the amount
-  // formatted as a plain thousand-separated decimal rather than
-  // dashing out the whole field.
-  if (!amount) return "—";
-  if (!currency) return formatBareAmount(amount);
-  return formatOperationalMoney(amount, currency, showCurrencyCode);
+function formatAmountReadout(amount: string | null, currency: string | null, _showCurrencyCode: boolean): string {
+  // Sprint 3 · Checkpoint 16C (2026-08-04) — SINGLE unified Work
+  // Intake amount formatter. Every amount cell / token / chip
+  // routes through this helper to guarantee "$X,XXX.XX CAD"
+  // format regardless of card variant / vendor state / workflow
+  // state. The `_showCurrencyCode` parameter is retained for the
+  // signature but ignored — the unified format always includes
+  // both symbol and ISO code when available.
+  return formatWorkIntakeAmount({ amount, currency });
 }
 
 function formatBareAmount(rawAmount: string): string {
-  const n = Number(rawAmount);
-  if (!Number.isFinite(n)) return rawAmount;
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+  return formatWorkIntakeAmount({ amount: rawAmount, currency: null });
 }
 
 function formatDecimal(raw: string): string {

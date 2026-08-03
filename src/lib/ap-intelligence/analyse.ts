@@ -885,6 +885,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       (gl.accountNumber == null || natureForRanker.leaderConfidence >= 60);
     if (shouldPromote) {
       const { accountTypesForNature } = await import("./accounting-nature");
+      const { rankNatureScopedAccounts } = await import("./nature-scoped-ranker");
       const wantTypes = new Set(accountTypesForNature(natureForRanker.leader));
       const accountLookup = new Map(
         accountsForAllocations.map((a) => [a.id, a]),
@@ -893,16 +894,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         const full = accountLookup.get(c.accountId);
         return { c, full };
       });
-      // Filter to account-type match only. Category-key hints
-      // exist in accounting-nature.ts but tenant COAs use varied
-      // naming conventions (ADMIN_EXPENSES / OTHER_EXPENSES /
-      // repairs_maintenance / …) and forcing a category match
-      // over-filters legitimate matches. Type match + raw ranker
-      // score is the defensible filter.
+      // Stage A — try to promote from the raw ranker's top-N. Cheap.
       const matches = candidates.filter(({ c, full }) => {
         if (!full) return false;
         return wantTypes.has(full.type);
       });
+      let promoted = false;
       if (matches.length > 0) {
         matches.sort((a, b) => {
           const cd = (b.c.confidence ?? 0) - (a.c.confidence ?? 0);
@@ -911,10 +908,6 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         });
         const picked = matches[0];
         const picked_c = picked.c;
-        // Guard: the picked candidate must have some non-trivial
-        // raw ranker signal (score ≥ 20). A score-0 candidate would
-        // mean the ranker had NO evidence — nature alone is not
-        // enough to fabricate a recommendation.
         if ((picked_c.confidence ?? 0) >= 20) {
           const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
           gl = {
@@ -928,6 +921,67 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
             reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}(raw_${picked_c.confidence})`,
             leaderIsPostable: picked_c.postable,
             leaderPostingBlockers: picked_c.postingBlockers,
+            autoApprovalEligible: false,
+          };
+          promoted = true;
+        }
+      }
+      // Stage B (16C §5) — full nature-scoped COA branch search.
+      // Runs when Stage A did not promote. Ranks EVERY nature-
+      // compatible account in the tenant COA, excludes contra /
+      // depreciation / header / inactive / control accounts, and
+      // returns the highest-scoring semantic account (if any).
+      if (!promoted) {
+        const allCoa = await prisma.account.findMany({
+          where: { clubId: args.clubId, isActive: true },
+          select: {
+            id: true, accountNumber: true, name: true, type: true,
+            isHeader: true, isControlAccount: true,
+            allowManualPosting: true, fundApplicability: true,
+            category: { select: { key: true, name: true } },
+            fsGroup: { select: { key: true, name: true } },
+          },
+        });
+        const uniqDescsNS = Array.from(new Set([
+          ...mergedExtraction.lineItems.map((li) => li.description),
+          ...mergedLineItems.map((li) => li.description),
+          ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
+        ].filter((d): d is string => typeof d === "string" && d.length > 0)));
+        const scoped = rankNatureScopedAccounts({
+          nature: natureForRanker.leader,
+          natureConfidence: natureForRanker.leaderConfidence,
+          allAccounts: allCoa.map((a) => ({
+            id: a.id,
+            accountNumber: a.accountNumber,
+            name: a.name,
+            type: a.type,
+            isActive: true,
+            isHeader: a.isHeader ?? false,
+            isControlAccount: a.isControlAccount ?? false,
+            allowManualPosting: a.allowManualPosting ?? true,
+            categoryKey: a.category?.key ?? null,
+            categoryName: a.category?.name ?? null,
+            fsGroupKey: a.fsGroup?.key ?? null,
+            fsGroupName: a.fsGroup?.name ?? null,
+            fundApplicability: a.fundApplicability,
+          })),
+          lineItemDescriptions: uniqDescsNS,
+          fullDocumentText: pdfText || null,
+          supplierName: mergedExtraction.vendor.guessedName,
+        });
+        if (scoped.leader) {
+          const ldr = scoped.leader;
+          gl = {
+            ...gl,
+            accountNumber: ldr.account.accountNumber,
+            accountName: ldr.account.name,
+            categoryKey: ldr.account.categoryKey ?? null,
+            fsGroupKey: ldr.account.fsGroupKey ?? null,
+            source: "SEMANTIC_MATCH",
+            confidence: Math.min(natureForRanker.leaderConfidence, Math.min(95, ldr.score)),
+            reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount})`,
+            leaderIsPostable: ldr.isPostable,
+            leaderPostingBlockers: ldr.postingBlockers as any,
             autoApprovalEligible: false,
           };
         }

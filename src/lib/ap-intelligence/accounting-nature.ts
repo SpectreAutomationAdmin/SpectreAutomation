@@ -104,6 +104,13 @@ const NATURE_LEXICONS: NatureLexicon[] = [
       /\brecurring\b/i,
       /\brepair\b/i,
       /\brental\b/i,
+      // 16C — replacement-component wording contradicts complete-
+      // unit acquisition. A "SEAL", "SPACER", "GASKET", "FILTER",
+      // "ASSEMBLY (ASM)" line is a subcomponent used to service an
+      // existing asset — NOT the acquisition of a new capital asset.
+      /\breplacement\s+parts?\b/i,
+      /\brepair\s+kit\b/i,
+      /\bservice\s+kit\b/i,
     ],
     amountSensitivity: "high",
   },
@@ -118,18 +125,45 @@ const NATURE_LEXICONS: NatureLexicon[] = [
       /\btune[-\s]?up\b/i,
       /\brebuild\b/i,
       /\bcalibrat(?:e|ion|ing)\b/i,
+      /\breplace(?:ment)?\s+part(?:s)?\b/i,
+      /\brepair\s+kit\b/i,
+      /\bservice\s+kit\b/i,
     ],
     weakTerms: [
-      /\breplace(?:ment)?\s+part(?:s)?\b/i,
       /\bfilter\b/i,
       /\bseal\b/i,
       /\bbearing\b/i,
       /\bgasket\b/i,
       /\bbelt\b/i,
       /\bhose\b/i,
+      // 16C — expanded component vocabulary. Individual tokens
+      // remain WEAK; the concept-family cluster bonus below
+      // aggregates coherent multi-signal evidence.
+      /\bspacer\b/i,
+      /\bassembly\b/i,
+      /\basm\b/i,
+      /\bwasher\b/i,
+      /\bfitting\b/i,
+      /\bvalve\b/i,
+      /\bpump\b/i,
+      /\bmotor\b/i,
+      /\bblade\b/i,
+      /\bspring\b/i,
+      /\bbolt\b/i,
+      /\bnut\b/i,
+      /\bnozzle\b/i,
+      /\bcoupler\b/i,
+      /\bcoupling\b/i,
+      /\bo[-\s]?ring\b/i,
+      /\bbushing\b/i,
+      /\bpiston\b/i,
+      /\bcylinder\b/i,
+      /\bshaft\b/i,
+      /\bpulley\b/i,
+      /\bblade\s*(?:assembly|kit)\b/i,
     ],
     antiTerms: [
-      /\bmodel\s*(?:#|no\.?)/i,     // suggests new asset, not repair
+      /\bmodel\s*(?:#|no\.?)\s*[A-Z0-9\-]+.*(?:new|complete\s+unit)/i,
     ],
     amountSensitivity: "low",
   },
@@ -304,6 +338,19 @@ const ANTI_WEIGHT = -2;
 // Max score is capped so amount-sensitivity boosts are bounded.
 const RAW_SCORE_CAP = 15;
 
+// 16C — concept-family cluster bonus. When ≥2 weak terms of the
+// same nature-branch fire on separate line items, add a cluster
+// bonus. This aggregates coherent multi-signal evidence (e.g. a
+// repair invoice with SEAL + BEARING + SPACER all across different
+// lines) into a defensible confidence, rather than treating each
+// token as an isolated weak match.
+//
+// The cluster bonus is applied ONCE per nature per document and
+// scales with distinct-line coverage, not raw term count.
+const CLUSTER_BONUS_2_LINES = 4;   // ≥2 distinct-line component matches
+const CLUSTER_BONUS_3_LINES = 6;   // ≥3 distinct-line component matches
+const CLUSTER_BONUS_5_LINES = 8;   // ≥5 distinct-line component matches
+
 export function classifyAccountingNature(input: AccountingNatureInput): AccountingNatureAssessment {
   const surfaceLines = [
     ...input.lineItemDescriptions,
@@ -324,10 +371,39 @@ export function classifyAccountingNature(input: AccountingNatureInput): Accounti
         supporting.push(`strong:${p.source}`);
       }
     }
+    // Per-line weak-term evidence — count DISTINCT lines that fire
+    // at least one weak term. Same term firing on multiple lines is
+    // one hit per line; different terms on the same line count as
+    // one hit for that line.
+    const linesWithWeakHit = new Set<number>();
+    for (let i = 0; i < input.lineItemDescriptions.length; i++) {
+      const line = input.lineItemDescriptions[i];
+      if (lex.weakTerms.some((p) => p.test(line))) {
+        linesWithWeakHit.add(i);
+      }
+    }
     for (const p of lex.weakTerms) {
       if (p.test(surface)) {
         raw += WEAK_WEIGHT;
         supporting.push(`weak:${p.source}`);
+      }
+    }
+    // 16C — cluster bonus for coherent multi-line component evidence.
+    // Distinguishes "one stray token" from "an invoice full of
+    // durable-component replacement lines". Rejects capital-asset
+    // classification on this signal alone by only firing for
+    // REPAIR_AND_MAINTENANCE + OPERATING_EXPENSE natures whose weak
+    // vocabularies are dominated by physical-component tokens.
+    if ((lex.nature === "REPAIR_AND_MAINTENANCE" || lex.nature === "OPERATING_EXPENSE") && linesWithWeakHit.size >= 2) {
+      if (linesWithWeakHit.size >= 5) {
+        raw += CLUSTER_BONUS_5_LINES;
+        supporting.push(`cluster_bonus_5+_lines(${linesWithWeakHit.size})`);
+      } else if (linesWithWeakHit.size >= 3) {
+        raw += CLUSTER_BONUS_3_LINES;
+        supporting.push(`cluster_bonus_3+_lines(${linesWithWeakHit.size})`);
+      } else {
+        raw += CLUSTER_BONUS_2_LINES;
+        supporting.push(`cluster_bonus_2+_lines(${linesWithWeakHit.size})`);
       }
     }
     for (const p of lex.antiTerms ?? []) {
