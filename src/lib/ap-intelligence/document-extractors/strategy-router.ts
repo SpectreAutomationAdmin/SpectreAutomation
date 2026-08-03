@@ -94,6 +94,35 @@ export async function runDocumentExtractionStrategy(input: StrategyRouterInput):
 
   // Step 3 — route.
   if (assessment.documentClass === "TEXT_HEALTHY") {
+    // Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — even for
+    // TEXT_HEALTHY docs, an earlier analyser call may have detected
+    // structural degradation and requested an OCR extraction (see
+    // structural-quality escalation in analyse.ts). If a persisted
+    // SUCCEEDED extraction exists, use it as an additional evidence
+    // source; the analyser will reconcile between flat-text and
+    // canonical fields. No new paid provider call is made.
+    if (input.clubId && input.ingestedDocumentId && input.documentSha256) {
+      const persistedLatest = await findLatestOcrExtractionForDocument({
+        clubId: input.clubId,
+        ingestedDocumentId: input.ingestedDocumentId,
+      });
+      if (persistedLatest && persistedLatest.status === "SUCCEEDED") {
+        recordOcrDuplicatePrevented({
+          clubId: input.clubId,
+          extractionRowIdTail: persistedLatest.id.slice(-8),
+          reason: "already_persisted",
+        });
+        return {
+          strategy: "AWS_TEXTRACT_EXPENSE",
+          assessment,
+          layout,
+          canonicalExtraction: readCanonicalFromRow(persistedLatest),
+          ocrRequestStatus: "SUCCEEDED",
+          ocrExtractionRowId: persistedLatest.id,
+          ocrProviderCallsThisTurn: 0,
+        };
+      }
+    }
     return {
       strategy: "EMBEDDED_TEXT",
       assessment,

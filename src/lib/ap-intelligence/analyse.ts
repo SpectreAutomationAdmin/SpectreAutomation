@@ -76,6 +76,15 @@ import {
 // structurally unreliable (§9). General logic — no invoice-
 // specific rules.
 import { applyFieldQualityGate, type QualityGateResult } from "./field-quality";
+// Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — structural-quality
+// reclassification + escalation trigger. When embedded text was
+// extracted but the RESULT shows structural degradation (rejected
+// supplier, contaminated reference, total-without-lines), reclassify
+// as COLLAPSED_COLUMNS / UNRECOVERED_TABLE and escalate to the next
+// strategy (positioned layout OR persisted Textract).
+import { assessStructuralQuality } from "./structural-quality";
+import { extractFromPositionedLayout } from "./positioned-extract";
+import { requestOcrExtraction } from "./ocr/enqueue";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -209,6 +218,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // strategy router. Populated when the router selected OCR
   // (AWS Textract) as the winning strategy.
   let canonicalExtraction: CanonicalDocumentExtraction | null = null;
+  // Sprint 3 · Checkpoint 15Y-Rejected — keep the PdfLayout in
+  // scope so the positioned-layout rescue path can consume it
+  // when the flat-text parser produces structurally-degraded
+  // candidates. Set from the router result.
+  let pdfLayout: import("./pdf-layout-extract").PdfLayout | null = null;
   if (args.extractedTextOverride != null) {
     pdfText = args.extractedTextOverride;
     pdfOk = pdfText.trim().length > 0;
@@ -254,6 +268,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       positionedItemCount = routed.layout?.items.length ?? 0;
       positionedTextChars = routed.layout?.items.reduce((sum, it) => sum + (it.text?.replace(/\s+/g, "").length ?? 0), 0) ?? 0;
       if (routed.layout) {
+        pdfLayout = routed.layout;   // 15Y-Rejected — retained for post-parse rescue
         const regions = detectLayoutRegions(routed.layout.visualLines);
         const supplier = pickSupplierRegion(regions);
         if (supplier) supplierRegionText = supplier.text;
@@ -317,6 +332,101 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const gateResult1 = applyFieldQualityGate({ extraction, fullText: pdfText });
   extraction = gateResult1.extraction;
   let fieldQualityGate: QualityGateResult = gateResult1.gate;
+
+  // Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — structural
+  // reclassification + escalation.
+  //
+  // Text presence is not sufficient evidence of usable document
+  // structure. When the parse RESULT shows degradation (rejected
+  // supplier, contaminated reference, total-without-lines), the
+  // doc is reclassified as COLLAPSED_COLUMNS or UNRECOVERED_TABLE
+  // and the next strategy is invoked:
+  //   * POSITIONED_LAYOUT — rescue supplier/identifiers from row/
+  //     column-aware analysis of the pdf.js positioned items.
+  //   * AWS_TEXTRACT_EXPENSE — enqueue a persisted OCR extraction
+  //     (idempotent per §16; at most one paid call per identity).
+  //
+  // The OCR enqueue is asynchronous; the current analyser call
+  // does NOT wait for it. The projection cache invalidates via the
+  // ocrRevision axis once the worker persists SUCCEEDED, so the
+  // next Mission Control render surfaces the enriched result
+  // without a browser refresh triggering another provider call.
+  const structural = assessStructuralQuality({
+    documentClass: (documentAssessment?.documentClass ?? "TEXT_HEALTHY") as import("./document-class").DocumentClass,
+    fieldQualityGate,
+    extraction,
+    layoutItemCount: positionedItemCount,
+    layoutHasVisualLines: !!pdfLayout && (pdfLayout.visualLines?.length ?? 0) > 0,
+    supplierWasRejected: fieldQualityGate.supplier.action === "rejected",
+    referenceWasRejected: fieldQualityGate.reference.action === "rejected",
+    referenceWasContaminated: fieldQualityGate.reference.action === "trimmed",
+  });
+
+  // Positioned-layout rescue — free, in-process. Try when the flat-
+  // text supplier was rejected AND we have positioned items.
+  if (
+    (structural.recommendedEscalation === "POSITIONED_LAYOUT" ||
+      structural.recommendedEscalation === "AWS_TEXTRACT_EXPENSE") &&
+    pdfLayout &&
+    fieldQualityGate.supplier.action === "rejected"
+  ) {
+    const positioned = extractFromPositionedLayout(pdfLayout);
+    if (positioned.supplier) {
+      // Re-run supplier validation on the rescued candidate.
+      const revalidated = applyFieldQualityGate({
+        extraction: { ...extraction, vendor: { ...extraction.vendor, guessedName: positioned.supplier.value } },
+        fullText: pdfText,
+      });
+      if (revalidated.gate.supplier.action !== "rejected") {
+        extraction = revalidated.extraction;
+        fieldQualityGate = revalidated.gate;
+      }
+    }
+    // Identifier rescues from positioned layout — only fill IF flat-
+    // text parse rejected the field.
+    if (extraction.invoiceNumber == null && positioned.invoiceNumber) {
+      extraction = { ...extraction, invoiceNumber: positioned.invoiceNumber.value, payableReferenceType: "INVOICE_NUMBER" };
+    }
+    if ((extraction.purchaseOrder == null || extraction.purchaseOrder === "") && positioned.purchaseOrderNumber) {
+      extraction = { ...extraction, purchaseOrder: positioned.purchaseOrderNumber.value };
+    }
+  }
+
+  // OCR escalation — enqueue an async Textract job when the structural
+  // quality assessment recommends it and the doc has embedded text
+  // (image-only docs are already handled by the strategy router).
+  if (
+    structural.recommendedEscalation === "AWS_TEXTRACT_EXPENSE" &&
+    (documentAssessment?.documentClass === "TEXT_HEALTHY" ||
+      documentAssessment?.documentClass === "TEXT_FRAGMENTED" ||
+      documentAssessment?.documentClass === "MIXED") &&
+    args.extractedTextOverride == null &&
+    !canonicalExtraction  // only if we don't already have OCR
+  ) {
+    try {
+      await requestOcrExtraction({
+        clubId: args.clubId,
+        ingestedDocumentId: doc.id,
+        documentSha256: doc.sha256Hash,
+        // Treat as fragmented so the strategy router's OCR gate
+        // opens on subsequent renders as well.
+        documentClass: "TEXT_FRAGMENTED",
+        strategy: "AWS_TEXTRACT_EXPENSE",
+      });
+      logger.info("ap-intelligence.analyse.escalated_to_ocr", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        structuralQuality: structural.quality,
+        reasons: structural.reasons,
+      });
+    } catch (e) {
+      logger.warn("ap-intelligence.analyse.ocr_escalation_failed", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        message: (e as Error).message.slice(0, 200),
+      });
+    }
+  }
 
   // Read the capital threshold from club settings.
   const capitalMinSetting = await getSetting<number>(args.clubId, "APPROVAL_THRESHOLDS", "capital_expense_min");
