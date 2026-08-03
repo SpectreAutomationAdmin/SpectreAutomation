@@ -885,8 +885,11 @@ function ApTitle({
 }) {
   const vendorLabel = ap.vendorMatch.matchedName ?? ap.extractedVendor.name;
   const invoiceNumber = ap.invoiceNumber ? `invoice #${ap.invoiceNumber}` : (vendorLabel ? "invoice" : null);
-  const amount = ap.gross.amount && ap.gross.currency
-    ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
+  // 15Z §2 — do not hide a reliable gross behind an unresolved currency.
+  const amount = ap.gross.amount
+    ? (ap.gross.currency
+        ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
+        : formatBareAmount(ap.gross.amount))
     : null;
   const category = ap.category.label ?? null;
 
@@ -1014,8 +1017,11 @@ function ordinal(n: number): string {
  */
 function ApWorkSummary({ ap }: { ap: ApInvoiceCardIntelligence }) {
   const vendor = ap.vendorMatch.matchedName ?? ap.extractedVendor.name ?? "the vendor";
-  const grossToken = ap.gross.amount && ap.gross.currency
-    ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
+  // 15Z §2 — display gross regardless of currency-code presence.
+  const grossToken = ap.gross.amount
+    ? (ap.gross.currency
+        ? formatOperationalMoney(ap.gross.amount, ap.gross.currency, ap.currencyShowCode !== false)
+        : formatBareAmount(ap.gross.amount))
     : null;
   const glToken = ap.category.glAccountNumber && ap.category.glAccountName
     ? `GL ${ap.category.glAccountNumber} ${ap.category.glAccountName}`
@@ -1086,8 +1092,21 @@ function formatVariance(v: string, currency: string): string {
 }
 
 function formatAmountReadout(amount: string | null, currency: string | null, showCurrencyCode: boolean): string {
-  if (!amount || !currency) return "—";
+  // Sprint 3 · Checkpoint 15Z (2026-08-04) — a reliable printed
+  // gross must not be hidden because currency is unresolved. When
+  // the analyser has an amount but no ISO currency code (many
+  // invoices don't print USD/CAD explicitly), display the amount
+  // formatted as a plain thousand-separated decimal rather than
+  // dashing out the whole field.
+  if (!amount) return "—";
+  if (!currency) return formatBareAmount(amount);
   return formatOperationalMoney(amount, currency, showCurrencyCode);
+}
+
+function formatBareAmount(rawAmount: string): string {
+  const n = Number(rawAmount);
+  if (!Number.isFinite(n)) return rawAmount;
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
 function formatDecimal(raw: string): string {

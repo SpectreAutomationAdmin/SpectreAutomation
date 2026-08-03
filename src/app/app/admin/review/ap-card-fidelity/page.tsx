@@ -95,6 +95,19 @@ function baseApFacts(): ApInvoiceCardIntelligence {
     unresolvedFindingCount: 1,
     primaryAttachment: { documentId: "fx-doc-93458", filename: "93458725404.pdf" },
     allocations: null,
+    workCardFacts: {
+      documentFacts: {
+        supplierNamePresent: true,
+        payableReferencePresent: true,
+        invoiceDatePresent: true,
+        dueDatePresent: false,
+        grossTotalPresent: true,
+        currencyPresent: true,
+      },
+      vendorResolution: { state: "NEW_VENDOR_REQUIRED" },
+      codingProposal: { state: "SINGLE", hasCategoryLabel: true, hasAllocations: false },
+      postingReadiness: { ready: false, blockerCount: 0 },
+    },
   };
 }
 

@@ -508,6 +508,43 @@ export interface ApInvoiceCardIntelligence {
       }>;
     }>;
   };
+  // Sprint 3 · Checkpoint 15Z (2026-08-04) — formal four-dimension
+  // work-card facts. Consumers must not gate any one dimension on
+  // any other. Consumed additively by projection tests and future
+  // card refactors; the pre-existing top-level fields
+  // (gross / category / vendorMatch / …) remain the source of truth
+  // for the current rendered card.
+  workCardFacts: ApWorkCardFacts;
+}
+
+// Sprint 3 · Checkpoint 15Z — ApWorkCardFacts (§3 formalisation).
+// Four independent dimensions. The projection MUST NOT overwrite or
+// blank one dimension based on another.
+export interface ApWorkCardFacts {
+  documentFacts: {
+    supplierNamePresent: boolean;
+    payableReferencePresent: boolean;
+    invoiceDatePresent: boolean;
+    dueDatePresent: boolean;
+    grossTotalPresent: boolean;
+    currencyPresent: boolean;
+  };
+  vendorResolution: {
+    state:
+      | "EXISTING_MATCH"
+      | "NEW_VENDOR_REQUIRED"
+      | "AMBIGUOUS_MATCH"
+      | "SUPPLIER_UNRESOLVED";
+  };
+  codingProposal: {
+    state: "SINGLE" | "MULTIPLE" | "PROVISIONAL" | "UNSUPPORTED";
+    hasCategoryLabel: boolean;
+    hasAllocations: boolean;
+  };
+  postingReadiness: {
+    ready: boolean;
+    blockerCount: number;
+  };
 }
 export async function loadLinkedIntelligenceForEmailIntakes(args: {
   clubId: string;
@@ -877,7 +914,12 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
         ?? (analysis?.amountHierarchy?.value != null
           ? analysis.amountHierarchy.value.toFixed(2)
           : null),
-      currency: extraction?.currency ?? null,
+      // Sprint 3 · Checkpoint 15Z (2026-08-04) — fall through to the
+      // tenant's ClubProfile.defaultCurrency when the extractor did
+      // not classify an ISO 4217 code on the invoice. Many invoices
+      // don't print USD/CAD explicitly. The amount cell must still
+      // display — see EmailIntakeCard#formatAmountReadout.
+      currency: extraction?.currency ?? (await loadClubDefaultCurrency(clubId)),
     },
     paymentTerms: paymentTermsResult.terms,
     paymentTermsSource: paymentTermsResult.source,
@@ -942,6 +984,10 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           })),
         }
       : null,
+    // Sprint 3 · Checkpoint 15Z (2026-08-04) — four-dimension formal
+    // model per §3. Each dimension is populated independently of the
+    // others; no cross-blanking.
+    workCardFacts: buildWorkCardFacts({ analysis, noCoa, workflowState }),
   };
 
   // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission
@@ -1096,6 +1142,28 @@ function classifyGstVerification(extraction: ExtractedInvoice | null): {
  * layer; failures degrade to the default rather than crashing the
  * projection.
  */
+/**
+ * Sprint 3 · Checkpoint 15Z (2026-08-04) — resolve the club's
+ * default currency for use when the extractor did not classify
+ * one on the invoice. Reads from ClubProfile.defaultCurrency
+ * (ISO 4217). Returns null when the profile does not name a
+ * default, in which case the card falls back to a bare-amount
+ * display (no currency symbol). Cached per-request via the
+ * per-club projection cache, so this hits the DB at most once
+ * per render.
+ */
+async function loadClubDefaultCurrency(clubId: string): Promise<string | null> {
+  try {
+    const profile = await prisma.clubProfile.findFirst({
+      where: { clubId },
+      select: { defaultCurrency: true },
+    });
+    return profile?.defaultCurrency ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCurrencyShowCode(clubId: string): Promise<boolean> {
   try {
     const { getSetting } = await import("@/lib/enterprise/settings");
@@ -1205,6 +1273,69 @@ function deriveApWorkflowReason(
       if (a.reconcile.state === "VENDOR_MISMATCH") return `Invoice reference already exists on a different vendor. Investigate before approving.`;
       return `Review the extracted invoice facts before advancing.`;
   }
+}
+
+/**
+ * Sprint 3 · Checkpoint 15Z (2026-08-04) — build the four-dimension
+ * ApWorkCardFacts model independently. Each field is computed from
+ * its own evidence; no dimension is nulled based on another.
+ * See ApWorkCardFacts interface for the contract.
+ */
+function buildWorkCardFacts(args: {
+  analysis: ApAnalyseResult | null;
+  noCoa: boolean;
+  workflowState: ApInvoiceCardIntelligence["workflowState"];
+}): ApWorkCardFacts {
+  const a = args.analysis;
+  const extraction = a?.extraction ?? null;
+  const vendorResolutionState: ApWorkCardFacts["vendorResolution"]["state"] = (() => {
+    const s = a?.vendor.state ?? "INSUFFICIENT_SIGNAL";
+    if (s === "MATCHED") return "EXISTING_MATCH";
+    if (s === "AMBIGUOUS") return "AMBIGUOUS_MATCH";
+    if (s === "NOT_FOUND") return "NEW_VENDOR_REQUIRED";
+    return "SUPPLIER_UNRESOLVED";
+  })();
+
+  const allocEntries = a?.allocations?.allocations ?? [];
+  const materialEntries = allocEntries.filter((e) => Math.abs(e.amount ?? 0) > 0.01);
+  const supportedAccount = a?.gl?.accountNumber != null;
+  const codingState: ApWorkCardFacts["codingProposal"]["state"] = (() => {
+    if (args.noCoa) return "UNSUPPORTED";
+    if (materialEntries.length >= 2) return "MULTIPLE";
+    if (supportedAccount) return "SINGLE";
+    // A cardCategory implies the ranker found *something* but it
+    // didn't clear the field-quality gate — provisional.
+    if (a?.allocations?.cardCategory) return "PROVISIONAL";
+    return "UNSUPPORTED";
+  })();
+
+  const blockers = a?.gl?.leaderPostingBlockers ?? [];
+  const postingReady =
+    codingState === "SINGLE" &&
+    vendorResolutionState === "EXISTING_MATCH" &&
+    blockers.length === 0 &&
+    (a?.gl?.leaderIsPostable ?? false);
+
+  return {
+    documentFacts: {
+      supplierNamePresent: !!extraction?.vendor.guessedName,
+      payableReferencePresent: !!extraction?.invoiceNumber,
+      invoiceDatePresent: !!extraction?.invoiceDate,
+      dueDatePresent: !!extraction?.dueDate,
+      grossTotalPresent: !!extraction?.total,
+      currencyPresent: !!extraction?.currency,
+    },
+    vendorResolution: { state: vendorResolutionState },
+    codingProposal: {
+      state: codingState,
+      hasCategoryLabel: !!(a?.gl?.accountName ?? a?.allocations?.cardCategory),
+      hasAllocations: materialEntries.length > 0,
+    },
+    postingReadiness: {
+      ready: postingReady,
+      blockerCount: blockers.length,
+    },
+  };
 }
 
 function humanCapitalClass(cls: string): string {

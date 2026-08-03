@@ -322,9 +322,9 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
 
   // Sprint 3 · Checkpoint 15Y (2026-08-03) — field-quality gate pass 1
   // (pre-canonical-merge). Rejects supplier candidates dominated by
-  // form labels ("PO DatePO #SalespersonSalesperson Phone"-shaped
-  // header-row noise) and payable references composed of concatenated
-  // dates + numbers ("4/6/264/16/262381091559-00"-shaped noise).
+  // form labels (crammed header-row noise) and payable references
+  // composed of concatenated dates + numbers (multiple identifiers
+  // glued by a flat-text extractor).
   // Rescue path scans fullText for an organization-suffix line
   // (LP / Inc / Ltd / Corp / LLC / Co. / Corporation) when a
   // structurally sound alternative exists. GENERAL logic — no
