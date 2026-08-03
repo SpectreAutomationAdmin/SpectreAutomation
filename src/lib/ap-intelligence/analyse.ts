@@ -58,6 +58,17 @@ import { assessPdfExtraction, type PdfExtractionAssessment } from "./document-cl
 // extractors consume as if it were embedded text.
 import { runDocumentExtractionStrategy } from "./document-extractors/strategy-router";
 import type { CanonicalDocumentExtraction } from "./document-extractors/canonical-model";
+// Sprint 3 · Checkpoint 15X Activation (2026-08-03) — canonical
+// projection merge. When OCR produces a canonical extraction, its
+// STRUCTURED fields (address components, line items, etc.) override
+// the analyser's text-parsed values which lose that structure via
+// the synthesizer round-trip.
+import {
+  mergeCanonicalIntoExtraction,
+  mergeCanonicalIntoLineItems,
+  mergeCanonicalIntoVendorProfile,
+  overrideAssessmentFromCanonical,
+} from "./ocr/canonical-projection";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -565,22 +576,39 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // function (moved up so the resolver can consume it). Alias so the
   // return object keeps the pre-15P-6 field name that downstream
   // consumers depend on.
-  const vendorProfile = vendorProfileExtracted;
+  let vendorProfile = vendorProfileExtracted;
+
+  // Sprint 3 · Checkpoint 15X Activation (2026-08-03) — canonical
+  // projection merge. When OCR produced a canonical extraction, its
+  // structured fields (address components with province + postal +
+  // country separated; per-line-item amounts) override the text-
+  // parsed derivatives that lost structure via the flat-text
+  // synthesizer. Text-parsed values remain as fallback for fields
+  // the provider didn't classify. See ocr/canonical-projection.ts.
+  let mergedExtraction = extraction;
+  let mergedLineItems = lineItemsExtracted;
+  let mergedAssessment = documentAssessment;
+  if (canonicalExtraction) {
+    mergedExtraction = mergeCanonicalIntoExtraction(extraction, canonicalExtraction);
+    mergedLineItems = mergeCanonicalIntoLineItems(lineItemsExtracted, canonicalExtraction);
+    vendorProfile = mergeCanonicalIntoVendorProfile(vendorProfile, canonicalExtraction);
+    mergedAssessment = overrideAssessmentFromCanonical(documentAssessment, canonicalExtraction);
+  }
 
   return {
     documentId: doc.id,
     ruleVersion: EXTRACTION_RULE_VERSION,
-    extraction,
+    extraction: mergedExtraction,
     extractionHints: parsed.hints,
     vendor,
     reconcile,
     capital,
     gl,
     findings,
-    extractionTextLength: extraction.extractedTextChars,
+    extractionTextLength: mergedExtraction.extractedTextChars,
     vendorProfile,
     supplier: supplierExtraction,
-    lineItemsExtracted,
+    lineItemsExtracted: mergedLineItems,
     taxReconciliation,
     identifiers,
     economicPurpose,
@@ -589,7 +617,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     taxGroupsResult,
     splitGlRecommendations: gl.splitRecommendations,
     allocations,
-    documentAssessment,
+    documentAssessment: mergedAssessment,
   };
 }
 
