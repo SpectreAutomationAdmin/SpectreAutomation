@@ -76,6 +76,11 @@ import {
 // structurally unreliable (§9). General logic — no invoice-
 // specific rules.
 import { applyFieldQualityGate, type QualityGateResult } from "./field-quality";
+// Sprint 3 · Checkpoint 16A (2026-08-04) — hierarchical accounting
+// intelligence. Accounting-nature classifier + positioned-table
+// reconstructor.
+import { classifyAccountingNature, type AccountingNatureAssessment } from "./accounting-nature";
+import { reconstructLineItemTable, type TableReconstructResult } from "./positioned-table-reconstruct";
 // Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — structural-quality
 // reclassification + escalation trigger. When embedded text was
 // extracted but the RESULT shows structural degradation (rejected
@@ -152,6 +157,26 @@ export interface ApAnalyseResult {
   // When documentClass is IMAGE_ONLY or UNSUPPORTED or ENCRYPTED,
   // no confident supplier or GL recommendation is emitted.
   documentAssessment: PdfExtractionAssessment | null;
+  // Sprint 3 · Checkpoint 16A (2026-08-04) — hierarchical
+  // accounting intelligence. Consumed by benchmarks + diagnostics;
+  // the rendered card contract is unchanged.
+  accountingIntelligence: {
+    natureLeader: import("./accounting-nature").AccountingNature;
+    natureConfidence: number;
+    natureIsDefensible: boolean;
+    natureRankedTop3: Array<{
+      nature: import("./accounting-nature").AccountingNature;
+      score: number;
+      supportingEvidence: string[];
+      contradictingEvidence: string[];
+    }>;
+    tableReconstruction: null | {
+      headerFound: boolean;
+      columnCount: number;
+      lineItemsRecovered: number;
+      columnAlignmentConfidence: number;
+    };
+  };
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -218,6 +243,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // strategy router. Populated when the router selected OCR
   // (AWS Textract) as the winning strategy.
   let canonicalExtraction: CanonicalDocumentExtraction | null = null;
+  // Sprint 3 · Checkpoint 16A — positioned-layout table
+  // reconstruction result. When Textract line items are sparse or
+  // absent, the reconstructor recovers rows from the pdf.js
+  // positioned items.
+  let tableReconstruction: TableReconstructResult | null = null;
+  let accountingNatureAssessment: AccountingNatureAssessment | null = null;
   // Sprint 3 · Checkpoint 15Y-Rejected — keep the PdfLayout in
   // scope so the positioned-layout rescue path can consume it
   // when the flat-text parser produces structurally-degraded
@@ -272,6 +303,18 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         const regions = detectLayoutRegions(routed.layout.visualLines);
         const supplier = pickSupplierRegion(regions);
         if (supplier) supplierRegionText = supplier.text;
+        // Sprint 3 · Checkpoint 16A — positioned-layout table
+        // reconstruction. Runs on every doc with a layout; result
+        // is used as an ADDITIONAL evidence source when Textract
+        // line items are sparse or absent.
+        try {
+          tableReconstruction = reconstructLineItemTable(routed.layout);
+        } catch (e) {
+          logger.warn("ap-intelligence.table-reconstruct.error", {
+            clubId: args.clubId, docIdTail: doc.id.slice(-6),
+            message: (e as Error).message.slice(0, 200),
+          });
+        }
       }
       // If Textract succeeded, its canonical extraction is the
       // authoritative source of supplier / payable / total / lines
@@ -732,6 +775,40 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // the gate again on the merged output and abstain from GL when
   // structural quality is insufficient (§9). Preserves 15W safe-
   // abstention behaviour under OCR contamination.
+  // Sprint 3 · Checkpoint 16A — merge reconstructed table rows into
+  // mergedExtraction when Textract/text line items are sparse.
+  // "Sparse" = fewer than 2 line items with substantive descriptions
+  // (≥12 chars). The reconstructor's output is used ADDITIVELY —
+  // never overrides confidently-extracted Textract lines.
+  if (tableReconstruction && tableReconstruction.lineItems.length > 0) {
+    const currentSubstantive = mergedExtraction.lineItems.filter(
+      (li) => (li.description?.length ?? 0) >= 12 && Number(li.amount ?? 0) > 0,
+    ).length;
+    if (currentSubstantive < 2 && tableReconstruction.lineItems.length >= 2) {
+      const reconstructed = tableReconstruction.lineItems
+        .filter((li) => (li.description?.length ?? 0) >= 3)
+        .map((li) => ({
+          description: li.sku ? `${li.sku} | ${li.description}` : li.description,
+          quantity: li.quantity != null ? String(li.quantity) : null,
+          unitCost: li.unitPrice != null ? li.unitPrice.toFixed(2) : null,
+          amount: li.amount != null ? li.amount.toFixed(2) : "0.00",
+        }));
+      mergedExtraction = { ...mergedExtraction, lineItems: reconstructed };
+      mergedLineItems = reconstructed.map((li, i) => ({
+        description: li.description,
+        quantity: li.quantity != null ? Number(li.quantity) : null,
+        unitPrice: li.unitCost != null ? Number(li.unitCost) : null,
+        amount: Number(li.amount),
+        taxRate: null,
+        taxAmount: null,
+        taxTreatment: "unknown" as const,
+        evidence: [],
+        confidence: 60,
+        lineNo: i + 1,
+      }));
+    }
+  }
+
   const gateResult2 = applyFieldQualityGate({ extraction: mergedExtraction, fullText: pdfText });
   mergedExtraction = gateResult2.extraction;
   fieldQualityGate = gateResult2.gate;
@@ -788,6 +865,42 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     splitGlRecommendations: gl.splitRecommendations,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    accountingIntelligence: (() => {
+      // Sprint 3 · Checkpoint 16A — hierarchical accounting
+      // intelligence. Consumed additively by the projection layer
+      // for diagnostics + future card-lane routing. Does not change
+      // the existing gl / allocations top-level fields (rendered
+      // card contract is unchanged per §18).
+      const lineDescriptions = [
+        ...mergedExtraction.lineItems.map((li) => li.description),
+        ...mergedLineItems.map((li) => li.description),
+        ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
+      ].filter((d): d is string => typeof d === "string" && d.length > 0);
+      const uniqDescriptions = Array.from(new Set(lineDescriptions));
+      accountingNatureAssessment = classifyAccountingNature({
+        extraction: mergedExtraction,
+        supplierName: mergedExtraction.vendor.guessedName,
+        lineItemDescriptions: uniqDescriptions,
+        fullDocumentText: pdfText || null,
+        capitalStateFromClassifier: capital.state,
+        capitalThresholdCents: capitalMinCents,
+        totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
+      });
+      return {
+        natureLeader: accountingNatureAssessment.leader,
+        natureConfidence: accountingNatureAssessment.leaderConfidence,
+        natureIsDefensible: accountingNatureAssessment.isDefensible,
+        natureRankedTop3: accountingNatureAssessment.ranked.slice(0, 3),
+        tableReconstruction: tableReconstruction
+          ? {
+              headerFound: tableReconstruction.headerFound,
+              columnCount: tableReconstruction.detectedColumns.length,
+              lineItemsRecovered: tableReconstruction.lineItems.length,
+              columnAlignmentConfidence: tableReconstruction.columnAlignmentConfidence,
+            }
+          : null,
+      };
+    })(),
   };
 }
 
