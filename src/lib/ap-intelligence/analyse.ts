@@ -69,6 +69,13 @@ import {
   mergeCanonicalIntoVendorProfile,
   overrideAssessmentFromCanonical,
 } from "./ocr/canonical-projection";
+// Sprint 3 · Checkpoint 15Y (2026-08-03) — field-quality validation
+// and rescue. Runs AFTER text parse and canonical merge; rejects
+// header-row supplier candidates, concatenated identifier values,
+// and forces GL abstention when foundational extraction is
+// structurally unreliable (§9). General logic — no invoice-
+// specific rules.
+import { applyFieldQualityGate, type QualityGateResult } from "./field-quality";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -294,9 +301,22 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     emailSubject: args.emailSubject ?? null,
     emailSenderAddress: args.emailSenderAddress ?? null,
   });
-  const extraction: ExtractedInvoice = pdfOk
+  let extraction: ExtractedInvoice = pdfOk
     ? parsed.invoice
     : { ...parsed.invoice, state: "DOCUMENT_UNREADABLE", extractedTextChars: 0, warnings: [pdfReason ?? "PDF_PARSE_ERROR"] };
+
+  // Sprint 3 · Checkpoint 15Y (2026-08-03) — field-quality gate pass 1
+  // (pre-canonical-merge). Rejects supplier candidates dominated by
+  // form labels ("PO DatePO #SalespersonSalesperson Phone"-shaped
+  // header-row noise) and payable references composed of concatenated
+  // dates + numbers ("4/6/264/16/262381091559-00"-shaped noise).
+  // Rescue path scans fullText for an organization-suffix line
+  // (LP / Inc / Ltd / Corp / LLC / Co. / Corporation) when a
+  // structurally sound alternative exists. GENERAL logic — no
+  // invoice-specific rules.
+  const gateResult1 = applyFieldQualityGate({ extraction, fullText: pdfText });
+  extraction = gateResult1.extraction;
+  let fieldQualityGate: QualityGateResult = gateResult1.gate;
 
   // Read the capital threshold from club settings.
   const capitalMinSetting = await getSetting<number>(args.clubId, "APPROVAL_THRESHOLDS", "capital_expense_min");
@@ -398,7 +418,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     hasProfessionalCredentialContext,
   });
 
-  const gl = await recommendGlAccount({
+  let gl = await recommendGlAccount({
     clubId: args.clubId,
     vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
     capitalState: capital.state,
@@ -593,6 +613,34 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     mergedLineItems = mergeCanonicalIntoLineItems(lineItemsExtracted, canonicalExtraction);
     vendorProfile = mergeCanonicalIntoVendorProfile(vendorProfile, canonicalExtraction);
     mergedAssessment = overrideAssessmentFromCanonical(documentAssessment, canonicalExtraction);
+  }
+
+  // Sprint 3 · Checkpoint 15Y (2026-08-03) — field-quality gate pass 2
+  // (post-canonical-merge). Canonical (OCR) fields may re-introduce a
+  // supplier / reference candidate that ALSO fails validation — for
+  // example, a provider that labels a header row as VENDOR_NAME. Run
+  // the gate again on the merged output and abstain from GL when
+  // structural quality is insufficient (§9). Preserves 15W safe-
+  // abstention behaviour under OCR contamination.
+  const gateResult2 = applyFieldQualityGate({ extraction: mergedExtraction, fullText: pdfText });
+  mergedExtraction = gateResult2.extraction;
+  fieldQualityGate = gateResult2.gate;
+  if (!fieldQualityGate.glEligible) {
+    // Force GL abstention. Preserves candidate list for diagnostics
+    // but nulls the SELECTED account so the projection displays
+    // "review required" with a truthful reason.
+    gl = {
+      ...gl,
+      accountNumber: null,
+      accountName: null,
+      categoryKey: null,
+      fsGroupKey: null,
+      source: "NONE",
+      confidence: 0,
+      reason: `abstained_field_quality:${fieldQualityGate.abstentionReasons.join(",")}`,
+      candidates: gl.candidates ?? [],
+      autoApprovalEligible: false,
+    };
   }
 
   return {
