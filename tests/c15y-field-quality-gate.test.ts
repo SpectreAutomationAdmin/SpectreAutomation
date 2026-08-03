@@ -103,6 +103,19 @@ describe("15Y · supplier candidate validation", () => {
     ].join("\n"));
     expect(rescued).toBe("Skyline Beverage Distribution Inc.");
   });
+
+  it("rescueOrganizationFromText finds an org when the suffix was split onto the next line by the PDF extractor", () => {
+    // flat-text PDF extractors frequently split "<company>\n<suffix>"
+    // across a line break; the 2-line window rescues it.
+    const rescued = rescueOrganizationFromText([
+      "PAGE 1 OF 1",
+      "Northlake Turf Products",
+      "LP Phone: 555-1212",
+      "PO Box 42",
+    ].join("\n"));
+    expect(rescued).toContain("Northlake Turf Products");
+    expect(rescued).toContain("LP");
+  });
 });
 
 // -----------------------------------------------------------------------------

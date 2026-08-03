@@ -625,6 +625,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const gateResult2 = applyFieldQualityGate({ extraction: mergedExtraction, fullText: pdfText });
   mergedExtraction = gateResult2.extraction;
   fieldQualityGate = gateResult2.gate;
+  let gatedAllocations = allocations;
   if (!fieldQualityGate.glEligible) {
     // Force GL abstention. Preserves candidate list for diagnostics
     // but nulls the SELECTED account so the projection displays
@@ -640,6 +641,17 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       reason: `abstained_field_quality:${fieldQualityGate.abstentionReasons.join(",")}`,
       candidates: gl.candidates ?? [],
       autoApprovalEligible: false,
+    };
+    // §9 rule: contaminated extraction must not yield a confident
+    // multi-GL allocation either. Preserve the entries for
+    // diagnostics (auditors may want to see what the ranker would
+    // have produced), but null the SURFACED category and force
+    // requiresReview so the projection does not show a plausible
+    // GL/category. See gl-allocations.AllocationResult shape.
+    gatedAllocations = {
+      ...allocations,
+      cardCategory: null,
+      requiresReview: true,
     };
   }
 
@@ -664,7 +676,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     amountHierarchy,
     taxGroupsResult,
     splitGlRecommendations: gl.splitRecommendations,
-    allocations,
+    allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
   };
 }

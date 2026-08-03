@@ -192,22 +192,53 @@ export function validateSupplierCandidate(
 /**
  * Scan fullText for the first line matching an organization-suffix
  * pattern. Skips lines that themselves fail the label-density test.
+ * Falls back to 2-line adjacent windows because flat-text PDF
+ * extractors frequently split "Northlake Turf Products LP" across
+ * two lines ("Northlake Turf Products\nLP …").
  * Returns null if no defensible candidate.
  */
 export function rescueOrganizationFromText(fullText: string, avoid?: string): string | null {
   const lines = fullText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const avoidNorm = avoid ? avoid.toLowerCase().replace(/\s+/g, "") : "";
+  const isDefensibleOrgPhrase = (candidate: string): string | null => {
+    if (!candidate || candidate.length < 6 || candidate.length > 120) return null;
+    if (labelDensity(candidate) > 0.4) return null;
+    if (!/[A-Za-z]{3,}/.test(candidate)) return null;
+    // Require substantive content BEFORE the suffix — otherwise a
+    // stray line like "LP Phone: 555-1212" would masquerade as an
+    // org phrase.
+    const suffixMatch = candidate.match(ORG_SUFFIX_TOKEN);
+    if (!suffixMatch) return null;
+    const beforeSuffix = candidate.slice(0, suffixMatch.index ?? 0).trim();
+    const beforeLetters = beforeSuffix.replace(/[^A-Za-z]/g, "").length;
+    if (beforeLetters < 3) return null;
+    // Extract the org phrase — from start-of-line up to and INCLUDING
+    // the suffix (stop at a natural break just after it).
+    const m = candidate.match(new RegExp(`^([^|]*?${ORG_SUFFIX_TOKEN.source})(?:[\\s|,;].*)?$`, "i"));
+    const name = (m ? m[1] : candidate).trim().replace(/[|,;].*$/, "").trim();
+    if (name.length < 6 || name.length > 100) return null;
+    if (labelDensity(name) > 0.4) return null;
+    if (avoidNorm && name.toLowerCase().replace(/\s+/g, "").includes(avoidNorm)) return null;
+    return name;
+  };
+
+  // Pass 1 — single-line scan.
   for (const line of lines) {
     if (!ORG_SUFFIX_TOKEN.test(line)) continue;
-    if (avoidNorm && line.toLowerCase().replace(/\s+/g, "").includes(avoidNorm)) continue;
-    if (line.length < 6 || line.length > 120) continue;
-    // Line itself must not be label-dominated.
-    if (labelDensity(line) > 0.4) continue;
-    // Extract the org phrase around the suffix — trim trailing junk.
-    // Take from start-of-line up to a natural break after the suffix.
-    const m = line.match(new RegExp(`^([^|]*?${ORG_SUFFIX_TOKEN.source}[^|]*?)(?:\\s*[|]|\\s*$)`, "i"));
-    const name = (m ? m[1] : line).trim().replace(/[|,;].*$/, "").trim();
-    if (name.length >= 6 && name.length <= 100) return name;
+    const rescued = isDefensibleOrgPhrase(line);
+    if (rescued) return rescued;
+  }
+  // Pass 2 — two-line adjacent windows. Catches PDF extractors that
+  // split "<company>\n<suffix>" across a line break.
+  for (let i = 0; i < lines.length - 1; i++) {
+    const combined = `${lines[i]} ${lines[i + 1]}`.trim();
+    if (!ORG_SUFFIX_TOKEN.test(combined)) continue;
+    // If pass 1 already matched, we won't reach here for that line.
+    // Require the suffix to appear in the SECOND half (so we don't
+    // just re-detect a suffix in line i alone).
+    if (!ORG_SUFFIX_TOKEN.test(lines[i + 1])) continue;
+    const rescued = isDefensibleOrgPhrase(combined);
+    if (rescued) return rescued;
   }
   return null;
 }
