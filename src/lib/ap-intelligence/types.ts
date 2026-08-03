@@ -21,7 +21,11 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 // for label→value pairing across separate lines (subtotal / tax /
 // total / payable-reference). This is a wholesale parsing behaviour
 // change; every projection cache must invalidate on deploy.
-export const EXTRACTION_RULE_VERSION = 3;
+// Sprint 3 · Checkpoint 15Y (2026-08-03) — bumped to 4 for the
+// field-quality gate: contaminated supplier candidates and
+// concatenated payable references are now rejected and can force
+// GL abstention. Every warm projection cache invalidates on deploy.
+export const EXTRACTION_RULE_VERSION = 4;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.
