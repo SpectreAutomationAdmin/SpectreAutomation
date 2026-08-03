@@ -842,6 +842,96 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     };
   }
 
+  // Sprint 3 · Checkpoint 16B (2026-08-04) — nature-driven GL
+  // promotion. When the ranker abstained (gl.accountNumber === null)
+  // but the accounting-nature classifier produced a defensible
+  // classification, promote the highest-scored candidate that
+  // matches BOTH the nature's expected account-type AND (loosely)
+  // one of the nature's category hints. This is §6's hierarchical
+  // model: nature defines the semantic search space; the promoted
+  // candidate is the leader within that space.
+  //
+  // Confidence-driven per §8:
+  //   * nature.confidence ≥ 60 → strong constraint: promote nature-
+  //     matching candidate even if a higher-raw-score non-matching
+  //     candidate exists
+  //   * 30 ≤ confidence < 60 → moderate: promote only when the
+  //     ranker abstained OR the top candidate lost to the anti-
+  //     contamination gate
+  //   * confidence < 30 → do NOT promote; use base ranker outcome
+  //
+  // Uses the reconstructed line-items list + full text via the
+  // classifier so promotion honours EVERY page's evidence (§2).
+  {
+    // Compute nature here (before the accountingIntelligence IIFE
+    // in the return) so we can consult it for promotion.
+    const uniqDescs = Array.from(new Set([
+      ...mergedExtraction.lineItems.map((li) => li.description),
+      ...mergedLineItems.map((li) => li.description),
+      ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
+    ].filter((d): d is string => typeof d === "string" && d.length > 0)));
+    const natureForRanker = classifyAccountingNature({
+      extraction: mergedExtraction,
+      supplierName: mergedExtraction.vendor.guessedName,
+      lineItemDescriptions: uniqDescs,
+      fullDocumentText: pdfText || null,
+      capitalStateFromClassifier: capital.state,
+      capitalThresholdCents: capitalMinCents,
+      totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
+    });
+
+    const shouldPromote =
+      natureForRanker.isDefensible &&
+      (gl.accountNumber == null || natureForRanker.leaderConfidence >= 60);
+    if (shouldPromote) {
+      const { accountTypesForNature, categoryHintsForNature } = await import("./accounting-nature");
+      const wantTypes = new Set(accountTypesForNature(natureForRanker.leader));
+      const wantCategoryHints = categoryHintsForNature(natureForRanker.leader);
+      // Pull full account rows so we can filter by type + category.
+      // Reuses the already-loaded accountsForAllocations.
+      const accountLookup = new Map(
+        accountsForAllocations.map((a) => [a.id, a]),
+      );
+      const candidates = (gl.candidates ?? []).map((c) => {
+        const full = accountLookup.get(c.accountId);
+        return { c, full };
+      });
+      const matches = candidates.filter(({ c, full }) => {
+        if (!full) return false;
+        if (!wantTypes.has(full.type)) return false;
+        const catKey = (full.category?.key ?? "").toLowerCase();
+        if (wantCategoryHints.length === 0) return true;
+        return wantCategoryHints.some((h) => catKey.includes(h.toLowerCase()));
+      });
+      if (matches.length > 0) {
+        // Highest raw-confidence match wins; tie-break by
+        // accountNumber ascending for determinism.
+        matches.sort((a, b) => {
+          const cd = (b.c.confidence ?? 0) - (a.c.confidence ?? 0);
+          if (cd !== 0) return cd;
+          return a.c.accountNumber.localeCompare(b.c.accountNumber);
+        });
+        const picked = matches[0];
+        const picked_c = picked.c;
+        // Confidence-blend: min of raw ranker score and nature score.
+        const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
+        gl = {
+          ...gl,
+          accountNumber: picked_c.accountNumber,
+          accountName: picked_c.accountName,
+          categoryKey: picked_c.categoryKey,
+          fsGroupKey: picked_c.fsGroupKey,
+          source: "SEMANTIC_MATCH",
+          confidence: blended,
+          reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}`,
+          leaderIsPostable: picked_c.postable,
+          leaderPostingBlockers: picked_c.postingBlockers,
+          autoApprovalEligible: false,
+        };
+      }
+    }
+  }
+
   return {
     documentId: doc.id,
     ruleVersion: EXTRACTION_RULE_VERSION,

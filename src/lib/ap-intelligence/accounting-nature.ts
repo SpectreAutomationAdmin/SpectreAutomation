@@ -181,16 +181,35 @@ const NATURE_LEXICONS: NatureLexicon[] = [
       /\bwater\s+(?:bill|service)\b/i,
       /\bgas\s+(?:bill|service)\b/i,
       /\bnatural\s+gas\b/i,
-      /\binternet\s+service\b/i,
-      /\bphone\s+(?:service|bill)\b/i,
+      /\binternet\s+(?:service|access|plan)\b/i,
+      /\bphone\s+(?:service|bill|plan)\b/i,
       /\bcable\s+service\b/i,
       /\bwaste\s+(?:collection|removal)\b/i,
       /\bsubscription\b/i,
+      // 16B — common billing-language patterns.
+      /\bongoing\s+charges?\b/i,          // "Ongoing charges" recurring section
+      /\bbilling\s+cycle\b/i,              // "Billing cycle YYYY-MM-DD - YYYY-MM-DD"
+      /\bservice\s+period\b/i,
+      /\brenewal\s+date\b/i,
+      /\baccount\s+summary\b/i,            // recurring-service invoice format
+      /\bplan\s+(?:fee|charge)\b/i,
     ],
     weakTerms: [
       /\brecurring\b/i,
       /\bmonthly\b/i,
       /\bbilling\s+period\b/i,
+      // 16B — telecom-specific signals surfaced by document text.
+      /\b\d+(?:\.\d+)?\s*mbit\s*\/\s*s\b/i,     // "25 mbit/s"
+      /\b\d+(?:\.\d+)?\s*mbps\b/i,
+      /\b\d+(?:\.\d+)?\s*gbit\s*\/\s*s\b/i,
+      /\b\d+(?:\.\d+)?\s*gbps\b/i,
+      /\bwireless\b/i,
+      /\bbroadband\b/i,
+      /\bfiber(?:\s*optic)?\b/i,
+      /\bwifi\b/i,
+      /\bstatement\s+number\b/i,            // recurring-service statement style
+      /\bautomated\s+payment\b/i,
+      /\bpre[-\s]?authorized\s+debit\b/i,
     ],
     amountSensitivity: "low",
   },
