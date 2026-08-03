@@ -215,26 +215,47 @@ describe("15Y · applyFieldQualityGate (composed)", () => {
     }
   });
 
-  it("clean supplier + clean reference → glEligible=true, values preserved", () => {
+  it("clean supplier + clean reference + substantive line items → glEligible=true, values preserved", () => {
     const gate = applyFieldQualityGate({
       extraction: baseExtraction({
         vendor: { guessedName: "Fairway Supply Co.", guessedEmail: null, guessedTaxNumber: null, guessedDomain: null },
         invoiceNumber: "INV-000456",
+        lineItems: [
+          { description: "Grass seed 50lb bag", quantity: "2", unitCost: "25.00", amount: "50.00" },
+        ],
       }),
-      fullText: "Fairway Supply Co.\nInvoice # INV-000456\nTotal: 500.00",
+      fullText: "Fairway Supply Co.\nInvoice # INV-000456\nGrass seed 50lb bag\nTotal: 500.00",
     });
     expect(gate.gate.glEligible).toBe(true);
     expect(gate.extraction.vendor.guessedName).toBe("Fairway Supply Co.");
     expect(gate.extraction.invoiceNumber).toBe("INV-000456");
   });
 
-  it("contaminated supplier BUT rescueable from fullText → glEligible=true, supplier rescued", () => {
+  it("clean supplier + clean reference BUT bare-SKU line items → glEligible=false (§12 anti-contamination)", () => {
+    const gate = applyFieldQualityGate({
+      extraction: baseExtraction({
+        vendor: { guessedName: "Fairway Supply Co.", guessedEmail: null, guessedTaxNumber: null, guessedDomain: null },
+        invoiceNumber: "INV-000456",
+        lineItems: [
+          { description: "30629", quantity: "1", unitCost: "0", amount: "0" },  // bare SKU + zero — insufficient
+        ],
+      }),
+      fullText: "Fairway Supply Co.\nSee return policy for delivery terms.",
+    });
+    expect(gate.gate.glEligible).toBe(false);
+    expect(gate.gate.abstentionReasons).toContain("line_items_insufficient_for_gl");
+  });
+
+  it("contaminated supplier BUT rescueable + substantive lines → glEligible=true, supplier rescued", () => {
     const gate = applyFieldQualityGate({
       extraction: baseExtraction({
         vendor: { guessedName: "PO DateSalesperson Phone Terms", guessedEmail: null, guessedTaxNumber: null, guessedDomain: null },
         invoiceNumber: "INV-000789",
+        lineItems: [
+          { description: "Turf fertiliser 25kg", quantity: "1", unitCost: "80.00", amount: "80.00" },
+        ],
       }),
-      fullText: "PO Date | Salesperson | Phone\n4/6/26 | Jane\nFairway Supply Co.\nInvoice # INV-000789\nTotal: 500.00",
+      fullText: "PO Date | Salesperson | Phone\n4/6/26 | Jane\nFairway Supply Co.\nInvoice # INV-000789\nTurf fertiliser 25kg\nTotal: 500.00",
     });
     expect(gate.gate.glEligible).toBe(true);
     expect(gate.extraction.vendor.guessedName).toBe("Fairway Supply Co.");

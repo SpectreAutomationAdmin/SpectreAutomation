@@ -340,6 +340,29 @@ export interface QualityGateResult {
 }
 
 /**
+ * Assess whether the extracted line items are substantive enough to
+ * support a confident economic-purpose classification. Empty / bare-
+ * SKU / zero-amount lines mean the ranker will fall back to document-
+ * wide keyword matching — which pulls contamination from footer /
+ * return-policy / marketing text (§12).
+ *
+ * A line item is "substantive" when it has BOTH:
+ *   - a description ≥12 chars (a bare SKU like "30629" is not enough)
+ *   - a positive amount OR positive quantity+unitPrice
+ */
+export function hasSubstantiveLineItemEvidence(
+  extraction: Pick<ExtractedInvoice, "lineItems">,
+): boolean {
+  return extraction.lineItems.some((li) => {
+    if (!li.description || li.description.trim().length < 12) return false;
+    const amt = li.amount != null ? Number(li.amount) : 0;
+    const qty = li.quantity != null ? Number(li.quantity) : 0;
+    const price = li.unitCost != null ? Number(li.unitCost) : 0;
+    return (Number.isFinite(amt) && amt > 0) || (qty > 0 && price > 0);
+  });
+}
+
+/**
  * Full field-quality pass over an ExtractedInvoice. Mutates a copy;
  * returns the corrected invoice plus the gate result.
  */
@@ -350,9 +373,12 @@ export function applyFieldQualityGate(args: {
   const supplier = validateSupplierCandidate(args.extraction.vendor.guessedName, args.fullText);
   const reference = validatePayableReferenceCandidate(args.extraction.invoiceNumber);
 
+  const substantiveLineEvidence = hasSubstantiveLineItemEvidence(args.extraction);
+
   const glEligible =
     (supplier.action === "keep" || supplier.action === "rescued") &&
-    (reference.action === "keep" || reference.action === "trimmed");
+    (reference.action === "keep" || reference.action === "trimmed") &&
+    substantiveLineEvidence;
 
   const abstentionReasons: string[] = [];
   if (supplier.action === "rejected") {
@@ -360,6 +386,13 @@ export function applyFieldQualityGate(args: {
   }
   if (reference.action === "rejected") {
     abstentionReasons.push(`reference_${reference.rejectionReason ?? "unknown"}`);
+  }
+  if (!substantiveLineEvidence) {
+    // Without a substantive line description, the ranker's document-
+    // wide keyword matching contaminates the GL choice with footer/
+    // marketing/policy text. §12 rule: GL must use invoice-charge
+    // evidence only.
+    abstentionReasons.push("line_items_insufficient_for_gl");
   }
 
   const corrected: ExtractedInvoice = {
