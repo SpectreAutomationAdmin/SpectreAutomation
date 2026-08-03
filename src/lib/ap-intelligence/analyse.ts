@@ -884,11 +884,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       natureForRanker.isDefensible &&
       (gl.accountNumber == null || natureForRanker.leaderConfidence >= 60);
     if (shouldPromote) {
-      const { accountTypesForNature, categoryHintsForNature } = await import("./accounting-nature");
+      const { accountTypesForNature } = await import("./accounting-nature");
       const wantTypes = new Set(accountTypesForNature(natureForRanker.leader));
-      const wantCategoryHints = categoryHintsForNature(natureForRanker.leader);
-      // Pull full account rows so we can filter by type + category.
-      // Reuses the already-loaded accountsForAllocations.
       const accountLookup = new Map(
         accountsForAllocations.map((a) => [a.id, a]),
       );
@@ -896,16 +893,17 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         const full = accountLookup.get(c.accountId);
         return { c, full };
       });
+      // Filter to account-type match only. Category-key hints
+      // exist in accounting-nature.ts but tenant COAs use varied
+      // naming conventions (ADMIN_EXPENSES / OTHER_EXPENSES /
+      // repairs_maintenance / …) and forcing a category match
+      // over-filters legitimate matches. Type match + raw ranker
+      // score is the defensible filter.
       const matches = candidates.filter(({ c, full }) => {
         if (!full) return false;
-        if (!wantTypes.has(full.type)) return false;
-        const catKey = (full.category?.key ?? "").toLowerCase();
-        if (wantCategoryHints.length === 0) return true;
-        return wantCategoryHints.some((h) => catKey.includes(h.toLowerCase()));
+        return wantTypes.has(full.type);
       });
       if (matches.length > 0) {
-        // Highest raw-confidence match wins; tie-break by
-        // accountNumber ascending for determinism.
         matches.sort((a, b) => {
           const cd = (b.c.confidence ?? 0) - (a.c.confidence ?? 0);
           if (cd !== 0) return cd;
@@ -913,21 +911,26 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         });
         const picked = matches[0];
         const picked_c = picked.c;
-        // Confidence-blend: min of raw ranker score and nature score.
-        const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
-        gl = {
-          ...gl,
-          accountNumber: picked_c.accountNumber,
-          accountName: picked_c.accountName,
-          categoryKey: picked_c.categoryKey,
-          fsGroupKey: picked_c.fsGroupKey,
-          source: "SEMANTIC_MATCH",
-          confidence: blended,
-          reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}`,
-          leaderIsPostable: picked_c.postable,
-          leaderPostingBlockers: picked_c.postingBlockers,
-          autoApprovalEligible: false,
-        };
+        // Guard: the picked candidate must have some non-trivial
+        // raw ranker signal (score ≥ 20). A score-0 candidate would
+        // mean the ranker had NO evidence — nature alone is not
+        // enough to fabricate a recommendation.
+        if ((picked_c.confidence ?? 0) >= 20) {
+          const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
+          gl = {
+            ...gl,
+            accountNumber: picked_c.accountNumber,
+            accountName: picked_c.accountName,
+            categoryKey: picked_c.categoryKey,
+            fsGroupKey: picked_c.fsGroupKey,
+            source: "SEMANTIC_MATCH",
+            confidence: blended,
+            reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}(raw_${picked_c.confidence})`,
+            leaderIsPostable: picked_c.postable,
+            leaderPostingBlockers: picked_c.postingBlockers,
+            autoApprovalEligible: false,
+          };
+        }
       }
     }
   }
