@@ -8646,11 +8646,34 @@ model WorkIntakeItem {
   reads          WorkIntakeItemRead[]
   apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
   domainCorrections           WorkDomainCorrection[]
+  proposedCommitments         ProposedCommitment[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
   @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
+// Commitments proposals. Spectre-inferred deadlines derived from
+// genuine WorkIntake evidence. Kept separate from real Outlook
+// calendar events.
+model ProposedCommitment {
+  id                String    @id @default(cuid())
+  clubId            String
+  workIntakeItemId  String?
+  workIntakeItem    WorkIntakeItem? @relation(fields: [workIntakeItemId], references: [id], onDelete: SetNull)
+  title             String
+  dueAt             DateTime
+  sourceRule        String
+  rationaleCode     String
+  confidence        Float     @default(0.5)
+  status            String    @default("PROPOSED")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([clubId, dueAt])
+  @@index([clubId, status])
 }
 
 // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — user-corrected

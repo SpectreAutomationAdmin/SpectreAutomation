@@ -28,6 +28,7 @@ import EmailIntakeCard, { type EmailFeedCardData } from "@/components/mission-co
 import IntelligenceReviewCard from "@/components/mission-control/IntelligenceReviewCard";
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
+import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 
 export const dynamic = "force-dynamic";
@@ -255,6 +256,11 @@ export default async function MissionControlPage({
               Source: <Link href="/app/admin/collections">{snapshot.insight.source}</Link> · {snapshot.insight.sourceTimeLabel}
             </div>
           </section>
+
+          {/* Sprint 3 · Checkpoint 16G Stage E — Today's Commitments.
+              Beneath Executive Insight per the approved Mission Control
+              concept. Real Outlook events + Spectre-proposed deadlines. */}
+          <TodaysCommitments data={snapshot.todaysCommitments} />
         </aside>
       </div>
     </div>

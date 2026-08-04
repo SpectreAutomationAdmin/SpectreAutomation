@@ -33,6 +33,7 @@ copy of it.
 | `User.Read`      | `e1fe6dd8-ba31-4d61-89e7-88639da4683d`   | Scope   | B2    |
 | `Mail.Read`      | `570282fd-fa5c-430d-a7fd-fc8dc98a9dca`   | Scope   | B2    |
 | `Mail.Send`      | `e383f46e-2787-4529-855e-0e479a3ffac0`   | Scope   | 14C-B |
+| `Calendars.Read` | `465a38f9-76ea-45b9-9f34-9e8b0d4b0b42`   | Scope   | 16G-E |
 
 ## Rationale — what each scope enables and does NOT enable
 
@@ -51,6 +52,14 @@ copy of it.
   outbound messages (Microsoft derives recipients + subject from the
   source message server-side); does NOT allow modifying the source
   message; does NOT allow sending from another mailbox.
+- `Calendars.Read` (added 16G-E) — read-only access to the
+  connected user's own calendar. Enables Today's Commitments to
+  merge real Outlook events with Spectre-proposed operational
+  deadlines. Does NOT allow reading anyone else's calendar
+  (that would need `Calendars.Read.Shared` — deliberately absent).
+  Does NOT allow creating, updating, or deleting events (that would
+  need `Calendars.ReadWrite` — deliberately absent). Founder rule
+  §8: "Do not write to Outlook automatically."
 
 ## Explicitly NOT approved
 
@@ -60,6 +69,8 @@ before being added:
 
 | Scope name              | Why it is NOT approved |
 |-------------------------|------------------------|
+| `Calendars.ReadWrite`   | Would let Spectre create / modify / delete calendar events. Founder rule §8: Spectre does not write to Outlook automatically. |
+| `Calendars.Read.Shared` | Would let Spectre read anyone else's calendar via delegation. Never needed — Today's Commitments only reads the signed-in user's own calendar. |
 | `Mail.ReadWrite`        | Would let Spectre mark, move, and delete messages in the user's mailbox. Never needed for read + reply. |
 | `Mail.ReadWrite.Shared` | Cross-mailbox mutation. Shared-mailbox work happens in a later phase. |
 | `Mail.Send.Shared`      | Sending as another user. Never authorized. |

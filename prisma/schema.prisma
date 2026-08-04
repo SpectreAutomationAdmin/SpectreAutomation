@@ -8669,11 +8669,36 @@ model WorkIntakeItem {
   // workDomain / workSubtype. Corrections inform future generalized
   // classification; no subject-specific hardcoded rules.
   domainCorrections WorkDomainCorrection[]
+  proposedCommitments ProposedCommitment[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
   @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
+// Commitments proposals. Spectre-inferred deadlines derived from
+// genuine WorkIntake evidence (invoice due dates, payroll cutoffs,
+// user defer dates, promised responses, aging thresholds). Kept
+// separate from real Outlook calendar events — the two are joined
+// for presentation in the panel but stored distinctly.
+model ProposedCommitment {
+  id                String    @id @default(cuid())
+  clubId            String
+  workIntakeItemId  String?
+  workIntakeItem    WorkIntakeItem? @relation(fields: [workIntakeItemId], references: [id], onDelete: SetNull)
+  title             String
+  dueAt             DateTime
+  sourceRule        String
+  rationaleCode     String
+  confidence        Float     @default(0.5)
+  status            String    @default("PROPOSED")   // PROPOSED | ACCEPTED | DISMISSED | COMPLETED
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([clubId, dueAt])
+  @@index([clubId, status])
 }
 
 // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — user-corrected

@@ -96,6 +96,19 @@ export const APPROVED_DELEGATED_SCOPES = [
   // Mail.Send — production consent is enforced server-side, not
   // just at the OAuth flow.
   "Mail.Send",
+  // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — founder-approved
+  // read-only calendar access for Today's Commitments.
+  //
+  // Calendars.Read: delegated, read-only, single-user (the signed-in
+  // user's calendar only). Adding this scope changes the Microsoft
+  // consent screen — users with existing consent will see a "missing
+  // scope" notice until they reconnect and approve the updated list.
+  //
+  // We deliberately do NOT request Calendars.Read.Shared (would
+  // require admin consent to read anyone else's calendar) and
+  // NOT Calendars.ReadWrite (writing to Outlook is explicitly
+  // out-of-scope per §8 — Spectre does not create or modify events).
+  "Calendars.Read",
 ] as const;
 
 // ---------------------------------------------------------------------------

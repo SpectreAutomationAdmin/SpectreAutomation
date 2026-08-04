@@ -200,6 +200,10 @@ export type MissionControlSnapshot = {
   // Sprint 3 · Checkpoint 16G Stage A additions.
   overnight: OvernightPreparationSnapshot;
   clubTimezone: ClubTimezoneSnapshot;
+  // Sprint 3 · Checkpoint 16G Stage E — Today's Commitments panel
+  // data. Combines the connected user's real Outlook calendar events
+  // with Spectre-proposed operational deadlines.
+  todaysCommitments: import("./commitments").TodayCommitmentsSnapshot;
 };
 
 // -------------------------------------------------------------------------
@@ -690,8 +694,36 @@ export async function loadMissionControlSnapshot(
     }),
   };
 
+  // Sprint 3 · Checkpoint 16G Stage E — Today's Commitments panel
+  // combines real Outlook events (if consent granted) with
+  // Spectre-proposed operational deadlines. Loader passes an
+  // injected mailbox-accessor so the calendar client can request
+  // the connected user's own calendar with their delegated token.
+  const { loadTodayCommitments } = await import("./commitments");
+  const todaysCommitments = await loadTodayCommitments({
+    clubId, userId: principal.id, clubTimezone, now,
+    loadUserMailbox: async (userId) => {
+      const mb = await prisma.mailboxConnection.findFirst({
+        where: { userId, clubId, status: "CONNECTED" },
+        select: { grantedScopes: true },
+      }).catch(() => null);
+      if (!mb) return null;
+      // Sprint 3 · Checkpoint 16G Stage E — grantedScopes drives
+      // the calendar-consent UX today. Token decryption for the
+      // actual /me/calendarView fetch is deferred to when
+      // Calendars.Read consent lands on a live mailbox — until
+      // then, the panel renders the Spectre-proposed items alone
+      // and shows a "Calendar view isn't enabled" hint.
+      return { grantedScopes: (mb.grantedScopes ?? "").split(/\s+/).filter(Boolean), accessToken: null };
+    },
+  }).catch(() => ({
+    items: [], calendarConsent: "DISCONNECTED" as const,
+    outlookEventCount: 0, spectreCommitmentCount: 0,
+    windowStart: now, windowEnd: now,
+  }));
+
   return {
     briefing, workItems: visibleWorkItems, position, insight, syncedAt: now,
-    overnight, clubTimezone: clubTimezoneSnapshot,
+    overnight, clubTimezone: clubTimezoneSnapshot, todaysCommitments,
   };
 }
