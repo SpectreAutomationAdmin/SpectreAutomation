@@ -308,6 +308,11 @@ function emailFeedData(item: WorkItem): EmailFeedCardData {
     // intelligence facets (invoice / statement child intakes) so the
     // email card can render them as tabs instead of separate cards.
     linkedIntelligence: item.linkedIntelligence,
+    // Sprint 3 · Checkpoint 16G Stage B/D (2026-08-04) — work-domain
+    // taxonomy propagated to the card renderer.
+    workDomain: item.workDomain,
+    workIntent: item.workIntent,
+    workSubtype: item.workSubtype,
   };
 }
 

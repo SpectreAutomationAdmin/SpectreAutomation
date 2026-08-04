@@ -137,6 +137,14 @@ export type WorkItem = {
   // item was materialised on the WorkIntakeItem canonical table. Some
   // loader-only paths (ap-adapter, ar-adapter) leave this undefined.
   workIntakeStatus?: string;
+  // Sprint 3 · Checkpoint 16G Stage B/D (2026-08-04) — work-domain
+  // taxonomy propagated to the renderer. The card picks its field
+  // grid, primary action, and tab set by workDomain — never by the
+  // legacy classification string.
+  workDomain?: string;
+  workIntent?: string;
+  workSubtype?: string;
+  workDomainConfidence?: number;
 };
 
 export type BriefingCounts = {

@@ -45,6 +45,9 @@ export async function loadEmailIntakeItems(args: {
     },
     orderBy: [{ displayReceivedAt: "desc" }],
     take: EMAIL_ITEM_CAP,
+    // Sprint 3 · Checkpoint 16G Stage B/D — workDomain fields come
+    // through automatically since we're using `include` (all scalar
+    // WI fields returned by default).
     include: {
       // Load ALL PRIMARY email origins (not just one) so the analysis
       // pipeline can pick the newest message in the conversation.
@@ -107,6 +110,11 @@ interface WorkIntakeItemRow {
   displayHasAttachments: boolean;
   ownerUserId: string | null;
   emailOrigins: EmailOriginRow[];
+  // Sprint 3 · Checkpoint 16G Stage B
+  workDomain?: string | null;
+  workIntent?: string | null;
+  workSubtype?: string | null;
+  workDomainConfidence?: number | null;
 }
 
 async function toWorkItem(
@@ -183,6 +191,12 @@ async function toWorkItem(
     // expanded tabs, per founder Phase 3.4 requirement.
     actions,
     workIntakeStatus: it.status,
+    // Sprint 3 · Checkpoint 16G Stage B/D — surface workDomain to
+    // the renderer so it picks the correct field grid + action + tabs.
+    workDomain: it.workDomain ?? undefined,
+    workIntent: it.workIntent ?? undefined,
+    workSubtype: it.workSubtype ?? undefined,
+    workDomainConfidence: it.workDomainConfidence ?? undefined,
   };
 }
 

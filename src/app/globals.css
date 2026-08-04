@@ -1026,6 +1026,18 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--spectre-status-warning); font-weight: 700;
   }
+  /* Sprint 3 · Checkpoint 16G Stage D (2026-08-04) — restrained
+     work-domain badge. Sits alongside the id-tag; monochrome,
+     subtle border, no bright category color, no emoji. */
+  .spectre-mc-domain-badge {
+    display: inline-flex; align-items: center;
+    padding: 2px 7px;
+    background: var(--spectre-surface-2, transparent);
+    border: 1px solid var(--spectre-border-subtle, #d8d3c9);
+    border-radius: 3px;
+    font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--spectre-text-secondary, #545044); font-weight: 600;
+  }
   .spectre-mc-ts {
     margin-left: auto;
     font-size: 11.5px; color: var(--spectre-text-muted);

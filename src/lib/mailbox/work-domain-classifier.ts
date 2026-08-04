@@ -255,6 +255,13 @@ export function classifyWorkDomain(input: WorkDomainClassifierInput): WorkDomain
   const ic = (input.ingestionClassification ?? "").toUpperCase();
   if (ic === "INVOICE_LIKELY") { scores.ACCOUNTS_PAYABLE += 1; evidenceByDomain.ACCOUNTS_PAYABLE.push({ code: "INGESTION_HINT_INVOICE_LIKELY", weight: 1 }); }
   if (ic === "MEMBER_INQUIRY_LIKELY") { scores.MEMBERSHIP += 1; evidenceByDomain.MEMBERSHIP.push({ code: "INGESTION_HINT_MEMBER_INQUIRY", weight: 1 }); }
+  // Strong AP hints — the AP intelligence materialiser has already
+  // determined this is an AP workflow (INVOICE or STATEMENT). Treat
+  // it as high-confidence AP evidence even when the WI is doc-only
+  // (no email body / no attachments in the classifier input).
+  if (ic === "AP_INVOICE_REVIEW") { scores.ACCOUNTS_PAYABLE += 5; evidenceByDomain.ACCOUNTS_PAYABLE.push({ code: "INGESTION_HINT_AP_INVOICE_REVIEW", weight: 5 }); }
+  if (ic === "VENDOR_STATEMENT_REVIEW") { scores.ACCOUNTS_PAYABLE += 5; evidenceByDomain.ACCOUNTS_PAYABLE.push({ code: "INGESTION_HINT_VENDOR_STATEMENT_REVIEW", weight: 5 }); }
+  if (ic?.startsWith("AR_AGING_")) { scores.ACCOUNTS_RECEIVABLE += 5; evidenceByDomain.ACCOUNTS_RECEIVABLE.push({ code: "INGESTION_HINT_AR_AGING", weight: 5 }); }
 
   // Winning domain.
   const ranked = (Object.entries(scores) as Array<[WorkDomain, number]>)

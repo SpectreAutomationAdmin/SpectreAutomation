@@ -50,6 +50,10 @@ import { deriveApAction, type ApAction } from "@/lib/mission-control/ap-action";
 // Sprint 3 · Checkpoint 16C (2026-08-04) — unified Work Intake
 // amount formatter. Every amount surface routes through this helper.
 import { formatWorkIntakeAmount } from "@/lib/ap-intelligence/format-amount";
+// Sprint 3 · Checkpoint 16G Stage D (2026-08-04) — domain view-model.
+// Non-AP cards render through this so AP fields never leak onto a
+// membership / governance / general card.
+import { buildDomainViewModel, type DomainCardViewModel } from "@/lib/mission-control/domain-view-models";
 
 // -------------------------------------------------------------------------
 // Public props
@@ -83,6 +87,13 @@ export interface EmailFeedCardData {
   // projection. The card's Variant D AP body consumes this shape
   // directly instead of the generic email-derived `evidence` array.
   linkedIntelligence?: LinkedIntelligenceForEmail;
+  // Sprint 3 · Checkpoint 16G Stage B/D (2026-08-04) — work-domain
+  // taxonomy. When workDomain is set to a non-AP value, the card
+  // renderer uses the domain view-model and NEVER shows the AP
+  // invoice grid or Invoice Review / Statement Review tabs.
+  workDomain?: string;
+  workIntent?: string;
+  workSubtype?: string;
 }
 
 interface Props { data: EmailFeedCardData }
@@ -318,9 +329,18 @@ export default function EmailIntakeCard({ data }: Props) {
         ref={openButtonRef as unknown as React.Ref<HTMLDivElement>}
         data-testid="card-surface"
       >
-        {ap
+        {/* Sprint 3 · Checkpoint 16G Stage D — domain gating.
+            AP renderer runs ONLY when both (a) linked-intelligence
+            has an AP invoice summary AND (b) workDomain is AP (or
+            absent, for backward compatibility). Non-AP domains route
+            to renderDomainCollapsedBody which uses the domain
+            view-model and never emits VENDOR / INVOICE / AP STATUS /
+            AMOUNT fields on non-AP cards. */}
+        {ap && (!data.workDomain || data.workDomain === "ACCOUNTS_PAYABLE")
           ? renderApCollapsedBody(data, ap, expanded, () => setCvapModalOpen(true))
-          : renderEmailCollapsedBody(data)}
+          : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
+            ? renderDomainCollapsedBody(data)
+            : renderEmailCollapsedBody(data)}
       </div>
 
       {/* Actions — queue-level (AP mode: primary is the AP workflow
@@ -551,8 +571,13 @@ function tabsFor(data: EmailFeedCardData): Tab[] {
   const linked = data.linkedIntelligence;
   const tabs: Tab[] = ["conversation"];
   if ((linked?.attachmentCount ?? 0) > 0) tabs.push("attachments");
-  if ((linked?.invoiceAttachmentCount ?? 0) > 0) tabs.push("invoice");
-  if ((linked?.statementAttachmentCount ?? 0) > 0) tabs.push("statement");
+  // Sprint 3 · Checkpoint 16G Stage D — Invoice Review / Statement
+  // Review tabs are AP-only. A membership / governance / general
+  // card must never see them even if a coincidental attachment was
+  // classified INVOICE.
+  const isAp = !data.workDomain || data.workDomain === "ACCOUNTS_PAYABLE";
+  if (isAp && (linked?.invoiceAttachmentCount ?? 0) > 0) tabs.push("invoice");
+  if (isAp && (linked?.statementAttachmentCount ?? 0) > 0) tabs.push("statement");
   tabs.push("activity");
   return tabs;
 }
@@ -788,6 +813,73 @@ function renderApCollapsedBody(
         <span className="k">Recommended</span>
         <span className="v">{ap.workflowReason}</span>
       </div>
+    </>
+  );
+}
+
+// Sprint 3 · Checkpoint 16G Stage D — domain-specific renderer for
+// non-AP cards. Uses buildDomainViewModel to pick the label set,
+// primary actions, and tabs appropriate to workDomain. NEVER emits
+// VENDOR / INVOICE / AP STATUS / AMOUNT fields — those live only in
+// the AP renderer above.
+function renderDomainCollapsedBody(data: EmailFeedCardData) {
+  const vm = buildDomainViewModel({
+    workDomain: data.workDomain,
+    workSubtype: data.workSubtype,
+    workIntent: data.workIntent,
+    senderDisplay: data.contextLine.split("·")[0].trim(),
+    receivedLabel: data.timestampLabel,
+    responseStatus: data.workIntakeStatus === "RESOLVED" ? "Resolved"
+      : data.workIntakeStatus === "IN_PROGRESS" ? "In progress"
+      : data.workIntakeStatus === "DEFERRED" ? "Deferred"
+      : "Awaiting reply",
+    linkedIntelligenceInvoiceCount: data.linkedIntelligence?.invoiceAttachmentCount ?? 0,
+    linkedIntelligenceStatementCount: data.linkedIntelligence?.statementAttachmentCount ?? 0,
+    linkedIntelligenceAttachmentCount: data.linkedIntelligence?.attachmentCount ?? 0,
+  });
+  return (
+    <>
+      <div className="spectre-mc-item-head">
+        <span className={`spectre-mc-pill ${data.state}`}>{PILL_LABEL[data.state]}</span>
+        <span className="spectre-mc-id-tag">{data.idTag}</span>
+        <span className="spectre-mc-domain-badge" data-testid="domain-badge" data-domain={vm.domain}>
+          {vm.domainLabel}
+        </span>
+        {data.isHighImportance ? (
+          <span className="spectre-mc-flag" data-testid="email-importance-high" title="High importance in the source mailbox">
+            High importance
+          </span>
+        ) : null}
+        {data.conversationMessageCount > 1 ? (
+          <span className="spectre-mc-convo-count" data-testid="email-convo-count">
+            {data.conversationMessageCount} messages
+          </span>
+        ) : null}
+        <span className="spectre-mc-ts">{data.timestampLabel}</span>
+      </div>
+      <h3 id={`title-${data.workIntakeItemId}`}>{data.situationTitle}</h3>
+      <div className="spectre-mc-sender">
+        <span className="from">{data.contextLine}</span>
+      </div>
+      <p className="spectre-mc-work" data-testid={`domain-synopsis-${vm.domain.toLowerCase()}`}>{data.synopsisText}</p>
+      {vm.fields.length > 0 ? (
+        <div className="spectre-mc-readout" data-testid={`domain-readout-${vm.domain.toLowerCase()}`}>
+          {vm.fields.slice(0, 4).map((cell) => (
+            <div key={cell.label} className="cell" data-testid={`domain-field-${cell.label.toLowerCase().replace(/\s+/g, "-")}`}>
+              <div className="k">{cell.label}</div>
+              <div className={`v${cell.state === "not_found" || cell.state === "not_extracted" ? " observation" : ""}`}>
+                {cell.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {data.recommendation ? (
+        <div className="spectre-mc-rec">
+          <span className="k">Recommended</span>
+          <span className="v">{data.recommendation}</span>
+        </div>
+      ) : null}
     </>
   );
 }

@@ -384,11 +384,37 @@ export async function analyseInvoiceConversation(args: {
   relTimeLabel: string;
 }): Promise<OperationalAnalysis> {
   const { clubId, newestEmail, conversationEmails, classificationLabel, classificationReason, relTimeLabel } = args;
+  // Sprint 3 · Checkpoint 16G Stage C (2026-08-04) — vendor-resolution
+  // gate now requires POSITIVE AP evidence, not merely a subject-
+  // keyword match. Founder rule: "Vendor resolution may run only
+  // where the evidence supports an AP/vendor workflow."
+  //
+  // POSITIVE AP evidence = at least one of:
+  //   * classification was INVOICE_LIKELY (ingestion pipeline saw an
+  //     invoice attachment or invoice-shaped body);
+  //   * the sender pattern is a known vendor / remittance address
+  //     (sales@, billing@, accounting@, ap@, accountspayable@);
+  //   * an invoice number could actually be extracted from the
+  //     conversation (extractIdentifiersFromEmail found one);
+  //   * a monetary amount could be extracted alongside AP-vocabulary
+  //     terms (amount due / balance owing / remit / payable).
+  //
+  // A subject that mentions "invoice" alone (e.g. a member asking
+  // "What's on my next invoice?" or a marketing email "Invoice
+  // manager for small clubs") is NO LONGER sufficient. Vendor
+  // resolution stays off unless positive evidence lands.
+  const identForGate = extractIdentifiersFromEmail(newestEmail);
+  const senderLower = (newestEmail.senderAddress ?? "").toLowerCase();
+  const senderIsVendorAddress = /^(sales|billing|accounting|ap|accountspayable|remit|payments)@/.test(senderLower);
+  const bodyLower = `${newestEmail.subject ?? ""} ${newestEmail.preview ?? ""}`.toLowerCase();
+  const apVocab = /\b(amount due|balance owing|remit to|payable to|past due|invoice number|payment due|please pay)\b/.test(bodyLower);
   const looksLikeInvoiceThread =
     classificationLabel === "INVOICE_LIKELY" ||
-    /invoice|payment due|past\s?due|balance owing/i.test(newestEmail.subject);
+    senderIsVendorAddress ||
+    !!identForGate.invoiceNumberRaw ||
+    apVocab;
 
-  const ident = extractIdentifiersFromEmail(newestEmail);
+  const ident = identForGate;
   // If the newest message didn't carry an invoice number, try older ones.
   if (!ident.invoiceNumberRaw) {
     for (const older of conversationEmails.slice(1)) {
@@ -654,6 +680,13 @@ function composeGenericSynopsis(args: {
     synopsis:
       `${senderLabel} sent this message. Spectre classified it as ${kind.toLowerCase()}. ` +
       (classificationReason || `Open the message to review the sender's intent and decide next steps.`),
+    // Sprint 3 · Checkpoint 16G Stage D (2026-08-04) — the evidence
+    // array remains AP-labelled here for backward compatibility with
+    // legacy renderers, but the DomainCardViewModel path in the card
+    // no longer uses it. Non-AP cards render domain-specific fields
+    // via buildDomainViewModel; the AP labels below are inert unless
+    // the pre-16G fallback renderer fires (only possible when
+    // workDomain is absent, i.e. an ancient unbacked WI).
     evidence: [
       { label: "VENDOR", value: senderLabel, state: "not_found" },
       { label: "INVOICE", value: "—", state: "not_extracted" },
