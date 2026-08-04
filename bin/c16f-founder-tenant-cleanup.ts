@@ -430,16 +430,26 @@ async function main() {
   });
   console.log(`Deleted ${wiDel.count} WorkIntakeItems`);
 
-  // 3. Delete fixture Vendors + APInvoices belonging to them.
+  // 3. Delete fixture Vendors + FK dependencies that don't cascade
+  //    automatically. Order: VendorStatementReconciliation →
+  //    VendorPayment → APInvoice → Vendor (Vendor cascades to its
+  //    contacts / banking / documents / risk flags / aliases via
+  //    schema onDelete: Cascade).
   if (fixtureVendors.length > 0) {
     const vendorIds = fixtureVendors.map((v) => v.id);
+    const vsrDel = await prisma.vendorStatementReconciliation.deleteMany({
+      where: { canonicalVendorId: { in: vendorIds } },
+    }).catch(() => ({ count: 0 }));
+    const vpDel = await prisma.vendorPayment.deleteMany({
+      where: { clubId: founder.id, vendorId: { in: vendorIds } },
+    });
     const invoiceDel = await prisma.aPInvoice.deleteMany({
       where: { clubId: founder.id, vendorId: { in: vendorIds } },
     });
     const vendorDel = await prisma.vendor.deleteMany({
       where: { id: { in: vendorIds }, clubId: founder.id },
     });
-    console.log(`Deleted ${invoiceDel.count} fixture APInvoices + ${vendorDel.count} fixture Vendors`);
+    console.log(`Deleted ${vsrDel.count} VendorStatementReconciliations, ${vpDel.count} VendorPayments, ${invoiceDel.count} fixture APInvoices, ${vendorDel.count} fixture Vendors`);
   }
 
   // 4. Cascade-delete fixture Members: Charges + Payments + CollectionNotices

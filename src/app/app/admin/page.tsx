@@ -62,13 +62,24 @@ export default async function MissionControlPage({
   const firstName = user.name?.split(" ")[0] ?? "there";
   const greetingWord = greetingForHour(snapshot.syncedAt);
 
+  // Sprint 3 · Checkpoint 16G Stage A — use the club's configured
+  // IANA timezone (snapshot.clubTimezone), never a hardcoded fallback.
+  // Time-zone-name = "short" emits the correct abbreviation for the
+  // current instant (MDT / MST / EST etc.) instead of the previous
+  // hardcoded "EDT".
+  const clubTz = snapshot.clubTimezone.ianaZone;
   const dateLabel = snapshot.syncedAt.toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric",
-    timeZone: "America/New_York",
+    timeZone: clubTz,
   });
-  const timeLabel = snapshot.syncedAt.toLocaleTimeString("en-US", {
-    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York",
-  }) + " EDT";
+  const timeParts = new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit", minute: "2-digit", hour12: false,
+    timeZoneName: "short", timeZone: clubTz,
+  }).formatToParts(snapshot.syncedAt);
+  const tzAbbrev = timeParts.find((p) => p.type === "timeZoneName")?.value ?? "";
+  const hh = timeParts.find((p) => p.type === "hour")?.value ?? "";
+  const mm = timeParts.find((p) => p.type === "minute")?.value ?? "";
+  const timeLabel = `${hh}:${mm} ${tzAbbrev}`;
 
   const stateAttention = snapshot.briefing.needJudgment > 0;
 
@@ -91,23 +102,29 @@ export default async function MissionControlPage({
       </div>
 
       {/* State line — one-sentence orientation ------------------- */}
+      {/* Sprint 3 · Checkpoint 16G Stage A — the overnight sentence
+          is composed by the loader from the actual analysis window;
+          the page renders it verbatim so English can never drift
+          from the underlying numbers. */}
       <div className={`spectre-mc-state${stateAttention ? " spectre-mc-state--attention" : ""}`}>
         <span className="dot" />
         <StateSentence
-          arrived={snapshot.briefing.arrivedToday}
-          approval={snapshot.briefing.readyForApproval}
+          overnightSentence={snapshot.overnight.sentence}
           judgment={snapshot.briefing.needJudgment}
-          auto={snapshot.briefing.completedAutomatically}
         />
       </div>
 
       {/* Executive briefing — instrument-panel readout ----------- */}
+      {/* Sprint 3 · Checkpoint 16G Stage A — sublabel now describes
+          what the metric actually measures ("received since midnight"
+          in the club's local timezone), replacing the misleading
+          "in the last 24 hours" text under a calendar-day count. */}
       <section className="spectre-mc-briefing" aria-label="Overnight briefing">
         <BriefingCell
           state="arrived"
           label="Arrived today"
           value={snapshot.briefing.arrivedToday}
-          sublabel="in the last 24 hours"
+          sublabel="received since midnight"
         />
         <BriefingCell
           state="auto"
@@ -169,8 +186,11 @@ export default async function MissionControlPage({
               <div className="spectre-mc-item-head">
                 <span className="spectre-mc-pill approval">All clear</span>
               </div>
-              <h3>Excellent. Your work intake is empty this morning.</h3>
-              <p className="spectre-mc-work">Spectre has processed every overnight item automatically. Nothing requires your judgment or approval right now.</p>
+              <h3>Your work intake is empty right now.</h3>
+              {/* Sprint 3 · Checkpoint 16G Stage A — empty-state copy
+                  no longer claims Spectre processed overnight items
+                  when the queue may have simply had nothing to process. */}
+              <p className="spectre-mc-work">Nothing requires your judgment or approval at the moment.</p>
             </div>
           ) : (
             snapshot.workItems.map((item) =>
@@ -298,32 +318,17 @@ function fmtMoney(n: number): { whole: string; cents: string } {
   return { whole: `${n < 0 ? "-" : ""}$${whole}`, cents };
 }
 
+// Sprint 3 · Checkpoint 16G Stage A — the overnight sentence is
+// authored by the loader (`overnight.sentence` from
+// composeOvernightSentence). This component only decorates it with
+// the running-state opener that depends on judgment count.
 function StateSentence({
-  arrived, approval, judgment, auto,
-}: { arrived: number; approval: number; judgment: number; auto: number; }) {
-  if (arrived === 0) {
-    return <><b>Everything is running normally.</b> No new work arrived overnight.</>;
-  }
-
-  // The running-state opener depends on whether judgment items exist.
-  // When they do, the opener already carries the judgment count, so we
-  // omit judgment from the follow-up summary to avoid an echo.
+  overnightSentence, judgment,
+}: { overnightSentence: string; judgment: number; }) {
   const running = judgment === 0
     ? "Everything is running normally."
     : `${judgment} item${judgment === 1 ? "" : "s"} need${judgment === 1 ? "s" : ""} your judgment.`;
-
-  const parts: string[] = [];
-  if (approval > 0) parts.push(`${approval} ready for approval`);
-  if (judgment === 0 && auto > 0) parts.push(`${auto} handled automatically`);
-  else if (auto > 0) parts.push(`${auto} handled automatically`);
-  const summary = parts.join(", ");
-
-  return (
-    <>
-      <b>{running}</b> Spectre prepared <b>{arrived}</b> item{arrived === 1 ? "" : "s"} overnight
-      {summary ? <> — {summary}.</> : "."}
-    </>
-  );
+  return (<><b>{running}</b> {overnightSentence}</>);
 }
 
 function BriefingCell({

@@ -46,6 +46,12 @@ model Club {
   // "SYNTHETIC_DEMO": synthetic fixtures allowed (dev / disposable
   // test DB only).
   stagingDataMode   String   @default("FOUNDER_REVIEW")
+  // Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — IANA timezone
+  // identifier for local-calendar arithmetic. Every "today", "since
+  // midnight", "overnight" calculation in Mission Control resolves
+  // against this. Nullable so onboarding forces an explicit choice —
+  // never defaulted to a global timezone. Coulee Ridge = America/Edmonton.
+  timezone          String?
   address           String?
   region            String?
   salesTaxRegion    String?

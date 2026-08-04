@@ -25,6 +25,11 @@ import { tenantWhere } from "@/lib/services/tenant";
 import type { Principal } from "@/lib/rbac";
 import type { LinkedIntelligenceForEmail } from "./intelligence-review-intakes";
 export type { ApInvoiceCardIntelligence, LinkedIntelligenceForEmail } from "./intelligence-review-intakes";
+// Sprint 3 · Checkpoint 16G Stage A — canonical timezone-aware helpers.
+import {
+  toLocalDateString, startOfLocalDayUtc, todayLocalDateString,
+} from "./arrival";
+import { overnightWindow, composeOvernightSentence, type OvernightPreparationSummary } from "./overnight-preparation";
 
 // -------------------------------------------------------------------------
 // Types
@@ -157,12 +162,36 @@ export type Insight = {
   sourceTimeLabel: string;          // "08:14 EDT"
 };
 
+// Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — overnight
+// preparation summary. Composed by the loader from the OvernightPrep
+// helper; the page consumes `sentence` verbatim.
+export type OvernightPreparationSnapshot = {
+  windowStart: string;    // ISO UTC
+  windowEnd: string;      // ISO UTC
+  itemsAnalysed: number;
+  itemsCompletedAutomatically: number;
+  itemsReadyForApproval: number;
+  itemsNeedingJudgment: number;
+  sentence: string;
+};
+
+// Sprint 3 · Checkpoint 16G Stage A — club timezone surfaced to the
+// page so the header wall-clock is not hardcoded America/New_York
+// anywhere.
+export type ClubTimezoneSnapshot = {
+  ianaZone: string;   // resolved club timezone (fallback UTC if missing)
+  configured: boolean; // true when Club.timezone was set (not fallback)
+};
+
 export type MissionControlSnapshot = {
   briefing: BriefingCounts;
   workItems: WorkItem[];
   position: Position;
   insight: Insight;
   syncedAt: Date;
+  // Sprint 3 · Checkpoint 16G Stage A additions.
+  overnight: OvernightPreparationSnapshot;
+  clubTimezone: ClubTimezoneSnapshot;
 };
 
 // -------------------------------------------------------------------------
@@ -333,25 +362,42 @@ async function loadBriefingCounts(
   principal: Principal,
   clubId: string,
   workItems: WorkItem[],
+  clubTimezone: string,
+  now: Date,
 ): Promise<BriefingCounts> {
   const readyForApproval = workItems.filter((w) => w.state === "approval").length;
   const needJudgment     = workItems.filter((w) => w.state === "judgment").length;
   const informational    = workItems.filter((w) => w.state === "info").length;
 
-  // "Completed automatically" today: posted AP invoices since 00:00 that were
-  // approved without human intervention. Approximated by counting POSTED
-  // invoices with `postedAt` in today's window — an underestimate that never
-  // over-claims automation credit.
-  const today = startOfDay(new Date());
+  // Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — completedAutomatically
+  // is now scoped to *today's local calendar in the club's timezone*, using
+  // startOfLocalDayUtc. Previously it used server-local startOfDay, which
+  // could be off by up to a full day for tenants in distant zones.
+  const startOfTodayUtc = startOfLocalDayUtc(now, clubTimezone);
   const completedAutomatically = await prisma.aPInvoice.count({
     where: {
       ...tenantWhere(principal, clubId),
       status: "POSTED",
-      postedAt: { gte: today },
+      postedAt: { gte: startOfTodayUtc },
     },
   }).catch(() => 0);
 
-  const arrivedToday = workItems.length + completedAutomatically;
+  // Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — arrivedToday is
+  // now a genuine time-window count: work items whose sortTimestamp
+  // (canonical intake-arrival timestamp) falls within today's local
+  // calendar day in the club's IANA timezone. The prior formula
+  // (`workItems.length + completedAutomatically`) counted every open
+  // item in the feed as an arrival regardless of when it actually
+  // arrived — see 16G Phase 1 diagnostic.
+  const todayLocal = todayLocalDateString(clubTimezone, now);
+  const arrivedFromFeed = workItems.filter((w) => {
+    const iso = w.sortTimestamp ?? w.timestamp;
+    if (!iso) return false;
+    const dt = new Date(iso);
+    if (isNaN(dt.getTime())) return false;
+    return toLocalDateString(dt, clubTimezone) === todayLocal;
+  }).length;
+  const arrivedToday = arrivedFromFeed + completedAutomatically;
 
   return {
     arrivedToday,
@@ -411,14 +457,18 @@ async function loadPosition(principal: Principal, clubId: string): Promise<Posit
 // Insight — a short narrative computed from live values.
 // -------------------------------------------------------------------------
 
-function buildInsight(position: Position, workItems: WorkItem[], syncedAt: Date): Insight {
+function buildInsight(position: Position, workItems: WorkItem[], syncedAt: Date, clubTimezone: string = "UTC"): Insight {
   const overdueCount = workItems.filter((w) => w.id.startsWith("ar-")).length;
   const overdueTotal = position.memberAROver60;
 
-  const timeLabel = syncedAt.toLocaleTimeString("en-US", {
+  // Sprint 3 · Checkpoint 16G Stage A — resolve timeLabel through the
+  // club's IANA timezone. No hardcoded America/New_York.
+  const parts = new Intl.DateTimeFormat("en-US", {
     hour: "2-digit", minute: "2-digit", hour12: false,
-    timeZone: "America/New_York",
-  }) + " EDT";
+    timeZoneName: "short", timeZone: clubTimezone,
+  }).formatToParts(syncedAt);
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const timeLabel = `${g("hour")}:${g("minute")} ${g("timeZoneName")}`;
 
   if (overdueCount === 0) {
     return {
@@ -497,6 +547,17 @@ export async function loadMissionControlSnapshot(
 ): Promise<MissionControlSnapshot> {
   const now = new Date();
   const feedFilter = options.feedFilter ?? "active";
+  // Sprint 3 · Checkpoint 16G Stage A — resolve club timezone before
+  // any calendar-day arithmetic. Never default to America/New_York.
+  const clubRow = await prisma.club.findUnique({
+    where: { id: clubId },
+    select: { timezone: true },
+  });
+  const clubTimezone = (clubRow?.timezone ?? "UTC").trim() || "UTC";
+  const clubTimezoneSnapshot: ClubTimezoneSnapshot = {
+    ianaZone: clubTimezone,
+    configured: !!clubRow?.timezone,
+  };
   // Sprint 3 Checkpoint 15B (2026-07-24) — AR-aging items are now
   // loaded from persisted WorkIntakeItem + WorkIntakeFinding via
   // loadArIntakeItems (read-only). The legacy ad-hoc
@@ -572,11 +633,57 @@ export async function loadMissionControlSnapshot(
     : workItems.filter((w) => w.workIntakeStatus !== "RESOLVED");
 
   const [briefing, position] = await Promise.all([
-    loadBriefingCounts(principal, clubId, workItems),
+    loadBriefingCounts(principal, clubId, workItems, clubTimezone, now),
     loadPosition(principal, clubId),
   ]);
 
-  const insight = buildInsight(position, visibleWorkItems, now);
+  const insight = buildInsight(position, visibleWorkItems, now, clubTimezone);
 
-  return { briefing, workItems: visibleWorkItems, position, insight, syncedAt: now };
+  // Sprint 3 · Checkpoint 16G Stage A — compose the overnight-
+  // preparation snapshot honestly. Window is prev 19:00 → 07:00 local
+  // (or now if pre-07:00). Counts derive from real analysis events
+  // during the window — NOT from currently-open items.
+  const { start, end } = overnightWindow(now, clubTimezone);
+  const [analysedInWindow, autoCompletedInWindow] = await Promise.all([
+    prisma.workIntakeItem.count({
+      where: {
+        clubId,
+        lastAnalysedAt: { gte: start, lt: end },
+      },
+    }).catch(() => 0),
+    prisma.aPInvoice.count({
+      where: {
+        ...tenantWhere(principal, clubId),
+        status: "POSTED",
+        postedAt: { gte: start, lt: end },
+      },
+    }).catch(() => 0),
+  ]);
+  const readyInWindow = visibleWorkItems.filter((w) =>
+    w.state === "approval" && w.timestamp
+    && new Date(w.timestamp) >= start && new Date(w.timestamp) < end,
+  ).length;
+  const judgmentInWindow = visibleWorkItems.filter((w) =>
+    w.state === "judgment" && w.timestamp
+    && new Date(w.timestamp) >= start && new Date(w.timestamp) < end,
+  ).length;
+  const overnight: OvernightPreparationSnapshot = {
+    windowStart: start.toISOString(),
+    windowEnd: end.toISOString(),
+    itemsAnalysed: analysedInWindow,
+    itemsCompletedAutomatically: autoCompletedInWindow,
+    itemsReadyForApproval: readyInWindow,
+    itemsNeedingJudgment: judgmentInWindow,
+    sentence: composeOvernightSentence({
+      itemsAnalysed: analysedInWindow,
+      itemsCompletedAutomatically: autoCompletedInWindow,
+      itemsReadyForApproval: readyInWindow,
+      itemsNeedingJudgment: judgmentInWindow,
+    }),
+  };
+
+  return {
+    briefing, workItems: visibleWorkItems, position, insight, syncedAt: now,
+    overnight, clubTimezone: clubTimezoneSnapshot,
+  };
 }

@@ -39,6 +39,10 @@ model Club {
   // Sprint 3 · Checkpoint 16F revised (2026-08-04) — data-mode
   // discriminator: FOUNDER_REVIEW / REGRESSION / SYNTHETIC_DEMO.
   stagingDataMode   String   @default("FOUNDER_REVIEW")
+  // Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — IANA timezone
+  // for local-calendar arithmetic. Nullable so onboarding must
+  // explicitly set it. Never defaulted to a global tz.
+  timezone          String?
   address           String?
   region            String?
   salesTaxRegion    String?
