@@ -269,12 +269,35 @@ export function rankNatureScopedAccounts(args: NatureScopedRankingArgs): NatureS
       reasons.push(`extraction_evidence_matches_name:${matchedNameTokens}`);
     }
 
-    // Department affinity (§9).
+    // Department affinity (§9 + 16D §12 — MATERIAL boost). When
+    // invoice evidence supports a department, an account whose
+    // name contains department-qualifying tokens receives a strong
+    // preference over a generic same-nature account. Sized to
+    // dominate the two-name-hint bonus (30) so a
+    // department-specific "R & M - Ground Equip" or "Equipment &
+    // Fixtures - Grounds" wins over a generic "Supplies -
+    // Backshop & Cart Parts" for a grounds-context invoice.
     if (args.departmentAccountNamePatterns && args.departmentKey) {
       const deptHit = args.departmentAccountNamePatterns.some((p) => p.test(nameLower));
       if (deptHit) {
-        score += 15;
+        score += 35;
         reasons.push(`department_affinity:${args.departmentKey}`);
+      } else if (args.departmentAccountNamePatterns.length > 0) {
+        // §12 rule: department-mismatch is a signal — reduce the
+        // account's score when a defensible/hint department exists
+        // but this account belongs to a different department.
+        // Cross-department accounts should not win by default.
+        //
+        // Applied ONLY when the account name contains SOME
+        // department-qualifying token that clearly isn't ours —
+        // e.g. "Backshop" (golf_shop) when we want grounds. If the
+        // account name contains no departmental token at all
+        // (e.g. plain "Equipment"), no penalty.
+        const ANY_DEPT_TOKEN = /\b(?:kitchen|bar|lounge|grounds?|course|turf|fairway|greens?|irrigation|pro\s*shop|golf\s*shop|backshop|clubhouse|kitchen|admin|office|technology|computer|network|telephone|internet|housekeeping|banquet|event)\b/i;
+        if (ANY_DEPT_TOKEN.test(nameLower)) {
+          score -= 20;
+          reasons.push(`department_mismatch_penalty:${args.departmentKey}`);
+        }
       }
     }
 
