@@ -32,6 +32,12 @@ model Club {
   // club's domains. Set false to advertise that the club runs on Spectre
   // (rare — usually only for case-study clubs).
   whitelabelEnabled Boolean  @default(true)
+  // Sprint 3 · Checkpoint 16F (2026-08-04) — demo/regression tenant
+  // marker. Fixture generators (bin/c15h-founder-fixture.ts, etc.)
+  // hard-refuse to write unless this is true. Founder-review tenants
+  // (Coulee Ridge, real customers) leave this false — they receive
+  // ONLY genuine operational work.
+  isDemoTenant      Boolean  @default(false)
   address           String?
   region            String?
   salesTaxRegion    String?
@@ -8847,6 +8853,57 @@ model DocumentOcrExtraction {
   @@index([clubId, status])
   @@index([ingestedDocumentId])
   @@index([clubId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 16F (2026-08-04) — AP regression library.
+//
+// A permanent, tenant-independent expectation set that the AP
+// intelligence engine can be evaluated against. Rows are keyed by
+// document SHA-256 so the same PDF can be loaded from any tenant's
+// storage (or from a fixture bucket) and scored against the same
+// expected answers.
+//
+// The founder-review tenant (Coulee Ridge) MUST NOT contain the
+// Work Intake wrappers for regression PDFs. The regression runner
+// reads directly from a demo tenant's IngestedDocument rows and
+// compares analysis output to a RegressionExpectation row.
+// ---------------------------------------------------------------------------
+model RegressionExpectation {
+  id                  String   @id @default(cuid())
+  // Document identity — SHA-256 of the PDF bytes. Independent of
+  // which tenant currently holds the IngestedDocument.
+  documentSha256      String
+  // Human-readable label for reports (e.g. "1091559-Oakcreek-capital").
+  // Never a supplier / customer name in production tests.
+  label               String
+  // Category shape — one of: CAPITAL_EQUIPMENT, REPAIR_PARTS,
+  // PROFESSIONAL_MEMBERSHIP, RECURRING_TELECOM, VENDOR_STATEMENT,
+  // IMAGE_ONLY_OCR, MULTI_PAGE, MULTI_ALLOCATION, GST_EDGE, CREDIT_MEMO,
+  // FUEL_SURCHARGE, INTEREST_CHARGE, UNKNOWN.
+  category            String
+  // Expected extraction / classification answers. Nullable when
+  // the expectation is "abstains cleanly" for that dimension.
+  expectedSupplier            String?
+  expectedInvoiceNumber       String?
+  expectedGrossTotalCents     Int?
+  expectedCurrency            String?
+  expectedAccountingNature    String?     // CAPITAL_ASSET / REPAIR_AND_MAINTENANCE / …
+  expectedDepartmentKey       String?     // grounds / kitchen / it / …
+  expectedGlAccountNumber     String?
+  expectedAllocationCount     Int?
+  // Whether the runner should assert supplier match / GL match /
+  // etc. Some regressions are "must abstain" — no expected GL.
+  assertSupplier              Boolean  @default(true)
+  assertGlAccount             Boolean  @default(true)
+  assertAccountingNature      Boolean  @default(true)
+  assertDepartment            Boolean  @default(false)
+  notes                       String?     // one-line rationale
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@unique([documentSha256])
+  @@index([category])
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,10 @@ import { prisma } from "../src/lib/prisma";
 import { ingestAttachment } from "../src/lib/documents/ingest";
 import { runApMaterialisation } from "../src/lib/ap-intelligence/materialise";
 import { runStatementMaterialisation } from "../src/lib/ap-statement-intelligence/materialise";
+// Sprint 3 · Checkpoint 16F (2026-08-04) — hard guard: fixture
+// generators may only run against a club with isDemoTenant=true.
+// See src/lib/fixtures/demo-tenant-guard.ts.
+import { guardDemoTenant } from "../src/lib/fixtures/demo-tenant-guard";
 
 async function makePdf(lines: string[]): Promise<Buffer> {
   const doc = new PDFDocument({ margin: 40, size: "LETTER" });
@@ -51,6 +55,15 @@ async function main() {
     else if (a === "--wipe") wipe = true;
   }
   if (!clubId) { console.error("REFUSED: --club=<clubId> required"); process.exit(2); }
+  // Sprint 3 · Checkpoint 16F — hard guard. Refuses to run against
+  // any club without isDemoTenant=true, plus all the other §8
+  // conditions (--apply, non-production env, non-production db).
+  // Legacy Silver Springs refusal preserved below for defence in depth.
+  await guardDemoTenant({
+    prisma, clubId,
+    apply: apply || wipe,   // wipe writes too; both require the guard
+    callerName: "c15h-founder-fixture",
+  });
   const club = await prisma.club.findUnique({ where: { id: clubId }, select: { id: true, slug: true, name: true } });
   if (!club) { console.error("REFUSED: club not found"); process.exit(4); }
   if (club.slug === "silver-springs" || (club.name ?? "").toLowerCase().includes("silver springs")) {

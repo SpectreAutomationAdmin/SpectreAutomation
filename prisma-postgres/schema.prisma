@@ -32,6 +32,9 @@ model Club {
   // club's domains. Set false to advertise that the club runs on Spectre
   // (rare — usually only for case-study clubs).
   whitelabelEnabled Boolean  @default(true)
+  // Sprint 3 · Checkpoint 16F (2026-08-04) — demo/regression tenant
+  // marker. Fixture generators hard-refuse to write unless true.
+  isDemoTenant      Boolean  @default(false)
   address           String?
   region            String?
   salesTaxRegion    String?
@@ -8891,6 +8894,35 @@ model DocumentOcrExtraction {
   @@index([clubId, status])
   @@index([ingestedDocumentId])
   @@index([clubId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 16F (2026-08-04) — AP regression library.
+// See prisma/schema.prisma for the canonical documentation.
+// ---------------------------------------------------------------------------
+model RegressionExpectation {
+  id                          String   @id @default(cuid())
+  documentSha256              String
+  label                       String
+  category                    String
+  expectedSupplier            String?
+  expectedInvoiceNumber       String?
+  expectedGrossTotalCents     Int?
+  expectedCurrency            String?
+  expectedAccountingNature    String?
+  expectedDepartmentKey       String?
+  expectedGlAccountNumber     String?
+  expectedAllocationCount     Int?
+  assertSupplier              Boolean  @default(true)
+  assertGlAccount             Boolean  @default(true)
+  assertAccountingNature      Boolean  @default(true)
+  assertDepartment            Boolean  @default(false)
+  notes                       String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@unique([documentSha256])
+  @@index([category])
 }
 
 // ---------------------------------------------------------------------------
