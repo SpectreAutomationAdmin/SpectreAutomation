@@ -28,6 +28,11 @@ import { isClassificationLocked } from "@/lib/work-intake/materializer";
 import { classifyEmail, type ClassificationResult } from "./classifier";
 import { normalizeGraphMessage } from "./normalize";
 import type { RawGraphMessage } from "@/lib/integrations/microsoft-graph-delegated";
+// Sprint 3 · Checkpoint 16G Stage B — work-domain classification runs
+// on every materialisation. Never throws — a classifier error must
+// never block intake materialisation. The persist helper writes the
+// workDomain/workIntent/workSubtype fields on the WorkIntakeItem.
+import { classifyAndPersistWorkDomain } from "./work-domain-persist";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -109,6 +114,11 @@ export async function upsertEmailIntake(args: {
     });
     // Note: we do NOT overwrite status / owner / defer / resolved /
     // judgmentRequired here. §7 invariant I2.
+    // Sprint 3 · Checkpoint 16G Stage B — refresh work-domain
+    // classification alongside display + classification. Errors
+    // are swallowed so a classifier bug never blocks resync.
+    await classifyAndPersistWorkDomain({ workIntakeItemId: intake.id, clubId: args.clubId })
+      .catch(() => undefined);
     return await prisma.workIntakeItem.findUnique({ where: { id: intake.id } });
   }
 
@@ -157,6 +167,10 @@ export async function upsertEmailIntake(args: {
       note: `Intake materialised from email ${args.email.graphMessageId}`,
     },
   });
+  // Sprint 3 · Checkpoint 16G Stage B — classify the work-domain now
+  // that the intake exists. Failure never blocks materialisation.
+  await classifyAndPersistWorkDomain({ workIntakeItemId: created.id, clubId: args.clubId })
+    .catch(() => undefined);
   return created;
 }
 

@@ -134,16 +134,20 @@ export const CLASSIFIER_RULES: ClassifierRule[] = [
   },
   {
     key: "internal_operations",
-    version: 1,
+    version: 2,   // Sprint 3 · Checkpoint 16G Stage B — "membership" removed
     label: "INTERNAL_OPERATIONS",
     reason: "Sender domain matches a club or internal address; subject is operational.",
     confidence: 0.5,
     intakeAction: "CREATE_ACTIONABLE",
     matches: (e) =>
-      // Same-domain internal is a weak signal; combined with an
-      // operational subject keyword we upgrade to actionable.
+      // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — "membership"
+      // removed from operations keywords. A prospect email asking
+      // about waitlist / joining / share purchase must not be
+      // treated as an operational facilities item. Domain routing
+      // now runs through work-domain-classifier.ts which recognises
+      // membership evidence positively.
       anyOf(
-        ["irrigation", "kitchen", "clubhouse", "membership", "maintenance", "grounds", "pro shop"],
+        ["irrigation", "kitchen", "clubhouse", "maintenance", "grounds", "pro shop"],
         e.subject + " " + e.preview,
       ),
   },

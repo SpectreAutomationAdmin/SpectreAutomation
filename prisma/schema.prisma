@@ -8632,6 +8632,25 @@ model WorkIntakeItem {
   // instead of silently mixing old + new logic.
   analysisVersion String?
 
+  // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — work-domain
+  // taxonomy. The renderer picks the correct card + fields + actions
+  // by workDomain, NOT by the legacy `classification` string (which
+  // remains for the ingestion classifier's own bookkeeping).
+  //   workDomain    — which business function owns this item
+  //   workIntent    — what the user needs to do
+  //   workSubtype   — domain-specific narrower kind (nullable)
+  //   workDomainConfidence — 0.0..1.0
+  //   workDomainSupportingEvidenceJson — audit trail of why
+  workDomain                        String?   // ACCOUNTS_PAYABLE | ACCOUNTS_RECEIVABLE | PAYROLL | MEMBERSHIP | COMMUNICATIONS | GOVERNANCE | OPERATIONS | HOSPITALITY | INFORMATIONAL | GENERAL
+  workIntent                        String?   // REVIEW | APPROVE | RESPOND | COLLECT | RESOLVE | INFORM | SCHEDULE | CREATE_RECORD | POST | OTHER
+  workSubtype                       String?
+  workDomainConfidence              Float?
+  workDomainSupportingEvidenceJson  String?   // JSON array
+  workDomainAlternativesJson        String?   // JSON array of {domain, confidence}
+  workDomainRequiresReview          Boolean   @default(false)
+  workDomainClassifiedAt            DateTime?
+  workDomainClassifierVersion       String?
+
   emailOrigins   EmailWorkIntakeOrigin[]
   origins        WorkIntakeOrigin[]
   findings       WorkIntakeFinding[]
@@ -8646,9 +8665,37 @@ model WorkIntakeItem {
   // canonical AP intake. See ApIntakeSource model below.
   apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
 
+  // Sprint 3 · Checkpoint 16G Stage B — user corrections to
+  // workDomain / workSubtype. Corrections inform future generalized
+  // classification; no subject-specific hardcoded rules.
+  domainCorrections WorkDomainCorrection[]
+
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
+  @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — user-corrected
+// work-domain labels. Feeds the classifier's evidence base without
+// creating subject-specific hardcoded rules. For this checkpoint
+// the data model + service contract exist; the correction UI is
+// deferred to a follow-up checkpoint.
+model WorkDomainCorrection {
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  workIntakeItem      WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  originalDomain      String?
+  correctedDomain     String
+  originalSubtype     String?
+  correctedSubtype    String?
+  correctedByUserId   String
+  correctedAt         DateTime  @default(now())
+  reason              String?
+
+  @@index([clubId, correctedAt])
+  @@index([workIntakeItemId])
 }
 
 model WorkIntakeOrigin {

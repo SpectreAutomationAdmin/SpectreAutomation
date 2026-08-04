@@ -8622,20 +8622,55 @@ model WorkIntakeItem {
   // mixing old + new logic silently.
   analysisVersion String?
 
+  // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — work-domain
+  // taxonomy. Separates the ingestion classifier's initial label
+  // (`classification`) from the renderer's ownership decision
+  // (`workDomain`), the user intent (`workIntent`), and the specific
+  // subtype (`workSubtype`). The renderer picks fields, actions and
+  // tabs by workDomain — NEVER by `classification` — so a
+  // membership inquiry never renders through the AP shell again.
+  workDomain                        String?
+  workIntent                        String?
+  workSubtype                       String?
+  workDomainConfidence              Float?
+  workDomainSupportingEvidenceJson  String?
+  workDomainAlternativesJson        String?
+  workDomainRequiresReview          Boolean   @default(false)
+  workDomainClassifiedAt            DateTime?
+  workDomainClassifierVersion       String?
+
   emailOrigins   EmailWorkIntakeOrigin[]
-  // Sprint 3 Checkpoint 15B — generic source-independent origin
-  // relation. Coexists with the email-only EmailWorkIntakeOrigin
-  // (that table remains the authoritative link for email origins in
-  // this checkpoint; email code is deliberately untouched).
   origins        WorkIntakeOrigin[]
   findings       WorkIntakeFinding[]
   activity       WorkIntakeActivity[]
   reads          WorkIntakeItemRead[]
   apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
+  domainCorrections           WorkDomainCorrection[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
+  @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — user-corrected
+// work-domain labels. Feeds the classifier's future generalized
+// evidence base without subject-specific hardcoded rules.
+model WorkDomainCorrection {
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  workIntakeItem      WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  originalDomain      String?
+  correctedDomain     String
+  originalSubtype     String?
+  correctedSubtype    String?
+  correctedByUserId   String
+  correctedAt         DateTime  @default(now())
+  reason              String?
+
+  @@index([clubId, correctedAt])
+  @@index([workIntakeItemId])
 }
 
 // Sprint 3 Checkpoint 15B (2026-07-24) — Generic source-independent
