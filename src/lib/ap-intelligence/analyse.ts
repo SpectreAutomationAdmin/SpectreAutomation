@@ -928,6 +928,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         ?? null;
       const deptPatsStageA = deptStageAHint ? deptPatternsStageA(deptStageAHint) : [];
       let promoted = false;
+      let stageAPickedDeptMatch = false;
       if (matches.length > 0) {
         matches.sort((a, b) => {
           // Department preference first: an account matching the
@@ -940,6 +941,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           if (cd !== 0) return cd;
           return a.c.accountNumber.localeCompare(b.c.accountNumber);
         });
+        stageAPickedDeptMatch = deptPatsStageA.length > 0 &&
+          deptPatsStageA.some((p) => p.test(matches[0].full?.name ?? ""));
         const picked = matches[0];
         const picked_c = picked.c;
         if ((picked_c.confidence ?? 0) >= 20) {
@@ -967,7 +970,14 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       // accounts, boosts accounts whose name contains department-
       // qualifying tokens when invoice evidence supports a
       // department.
-      if (!promoted) {
+      //
+      // 16D — Stage B ALSO runs when Stage A promoted an account
+      // that does NOT match the hint-department. This ensures a
+      // department-specific account (e.g. R & M - Ground Equip)
+      // beats a generic account (e.g. Supplies - Backshop) that
+      // happened to appear higher in the raw ranker's top-5.
+      const stageBShouldRun = !promoted || (deptPatsStageA.length > 0 && !stageAPickedDeptMatch);
+      if (stageBShouldRun) {
         const allCoa = await prisma.account.findMany({
           where: { clubId: args.clubId, isActive: true },
           select: {
@@ -1032,19 +1042,29 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         });
         if (scoped.leader) {
           const ldr = scoped.leader;
-          gl = {
-            ...gl,
-            accountNumber: ldr.account.accountNumber,
-            accountName: ldr.account.name,
-            categoryKey: ldr.account.categoryKey ?? null,
-            fsGroupKey: ldr.account.fsGroupKey ?? null,
-            source: "SEMANTIC_MATCH",
-            confidence: Math.min(natureForRanker.leaderConfidence, Math.min(95, ldr.score)),
-            reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount})`,
-            leaderIsPostable: ldr.isPostable,
-            leaderPostingBlockers: ldr.postingBlockers as any,
-            autoApprovalEligible: false,
-          };
+          // 16D — override rule when Stage A already promoted:
+          // only take Stage B's leader if it matches the hint-
+          // department AND Stage A didn't. This prevents Stage B
+          // from stomping a fine Stage A choice with a lower-
+          // scoring account.
+          const ldrDeptMatches = deptPatterns.length > 0 &&
+            deptPatterns.some((p) => p.test(ldr.account.name));
+          const shouldOverride = !promoted || (ldrDeptMatches && !stageAPickedDeptMatch);
+          if (shouldOverride) {
+            gl = {
+              ...gl,
+              accountNumber: ldr.account.accountNumber,
+              accountName: ldr.account.name,
+              categoryKey: ldr.account.categoryKey ?? null,
+              fsGroupKey: ldr.account.fsGroupKey ?? null,
+              source: "SEMANTIC_MATCH",
+              confidence: Math.min(natureForRanker.leaderConfidence, Math.min(95, ldr.score)),
+              reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount},dept=${deptKey ?? "none"},dept_match=${ldrDeptMatches})`,
+              leaderIsPostable: ldr.isPostable,
+              leaderPostingBlockers: ldr.postingBlockers as any,
+              autoApprovalEligible: false,
+            };
+          }
         }
       }
     }
