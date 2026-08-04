@@ -534,6 +534,37 @@ export async function handleEmailEvidenceDeleted(args: {
   if (link.workIntakeItem.status === "RESOLVED" || link.workIntakeItem.status === "SUPPRESSED") {
     return;
   }
+  // Sprint 3 · Checkpoint 16H (2026-08-04) — reconciliation with
+  // Spectre-initiated archive moves.
+  //
+  // Delta sync emits `@removed` for the Inbox scope when a message
+  // is moved OUT of Inbox (e.g. our own archive worker just moved
+  // it to Archive). Without this guard, the old behaviour would
+  // flip the WI to SUPPRESSED — losing the fact that the user
+  // deliberately completed the work AND that the archive move
+  // is our own doing.
+  //
+  // If there's a SUCCEEDED OutlookArchiveMutation for this
+  // (workIntakeId, emailMessageId), skip the SUPPRESSED transition
+  // and record a reconciliation activity note instead.
+  const ourArchive = await prisma.outlookArchiveMutation.findFirst({
+    where: {
+      workIntakeId: link.workIntakeItemId,
+      emailMessageId: args.emailMessageId,
+      status: "SUCCEEDED",
+    },
+    select: { id: true },
+  });
+  if (ourArchive) {
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: link.workIntakeItemId,
+        action: "EVIDENCE_ARCHIVED",
+        note: "Source email moved to Archive by Spectre completion — no state change.",
+      },
+    });
+    return;
+  }
   await prisma.$transaction([
     prisma.workIntakeItem.update({
       where: { id: link.workIntakeItemId },

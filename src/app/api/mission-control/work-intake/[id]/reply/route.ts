@@ -47,6 +47,11 @@ interface ReplyResponsePayload {
   sentAt: string;
   sendingMailbox: string;
   replyToSubject: string;
+  // Sprint 3 · Checkpoint 16H additions.
+  replyMutationId?: string;
+  andClose?: boolean;
+  completionEventId?: string;
+  archiveJobsEnqueued?: number;
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -70,6 +75,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   const rawBody = typeof payload?.body === "string" ? payload.body : "";
   const bodyText = rawBody.trim();
+  // Sprint 3 · Checkpoint 16H — "Send reply & close" toggle. When
+  // true, a successful send triggers resolveIntake({ completionType:
+  // "REPLIED_AND_CLOSED" }) which fires the canonical completion
+  // event → enqueues the Outlook archive job.
+  const andClose = typeof (payload as { andClose?: unknown }).andClose === "boolean"
+    ? Boolean((payload as { andClose: boolean }).andClose)
+    : false;
+  const mode: "REPLY" | "REPLY_ALL" =
+    (payload as { mode?: unknown }).mode === "REPLY_ALL" ? "REPLY_ALL" : "REPLY";
   if (bodyText.length === 0) {
     return NextResponse.json({ error: "empty_body", reason: "The reply body is empty." }, { status: 400 });
   }
@@ -269,11 +283,72 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     sentAtIso: sentAt.toISOString(),
   });
 
+  // Sprint 3 · Checkpoint 16H — persist OutlookReplyMutation.
+  // Idempotency key is the header if supplied, else a synthetic key
+  // derived from the source message + timestamp so a rapid double
+  // POST without a client key still doesn't duplicate.
+  const persistedKey = idempotencyKey ?? `wi:${intake.id}:msg:${targetEmail.graphMessageId}:${Math.floor(sentAt.getTime() / 1000)}`;
+  const mutation = await prisma.outlookReplyMutation.upsert({
+    where: { idempotencyKey: persistedKey },
+    create: {
+      clubId, workIntakeId: intake.id,
+      mailboxConnectionId: conn.id,
+      sourceEmailMessageId: targetEmail.id,
+      initiatedByUserId: principal.id,
+      mode,
+      status: "SENT",
+      graphConversationId: targetEmail.conversationId ?? null,
+      sentAt,
+      attemptCount: 1,
+      idempotencyKey: persistedKey,
+    },
+    update: { status: "SENT", sentAt, attemptCount: { increment: 1 } },
+    select: { id: true },
+  }).catch(() => null);
+
+  // Sprint 3 · Checkpoint 16H — "Send reply & close" completion path.
+  let completionEventId: string | undefined;
+  let archiveJobsEnqueued = 0;
+  if (andClose) {
+    try {
+      const { emitWorkCompletionEvent } = await import("@/lib/work-intake/completion");
+      // Flip the WI to RESOLVED (with completion type = REPLIED_AND_CLOSED).
+      await prisma.workIntakeItem.update({
+        where: { id: intake.id },
+        data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: principal.id },
+      });
+      await prisma.workIntakeActivity.create({
+        data: {
+          workIntakeItemId: intake.id, actorUserId: principal.id,
+          action: "RESOLVED", fromValue: intake.status, toValue: "RESOLVED",
+          note: `Send reply & close from ${conn.connectedEmail}.`,
+        },
+      });
+      const evt = await emitWorkCompletionEvent({
+        workIntakeItemId: intake.id, clubId,
+        completedByUserId: principal.id,
+        completionType: "REPLIED_AND_CLOSED",
+        metadata: { replyMutationId: mutation?.id, sendingMailbox: conn.connectedEmail },
+      });
+      completionEventId = evt.eventId;
+      archiveJobsEnqueued = evt.archiveJobsEnqueued;
+    } catch (e) {
+      logger.warn("mailbox.reply.and_close.failed", { workIntakeItemId: intake.id, reason: (e as Error).message?.slice(0, 80) });
+      // The reply already succeeded — do NOT roll back. The user
+      // sees a truthful "reply sent" but the close-and-archive did
+      // not fire. Response payload signals andClose=false.
+    }
+  }
+
   const response: ReplyResponsePayload = {
     workIntakeItemId: intake.id,
     sentAt: sentAt.toISOString(),
     sendingMailbox: conn.connectedEmail,
     replyToSubject: targetEmail.subject,
+    replyMutationId: mutation?.id,
+    andClose: andClose && !!completionEventId,
+    completionEventId,
+    archiveJobsEnqueued,
   };
   return NextResponse.json(response, { status: 200 });
 }

@@ -703,18 +703,36 @@ export async function loadMissionControlSnapshot(
   const todaysCommitments = await loadTodayCommitments({
     clubId, userId: principal.id, clubTimezone, now,
     loadUserMailbox: async (userId) => {
+      // Sprint 3 · Checkpoint 16H (2026-08-04) — feature-flag gated.
+      // Without OUTLOOK_CALENDAR_READ_ENABLED, we skip the token
+      // decrypt entirely (safe default: panel shows the Spectre
+      // proposals + Calendar-not-enabled state).
+      const { isOutlookCalendarReadEnabled } = await import("@/lib/env");
+      if (!isOutlookCalendarReadEnabled()) {
+        return null;
+      }
       const mb = await prisma.mailboxConnection.findFirst({
         where: { userId, clubId, status: "CONNECTED" },
-        select: { grantedScopes: true },
+        select: { id: true, grantedScopes: true },
       }).catch(() => null);
       if (!mb) return null;
-      // Sprint 3 · Checkpoint 16G Stage E — grantedScopes drives
-      // the calendar-consent UX today. Token decryption for the
-      // actual /me/calendarView fetch is deferred to when
-      // Calendars.Read consent lands on a live mailbox — until
-      // then, the panel renders the Spectre-proposed items alone
-      // and shows a "Calendar view isn't enabled" hint.
-      return { grantedScopes: (mb.grantedScopes ?? "").split(/\s+/).filter(Boolean), accessToken: null };
+      const scopes = (mb.grantedScopes ?? "").split(/\s+/).filter(Boolean);
+      // If the scope isn't there, no need to attempt token decrypt.
+      if (!scopes.map((s) => s.toLowerCase()).includes("calendars.read")) {
+        return { grantedScopes: scopes, accessToken: null };
+      }
+      try {
+        const { getFreshDelegatedAccessToken } = await import("@/lib/mailbox/connect");
+        const tok = await getFreshDelegatedAccessToken({
+          mailboxConnectionId: mb.id, callerClubId: clubId, callerUserId: userId,
+        });
+        return { grantedScopes: scopes, accessToken: tok.accessToken };
+      } catch {
+        // Token refresh failed → surface as PERMISSION_MISSING so
+        // the user is nudged to reconnect; DO NOT block Mission
+        // Control from rendering.
+        return { grantedScopes: scopes, accessToken: null };
+      }
     },
   }).catch(() => ({
     items: [], calendarConsent: "DISCONNECTED" as const,

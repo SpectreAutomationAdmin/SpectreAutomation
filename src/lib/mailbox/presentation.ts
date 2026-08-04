@@ -30,6 +30,12 @@ export interface ConnectionPresentation {
   explanation: string;  // one paragraph, plain language
   primaryAction?: ConnectionActionSpec;
   secondaryAction?: ConnectionActionSpec;
+  /** Sprint 3 · Checkpoint 16H (2026-08-04) — an additional
+   *  "Update Microsoft permissions" affordance rendered on the
+   *  CONNECTED state so the user can re-consent to the expanded
+   *  scope set (Calendars.Read + Mail.ReadWrite + Mail.Send) via
+   *  ONE consent event, without having to disconnect first. */
+  tertiaryAction?: ConnectionActionSpec;
   /** Whether the surface should render a small "Connected as
    *  <email>" identity strip. False for Not-connected + Error
    *  states with no prior identity. */
@@ -109,6 +115,17 @@ export function presentConnection(status: MailboxStatus | string | null): Connec
           key: CONNECTION_ACTION.DISCONNECT,
           label: "Disconnect Outlook",
           kind: "destructive",
+        },
+        // Sprint 3 · Checkpoint 16H — one-click permission update.
+        // Triggers the same OAuth flow as RECONNECT, but the button
+        // label makes clear this is about adding/updating scopes
+        // (Calendars.Read, Mail.ReadWrite, Mail.Send) rather than
+        // fixing a broken connection. Preserves the existing
+        // mailbox row + delta cursor on success.
+        tertiaryAction: {
+          key: CONNECTION_ACTION.RECONNECT,
+          label: "Update Microsoft permissions",
+          kind: "secondary",
         },
         showIdentity: true,
         showVisibility: true,

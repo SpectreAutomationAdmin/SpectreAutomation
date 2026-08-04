@@ -398,7 +398,7 @@ export default function ConnectedAccountsClient(props: ConnectedAccountsClientPr
 
           <ScopeDisclosure />
 
-          {(presentation.primaryAction || presentation.secondaryAction) && (
+          {(presentation.primaryAction || presentation.secondaryAction || presentation.tertiaryAction) && (
             <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-stone-200 pt-6">
               {presentation.primaryAction && (
                 <ActionButton
@@ -407,6 +407,18 @@ export default function ConnectedAccountsClient(props: ConnectedAccountsClientPr
                   disabled={!props.canConnect || pending}
                   onClick={onAction}
                   testId="primary-action"
+                />
+              )}
+              {/* Sprint 3 · Checkpoint 16H — "Update Microsoft permissions"
+                  tertiary action renders alongside primary + secondary on
+                  the CONNECTED status. Same underlying OAuth flow as
+                  RECONNECT; label makes the intent explicit. */}
+              {presentation.tertiaryAction && (
+                <ActionButton
+                  action={presentation.tertiaryAction}
+                  disabled={pending}
+                  onClick={onAction}
+                  testId="tertiary-action"
                 />
               )}
               {presentation.secondaryAction && (
@@ -606,6 +618,11 @@ const ActionButton = ({
 };
 
 function ScopeDisclosure() {
+  // Sprint 3 · Checkpoint 16H (2026-08-04) — refreshed disclosure to
+  // match the four founder-approved delegated capabilities:
+  // Mail.Read, Mail.Send, Calendars.Read, Mail.ReadWrite. All
+  // capabilities operate on the connected user's OWN mailbox +
+  // calendar only. No shared / application scopes.
   return (
     <div className="mt-6 rounded-lg bg-stone-50 border border-stone-200 p-4 text-sm">
       <p className="font-semibold text-stone-900 mb-2">What Spectre can and cannot do</p>
@@ -616,24 +633,26 @@ function ScopeDisclosure() {
             <li>Read recent messages from your Inbox</li>
             <li>Read sender, subject, preview, and message content</li>
             <li>Read attachment names and metadata</li>
-            <li>Use those messages to create Work Intake items</li>
+            <li>Reply to a Work Intake item from your Outlook mailbox</li>
+            <li>Read your own calendar events for Today&rsquo;s Commitments</li>
+            <li>Move a linked Inbox message to Archive when the associated Work Intake is completed</li>
           </ul>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1">Spectre cannot in this phase</p>
+          <p className="text-xs uppercase tracking-wider text-stone-500 font-semibold mb-1">Spectre cannot</p>
           <ul className="list-disc pl-5 text-stone-700 space-y-0.5">
-            <li>Send email or reply on your behalf</li>
-            <li>Delete or move messages</li>
-            <li>Mark messages read or unread</li>
-            <li>Access another mailbox without separate consent</li>
+            <li>Access another user&rsquo;s mailbox or calendar</li>
+            <li>Create, edit, accept, or decline calendar events</li>
+            <li>Delete messages</li>
+            <li>Send from a mailbox other than the connected one</li>
+            <li>Read shared mailboxes without separate authorization</li>
           </ul>
         </div>
       </div>
       <details className="mt-3">
         <summary className="cursor-pointer text-xs text-stone-500 hover:text-stone-700">Technical permissions</summary>
         <p className="mt-2 text-xs text-stone-500">
-          Delegated Microsoft Graph scopes: <code className="font-mono">User.Read</code>, <code className="font-mono">Mail.Read</code>,{" "}
-          <code className="font-mono">offline_access</code>. No write scopes are requested.
+          Delegated Microsoft Graph scopes: <code className="font-mono">openid</code>, <code className="font-mono">profile</code>, <code className="font-mono">email</code>, <code className="font-mono">offline_access</code>, <code className="font-mono">User.Read</code>, <code className="font-mono">Mail.Read</code>, <code className="font-mono">Mail.Send</code>, <code className="font-mono">Mail.ReadWrite</code>, <code className="font-mono">Calendars.Read</code>. Delegated single-user only — no <code className="font-mono">.Shared</code> or application scopes.
         </p>
       </details>
     </div>

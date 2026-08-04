@@ -34,6 +34,7 @@ copy of it.
 | `Mail.Read`      | `570282fd-fa5c-430d-a7fd-fc8dc98a9dca`   | Scope   | B2    |
 | `Mail.Send`      | `e383f46e-2787-4529-855e-0e479a3ffac0`   | Scope   | 14C-B |
 | `Calendars.Read` | `465a38f9-76ea-45b9-9f34-9e8b0d4b0b42`   | Scope   | 16G-E |
+| `Mail.ReadWrite` | `024d486e-b451-40bb-833d-3e66d98c5c73`   | Scope   | 16H   |
 
 ## Rationale — what each scope enables and does NOT enable
 
@@ -60,6 +61,13 @@ copy of it.
   Does NOT allow creating, updating, or deleting events (that would
   need `Calendars.ReadWrite` — deliberately absent). Founder rule
   §8: "Do not write to Outlook automatically."
+- `Mail.ReadWrite` (added 16H) — read+write on the connected user's
+  OWN mailbox. Authorises `POST /me/messages/{id}/move` for
+  archiving completed email-backed Work Intake conversations from
+  Inbox to Archive. Does NOT authorise mutating other users'
+  mailboxes (`Mail.ReadWrite.Shared` deliberately absent) or
+  application-tenant-wide mutation. Delegated single-user
+  authority only, exactly matching Spectre's operating model.
 
 ## Explicitly NOT approved
 

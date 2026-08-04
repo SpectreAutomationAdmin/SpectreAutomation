@@ -109,6 +109,22 @@ export const APPROVED_DELEGATED_SCOPES = [
   // NOT Calendars.ReadWrite (writing to Outlook is explicitly
   // out-of-scope per §8 — Spectre does not create or modify events).
   "Calendars.Read",
+  // Sprint 3 · Checkpoint 16H (2026-08-04) — founder-approved
+  // read+write scope on the CONNECTED USER'S OWN mailbox only.
+  //
+  // Mail.ReadWrite: authorises `POST /me/messages/{id}/move` so
+  // that when an email-backed Work Intake completes, Spectre can
+  // move the associated Inbox message into the user's Archive
+  // folder. Combined with Mail.Send this is the minimum needed
+  // for the founder-approved reply-and-archive workflow.
+  //
+  // We deliberately do NOT request Mail.ReadWrite.Shared (would
+  // require admin consent to mutate other users' mailboxes) and
+  // NOT application-level Mail.ReadWrite (would allow tenant-wide
+  // mutation without any signed-in user). Delegated single-user
+  // read+write is sufficient for the founder's model: "the
+  // connected mailbox is the signed-in user's own mailbox".
+  "Mail.ReadWrite",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -282,6 +298,21 @@ export interface ReplyToMessageResult {
   sentAt: Date;
 }
 
+// Sprint 3 · Checkpoint 16H (2026-08-04) — moveMessage types.
+export interface MoveMessageArgs {
+  accessToken: string;
+  graphMessageId: string;
+  /** Well-known folder name ("archive", "deleteditems", …) or an
+   *  opaque parentFolderId. Well-known names avoid depending on
+   *  the localised display name of the Archive folder. */
+  destinationId: string;
+}
+export interface MoveMessageResult {
+  resultingGraphMessageId: string;
+  destinationFolderId: string;
+  movedAt: Date;
+}
+
 export interface MicrosoftDelegatedProvider {
   buildAuthorizationUrl(args: AuthorizationUrlArgs): Promise<string>;
   exchangeCode(args: CodeExchangeArgs): Promise<TokenResponse>;
@@ -338,6 +369,24 @@ export interface MicrosoftDelegatedProvider {
    *      consent failures land the right MAILBOX_ERROR_CODE.
    */
   getAttachmentBytes(args: GetAttachmentBytesArgs): Promise<Buffer>;
+  /** Sprint 3 · Checkpoint 16H (2026-08-04) — move a message.
+   *
+   *  Endpoint: POST /v1.0/me/messages/{graphMessageId}/move
+   *  Payload:  { "destinationId": "archive" | "<opaqueFolderId>" }
+   *  Response: 201 Created with the new message (may have a
+   *            different `id` after the move; the immutable id
+   *            remains stable for tenants that support ImmutableId).
+   *
+   *  Contract:
+   *    - Delegated identity (Mail.ReadWrite scope).
+   *    - Uses well-known folder names ("archive", "deleteditems",
+   *      etc.) where Graph accepts them, avoiding hardcoding
+   *      localised folder display strings.
+   *    - Returns the resulting graphMessageId so the caller can
+   *      persist the new identifier (may differ post-move on some
+   *      tenants).
+   */
+  moveMessage(args: MoveMessageArgs): Promise<MoveMessageResult>;
 }
 
 export interface GetAttachmentBytesArgs {
@@ -560,6 +609,44 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
       });
       if (!res.ok) throw graphErrorFromResponse(res);
       return { sentAt: new Date() };
+    },
+    async moveMessage(args) {
+      // Sprint 3 · Checkpoint 16H (2026-08-04) — delegated move.
+      //
+      // Endpoint: POST /me/messages/{graphMessageId}/move
+      // Payload:  { "destinationId": <folder-id-or-well-known-name> }
+      //
+      // Graph accepts well-known folder names ("archive",
+      // "deleteditems", "junkemail", "inbox", "sentitems", "drafts")
+      // in place of an opaque folder id — this avoids depending on
+      // any localised display name for the Archive folder.
+      //
+      // Response body is the moved message with a NEW `id` — the
+      // per-folder id changes on move, but the immutable id remains
+      // stable for tenants that support ImmutableId. Callers persist
+      // both original + resulting ids for delta-sync reconciliation.
+      if (!args.graphMessageId) throw new Error("moveMessage requires graphMessageId");
+      if (!args.destinationId) throw new Error("moveMessage requires destinationId");
+      const url = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(args.graphMessageId)}/move`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+          Prefer: 'IdType="ImmutableId"',
+        },
+        body: JSON.stringify({ destinationId: args.destinationId }),
+      });
+      if (!res.ok) throw graphErrorFromResponse(res);
+      const body = (await res.json()) as {
+        id: string;
+        parentFolderId?: string;
+      };
+      return {
+        resultingGraphMessageId: body.id,
+        destinationFolderId: body.parentFolderId ?? args.destinationId,
+        movedAt: new Date(),
+      };
     },
     async getAttachmentBytes(args) {
       // Sprint 3 Checkpoint 15D (2026-07-24) — Fetch attachment bytes.

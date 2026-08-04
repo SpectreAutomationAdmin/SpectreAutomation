@@ -281,6 +281,32 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     return { sentAt: new Date() };
   }
 
+  // Sprint 3 · Checkpoint 16H (2026-08-04) — moveMessage mock.
+  private moveOutcome: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_MESSAGE_NOT_FOUND" | "TERMINAL_INSUFFICIENT_SCOPE" = "SUCCESS";
+  public capturedMoveCalls: Array<import("./microsoft-graph-delegated").MoveMessageArgs> = [];
+  setMoveOutcome(o: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_MESSAGE_NOT_FOUND" | "TERMINAL_INSUFFICIENT_SCOPE"): void {
+    this.moveOutcome = o;
+  }
+  async moveMessage(args: import("./microsoft-graph-delegated").MoveMessageArgs): Promise<import("./microsoft-graph-delegated").MoveMessageResult> {
+    this.capturedMoveCalls.push(args);
+    if (!args.graphMessageId) throw new Error("moveMessage requires graphMessageId");
+    if (!args.destinationId) throw new Error("moveMessage requires destinationId");
+    if (this.moveOutcome === "RETRYABLE_THROTTLE") {
+      throw makeMsalError({ errorCode: "temporarily_unavailable", response: { status: 429 } });
+    }
+    if (this.moveOutcome === "TERMINAL_MESSAGE_NOT_FOUND") {
+      throw makeMsalError({ errorCode: "MESSAGE_NOT_FOUND", response: { status: 404 } });
+    }
+    if (this.moveOutcome === "TERMINAL_INSUFFICIENT_SCOPE") {
+      throw makeMsalError({ errorCode: "insufficient_scope", response: { status: 403 } });
+    }
+    return {
+      resultingGraphMessageId: `moved-${args.graphMessageId}`,
+      destinationFolderId: args.destinationId,
+      movedAt: new Date(),
+    };
+  }
+
   // Sprint 3 Checkpoint 15D — attachment-bytes mock.
   private fixtureAttachmentBytes = new Map<string, Buffer>();
   private getAttachmentBytesOutcome: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_INVALID_GRANT" = "SUCCESS";

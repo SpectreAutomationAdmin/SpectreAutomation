@@ -88,6 +88,15 @@ const schema = z.object({
   // pair below is reachable.
   MAILBOX_INTEGRATION_ENABLED: z.enum(["true", "false"]).default("false"),
 
+  // Sprint 3 · Checkpoint 16H (2026-08-04) — three independent
+  // feature gates for the Outlook capabilities. Deployed OFF; the
+  // founder flips each to "true" separately as consent + verification
+  // lands. Rollback: flip back to "false" without disconnecting
+  // Outlook or removing consented permissions.
+  OUTLOOK_CALENDAR_READ_ENABLED: z.enum(["true", "false"]).default("false"),
+  OUTLOOK_REPLY_ENABLED: z.enum(["true", "false"]).default("false"),
+  OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED: z.enum(["true", "false"]).default("false"),
+
   // Canonical public base URL for THIS deployment — used to construct
   // OAuth callback + Graph webhook + Graph lifecycle URLs. Never
   // hardcoded anywhere in src/. Must be an absolute https URL in
@@ -262,6 +271,21 @@ if (env.NEXT_PUBLIC_APP_URL !== env.APP_URL) {
 // disabled deployment MUST have zero code paths that hit Graph.
 export function isMailboxIntegrationEnabled(): boolean {
   return env.MAILBOX_INTEGRATION_ENABLED === "true";
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — three independent Outlook
+// capability gates. Rolled off by default so a deploy alone does not
+// begin calling Graph write endpoints. Each MUST also require
+// isMailboxIntegrationEnabled() at the caller — these three flags
+// are additional gates, not replacements for the master switch.
+export function isOutlookCalendarReadEnabled(): boolean {
+  return isMailboxIntegrationEnabled() && env.OUTLOOK_CALENDAR_READ_ENABLED === "true";
+}
+export function isOutlookReplyEnabled(): boolean {
+  return isMailboxIntegrationEnabled() && env.OUTLOOK_REPLY_ENABLED === "true";
+}
+export function isOutlookArchiveOnCompletionEnabled(): boolean {
+  return isMailboxIntegrationEnabled() && env.OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED === "true";
 }
 
 // Sprint 2 Step 13A (2026-07-21) — controlled-sync-mode invariants.

@@ -8647,11 +8647,88 @@ model WorkIntakeItem {
   apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
   domainCorrections           WorkDomainCorrection[]
   proposedCommitments         ProposedCommitment[]
+  completionEvents            WorkCompletionEvent[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
   @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — canonical completion
+// event emitter for every WI terminal transition. Downstream
+// services (Outlook archive worker, analytics) consume this without
+// each caller having to know about every side-effect.
+model WorkCompletionEvent {
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  workIntakeItem      WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  completedByUserId   String
+  completedAt         DateTime  @default(now())
+  completionType      String
+  metadataJson        String?
+
+  archiveMutations    OutlookArchiveMutation[]
+
+  @@index([clubId, completedAt])
+  @@index([workIntakeItemId])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — Spectre-originated
+// Outlook reply record. Row exists for audit + idempotency + so
+// delta-sync can recognise its own sent messages and not create
+// duplicate Work Intake items.
+model OutlookReplyMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeId          String
+  mailboxConnectionId   String
+  sourceEmailMessageId  String
+  initiatedByUserId     String
+  mode                  String
+  status                String    @default("DRAFT")
+  graphMessageId        String?
+  graphConversationId   String?
+  sentAt                DateTime?
+  attemptCount          Int       @default(0)
+  errorCode             String?
+  idempotencyKey        String    @unique
+  bodyCiphertext        String?
+  bodySecretRef         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([clubId, createdAt])
+  @@index([workIntakeId])
+  @@index([sourceEmailMessageId])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — durable Outlook archive
+// job. Idempotent per (completionEvent, message).
+model OutlookArchiveMutation {
+  id                        String    @id @default(cuid())
+  clubId                    String
+  workIntakeId              String
+  workCompletionEventId     String?
+  workCompletionEvent       WorkCompletionEvent? @relation(fields: [workCompletionEventId], references: [id], onDelete: SetNull)
+  emailMessageId            String
+  originalExternalMessageId String
+  resultingExternalMessageId String?
+  originalFolderId          String?
+  destinationFolderId       String?
+  mailboxConnectionId       String
+  status                    String    @default("PENDING")
+  attemptCount              Int       @default(0)
+  lastAttemptAt             DateTime?
+  completedAt               DateTime?
+  errorCode                 String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@unique([workCompletionEventId, emailMessageId])
+  @@index([clubId, status])
+  @@index([workIntakeId])
 }
 
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's

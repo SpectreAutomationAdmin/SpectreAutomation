@@ -50,7 +50,7 @@ export class WorkIntakeActionError extends Error {
   }
 }
 
-export async function resolveIntake(ctx: ActionCtx, note?: string): Promise<void> {
+export async function resolveIntake(ctx: ActionCtx, note?: string, opts?: { completionType?: "RESOLVED" | "REPLIED_AND_CLOSED" | "OTHER" }): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
   await prisma.$transaction([
     prisma.workIntakeItem.update({
@@ -72,6 +72,21 @@ export async function resolveIntake(ctx: ActionCtx, note?: string): Promise<void
       },
     }),
   ]);
+  // Sprint 3 · Checkpoint 16H — emit canonical completion event
+  // AFTER the transaction commits, so the archive worker never
+  // races the WI status write. Failure here does NOT roll back
+  // the resolve (the worker owns its own retries).
+  try {
+    const { emitWorkCompletionEvent } = await import("./completion");
+    await emitWorkCompletionEvent({
+      workIntakeItemId: it.id,
+      clubId: it.clubId,
+      completedByUserId: ctx.principal.id,
+      completionType: opts?.completionType ?? "RESOLVED",
+    });
+  } catch {
+    // Never block resolve on event emission.
+  }
 }
 
 export async function reopenIntake(ctx: ActionCtx): Promise<void> {

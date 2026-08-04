@@ -8670,11 +8670,92 @@ model WorkIntakeItem {
   // classification; no subject-specific hardcoded rules.
   domainCorrections WorkDomainCorrection[]
   proposedCommitments ProposedCommitment[]
+  completionEvents  WorkCompletionEvent[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
   @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — canonical completion
+// event. Every place that transitions a Work Intake item to a
+// terminal state emits ONE of these. Downstream services (Outlook
+// archive worker, audit log, analytics) consume them without each
+// caller having to know about every downstream side-effect.
+model WorkCompletionEvent {
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  workIntakeItem      WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  completedByUserId   String
+  completedAt         DateTime  @default(now())
+  completionType      String    // RESOLVED | POSTED_AND_CLEARED | REPLIED_AND_CLOSED | APPROVED_AND_COMPLETED | OTHER
+  metadataJson        String?
+
+  archiveMutations    OutlookArchiveMutation[]
+
+  @@index([clubId, completedAt])
+  @@index([workIntakeItemId])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — durable record of a
+// reply sent through the connected user's Outlook mailbox from
+// Spectre. Never duplicates the raw body — the actual email lives
+// in Outlook Sent Items; this row records the send attempt +
+// outcome for audit, idempotency, and delta-sync recognition.
+model OutlookReplyMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeId          String
+  mailboxConnectionId   String
+  sourceEmailMessageId  String
+  initiatedByUserId     String
+  mode                  String    // REPLY | REPLY_ALL
+  status                String    @default("DRAFT")   // DRAFT | PENDING | SENDING | SENT | FAILED_RETRYABLE | FAILED_TERMINAL | CANCELLED
+  graphMessageId        String?
+  graphConversationId   String?
+  sentAt                DateTime?
+  attemptCount          Int       @default(0)
+  errorCode             String?
+  idempotencyKey        String    @unique
+  bodyCiphertext        String?   // Optional encrypted draft body (KMS envelope)
+  bodySecretRef         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([clubId, createdAt])
+  @@index([workIntakeId])
+  @@index([sourceEmailMessageId])
+}
+
+// Sprint 3 · Checkpoint 16H (2026-08-04) — durable record of an
+// Outlook archive move triggered by a Spectre completion event.
+// Idempotency key = (workCompletionEventId, sourceEmailMessageId).
+model OutlookArchiveMutation {
+  id                        String    @id @default(cuid())
+  clubId                    String
+  workIntakeId              String
+  workCompletionEventId     String?
+  workCompletionEvent       WorkCompletionEvent? @relation(fields: [workCompletionEventId], references: [id], onDelete: SetNull)
+  emailMessageId            String
+  originalExternalMessageId String
+  resultingExternalMessageId String?
+  originalFolderId          String?
+  destinationFolderId       String?
+  mailboxConnectionId       String
+  status                    String    @default("PENDING")   // PENDING | RUNNING | SUCCEEDED | RETRYABLE | FAILED_TERMINAL | NOT_REQUIRED
+  attemptCount              Int       @default(0)
+  lastAttemptAt             DateTime?
+  completedAt               DateTime?
+  errorCode                 String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  // Idempotency: at most one row per (completion, message).
+  @@unique([workCompletionEventId, emailMessageId])
+  @@index([clubId, status])
+  @@index([workIntakeId])
 }
 
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
