@@ -1,49 +1,100 @@
 #!/usr/bin/env tsx
-// Sprint 3 · Checkpoint 16F revised (2026-08-04) — founder-review
-// tenant cleanup.
+// Sprint 3 · Checkpoint 16F revised v2 (2026-08-04) — founder-review
+// tenant cleanup, provenance-first.
 //
-// Coulee Ridge is the sole staging / demo / founder-review tenant.
-// This script removes the SYNTHETIC OPERATIONAL WRAPPERS
-// (Work Intake cards, fixture Members + AR balances, fixture
-// Vendors + APInvoices, fixture statements) from Coulee Ridge while
-// PRESERVING the underlying regression IngestedDocuments in place on
-// Coulee Ridge and capturing a per-SHA-256 RegressionExpectation so
-// the benchmark runner can still evaluate them.
+// This cleanup engine uses a strict, ordered provenance hierarchy.
+// Filenames and subjects are NEVER primary evidence. A genuine Outlook
+// email or founder-uploaded document ALWAYS defaults to operational
+// founder-review data unless POSITIVE provenance proves it is a fixture.
 //
-// Regression documents remain readable + benchmarkable on Coulee
-// Ridge — they simply no longer materialise as visible Work Intake
-// items, Members, Vendors, or AR balances.
+// PROVENANCE HIERARCHY (highest priority first):
 //
-// Preserves:
-//   - real founder-sent Outlook attachments (Oakcreek, Oxio,
-//     Microsoft, CPA Alberta, etc.)
-//   - real system-generated Work Intake tied to those documents
-//   - real Vendors backed by real invoices with no fixture markers
+//   Rule 1 — Seeded entity relationships:
+//     A WorkIntakeItem is fixture if it has an origin (WorkIntakeOrigin
+//     OR EmailWorkIntakeOrigin) that points at:
+//       - a fixture Member (email endsWith @fixture.test)
+//       - a fixture Vendor (vendorNumber startsWith V-c15h-fixture-)
+//       - a fixture IngestedDocument (sourceReferenceId matches a
+//         known fixture-generator namespace pattern — see
+//         FIXTURE_DOC_SOURCE_REF_PATTERNS below)
 //
-// Removes / suppresses:
-//   - Work Intake items with fixture subject markers
-//     (Verification-Invoice / C15D-Verify / c15h / c15g /
-//      test baseline / ninety day / sixty day / onetwenty day)
-//   - Work Intake items with a fixture classificationRuleKey
-//   - Work Intake items with zero origins (orphans)
-//   - AR-aging Work Intake items whose Member origin is a
-//     @fixture.test member
-//   - Fixture Members (@fixture.test) + MemberAccount rows
-//   - Fixture Vendors (V-c15h-fixture-*) + APInvoice rows
+//   Rule 2 — Fixture namespace on classificationRuleKey:
+//     A WI is fixture if its classificationRuleKey references a
+//     fixture namespace, e.g. contains "c15h-fixture" or "c15g", or
+//     is a per-vendor statement rule key whose vendor is a fixture
+//     vendor (matched by ID against §1 discovered fixture vendors).
 //
-// Refuses production. Defaults to --dry-run.
+//   Rule 3 — Truly-orphan absence-of-provenance:
+//     A WI is fixture if it has ZERO EmailWorkIntakeOrigin AND ZERO
+//     WorkIntakeOrigin AND ZERO ApIntakeSource rows. This is the
+//     ABSENCE of any positive genuine origin — no real Outlook email
+//     backs it, no real upload backs it, no real system detection
+//     backs it. Manually-created or broken test-path artifacts.
 //
-// Usage:
+//   Rule 4 — RegressionExpectation linkage (future):
+//     Not applied here; captured for the runner. A WI whose
+//     canonical doc has a RegressionExpectation row will be
+//     recognised as regression by the runner.
+//
+//   Rule 5 (diagnostic ONLY, NOT decisive):
+//     Filename / subject / sender text. Recorded in the audit log
+//     for the human reviewer but does not decide DELETE. A future
+//     genuine "Verification-Invoice.pdf" from a real vendor will
+//     pass through this engine untouched because Rules 1-3 will
+//     positively identify it as genuine.
+//
+// USAGE:
 //   npx tsx bin/c16f-founder-tenant-cleanup.ts \
 //     --founder-club=<coulee-ridge-id> \
 //     [--dry-run|--apply]
+//
+// Refuses production. Defaults to --dry-run.
 
 import { prisma } from "../src/lib/prisma";
 
-interface CleanupPlan {
-  founderClubId: string;
-  apply: boolean;
+// ---------------------------------------------------------------------------
+// Provenance markers — POSITIVE evidence patterns for fixture data.
+// ---------------------------------------------------------------------------
+
+// IngestedDocument.sourceReferenceId patterns for fixture-generated docs.
+// Real Outlook attachments produce cuid-format IDs (`cm...`, 25 chars). No
+// fixture pattern matches a cuid. Adding a new fixture generator?
+// Add its namespace here.
+const FIXTURE_DOC_SOURCE_REF_PATTERNS: RegExp[] = [
+  /^c15h-fixture:/i,       // bin/c15h-founder-fixture.ts
+  /^c15d-verify-/i,        // c15d verification runs (timestamped)
+  /^c15e-verify-/i,        // c15e verification runs (timestamped)
+  /^stmt-0\./,             // ad-hoc statement fixture (Math.random-based)
+  /^c15g/i,                // any future c15g fixture
+  /:fixture:/i,            // generic fixture-namespace convention
+];
+
+// classificationRuleKey patterns for fixture-created WorkIntakeItems.
+const FIXTURE_RULE_KEY_PATTERNS: RegExp[] = [
+  /c15h-fixture/i,
+  /c15g/i,
+];
+
+// Member fixture marker.
+const FIXTURE_MEMBER_EMAIL_SUFFIX = "@fixture.test";
+// Vendor fixture marker.
+const FIXTURE_VENDOR_NUMBER_PREFIX = "V-c15h-fixture-";
+
+function isFixtureDocSourceRef(ref: string | null | undefined): boolean {
+  if (!ref) return false;
+  return FIXTURE_DOC_SOURCE_REF_PATTERNS.some((re) => re.test(ref));
 }
+
+function isFixtureRuleKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  return FIXTURE_RULE_KEY_PATTERNS.some((re) => re.test(key));
+}
+
+// ---------------------------------------------------------------------------
+// Args + guards.
+// ---------------------------------------------------------------------------
+
+interface CleanupPlan { founderClubId: string; apply: boolean; }
 
 function parseArgs(argv: string[]): CleanupPlan {
   let founderClubId: string | null = null;
@@ -76,6 +127,27 @@ function refuseProduction() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Classification.
+// ---------------------------------------------------------------------------
+
+interface WiClassification {
+  id: string;
+  subject: string;
+  classification: string | null;
+  status: string;
+  ruleKey: string | null;
+  action: "DELETE" | "PRESERVE";
+  reasonRule: "R1_fixture_member_origin" | "R1_fixture_vendor_origin" | "R1_fixture_doc_origin"
+    | "R2_fixture_rule_key" | "R2_fixture_vendor_in_rule_key"
+    | "R3_no_provenance"
+    | "PRESERVE_genuine_email_origin"
+    | "PRESERVE_genuine_generic_origin"
+    | "PRESERVE_no_positive_fixture_evidence";
+  evidence: string;
+  supportingDocIds: string[];
+}
+
 async function main() {
   const plan = parseArgs(process.argv.slice(2));
   refuseProduction();
@@ -85,96 +157,231 @@ async function main() {
     select: { id: true, slug: true, name: true, isDemoTenant: true, stagingDataMode: true },
   });
   if (!founder) { console.error("REFUSED: founder club not found"); process.exit(5); }
-  // Guard: must be a staging/founder-review club, not production.
   if (founder.stagingDataMode !== "FOUNDER_REVIEW" && founder.stagingDataMode !== "REGRESSION") {
-    console.error(
-      `REFUSED: club ${founder.slug} has stagingDataMode=${founder.stagingDataMode}. ` +
-      `Cleanup only runs on FOUNDER_REVIEW or REGRESSION tenants.`,
-    );
+    console.error(`REFUSED: club ${founder.slug} has stagingDataMode=${founder.stagingDataMode}. Cleanup only runs on FOUNDER_REVIEW or REGRESSION.`);
     process.exit(6);
   }
 
   console.log(`Founder-review club: ${founder.slug} (${founder.name})`);
-  console.log(`  stagingDataMode=${founder.stagingDataMode}, isDemoTenant=${founder.isDemoTenant}`);
+  console.log(`  stagingDataMode=${founder.stagingDataMode}`);
   console.log(`Mode:                ${plan.apply ? "APPLY" : "DRY-RUN"}`);
   console.log(``);
 
-  // -------------------------------------------------------------------------
-  // Identify targets from the 16E inventory buckets.
-  // -------------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Discover fixture entity sets (positive provenance).
+  // ------------------------------------------------------------------
 
   const fixtureMembers = await prisma.member.findMany({
-    where: { clubId: founder.id, email: { endsWith: "@fixture.test" } },
+    where: { clubId: founder.id, email: { endsWith: FIXTURE_MEMBER_EMAIL_SUFFIX } },
     select: { id: true, firstName: true, lastName: true, email: true },
   });
   const fixtureMemberIds = new Set(fixtureMembers.map((m) => m.id));
 
   const fixtureVendors = await prisma.vendor.findMany({
-    where: { clubId: founder.id, vendorNumber: { startsWith: "V-c15h-fixture-" } },
+    where: { clubId: founder.id, vendorNumber: { startsWith: FIXTURE_VENDOR_NUMBER_PREFIX } },
     select: { id: true, vendorNumber: true, legalName: true },
   });
+  const fixtureVendorIds = new Set(fixtureVendors.map((v) => v.id));
 
-  const allWorkIntakes = await prisma.workIntakeItem.findMany({
+  // Fixture MemberAccounts belong to fixture members. AR-aging cards
+  // point at MemberAccount via MEMBER_ACCOUNT origins.
+  const fixtureMemberAccounts = await prisma.memberAccount.findMany({
+    where: { memberId: { in: [...fixtureMemberIds] } },
+    select: { id: true },
+  });
+  const fixtureMemberAccountIds = new Set(fixtureMemberAccounts.map((a) => a.id));
+
+  // Fixture IngestedDocuments (positive fixture namespace evidence).
+  const allDocs = await prisma.ingestedDocument.findMany({
+    where: { clubId: founder.id },
+    select: { id: true, filename: true, sha256Hash: true, sourceKind: true, sourceReferenceId: true, mimeType: true, byteLength: true },
+  });
+  const fixtureDocIds = new Set(allDocs.filter((d) => isFixtureDocSourceRef(d.sourceReferenceId)).map((d) => d.id));
+  const genuineDocIds = new Set(allDocs.filter((d) => !fixtureDocIds.has(d.id)).map((d) => d.id));
+
+  // Fixture vendor IDs may appear inside per-vendor statement classification
+  // rule keys like: ap-statement:{clubId}:{vendorId}
+  const fixtureVendorRuleKeyPatterns = [...fixtureVendorIds].map((vid) => new RegExp(`:${vid}(:|$)`));
+
+  // ------------------------------------------------------------------
+  // Classify every WI item.
+  // ------------------------------------------------------------------
+
+  const allWi = await prisma.workIntakeItem.findMany({
     where: { clubId: founder.id },
     select: {
       id: true, classification: true, status: true,
       displaySubject: true, displaySender: true, classificationRuleKey: true,
+      emailOrigins: { select: { id: true } },
       origins: { select: { kind: true, referenceId: true } },
-      apIntakeSourcesForCanonical: { select: { id: true, ingestedDocumentId: true } },
+      apIntakeSourcesForCanonical: {
+        select: { id: true, ingestedDocumentId: true },
+      },
     },
+    orderBy: { createdAt: "asc" },
   });
 
-  const workIntakesToRemove: Array<{
-    id: string; classification: string; subject: string;
-    reason: string; supportingIngestedDocumentIds: string[];
-  }> = [];
-  for (const w of allWorkIntakes) {
-    const supportingDocs = w.apIntakeSourcesForCanonical.map((s) => s.ingestedDocumentId);
-    const subj = (w.displaySubject ?? "").toLowerCase();
-    const isFixtureSubject = /verification-invoice|c15d-verify|c15h|c15g|test baseline|ninety day|sixty day|onetwenty day/i.test(subj);
-    const isFixtureRuleKey = /c15h-fixture|c15g/.test(w.classificationRuleKey ?? "");
-    const isOrphan = w.origins.length === 0;
-    const isArAgingFixture = w.classification?.startsWith("AR_AGING_") &&
-      w.origins.some((o) => o.kind === "MEMBER" && fixtureMemberIds.has(o.referenceId));
+  const classifications: WiClassification[] = [];
+  for (const w of allWi) {
+    const supportingDocIds = w.apIntakeSourcesForCanonical.map((s) => s.ingestedDocumentId);
+    const docOriginIds = w.origins.filter((o) => o.kind === "INGESTED_DOCUMENT").map((o) => o.referenceId);
+    const allDocRefs = [...new Set([...supportingDocIds, ...docOriginIds])];
 
-    if (isFixtureSubject) {
-      workIntakesToRemove.push({ id: w.id, classification: w.classification ?? "", subject: subj.slice(0, 60), reason: "fixture_subject_marker", supportingIngestedDocumentIds: supportingDocs });
-    } else if (isFixtureRuleKey) {
-      workIntakesToRemove.push({ id: w.id, classification: w.classification ?? "", subject: subj.slice(0, 60), reason: "fixture_rule_key", supportingIngestedDocumentIds: supportingDocs });
-    } else if (isOrphan) {
-      workIntakesToRemove.push({ id: w.id, classification: w.classification ?? "", subject: subj.slice(0, 60), reason: "orphan_no_origins", supportingIngestedDocumentIds: supportingDocs });
-    } else if (isArAgingFixture) {
-      workIntakesToRemove.push({ id: w.id, classification: w.classification ?? "", subject: subj.slice(0, 60), reason: "ar_aging_fixture_member", supportingIngestedDocumentIds: supportingDocs });
+    // Rule 1a — Fixture-Member origin.
+    const memberOrigin = w.origins.find((o) => o.kind === "MEMBER" && fixtureMemberIds.has(o.referenceId));
+    if (memberOrigin) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R1_fixture_member_origin",
+        evidence: `origin.kind=MEMBER refs fixture member ${memberOrigin.referenceId.slice(-8)}`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
     }
+    // Rule 1a' — MEMBER_ACCOUNT origin belonging to fixture member.
+    const memberAccountOrigin = w.origins.find((o) => o.kind === "MEMBER_ACCOUNT" && fixtureMemberAccountIds.has(o.referenceId));
+    if (memberAccountOrigin) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R1_fixture_member_origin",
+        evidence: `origin.kind=MEMBER_ACCOUNT refs fixture-member's account`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Rule 1b — Fixture-Vendor origin.
+    const vendorOrigin = w.origins.find((o) => o.kind === "VENDOR" && fixtureVendorIds.has(o.referenceId));
+    if (vendorOrigin) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R1_fixture_vendor_origin",
+        evidence: `origin.kind=VENDOR refs fixture vendor`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Rule 1c — Fixture-IngestedDocument origin.
+    const fixtureDocOrigin = allDocRefs.find((id) => fixtureDocIds.has(id));
+    if (fixtureDocOrigin) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R1_fixture_doc_origin",
+        evidence: `INGESTED_DOCUMENT origin refs fixture doc (sourceReferenceId matches fixture namespace)`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Rule 2 — Fixture rule key.
+    if (isFixtureRuleKey(w.classificationRuleKey)) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R2_fixture_rule_key",
+        evidence: `classificationRuleKey matches fixture namespace`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Rule 2' — Fixture-vendor ID embedded in per-vendor statement rule key.
+    if (w.classificationRuleKey && fixtureVendorRuleKeyPatterns.some((re) => re.test(w.classificationRuleKey!))) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R2_fixture_vendor_in_rule_key",
+        evidence: `classificationRuleKey embeds fixture vendorId`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Rule 3 — Truly orphan (no positive genuine origin at all).
+    const emailOriginCount = w.emailOrigins.length;
+    const genericOriginCount = w.origins.length;
+    const apCanonCount = w.apIntakeSourcesForCanonical.length;
+    if (emailOriginCount === 0 && genericOriginCount === 0 && apCanonCount === 0) {
+      classifications.push({
+        id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+        classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+        action: "DELETE", reasonRule: "R3_no_provenance",
+        evidence: `no emailOrigins, no origins, no apIntakeSources`,
+        supportingDocIds: allDocRefs,
+      });
+      continue;
+    }
+    // Otherwise: PRESERVE. Positive genuine provenance.
+    let preserveRule: WiClassification["reasonRule"];
+    let evidence: string;
+    if (emailOriginCount > 0) {
+      preserveRule = "PRESERVE_genuine_email_origin";
+      evidence = `emailOrigins=${emailOriginCount} (positive Outlook provenance)`;
+    } else if (genericOriginCount > 0 || apCanonCount > 0) {
+      preserveRule = "PRESERVE_genuine_generic_origin";
+      evidence = `origins=${genericOriginCount}, apIntakeSources=${apCanonCount} (positive genuine provenance)`;
+    } else {
+      preserveRule = "PRESERVE_no_positive_fixture_evidence";
+      evidence = "default-preserve (no positive fixture evidence)";
+    }
+    classifications.push({
+      id: w.id, subject: (w.displaySubject ?? "").slice(0, 70),
+      classification: w.classification, status: w.status, ruleKey: w.classificationRuleKey,
+      action: "PRESERVE", reasonRule: preserveRule, evidence,
+      supportingDocIds: allDocRefs,
+    });
   }
 
-  // Collect IngestedDocuments supporting the fixture work — these
-  // remain on Coulee Ridge but each will get a RegressionExpectation.
+  const deleteList = classifications.filter((c) => c.action === "DELETE");
+  const preserveList = classifications.filter((c) => c.action === "PRESERVE");
+
+  // ------------------------------------------------------------------
+  // Regression assets: fixture docs backed by DELETE WIs, capture
+  // RegressionExpectation for each.
+  // ------------------------------------------------------------------
+
   const regressionDocIds = new Set<string>();
-  for (const w of workIntakesToRemove) {
-    for (const d of w.supportingIngestedDocumentIds) regressionDocIds.add(d);
-    const full = allWorkIntakes.find((x) => x.id === w.id);
-    for (const o of full?.origins ?? []) {
-      if (o.kind === "INGESTED_DOCUMENT") regressionDocIds.add(o.referenceId);
-    }
+  for (const c of deleteList) {
+    for (const id of c.supportingDocIds) if (fixtureDocIds.has(id)) regressionDocIds.add(id);
   }
-  const regressionDocsList = await prisma.ingestedDocument.findMany({
-    where: { id: { in: [...regressionDocIds] }, clubId: founder.id },
-    select: { id: true, filename: true, sha256Hash: true },
-  });
+  const regressionDocs = allDocs.filter((d) => regressionDocIds.has(d.id));
 
-  console.log(`=== TARGETS ===`);
-  console.log(`Fixture Members:                 ${fixtureMembers.length}`);
+  // ------------------------------------------------------------------
+  // Report.
+  // ------------------------------------------------------------------
+
+  console.log(`=== DISCOVERED FIXTURE ENTITIES (positive provenance) ===`);
+  console.log(`Fixture Members (email @fixture.test):   ${fixtureMembers.length}`);
+  console.log(`Fixture MemberAccounts (derived):        ${fixtureMemberAccounts.length}`);
+  console.log(`Fixture Vendors (V-c15h-fixture-* #):    ${fixtureVendors.length}`);
+  console.log(`Fixture IngestedDocs (sourceRef prefix): ${fixtureDocIds.size}`);
+  console.log(`Genuine IngestedDocs (real Outlook):     ${genuineDocIds.size}`);
+  console.log(``);
+  console.log(`=== WORK INTAKE CLASSIFICATION (${allWi.length} total) ===`);
+  const byRule: Record<string, number> = {};
+  for (const c of classifications) byRule[c.reasonRule] = (byRule[c.reasonRule] ?? 0) + 1;
+  for (const [k, v] of Object.entries(byRule)) console.log(`  ${k.padEnd(45)} ${v}`);
+  console.log(``);
+  console.log(`=== WORK INTAKE DELETE (${deleteList.length}) ===`);
+  for (const c of deleteList) {
+    console.log(`  · [${c.reasonRule}] ${c.status.padEnd(14)} ${(c.classification ?? "").padEnd(24)} — ${c.subject}`);
+    console.log(`    evidence: ${c.evidence}`);
+  }
+  console.log(``);
+  console.log(`=== WORK INTAKE PRESERVE (${preserveList.length}) ===`);
+  for (const c of preserveList) {
+    console.log(`  · [${c.reasonRule}] ${c.status.padEnd(14)} ${(c.classification ?? "").padEnd(24)} — ${c.subject}`);
+    console.log(`    evidence: ${c.evidence}`);
+  }
+  console.log(``);
+  console.log(`=== FIXTURE MEMBERS (Decision A → DELETE cascade) ===`);
   for (const m of fixtureMembers) console.log(`  · ${m.firstName} ${m.lastName} <${m.email}>`);
-  console.log(`Fixture Vendors:                 ${fixtureVendors.length}`);
+  console.log(``);
+  console.log(`=== FIXTURE VENDORS (${fixtureVendors.length}) ===`);
   for (const v of fixtureVendors) console.log(`  · ${v.vendorNumber} — ${v.legalName}`);
-  console.log(`Work Intake items to remove:     ${workIntakesToRemove.length}`);
-  const byReason: Record<string, number> = {};
-  for (const w of workIntakesToRemove) byReason[w.reason] = (byReason[w.reason] ?? 0) + 1;
-  for (const [r, n] of Object.entries(byReason)) console.log(`    ${r}: ${n}`);
-  console.log(`IngestedDocuments preserved      ${regressionDocsList.length}`);
-  console.log(`  (as regression assets on Coulee Ridge; NOT moved,`);
-  console.log(`   NOT deleted — each gets a RegressionExpectation)`);
+  console.log(``);
+  console.log(`=== REGRESSION DOCS (preserved in place, ${regressionDocs.length}) ===`);
+  for (const d of regressionDocs) console.log(`  · sha:${d.sha256Hash.slice(-8)}  ${d.filename}`);
 
   if (!plan.apply) {
     console.log(``);
@@ -183,46 +390,47 @@ async function main() {
     return;
   }
 
+  // ------------------------------------------------------------------
+  // Execute.
+  // ------------------------------------------------------------------
+
   console.log(``);
   console.log(`=== EXECUTING ===`);
 
-  // 1. Capture RegressionExpectation for every supporting doc.
-  //    Category inferred from filename; expected fields left null
-  //    (curation pass fills them in later per §7). The runner treats
-  //    null expected fields as "not asserted" and only reports the
-  //    dimensions with expectations set.
-  const upsertedExpectations: string[] = [];
-  for (const doc of regressionDocsList) {
-    const name = doc.filename ?? "";
-    const category = /verification/i.test(name) ? "VERIFICATION_FIXTURE"
-      : /c15h/i.test(name) ? "AP_FIXTURE_C15H"
-      : /c15g/i.test(name) ? "STATEMENT_FIXTURE_C15G"
-      : /oakcreek|oxio|microsoft|cpa/i.test(name) ? "REAL_REGRESSION"
-      : "UNCATEGORIZED";
-    const label = (doc.filename ?? doc.sha256Hash).slice(0, 80);
+  // 1. Capture RegressionExpectation for each fixture doc.
+  let capturedRegressions = 0;
+  for (const d of regressionDocs) {
+    const name = d.filename ?? "";
+    const category =
+      /^c15h-fixture:/i.test(d.sourceReferenceId ?? "") ? "AP_FIXTURE_C15H"
+      : /^c15d-verify-/i.test(d.sourceReferenceId ?? "") ? "AP_FIXTURE_C15D_VERIFY"
+      : /^c15e-verify-/i.test(d.sourceReferenceId ?? "") ? "AP_FIXTURE_C15E_VERIFY"
+      : /^stmt-0\./.test(d.sourceReferenceId ?? "") ? "STATEMENT_FIXTURE_ADHOC"
+      : "UNCATEGORIZED_FIXTURE";
     try {
       await prisma.regressionExpectation.upsert({
-        where: { documentSha256: doc.sha256Hash },
+        where: { documentSha256: d.sha256Hash },
         create: {
-          documentSha256: doc.sha256Hash, label, category,
-          notes: `captured_by_16f_cleanup:founder=${founder.slug}`,
+          documentSha256: d.sha256Hash, label: (name || d.sha256Hash).slice(0, 80),
+          category, notes: `captured_by_16f_cleanup_v2:founder=${founder.slug}:sourceRef=${(d.sourceReferenceId ?? "").slice(0, 40)}`,
         },
-        update: {},   // preserve any manual curation on re-runs
+        update: {},
       });
-      upsertedExpectations.push(doc.sha256Hash.slice(-8));
+      capturedRegressions++;
     } catch (e) {
       console.error(`  ! could not upsert expectation for ${name}: ${(e as Error).message.slice(0, 80)}`);
     }
   }
-  console.log(`Captured ${upsertedExpectations.length} RegressionExpectations`);
+  console.log(`Captured ${capturedRegressions} RegressionExpectations`);
 
-  // 2. Delete Work Intake items. Findings, origins, and
-  //    ApIntakeSource rows cascade per schema.
-  const wiIds = workIntakesToRemove.map((w) => w.id);
-  const wiDel = await prisma.workIntakeItem.deleteMany({ where: { id: { in: wiIds } } });
-  console.log(`Deleted ${wiDel.count} WorkIntakeItems (regression IngestedDocuments preserved)`);
+  // 2. Delete WorkIntakeItems (cascade WorkIntakeOrigin, EmailWorkIntakeOrigin,
+  //    WorkIntakeItemFinding, ApIntakeSource per schema).
+  const wiDel = await prisma.workIntakeItem.deleteMany({
+    where: { id: { in: deleteList.map((c) => c.id) } },
+  });
+  console.log(`Deleted ${wiDel.count} WorkIntakeItems`);
 
-  // 3. Delete fixture Vendors + related APInvoice rows.
+  // 3. Delete fixture Vendors + APInvoices belonging to them.
   if (fixtureVendors.length > 0) {
     const vendorIds = fixtureVendors.map((v) => v.id);
     const invoiceDel = await prisma.aPInvoice.deleteMany({
@@ -234,15 +442,27 @@ async function main() {
     console.log(`Deleted ${invoiceDel.count} fixture APInvoices + ${vendorDel.count} fixture Vendors`);
   }
 
-  // 4. Delete fixture Members + MemberAccount rows.
+  // 4. Cascade-delete fixture Members: Charges + Payments + CollectionNotices
+  //    + MemberAccount + Member. NONE of these have onDelete:Cascade at the
+  //    Prisma level for Member, so this order is required.
   if (fixtureMembers.length > 0) {
+    const memberIds = [...fixtureMemberIds];
+    const collectionNoticeDel = await prisma.collectionNotice.deleteMany({
+      where: { clubId: founder.id, memberId: { in: memberIds } },
+    }).catch(() => ({ count: 0 }));
+    const chargeDel = await prisma.charge.deleteMany({
+      where: { clubId: founder.id, memberId: { in: memberIds } },
+    });
+    const paymentDel = await prisma.payment.deleteMany({
+      where: { clubId: founder.id, memberId: { in: memberIds } },
+    });
     const accountDel = await prisma.memberAccount.deleteMany({
-      where: { memberId: { in: [...fixtureMemberIds] } },
+      where: { memberId: { in: memberIds } },
     });
     const memberDel = await prisma.member.deleteMany({
-      where: { id: { in: [...fixtureMemberIds] }, clubId: founder.id },
+      where: { id: { in: memberIds }, clubId: founder.id },
     });
-    console.log(`Deleted ${accountDel.count} fixture MemberAccounts + ${memberDel.count} fixture Members`);
+    console.log(`Deleted ${collectionNoticeDel.count} CollectionNotices, ${chargeDel.count} Charges, ${paymentDel.count} Payments, ${accountDel.count} MemberAccounts, ${memberDel.count} Members`);
   }
 
   console.log(``);
@@ -254,12 +474,12 @@ async function main() {
     prisma.aPInvoice.count({ where: { clubId: founder.id } }),
     prisma.ingestedDocument.count({ where: { clubId: founder.id } }),
   ]);
+  const expectations = await prisma.regressionExpectation.count();
   console.log(`Coulee Ridge remaining WorkIntakeItems:  ${wi}`);
   console.log(`Coulee Ridge remaining Members:          ${members}`);
   console.log(`Coulee Ridge remaining Vendors:          ${vendors}`);
   console.log(`Coulee Ridge remaining APInvoices:       ${apInvoices}`);
   console.log(`Coulee Ridge remaining IngestedDocs:     ${ingested}`);
-  const expectations = await prisma.regressionExpectation.count();
   console.log(`Total RegressionExpectations:            ${expectations}`);
 
   await prisma.$disconnect();
