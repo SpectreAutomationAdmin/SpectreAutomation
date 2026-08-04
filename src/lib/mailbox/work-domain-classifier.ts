@@ -97,9 +97,10 @@ export interface WorkDomainDecision {
 
 const AP_INVOICE_TERMS = [
   "invoice", "invoice #", "invoice number", "invoice date", "due date",
-  "amount due", "balance due", "total due", "remit to", "payable to",
-  "payment due", "past due", "past-due", "past  due", "overdue",
-  "bill to", "billed to", "vendor invoice", "purchase order", "po number",
+  "amount due", "balance due", "balance owing", "total due", "remit to",
+  "remit payment", "payable to", "payment due", "past due", "past-due",
+  "past  due", "overdue", "bill to", "billed to", "vendor invoice",
+  "purchase order", "po number",
 ];
 const AP_STATEMENT_TERMS = [
   "statement", "vendor statement", "monthly statement", "account statement",
@@ -138,9 +139,9 @@ const MEMBERSHIP_TERMS = [
   "member number", "reset my member", "update my member",
 ];
 const GOVERNANCE_TERMS = [
-  "board of directors", "committee meeting", "agenda", "minutes",
-  "annual general meeting", "AGM", "special resolution", "governance policy",
-  "board meeting",
+  "board of directors", "committee meeting", "agenda", "board minutes",
+  "meeting minutes", "annual general meeting", "AGM",
+  "special resolution", "governance policy", "board meeting",
 ];
 const HOSPITALITY_TERMS = [
   "reservation", "dining reservation", "tee time", "cancel my reservation",
@@ -317,7 +318,7 @@ function pickMembershipSubtype(text: string): MembershipSubtype {
   if (/(membership application|apply for membership|application (status|form))/.test(t)) return "APPLICATION";
   if (/(share purchase|share transfer|shareholder transfer)/.test(t)) return "SHARE_TRANSFER";
   if (/(resign|resignation)\b/.test(t)) return "RESIGNATION";
-  if (/(join the club|become a member|prospective member|inquire|inquiring|interested in|considering|club tour|how do i join|how would i)/.test(t)) return "PROSPECT_INQUIRY";
+  if (/(join the club|become a member|prospective member|inquire|inquiring|interested in|considering|club tour|how do i join|how would i|joining|initiation fee|entrance fee|signing up|sign up)/.test(t)) return "PROSPECT_INQUIRY";
   if (/(member number|update my member|reset my member)/.test(t)) return "MEMBER_SERVICE";
   return "OTHER";
 }
