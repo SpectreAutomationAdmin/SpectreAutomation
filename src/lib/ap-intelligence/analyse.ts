@@ -899,9 +899,43 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         if (!full) return false;
         return wantTypes.has(full.type);
       });
+      // 16D §12 — department tie-break: if we have a defensible
+      // department leader, prefer top-N candidates whose account
+      // name contains a department-qualifying token.
+      const {
+        inferDepartment: inferDeptStageA,
+        DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_STAGE_A,
+        departmentAccountNamePatterns: deptPatternsStageA,
+      } = await import("./department-inference");
+      const uniqDescsStageA = Array.from(new Set([
+        ...mergedExtraction.lineItems.map((li) => li.description),
+        ...mergedLineItems.map((li) => li.description),
+        ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
+      ].filter((d): d is string => typeof d === "string" && d.length > 0)));
+      const deptStageA = inferDeptStageA({
+        supplierName: mergedExtraction.vendor.guessedName,
+        lineItemDescriptions: uniqDescsStageA,
+        fullDocumentText: pdfText || null,
+        clubDepartments: DEFAULT_DEPTS_STAGE_A,
+      });
+      // 16D — for ranker tie-break we use the highest-scoring
+      // department candidate even when below the defensibility
+      // threshold. Supplier-only signals cannot cross defensibility
+      // (§6: vendor name alone = weak evidence) but they CAN break
+      // a ranker tie between two otherwise-equal accounts.
+      const deptStageAHint = deptStageA.leader?.key
+        ?? deptStageA.ranked.find((d) => d.score > 0)?.key
+        ?? null;
+      const deptPatsStageA = deptStageAHint ? deptPatternsStageA(deptStageAHint) : [];
       let promoted = false;
       if (matches.length > 0) {
         matches.sort((a, b) => {
+          // Department preference first: an account matching the
+          // department leader beats one that doesn't (when both
+          // have comparable raw confidence).
+          const aDept = deptPatsStageA.some((p) => p.test(a.full?.name ?? "")) ? 1 : 0;
+          const bDept = deptPatsStageA.some((p) => p.test(b.full?.name ?? "")) ? 1 : 0;
+          if (aDept !== bDept) return bDept - aDept;
           const cd = (b.c.confidence ?? 0) - (a.c.confidence ?? 0);
           if (cd !== 0) return cd;
           return a.c.accountNumber.localeCompare(b.c.accountNumber);
@@ -926,11 +960,13 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           promoted = true;
         }
       }
-      // Stage B (16C §5) — full nature-scoped COA branch search.
-      // Runs when Stage A did not promote. Ranks EVERY nature-
-      // compatible account in the tenant COA, excludes contra /
-      // depreciation / header / inactive / control accounts, and
-      // returns the highest-scoring semantic account (if any).
+      // Stage B (16C §5 + 16D §3+§12) — full nature-scoped COA
+      // branch search WITH department inference. Ranks every
+      // nature-compatible account in the tenant COA, excludes
+      // contra / depreciation / header / inactive / control
+      // accounts, boosts accounts whose name contains department-
+      // qualifying tokens when invoice evidence supports a
+      // department.
       if (!promoted) {
         const allCoa = await prisma.account.findMany({
           where: { clubId: args.clubId, isActive: true },
@@ -947,6 +983,29 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           ...mergedLineItems.map((li) => li.description),
           ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
         ].filter((d): d is string => typeof d === "string" && d.length > 0)));
+
+        // 16D §3+§4+§12 — compute department candidates + pass to
+        // the ranker. Uses the tenant's department taxonomy
+        // (defaults when tenant hasn't configured one).
+        const {
+          inferDepartment,
+          DEFAULT_CLUB_DEPARTMENTS,
+          departmentAccountNamePatterns,
+        } = await import("./department-inference");
+        const departmentResult = inferDepartment({
+          supplierName: mergedExtraction.vendor.guessedName,
+          lineItemDescriptions: uniqDescsNS,
+          fullDocumentText: pdfText || null,
+          clubDepartments: DEFAULT_CLUB_DEPARTMENTS,
+        });
+        // 16D — hint department: highest-scoring candidate even
+        // when below defensibility threshold. Used ONLY as a
+        // ranker tie-break (not primary signal).
+        const deptKey = departmentResult.leader?.key
+          ?? departmentResult.ranked.find((d) => d.score > 0)?.key
+          ?? null;
+        const deptPatterns = deptKey ? departmentAccountNamePatterns(deptKey) : [];
+
         const scoped = rankNatureScopedAccounts({
           nature: natureForRanker.leader,
           natureConfidence: natureForRanker.leaderConfidence,
@@ -968,6 +1027,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           lineItemDescriptions: uniqDescsNS,
           fullDocumentText: pdfText || null,
           supplierName: mergedExtraction.vendor.guessedName,
+          departmentKey: deptKey,
+          departmentAccountNamePatterns: deptPatterns,
         });
         if (scoped.leader) {
           const ldr = scoped.leader;

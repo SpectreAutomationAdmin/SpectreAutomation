@@ -58,6 +58,7 @@ const DEFAULT_LEXICONS: Record<string, RegExp[]> = {
   it: [/\bit\b/i, /\btechnology\b/i, /\bnetwork\b/i, /\binternet\b/i, /\bphone\b/i, /\bcomputer\b/i, /\btelecom\b/i, /\bsoftware\b/i],
   member_services: [/\bmember\s+service(?:s)?\b/i, /\bmembership\b/i, /\breception(?:ist)?\b/i],
   utilities: [/\butilit(?:y|ies)\b/i, /\bhydro\b/i, /\bwater\s+service\b/i, /\bgas\s+service\b/i, /\belectricity\b/i, /\bnatural\s+gas\b/i],
+  clubhouse: [/\bclubhouse\b/i, /\bmain\s+building\b/i, /\bfront\s+of\s+house\b/i],
 };
 
 // -----------------------------------------------------------------------------
@@ -140,3 +141,42 @@ export const DEFAULT_CLUB_DEPARTMENTS: Array<{ key: string; displayName: string 
   { key: "member_services", displayName: "Member Services" },
   { key: "utilities", displayName: "Utilities" },
 ];
+
+/**
+ * Sprint 3 · Checkpoint 16D (2026-08-04) — return the account-name
+ * regexes that identify accounts belonging to a given department.
+ * Used by the nature-scoped ranker to boost department-compatible
+ * account names.
+ *
+ * These are DIFFERENT from the department-lexicon match patterns
+ * (which infer department FROM invoice text). These match
+ * department-qualifying tokens IN ACCOUNT NAMES so accounts like
+ * "R & M - Ground Equip" or "Equipment & Fixtures - Grounds"
+ * receive a boost when the invoice department is "grounds".
+ */
+export function departmentAccountNamePatterns(deptKey: string): RegExp[] {
+  const map: Record<string, RegExp[]> = {
+    kitchen: [/\bkitchen\b/i, /\bculinary\b/i],
+    food_beverage: [/\bf\s*&\s*b\b/i, /\bfood\b/i, /\bbeverage\b/i, /\brestaurant\b/i, /\bdining\b/i],
+    bar: [/\bbar\b/i, /\blounge\b/i],
+    grounds: [
+      /\bgrounds?\b/i,                          // "Ground" / "Grounds"
+      /\bcourse\b/i,                            // "Course Equipment"
+      /\bturf\b/i,
+      /\bfairway\b/i,
+      /\bgreen(?:s)?\b/i,
+      /\birrigat(?:ion|e)?\b/i,
+    ],
+    golf_shop: [/\bpro\s*shop\b/i, /\bgolf\s*shop\b/i, /\bmerchandise\b/i, /\bapparel\b/i, /\bbackshop\b/i],
+    golf_operations: [/\btee\s*sheet\b/i, /\brange\b/i, /\bcart\s+fleet\b/i, /\bstarter\b/i],
+    events: [/\bevent(?:s)?\b/i, /\bwedding\b/i, /\bbanquet\b/i, /\breception\b/i],
+    housekeeping: [/\bhousekeeping\b/i, /\bjanitorial\b/i, /\blinen\b/i],
+    maintenance: [/\bmaintenance\b/i, /\brepair\b/i, /\bhvac\b/i, /\bfacilit(?:y|ies)\b/i],
+    administration: [/\badmin\b/i, /\boffice\b/i, /\bmanagement\b/i],
+    it: [/\bit\b/i, /\btechnolog(?:y|ies)\b/i, /\bcomputer\b/i, /\bnetwork\b/i, /\bsoftware\b/i, /\btelephone\b/i, /\binternet\b/i],
+    member_services: [/\bmember\s+service(?:s)?\b/i, /\bmembership\b/i],
+    utilities: [/\butilit(?:y|ies)\b/i, /\bhydro\b/i, /\bgas\b/i, /\bwater\b/i, /\belectricity\b/i],
+    clubhouse: [/\bclubhouse\b/i],
+  };
+  return map[deptKey] ?? map[deptKey.toLowerCase()] ?? [];
+}
