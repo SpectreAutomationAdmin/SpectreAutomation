@@ -33,11 +33,19 @@ model Club {
   // (rare — usually only for case-study clubs).
   whitelabelEnabled Boolean  @default(true)
   // Sprint 3 · Checkpoint 16F (2026-08-04) — demo/regression tenant
-  // marker. Fixture generators (bin/c15h-founder-fixture.ts, etc.)
-  // hard-refuse to write unless this is true. Founder-review tenants
-  // (Coulee Ridge, real customers) leave this false — they receive
-  // ONLY genuine operational work.
+  // marker retained as an environment safeguard. NOT the primary
+  // discriminator for fixture writes — see `stagingDataMode` below.
   isDemoTenant      Boolean  @default(false)
+  // Sprint 3 · Checkpoint 16F revised (2026-08-04) — data-mode
+  // discriminator for fixture / regression / synthetic-demo writes.
+  // Coulee Ridge (staging demo AND founder-review tenant) is
+  // "FOUNDER_REVIEW": synthetic Members / Vendors / AR balances /
+  // Work Intake cards forbidden; only genuine operational work.
+  // "REGRESSION": regression documents may be stored + evaluated
+  // by the benchmark runner, but no operational wrappers created.
+  // "SYNTHETIC_DEMO": synthetic fixtures allowed (dev / disposable
+  // test DB only).
+  stagingDataMode   String   @default("FOUNDER_REVIEW")
   address           String?
   region            String?
   salesTaxRegion    String?

@@ -33,8 +33,12 @@ model Club {
   // (rare — usually only for case-study clubs).
   whitelabelEnabled Boolean  @default(true)
   // Sprint 3 · Checkpoint 16F (2026-08-04) — demo/regression tenant
-  // marker. Fixture generators hard-refuse to write unless true.
+  // marker retained as an environment safeguard. NOT the primary
+  // discriminator; see `stagingDataMode` below.
   isDemoTenant      Boolean  @default(false)
+  // Sprint 3 · Checkpoint 16F revised (2026-08-04) — data-mode
+  // discriminator: FOUNDER_REVIEW / REGRESSION / SYNTHETIC_DEMO.
+  stagingDataMode   String   @default("FOUNDER_REVIEW")
   address           String?
   region            String?
   salesTaxRegion    String?

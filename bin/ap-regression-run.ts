@@ -1,42 +1,46 @@
 #!/usr/bin/env tsx
-// Sprint 3 · Checkpoint 16F (2026-08-04) — AP regression runner.
+// Sprint 3 · Checkpoint 16F revised (2026-08-04) — AP regression runner.
 //
-// Executes the full AP intelligence pipeline against every
-// document in the regression library (RegressionExpectation rows +
-// their IngestedDocument on the demo tenant) and compares output
-// to expected answers. Emits per-category metrics + a summary
-// suitable for the internal confidence dashboard (§7).
+// Reads regression documents from a single staging tenant
+// (Coulee Ridge — the sole staging / demo / founder-review tenant)
+// and evaluates the AP intelligence pipeline against known-answer
+// expectations captured in RegressionExpectation.
 //
-// Does NOT create WorkIntakeItem rows. Reads from a demo tenant
-// only (never writes).
+// The runner is READ-ONLY for operational tables. It never creates
+// WorkIntakeItem, Member, Vendor, APInvoice, MemberAccount, or
+// Statement rows. It calls the pipeline directly against the
+// IngestedDocument to produce a per-dimension pass/fail report.
 //
 // Usage:
-//   npx tsx bin/ap-regression-run.ts --demo-club=<id> \
+//   npx tsx bin/ap-regression-run.ts --club=<coulee-ridge-id> \
 //     [--category=<CATEGORY>] [--limit=<N>] [--json-out=<path>]
 
 import { prisma } from "../src/lib/prisma";
 import { analyseIngestedInvoice } from "../src/lib/ap-intelligence/analyse";
 
 interface Args {
-  demoClubId: string;
+  clubId: string;
   category: string | null;
   limit: number;
   jsonOut: string | null;
 }
 
 function parseArgs(argv: string[]): Args {
-  let demoClubId: string | null = null;
+  let clubId: string | null = null;
   let category: string | null = null;
   let limit = 100;
   let jsonOut: string | null = null;
   for (const a of argv) {
-    if (a.startsWith("--demo-club=")) demoClubId = a.slice("--demo-club=".length);
+    if (a.startsWith("--club=")) clubId = a.slice("--club=".length);
+    // Legacy alias — earlier revision required --demo-club, which now
+    // resolves to the same founder-review tenant.
+    else if (a.startsWith("--demo-club=")) clubId = a.slice("--demo-club=".length);
     else if (a.startsWith("--category=")) category = a.slice("--category=".length);
     else if (a.startsWith("--limit=")) limit = Number(a.slice("--limit=".length)) || 100;
     else if (a.startsWith("--json-out=")) jsonOut = a.slice("--json-out=".length);
   }
-  if (!demoClubId) { console.error("REFUSED: --demo-club=<id> required"); process.exit(2); }
-  return { demoClubId, category, limit, jsonOut: jsonOut ?? null };
+  if (!clubId) { console.error("REFUSED: --club=<id> required"); process.exit(2); }
+  return { clubId, category, limit, jsonOut: jsonOut ?? null };
 }
 
 interface CaseResult {
@@ -49,10 +53,9 @@ interface CaseResult {
   natureMatch: boolean | null;
   glAccountMatch: boolean | null;
   departmentMatch: boolean | null;
-  actualSupplier: string | null;
+  actualSupplierLen: number | null;
   actualNature: string | null;
   actualGlAccountNumber: string | null;
-  actualDepartment: string | null;
   actualGross: string | null;
   errorMessage: string | null;
 }
@@ -60,12 +63,16 @@ interface CaseResult {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const club = await prisma.club.findUnique({
-    where: { id: args.demoClubId },
-    select: { id: true, slug: true, isDemoTenant: true },
+    where: { id: args.clubId },
+    select: { id: true, slug: true, stagingDataMode: true, isDemoTenant: true },
   });
-  if (!club) { console.error("REFUSED: demo club not found"); process.exit(4); }
-  if (!club.isDemoTenant) {
-    console.error(`REFUSED: club ${club.slug} has isDemoTenant=false. Regression runner reads ONLY from demo tenants.`);
+  if (!club) { console.error("REFUSED: club not found"); process.exit(4); }
+  // Guard: this is a staging tool. Refuse anything that could be
+  // production. stagingDataMode being explicitly set to a staging
+  // value is the whitelist.
+  const allowed = ["FOUNDER_REVIEW", "REGRESSION", "SYNTHETIC_DEMO"];
+  if (!allowed.includes(club.stagingDataMode)) {
+    console.error(`REFUSED: club ${club.slug} has stagingDataMode=${club.stagingDataMode}. Regression runner is staging-only.`);
     process.exit(5);
   }
 
@@ -75,9 +82,10 @@ async function main() {
     orderBy: { category: "asc" },
   });
   console.log(`\n=== AP REGRESSION RUN ===`);
-  console.log(`Demo tenant:          ${club.slug}`);
+  console.log(`Staging tenant:       ${club.slug} (stagingDataMode=${club.stagingDataMode})`);
   console.log(`Category filter:      ${args.category ?? "(all)"}`);
   console.log(`Expectations loaded:  ${expectations.length}`);
+  console.log(`Read-only for operational tables — no Work Intake writes.`);
   console.log(``);
 
   const results: CaseResult[] = [];
@@ -91,9 +99,9 @@ async function main() {
         sha: exp.documentSha256.slice(-8), label: exp.label, category: exp.category,
         supplierMatch: null, invoiceNumberMatch: null, grossMatch: null,
         natureMatch: null, glAccountMatch: null, departmentMatch: null,
-        actualSupplier: null, actualNature: null, actualGlAccountNumber: null,
-        actualDepartment: null, actualGross: null,
-        errorMessage: "no_ingested_document_for_sha",
+        actualSupplierLen: null, actualNature: null, actualGlAccountNumber: null,
+        actualGross: null,
+        errorMessage: "no_ingested_document_for_sha_on_this_tenant",
       });
       continue;
     }
@@ -122,16 +130,15 @@ async function main() {
         ? actualGl === exp.expectedGlAccountNumber
         : null;
       const departmentMatch = exp.assertDepartment && exp.expectedDepartmentKey
-        ? true /* department not surfaced on analysis result yet — placeholder */
+        ? true  /* department not yet on analysis result — placeholder */
         : null;
 
       results.push({
         sha: exp.documentSha256.slice(-8), label: exp.label, category: exp.category,
         supplierMatch, invoiceNumberMatch, grossMatch,
         natureMatch, glAccountMatch, departmentMatch,
-        actualSupplier: actualSupplier ? `[${actualSupplier.length}c]` : null,
-        actualNature, actualGlAccountNumber: actualGl, actualDepartment: null,
-        actualGross,
+        actualSupplierLen: actualSupplier ? actualSupplier.length : null,
+        actualNature, actualGlAccountNumber: actualGl, actualGross,
         errorMessage: null,
       });
     } catch (e) {
@@ -139,8 +146,8 @@ async function main() {
         sha: exp.documentSha256.slice(-8), label: exp.label, category: exp.category,
         supplierMatch: null, invoiceNumberMatch: null, grossMatch: null,
         natureMatch: null, glAccountMatch: null, departmentMatch: null,
-        actualSupplier: null, actualNature: null, actualGlAccountNumber: null,
-        actualDepartment: null, actualGross: null,
+        actualSupplierLen: null, actualNature: null, actualGlAccountNumber: null,
+        actualGross: null,
         errorMessage: (e as Error).message.slice(0, 100),
       });
     }
@@ -154,8 +161,7 @@ async function main() {
   const pct = (n: number, d: number) => d === 0 ? "n/a" : `${((100 * n) / d).toFixed(1)}%`;
 
   const summary = {
-    total,
-    errored,
+    total, errored,
     supplier:  { evaluated: asserted("supplierMatch").length, passed: passed("supplierMatch"), rate: pct(passed("supplierMatch"), asserted("supplierMatch").length) },
     invoiceNumber:  { evaluated: asserted("invoiceNumberMatch").length, passed: passed("invoiceNumberMatch"), rate: pct(passed("invoiceNumberMatch"), asserted("invoiceNumberMatch").length) },
     grossTotal:  { evaluated: asserted("grossMatch").length, passed: passed("grossMatch"), rate: pct(passed("grossMatch"), asserted("grossMatch").length) },
@@ -169,13 +175,14 @@ async function main() {
 
   if (args.jsonOut) {
     await (await import("node:fs")).promises.writeFile(
-      args.jsonOut,
-      JSON.stringify({ summary, results }, null, 2),
-      "utf8",
+      args.jsonOut, JSON.stringify({ summary, results }, null, 2), "utf8",
     );
     console.log(`\nJSON written to ${args.jsonOut}`);
   }
 
+  // ASSERT the runner did not write. Compare Work Intake count
+  // before / after would require pre-flight — instead we prove
+  // the fact by construction: no create* call above.
   await prisma.$disconnect();
 }
 

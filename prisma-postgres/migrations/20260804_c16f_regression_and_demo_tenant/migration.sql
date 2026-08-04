@@ -1,17 +1,24 @@
--- Sprint 3 · Checkpoint 16F (2026-08-04) — separate founder-review
--- data from regression data.
+-- Sprint 3 · Checkpoint 16F revised (2026-08-04) — separate founder-review
+-- data from regression data. Coulee Ridge remains the sole staging /
+-- demo / founder-review tenant; regression data is separated by
+-- *data-mode* within the same tenant, not by a second tenant.
 --
 -- Adds:
---   1. Club.isDemoTenant boolean (default false). Fixture generators
---      hard-refuse to write to any club with isDemoTenant=false.
---   2. RegressionExpectation table — tenant-independent expectation
---      set keyed by document SHA-256. AP intelligence engine can be
---      benchmarked against this without creating Work Intake items.
+--   1. Club.isDemoTenant boolean (environment safeguard; NOT the
+--      primary discriminator).
+--   2. Club.stagingDataMode string default "FOUNDER_REVIEW" — the
+--      primary write-mode discriminator. Fixture writers must check
+--      this per operation class.
+--   3. RegressionExpectation table — per-SHA-256 expected results for
+--      the benchmark runner. Regression documents live on the
+--      founder-review tenant but do NOT materialise operational
+--      wrappers (Work Intake, Members, Vendors, AR).
 
 -- --------------------------------------------------------------------------
--- 1. Club.isDemoTenant
+-- 1. Club.isDemoTenant + Club.stagingDataMode
 -- --------------------------------------------------------------------------
 ALTER TABLE "Club" ADD COLUMN "isDemoTenant" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Club" ADD COLUMN "stagingDataMode" TEXT NOT NULL DEFAULT 'FOUNDER_REVIEW';
 
 -- --------------------------------------------------------------------------
 -- 2. RegressionExpectation

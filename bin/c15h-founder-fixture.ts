@@ -55,14 +55,16 @@ async function main() {
     else if (a === "--wipe") wipe = true;
   }
   if (!clubId) { console.error("REFUSED: --club=<clubId> required"); process.exit(2); }
-  // Sprint 3 · Checkpoint 16F — hard guard. Refuses to run against
-  // any club without isDemoTenant=true, plus all the other §8
-  // conditions (--apply, non-production env, non-production db).
-  // Legacy Silver Springs refusal preserved below for defence in depth.
+  // Sprint 3 · Checkpoint 16F revised — hard guard. This generator
+  // creates fake Members / Vendors / Statements / Work Intake cards
+  // — synthetic OPERATIONAL data. Guard refuses unless the target
+  // club is stagingDataMode=SYNTHETIC_DEMO. Coulee Ridge is
+  // FOUNDER_REVIEW → this refuses on staging.
   await guardDemoTenant({
     prisma, clubId,
-    apply: apply || wipe,   // wipe writes too; both require the guard
+    apply: apply || wipe,
     callerName: "c15h-founder-fixture",
+    writeClass: "SYNTHETIC_OPERATIONAL",
   });
   const club = await prisma.club.findUnique({ where: { id: clubId }, select: { id: true, slug: true, name: true } });
   if (!club) { console.error("REFUSED: club not found"); process.exit(4); }
