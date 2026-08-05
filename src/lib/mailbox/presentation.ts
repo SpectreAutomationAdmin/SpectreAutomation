@@ -255,28 +255,50 @@ export function notConnectedPresentation(): ConnectionPresentation {
 // One-time result banner content driven by the ?mailbox=... query
 // param the callback sets. Returns null when the query does not
 // carry a known outcome.
-export function callbackBanner(params: URLSearchParams): { tone: PresentationTone; message: string } | null {
+export function callbackBanner(
+  params: URLSearchParams,
+  ctx?: { connectedEmail?: string | null },
+): { tone: PresentationTone; message: string } | null {
   const mailbox = params.get("mailbox");
   const error = params.get("error");
   if (mailbox === "connected") {
-    return { tone: "success", message: "Your Microsoft 365 mailbox is connected. Spectre will begin syncing when that capability ships in the next phase." };
+    return { tone: "success", message: "Your Microsoft 365 mailbox is connected. Spectre will begin syncing shortly." };
+  }
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — dedicated
+  // success banner for the permission-update flow so the founder
+  // sees explicit confirmation that the expanded scopes were stored.
+  if (mailbox === "updated") {
+    return { tone: "success", message: "Microsoft permissions updated. Spectre now has access to the expanded capabilities you approved." };
   }
   if (mailbox === "error" && error) {
-    return { tone: "error", message: humanReadableCallbackError(error) };
+    return { tone: "error", message: humanReadableCallbackError(error, ctx?.connectedEmail ?? null) };
   }
   return null;
 }
 
-function humanReadableCallbackError(code: string): string {
+function humanReadableCallbackError(code: string, connectedEmail: string | null): string {
   switch (code) {
     case "oauth_denied_by_user":
-      return "You declined the Microsoft consent screen. Connect again when you're ready.";
+      return "You declined the Microsoft consent screen. Try again when you're ready.";
     case "oauth_admin_consent_required":
       return "Your Microsoft 365 administrator needs to approve Spectre before you can connect. Contact your IT team.";
     case "oauth_personal_account_rejected":
       return "Spectre supports Microsoft 365 work and school mailboxes only. Personal Outlook.com accounts cannot be connected.";
-    case "active_personal_mailbox_replacement_required":
-      return "You already have a Microsoft mailbox connected in this club. Disconnect it first, then reconnect with the new one.";
+    case "active_personal_mailbox_replacement_required": {
+      // Sprint 3 · Checkpoint 16H remediation — actionable copy that
+      // explains the mismatch AND names the currently connected
+      // mailbox when known, without exposing Microsoft oid / tid.
+      const emailPart = connectedEmail
+        ? ` (currently: ${connectedEmail})`
+        : "";
+      return `The Microsoft account selected does not match the mailbox currently connected to Spectre${emailPart}. Try updating permissions again and choose the same Microsoft account. Disconnect Outlook first only if you intend to replace the connected mailbox.`;
+    }
+    case "permission_update_identity_mismatch": {
+      const emailPart = connectedEmail
+        ? ` (currently: ${connectedEmail})`
+        : "";
+      return `The Microsoft account you signed in with does not match the mailbox this permission update was for${emailPart}. No changes were made. Try again and choose the correct Microsoft account.`;
+    }
     case "duplicate_mailbox_different_user":
       return "Another user in this club is already connected to that Microsoft mailbox. Only one Spectre user per club can own a given personal mailbox.";
     case "cross_club_mailbox_denied":

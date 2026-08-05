@@ -29,6 +29,11 @@ export const MAILBOX_ERROR_CODE = {
   DUPLICATE_MAILBOX_DIFFERENT_USER: "duplicate_mailbox_different_user",
   ACTIVE_PERSONAL_MAILBOX_REPLACEMENT_REQUIRED: "active_personal_mailbox_replacement_required",
   CROSS_CLUB_MAILBOX_DENIED: "cross_club_mailbox_denied",
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — the OAuth
+  // callback validates that the returned Microsoft identity matches
+  // the mailbox connection whose permissions were being updated.
+  // Different identity → refuse without touching any token.
+  PERMISSION_UPDATE_IDENTITY_MISMATCH: "permission_update_identity_mismatch",
   // Refresh lifecycle
   REFRESH_RETRYABLE: "refresh_retryable",
   REFRESH_TERMINAL: "refresh_terminal",

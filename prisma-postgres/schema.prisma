@@ -9485,6 +9485,13 @@ model MailboxOAuthTransaction {
   consumedAt   DateTime?
   outcome      String?
 
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — expected
+  // Microsoft identity for permission-update reconnect. Callback
+  // validates returned oid+tid against these before any token write.
+  expectedMailboxConnectionId String?
+  expectedExternalUserId      String?
+  expectedExternalTenantId    String?
+
   @@index([userId, clubId, createdAt])
   @@index([expiresAt])
 }

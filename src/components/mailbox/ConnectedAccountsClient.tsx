@@ -66,8 +66,12 @@ export default function ConnectedAccountsClient(props: ConnectedAccountsClientPr
     const p = new URLSearchParams();
     if (props.callbackResult.mailbox) p.set("mailbox", props.callbackResult.mailbox);
     if (props.callbackResult.error) p.set("error", props.callbackResult.error);
-    return callbackBanner(p);
-  }, [props.callbackResult]);
+    // Sprint 3 · Checkpoint 16H remediation — pass the currently
+    // connected email so the error banner can name it in copy
+    // ("currently: cturcato@spectreautomation.com") without ever
+    // exposing Microsoft oid/tid/tokens.
+    return callbackBanner(p, { connectedEmail: props.snapshot.connection?.connectedEmail ?? null });
+  }, [props.callbackResult, props.snapshot.connection?.connectedEmail]);
 
   useEffect(() => {
     if (!banner) return;
@@ -87,23 +91,36 @@ export default function ConnectedAccountsClient(props: ConnectedAccountsClientPr
 
   const initiateConnect = useCallback(
     (options?: { intent?: "reconnect" | "replace" }) => {
-      void options;
       setInlineError(null);
       startTransition(async () => {
         try {
+          // Sprint 3 · Checkpoint 16H remediation (2026-08-05) —
+          // for permission updates on an already-connected mailbox,
+          // pass expectedMailboxConnectionId. The server derives
+          // login_hint + stores expected oid+tid on the transaction
+          // so the callback can validate the returning identity
+          // BEFORE any token write. Refuses cross-user/cross-club at
+          // startConnect.
+          const isPermissionUpdate = options?.intent === "reconnect"
+            && !!props.snapshot.connection?.id
+            && props.snapshot.connection?.status === "CONNECTED";
+          const requestBody: Record<string, string> = { returnPath: "/app/user/settings/connected-accounts" };
+          if (isPermissionUpdate && props.snapshot.connection?.id) {
+            requestBody.expectedMailboxConnectionId = props.snapshot.connection.id;
+          }
           const res = await fetch("/api/integrations/microsoft/connect", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ returnPath: "/app/user/settings/connected-accounts" }),
+            body: JSON.stringify(requestBody),
           });
           if (!res.ok) {
-            const body = (await res.json().catch(() => ({}))) as { error?: string };
-            setInlineError(banner_error_to_message(body.error ?? "internal_error"));
+            const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+            setInlineError(banner_error_to_message(errBody.error ?? "internal_error"));
             return;
           }
-          const body = (await res.json()) as { authorizationUrl?: string };
-          if (body.authorizationUrl) {
-            window.location.assign(body.authorizationUrl);
+          const okBody = (await res.json()) as { authorizationUrl?: string };
+          if (okBody.authorizationUrl) {
+            window.location.assign(okBody.authorizationUrl);
             return;
           }
           setInlineError(banner_error_to_message("internal_error"));

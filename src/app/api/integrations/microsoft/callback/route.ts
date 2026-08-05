@@ -10,7 +10,9 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { env, isMailboxIntegrationEnabled } from "@/lib/env";
 import { finaliseConnection } from "@/lib/mailbox/connect";
-import { MailboxFlowError, MAILBOX_ERROR_CODE, type MailboxErrorCode } from "@/lib/mailbox/errors";
+import { MailboxFlowError, MAILBOX_ERROR_CODE } from "@/lib/mailbox/errors";
+import { prisma } from "@/lib/prisma";
+import { assertReturnPathSafe } from "@/lib/mailbox/connect";
 
 // Sprint 2 Checkpoint 12C (2026-07-21) — every browser-facing redirect
 // out of this callback MUST use env.APP_URL as its origin, NEVER the
@@ -69,29 +71,57 @@ export async function GET(req: NextRequest) {
       userAgent,
     });
     const redirectUrl = canonicalRedirect(result.returnPath);
-    redirectUrl.searchParams.set("mailbox", "connected");
+    // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — surface
+    // "connected" vs "permissions updated" so Connected Accounts can
+    // render an accurate success banner.
+    redirectUrl.searchParams.set("mailbox", result.isReconnect ? "updated" : "connected");
     redirectUrl.searchParams.set("cx", result.mailboxConnectionId);
     return NextResponse.redirect(redirectUrl, 302);
   } catch (err) {
     if (err instanceof MailboxFlowError) {
-      const returnPath = safeErrorReturn(err.code);
+      // Sprint 3 · Checkpoint 16H remediation — restore the user's
+      // original returnPath (e.g. /app/user/settings/connected-accounts)
+      // by loading the transaction from state. Fallback to the
+      // Connected Accounts page itself when state is missing / unknown /
+      // returnPath fails the allowlist. NEVER redirects to
+      // /app/user/settings (a 404).
+      const returnPath = await safeErrorReturn(state);
       const redirectUrl = canonicalRedirect(returnPath);
       redirectUrl.searchParams.set("mailbox", "error");
       redirectUrl.searchParams.set("error", err.code);
       return NextResponse.redirect(redirectUrl, 302);
     }
-    const redirectUrl = canonicalRedirect("/app/user/settings");
+    const returnPath = await safeErrorReturn(state);
+    const redirectUrl = canonicalRedirect(returnPath);
     redirectUrl.searchParams.set("mailbox", "error");
     redirectUrl.searchParams.set("error", MAILBOX_ERROR_CODE.INTERNAL_ERROR);
     return NextResponse.redirect(redirectUrl, 302);
   }
 }
 
-// Every error redirect lands on an internal, allowlisted path. Never
-// echo the OAuth `state` or Microsoft's `error_description` back to
-// the browser as a query parameter — they can contain user email
-// addresses or tenant identifiers the user may not want URL-visible.
-function safeErrorReturn(code: MailboxErrorCode): string {
-  void code;
-  return "/app/user/settings";
+// Sprint 3 · Checkpoint 16H remediation (2026-08-05) — recover the
+// user's stored returnPath from the transaction so an error lands on
+// the same page the user started from. Fallback is the real Connected
+// Accounts page (never the parent /app/user/settings, which is 404).
+const CONNECTED_ACCOUNTS_FALLBACK = "/app/user/settings/connected-accounts";
+async function safeErrorReturn(state: string): Promise<string> {
+  if (!state) return CONNECTED_ACCOUNTS_FALLBACK;
+  try {
+    const txn = await prisma.mailboxOAuthTransaction.findUnique({
+      where: { state },
+      select: { returnPath: true },
+    });
+    if (!txn?.returnPath) return CONNECTED_ACCOUNTS_FALLBACK;
+    // Belt-and-suspenders: re-check the allowlist. If it passes,
+    // we honour the stored path. If not, fall back to Connected
+    // Accounts. Never trust a stored value blindly.
+    try {
+      assertReturnPathSafe(txn.returnPath);
+      return txn.returnPath;
+    } catch {
+      return CONNECTED_ACCOUNTS_FALLBACK;
+    }
+  } catch {
+    return CONNECTED_ACCOUNTS_FALLBACK;
+  }
 }

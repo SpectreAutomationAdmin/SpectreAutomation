@@ -36,8 +36,15 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await safeParseJson(req);
-  const returnPath = typeof body?.returnPath === "string" ? body.returnPath : "/app/user/settings";
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — default
+  // returnPath is now the real Connected Accounts page (the prior
+  // "/app/user/settings" is a 404). Also accept
+  // expectedMailboxConnectionId for permission-update reconnects.
+  const returnPath = typeof body?.returnPath === "string" ? body.returnPath : "/app/user/settings/connected-accounts";
   const loginHint = typeof body?.loginHint === "string" ? body.loginHint : undefined;
+  const expectedMailboxConnectionId = typeof body?.expectedMailboxConnectionId === "string"
+    ? body.expectedMailboxConnectionId
+    : undefined;
 
   try {
     const { authorizationUrl, transactionId } = await startConnect({
@@ -45,6 +52,7 @@ export async function POST(req: NextRequest) {
       clubId,
       returnPath,
       loginHint,
+      expectedMailboxConnectionId,
     });
     return NextResponse.json({ authorizationUrl, transactionId }, { status: 200 });
   } catch (err) {

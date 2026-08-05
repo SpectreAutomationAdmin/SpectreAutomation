@@ -90,7 +90,7 @@ function generateNonce(): string {
   return base64url(randomBytes(24));
 }
 
-function assertReturnPathSafe(returnPath: string): void {
+export function assertReturnPathSafe(returnPath: string): void {
   if (!returnPath.startsWith("/")) {
     throw new MailboxFlowError(MAILBOX_ERROR_CODE.OAUTH_UNSAFE_RETURN_URL, { returnPath });
   }
@@ -115,9 +115,45 @@ export async function startConnect(args: {
   clubId: string;
   returnPath: string;
   loginHint?: string;
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — when the
+  // caller is updating permissions on an already-connected mailbox,
+  // it passes the connection id. startConnect derives loginHint +
+  // captures the expected identity on the transaction row so the
+  // callback can validate the returning Microsoft identity BEFORE
+  // any token write.
+  expectedMailboxConnectionId?: string;
 }): Promise<{ authorizationUrl: string; transactionId: string }> {
   assertFeatureEnabled();
   assertReturnPathSafe(args.returnPath);
+
+  // Resolve expected-identity fields from the connection row when
+  // caller provided the id. Enforces tenant + user ownership before
+  // trusting anything from the connection.
+  let expectedMailboxConnectionId: string | null = null;
+  let expectedExternalUserId: string | null = null;
+  let expectedExternalTenantId: string | null = null;
+  let derivedLoginHint: string | undefined = args.loginHint;
+  if (args.expectedMailboxConnectionId) {
+    const conn = await prisma.mailboxConnection.findUnique({
+      where: { id: args.expectedMailboxConnectionId },
+      select: {
+        id: true, userId: true, clubId: true,
+        externalUserId: true, microsoftTenantId: true,
+        connectedEmail: true, mailboxType: true,
+      },
+    });
+    if (!conn) throw new MailboxFlowError(MAILBOX_ERROR_CODE.CONNECTION_NOT_FOUND);
+    // Cross-club / cross-user protection — the caller must own the mailbox.
+    if (conn.userId !== args.userId || conn.clubId !== args.clubId) {
+      throw new MailboxFlowError(MAILBOX_ERROR_CODE.PERMISSION_DENIED, { reason: "cross-user-or-club-permission-update" });
+    }
+    expectedMailboxConnectionId = conn.id;
+    expectedExternalUserId = conn.externalUserId ?? null;
+    expectedExternalTenantId = conn.microsoftTenantId ?? null;
+    // login_hint is an identity-selection AID (not a security control).
+    // The callback still validates the returned identity server-side.
+    if (!derivedLoginHint && conn.connectedEmail) derivedLoginHint = conn.connectedEmail;
+  }
 
   const state = generateState();
   const pkceVerifier = generatePkceVerifier();
@@ -132,6 +168,9 @@ export async function startConnect(args: {
       nonce,
       returnPath: args.returnPath,
       expiresAt: new Date(now.getTime() + TRANSACTION_TTL_MS),
+      expectedMailboxConnectionId,
+      expectedExternalUserId,
+      expectedExternalTenantId,
     },
   });
   const provider = getMicrosoftDelegatedProvider();
@@ -140,7 +179,7 @@ export async function startConnect(args: {
     pkceCodeChallenge: pkceChallenge(pkceVerifier),
     pkceMethod: "S256",
     nonce,
-    loginHint: args.loginHint,
+    loginHint: derivedLoginHint,
     redirectUri: mailboxRedirectUri(),
   });
 
@@ -148,7 +187,10 @@ export async function startConnect(args: {
     clubId: args.clubId,
     userId: args.userId,
     provider: "MICROSOFT_365",
-    extra: { transactionId: transaction.id },
+    extra: {
+      transactionId: transaction.id,
+      permissionUpdateFlow: !!expectedMailboxConnectionId,
+    },
   });
   return { authorizationUrl, transactionId: transaction.id };
 }
@@ -318,13 +360,58 @@ export async function finaliseConnection(args: FinaliseConnectionArgs): Promise<
     throw new MailboxFlowError(MAILBOX_ERROR_CODE.OAUTH_MAILBOX_ADDRESS_MISSING);
   }
 
-  // Uniqueness / policy checks.
-  await enforceMailboxUniqueness({
-    userId: transaction.userId,
-    clubId: transaction.clubId,
-    microsoftTenantId: tenantId,
-    externalUserId,
-  });
+  // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — expected-
+  // identity gate.
+  //
+  // When the transaction was started with expectedMailboxConnectionId
+  // (permission-update reconnect flow), the returned Microsoft
+  // identity MUST match the stored expected identity. Any mismatch
+  // → refuse WITHOUT touching tokens, WITHOUT modifying grantedScopes,
+  // WITHOUT disconnecting the working mailbox. login_hint on the
+  // authorization URL is an identity-selection aid; this server-side
+  // comparison is authoritative.
+  if (transaction.expectedMailboxConnectionId) {
+    const expectedOidMismatch =
+      transaction.expectedExternalUserId != null &&
+      transaction.expectedExternalUserId !== externalUserId;
+    const expectedTidMismatch =
+      transaction.expectedExternalTenantId != null &&
+      transaction.expectedExternalTenantId !== tenantId;
+    if (expectedOidMismatch || expectedTidMismatch) {
+      await markTransactionOutcome(transaction.id, "PERMISSION_UPDATE_IDENTITY_MISMATCH");
+      await auditMailboxEvent(MAILBOX_AUDIT_ACTION.CONNECT_FAILED, {
+        clubId: transaction.clubId, userId: transaction.userId,
+        provider: "MICROSOFT_365", microsoftTenantId: tenantId,
+        errorCode: MAILBOX_ERROR_CODE.PERMISSION_UPDATE_IDENTITY_MISMATCH,
+        extra: {
+          expectedConnectionId: transaction.expectedMailboxConnectionId,
+          oidMismatch: expectedOidMismatch, tidMismatch: expectedTidMismatch,
+        },
+      });
+      throw new MailboxFlowError(MAILBOX_ERROR_CODE.PERMISSION_UPDATE_IDENTITY_MISMATCH, {
+        expectedConnectionId: transaction.expectedMailboxConnectionId,
+      });
+    }
+  }
+
+  // Uniqueness / policy checks. Wrapped so a throw here (e.g.
+  // ACTIVE_PERSONAL_MAILBOX_REPLACEMENT_REQUIRED for a first-time
+  // reconnect where different identity was picked without the
+  // expected-identity contract) still marks the transaction outcome
+  // — no more `outcome: null` leaks.
+  try {
+    await enforceMailboxUniqueness({
+      userId: transaction.userId,
+      clubId: transaction.clubId,
+      microsoftTenantId: tenantId,
+      externalUserId,
+    });
+  } catch (err) {
+    if (err instanceof MailboxFlowError) {
+      await markTransactionOutcome(transaction.id, `UNIQUENESS_${err.code}`);
+    }
+    throw err;
+  }
 
   // Look up an existing connection FIRST, outside the transaction,
   // so we can encrypt against a stable id. Encryption performs its
