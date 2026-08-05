@@ -31,6 +31,7 @@
 
 import { useState, type ReactElement } from "react";
 import type { ReplyComposerConsentState } from "./ReplyComposer";
+import EmailBodyFrame from "./EmailBodyFrame";
 
 export interface ConversationThreadMessage {
   id: string;
@@ -197,12 +198,13 @@ function ThreadMessage({
               This message was removed from the mailbox. The Work Intake record is preserved for audit.
             </div>
           ) : msg.bodyHtmlSanitized ? (
-            <div
-              className="spectre-mc-inline-thread-body-html prose prose-sm max-w-none"
-              data-testid="inline-thread-body-html"
-              // eslint-disable-next-line react/no-danger
-              dangerouslySetInnerHTML={{ __html: msg.bodyHtmlSanitized }}
-            />
+            // Sprint 3 · Checkpoint 16H rejection #3 (2026-08-06) —
+            // safe HTML renders inside an isolated iframe (§4) so
+            // newsletter layout is preserved and Spectre CSS does
+            // not flatten it. Direct dangerouslySetInnerHTML is
+            // forbidden here: it would inherit the .prose reset
+            // that stripped the newsletter's visual hierarchy.
+            <EmailBodyFrame html={msg.bodyHtmlSanitized} testId="inline-thread-body-html" />
           ) : msg.bodyTextExtract ? (
             <pre className="spectre-mc-inline-thread-body-text" data-testid="inline-thread-body-text">
               {msg.bodyTextExtract}

@@ -665,8 +665,20 @@ export async function loadMissionControlSnapshot(
       })
     : filteredWorkItems;
 
+  // Sprint 3 · Checkpoint 16H rejection #3 (2026-08-06) — briefing
+  // MUST derive from the SAME projected/filtered set the feed renders
+  // (§12 canonical visible-work model). Previously `workItems` (the
+  // raw pre-filter merge) was passed in, so RESOLVED items excluded
+  // by the Active filter still inflated Needs Judgment / Informational
+  // counters — the founder saw 8+2 in the summary but only 7 rendered
+  // cards. The invariant is:
+  //     visibleWorkItems.length ===
+  //         readyForApproval + needJudgment + informational + auto
+  // (arrivedToday and completedAutomatically are separate time-based
+  // metrics and may overlap the buckets; they are NOT part of the
+  // mutually-exclusive sum.)
   const [briefing, position] = await Promise.all([
-    loadBriefingCounts(principal, clubId, workItems, clubTimezone, now),
+    loadBriefingCounts(principal, clubId, visibleWorkItems, clubTimezone, now),
     loadPosition(principal, clubId),
   ]);
 
