@@ -8914,6 +8914,49 @@ model EmailWorkIntakeOrigin {
 }
 
 // ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 16H rejection (2026-08-04) — Canonical
+// provider-neutral conversation message. See prisma/schema.prisma for
+// the full contract + rationale.
+model ConversationMessage {
+  id                    String   @id @default(cuid())
+  clubId                String
+  mailboxConnectionId   String
+  workIntakeItemId      String?
+  conversationId        String
+
+  direction             String
+  source                String
+
+  providerMessageId     String?
+  internetMessageId     String?
+  replyMutationId       String?  @unique
+
+  senderName            String
+  senderAddress         String
+  recipientsJson        String
+  subject               String
+
+  bodyHtmlSanitized     String?
+  bodyTextExtract       String?
+  bodyCiphertext        String?
+  bodySecretRef         String?
+
+  sentAt                DateTime?
+  receivedAt            DateTime?
+  providerReconciledAt  DateTime?
+  reconciliationStatus  String   @default("NOT_APPLICABLE")
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([mailboxConnectionId, providerMessageId])
+  @@index([clubId, workIntakeItemId])
+  @@index([mailboxConnectionId, conversationId])
+  @@index([workIntakeItemId])
+  @@index([reconciliationStatus])
+}
+
+// ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15D (2026-07-24) — Immutable ingested-document store.
 //
 // An IngestedDocument is a canonical, immutable binary object ingested from

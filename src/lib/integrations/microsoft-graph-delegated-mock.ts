@@ -335,6 +335,40 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     return bytes;
   }
 
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — Sent-Items
+  // lookup mock. Tests register fixture messages keyed by
+  // conversationId; the mock returns them (filtered by the sent-time
+  // window) verbatim.
+  public capturedLookupSentCalls: import("./microsoft-graph-delegated").LookupSentMessagesArgs[] = [];
+  private fixtureSentMessages = new Map<string, import("./microsoft-graph-delegated").RawGraphSentMessage[]>();
+  private lookupSentOutcome: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_INVALID_GRANT" = "SUCCESS";
+  setLookupSentOutcome(o: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_INVALID_GRANT"): void {
+    this.lookupSentOutcome = o;
+  }
+  setFixtureSentMessages(conversationId: string, msgs: import("./microsoft-graph-delegated").RawGraphSentMessage[]): void {
+    this.fixtureSentMessages.set(conversationId, msgs);
+  }
+  async lookupSentMessagesInConversation(
+    args: import("./microsoft-graph-delegated").LookupSentMessagesArgs,
+  ): Promise<import("./microsoft-graph-delegated").LookupSentMessagesResult> {
+    this.capturedLookupSentCalls.push(args);
+    if (this.lookupSentOutcome === "RETRYABLE_THROTTLE") {
+      throw makeMsalError({ errorCode: "temporarily_unavailable", response: { status: 429 } });
+    }
+    if (this.lookupSentOutcome === "TERMINAL_INVALID_GRANT") {
+      throw makeMsalError({ errorCode: "invalid_grant" });
+    }
+    const all = this.fixtureSentMessages.get(args.conversationId) ?? [];
+    const lo = Date.parse(args.sentAfterIso);
+    const hi = Date.parse(args.sentBeforeIso);
+    const filtered = all.filter((m) => {
+      const t = m.sentDateTime ? Date.parse(m.sentDateTime) : NaN;
+      if (Number.isNaN(t)) return false;
+      return t >= lo && t <= hi;
+    });
+    return { messages: filtered };
+  }
+
   async listInboxMessagesDelta(args: ListInboxMessagesDeltaArgs): Promise<RawGraphMessagePage> {
     this.capturedListInboxDeltaCalls.push(args);
     if (this.listInboxDeltaOutcome === "TERMINAL_INVALID_GRANT") {

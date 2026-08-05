@@ -30,6 +30,7 @@ import MissionControlLiveRefresh from "@/components/mission-control/MissionContr
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
+import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
 
 export const dynamic = "force-dynamic";
 
@@ -197,21 +198,42 @@ export default async function MissionControlPage({
               <p className="spectre-mc-work">Nothing requires your judgment or approval at the moment.</p>
             </div>
           ) : (
-            snapshot.workItems.map((item) =>
-              // Sprint 2 Checkpoint 14B — email-derived items use the
-              // client-side card with inline expansion (view email +
-              // reply composer). AP/AR/system-generated items use the
-              // legacy server-rendered FeedItem, unchanged.
-              item.emailMessageId ? (
-                <EmailIntakeCard key={item.id} data={emailFeedData(item)} />
-              ) : item.classification === "AP_INVOICE_REVIEW" ? (
-                <IntelligenceReviewCard key={item.id} data={item} kind="AP_INVOICE_REVIEW" />
-              ) : item.classification === "VENDOR_STATEMENT_REVIEW" ? (
-                <IntelligenceReviewCard key={item.id} data={item} kind="VENDOR_STATEMENT_REVIEW" />
-              ) : (
-                <FeedItem key={item.id} item={item} />
-              ),
-            )
+            (() => {
+              // Sprint 3 · Checkpoint 16H rejection (2026-08-06) —
+              // Completed History timeline separators (§16). Only
+              // rendered in history view; active view keeps the
+              // existing arrival-based flow unbroken.
+              const markers = view === "history"
+                ? computeTimelineMarkers(snapshot.workItems, clubTz, snapshot.syncedAt)
+                : snapshot.workItems.map(() => null);
+              return snapshot.workItems.map((item, idx) => {
+                const card = item.emailMessageId ? (
+                  <EmailIntakeCard key={item.id} data={emailFeedData(item)} />
+                ) : item.classification === "AP_INVOICE_REVIEW" ? (
+                  <IntelligenceReviewCard key={item.id} data={item} kind="AP_INVOICE_REVIEW" />
+                ) : item.classification === "VENDOR_STATEMENT_REVIEW" ? (
+                  <IntelligenceReviewCard key={item.id} data={item} kind="VENDOR_STATEMENT_REVIEW" />
+                ) : (
+                  <FeedItem key={item.id} item={item} />
+                );
+                const marker = markers[idx];
+                if (!marker) return card;
+                return (
+                  <div key={`marker-group-${marker.key}-${item.id}`}>
+                    <div
+                      className="spectre-mc-timeline-marker"
+                      role="separator"
+                      data-testid="mc-timeline-marker"
+                      data-marker-key={marker.key}
+                    >
+                      <span className="spectre-mc-timeline-marker-label">{marker.label}</span>
+                      <span className="spectre-mc-timeline-marker-rule" aria-hidden="true" />
+                    </div>
+                    {card}
+                  </div>
+                );
+              });
+            })()
           )}
         </section>
 

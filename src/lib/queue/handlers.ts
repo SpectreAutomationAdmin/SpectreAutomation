@@ -155,6 +155,24 @@ registerHandler<{
   return runMailboxArchiveMessage(payload);
 });
 
+// Sprint 3 · Checkpoint 16H rejection (2026-08-06) — reconcile a
+// Spectre-originated outbound reply against Outlook Sent Items. The
+// handler is invoked with a delay from persistCanonicalOutboundReply
+// (backoff 30s / 2m / 10m). On success it attaches the real Graph
+// message id; on failure it either requeues or parks the row FAILED
+// without ever deleting the founder-visible local reply.
+registerHandler<{
+  conversationMessageId: string;
+  attempt: number;
+}>("CONVERSATION_MESSAGE_RECONCILE", async ({ payload }) => {
+  const { runConversationReconciliation } = await import("../mailbox/conversation-messages");
+  const res = await runConversationReconciliation({
+    conversationMessageId: payload.conversationMessageId,
+    attempt: typeof payload.attempt === "number" ? payload.attempt : 0,
+  });
+  return { outcome: res.outcome };
+});
+
 // Remaining reserved Phase C kinds — still gated. If a stray job lands,
 // fail loudly so operators see it in JobRun / JobFailure records.
 for (const kind of [

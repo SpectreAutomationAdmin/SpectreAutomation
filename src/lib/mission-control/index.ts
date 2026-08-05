@@ -145,6 +145,14 @@ export type WorkItem = {
   workIntent?: string;
   workSubtype?: string;
   workDomainConfidence?: number;
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — canonical
+  // WorkIntakeItem.createdAt (ISO). Completed History orders by this
+  // (§15) — the ORIGINAL time the item entered Spectre, not
+  // resolvedAt, updatedAt, archive time, reply time, or restoration
+  // time. Also drives the Edmonton-timezone timeline separators
+  // (§16). Optional so loader-only rows without a canonical WI
+  // (legacy AP/AR adapters) still project safely.
+  workIntakeCreatedAt?: string;
 };
 
 export type BriefingCounts = {
@@ -640,9 +648,22 @@ export async function loadMissionControlSnapshot(
   //   secondary UI-layer pass belt-and-suspenders it.
   // HISTORY: show ONLY resolved items so the operator can review the
   //   completed queue without dumping them back into the active view.
-  const visibleWorkItems: WorkItem[] = feedFilter === "history"
+  const filteredWorkItems: WorkItem[] = feedFilter === "history"
     ? workItems.filter((w) => w.workIntakeStatus === "RESOLVED" || w.state === "auto")
     : workItems.filter((w) => w.workIntakeStatus !== "RESOLVED");
+
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — Completed
+  // History MUST order by WorkIntakeItem.createdAt DESC (founder
+  // §15). Restoration + recompletion never change position (§17).
+  // ACTIVE view keeps arrival-based sortTimestamp.
+  const visibleWorkItems: WorkItem[] = feedFilter === "history"
+    ? [...filteredWorkItems].sort((a, b) => {
+        const at = a.workIntakeCreatedAt ?? a.sortTimestamp ?? a.timestamp ?? "";
+        const bt = b.workIntakeCreatedAt ?? b.sortTimestamp ?? b.timestamp ?? "";
+        if (at !== bt) return bt.localeCompare(at);
+        return b.id.localeCompare(a.id);
+      })
+    : filteredWorkItems;
 
   const [briefing, position] = await Promise.all([
     loadBriefingCounts(principal, clubId, workItems, clubTimezone, now),

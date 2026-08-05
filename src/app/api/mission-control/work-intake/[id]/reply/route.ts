@@ -1,4 +1,8 @@
 // Sprint 2 Checkpoint 14C-B (2026-07-23) — Delegated reply endpoint.
+// Sprint 3 · Checkpoint 16H rejection (2026-08-06) — persist a
+// canonical outbound ConversationMessage immediately after Graph 202
+// so the reply becomes visible in the Conversation tab before Sent
+// Items indexing catches up (founder-directed §2).
 //
 // POST /api/mission-control/work-intake/[id]/reply
 //
@@ -20,9 +24,12 @@
 //         client re-authenticates
 //
 // On success:
+//   - Persists an OutlookReplyMutation (durable audit)
+//   - Persists a canonical ConversationMessage (visible in the
+//     thread immediately; reconciliationStatus=PENDING until a
+//     Sent-Items lookup attaches the real Graph message id)
 //   - Records a "REPLY_SENT" WorkIntakeActivity row
-//   - Does NOT auto-resolve the Work Intake item
-//   - Does NOT fabricate an EmailMessage row for the sent reply
+//   - Enqueues a delayed CONVERSATION_MESSAGE_RECONCILE job
 //   - Returns a truthful confirmation payload
 
 import { NextRequest, NextResponse } from "next/server";
@@ -36,7 +43,9 @@ import {
   getMicrosoftDelegatedProvider,
   APPROVED_DELEGATED_SCOPES,
 } from "@/lib/integrations/microsoft-graph-delegated";
+import { encryptSecret } from "@/lib/kms";
 import { logger } from "@/lib/observability/logger";
+import { persistCanonicalOutboundReply } from "@/lib/mailbox/conversation-messages";
 
 export const dynamic = "force-dynamic";
 
@@ -288,6 +297,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // derived from the source message + timestamp so a rapid double
   // POST without a client key still doesn't duplicate.
   const persistedKey = idempotencyKey ?? `wi:${intake.id}:msg:${targetEmail.graphMessageId}:${Math.floor(sentAt.getTime() / 1000)}`;
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — encrypt the
+  // reply body at rest per founder §12 before recording it on either
+  // the mutation or the canonical outbound conversation message.
+  const bodySecretRef = `reply-body:${intake.id}:${persistedKey}`;
+  let bodyCiphertext: string | null = null;
+  try {
+    bodyCiphertext = await encryptSecret({
+      scope: "MAILBOX",
+      secretReference: bodySecretRef,
+      plaintext: bodyText,
+      clubId, actorUserId: principal.id,
+    });
+  } catch (e) {
+    logger.warn("mailbox.reply.body_ciphertext_failed", { workIntakeItemId: intake.id, reason: (e as Error).message?.slice(0, 80) });
+    // We continue — encryption failure does not undo the send that
+    // already happened. The plaintext-only path still persists the
+    // canonical conversation message so the reply remains visible.
+  }
   const mutation = await prisma.outlookReplyMutation.upsert({
     where: { idempotencyKey: persistedKey },
     create: {
@@ -301,10 +328,45 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       sentAt,
       attemptCount: 1,
       idempotencyKey: persistedKey,
+      bodyCiphertext: bodyCiphertext ?? undefined,
+      bodySecretRef: bodyCiphertext ? bodySecretRef : undefined,
     },
     update: { status: "SENT", sentAt, attemptCount: { increment: 1 } },
     select: { id: true },
   }).catch(() => null);
+
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — persist the
+  // canonical outbound message and enqueue the Sent-Items
+  // reconciliation. Any failure here does NOT roll back the send —
+  // the reply exists at Microsoft; we log the persistence gap.
+  if (mutation?.id) {
+    try {
+      await persistCanonicalOutboundReply({
+        clubId,
+        workIntakeItemId: intake.id,
+        mailboxConnectionId: conn.id,
+        conversationId: targetEmail.conversationId ?? null,
+        replyMutationId: mutation.id,
+        senderName: conn.connectedEmail,
+        senderAddress: conn.connectedEmail,
+        recipientsJson: targetEmail.recipientsJson,
+        // Microsoft's `/reply` action derives the subject as
+        // "Re: <source subject>" server-side; mirror that here so
+        // the local canonical row matches the eventually-reconciled
+        // Sent Items record.
+        subject: targetEmail.subject.startsWith("Re:") ? targetEmail.subject : `Re: ${targetEmail.subject}`,
+        bodyText,
+        bodyCiphertext,
+        bodySecretRef: bodyCiphertext ? bodySecretRef : null,
+        sentAt,
+      });
+    } catch (e) {
+      logger.warn("mailbox.reply.canonical_persist_failed", {
+        workIntakeItemId: intake.id, mutationIdShort: mutation.id.slice(-8),
+        reason: (e as Error).message?.slice(0, 80),
+      });
+    }
+  }
 
   // Sprint 3 · Checkpoint 16H — "Send reply & close" completion path.
   let completionEventId: string | undefined;

@@ -47,6 +47,12 @@ export type JobKind =
   // check via the mailbox integration when it lands). See
   // src/lib/queue/handlers.ts for the handler.
   | "MAILBOX_ARCHIVE_MESSAGE"
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — reconcile a
+  // Spectre-originated outbound reply with the corresponding message
+  // in Outlook Sent Items. Idempotent per (conversationMessageId,
+  // attempt). Payload: { conversationMessageId: string; attempt: number }
+  // Handler: src/lib/queue/handlers.ts → runConversationReconciliation
+  | "CONVERSATION_MESSAGE_RECONCILE"
   // Sprint 3 · Checkpoint 15X continuation (2026-07-29) — AP
   // document OCR extraction via AWS Textract AnalyzeExpense.
   //

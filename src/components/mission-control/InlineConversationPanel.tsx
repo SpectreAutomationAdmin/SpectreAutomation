@@ -47,6 +47,12 @@ export interface ConversationThreadMessage {
   bodyHtmlSanitized: string | null;
   bodyTextExtract: string | null;
   softDeleted: boolean;
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — direction +
+  // source drive the "You replied" chrome and prevent presenting an
+  // outbound reply as another inbound email (founder §14).
+  direction?: "INBOUND" | "OUTBOUND";
+  source?: "OUTLOOK_SYNC" | "SPECTRE_REPLY";
+  reconciliationStatus?: string | null;
 }
 
 export interface ConversationDetail {
@@ -116,9 +122,17 @@ function ThreadMessage({
 }) {
   const [open, setOpen] = useState(openByDefault);
   const receivedLabel = formatDateTime(msg.receivedAt);
+  const isOutbound = msg.direction === "OUTBOUND";
+  const isSpectreReply = msg.source === "SPECTRE_REPLY";
+  const isPendingReconciliation = isSpectreReply && msg.reconciliationStatus === "PENDING";
 
   return (
-    <li className={`spectre-mc-inline-thread-item${open ? " open" : ""}`} data-testid="inline-thread-message">
+    <li
+      className={`spectre-mc-inline-thread-item${open ? " open" : ""}${isOutbound ? " is-outbound" : ""}`}
+      data-testid="inline-thread-message"
+      data-direction={msg.direction ?? "INBOUND"}
+      data-source={msg.source ?? "OUTLOOK_SYNC"}
+    >
       <button
         type="button"
         className="spectre-mc-inline-thread-summary"
@@ -126,7 +140,19 @@ function ThreadMessage({
         aria-expanded={open}
         data-testid="inline-thread-toggle"
       >
-        <span className="pos">{positionLabel}</span>
+        <span
+          className={`pos${isOutbound ? " pos-out" : ""}`}
+          data-testid="inline-thread-direction"
+          title={
+            isOutbound
+              ? isPendingReconciliation
+                ? "You replied — Sent Items reconciliation pending"
+                : "You replied"
+              : undefined
+          }
+        >
+          {isOutbound ? "You replied" : positionLabel}
+        </span>
         <span className="sender" data-testid="inline-thread-sender">
           {msg.senderName}
           {msg.senderAddress ? (

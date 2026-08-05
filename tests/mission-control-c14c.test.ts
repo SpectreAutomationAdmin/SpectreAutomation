@@ -617,12 +617,13 @@ describe("Delegated provider — Mail.Send + replyToMessage — Checkpoint 14C-B
   });
 
   it("replyToMessage uses POST /me/messages/{id}/reply with { comment } — no client overrides", () => {
-    // Slice ONLY the replyToMessage function body, stopping at the
-    // next method (listInboxMessagesDelta) so we don't spill into
-    // listInboxMessagesDelta's $select array (which legitimately
-    // includes "toRecipients").
+    // Slice ONLY the replyToMessage function body. End at the next
+    // method definition so we don't spill into other providers'
+    // $select arrays (moveMessage, lookupSentMessagesInConversation,
+    // listInboxMessagesDelta all legitimately reference recipient /
+    // move fields).
     const start = DELEGATED_TS.indexOf("async replyToMessage(args)");
-    const end = DELEGATED_TS.indexOf("async listInboxMessagesDelta", start);
+    const end = DELEGATED_TS.indexOf("async moveMessage", start);
     const method = DELEGATED_TS
       .slice(start, end)
       .replace(/\/\*[\s\S]*?\*\//g, "")

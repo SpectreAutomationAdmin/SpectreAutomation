@@ -313,6 +313,74 @@ export interface MoveMessageResult {
   movedAt: Date;
 }
 
+// Sprint 3 · Checkpoint 16H rejection (2026-08-06) — Sent-Items
+// lookup for reply-reconciliation.
+//
+// Founder-mandated §7 validation of the Graph query contract:
+//
+//   Endpoint:
+//     GET /v1.0/me/mailFolders/sentitems/messages
+//       ?$filter={conversationId eq '{cid}' and sentDateTime ge {lo}
+//                 and sentDateTime le {hi}}
+//       &$orderby=sentDateTime desc
+//       &$top=25
+//       &$select=id,internetMessageId,conversationId,subject,from,
+//                toRecipients,ccRecipients,sentDateTime,bodyPreview,body
+//     Header: ConsistencyLevel: eventual
+//
+//   Why this shape:
+//     • `conversationId` is a filterable string property on the
+//       Message resource (Graph reference: Message properties).
+//     • `sentDateTime` is filterable + orderable and lives on the
+//       SentItems folder items (delegated identity is the owner).
+//     • Combining $filter over conversationId with $orderby on
+//       sentDateTime requires `ConsistencyLevel: eventual` because
+//       the two are indexed independently. Passing the header
+//       silences the "InefficientFilter" 400 and enables the
+//       secondary sort.
+//     • Scope of the search is bounded to `/mailfolders/sentitems`
+//       — Graph will NOT return Inbox or archived items even if
+//       they share the conversationId.
+//     • `$top=25` bounds a runaway result; a single Spectre reply
+//       is expected to be one of the newest messages in the
+//       conversation.
+//
+//   Retry / lag policy (§8):
+//     A newly-sent message may not yet be indexed. Callers back off
+//     30s → 2min → 10min before giving up; the local outbound
+//     ConversationMessage row remains visible throughout.
+//
+//   Identity matching (§10):
+//     conversationId + sender = mailbox owner + tight sentAt window
+//     is the "medium confidence" fallback. If the returned message
+//     has an internetMessageId matching a stored value, that is
+//     upgraded to "high confidence."
+export interface LookupSentMessagesArgs {
+  accessToken: string;
+  conversationId: string;
+  /** ISO — search window opens; typically mutation.sentAt - 60s. */
+  sentAfterIso: string;
+  /** ISO — search window closes; typically mutation.sentAt + 60min. */
+  sentBeforeIso: string;
+  /** Optional cap; provider default 25 (Graph max reasonable). */
+  top?: number;
+}
+export interface RawGraphSentMessage {
+  id: string;
+  internetMessageId: string | null;
+  conversationId: string | null;
+  subject: string | null;
+  from: { emailAddress?: { name?: string; address?: string } } | null;
+  toRecipients: Array<{ emailAddress?: { name?: string; address?: string } }> | null;
+  ccRecipients: Array<{ emailAddress?: { name?: string; address?: string } }> | null;
+  sentDateTime: string | null;
+  bodyPreview: string | null;
+  body: { contentType?: "text" | "html"; content?: string } | null;
+}
+export interface LookupSentMessagesResult {
+  messages: RawGraphSentMessage[];
+}
+
 export interface MicrosoftDelegatedProvider {
   buildAuthorizationUrl(args: AuthorizationUrlArgs): Promise<string>;
   exchangeCode(args: CodeExchangeArgs): Promise<TokenResponse>;
@@ -387,6 +455,11 @@ export interface MicrosoftDelegatedProvider {
    *      tenants).
    */
   moveMessage(args: MoveMessageArgs): Promise<MoveMessageResult>;
+  /** Sprint 3 · Checkpoint 16H rejection (2026-08-06) — Sent-Items
+   *  lookup for reconciling a Spectre-originated reply back to its
+   *  real Graph message id. See LookupSentMessagesArgs docs for the
+   *  validated Graph query contract. */
+  lookupSentMessagesInConversation(args: LookupSentMessagesArgs): Promise<LookupSentMessagesResult>;
 }
 
 export interface GetAttachmentBytesArgs {
@@ -647,6 +720,52 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
         destinationFolderId: body.parentFolderId ?? args.destinationId,
         movedAt: new Date(),
       };
+    },
+    async lookupSentMessagesInConversation(args) {
+      // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — validated
+      // Sent-Items lookup. See LookupSentMessagesArgs docs for the
+      // full query-contract rationale. Never queries other folders.
+      if (!args.conversationId) throw new Error("lookupSentMessagesInConversation requires conversationId");
+      const top = Math.min(Math.max(args.top ?? 25, 1), 100);
+      // The conversationId can contain characters that need URL
+      // encoding AND single-quote escaping in the OData filter.
+      // Escape ' → '' first (per OData v4 §5.1.1.6.2), then URL-encode.
+      const escConv = args.conversationId.replace(/'/g, "''");
+      const filter =
+        `conversationId eq '${escConv}'` +
+        ` and sentDateTime ge ${args.sentAfterIso}` +
+        ` and sentDateTime le ${args.sentBeforeIso}`;
+      const select = [
+        "id",
+        "internetMessageId",
+        "conversationId",
+        "subject",
+        "from",
+        "toRecipients",
+        "ccRecipients",
+        "sentDateTime",
+        "bodyPreview",
+        "body",
+      ].join(",");
+      const url =
+        `https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages` +
+        `?$filter=${encodeURIComponent(filter)}` +
+        `&$orderby=${encodeURIComponent("sentDateTime desc")}` +
+        `&$top=${top}` +
+        `&$select=${encodeURIComponent(select)}`;
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          // Required for the combined $filter/$orderby on this
+          // resource; Graph rejects with 400 InefficientFilter
+          // without it.
+          ConsistencyLevel: "eventual",
+        },
+      });
+      if (!res.ok) throw graphErrorFromResponse(res);
+      const body = (await res.json()) as { value?: RawGraphSentMessage[] };
+      return { messages: Array.isArray(body.value) ? body.value : [] };
     },
     async getAttachmentBytes(args) {
       // Sprint 3 Checkpoint 15D (2026-07-24) — Fetch attachment bytes.

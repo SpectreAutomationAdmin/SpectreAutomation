@@ -8921,6 +8921,74 @@ model EmailWorkIntakeOrigin {
 }
 
 // ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 16H rejection (2026-08-04) — Canonical
+// provider-neutral conversation message.
+//
+// Represents ONE message in a Work Intake conversation regardless of
+// origin: pulled from Outlook by delta sync, OR originated locally by a
+// Spectre reply. The Conversation tab reads THIS table for outbound
+// rows and the existing EmailMessage table for inbound rows (Sprint 2
+// C14C thread loader is extended by 16H rejection).
+//
+// Why a separate model:
+//   EmailMessage requires non-null graphMessageId + receivedAt +
+//   lastSyncedAt and enforces @@unique([mailboxConnectionId,
+//   graphMessageId]). A locally-originated reply has none of those at
+//   send time — fabricating them would either violate the invariant
+//   or, per founder §3, "create a misleading fake Graph message ID."
+//   ConversationMessage owns the provider-neutral contract.
+//
+// Idempotency (§4):
+//   Exactly one canonical outbound message per successful
+//   OutlookReplyMutation → replyMutationId is unique.
+//   Reconciled provider messages are unique per (mailboxConnectionId,
+//   providerMessageId).
+//
+// Storage of message body (§12):
+//   bodyCiphertext + bodySecretRef mirror the existing
+//   OutlookReplyMutation encryption contract. Plaintext bodyHtml /
+//   bodyText are populated only if the existing security model
+//   already stores plaintext for the same class of message.
+model ConversationMessage {
+  id                    String   @id @default(cuid())
+  clubId                String
+  mailboxConnectionId   String
+  workIntakeItemId      String?
+  conversationId        String
+
+  direction             String   // "INBOUND" | "OUTBOUND"
+  source                String   // "OUTLOOK_SYNC" | "SPECTRE_REPLY"
+
+  providerMessageId     String?  // null until Sent-Items reconciliation lands
+  internetMessageId     String?
+  replyMutationId       String?  @unique
+
+  senderName            String
+  senderAddress         String
+  recipientsJson        String
+  subject               String
+
+  bodyHtmlSanitized     String?
+  bodyTextExtract       String?
+  bodyCiphertext        String?
+  bodySecretRef         String?
+
+  sentAt                DateTime?
+  receivedAt            DateTime?
+  providerReconciledAt  DateTime?
+  reconciliationStatus  String   @default("NOT_APPLICABLE") // NOT_APPLICABLE | PENDING | RECONCILED | FAILED
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([mailboxConnectionId, providerMessageId])
+  @@index([clubId, workIntakeItemId])
+  @@index([mailboxConnectionId, conversationId])
+  @@index([workIntakeItemId])
+  @@index([reconciliationStatus])
+}
+
+// ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15D (2026-07-24) — Immutable ingested-document store.
 // See prisma-postgres/schema.prisma for the canonical documentation.
 // ---------------------------------------------------------------------------

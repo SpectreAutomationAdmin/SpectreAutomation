@@ -52,6 +52,10 @@ interface ThreadMessage {
   bodyHtmlSanitized: string | null;
   bodyTextExtract: string | null;
   softDeleted: boolean;
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06).
+  direction: "INBOUND" | "OUTBOUND";
+  source: "OUTLOOK_SYNC" | "SPECTRE_REPLY";
+  reconciliationStatus: string | null;
 }
 
 interface ThreadResponse {
@@ -160,40 +164,121 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       recipientsJson: true, receivedAt: true, sentAt: true,
       importance: true, isRead: true, hasAttachments: true,
       bodyHtmlSanitized: true, bodyTextExtract: true, softDeletedAt: true,
+      // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — pulled
+      // for dedup vs ConversationMessage.providerMessageId /
+      // internetMessageId when Sent Items delta sync arrives.
+      graphMessageId: true, internetMessageId: true,
     },
+  });
+
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — union
+  // canonical outbound Spectre replies (ConversationMessage) with
+  // provider-imported EmailMessage rows into ONE chronological
+  // thread. See §13: one loader for every workflow state.
+  const outboundRows = conversationId
+    ? await prisma.conversationMessage.findMany({
+        where: {
+          mailboxConnectionId,
+          conversationId,
+        },
+        orderBy: { sentAt: "desc" },
+        select: {
+          id: true, subject: true, senderName: true, senderAddress: true,
+          recipientsJson: true, sentAt: true, receivedAt: true,
+          bodyHtmlSanitized: true, bodyTextExtract: true,
+          direction: true, source: true, providerMessageId: true, internetMessageId: true,
+          reconciliationStatus: true,
+        },
+      })
+    : [];
+
+  // Dedup: if a Spectre-originated outbound reply has been reconciled
+  // AND the same providerMessageId (or internetMessageId) also appears
+  // in the EmailMessage set (e.g., a future Sent-Items delta imported
+  // the same message), keep the ConversationMessage row and drop the
+  // EmailMessage duplicate. §2 canonical thread + §10 no double-count.
+  const reconciledProviderIds = new Set(
+    outboundRows.map((c) => c.providerMessageId).filter((v): v is string => !!v),
+  );
+  const reconciledInternetIds = new Set(
+    outboundRows.map((c) => c.internetMessageId).filter((v): v is string => !!v),
+  );
+  const inboundKept = threadEmails.filter((m) => {
+    if (reconciledProviderIds.has(m.graphMessageId)) return false;
+    if (m.internetMessageId && reconciledInternetIds.has(m.internetMessageId)) return false;
+    return true;
   });
 
   const grantedScopesRaw = anchorEmail.mailboxConnection.grantedScopes || "";
   const grantedScopes = grantedScopesRaw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
   const replyConsent = deriveReplyConsent(grantedScopes);
 
+  // Assemble both streams into one message list — sort by canonical
+  // time and use id as a deterministic tie-breaker (§13).
+  type UnifiedMsg = ThreadMessage & { _sortKey: number };
+  const inboundMessages: UnifiedMsg[] = inboundKept.map((m) => {
+    const isSoftDeleted = m.softDeletedAt != null;
+    const recipients = safeParseRecipients(m.recipientsJson);
+    return {
+      id: m.id,
+      subject: m.subject,
+      senderName: m.senderName,
+      senderAddress: m.senderAddress,
+      recipientsTo: recipients.to,
+      recipientsCc: recipients.cc,
+      receivedAt: m.receivedAt.toISOString(),
+      sentAt: m.sentAt?.toISOString() ?? null,
+      importance: m.importance,
+      isRead: m.isRead,
+      hasAttachments: m.hasAttachments,
+      bodyHtmlSanitized: isSoftDeleted ? null : m.bodyHtmlSanitized,
+      bodyTextExtract: isSoftDeleted ? null : m.bodyTextExtract,
+      softDeleted: isSoftDeleted,
+      direction: "INBOUND",
+      source: "OUTLOOK_SYNC",
+      reconciliationStatus: null,
+      _sortKey: m.receivedAt.getTime(),
+    };
+  });
+  const outboundMessages: UnifiedMsg[] = outboundRows.map((c) => {
+    const recipients = safeParseRecipients(c.recipientsJson);
+    // Use sentAt for outbound sort; fall back to receivedAt or now.
+    const canonicalTime = c.sentAt ?? c.receivedAt ?? new Date();
+    return {
+      id: c.id,
+      subject: c.subject,
+      senderName: c.senderName,
+      senderAddress: c.senderAddress,
+      recipientsTo: recipients.to,
+      recipientsCc: recipients.cc,
+      receivedAt: canonicalTime.toISOString(),
+      sentAt: c.sentAt?.toISOString() ?? null,
+      importance: "normal",
+      isRead: true,
+      hasAttachments: false,
+      bodyHtmlSanitized: c.bodyHtmlSanitized,
+      bodyTextExtract: c.bodyTextExtract,
+      softDeleted: false,
+      direction: c.direction === "OUTBOUND" ? "OUTBOUND" : "INBOUND",
+      source: c.source === "SPECTRE_REPLY" ? "SPECTRE_REPLY" : "OUTLOOK_SYNC",
+      reconciliationStatus: c.reconciliationStatus,
+      _sortKey: canonicalTime.getTime(),
+    };
+  });
+  const messages: ThreadMessage[] = [...inboundMessages, ...outboundMessages]
+    .sort((a, b) => {
+      if (b._sortKey !== a._sortKey) return b._sortKey - a._sortKey;
+      // Deterministic tie-breaker: id descending.
+      return b.id.localeCompare(a.id);
+    })
+    .map(({ _sortKey: _unused, ...rest }) => rest);
+
   const response: ThreadResponse = {
     workIntakeItemId: intake.id,
     conversationId,
     mailboxConnectedEmail: anchorEmail.mailboxConnection.connectedEmail,
-    messageCount: threadEmails.length,
-    messages: threadEmails.map((m) => {
-      const isSoftDeleted = m.softDeletedAt != null;
-      const recipients = safeParseRecipients(m.recipientsJson);
-      return {
-        id: m.id,
-        subject: m.subject,
-        senderName: m.senderName,
-        senderAddress: m.senderAddress,
-        recipientsTo: recipients.to,
-        recipientsCc: recipients.cc,
-        receivedAt: m.receivedAt.toISOString(),
-        sentAt: m.sentAt?.toISOString() ?? null,
-        importance: m.importance,
-        isRead: m.isRead,
-        hasAttachments: m.hasAttachments,
-        // Strip body content for soft-deleted messages — the UI
-        // renders an audit notice in its place.
-        bodyHtmlSanitized: isSoftDeleted ? null : m.bodyHtmlSanitized,
-        bodyTextExtract: isSoftDeleted ? null : m.bodyTextExtract,
-        softDeleted: isSoftDeleted,
-      };
-    }),
+    messageCount: messages.length,
+    messages,
     replyConsent,
   };
 

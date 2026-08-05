@@ -115,6 +115,10 @@ interface WorkIntakeItemRow {
   workIntent?: string | null;
   workSubtype?: string | null;
   workDomainConfidence?: number | null;
+  // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — original
+  // WorkIntakeItem.createdAt. Powers the Completed History
+  // chronological order + timeline separators.
+  createdAt?: Date | null;
 }
 
 async function toWorkItem(
@@ -197,6 +201,7 @@ async function toWorkItem(
     workIntent: it.workIntent ?? undefined,
     workSubtype: it.workSubtype ?? undefined,
     workDomainConfidence: it.workDomainConfidence ?? undefined,
+    workIntakeCreatedAt: it.createdAt ? it.createdAt.toISOString() : undefined,
   };
 }
 
