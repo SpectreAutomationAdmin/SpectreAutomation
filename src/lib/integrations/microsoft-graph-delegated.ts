@@ -722,19 +722,19 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
       };
     },
     async lookupSentMessagesInConversation(args) {
-      // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — validated
-      // Sent-Items lookup. See LookupSentMessagesArgs docs for the
-      // full query-contract rationale. Never queries other folders.
+      // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — Sent-Items
+      // lookup with two-step filter contract. See
+      // LookupSentMessagesArgs for the full rationale.
+      //
+      // Empirical observation on staging (2026-08-05): the primary
+      // combined filter (conversationId + sentDateTime) is rejected
+      // with 400 InefficientFilter on some tenants even with
+      // ConsistencyLevel: eventual. We fall back to a sentDateTime-
+      // only filter and rely on the caller (pickBestSentMatch) to
+      // enforce owner + conversationId + tight-window matching. That
+      // preserves §10 — conversationId alone can still not merge.
       if (!args.conversationId) throw new Error("lookupSentMessagesInConversation requires conversationId");
       const top = Math.min(Math.max(args.top ?? 25, 1), 100);
-      // The conversationId can contain characters that need URL
-      // encoding AND single-quote escaping in the OData filter.
-      // Escape ' → '' first (per OData v4 §5.1.1.6.2), then URL-encode.
-      const escConv = args.conversationId.replace(/'/g, "''");
-      const filter =
-        `conversationId eq '${escConv}'` +
-        ` and sentDateTime ge ${args.sentAfterIso}` +
-        ` and sentDateTime le ${args.sentBeforeIso}`;
       const select = [
         "id",
         "internetMessageId",
@@ -747,24 +747,40 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
         "bodyPreview",
         "body",
       ].join(",");
-      const url =
-        `https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages` +
-        `?$filter=${encodeURIComponent(filter)}` +
-        `&$orderby=${encodeURIComponent("sentDateTime desc")}` +
-        `&$top=${top}` +
-        `&$select=${encodeURIComponent(select)}`;
-      const res = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${args.accessToken}`,
-          // Required for the combined $filter/$orderby on this
-          // resource; Graph rejects with 400 InefficientFilter
-          // without it.
-          ConsistencyLevel: "eventual",
-        },
-      });
-      if (!res.ok) throw graphErrorFromResponse(res);
-      const body = (await res.json()) as { value?: RawGraphSentMessage[] };
+      const base = `https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages`;
+      const orderBy = encodeURIComponent("sentDateTime desc");
+      const selectQs = encodeURIComponent(select);
+      const runFilter = async (filter: string): Promise<{ ok: boolean; status: number; body: unknown }> => {
+        const url = `${base}?$filter=${encodeURIComponent(filter)}&$orderby=${orderBy}&$top=${top}&$select=${selectQs}`;
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${args.accessToken}`,
+            ConsistencyLevel: "eventual",
+          },
+        });
+        const bodyJson = res.ok ? await res.json() : await res.text();
+        return { ok: res.ok, status: res.status, body: bodyJson };
+      };
+      const escConv = args.conversationId.replace(/'/g, "''");
+      const primary =
+        `conversationId eq '${escConv}'` +
+        ` and sentDateTime ge ${args.sentAfterIso}` +
+        ` and sentDateTime le ${args.sentBeforeIso}`;
+      let result = await runFilter(primary);
+      if (!result.ok) {
+        // Fallback: sentDateTime-only.
+        const fallback = `sentDateTime ge ${args.sentAfterIso} and sentDateTime le ${args.sentBeforeIso}`;
+        result = await runFilter(fallback);
+      }
+      if (!result.ok) {
+        // Both failed — throw the second-attempt classification so
+        // classifyMsalError sees a real Graph error.
+        const err = new Error(`Graph request failed with status ${result.status}`);
+        Object.assign(err, { response: { status: result.status } });
+        throw err;
+      }
+      const body = result.body as { value?: RawGraphSentMessage[] };
       return { messages: Array.isArray(body.value) ? body.value : [] };
     },
     async getAttachmentBytes(args) {
