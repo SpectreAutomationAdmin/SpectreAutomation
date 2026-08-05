@@ -110,22 +110,58 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "token_failed" }, { status: 502 });
   }
 
-  const provider = getMicrosoftDelegatedProvider();
+  // Direct Graph call so the exact response body can flow back into
+  // the JSON reply for one-shot diagnosis. If the primary lookup
+  // fails we retry with a broader shape (no conversationId filter)
+  // so we can distinguish "wrong filter contract" from "no candidates."
   const lo = new Date(mutation.sentAt.getTime() - 60_000);
   const hi = new Date(mutation.sentAt.getTime() + 60 * 60_000);
-  let candidates: RawGraphSentMessage[];
-  try {
-    const res = await provider.lookupSentMessagesInConversation({
-      accessToken,
-      conversationId: sourceEmail.conversationId,
-      sentAfterIso: lo.toISOString(),
-      sentBeforeIso: hi.toISOString(),
-      top: 25,
+
+  async function lookupWithFilter(filter: string, includeSelect = true): Promise<{ ok: boolean; status: number; body: string }> {
+    const select = "id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,sentDateTime,bodyPreview,body";
+    const url =
+      "https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages" +
+      `?$filter=${encodeURIComponent(filter)}` +
+      `&$orderby=${encodeURIComponent("sentDateTime desc")}` +
+      `&$top=25` +
+      (includeSelect ? `&$select=${encodeURIComponent(select)}` : "");
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}`, ConsistencyLevel: "eventual" },
     });
-    candidates = res.messages;
-  } catch (e) {
-    logger.warn("backfill.membership.graph_failed", { reason: (e as Error).message?.slice(0, 60) });
-    return NextResponse.json({ error: "graph_lookup_failed" }, { status: 502 });
+    const body = await res.text();
+    return { ok: res.ok, status: res.status, body };
+  }
+
+  const escConv = sourceEmail.conversationId.replace(/'/g, "''");
+  const filterA = `conversationId eq '${escConv}' and sentDateTime ge ${lo.toISOString()} and sentDateTime le ${hi.toISOString()}`;
+  let attempt = await lookupWithFilter(filterA);
+  let candidates: RawGraphSentMessage[] = [];
+  if (attempt.ok) {
+    try { candidates = (JSON.parse(attempt.body).value ?? []) as RawGraphSentMessage[]; } catch { candidates = []; }
+  } else {
+    // Fallback: sentDateTime-only. The wide net returns more but the
+    // client-side matcher still requires owner + conversationId +
+    // window, so it never leaks a wrong sender.
+    const filterB = `sentDateTime ge ${lo.toISOString()} and sentDateTime le ${hi.toISOString()}`;
+    const attemptB = await lookupWithFilter(filterB);
+    if (!attemptB.ok) {
+      logger.warn("backfill.membership.graph_failed", {
+        primaryStatus: attempt.status, fallbackStatus: attemptB.status,
+      });
+      return NextResponse.json({
+        error: "graph_lookup_failed",
+        primaryStatus: attempt.status,
+        primaryBodyExcerpt: attempt.body.slice(0, 400),
+        fallbackStatus: attemptB.status,
+        fallbackBodyExcerpt: attemptB.body.slice(0, 400),
+      }, { status: 502 });
+    }
+    try { candidates = (JSON.parse(attemptB.body).value ?? []) as RawGraphSentMessage[]; } catch { candidates = []; }
+    logger.info("backfill.membership.used_fallback_filter", {
+      candidateCount: candidates.length,
+      primaryStatus: attempt.status,
+    });
   }
 
   const match = pickBestSentMatch(candidates, {
