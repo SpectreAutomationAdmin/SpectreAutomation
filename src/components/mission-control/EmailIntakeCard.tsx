@@ -353,9 +353,50 @@ export default function EmailIntakeCard({ data }: Props) {
         role="presentation"
       >
         {isResolved ? (
-          <span className="spectre-mc-aux" data-testid="card-resolved-marker">
-            Resolved · in Completed history
-          </span>
+          // Sprint 3 · Checkpoint 16H completion §11-13 — completed
+          // cards render a Restore action (not a static label).
+          // Marker span preserved for backward compatibility with
+          // tests that read data-testid=card-resolved-marker.
+          <>
+            <span className="spectre-mc-aux" data-testid="card-resolved-marker">
+              Completed
+            </span>
+            <button
+              type="button"
+              className="spectre-btn spectre-btn--secondary spectre-btn--sm"
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (resolving) return;
+                setResolving(true);
+                setResolveError(null);
+                try {
+                  const res = await fetch("/api/work-intake/action", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ workIntakeItemId: data.workIntakeItemId, action: "restore" }),
+                  });
+                  if (!res.ok) {
+                    setResolveError("restore_failed");
+                    setResolving(false);
+                    return;
+                  }
+                  router.refresh();
+                } catch {
+                  setResolveError("network");
+                  setResolving(false);
+                }
+              }}
+              disabled={resolving}
+              data-testid="card-restore"
+            >
+              {resolving ? "Restoring…" : "Restore to Work Intake Feed"}
+            </button>
+            {resolveError ? (
+              <span className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">
+                Could not restore — please retry.
+              </span>
+            ) : null}
+          </>
         ) : ap ? (
           <ApActionRow
             ap={ap}

@@ -85,14 +85,16 @@ export default function ReplyComposer({
     if (typeof window === "undefined") return seedRecommendation ?? "";
     return loadDraft(workIntakeItemId) ?? seedRecommendation ?? "";
   });
-  const [andClose, setAndClose] = useState<boolean>(false);
+  // Sprint 3 · Checkpoint 16H completion §17 — "Also close this item"
+  // toggle removed. Sending a reply now always completes the item
+  // (per the founder rule: completion is inherent in the completing
+  // action). No optional close flag remains.
   const [step, setStep] = useState<ComposerStep>("draft");
   const [errorText, setErrorText] = useState<string | null>(null);
   const [sentSummary, setSentSummary] = useState<{
     sentAt: string;
     sendingMailbox: string;
     replyToSubject: string;
-    andClose?: boolean;
   } | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -130,10 +132,13 @@ export default function ReplyComposer({
             // re-sending.
             "x-idempotency-key": `reply:${workIntakeItemId}:${Date.now()}`,
           },
-          // Sprint 3 · Checkpoint 16H — andClose flag triggers
-          // the server's REPLIED_AND_CLOSED completion path after
-          // a successful Graph send.
-          body: JSON.stringify({ body: draft, andClose, mode: "REPLY" }),
+          // Sprint 3 · Checkpoint 16H completion — reply always
+          // auto-completes the Work Intake item after successful
+          // Graph send. The `andClose: true` flag routes through the
+          // canonical WorkCompletionEvent path (REPLIED_AND_CLOSED),
+          // which moves the item to Completed History and enqueues
+          // the Outlook archive job.
+          body: JSON.stringify({ body: draft, andClose: true, mode: "REPLY" }),
         },
       );
       if (res.status === 401) { setErrorText("Your session expired. Please sign in again."); setStep("error"); return; }
@@ -151,13 +156,11 @@ export default function ReplyComposer({
         sentAt?: string;
         sendingMailbox?: string;
         replyToSubject?: string;
-        andClose?: boolean;
       } | null;
       setSentSummary({
         sentAt: body?.sentAt ?? new Date().toISOString(),
         sendingMailbox: body?.sendingMailbox ?? "your mailbox",
         replyToSubject: body?.replyToSubject ?? "the conversation",
-        andClose: !!body?.andClose,
       });
       // Sprint 3 · Checkpoint 16H — clear the local draft after
       // successful send so the field starts empty on reopen.
@@ -184,9 +187,7 @@ export default function ReplyComposer({
         </header>
         <p className="spectre-mc-inline-composer-truthful-note" data-testid="composer-sent-note">
           Reply sent from <b>{sentSummary.sendingMailbox}</b> to <b>{sentSummary.replyToSubject}</b>.
-          {sentSummary.andClose
-            ? " Work Intake moved to Completed and Outlook archive job enqueued."
-            : " The thread will update after the next mailbox synchronisation."}
+          {" "}Moved to Completed History and Outlook message archive requested.
         </p>
         <div className="spectre-mc-inline-composer-controls">
           <button type="button" className="spectre-btn spectre-btn--ghost" onClick={onCancel} data-testid="composer-close-after-sent">
@@ -240,11 +241,7 @@ export default function ReplyComposer({
           <ul>
             <li>Reply is sent from the connected mailbox listed in the thread header.</li>
             <li>Recipient and subject are set from the source message on the server — you cannot change them here.</li>
-            {andClose ? (
-              <li><b>Also close this item</b> is on — after the reply sends, the Work Intake will be marked completed and the linked Outlook message will be archived.</li>
-            ) : (
-              <li>Once sent, the Work Intake card is not automatically resolved.</li>
-            )}
+            <li>After a successful send, the Work Intake moves to Completed History and the linked Outlook message is archived.</li>
           </ul>
         </div>
       ) : null}
@@ -261,16 +258,9 @@ export default function ReplyComposer({
             <button type="button" className="spectre-btn spectre-btn--ghost" onClick={onCancel} data-testid="composer-cancel">
               Cancel
             </button>
-            {/* Sprint 3 · Checkpoint 16H — Send reply & close toggle. */}
-            <label className="spectre-mc-inline-composer-close-toggle" data-testid="composer-and-close-toggle">
-              <input
-                type="checkbox"
-                checked={andClose}
-                onChange={(e) => setAndClose(e.target.checked)}
-                disabled={!canSend}
-              />
-              <span>Also close this item</span>
-            </label>
+            {/* Sprint 3 · Checkpoint 16H completion §17 — no optional
+                close toggle. Send reply always completes + archives on
+                success. */}
             <button
               type="button"
               className={canSend ? "spectre-btn spectre-btn--primary" : "spectre-btn spectre-btn--primary spectre-btn--disabled"}
@@ -281,7 +271,7 @@ export default function ReplyComposer({
               data-testid="composer-send"
             >
               <IconSend size={12} />
-              {andClose ? "Send reply & close" : "Send reply"}
+              Send reply
             </button>
           </>
         ) : step === "confirm" ? (

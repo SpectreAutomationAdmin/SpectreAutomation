@@ -425,40 +425,49 @@ export async function postApInvoiceAction(
       after: { via: "mission-control:post-ap-invoice-atomic", apInvoiceId: result.invoiceId, journalEntryId: result.journalEntryId },
     });
 
-    // Outlook archive job enqueue (only when the WI originated
-    // from an Outlook email).
+    // Sprint 3 · Checkpoint 16H completion §5 — route through the
+    // canonical WorkCompletionEvent path so archive-enqueue,
+    // audit, and idempotency are consistent with every other
+    // completing workflow. The emit helper:
+    //   * writes a WorkCompletionEvent (completionType =
+    //     POSTED_AND_CLEARED)
+    //   * finds PRIMARY email origins
+    //   * enqueues MAILBOX_ARCHIVE_MESSAGE with idempotency key
+    //     `archive:{eventId}:{emailMessageId}` (per-completion
+    //     unique — a rapid double-click coalesces)
+    //   * gates on OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED
+    // The prior direct enqueue is removed; emit is the single
+    // source of the archive job.
     let archive: PostApInvoiceResult["lifecycle"]["emailArchive"] = {
       status: "NOT_APPLICABLE", reason: "WI not linked to an EmailMessage",
     };
     try {
-      const emailOrigin = await prisma.emailWorkIntakeOrigin.findFirst({
-        where: { workIntakeItemId: wi.id, role: "PRIMARY" },
-        select: {
-          emailMessageId: true,
-          emailMessage: { select: { graphMessageId: true, mailboxConnectionId: true } },
+      const { emitWorkCompletionEvent } = await import("@/lib/work-intake/completion");
+      const evt = await emitWorkCompletionEvent({
+        workIntakeItemId: wi.id,
+        clubId,
+        completedByUserId: principal.id,
+        completionType: "POSTED_AND_CLEARED",
+        metadata: {
+          apInvoiceId: result.invoiceId,
+          apInvoiceNumber: result.invoiceNumber,
+          journalEntryId: result.journalEntryId,
+          journalEntryNumber: result.journalEntryNumber,
         },
       });
-      if (emailOrigin?.emailMessage?.graphMessageId && emailOrigin.emailMessage.mailboxConnectionId) {
-        const job = await enqueueJob({
-          clubId,
-          kind: "MAILBOX_ARCHIVE_MESSAGE",
-          payload: {
-            apInvoiceId: result.invoiceId,
-            workIntakeItemId: wi.id,
-            emailMessageId: emailOrigin.emailMessageId,
-            graphMessageId: emailOrigin.emailMessage.graphMessageId,
-            mailboxConnectionId: emailOrigin.emailMessage.mailboxConnectionId,
-          },
-          idempotencyKey: `mailbox-archive:${result.invoiceId}`,
-        });
-        archive = { status: "QUEUED", jobId: job.id };
+      if (evt.archiveJobsEnqueued > 0) {
+        archive = { status: "QUEUED", jobId: `event:${evt.eventId}` };
+      } else if (evt.reason === "no_email_provenance") {
+        archive = { status: "NOT_APPLICABLE", reason: "WI not linked to an EmailMessage" };
+      } else if (evt.reason === "flag_off") {
+        archive = { status: "NOT_APPLICABLE", reason: "OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED is off" };
       }
-    } catch (queueErr) {
-      logger.warn("mission-control.post-ap-invoice.archive-enqueue-failed", {
+    } catch (emitErr) {
+      logger.warn("mission-control.post-ap-invoice.completion-emit-failed", {
         clubId, invoiceId: result.invoiceId,
-        error: queueErr instanceof Error ? queueErr.message : String(queueErr),
+        error: emitErr instanceof Error ? emitErr.message : String(emitErr),
       });
-      archive = { status: "ENQUEUE_FAILED", error: queueErr instanceof Error ? queueErr.message : "unknown" };
+      archive = { status: "ENQUEUE_FAILED", error: emitErr instanceof Error ? emitErr.message : "unknown" };
     }
 
     logger.info("mission-control.post-ap-invoice.success", {

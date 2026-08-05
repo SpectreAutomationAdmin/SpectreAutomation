@@ -8671,11 +8671,31 @@ model WorkIntakeItem {
   domainCorrections WorkDomainCorrection[]
   proposedCommitments ProposedCommitment[]
   completionEvents  WorkCompletionEvent[]
+  restorationEvents WorkRestorationEvent[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
   @@index([clubId, updatedAt])
   @@index([clubId, workDomain])
+}
+
+// Sprint 3 · Checkpoint 16H completion (2026-08-05) — audit record
+// for restoring a completed Work Intake back to Active. The
+// operation is asymmetric: restoration returns the WI to the
+// visible feed, but does NOT reverse accounting, does NOT resend
+// replies, does NOT move archived Outlook mail back to Inbox.
+model WorkRestorationEvent {
+  id                     String    @id @default(cuid())
+  clubId                 String
+  workIntakeItemId       String
+  workIntakeItem         WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  restoredByUserId       String
+  restoredAt             DateTime  @default(now())
+  priorCompletionEventId String?
+  reason                 String?
+
+  @@index([clubId, restoredAt])
+  @@index([workIntakeItemId])
 }
 
 // Sprint 3 · Checkpoint 16H (2026-08-04) — canonical completion

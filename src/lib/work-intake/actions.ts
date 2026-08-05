@@ -113,6 +113,70 @@ export async function reopenIntake(ctx: ActionCtx): Promise<void> {
   ]);
 }
 
+/**
+ * Sprint 3 · Checkpoint 16H completion (2026-08-05) — restore a
+ * completed Work Intake back to Active.
+ *
+ * Asymmetric semantics (per founder §13-15):
+ *   * The WI returns to the active feed with its ORIGINAL id + all
+ *     provenance + all prior activity + prior completion event
+ *     preserved.
+ *   * Archived Outlook messages are NOT moved back to Inbox in this
+ *     checkpoint.
+ *   * Sent replies are NOT re-sent.
+ *   * Posted AP invoices are NOT reversed.
+ *
+ * Records a WorkRestorationEvent capturing who + when + which
+ * completion is being reversed. Idempotent — a second call while the
+ * WI is already OPEN is a no-op (records no duplicate row).
+ */
+export async function restoreIntake(ctx: ActionCtx, reason?: string): Promise<void> {
+  const it = await loadAuthorisedIntake(ctx);
+  // Idempotency: nothing to do if already active. Never records a
+  // "restore" event for a WI that's already Active.
+  if (it.status !== "RESOLVED" && it.status !== "INFORMATIONAL" && it.status !== "SUPPRESSED") {
+    return;
+  }
+  // Grab the most recent completion event for audit linkage.
+  const priorCompletion = await prisma.workCompletionEvent.findFirst({
+    where: { workIntakeItemId: it.id },
+    orderBy: { completedAt: "desc" },
+    select: { id: true },
+  }).catch(() => null);
+
+  await prisma.$transaction([
+    prisma.workIntakeItem.update({
+      where: { id: it.id },
+      data: {
+        status: "OPEN",
+        // NEVER clear resolvedAt / resolvedByUserId — those preserve
+        // the original completion record. Restoration is a separate
+        // event, not a rewrite of history.
+        deferredUntil: null,
+      },
+    }),
+    prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: it.id,
+        actorUserId: ctx.principal.id,
+        action: "RESTORED",
+        fromValue: it.status,
+        toValue: "OPEN",
+        note: reason ?? "Restored to Work Intake Feed",
+      },
+    }),
+    prisma.workRestorationEvent.create({
+      data: {
+        clubId: it.clubId,
+        workIntakeItemId: it.id,
+        restoredByUserId: ctx.principal.id,
+        priorCompletionEventId: priorCompletion?.id ?? null,
+        reason: reason ?? null,
+      },
+    }),
+  ]);
+}
+
 export async function markInformational(ctx: ActionCtx): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
   await prisma.$transaction([

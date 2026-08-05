@@ -157,8 +157,11 @@ export default async function MissionControlPage({
       <div className="spectre-mc-grid">
         <section>
           <div className="spectre-mc-feed-head">
+            {/* Sprint 3 · Checkpoint 16H §1 — visible feed header
+                renamed "Work intake" → "Work Intake Feed". Internal
+                types/models keep the WorkIntakeItem name. */}
             <h2>
-              Work intake
+              Work Intake Feed
               <span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span>
             </h2>
             <div className="controls">
@@ -187,7 +190,7 @@ export default async function MissionControlPage({
               <div className="spectre-mc-item-head">
                 <span className="spectre-mc-pill approval">All clear</span>
               </div>
-              <h3>Your work intake is empty right now.</h3>
+              <h3>Your Work Intake Feed is empty right now.</h3>
               {/* Sprint 3 · Checkpoint 16G Stage A — empty-state copy
                   no longer claims Spectre processed overnight items
                   when the queue may have simply had nothing to process. */}

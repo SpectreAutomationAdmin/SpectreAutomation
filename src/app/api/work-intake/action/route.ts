@@ -16,6 +16,7 @@ import {
   deferIntake,
   assignToSelf,
   markWorkIntakeRead,
+  restoreIntake,
   WorkIntakeActionError,
 } from "@/lib/work-intake/actions";
 import { MAILBOX_ERROR_CODE } from "@/lib/mailbox/errors";
@@ -61,6 +62,13 @@ export async function POST(req: NextRequest) {
       case "mark_read":
         // Sprint 3 Checkpoint 15I — per-user read state. Idempotent.
         await markWorkIntakeRead(ctx);
+        break;
+      case "restore":
+        // Sprint 3 · Checkpoint 16H completion §11-16 — return a
+        // completed WI to Active. Preserves ID, provenance,
+        // accounting, sent replies, completion history. Never
+        // moves archived Outlook mail back to Inbox.
+        await restoreIntake(ctx, typeof body?.reason === "string" ? body.reason : undefined);
         break;
       default:
         return NextResponse.json({ error: "unknown_action" }, { status: 400 });
