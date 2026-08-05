@@ -160,22 +160,29 @@ export const CLASSIFIER_RULES: ClassifierRule[] = [
     intakeAction: "CREATE_ACTIONABLE",
     matches: (e) => e.importance === "high",
   },
+  // Sprint 3 · Checkpoint 16H rejection #2 (2026-08-06) — bulk /
+  // list / no-reply mail is INFORMATIONAL, never SUPPRESS. Founder
+  // §4/§7: "No action required" is not an exclusion. A newsletter
+  // still belongs in the Work Intake Feed. SUPPRESS is reserved for
+  // narrow technical exclusions (junk / deleted-folder policy /
+  // provider tombstone / user-created suppression) applied
+  // BEFORE the classifier ever sees the message.
   {
     key: "list_mail_or_marketing",
-    version: 1,
-    label: "LIKELY_NOISE",
-    reason: "Message is bulk / marketing / list mail (List-Unsubscribe or List-Id header present).",
-    confidence: 0.9,
-    intakeAction: "SUPPRESS",
+    version: 2,
+    label: "INFORMATIONAL",
+    reason: "Bulk / list mail (List-Unsubscribe or List-Id header present) — informational, no action required.",
+    confidence: 0.85,
+    intakeAction: "CREATE_INFORMATIONAL",
     matches: (e) => isListMail(e),
   },
   {
     key: "automated_sender_pattern",
-    version: 1,
-    label: "LIKELY_NOISE",
-    reason: "Sender address matches a common automated pattern (no-reply, notifications, mailer-daemon).",
+    version: 2,
+    label: "INFORMATIONAL",
+    reason: "Automated sender pattern (no-reply / notifications / mailer-daemon) — informational, no reply expected.",
     confidence: 0.75,
-    intakeAction: "SUPPRESS",
+    intakeAction: "CREATE_INFORMATIONAL",
     matches: (e) => isAutomatedSender(e) || hasAutoSubmittedHeader(e),
   },
   {

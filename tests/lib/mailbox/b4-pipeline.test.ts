@@ -184,16 +184,22 @@ describe("classifyEmail (§9)", () => {
     expect(c.confidence).not.toBe(1.0); // never auto-1.0 for rule execution
   });
 
-  it("suppresses list mail via List-Unsubscribe", () => {
+  // Sprint 3 · Checkpoint 16H rejection #2 (2026-08-06) — bulk /
+  // list / no-reply mail now materializes as INFORMATIONAL, never
+  // SUPPRESS. Founder's §4/§7: "no action required" is not an
+  // exclusion; every genuine mailbox email belongs in the feed.
+  it("classifies list mail as INFORMATIONAL (List-Unsubscribe)", () => {
     const c = make({ headers: { "list-unsubscribe": "<mailto:x@list.com>" } });
-    expect(c.label).toBe("LIKELY_NOISE");
-    expect(c.intakeAction).toBe("SUPPRESS");
+    expect(c.label).toBe("INFORMATIONAL");
+    expect(c.intakeAction).toBe("CREATE_INFORMATIONAL");
+    expect(c.ruleKey).toBe("list_mail_or_marketing");
   });
 
-  it("suppresses no-reply automation", () => {
+  it("classifies no-reply automation as INFORMATIONAL", () => {
     const c = make({ senderAddress: "noreply@service.example" });
-    expect(c.label).toBe("LIKELY_NOISE");
-    expect(c.intakeAction).toBe("SUPPRESS");
+    expect(c.label).toBe("INFORMATIONAL");
+    expect(c.intakeAction).toBe("CREATE_INFORMATIONAL");
+    expect(c.ruleKey).toBe("automated_sender_pattern");
   });
 
   it("falls through to INFORMATIONAL when nothing else matches", () => {
@@ -492,11 +498,14 @@ describe("initial sync — mocked round trip", () => {
     const emails = await prisma.emailMessage.findMany({ where: { mailboxConnectionId } });
     expect(emails).toHaveLength(3);
 
-    // Intake items: invoice + reservation created; newsletter suppressed.
+    // Sprint 3 · Checkpoint 16H rejection #2 (2026-08-06) — the
+    // newsletter no longer suppresses; every genuine mailbox email
+    // materialises. Feed items: invoice + reservation + newsletter
+    // (INFORMATIONAL).
     const intake = await prisma.workIntakeItem.findMany({ where: { clubId } });
-    expect(intake).toHaveLength(2);
+    expect(intake).toHaveLength(3);
     const labels = intake.map((i) => i.classification).sort();
-    expect(labels).toEqual(["INVOICE_LIKELY", "MEMBER_INQUIRY_LIKELY"]);
+    expect(labels).toEqual(["INFORMATIONAL", "INVOICE_LIKELY", "MEMBER_INQUIRY_LIKELY"]);
 
     // Connection transitioned CONNECTED_PENDING_SYNC → CONNECTED.
     const conn = await prisma.mailboxConnection.findUnique({ where: { id: mailboxConnectionId } });
