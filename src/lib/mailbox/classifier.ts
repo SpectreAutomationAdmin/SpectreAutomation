@@ -160,6 +160,40 @@ export const CLASSIFIER_RULES: ClassifierRule[] = [
     intakeAction: "CREATE_ACTIONABLE",
     matches: (e) => e.importance === "high",
   },
+  // Sprint 3 · Checkpoint 16H rejection #4 (2026-08-06) — genuine
+  // attachment-bearing emails must NOT terminate as Informational
+  // before document analysis finishes (founder §4/§5/§7). This
+  // rule provides the "provisional pending analysis" state that
+  // sits between the specific-keyword rules above and the bulk /
+  // no-reply / informational fallback below.
+  //
+  // Precedence:
+  //   invoice_keyword / vendor rules  → real INVOICE_LIKELY (above)
+  //   high_importance_flag           → HIGH_IMPORTANCE (above)
+  //   THIS RULE (hasAttachments)     → ACTIONABLE pending analysis
+  //   list_mail / no-reply / default → INFORMATIONAL
+  //
+  // Rationale: the document classifier
+  // (src/lib/documents/classify.ts) now defaults any PDF/image
+  // attachment to INVOICE so the AP materialiser runs OCR +
+  // extraction on the CONTENT. This email-level rule ensures the
+  // founder-visible card is NOT confidently labelled Informational
+  // while that analysis is still in flight. Once ApIntakeSource
+  // rows are written, `loadLinkedIntelligenceForEmailIntakes`
+  // promotes the card to the AP invoice view via `invoiceSummary`.
+  //
+  // Attachment authority wins over list/no-reply/informational —
+  // a real vendor invoice from a no-reply address must still route
+  // to AP analysis, not a "no action" bucket.
+  {
+    key: "has_attachment_pending_analysis",
+    version: 1,
+    label: "INFORMATIONAL",
+    reason: "Attachment present — document analysis pending. Card will refresh when OCR + extraction complete.",
+    confidence: 0.5,
+    intakeAction: "CREATE_ACTIONABLE",
+    matches: (e) => e.hasAttachments,
+  },
   // Sprint 3 · Checkpoint 16H rejection #2 (2026-08-06) — bulk /
   // list / no-reply mail is INFORMATIONAL, never SUPPRESS. Founder
   // §4/§7: "No action required" is not an exclusion. A newsletter

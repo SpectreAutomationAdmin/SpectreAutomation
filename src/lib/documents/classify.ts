@@ -36,8 +36,26 @@ interface Rule {
   matches: (s: ClassifySignals) => boolean;
 }
 
-const CLASSIFY_RULES_VERSION = 1;
+// Sprint 3 · Checkpoint 16H rejection #4 (2026-08-06) — bumped to
+// version 2 for the mime-default INVOICE fallback. Rule audit trail
+// now clearly separates keyword-derived INVOICE classifications
+// from mime-default INVOICE classifications.
+const CLASSIFY_RULES_VERSION = 2;
 export { CLASSIFY_RULES_VERSION };
+
+function isInvoiceCandidateMime(mimeType: string): boolean {
+  // A PDF from an email attachment is an invoice candidate unless a
+  // more-specific keyword rule (STATEMENT / CREDIT_NOTE / REMITTANCE
+  // / PURCHASE_ORDER) already claimed it above. Image types (JPEG,
+  // PNG) are also candidates — many small vendors send phone-camera
+  // snapshots of paper invoices.
+  const m = mimeType.toLowerCase();
+  return m === "application/pdf"
+    || m === "image/jpeg" || m === "image/jpg"
+    || m === "image/png"
+    || m === "image/tiff" || m === "image/tif"
+    || m === "image/heic" || m === "image/heif";
+}
 
 function containsAny(haystack: string | undefined | null, needles: string[]): boolean {
   if (!haystack) return false;
@@ -118,6 +136,25 @@ const RULES: Rule[] = [
     classification: "INVOICE",
     matches: (s) =>
       containsAny(s.emailBodyExcerpt, ["invoice number", "amount due", "total due"]),
+  },
+  // Sprint 3 · Checkpoint 16H rejection #4 (2026-08-06) — mime-based
+  // invoice-candidate fallback. Every unclassified PDF or image
+  // attachment defaults to INVOICE so the AP pipeline (OCR →
+  // extraction → materialise) runs against the CONTENT, not the
+  // filename. Founder §10: filename is weak supporting evidence only.
+  //
+  // This rule runs LAST so a filename like "purchase-order-42.pdf"
+  // still resolves to PURCHASE_ORDER (the earlier keyword rule
+  // matches first). Only untagged PDFs like "B0037FC.PDF" and
+  // camera-snapshot invoices ("IMG_1234.jpg") take this branch.
+  //
+  // The OCR/extraction stage is the authority that upgrades to
+  // real AP intake OR abstains truthfully (see analyseIngestedInvoice
+  // + strategy-router). A vague email body cannot defeat this.
+  {
+    key: "mime.pdf_or_image_default_invoice",
+    classification: "INVOICE",
+    matches: (s) => isInvoiceCandidateMime(s.mimeType),
   },
 ];
 
