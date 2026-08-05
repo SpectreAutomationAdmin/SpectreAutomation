@@ -336,7 +336,17 @@ export default function EmailIntakeCard({ data }: Props) {
             to renderDomainCollapsedBody which uses the domain
             view-model and never emits VENDOR / INVOICE / AP STATUS /
             AMOUNT fields on non-AP cards. */}
-        {ap && (!data.workDomain || data.workDomain === "ACCOUNTS_PAYABLE")
+        {/* Sprint 3 · Checkpoint 16H rejection #4 (2026-08-06) — AP
+            presentation wins whenever an ApInvoiceCardIntelligence
+            is linked, regardless of the email's own `workDomain`
+            (which is classified from the email BODY at ingest time,
+            before the attachment analysis has run). Otherwise a
+            "For your review" email whose attached PDF is now
+            recognised as an invoice would keep rendering the
+            GENERAL / INFORMATIONAL shell while its Create-vendor
+            button sits at the bottom — an incoherent hybrid card.
+            Founder §6: one canonical AP work card. */}
+        {ap
           ? renderApCollapsedBody(data, ap, expanded, () => setCvapModalOpen(true))
           : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
             ? renderDomainCollapsedBody(data)
