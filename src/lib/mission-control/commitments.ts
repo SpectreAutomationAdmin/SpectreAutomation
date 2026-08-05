@@ -19,6 +19,12 @@ import { startOfLocalDayUtc, todayLocalDateString } from "./arrival";
 
 export type TodayCommitmentSource = "OUTLOOK_CALENDAR" | "SPECTRE_PROPOSED";
 
+// Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+// temporal state derived from absolute start/end instants + the
+// current wall-clock in the club's IANA timezone. Never derived
+// from start alone.
+export type CalendarCommitmentState = "PAST" | "IN_PROGRESS" | "UPCOMING" | "ALL_DAY";
+
 export type TodayCommitment = {
   key: string;
   source: TodayCommitmentSource;
@@ -32,6 +38,12 @@ export type TodayCommitment = {
   proposalStatus?: string;
   locationSummary?: string;
   organiserName?: string;
+  // Sprint 3 · Checkpoint 16H — serialisable state fields. The panel
+  // re-derives state on the client every minute using startIso + endIso
+  // so past appointments fade without a Graph refetch.
+  state: CalendarCommitmentState;
+  startIso: string | null;
+  endIso: string | null;
 };
 
 export type CalendarConsentState =
@@ -109,6 +121,9 @@ export async function loadTodayCommitments(args: {
       sourceLabel: "Outlook calendar",
       locationSummary: e.locationSummary,
       organiserName: e.organiserName,
+      state: deriveCommitmentState({ startAt: e.startAt, endAt: e.endAt, isAllDay: e.isAllDay, now: args.now }),
+      startIso: e.startAt.toISOString(),
+      endIso: e.endAt.toISOString(),
     })),
     ...proposals.map((p) => ({
       key: `pc_${p.id}`,
@@ -120,6 +135,12 @@ export async function loadTodayCommitments(args: {
       sourceLabel: "Spectre proposed",
       workIntakeItemId: p.workIntakeItemId ?? undefined,
       proposalStatus: p.status,
+      // Proposed commitments don't have a native end time — treat
+      // dueAt as both start and end for state purposes so the item
+      // fades once the deadline has passed.
+      state: deriveCommitmentState({ startAt: p.dueAt, endAt: p.dueAt, isAllDay: false, now: args.now }),
+      startIso: p.dueAt.toISOString(),
+      endIso: p.dueAt.toISOString(),
     })),
   ].sort((a, b) => {
     // All-day items first, then chronological.
@@ -138,6 +159,31 @@ export async function loadTodayCommitments(args: {
     windowStart: start,
     windowEnd: end,
   };
+}
+
+/**
+ * Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+ * temporal-state derivation. Derived from ABSOLUTE start/end
+ * instants + the current instant. Never derived from start alone.
+ *
+ *   endAt <= now                → PAST
+ *   startAt <= now < endAt      → IN_PROGRESS
+ *   startAt > now               → UPCOMING
+ *   isAllDay + still within today's local day → ALL_DAY
+ *
+ * The caller supplies `now` explicitly so tests can use a fake clock.
+ */
+export function deriveCommitmentState(input: {
+  startAt: Date;
+  endAt: Date;
+  isAllDay: boolean;
+  now: Date;
+}): CalendarCommitmentState {
+  if (input.isAllDay) return "ALL_DAY";
+  const nowMs = input.now.getTime();
+  if (input.endAt.getTime() <= nowMs) return "PAST";
+  if (input.startAt.getTime() <= nowMs) return "IN_PROGRESS";
+  return "UPCOMING";
 }
 
 /** Format a UTC instant as HH:mm in the given IANA timezone. */

@@ -1081,6 +1081,28 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-commitments-hint-link {
     font-size: 11.5px; color: var(--spectre-link, #2f5832); font-weight: 500;
   }
+  /* Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+     past-appointment presentation. Faded + strikethrough BOTH; per
+     §18 must not rely on opacity alone. Preserves legibility (52%
+     opacity keeps AA contrast against the rail card background) and
+     never uses warning/error tone. */
+  .spectre-mc-commitment-row.is-past .spectre-mc-commitment-time,
+  .spectre-mc-commitment-row.is-past .spectre-mc-commitment-title {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+    opacity: 0.52;
+  }
+  .spectre-mc-commitment-row.is-past .spectre-mc-commitment-source,
+  .spectre-mc-commitment-row.is-past .spectre-mc-commitment-meta {
+    opacity: 0.52;
+  }
+  /* Visually hidden but readable by assistive tech. Used to surface
+     "past appointment" state to screen readers without visible UI. */
+  .spectre-mc-visually-hidden {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
   .spectre-mc-ts {
     margin-left: auto;
     font-size: 11.5px; color: var(--spectre-text-muted);

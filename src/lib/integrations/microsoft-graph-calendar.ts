@@ -8,6 +8,12 @@
 
 import type { RawGraphMessage } from "./microsoft-graph-delegated";
 import { prisma } from "@/lib/prisma";
+// Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+// canonical time helpers. Graph returns naive wall-clock dateTime
+// strings + a separate timeZone field; we must convert them to
+// absolute UTC instants exactly once.
+import { zonedTimeToUtc } from "@/lib/mission-control/arrival";
+import { logger } from "@/lib/observability/logger";
 
 export type CalendarCommitment = {
   externalEventId: string;
@@ -78,22 +84,105 @@ export async function fetchCalendarCommitmentsForToday(args: {
     if (!res.ok) return { state: "ERROR", reason: `graph_${res.status}` };
     const body = (await res.json()) as { value?: GraphEvent[] };
     const rawEvents = body.value ?? [];
-    const events: CalendarCommitment[] = rawEvents.map((e) => ({
-      externalEventId: e.id,
-      // Sprint 3 · Checkpoint 16G §12 — respect private-event
-      // visibility. When Outlook flags an event as `private` we
-      // still render its time-slot but obscure the subject.
-      subject: e.sensitivity === "private" ? "Private event" : (e.subject ?? "(no subject)"),
-      startAt: new Date(e.start?.dateTime ?? new Date().toISOString()),
-      endAt: new Date(e.end?.dateTime ?? new Date().toISOString()),
-      locationSummary: e.sensitivity === "private" ? undefined : e.location?.displayName,
-      organiserName: e.sensitivity === "private" ? undefined : e.organizer?.emailAddress?.name,
-      attendeeStatus: e.responseStatus?.response,
-      isAllDay: !!e.isAllDay,
-      source: "OUTLOOK_CALENDAR",
-    }));
+    const events: CalendarCommitment[] = rawEvents.map((e) => {
+      // Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+      // parse dateTime as a wall-clock in the event's own timeZone,
+      // then convert exactly once to an absolute UTC instant.
+      //
+      // Graph honours `Prefer: outlook.timezone="America/Edmonton"`
+      // by returning dateTime WITHOUT any offset or Z suffix
+      // ("2026-08-04T18:00:00.0000000") plus a separate timeZone
+      // field. Passing that raw string to `new Date(...)` would
+      // parse it as UTC (per ECMAScript), shifting the instant by
+      // the local offset — the founder-reported 6-hour bug.
+      //
+      // Fallback tz = args.timezone (the club's IANA zone we
+      // requested via Prefer). If Graph ever returns a Windows tz
+      // identifier we still get correctly-formatted display times
+      // because the club-tz fallback matches the requested zone.
+      const startAt = normaliseGraphInstant(e.start?.dateTime, e.start?.timeZone ?? args.timezone, args.timezone);
+      const endAt = normaliseGraphInstant(e.end?.dateTime, e.end?.timeZone ?? args.timezone, args.timezone);
+      return {
+        externalEventId: e.id,
+        // Sprint 3 · Checkpoint 16G §12 — respect private-event
+        // visibility. When Outlook flags an event as `private` we
+        // still render its time-slot but obscure the subject.
+        subject: e.sensitivity === "private" ? "Private event" : (e.subject ?? "(no subject)"),
+        startAt,
+        endAt,
+        locationSummary: e.sensitivity === "private" ? undefined : e.location?.displayName,
+        organiserName: e.sensitivity === "private" ? undefined : e.organizer?.emailAddress?.name,
+        attendeeStatus: e.responseStatus?.response,
+        isAllDay: !!e.isAllDay,
+        source: "OUTLOOK_CALENDAR",
+      };
+    });
     return { state: "CONNECTED", events };
   } catch (e) {
     return { state: "ERROR", reason: `network_${(e as Error).message?.slice(0, 40) ?? "unknown"}` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 3 · Checkpoint 16H calendar-acceptance (2026-08-05) —
+// canonical normalisation from Graph's naive wall-clock format to an
+// absolute UTC instant.
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a Microsoft-Graph event dateTime string + timeZone tuple to
+ * an absolute UTC Date. Graph returns dateTime as a naive wall-clock
+ * without any offset/Z suffix (e.g. "2026-08-04T18:00:00.0000000")
+ * along with a separate timeZone field naming the zone that wall
+ * clock refers to. We must NEVER pass that raw string to `new Date`
+ * — ES spec parses offset-less ISO strings as UTC, producing an
+ * instant shifted by the local offset.
+ *
+ * Uses zonedTimeToUtc (from src/lib/mission-control/arrival.ts) which
+ * is DST-safe via Intl.DateTimeFormat iteration.
+ */
+export function normaliseGraphInstant(
+  dateTime: string | undefined,
+  eventTz: string,
+  fallbackTz: string,
+): Date {
+  if (!dateTime) return new Date();
+  // Strip Graph's high-precision fractional seconds (".0000000") so
+  // the string matches the "YYYY-MM-DDTHH:mm:ss" contract zonedTimeToUtc
+  // expects. Graph never returns an offset in this shape.
+  const trimmed = dateTime.slice(0, 19);
+  // If Graph returned a Windows tz name (unusual when we set the
+  // Prefer header, but possible) or an empty string, fall back to
+  // the club/fallback zone we requested. We do NOT ship a Windows→
+  // IANA table here — the fallback is the same zone we asked Graph
+  // for via Prefer, so display remains correct.
+  const zone = looksLikeIanaZone(eventTz) ? eventTz : fallbackTz;
+  try {
+    const utc = zonedTimeToUtc(trimmed, zone);
+    if (Number.isNaN(utc.getTime())) throw new Error("Invalid Date");
+    return utc;
+  } catch (err) {
+    logger.warn("calendar.graph.normalise_failed", {
+      // Keep the log actionable but sanitised — no attendee names,
+      // no subject, no organiser.
+      wallClockLen: trimmed.length,
+      eventTzLen: eventTz.length,
+      reason: (err as Error).message?.slice(0, 60),
+    });
+    // Fail-safe: interpret as UTC (matches pre-16H behaviour) so a
+    // parse error never blocks the panel. Instant is wrong but
+    // rendering doesn't crash.
+    return new Date(`${trimmed}Z`);
+  }
+}
+
+/**
+ * Coarse check that a timezone string looks like an IANA identifier.
+ * IANA identifiers are `Region/City[/Subregion]` with letters +
+ * underscores/hyphens/slashes only. Windows tz identifiers use
+ * spaces ("Mountain Standard Time") which this rejects.
+ */
+function looksLikeIanaZone(tz: string | undefined): boolean {
+  if (!tz) return false;
+  return /^[A-Za-z_+\-]+\/[A-Za-z_+\-]+(\/[A-Za-z_+\-]+)?$/.test(tz);
 }
