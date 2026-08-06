@@ -54,7 +54,7 @@ test.describe("Phase 4 · Slice 2 · feature-specific extraction acceptance", ()
     expect(String(supplier)).not.toMatch(/^(PRODUIT|DESCRIPTION|INVOICE|FACTURE|Item)$/i);
     const invNum = body.invoice?.invoiceNumber ?? body.invoiceNumber;
     expect(invNum).not.toBe("OICE");
-    expect(invNum).toBe(expected.invoiceNumber);
+    expect(invNum).toBe((expected.invoiceNumber as { value: string }).value);
     const total = Number(body.invoice?.total ?? body.total);
     expect(total).toBeCloseTo(expected.total as number, 2);
     // Canonical evidence surface presence.
@@ -78,7 +78,7 @@ test.describe("Phase 4 · Slice 2 · feature-specific extraction acceptance", ()
     expect(res.status()).toBe(200);
     const body = await res.json();
     const invNum = body.invoice?.invoiceNumber ?? body.invoiceNumber;
-    expect(invNum).toBe(expected.invoiceNumber);
+    expect(invNum).toBe((expected.invoiceNumber as { value: string }).value);
     const total = Number(body.invoice?.total ?? body.total);
     expect(total).toBeCloseTo(expected.total as number, 2);
     if (body.invoice?.payableReferenceType) {
@@ -100,7 +100,7 @@ test.describe("Phase 4 · Slice 2 · feature-specific extraction acceptance", ()
     expect(res.status()).toBe(200);
     const body = await res.json();
     const invNum = body.invoice?.invoiceNumber ?? body.invoiceNumber;
-    expect(invNum).toBe(expected.invoiceNumber);
+    expect(invNum).toBe((expected.invoiceNumber as { value: string }).value);
     expect(invNum).not.toContain("4402");   // account number must not surface
     if (body.invoice?.payableReferenceType) {
       expect(body.invoice.payableReferenceType).toBe("STATEMENT_NUMBER");
