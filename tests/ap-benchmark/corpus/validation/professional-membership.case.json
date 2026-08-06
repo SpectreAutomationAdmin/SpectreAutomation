@@ -1,6 +1,6 @@
 {
   "id": "professional-membership",
-  "split": "holdout",
+  "split": "validation",
   "label": "CPA professional membership dues — must NOT auto-code as grounds/fuel/capital",
   "category": "PROFESSIONAL_MEMBERSHIP",
   "tags": [

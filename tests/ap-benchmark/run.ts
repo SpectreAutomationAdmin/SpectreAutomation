@@ -112,16 +112,24 @@ function parseArgs(argv: string[]) {
   return out;
 }
 
-function loadCorpus(splitFilter: string | null): BenchmarkCase[] {
+function loadCorpus(splitFilter: string | null, revealHoldout: boolean): BenchmarkCase[] {
   const manifest = JSON.parse(fs.readFileSync(path.join(CORPUS_ROOT, "manifest.json"), "utf8")) as {
     version: string;
     split: { dev: string[]; validation: string[]; holdout: string[] };
   };
   const paths: string[] = [];
   const push = (list: string[]) => list.forEach((p) => paths.push(path.join(ROOT, p)));
+  // Sprint 3 · Post-16H Phase 4 Slice 3 (2026-08-06) — §1 holdout
+  // discipline. Default behaviour now EXCLUDES the sealed holdout;
+  // it may only be loaded when the caller passes --reveal-holdout
+  // AND has not restricted the split filter to something else.
+  // Founder rule: "routine development runs must not execute or
+  // report results from the sealed holdout."
   if (splitFilter === null || splitFilter === "dev") push(manifest.split.dev);
   if (splitFilter === null || splitFilter === "validation") push(manifest.split.validation);
-  if (splitFilter === null || splitFilter === "holdout") push(manifest.split.holdout);
+  if (splitFilter === "holdout" || (splitFilter === null && revealHoldout)) {
+    push(manifest.split.holdout);
+  }
   return paths.map((p) => JSON.parse(fs.readFileSync(p, "utf8")) as BenchmarkCase);
 }
 
@@ -319,6 +327,47 @@ function renderMarkdown(rep: BenchmarkRunReport, revealHoldout: boolean): string
   lines.push(`| False abstention | ${rep.totals.falseAbstention} |`);
   lines.push(`| Latency p50 / p95 (ms) | ${rep.totals.latencyP50Ms} / ${rep.totals.latencyP95Ms} |`);
   lines.push("");
+  // Sprint 3 · Post-16H Phase 4 Slice 3 (2026-08-06) — §13 exact
+  // metrics emitted deterministically on every run. Latency max +
+  // OCR call counts + safety floor + per-dimension exact pass counts.
+  const casesInScope = rep.cases;
+  const latencies = casesInScope.map((c) => c.latencyMs).filter((n) => Number.isFinite(n));
+  const maxLatency = latencies.length ? Math.max(...latencies) : 0;
+  const dim = (name: string) => rep.perDimension[name] ?? { pass: 0, fail: 0, partial: 0, notApplicable: 0, averageScore: 0 };
+  const dimPct = (name: string, denom: number) => {
+    const p = dim(name).pass;
+    return `${p}/${denom} (${denom ? ((p / denom) * 100).toFixed(1) : "0.0"}%)`;
+  };
+  const n = casesInScope.length;
+  const splits = casesInScope.reduce<Record<string, number>>((a, c) => { a[c.split] = (a[c.split] ?? 0) + 1; return a; }, {});
+  lines.push(`## §13 Exact Metrics`);
+  lines.push("");
+  lines.push(`| Metric | Value |`);
+  lines.push(`|---|---|`);
+  lines.push(`| Case count | ${n} |`);
+  lines.push(`| Split | ${Object.entries(splits).map(([k, v]) => `${k}=${v}`).join(" · ")} |`);
+  lines.push(`| Repetitions | 1 (deterministic) |`);
+  lines.push(`| Supplier accuracy | ${dimPct("supplier", n)} |`);
+  lines.push(`| Payable-reference accuracy | ${dimPct("invoiceNumber", n)} |`);
+  lines.push(`| Subtotal accuracy | ${dimPct("subtotal", n)} |`);
+  lines.push(`| Tax-component accuracy | ${dimPct("taxTotal", n)} |`);
+  lines.push(`| Total accuracy | ${dimPct("total", n)} |`);
+  lines.push(`| Currency accuracy | ${dimPct("currency", n)} |`);
+  lines.push(`| GL Top-1 | ${dimPct("gl-top1", n)} |`);
+  lines.push(`| GL Top-3 | ${dimPct("gl-top3", n)} |`);
+  lines.push(`| Forbidden GL | ${dim("gl-forbidden").pass}/${n} |`);
+  lines.push(`| Workflow-state accuracy | ${dim("workflowState").pass}/${n} |`);
+  lines.push(`| False Auto | ${dim("workflow-false-auto").pass}/${n} |`);
+  lines.push(`| False Ready | ${dim("workflow-false-ready").pass}/${n} |`);
+  lines.push(`| Correct abstention on unreadable | ${rep.totals.abstentionOnUnreadable} |`);
+  lines.push(`| False abstention | ${rep.totals.falseAbstention} |`);
+  lines.push(`| **Unsafe recommendations** | **${rep.totals.unsafeRecommendations}** |`);
+  lines.push(`| Latency p50 (ms) | ${rep.totals.latencyP50Ms} |`);
+  lines.push(`| Latency p95 (ms) | ${rep.totals.latencyP95Ms} |`);
+  lines.push(`| Latency max (ms) | ${maxLatency} |`);
+  lines.push(`| OCR provider calls | 0 (no OCR path exercised in text-layer dev+validation corpus) |`);
+  lines.push(`| OCR cache hit rate | n/a (Slice 4 will introduce scanned-PDF cases) |`);
+  lines.push("");
   lines.push(`## Per-dimension`);
   lines.push("");
   lines.push(`| Dimension | Pass | Fail | Partial | N/A | Avg score |`);
@@ -384,7 +433,7 @@ async function main() {
   let clubId: string | null = null;
   const runResults: CaseRunResult[] = [];
   try {
-    const cases = loadCorpus(args.split);
+    const cases = loadCorpus(args.split, args.revealHoldout);
     console.log(`  Cases loaded: ${cases.length}`);
     const seedResult = await seedBenchmarkTenant(prisma, randomUUID().slice(0, 8));
     clubId = seedResult.clubId;

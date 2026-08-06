@@ -33,6 +33,18 @@ import {
   emptyEvidence,
   reconcileAmounts,
 } from "./canonical-invoice-evidence";
+import { extractLineItemsFromText, reconcileLineItems } from "./line-items";
+import {
+  extractStructuredTaxComponents,
+  selectTaxTotal,
+  type StructuredTaxComponent,
+} from "./tax-components";
+import {
+  rankSuppliers,
+  deriveSignals,
+  type RankableSupplierCandidate,
+  type SupplierRankResult,
+} from "./supplier-ranker";
 
 export interface BuildEvidenceInput {
   /** Flattened text of the primary document. */
@@ -221,7 +233,77 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
     });
   }
 
-  // --- conflict + reconciliation -------------------------------------
+  // --- line items / credits / surcharges (Slice 3 §7) ---------------
+  const li = extractLineItemsFromText(input.text, input.pageCount ?? 1);
+  ev.lineItems = li.lineItems;
+  ev.credits = li.credits;
+  ev.surcharges = li.surcharges;
+  for (const c of li.conflicts) ev.evidenceConflicts.push(c);
+
+  // --- structured tax components (Slice 3 §9) -----------------------
+  const taxComponents = extractStructuredTaxComponents(input.text);
+  // Attach on the evidence as an extension bag (not part of the base
+  // shape) so downstream consumers can drill in without changing
+  // the canonical evidence type surface used by Slice 2 tests.
+  (ev as CanonicalInvoiceEvidence & { taxComponents?: StructuredTaxComponent[] }).taxComponents = taxComponents;
+
+  // --- supplier ranker v2 (Slice 3 §3) ------------------------------
+  // Scored composition over the collected supplier candidates.
+  // Winners bubble UP within the same candidate list; losers keep
+  // their preserved-alternate status. The ranker never removes
+  // candidates — it re-orders + tags them.
+  const rankable: RankableSupplierCandidate[] = ev.fields.supplierCandidates.map((c) => {
+    const sig = deriveSignals(c.value, {
+      text: input.text,
+      senderDomain: input.email?.senderAddress?.split("@")[1]?.toLowerCase(),
+    });
+    // Add BILL_TO_PROXIMITY when the collision detector below fires,
+    // but the collision detector runs AFTER the ranker — so we
+    // pre-check recipient overlap here.
+    if (ev.fields.recipientCandidates.some((r) => normalizeOrgName(r.value) === normalizeOrgName(c.value))) {
+      sig.negative.push("BILL_TO_PROXIMITY");
+    }
+    return {
+      value: c.value,
+      positive: sig.positive,
+      negative: sig.negative,
+      prior: c.confidence,
+      provenance: c.ruleKey ?? undefined,
+    };
+  });
+  const rank: SupplierRankResult | null = rankable.length > 0 ? rankSuppliers(rankable) : null;
+  if (rank && rank.winner) {
+    // Re-order supplierCandidates so the ranker winner is first.
+    // Preserve losers as alternates behind it.
+    const winnerValue = rank.winner.value;
+    const reordered = [
+      ...ev.fields.supplierCandidates.filter((c) => c.value === winnerValue),
+      ...ev.fields.supplierCandidates.filter((c) => c.value !== winnerValue),
+    ];
+    // Update winner's confidence to reflect the composed score (0..100).
+    const winnerCand = reordered[0];
+    if (winnerCand) {
+      winnerCand.confidence = Math.max(0, Math.min(100, Math.round(rank.winner.score)));
+      winnerCand.ruleKey = `${winnerCand.ruleKey ?? "supplier"}+ranker_v2`;
+      if (rank.ambiguous) {
+        winnerCand.validationStatus = "FAILED_PLAUSIBILITY";
+      }
+    }
+    ev.fields.supplierCandidates = reordered;
+  }
+  // Attach the full ranked evidence for diagnostics.
+  (ev as CanonicalInvoiceEvidence & { supplierRanking?: SupplierRankResult }).supplierRanking = rank ?? undefined;
+
+  // --- line-item reconciliation (§8) --------------------------------
+  const li2 = reconcileLineItems(
+    ev.lineItems,
+    ev.credits,
+    ev.surcharges,
+    input.legacyValues.subtotal,
+  );
+  if (li2?.conflict) ev.evidenceConflicts.push(li2.conflict);
+
+  // --- amount reconciliation + existing conflict detection ---------
   const amountRec = reconcileAmounts(ev);
   for (const conflict of amountRec.conflicts) {
     ev.evidenceConflicts.push(conflict);

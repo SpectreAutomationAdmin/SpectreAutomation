@@ -1,6 +1,6 @@
 {
   "id": "food-service-invoice",
-  "split": "holdout",
+  "split": "validation",
   "label": "Food-service invoice — must route to F&B cost of sales",
   "category": "FOOD_SERVICE",
   "tags": [

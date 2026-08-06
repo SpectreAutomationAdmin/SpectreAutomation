@@ -559,9 +559,19 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const hasProfessionalCredentialContext =
     (supplierName != null && (professionalBodyRe.test(supplierName) || professionalBodyAcronymRe.test(supplierName)))
     || (pdfOk && professionalBodyRe.test(pdfText));
+  // Sprint 3 · Post-16H Phase 4 Slice 3 (2026-08-06) — §10 primary
+  // signal is CANONICAL line-item descriptions when the evidence
+  // layer surfaced them, else fall back to the legacy line list.
+  // Canonical line items are the founder-mandated authority when
+  // present: filename / sender / supplier name are supplementary.
+  const canonicalLineDescriptions =
+    parsed.canonicalEvidence?.lineItems?.map((l) => l.description.value) ?? [];
+  const legacyLineDescriptions = lineItemsExtracted.map((l) => l.description);
+  const lineDescriptions =
+    canonicalLineDescriptions.length > 0 ? canonicalLineDescriptions : legacyLineDescriptions;
   const economicPurpose = classifyEconomicPurpose({
     supplierName,
-    lineDescriptions: lineItemsExtracted.map((l) => l.description),
+    lineDescriptions,
     fullDocumentText: pdfOk ? pdfText : null,
     paymentDirection: "club_pays_vendor",
     hasPenaltyLine: lineItemsExtracted.some(
