@@ -53,6 +53,7 @@ export async function seedBenchmarkTenant(
     isBankAccount?: boolean;
     isCashAccount?: boolean;
     fundApplicability?: string | null;
+    accountRole?: string;
   }> = [
     // Legitimate ASSET accounts — postable as AP debits for capital.
     { accountNumber: "1506", name: "Equipment & Fixtures — Grounds", type: "ASSET", normalBalance: "DEBIT" },
@@ -62,17 +63,25 @@ export async function seedBenchmarkTenant(
     // Contra-asset accounts — MUST NOT be recommended for AP debit.
     // Uses the abbreviation "Accum Deprec" specifically so the
     // audit-identified name-fragile exclusion cannot rescue Phase 0.
-    { accountNumber: "1710", name: "Accum Deprec — Computer Equipment & Fixtures", type: "ASSET", normalBalance: "CREDIT" },
-    { accountNumber: "1720", name: "Accum Deprec — Grounds Equipment", type: "ASSET", normalBalance: "CREDIT" },
-    { accountNumber: "1730", name: "Accumulated Amortization — Intangibles", type: "ASSET", normalBalance: "CREDIT" },
+    // Textbook convention (ASSET/CREDIT) — caught by ruleContraAsset.
+    { accountNumber: "1710", name: "Accum Deprec — Computer Equipment & Fixtures", type: "ASSET", normalBalance: "CREDIT", accountRole: "CONTRA_ASSET" },
+    { accountNumber: "1720", name: "Accum Deprec — Grounds Equipment", type: "ASSET", normalBalance: "CREDIT", accountRole: "CONTRA_ASSET" },
+    { accountNumber: "1730", name: "Accumulated Amortization — Intangibles", type: "ASSET", normalBalance: "CREDIT", accountRole: "CONTRA_ASSET" },
     // JONAS-CONVENTION accumulated depreciation (ASSET/DEBIT). This
     // is how Coulee Ridge's real COA stores contra-assets — per the
     // 2026-08-06 staging inventory (7 accum-depr accounts, all DEBIT).
     // The structural CONTRA_ASSET rule (ASSET/CREDIT) DOES NOT fire
-    // on this convention. Included in the seed so the benchmark
-    // honestly measures the gap that Phase 6 schema work must close.
-    { accountNumber: "1513", name: "Accum Deprec — Computer Eqp & Fix", type: "ASSET", normalBalance: "DEBIT" },
-    { accountNumber: "1514", name: "Accum Deprec — Equip under financing", type: "ASSET", normalBalance: "DEBIT" },
+    // on this convention. Phase 2.1 closes this via the durable
+    // accountRole=CONTRA_ASSET field, backfilled from the reporting-
+    // side helper. Both accounts are seeded with accountRole so the
+    // benchmark measures the FIXED behaviour (not the residual gap).
+    { accountNumber: "1513", name: "Accum Deprec — Computer Eqp & Fix", type: "ASSET", normalBalance: "DEBIT", accountRole: "CONTRA_ASSET" },
+    { accountNumber: "1514", name: "Accum Deprec — Equip under financing", type: "ASSET", normalBalance: "DEBIT", accountRole: "CONTRA_ASSET" },
+    // Un-backfilled Jonas-convention contra (ASSET/DEBIT, accountRole
+    // DEFAULT=STANDARD) — the adversarial case. Present to prove the
+    // mutation guard: if the accountRole rule is removed, this
+    // account would leak into ranking under CAPITAL_ASSET context.
+    { accountNumber: "1515", name: "Accum Deprec — Land Improvements", type: "ASSET", normalBalance: "DEBIT" },
 
     // Bank + cash — must not be an AP debit.
     { accountNumber: "1100", name: "Operating Bank Account", type: "ASSET", normalBalance: "DEBIT", isBankAccount: true, isCashAccount: true },
@@ -126,6 +135,7 @@ export async function seedBenchmarkTenant(
         isBankAccount: acct.isBankAccount ?? false,
         isCashAccount: acct.isCashAccount ?? false,
         fundApplicability: acct.fundApplicability ?? null,
+        accountRole: acct.accountRole ?? "STANDARD",
       },
       select: { id: true },
     });

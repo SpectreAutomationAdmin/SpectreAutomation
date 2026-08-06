@@ -101,6 +101,19 @@ export interface AllocationResult {
   // was resolvable.
   cardCategory: string | null;
   requiresReview: boolean;
+  // Sprint 3 · Post-16H Phase 2.1 (2026-08-06) — allocation
+  // eligibility mode.
+  //   PER_ALLOCATION    — each allocation was evaluated with its own
+  //                       AccountingTransactionContext derived from its
+  //                       own line-item / purpose evidence.
+  //   DOCUMENT_FALLBACK — one document-level context reused across
+  //                       every allocation (current Phase 2 wiring).
+  //   NOT_EVALUATED     — eligibility service was not consulted for
+  //                       this allocation set (e.g. legacy path).
+  // Only PER_ALLOCATION may qualify for AUTO_APPROVAL_ELIGIBLE
+  // (Phase 3 §B3). Multi-allocation invoices under DOCUMENT_FALLBACK
+  // must remain requiresReview=true — Phase 2.1 §A5.
+  allocationEligibilityMode: "PER_ALLOCATION" | "DOCUMENT_FALLBACK" | "NOT_EVALUATED";
 }
 
 export interface AllocationInput {
@@ -539,6 +552,7 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
       }),
       cardCategory: null,
       requiresReview: true,
+      allocationEligibilityMode: "NOT_EVALUATED",
     };
   }
 
@@ -585,12 +599,31 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
 
   // Step 9: derive card category + requiresReview.
   const cardCategory = deriveCardCategory(allocations);
+  // Phase 2.1 (2026-08-06) §A5 — until per-allocation eligibility
+  // context wiring lands, multi-allocation invoices are always
+  // requiresReview=true. The current Phase 2 wire threads one
+  // document-level `expectedDebitRole` through recommendGlAccount,
+  // which the ranker reuses for every candidate; each allocation
+  // has NOT been evaluated with its own transaction context yet.
+  // Report the mode explicitly so the workflow layer (Phase 3) can
+  // block AUTO_APPROVAL_ELIGIBLE on anything other than
+  // PER_ALLOCATION.
+  const materialAllocations = allocations.filter((a) => Math.abs(a.amount) >= 0.01).length;
+  // NOTE: DOCUMENT_FALLBACK is currently the only mode this function
+  // emits — per-allocation contexts are threaded end-to-end in Phase 3.
+  // Widening `allocationEligibilityMode` to a broader union here
+  // avoids a spurious TS "no overlap" check on the requiresReview
+  // guard below and keeps the invariant explicit.
+  const allocationEligibilityMode: AllocationResult["allocationEligibilityMode"] = "DOCUMENT_FALLBACK";
+  const multiAllocationBlocked =
+    materialAllocations >= 2 && (allocationEligibilityMode as string) !== "PER_ALLOCATION";
   const requiresReview =
     allocations.length === 0
     || allocations.some((a) => a.recommendedAccount == null || a.recommendedAccount.requiresReview)
-    || Math.abs(totals.allocationVariance) > 0.02;
+    || Math.abs(totals.allocationVariance) > 0.02
+    || multiAllocationBlocked;
 
-  return { allocations, totals, cardCategory, requiresReview };
+  return { allocations, totals, cardCategory, requiresReview, allocationEligibilityMode };
 }
 
 function round2(n: number): number {

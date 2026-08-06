@@ -12,7 +12,8 @@
       "corpus/dev/statement-of-account.case.json",
       "corpus/dev/keyword-trap-computer.case.json",
       "corpus/dev/pathological-vendor-default-contra.case.json",
-      "corpus/dev/jonas-convention-accum-depr.case.json"
+      "corpus/dev/jonas-convention-accum-depr.case.json",
+      "corpus/dev/adversarial-capital-with-accumdepr.case.json"
     ],
     "validation": [
       "corpus/validation/mixed-tax-invoice.case.json"

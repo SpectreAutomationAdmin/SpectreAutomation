@@ -78,15 +78,46 @@ export function ruleLiability(a: AccountEligibilityView): AccountingEligibilityR
   return a.type === "LIABILITY" ? "LIABILITY_NOT_VALID_FOR_AP_DEBIT" : null;
 }
 
-/** Textbook contra-asset detection. ONLY fires when the tenant COA
- *  actually records accumulated depreciation with a CREDIT normal
- *  balance. Jonas-convention tenants (Coulee Ridge) store these as
- *  ASSET/DEBIT — Phase 6 `accountRole` field is required to close
- *  that gap. */
+/** Textbook contra-asset detection. Fires when the tenant COA
+ *  records accumulated depreciation with a CREDIT normal balance.
+ *  Kept as a secondary generic rule for tenants using conventional
+ *  normal-balance configuration. */
 export function ruleContraAsset(a: AccountEligibilityView): AccountingEligibilityReason | null {
   return a.type === "ASSET" && a.normalBalance === "CREDIT"
     ? "CONTRA_ASSET_NOT_VALID_FOR_PURCHASE"
     : null;
+}
+
+/** Phase 2.1 (2026-08-06) — durable contra-asset identification via
+ *  `Account.accountRole`. Closes the Jonas-convention gap where
+ *  accumulated-depreciation accounts are stored as ASSET/DEBIT and
+ *  cannot be caught by the type+normalBalance rule alone. Backfill
+ *  populated by scripts/backfill-account-role.ts from the reporting-
+ *  side `isAccumulatedDepreciationLine` helper; runtime consults ONLY
+ *  this field. Applies under EVERY nature — including CAPITAL_ASSET,
+ *  INVENTORY, PREPAID_EXPENSE — because a contra-asset is never a
+ *  valid AP debit regardless of transaction type. */
+export function ruleAccountRoleContraAsset(a: AccountEligibilityView): AccountingEligibilityReason | null {
+  return a.accountRole === "CONTRA_ASSET" ? "CONTRA_ASSET_NOT_VALID_FOR_PURCHASE" : null;
+}
+
+/** Phase 2.1 — every other structural role that must never be an AP
+ *  debit target. `CONTROL` / `BANK` / `CASH` overlap the boolean
+ *  flags above; `accountRole` is the durable authority once
+ *  backfilled but the boolean flags remain valid for legacy paths.
+ *  `CONTRA_REVENUE` / `CONTRA_LIABILITY` / `CLEARING` are Phase 6
+ *  refinements — currently rejected via `TRANSACTION_NATURE_
+ *  INCOMPATIBLE` when reached (no dedicated reason yet). */
+export function ruleAccountRoleForbidden(a: AccountEligibilityView): AccountingEligibilityReason | null {
+  switch (a.accountRole) {
+    case "CONTRA_REVENUE": return "REVENUE_NOT_VALID_FOR_AP_DEBIT";
+    case "CONTRA_LIABILITY": return "LIABILITY_NOT_VALID_FOR_AP_DEBIT";
+    case "CONTROL": return "CONTROL_ACCOUNT";
+    case "BANK": return "BANK_ACCOUNT_NOT_VALID_FOR_AP_ALLOCATION";
+    case "CASH": return "CASH_ACCOUNT_NOT_VALID_FOR_AP_ALLOCATION";
+    case "CLEARING": return "SYSTEM_ACCOUNT_NOT_USER_POSTABLE";
+    default: return null;
+  }
 }
 
 /** Data-quality edge: an EXPENSE with CREDIT normal balance is

@@ -287,6 +287,8 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
           archivedAt: a.archivedAt, fundApplicability: a.fundApplicability,
           categoryKey: a.category?.key ?? null,
           fsGroupKey: a.fsGroup?.key ?? null,
+          // Phase 2.1 — durable role. Prisma default = "STANDARD".
+          accountRole: (a as unknown as { accountRole?: string }).accountRole ?? "STANDARD",
         }));
         const res = filterEligibleAccounts(views, eligibilityCtx);
         eligibilityRejected = res.rejected;

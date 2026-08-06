@@ -1705,6 +1705,11 @@ model Account {
   isBankAccount       Boolean                  @default(false)
   isControlAccount    Boolean                  @default(false)
   isCashAccount       Boolean                  @default(false) // tagged for cash-flow grouping
+  /// Sprint 3 · Post-16H Phase 2.1 (2026-08-06) — durable account
+  /// role. Values: STANDARD | CONTRA_ASSET | CONTRA_REVENUE |
+  /// CONTRA_LIABILITY | CONTROL | CLEARING | BANK | CASH.
+  /// See prisma-postgres/schema.prisma for full documentation.
+  accountRole         String                   @default("STANDARD")
   fsGroupId           String?
   fsGroup             FinancialStatementGroup? @relation(fields: [fsGroupId], references: [id])
   /// Founder rule 2026-07-02 v15.0 — Fund Applicability.

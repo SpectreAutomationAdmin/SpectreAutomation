@@ -27,6 +27,7 @@ import {
   ruleRevenue, ruleEquity, ruleLiability,
   ruleContraAsset, ruleNormalBalanceContradiction,
   ruleNatureAssetExcluded,
+  ruleAccountRoleContraAsset, ruleAccountRoleForbidden,
   postingBlockerFundApplicability,
 } from "./rules-structural";
 
@@ -57,6 +58,13 @@ export function evaluateEligibility(
   push(ruleCash(a));
   push(ruleContraAsset(a));
   push(ruleNormalBalanceContradiction(a));
+  // Phase 2.1 — durable accountRole rules. Apply BEFORE the
+  // nature-conditioned rule so the contra-asset verdict is stable
+  // regardless of transaction nature (a contra-asset is never a
+  // valid AP debit under CAPITAL_ASSET, INVENTORY, or PREPAID
+  // either — the specific defect Phase 2.1 closes).
+  push(ruleAccountRoleContraAsset(a));
+  push(ruleAccountRoleForbidden(a));
   // Nature-conditioned — applied last so structural reasons dominate.
   push(ruleNatureAssetExcluded(a, ctx));
 

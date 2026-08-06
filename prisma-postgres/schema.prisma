@@ -1696,6 +1696,25 @@ model Account {
   isBankAccount       Boolean                  @default(false)
   isControlAccount    Boolean                  @default(false)
   isCashAccount       Boolean                  @default(false) // tagged for cash-flow grouping
+  /// Sprint 3 · Post-16H Phase 2.1 (2026-08-06) — durable
+  /// account-role for the accounting eligibility service. Closes
+  /// the Jonas-convention gap where accumulated-depreciation
+  /// accounts are stored as ASSET/DEBIT and would otherwise pass
+  /// the type+normalBalance contra rule. Runtime eligibility uses
+  /// this field STRUCTURALLY — never a name pattern.
+  ///
+  /// Enum-shaped string (Prisma provides no cross-DB enum for
+  /// this schema variant). Closed set enforced in
+  /// src/lib/accounting/eligibility/types.ts.
+  ///
+  /// Values: STANDARD | CONTRA_ASSET | CONTRA_REVENUE |
+  ///         CONTRA_LIABILITY | CONTROL | CLEARING | BANK | CASH
+  ///
+  /// Default STANDARD so existing rows stay eligible. Backfill via
+  /// scripts/backfill-account-role.ts uses the reporting-side
+  /// helper isAccumulatedDepreciationLine as a ONE-TIME migration
+  /// aid; runtime never consults that helper again.
+  accountRole         String                   @default("STANDARD")
   fsGroupId           String?
   fsGroup             FinancialStatementGroup? @relation(fields: [fsGroupId], references: [id])
   /// Founder rule 2026-07-02 v15.0 — Fund Applicability.

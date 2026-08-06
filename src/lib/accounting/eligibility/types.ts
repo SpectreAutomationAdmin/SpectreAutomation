@@ -74,6 +74,19 @@ export interface AccountEligibilityResult {
   ruleVersion: number;
 }
 
+/** Closed set of `Account.accountRole` values. Runtime eligibility
+ *  reads this field STRUCTURALLY — no text-pattern parsing. See
+ *  scripts/backfill-account-role.ts for the one-time migration input. */
+export type AccountRole =
+  | "STANDARD"
+  | "CONTRA_ASSET"
+  | "CONTRA_REVENUE"
+  | "CONTRA_LIABILITY"
+  | "CONTROL"
+  | "CLEARING"
+  | "BANK"
+  | "CASH";
+
 /** The narrow shape the eligibility service needs from a COA row.
  *  Callers project their Prisma rows into this shape so the module
  *  is not coupled to Prisma. */
@@ -93,6 +106,10 @@ export interface AccountEligibilityView {
   fundApplicability: string | null;
   categoryKey: string | null;
   fsGroupKey: string | null;
+  // Phase 2.1 (2026-08-06) — durable account role. Defaults to
+  // "STANDARD" so pre-backfill callers behave as before.
+  accountRole?: AccountRole | string;
 }
 
-export const ELIGIBILITY_RULE_VERSION = 1;
+// Phase 2.1 (2026-08-06) — bumped to 2 for accountRole rule.
+export const ELIGIBILITY_RULE_VERSION = 2;

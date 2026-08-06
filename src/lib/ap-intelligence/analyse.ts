@@ -1112,6 +1112,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           isActive: true, isHeader: true, allowManualPosting: true,
           isControlAccount: true, isBankAccount: true, isCashAccount: true,
           archivedAt: true, fundApplicability: true,
+          accountRole: true,
           category: { select: { key: true } }, fsGroup: { select: { key: true } },
         },
       });
@@ -1127,6 +1128,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           fundApplicability: acct.fundApplicability,
           categoryKey: acct.category?.key ?? null,
           fsGroupKey: acct.fsGroup?.key ?? null,
+          accountRole: acct.accountRole ?? "STANDARD",
         }, {
           transactionKind: "AP_INVOICE",
           expectedDebitRole,
@@ -1154,6 +1156,14 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
   }
 
+  // Phase 2.1 (2026-08-06) §A6 — Phase 0 vs Phase 2 disagreement
+  // logging. Both containment layers run below; here we snapshot
+  // what Phase 2 concluded so the Phase 0 wire (next block) can
+  // compare its own verdict. Founder §A6: never silently choose
+  // the more permissive outcome — most restrictive wins.
+  const phase2ConcludedLeader = gl.accountNumber;
+  const phase2ConcludedAbstained = phase2ConcludedLeader == null;
+
   // Sprint 3 · Checkpoint 16H rejection #4 → audit approval
   // (2026-08-06) — Phase 0 safety containment. Runs AFTER the
   // nature-scoped promotion has (potentially) overridden the base
@@ -1180,7 +1190,34 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       const acctMap = new Map(accts.map((a) => [a.accountNumber, a]));
       const guarded = applyPhase0SafetyContainment(gl, acctMap);
       if (guarded.suppressed) {
+        // Phase 2.1 §A6 disagreement warning: Phase 2 admitted a
+        // leader that Phase 0 then suppressed. Both concluding to
+        // abstain is fine (agreement on the safe outcome); a P0
+        // suppression AFTER a non-abstained P2 verdict means Phase 2
+        // missed something Phase 0 caught — a diagnostic worth
+        // logging. Sanitized: account number + reasons only, no
+        // account name.
+        if (!phase2ConcludedAbstained) {
+          logger.warn("ap-intelligence.eligibility.p0_p2_disagreement", {
+            clubIdTail: args.clubId.slice(-6),
+            documentIdTail: doc.id.slice(-6),
+            phase0SuppressedAccountNumber: guarded.diagnostic?.suppressedLeaderAccountNumber ?? null,
+            phase0Reasons: guarded.diagnostic?.suppressedLeaderReasons ?? [],
+            phase2ConcludedLeaderAccountNumber: phase2ConcludedLeader,
+            outcome: "PHASE0_MORE_RESTRICTIVE_WINS",
+          });
+        }
         gl = guarded.recommendation;
+      } else if (phase2ConcludedAbstained && gl.accountNumber != null) {
+        // Would only happen if Phase 0 somehow re-populated gl,
+        // which it doesn't — kept as a defensive branch that will
+        // surface via telemetry if the invariant is ever violated.
+        logger.warn("ap-intelligence.eligibility.p0_p2_disagreement", {
+          clubIdTail: args.clubId.slice(-6),
+          documentIdTail: doc.id.slice(-6),
+          phase2ConcludedAbstained: true,
+          outcome: "UNEXPECTED_P0_REPOPULATION",
+        });
       }
     }
   }
