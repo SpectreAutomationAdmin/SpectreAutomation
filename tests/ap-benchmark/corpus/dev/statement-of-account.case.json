@@ -1,0 +1,28 @@
+{
+  "id": "statement-of-account",
+  "split": "dev",
+  "label": "Vendor statement of account — must NOT create AP invoice",
+  "category": "STATEMENT",
+  "tags": ["statement", "not-an-invoice"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Oakcreek Golf & Turf LP\nSTATEMENT OF ACCOUNT\nStatement Number: STMT-2026-08-1091559\nStatement Date: 2026-08-01\nAccount balance as of statement date:\n\nInvoice 1091559-00     2026-07-29     77833.35\nInvoice 1087769-00     2026-07-29      1056.22\n\n                          Statement Total:    78889.57\n",
+    "email": {
+      "senderAddress": "billing@oakcreek.example",
+      "subject": "Statement of account — August 2026"
+    }
+  },
+  "expected": {
+    "documentClass": "STATEMENT",
+    "supplier": { "name": "Oakcreek Golf & Turf LP" },
+    "invoiceNumber": { "value": "STMT-2026-08-1091559" },
+    "invoiceDate": "2026-08-01",
+    "currency": "CAD",
+    "total": 78889.57,
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAbstention": true,
+    "forbiddenGlAccounts": ["5310", "6020", "1506", "1540", "1710"],
+    "forbiddenGlConcepts": ["invoice"],
+    "notes": "Statements aggregate prior invoices; they must not create a NEW AP invoice or receive a GL recommendation."
+  }
+}

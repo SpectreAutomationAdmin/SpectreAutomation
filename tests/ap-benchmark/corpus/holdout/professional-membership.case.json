@@ -1,0 +1,32 @@
+{
+  "id": "professional-membership",
+  "split": "holdout",
+  "label": "CPA professional membership dues — must NOT auto-code as grounds/fuel/capital",
+  "category": "PROFESSIONAL_MEMBERSHIP",
+  "tags": ["holdout", "blind", "membership-dues"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "CPA Alberta\nProfessional Membership Renewal 2026\nMember: Coulee Ridge Golf & Country Club\nInvoice Number: 1007565767\nInvoice Date: 2026-07-15\n\nItem                                        Amount\nAnnual membership dues — 2026 renewal      1420.50\n\n                                Subtotal:  1420.50\n                                GST:           0.00\n                                Total:     1420.50\n",
+    "email": {
+      "senderAddress": "membership@cpaalberta.example",
+      "subject": "Membership renewal invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "CPA Alberta" },
+    "invoiceNumber": { "value": "1007565767" },
+    "invoiceDate": "2026-07-15",
+    "currency": "CAD",
+    "subtotal": 1420.50,
+    "taxTotal": 0.00,
+    "total": 1420.50,
+    "economicPurpose": "PROFESSIONAL_MEMBERSHIP",
+    "acceptableGlAccounts": ["6064", "6065"],
+    "acceptableGlConcepts": ["membership_and_dues", "professional_services"],
+    "forbiddenGlAccounts": ["1710", "1720", "1100", "5310", "6020", "1506", "1540"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "fuel_expense", "capital_asset", "grounds_maintenance"],
+    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "notes": "Blind holdout. Do not tune rules against this case."
+  }
+}

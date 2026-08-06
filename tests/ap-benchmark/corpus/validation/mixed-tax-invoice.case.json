@@ -1,0 +1,31 @@
+{
+  "id": "mixed-tax-invoice",
+  "split": "validation",
+  "label": "Mixed-tax invoice — GST + PST",
+  "category": "OPERATING_INVOICE",
+  "tags": ["gst-and-pst", "mixed-tax", "validation"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Prairie Turf Supplies Ltd.\nInvoice Number: PTS-2026-33421\nInvoice Date: 2026-07-20\n\nItem                                        Qty      Unit      Amount\nFertilizer — 50kg bag                        20      42.00     840.00\nSpreader rental — daily                       3      55.00     165.00\n\n                                                    Subtotal: 1005.00\n                                                    GST (5%):   50.25\n                                                    PST (7%):   70.35\n                                                    Total:    1125.60\n",
+    "email": {
+      "senderAddress": "invoices@prairieturf.example",
+      "subject": "Invoice PTS-2026-33421"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Prairie Turf Supplies Ltd." },
+    "invoiceNumber": { "value": "PTS-2026-33421" },
+    "invoiceDate": "2026-07-20",
+    "currency": "CAD",
+    "subtotal": 1005.00,
+    "taxTotal": 120.60,
+    "total": 1125.60,
+    "economicPurpose": "GROUNDS_SUPPLIES",
+    "acceptableGlAccounts": ["6020", "6025"],
+    "acceptableGlConcepts": ["grounds_maintenance", "supplies", "fertilizer"],
+    "forbiddenGlAccounts": ["1710", "1720", "1100", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
+    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED"
+  }
+}

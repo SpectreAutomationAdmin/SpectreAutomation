@@ -1,0 +1,43 @@
+{
+  "id": "capital-irrigation",
+  "split": "dev",
+  "label": "Capital irrigation pump — text-layer PDF",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["text-layer-pdf", "gst-only", "capital-purchase", "existing-vendor"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Northside Course Maintenance Inc.\n1234 Fairway Drive · Calgary AB\nGST: 987654321 RT0001\n\nINVOICE\nInvoice Number: INV-2026-9010\nInvoice Date: 2026-07-01\nDue Date: 2026-07-31\n\nDescription: Replace irrigation pump — 6th hole\n\nItem                                     Qty     Unit         Amount\nIrrigation pump replacement               1       9500.00      9500.00\nInstallation labour                       1       1200.00      1200.00\n\n                                                Subtotal:    10700.00\n                                                GST (5%):      535.00\n                                                Total Due:   11235.00\n",
+    "email": {
+      "senderAddress": "billing@northside.example",
+      "subject": "Invoice INV-2026-9010"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Northside Course Maintenance Inc.",
+      "acceptableAliases": ["Northside Course Maintenance"]
+    },
+    "invoiceNumber": { "value": "INV-2026-9010" },
+    "invoiceDate": "2026-07-01",
+    "dueDate": "2026-07-31",
+    "currency": "CAD",
+    "subtotal": 10700.00,
+    "taxTotal": 535.00,
+    "taxRate": 0.05,
+    "total": 11235.00,
+    "lineItems": [
+      { "descriptionContains": "irrigation pump", "amountApprox": 9500.00 },
+      { "descriptionContains": "installation", "amountApprox": 1200.00 }
+    ],
+    "economicPurpose": "CAPITAL_ACQUISITION",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "MATCHED",
+    "acceptableGlAccounts": ["1530", "1540"],
+    "acceptableGlConcepts": ["course_improvements", "equipment_and_vehicles", "capital_asset"],
+    "forbiddenGlAccounts": ["1710", "1720", "1100", "1200", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
+    "expectedWorkflowType": "AP_REVIEW",
+    "expectedAllocationCount": 1
+  }
+}

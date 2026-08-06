@@ -1,0 +1,33 @@
+{
+  "id": "pathological-vendor-default-contra",
+  "split": "dev",
+  "label": "Vendor default expense = contra-asset — Phase 0 must suppress",
+  "category": "PATHOLOGICAL",
+  "tags": ["phase0-live-measurement", "vendor-default-misconfigured", "contra-asset"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Legacy Copier Service Ltd.\nInvoice Number: LCS-2026-01\nInvoice Date: 2026-07-30\n\nPurchase Order #: PO-2026-118\nEquipment: copier model XYZ-2200, serial 44821\n\nItem                            Qty    Unit      Amount\nMonthly service on equipment      1    350.00    350.00\n\n                                Subtotal:  350.00\n                                GST (5%):   17.50\n                                Total:     367.50\n",
+    "email": {
+      "senderAddress": "billing@legacycopier.example",
+      "subject": "Monthly service invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Legacy Copier Service Ltd." },
+    "invoiceNumber": { "value": "LCS-2026-01" },
+    "invoiceDate": "2026-07-30",
+    "currency": "CAD",
+    "subtotal": 350.00,
+    "taxTotal": 17.50,
+    "total": 367.50,
+    "vendorMatchExpectation": "MATCHED",
+    "acceptableGlAccounts": ["6020", "6025", "6031"],
+    "acceptableGlConcepts": ["office_services", "maintenance"],
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "1100", "1200", "1300", "2100", "2200", "3100", "4100", "4200", "9999", "5000"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "control_account", "bank_account", "revenue", "equity"],
+    "expectedWorkflowType": "AP_REVIEW",
+    "expectedAbstention": true,
+    "notes": "The vendor's default expense account is INTENTIONALLY a contra-asset in the benchmark seed. The pre-fix pipeline surfaces it as the leader via the +15 vendor-history boost. Phase 0 containment must abstain. `expectedAbstention: true` means the acceptable answer here is NO recommendation."
+  }
+}

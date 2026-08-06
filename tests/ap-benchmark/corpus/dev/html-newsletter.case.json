@@ -1,0 +1,23 @@
+{
+  "id": "html-newsletter",
+  "split": "dev",
+  "label": "HTML newsletter with no attachment — must NOT route to AP",
+  "category": "INFORMATIONAL_EMAIL",
+  "tags": ["newsletter", "no-attachment", "false-ap-guard"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Weekly Club Update — Course news for the week.\nTee sheet: booking window opens Sunday.\nDining room hours: extended for the holiday weekend.\nMember reminder: locker fees due September 1.\n\nNo action required — this is an informational bulletin.\n",
+    "email": {
+      "senderAddress": "noreply@silverspringsgolfclub.example",
+      "subject": "Weekly Update — Week of July 22nd, 2026"
+    }
+  },
+  "expected": {
+    "documentClass": "INFORMATIONAL",
+    "expectedWorkflowType": "INFORMATIONAL",
+    "expectedAbstention": true,
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "1100", "1200", "3100", "4100", "5310", "6020"],
+    "forbiddenGlConcepts": ["invoice", "capital_asset", "revenue", "equity", "accumulated_depreciation"],
+    "notes": "Regression guard: HTML newsletter must never surface as an AP invoice or receive a GL recommendation."
+  }
+}

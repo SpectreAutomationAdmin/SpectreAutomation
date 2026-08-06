@@ -47,6 +47,11 @@ import {
   type AccountConceptMatch,
 } from "./gl-account-concepts";
 import { conceptRelatedness, isContradiction, CONCEPT_BY_ID } from "./gl-concepts";
+import {
+  applyPhase0SafetyContainment,
+  isPhase0SafetyEnabled,
+  type AccountSafetyView,
+} from "./eligibility/phase0-safety";
 
 const RULE_VERSION = 3;
 
@@ -358,7 +363,7 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     );
   }
 
-  return finaliseRecommendation({
+  const finalRec = finaliseRecommendation({
     top,
     topCandidates,
     rationale,
@@ -366,6 +371,37 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     requiresReview,
     splitRecommendations,
   });
+
+  // Sprint 3 · Checkpoint 16H rejection #4 → audit approval
+  // (2026-08-06) — Phase 0 safety containment. Runs AFTER the
+  // ranker has produced its answer; refuses to surface a leader
+  // that is accounting-invalid for an ordinary AP debit. Uses
+  // structural schema fields only; does NOT substitute the next
+  // candidate. When suppressed, returns an abstained
+  // recommendation. The env flag AP_INTELLIGENCE_PHASE0_SAFETY=0
+  // is available so the benchmark harness can capture a baseline
+  // WITHOUT this guard for measurement — the flag is not a
+  // production posture. See src/lib/ap-intelligence/eligibility/
+  // phase0-safety.ts for the rule set.
+  if (isPhase0SafetyEnabled()) {
+    const accountsByNumber = new Map<string, AccountSafetyView>(
+      accountsRaw.map((a) => [a.accountNumber, {
+        accountNumber: a.accountNumber,
+        name: a.name,
+        type: a.type,
+        normalBalance: a.normalBalance,
+        isActive: a.isActive,
+        isHeader: a.isHeader,
+        allowManualPosting: a.allowManualPosting,
+        isControlAccount: a.isControlAccount,
+        isBankAccount: a.isBankAccount,
+        isCashAccount: a.isCashAccount,
+      }]),
+    );
+    const guarded = applyPhase0SafetyContainment(finalRec, accountsByNumber);
+    return guarded.recommendation;
+  }
+  return finalRec;
 }
 
 // ---------------------------------------------------------------------------

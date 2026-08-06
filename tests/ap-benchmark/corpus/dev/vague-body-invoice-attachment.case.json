@@ -1,0 +1,36 @@
+{
+  "id": "vague-body-invoice-attachment",
+  "split": "dev",
+  "label": "Vague email body carrying a real invoice — attachment authority",
+  "category": "ATTACHMENT_AUTHORITY",
+  "tags": ["vague-body", "attachment-carries-truth"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Oakcreek Golf & Turf LP\n5000 Fairway Road · Edmonton AB\nGST: 123456789 RT0001\n\nINVOICE\nInvoice Number: 1091559-00\nInvoice Date: 2026-07-29\nDue Date: 2026-08-28\n\nItem                                        Qty    Unit         Amount\nEquipment & fixtures — grounds                1    77833.35     77833.35\n\n                                                    Subtotal:   77833.35\n                                                    GST (5%):    3891.67\n                                                    Total:      81725.02\n",
+    "email": {
+      "senderAddress": "billing@oakcreek.example",
+      "subject": "For your review"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Oakcreek Golf & Turf LP",
+      "unacceptable": ["Item", "INVOICE", "For your review"]
+    },
+    "invoiceNumber": { "value": "1091559-00" },
+    "invoiceDate": "2026-07-29",
+    "currency": "CAD",
+    "subtotal": 77833.35,
+    "taxTotal": 3891.67,
+    "total": 81725.02,
+    "economicPurpose": "CAPITAL_ACQUISITION",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540"],
+    "acceptableGlConcepts": ["equipment_and_fixtures", "capital_asset"],
+    "forbiddenGlAccounts": ["1710", "1720", "1100", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
+    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "notes": "Regression guard for 16H rejection #4 — vague subject/body must NOT block AP promotion when a real invoice PDF is attached."
+  }
+}

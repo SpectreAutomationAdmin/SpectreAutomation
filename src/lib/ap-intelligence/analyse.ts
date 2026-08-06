@@ -1070,6 +1070,37 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
   }
 
+  // Sprint 3 · Checkpoint 16H rejection #4 → audit approval
+  // (2026-08-06) — Phase 0 safety containment. Runs AFTER the
+  // nature-scoped promotion has (potentially) overridden the base
+  // ranker's leader. Refuses to surface an accounting-invalid
+  // leader — structural schema-field checks only, no name-pattern
+  // gating. When suppressed, `gl` is replaced by an abstained
+  // recommendation and the raw ranker output is retained in
+  // diagnostics for review. Guarded by AP_INTELLIGENCE_PHASE0_SAFETY.
+  {
+    const {
+      applyPhase0SafetyContainment,
+      isPhase0SafetyEnabled,
+    } = await import("./eligibility/phase0-safety");
+    if (isPhase0SafetyEnabled() && gl.accountNumber != null) {
+      const { prisma: prismaClient } = await import("@/lib/prisma");
+      const accts = await prismaClient.account.findMany({
+        where: { clubId: args.clubId, accountNumber: gl.accountNumber },
+        select: {
+          accountNumber: true, name: true, type: true, normalBalance: true,
+          isActive: true, isHeader: true, allowManualPosting: true,
+          isControlAccount: true, isBankAccount: true, isCashAccount: true,
+        },
+      });
+      const acctMap = new Map(accts.map((a) => [a.accountNumber, a]));
+      const guarded = applyPhase0SafetyContainment(gl, acctMap);
+      if (guarded.suppressed) {
+        gl = guarded.recommendation;
+      }
+    }
+  }
+
   return {
     documentId: doc.id,
     ruleVersion: EXTRACTION_RULE_VERSION,

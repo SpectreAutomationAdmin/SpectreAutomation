@@ -1,0 +1,29 @@
+{
+  "version": "v1-2026-08-06",
+  "sealed": true,
+  "split": {
+    "dev": [
+      "corpus/dev/dmm-energy-fuel.case.json",
+      "corpus/dev/capital-irrigation.case.json",
+      "corpus/dev/operating-maintenance.case.json",
+      "corpus/dev/vague-body-invoice-attachment.case.json",
+      "corpus/dev/html-newsletter.case.json",
+      "corpus/dev/unreadable-empty.case.json",
+      "corpus/dev/statement-of-account.case.json",
+      "corpus/dev/keyword-trap-computer.case.json",
+      "corpus/dev/pathological-vendor-default-contra.case.json"
+    ],
+    "validation": [
+      "corpus/validation/mixed-tax-invoice.case.json"
+    ],
+    "holdout": [
+      "corpus/holdout/professional-membership.case.json",
+      "corpus/holdout/food-service-invoice.case.json"
+    ]
+  },
+  "policy": {
+    "holdoutBlindness": "Cases in holdout/ MUST NOT be examined while tuning rules. Runner prints only pass/fail for holdout cases — never raw extraction detail or divergence reasons — unless invoked with --reveal-holdout.",
+    "productionLiterals": "Nothing in this manifest may be branched on by production code. Fixture literals belong only in tests/ap-benchmark/.",
+    "growingCorpus": "V1 covers the founder-required minimum document classes. Add new cases with `id` unique, `split` explicit, and a founder-recorded acceptance if it changes scoring thresholds."
+  }
+}
