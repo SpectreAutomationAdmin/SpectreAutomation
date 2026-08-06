@@ -16,6 +16,7 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
+    "test:e2e:staging": "playwright test --project=staging-authenticated",
     "test:cleanup": "tsx scripts/test-cleanup.ts",
     "test:unit:fast": "tsx scripts/test-unit-fast.ts",
     "test:db:serial": "tsx scripts/test-db-serial.ts",

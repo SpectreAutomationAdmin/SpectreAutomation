@@ -41,5 +41,31 @@ export default defineConfig({
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
     },
+    // Sprint 3 · Post-16H Phase 3.2 (2026-08-05) — permanent
+    // authenticated-staging project. Runs specs that end in
+    // `.staging.spec.ts` against https://staging.spectreautomation.com
+    // using founder credentials read from a git-ignored
+    // .env.playwright.local (see tests/e2e/_lib/staging-auth.ts).
+    //
+    // Invoked explicitly via `npm run test:e2e:staging` so it never
+    // fires accidentally in the local iteration loop.
+    {
+      name: "staging-authenticated",
+      testMatch: /.*\.staging\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL:
+          process.env.SPECTRE_STAGING_BASE_URL ??
+          "https://staging.spectreautomation.com",
+        // Login screen is exempt from screenshot-on-failure — the
+        // form-fill moment is the only place a populated password
+        // field could otherwise leak into an artefact. Individual
+        // specs may re-enable screenshotting AFTER navigating away
+        // from /login.
+        screenshot: "only-on-failure",
+        video: "retain-on-failure",
+        trace: "retain-on-failure",
+      },
+    },
   ],
 });
