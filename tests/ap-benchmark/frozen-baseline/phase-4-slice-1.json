@@ -1,0 +1,2591 @@
+{
+  "runId": "ap-bench-2026-08-06T05-21-40-208Z-p0on-p2on",
+  "startedAt": "2026-08-06T05:21:40.209Z",
+  "finishedAt": "2026-08-06T05:21:45.862Z",
+  "phase0Enabled": true,
+  "corpusVersion": "v1-2026-08-06",
+  "totals": {
+    "cases": 17,
+    "pass": 7,
+    "fail": 10,
+    "partial": 0,
+    "notApplicable": 0,
+    "unsafeRecommendations": 0,
+    "abstentionOnUnreadable": 5,
+    "falseAbstention": 0,
+    "latencyP50Ms": 58,
+    "latencyP95Ms": 187
+  },
+  "perDimension": {
+    "supplier": {
+      "pass": 15,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "invoiceNumber": {
+      "pass": 15,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "subtotal": {
+      "pass": 14,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "taxTotal": {
+      "pass": 14,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "total": {
+      "pass": 14,
+      "fail": 1,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.933
+    },
+    "currency": {
+      "pass": 14,
+      "fail": 1,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.933
+    },
+    "vendorMatch": {
+      "pass": 3,
+      "fail": 2,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.6
+    },
+    "gl-top1": {
+      "pass": 11,
+      "fail": 6,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.647
+    },
+    "gl-top3": {
+      "pass": 6,
+      "fail": 8,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.429
+    },
+    "gl-forbidden": {
+      "pass": 17,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "workflowState": {
+      "pass": 17,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "workflow-false-ready": {
+      "pass": 17,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "workflow-false-auto": {
+      "pass": 17,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    },
+    "abstention": {
+      "pass": 5,
+      "fail": 0,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 1
+    }
+  },
+  "cases": [
+    {
+      "caseId": "dmm-energy-fuel",
+      "split": "dev",
+      "category": "FUEL_INVOICE",
+      "label": "DMM Energy — dyed low-sulphur diesel · Québec French headers",
+      "latencyMs": 187,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "DMM Energy Inc",
+          "expected": "dmm energy inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "B0037FC",
+          "expected": "B0037FC",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2412.3,
+          "expected": 2412.3,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 120.62,
+          "expected": 120.62,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2532.92,
+          "expected": 2532.92,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "vendorMatch",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NOT_FOUND",
+          "expected": "NOT_FOUND",
+          "reason": "Vendor state matched expected."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "No Top-1 recommendation; expected one of [5310, 5311, 5320]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1100",
+            "1200",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "DMM Energy Inc",
+        "invoiceNumber": "B0037FC",
+        "total": "2532.92",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "capital-irrigation",
+      "split": "dev",
+      "category": "CAPITAL_INVOICE",
+      "label": "Capital irrigation pump — text-layer PDF",
+      "latencyMs": 185,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Northside Course Maintenance Inc.",
+          "expected": "northside course maintenance inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "INV-2026-9010",
+          "expected": "INV-2026-9010",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 10700,
+          "expected": 10700,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 535,
+          "expected": 535,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 11235,
+          "expected": 11235,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "vendorMatch",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "MATCHED",
+          "expected": "MATCHED",
+          "reason": "Vendor state matched expected."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": "6020",
+          "expected": [
+            "1530",
+            "1540"
+          ],
+          "reason": "Top-1 6020 not in acceptable set [1530, 1540]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [
+            "6020",
+            "6031",
+            "6065"
+          ],
+          "expected": [
+            "1530",
+            "1540"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6020",
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "1200",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Northside Course Maintenance Inc.",
+        "invoiceNumber": "INV-2026-9010",
+        "total": "11235.00",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "6020",
+        "glLeaderName": "Grounds Maintenance",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "operating-maintenance",
+      "split": "dev",
+      "category": "OPERATING_INVOICE",
+      "label": "Monthly maintenance service — operating expense with vendor default GL",
+      "latencyMs": 84,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Northside Course Maintenance Inc",
+          "expected": "northside course maintenance inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "INV-2026-9011",
+          "expected": "INV-2026-9011",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 450,
+          "expected": 450,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 22.5,
+          "expected": 22.5,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 472.5,
+          "expected": 472.5,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "vendorMatch",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": "AMBIGUOUS",
+          "expected": "MATCHED",
+          "reason": "Vendor state AMBIGUOUS did not match expected MATCHED."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6020",
+          "expected": [
+            "6020"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "6020",
+            "6031",
+            "6065"
+          ],
+          "expected": [
+            "6020"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6020",
+          "expected": [
+            "1710",
+            "1100",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Northside Course Maintenance Inc",
+        "invoiceNumber": "INV-2026-9011",
+        "total": "472.50",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "6020",
+        "glLeaderName": "Grounds Maintenance",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "vague-body-invoice-attachment",
+      "split": "dev",
+      "category": "ATTACHMENT_AUTHORITY",
+      "label": "Vague email body carrying a real invoice — attachment authority",
+      "latencyMs": 72,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Oakcreek Golf & Turf LP",
+          "expected": "oakcreek golf turf lp",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "1091559-00",
+          "expected": "1091559-00",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 77833.35,
+          "expected": 77833.35,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 3891.67,
+          "expected": 3891.67,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 81725.02,
+          "expected": 81725.02,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "vendorMatch",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NOT_FOUND",
+          "expected": "NOT_FOUND",
+          "reason": "Vendor state matched expected."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": null,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "1506",
+            "1540"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": true,
+          "expected": true,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Oakcreek Golf & Turf LP",
+        "invoiceNumber": "1091559-00",
+        "total": "81725.02",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "html-newsletter",
+      "split": "dev",
+      "category": "INFORMATIONAL_EMAIL",
+      "label": "HTML newsletter with no attachment — must NOT route to AP",
+      "latencyMs": 42,
+      "results": [
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": null,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1100",
+            "1200",
+            "3100",
+            "4100",
+            "5310",
+            "6020"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": true,
+          "expected": true,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "PAYABLE_REFERENCE_MISSING",
+              "GROSS_TOTAL_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "PAYABLE_REFERENCE_MISSING",
+              "GROSS_TOTAL_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "Weekly Club Update — Course news for the week.",
+        "invoiceNumber": null,
+        "total": null,
+        "currency": null,
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": 0,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "unreadable-empty",
+      "split": "dev",
+      "category": "UNREADABLE",
+      "label": "Unreadable / empty extraction — must abstain",
+      "latencyMs": 32,
+      "results": [
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": null,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "5310",
+            "6020",
+            "1506",
+            "1540"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "UNSUPPORTED",
+          "expected": "UNSUPPORTED",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": true,
+          "expected": true,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "UNSUPPORTED",
+            "blockers": [
+              "DOCUMENT_UNREADABLE"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "UNSUPPORTED",
+            "exclusions": [
+              "DOCUMENT_UNREADABLE"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": null,
+        "invoiceNumber": null,
+        "total": null,
+        "currency": null,
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": 0,
+        "workflowState": "UNSUPPORTED"
+      }
+    },
+    {
+      "caseId": "statement-of-account",
+      "split": "dev",
+      "category": "STATEMENT",
+      "label": "Vendor statement of account — must NOT create AP invoice",
+      "latencyMs": 32,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Oakcreek Golf & Turf LP",
+          "expected": "oakcreek golf turf lp",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "STMT-2026-08-1091559",
+          "expected": "STMT-2026-08-1091559",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "total",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": 78889.57,
+          "reason": "No total extracted; expected 78889.57."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": "CAD",
+          "reason": "Currency (none) did not match expected CAD."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": null,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "5310",
+            "6020",
+            "1506",
+            "1540",
+            "1710"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": true,
+          "expected": true,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "GROSS_TOTAL_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "GROSS_TOTAL_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Oakcreek Golf & Turf LP",
+        "invoiceNumber": "STMT-2026-08-1091559",
+        "total": null,
+        "currency": null,
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "keyword-trap-computer",
+      "split": "dev",
+      "category": "FUEL_INVOICE",
+      "label": "Fuel invoice mentioning \"purchase order\" — CAPITAL_ASSET nature trap",
+      "latencyMs": 58,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Grande Prairie Petroleum Inc",
+          "expected": "grande prairie petroleum inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "GPP-2026-4471",
+          "expected": "GPP-2026-4471",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1349,
+          "expected": 1349,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 67.45,
+          "expected": 67.45,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1416.45,
+          "expected": 1416.45,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1506",
+            "1540"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "Grande Prairie Petroleum Inc",
+        "invoiceNumber": "GPP-2026-4471",
+        "total": "1416.45",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "5310",
+        "glLeaderName": "Fuel — Grounds Equipment",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "pathological-vendor-default-contra",
+      "split": "dev",
+      "category": "PATHOLOGICAL",
+      "label": "Vendor default expense = contra-asset — Phase 0 must suppress",
+      "latencyMs": 45,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Legacy Copier Service Ltd",
+          "expected": "legacy copier service ltd",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "LCS-2026-01",
+          "expected": "LCS-2026-01",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 350,
+          "expected": 350,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 17.5,
+          "expected": 17.5,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 367.5,
+          "expected": 367.5,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "vendorMatch",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": "AMBIGUOUS",
+          "expected": "MATCHED",
+          "reason": "Vendor state AMBIGUOUS did not match expected MATCHED."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": null,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "6020",
+            "6025",
+            "6031"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1100",
+            "1200",
+            "1300",
+            "2100",
+            "2200",
+            "3100",
+            "4100",
+            "4200",
+            "9999",
+            "5000"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": true,
+          "expected": true,
+          "reason": "Correctly abstained."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Legacy Copier Service Ltd",
+        "invoiceNumber": "LCS-2026-01",
+        "total": "367.50",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "jonas-convention-accum-depr",
+      "split": "dev",
+      "category": "STRUCTURAL_GAP_MEASUREMENT",
+      "label": "Diesel fuel invoice + Jonas-convention accum-depr accounts (ASSET/DEBIT) on the seed COA",
+      "latencyMs": 70,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Grande Prairie Petroleum Inc",
+          "expected": "grande prairie petroleum inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "GPP-2026-4499",
+          "expected": "GPP-2026-4499",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2130,
+          "expected": 2130,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 106.5,
+          "expected": 106.5,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2236.5,
+          "expected": 2236.5,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "1513",
+            "1514",
+            "1710",
+            "1720",
+            "1730"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "Grande Prairie Petroleum Inc",
+        "invoiceNumber": "GPP-2026-4499",
+        "total": "2236.50",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "5310",
+        "glLeaderName": "Fuel — Grounds Equipment",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "adversarial-capital-with-accumdepr",
+      "split": "dev",
+      "category": "ADVERSARIAL_CAPITAL",
+      "label": "Adversarial: CAPITAL nature + accum-depr account with strong semantic hits (Jonas convention)",
+      "latencyMs": 53,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Prairie Computer Equipment Co.",
+          "expected": "prairie computer equipment co",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "PCE-2026-1188",
+          "expected": "PCE-2026-1188",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 16600,
+          "expected": 16600,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 830,
+          "expected": 830,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 17430,
+          "expected": 17430,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": [
+            "1506",
+            "1530",
+            "1540"
+          ],
+          "reason": "No Top-1 recommendation; expected one of [1506, 1530, 1540]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "1506",
+            "1530",
+            "1540"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1513",
+            "1514",
+            "1515",
+            "1100",
+            "1200",
+            "1300",
+            "2100",
+            "2200",
+            "3100",
+            "4100",
+            "4200"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "GL_INELIGIBLE",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Prairie Computer Equipment Co.",
+        "invoiceNumber": "PCE-2026-1188",
+        "total": "17430.00",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "mixed-tax-invoice",
+      "split": "validation",
+      "category": "OPERATING_INVOICE",
+      "label": "Mixed-tax invoice — GST + PST",
+      "latencyMs": 58,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Prairie Turf Supplies Ltd",
+          "expected": "prairie turf supplies ltd",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "PTS-2026-33421",
+          "expected": "PTS-2026-33421",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1005,
+          "expected": 1005,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 120.6,
+          "expected": 120.6,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1125.6,
+          "expected": 1125.6,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": [
+            "6020",
+            "6025"
+          ],
+          "reason": "No Top-1 recommendation; expected one of [6020, 6025]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "6020",
+            "6025"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "MULTI_ALLOCATION_NOT_PER_ALLOCATION",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "MULTI_ALLOCATION_NOT_PER_ALLOCATION",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Prairie Turf Supplies Ltd",
+        "invoiceNumber": "PTS-2026-33421",
+        "total": "1125.60",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "professional-membership",
+      "split": "holdout",
+      "category": "PROFESSIONAL_MEMBERSHIP",
+      "label": "CPA professional membership dues — must NOT auto-code as grounds/fuel/capital",
+      "latencyMs": 65,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CPA Alberta",
+          "expected": "cpa alberta",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "1007565767",
+          "expected": "1007565767",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1420.5,
+          "expected": 1420.5,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 0,
+          "expected": 0,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1420.5,
+          "expected": 1420.5,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6064",
+          "expected": [
+            "6064",
+            "6065"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "6064",
+            "5100",
+            "5101"
+          ],
+          "expected": [
+            "6064",
+            "6065"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6064",
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "5310",
+            "6020",
+            "1506",
+            "1540"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "CPA Alberta",
+        "invoiceNumber": "1007565767",
+        "total": "1420.50",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "6064",
+        "glLeaderName": "Membership & Dues — Professional",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "food-service-invoice",
+      "split": "holdout",
+      "category": "FOOD_SERVICE",
+      "label": "Food-service invoice — must route to F&B cost of sales",
+      "latencyMs": 40,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Sysco Prairie Foods",
+          "expected": "sysco prairie foods",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "SYS-4472138",
+          "expected": "SYS-4472138",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1427.95,
+          "expected": 1427.95,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 71.4,
+          "expected": 71.4,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1499.35,
+          "expected": 1499.35,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": [
+            "5100",
+            "5101"
+          ],
+          "reason": "No Top-1 recommendation; expected one of [5100, 5101]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "5100",
+            "5101"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": null,
+          "expected": [
+            "1710",
+            "1720",
+            "1100",
+            "5310",
+            "6020",
+            "1506",
+            "1540"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Sysco Prairie Foods",
+        "invoiceNumber": "SYS-4472138",
+        "total": "1499.35",
+        "currency": "CAD",
+        "glLeaderAccountNumber": null,
+        "glLeaderName": null,
+        "glConfidence": null,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "h-01-blind",
+      "split": "holdout",
+      "category": "BLIND",
+      "label": "Blind holdout case #1",
+      "latencyMs": 55,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Alberta Fleet Services Ltd.",
+          "expected": "alberta fleet services ltd",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "AFS-04412",
+          "expected": "AFS-04412",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 346.25,
+          "expected": 346.25,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 17.31,
+          "expected": 17.31,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 363.56,
+          "expected": 363.56,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": "6025",
+          "expected": [
+            "6020",
+            "6031"
+          ],
+          "reason": "Top-1 6025 not in acceptable set [6020, 6031]."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": [],
+          "expected": [
+            "6020",
+            "6031"
+          ],
+          "reason": "No Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6025",
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1513",
+            "1514",
+            "1100",
+            "1200",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "GL_BELOW_THRESHOLD",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Alberta Fleet Services Ltd.",
+        "invoiceNumber": "AFS-04412",
+        "total": "363.56",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "6025",
+        "glLeaderName": "Grounds Supplies",
+        "glConfidence": 15,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "h-02-blind",
+      "split": "holdout",
+      "category": "BLIND",
+      "label": "Blind holdout case #2",
+      "latencyMs": 65,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "TelusOne Business Communications",
+          "expected": "telusone business communications",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "TB-2026-08-9902",
+          "expected": "TB-2026-08-9902",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 209.99,
+          "expected": 209.99,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 10.5,
+          "expected": 10.5,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 220.49,
+          "expected": 220.49,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6072",
+          "expected": [
+            "6072"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "6072",
+            "5100",
+            "5101"
+          ],
+          "expected": [
+            "6072"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "6072",
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1513",
+            "1514",
+            "1100",
+            "1200",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "MULTI_ALLOCATION_NOT_PER_ALLOCATION",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "TAX_UNRECONCILED",
+              "MULTI_ALLOCATION_NOT_PER_ALLOCATION",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "TelusOne Business Communications",
+        "invoiceNumber": "TB-2026-08-9902",
+        "total": "220.49",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "6072",
+        "glLeaderName": "Telephone & Internet",
+        "glConfidence": 95,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    },
+    {
+      "caseId": "h-03-blind",
+      "split": "holdout",
+      "category": "BLIND",
+      "label": "Blind holdout case #3",
+      "latencyMs": 106,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Peak Beverage Distributors",
+          "expected": "peak beverage distributors",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "PBD-118225",
+          "expected": "PBD-118225",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1302,
+          "expected": 1302,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 65.1,
+          "expected": 65.1,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 1367.1,
+          "expected": 1367.1,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "CAD",
+          "expected": "CAD",
+          "reason": "Currency matched."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5101",
+          "expected": [
+            "5100",
+            "5101"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "5101",
+            "5100",
+            "5310"
+          ],
+          "expected": [
+            "5100",
+            "5101"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5101",
+          "expected": [
+            "1710",
+            "1720",
+            "1730",
+            "1513",
+            "1514",
+            "1100",
+            "3100",
+            "4100"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "NEEDS_JUDGMENT",
+          "expected": "NEEDS_JUDGMENT",
+          "reason": "Workflow state matched expected."
+        },
+        {
+          "dimension": "workflow-false-ready",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "blockers": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "no READY state while blockers exist",
+          "reason": "No false-ready state.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflow-false-auto",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": {
+            "state": "NEEDS_JUDGMENT",
+            "exclusions": [
+              "SUPPLIER_UNRESOLVED",
+              "VENDOR_UNRESOLVED"
+            ]
+          },
+          "expected": "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+          "reason": "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+          "unsafe": false
+        }
+      ],
+      "overall": "PASS",
+      "extract": {
+        "supplier": "Peak Beverage Distributors",
+        "invoiceNumber": "PBD-118225",
+        "total": "1367.10",
+        "currency": "CAD",
+        "glLeaderAccountNumber": "5101",
+        "glLeaderName": "F&B — Beverage Cost of Sales",
+        "glConfidence": 94,
+        "workflowState": "NEEDS_JUDGMENT"
+      }
+    }
+  ]
+}

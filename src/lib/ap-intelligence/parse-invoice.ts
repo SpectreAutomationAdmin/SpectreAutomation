@@ -44,7 +44,14 @@ const CURRENCY_HINTS: Record<string, string> = {
   "GBP": "GBP",
 };
 
-const MONEY_TOKEN = /(?:[\$€£]|CA\$|US\$|CAD|USD|EUR|GBP)?\s*([0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})/;
+// Sprint 3 · Post-16H Phase 4 Slice 1 (2026-08-05) — allow an
+// optional currency word AFTER the amount so lines like
+// "Invoice Total: 2532.92 CAD" match cleanly. Previously the
+// pre-amount cluster accepted CAD/USD/etc. but the post-amount
+// tail did not, and the line-scanner's trailing `\s*$` anchor
+// rejected any suffix — causing bilingual invoices that print
+// "<amount> CAD" to silently drop the total.
+const MONEY_TOKEN = /(?:[\$€£]|CA\$|US\$|CAD|USD|EUR|GBP)?\s*([0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})(?:\s*(?:CAD|USD|EUR|GBP))?/;
 
 function toNumericString(raw: string): string {
   return raw.replace(/,/g, "");
@@ -68,18 +75,63 @@ function firstMatch(text: string, patterns: Array<{ ruleKey: string; regex: RegE
 // -----------------------------------------------------------------------------
 
 function extractInvoiceNumber(text: string) {
-  // Sprint 3 · Checkpoint 15T — retained for backwards compatibility.
-  // The main analyser now consults extractPayableReference (which
-  // wraps the shared document-layout layer + supports the full
-  // taxonomy: INVOICE_NUMBER / STATEMENT_NUMBER / BILL_NUMBER /
-  // REFERENCE_NUMBER). This narrow helper only fires when the label
-  // + value sit on the same line — used as a fallback for cases where
-  // the layout layer's stricter guardrails happen to reject a value.
-  return firstMatch(text, [
-    { ruleKey: "inv_no.labeled", regex: /(?:^|\n)\s*Invoice\s*(?:Number|No\.?|#)\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
+  // Sprint 3 · Post-16H Phase 4 Slice 1 (2026-08-05) — fix the
+  // "OICE" bug. The prior `inv_no.hash` regex
+  //   /\b(?:INV|INVN)\s*[-# ]?\s*([A-Za-z0-9\-]{3,30})\b/i
+  // captured the tail of the word "INVOICE" itself (INV + zero
+  // separator + "OICE"). Fixed by:
+  //   * requiring at least one MANDATORY separator character
+  //     after INV|INVN, so "INVOICE" as a solid word can never
+  //     succeed;
+  //   * validating captured values pass isPlausibleInvoiceNumber
+  //     (must contain a digit; must not equal common labels).
+  //
+  // Also adds:
+  //   * bilingual "Facture" support (Québec French invoices);
+  //   * label-then-value on separate lines ("Invoice\nB0037FC");
+  //   * label + space + value on the same line ("Invoice B0037FC")
+  //     — very common on French/Canadian invoices that print no
+  //     "#" separator between the word and the number.
+  const patterns: Array<{ ruleKey: string; regex: RegExp; group?: number }> = [
+    { ruleKey: "inv_no.labeled", regex: /(?:^|\n)\s*Invoice\s*(?:Number|No\.?|#)\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
+    { ruleKey: "inv_no.facture", regex: /(?:^|\n)\s*Facture\s*(?:Num[eé]ro|N[oº]\.?|#)?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
     { ruleKey: "inv_no.compact", regex: /\bInvoice\s*[#:]\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,30})\b/i },
-    { ruleKey: "inv_no.hash", regex: /\b(?:INV|INVN)\s*[-# ]?\s*([A-Za-z0-9\-]{3,30})\b/i },
+    // Label + one-or-more whitespace + value (Invoice B0037FC).
+    // Value MUST contain at least one digit to be a reference.
+    { ruleKey: "inv_no.label_space", regex: /(?:^|\n)\s*Invoice\s+([A-Z][A-Z0-9\-\/]{2,29}\d[A-Z0-9\-\/]{0,29})\b/ },
+    // INV / INVN with MANDATORY separator [-# ] — kills the OICE bug.
+    { ruleKey: "inv_no.hash", regex: /\b(?:INV|INVN)[\s\-#]+([A-Za-z0-9\-]{3,30})\b/i },
+  ];
+  const first = firstMatch(text, patterns);
+  if (!first) return null;
+  if (!isPlausibleInvoiceNumber(first.value)) return null;
+  return first;
+}
+
+/** Reject fragments of "INVOICE" / "FACTURE" / common labels, dates,
+ *  phone numbers, or pure alphabetic strings. A real invoice number
+ *  must have at least one digit AND not be a known-bad token. */
+function isPlausibleInvoiceNumber(v: string): boolean {
+  const s = v.trim();
+  if (s.length < 3 || s.length > 32) return false;
+  // Must contain at least one digit — invoice references are almost
+  // never pure letters.
+  if (!/\d/.test(s)) return false;
+  // Reject fragments of common label words.
+  const bad = new Set([
+    "oice", "voice", "cture", "acture", "umber", "eference",
+    "number", "reference", "statement", "bill",
   ]);
+  if (bad.has(s.toLowerCase())) return false;
+  // Reject North-American phone shapes — but only the formatted
+  // variety (with separators). A bare 10-digit numeric string is a
+  // legitimate invoice reference in plenty of billing systems, so
+  // we do NOT reject digits-only. Formatted phones (1-800-555-1234,
+  // (555) 123-4567, 555.123.4567) are explicit context.
+  if (/^\+?1?[\s.\-]?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}$/.test(s)) return false;
+  // Reject ISO date shapes.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  return true;
 }
 
 function extractPurchaseOrder(text: string) {
@@ -235,6 +287,62 @@ function extractMoney(text: string, labels: string[], ruleKeyBase: string) {
   return null;
 }
 
+/**
+ * Sprint 3 · Post-16H Phase 4 Slice 1 (2026-08-05) — sum every
+ * distinct tax-component line so mixed-tax invoices (GST + PST,
+ * GST + QST, HST alone) surface a taxTotal that reconciles with
+ * subtotal + total.
+ *
+ * The prior extractor used first-line-wins ordering — for a
+ * "GST 5%: 50.25 / PST 7%: 70.35" invoice it returned only 50.25
+ * and the reconcile stage would report ALLOCATION_VARIANCE. The
+ * summing helper preserves each component line so the reconciler
+ * can present the correct sum AND log which components were
+ * observed (useful diagnostic when a tenant's tax setup is
+ * misconfigured).
+ *
+ * Returns null when fewer than TWO distinct tax component lines
+ * were found — in that case the caller should keep the existing
+ * single-line result (which handles combined "GST/HST: 50.25"
+ * lines correctly).
+ */
+function extractTaxSum(
+  text: string,
+): { value: string; hint: ParseHint; components: Array<{ label: string; amount: number }> } | null {
+  const lineRegex = /^\s*(GST|HST|PST|QST|TPS|TVQ|VAT|Sales\s+Tax)\s*(?:\(?\s*\d+(?:\.\d+)?\s*%?\s*\)?)?\s*[:=]?\s*[^\n\r]*?([0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})\s*(?:CAD|USD|EUR|GBP)?\s*$/i;
+  const components: Array<{ label: string; amount: number }> = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(lineRegex);
+    if (!m) continue;
+    const label = m[1].toUpperCase().replace(/\s+/g, " ");
+    const amount = Number(m[2].replace(/,/g, ""));
+    if (!isFinite(amount) || amount < 0) continue;
+    // Skip zero-amount lines — they inflate the count without
+    // contributing (many invoices print "PST: 0.00" to be explicit
+    // that no PST applies, and treating that as a "distinct
+    // component" would wrongly trigger the sum path).
+    if (amount === 0) continue;
+    // Dedupe: same label repeated on multiple lines (e.g. per-item
+    // GST breakdown) — we only want the SUMMARY line, so the last
+    // occurrence per label wins. Callers that want per-line breakout
+    // should use the layout layer directly.
+    const existing = components.findIndex((c) => c.label === label);
+    if (existing >= 0) components[existing].amount = amount;
+    else components.push({ label, amount });
+  }
+  if (components.length < 2) return null;
+  const sum = components.reduce((a, c) => a + c.amount, 0);
+  return {
+    value: sum.toFixed(2),
+    hint: {
+      field: "taxTotal",
+      ruleKey: "tax.multi_component_sum",
+      matchedText: components.map((c) => `${c.label}=${c.amount.toFixed(2)}`).join(", ").slice(0, 120),
+    },
+    components,
+  };
+}
+
 function extractCurrency(text: string): { value: string; hint: ParseHint } | null {
   const hit = firstMatch(text, [
     { ruleKey: "currency.explicit", regex: /\b(USD|CAD|EUR|GBP)\b/ },
@@ -247,6 +355,28 @@ function extractCurrency(text: string): { value: string; hint: ParseHint } | nul
   }
   if (/\$/.test(text)) {
     return { value: "CAD", hint: { field: "currency", ruleKey: "currency.dollar_default_cad", matchedText: "$" } };
+  }
+  // Sprint 3 · Post-16H Phase 4 Slice 1 (2026-08-05) — infer CAD
+  // from Canadian tax evidence. Many club invoices print totals as
+  // plain "1,234.56" (no currency symbol, no ISO code) but include
+  // Canadian tax lines (GST 5%, PST, HST 13%, QST, TPS, TVQ). Those
+  // taxes ONLY exist in the Canadian tax system, so their presence
+  // is a strong-and-unambiguous currency signal. This inference is
+  // additive — providers or explicit currency tokens still win.
+  const canadaTax = text.match(/\b(GST|HST|PST|QST|TPS|TVQ)\b\s*(?:[:(]|\d|%|\s)/);
+  if (canadaTax) {
+    return {
+      value: "CAD",
+      hint: { field: "currency", ruleKey: "currency.canadian_tax_inference", matchedText: canadaTax[0].slice(0, 60) },
+    };
+  }
+  // US sales-tax hint (weakest — plenty of US invoices just say "Tax:").
+  const usSalesTax = text.match(/\bSales\s+Tax\b/i);
+  if (usSalesTax && /\bEIN\b|\bZIP\b|\b\d{5}(?:-\d{4})?\b/.test(text)) {
+    return {
+      value: "USD",
+      hint: { field: "currency", ruleKey: "currency.us_tax_inference", matchedText: "Sales Tax + US locality signal" },
+    };
   }
   return null;
 }
@@ -472,7 +602,13 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   const subtotalHit = subtotalLayout ?? extractMoney(text, ["Subtotal", "Sub Total", "Net", "Charges", "Net Amount", "Sub-Total"], "subtotal");
   const taxLayout = extractMoneyFromLayout(layout, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "Taxes/Fees", "Taxes and Fees", "GST", "HST", "Tax Total", "Tax"], "tax", { consumedLineIndices: consumedAmountLineIndices });
   if (taxLayout) consumedAmountLineIndices.add(taxLayout.valueLineIndex);
-  const taxHit = taxLayout ?? extractMoney(text, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "GST", "HST", "Tax Total", "Tax"], "tax");
+  // Sprint 3 · Post-16H Phase 4 Slice 1 (2026-08-05) — mixed-tax
+  // path. If the document prints ≥ 2 distinct non-zero component
+  // lines (GST + PST etc.), sum them; that reconciles with the
+  // printed total. Otherwise fall through to the existing
+  // single-line layout / regex extractor.
+  const taxSum = extractTaxSum(text);
+  const taxHit = taxSum ?? taxLayout ?? extractMoney(text, ["Sales Tax", "GST/HST", "GST/ HST", "HST/GST", "GST", "HST", "Tax Total", "Tax"], "tax");
   // Sprint 3 · Checkpoint 15T — the total extractor runs LAST and
   // treats every subtotal / tax / description-paired amount as
   // consumed. Backward scan is generous (20 lines) because pdf-parse
