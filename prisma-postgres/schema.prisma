@@ -395,6 +395,8 @@ model Club {
   workIntakeItems              WorkIntakeItem[]
   mailboxConnections           MailboxConnection[]
   mailboxOAuthTransactions     MailboxOAuthTransaction[] @relation("MailboxTransactionClub")
+  // Sprint 3 · Post-16H Phase 3.2 (2026-08-06).
+  apReviewOverrides            ApReviewOverride[]
 }
 
 // ---------------------------------------------------------------------
@@ -559,6 +561,7 @@ model User {
   resolvedWorkIntakeItems  WorkIntakeItem[]     @relation("WorkIntakeResolvedBy")
   overriddenClassifications WorkIntakeItem[]    @relation("WorkIntakeClassOverride")
   workIntakeActivity       WorkIntakeActivity[] @relation("WorkIntakeActivityActor")
+  apReviewOverrides        ApReviewOverride[]   @relation("ApReviewOverrideActor")
   workIntakeReads          WorkIntakeItemRead[] @relation("WorkIntakeItemReadUser")
   mailboxConnections       MailboxConnection[]
   mailboxDisconnections    MailboxConnection[]  @relation("MailboxDisconnectedBy")
@@ -8662,6 +8665,7 @@ model WorkIntakeItem {
   origins        WorkIntakeOrigin[]
   findings       WorkIntakeFinding[]
   activity       WorkIntakeActivity[]
+  apReviewOverrides ApReviewOverride[]
   reads          WorkIntakeItemRead[]
   apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
   domainCorrections           WorkDomainCorrection[]
@@ -8874,6 +8878,56 @@ model WorkIntakeFinding {
 
   @@index([workIntakeItemId, key])
   @@index([clubId, key, state])
+}
+
+// Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — AP review-override
+// audit row. Preserves the founder's §3 audit requirement:
+// distinguish machine extraction from user correction so future
+// learning (Phase 4+) can measure both surfaces independently AND
+// so the server-side posting gate can prove that REQUIRES_EXPLICIT_
+// REVIEW blockers were actually reviewed before posting.
+//
+// One row per corrected field or reviewed blocker. Immutable — never
+// updated, never deleted; a subsequent correction inserts a new row.
+model ApReviewOverride {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id])
+  workIntakeItemId      String
+  workIntakeItem        WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  reviewedByUserId      String
+  reviewedBy            User     @relation("ApReviewOverrideActor", fields: [reviewedByUserId], references: [id])
+  reviewedAt            DateTime @default(now())
+
+  // What was reviewed / corrected. Closed enum in code.
+  //   SUPPLIER | INVOICE_NUMBER | INVOICE_DATE | SUBTOTAL | TAX |
+  //   TOTAL | CURRENCY | GL_ACCOUNT | DEPARTMENT | ALLOCATION |
+  //   CAPITAL_TREATMENT | TAX_UNCERTAINTY |
+  //   MULTI_ALLOCATION_REVIEW | VENDOR_ONBOARDING | BLOCKER_ACK |
+  //   OTHER
+  overrideKind          String
+
+  // ApWorkflowBlockerCode string this override satisfies (nullable
+  // when the override is a straight correction, not a blocker ack).
+  satisfiesBlocker      String?
+
+  // Original machine value + corrected user value. JSON so the
+  // schema does not need to distinguish string / number / object.
+  // Null for BLOCKER_ACK-type rows where there is no field value.
+  originalValueJson     String?
+  correctedValueJson    String?
+
+  // Human-readable reason the reviewer supplied (optional).
+  reason                String?
+
+  // Snapshot of the canonical decision produced by the server AFTER
+  // this override was persisted — records the exact state at
+  // review time so audit trail is complete.
+  resultingDecisionJson String?
+
+  @@index([workIntakeItemId, reviewedAt])
+  @@index([clubId, reviewedAt])
+  @@index([satisfiesBlocker])
 }
 
 model WorkIntakeActivity {

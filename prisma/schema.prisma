@@ -404,6 +404,8 @@ model Club {
   workIntakeItems              WorkIntakeItem[]
   mailboxConnections           MailboxConnection[]
   mailboxOAuthTransactions     MailboxOAuthTransaction[] @relation("MailboxTransactionClub")
+  // Sprint 3 · Post-16H Phase 3.2.
+  apReviewOverrides            ApReviewOverride[]
 }
 
 // ---------------------------------------------------------------------
@@ -568,6 +570,7 @@ model User {
   resolvedWorkIntakeItems  WorkIntakeItem[]     @relation("WorkIntakeResolvedBy")
   overriddenClassifications WorkIntakeItem[]    @relation("WorkIntakeClassOverride")
   workIntakeActivity       WorkIntakeActivity[] @relation("WorkIntakeActivityActor")
+  apReviewOverrides        ApReviewOverride[]   @relation("ApReviewOverrideActor")
   workIntakeReads          WorkIntakeItemRead[] @relation("WorkIntakeItemReadUser")
   mailboxConnections       MailboxConnection[]
   mailboxDisconnections    MailboxConnection[]  @relation("MailboxDisconnectedBy")
@@ -8660,6 +8663,7 @@ model WorkIntakeItem {
   origins        WorkIntakeOrigin[]
   findings       WorkIntakeFinding[]
   activity       WorkIntakeActivity[]
+  apReviewOverrides ApReviewOverride[]
   reads          WorkIntakeItemRead[]
 
   // Sprint 3 · Checkpoint 15S — persistent source-to-canonical-AP
@@ -8867,6 +8871,30 @@ model WorkIntakeFinding {
 
   @@index([workIntakeItemId, key])
   @@index([clubId, key, state])
+}
+
+// Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — AP review-override
+// audit row. Immutable per correction. See prisma-postgres/schema.prisma
+// for full documentation.
+model ApReviewOverride {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id])
+  workIntakeItemId      String
+  workIntakeItem        WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  reviewedByUserId      String
+  reviewedBy            User     @relation("ApReviewOverrideActor", fields: [reviewedByUserId], references: [id])
+  reviewedAt            DateTime @default(now())
+  overrideKind          String
+  satisfiesBlocker      String?
+  originalValueJson     String?
+  correctedValueJson    String?
+  reason                String?
+  resultingDecisionJson String?
+
+  @@index([workIntakeItemId, reviewedAt])
+  @@index([clubId, reviewedAt])
+  @@index([satisfiesBlocker])
 }
 
 model WorkIntakeActivity {

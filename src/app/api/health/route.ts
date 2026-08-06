@@ -19,10 +19,35 @@ async function checkDatabase(): Promise<CheckResult> {
 }
 
 async function checkQueueHealth(): Promise<CheckResult> {
+  // Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — §6 DLQ bucketing.
+  // Founder rule: "Do not delete DLQ rows to make health green — an
+  // observability failure is a real defect, not a display bug."
+  // Historical = failed > 30 days ago AND not from any AP-related
+  // job kind. Active = anything else. Health warns only on ACTIVE.
   try {
-    const deadLetter = await prisma.backgroundJob.count({ where: { status: "DEAD_LETTER" } });
-    if (deadLetter > 100) return { name: "queue", status: "warn", detail: `${deadLetter} dead-letter jobs` };
-    return { name: "queue", status: "ok", detail: `${deadLetter} dead-letter jobs` };
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [total, historical] = await Promise.all([
+      prisma.backgroundJob.count({ where: { status: "DEAD_LETTER" } }),
+      prisma.backgroundJob.count({
+        where: {
+          status: "DEAD_LETTER",
+          createdAt: { lt: cutoff },
+          kind: {
+            notIn: [
+              "AP_INVOICE_ANALYSE",
+              "AP_INVOICE_POST",
+              "AP_OCR_ANALYSE",
+              "AP_INTAKE_INGEST",
+              "WORK_INTAKE_CLASSIFY",
+            ],
+          },
+        },
+      }),
+    ]);
+    const active = total - historical;
+    const detail = `dlq total=${total} · active=${active} · historical=${historical}`;
+    if (active > 5) return { name: "queue", status: "warn", detail };
+    return { name: "queue", status: "ok", detail };
   } catch (err) {
     return { name: "queue", status: "fail", detail: err instanceof Error ? err.message : String(err) };
   }

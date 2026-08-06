@@ -50,6 +50,8 @@ import { resolveDueDate } from "@/lib/ap-intelligence/due-date-resolve";
 import { ensureFiscalPeriodForPosting } from "@/lib/ap-intelligence/fiscal-period-preflight";
 import { nextEntryNumberTx } from "@/lib/accounting/journal";
 import { enqueue as enqueueJob } from "@/lib/queue";
+import type { PostingGateVerdict } from "@/lib/ap-intelligence/workflow/blocker-class";
+import type { ApWorkflowBlockerCode } from "@/lib/ap-intelligence/workflow/decision";
 
 const codingSchema = z.object({
   invoiceNumber: z.string().trim().min(1),
@@ -70,10 +72,27 @@ const codingSchema = z.object({
   recommendationAccepted: z.boolean().optional(),
 });
 
+// Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — §2 explicit-review
+// acknowledgments + §3 override audit rows. `acknowledgedBlockers`
+// carries the ApWorkflowBlockerCode values the reviewer has
+// explicitly cleared (`REQUIRES_EXPLICIT_REVIEW` severity). Every
+// entry MUST be paired with an `overrides[]` row that records what
+// the analyser produced vs. what the reviewer corrected, so a
+// downstream auditor can reconstruct who overrode what and why.
+const overrideAuditSchema = z.object({
+  overrideKind: z.string().trim().min(1).max(64),
+  satisfiesBlocker: z.string().trim().min(1).max(64).nullable().optional(),
+  originalValueJson: z.string().trim().nullable().optional(),
+  correctedValueJson: z.string().trim().nullable().optional(),
+  reason: z.string().trim().max(2000).nullable().optional(),
+});
+
 const schema = z.object({
   workIntakeItemId: z.string().min(1),
   vendorId: z.string().min(1),
   coding: codingSchema,
+  acknowledgedBlockers: z.array(z.string().trim().min(1).max(64)).optional().default([]),
+  overrides: z.array(overrideAuditSchema).optional().default([]),
 });
 
 export interface PostApInvoiceResult {
@@ -203,6 +222,96 @@ export async function postApInvoiceAction(
       code: "ELIGIBILITY_REJECTED",
     };
   }
+
+  // -----------------------------------------------------------------------
+  // Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — §2 canonical-decision
+  // enforcement. The narrow eligibility check above only proves the
+  // SELECTED GL is structurally postable. It does NOT prove the invoice
+  // as a whole is safe to post: unresolved gross total, allocation
+  // variance, duplicate risk, contradictory evidence, etc. remain the
+  // canonical decision's job. Founder rule: "Immediately before any
+  // accounting write, reconstruct the current canonical decision using
+  // authoritative server-side data. Posting must be refused when the
+  // current decision includes any blocker that makes the invoice unsafe
+  // or incomplete for posting."
+  //
+  // Enforcement policy uses `evaluatePostingGate`:
+  //   * HARD_BLOCK               → refuse unconditionally.
+  //   * REQUIRES_EXPLICIT_REVIEW → refuse unless client sent the code
+  //                                in `acknowledgedBlockers` AND an
+  //                                override audit row is queued for it.
+  //   * WARNING_ONLY             → allow; recorded as warning below.
+  //
+  // Absence of a persistable analysis (no ApIntakeSource → no ingested
+  // document) is itself a soft-block — surfaced as
+  // ACCOUNTING_DECISION_UNAVAILABLE so the client can't bypass by
+  // supplying an arbitrary WI id.
+  const intakeSource = await prisma.apIntakeSource.findFirst({
+    where: { clubId, canonicalApIntakeId: wi.id },
+    select: { ingestedDocumentId: true },
+    orderBy: { createdAt: "desc" },
+  });
+  let canonicalGateVerdict: PostingGateVerdict | null = null;
+  let canonicalDecisionSnapshot: string | null = null;
+  if (intakeSource?.ingestedDocumentId) {
+    try {
+      const { analyseIngestedInvoice } = await import("@/lib/ap-intelligence/analyse");
+      const { computeApWorkflowDecision } = await import("@/lib/ap-intelligence/workflow/decision");
+      const { evaluatePostingGate } = await import("@/lib/ap-intelligence/workflow/blocker-class");
+      const analysis = await analyseIngestedInvoice({ clubId, ingestedDocumentId: intakeSource.ingestedDocumentId });
+      const decision = computeApWorkflowDecision({
+        analysis,
+        documentAnalysisPending: false,
+        duplicateRisk:
+          analysis.reconcile.state === "DUPLICATE" || analysis.reconcile.state === "HASH_DUPLICATE",
+        tenantAutoApprovalPolicy: undefined,
+        vendorIsNew: analysis.vendor.state !== "MATCHED",
+      });
+      const ackCodes = (input.acknowledgedBlockers ?? []) as ApWorkflowBlockerCode[];
+      canonicalGateVerdict = evaluatePostingGate(
+        decision.blockers.map((b) => b.code),
+        ackCodes,
+      );
+      canonicalDecisionSnapshot = JSON.stringify({
+        state: decision.state,
+        blockerCodes: decision.blockers.map((b) => b.code),
+        warningCodes: decision.warnings.map((w) => w.code),
+        acknowledged: input.acknowledgedBlockers ?? [],
+        capturedAt: new Date().toISOString(),
+      });
+      if (!canonicalGateVerdict.allowed) {
+        logger.warn("mission-control.post-ap-invoice.canonical-gate-refused", {
+          clubId, workIntakeItemId: wi.id,
+          refusalCode: canonicalGateVerdict.refusalCode,
+          hard: canonicalGateVerdict.hardBlockers,
+          unackedReview: canonicalGateVerdict.unacknowledgedRequiresReview,
+        });
+        return {
+          ok: false,
+          message: canonicalGateVerdict.refusalMessage ?? "Canonical decision refused posting.",
+          code: canonicalGateVerdict.refusalCode === "HARD_BLOCK"
+            ? "CANONICAL_HARD_BLOCK"
+            : "CANONICAL_UNACKNOWLEDGED_REVIEW",
+        };
+      }
+    } catch (canonErr) {
+      logger.error("mission-control.post-ap-invoice.canonical-gate-error", {
+        clubId, workIntakeItemId: wi.id,
+        error: canonErr instanceof Error ? canonErr.message : String(canonErr),
+      });
+      // Fail-closed: on decision-service failure, refuse rather than post.
+      return {
+        ok: false,
+        message: "Canonical AP decision could not be evaluated; posting refused for safety.",
+        code: "ACCOUNTING_DECISION_UNAVAILABLE",
+      };
+    }
+  }
+  // If there is no ApIntakeSource (e.g. non-email intake), the legacy
+  // eligibility check above is the sole structural gate. That path is
+  // exercised only by administrative / test-fixture WIs on this tenant
+  // and remains subject to the same balanced-entry + fiscal-period +
+  // duplicate preflights below.
 
   const subtotalD = toMoney(input.coding.subtotal);
   const taxD = toMoney(input.coding.tax);
@@ -422,6 +531,30 @@ export async function postApInvoiceAction(
         data: { status: "RESOLVED", resolvedAt: nowTs, resolvedByUserId: principal.id },
       });
 
+      // Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — §3 override
+      // audit rows. Persist every reviewer correction inside the same
+      // atomic tx so no accounting write survives without its
+      // supporting audit trail. `resultingDecisionJson` is the same
+      // canonical snapshot the enforcement gate evaluated, so an
+      // auditor can prove the posted decision matches what was
+      // authorised.
+      const auditableOverrides = input.overrides ?? [];
+      if (auditableOverrides.length > 0) {
+        await tx.apReviewOverride.createMany({
+          data: auditableOverrides.map((o) => ({
+            clubId,
+            workIntakeItemId: wi.id,
+            reviewedByUserId: principal.id,
+            overrideKind: o.overrideKind,
+            satisfiesBlocker: o.satisfiesBlocker ?? null,
+            originalValueJson: o.originalValueJson ?? null,
+            correctedValueJson: o.correctedValueJson ?? null,
+            reason: o.reason ?? null,
+            resultingDecisionJson: canonicalDecisionSnapshot,
+          })),
+        });
+      }
+
       return { invoiceId: inv.id, invoiceNumber, journalEntryId: je.id, journalEntryNumber: je.entryNumber };
     }, { timeout: 60_000, maxWait: 15_000 });
 
@@ -463,6 +596,14 @@ export async function postApInvoiceAction(
         source: "mission-control:post-ap-invoice-atomic",
         recommendationAccepted: input.coding.recommendationAccepted ?? null,
         fiscalPeriodBootstrapped,
+        canonicalGate: canonicalGateVerdict ? {
+          refusalCode: canonicalGateVerdict.refusalCode,
+          hardBlockers: canonicalGateVerdict.hardBlockers,
+          requiresReviewBlockers: canonicalGateVerdict.requiresReviewBlockers,
+          acknowledgedByReview: canonicalGateVerdict.acknowledgedByReview,
+          warningOnlyBlockers: canonicalGateVerdict.warningOnlyBlockers,
+        } : { refusalCode: "OK", note: "no ApIntakeSource — legacy structural gate only" },
+        overridesRecorded: (input.overrides ?? []).length,
       },
     });
     await audit(principal, {
