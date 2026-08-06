@@ -1,0 +1,32 @@
+{
+  "id": "h-01-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #1",
+  "category": "BLIND",
+  "tags": ["blind", "phase4-eval"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Alberta Fleet Services Ltd.\n5522 Industrial Way · Red Deer AB\nGST: 555556666 RT0001\n\nINVOICE\nInvoice Number: AFS-04412\nInvoice Date: 2026-06-12\nDue Date: 2026-07-12\n\nItem                            Qty      Unit         Amount\nOil change + service            1        189.00        189.00\nBrake pads (front, per set)     1        142.50        142.50\nShop supplies                   1         14.75         14.75\n\n                                        Subtotal:      346.25\n                                        GST (5%):       17.31\n                                        Total:         363.56\n",
+    "email": {
+      "senderAddress": "billing@albertafleet.example",
+      "subject": "Service invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Alberta Fleet Services Ltd." },
+    "invoiceNumber": { "value": "AFS-04412" },
+    "invoiceDate": "2026-06-12",
+    "currency": "CAD",
+    "subtotal": 346.25,
+    "taxTotal": 17.31,
+    "total": 363.56,
+    "economicPurpose": "MAINTENANCE_SERVICE",
+    "acceptableGlAccounts": ["6020", "6031"],
+    "acceptableGlConcepts": ["repair_and_maintenance", "grounds_maintenance", "fleet_service"],
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "1513", "1514", "1100", "1200", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "contra_asset", "revenue", "equity"],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "notes": "Blind holdout. Do not tune Phase 3.1 against this."
+  }
+}

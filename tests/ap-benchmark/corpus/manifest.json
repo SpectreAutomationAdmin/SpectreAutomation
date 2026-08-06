@@ -16,11 +16,14 @@
       "corpus/dev/adversarial-capital-with-accumdepr.case.json"
     ],
     "validation": [
-      "corpus/validation/mixed-tax-invoice.case.json"
+      "corpus/validation/mixed-tax-invoice.case.json",
+      "corpus/validation/professional-membership.case.json",
+      "corpus/validation/food-service-invoice.case.json"
     ],
     "holdout": [
-      "corpus/holdout/professional-membership.case.json",
-      "corpus/holdout/food-service-invoice.case.json"
+      "corpus/holdout/h-01-blind.case.json",
+      "corpus/holdout/h-02-blind.case.json",
+      "corpus/holdout/h-03-blind.case.json"
     ]
   },
   "policy": {

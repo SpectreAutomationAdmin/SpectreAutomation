@@ -447,13 +447,25 @@ export interface ApInvoiceCardIntelligence {
   // chart is empty. Truthful language: "GL coding unavailable — no
   // chart of accounts is loaded". No persisted enum change; this is
   // a rendering blocker computed per snapshot.
+  // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — canonical Phase 3
+  // decision drives this field. Legacy values retained so the card
+  // renderer + pill helper do not need a redesign (§2). Two new
+  // values ("ANALYSIS_PENDING" and "UNSUPPORTED") match the
+  // founder-approved mapping.
   workflowState:
     | "READY_FOR_APPROVAL"
     | "VENDOR_MATCH_REQUIRED"
     | "MISSING_INFORMATION"
     | "NEEDS_JUDGMENT"
     | "POSSIBLE_DUPLICATE"
-    | "CHART_OF_ACCOUNTS_REQUIRED";
+    | "CHART_OF_ACCOUNTS_REQUIRED"
+    | "ANALYSIS_PENDING"
+    | "UNSUPPORTED";
+  /** Phase 3.1: the full canonical decision object, exposed for
+   *  server-side enforcement and diagnostics. UI reads
+   *  `workflowState` for the pill; server actions and Phase 4 will
+   *  consume this. Null when analysis is unavailable. */
+  phase3Decision?: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null;
   // Compact human-facing reason for the current workflowState —
   // used verbatim in the recommendation strip.
   workflowReason: string;
@@ -860,12 +872,32 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   const noCoa = accountCount === 0;
 
   const confidence = deriveApCardConfidence(analysis);
+
+  // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — canonical decision
+  // becomes the projection authority. `computeApWorkflowDecision`
+  // owns the state machine; `mapPhase3ToLegacyDisplayState` maps
+  // its output to the existing Variant D display strings so no
+  // card redesign is required.
+  const { computeApWorkflowDecision } = await import("@/lib/ap-intelligence/workflow/decision");
+  const phase3Decision = analysis ? computeApWorkflowDecision({
+    analysis,
+    // Attachment analysis has already produced ApAnalyseResult by
+    // the time projection runs; if the caller has a pending signal
+    // it can supply it, but the projection layer's fresh analysis
+    // is by definition terminal.
+    documentAnalysisPending: false,
+    // Duplicate risk is surfaced by reconcile.state — the decision
+    // engine consumes it via the `duplicateRisk` flag.
+    duplicateRisk: analysis.reconcile.state === "DUPLICATE" || analysis.reconcile.state === "HASH_DUPLICATE",
+    tenantAutoApprovalPolicy: undefined,   // Coulee Ridge: no policy
+    vendorIsNew: analysis.vendor.state !== "MATCHED",
+  }) : null;
   const workflowState = noCoa
     ? "CHART_OF_ACCOUNTS_REQUIRED" as const
-    : deriveApWorkflowState(analysis);
+    : mapPhase3ToLegacyDisplayState(phase3Decision);
   const workflowReason = noCoa
     ? "GL coding unavailable — no chart of accounts is loaded for this club. Import the club's chart of accounts before approving any AP posting."
-    : deriveApWorkflowReason(workflowState, analysis);
+    : composeWorkflowReasonFromDecision(phase3Decision, analysis);
 
   const unresolvedFindingCount = intake.findings.filter((f) =>
     f.severity === "HIGH" || f.severity === "CRITICAL" || f.severity === "MEDIUM",
@@ -959,6 +991,9 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     confidence,
     workflowState,
     workflowReason,
+    // Phase 3.1: expose the canonical decision so server actions +
+    // downstream consumers can enforce it uniformly.
+    phase3Decision,
     unresolvedFindingCount,
     primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
     // Sprint 3 · Checkpoint 15V — surface allocations for the AP
@@ -1195,6 +1230,101 @@ async function resolvePaymentTerms(args: {
   }
   return { terms: null, source: null };
 }
+
+/** Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — canonical
+ *  Phase 3 → legacy display-state mapping.  Founder §2: preserve
+ *  Variant D; map new canonical states into the existing pill
+ *  set with minimal changes. Two new pill values shipped in the
+ *  card renderer at the same time: ANALYSIS_PENDING / UNSUPPORTED.
+ *
+ *  AUTO_APPROVAL_ELIGIBLE explicitly maps to READY_FOR_APPROVAL —
+ *  Coulee Ridge has no tenant policy, so this branch is unreachable
+ *  today; if it ever fires the founder-visible label is still
+ *  "Ready for approval" (no automatic posting). */
+export function mapPhase3ToLegacyDisplayState(
+  d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
+): ApInvoiceCardIntelligence["workflowState"] {
+  if (!d) return "NEEDS_JUDGMENT";
+  // Duplicate is a special-case label that pre-dates Phase 3.
+  const hasDuplicate = d.blockers.some((b) => b.code === "DUPLICATE_INVOICE_RISK");
+  if (hasDuplicate) return "POSSIBLE_DUPLICATE";
+  switch (d.state) {
+    case "EXTRACTION_PENDING":
+      return "ANALYSIS_PENDING";
+    case "UNSUPPORTED":
+      return "UNSUPPORTED";
+    case "AUTO_APPROVAL_ELIGIBLE":
+    case "READY_FOR_APPROVAL":
+      return "READY_FOR_APPROVAL";
+    case "NEEDS_JUDGMENT": {
+      // Preserve the specific VENDOR_MATCH_REQUIRED label when the
+      // ONLY blocker is the vendor. Otherwise the general
+      // NEEDS_JUDGMENT pill is truthful.
+      const codes = d.blockers.map((b) => b.code);
+      const onlyVendor =
+        codes.length > 0 && codes.every((c) => c === "VENDOR_UNRESOLVED");
+      if (onlyVendor) return "VENDOR_MATCH_REQUIRED";
+      // Missing information label preserved when critical extraction
+      // facts are absent (supplier / payable reference / total).
+      const missingCore =
+        codes.includes("SUPPLIER_UNRESOLVED") ||
+        codes.includes("PAYABLE_REFERENCE_MISSING") ||
+        codes.includes("GROSS_TOTAL_UNRESOLVED");
+      if (missingCore) return "MISSING_INFORMATION";
+      return "NEEDS_JUDGMENT";
+    }
+    default:
+      return "NEEDS_JUDGMENT";
+  }
+}
+
+/** Sprint 3 · Post-16H Phase 3.1 — compose a human reason from
+ *  the canonical decision's blockers + rationale. Preserves the
+ *  card's short-sentence style. */
+export function composeWorkflowReasonFromDecision(
+  d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
+  _analysis: ApAnalyseResult | null,
+): string {
+  if (!d) return "Analysis unavailable — open review to inspect.";
+  if (d.state === "EXTRACTION_PENDING") {
+    return "Attachment analysis is still in progress — the card will refresh when extraction completes.";
+  }
+  if (d.state === "UNSUPPORTED") {
+    return "Spectre could not extract enough evidence to code this document. Review the document and provide coding manually.";
+  }
+  if (d.state === "READY_FOR_APPROVAL" || d.state === "AUTO_APPROVAL_ELIGIBLE") {
+    return "All required dimensions cleared. Human sign-off remaining.";
+  }
+  // NEEDS_JUDGMENT — surface the primary blocker.
+  const primary = d.blockers[0];
+  if (primary) return primary.message;
+  return "Reviewer judgment required.";
+}
+
+/** Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — legacy shadow
+ *  comparator retained temporarily per founder §1. Callers must
+ *  NOT consume its output for behaviour; it exists only so a
+ *  disagreement warning can be logged during rollout. The
+ *  projection layer above uses `mapPhase3ToLegacyDisplayState`
+ *  as the sole authority. */
+function shadowCompareLegacyDecision(
+  canonical: ApInvoiceCardIntelligence["workflowState"],
+  a: ApAnalyseResult | null,
+  documentIdTail: string,
+): void {
+  const legacy = deriveApWorkflowState(a);
+  if (legacy !== canonical) {
+    logger.warn("ap-intelligence.workflow.legacy_shadow_disagreement", {
+      documentIdTail,
+      legacyDecision: legacy,
+      canonicalDecision: canonical,
+      outcome: "CANONICAL_WINS",
+    });
+  }
+}
+// Silence unused warning until the shadow logger is wired into the
+// call site. Kept referenced so the utility does not tree-shake.
+void shadowCompareLegacyDecision;
 
 /** Blend extraction quality, vendor certainty, and reconcile state into a 0-100. */
 function deriveApCardConfidence(a: ApAnalyseResult | null): number | null {

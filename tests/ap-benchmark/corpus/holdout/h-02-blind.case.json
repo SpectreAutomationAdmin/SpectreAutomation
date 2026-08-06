@@ -1,0 +1,32 @@
+{
+  "id": "h-02-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #2",
+  "category": "BLIND",
+  "tags": ["blind", "phase4-eval"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "TelusOne Business Communications\nBusiness Account Statement — Invoice\nAccount 5544-8821\nInvoice Number: TB-2026-08-9902\nInvoice Date: 2026-08-01\nDue Date: 2026-08-31\n\nItem                                          Amount\nBusiness voice line — Aug 2026                 68.00\nBusiness internet 300M — Aug 2026             129.99\nEquipment rental                                12.00\n\n                                Subtotal:     209.99\n                                GST (5%):      10.50\n                                Total:        220.49\n",
+    "email": {
+      "senderAddress": "billing@telusone.example",
+      "subject": "Monthly bill"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "TelusOne Business Communications" },
+    "invoiceNumber": { "value": "TB-2026-08-9902" },
+    "invoiceDate": "2026-08-01",
+    "currency": "CAD",
+    "subtotal": 209.99,
+    "taxTotal": 10.50,
+    "total": 220.49,
+    "economicPurpose": "UTILITY_OR_RECURRING_SERVICE",
+    "acceptableGlAccounts": ["6072"],
+    "acceptableGlConcepts": ["telephone_and_internet", "utility_expense"],
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "1513", "1514", "1100", "1200", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "contra_asset", "capital_asset", "revenue", "equity"],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "notes": "Blind holdout. Do not tune Phase 3.1 against this."
+  }
+}

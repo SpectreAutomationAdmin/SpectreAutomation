@@ -1001,6 +1001,10 @@ function pillForApWorkflow(state: ApInvoiceCardIntelligence["workflowState"]): {
     case "MISSING_INFORMATION":        return { label: "Missing information",      tone: "judgment" };
     case "POSSIBLE_DUPLICATE":         return { label: "Possible duplicate",       tone: "judgment" };
     case "CHART_OF_ACCOUNTS_REQUIRED": return { label: "Chart of accounts required", tone: "judgment" };
+    // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — new canonical
+    // states surfaced through the same Variant D pill treatment.
+    case "ANALYSIS_PENDING":           return { label: "Analysis pending",         tone: "info" };
+    case "UNSUPPORTED":                return { label: "Needs review",             tone: "judgment" };
     case "NEEDS_JUDGMENT":
     default:                           return { label: "Needs judgment",           tone: "judgment" };
   }
@@ -1347,7 +1351,10 @@ function ApActionRow({
   );
 }
 
-type PrimaryIconKind = "check" | "vendor-plus" | "envelope" | "document-check" | "duplicate" | "coa";
+type PrimaryIconKind =
+  | "check" | "vendor-plus" | "envelope" | "document-check" | "duplicate" | "coa"
+  // Phase 3.1: "pending" for ANALYSIS_PENDING; "review" for UNSUPPORTED.
+  | "pending" | "review";
 
 // Sprint 3 · Checkpoint 15P-5 — `primaryActionForApWorkflow` is
 // retired. The card now consumes `deriveApAction` (imported at the
@@ -1410,6 +1417,23 @@ function PrimaryActionIcon({ kind }: { kind: PrimaryIconKind }) {
           <path d="M4 4h14v16H4z" />
           <path d="M8 4v16" />
           <path d="M11 9h5M11 12h5M11 15h5" />
+        </svg>
+      );
+    case "pending":
+      // Clock — analysis in progress.
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      );
+    case "review":
+      // Magnifier over a document — review the source.
+      return (
+        <svg {...common}>
+          <path d="M4 4h11l4 4v12H4z" />
+          <circle cx="11" cy="13" r="2.5" />
+          <path d="M13 15l2 2" />
         </svg>
       );
   }

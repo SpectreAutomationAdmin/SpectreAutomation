@@ -1,0 +1,32 @@
+{
+  "id": "h-03-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #3",
+  "category": "BLIND",
+  "tags": ["blind", "phase4-eval"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Peak Beverage Distributors\nInvoice Number: PBD-118225\nInvoice Date: 2026-07-25\n\nItem                                          Qty      Unit         Amount\nDomestic beer — case (24×355ml)                 12      42.00        504.00\nHouse wine — case (12×750ml)                     6      95.00        570.00\nSoft drink syrup — 5L bag-in-box                 8      28.50        228.00\n\n                                                Subtotal:     1302.00\n                                                GST (5%):       65.10\n                                                Total:        1367.10\n",
+    "email": {
+      "senderAddress": "orders@peakbeverage.example",
+      "subject": "Weekly delivery invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Peak Beverage Distributors" },
+    "invoiceNumber": { "value": "PBD-118225" },
+    "invoiceDate": "2026-07-25",
+    "currency": "CAD",
+    "subtotal": 1302.00,
+    "taxTotal": 65.10,
+    "total": 1367.10,
+    "economicPurpose": "FOOD_AND_BEVERAGE_COST_OF_SALES",
+    "acceptableGlAccounts": ["5100", "5101"],
+    "acceptableGlConcepts": ["beverage_cost_of_sales", "food_cost_of_sales"],
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "1513", "1514", "1100", "3100", "4100"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "contra_asset", "capital_asset", "revenue"],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "notes": "Blind holdout. Do not tune Phase 3.1 against this."
+  }
+}

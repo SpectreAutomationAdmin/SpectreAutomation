@@ -143,7 +143,13 @@ export async function postApInvoiceAction(
 
   const expenseAccount = await prisma.account.findFirst({
     where: { clubId, accountNumber: input.coding.glAccountNumber, isActive: true },
-    select: { id: true, accountNumber: true, name: true, type: true },
+    select: {
+      id: true, accountNumber: true, name: true, type: true, normalBalance: true,
+      isHeader: true, allowManualPosting: true, isControlAccount: true,
+      isBankAccount: true, isCashAccount: true, archivedAt: true,
+      fundApplicability: true, accountRole: true,
+      category: { select: { key: true } }, fsGroup: { select: { key: true } },
+    },
   });
   if (!expenseAccount) {
     return { ok: false, message: `GL account ${input.coding.glAccountNumber} is inactive or missing.`, code: "BAD_GL" };
@@ -153,6 +159,48 @@ export async function postApInvoiceAction(
       ok: false,
       message: `GL ${expenseAccount.accountNumber} ${expenseAccount.name} is a ${expenseAccount.type} account — AP debits can only target EXPENSE or ASSET accounts.`,
       code: "BAD_GL_TYPE",
+    };
+  }
+
+  // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — server-side
+  // accounting eligibility enforcement (§4). A user must not be
+  // able to bypass the projection layer's decision by calling
+  // this endpoint directly. The eligibility service re-evaluates
+  // the SELECTED debit account against the same structural rules
+  // the pre-ranker uses. Rejection returns a structured refusal;
+  // the DB is untouched.
+  const { evaluateEligibility } = await import("@/lib/accounting/eligibility");
+  const eligibilityVerdict = evaluateEligibility({
+    id: expenseAccount.id,
+    accountNumber: expenseAccount.accountNumber,
+    name: expenseAccount.name,
+    type: expenseAccount.type,
+    normalBalance: expenseAccount.normalBalance,
+    isActive: true,
+    isHeader: expenseAccount.isHeader,
+    allowManualPosting: expenseAccount.allowManualPosting,
+    isControlAccount: expenseAccount.isControlAccount,
+    isBankAccount: expenseAccount.isBankAccount,
+    isCashAccount: expenseAccount.isCashAccount,
+    archivedAt: expenseAccount.archivedAt,
+    fundApplicability: expenseAccount.fundApplicability,
+    categoryKey: expenseAccount.category?.key ?? null,
+    fsGroupKey: expenseAccount.fsGroup?.key ?? null,
+    accountRole: expenseAccount.accountRole ?? "STANDARD",
+  }, {
+    transactionKind: "AP_INVOICE",
+    // Server-side, without a capital classifier in scope, default
+    // to UNKNOWN — the conservative posture. Callers who need a
+    // capital debit will still be admitted by ASSET/DEBIT rows if
+    // the account passes structural rules; the nature-conditioned
+    // rule only rejects ordinary ASSETs under OPERATING and similar.
+    expectedDebitRole: expenseAccount.type === "ASSET" ? "CAPITAL_ASSET" : "OPERATING_EXPENSE",
+  });
+  if (!eligibilityVerdict.eligible) {
+    return {
+      ok: false,
+      message: `Account ${expenseAccount.accountNumber} ${expenseAccount.name} is not eligible for an AP debit: ${eligibilityVerdict.exclusionReasons.join(", ")}. Choose a different account.`,
+      code: "ELIGIBILITY_REJECTED",
     };
   }
 

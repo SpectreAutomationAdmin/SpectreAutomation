@@ -27,8 +27,10 @@
 
 import type { ApInvoiceCardIntelligence } from "@/lib/mission-control";
 
+// (icon list widened in Phase 3.1 to include pending / review — see below)
 export type ApActionIcon =
-  | "check" | "vendor-plus" | "envelope" | "duplicate" | "coa" | "document-check";
+  | "check" | "vendor-plus" | "envelope" | "duplicate" | "coa" | "document-check"
+  | "pending" | "review";
 
 export type ApAction =
   // Vendor already exists + exact/strong match + coding ready →
@@ -91,6 +93,21 @@ export type ApAction =
       kind: "COA_REQUIRED";
       label: "Import chart of accounts";
       icon: "coa";
+      modal: { open: false; expand: true };
+    }
+  // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — Phase 3 canonical
+  // action targets. `EXPAND_ONLY` never posts; `REVIEW_DOCUMENT`
+  // opens the document viewer so the reviewer can code manually.
+  | {
+      kind: "EXPAND_ONLY";
+      label: string;
+      icon: ApActionIcon;
+      modal: { open: false; expand: true };
+    }
+  | {
+      kind: "REVIEW_DOCUMENT";
+      label: string;
+      icon: ApActionIcon;
       modal: { open: false; expand: true };
     };
 
@@ -196,5 +213,28 @@ export function deriveApAction(ap: ApInvoiceCardIntelligence): ApAction {
         icon: "coa",
         modal: { open: false, expand: true },
       };
+
+    // Sprint 3 · Post-16H Phase 3.1 (2026-08-06) — new canonical
+    // states mapped to primary actions per founder §3.
+    case "ANALYSIS_PENDING":
+      // No posting action; the card shows "Analysis in progress"
+      // until the terminal ApAnalyseResult arrives via refresh.
+      return {
+        kind: "EXPAND_ONLY",
+        label: "Analysis pending",
+        icon: "pending",
+        modal: { open: false, expand: true },
+      } as ApAction;
+
+    case "UNSUPPORTED":
+      // Reviewer must open the document and provide coding manually.
+      // NEVER "Request information" merely because internal
+      // extraction failed (founder §3).
+      return {
+        kind: "REVIEW_DOCUMENT",
+        label: "Review document",
+        icon: "review",
+        modal: { open: false, expand: true },
+      } as ApAction;
   }
 }
