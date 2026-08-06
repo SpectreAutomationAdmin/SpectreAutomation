@@ -3,7 +3,12 @@
   "split": "holdout",
   "label": "Food-service invoice — must route to F&B cost of sales",
   "category": "FOOD_SERVICE",
-  "tags": ["holdout", "blind", "f-and-b", "cost-of-sales"],
+  "tags": [
+    "holdout",
+    "blind",
+    "f-and-b",
+    "cost-of-sales"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "Sysco Prairie Foods\nInvoice Number: SYS-4472138\nInvoice Date: 2026-07-22\n\nItem                                        Qty      Unit         Amount\nBeef tenderloin AAA                          40      21.50        860.00\nAtlantic salmon fillet portioned             25      18.75        468.75\nMixed-lettuce salad blend — case              8      12.40         99.20\n\n                                                    Subtotal:    1427.95\n                                                    GST (5%):      71.40\n                                                    Total:       1499.35\n",
@@ -14,19 +19,42 @@
   },
   "expected": {
     "documentClass": "INVOICE",
-    "supplier": { "name": "Sysco Prairie Foods" },
-    "invoiceNumber": { "value": "SYS-4472138" },
+    "supplier": {
+      "name": "Sysco Prairie Foods"
+    },
+    "invoiceNumber": {
+      "value": "SYS-4472138"
+    },
     "invoiceDate": "2026-07-22",
     "currency": "CAD",
     "subtotal": 1427.95,
-    "taxTotal": 71.40,
+    "taxTotal": 71.4,
     "total": 1499.35,
     "economicPurpose": "FOOD_AND_BEVERAGE_COST_OF_SALES",
-    "acceptableGlAccounts": ["5100", "5101"],
-    "acceptableGlConcepts": ["food_cost_of_sales", "food_purchases"],
-    "forbiddenGlAccounts": ["1710", "1720", "1100", "5310", "6020", "1506", "1540"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "fuel_expense", "capital_asset", "grounds_maintenance"],
-    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "acceptableGlAccounts": [
+      "5100",
+      "5101"
+    ],
+    "acceptableGlConcepts": [
+      "food_cost_of_sales",
+      "food_purchases"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1100",
+      "5310",
+      "6020",
+      "1506",
+      "1540"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "fuel_expense",
+      "capital_asset",
+      "grounds_maintenance"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
     "notes": "Blind holdout. Do not tune rules against this case."
   }
 }

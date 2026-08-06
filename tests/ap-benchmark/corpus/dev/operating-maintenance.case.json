@@ -3,7 +3,13 @@
   "split": "dev",
   "label": "Monthly maintenance service — operating expense with vendor default GL",
   "category": "OPERATING_INVOICE",
-  "tags": ["text-layer-pdf", "gst-only", "operating", "existing-vendor", "vendor-default-gl"],
+  "tags": [
+    "text-layer-pdf",
+    "gst-only",
+    "operating",
+    "existing-vendor",
+    "vendor-default-gl"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "Northside Course Maintenance Inc.\nINVOICE\nInvoice Number: INV-2026-9011\nInvoice Date: 2026-07-03\nDue Date: 2026-08-02\nDescription: Monthly maintenance service for course equipment\n\nItem                            Qty    Unit      Amount\nMonthly service call             1      450.00    450.00\n\n                                       Subtotal:  450.00\n                                       GST (5%):   22.50\n                                       Total:     472.50\n",
@@ -14,19 +20,37 @@
   },
   "expected": {
     "documentClass": "INVOICE",
-    "supplier": { "name": "Northside Course Maintenance Inc." },
-    "invoiceNumber": { "value": "INV-2026-9011" },
+    "supplier": {
+      "name": "Northside Course Maintenance Inc."
+    },
+    "invoiceNumber": {
+      "value": "INV-2026-9011"
+    },
     "invoiceDate": "2026-07-03",
     "currency": "CAD",
-    "subtotal": 450.00,
-    "taxTotal": 22.50,
-    "total": 472.50,
+    "subtotal": 450,
+    "taxTotal": 22.5,
+    "total": 472.5,
     "economicPurpose": "MAINTENANCE_SERVICE",
     "vendorMatchExpectation": "MATCHED",
-    "acceptableGlAccounts": ["6020"],
-    "acceptableGlConcepts": ["grounds_maintenance", "repair_and_maintenance"],
-    "forbiddenGlAccounts": ["1710", "1100", "3100", "4100"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
-    "expectedWorkflowType": "AP_REVIEW"
+    "acceptableGlAccounts": [
+      "6020"
+    ],
+    "acceptableGlConcepts": [
+      "grounds_maintenance",
+      "repair_and_maintenance"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1100",
+      "3100",
+      "4100"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "revenue",
+      "equity"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT"
   }
 }

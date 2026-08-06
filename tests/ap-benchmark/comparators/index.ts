@@ -28,6 +28,10 @@ export interface AnalyserSnapshot {
   glReason: string | null;
   workflowState: string | null;
   documentClass?: string | null;
+  // Phase 3 (2026-08-06) — per-stage workflow observations.
+  autoApprovalExclusions?: string[];
+  workflowBlockers?: string[];
+  workflowDimensionStatuses?: Record<string, string>;
 }
 
 function normalizeName(v: string): string {
@@ -225,6 +229,49 @@ export function cmpAbstention(e: ExpectedTruth, a: AnalyserSnapshot): Comparator
   };
 }
 
+// Phase 3 comparators — workflow state + false-ready / false-auto.
+
+export function cmpFalseReady(_e: ExpectedTruth, a: AnalyserSnapshot): ComparatorResult {
+  // A "false READY" is READY_FOR_APPROVAL surfaced while blockers
+  // still exist. The workflow decision should never permit this,
+  // but this comparator asserts it as a benchmark-level invariant.
+  const isReady = a.workflowState === "READY_FOR_APPROVAL" || a.workflowState === "AUTO_APPROVAL_ELIGIBLE";
+  const hasBlockers = (a.workflowBlockers ?? []).length > 0;
+  const violated = isReady && hasBlockers;
+  return {
+    dimension: "workflow-false-ready", verdict: violated ? "FAIL" : "PASS",
+    score: violated ? 0 : 1,
+    actual: { state: a.workflowState, blockers: a.workflowBlockers ?? [] },
+    expected: "no READY state while blockers exist",
+    reason: violated
+      ? `UNSAFE — workflow reported ${a.workflowState} with active blockers.`
+      : "No false-ready state.",
+    unsafe: violated ? true : false,
+  };
+}
+
+export function cmpFalseAutoApproval(_e: ExpectedTruth, a: AnalyserSnapshot): ComparatorResult {
+  // AUTO_APPROVAL_ELIGIBLE must NEVER fire when no tenant policy
+  // is configured. Coulee Ridge has none. This comparator is
+  // effectively "AUTO_APPROVAL should always have autoApprovalExclusions
+  // set when tenant policy is unconfigured."
+  const isAuto = a.workflowState === "AUTO_APPROVAL_ELIGIBLE";
+  const noExclusions = (a.autoApprovalExclusions ?? []).length === 0;
+  const violated = isAuto && noExclusions === false;
+  // Success condition (per Coulee Ridge context): auto NEVER fires.
+  return {
+    dimension: "workflow-false-auto",
+    verdict: isAuto ? "FAIL" : "PASS",
+    score: isAuto ? 0 : 1,
+    actual: { state: a.workflowState, exclusions: a.autoApprovalExclusions ?? [] },
+    expected: "AUTO_APPROVAL_ELIGIBLE must not fire without configured tenant policy",
+    reason: isAuto
+      ? `UNSAFE — AUTO_APPROVAL_ELIGIBLE fired without an explicit tenant policy.`
+      : "No auto-approval eligibility declared (correct for Coulee Ridge — no policy).",
+    unsafe: isAuto && violated,
+  };
+}
+
 export function runAllComparators(expected: ExpectedTruth, actual: AnalyserSnapshot): ComparatorResult[] {
   const out: ComparatorResult[] = [];
   const push = (r: ComparatorResult | null) => { if (r) out.push(r); };
@@ -240,5 +287,8 @@ export function runAllComparators(expected: ExpectedTruth, actual: AnalyserSnaps
   push(cmpForbiddenGl(expected, actual));
   push(cmpWorkflowType(expected, actual));
   push(cmpAbstention(expected, actual));
+  // Phase 3.
+  push(cmpFalseReady(expected, actual));
+  push(cmpFalseAutoApproval(expected, actual));
   return out;
 }

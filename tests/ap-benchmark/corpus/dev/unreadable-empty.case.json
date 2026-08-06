@@ -3,18 +3,35 @@
   "split": "dev",
   "label": "Unreadable / empty extraction — must abstain",
   "category": "UNREADABLE",
-  "tags": ["abstention", "no-evidence"],
+  "tags": [
+    "abstention",
+    "no-evidence"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "",
-    "email": { "senderAddress": "unknown@example", "subject": "attached" }
+    "email": {
+      "senderAddress": "unknown@example",
+      "subject": "attached"
+    }
   },
   "expected": {
     "documentClass": "UNKNOWN",
-    "expectedWorkflowType": "MISSING_INFORMATION",
+    "expectedWorkflowType": "UNSUPPORTED",
     "expectedAbstention": true,
-    "forbiddenGlAccounts": ["1710", "1720", "1100", "5310", "6020", "1506", "1540"],
-    "forbiddenGlConcepts": ["invoice", "capital_asset"],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1100",
+      "5310",
+      "6020",
+      "1506",
+      "1540"
+    ],
+    "forbiddenGlConcepts": [
+      "invoice",
+      "capital_asset"
+    ],
     "notes": "Abstention guard: no evidence must never produce a GL recommendation."
   }
 }

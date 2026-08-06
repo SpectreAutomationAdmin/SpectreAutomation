@@ -3,7 +3,12 @@
   "split": "dev",
   "label": "Adversarial: CAPITAL nature + accum-depr account with strong semantic hits (Jonas convention)",
   "category": "ADVERSARIAL_CAPITAL",
-  "tags": ["phase2.1-mutation-guard", "accountRole-required", "jonas-convention", "capital-invoice"],
+  "tags": [
+    "phase2.1-mutation-guard",
+    "accountRole-required",
+    "jonas-convention",
+    "capital-invoice"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "Prairie Computer Equipment Co.\n1234 Data Way · Calgary AB\nGST: 987654321 RT0001\n\nINVOICE\nInvoice Number: PCE-2026-1188\nInvoice Date: 2026-07-30\nDue Date: 2026-08-29\n\nPurchase Order #: PO-2026-CAP-118\nEquipment: server rack model XR-2200, serial 41821, manufacturer warranty 3 years\n\nItem                                    Qty      Unit         Amount\nComputer equipment — server rack XR-2200  1     14200.00      14200.00\nInstallation labour (capitalised)          1      2400.00       2400.00\n\n                                                Subtotal:      16600.00\n                                                GST (5%):        830.00\n                                                Total:         17430.00\n",
@@ -14,19 +19,53 @@
   },
   "expected": {
     "documentClass": "INVOICE",
-    "supplier": { "name": "Prairie Computer Equipment Co." },
-    "invoiceNumber": { "value": "PCE-2026-1188" },
+    "supplier": {
+      "name": "Prairie Computer Equipment Co."
+    },
+    "invoiceNumber": {
+      "value": "PCE-2026-1188"
+    },
     "invoiceDate": "2026-07-30",
     "currency": "CAD",
-    "subtotal": 16600.00,
-    "taxTotal": 830.00,
-    "total": 17430.00,
+    "subtotal": 16600,
+    "taxTotal": 830,
+    "total": 17430,
     "economicPurpose": "CAPITAL_ACQUISITION",
-    "acceptableGlAccounts": ["1506", "1530", "1540"],
-    "acceptableGlConcepts": ["equipment_and_fixtures", "capital_asset", "course_improvements"],
-    "forbiddenGlAccounts": ["1710", "1720", "1730", "1513", "1514", "1515", "1100", "1200", "1300", "2100", "2200", "3100", "4100", "4200"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "contra_asset", "bank_account", "control_account", "revenue", "equity"],
-    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "acceptableGlAccounts": [
+      "1506",
+      "1530",
+      "1540"
+    ],
+    "acceptableGlConcepts": [
+      "equipment_and_fixtures",
+      "capital_asset",
+      "course_improvements"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1730",
+      "1513",
+      "1514",
+      "1515",
+      "1100",
+      "1200",
+      "1300",
+      "2100",
+      "2200",
+      "3100",
+      "4100",
+      "4200"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "contra_asset",
+      "bank_account",
+      "control_account",
+      "revenue",
+      "equity"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
     "notes": "Founder §A4 adversarial case. Under a defensible CAPITAL_ASSET context, ordinary ASSET accounts (1506/1530/1540) are admitted by the nature-conditioned rule. Without the accountRole=CONTRA_ASSET durability, accounts 1710/1720/1730 (ASSET/CREDIT — caught by structural rule) AND 1513/1514 (ASSET/DEBIT — Jonas convention, ONLY caught by accountRole) would compete on semantic score. The line 'Computer equipment — server rack' hits `computer` and `equipment` name-substrings that would score high on 1710 and 1513. If accountRole enforcement is disabled or missing, this case surfaces an accum-depr account as Top-1 — an UNSAFE recommendation. Account 1515 is intentionally left as accountRole=STANDARD (un-backfilled) so it exercises the residual name-based gap should the mutation guard ever regress; if it wins, the fault is a missed backfill."
   }
 }

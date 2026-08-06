@@ -3,7 +3,10 @@
   "split": "dev",
   "label": "Fuel invoice mentioning \"purchase order\" — CAPITAL_ASSET nature trap",
   "category": "FUEL_INVOICE",
-  "tags": ["nature-classifier-trap", "regression-guard-16H-rej4"],
+  "tags": [
+    "nature-classifier-trap",
+    "regression-guard-16H-rej4"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "Grande Prairie Petroleum Inc.\nInvoice Number: GPP-2026-4471\nInvoice Date: 2026-07-15\n\nPurchase Order #: PO-2026-118\n\nItem                            Qty      Unit         Amount\nDyed diesel fuel                 950     1.4200        1349.00\n\n                                        Subtotal:      1349.00\n                                        GST (5%):        67.45\n                                        Total:         1416.45\n",
@@ -14,19 +17,41 @@
   },
   "expected": {
     "documentClass": "INVOICE",
-    "supplier": { "name": "Grande Prairie Petroleum Inc." },
-    "invoiceNumber": { "value": "GPP-2026-4471" },
+    "supplier": {
+      "name": "Grande Prairie Petroleum Inc."
+    },
+    "invoiceNumber": {
+      "value": "GPP-2026-4471"
+    },
     "invoiceDate": "2026-07-15",
     "currency": "CAD",
-    "subtotal": 1349.00,
+    "subtotal": 1349,
     "taxTotal": 67.45,
     "total": 1416.45,
     "economicPurpose": "FUEL_OR_UTILITY_CONSUMPTION",
-    "acceptableGlAccounts": ["5310", "5311", "5320"],
-    "acceptableGlConcepts": ["fuel_expense", "diesel_fuel", "equipment_fuel"],
-    "forbiddenGlAccounts": ["1710", "1720", "1730", "1506", "1540"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "capital_asset", "computer_equipment"],
-    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "acceptableGlAccounts": [
+      "5310",
+      "5311",
+      "5320"
+    ],
+    "acceptableGlConcepts": [
+      "fuel_expense",
+      "diesel_fuel",
+      "equipment_fuel"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1730",
+      "1506",
+      "1540"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "capital_asset",
+      "computer_equipment"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
     "notes": "The word 'Purchase Order' must NOT push the nature classifier to CAPITAL_ASSET when the line items are clearly fuel."
   }
 }

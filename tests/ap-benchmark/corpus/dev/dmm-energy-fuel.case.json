@@ -3,7 +3,13 @@
   "split": "dev",
   "label": "DMM Energy — dyed low-sulphur diesel · Québec French headers",
   "category": "FUEL_INVOICE",
-  "tags": ["french-headers", "text-layer-pdf", "gst-only", "capital-look-alike", "founder-locked-truth"],
+  "tags": [
+    "french-headers",
+    "text-layer-pdf",
+    "gst-only",
+    "capital-look-alike",
+    "founder-locked-truth"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "DMM Energy Inc.\nLes Produits DMM Energy\n1234, boulevard de l'Industrie · Rouyn-Noranda QC J9X 5B7\nNo TPS: 812345678 RT0001\n\nFACTURE / INVOICE\nInvoice B0037FC\nDate: 2026-08-04\nDue Date: 2026-08-19\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nAttn: Accounts Payable\n\nPRODUIT                            QUANTITÉ    PRIX      MONTANT\nDiesel biodégradable dyed low-sulphur   1700    1.4190     2412.30\n\n                                              Subtotal:     2412.30\n                                              GST (5%):      120.62\n                                              PST:             0.00\n                                              Invoice Total: 2532.92 CAD\n\nRemit to: DMM Energy Inc.\nPayable in 15 days.\n",
@@ -16,31 +22,77 @@
     "documentClass": "INVOICE",
     "supplier": {
       "name": "DMM Energy Inc.",
-      "acceptableAliases": ["DMM Energy", "Les Produits DMM Energy"],
-      "unacceptable": ["PRODUIT", "QUANTITÉ", "PRIX", "FACTURE", "INVOICE"]
+      "acceptableAliases": [
+        "DMM Energy",
+        "Les Produits DMM Energy"
+      ],
+      "unacceptable": [
+        "PRODUIT",
+        "QUANTITÉ",
+        "PRIX",
+        "FACTURE",
+        "INVOICE"
+      ]
     },
     "invoiceNumber": {
       "value": "B0037FC",
-      "unacceptable": ["OICE", "OICE-B0037FC", "OICEB0037FC"]
+      "unacceptable": [
+        "OICE",
+        "OICE-B0037FC",
+        "OICEB0037FC"
+      ]
     },
     "invoiceDate": "2026-08-04",
     "dueDate": "2026-08-19",
     "currency": "CAD",
-    "subtotal": 2412.30,
+    "subtotal": 2412.3,
     "taxTotal": 120.62,
     "taxRate": 0.05,
     "total": 2532.92,
     "lineItems": [
-      { "descriptionContains": "diesel", "amountApprox": 2412.30, "quantityApprox": 1700 }
+      {
+        "descriptionContains": "diesel",
+        "amountApprox": 2412.3,
+        "quantityApprox": 1700
+      }
     ],
     "economicPurpose": "FUEL_OR_UTILITY_CONSUMPTION",
-    "departmentHints": ["Grounds", "Course operations"],
+    "departmentHints": [
+      "Grounds",
+      "Course operations"
+    ],
     "vendorMatchExpectation": "NOT_FOUND",
-    "acceptableGlAccounts": ["5310", "5311", "5320"],
-    "acceptableGlConcepts": ["fuel_expense", "diesel_fuel", "equipment_fuel", "grounds_fuel", "fuel_and_lubricants"],
-    "forbiddenGlAccounts": ["1710", "1720", "1730", "1100", "1200", "3100", "4100"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "computer_equipment", "contra_asset", "revenue", "equity", "unrelated_liability", "petty_cash"],
-    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "acceptableGlAccounts": [
+      "5310",
+      "5311",
+      "5320"
+    ],
+    "acceptableGlConcepts": [
+      "fuel_expense",
+      "diesel_fuel",
+      "equipment_fuel",
+      "grounds_fuel",
+      "fuel_and_lubricants"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1730",
+      "1100",
+      "1200",
+      "3100",
+      "4100"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "computer_equipment",
+      "contra_asset",
+      "revenue",
+      "equity",
+      "unrelated_liability",
+      "petty_cash"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
     "expectedAllocationCount": 1,
     "notes": "Founder-locked truth per checkpoint acceptance. Do not copy any literal from this file into production decision branches."
   }

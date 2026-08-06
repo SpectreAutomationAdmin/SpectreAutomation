@@ -168,7 +168,7 @@ async function ingestStubDocument(
   return result.documentId;
 }
 
-function projectAnalyserSnapshot(analysis: unknown): AnalyserSnapshot {
+async function projectAnalyserSnapshot(analysis: unknown): Promise<AnalyserSnapshot> {
   const a = analysis as {
     extraction?: {
       state?: string; supplier?: { guessedName?: string | null };
@@ -186,6 +186,16 @@ function projectAnalyserSnapshot(analysis: unknown): AnalyserSnapshot {
     };
   };
   const supplierName = a.extraction?.supplier?.guessedName ?? a.extraction?.vendor?.guessedName ?? null;
+  // Phase 3 — compute the canonical workflow decision so per-case
+  // scoring can measure state / false-ready / false-auto.
+  const { computeApWorkflowDecision } = await import("@/lib/ap-intelligence/workflow/decision");
+  const decision = computeApWorkflowDecision({
+    analysis: analysis as import("@/lib/ap-intelligence/analyse").ApAnalyseResult,
+    documentAnalysisPending: false,   // harness only runs terminal extractions
+    duplicateRisk: false,
+    tenantAutoApprovalPolicy: undefined,   // Coulee Ridge: no policy configured
+    vendorIsNew: false,
+  });
   return {
     extractionState: a.extraction?.state ?? null,
     supplier: supplierName,
@@ -202,11 +212,12 @@ function projectAnalyserSnapshot(analysis: unknown): AnalyserSnapshot {
     glConfidence: a.gl?.confidence ?? null,
     glCandidateNumbers: (a.gl?.candidates ?? []).map((c) => c.accountNumber),
     glReason: a.gl?.reason ?? null,
-    // Workflow state is projected by the intelligence-review-intakes
-    // layer. Not computed here — the harness observes only the
-    // analyser output. Left null; the workflow comparator becomes
-    // NOT_APPLICABLE when no workflow field is available.
-    workflowState: null,
+    workflowState: decision.state,
+    autoApprovalExclusions: decision.autoApprovalExclusions,
+    workflowBlockers: decision.blockers.map((b) => b.code),
+    workflowDimensionStatuses: Object.fromEntries(
+      decision.dimensions.map((d) => [d.key, d.validationStatus]),
+    ),
   };
 }
 
@@ -234,7 +245,7 @@ async function runOneCase(
     extractedTextOverride: c.source.text,
   });
   const t1 = Number(process.hrtime.bigint() / 1_000_000n);
-  const snapshot = projectAnalyserSnapshot(analysis);
+  const snapshot = await projectAnalyserSnapshot(analysis);
   const results = runAllComparators(c.expected as ExpectedTruth, snapshot);
   const overall = overallVerdict(results);
   return {

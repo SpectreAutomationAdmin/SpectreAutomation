@@ -3,7 +3,10 @@
   "split": "dev",
   "label": "Vague email body carrying a real invoice — attachment authority",
   "category": "ATTACHMENT_AUTHORITY",
-  "tags": ["vague-body", "attachment-carries-truth"],
+  "tags": [
+    "vague-body",
+    "attachment-carries-truth"
+  ],
   "source": {
     "kind": "TEXT_OVERRIDE",
     "text": "Oakcreek Golf & Turf LP\n5000 Fairway Road · Edmonton AB\nGST: 123456789 RT0001\n\nINVOICE\nInvoice Number: 1091559-00\nInvoice Date: 2026-07-29\nDue Date: 2026-08-28\n\nItem                                        Qty    Unit         Amount\nEquipment & fixtures — grounds                1    77833.35     77833.35\n\n                                                    Subtotal:   77833.35\n                                                    GST (5%):    3891.67\n                                                    Total:      81725.02\n",
@@ -16,9 +19,15 @@
     "documentClass": "INVOICE",
     "supplier": {
       "name": "Oakcreek Golf & Turf LP",
-      "unacceptable": ["Item", "INVOICE", "For your review"]
+      "unacceptable": [
+        "Item",
+        "INVOICE",
+        "For your review"
+      ]
     },
-    "invoiceNumber": { "value": "1091559-00" },
+    "invoiceNumber": {
+      "value": "1091559-00"
+    },
     "invoiceDate": "2026-07-29",
     "currency": "CAD",
     "subtotal": 77833.35,
@@ -26,11 +35,27 @@
     "total": 81725.02,
     "economicPurpose": "CAPITAL_ACQUISITION",
     "vendorMatchExpectation": "NOT_FOUND",
-    "acceptableGlAccounts": ["1506", "1540"],
-    "acceptableGlConcepts": ["equipment_and_fixtures", "capital_asset"],
-    "forbiddenGlAccounts": ["1710", "1720", "1100", "3100", "4100"],
-    "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
-    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "acceptableGlAccounts": [
+      "1506",
+      "1540"
+    ],
+    "acceptableGlConcepts": [
+      "equipment_and_fixtures",
+      "capital_asset"
+    ],
+    "forbiddenGlAccounts": [
+      "1710",
+      "1720",
+      "1100",
+      "3100",
+      "4100"
+    ],
+    "forbiddenGlConcepts": [
+      "accumulated_depreciation",
+      "revenue",
+      "equity"
+    ],
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
     "expectedAbstention": true,
     "notes": "Regression guard for 16H rejection #4 — vague subject/body must NOT block AP promotion when a real invoice PDF is attached. Under Phase 2, when the capital classifier is AMBIGUOUS (subject/body carry no explicit capital evidence), ASSET accounts are correctly excluded per founder §6 (amount alone must not qualify a capital-asset account). Abstention is the eligible outcome here; a Phase 4 improvement to capital-evidence detection could later promote 1506 as the acceptable Top-1 if the invoice text is strengthened."
   }
