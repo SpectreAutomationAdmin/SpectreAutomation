@@ -95,6 +95,7 @@ function teardownDisposableDatabase(dbFile: string): void {
 function parseArgs(argv: string[]) {
   const out = {
     phase0: true as boolean,
+    phase2: true as boolean,
     split: null as string | null,
     sealBaseline: false as boolean,
     revealHoldout: false as boolean,
@@ -102,6 +103,8 @@ function parseArgs(argv: string[]) {
   for (const a of argv.slice(2)) {
     if (a === "--phase0=off" || a === "--phase0=0" || a === "--phase0=false") out.phase0 = false;
     else if (a === "--phase0=on" || a === "--phase0=1" || a === "--phase0=true") out.phase0 = true;
+    else if (a === "--phase2=off" || a === "--phase2=0" || a === "--phase2=false") out.phase2 = false;
+    else if (a === "--phase2=on" || a === "--phase2=1" || a === "--phase2=true") out.phase2 = true;
     else if (a.startsWith("--split=")) out.split = a.slice("--split=".length);
     else if (a === "--seal-baseline") out.sealBaseline = true;
     else if (a === "--reveal-holdout") out.revealHoldout = true;
@@ -344,9 +347,10 @@ function renderMarkdown(rep: BenchmarkRunReport, revealHoldout: boolean): string
 async function main() {
   const args = parseArgs(process.argv);
 
-  // Env flag for the safety guard. Set BEFORE Prisma / analyser
-  // imports so the module reads it at first evaluation.
+  // Env flags for the eligibility guards. Set BEFORE Prisma /
+  // analyser imports so the modules read them at first evaluation.
   process.env.AP_INTELLIGENCE_PHASE0_SAFETY = args.phase0 ? "1" : "0";
+  process.env.AP_INTELLIGENCE_PHASE2_ELIGIBILITY = args.phase2 ? "1" : "0";
 
   // Provision a disposable SQLite file BEFORE the production-guard
   // check reads DATABASE_URL — the guard's whole purpose is to
@@ -357,11 +361,12 @@ async function main() {
   fs.mkdirSync(REPORTS_DIR, { recursive: true });
   fs.mkdirSync(BASELINES_DIR, { recursive: true });
 
-  const runId = `ap-bench-${new Date().toISOString().replace(/[:.]/g, "-")}-${args.phase0 ? "on" : "off"}`;
+  const runId = `ap-bench-${new Date().toISOString().replace(/[:.]/g, "-")}-p0${args.phase0 ? "on" : "off"}-p2${args.phase2 ? "on" : "off"}`;
   const startedAt = new Date().toISOString();
 
   console.log(`AP Benchmark ${runId}`);
-  console.log(`  Phase 0 containment: ${args.phase0 ? "ENABLED" : "DISABLED"}`);
+  console.log(`  Phase 0 containment (post-ranker guard): ${args.phase0 ? "ENABLED" : "DISABLED"}`);
+  console.log(`  Phase 2 eligibility (pre-ranker gate):   ${args.phase2 ? "ENABLED" : "DISABLED"}`);
   console.log(`  Split filter: ${args.split ?? "all"}`);
 
   const prisma = new PrismaClient();

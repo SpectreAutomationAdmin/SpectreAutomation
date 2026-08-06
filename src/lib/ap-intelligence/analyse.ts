@@ -571,6 +571,19 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     hasProfessionalCredentialContext,
   });
 
+  // Post-16H Phase 2 (2026-08-06) — derive `expectedDebitRole` for
+  // the accounting eligibility service from the capital classifier
+  // we already ran. The eligibility layer uses this to admit ASSET
+  // accounts only when a capital / inventory / prepaid nature is
+  // defensible. Precise nature-mapping (COST_OF_SALES / R&M / …)
+  // is computed AFTER the ranker (see `classifyAccountingNature`
+  // call further down) — that finer resolution feeds nature-scoped
+  // promotion, not the pre-ranking eligibility gate.
+  const expectedDebitRole: import("@/lib/accounting/eligibility").ExpectedDebitRole =
+    capital.state === "CAPITAL" ? "CAPITAL_ASSET"
+    : capital.state === "OPERATING" ? "OPERATING_EXPENSE"
+    : "UNKNOWN";
+
   let gl = await recommendGlAccount({
     clubId: args.clubId,
     vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
@@ -591,6 +604,14 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // item channels respectively.
     fullDocumentText: pdfOk ? pdfText : null,
     extractedLineItems: lineItemsExtracted,
+    // Post-16H Phase 2 — eligibility context.
+    eligibilityContext: {
+      expectedDebitRole,
+      capitalizationEvidence: {
+        supported: capital.state === "CAPITAL",
+        confidence: capital.state === "CAPITAL" ? 80 : 0,
+      },
+    },
   });
   const confidenceDimensions = computeConfidenceDimensions({
     supplierExtraction,
@@ -1065,6 +1086,69 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
               autoApprovalEligible: false,
             };
           }
+        }
+      }
+    }
+  }
+
+  // Post-16H Phase 2 (2026-08-06) — post-promotion eligibility
+  // check. Nature-scoped promotion above ranks the full COA
+  // independently of the base ranker's eligibility filter, so it
+  // can re-introduce an ineligible account. Re-evaluate the
+  // promoted leader against the same eligibility service; if
+  // ineligible, abstain. This is the SECOND enforcement site for
+  // Phase 2 — the pre-ranker filter is the first.
+  {
+    const {
+      evaluateEligibility,
+      isPhase2EligibilityEnabled,
+    } = await import("@/lib/accounting/eligibility");
+    if (isPhase2EligibilityEnabled() && gl.accountNumber != null) {
+      const { prisma: prismaClient } = await import("@/lib/prisma");
+      const acct = await prismaClient.account.findFirst({
+        where: { clubId: args.clubId, accountNumber: gl.accountNumber },
+        select: {
+          id: true, accountNumber: true, name: true, type: true, normalBalance: true,
+          isActive: true, isHeader: true, allowManualPosting: true,
+          isControlAccount: true, isBankAccount: true, isCashAccount: true,
+          archivedAt: true, fundApplicability: true,
+          category: { select: { key: true } }, fsGroup: { select: { key: true } },
+        },
+      });
+      if (acct) {
+        const verdict = evaluateEligibility({
+          id: acct.id, accountNumber: acct.accountNumber, name: acct.name,
+          type: acct.type, normalBalance: acct.normalBalance,
+          isActive: acct.isActive, isHeader: acct.isHeader,
+          allowManualPosting: acct.allowManualPosting,
+          isControlAccount: acct.isControlAccount,
+          isBankAccount: acct.isBankAccount, isCashAccount: acct.isCashAccount,
+          archivedAt: acct.archivedAt,
+          fundApplicability: acct.fundApplicability,
+          categoryKey: acct.category?.key ?? null,
+          fsGroupKey: acct.fsGroup?.key ?? null,
+        }, {
+          transactionKind: "AP_INVOICE",
+          expectedDebitRole,
+          capitalizationEvidence: {
+            supported: capital.state === "CAPITAL",
+            confidence: capital.state === "CAPITAL" ? 80 : 0,
+          },
+        });
+        if (!verdict.eligible) {
+          gl = {
+            ...gl,
+            accountNumber: null, accountName: null,
+            categoryKey: null, fsGroupKey: null,
+            source: "NONE",
+            confidence: null,
+            reason: `Phase 2 accounting eligibility rejected the promoted leader ${verdict.accountNumber}: ${verdict.exclusionReasons.join(", ")}. No supported recommendation — review required.`,
+            candidates: [],
+            leaderIsPostable: false,
+            leaderPostingBlockers: [],
+            autoApprovalEligible: false,
+            requiresReview: true,
+          };
         }
       }
     }

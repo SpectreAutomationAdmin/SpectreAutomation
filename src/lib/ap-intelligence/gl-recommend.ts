@@ -52,6 +52,13 @@ import {
   isPhase0SafetyEnabled,
   type AccountSafetyView,
 } from "./eligibility/phase0-safety";
+import {
+  filterEligibleAccounts,
+  isPhase2EligibilityEnabled,
+  type AccountEligibilityView,
+  type AccountEligibilityResult,
+  type AccountingTransactionContext,
+} from "@/lib/accounting/eligibility";
 
 const RULE_VERSION = 3;
 
@@ -160,6 +167,16 @@ export interface GlRecommendationArgs {
   // amount + tax treatment; ExtractedInvoice.lineItems is a
   // simpler subset).
   extractedLineItems?: LineItem[] | null;
+  // Post-16H Phase 2 (2026-08-06) — transaction context handed to
+  // the accounting eligibility service. When null the eligibility
+  // layer falls back to UNKNOWN and applies conservative operating-
+  // AP rules. `capitalizationEvidence` optional; the ranker's
+  // existing capital classifier composes it upstream.
+  eligibilityContext?: {
+    expectedDebitRole: import("@/lib/accounting/eligibility").ExpectedDebitRole;
+    departmentHint?: string | null;
+    capitalizationEvidence?: { supported: boolean; confidence: number };
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,22 +250,66 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     return emptyRecommendation("No chart of accounts is loaded on this club — cannot recommend a GL account.", 0);
   }
 
-  // Stage A — eligibility. Every active, non-header, EXPENSE/ASSET
-  // account is a candidate. Fund-applicability + other posting
-  // blockers do NOT filter eligibility (they surface separately).
-  const eligibleAccounts: AccountView[] = accountsRaw
-    .filter((a) => a.isActive && !a.isHeader && (a.type === "EXPENSE" || a.type === "ASSET"))
-    .map((a) => ({
-      id: a.id,
-      accountNumber: a.accountNumber,
-      name: a.name,
-      categoryKey: a.category?.key ?? null,
-      categoryName: a.category?.name ?? null,
-      fsGroupKey: a.fsGroup?.key ?? null,
-      fsGroupName: a.fsGroup?.name ?? null,
-    }));
+  // Stage A — Post-16H Phase 2 (2026-08-06) — permanent accounting
+  // eligibility gate. Replaces the pre-Phase-2 three-field filter
+  // (isActive && !isHeader && type in {EXPENSE,ASSET}) with the
+  // canonical `filterEligibleAccounts` service. The service applies
+  // structural rules (control / bank / cash / revenue / equity /
+  // liability / contra-asset / normal-balance contradiction / etc.)
+  // AND nature-conditioned rules (asset excluded from ordinary
+  // operating AP unless capitalizationEvidence supports it), then
+  // returns the eligible candidate pool + a rejected list with
+  // machine-readable reasons.
+  //
+  // The pre-Phase-2 filter shape is preserved WHEN the
+  // AP_INTELLIGENCE_PHASE2_ELIGIBILITY env flag is disabled so the
+  // benchmark harness can capture a Phase-2-off baseline for the
+  // shadow-comparison measurement.
+  const phase2Enabled = isPhase2EligibilityEnabled();
+  const eligibilityCtx: AccountingTransactionContext = {
+    transactionKind: "AP_INVOICE",
+    expectedDebitRole: args.eligibilityContext?.expectedDebitRole ?? "UNKNOWN",
+    departmentHint: args.eligibilityContext?.departmentHint ?? null,
+    capitalizationEvidence: args.eligibilityContext?.capitalizationEvidence,
+  };
+
+  let eligibilityRejected: AccountEligibilityResult[] = [];
+  let eligibilityVerdicts: Map<string, AccountEligibilityResult> = new Map();
+  const eligibleAccounts: AccountView[] = (phase2Enabled
+    ? (() => {
+        const views: AccountEligibilityView[] = accountsRaw.map((a) => ({
+          id: a.id, accountNumber: a.accountNumber, name: a.name,
+          type: a.type, normalBalance: a.normalBalance,
+          isActive: a.isActive, isHeader: a.isHeader,
+          allowManualPosting: a.allowManualPosting,
+          isControlAccount: a.isControlAccount,
+          isBankAccount: a.isBankAccount, isCashAccount: a.isCashAccount,
+          archivedAt: a.archivedAt, fundApplicability: a.fundApplicability,
+          categoryKey: a.category?.key ?? null,
+          fsGroupKey: a.fsGroup?.key ?? null,
+        }));
+        const res = filterEligibleAccounts(views, eligibilityCtx);
+        eligibilityRejected = res.rejected;
+        eligibilityVerdicts = res.verdictsByAccountId;
+        return res.eligible;
+      })()
+    : accountsRaw
+        .filter((a) => a.isActive && !a.isHeader && (a.type === "EXPENSE" || a.type === "ASSET"))
+  ).map((a) => ({
+    id: a.id,
+    accountNumber: a.accountNumber,
+    name: a.name,
+    categoryKey: (a as any).category?.key ?? (a as any).categoryKey ?? null,
+    categoryName: (a as any).category?.name ?? null,
+    fsGroupKey: (a as any).fsGroup?.key ?? (a as any).fsGroupKey ?? null,
+    fsGroupName: (a as any).fsGroup?.name ?? null,
+  }));
 
   const totalAccountsEvaluated = eligibleAccounts.length;
+  // Reserved for downstream inspection — future callers can read
+  // the Phase 2 verdicts via the returned recommendation's
+  // rationale to explain WHY an account was excluded.
+  void eligibilityRejected; void eligibilityVerdicts;
 
   // Look up vendor history — for a matched vendor with prior coding
   // or a default expense account, gather the CONCEPTS observed and

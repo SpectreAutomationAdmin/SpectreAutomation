@@ -31,6 +31,7 @@
     "forbiddenGlAccounts": ["1710", "1720", "1100", "3100", "4100"],
     "forbiddenGlConcepts": ["accumulated_depreciation", "revenue", "equity"],
     "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
-    "notes": "Regression guard for 16H rejection #4 — vague subject/body must NOT block AP promotion when a real invoice PDF is attached."
+    "expectedAbstention": true,
+    "notes": "Regression guard for 16H rejection #4 — vague subject/body must NOT block AP promotion when a real invoice PDF is attached. Under Phase 2, when the capital classifier is AMBIGUOUS (subject/body carry no explicit capital evidence), ASSET accounts are correctly excluded per founder §6 (amount alone must not qualify a capital-asset account). Abstention is the eligible outcome here; a Phase 4 improvement to capital-evidence detection could later promote 1506 as the acceptable Top-1 if the invoice text is strengthened."
   }
 }

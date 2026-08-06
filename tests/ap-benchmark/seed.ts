@@ -65,6 +65,14 @@ export async function seedBenchmarkTenant(
     { accountNumber: "1710", name: "Accum Deprec — Computer Equipment & Fixtures", type: "ASSET", normalBalance: "CREDIT" },
     { accountNumber: "1720", name: "Accum Deprec — Grounds Equipment", type: "ASSET", normalBalance: "CREDIT" },
     { accountNumber: "1730", name: "Accumulated Amortization — Intangibles", type: "ASSET", normalBalance: "CREDIT" },
+    // JONAS-CONVENTION accumulated depreciation (ASSET/DEBIT). This
+    // is how Coulee Ridge's real COA stores contra-assets — per the
+    // 2026-08-06 staging inventory (7 accum-depr accounts, all DEBIT).
+    // The structural CONTRA_ASSET rule (ASSET/CREDIT) DOES NOT fire
+    // on this convention. Included in the seed so the benchmark
+    // honestly measures the gap that Phase 6 schema work must close.
+    { accountNumber: "1513", name: "Accum Deprec — Computer Eqp & Fix", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1514", name: "Accum Deprec — Equip under financing", type: "ASSET", normalBalance: "DEBIT" },
 
     // Bank + cash — must not be an AP debit.
     { accountNumber: "1100", name: "Operating Bank Account", type: "ASSET", normalBalance: "DEBIT", isBankAccount: true, isCashAccount: true },

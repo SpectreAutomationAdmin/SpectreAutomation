@@ -1,0 +1,32 @@
+{
+  "id": "jonas-convention-accum-depr",
+  "split": "dev",
+  "label": "Diesel fuel invoice + Jonas-convention accum-depr accounts (ASSET/DEBIT) on the seed COA",
+  "category": "STRUCTURAL_GAP_MEASUREMENT",
+  "tags": ["jonas-convention", "phase6-gap-guard", "coulee-ridge-mirror"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Grande Prairie Petroleum Inc.\nInvoice Number: GPP-2026-4499\nInvoice Date: 2026-07-15\n\nPurchase Order #: PO-2026-118\nEquipment: fleet truck 44821\n\nItem                                    Qty      Unit         Amount\nDyed diesel fuel                        1500     1.4200        2130.00\nComputer equipment fixtures — DELETE     0        0.00           0.00\n\n                                                Subtotal:      2130.00\n                                                GST (5%):       106.50\n                                                Total:         2236.50\n",
+    "email": {
+      "senderAddress": "billing@gppetroleum.example",
+      "subject": "Fuel delivery invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Grande Prairie Petroleum Inc." },
+    "invoiceNumber": { "value": "GPP-2026-4499" },
+    "invoiceDate": "2026-07-15",
+    "currency": "CAD",
+    "subtotal": 2130.00,
+    "taxTotal": 106.50,
+    "total": 2236.50,
+    "economicPurpose": "FUEL_OR_UTILITY_CONSUMPTION",
+    "acceptableGlAccounts": ["5310", "5311", "5320"],
+    "acceptableGlConcepts": ["fuel_expense", "diesel_fuel", "equipment_fuel"],
+    "forbiddenGlAccounts": ["1513", "1514", "1710", "1720", "1730"],
+    "forbiddenGlConcepts": ["accumulated_depreciation", "computer_equipment", "contra_asset"],
+    "expectedWorkflowType": "VENDOR_MATCH_REQUIRED",
+    "notes": "This case includes a decoy line explicitly mentioning \"Computer equipment fixtures\" so the nature classifier or account-name similarity is tempted to promote 1513 (Jonas-convention accum-depr, stored as ASSET/DEBIT). Structural CONTRA_ASSET rule DOES NOT fire on ASSET/DEBIT — Phase 2 catches it via the nature-conditioned ASSET-excluded-from-OPERATING rule instead. If this case regresses to recommending 1513/1514/1710/1720/1730, the eligibility layer has a hole."
+  }
+}

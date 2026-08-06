@@ -1,63 +1,63 @@
 {
-  "runId": "ap-bench-2026-08-06T00-52-32-072Z-off",
-  "startedAt": "2026-08-06T00:52:32.076Z",
-  "finishedAt": "2026-08-06T00:52:36.541Z",
+  "runId": "ap-bench-2026-08-06T01-38-34-661Z-p0off-p2off",
+  "startedAt": "2026-08-06T01:38:34.664Z",
+  "finishedAt": "2026-08-06T01:38:37.100Z",
   "phase0Enabled": false,
   "corpusVersion": "v1-2026-08-06",
   "totals": {
-    "cases": 12,
+    "cases": 13,
     "pass": 0,
-    "fail": 12,
+    "fail": 13,
     "partial": 0,
     "notApplicable": 0,
     "unsafeRecommendations": 1,
     "abstentionOnUnreadable": 3,
     "falseAbstention": 0,
-    "latencyP50Ms": 97,
-    "latencyP95Ms": 334
+    "latencyP50Ms": 57,
+    "latencyP95Ms": 110
   },
   "perDimension": {
     "supplier": {
-      "pass": 10,
+      "pass": 11,
       "fail": 0,
       "partial": 0,
       "notApplicable": 0,
       "averageScore": 1
     },
     "invoiceNumber": {
-      "pass": 9,
+      "pass": 10,
       "fail": 1,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.9
+      "averageScore": 0.909
     },
     "subtotal": {
-      "pass": 9,
+      "pass": 10,
       "fail": 0,
       "partial": 0,
       "notApplicable": 0,
       "averageScore": 1
     },
     "taxTotal": {
-      "pass": 8,
+      "pass": 9,
       "fail": 1,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.889
+      "averageScore": 0.9
     },
     "total": {
-      "pass": 8,
+      "pass": 9,
       "fail": 2,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.8
+      "averageScore": 0.818
     },
     "currency": {
       "pass": 1,
-      "fail": 9,
+      "fail": 10,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.1
+      "averageScore": 0.091
     },
     "vendorMatch": {
       "pass": 3,
@@ -68,38 +68,38 @@
     },
     "gl-top1": {
       "pass": 7,
-      "fail": 5,
-      "partial": 0,
-      "notApplicable": 0,
-      "averageScore": 0.583
-    },
-    "gl-top3": {
-      "pass": 3,
       "fail": 6,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.333
+      "averageScore": 0.538
+    },
+    "gl-top3": {
+      "pass": 4,
+      "fail": 6,
+      "partial": 0,
+      "notApplicable": 0,
+      "averageScore": 0.4
     },
     "gl-forbidden": {
-      "pass": 11,
+      "pass": 12,
       "fail": 1,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.917
+      "averageScore": 0.923
     },
     "workflowState": {
       "pass": 0,
-      "fail": 12,
+      "fail": 13,
       "partial": 0,
       "notApplicable": 0,
       "averageScore": 0
     },
     "abstention": {
       "pass": 3,
-      "fail": 1,
+      "fail": 2,
       "partial": 0,
       "notApplicable": 0,
-      "averageScore": 0.75
+      "averageScore": 0.6
     }
   },
   "cases": [
@@ -108,7 +108,7 @@
       "split": "dev",
       "category": "FUEL_INVOICE",
       "label": "DMM Energy — dyed low-sulphur diesel · Québec French headers",
-      "latencyMs": 334,
+      "latencyMs": 110,
       "results": [
         {
           "dimension": "supplier",
@@ -233,7 +233,7 @@
       "split": "dev",
       "category": "CAPITAL_INVOICE",
       "label": "Capital irrigation pump — text-layer PDF",
-      "latencyMs": 159,
+      "latencyMs": 80,
       "results": [
         {
           "dimension": "supplier",
@@ -359,7 +359,7 @@
       "split": "dev",
       "category": "OPERATING_INVOICE",
       "label": "Monthly maintenance service — operating expense with vendor default GL",
-      "latencyMs": 149,
+      "latencyMs": 67,
       "results": [
         {
           "dimension": "supplier",
@@ -481,7 +481,7 @@
       "split": "dev",
       "category": "ATTACHMENT_AUTHORITY",
       "label": "Vague email body carrying a real invoice — attachment authority",
-      "latencyMs": 102,
+      "latencyMs": 63,
       "results": [
         {
           "dimension": "supplier",
@@ -541,14 +541,11 @@
         },
         {
           "dimension": "gl-top1",
-          "verdict": "PASS",
-          "score": 1,
+          "verdict": "FAIL",
+          "score": 0,
           "actual": "1506",
-          "expected": [
-            "1506",
-            "1540"
-          ],
-          "reason": "Top-1 in acceptable set."
+          "expected": null,
+          "reason": "Recommended GL 1506 when abstention was expected."
         },
         {
           "dimension": "gl-top3",
@@ -583,6 +580,14 @@
           "actual": null,
           "expected": "VENDOR_MATCH_REQUIRED",
           "reason": "Workflow state (none) did not match expected VENDOR_MATCH_REQUIRED."
+        },
+        {
+          "dimension": "abstention",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": false,
+          "expected": true,
+          "reason": "False recommendation when abstention was expected."
         }
       ],
       "overall": "FAIL",
@@ -602,7 +607,7 @@
       "split": "dev",
       "category": "INFORMATIONAL_EMAIL",
       "label": "HTML newsletter with no attachment — must NOT route to AP",
-      "latencyMs": 79,
+      "latencyMs": 45,
       "results": [
         {
           "dimension": "gl-top1",
@@ -665,7 +670,7 @@
       "split": "dev",
       "category": "UNREADABLE",
       "label": "Unreadable / empty extraction — must abstain",
-      "latencyMs": 68,
+      "latencyMs": 37,
       "results": [
         {
           "dimension": "gl-top1",
@@ -726,7 +731,7 @@
       "split": "dev",
       "category": "STATEMENT",
       "label": "Vendor statement of account — must NOT create AP invoice",
-      "latencyMs": 87,
+      "latencyMs": 40,
       "results": [
         {
           "dimension": "supplier",
@@ -817,7 +822,7 @@
       "split": "dev",
       "category": "FUEL_INVOICE",
       "label": "Fuel invoice mentioning \"purchase order\" — CAPITAL_ASSET nature trap",
-      "latencyMs": 68,
+      "latencyMs": 53,
       "results": [
         {
           "dimension": "supplier",
@@ -936,7 +941,7 @@
       "split": "dev",
       "category": "PATHOLOGICAL",
       "label": "Vendor default expense = contra-asset — Phase 0 must suppress",
-      "latencyMs": 79,
+      "latencyMs": 44,
       "results": [
         {
           "dimension": "supplier",
@@ -1067,11 +1072,130 @@
       }
     },
     {
+      "caseId": "jonas-convention-accum-depr",
+      "split": "dev",
+      "category": "STRUCTURAL_GAP_MEASUREMENT",
+      "label": "Diesel fuel invoice + Jonas-convention accum-depr accounts (ASSET/DEBIT) on the seed COA",
+      "latencyMs": 57,
+      "results": [
+        {
+          "dimension": "supplier",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "Grande Prairie Petroleum Inc",
+          "expected": "grande prairie petroleum inc",
+          "reason": "Extracted supplier matched an acceptable alias."
+        },
+        {
+          "dimension": "invoiceNumber",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "GPP-2026-4499",
+          "expected": "GPP-2026-4499",
+          "reason": "Extracted invoice number matched expected exactly."
+        },
+        {
+          "dimension": "subtotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2130,
+          "expected": 2130,
+          "reason": "subtotal matched within tolerance."
+        },
+        {
+          "dimension": "taxTotal",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 106.5,
+          "expected": 106.5,
+          "reason": "taxTotal matched within tolerance."
+        },
+        {
+          "dimension": "total",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": 2236.5,
+          "expected": 2236.5,
+          "reason": "total matched within tolerance."
+        },
+        {
+          "dimension": "currency",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": "CAD",
+          "reason": "Currency (none) did not match expected CAD."
+        },
+        {
+          "dimension": "gl-top1",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "Top-1 in acceptable set."
+        },
+        {
+          "dimension": "gl-top3",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "expected": [
+            "5310",
+            "5311",
+            "5320"
+          ],
+          "reason": "At least one Top-3 candidate in acceptable set."
+        },
+        {
+          "dimension": "gl-forbidden",
+          "verdict": "PASS",
+          "score": 1,
+          "actual": "5310",
+          "expected": [
+            "1513",
+            "1514",
+            "1710",
+            "1720",
+            "1730"
+          ],
+          "reason": "Top-1 did not land on a forbidden account.",
+          "unsafe": false
+        },
+        {
+          "dimension": "workflowState",
+          "verdict": "FAIL",
+          "score": 0,
+          "actual": null,
+          "expected": "VENDOR_MATCH_REQUIRED",
+          "reason": "Workflow state (none) did not match expected VENDOR_MATCH_REQUIRED."
+        }
+      ],
+      "overall": "FAIL",
+      "extract": {
+        "supplier": "Grande Prairie Petroleum Inc",
+        "invoiceNumber": "GPP-2026-4499",
+        "total": "2236.50",
+        "currency": null,
+        "glLeaderAccountNumber": "5310",
+        "glLeaderName": "Fuel — Grounds Equipment",
+        "glConfidence": 95,
+        "workflowState": null
+      }
+    },
+    {
       "caseId": "mixed-tax-invoice",
       "split": "validation",
       "category": "OPERATING_INVOICE",
       "label": "Mixed-tax invoice — GST + PST",
-      "latencyMs": 102,
+      "latencyMs": 64,
       "results": [
         {
           "dimension": "supplier",
@@ -1184,7 +1308,7 @@
       "split": "holdout",
       "category": "PROFESSIONAL_MEMBERSHIP",
       "label": "CPA professional membership dues — must NOT auto-code as grounds/fuel/capital",
-      "latencyMs": 97,
+      "latencyMs": 65,
       "results": [
         {
           "dimension": "supplier",
@@ -1303,7 +1427,7 @@
       "split": "holdout",
       "category": "FOOD_SERVICE",
       "label": "Food-service invoice — must route to F&B cost of sales",
-      "latencyMs": 90,
+      "latencyMs": 56,
       "results": [
         {
           "dimension": "supplier",
