@@ -108,6 +108,10 @@ export const PAYABLE_REFERENCE_TYPES = [
   "STATEMENT_NUMBER",
   "BILL_NUMBER",
   "REFERENCE_NUMBER",
+  // Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — credit-memo
+  // taxonomy addition. Ranked FIRST inside the extractor so a
+  // credit memo's own reference wins over any referenced original.
+  "CREDIT_MEMO_NUMBER",
   "OTHER",
 ] as const;
 export type PayableReferenceType = (typeof PAYABLE_REFERENCE_TYPES)[number];

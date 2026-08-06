@@ -1,0 +1,27 @@
+{
+  "id": "duplicate-gst-summary-remittance",
+  "split": "dev",
+  "label": "Duplicate GST in invoice summary and remittance stub — must not double-count",
+  "category": "TAX_DEDUPLICATION",
+  "tags": ["dup-gst", "summary-remittance", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Fairway Chemical Supplies Ltd.\n300 Riverside Rd · Kelowna BC V1Y 4L2\nGST: 671234582 RT0001\n\nINVOICE\n\nInvoice Number: FCS-6620\nInvoice Date: 2026-08-04\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nProduct                                Qty     Unit         Amount\nFairway fungicide, granular            100      45.00        4500.00\n\n                                              Subtotal:     4500.00\n                                              GST (5%):      225.00\n                                              Total:        4725.00\n\n-----------------------------------------------------------\nREMITTANCE STUB — please return with payment\n\nRemit to: Fairway Chemical Supplies Ltd.\nInvoice: FCS-6620\nSubtotal:  4500.00\nGST (5%):   225.00\nTotal:     4725.00\n",
+    "email": {
+      "senderAddress": "ap@fairwaychem.example",
+      "subject": "Invoice FCS-6620"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Fairway Chemical Supplies Ltd." },
+    "invoiceNumber": { "value": "FCS-6620" },
+    "currency": "CAD",
+    "subtotal": 4500.00,
+    "taxTotal": 225.00,
+    "total": 4725.00,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 tax-dedup regression — GST appears TWICE in the document (invoice summary + remittance stub). The tax extractor must return 225.00, NOT 450.00. Reconciliation with printed total 4725.00 disambiguates."
+  }
+}

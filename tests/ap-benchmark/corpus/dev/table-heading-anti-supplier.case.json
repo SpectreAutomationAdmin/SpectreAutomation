@@ -1,0 +1,32 @@
+{
+  "id": "table-heading-anti-supplier",
+  "split": "dev",
+  "label": "Table-heading anti-supplier — DESCRIPTION / PRODUIT must not win",
+  "category": "SUPPLIER_DISAMBIGUATION",
+  "tags": ["table-heading-collision", "bilingual", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "\n\n\nDESCRIPTION                              QUANTITY      RATE       AMOUNT\n\nNorthern Ridge Fuel Distributors Inc.\n888 Industrial Way · Winnipeg MB R3T 5V6\nGST: 762109834 RT0002\n\nFACTURE / INVOICE\n\nInvoice Number: NRFD-889320\nInvoice Date: 2026-08-02\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nPRODUIT / DESCRIPTION                    QUANTITÉ     PRIX      MONTANT\nDiesel low-sulphur                          1200       1.42      1704.00\n\n                                              Subtotal:  1704.00\n                                              GST (5%):    85.20\n                                              Total:     1789.20\n",
+    "email": {
+      "senderAddress": "invoices@northernridge.example",
+      "subject": "Fuel delivery invoice"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Northern Ridge Fuel Distributors Inc.",
+      "acceptableAliases": ["Northern Ridge Fuel Distributors", "Northern Ridge"],
+      "unacceptable": ["DESCRIPTION", "PRODUIT", "QUANTITY", "QUANTITÉ", "PRIX", "MONTANT", "FACTURE", "INVOICE", "BILL TO", "Coulee Ridge Golf & Country Club"]
+    },
+    "invoiceNumber": { "value": "NRFD-889320" },
+    "invoiceDate": "2026-08-02",
+    "currency": "CAD",
+    "subtotal": 1704.00,
+    "taxTotal": 85.20,
+    "total": 1789.20,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 regression — a table-heading row that appears BEFORE the letterhead (e.g. pdf-parse anomaly) must not become the supplier. Rank by tax-registration + address + corp-suffix, not by first-non-empty-line."
+  }
+}

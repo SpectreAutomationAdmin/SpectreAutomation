@@ -1,0 +1,34 @@
+{
+  "id": "statement-plus-account-number",
+  "split": "dev",
+  "label": "Telecom statement — statement number is payable ref, account number is not",
+  "category": "PAYABLE_REFERENCE_TAXONOMY",
+  "tags": ["statement-number", "account-number-rejection", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Northlink Communications Inc.\n45 Broadcast Blvd · Toronto ON M5V 3P8\nGST: 121987654 RT0001\n\nSTATEMENT OF ACCOUNT\n\nStatement Number: STM-2026-08-77812\nStatement Date: 2026-08-01\nAccount Number: 4402-889001-CC\nAccount Holder: Coulee Ridge Golf & Country Club\n\nService Period: 2026-07-01 to 2026-07-31\n\nDescription                              Amount\nBusiness Fibre 500/500 Mbps               350.00\nStatic IPs (4)                             40.00\nInternet gateway rental                    25.00\n\n                                    Subtotal:    415.00\n                                    HST (13%):    53.95\n                                    Total Due:   468.95\n\nPayable upon receipt.\n",
+    "email": {
+      "senderAddress": "billing@northlink.example",
+      "subject": "Your Northlink August statement"
+    }
+  },
+  "expected": {
+    "documentClass": "STATEMENT",
+    "supplier": {
+      "name": "Northlink Communications Inc.",
+      "acceptableAliases": ["Northlink Communications", "Northlink"]
+    },
+    "invoiceNumber": {
+      "value": "STM-2026-08-77812",
+      "unacceptable": ["4402-889001-CC", "STM", "STATEMENT"],
+      "expectedType": "STATEMENT_NUMBER"
+    },
+    "currency": "CAD",
+    "subtotal": 415.00,
+    "taxTotal": 53.95,
+    "total": 468.95,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 payref taxonomy — statement number wins; account number must NOT be substituted. Payable reference type = STATEMENT_NUMBER."
+  }
+}

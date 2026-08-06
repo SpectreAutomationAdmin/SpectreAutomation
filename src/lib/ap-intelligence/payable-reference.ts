@@ -18,6 +18,7 @@ export type PayableReferenceType =
   | "STATEMENT_NUMBER"
   | "BILL_NUMBER"
   | "REFERENCE_NUMBER"
+  | "CREDIT_MEMO_NUMBER"
   | "OTHER";
 
 export interface PayableReferenceResult {
@@ -42,6 +43,17 @@ const SEARCH_ORDER: Array<{
   labels: string[];
   ruleKeyBase: string;
 }> = [
+  // Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — credit memo
+  // MUST rank ahead of every other payable-reference type. Credit
+  // memos routinely reference the ORIGINAL invoice ("Original
+  // Invoice: <n>") in addition to their own credit-memo number, so
+  // scanning for INVOICE_NUMBER first would surface the referenced
+  // invoice rather than the actual document's own payable reference.
+  {
+    type: "CREDIT_MEMO_NUMBER",
+    labels: ["Credit Memo Number", "Credit Memo No", "Credit Memo No.", "Credit Memo #", "Credit Note Number", "Credit Note No", "Credit Note #", "CN Number", "CM Number"],
+    ruleKeyBase: "payable_ref.credit_memo_number",
+  },
   {
     type: "INVOICE_NUMBER",
     labels: ["Invoice Number", "Invoice No", "Invoice No.", "Invoice #", "Invoice ID"],

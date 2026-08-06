@@ -1,5 +1,5 @@
 {
-  "version": "v1-2026-08-06",
+  "version": "v2-2026-08-06",
   "sealed": true,
   "split": {
     "dev": [
@@ -13,7 +13,14 @@
       "corpus/dev/keyword-trap-computer.case.json",
       "corpus/dev/pathological-vendor-default-contra.case.json",
       "corpus/dev/jonas-convention-accum-depr.case.json",
-      "corpus/dev/adversarial-capital-with-accumdepr.case.json"
+      "corpus/dev/adversarial-capital-with-accumdepr.case.json",
+      "corpus/dev/supplier-vs-recipient-collision.case.json",
+      "corpus/dev/table-heading-anti-supplier.case.json",
+      "corpus/dev/canadian-invoice-usd.case.json",
+      "corpus/dev/duplicate-gst-summary-remittance.case.json",
+      "corpus/dev/statement-plus-account-number.case.json",
+      "corpus/dev/credit-memo.case.json",
+      "corpus/dev/po-without-invoice-number.case.json"
     ],
     "validation": [
       "corpus/validation/mixed-tax-invoice.case.json",

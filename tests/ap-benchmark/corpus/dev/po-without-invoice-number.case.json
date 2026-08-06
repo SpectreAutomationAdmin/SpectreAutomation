@@ -1,0 +1,32 @@
+{
+  "id": "po-without-invoice-number",
+  "split": "dev",
+  "label": "PO number present, no invoice-number label — PO must not surface as payable ref",
+  "category": "PAYABLE_REFERENCE_TAXONOMY",
+  "tags": ["po-not-invoice", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Southern Ridge Mechanical Ltd.\n2200 Service Road · Lethbridge AB T1J 4S4\nGST: 442310981 RT0001\n\nBILL\n\nBill Number: SRM-BILL-3020\nBill Date: 2026-08-03\nPurchase Order: PO-CR-40011\n\nBILL TO: Coulee Ridge Golf & Country Club\n\nDescription                              Amount\nEmergency HVAC repair — pro shop         800.00\nParts (compressor capacitor)              65.00\n\n                              Subtotal:   865.00\n                              GST (5%):    43.25\n                              Total:      908.25\n",
+    "email": {
+      "senderAddress": "billing@southernridge.example",
+      "subject": "Bill SRM-BILL-3020 for August"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Southern Ridge Mechanical Ltd." },
+    "invoiceNumber": {
+      "value": "SRM-BILL-3020",
+      "expectedType": "BILL_NUMBER",
+      "unacceptable": ["PO-CR-40011", "PO", "Purchase Order"]
+    },
+    "invoiceDate": "2026-08-03",
+    "currency": "CAD",
+    "subtotal": 865.00,
+    "taxTotal": 43.25,
+    "total": 908.25,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 payref taxonomy — a PO number is a SEPARATE reference; it must not be substituted for the payable reference when the document supports a bill number. Payable reference type = BILL_NUMBER."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "credit-memo",
+  "split": "dev",
+  "label": "Credit memo — payable reference is CREDIT_MEMO_NUMBER, not INVOICE_NUMBER",
+  "category": "PAYABLE_REFERENCE_TAXONOMY",
+  "tags": ["credit-memo", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Greenwood Turf Nutrition Ltd.\n800 Agronomy Way · Guelph ON N1H 4G5\nGST: 552106678 RT0001\n\nCREDIT MEMO\n\nCredit Memo Number: CM-2026-0071\nOriginal Invoice: GTN-556644\nCredit Date: 2026-07-28\n\nBILL TO: Coulee Ridge Golf & Country Club\n\nDescription                                        Amount\nReturn of unopened fertilizer, tote                -1200.00\n\n                                        Subtotal:  -1200.00\n                                        GST (5%):    -60.00\n                                        Credit Total: -1260.00 CAD\n\nRemit as credit against future invoicing.\n",
+    "email": {
+      "senderAddress": "credits@greenwoodturf.example",
+      "subject": "Credit memo CM-2026-0071"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Greenwood Turf Nutrition Ltd." },
+    "invoiceNumber": {
+      "value": "CM-2026-0071",
+      "expectedType": "CREDIT_MEMO_NUMBER",
+      "unacceptable": ["GTN-556644"]
+    },
+    "invoiceDate": "2026-07-28",
+    "currency": "CAD",
+    "subtotal": -1200.00,
+    "taxTotal": -60.00,
+    "total": -1260.00,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 payref taxonomy — credit memo. Payable reference type = CREDIT_MEMO_NUMBER; the credit memo number wins over the referenced original-invoice number."
+  }
+}

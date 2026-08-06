@@ -1,0 +1,30 @@
+{
+  "id": "canadian-invoice-usd",
+  "split": "dev",
+  "label": "Canadian supplier invoicing in USD — currency hierarchy negative control",
+  "category": "CURRENCY_HIERARCHY",
+  "tags": ["canadian-in-usd", "currency-inference-must-not-override", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Cross-Border Turf Supply Co.\n1450 International Ave · Windsor ON N9A 5X8\nGST: 981234576 RT0001\n\nINVOICE (billed in USD)\n\nInvoice Number: CBTS-USD-0402\nInvoice Date: 2026-07-30\n\nBILL TO: Coulee Ridge Golf & Country Club\n\nDescription                      Qty     Unit(USD)    Amount(USD)\nBentgrass seed, premium mix       50      120.00       6000.00\n\n                                       Subtotal:      6000.00 USD\n                                       GST (5%):       300.00 USD\n                                       Total:         6300.00 USD\n\nRemit payment in United States Dollars only.\n",
+    "email": {
+      "senderAddress": "billing@crossborderturf.example",
+      "subject": "USD invoice for July delivery"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Cross-Border Turf Supply Co.",
+      "acceptableAliases": ["Cross-Border Turf Supply"]
+    },
+    "invoiceNumber": { "value": "CBTS-USD-0402" },
+    "currency": "USD",
+    "subtotal": 6000.00,
+    "taxTotal": 300.00,
+    "total": 6300.00,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 currency-hierarchy negative control — explicit 'USD' currency evidence MUST beat the GST-based CAD inference. If the extractor returns CAD, the tax inference has wrongly overridden explicit-currency evidence."
+  }
+}

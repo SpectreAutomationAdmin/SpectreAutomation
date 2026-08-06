@@ -73,6 +73,7 @@ export type PayableReferenceType =
   | "STATEMENT_NUMBER"
   | "BILL_NUMBER"
   | "REFERENCE_NUMBER"
+  | "CREDIT_MEMO_NUMBER"
   | "OTHER";
 
 export interface PayableReferenceCandidate extends EvidenceCandidate<string> {

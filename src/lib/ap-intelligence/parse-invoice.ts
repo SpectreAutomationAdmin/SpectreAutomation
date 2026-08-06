@@ -8,6 +8,13 @@
 // as strings (Decimal-safe) so no float drift enters accounting math.
 
 import type { ExtractedInvoice, ParseHint, PayableReferenceType } from "./types";
+// Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — canonical
+// evidence orchestrator. Imported eagerly so the cutover code path
+// resolves under both ESM and CommonJS callers.
+import {
+  buildCanonicalEvidence,
+  selectCanonicalFields,
+} from "./evidence/build-canonical-evidence";
 import { EXTRACTION_RULE_VERSION } from "./types";
 import { extractSupplier, type SupplierExtraction } from "./supplier-extract";
 import { parseDocumentLayout, associateLabelValue, associateDescriptionAmounts, type DocumentLayout } from "./document-layout";
@@ -51,7 +58,13 @@ const CURRENCY_HINTS: Record<string, string> = {
 // tail did not, and the line-scanner's trailing `\s*$` anchor
 // rejected any suffix — causing bilingual invoices that print
 // "<amount> CAD" to silently drop the total.
-const MONEY_TOKEN = /(?:[\$€£]|CA\$|US\$|CAD|USD|EUR|GBP)?\s*([0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})(?:\s*(?:CAD|USD|EUR|GBP))?/;
+//
+// Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — accept an
+// optional leading MINUS SIGN so credit memos (negative totals /
+// negative subtotals / negative taxes) reconcile through the same
+// extractor. Parentheses-negative "(1260.00)" is a separate
+// accounting convention deferred to Slice 3.
+const MONEY_TOKEN = /(?:[\$€£]|CA\$|US\$|CAD|USD|EUR|GBP)?\s*(-?[0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|-?[0-9]+\.[0-9]{2})(?:\s*(?:CAD|USD|EUR|GBP))?/;
 
 function toNumericString(raw: string): string {
   return raw.replace(/,/g, "");
@@ -504,6 +517,13 @@ export interface ParseResult {
   // the parse result so the orchestrator + card projection can render
   // per-field provenance without re-running the extractor.
   supplier: SupplierExtraction;
+  // Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — canonical
+  // evidence layer + selection. Consumers may read the winning
+  // scalar from `.invoice.*` as before, or drill into
+  // `.canonicalEvidence` / `.selection` to render provenance,
+  // rejected alternates, and conflict reasons.
+  canonicalEvidence?: import("./evidence/canonical-invoice-evidence").CanonicalInvoiceEvidence;
+  selection?: import("./evidence/build-canonical-evidence").CanonicalFieldSelection;
 }
 
 export function parseInvoiceText(args: ParseArgs): ParseResult {
@@ -591,7 +611,9 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   const invoiceDate = record("invoiceDate", extractDate(text, "invoice"));
   const dueDate = record("dueDate", extractDate(text, "due"));
   const purchaseOrder = record("purchaseOrder", extractPurchaseOrder(text));
-  const currency = record("currency", extractCurrency(text));
+  const currencyResult = extractCurrency(text);
+  const currency = record("currency", currencyResult);
+  const currencyRuleKey: string | null = currencyResult?.hint.ruleKey ?? null;
   // Sprint 3 · Checkpoint 15T — money extraction now consults the
   // shared document-layout layer FIRST (handles CPA-style layouts
   // where SUBTOTAL sits on line 38 and the amount sits on line 41).
@@ -614,9 +636,13 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   // consumed. Backward scan is generous (20 lines) because pdf-parse
   // often places the printed total on its own line MANY rows above
   // the "INVOICE TOTAL" label.
-  const totalLayout = extractMoneyFromLayout(layout, ["Invoice Total", "Total Amount Due", "Total Due", "Total Amount", "Balance Due", "Balance Owing", "Amount Due", "Total"], "total", { backwardMaxLines: 20, consumedLineIndices: consumedAmountLineIndices });
+  // Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — "Credit Total"
+  // (credit memos) and "Grand Total" (some club-suppliers' generic
+  // print format) now resolve. Credit Total must precede plain "Total"
+  // in the search order so it wins on documents that print both.
+  const totalLayout = extractMoneyFromLayout(layout, ["Invoice Total", "Total Amount Due", "Credit Total", "Total Due", "Total Amount", "Balance Due", "Balance Owing", "Amount Due", "Grand Total", "Total"], "total", { backwardMaxLines: 20, consumedLineIndices: consumedAmountLineIndices });
   if (totalLayout) consumedAmountLineIndices.add(totalLayout.valueLineIndex);
-  const totalHit = totalLayout ?? extractMoney(text, ["Invoice Total", "Total Due", "Total", "Amount Due", "Balance Due"], "total");
+  const totalHit = totalLayout ?? extractMoney(text, ["Invoice Total", "Credit Total", "Total Due", "Grand Total", "Total", "Amount Due", "Balance Due"], "total");
   if (subtotalHit) { hints.push({ ...subtotalHit.hint, field: "subtotal" }); }
   if (taxHit)      { hints.push({ ...taxHit.hint, field: "taxTotal" }); }
   if (totalHit)    { hints.push({ ...totalHit.hint, field: "total" }); }
@@ -688,12 +714,77 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   const domain = domainFromEmail(emailAddress);
   const providenceEmail = args.emailSenderAddress?.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/)?.[0] ?? null;
 
-  if (!invoiceNumber) warnings.push("Invoice number not extracted.");
-  if (!totalHit) warnings.push("Invoice total not extracted.");
-  if (!invoiceDate) warnings.push("Invoice date not extracted.");
+  // Sprint 3 · Post-16H Phase 4 Slice 2 (2026-08-06) — canonical
+  // evidence CUTOVER. Every legacy extractor above becomes a
+  // CANDIDATE SOURCE feeding the canonical evidence layer; the
+  // selected value returned to consumers is drawn from the
+  // canonical layer, not from the legacy variable directly.
+  //
+  // Founder rule (§2): "Do not maintain two independent extraction
+  // authorities indefinitely." parseInvoiceText's OUTPUT is now
+  // authoritatively derived from CanonicalInvoiceEvidence; the
+  // legacy scalar variables become inputs to the pipeline.
+  //
+  // Slice-2-safe promotion: because evidence is currently seeded
+  // ONLY from legacy values, `select.value` equals the legacy
+  // value in every observed case (proven by the benchmark
+  // holding invariant). Slice 3 will add additional candidate
+  // sources; when those add value or refute the legacy pick, the
+  // selector will surface the difference here without any further
+  // downstream change.
+  const canonicalEvidence = buildCanonicalEvidence({
+    text,
+    legacyValues: {
+      supplierName: vendorNameFromText,
+      supplierConfidence: supplier.confidence,
+      supplierRuleKey: `supplier.${supplier.reasoningCode}`,
+      supplierAlternates: (supplier.alternates ?? []).map((a) => ({
+        value: a.value,
+        // SupplierCandidate uses `.score` (0..100). Fall back to 0
+        // if score somehow missing so the seeded candidate is still
+        // present as a preserved-loser record.
+        confidence: typeof (a as { score?: number }).score === "number" ? (a as { score: number }).score : 0,
+        rule: `supplier.alt.line${(a as { lineNo?: number }).lineNo ?? "unknown"}`,
+      })),
+      payableReferenceValue: invoiceNumber,
+      payableReferenceType,
+      payableReferenceConfidence: payableRefResult?.confidence ?? null,
+      payableReferenceRuleKey: payableRefResult?.ruleKey ?? null,
+      invoiceDate,
+      dueDate,
+      currency,
+      currencyRuleKey: currencyRuleKey,
+      subtotal: subtotalHit ? Number(toNumericString(subtotalHit.value)) : null,
+      tax: taxHit ? Number(toNumericString(taxHit.value)) : null,
+      total: totalHit ? Number(toNumericString(totalHit.value)) : null,
+      taxComponents: (taxHit && "components" in taxHit && Array.isArray((taxHit as { components?: Array<{ label: string; amount: number }> }).components))
+        ? (taxHit as { components: Array<{ label: string; amount: number }> }).components
+        : undefined,
+    },
+    email: {
+      senderAddress: args.emailSenderAddress ?? null,
+      subject: args.emailSubject ?? null,
+    },
+    pageCount: 1,
+  });
+  const selection = selectCanonicalFields(canonicalEvidence);
+
+  // Downstream ApAnalyseResult sees the SELECTED canonical values.
+  const selectedInvoiceNumber = selection.payableReference.value ?? invoiceNumber;
+  const selectedPayableRefType = selection.payableReference.type ?? payableReferenceType;
+  const selectedInvoiceDate = selection.invoiceDate.value ?? invoiceDate;
+  const selectedDueDate = selection.dueDate.value ?? dueDate;
+  const selectedCurrency = selection.currency.value ?? currency;
+  const selectedSubtotal = selection.subtotal.value;
+  const selectedTax = selection.tax.value;
+  const selectedTotal = selection.total.value;
+
+  if (!selectedInvoiceNumber) warnings.push("Invoice number not extracted.");
+  if (selectedTotal == null) warnings.push("Invoice total not extracted.");
+  if (!selectedInvoiceDate) warnings.push("Invoice date not extracted.");
   if (!vendorNameFromText && !vendorTax) warnings.push("Vendor identity not extracted from the invoice.");
 
-  const criticalMissing = !invoiceNumber || !totalHit || !invoiceDate;
+  const criticalMissing = !selectedInvoiceNumber || selectedTotal == null || !selectedInvoiceDate;
   const state = criticalMissing ? "PARTIAL" : "STRUCTURED";
 
   return {
@@ -707,22 +798,24 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
         guessedTaxNumber: vendorTax,
         guessedDomain: domain,
       },
-      invoiceNumber,
-      payableReferenceType,
-      invoiceDate,
-      dueDate,
+      invoiceNumber: selectedInvoiceNumber,
+      payableReferenceType: selectedPayableRefType,
+      invoiceDate: selectedInvoiceDate,
+      dueDate: selectedDueDate,
       paymentTerms: null,
       purchaseOrder,
       description,
-      currency,
-      subtotal: subtotalHit ? toNumericString(subtotalHit.value) : null,
-      taxTotal: taxHit ? toNumericString(taxHit.value) : null,
-      total: totalHit ? toNumericString(totalHit.value) : null,
+      currency: selectedCurrency,
+      subtotal: selectedSubtotal != null ? selectedSubtotal.toFixed(2) : null,
+      taxTotal: selectedTax != null ? selectedTax.toFixed(2) : null,
+      total: selectedTotal != null ? selectedTotal.toFixed(2) : null,
       lineItems,
       remittance: { address: null, email: providenceEmail },
       warnings,
     },
     hints,
     supplier,
+    canonicalEvidence,
+    selection,
   };
 }

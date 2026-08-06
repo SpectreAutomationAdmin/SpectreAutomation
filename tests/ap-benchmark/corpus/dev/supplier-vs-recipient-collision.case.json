@@ -1,0 +1,33 @@
+{
+  "id": "supplier-vs-recipient-collision",
+  "split": "dev",
+  "label": "Supplier vs recipient collision — Coulee Ridge appears prominently as bill-to",
+  "category": "SUPPLIER_DISAMBIGUATION",
+  "tags": ["supplier-recipient-collision", "phase-4-slice-2"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Prairie Greens Landscape Ltd.\n2200 Trans-Canada Highway · Regina SK S4P 3Y2\nwww.prairiegreens.example\nGST: 843210987 RT0001\n\nINVOICE\n\nInvoice Number: PG-2026-1188\nInvoice Date: 2026-08-01\nDue Date: 2026-08-31\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nAttn: Accounts Payable\n1500 Fairway Drive\nCalgary AB T2S 3E2\n\nDescription                                Qty     Rate     Amount\nSand-cap dressing, greens                  400     2.15      860.00\nAerator rental, half-day                     1    140.00     140.00\n\n                                               Subtotal:    1000.00\n                                               GST (5%):      50.00\n                                               Total:       1050.00\n\nRemit to: Prairie Greens Landscape Ltd.\n",
+    "email": {
+      "senderAddress": "billing@prairiegreens.example",
+      "subject": "Invoice PG-2026-1188"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Prairie Greens Landscape Ltd.",
+      "acceptableAliases": ["Prairie Greens Landscape", "Prairie Greens"],
+      "unacceptable": ["Coulee Ridge Golf & Country Club", "Coulee Ridge", "Accounts Payable", "BILL TO", "Description"]
+    },
+    "invoiceNumber": { "value": "PG-2026-1188" },
+    "invoiceDate": "2026-08-01",
+    "dueDate": "2026-08-31",
+    "currency": "CAD",
+    "subtotal": 1000.00,
+    "taxTotal": 50.00,
+    "total": 1050.00,
+    "expectedWorkflowType": "NEEDS_JUDGMENT",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "notes": "Slice 2 regression guard — supplier extractor MUST NOT surface Coulee Ridge (the bill-to) as the supplier. Recipient-block heuristic + letterhead-position + tax-registration ownership must combine."
+  }
+}
