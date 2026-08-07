@@ -170,6 +170,45 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
           }
         }
       }
+      // Sprint 3 · Post-16H Phase 4 Slice 4 (2026-08-07) — website
+      // domain seed. Real invoices often print www.<supplier>.tld
+      // in the letterhead area; that domain root is a high-quality
+      // supplier candidate even when the org name is absent from a
+      // corp-suffix line. Extracts "dmmenergy" from "www.dmmenergy.ca"
+      // → strong seed; downstream ranker still needs positive signals
+      // (letterhead / tax-reg / etc.) to beat cleaner candidates.
+      const webMatch = line.match(/\bwww\.([a-z0-9][a-z0-9\-]{1,40})\.([a-z]{2,6})\b/i);
+      if (webMatch && webMatch[1]) {
+        // Title-case the root as a supplier candidate. Not a perfect
+        // company name but a strong anchor when the extractor has
+        // nothing else structurally clean.
+        const domainRoot = webMatch[1].toLowerCase();
+        // Reject generic infrastructure domains (mailerdaemon /
+        // notifications) — they aren't supplier identities.
+        const genericDomains = new Set([
+          "gmail", "yahoo", "hotmail", "outlook", "protonmail", "aol",
+          "no-reply", "noreply", "notifications", "mailer-daemon",
+        ]);
+        if (!genericDomains.has(domainRoot) && domainRoot.length >= 3) {
+          // Convert domain root to a plausible display name:
+          // "dmmenergy" → "Dmmenergy" (best effort; downstream
+          // matching against the tenant's vendor catalog will
+          // normalise). Preserve the raw domain in provenance.
+          const displayName = domainRoot.charAt(0).toUpperCase() + domainRoot.slice(1);
+          if (!alreadyPresent.has(displayName)) {
+            ev.fields.supplierCandidates.push({
+              value: displayName,
+              confidence: 76,
+              strategy: "EMBEDDED_TEXT",
+              ruleKey: "supplier.website_domain_seed",
+              region: { page: 1, lineIndex: i },
+              evidenceSnippet: `www.${domainRoot}.${webMatch[2]}`,
+              validationStatus: "UNVALIDATED",
+            });
+            alreadyPresent.add(displayName);
+          }
+        }
+      }
       // (2) Corp-suffix line — capture the whole line as candidate.
       // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
       // strip common role prefixes so "Remit to: <Org> Ltd." and

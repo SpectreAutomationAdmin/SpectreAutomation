@@ -151,12 +151,27 @@ export function rankSuppliers(candidates: RankableSupplierCandidate[]): Supplier
     // description that leaked into the candidate pool. Organizations
     // do not embed prices in their name.
     const hasMoney = /-?\d{1,3}(?:,\d{3})*\.\d{2}\b|-?\d+\.\d{2}\b/.test(c.value);
+    // Sprint 3 · Post-16H Phase 4 Slice 4 (2026-08-07) — hard
+    // sentence veto. Founder §4: "A full grammatical sentence
+    // should require extremely strong contrary evidence before it
+    // can become the supplier identity." Detected via: word count
+    // ≥ 12, OR leading imperative verb (please/write/return/remit/
+    // note/refer/contact/see/kindly/thank/call/pay/send/complete),
+    // OR contains three-or-more sentence-linkers ("or", "and",
+    // "if", "unless", "when") on a single line. Applied at the
+    // ranker level (not just isPlausibleSupplierName) so a
+    // sentence that leaked into the candidate pool through any
+    // seeding path cannot bubble up as the winner.
+    const words = c.value.trim().split(/\s+/);
+    const isImperative = /^(please|write|return|remit|note|refer|contact|see|kindly|thank|call|pay|send|complete)\b/i.test(c.value);
+    const linkers = (c.value.toLowerCase().match(/\b(or|and|if|unless|when)\b/g) ?? []).length;
+    const isSentence = words.length >= 12 || isImperative || linkers >= 3;
     return {
       ...c,
       score,
       positiveWeight,
       negativeWeight,
-      survivedNegatives: !vetoed && !hasMoney && negativeWeight <= positiveWeight,
+      survivedNegatives: !vetoed && !hasMoney && !isSentence && negativeWeight <= positiveWeight,
     };
   });
   ranked.sort((a, b) => b.score - a.score);

@@ -15,6 +15,7 @@ import {
   buildCanonicalEvidence,
   selectCanonicalFields,
 } from "./evidence/build-canonical-evidence";
+import { arithmeticReconcileAmounts } from "./evidence/amount-arithmetic-reconciler";
 import { EXTRACTION_RULE_VERSION } from "./types";
 import { extractSupplier, type SupplierExtraction } from "./supplier-extract";
 import { parseDocumentLayout, associateLabelValue, associateDescriptionAmounts, type DocumentLayout } from "./document-layout";
@@ -128,6 +129,13 @@ function extractInvoiceNumber(text: string) {
     // Label + one-or-more whitespace + value (Invoice B0037FC).
     // Value MUST contain at least one digit to be a reference.
     { ruleKey: "inv_no.label_space", regex: /(?:^|\n)\s*Invoice\s+([A-Z][A-Z0-9\-\/]{2,29}\d[A-Z0-9\-\/]{0,29})\b/ },
+    // Sprint 3 · Post-16H Phase 4 Slice 4 (2026-08-07) — column-first
+    // pdf-parse output can jam label + value + adjacent date into a
+    // single line ("B0037FC2026/06/17DATEPAGE"). Extract the leading
+    // alphanumeric reference (letters + digits, ≥ 4 chars total, at
+    // least one digit) and reject the trailing yyyy/mm/dd or similar
+    // date suffix by anchoring on the year boundary.
+    { ruleKey: "inv_no.jammed_date_suffix", regex: /(?:^|\n)([A-Z][A-Z0-9]{3,15})(?=(?:19|20)\d{2}[\/\-]\d{1,2}[\/\-]\d{1,2})/ },
     // INV / INVN with MANDATORY separator [-# ] — kills the OICE bug.
     { ruleKey: "inv_no.hash", regex: /\b(?:INV|INVN)[\s\-#]+([A-Za-z0-9\-]{3,30})\b/i },
   ];
@@ -663,6 +671,34 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   if (taxHit)      { hints.push({ ...taxHit.hint, field: "taxTotal" }); }
   if (totalHit)    { hints.push({ ...totalHit.hint, field: "total" }); }
 
+  // Sprint 3 · Post-16H Phase 4 Slice 4 (2026-08-07) — arithmetic
+  // reconciliation for column-first invoices. When the label-based
+  // extractor's subtotal+tax does NOT equal total (or when subtotal
+  // is missing entirely), search the document for a unique money
+  // triple where A + B = C and correct in place. General rule; no
+  // vendor-specific patterns. Founder-required §6.
+  const arithReconcile = arithmeticReconcileAmounts({
+    text,
+    labelBased: {
+      subtotal: subtotalHit ? Number(toNumericString(subtotalHit.value)) : null,
+      tax: taxHit ? Number(toNumericString(taxHit.value)) : null,
+      total: totalHit ? Number(toNumericString(totalHit.value)) : null,
+    },
+  });
+  let reconciledSubtotal: number | null = subtotalHit ? Number(toNumericString(subtotalHit.value)) : null;
+  let reconciledTax: number | null = taxHit ? Number(toNumericString(taxHit.value)) : null;
+  let reconciledTotal: number | null = totalHit ? Number(toNumericString(totalHit.value)) : null;
+  if (arithReconcile) {
+    reconciledSubtotal = arithReconcile.subtotal;
+    reconciledTax = arithReconcile.tax;
+    reconciledTotal = arithReconcile.total;
+    hints.push({
+      field: "amountReconciliation",
+      ruleKey: "amount.arithmetic_reconcile",
+      matchedText: arithReconcile.reason.slice(0, 200),
+    });
+  }
+
   const vendorEmail = record("vendor.email", extractVendorEmail(text));
   const vendorTax = record("vendor.taxNumber", extractVendorTaxNumber(text));
   // Sprint 3 · Checkpoint 15Q (revised, 2026-07-28) — dual-extractor
@@ -770,9 +806,9 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
       dueDate,
       currency,
       currencyRuleKey: currencyRuleKey,
-      subtotal: subtotalHit ? Number(toNumericString(subtotalHit.value)) : null,
-      tax: taxHit ? Number(toNumericString(taxHit.value)) : null,
-      total: totalHit ? Number(toNumericString(totalHit.value)) : null,
+      subtotal: reconciledSubtotal,
+      tax: reconciledTax,
+      total: reconciledTotal,
       taxComponents: (taxHit && "components" in taxHit && Array.isArray((taxHit as { components?: Array<{ label: string; amount: number }> }).components))
         ? (taxHit as { components: Array<{ label: string; amount: number }> }).components
         : undefined,
