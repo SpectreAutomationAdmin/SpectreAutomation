@@ -211,6 +211,21 @@ registerHandler<{ extractionRowId: string }>("AP_DOCUMENT_OCR", async ({ payload
   });
 });
 
+// Sprint 3 · Post-16H P0-hardening (2026-08-07) — recovery for
+// stranded ApIntakeSource records. See
+// src/lib/ap-intelligence/materialise-recovery.ts.
+registerHandler<{
+  clubId: string;
+  ingestedDocumentId: string;
+  emailAttachmentId?: string;
+  emailMessageId?: string;
+}>("AP_MATERIALISE_RECOVERY", async ({ payload }) => {
+  const { runApMaterialiseRecovery } = await import(
+    "../ap-intelligence/materialise-recovery"
+  );
+  return runApMaterialiseRecovery(payload);
+});
+
 /**
  * Sprint 2 B4.1 — Which mailbox JobKinds are implemented today. Used
  * by a future health endpoint to distinguish "reserved" from "live".

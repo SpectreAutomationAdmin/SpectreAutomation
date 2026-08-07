@@ -807,12 +807,15 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
 
   const extraction: ExtractedInvoice | null = analysis?.extraction ?? null;
 
-  // Sprint 3 · Post-16H P0-repair (2026-08-06) — canonical-analysis
-  // driven reclassification of the PARENT email WorkIntakeItem.
-  // Founder §3/§4: when canonical analysis is available, the parent
-  // Work Intake must reflect it — a stale INFORMATIONAL default
-  // must not override authoritative document intelligence.
-  // Idempotent + fire-and-forget (never blocks the projection).
+  // Sprint 3 · Post-16H P0-hardening (2026-08-07) — projection-time
+  // reclassification remains as a RECOVERY fallback for legacy WIs
+  // that pre-date the materialiser-driven authoritative trigger
+  // (Sprint 3 · P0-hardening §1). New AP records are reclassified
+  // by `materialiseSingleInvoiceDocument` before Mission Control
+  // ever renders them. This branch fires only when a WI's parent
+  // was never touched by the authoritative trigger (e.g., historical
+  // records) and is explicitly logged with `trigger=projection_fallback`
+  // so recovery activity is distinguishable from normal operation.
   if (extraction && extraction.state !== "DOCUMENT_UNREADABLE") {
     try {
       const parentOrigin = await prisma.apIntakeSource.findFirst({
@@ -833,6 +836,7 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
             parentWorkIntakeItemId: parentEmailIntake.workIntakeItemId,
             canonicalAnalysisSucceeded: true,
             canonicalDocumentClass: "INVOICE",
+            trigger: "projection_fallback",
           });
         }
       }

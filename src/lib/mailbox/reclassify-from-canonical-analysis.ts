@@ -39,6 +39,12 @@ export interface ReclassifyArgs {
   /** Optional finer-grained document class from the canonical
    *  analysis: INVOICE / STATEMENT / CREDIT_MEMO / OTHER. */
   canonicalDocumentClass?: "INVOICE" | "STATEMENT" | "CREDIT_MEMO" | "OTHER";
+  /** Which pipeline stage invoked the reclassifier. Used purely
+   *  for observability — the founder's P0-hardening §1 rule
+   *  requires that `materialise` be the authoritative trigger
+   *  and any `projection` call is a recovery path that should be
+   *  visible in logs as such. */
+  trigger?: "materialise" | "projection_fallback" | "recovery_sweep" | "manual";
 }
 
 export interface ReclassifyResult {
@@ -116,6 +122,7 @@ export async function reclassifyFromCanonicalAnalysis(args: ReclassifyArgs): Pro
     to: targetClassification,
     fromStatus: wi.status,
     toStatus: targetStatus,
+    trigger: args.trigger ?? "unspecified",
   });
   return {
     updated: true,

@@ -221,12 +221,23 @@ export const CLASSIFIER_RULES: ClassifierRule[] = [
   },
   {
     key: "informational_default",
-    version: 1,
+    version: 2,   // Sprint 3 · Post-16H P0-hardening (2026-08-07)
     label: "INFORMATIONAL",
     reason: "No actionable signals found; kept as informational for the user's review.",
     confidence: 0.4,
     intakeAction: "CREATE_INFORMATIONAL",
-    matches: () => true,
+    // Hard PDF-pending invariant (P0-hardening §2). If the email
+    // carries a non-inline attachment, the classifier MUST NOT
+    // finalize the WorkIntakeItem as ordinary INFORMATIONAL — even
+    // if the attachment metadata / bytes / document ingest / analysis
+    // hasn't completed yet. Force the earlier
+    // `has_attachment_pending_analysis` rule to catch it (that rule
+    // matches on `hasAttachments` too, but with intakeAction
+    // CREATE_ACTIONABLE so downstream materialisation + reclassification
+    // fires when analysis completes). This is a mechanical safeguard —
+    // the founder's P0-hardening rule requires the classifier NOT
+    // to lose a race against attachment ingestion.
+    matches: (e) => !e.hasAttachments,
   },
 ];
 

@@ -26,10 +26,24 @@ test.describe("P0 aggregate attachment-chain audit", () => {
     );
     console.log(`Feed cards: ${suffixes.length} — MAIL-${suffixes.map((s) => s.toUpperCase()).join(", MAIL-")}`);
 
+    // Sprint 3 · Post-16H P0-hardening (2026-08-07) — §5 distinguish
+    // legitimate deduplication from a genuine ingestion defect.
+    // DEDUP_REUSES_EXISTING_CANONICAL_SOURCE: an attachment SHA
+    //   matches an already-ingested document; per Sprint 3 · 15S
+    //   design, the ApIntakeSource lives under the ORIGINAL email
+    //   attachment and is NOT recreated for the retransmission.
+    //   The parent WI is still correctly promoted (INVOICE_LIKELY)
+    //   because the retransmitted email inherits its classification
+    //   from the shared document analysis.
+    // MISSING_APINTAKESOURCE_DEFECT: a non-inline PDF attachment
+    //   is present with a distinct SHA (or no linked canonical
+    //   intake at all) and no ApIntakeSource exists — the recovery
+    //   sweep should catch these.
     const buckets: Record<string, Array<{ mail: string; classification: string; status: string; attachmentContentType: string | null; hasApIntakeSource: boolean; hasIngestedDocument: boolean }>> = {
       OK: [],
       "STALE_INFORMATIONAL — has attachment + IngestedDocument + ApIntakeSource but WI still INFORMATIONAL": [],
-      "MISSING_APINTAKESOURCE — non-inline PDF attachment present but no ApIntakeSource": [],
+      "DEDUP_REUSES_EXISTING_CANONICAL_SOURCE — legit retransmission, source lives under original attachment": [],
+      "MISSING_APINTAKESOURCE_DEFECT — non-inline PDF but no ApIntakeSource AND no dedup evidence": [],
       "MISSING_INGESTED_DOCUMENT — ApIntakeSource present but no IngestedDocument": [],
       "NO_ATTACHMENT_ROW — hasAttachments true but zero EmailAttachment rows": [],
       "ATTACHMENT_ALL_INLINE — no non-inline PDF": [],
@@ -71,7 +85,17 @@ test.describe("P0 aggregate attachment-chain audit", () => {
         continue;
       }
       if (apSourcesByAttachment.length === 0) {
-        buckets["MISSING_APINTAKESOURCE — non-inline PDF attachment present but no ApIntakeSource"].push(entry);
+        // Distinguish legitimate retransmission dedup from a genuine
+        // ingestion defect. If the parent WI is already promoted to
+        // INVOICE_LIKELY, its child canonical AP intake inherits from
+        // an earlier retransmission's ApIntakeSource (Sprint 3 · 15S
+        // design). If the parent is still INFORMATIONAL AND there's
+        // no source, that's the recovery-sweep bucket.
+        if (wi.classification === "INVOICE_LIKELY") {
+          buckets["DEDUP_REUSES_EXISTING_CANONICAL_SOURCE — legit retransmission, source lives under original attachment"].push(entry);
+        } else {
+          buckets["MISSING_APINTAKESOURCE_DEFECT — non-inline PDF but no ApIntakeSource AND no dedup evidence"].push(entry);
+        }
         continue;
       }
       if (docs.length === 0) {

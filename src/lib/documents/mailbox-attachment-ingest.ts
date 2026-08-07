@@ -243,6 +243,24 @@ async function maybeMaterialiseInvoiceOrStatement(args: {
         clubId: args.clubId, documentIdTail: docId.slice(-6),
         message: err instanceof Error ? err.message : String(err),
       });
+      // Sprint 3 · Post-16H P0-hardening (2026-08-07) — automatic
+      // recovery. The inline materialiser failed for this attachment;
+      // enqueue the recovery job so a bounded-retry worker rerun
+      // catches it. Idempotent (dedup by ingestedDocumentId).
+      try {
+        const { enqueueApMaterialiseRecovery } = await import("../ap-intelligence/materialise-recovery");
+        await enqueueApMaterialiseRecovery({
+          clubId: args.clubId,
+          ingestedDocumentId: docId,
+          emailAttachmentId: sourceContext?.emailAttachmentId,
+          emailMessageId: sourceContext?.emailMessageId,
+        });
+      } catch (queueErr) {
+        logger.warn("documents.mailbox_ingest.recovery_enqueue_failed", {
+          clubId: args.clubId, documentIdTail: docId.slice(-6),
+          error: queueErr instanceof Error ? queueErr.message : String(queueErr),
+        });
+      }
     }
   } else if (classification === "STATEMENT") {
     try {

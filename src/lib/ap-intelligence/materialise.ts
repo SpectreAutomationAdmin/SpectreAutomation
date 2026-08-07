@@ -276,6 +276,45 @@ export async function materialiseSingleInvoiceDocument(args: {
       analysisVersion: currentVersion,
     });
   }
+  // Sprint 3 · Post-16H P0-hardening (2026-08-07) — §1 authoritative
+  // parent WI reclassification. The materialiser is the FIRST place
+  // in the pipeline where BOTH the child canonical AP intake AND the
+  // completed document analysis exist together. Reclassifying here
+  // (rather than during Mission Control projection) means the
+  // parent EmailWorkIntakeItem picks up its correct AP-flavoured
+  // label without anyone opening Mission Control. Idempotent.
+  // Never overwrites operator state.
+  if (args.sourceContext) {
+    try {
+      const parentEmailIntake = await prisma.emailWorkIntakeOrigin.findFirst({
+        where: {
+          clubId: args.clubId,
+          emailMessageId: args.sourceContext.emailMessageId,
+          role: "PRIMARY",
+        },
+        select: { workIntakeItemId: true },
+      });
+      if (parentEmailIntake) {
+        const { reclassifyFromCanonicalAnalysis } = await import(
+          "@/lib/mailbox/reclassify-from-canonical-analysis"
+        );
+        await reclassifyFromCanonicalAnalysis({
+          clubId: args.clubId,
+          parentWorkIntakeItemId: parentEmailIntake.workIntakeItemId,
+          canonicalAnalysisSucceeded: analysis.extraction.state !== "DOCUMENT_UNREADABLE",
+          canonicalDocumentClass: "INVOICE",
+          trigger: "materialise",
+        });
+      }
+    } catch (recErr) {
+      logger.warn("ap-intelligence.materialise_single.reclassify_failed", {
+        clubId: args.clubId,
+        intakeIdTail: canonical.id.slice(-6),
+        error: recErr instanceof Error ? recErr.message : String(recErr),
+      });
+    }
+  }
+
   logger.info("ap-intelligence.materialise_single.complete", {
     clubId: args.clubId,
     documentIdTail: doc.id.slice(-6),

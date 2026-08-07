@@ -64,7 +64,19 @@ export type JobKind =
   //
   // Payload: { extractionRowId: string }
   // Handler: src/lib/ap-intelligence/ocr/worker.ts#runAPDocumentOcrJob
-  | "AP_DOCUMENT_OCR";
+  | "AP_DOCUMENT_OCR"
+  // Sprint 3 · Post-16H P0-hardening (2026-08-07) — recovery hook
+  // for the "10-hour ApIntakeSource delay" defect. Enqueued when
+  // an IngestedDocument is created and classified as INVOICE /
+  // STATEMENT / CREDIT_MEMO but no ApIntakeSource exists yet.
+  // Idempotency: enqueue with key
+  //   `ap-materialise-recover:{clubId}:{ingestedDocumentId}`
+  // The handler calls materialiseSingleInvoiceDocument (already
+  // idempotent by canonical-intake natural key) and is a no-op
+  // when the ApIntakeSource already exists. Payload:
+  //   { clubId: string; ingestedDocumentId: string; emailAttachmentId?: string; emailMessageId?: string }
+  // Handler: src/lib/ap-intelligence/materialise-recovery.ts
+  | "AP_MATERIALISE_RECOVERY";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;
