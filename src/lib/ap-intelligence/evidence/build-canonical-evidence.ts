@@ -45,6 +45,10 @@ import {
   type RankableSupplierCandidate,
   type SupplierRankResult,
 } from "./supplier-ranker";
+import {
+  selectSupplierFromText,
+  type SupplierSelection,
+} from "./supplier-identity";
 
 export interface BuildEvidenceInput {
   /** Flattened text of the primary document. */
@@ -353,6 +357,33 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
   // shape) so downstream consumers can drill in without changing
   // the canonical evidence type surface used by Slice 2 tests.
   (ev as CanonicalInvoiceEvidence & { taxComponents?: StructuredTaxComponent[] }).taxComponents = taxComponents;
+
+  // --- supplier identity orchestrator (Slice 4-reopen §1-§6) -------
+  // Corroborated identity from independent evidence groups. When
+  // confidence clears the commitment threshold, seed the winner as
+  // a high-confidence candidate at the top of supplierCandidates so
+  // the ranker + selector propagate it as the ApAnalyseResult
+  // supplier. When it abstains, we leave the candidate pool as-is
+  // (the ranker's sentence/veto rules will still exclude bad picks).
+  const supplierIdentity: SupplierSelection = selectSupplierFromText(input.text);
+  if (supplierIdentity.winner) {
+    const w = supplierIdentity.winner;
+    const displayName = w.legalNameCandidate ?? w.operatingNameCandidate ?? w.normalizedIdentity;
+    // Prepend as the primary candidate; other pool candidates remain
+    // as alternates for provenance.
+    ev.fields.supplierCandidates = [
+      {
+        value: displayName,
+        confidence: w.confidence,
+        strategy: "EMBEDDED_TEXT",
+        ruleKey: `supplier.identity_orchestrator+${w.independentEvidenceGroups}_groups`,
+        evidenceSnippet: w.evidence.map((e) => e.type).slice(0, 5).join("+"),
+        validationStatus: "PASSED",
+      },
+      ...ev.fields.supplierCandidates.filter((c) => c.value !== displayName),
+    ];
+  }
+  (ev as CanonicalInvoiceEvidence & { supplierIdentity?: SupplierSelection }).supplierIdentity = supplierIdentity;
 
   // --- supplier ranker v2 (Slice 3 §3) ------------------------------
   // Scored composition over the collected supplier candidates.
