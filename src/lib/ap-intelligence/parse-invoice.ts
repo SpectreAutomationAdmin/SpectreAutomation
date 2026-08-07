@@ -778,6 +778,15 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
   const selectedSubtotal = selection.subtotal.value;
   const selectedTax = selection.tax.value;
   const selectedTotal = selection.total.value;
+  // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) — supplier
+  // cutover completion. Slice 2 moved payref / dates / currency /
+  // amounts through canonical selection but left `guessedName` on the
+  // legacy `vendorNameFromText`. Slice 3's supplier ranker v2
+  // consequently never influenced the scalar the card renders. The
+  // founder-observed DMM "PRODUIT" bug on the real Outlook-backed
+  // Work Intake card was the direct symptom. Every downstream card /
+  // modal / API consumer now sees the canonical winner.
+  const selectedSupplierName = selection.supplier.value ?? vendorNameFromText;
 
   if (!selectedInvoiceNumber) warnings.push("Invoice number not extracted.");
   if (selectedTotal == null) warnings.push("Invoice total not extracted.");
@@ -793,7 +802,7 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
       ruleVersion: EXTRACTION_RULE_VERSION,
       extractedTextChars: text.length,
       vendor: {
-        guessedName: vendorNameFromText,
+        guessedName: selectedSupplierName,
         guessedEmail: emailAddress,
         guessedTaxNumber: vendorTax,
         guessedDomain: domain,

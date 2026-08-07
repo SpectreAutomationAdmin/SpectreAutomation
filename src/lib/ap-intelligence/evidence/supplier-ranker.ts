@@ -121,7 +121,15 @@ export function rankSuppliers(candidates: RankableSupplierCandidate[]): Supplier
   const ranked: RankedSupplier[] = candidates.map((c) => {
     const positiveWeight = c.positive.reduce((a, s) => a + (POSITIVE_WEIGHT[s] ?? 0), 0);
     const negativeWeight = c.negative.reduce((a, s) => a + (NEGATIVE_WEIGHT[s] ?? 0), 0);
-    const priorContribution = Math.min(50, Math.max(0, (c.prior ?? 0) / 2));
+    // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
+    // stronger prior weighting so a candidate the legacy extractor
+    // already picked with high confidence cannot be cheaply
+    // overturned by a handful of context signals on a rival
+    // candidate. Founder §3: "Do not let one weak signal defeat
+    // several contradictory signals." Applied symmetrically —
+    // a strong legacy pick has genuine weight; the ranker's job
+    // is to REFINE not to REPLACE without strong reason.
+    const priorContribution = Math.min(100, Math.max(0, (c.prior ?? 0) * 0.8));
     const score = priorContribution + positiveWeight - negativeWeight;
     // Sprint 3 · Post-16H Phase 4 Slice 3 (2026-08-06) — VETO
     // negatives. Some signals are semantic disqualifications: a
@@ -136,12 +144,19 @@ export function rankSuppliers(candidates: RankableSupplierCandidate[]): Supplier
       "SHIP_TO_ROLE",
     ];
     const vetoed = c.negative.some((s) => VETO.includes(s));
+    // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
+    // extra hard-veto for line-item contamination. A supplier
+    // candidate that CONTAINS a money-shaped token (e.g. "Annual
+    // membership dues — 2026 renewal      1420.50") is a line-item
+    // description that leaked into the candidate pool. Organizations
+    // do not embed prices in their name.
+    const hasMoney = /-?\d{1,3}(?:,\d{3})*\.\d{2}\b|-?\d+\.\d{2}\b/.test(c.value);
     return {
       ...c,
       score,
       positiveWeight,
       negativeWeight,
-      survivedNegatives: !vetoed && negativeWeight <= positiveWeight,
+      survivedNegatives: !vetoed && !hasMoney && negativeWeight <= positiveWeight,
     };
   });
   ranked.sort((a, b) => b.score - a.score);

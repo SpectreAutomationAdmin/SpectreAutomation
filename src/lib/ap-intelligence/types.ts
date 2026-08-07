@@ -25,7 +25,30 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 // field-quality gate: contaminated supplier candidates and
 // concatenated payable references are now rejected and can force
 // GL abstention. Every warm projection cache invalidates on deploy.
-export const EXTRACTION_RULE_VERSION = 4;
+//
+// Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) — bumped
+// to 7 to cover the accumulated Slice 1 + 2 + 3 analyser changes
+// (never bumped during those slices — that oversight kept warm
+// mission-control-projection caches on the pre-Slice-1 shape and
+// was the root cause of the founder-observed DMM card divergence).
+//
+// Included in this bump:
+//   * Slice 1: OICE bug fix, MONEY_TOKEN trailing currency,
+//     Canadian-tax currency inference, multi-tax GST+PST sum.
+//   * Slice 2: canonical evidence cutover for payref / dates /
+//     currency / amounts, CREDIT_MEMO_NUMBER type, Credit Total
+//     labels, MONEY_TOKEN negative-amount support.
+//   * Slice 3: supplier ranker v2 (scored composition + VETO
+//     negatives), canonical line-items / credits / surcharges,
+//     line-item arithmetic reconciliation, structured tax
+//     components with TPS↔GST bilingual normalisation and
+//     SUMMARY/REMITTANCE level detection, economic-purpose from
+//     canonical line items, supplier scalar cutover so
+//     invoice.vendor.guessedName reflects canonical selection.
+//
+// Bumping this version invalidates every warm apSummaryCache
+// entry — the next projection sees the current analyser output.
+export const EXTRACTION_RULE_VERSION = 7;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.
