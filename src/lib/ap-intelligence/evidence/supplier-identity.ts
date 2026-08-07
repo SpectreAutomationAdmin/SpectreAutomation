@@ -104,7 +104,14 @@ export interface SupplierSelection {
 // ---------------------------------------------------------------------------
 
 const LEGAL_SUFFIX_RE = /\b(Inc|Incorporated|Corp|Corporation|Ltd|Limited|LLC|LLP|LP|ULC|PLC|Company|Co|GmbH|AG|SA|BV|NV)\b\.?/i;
-const LEGAL_ENTITY_LINE = /([A-Z][A-Za-z0-9&.,'\-\s]{2,60}?\s+(?:Inc|Incorporated|Corp|Corporation|Ltd|Limited|LLC|LLP|LP|ULC|PLC|Company|Co|GmbH|AG|SA|BV|NV))\b\.?/i;
+// Sprint 3 · Post-16H Phase 4 Slice 4-reopen fix (2026-08-07) —
+// the LEGAL_ENTITY_LINE regex must NOT use /i, because /i makes
+// `[A-Z]` match lowercase too, which caused "the property of DMM
+// ENERGY INC" to be captured as an org name from the footer terms
+// ("...the property of DMM ENERGY INC. until full payment..."). An
+// organisation name always STARTS with an uppercase letter — the
+// suffix alternation covers common casing variants explicitly.
+const LEGAL_ENTITY_LINE = /([A-Z][A-Za-z0-9&.,'\-\s]{2,60}?\s+(?:Inc|Incorporated|Corp|Corporation|Ltd|Limited|LLC|LLP|LP|ULC|PLC|Company|Co|GmbH|AG|SA|BV|NV|INC|CORP|LTD|LIMITED|COMPANY|CO))\b\.?/;
 const WEBSITE_RE = /\bwww\.([a-z0-9][a-z0-9\-]{1,40})\.([a-z]{2,6})\b/i;
 const EMAIL_RE = /\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+)\.([A-Za-z]{2,})\b/g;
 const PHONE_RE = /\b(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b/;
