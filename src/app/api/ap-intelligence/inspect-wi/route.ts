@@ -161,6 +161,72 @@ export async function POST(req: Request) {
       })
     : [];
 
+  // Phase 4 · Slice 4 (2026-08-07) — real-bytes canonical trace.
+  // Runs the deployed production analyser against the actual PDF
+  // bytes of the FIRST linked IngestedDocument (whether accessed as
+  // apIntakeSources or apIntakeSourcesByAttachment). Returns a 2KB
+  // sample of the pdf-parse text + ranked supplier candidates +
+  // selection winner so the caller can see EXACTLY what the
+  // analyser produces from real bytes.
+  let analyseResult: unknown = null;
+  let extractedTextSample: string | null = null;
+  const primaryDocId = docs[0]?.id ?? null;
+  if (primaryDocId) {
+    try {
+      const { analyseIngestedInvoice } = await import("@/lib/ap-intelligence/analyse");
+      const result = await analyseIngestedInvoice({ clubId, ingestedDocumentId: primaryDocId });
+      analyseResult = {
+        state: result.extraction.state,
+        extractedTextChars: result.extraction.extractedTextChars,
+        supplierGuessedName: result.extraction.vendor.guessedName,
+        invoiceNumber: result.extraction.invoiceNumber,
+        subtotal: result.extraction.subtotal,
+        taxTotal: result.extraction.taxTotal,
+        total: result.extraction.total,
+        currency: result.extraction.currency,
+        warnings: result.extraction.warnings,
+      };
+    } catch (err) {
+      analyseResult = { error: err instanceof Error ? err.message : "unknown" };
+    }
+    try {
+      const { getDocumentBytes } = await import("@/lib/documents/retrieve");
+      const { parseInvoiceText } = await import("@/lib/ap-intelligence/parse-invoice");
+      const pdfParse = (await import("pdf-parse")).default;
+      const bytes = await getDocumentBytes(
+        { clubId, documentId: primaryDocId, actorUserId: principal.id },
+        "PREVIEW",
+      );
+      const parsed = await pdfParse(bytes.bytes);
+      const text = (parsed.text ?? "").trim();
+      extractedTextSample = text.slice(0, 2000);
+      const p = parseInvoiceText({ extractedText: text });
+      (analyseResult as { canonicalSupplierCandidates?: unknown }).canonicalSupplierCandidates =
+        p.canonicalEvidence?.fields.supplierCandidates.slice(0, 8) ?? null;
+      (analyseResult as { canonicalSupplierWinner?: unknown }).canonicalSupplierWinner =
+        p.selection?.supplier ?? null;
+      (analyseResult as { canonicalPayableRef?: unknown }).canonicalPayableRef =
+        p.selection?.payableReference ?? null;
+      (analyseResult as { canonicalSubtotal?: unknown }).canonicalSubtotal =
+        p.selection?.subtotal ?? null;
+      (analyseResult as { canonicalTax?: unknown }).canonicalTax =
+        p.selection?.tax ?? null;
+      (analyseResult as { canonicalTotal?: unknown }).canonicalTotal =
+        p.selection?.total ?? null;
+      (analyseResult as { canonicalCurrency?: unknown }).canonicalCurrency =
+        p.selection?.currency ?? null;
+      (analyseResult as { canonicalLineItems?: unknown }).canonicalLineItems =
+        p.canonicalEvidence?.lineItems.slice(0, 12) ?? null;
+      (analyseResult as { canonicalConflicts?: unknown }).canonicalConflicts =
+        p.canonicalEvidence?.evidenceConflicts ?? null;
+      (analyseResult as { amountReconciliation?: unknown }).amountReconciliation =
+        p.selection?.amountReconciliation ?? null;
+    } catch (pErr) {
+      (analyseResult as { canonicalProbeError?: string }).canonicalProbeError =
+        pErr instanceof Error ? pErr.message : String(pErr);
+    }
+  }
+
   // ---- (7) Mailbox sync-job / ingest-history (BackgroundJob) --------
   // We look at the last 40 mailbox-related jobs for this club and
   // filter for anything that touched the message's graphMessageId (if
@@ -321,5 +387,7 @@ export async function POST(req: Request) {
       finishedAt: j.finishedAt,
     })),
     graphProbe,
+    analyseResult,
+    extractedTextSample,
   });
 }
