@@ -807,6 +807,43 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
 
   const extraction: ExtractedInvoice | null = analysis?.extraction ?? null;
 
+  // Sprint 3 · Post-16H P0-repair (2026-08-06) — canonical-analysis
+  // driven reclassification of the PARENT email WorkIntakeItem.
+  // Founder §3/§4: when canonical analysis is available, the parent
+  // Work Intake must reflect it — a stale INFORMATIONAL default
+  // must not override authoritative document intelligence.
+  // Idempotent + fire-and-forget (never blocks the projection).
+  if (extraction && extraction.state !== "DOCUMENT_UNREADABLE") {
+    try {
+      const parentOrigin = await prisma.apIntakeSource.findFirst({
+        where: { clubId, canonicalApIntakeId: intakeId },
+        select: { emailMessageId: true },
+      });
+      if (parentOrigin?.emailMessageId) {
+        const parentEmailIntake = await prisma.emailWorkIntakeOrigin.findFirst({
+          where: { clubId, emailMessageId: parentOrigin.emailMessageId, role: "PRIMARY" },
+          select: { workIntakeItemId: true },
+        });
+        if (parentEmailIntake) {
+          const { reclassifyFromCanonicalAnalysis } = await import(
+            "@/lib/mailbox/reclassify-from-canonical-analysis"
+          );
+          await reclassifyFromCanonicalAnalysis({
+            clubId,
+            parentWorkIntakeItemId: parentEmailIntake.workIntakeItemId,
+            canonicalAnalysisSucceeded: true,
+            canonicalDocumentClass: "INVOICE",
+          });
+        }
+      }
+    } catch (recErr) {
+      logger.warn("mission-control.ap-card-summary.reclassify_failed", {
+        clubId, intakeId,
+        error: recErr instanceof Error ? recErr.message : String(recErr),
+      });
+    }
+  }
+
   // Document metadata (filename for the aux link) + sourceReferenceId
   // (the EmailAttachment.id — IngestedDocument.sourceReferenceId is a
   // plain string, not a Prisma relation, so we walk it manually).
