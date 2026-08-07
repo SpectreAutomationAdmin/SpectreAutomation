@@ -38,6 +38,22 @@ function isPlausibleSupplierName(value: string): boolean {
   // Reject if letters are less than 40% of characters.
   const letters = (s.match(/[A-Za-z]/g) ?? []).length;
   if (letters < s.length * 0.4) return false;
+  // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) — reject
+  // sentence-shaped candidates. An organization name is a compact
+  // proper-noun phrase; a full sentence is a legal-boilerplate /
+  // remittance instruction leak. Symptoms observed on staging: the
+  // real DMM Energy PDF's pdf-parse output surfaced
+  //   "Please write your account number AND the invoice number on
+  //    your cheque or return a copy of the invoice with your payment"
+  // as the vendor. General signals (no DMM-specific rule):
+  //   * word count > 12 — organizations don't have 12+ word names.
+  //   * starts with an imperative verb (please, write, return,
+  //     remit, note, refer, contact) — that's instruction copy.
+  //   * ends with a sentence-terminal period + is > 40 chars.
+  const words = s.split(/\s+/);
+  if (words.length > 12) return false;
+  if (/^(please|write|return|remit|note|refer|contact|see|kindly|thank|call)\b/i.test(s)) return false;
+  if (s.length > 40 && /\.$/.test(s)) return false;
   return true;
 }
 

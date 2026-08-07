@@ -128,6 +128,74 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
       });
     }
   }
+  // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
+  // TEXT-DERIVED candidate injection. The legacy extractor emits
+  // ONE winner + a handful of alternates. When the legacy winner
+  // is a boilerplate / instruction leak, the ranker had no better
+  // candidate to promote. This pass scans the document text for
+  // two structurally strong supplier anchors:
+  //
+  //   1. A line immediately BEFORE or AFTER a tax-registration
+  //      marker (GST / HST / TPS / EIN + a registration number).
+  //      The organization owning that registration is by
+  //      definition the issuer.
+  //   2. A line ending with a canonical corporate suffix (Inc /
+  //      Corp / Ltd / LLC / LLP / Company / GmbH / SA / BV / NV).
+  //
+  // Both are GENERAL patterns — no vendor-specific text.
+  {
+    const lines = input.text.split(/\r?\n/);
+    const TAX_MARKER = /\b(?:GST|HST|TPS|TVQ|QST|BN|Business\s*Number|Tax\s*Reg(?:istration)?|EIN)\s*[:#]?\s*\d/i;
+    const CORP_SUFFIX_LINE = /^(.+?\s+(?:Inc\.?|Corp(?:oration)?\.?|Ltd\.?|Limited|LLC|LLP|LP|ULC|PLC|Company|Co\.?|GmbH|AG|SA|BV|NV))(?:\b|$)/;
+    const alreadyPresent = new Set(ev.fields.supplierCandidates.map((c) => c.value.trim()));
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      // (1) Tax-registration adjacency.
+      if (TAX_MARKER.test(line)) {
+        for (const nb of [-2, -1, 1]) {
+          const idx = i + nb;
+          if (idx < 0 || idx >= lines.length) continue;
+          const neighbour = lines[idx].trim();
+          if (neighbour && neighbour.length >= 4 && !alreadyPresent.has(neighbour) && /[A-Za-z]{3,}/.test(neighbour)) {
+            ev.fields.supplierCandidates.push({
+              value: neighbour,
+              confidence: 78,
+              strategy: "EMBEDDED_TEXT",
+              ruleKey: "supplier.tax_reg_neighbour",
+              region: { page: 1, lineIndex: idx },
+              validationStatus: "UNVALIDATED",
+            });
+            alreadyPresent.add(neighbour);
+          }
+        }
+      }
+      // (2) Corp-suffix line — capture the whole line as candidate.
+      // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
+      // strip common role prefixes so "Remit to: <Org> Ltd." and
+      // "Payable to: <Org> Inc." surface only the organisation
+      // name, not the boilerplate role phrase.
+      const roleStripped = line.replace(
+        /^(?:Remit\s*(?:payment\s*)?to|Bill\s*(?:from|to)|Payable\s*to|Attn|Attention|To|From|Sold\s*to|Ship\s*to)\s*[:\-]\s*/i,
+        "",
+      );
+      const suf = roleStripped.match(CORP_SUFFIX_LINE);
+      if (suf && suf[1]) {
+        const cand = suf[1].trim();
+        if (!alreadyPresent.has(cand)) {
+          ev.fields.supplierCandidates.push({
+            value: cand,
+            confidence: 82,
+            strategy: "EMBEDDED_TEXT",
+            ruleKey: "supplier.corp_suffix_line",
+            region: { page: 1, lineIndex: i },
+            validationStatus: "UNVALIDATED",
+          });
+          alreadyPresent.add(cand);
+        }
+      }
+    }
+  }
   // Email sender as a weakest fallback candidate — never wins over
   // a document-anchored supplier but preserved for provenance.
   if (input.email?.senderAddress) {
@@ -272,24 +340,36 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
     };
   });
   const rank: SupplierRankResult | null = rankable.length > 0 ? rankSuppliers(rankable) : null;
-  if (rank && rank.winner) {
-    // Re-order supplierCandidates so the ranker winner is first.
-    // Preserve losers as alternates behind it.
-    const winnerValue = rank.winner.value;
-    const reordered = [
-      ...ev.fields.supplierCandidates.filter((c) => c.value === winnerValue),
-      ...ev.fields.supplierCandidates.filter((c) => c.value !== winnerValue),
-    ];
-    // Update winner's confidence to reflect the composed score (0..100).
-    const winnerCand = reordered[0];
-    if (winnerCand) {
-      winnerCand.confidence = Math.max(0, Math.min(100, Math.round(rank.winner.score)));
-      winnerCand.ruleKey = `${winnerCand.ruleKey ?? "supplier"}+ranker_v2`;
-      if (rank.ambiguous) {
-        winnerCand.validationStatus = "FAILED_PLAUSIBILITY";
-      }
+  if (rank) {
+    // Sprint 3 · Post-16H Phase 4 Slice 3-hotfix (2026-08-06) —
+    // propagate the ranker's disqualification decision back onto
+    // the corresponding evidence candidate so pickSingle() (which
+    // sorts by confidence + validationStatus) can never resurrect
+    // a candidate the ranker vetoed. Before this fix, injected
+    // candidates like "Subtotal: 1420.50" (rejected by the
+    // money-token veto) could still win pickSingle because their
+    // seeded prior confidence (78) beat legitimate candidates.
+    const disqualified = new Set(rank.ranked.filter((r) => !r.survivedNegatives).map((r) => r.value));
+    for (const c of ev.fields.supplierCandidates) {
+      if (disqualified.has(c.value)) c.validationStatus = "FAILED_PLAUSIBILITY";
     }
-    ev.fields.supplierCandidates = reordered;
+    if (rank.winner) {
+      // Re-order supplierCandidates so the ranker winner is first.
+      const winnerValue = rank.winner.value;
+      const reordered = [
+        ...ev.fields.supplierCandidates.filter((c) => c.value === winnerValue),
+        ...ev.fields.supplierCandidates.filter((c) => c.value !== winnerValue),
+      ];
+      const winnerCand = reordered[0];
+      if (winnerCand) {
+        winnerCand.confidence = Math.max(0, Math.min(100, Math.round(rank.winner.score)));
+        winnerCand.ruleKey = `${winnerCand.ruleKey ?? "supplier"}+ranker_v2`;
+        if (rank.ambiguous) {
+          winnerCand.validationStatus = "FAILED_PLAUSIBILITY";
+        }
+      }
+      ev.fields.supplierCandidates = reordered;
+    }
   }
   // Attach the full ranked evidence for diagnostics.
   (ev as CanonicalInvoiceEvidence & { supplierRanking?: SupplierRankResult }).supplierRanking = rank ?? undefined;

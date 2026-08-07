@@ -48,7 +48,7 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 //
 // Bumping this version invalidates every warm apSummaryCache
 // entry — the next projection sees the current analyser output.
-export const EXTRACTION_RULE_VERSION = 7;
+export const EXTRACTION_RULE_VERSION = 8;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.
