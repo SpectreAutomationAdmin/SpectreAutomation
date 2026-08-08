@@ -51,7 +51,24 @@ const bodySchema = z.object({
   wiId: z.string().min(1).optional(),
   wiIdSuffix4: z.string().length(4).optional(),
   probeGraph: z.boolean().optional().default(false),
-}).refine((v) => v.wiId || v.wiIdSuffix4, { message: "wiId or wiIdSuffix4 required" });
+  // Phase 4 · Slice 5 (2026-08-07) — diagnostic-only positional trace
+  // + two-extractor side-by-side. Staging-only, SUPER_ADMIN-gated,
+  // additive to the existing analyseResult block. Does not alter any
+  // production analyser code path.
+  positionalTrace: z.boolean().optional().default(false),
+  extractorDiff: z.boolean().optional().default(false),
+  // Discovery mode — resolve a suffix from a filename / sender /
+  // invoice-number hint. Used to find the second Oakcreek WI when
+  // only the invoice number is known.
+  discover: z.object({
+    filenameContains: z.string().min(1).max(80).optional(),
+    senderContains: z.string().min(1).max(80).optional(),
+    invoiceNumberContains: z.string().min(1).max(80).optional(),
+    limit: z.number().int().min(1).max(50).optional().default(20),
+  }).optional(),
+}).refine((v) => v.wiId || v.wiIdSuffix4 || v.discover, {
+  message: "wiId, wiIdSuffix4, or discover required",
+});
 
 export async function POST(req: Request) {
   if (!isStagingEnv()) return new NextResponse("Not Found", { status: 404 });
@@ -66,6 +83,120 @@ export async function POST(req: Request) {
   try { raw = await req.json(); } catch { return NextResponse.json({ ok: false, error: "INVALID_JSON" }, { status: 400 }); }
   const parsed = bodySchema.safeParse(raw);
   if (!parsed.success) return NextResponse.json({ ok: false, error: "VALIDATION" }, { status: 400 });
+
+  // ---- Discovery mode (early return) ------------------------------
+  // When called with { discover: {...} } we return a list of matching
+  // Work Intake IDs (as 4-char suffixes for downstream trace calls).
+  // Sanitised: only surface displaySender + filename suffix + createdAt.
+  if (parsed.data.discover) {
+    const disc = parsed.data.discover;
+    const limit = disc.limit ?? 20;
+
+    // Step 1: find IngestedDocuments matching filename / invoice-number
+    // hints. These give us canonicalApIntakeId via ApIntakeSource.
+    let matchingDocIds: string[] = [];
+    if (disc.filenameContains || disc.invoiceNumberContains) {
+      const docs = await prisma.ingestedDocument.findMany({
+        where: {
+          clubId,
+          OR: [
+            ...(disc.filenameContains ? [{ filename: { contains: disc.filenameContains } as const }] : []),
+            ...(disc.invoiceNumberContains ? [{ filename: { contains: disc.invoiceNumberContains } as const }] : []),
+          ],
+        },
+        select: { id: true, filename: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      });
+      matchingDocIds = docs.map((d) => d.id);
+    }
+    const apSources = matchingDocIds.length > 0
+      ? await prisma.apIntakeSource.findMany({
+          where: { clubId, ingestedDocumentId: { in: matchingDocIds } },
+          select: { canonicalApIntakeId: true, ingestedDocumentId: true },
+        })
+      : [];
+    const wiIdsFromDocs = Array.from(new Set(apSources.map((s) => s.canonicalApIntakeId).filter(Boolean)));
+
+    // Step 2: also filter by displaySender if provided.
+    const wisBySender = disc.senderContains
+      ? await prisma.workIntakeItem.findMany({
+          where: {
+            clubId,
+            displaySender: { contains: disc.senderContains },
+          },
+          select: {
+            id: true, displaySender: true, createdAt: true, status: true,
+            classification: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: limit * 2,
+        })
+      : [];
+
+    const wisById = wiIdsFromDocs.length > 0
+      ? await prisma.workIntakeItem.findMany({
+          where: { clubId, id: { in: wiIdsFromDocs as string[] } },
+          select: {
+            id: true, displaySender: true, createdAt: true, status: true,
+            classification: true,
+          },
+          orderBy: { createdAt: "desc" },
+          take: limit * 2,
+        })
+      : [];
+
+    const combined = new Map<string, typeof wisBySender[number]>();
+    for (const w of wisBySender) combined.set(w.id, w);
+    for (const w of wisById) combined.set(w.id, w);
+    const matches = Array.from(combined.values()).slice(0, limit);
+
+    // Resolve one filename per WI for context (best-effort).
+    const filenameByWiId = new Map<string, string>();
+    if (matches.length > 0) {
+      const wiIds = matches.map((m) => m.id);
+      const sources = await prisma.apIntakeSource.findMany({
+        where: { clubId, canonicalApIntakeId: { in: wiIds } },
+        select: { canonicalApIntakeId: true, ingestedDocumentId: true },
+      });
+      const docIds = Array.from(new Set(sources.map((s) => s.ingestedDocumentId).filter(Boolean))) as string[];
+      const docs = docIds.length > 0
+        ? await prisma.ingestedDocument.findMany({
+            where: { clubId, id: { in: docIds } },
+            select: { id: true, filename: true },
+          })
+        : [];
+      const docFilenameById = new Map(docs.map((d) => [d.id, d.filename]));
+      for (const s of sources) {
+        const fn = docFilenameById.get(s.ingestedDocumentId!);
+        if (fn && !filenameByWiId.has(s.canonicalApIntakeId!)) {
+          filenameByWiId.set(s.canonicalApIntakeId!, fn);
+        }
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      discover: {
+        query: {
+          filenameContains: disc.filenameContains ?? null,
+          senderContains: disc.senderContains ?? null,
+          invoiceNumberContains: disc.invoiceNumberContains ?? null,
+          limit,
+        },
+        matchCount: matches.length,
+        matches: matches.map((m) => ({
+          wiIdSuffix4: m.id.slice(-4),
+          wiIdSuffix8: m.id.slice(-8),
+          displaySender: m.displaySender,
+          status: m.status,
+          classification: m.classification,
+          createdAt: m.createdAt,
+          filenameSuffix: (filenameByWiId.get(m.id) ?? "").slice(-32) || null,
+        })),
+      },
+    });
+  }
 
   // ---- (1) Work Intake Item ----------------------------------------
   const wi = parsed.data.wiId
@@ -224,6 +355,221 @@ export async function POST(req: Request) {
     } catch (pErr) {
       (analyseResult as { canonicalProbeError?: string }).canonicalProbeError =
         pErr instanceof Error ? pErr.message : String(pErr);
+    }
+  }
+
+  // Phase 4 · Slice 5 (2026-08-07) — additive positional-layout trace
+  // + two-extractor side-by-side. Enabled by { positionalTrace: true }
+  // / { extractorDiff: true }. Does not alter any production analyser
+  // path — pure diagnostic. Sanitised: text samples truncated, no raw
+  // bytes exposed, item counts bounded.
+  let positionalTrace: unknown = null;
+  let lineItemPaths: unknown = null;
+  if (primaryDocId && (parsed.data.positionalTrace || parsed.data.extractorDiff)) {
+    try {
+      const { getDocumentBytes } = await import("@/lib/documents/retrieve");
+      const bytes = await getDocumentBytes(
+        { clubId, documentId: primaryDocId, actorUserId: principal.id },
+        "PREVIEW",
+      );
+
+      if (parsed.data.positionalTrace) {
+        try {
+          const { extractPdfLayout } = await import("@/lib/ap-intelligence/pdf-layout-extract");
+          const { reconstructLineItemTable } = await import("@/lib/ap-intelligence/positioned-table-reconstruct");
+          const layout = await extractPdfLayout(bytes.bytes);
+          const table = reconstructLineItemTable(layout);
+
+          const perPageItemCount = new Map<number, number>();
+          for (const it of layout.items) {
+            perPageItemCount.set(it.page, (perPageItemCount.get(it.page) ?? 0) + 1);
+          }
+          const perPageVisualLineCount = new Map<number, number>();
+          for (const vl of layout.visualLines) {
+            perPageVisualLineCount.set(vl.page, (perPageVisualLineCount.get(vl.page) ?? 0) + 1);
+          }
+
+          // Header-region sampling: if header found, take items /
+          // visualLines within ±200 y-units on the header's page.
+          // Otherwise take the first 120 items and first 40 lines in
+          // document order.
+          const headerPage = table.headerFound && table.headerRowY != null
+            ? layout.visualLines.find((l) => l.y === table.headerRowY)?.page ?? 1
+            : layout.items[0]?.page ?? 1;
+          const headerY = table.headerRowY ?? layout.items[0]?.y ?? 0;
+
+          const inRegion = (page: number, y: number) => {
+            if (!table.headerFound) return true;
+            return page === headerPage && Math.abs(y - headerY) <= 300;
+          };
+
+          const itemsInRegion = layout.items
+            .filter((it) => inRegion(it.page, it.y))
+            .slice(0, 150)
+            .map((it) => ({
+              text: it.text.slice(0, 80),
+              page: it.page,
+              x: it.x,
+              y: it.y,
+              width: it.width,
+              height: it.height,
+            }));
+          const visualLinesInRegion = layout.visualLines
+            .filter((vl) => inRegion(vl.page, vl.y))
+            .slice(0, 60)
+            .map((vl) => ({
+              page: vl.page,
+              y: vl.y,
+              text: vl.text.slice(0, 200),
+              itemCount: vl.items.length,
+            }));
+
+          // Arithmetic relationships from reconstructed rows.
+          const arithmetic = table.lineItems
+            .filter((li) => li.quantity != null && li.unitPrice != null && li.amount != null)
+            .map((li) => {
+              const expected = Math.round((li.quantity! * li.unitPrice!) * 100) / 100;
+              const delta = Math.round((expected - li.amount!) * 100) / 100;
+              return {
+                page: li.page,
+                rowY: li.rowY,
+                qty: li.quantity,
+                unit: li.unitPrice,
+                amount: li.amount,
+                expected,
+                delta,
+                withinTolerance: Math.abs(delta) <= 0.02,
+              };
+            })
+            .slice(0, 30);
+
+          // Header row context — the actual text of the visualLine
+          // matched as header, if any.
+          const headerLine = table.headerFound && table.headerRowY != null
+            ? layout.visualLines.find((l) => l.y === table.headerRowY && l.page === headerPage)
+            : null;
+
+          positionalTrace = {
+            pageCount: layout.pageCount,
+            embeddedTextChars: layout.flattenedText.length,
+            totalPositionedItems: layout.items.length,
+            totalVisualLines: layout.visualLines.length,
+            perPageItemCount: [...perPageItemCount.entries()].sort((a, b) => a[0] - b[0])
+              .map(([page, count]) => ({ page, count })),
+            perPageVisualLineCount: [...perPageVisualLineCount.entries()].sort((a, b) => a[0] - b[0])
+              .map(([page, count]) => ({ page, count })),
+            layoutFallback: layout.items.length === 0
+              ? "COORDINATES_UNAVAILABLE_falling_back_to_flattened_text"
+              : null,
+            tableReconstruction: {
+              headerFound: table.headerFound,
+              headerRowY: table.headerRowY,
+              headerRowText: headerLine ? headerLine.text.slice(0, 200) : null,
+              headerRowItemCount: headerLine ? headerLine.items.length : 0,
+              detectedColumns: table.detectedColumns,
+              columnAlignmentConfidence: table.columnAlignmentConfidence,
+              lineItemCount: table.lineItems.length,
+              rejectedRowsCount: table.rejectedRows.length,
+              lineItems: table.lineItems.slice(0, 20).map((li) => ({
+                page: li.page,
+                rowY: li.rowY,
+                sku: li.sku,
+                description: li.description.slice(0, 120),
+                quantity: li.quantity,
+                unitPrice: li.unitPrice,
+                amount: li.amount,
+                supportingCellCount: li.supportingCellCount,
+                confidence: li.confidence,
+              })),
+              rejectedRows: table.rejectedRows.slice(0, 25).map((r) => ({
+                y: r.y,
+                text: r.text.slice(0, 100),
+                reason: r.reason,
+              })),
+              arithmetic,
+            },
+            invoiceRegionItemsSample: itemsInRegion,
+            visualLinesSample: visualLinesInRegion,
+          };
+        } catch (posErr) {
+          positionalTrace = {
+            error: posErr instanceof Error ? posErr.message : String(posErr),
+          };
+        }
+      }
+
+      if (parsed.data.extractorDiff) {
+        try {
+          // Use the flattened text from pdf-parse (the exact input the
+          // production line-item extractors consume today).
+          const pdfParse = (await import("pdf-parse")).default;
+          const parsedPdf = await pdfParse(bytes.bytes);
+          const text = (parsedPdf.text ?? "").trim();
+          const pageCount = parsedPdf.numpages ?? 1;
+
+          const { extractLineItemsFromText } = await import("@/lib/ap-intelligence/evidence/line-items");
+          const { extractLineItems } = await import("@/lib/ap-intelligence/line-items-extract");
+          const pathA = extractLineItemsFromText(text, pageCount);
+          const pathB = extractLineItems(text);
+
+          const pathADescs = new Set(pathA.lineItems.map((l) => l.description.value));
+          const pathBDescs = new Set(pathB.map((l) => l.description));
+          const onlyInA = [...pathADescs].filter((d) => !pathBDescs.has(d)).slice(0, 10);
+          const onlyInB = [...pathBDescs].filter((d) => !pathADescs.has(d)).slice(0, 10);
+
+          lineItemPaths = {
+            pathA_build_canonical_evidence: {
+              source: "src/lib/ap-intelligence/evidence/line-items.ts :: extractLineItemsFromText",
+              lineItemCount: pathA.lineItems.length,
+              creditCount: pathA.credits.length,
+              surchargeCount: pathA.surcharges.length,
+              interestOrPenaltyCount: pathA.interestOrPenalty.length,
+              conflictCount: pathA.conflicts.length,
+              lineItems: pathA.lineItems.slice(0, 15).map((l) => ({
+                description: l.description.value.slice(0, 120),
+                quantity: l.quantity?.value ?? null,
+                unitPrice: l.unitPrice?.value ?? null,
+                amount: l.amount.value,
+              })),
+              credits: pathA.credits.slice(0, 5).map((l) => ({
+                description: l.description.value.slice(0, 120),
+                amount: l.amount.value,
+              })),
+              surcharges: pathA.surcharges.slice(0, 5).map((l) => ({
+                description: l.description.value.slice(0, 120),
+                amount: l.amount.value,
+              })),
+              conflicts: pathA.conflicts.slice(0, 5),
+            },
+            pathB_analyse_pipeline: {
+              source: "src/lib/ap-intelligence/line-items-extract.ts :: extractLineItems",
+              lineItemCount: pathB.length,
+              lineItems: pathB.slice(0, 15).map((l) => ({
+                description: l.description.slice(0, 120),
+                quantity: l.quantity,
+                unitPrice: l.unitPrice,
+                amount: l.amount,
+                taxTreatment: l.taxTreatment,
+                confidence: l.confidence,
+                evidence: l.evidence,
+              })),
+            },
+            divergence: {
+              descriptionsOnlyInPathA: onlyInA,
+              descriptionsOnlyInPathB: onlyInB,
+              countDelta: pathA.lineItems.length - pathB.length,
+            },
+          };
+        } catch (diffErr) {
+          lineItemPaths = {
+            error: diffErr instanceof Error ? diffErr.message : String(diffErr),
+          };
+        }
+      }
+    } catch (bytesErr) {
+      const msg = bytesErr instanceof Error ? bytesErr.message : String(bytesErr);
+      if (parsed.data.positionalTrace) positionalTrace = { bytesError: msg };
+      if (parsed.data.extractorDiff) lineItemPaths = { bytesError: msg };
     }
   }
 
@@ -389,5 +735,7 @@ export async function POST(req: Request) {
     graphProbe,
     analyseResult,
     extractedTextSample,
+    positionalTrace,
+    lineItemPaths,
   });
 }
