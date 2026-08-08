@@ -84,6 +84,14 @@ import { reconstructLineItemTable, type TableReconstructResult } from "./positio
 // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — the ONE line-item authority.
 import { extractCanonicalLineItems } from "./canonical-line-item-extractor";
 import type { CanonicalLineItem } from "./evidence/canonical-line-item";
+// Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level trigger
+// evaluation, targeted OCR dispatch, and visual-branding evidence.
+import { evaluateOcrTriggers, OCR_TRIGGER_ENABLED, type OcrTriggerDecision } from "./ocr/ocr-trigger-reasons";
+import { requestOcrExtraction } from "./ocr/enqueue";
+import { findOcrExtraction } from "./ocr/persistence";
+import { OCR_EXTRACTION_VERSION, OCR_PROVIDER_ID_AWS_TEXTRACT, resolveDailyTargetedOcrCap, TARGETED_OCR_TRIGGERS } from "./ocr/config";
+import { extractVisualBrandingEvidence } from "./ocr/visual-branding-extractor";
+import type { SupplierIdentityEvidence } from "./evidence/supplier-identity";
 // Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — structural-quality
 // reclassification + escalation trigger. When embedded text was
 // extracted but the RESULT shows structural degradation (rejected
@@ -92,7 +100,6 @@ import type { CanonicalLineItem } from "./evidence/canonical-line-item";
 // strategy (positioned layout OR persisted Textract).
 import { assessStructuralQuality } from "./structural-quality";
 import { extractFromPositionedLayout } from "./positioned-extract";
-import { requestOcrExtraction } from "./ocr/enqueue";
 
 export interface ApAnalyseArgs {
   clubId: string;
@@ -256,6 +263,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   let canonicalLineItemExtractionDiagnostic: string | null = null;
   let canonicalLineItemPages: Array<{ page: number; pageClass: string; itemsProduced: number; routedTo: string }> = [];
   let canonicalOcrPending = false;
+  // Sprint 3 · Phase 4 Slice 5.1 — page-level trigger + OCR fusion + visual branding.
+  let ocrTriggerDecisions: OcrTriggerDecision[] = [];
+  let targetedOcrDispatchLog: Array<{ page: number; reasons: string[]; outcome: string; rowIdTail: string }> = [];
+  let visualBrandingEvidence: SupplierIdentityEvidence[] = [];
+  let fusedOcrExtractionRowIds: string[] = [];
   let accountingNatureAssessment: AccountingNatureAssessment | null = null;
   // Sprint 3 · Checkpoint 15Y-Rejected — keep the PdfLayout in
   // scope so the positioned-layout rescue path can consume it
@@ -370,6 +382,125 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
             message: (e as Error).message.slice(0, 200),
           });
         }
+
+        // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — per-page
+        // trigger evaluation + targeted-OCR dispatch. Runs AFTER
+        // native extraction so triggers see the actual native
+        // outcome (item counts, region detection). For each page
+        // whose trigger fires: check persistence first (idempotent),
+        // enqueue if missing, fuse if present.
+        try {
+          const pagesToEvaluate = routed.layout.pages ?? [];
+          const dailyCap = resolveDailyTargetedOcrCap();
+          let targetedThisTurn = 0;
+          for (const pd of pagesToEvaluate) {
+            const regionsOnPage: import("./line-item-region-strategies").LineItemRegion[] = [];
+            const nativeItemsOnPage = canonicalLineItemsFromLayout.filter((li) => li.page === pd.page);
+            const decision = evaluateOcrTriggers({
+              layout: routed.layout,
+              pageDescriptor: pd,
+              regionsOnPage,
+              nativeItemsOnPage,
+            });
+            ocrTriggerDecisions.push(decision);
+            if (!decision.shouldOcr) continue;
+
+            // Look for a persisted OCR row for this page (idempotent).
+            const persisted = await findOcrExtraction({
+              clubId: args.clubId,
+              documentSha256: doc.sha256Hash,
+              provider: OCR_PROVIDER_ID_AWS_TEXTRACT,
+              extractionVersion: OCR_EXTRACTION_VERSION,
+              pageNumber: pd.page,
+            });
+            if (persisted) {
+              if (persisted.status === "SUCCEEDED" && persisted.normalizedExtractionJson) {
+                try {
+                  const ocrCanonical = JSON.parse(persisted.normalizedExtractionJson) as import("./document-extractors/canonical-model").CanonicalDocumentExtraction;
+                  // Re-run canonical extraction with fusion.
+                  const fused = await extractCanonicalLineItems({
+                    layout: routed.layout,
+                    flattenedText: pdfText,
+                    pageCount: routed.layout.pageCount,
+                    ocrExtraction: ocrCanonical,
+                    ocrSourcePageNumber: pd.page,
+                  });
+                  canonicalLineItemsFromLayout = fused.lineItems;
+                  canonicalLineItemExtractionDiagnostic = fused.diagnostic;
+                  fusedOcrExtractionRowIds.push(persisted.id);
+                  // Also produce visual-branding evidence from this
+                  // OCR result. Corroborative only; the frozen
+                  // supplier-identity orchestrator picks it up via
+                  // canonicalEvidence.visualBrandingEvidence.
+                  const branding = extractVisualBrandingEvidence(ocrCanonical, { sourcePageNumber: pd.page });
+                  for (const b of branding) visualBrandingEvidence.push(b);
+                  targetedOcrDispatchLog.push({
+                    page: pd.page,
+                    reasons: decision.triggered,
+                    outcome: "FUSED_PERSISTED",
+                    rowIdTail: persisted.id.slice(-8),
+                  });
+                } catch (fusionErr) {
+                  logger.warn("ap-intelligence.ocr.fusion.error", {
+                    clubId: args.clubId, docIdTail: doc.id.slice(-6),
+                    pageNumber: pd.page,
+                    message: (fusionErr as Error).message.slice(0, 200),
+                  });
+                }
+                continue;
+              }
+              // Row exists but is PENDING / PROCESSING / FAILED_*.
+              targetedOcrDispatchLog.push({
+                page: pd.page,
+                reasons: decision.triggered,
+                outcome: `PERSISTED_${persisted.status}`,
+                rowIdTail: persisted.id.slice(-8),
+              });
+              continue;
+            }
+
+            // Cost ceiling gate — only count targeted (non-IMAGE_ONLY) triggers.
+            const isTargeted = decision.triggered.some((r) => TARGETED_OCR_TRIGGERS.has(r));
+            if (isTargeted && dailyCap != null && targetedThisTurn >= dailyCap) {
+              targetedOcrDispatchLog.push({
+                page: pd.page,
+                reasons: decision.triggered,
+                outcome: "CAP_REACHED_TRUTHFUL_ABSTAIN",
+                rowIdTail: "-",
+              });
+              continue;
+            }
+
+            // Enqueue targeted OCR (or IMAGE_ONLY OCR) for this page.
+            // Router's canonicalExtraction, when present, already
+            // carries a documentClass classification; otherwise
+            // default to the neutral "INVOICE" class (the router's
+            // own default).
+            const documentClass: import("./document-class").DocumentClass =
+              routed.canonicalExtraction?.documentClass ?? "TEXT_HEALTHY";
+            const requested = await requestOcrExtraction({
+              clubId: args.clubId,
+              ingestedDocumentId: doc.id,
+              documentSha256: doc.sha256Hash,
+              documentClass,
+              strategy: "PAGE_TARGETED_OCR",
+              pageNumber: pd.page,
+              triggerReason: decision.triggered[0],
+            });
+            if (isTargeted) targetedThisTurn++;
+            targetedOcrDispatchLog.push({
+              page: pd.page,
+              reasons: decision.triggered,
+              outcome: `ENQUEUE_${requested.reason.toUpperCase()}`,
+              rowIdTail: requested.row.id.slice(-8),
+            });
+          }
+        } catch (te) {
+          logger.warn("ap-intelligence.ocr.trigger.error", {
+            clubId: args.clubId, docIdTail: doc.id.slice(-6),
+            message: (te as Error).message.slice(0, 200),
+          });
+        }
       }
       // If Textract succeeded, its canonical extraction is the
       // authoritative source of supplier / payable / total / lines
@@ -379,6 +510,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       if (routed.canonicalExtraction) {
         canonicalExtraction = routed.canonicalExtraction;
         pdfText = synthesizePdfTextFromCanonical(canonicalExtraction, pdfText);
+        // Slice 5.1 amendment #4 — extract visual-branding evidence
+        // from the router's own OCR result too (image-only path).
+        try {
+          const branding = extractVisualBrandingEvidence(routed.canonicalExtraction);
+          for (const b of branding) visualBrandingEvidence.push(b);
+        } catch { /* diagnostic-only; never fatal */ }
         pdfOk = pdfText.trim().length > 0;
         // Supplier region text — assemble from canonical extraction.
         if (canonicalExtraction.fields.supplierName || canonicalExtraction.fields.supplierAddress) {

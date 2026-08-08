@@ -63,6 +63,7 @@
     "iron-session": "^8.0.4",
     "next": "14.2.18",
     "nodemailer": "^8.0.8",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.4",
     "pdfkit": "^0.18.0",
     "playwright": "^1.60.0",

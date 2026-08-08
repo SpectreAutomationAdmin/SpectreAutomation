@@ -9137,7 +9137,11 @@ model DocumentOcrExtraction {
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
-  @@unique([clubId, documentSha256, provider, extractionVersion])
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch.
+  pageNumber                Int      @default(0)
+  regionKey                 String?
+
+  @@unique([clubId, documentSha256, provider, extractionVersion, pageNumber])
   @@index([clubId, status])
   @@index([ingestedDocumentId])
   @@index([clubId, updatedAt])

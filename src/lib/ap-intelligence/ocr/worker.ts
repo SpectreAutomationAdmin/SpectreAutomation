@@ -44,6 +44,10 @@ import { runTextractExpense } from "../document-extractors/aws-textract-expense"
 import { normalizeTextractExpense } from "../document-extractors/textract-to-canonical";
 import type { DocumentClass } from "../document-class";
 import { recordOcrCallTelemetry } from "./telemetry";
+// Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch +
+// async re-analyse re-enqueue.
+import { extractSinglePagePdf, classifySplitError } from "../document-extractors/page-pdf-split";
+import { enqueue as enqueueJob } from "@/lib/queue";
 
 export interface OcrJobPayload {
   extractionRowId: string;
@@ -158,12 +162,53 @@ export async function runAPDocumentOcrJob(args: {
       sanitizedErrorCode: "DOCUMENT_BYTES_UNAVAILABLE",
     };
   }
-  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const rawBuffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch.
+  // When the persistence row records a specific page (pageNumber ≥ 1),
+  // extract that single page into its own PDF byte payload before
+  // handing it to Textract. `pageNumber = 0` preserves the pre-5.1
+  // whole-document semantics (image-only single-page uploads).
+  let buffer: Buffer = rawBuffer;
+  if (claimed.pageNumber >= 1 && /pdf$/i.test(doc.mimeType)) {
+    try {
+      const single = await extractSinglePagePdf(rawBuffer, claimed.pageNumber, doc.sha256Hash);
+      buffer = single.bytes;
+      logger.info("ap-intelligence.ocr.worker.page_split", {
+        extractionRowIdTail: extractionRowId.slice(-8),
+        pageNumber: claimed.pageNumber,
+        singlePageBytes: single.byteLength,
+        sourcePages: single.sourcePageCount,
+      });
+    } catch (splitErr) {
+      const code = classifySplitError(splitErr);
+      await markExtractionTerminal({
+        id: extractionRowId,
+        sanitizedErrorCode: code,
+      });
+      recordOcrCallTelemetry({
+        clubId: claimed.clubId,
+        extractionRowIdTail: extractionRowId.slice(-8),
+        documentClass: claimed.documentClass,
+        outcome: "TERMINAL_FAIL",
+        sanitizedErrorCode: code,
+        attempt: claimed.attemptCount,
+        latencyMs: Date.now() - started,
+        byteLength: rawBuffer.length,
+        pageCount: 1,
+        providerRegion: claimed.providerRegion,
+        strategy: claimed.strategy,
+      });
+      return {
+        extractionRowId,
+        outcome: "TERMINAL_FAIL",
+        sanitizedErrorCode: code,
+      };
+    }
+  }
 
   // §6 verified input path: AWS Textract AnalyzeExpense sync mode
   // accepts { Document: { Bytes } } for single-page PDF up to 10 MB.
-  // See src/lib/ap-intelligence/document-extractors/aws-textract-expense.ts
-  // for the size / page / MIME gates.
   const providerResult = await runTextractExpense({
     bytes: buffer,
     mimeType: doc.mimeType,
@@ -261,6 +306,41 @@ export async function runAPDocumentOcrJob(args: {
     clubId: claimed.clubId,
     ingestedDocumentId: claimed.ingestedDocumentId,
   });
+
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08, amendment #5) — eager
+  // AP re-analyse. OCR completion must update canonical analysis
+  // WITHOUT requiring Mission Control to render. Enqueue a
+  // background AP_INVOICE_REANALYSE job idempotently so multiple
+  // page-level OCR completions for the same document collapse to
+  // one re-analysis.
+  try {
+    const { apInvoiceReanalyseIdempotencyKey } = await import("../reanalyse-worker");
+    await enqueueJob({
+      kind: "AP_INVOICE_REANALYSE",
+      queue: "default",
+      clubId: claimed.clubId,
+      payload: {
+        clubId: claimed.clubId,
+        ingestedDocumentId: claimed.ingestedDocumentId,
+        triggerSource: "ocr",
+      },
+      idempotencyKey: apInvoiceReanalyseIdempotencyKey({
+        clubId: claimed.clubId,
+        ingestedDocumentId: claimed.ingestedDocumentId,
+      }),
+      maxAttempts: 3,
+    });
+    logger.info("ap-intelligence.ocr.worker.reanalyse_enqueued", {
+      extractionRowIdTail: saved.id.slice(-8),
+      docIdTail: claimed.ingestedDocumentId.slice(-6),
+      pageNumber: claimed.pageNumber,
+    });
+  } catch (reErr) {
+    logger.warn("ap-intelligence.ocr.worker.reanalyse_enqueue_failed", {
+      extractionRowIdTail: saved.id.slice(-8),
+      message: (reErr as Error).message.slice(0, 200),
+    });
+  }
 
   recordOcrCallTelemetry({
     clubId: saved.clubId,

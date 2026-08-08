@@ -135,3 +135,30 @@ export const OCR_MAX_ATTEMPTS = 3;
 export const OCR_BACKOFF_BASE_MS = 5_000;
 // Cap so a single doc can never wait longer than this before giving up.
 export const OCR_BACKOFF_MAX_MS = 5 * 60_000;
+
+// -----------------------------------------------------------------------------
+// Sprint 3 · Phase 4 Slice 5.1 (2026-08-08, amendment #7) — daily
+// targeted-OCR cost ceiling. Configurable via env; unset = no
+// ceiling (telemetry-only mode). When the ceiling is reached the
+// router MUST fail truthfully to pending/review; never substitutes
+// low-quality body or flattened-text guesses.
+// -----------------------------------------------------------------------------
+
+/** Per-club daily cap on targeted-OCR invocations. Unset / 0 = no
+ *  cap (telemetry-only). */
+export function resolveDailyTargetedOcrCap(): number | null {
+  const raw = process.env.SPECTRE_OCR_TARGETED_DAILY_CAP_PER_CLUB;
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+/** Trigger reasons that count against the daily cap. IMAGE_ONLY
+ *  routing is not a "targeted" call — it's forced by the document's
+ *  absence of text — so it doesn't consume cap budget. */
+export const TARGETED_OCR_TRIGGERS = new Set([
+  "CLASSIC_TABLE_FUSED_ROW",
+  "SUPPLIER_AMBIGUOUS_VISUAL_CANDIDATE",
+  "TOTALS_UNRECONCILED_WITH_LINE_ITEMS",
+]);

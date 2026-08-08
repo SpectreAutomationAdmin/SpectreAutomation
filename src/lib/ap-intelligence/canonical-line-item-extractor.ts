@@ -46,6 +46,14 @@ import {
   validateRowArithmetic,
 } from "./evidence/canonical-line-item";
 import { extractLineItems as flattenedFallbackExtract } from "./line-items-extract";
+// Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — Textract-normalised
+// canonical line items + fusion with native evidence. When the caller
+// supplies a `ocrExtraction`, we normalise its line items into the
+// Slice-5 CanonicalLineItem shape and fuse them with the native
+// positioned rows via `fuseNativeAndOcrLineItems`.
+import type { CanonicalDocumentExtraction } from "./document-extractors/canonical-model";
+import { normalizeTextractLineItemsToSlice5 } from "./ocr/textract-to-slice5-line-items";
+import { fuseNativeAndOcrLineItems } from "./ocr/native-ocr-fusion";
 
 // -----------------------------------------------------------------------------
 // Public API
@@ -64,6 +72,16 @@ export interface CanonicalLineItemExtractionInput {
   /** Known page count (from analyseIngestedInvoice). Used for the
    *  flattened fallback. */
   pageCount?: number | null;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — provider-neutral
+   *  OCR extraction (from Textract or another provider). When
+   *  supplied, the extractor normalises the provider line items
+   *  into the Slice-5 CanonicalLineItem shape and fuses them with
+   *  the native positioned rows. */
+  ocrExtraction?: CanonicalDocumentExtraction | null;
+  /** Source page number of the OCR extraction (relative to the
+   *  ORIGINAL source document, not the single-page extract sent to
+   *  the provider). Defaults to 1. */
+  ocrSourcePageNumber?: number;
 }
 
 export interface CanonicalLineItemExtractionResult {
@@ -222,9 +240,37 @@ export async function extractCanonicalLineItems(
   // description), keep the higher-confidence one. Guards against
   // OXIO-shape documents where a summary panel might overlap with a
   // detail block.
-  const deduped = dedupeCrossStrategy(items);
+  let deduped = dedupeCrossStrategy(items);
 
-  const diagnostic = `strategies=[${[...strategiesUsed].join(",")}] regions=${regions.length} items=${deduped.length} pages=${perPage.map((p) => `${p.page}:${p.pageClass}→${p.routedTo}(${p.itemsProduced})`).join(", ")}${ocrPending ? " OCR_PENDING" : ""}`;
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — fuse Textract-
+  // normalised OCR line items with the native positioned rows.
+  // Preserves both sources on `evidence[]`; canonical reconciliation
+  // (in analyse.ts) decides the selected numeric value.
+  let fusionDiag = "";
+  if (input.ocrExtraction && input.ocrExtraction.lineItems.length > 0) {
+    const ocrItems = normalizeTextractLineItemsToSlice5(input.ocrExtraction, {
+      sourcePageNumber: input.ocrSourcePageNumber ?? 1,
+    });
+    if (ocrItems.length > 0) {
+      const fusion = fuseNativeAndOcrLineItems(deduped, ocrItems);
+      deduped = fusion.items;
+      for (const li of fusion.items) {
+        strategiesUsed.add(li.sourceStrategy);
+      }
+      // OCR admittances also count as strategy usage.
+      for (const m of fusion.matches) {
+        if (m.matchStrategy === "OCR_ONLY_ADMITTED" || m.matchStrategy === "MERGED_NATIVE_AND_OCR") {
+          strategiesUsed.add("TEXTRACT_LINE_ITEM");
+        }
+      }
+      fusionDiag = ` fusion={merged:${fusion.diagnostic.mergedCount},nativeOnly:${fusion.diagnostic.nativeOnlyCount},ocrAdmitted:${fusion.diagnostic.ocrOnlyAdmittedCount},ocrRejected:${fusion.diagnostic.ocrOnlyRejectedCount}}`;
+      // Once we fused OCR content, the doc is no longer "OCR pending" —
+      // OCR results are now present in canonical evidence.
+      ocrPending = false;
+    }
+  }
+
+  const diagnostic = `strategies=[${[...strategiesUsed].join(",")}] regions=${regions.length} items=${deduped.length} pages=${perPage.map((p) => `${p.page}:${p.pageClass}→${p.routedTo}(${p.itemsProduced})`).join(", ")}${ocrPending ? " OCR_PENDING" : ""}${fusionDiag}`;
 
   return {
     lineItems: deduped,

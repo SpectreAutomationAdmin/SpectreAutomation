@@ -9166,7 +9166,17 @@ model DocumentOcrExtraction {
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
-  @@unique([clubId, documentSha256, provider, extractionVersion])
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level OCR
+  // dispatch. Persistence identity extends to include the specific
+  // page the extraction covers so mixed digital+scanned PDFs can
+  // run OCR page-by-page independently. `pageNumber = 0` reserved
+  // for whole-document extractions (pre-5.1 rows migrate to 0).
+  // A future deterministic `regionKey` can be added without
+  // breaking the current key.
+  pageNumber                Int      @default(0)
+  regionKey                 String?
+
+  @@unique([clubId, documentSha256, provider, extractionVersion, pageNumber])
   @@index([clubId, status])
   @@index([ingestedDocumentId])
   @@index([clubId, updatedAt])

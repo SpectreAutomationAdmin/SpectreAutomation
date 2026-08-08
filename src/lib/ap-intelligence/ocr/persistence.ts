@@ -56,6 +56,14 @@ export interface OcrExtractionRow {
   completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level identity
+   *  extension. `0` = whole-document extraction (pre-5.1 semantics
+   *  and the default for image-only single-page documents). `≥1` =
+   *  specific page. */
+  pageNumber: number;
+  /** Reserved for a future deterministic region identifier. Nullable
+   *  now; when populated, participates in identity. */
+  regionKey: string | null;
 }
 
 // -----------------------------------------------------------------------------
@@ -72,6 +80,9 @@ export interface OcrIdentity {
   documentSha256: string;
   provider: string;
   extractionVersion: number;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level identity.
+   *  Default `0` preserves the pre-5.1 whole-document semantics. */
+  pageNumber?: number;
 }
 
 /**
@@ -80,7 +91,8 @@ export interface OcrIdentity {
  * so a concurrent enqueue + insert cannot deadlock into two rows.
  */
 export function ocrIdempotencyKey(identity: OcrIdentity): string {
-  return `ap-doc-ocr:${identity.clubId}:${identity.documentSha256}:${identity.provider}:${identity.extractionVersion}`;
+  const page = identity.pageNumber ?? 0;
+  return `ap-doc-ocr:${identity.clubId}:${identity.documentSha256}:${identity.provider}:${identity.extractionVersion}:p${page}`;
 }
 
 /**
@@ -88,12 +100,14 @@ export function ocrIdempotencyKey(identity: OcrIdentity): string {
  * Used by the strategy router before deciding to enqueue.
  */
 export async function findOcrExtraction(identity: OcrIdentity): Promise<OcrExtractionRow | null> {
+  const page = identity.pageNumber ?? 0;
   return prisma.documentOcrExtraction.findFirst({
     where: {
       clubId: identity.clubId,
       documentSha256: identity.documentSha256,
       provider: identity.provider,
       extractionVersion: identity.extractionVersion,
+      pageNumber: page,
     },
     orderBy: { createdAt: "desc" },
   }) as Promise<OcrExtractionRow | null>;
@@ -140,14 +154,19 @@ export async function createOrReturnPendingExtraction(args: {
   provider?: string;
   providerApi?: string;
   providerRegion?: string | null;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch. */
+  pageNumber?: number;
+  regionKey?: string | null;
 }): Promise<{ row: OcrExtractionRow; created: boolean }> {
   const provider = args.provider ?? OCR_PROVIDER_ID_AWS_TEXTRACT;
   const providerApi = args.providerApi ?? OCR_PROVIDER_API_ANALYZE_EXPENSE;
+  const pageNumber = args.pageNumber ?? 0;
   const identity: OcrIdentity = {
     clubId: args.clubId,
     documentSha256: args.documentSha256,
     provider,
     extractionVersion: OCR_EXTRACTION_VERSION,
+    pageNumber,
   };
   const existing = await findOcrExtraction(identity);
   if (existing) return { row: existing, created: false };
@@ -166,6 +185,8 @@ export async function createOrReturnPendingExtraction(args: {
         strategy: args.strategy,
         status: "PENDING" satisfies OcrExtractionStatus,
         attemptCount: 0,
+        pageNumber,
+        regionKey: args.regionKey ?? null,
       },
     })) as OcrExtractionRow;
     return { row, created: true };

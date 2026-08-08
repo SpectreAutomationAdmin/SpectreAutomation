@@ -226,6 +226,19 @@ registerHandler<{
   return runApMaterialiseRecovery(payload);
 });
 
+// Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — AP re-analyse after
+// OCR completion. See src/lib/ap-intelligence/reanalyse-worker.ts.
+registerHandler<{
+  clubId: string;
+  ingestedDocumentId: string;
+  triggerSource: "ocr" | "manual";
+}>("AP_INVOICE_REANALYSE", async ({ payload, jobId }) => {
+  const { runAPInvoiceReanalyseJob } = await import(
+    "../ap-intelligence/reanalyse-worker"
+  );
+  return runAPInvoiceReanalyseJob({ jobId, payload });
+});
+
 /**
  * Sprint 2 B4.1 — Which mailbox JobKinds are implemented today. Used
  * by a future health endpoint to distinguish "reserved" from "live".

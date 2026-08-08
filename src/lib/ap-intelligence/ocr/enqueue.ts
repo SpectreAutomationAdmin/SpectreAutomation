@@ -37,6 +37,18 @@ export interface RequestOcrArgs {
   documentSha256: string;
   documentClass: DocumentClass;
   strategy: string;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch.
+   *  `0` = whole-document (pre-5.1 semantics); `≥1` = specific page.
+   *  Router callers should pass the target page for targeted OCR
+   *  extractions and rely on the page-splitter to hand the worker
+   *  the correct single-page byte payload. */
+  pageNumber?: number;
+  /** Optional targeted-region identifier for future region-scoped
+   *  extractions. Preserved on the persisted row for provenance. */
+  regionKey?: string | null;
+  /** Human-readable trigger reason (from ocr-trigger-reasons.ts)
+   *  captured for diagnostics only. Never controls provider dispatch. */
+  triggerReason?: string;
 }
 
 export interface RequestOcrResult {
@@ -62,12 +74,14 @@ export async function requestOcrExtraction(args: RequestOcrArgs): Promise<Reques
   const provider = OCR_PROVIDER_ID_AWS_TEXTRACT;
   const providerApi = OCR_PROVIDER_API_ANALYZE_EXPENSE;
   const region = resolveTextractRegion();
+  const pageNumber = args.pageNumber ?? 0;
 
   const existing = await findOcrExtraction({
     clubId: args.clubId,
     documentSha256: args.documentSha256,
     provider,
     extractionVersion: OCR_EXTRACTION_VERSION,
+    pageNumber,
   });
   if (existing) {
     if (existing.status === "SUCCEEDED" || existing.status === "FAILED_TERMINAL") {
@@ -85,19 +99,15 @@ export async function requestOcrExtraction(args: RequestOcrArgs): Promise<Reques
     provider,
     providerApi,
     providerRegion: region.ok ? region.region : null,
+    pageNumber,
+    regionKey: args.regionKey ?? null,
   });
 
   if (!created) {
-    // A concurrent writer inserted the row; do not enqueue a
-    // duplicate — the DB uniqueness proves the other writer either
-    // already enqueued or is about to.
     return { ok: true, row, enqueued: false, reason: "already_pending" };
   }
 
   if (!isOcrEnabled()) {
-    // Row persisted PENDING; no worker call queued. Projection
-    // renders honest "pending" state. Flipping the env var later
-    // will let the worker pick up the row on its next queue tick.
     logger.info("ap-intelligence.ocr.enqueue.disabled", {
       extractionRowIdTail: row.id.slice(-8),
       clubId: args.clubId,
@@ -110,6 +120,7 @@ export async function requestOcrExtraction(args: RequestOcrArgs): Promise<Reques
     documentSha256: args.documentSha256,
     provider,
     extractionVersion: OCR_EXTRACTION_VERSION,
+    pageNumber,
   });
   await enqueue({
     kind: "AP_DOCUMENT_OCR",
@@ -124,6 +135,8 @@ export async function requestOcrExtraction(args: RequestOcrArgs): Promise<Reques
     clubId: args.clubId,
     documentClass: args.documentClass,
     strategy: args.strategy,
+    pageNumber,
+    triggerReason: args.triggerReason ?? null,
   });
   return { ok: true, row, enqueued: true, reason: "enqueued_new" };
 }

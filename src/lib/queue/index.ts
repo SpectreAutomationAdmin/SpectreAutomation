@@ -76,7 +76,20 @@ export type JobKind =
   // when the ApIntakeSource already exists. Payload:
   //   { clubId: string; ingestedDocumentId: string; emailAttachmentId?: string; emailMessageId?: string }
   // Handler: src/lib/ap-intelligence/materialise-recovery.ts
-  | "AP_MATERIALISE_RECOVERY";
+  | "AP_MATERIALISE_RECOVERY"
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — eager AP re-analyse
+  // after OCR success. Enqueued by the OCR worker when
+  // DocumentOcrExtraction transitions to SUCCEEDED so canonical
+  // analysis + Work Intake projection update automatically without
+  // requiring Mission Control to render.
+  //
+  // Idempotency: enqueue with key
+  //   `ap-reanalyse:{clubId}:{ingestedDocumentId}`
+  // Multiple OCR completions for pages of the same document collapse
+  // to one re-analyse. Handler is a no-op when no state has changed.
+  // Payload: { clubId, ingestedDocumentId, triggerSource: "ocr" | "manual" }
+  // Handler: src/lib/ap-intelligence/reanalyse-worker.ts
+  | "AP_INVOICE_REANALYSE";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;
