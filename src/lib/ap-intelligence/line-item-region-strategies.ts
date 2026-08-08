@@ -304,8 +304,17 @@ export function reconstructClassicColumnTable(
       const b = candidates[j];
       if (b.page !== a.page) continue;
       if (Math.abs(b.y - a.y) > 25) continue;
-      const bDescShort = b.descRaw.length < 3 || /^[\d.,\s]+$/.test(b.descRaw);
-      if (!b.hasAmount || !bDescShort) continue;
+      // §1 completion-pass amendment: only merge when B is genuinely
+      // amount-only. "2 30629" (a new row's line# + product-code) is
+      // NOT amount-only even though it matches the previous digit-only
+      // check — it's the leading prefix of a fresh product row. Reject
+      // unless (a) B's descRaw is empty, (b) it's a single ≤3-char
+      // numeric like a bare "1", or (c) leadingTokens match A's.
+      const bLeadingTokenMatchesA = a.leadingToken != null && b.leadingToken != null && a.leadingToken === b.leadingToken;
+      const bLooksLikeContinuation = b.descRaw === ""
+        || /^\d{1,3}$/.test(b.descRaw.trim())
+        || bLeadingTokenMatchesA;
+      if (!b.hasAmount || !bLooksLikeContinuation) continue;
       // Reject the merge if any OTHER candidate with a substantive
       // description sits between A and B on the y axis.
       const [loY, hiY] = a.y < b.y ? [a.y, b.y] : [b.y, a.y];
@@ -340,15 +349,21 @@ export function reconstructClassicColumnTable(
     if (merged.has(i)) continue; // consumed by an earlier merge
     const c = candidates[i];
 
-    // Wrapped description merge into the previous emitted item — same
-    // rule as before but running against the merged candidate set.
+    // Wrapped description merge into the previous emitted item.
+    // §1 completion-pass amendment: y-band widened from 20 → 32 so
+    // multi-line description blocks (multiple continuation lines +
+    // Serial#/Model# labels) attach to the primary purchase row
+    // rather than each becoming a spurious PRIMARY_PURCHASE. Guard
+    // rows: only wrap when the candidate has no numeric evidence AND
+    // its distance to the previous ITEM'S ANCHOR y is within the
+    // continuation window. The row is otherwise emitted normally.
     if (!c.hasAmount
         && c.descRaw.length > 0
         && !c.skuRaw
         && c.qtyResolved.value == null
         && items.length > 0) {
       const prev = items[items.length - 1];
-      if (c.y - (prev.region?.y ?? 0) < 20 && prev.description.length < 200) {
+      if (c.y - (prev.region?.y ?? 0) < 32 && prev.description.length < 200) {
         prev.description = `${prev.description} ${c.descRaw}`.trim().slice(0, 200);
         prev.evidence.push({ kind: "wrapped_description_merge", detail: c.descRaw.slice(0, 60) });
         continue;
