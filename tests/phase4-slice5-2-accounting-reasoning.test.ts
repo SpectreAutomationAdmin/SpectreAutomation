@@ -115,6 +115,57 @@ describe("Slice 5.2 · buildTransactionalText (amendment #4)", () => {
 });
 
 // -----------------------------------------------------------------------------
+// Amendment #4/5 — evidence-quality gate: SURCHARGE vocabulary hits
+// do NOT count as discriminative primary-purchase evidence
+// (Oakcreek 1091559 "Alberta Tire Levy" case)
+// -----------------------------------------------------------------------------
+describe("Slice 5.2 completion · evidence-quality gate treats surcharges as auxiliary", () => {
+  it("SURCHARGE line 'Alberta Tire Levy' does NOT elevate a summary-shape primary to HIGH quality", async () => {
+    const { assessPurposeEvidenceQuality } = await import("@/lib/ap-intelligence/purpose-evidence-quality");
+    const decision = {
+      source: "CANONICAL_COMMITTED" as const,
+      concept: "EQUIPMENT_PARTS" as const,
+      confidence: 96,
+      label: "Equipment parts / consumables",
+      canonicalTop3: [], legacyCandidates: [],
+      diagnostic: "test",
+    };
+    const items: CanonicalLineItem[] = [
+      // Summary-shape primary (Oakcreek 1091559 archetype)
+      li({ description: "2 Lines Total", extension: 74112, role: "PRIMARY_PURCHASE" }),
+      // Auxiliary surcharge that HAPPENS to contain vocabulary
+      li({ description: "Alberta Tire Levy ADF", extension: 15, role: "SURCHARGE" }),
+      // Tax
+      li({ description: "G.S.T./H.S.T.", extension: 3706.35, role: "TAX" }),
+    ];
+    const q = assessPurposeEvidenceQuality(decision, items);
+    expect(q.quality).toBe("LOW");
+    expect(q.commitEligible).toBe(false);
+    expect(q.reason).toBe("PRIMARY_PURCHASE_DESCRIPTION_UNRESOLVED");
+    expect(q.hasDiscriminativeMatch).toBe(false);
+  });
+  it("PRIMARY_PURCHASE line with discriminative vocabulary IS HIGH quality (DMM archetype)", async () => {
+    const { assessPurposeEvidenceQuality } = await import("@/lib/ap-intelligence/purpose-evidence-quality");
+    const decision = {
+      source: "CANONICAL_COMMITTED" as const,
+      concept: "FUEL" as const,
+      confidence: 96,
+      label: "Fuel / petroleum product",
+      canonicalTop3: [], legacyCandidates: [],
+      diagnostic: "test",
+    };
+    const items: CanonicalLineItem[] = [
+      li({ description: "9 Diesel LS Dyed", extension: 2344.30, role: "PRIMARY_PURCHASE" }),
+      li({ description: "PFT :", extension: 68, role: "PRIMARY_PURCHASE" }),
+    ];
+    const q = assessPurposeEvidenceQuality(decision, items);
+    expect(q.quality).toBe("HIGH");
+    expect(q.commitEligible).toBe(true);
+    expect(q.hasDiscriminativeMatch).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
 // Amendment #3 — amount-based capital signal REMOVED
 // -----------------------------------------------------------------------------
 describe("Slice 5.2 · accounting-nature amount signal REMOVED (amendment #3)", () => {

@@ -135,10 +135,12 @@ export function assessPurposeEvidenceQuality(
   decision: EconomicPurposeDecision,
   canonicalLineItems: CanonicalLineItem[],
 ): PurposeEvidenceQualityResult {
-  const purchaseLines = canonicalLineItems.filter(
-    (li) => li.role === "PRIMARY_PURCHASE" || li.role === "SURCHARGE" || li.role === "FREIGHT",
-  );
-  const primary = purchaseLines[0] ?? null;
+  // Amendment #4: evidence quality is about the PRIMARY PURCHASE.
+  // Surcharges and freight lines are AUXILIARY — a tire levy on a
+  // large-value invoice does not tell us the primary purchase was
+  // tires. Only PRIMARY_PURCHASE lines contribute to quality.
+  const primaryPurchaseLines = canonicalLineItems.filter((li) => li.role === "PRIMARY_PURCHASE");
+  const primary = primaryPurchaseLines[0] ?? null;
   const primaryDesc = primary?.description ?? null;
   const primaryLen = primaryDesc?.trim().length ?? 0;
   const isSummaryShape = primaryDesc ? SUMMARY_SHAPE_RE.test(primaryDesc.trim()) : false;
@@ -146,7 +148,7 @@ export function assessPurposeEvidenceQuality(
   const concept = decision.concept;
   const vocab = concept ? CONCEPT_ITEM_VOCABULARY[concept] ?? [] : [];
   const hasDiscriminativeMatch = concept != null
-    && purchaseLines.some((li) => vocab.some((r) => r.test(li.description)));
+    && primaryPurchaseLines.some((li) => vocab.some((r) => r.test(li.description)));
 
   let quality: PurposeEvidenceQuality;
   let reason: string;
@@ -163,9 +165,9 @@ export function assessPurposeEvidenceQuality(
   } else if (hasDiscriminativeMatch) {
     quality = "HIGH";
     reason = "DISCRIMINATIVE_MATCH_ON_LINE_ITEM";
-  } else if (purchaseLines.length >= 2 && primaryLen >= MIN_SUBSTANTIVE_LEN * 2) {
-    // Multiple substantive lines contributing to the concept even
-    // without a direct vocabulary hit.
+  } else if (primaryPurchaseLines.length >= 2 && primaryLen >= MIN_SUBSTANTIVE_LEN * 2) {
+    // Multiple substantive primary lines contributing to the concept
+    // even without a direct vocabulary hit.
     quality = "MEDIUM";
     reason = "MULTIPLE_SUBSTANTIVE_LINES";
   } else {
@@ -184,7 +186,7 @@ export function assessPurposeEvidenceQuality(
     primaryItemLen: primaryLen,
     hasDiscriminativeMatch,
     isSummaryShape,
-    contributingLineCount: purchaseLines.length,
-    diagnostic: `concept=${concept ?? "none"} taxonomyConfidence=${decision.confidence} quality=${quality} commitEligible=${commitEligible} reason=${reason} primaryLen=${primaryLen} discriminativeMatch=${hasDiscriminativeMatch} summaryShape=${isSummaryShape} lines=${purchaseLines.length}`,
+    contributingLineCount: primaryPurchaseLines.length,
+    diagnostic: `concept=${concept ?? "none"} taxonomyConfidence=${decision.confidence} quality=${quality} commitEligible=${commitEligible} reason=${reason} primaryLen=${primaryLen} discriminativeMatch=${hasDiscriminativeMatch} summaryShape=${isSummaryShape} primaryLines=${primaryPurchaseLines.length}`,
   };
 }
