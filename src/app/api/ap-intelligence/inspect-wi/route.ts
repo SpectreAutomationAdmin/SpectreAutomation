@@ -316,6 +316,61 @@ export async function POST(req: Request) {
         total: result.extraction.total,
         currency: result.extraction.currency,
         warnings: result.extraction.warnings,
+        // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08) — accounting-
+        // reasoning trace. Diagnostic-only exposure of the outputs
+        // that today drive the founder-facing category.
+        legacyEconomicPurposeTop3: (result.economicPurpose ?? []).slice(0, 3).map((p) => ({
+          purpose: p.purpose,
+          score: p.score,
+          classificationConcept: p.classificationConcept,
+          supporting: (p.supporting ?? []).slice(0, 6).map((s) => ({
+            kind: s.kind,
+            detail: (s.detail ?? "").slice(0, 120),
+            strength: s.strength,
+          })),
+          contradicting: (p.contradicting ?? []).slice(0, 4).map((c) => ({
+            kind: c.kind,
+            detail: (c.detail ?? "").slice(0, 120),
+          })),
+        })),
+        capitalState: (result as { capital?: { state?: string; capitalClass?: string } }).capital?.state
+          ?? (result as { capitalState?: string }).capitalState
+          ?? null,
+        accountingIntelligence: {
+          natureLeader: result.accountingIntelligence?.natureLeader,
+          natureConfidence: result.accountingIntelligence?.natureConfidence,
+          natureIsDefensible: result.accountingIntelligence?.natureIsDefensible,
+          natureRankedTop3: (result.accountingIntelligence?.natureRankedTop3 ?? []).slice(0, 3).map((r) => ({
+            nature: r.nature,
+            score: r.score,
+            supporting: (r.supportingEvidence ?? []).slice(0, 5),
+            contradicting: (r.contradictingEvidence ?? []).slice(0, 3),
+          })),
+        },
+        allocations: {
+          cardCategory: result.allocations?.cardCategory ?? null,
+          requiresReview: result.allocations?.requiresReview ?? null,
+          allocationEligibilityMode: result.allocations?.allocationEligibilityMode ?? null,
+          entryCount: result.allocations?.allocations?.length ?? 0,
+          entries: (result.allocations?.allocations ?? []).slice(0, 6).map((a) => ({
+            purpose: (a as { purpose?: string }).purpose ?? null,
+            recommendedAccountNumber: (a as { recommendedAccount?: { accountNumber?: string } }).recommendedAccount?.accountNumber ?? null,
+            recommendedAccountName: (a as { recommendedAccount?: { accountName?: string } }).recommendedAccount?.accountName ?? null,
+            amountCents: (a as { amountCents?: number }).amountCents ?? null,
+            requiresReview: (a as { requiresReview?: boolean }).requiresReview ?? null,
+          })),
+        },
+        glRecommendationWinner: {
+          accountNumber: (result as { gl?: { accountNumber?: string } }).gl?.accountNumber ?? null,
+          accountName: (result as { gl?: { accountName?: string } }).gl?.accountName ?? null,
+          confidence: (result as { gl?: { confidence?: number } }).gl?.confidence ?? null,
+          source: (result as { gl?: { source?: string } }).gl?.source ?? null,
+        },
+        glAlternativesTop3: ((result as { gl?: { alternatives?: Array<{ accountNumber?: string; accountName?: string; score?: number }> } }).gl?.alternatives ?? []).slice(0, 3).map((a) => ({
+          accountNumber: a.accountNumber ?? null,
+          accountName: a.accountName ?? null,
+          score: a.score ?? null,
+        })),
       };
     } catch (err) {
       analyseResult = { error: err instanceof Error ? err.message : "unknown" };
