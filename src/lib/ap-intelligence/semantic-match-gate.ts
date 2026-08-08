@@ -24,9 +24,16 @@ import type { EconomicPurposeDecision } from "./economic-purpose-authority";
 // Thresholds
 // -----------------------------------------------------------------------------
 
-/** Nature confidence must be at least this for the gate to consider
- *  the override. Matches the accounting-nature isDefensible threshold. */
+/** Nature confidence must be at least this when the gate is
+ *  OVERRIDING a base-ranker pick — the stricter threshold guards
+ *  against confidence-laundering (§25) when the base ranker already
+ *  produced a defensible winner. */
 export const NATURE_OVERRIDE_MIN_CONFIDENCE = 60;
+/** When the base ranker produced NO defensible winner (accountNumber
+ *  null), the gate uses this looser threshold — a defensible-but-
+ *  moderate nature (e.g. R&M 53) is preferable to a fabricated null
+ *  answer. Still above the isDefensible floor (20) by a wide margin. */
+export const NATURE_PROMOTION_MIN_CONFIDENCE = 40;
 
 // -----------------------------------------------------------------------------
 // Compatibility matrices
@@ -91,6 +98,12 @@ export interface SemanticMatchGateInput {
   natureIsDefensible: boolean;
   candidateAccountType: string | null;
   purposeDecision: EconomicPurposeDecision;
+  /** When true, the gate is being consulted for a Stage-B promotion
+   *  where the base ranker produced no defensible winner. The
+   *  confidence threshold is relaxed (NATURE_PROMOTION_MIN_CONFIDENCE
+   *  instead of NATURE_OVERRIDE_MIN_CONFIDENCE). Amendment #5 gates
+   *  (b)-(e) are unchanged — only (a) shifts. */
+  baseRankerAbstained?: boolean;
 }
 
 export interface SemanticMatchGateResult {
@@ -105,9 +118,10 @@ export interface SemanticMatchGateResult {
 export function evaluateSemanticMatchGate(input: SemanticMatchGateInput): SemanticMatchGateResult {
   const denials: string[] = [];
 
-  // (a) confidence
-  if (input.natureConfidence < NATURE_OVERRIDE_MIN_CONFIDENCE) {
-    denials.push(`nature_confidence_below_threshold(${input.natureConfidence}<${NATURE_OVERRIDE_MIN_CONFIDENCE})`);
+  // (a) confidence — stricter when overriding a base pick.
+  const requiredConf = input.baseRankerAbstained ? NATURE_PROMOTION_MIN_CONFIDENCE : NATURE_OVERRIDE_MIN_CONFIDENCE;
+  if (input.natureConfidence < requiredConf) {
+    denials.push(`nature_confidence_below_threshold(${input.natureConfidence}<${requiredConf})`);
   }
   // (b) defensible
   if (!input.natureIsDefensible) {

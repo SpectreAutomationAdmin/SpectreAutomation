@@ -984,11 +984,32 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           autoApprovalEligible: false,
         };
       } else {
-        logger.info("ap-intelligence.purpose-ontology.no-alternative", {
+        // Amendment #11: "A recommendation that is merely less
+        // wrong does not pass." When the winner is INCOMPATIBLE
+        // with a committed canonical purpose AND no compatible
+        // alternative exists in the base ranker's candidates, we
+        // ABSTAIN — clearing the winner is more honest than letting
+        // a wrong high-confidence answer stand. Nature-scoped
+        // Stage B may still widen the search.
+        logger.info("ap-intelligence.purpose-ontology.abstain", {
           clubId: args.clubId, docIdTail: doc.id.slice(-6),
           concept: purposeDecision.concept,
-          keptWinner: gl.accountNumber,
+          clearedWinner: gl.accountNumber,
         });
+        gl = {
+          ...gl,
+          accountNumber: null,
+          accountName: null,
+          categoryKey: null,
+          fsGroupKey: null,
+          source: "NONE",
+          confidence: null,
+          reason: `purpose_ontology_abstain:${purposeDecision.concept}(${purposeDecision.confidence}) — no purpose-compatible candidate in ranker top-N; base winner ${gl.accountNumber} ${JSON.stringify(gl.accountName)} was incompatible`,
+          leaderIsPostable: false,
+          leaderPostingBlockers: [],
+          autoApprovalEligible: false,
+          requiresReview: true,
+        };
       }
     }
   }
@@ -1479,6 +1500,10 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
               canonicalTop3: [], legacyCandidates: [],
               diagnostic: "no purpose decision available",
             },
+            // When the base ranker abstained (no winner), the gate
+            // relaxes its confidence threshold — a defensible-but-
+            // moderate nature is preferable to a null answer.
+            baseRankerAbstained: gl.accountNumber == null,
           };
           const gateOutcome = evaluateSemanticMatchGate(gateInput);
           semanticMatchGateEvaluations.push({
