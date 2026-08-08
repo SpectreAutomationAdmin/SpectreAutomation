@@ -388,6 +388,27 @@ export async function POST(req: Request) {
         // substance authorities exposed for founder-facing diagnostic.
         // Purchased items are truncated to first 8 to bound response
         // size; capital decision and department leader are complete.
+        // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08) —
+        // PurchasedObject authority exposed for the founder-facing
+        // diagnostic. Truncated to first 8 objects to bound response.
+        purchasedObjectIntelligence: result.purchasedObjectIntelligence ? {
+          objects: (result.purchasedObjectIntelligence.objects ?? []).slice(0, 8).map((o) => ({
+            description: (o.description ?? "").slice(0, 100),
+            brandCandidates: o.brandCandidates?.slice(0, 4) ?? [],
+            modelCandidates: o.modelCandidates?.slice(0, 4) ?? [],
+            skuCandidates: o.skuCandidates?.slice(0, 4) ?? [],
+            serialCandidates: o.serialCandidates?.slice(0, 4) ?? [],
+            quantity: o.quantity,
+            unit: o.unit,
+            unitPrice: o.unitPrice,
+            extension: o.extension,
+            objectRole: o.objectRole,
+            objectRoleConfidence: o.objectRoleConfidence,
+            objectRoleDiagnostic: o.objectRoleDiagnostic,
+            relatedObjects: o.relatedObjects ?? [],
+            evidenceQuality: o.evidenceQuality,
+          })),
+        } : null,
         purchasedItemIntelligence: result.purchasedItemIntelligence ? {
           items: (result.purchasedItemIntelligence.items ?? []).slice(0, 8).map((it) => ({
             description: (it.description ?? "").slice(0, 100),

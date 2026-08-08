@@ -199,10 +199,30 @@ export interface ApAnalyseResult {
       columnAlignmentConfidence: number;
     };
   };
-  // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — purchased-item
-  // substance authority. Downstream projection consumes these to
-  // populate the founder-facing category chip when GL cannot commit,
+  // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08) —
+  // purchased-OBJECT authority (§6–§14). objects[] carries per-object
+  // brand/model/sku/serial candidates + objectRole + relationships
+  // + the object-aware capital decision. Downstream projection uses
+  // it for the founder-facing category chip when GL cannot commit
   // and to surface diagnostic detail in inspect-wi.
+  purchasedObjectIntelligence?: {
+    objects: Array<{
+      description: string;
+      brandCandidates: Array<{ value: string; strength: string; provenance: string }>;
+      modelCandidates: Array<{ value: string; strength: string; provenance: string }>;
+      skuCandidates: Array<{ value: string; strength: string; provenance: string }>;
+      serialCandidates: Array<{ value: string; strength: string; provenance: string }>;
+      quantity: number | null;
+      unit: string | null;
+      unitPrice: number | null;
+      extension: number | null;
+      objectRole: string;
+      objectRoleConfidence: number;
+      objectRoleDiagnostic: string;
+      relatedObjects: Array<{ targetIndex: number; kind: string; strength: string; detail: string }>;
+      evidenceQuality: string;
+    }>;
+  };
   purchasedItemIntelligence: {
     items: Array<{
       description: string;
@@ -993,26 +1013,37 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // amendment #8 bans amount as capital evidence.
   const { extractPurchasedItems: extractPurchasedItemsShared } = await import("./purchased-item-identity");
   const { classifyItemCompleteness: classifyItemCompletenessShared } = await import("./item-completeness");
-  const { evaluateCapitalEvidence: evaluateCapitalEvidenceShared } = await import("./capital-evidence");
+  const { evaluateCapitalObjectEvidence: evaluateCapitalObjectShared } = await import("./capital-evidence");
+  const { DeterministicPurchasedObjectProvider: PurchasedObjectProvider } = await import("./purchased-object-identity");
   const sharedPurchasedItems = extractPurchasedItemsShared(canonicalLineItemsFromLayout);
   const sharedItemCompleteness = new Map<number, ReturnType<typeof classifyItemCompletenessShared>>();
   for (const item of sharedPurchasedItems) {
     sharedItemCompleteness.set(item.sourceLineItemIndex, classifyItemCompletenessShared(item));
   }
-  const sharedCapitalDecision = evaluateCapitalEvidenceShared({
-    items: sharedPurchasedItems,
-    itemCompleteness: sharedItemCompleteness,
+  // Completion pass (§6–§14): PurchasedObject identity + object-role
+  // + relationships + refined capital reasoning. The object-aware
+  // capital branch consumes PurchasedObjectIdentity[] and treats
+  // "engine"/"seat"/etc. as evidence, not verdict.
+  const sharedPurchasedObjects = new PurchasedObjectProvider().interpret(canonicalLineItemsFromLayout);
+  const sharedCapitalDecision = evaluateCapitalObjectShared({
+    objects: sharedPurchasedObjects,
     poRequestorText: null,
     supplierName: extraction.vendor.guessedName,
   });
-  // Department leader from item-identity-primary inference (amendment
-  // #10: item identity beats vendor).
+  // Department leader from object-identity-primary inference
+  // (completion pass §18: object application beats vendor).
   const {
     inferDepartment: inferDeptShared,
     DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_SHARED,
   } = await import("./department-inference");
+  // Compose lineItemDescriptions from PurchasedObject descriptions so
+  // department inference scores against the SUBSTANTIVE purchased-
+  // object surface (which excludes summary rows and includes attached
+  // continuations like Serial# lines and description-wrap words).
   const sharedUniqDescs = Array.from(new Set(
-    canonicalLineItemsFromLayout.map((li) => li.description).filter(Boolean),
+    sharedPurchasedObjects.length > 0
+      ? sharedPurchasedObjects.map((o) => o.description)
+      : canonicalLineItemsFromLayout.map((li) => li.description).filter(Boolean),
   ));
   const sharedDept = inferDeptShared({
     supplierName: extraction.vendor.guessedName,
@@ -1919,6 +1950,24 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    purchasedObjectIntelligence: {
+      objects: sharedPurchasedObjects.map((o) => ({
+        description: o.description,
+        brandCandidates: o.brandCandidates,
+        modelCandidates: o.modelCandidates,
+        skuCandidates: o.skuCandidates,
+        serialCandidates: o.serialCandidates,
+        quantity: o.quantity,
+        unit: o.unit,
+        unitPrice: o.unitPrice,
+        extension: o.extension,
+        objectRole: o.objectRole,
+        objectRoleConfidence: o.objectRoleConfidence,
+        objectRoleDiagnostic: o.objectRoleDiagnostic,
+        relatedObjects: o.relatedObjects,
+        evidenceQuality: o.evidenceQuality,
+      })),
+    },
     purchasedItemIntelligence: (() => {
       // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — pack the shared
       // purchased-item authorities for the projection layer + inspect-
@@ -1946,22 +1995,38 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       const capital = sharedCapitalDecision;
       const dept = sharedDept.leader;
       const deptDefensible = sharedDept.isDefensible;
-      // Founder-facing category composition. Requires the capital
-      // decision to be committed (confidence ≥ 40); department is
-      // OPTIONAL for the general "Equipment Purchase" / "Repairs &
-      // Maintenance" fallback. When department is independently
-      // supported (defensible) it prefixes the category.
+      // Founder-facing category hierarchy (§19 completion pass):
+      //   1. If GL committed → projection uses account name (upstream).
+      //   2. If capital+nature understood → composed label
+      //      ("Equipment Purchase" / "Repairs & Maintenance") with
+      //      optional department prefix.
+      //   3. If capital unresolved but PurchasedObject understood →
+      //      object-oriented label (e.g. "<brand> <model> equipment").
+      //   4. Otherwise null → projection falls to taxonomy purpose.
       let founderFacingCategory: string | null = null;
-      if (capital.confidence >= 40) {
+      if (capital.confidence >= 40 && capital.decision !== "UNRESOLVED") {
         const deptPrefix = deptDefensible && dept ? dept.displayName + " " : "";
         if (capital.decision === "CAPITAL_CANDIDATE") {
           founderFacingCategory = (deptPrefix + "Equipment Purchase").trim();
         } else if (capital.decision === "REPAIR_MAINTENANCE") {
           founderFacingCategory = (deptPrefix + "Repairs & Maintenance").trim();
-        } else if (capital.decision === "OPERATING") {
-          // Operating: don't invent a category from thin air — the
-          // purpose label already carries the concept ("Fuel", etc.).
-          founderFacingCategory = null;
+        }
+        // OPERATING: fall through to purpose label; the concept
+        // (Fuel, Telecom, …) is more informative than a generic
+        // "Operating Purchase" chip.
+      }
+      if (founderFacingCategory == null && sharedPurchasedObjects.length > 0) {
+        // Object-oriented fallback (§19 layer 3). Compose from the
+        // strongest brand + model of the highest-extension object.
+        const primary = [...sharedPurchasedObjects]
+          .sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
+        if (primary && primary.evidenceQuality !== "LOW") {
+          const brand = primary.brandCandidates[0]?.value ?? "";
+          const model = primary.modelCandidates[0]?.value ?? "";
+          const bits = [brand, model].filter(Boolean).join(" ");
+          if (bits.length > 0) {
+            founderFacingCategory = `${bits} equipment`.trim();
+          }
         }
       }
       return {

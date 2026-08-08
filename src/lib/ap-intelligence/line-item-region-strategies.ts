@@ -222,8 +222,9 @@ export function reconstructClassicColumnTable(
     hasAmount: boolean;
     hasSkuOrDesc: boolean;
     isSummaryShape: boolean;
-    /** Leading token like "1 30807" that a split-row merge may use
-     *  as strong (but not required) corroborating evidence. */
+    /** Leading token like "<line#> <product-code>" that a split-row
+     *  merge may use as strong (but not required) corroborating
+     *  evidence. */
     leadingToken: string | null;
   }
 
@@ -265,8 +266,8 @@ export function reconstructClassicColumnTable(
     const hasAmount = amtResolved.value != null;
     const hasSkuOrDesc = skuRaw.length > 0 || descRaw.length > 2;
     if (!hasAmount && !hasSkuOrDesc) continue;
-    // Extract a leading-token like "1 30807" (line# + product-code)
-    // for optional merge corroboration.
+    // Extract a leading-token like "<line#> <product-code>" for
+    // optional merge corroboration.
     const leadingTokenMatch = (descRaw || text).match(/^\s*(\d{1,3})\s+(\S{2,})\b/);
     const leadingToken = leadingTokenMatch ? `${leadingTokenMatch[1]} ${leadingTokenMatch[2]}` : null;
     candidates.push({
@@ -305,11 +306,12 @@ export function reconstructClassicColumnTable(
       if (b.page !== a.page) continue;
       if (Math.abs(b.y - a.y) > 25) continue;
       // §1 completion-pass amendment: only merge when B is genuinely
-      // amount-only. "2 30629" (a new row's line# + product-code) is
-      // NOT amount-only even though it matches the previous digit-only
-      // check — it's the leading prefix of a fresh product row. Reject
-      // unless (a) B's descRaw is empty, (b) it's a single ≤3-char
-      // numeric like a bare "1", or (c) leadingTokens match A's.
+      // amount-only. A "<line#> <product-code>" prefix in B's desc
+      // is NOT amount-only even though it matches the previous
+      // digit-only check — it's the leading prefix of a fresh product
+      // row. Reject unless (a) B's descRaw is empty, (b) it's a single
+      // ≤3-char numeric like a bare "1", or (c) leadingTokens match
+      // A's.
       const bLeadingTokenMatchesA = a.leadingToken != null && b.leadingToken != null && a.leadingToken === b.leadingToken;
       const bLooksLikeContinuation = b.descRaw === ""
         || /^\d{1,3}$/.test(b.descRaw.trim())
