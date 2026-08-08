@@ -645,16 +645,27 @@ export function clusterSupplierEvidence(evidence: SupplierIdentityEvidence[]): S
     e.type === "ADDRESS_BLOCK" || e.type === "PHONE_BLOCK" || e.type === "TAX_REGISTRATION",
   );
   const clusterList = Array.from(candidatesByIdentity.values());
-  if (clusterList.length === 1) {
-    for (const s of supporting) clusterList[0].evidence.push(s);
-  } else if (clusterList.length > 1) {
+  // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+  // never attach supporting evidence (address / phone / tax reg) to
+  // a person-shape cluster when an ORG-shape cluster also exists.
+  // A recipient's name should not inherit the supplier's tax
+  // registration by nearest-line proximity. If no org cluster
+  // exists, nearest-line applies as before.
+  const orgClusters = clusterList.filter((c) => {
+    const primary = c.evidence.find((e) => e.type === "HEADER_ORG_TEXT" || e.type === "LEGAL_ENTITY_TEXT");
+    return primary ? !looksLikePersonName(primary.value) : true;
+  });
+  const attachTargets = orgClusters.length > 0 ? orgClusters : clusterList;
+  if (attachTargets.length === 1) {
+    for (const s of supporting) attachTargets[0].evidence.push(s);
+  } else if (attachTargets.length > 1) {
     for (const s of supporting) {
       const sLine = s.region?.lineIndex ?? -1;
-      if (sLine < 0) { clusterList[0].evidence.push(s); continue; }
+      if (sLine < 0) { attachTargets[0].evidence.push(s); continue; }
       // Distance = min |cluster-evidence-lineIndex − s.lineIndex|.
-      let best = clusterList[0];
+      let best = attachTargets[0];
       let bestDist = Number.POSITIVE_INFINITY;
-      for (const c of clusterList) {
+      for (const c of attachTargets) {
         for (const ce of c.evidence) {
           const cLine = ce.region?.lineIndex;
           if (cLine == null) continue;
