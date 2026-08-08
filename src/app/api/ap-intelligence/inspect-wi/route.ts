@@ -377,8 +377,46 @@ export async function POST(req: Request) {
         try {
           const { extractPdfLayout } = await import("@/lib/ap-intelligence/pdf-layout-extract");
           const { reconstructLineItemTable } = await import("@/lib/ap-intelligence/positioned-table-reconstruct");
+          const { extractCanonicalLineItems } = await import("@/lib/ap-intelligence/canonical-line-item-extractor");
+          const { DeterministicTaxonomyProvider } = await import("@/lib/ap-intelligence/economic-purpose-taxonomy");
           const layout = await extractPdfLayout(bytes.bytes);
           const table = reconstructLineItemTable(layout);
+
+          // Slice 5 — canonical authority + purpose taxonomy trace.
+          const canon = await extractCanonicalLineItems({ layout, flattenedText: layout.flattenedText, pageCount: layout.pageCount });
+          const provider = new DeterministicTaxonomyProvider();
+          const purposeCandidates = provider.classify(canon.lineItems, {
+            supplierName: (analyseResult as { supplierGuessedName?: string })?.supplierGuessedName ?? null,
+            fullDocumentText: layout.flattenedText,
+          });
+          (analyseResult as { canonicalLineItemsV2?: unknown }).canonicalLineItemsV2 = canon.lineItems.slice(0, 25).map((li) => ({
+            description: li.description.slice(0, 120),
+            quantity: li.quantity,
+            unit: li.unit,
+            unitPrice: li.unitPrice,
+            extension: li.extension,
+            role: li.role,
+            sourceStrategy: li.sourceStrategy,
+            arithmetic: li.arithmetic,
+            validationConfidence: li.validationConfidence,
+            page: li.page,
+          }));
+          (analyseResult as { canonicalDiagnostic?: unknown }).canonicalDiagnostic = canon.diagnostic;
+          (analyseResult as { canonicalPages?: unknown }).canonicalPages = canon.pages;
+          (analyseResult as { canonicalOcrPending?: unknown }).canonicalOcrPending = canon.ocrPending;
+          (analyseResult as { canonicalRegionsCount?: unknown }).canonicalRegionsCount = canon.regions.length;
+          (analyseResult as { canonicalRegions?: unknown }).canonicalRegions = canon.regions.map((r) => ({
+            kind: r.kind, page: r.page, yTop: r.yTop, yBottom: r.yBottom,
+            confidence: r.confidence, diagnostic: r.diagnostic,
+          }));
+          (analyseResult as { purposeTaxonomyTop3?: unknown }).purposeTaxonomyTop3 = purposeCandidates.slice(0, 3).map((p) => ({
+            concept: p.concept, label: p.label, confidence: p.confidence,
+            supportingCount: p.supporting.length,
+            supportingSample: p.supporting.slice(0, 3).map((s) => ({
+              cue: s.cue, strength: s.strength, reason: s.reason,
+              lineItemDescription: s.lineItemDescription,
+            })),
+          }));
 
           const perPageItemCount = new Map<number, number>();
           for (const it of layout.items) {

@@ -531,6 +531,13 @@ export interface ParseArgs {
   extractedText: string;
   emailSubject?: string | null;
   emailSenderAddress?: string | null;
+  // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — the ONE line-item
+  // authority. When provided, buildCanonicalEvidence uses this as the
+  // source-of-truth for evidence.canonicalLineItems + evidence.lineItems.
+  // When absent, evidence.lineItems/credits/surcharges remain empty and
+  // downstream consumers should treat the document as having no
+  // structured line-item evidence.
+  canonicalLineItems?: import("./evidence/canonical-line-item").CanonicalLineItem[];
 }
 
 export interface ParseResult {
@@ -818,6 +825,7 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
       subject: args.emailSubject ?? null,
     },
     pageCount: 1,
+    canonicalLineItems: args.canonicalLineItems ?? [],
   });
   const selection = selectCanonicalFields(canonicalEvidence);
 

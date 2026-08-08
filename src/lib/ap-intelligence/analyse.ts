@@ -81,6 +81,9 @@ import { applyFieldQualityGate, type QualityGateResult } from "./field-quality";
 // reconstructor.
 import { classifyAccountingNature, type AccountingNatureAssessment } from "./accounting-nature";
 import { reconstructLineItemTable, type TableReconstructResult } from "./positioned-table-reconstruct";
+// Sprint 3 · Phase 4 Slice 5 (2026-08-07) — the ONE line-item authority.
+import { extractCanonicalLineItems } from "./canonical-line-item-extractor";
+import type { CanonicalLineItem } from "./evidence/canonical-line-item";
 // Sprint 3 · Checkpoint 15Y-Rejected (2026-08-03) — structural-quality
 // reclassification + escalation trigger. When embedded text was
 // extracted but the RESULT shows structural degradation (rejected
@@ -248,6 +251,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // absent, the reconstructor recovers rows from the pdf.js
   // positioned items.
   let tableReconstruction: TableReconstructResult | null = null;
+  // Sprint 3 · Phase 4 Slice 5 — canonical line-item authority state.
+  let canonicalLineItemsFromLayout: CanonicalLineItem[] = [];
+  let canonicalLineItemExtractionDiagnostic: string | null = null;
+  let canonicalLineItemPages: Array<{ page: number; pageClass: string; itemsProduced: number; routedTo: string }> = [];
+  let canonicalOcrPending = false;
   let accountingNatureAssessment: AccountingNatureAssessment | null = null;
   // Sprint 3 · Checkpoint 15Y-Rejected — keep the PdfLayout in
   // scope so the positioned-layout rescue path can consume it
@@ -303,14 +311,61 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         const regions = detectLayoutRegions(routed.layout.visualLines);
         const supplier = pickSupplierRegion(regions);
         if (supplier) supplierRegionText = supplier.text;
-        // Sprint 3 · Checkpoint 16A — positioned-layout table
-        // reconstruction. Runs on every doc with a layout; result
-        // is used as an ADDITIONAL evidence source when Textract
-        // line items are sparse or absent.
+        // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — replaced the
+        // old positioned-table-reconstruct call with the ONE canonical
+        // line-item authority. The authority runs region detection +
+        // reconstruction (classic-column + category-block strategies)
+        // + arithmetic validation + role classification. The old
+        // TableReconstructResult shape is populated as a
+        // backward-compatibility shim so downstream analyse.ts
+        // consumers see the same rows through their existing
+        // interface — but the rows come from ONE source.
         try {
-          tableReconstruction = reconstructLineItemTable(routed.layout);
+          const canonicalOut = await extractCanonicalLineItems({
+            layout: routed.layout,
+            flattenedText: pdfText,
+            pageCount: routed.layout.pageCount,
+          });
+          canonicalLineItemsFromLayout = canonicalOut.lineItems;
+          canonicalLineItemExtractionDiagnostic = canonicalOut.diagnostic;
+          canonicalLineItemPages = canonicalOut.pages;
+          canonicalOcrPending = canonicalOut.ocrPending;
+          // Compat shim — map canonical items to TableReconstructResult
+          // so the many downstream call sites keep working without a
+          // parallel refactor. `headerFound` is true whenever any
+          // CLASSIC_COLUMN_TABLE region committed a row; column list
+          // is derived from those regions' payload.
+          const classicRegions = canonicalOut.regions.filter((r) => r.kind === "CLASSIC_COLUMN_TABLE");
+          const detectedColumns: Array<{ role: string; xCenter: number }> = [];
+          for (const r of classicRegions) {
+            const cols = (r.payload as { columns?: Array<{ role: string; xCenter: number }> }).columns ?? [];
+            for (const c of cols) {
+              if (!detectedColumns.some((d) => d.role === c.role)) detectedColumns.push(c);
+            }
+          }
+          tableReconstruction = {
+            headerFound: classicRegions.length > 0,
+            headerRowY: classicRegions[0]?.yTop ?? null,
+            detectedColumns,
+            columnAlignmentConfidence: 0,
+            lineItems: canonicalOut.lineItems
+              .filter((li) => li.role === "PRIMARY_PURCHASE"
+                || li.role === "SURCHARGE" || li.role === "FREIGHT")
+              .map((li) => ({
+                page: li.page,
+                rowY: li.region?.y ?? 0,
+                sku: li.sku ?? null,
+                description: li.description,
+                quantity: li.quantity ?? null,
+                unitPrice: li.unitPrice ?? null,
+                amount: li.extension,
+                supportingCellCount: li.quantity != null && li.unitPrice != null ? 4 : 2,
+                confidence: li.validationConfidence,
+              })),
+            rejectedRows: [],
+          };
         } catch (e) {
-          logger.warn("ap-intelligence.table-reconstruct.error", {
+          logger.warn("ap-intelligence.canonical-line-items.error", {
             clubId: args.clubId, docIdTail: doc.id.slice(-6),
             message: (e as Error).message.slice(0, 200),
           });
@@ -354,10 +409,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         parserThrew,
         parserError,
       });
+  // Sprint 3 · Phase 4 Slice 5 — flattened fallback for docs where
+  // the positional path produced zero items but useful flat text
+  // exists. Runs BEFORE parseInvoiceText so canonicalLineItems can
+  // thread through as the ONE source of truth for evidence.lineItems.
+  if (canonicalLineItemsFromLayout.length === 0 && pdfOk && pdfText.trim().length > 0) {
+    try {
+      const fallbackOut = await extractCanonicalLineItems({
+        flattenedText: pdfText,
+        pageCount: pdfPageCount || 1,
+      });
+      canonicalLineItemsFromLayout = fallbackOut.lineItems;
+      if (fallbackOut.lineItems.length > 0) {
+        canonicalLineItemExtractionDiagnostic =
+          (canonicalLineItemExtractionDiagnostic ?? "") + " | fallback:" + fallbackOut.diagnostic;
+      }
+    } catch { /* keep empty */ }
+  }
   const parsed = parseInvoiceText({
     extractedText: pdfOk ? pdfText : "",
     emailSubject: args.emailSubject ?? null,
     emailSenderAddress: args.emailSenderAddress ?? null,
+    canonicalLineItems: canonicalLineItemsFromLayout,
   });
   let extraction: ExtractedInvoice = pdfOk
     ? parsed.invoice
@@ -528,7 +601,32 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // dimension confidence + provenance. Each of these is deterministic
   // and side-effect-free; safe to run inside the analyser.
   const supplierExtraction = parsed.supplier;
-  const lineItemsExtracted: LineItem[] = pdfOk ? extractLineItems(pdfText) : [];
+  // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — ONE authority. Derive
+  // the legacy LineItem[] shape from CanonicalLineItem[] so
+  // tax-reconciliation + economic-purpose + GL recommender see the
+  // same rows the canonical evidence layer + AP Coding modal see.
+  // Fall back to the flat-text extractor ONLY when canonical produced
+  // nothing (image-only docs where OCR is pending).
+  const lineItemsExtracted: LineItem[] = canonicalLineItemsFromLayout.length > 0
+    ? canonicalLineItemsFromLayout
+        .filter((li) => li.role !== "TAX")
+        .map((li) => ({
+          description: li.description,
+          quantity: li.quantity ?? null,
+          unitPrice: li.unitPrice ?? null,
+          amount: li.extension,
+          taxRate: li.taxTreatment?.rate ?? null,
+          taxAmount: null,
+          taxTreatment: li.role === "PENALTY" || li.role === "INTEREST"
+            ? "exempt"
+            : (li.taxTreatment?.taxable ? "taxable" : "unknown"),
+          evidence: li.role === "PENALTY" || li.role === "INTEREST"
+            ? ["penalty_or_finance_charge"]
+            : (li.taxTreatment?.taxable ? ["member_dues_language"] : ["amount_only"]),
+          confidence: li.validationConfidence,
+          lineNo: li.region?.lineIndex ?? 0,
+        }))
+    : (pdfOk ? extractLineItems(pdfText) : []);
   const identifiers: IdentifierCandidate[] = pdfOk ? extractIdentifiers(pdfText) : [];
   const printedSubtotal = extraction.subtotal ? Number(extraction.subtotal) : null;
   const printedTax = extraction.taxTotal ? Number(extraction.taxTotal) : null;

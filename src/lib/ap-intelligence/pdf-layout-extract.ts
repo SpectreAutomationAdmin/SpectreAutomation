@@ -1,17 +1,22 @@
-// Sprint 3 · Checkpoint 15V Addendum-2 (2026-07-30) — coordinate-
-// aware PDF text extraction.
+// Sprint 3 · Phase 4 Slice 5 (2026-08-07) — coordinate-normalized
+// PDF text extraction with glyph-level positioning + per-page
+// document-class classification.
 //
-// pdf-parse's default text output flattens positioned text into
-// a single reading-order string, destroying column and header
-// layout. Real invoices place the supplier block in the top-right
-// (letterhead) and the recipient block on the left (bill-to). A
-// flattened stream interleaves them; no regex on the flattened
-// text can reliably tell which words belong to which entity.
+// Prior versions of this module preserved PDF user-space coordinates
+// (bottom-up y) which forced every downstream consumer to remember
+// the orientation and inverted their comparisons — the y-inversion
+// defect the Slice 5 trace found in positioned-table-reconstruct
+// was a direct consequence.
 //
-// pdf-parse's `pagerender` hook gives us access to pdf.js's text
-// content, including per-item x/y coordinates. This module wraps
-// that hook and returns a structured LayoutTextItem[] per page
-// plus visual lines reconstructed by y-band clustering.
+// This version normalises to a canonical top-left convention (y = 0
+// at page top, growing downward). Downstream reconstructors compare
+// y like they would in HTML/CSS. Raw values are preserved on each
+// item for provenance.
+//
+// It also asks pdf.js for uncombined text items so glyph-level runs
+// stay separate. That gives the fused-row splitter proper x-position
+// evidence to work from, without resorting to proportional character
+// splitting as a primary strategy.
 //
 // Deterministic. No LLM. Numeric outputs stable across engines.
 
@@ -20,40 +25,78 @@ import pdfParse from "pdf-parse";
 export interface LayoutTextItem {
   text: string;
   page: number;
+  /** Left edge in PDF user-space units (unchanged across versions). */
   x: number;
+  /** Top edge in canonical top-left coordinates (0 = top of page,
+   *  growing DOWNWARD). This is the field downstream reconstructors
+   *  should use for row comparisons. */
   y: number;
   width: number;
   height: number;
+  /** Raw PDF user-space baseline y (bottom-up). Preserved so any
+   *  future path that needs the original PDF coordinate can recover
+   *  it without re-extracting. */
+  yBaselineRaw?: number;
+  /** Page height in PDF user-space units (for reference). */
+  pageHeight?: number;
 }
 
 export interface LayoutVisualLine {
   page: number;
-  y: number;                          // center y of the line
-  text: string;                       // items joined in x-order with spaces
+  /** Top-left y of the row's band. */
+  y: number;
+  text: string;
   items: LayoutTextItem[];
+}
+
+export type PdfPageClass =
+  /** Positioned items sufficient for structural reconstruction. */
+  | "DIGITAL_TEXT"
+  /** Some positioned items but not enough distinct rows to reconstruct.
+   *  Flattened text is likely useful; OCR may still help. */
+  | "PARTIAL_TEXT"
+  /** Zero positioned items — no exploitable text layer. Requires OCR
+   *  to recover line-item structure. */
+  | "IMAGE_ONLY";
+
+export interface PdfPageDescriptor {
+  page: number;
+  pageWidth: number;
+  pageHeight: number;
+  itemCount: number;
+  distinctYBandCount: number;
+  pageClass: PdfPageClass;
 }
 
 export interface PdfLayout {
   pageCount: number;
-  items: LayoutTextItem[];            // every positioned item, in document order
-  visualLines: LayoutVisualLine[];    // items grouped by y-band, sorted top-to-bottom
-  flattenedText: string;              // fallback: default pdf-parse text output
+  items: LayoutTextItem[];
+  visualLines: LayoutVisualLine[];
+  flattenedText: string;
+  /** Per-page descriptors including document-class routing hint.
+   *  Optional to preserve backward compatibility with fixtures that
+   *  hand-construct a PdfLayout for testing. Production extraction
+   *  always populates this. */
+  pages?: PdfPageDescriptor[];
 }
 
 // -----------------------------------------------------------------------------
 // Public entrypoint
 // -----------------------------------------------------------------------------
 
+/** Number of distinct positioned items above which a page is
+ *  considered DIGITAL_TEXT. Below this, PARTIAL_TEXT. Zero → IMAGE_ONLY. */
+const DIGITAL_TEXT_MIN_ITEMS = 20;
+/** Distinct y-bands required alongside item count for DIGITAL_TEXT. */
+const DIGITAL_TEXT_MIN_YBANDS = 3;
+
 export async function extractPdfLayout(bytes: Buffer): Promise<PdfLayout> {
   const items: LayoutTextItem[] = [];
+  const pageHeights = new Map<number, { width: number; height: number }>();
   let pageCount = 0;
   let coordsOk = true;
-
-  // pdf-parse's `pagerender` receives a pdf.js page object. We call
-  // getTextContent to enumerate every text item + its transform
-  // matrix. `it.transform` is a 6-element affine matrix [a,b,c,d,e,f]
-  // where (e, f) is the origin of the text run in PDF user space.
   let flattenedText = "";
+
   try {
     const parsed = await pdfParse(bytes, {
       pagerender: async (pageData: unknown) => {
@@ -61,27 +104,60 @@ export async function extractPdfLayout(bytes: Buffer): Promise<PdfLayout> {
           const page = pageData as {
             pageNumber?: number;
             pageIndex?: number;
+            getViewport?: (opts: { scale: number }) => { width: number; height: number };
+            view?: number[];
             getTextContent: (opts?: unknown) => Promise<{
               items: Array<{ str: string; transform: number[]; width?: number; height?: number }>;
             }>;
           };
           const pageNum = page.pageNumber ?? ((page.pageIndex ?? 0) + 1);
-          const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
+
+          // Extract page height so we can normalise y to top-left.
+          // Prefer getViewport(); fall back to mediabox view[3].
+          let pageWidth = 612; // US Letter default
+          let pageHeight = 792;
+          try {
+            const vp = page.getViewport?.({ scale: 1 });
+            if (vp && Number.isFinite(vp.width) && Number.isFinite(vp.height)) {
+              pageWidth = vp.width;
+              pageHeight = vp.height;
+            } else if (page.view && page.view.length >= 4) {
+              pageWidth = page.view[2] - page.view[0];
+              pageHeight = page.view[3] - page.view[1];
+            }
+          } catch { /* keep defaults */ }
+          pageHeights.set(pageNum, { width: pageWidth, height: pageHeight });
+
+          // Ask pdf.js for uncombined text items so glyph-level runs
+          // stay separate — the fused-row splitter needs distinct x
+          // positions to snap columns without proportional guessing.
+          const content = await page.getTextContent({
+            normalizeWhitespace: false,
+            disableCombineTextItems: true,
+          });
           for (const it of content.items) {
             const t = it.transform ?? [0, 0, 0, 0, 0, 0];
+            const xRaw = round2(t[4] ?? 0);
+            const yBaselineRaw = round2(t[5] ?? 0);
+            const itemHeight = round2(it.height ?? 0);
+            // Normalise to top-left: top = pageHeight − (baseline + itemHeight).
+            // The baseline is where the text sits; itemHeight is
+            // ascender extent above the baseline. Text at PDF y=750 on
+            // a 792pt page has its top at 792 - 750 - h ≈ 32.
+            const yTop = round2(pageHeight - yBaselineRaw - itemHeight);
             items.push({
               text: it.str ?? "",
               page: pageNum,
-              x: round2(t[4] ?? 0),
-              y: round2(t[5] ?? 0),
+              x: xRaw,
+              y: yTop,
               width: round2(it.width ?? 0),
-              height: round2(it.height ?? 0),
+              height: itemHeight,
+              yBaselineRaw,
+              pageHeight,
             });
           }
-          // Return a text approximation for the default `parsed.text`
-          // consumer (used as the fallback flattened source).
           return content.items.map((i) => i.str).join(" ") + "\n";
-        } catch (e) {
+        } catch {
           coordsOk = false;
           return "";
         }
@@ -89,43 +165,80 @@ export async function extractPdfLayout(bytes: Buffer): Promise<PdfLayout> {
     });
     flattenedText = parsed.text ?? "";
     pageCount = parsed.numpages ?? 0;
-  } catch (e) {
+  } catch {
     coordsOk = false;
-    // Fallback — plain pdf-parse.
-    const parsed = await pdfParse(bytes);
-    flattenedText = parsed.text ?? "";
-    pageCount = parsed.numpages ?? 0;
+    const parsedFallback = await pdfParse(bytes);
+    flattenedText = parsedFallback.text ?? "";
+    pageCount = parsedFallback.numpages ?? 0;
   }
 
   if (!coordsOk || items.length === 0) {
-    // Coordinate extraction failed — build visualLines from
-    // flattenedText so downstream consumers still have SOMETHING.
     const visualLines = flattenedText.split(/\r?\n/).map((line, idx) => ({
       page: 1,
       y: idx,
       text: line,
-      items: [],
+      items: [] as LayoutTextItem[],
     }));
-    return { pageCount, items, visualLines, flattenedText };
+    const pages: PdfPageDescriptor[] = [];
+    for (let p = 1; p <= Math.max(1, pageCount); p++) {
+      pages.push({
+        page: p,
+        pageWidth: 0,
+        pageHeight: 0,
+        itemCount: 0,
+        distinctYBandCount: 0,
+        pageClass: "IMAGE_ONLY",
+      });
+    }
+    return { pageCount, items, visualLines, flattenedText, pages };
   }
 
   const visualLines = clusterVisualLines(items);
-  return { pageCount, items, visualLines, flattenedText };
+
+  // Per-page classification. DIGITAL_TEXT requires both a minimum item
+  // count and a minimum number of distinct y-bands (a page with 40
+  // items all on one line is degenerate).
+  const pages: PdfPageDescriptor[] = [];
+  const seenPages = new Set<number>();
+  for (let p = 1; p <= Math.max(1, pageCount); p++) {
+    seenPages.add(p);
+    const pageItems = items.filter((it) => it.page === p);
+    const pageLines = visualLines.filter((vl) => vl.page === p);
+    const dims = pageHeights.get(p) ?? { width: 0, height: 0 };
+    let cls: PdfPageClass;
+    if (pageItems.length === 0) {
+      cls = "IMAGE_ONLY";
+    } else if (pageItems.length >= DIGITAL_TEXT_MIN_ITEMS && pageLines.length >= DIGITAL_TEXT_MIN_YBANDS) {
+      cls = "DIGITAL_TEXT";
+    } else {
+      cls = "PARTIAL_TEXT";
+    }
+    pages.push({
+      page: p,
+      pageWidth: dims.width,
+      pageHeight: dims.height,
+      itemCount: pageItems.length,
+      distinctYBandCount: pageLines.length,
+      pageClass: cls,
+    });
+  }
+
+  return { pageCount, items, visualLines, flattenedText, pages };
 }
 
 // -----------------------------------------------------------------------------
 // Cluster positioned items into visual lines by y-band
 // -----------------------------------------------------------------------------
 
-const Y_BAND_TOLERANCE = 3.5;   // PDF user-space units; ~1/4 of a typical line height
+const Y_BAND_TOLERANCE = 3.5;
 
 function clusterVisualLines(items: LayoutTextItem[]): LayoutVisualLine[] {
   if (items.length === 0) return [];
-  // Sort primarily by page, then by y DESCENDING (PDF coords are
-  // bottom-up, so higher y = top of page), then by x.
+  // Sort primary by page, then by y ASCENDING (top-left convention),
+  // then by x.
   const sorted = [...items].sort((a, b) => {
     if (a.page !== b.page) return a.page - b.page;
-    if (Math.abs(a.y - b.y) > Y_BAND_TOLERANCE) return b.y - a.y;
+    if (Math.abs(a.y - b.y) > Y_BAND_TOLERANCE) return a.y - b.y;
     return a.x - b.x;
   });
 
@@ -161,11 +274,6 @@ function clusterVisualLines(items: LayoutTextItem[]): LayoutVisualLine[] {
   return lines;
 }
 
-// Join items on the SAME visual line using x-distance heuristics:
-// small x-gap → concatenate directly (they're the same word run
-// that pdf.js split); larger gap → single space; big gap → tab-like
-// spacing preserved as multiple spaces so downstream tokenizers can
-// still tell that "Suite 800   $150.00" is two columns not one.
 function joinItemsWithSpacing(items: LayoutTextItem[]): string {
   if (items.length === 0) return "";
   let out = items[0].text;

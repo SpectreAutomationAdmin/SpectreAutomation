@@ -33,7 +33,8 @@ import {
   emptyEvidence,
   reconcileAmounts,
 } from "./canonical-invoice-evidence";
-import { extractLineItemsFromText, reconcileLineItems } from "./line-items";
+import { reconcileLineItems } from "./line-items";
+import type { CanonicalLineItem } from "./canonical-line-item";
 import {
   extractStructuredTaxComponents,
   selectTaxTotal,
@@ -86,6 +87,14 @@ export interface BuildEvidenceInput {
   };
   /** How many pages the source document had. */
   pageCount?: number;
+  /** Sprint 3 · Phase 4 Slice 5 (2026-08-07) — the ONE line-item
+   *  authority. Injected by analyse.ts after it runs
+   *  extractCanonicalLineItems on the document bytes. This module no
+   *  longer independently extracts line items — the legacy
+   *  ev.lineItems / ev.credits / ev.surcharges lists are mapped
+   *  DIRECTLY from this canonical list so downstream consumers see a
+   *  single source. */
+  canonicalLineItems?: CanonicalLineItem[];
 }
 
 /** Confidence dial per source strategy — used when the underlying
@@ -353,12 +362,35 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
     });
   }
 
-  // --- line items / credits / surcharges (Slice 3 §7) ---------------
-  const li = extractLineItemsFromText(input.text, input.pageCount ?? 1);
-  ev.lineItems = li.lineItems;
-  ev.credits = li.credits;
-  ev.surcharges = li.surcharges;
-  for (const c of li.conflicts) ev.evidenceConflicts.push(c);
+  // --- line items / credits / surcharges (Slice 5 §1 hard requirement) ---
+  // One canonical authority: this module NO LONGER independently
+  // extracts line items. `input.canonicalLineItems` — produced by
+  // extractCanonicalLineItems in analyse.ts — is the single source.
+  // The legacy ev.lineItems / ev.credits / ev.surcharges shape is
+  // mapped from that same canonical list so consumers that read the
+  // legacy fields observe the same rows the canonical field carries.
+  const canonicalIn: CanonicalLineItem[] = input.canonicalLineItems ?? [];
+  (ev as CanonicalInvoiceEvidence & { canonicalLineItems?: CanonicalLineItem[] }).canonicalLineItems = canonicalIn;
+  for (const cli of canonicalIn) {
+    const asLegacy = {
+      description: { value: cli.description, confidence: cli.validationConfidence, strategy: "POSITIONED_TEXT" as const, ruleKey: `lineitem.${cli.sourceStrategy.toLowerCase()}`, region: cli.region, validationStatus: cli.arithmetic === "ARITHMETIC_OK" ? "PASSED" as const : "UNVALIDATED" as const },
+      amount: { value: cli.extension, confidence: cli.validationConfidence, strategy: "POSITIONED_TEXT" as const, ruleKey: `lineitem.${cli.sourceStrategy.toLowerCase()}`, region: cli.region, validationStatus: cli.arithmetic === "ARITHMETIC_OK" ? "PASSED" as const : "UNVALIDATED" as const },
+      ...(cli.quantity != null ? {
+        quantity: { value: cli.quantity, confidence: cli.validationConfidence, strategy: "POSITIONED_TEXT" as const, ruleKey: `lineitem.${cli.sourceStrategy.toLowerCase()}` },
+      } : {}),
+      ...(cli.unitPrice != null ? {
+        unitPrice: { value: cli.unitPrice, confidence: cli.validationConfidence, strategy: "POSITIONED_TEXT" as const, ruleKey: `lineitem.${cli.sourceStrategy.toLowerCase()}` },
+      } : {}),
+      isCredit: cli.role === "CREDIT" || cli.role === "DISCOUNT",
+      isSurcharge: cli.role === "SURCHARGE" || cli.role === "FREIGHT" || cli.role === "INTEREST" || cli.role === "PENALTY",
+    };
+    if (cli.role === "CREDIT" || cli.role === "DISCOUNT") ev.credits.push(asLegacy);
+    else if (cli.role === "SURCHARGE" || cli.role === "FREIGHT") ev.surcharges.push(asLegacy);
+    else if (cli.role === "PRIMARY_PURCHASE") ev.lineItems.push(asLegacy);
+    // TAX / INTEREST / PENALTY intentionally omitted from lineItems —
+    // downstream consumers treat legacy lineItems as the purchased-
+    // goods pool.
+  }
 
   // --- structured tax components (Slice 3 §9) -----------------------
   const taxComponents = extractStructuredTaxComponents(input.text);

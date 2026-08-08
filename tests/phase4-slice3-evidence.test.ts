@@ -131,21 +131,31 @@ describe("Phase 4 · Slice 3 · §9 tax-component structured metadata", () => {
 });
 
 describe("Phase 4 · Slice 3 · integration — parseInvoiceText carries line items + tax components", () => {
-  it("attaches Slice-3 evidence to the canonical evidence object", () => {
+  it("attaches Slice-3 evidence to the canonical evidence object", async () => {
+    // Slice 5 (2026-08-07): buildCanonicalEvidence no longer extracts
+    // line items independently — the analyser is the ONE authority.
+    // This test simulates the analyser flow: run the canonical
+    // extractor first, then thread its output into parseInvoiceText.
+    const text = [
+      "Prairie Greens Landscape Ltd.",
+      "1500 Fairway Rd · Regina SK",
+      "GST: 843210987 RT0001",
+      "Invoice Number: PG-001",
+      "",
+      "Sand-cap dressing, greens            400   2.15    860.00",
+      "Aerator rental, half-day               1 140.00    140.00",
+      "",
+      "Subtotal: 1000.00",
+      "GST 5%: 50.00",
+      "Total:   1050.00",
+    ].join("\n");
+    const { extractCanonicalLineItems } = await import(
+      "@/lib/ap-intelligence/canonical-line-item-extractor"
+    );
+    const canonical = await extractCanonicalLineItems({ flattenedText: text, pageCount: 1 });
     const r = parseInvoiceText({
-      extractedText: [
-        "Prairie Greens Landscape Ltd.",
-        "1500 Fairway Rd · Regina SK",
-        "GST: 843210987 RT0001",
-        "Invoice Number: PG-001",
-        "",
-        "Sand-cap dressing, greens            400   2.15    860.00",
-        "Aerator rental, half-day               1 140.00    140.00",
-        "",
-        "Subtotal: 1000.00",
-        "GST 5%: 50.00",
-        "Total:   1050.00",
-      ].join("\n"),
+      extractedText: text,
+      canonicalLineItems: canonical.lineItems,
     });
     expect(r.canonicalEvidence?.lineItems.length).toBeGreaterThanOrEqual(1);
     // Slice 3 attaches tax components on the extension bag.

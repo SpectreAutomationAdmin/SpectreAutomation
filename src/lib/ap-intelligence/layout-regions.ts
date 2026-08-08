@@ -83,18 +83,21 @@ function detectRegionsOnPage(page: number, lines: LayoutVisualLine[]): LayoutReg
   const pageXMax = Math.max(...allItems.map((i) => i.x + i.width));
   const pageYMin = Math.min(...allItems.map((i) => i.y));
   const pageYMax = Math.max(...allItems.map((i) => i.y + i.height));
-  const headerBoundary = pageYMax - (pageYMax - pageYMin) * HEADER_TOP_FRACTION;
-  const footerBoundary = pageYMin + (pageYMax - pageYMin) * FOOTER_BOTTOM_FRACTION;
+  // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — pdf-layout-extract now
+  // emits top-left y coordinates (y=0 at page top, growing downward).
+  // Header is the low-y band; footer is the high-y band.
+  const headerBoundary = pageYMin + (pageYMax - pageYMin) * HEADER_TOP_FRACTION;
+  const footerBoundary = pageYMax - (pageYMax - pageYMin) * FOOTER_BOTTOM_FRACTION;
 
-  // Sort lines top-to-bottom (PDF: y increases upward).
-  const topDown = [...lines].sort((a, b) => b.y - a.y);
+  // Sort lines top-to-bottom (ascending y under top-left convention).
+  const topDown = [...lines].sort((a, b) => a.y - b.y);
 
   // Split at each vertical gap larger than VERTICAL_GAP_THRESHOLD.
   const bands: LayoutVisualLine[][] = [];
   let currentBand: LayoutVisualLine[] = [];
   let lastY: number | null = null;
   for (const l of topDown) {
-    if (lastY != null && lastY - l.y > VERTICAL_GAP_THRESHOLD) {
+    if (lastY != null && l.y - lastY > VERTICAL_GAP_THRESHOLD) {
       if (currentBand.length > 0) bands.push(currentBand);
       currentBand = [];
     }
@@ -204,9 +207,10 @@ function classifyRegionKind(args: {
   const text = seed.lines.map((l) => l.text).join("\n");
   const evidence: string[] = [];
 
-  // Position heuristics.
-  const inHeader = seed.yMin >= headerBoundary;
-  const inFooter = seed.yMax <= footerBoundary;
+  // Position heuristics. Slice 5: top-left y convention — header is
+  // the low-y band, footer is the high-y band.
+  const inHeader = seed.yMax <= headerBoundary;
+  const inFooter = seed.yMin >= footerBoundary;
   if (inHeader) evidence.push("in-header-region");
   if (inFooter) evidence.push("in-footer-region");
 
