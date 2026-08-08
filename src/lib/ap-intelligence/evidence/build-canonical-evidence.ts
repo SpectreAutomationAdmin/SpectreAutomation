@@ -47,6 +47,7 @@ import {
 } from "./supplier-ranker";
 import {
   selectSupplierFromText,
+  isGenericLabelCandidate,
   type SupplierSelection,
 } from "./supplier-identity";
 
@@ -162,6 +163,14 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
           if (idx < 0 || idx >= lines.length) continue;
           const neighbour = lines[idx].trim();
           if (neighbour && neighbour.length >= 4 && !alreadyPresent.has(neighbour) && /[A-Za-z]{3,}/.test(neighbour)) {
+            // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+            // §5 generic-label rejection before seeding. Prevents
+            // "Taxes/Fees" (and other slash/short-noun labels near a
+            // tax marker) from becoming a supplier candidate.
+            if (isGenericLabelCandidate(neighbour)) {
+              alreadyPresent.add(neighbour);
+              continue;
+            }
             ev.fields.supplierCandidates.push({
               value: neighbour,
               confidence: 78,
@@ -368,19 +377,37 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
   const supplierIdentity: SupplierSelection = selectSupplierFromText(input.text);
   if (supplierIdentity.winner) {
     const w = supplierIdentity.winner;
-    const displayName = w.legalNameCandidate ?? w.operatingNameCandidate ?? w.normalizedIdentity;
+    // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+    // founder §3: prefer displayName (raw preserved text from
+    // highest-quality identity evidence). Never surface the
+    // normalizedIdentity to the card.
+    const displayName = w.displayName ?? w.legalNameCandidate ?? w.operatingNameCandidate ?? w.normalizedIdentity;
     // Prepend as the primary candidate; other pool candidates remain
-    // as alternates for provenance.
+    // as alternates for provenance. Also DEMOTE any legacy heuristic
+    // seed (supplier.tax_reg_neighbour / supplier.website_domain_seed /
+    // supplier.alt.*) whose value doesn't match the orchestrator's
+    // winner — the orchestrator's cluster is authoritative when it
+    // commits.
+    const HEURISTIC_RULES = ["supplier.tax_reg_neighbour", "supplier.website_domain_seed", "supplier.corp_suffix_line"];
+    const demotedRest = ev.fields.supplierCandidates
+      .filter((c) => c.value !== displayName)
+      .map((c) => {
+        const isHeuristic = HEURISTIC_RULES.some((h) => (c.ruleKey ?? "").startsWith(h));
+        if (isHeuristic) {
+          return { ...c, validationStatus: "SHADOWED" as const };
+        }
+        return c;
+      });
     ev.fields.supplierCandidates = [
       {
         value: displayName,
         confidence: w.confidence,
         strategy: "EMBEDDED_TEXT",
-        ruleKey: `supplier.identity_orchestrator+${w.independentEvidenceGroups}_groups`,
+        ruleKey: `supplier.identity_orchestrator+${w.independentEvidenceFamilies}_families`,
         evidenceSnippet: w.evidence.map((e) => e.type).slice(0, 5).join("+"),
         validationStatus: "PASSED",
       },
-      ...ev.fields.supplierCandidates.filter((c) => c.value !== displayName),
+      ...demotedRest,
     ];
   }
   (ev as CanonicalInvoiceEvidence & { supplierIdentity?: SupplierSelection }).supplierIdentity = supplierIdentity;

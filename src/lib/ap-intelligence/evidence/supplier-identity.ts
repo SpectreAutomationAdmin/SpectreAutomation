@@ -73,9 +73,23 @@ export interface SupplierIdentityCandidate {
   normalizedIdentity: string;
   legalNameCandidate?: string;
   operatingNameCandidate?: string;
+  /** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+   *  founder §3: the founder-facing displayName MUST preserve the
+   *  original casing / spacing / punctuation of the highest-quality
+   *  document evidence text. It must NEVER equal the normalizedIdentity
+   *  (which is a machine cluster key). Priority when computing:
+   *    HEADER_ORG_TEXT > LEGAL_ENTITY_TEXT > REMITTANCE_ENTITY >
+   *    VISUAL_LOGO > REPEATED_BRANDING > any raw-text identity.
+   *  Only when NO raw-text evidence exists (domain-only) does a
+   *  domain-derived title-case value fall through. */
+  displayName?: string;
   evidence: SupplierIdentityEvidence[];
   contradictions: SupplierIdentityEvidence[];
+  /** Founder §6: distinct COUNT of evidence FAMILIES (correlated
+   *  observations from the same physical block are ONE family).
+   *  Was `independentEvidenceGroups` — kept for backward compat. */
   independentEvidenceGroups: number;
+  independentEvidenceFamilies: number;
   confidence: number;
 }
 
@@ -148,6 +162,142 @@ export function normalizeOrgName(raw: string): string {
     .trim();
 }
 
+/** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) — §5
+ *  generalized generic-label rejection. Blocks candidates that
+ *  are role/category descriptors (slash-separated, colon-labels,
+ *  short common-noun phrases with no organization signal) from
+ *  becoming supplier identities. Genuine businesses whose names
+ *  INCLUDE these words are not rejected — the value must BE the
+ *  bare descriptor (≤ 3 words, no proper-noun anchor).
+ *
+ *  Rejection criteria (any one is sufficient):
+ *    * slash-separated category label ("Taxes/Fees", "GST/HST",
+ *      "Product/Service")
+ *    * word count ≤ 3 AND every word is on the generic-commercial-
+ *      noun list ("Fees", "Charges", "Services", "Products",
+ *      "Supplies", "Membership", "Dues", "Account", "Payment",
+ *      "Ongoing charges")
+ *    * matches known section-title vocabulary
+ */
+const GENERIC_COMMERCIAL_NOUNS = new Set([
+  "fee", "fees", "charge", "charges", "service", "services", "product",
+  "products", "supply", "supplies", "membership", "dues", "account",
+  "accounts", "payment", "payments", "invoice", "invoices", "statement",
+  "statements", "bill", "bills", "receipt", "receipts", "amount",
+  "amounts", "total", "totals", "subtotal", "tax", "taxes", "credit",
+  "credits", "debit", "debits", "ongoing", "recurring", "pending",
+  "outage", "usage", "billing", "adjustment", "adjustments", "rebate",
+  "discount", "surcharge",
+]);
+export function isGenericLabelCandidate(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  // Slash-separated category label — Taxes/Fees / GST/HST / etc.
+  if (/^[A-Za-z][A-Za-z]*\/[A-Za-z][A-Za-z]*(?:\/[A-Za-z]+)*$/.test(trimmed)) return true;
+  // Trailing colon indicates a label, not an identity.
+  if (/:\s*$/.test(trimmed)) return true;
+  // Word-by-word generic check.
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  if (words.length <= 3) {
+    // All-generic word check (case-insensitive). If EVERY word is
+    // in the generic-commercial-noun list, it's a descriptor.
+    const allGeneric = words.every((w) => GENERIC_COMMERCIAL_NOUNS.has(w.toLowerCase().replace(/[^a-z]/g, "")));
+    if (allGeneric) return true;
+  }
+  return false;
+}
+
+/** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) — §6
+ *  independent-evidence-FAMILY count. Multiple observations from
+ *  the same physical letterhead/contact block are correlated and
+ *  count as ONE family, not several. Groupings:
+ *    IDENTITY_TEXT   — HEADER_ORG_TEXT / LEGAL_ENTITY_TEXT (each
+ *                      distinct-value is its own family)
+ *    VISUAL_LOGO     — separate family per logo
+ *    DOMAIN          — WEBSITE_DOMAIN + EMAIL_DOMAIN sharing domain
+ *                      root count as ONE family
+ *    CONTACT_BLOCK   — ADDRESS_BLOCK + PHONE_BLOCK adjacent lines
+ *                      collapse to ONE family
+ *    TAX_REGISTRATION— each distinct registration is its own family
+ *    REMITTANCE      — each distinct remittance entity
+ *    REPEATED_BRANDING— per-page recurrence
+ *    PROVIDER_ROLE   — provider-declared vendor field
+ */
+function computeIndependentFamilies(evidence: SupplierIdentityEvidence[]): number {
+  const families = new Set<string>();
+  let contactBlockSeen = false;
+  const domainRoots = new Set<string>();
+  for (const e of evidence) {
+    if (e.type === "ADDRESS_BLOCK" || e.type === "PHONE_BLOCK") {
+      if (!contactBlockSeen) {
+        families.add("CONTACT_BLOCK");
+        contactBlockSeen = true;
+      }
+      continue;
+    }
+    if (e.type === "WEBSITE_DOMAIN" || e.type === "EMAIL_DOMAIN") {
+      const root = e.value.toLowerCase();
+      if (!domainRoots.has(root)) {
+        domainRoots.add(root);
+        families.add(`DOMAIN:${root}`);
+      }
+      continue;
+    }
+    if (e.type === "TAX_REGISTRATION") {
+      families.add(`TAX_REG:${e.value.replace(/\s+/g, "")}`);
+      continue;
+    }
+    if (e.type === "REMITTANCE_ENTITY") {
+      families.add(`REMIT:${normalizeOrgName(e.value)}`);
+      continue;
+    }
+    if (e.type === "VISUAL_LOGO" || e.type === "REPEATED_BRANDING") {
+      families.add(`${e.type}:${normalizeOrgName(e.value)}`);
+      continue;
+    }
+    if (e.type === "HEADER_ORG_TEXT" || e.type === "LEGAL_ENTITY_TEXT" || e.type === "POSITIONAL_HEADER") {
+      // Each distinct identity-text value is its own family.
+      families.add(`IDENTITY_TEXT:${normalizeOrgName(e.value)}`);
+      continue;
+    }
+    if (e.type === "PROVIDER_VENDOR_ROLE") {
+      families.add("PROVIDER_ROLE");
+      continue;
+    }
+    families.add(`${e.type}:${normalizeOrgName(e.value)}`);
+  }
+  return families.size;
+}
+
+/** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) — §3
+ *  founder-facing displayName. Highest-quality preserved-casing
+ *  text from actual document evidence. Never returns the
+ *  normalizedIdentity. Priority order:
+ *    HEADER_ORG_TEXT > LEGAL_ENTITY_TEXT > REMITTANCE_ENTITY >
+ *    VISUAL_LOGO > REPEATED_BRANDING > (last resort) a
+ *    title-cased domain root.
+ */
+function computeDisplayName(evidence: SupplierIdentityEvidence[]): string | undefined {
+  const PRIORITY: SupplierEvidenceType[] = [
+    "HEADER_ORG_TEXT", "LEGAL_ENTITY_TEXT", "REMITTANCE_ENTITY",
+    "VISUAL_LOGO", "REPEATED_BRANDING", "POSITIONAL_HEADER",
+  ];
+  for (const t of PRIORITY) {
+    const cand = evidence
+      .filter((e) => e.type === t)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+    if (cand && !isGenericLabelCandidate(cand.value)) return cand.value;
+  }
+  // Last resort: a domain — title-case it, but flag downstream
+  // that this is a domain-only fallback.
+  const domain = evidence
+    .filter((e) => e.type === "WEBSITE_DOMAIN" || e.type === "EMAIL_DOMAIN")
+    .sort((a, b) => b.confidence - a.confidence)[0];
+  if (domain) return domain.value.charAt(0).toUpperCase() + domain.value.slice(1);
+  return undefined;
+}
+
 /** Compute independenceGroup key for an evidence item. WEBSITE +
  *  EMAIL sharing the same domain root collapse; address + phone
  *  block sharing the same page region are separate groups. */
@@ -168,7 +318,7 @@ export function collectTextSupplierEvidence(text: string): SupplierIdentityEvide
   const totalLines = lines.length;
   const headerCutoff = Math.min(30, Math.ceil(totalLines * 0.3));
 
-  // ---- LEGAL_ENTITY_TEXT + HEADER_ORG_TEXT ----
+  // ---- LEGAL_ENTITY_TEXT + HEADER_ORG_TEXT (suffix-required path) ----
   for (let i = 0; i < totalLines; i++) {
     const line = lines[i];
     const m = line.match(LEGAL_ENTITY_LINE);
@@ -187,6 +337,81 @@ export function collectTextSupplierEvidence(text: string): SupplierIdentityEvide
       sourceStrategy: "EMBEDDED_TEXT",
       evidenceSnippet: line.slice(0, 100),
       independenceGroup: `LEGAL:${norm}`,
+    });
+  }
+
+  // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) — §4
+  // suffix-LESS header-org detection. Many real invoices carry the
+  // supplier name as a bare all-caps or Title-Case line in the
+  // header WITHOUT a corp suffix (CPA ALBERTA / OXIO / Silver
+  // Springs Golf & Country Club). Emit these as HEADER_ORG_TEXT
+  // evidence so the orchestrator can cluster them with website /
+  // tax-reg / address evidence — otherwise the founder-facing
+  // display falls through to a domain-derived normalized key.
+  const HEADER_STOPLIST = new Set([
+    "INVOICE", "FACTURE", "STATEMENT", "BILL", "RECEIPT", "QUOTE", "QUOTATION",
+    "CREDIT MEMO", "CREDIT NOTE", "REMITTANCE",
+    "BILL TO", "BILL TO:", "SHIP TO", "SHIP TO:", "SOLD TO",
+    "CUSTOMER", "CLIENT", "ACCOUNT HOLDER",
+    "DESCRIPTION", "PRODUCT", "PRODUIT", "QUANTITY", "QUANTITÉ",
+    "PRICE", "PRIX", "AMOUNT", "MONTANT", "TOTAL", "SUBTOTAL",
+    "SUB TOTAL", "GRAND TOTAL", "TAX", "TAXES", "GST", "HST", "PST", "QST",
+    "TAXES/FEES", "FEES", "CHARGES", "PRODUCTS", "SERVICES", "SUPPLIES",
+    "DATE", "PAGE", "REFERENCE", "DATEPAGE", "ORDER", "REF", "REF NO",
+    "TERMS", "DUE", "DUE DATE", "PAID", "BALANCE",
+  ]);
+  // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+  // pdf-parse column-header concatenations (DATEPAGE, PAGEDATE,
+  // ORDERPAGE, ITEMQTY, etc.) are single-word tokens formed by
+  // adjacent column labels being flattened together. Reject any
+  // ALL-CAPS single word whose entire content is composed of ≥2
+  // stoplist words concatenated end-to-end.
+  const isColumnHeaderConcat = (raw: string): boolean => {
+    if (!/^[A-Z]+$/.test(raw)) return false;
+    // Try to split into ≥2 known stoplist tokens.
+    const stopWords = ["DATE", "PAGE", "TIME", "ORDER", "INVOICE", "ITEM",
+      "QTY", "QUANTITY", "PRICE", "AMOUNT", "TOTAL", "TAX", "REF",
+      "PRODUCT", "DESCRIPTION", "DUE", "PAID", "NUMBER"];
+    let remaining = raw;
+    let tokensFound = 0;
+    while (remaining.length > 0) {
+      const match = stopWords.find((w) => remaining.startsWith(w));
+      if (!match) return false;
+      remaining = remaining.slice(match.length);
+      tokensFound++;
+    }
+    return tokensFound >= 2;
+  };
+  const HEADER_SUFFIX_LESS_LINE = /^[A-Z][A-Za-z0-9&.'\-]+(?:\s+[A-Z][A-Za-z0-9&.'\-]+){0,5}$/;
+  for (let i = 0; i < Math.min(headerCutoff, totalLines); i++) {
+    const raw = lines[i].trim();
+    if (!raw) continue;
+    // Skip lines already emitted by the suffix-required path.
+    if (LEGAL_SUFFIX_RE.test(raw)) continue;
+    if (raw.length < 3 || raw.length > 60) continue;
+    // Must be Title-Case or ALL-CAPS run of 1-6 words.
+    if (!HEADER_SUFFIX_LESS_LINE.test(raw)) continue;
+    // Must not be a stoplist word (case-insensitive comparison).
+    if (HEADER_STOPLIST.has(raw.toUpperCase())) continue;
+    // Reject pdf-parse column-header concatenations (DATEPAGE etc.).
+    if (isColumnHeaderConcat(raw)) continue;
+    // Guard: reject generic labels via the same predicate the
+    // orchestrator uses downstream (§5). Prevents FEES / SERVICES /
+    // TAXES/FEES / CHARGES from becoming a candidate at seeding time.
+    if (isGenericLabelCandidate(raw)) continue;
+    const norm = normalizeOrgName(raw);
+    if (!norm || norm.length < 3) continue;
+    // Reject bare descriptors (2-word phrases where BOTH words are
+    // generic commercial nouns).
+    evidence.push({
+      type: "HEADER_ORG_TEXT",
+      value: raw,
+      page: 1,
+      region: { page: 1, lineIndex: i },
+      confidence: 78,
+      sourceStrategy: "EMBEDDED_TEXT",
+      evidenceSnippet: raw,
+      independenceGroup: `HEADER:${norm}`,
     });
   }
 
@@ -341,9 +566,11 @@ export function clusterSupplierEvidence(evidence: SupplierIdentityEvidence[]): S
         normalizedIdentity: target,
         legalNameCandidate: undefined,
         operatingNameCandidate: undefined,
+        displayName: undefined,
         evidence: [],
         contradictions: [],
         independentEvidenceGroups: 0,
+        independentEvidenceFamilies: 0,
         confidence: 0,
       };
       candidatesByIdentity.set(target, cand);
@@ -363,56 +590,86 @@ export function clusterSupplierEvidence(evidence: SupplierIdentityEvidence[]): S
   }
 
   // Second pass: attach supporting evidence (address/phone/tax-reg)
-  // to the SINGLE candidate when there's exactly one identity, or
-  // to all identity clusters as weak support when there are multiple.
-  // For DMM this yields: DMM cluster gets address + phone + tax-reg.
+  // to the NEAREST-line identity cluster. Sprint 3 · Post-16H
+  // Phase 4 Slice 4-reopen (2026-08-07) — nearest-attachment
+  // replaces first-by-lineIndex so DMM's Saskatoon address (line
+  // 20) attaches to the DMM cluster (whose website evidence is at
+  // line 18), not to a spurious earlier cluster like a pdf-parse
+  // column-header concat at line 2.
   const supporting = evidence.filter((e) =>
     e.type === "ADDRESS_BLOCK" || e.type === "PHONE_BLOCK" || e.type === "TAX_REGISTRATION",
   );
-  if (candidatesByIdentity.size === 1) {
-    const only = Array.from(candidatesByIdentity.values())[0];
-    for (const s of supporting) only.evidence.push(s);
-  } else if (candidatesByIdentity.size > 1) {
-    // When multiple clusters exist, attach the address/phone/tax-reg
-    // to the FIRST (highest-line-index) cluster only — the header
-    // is typically the supplier's identity, so its adjacent block
-    // is its identity's support.
-    const first = Array.from(candidatesByIdentity.values())
-      .sort((a, b) => (a.evidence[0]?.region?.lineIndex ?? 0) - (b.evidence[0]?.region?.lineIndex ?? 0))[0];
-    for (const s of supporting) first.evidence.push(s);
+  const clusterList = Array.from(candidatesByIdentity.values());
+  if (clusterList.length === 1) {
+    for (const s of supporting) clusterList[0].evidence.push(s);
+  } else if (clusterList.length > 1) {
+    for (const s of supporting) {
+      const sLine = s.region?.lineIndex ?? -1;
+      if (sLine < 0) { clusterList[0].evidence.push(s); continue; }
+      // Distance = min |cluster-evidence-lineIndex − s.lineIndex|.
+      let best = clusterList[0];
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const c of clusterList) {
+        for (const ce of c.evidence) {
+          const cLine = ce.region?.lineIndex;
+          if (cLine == null) continue;
+          const dist = Math.abs(cLine - sLine);
+          if (dist < bestDist) { bestDist = dist; best = c; }
+        }
+      }
+      best.evidence.push(s);
+    }
   }
 
   return Array.from(candidatesByIdentity.values());
 }
 
-/** Compute independent-evidence-group count + confidence for every
- *  candidate. Uses the founder's §5 confidence model. */
+/** Compute independent-evidence-family count + confidence for every
+ *  candidate. Uses the founder's §5 confidence model + §6 family
+ *  bucketing so contact-block observations count as ONE family. */
 export function scoreSupplierCandidates(candidates: SupplierIdentityCandidate[]): void {
   for (const c of candidates) {
+    // Kept for backward compat (old field) — but confidence now
+    // uses FAMILIES.
     const groups = new Set(c.evidence.map((e) => e.independenceGroup));
     c.independentEvidenceGroups = groups.size;
+    c.independentEvidenceFamilies = computeIndependentFamilies(c.evidence);
+    // Compute + freeze the founder-facing displayName from actual
+    // document text (never the normalized cluster key).
+    c.displayName = computeDisplayName(c.evidence);
     // Base score from strongest single signal.
     const strongest = c.evidence.reduce((max, e) => Math.max(max, e.confidence), 0);
-    // Corroboration multiplier per additional independent group.
-    // Founder §5 model:
-    //   1 weak signal → candidate only (≤ 40)
-    //   1 very strong signal → plausible / still review (≤ 65)
-    //   2 independent agreeing → strong (65..85)
-    //   3+ independent agreeing → high (85..99)
+    // Corroboration multiplier per additional independent FAMILY.
+    //   1 family → strongest only
+    //   2 families → +20
+    //   3+ families → +30
+    const bonusFamilies = c.independentEvidenceFamilies;
     const groupBonus =
-      c.independentEvidenceGroups >= 3 ? 30
-      : c.independentEvidenceGroups === 2 ? 20
+      bonusFamilies >= 3 ? 30
+      : bonusFamilies === 2 ? 20
       : 0;
-    // Weak-only cap: single WEBSITE/EMAIL group with no
+    // Weak-only cap: single WEBSITE/EMAIL family with no
     // corroboration cannot exceed 45 — founder §18.
     const types = new Set(c.evidence.map((e) => e.type));
-    const onlyDomain = c.independentEvidenceGroups === 1
+    const onlyDomain = bonusFamilies === 1
       && (types.has("WEBSITE_DOMAIN") || types.has("EMAIL_DOMAIN"))
       && !types.has("LEGAL_ENTITY_TEXT") && !types.has("HEADER_ORG_TEXT")
       && !types.has("TAX_REGISTRATION") && !types.has("ADDRESS_BLOCK")
       && !types.has("VISUAL_LOGO");
     let confidence = strongest + groupBonus;
     if (onlyDomain) confidence = Math.min(confidence, 45);
+    // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+    // §4 positive-organization-shape requirement. A candidate that
+    // has NO identity-text evidence (HEADER_ORG_TEXT /
+    // LEGAL_ENTITY_TEXT / VISUAL_LOGO / REPEATED_BRANDING /
+    // REMITTANCE_ENTITY) cannot exceed the commitment threshold.
+    // Domain-only + address-block does NOT satisfy positive-org-shape.
+    const hasIdentityText = types.has("HEADER_ORG_TEXT")
+      || types.has("LEGAL_ENTITY_TEXT")
+      || types.has("VISUAL_LOGO")
+      || types.has("REPEATED_BRANDING")
+      || types.has("REMITTANCE_ENTITY");
+    if (!hasIdentityText) confidence = Math.min(confidence, 55);
     c.confidence = Math.max(0, Math.min(100, Math.round(confidence)));
   }
 }
@@ -440,17 +697,20 @@ export function selectSupplier(candidates: SupplierIdentityCandidate[], opts: {
     ? `top candidate confidence ${winner.confidence} < threshold ${threshold} (insufficient corroboration)`
     : null;
   const supporting = winner ? Array.from(new Set(winner.evidence.map((e) => e.type))) : [];
+  // Founder §3 — the founder-facing selectedSupplier is the
+  // displayName (raw preserved text from the highest-quality
+  // evidence). NEVER the normalizedIdentity.
   return {
     winner: abstained ? null : winner,
     alternates,
     abstained,
     abstainReason,
     diagnostic: {
-      selectedSupplier: abstained ? null : (winner?.legalNameCandidate ?? winner?.operatingNameCandidate ?? winner?.normalizedIdentity ?? null),
-      operatingName: winner?.operatingNameCandidate ?? null,
+      selectedSupplier: abstained ? null : (winner?.displayName ?? winner?.legalNameCandidate ?? winner?.operatingNameCandidate ?? null),
+      operatingName: winner?.operatingNameCandidate ?? winner?.displayName ?? null,
       legalName: winner?.legalNameCandidate ?? null,
       confidence: winner?.confidence ?? 0,
-      independentEvidenceGroups: winner?.independentEvidenceGroups ?? 0,
+      independentEvidenceGroups: winner?.independentEvidenceFamilies ?? 0,
       supportingEvidence: supporting,
       contradictions: winner ? Array.from(new Set(winner.contradictions.map((e) => e.type))) : [],
       allCandidates: candidates.length,
