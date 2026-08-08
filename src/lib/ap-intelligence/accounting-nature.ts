@@ -368,11 +368,16 @@ const CLUSTER_BONUS_5_LINES = 8;   // ≥5 distinct-line component matches
 
 export function classifyAccountingNature(input: AccountingNatureInput): AccountingNatureAssessment {
   // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4) — prefer
-  // the DOCUMENT-ROLE-AWARE transactional text when provided.
-  // Falls back to fullDocumentText for callers that haven't been
-  // migrated. Supplier / recipient / footer / policy regions never
-  // enter here when the caller passes `transactionalText`.
-  const documentSurfaceText = input.transactionalText ?? input.fullDocumentText ?? "";
+  // the DOCUMENT-ROLE-AWARE transactional text when provided AND
+  // non-empty. When transactionalText is present but empty (e.g.
+  // image-only PDF with no positional regions), we do NOT starve the
+  // classifier of evidence by refusing the fullDocumentText fallback;
+  // amendment #4 is about region-role provenance, not about muting
+  // the classifier when regions couldn't be detected.
+  const hasTransactionalText = input.transactionalText != null && input.transactionalText.trim().length > 0;
+  const documentSurfaceText = hasTransactionalText
+    ? input.transactionalText!
+    : input.fullDocumentText ?? "";
   const surfaceLines = [
     ...input.lineItemDescriptions,
     documentSurfaceText,

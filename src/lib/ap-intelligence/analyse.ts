@@ -887,7 +887,20 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // text + the richer line items with tax classification. Both
     // feed the query-concept extractor's document-phrase and line-
     // item channels respectively.
-    fullDocumentText: pdfOk ? pdfText : null,
+    //
+    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4+#6) —
+    // when a defensible transactional-text view exists, pass THAT
+    // to the ranker's document-phrase channel instead of the raw
+    // pdfText. Supplier / recipient / footer / policy regions are
+    // excluded so document-phrase evidence cannot fire on
+    // "Telephone" / "Internet" appearing in a supplier address
+    // block or "finance charge" appearing in a terms paragraph.
+    // Falls back to raw pdfText when transactional text is empty
+    // (image-only PDF, OCR pending) to preserve legacy behaviour.
+    fullDocumentText:
+      transactionalTextValue != null && transactionalTextValue.trim().length > 0
+        ? transactionalTextValue
+        : (pdfOk ? pdfText : null),
     extractedLineItems: lineItemsExtracted,
     // Post-16H Phase 2 — eligibility context.
     eligibilityContext: {
@@ -909,6 +922,76 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     vendorResolve: vendor,
     gl,
   });
+
+  // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #2+#6) —
+  // post-base-ranker purpose-compatibility guard. When the canonical
+  // purpose is COMMITTED (Slice-5 taxonomy ≥60) AND the base
+  // ranker's winner does NOT match any discriminative ontology
+  // substring for that concept, walk the top-K candidates for a
+  // purpose-compatible alternative and promote it. If none exists,
+  // KEEP the winner but flag it requiresReview — never fabricate.
+  //
+  // This closes the last-mile defect where DMM (canonical
+  // FUEL(96)) was still winning "Telephone & Internet" because
+  // the base ranker's document-phrase channel matched telecom
+  // vocabulary in the supplier's raw phone/website footer text.
+  // Weak-ontology boost is intentionally modest (§2) — used only
+  // when the winner IS INCOMPATIBLE with the committed purpose.
+  if (purposeDecision == null) {
+    purposeDecision = resolveEconomicPurpose({
+      canonicalLineItems: canonicalLineItemsFromLayout,
+      supplierName: extraction.vendor.guessedName,
+      transactionalText: transactionalTextValue,
+      hasPenaltyLine: canonicalLineItemsFromLayout.some((li) => li.role === "PENALTY"),
+      hasMembershipLine: canonicalLineItemsFromLayout.some((li) =>
+        /\b(member(?:ship)?\s*(?:dues|fee))\b/i.test(li.description)),
+      hasProfessionalCredentialContext: (extraction.vendor.guessedName ?? "").match(
+        /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
+    });
+  }
+  if (purposeDecision.source === "CANONICAL_COMMITTED" && purposeDecision.concept != null && gl.accountName) {
+    const winnerAffinity = evaluatePurposeAccountAffinity(purposeDecision.concept, gl.accountName);
+    if (winnerAffinity == null) {
+      // Winner has no ontology tie to the committed purpose. Look
+      // for the highest-scoring alternative that does.
+      const alternatives = gl.candidates ?? [];
+      let promoted: typeof alternatives[number] | null = null;
+      for (const alt of alternatives) {
+        if (alt.accountId === gl.candidates[0]?.accountId) continue;
+        const affinity = evaluatePurposeAccountAffinity(purposeDecision.concept, alt.accountName);
+        if (affinity && alt.postable) {
+          promoted = alt;
+          break;
+        }
+      }
+      if (promoted) {
+        logger.info("ap-intelligence.purpose-ontology.override", {
+          clubId: args.clubId, docIdTail: doc.id.slice(-6),
+          concept: purposeDecision.concept,
+          from: gl.accountNumber, to: promoted.accountNumber,
+        });
+        gl = {
+          ...gl,
+          accountNumber: promoted.accountNumber,
+          accountName: promoted.accountName,
+          categoryKey: promoted.categoryKey,
+          fsGroupKey: promoted.fsGroupKey,
+          source: "ECONOMIC_PURPOSE",
+          confidence: Math.min(promoted.confidence + 8, 90),
+          reason: `purpose_ontology_promotion:${purposeDecision.concept}(${purposeDecision.confidence})->${promoted.accountNumber}(base_conf=${promoted.confidence},from=${gl.accountNumber})`,
+          leaderIsPostable: promoted.postable,
+          leaderPostingBlockers: promoted.postingBlockers,
+          autoApprovalEligible: false,
+        };
+      } else {
+        logger.info("ap-intelligence.purpose-ontology.no-alternative", {
+          clubId: args.clubId, docIdTail: doc.id.slice(-6),
+          concept: purposeDecision.concept,
+          keptWinner: gl.accountNumber,
+        });
+      }
+    }
+  }
 
   // Sprint 3 · Checkpoint 15T — compute amount hierarchy and tax /
   // credit groups. Printed total is preserved verbatim regardless
