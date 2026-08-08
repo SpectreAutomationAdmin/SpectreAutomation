@@ -384,6 +384,32 @@ export async function POST(req: Request) {
         })),
         purposeDecision: (result as { purposeDecision?: { source: string; concept: string | null; confidence: number; label: string; diagnostic: string } }).purposeDecision ?? null,
         glReason: (result as { gl?: { reason?: string } }).gl?.reason ?? null,
+        // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — purchased-item
+        // substance authorities exposed for founder-facing diagnostic.
+        // Purchased items are truncated to first 8 to bound response
+        // size; capital decision and department leader are complete.
+        purchasedItemIntelligence: result.purchasedItemIntelligence ? {
+          items: (result.purchasedItemIntelligence.items ?? []).slice(0, 8).map((it) => ({
+            description: (it.description ?? "").slice(0, 100),
+            manufacturer: it.manufacturer,
+            model: it.model,
+            sku: it.sku,
+            serialNumber: it.serialNumber,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            extension: it.extension,
+            evidenceQuality: it.evidenceQuality,
+            completeness: it.completeness,
+            completenessConfidence: it.completenessConfidence,
+          })),
+          capitalDecision: result.purchasedItemIntelligence.capitalDecision,
+          capitalConfidence: result.purchasedItemIntelligence.capitalConfidence,
+          capitalDiagnostic: result.purchasedItemIntelligence.capitalDiagnostic,
+          departmentLeaderKey: result.purchasedItemIntelligence.departmentLeaderKey,
+          departmentLeaderName: result.purchasedItemIntelligence.departmentLeaderName,
+          departmentIsDefensible: result.purchasedItemIntelligence.departmentIsDefensible,
+          founderFacingCategory: result.purchasedItemIntelligence.founderFacingCategory,
+        } : null,
       };
     } catch (err) {
       analyseResult = { error: err instanceof Error ? err.message : "unknown" };

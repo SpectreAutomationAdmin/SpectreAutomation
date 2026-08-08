@@ -65,33 +65,42 @@ const DEFAULT_LEXICONS: Record<string, RegExp[]> = {
 // Public entrypoint
 // -----------------------------------------------------------------------------
 
-const STRONG_MATCH = 25;
-const WEAK_MATCH = 8;
+const STRONG_ITEM_MATCH = 30;       // purchased-item description hits (§10 primary)
+const MEDIUM_BODY_MATCH = 18;       // other document-body text
+const WEAK_MATCH = 8;               // supplier-only
 const DEFENSIBLE_THRESHOLD = 25;
 
 export function inferDepartment(input: DepartmentInferenceInput): DepartmentInferenceResult {
-  // §10 rule: supplier alone is WEAK evidence. Split the surface
-  // into document-body vs supplier-name so supplier-only matches
-  // never cross the defensibility bar on their own.
-  const documentSurface = [
-    ...(input.lineItemDescriptions ?? []),
-    input.fullDocumentText ?? "",
-  ].filter(Boolean).join("\n");
+  // §10 amendment (Slice 5.3): purchased-item identity is the
+  // PRIMARY signal; other body text is medium; supplier alone is
+  // weak. Split the surfaces so each pass scores at its own weight.
+  const itemSurface = (input.lineItemDescriptions ?? []).filter(Boolean).join("\n");
+  const bodySurface = (input.fullDocumentText ?? "").trim();
   const supplierSurface = input.supplierName ?? "";
 
   const ranked: DepartmentCandidate[] = input.clubDepartments.map((d) => {
     const lex = d.lexicon ?? DEFAULT_LEXICONS[d.key] ?? DEFAULT_LEXICONS[d.key.toLowerCase()] ?? [];
     let score = 0;
     const evidence: string[] = [];
-    // Pass 1 — STRONG match against document body only.
+    // Pass 1 — STRONG match against purchased-item descriptions
+    // (item identity is authoritative per §10).
     for (const pattern of lex) {
-      if (pattern.test(documentSurface)) {
-        score += STRONG_MATCH;
-        evidence.push(`match:${pattern.source}`);
+      if (itemSurface && pattern.test(itemSurface)) {
+        score += STRONG_ITEM_MATCH;
+        evidence.push(`item:${pattern.source}`);
       }
     }
-    // Pass 2 — WEAK match against supplier name, only when no body
-    // match already fired. Supplier alone must not be defensible.
+    // Pass 2 — MEDIUM match against remaining document body (headers,
+    // ship-to, project references) when not already covered by item.
+    for (const pattern of lex) {
+      if (bodySurface && pattern.test(bodySurface) && !(itemSurface && pattern.test(itemSurface))) {
+        score += MEDIUM_BODY_MATCH;
+        evidence.push(`body:${pattern.source}`);
+      }
+    }
+    // Pass 3 — WEAK match against supplier name, only when no body
+    // or item match already fired. Supplier alone must not be
+    // defensible.
     if (score === 0 && supplierSurface) {
       for (const pattern of lex) {
         if (pattern.test(supplierSurface)) {

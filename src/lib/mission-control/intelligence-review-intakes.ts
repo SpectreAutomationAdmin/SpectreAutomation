@@ -1030,12 +1030,22 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       // than a bare "—". Distinct from the "purpose unresolved"
       // state (which surfaces nothing).
       purposeLabel: noCoa ? null : (
-        (analysis?.purposeDecision
-          && analysis.purposeDecision.source !== "ABSTAIN"
-          && analysis.purposeDecision.label
-          && !(analysis.purposeDecision.label.startsWith("Purpose") || analysis.purposeDecision.label.startsWith("Contradictory")))
-          ? analysis.purposeDecision.label
-          : null
+        // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #16 /
+        // §27) — founder-facing category. When GL cannot commit but
+        // the purchased-item authority produced a committed
+        // capital decision + optional department, prefer the
+        // composed category ("Equipment Purchase", "Grounds Repairs
+        // & Maintenance", etc.) over the taxonomy label. Otherwise
+        // fall back to the canonical purpose label as before.
+        (analysis?.purchasedItemIntelligence?.founderFacingCategory ?? null)
+        ?? (
+          (analysis?.purposeDecision
+            && analysis.purposeDecision.source !== "ABSTAIN"
+            && analysis.purposeDecision.label
+            && !(analysis.purposeDecision.label.startsWith("Purpose") || analysis.purposeDecision.label.startsWith("Contradictory")))
+            ? analysis.purposeDecision.label
+            : null
+        )
       ),
       purposeReason: noCoa ? null : (
         (analysis?.purposeDecision

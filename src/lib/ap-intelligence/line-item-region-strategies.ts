@@ -57,6 +57,26 @@ export interface LineItemRegion {
 const SUMMARY_ROW_LEADING =
   /^(?:sub\s*[-]?\s*total|total|balance(?:\s*due)?|amount\s*due|invoice\s*total|payment|discount|credit(?:s)?|gst|hst|pst|qst|vat|tax(?:es)?(?:\/fees)?|shipping|freight|surcharge|convenience\s*fee|charges?|thank\s*you|please\s*remit|please\s*write|amount\s*enclosed|previous\s*balance|new\s*charges|adjustment|ongoing\s*charges|pending\s*payments|total\s*due|due|invoice\s*due|administration\s*fee|on\s*all\s*overdue|account'?s?\s*terms|terms\s*and\s*conditions|all\s+merchandise|the\s+property\s+of|until\s*full\s*payment)\b/i;
 
+/** Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #1) —
+ *  generalized ITEMIZED-TOTAL summary shapes. A row matching this
+ *  pattern reports the SUM of underlying product rows and MUST NOT
+ *  become a PRIMARY_PURCHASE. The parser retains the row as
+ *  reconciliation/summary evidence and marks the description as a
+ *  summary shape so the canonical extractor + evidence-quality gate
+ *  can act on it downstream.
+ *
+ *  Covers: "2 Lines Total", "N Line Total", "Items Total",
+ *  "Product Total", "Parts Total", "Net Total" — all with optional
+ *  leading digit count. Case-insensitive. */
+const ITEMIZED_SUMMARY_RE =
+  /^\s*(?:\d+\s*)?(?:lines?|items?|products?|parts?|net)\s*total\s*$/i;
+
+/** True when the row's description text is a summary/itemized-total
+ *  shape rather than a real product row. */
+export function isItemizedSummaryDescription(description: string): boolean {
+  return ITEMIZED_SUMMARY_RE.test(description.trim());
+}
+
 /** Category-block labels (Ongoing charges / Taxes and Fees / Credits /
  *  Pending payments / etc.) — used by CATEGORY_BLOCK strategy to
  *  identify anchor rows. GENERIC statement-style labels only. */
@@ -158,22 +178,46 @@ export function reconstructClassicColumnTable(
     .filter((l) => l.page === region.page && l.y > headerLine.y && l.y <= region.yBottom)
     .sort((a, b) => a.y - b.y);
 
+  // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendments #1 + #2) —
+  // three-phase reconstruction:
+  //   Phase 1: collect a `RowCandidate` for every body line, keeping
+  //            description-only rows and amount-only rows separately
+  //            (previously description-only rows were dropped).
+  //   Phase 2: split-row merge — pair a description-only row with an
+  //            adjacent amount-only row when structural evidence
+  //            supports it (same region, close y-band, compatible
+  //            column occupancy, no intervening product row).
+  //   Phase 3: emit CanonicalLineItem[], rejecting itemized-summary
+  //            shapes (§1) as reconciliation-only evidence rather
+  //            than PRIMARY_PURCHASE.
+  interface RowCandidate {
+    y: number;
+    page: number;
+    workingItems: ReturnType<typeof splitFusedItemsAcrossColumns>;
+    cells: Map<string, string[]>;
+    skuRaw: string;
+    descRaw: string;
+    qtyRaw: string;
+    unitRaw: string;
+    amtRaw: string;
+    hasAmount: boolean;
+    hasSkuOrDesc: boolean;
+    isSummaryShape: boolean;
+    /** Leading token like "1 30807" that a split-row merge may use
+     *  as strong (but not required) corroborating evidence. */
+    leadingToken: string | null;
+  }
+
+  const candidates: RowCandidate[] = [];
   const items: CanonicalLineItem[] = [];
+
   for (const line of bodyLines) {
-    if (items.length >= MAX_ROWS) break;
+    if (candidates.length >= MAX_ROWS) break;
     const text = line.text.trim();
     if (text.length === 0) continue;
     if (SUMMARY_ROW_LEADING.test(text)) break;
     if (POLICY_HINTS.test(text) && !endsWithAmount(text)) continue;
-
-    // If the line has a single item that spans multiple detected
-    // column x-centres, this is a fused row from pdf.js. Prefer
-    // glyph-level items (we already asked for disableCombineTextItems:
-    // true); if a fused item still appears, apply proportional
-    // character splitting AS LOWER-CONFIDENCE evidence (amendment #2).
     const workingItems = splitFusedItemsAcrossColumns(line.items, columns);
-
-    // Snap items to columns by nearest x-centre.
     const cells = new Map<string, string[]>();
     for (const it of workingItems.items) {
       const col = nearestColumn(it, columns);
@@ -183,70 +227,157 @@ export function reconstructClassicColumnTable(
       cells.set(col.role, arr);
     }
     if (cells.size === 0) continue;
-
     const skuRaw = (cells.get("sku") ?? []).join(" ").trim();
     const descRaw = (cells.get("description") ?? []).join(" ").trim();
     const qtyRaw = (cells.get("quantity") ?? []).join(" ").trim();
     const unitRaw = (cells.get("unitPrice") ?? []).join(" ").trim();
     const amtRaw = (cells.get("amount") ?? []).join(" ").trim();
-
     const hasAmount = AMOUNT_TOKEN.test(amtRaw);
     const hasSkuOrDesc = skuRaw.length > 0 || descRaw.length > 2;
     if (!hasAmount && !hasSkuOrDesc) continue;
+    // Extract a leading-token like "1 30807" (line# + product-code)
+    // for optional merge corroboration.
+    const leadingTokenMatch = (descRaw || text).match(/^\s*(\d{1,3})\s+(\S{2,})\b/);
+    const leadingToken = leadingTokenMatch ? `${leadingTokenMatch[1]} ${leadingTokenMatch[2]}` : null;
+    candidates.push({
+      y: line.y, page: line.page,
+      workingItems, cells,
+      skuRaw, descRaw, qtyRaw, unitRaw, amtRaw,
+      hasAmount, hasSkuOrDesc,
+      isSummaryShape: descRaw ? isItemizedSummaryDescription(descRaw) : false,
+      leadingToken,
+    });
+  }
 
-    // Wrapped description merge: if this row has ONLY a description
-    // (no amount, no sku, no qty) and is near the previous row, append
-    // its text to the previous item.
-    if (!hasAmount && descRaw.length > 0 && !skuRaw && !qtyRaw && items.length > 0) {
+  // Phase 2 — split-row merge.
+  //   • Row A: substantive description present (descRaw.length ≥ 3)
+  //     but NO amount and NO qty/unit.
+  //   • Row B: amount present but description absent OR
+  //     numeric-only OR very short.
+  //   • Same page + close y-band (< ~20) + compatible x/column
+  //     occupancy (no intervening candidate with description).
+  //   Merge: adopt A's description; take B's qty/unitPrice/extension.
+  //   Corroboration: matching leadingToken doubles confidence.
+  const merged = new Set<number>();
+  for (let i = 0; i < candidates.length; i++) {
+    if (merged.has(i)) continue;
+    const a = candidates[i];
+    const aIsDescOnly = a.descRaw.length >= 3 && !a.hasAmount && !a.qtyRaw && !a.unitRaw;
+    if (!aIsDescOnly) continue;
+    // Look for an amount-only counterpart within a small y-band.
+    for (let j = 0; j < candidates.length; j++) {
+      if (j === i || merged.has(j)) continue;
+      const b = candidates[j];
+      if (b.page !== a.page) continue;
+      if (Math.abs(b.y - a.y) > 25) continue;
+      const bDescShort = b.descRaw.length < 3 || /^[\d.,\s]+$/.test(b.descRaw);
+      if (!b.hasAmount || !bDescShort) continue;
+      // Reject the merge if any OTHER candidate with a substantive
+      // description sits between A and B on the y axis.
+      const [loY, hiY] = a.y < b.y ? [a.y, b.y] : [b.y, a.y];
+      const intervening = candidates.some((c, idx) =>
+        idx !== i && idx !== j
+        && c.page === a.page
+        && c.y > loY && c.y < hiY
+        && c.descRaw.length >= 3
+        && !c.isSummaryShape,
+      );
+      if (intervening) continue;
+      // Corroboration signal.
+      const tokensMatch = a.leadingToken != null && b.leadingToken != null && a.leadingToken === b.leadingToken;
+      // Merge: adopt A's desc, take B's numeric cells.
+      a.qtyRaw = b.qtyRaw;
+      a.unitRaw = b.unitRaw;
+      a.amtRaw = b.amtRaw;
+      a.hasAmount = true;
+      a.workingItems = { items: [...a.workingItems.items, ...b.workingItems.items], usedProportionalSplit: a.workingItems.usedProportionalSplit || b.workingItems.usedProportionalSplit };
+      // Cite this merge on the candidate so the emitted row keeps
+      // provenance.
+      (a as RowCandidate & { mergeProvenance?: { fromY: number; toY: number; tokensMatch: boolean } })
+        .mergeProvenance = { fromY: a.y, toY: b.y, tokensMatch };
+      merged.add(j);
+      break;
+    }
+  }
+
+  // Phase 3 — emit CanonicalLineItem[] from the surviving candidates.
+  for (let i = 0; i < candidates.length; i++) {
+    if (items.length >= MAX_ROWS) break;
+    if (merged.has(i)) continue; // consumed by an earlier merge
+    const c = candidates[i];
+
+    // Wrapped description merge into the previous emitted item — same
+    // rule as before but running against the merged candidate set.
+    if (!c.hasAmount && c.descRaw.length > 0 && !c.skuRaw && !c.qtyRaw && items.length > 0) {
       const prev = items[items.length - 1];
-      if (line.y - (prev.region?.y ?? 0) < 20 && prev.description.length < 200) {
-        prev.description = `${prev.description} ${descRaw}`.trim().slice(0, 200);
-        prev.evidence.push({ kind: "wrapped_description_merge", detail: descRaw.slice(0, 60) });
+      if (c.y - (prev.region?.y ?? 0) < 20 && prev.description.length < 200) {
+        prev.description = `${prev.description} ${c.descRaw}`.trim().slice(0, 200);
+        prev.evidence.push({ kind: "wrapped_description_merge", detail: c.descRaw.slice(0, 60) });
         continue;
       }
     }
 
-    const quantity = parseNumber(qtyRaw);
-    const unitPrice = parseAmount(unitRaw);
-    const extension = parseAmount(amtRaw);
+    const quantity = parseNumber(c.qtyRaw);
+    const unitPrice = parseAmount(c.unitRaw);
+    const extension = parseAmount(c.amtRaw);
 
-    let description = descRaw;
+    let description = c.descRaw;
     if (!description || description.length < 3) {
-      const nonAmountItems = workingItems.items
+      const nonAmountItems = c.workingItems.items
         .filter((it) => !AMOUNT_TOKEN.test(it.text.trim()) && !AMOUNT_TOKEN.test(it.text.replace("$", "").trim()))
         .map((it) => it.text.trim())
         .filter(Boolean);
       description = nonAmountItems.join(" ").trim().slice(0, 200);
     }
-    if (!description && !skuRaw && extension == null) continue;
+    if (!description && !c.skuRaw && extension == null) continue;
+    if (extension == null) continue;
 
-    if (extension == null) continue; // No amount → not a line item.
-
+    // Amendment #1: itemized-summary shapes NEVER become
+    // PRIMARY_PURCHASE. Preserve as SUMMARY_ROW_REJECTED role for
+    // downstream reconciliation evidence.
     const cites: CanonicalLineItemEvidenceCite[] = [
       { kind: "column_header", detail: `[${columns.map((c) => c.role).join(",")}]` },
       { kind: "column_alignment" },
     ];
-    if (workingItems.usedProportionalSplit) {
+    if (c.workingItems.usedProportionalSplit) {
       cites.push({ kind: "proportional_character_split", detail: "pdf.js emitted a fused row across ≥2 column centres" });
     }
+    const mergeProvenance = (c as RowCandidate & { mergeProvenance?: { fromY: number; toY: number; tokensMatch: boolean } }).mergeProvenance;
+    if (mergeProvenance) {
+      cites.push({
+        kind: "wrapped_description_merge",
+        detail: `POSITIONED_SPLIT_ROW_MERGE: description@y=${mergeProvenance.fromY} + amount@y=${mergeProvenance.toY}${mergeProvenance.tokensMatch ? " · leadingTokenMatch" : ""}`,
+      });
+    }
 
-    const { role, cite: roleCite } = classifyLineItemRole(description, extension);
+    const isSummary = isItemizedSummaryDescription(description);
+    const { role, cite: roleCite } = isSummary
+      ? { role: "SUMMARY_ROW_REJECTED" as const, cite: null }
+      : classifyLineItemRole(description, extension);
     if (roleCite) cites.push(roleCite);
+    if (isSummary) {
+      cites.push({
+        kind: "flattened_text_row",
+        detail: `itemized_summary_rejected: "${description.slice(0, 60)}"`,
+      });
+    }
 
     const li: CanonicalLineItem = {
-      description: description || (skuRaw ? `Item ${skuRaw}` : "line item"),
-      sku: skuRaw || null,
+      description: description || (c.skuRaw ? `Item ${c.skuRaw}` : "line item"),
+      sku: c.skuRaw || null,
       quantity,
       unit: null,
       unitPrice,
       extension,
       role,
-      page: line.page,
-      region: { page: line.page, x: 0, y: line.y, lineIndex: undefined },
-      sourceStrategy: workingItems.usedProportionalSplit
+      page: c.page,
+      region: { page: c.page, x: 0, y: c.y, lineIndex: undefined },
+      sourceStrategy: c.workingItems.usedProportionalSplit
         ? "POSITIONED_PROPORTIONAL_SPLIT"
         : "POSITIONED_CLASSIC_TABLE",
-      validationConfidence: workingItems.usedProportionalSplit ? 55 : 78,
+      validationConfidence: c.workingItems.usedProportionalSplit
+        ? 55
+        : (mergeProvenance ? (mergeProvenance.tokensMatch ? 82 : 74) : 78),
       arithmetic: "UNVALIDATED",
       evidence: cites,
     };

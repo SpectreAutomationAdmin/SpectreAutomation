@@ -199,6 +199,35 @@ export interface ApAnalyseResult {
       columnAlignmentConfidence: number;
     };
   };
+  // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — purchased-item
+  // substance authority. Downstream projection consumes these to
+  // populate the founder-facing category chip when GL cannot commit,
+  // and to surface diagnostic detail in inspect-wi.
+  purchasedItemIntelligence: {
+    items: Array<{
+      description: string;
+      manufacturer: string | null;
+      model: string | null;
+      sku: string | null;
+      serialNumber: string | null;
+      quantity: number | null;
+      unitPrice: number | null;
+      extension: number | null;
+      evidenceQuality: "HIGH" | "MEDIUM" | "LOW";
+      completeness: "COMPLETE_ASSET" | "COMPONENT" | "CONSUMABLE" | "SERVICE" | "UNKNOWN";
+      completenessConfidence: number;
+    }>;
+    capitalDecision: "CAPITAL_CANDIDATE" | "OPERATING" | "REPAIR_MAINTENANCE" | "UNRESOLVED";
+    capitalConfidence: number;
+    capitalDiagnostic: string;
+    departmentLeaderKey: string | null;
+    departmentLeaderName: string | null;
+    departmentIsDefensible: boolean;
+    /** Founder-facing category chip when GL cannot commit and the
+     *  purpose label is too generic. Formed by combining capital
+     *  decision + department. Null when insufficient signal. */
+    founderFacingCategory: string | null;
+  };
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -954,6 +983,43 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
     });
   }
+
+  // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — purchased-item
+  // substance authority. Computed ONCE from the canonical line items
+  // and reused by (a) the purpose-driven ranker as a capital signal,
+  // (b) the ApAnalyseResult return payload for the projection layer
+  // and inspect-wi diagnostic. Amendment #6 separates identity from
+  // capital nature; amendment #7 keeps capital probabilistic;
+  // amendment #8 bans amount as capital evidence.
+  const { extractPurchasedItems: extractPurchasedItemsShared } = await import("./purchased-item-identity");
+  const { classifyItemCompleteness: classifyItemCompletenessShared } = await import("./item-completeness");
+  const { evaluateCapitalEvidence: evaluateCapitalEvidenceShared } = await import("./capital-evidence");
+  const sharedPurchasedItems = extractPurchasedItemsShared(canonicalLineItemsFromLayout);
+  const sharedItemCompleteness = new Map<number, ReturnType<typeof classifyItemCompletenessShared>>();
+  for (const item of sharedPurchasedItems) {
+    sharedItemCompleteness.set(item.sourceLineItemIndex, classifyItemCompletenessShared(item));
+  }
+  const sharedCapitalDecision = evaluateCapitalEvidenceShared({
+    items: sharedPurchasedItems,
+    itemCompleteness: sharedItemCompleteness,
+    poRequestorText: null,
+    supplierName: extraction.vendor.guessedName,
+  });
+  // Department leader from item-identity-primary inference (amendment
+  // #10: item identity beats vendor).
+  const {
+    inferDepartment: inferDeptShared,
+    DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_SHARED,
+  } = await import("./department-inference");
+  const sharedUniqDescs = Array.from(new Set(
+    canonicalLineItemsFromLayout.map((li) => li.description).filter(Boolean),
+  ));
+  const sharedDept = inferDeptShared({
+    supplierName: extraction.vendor.guessedName,
+    lineItemDescriptions: sharedUniqDescs,
+    fullDocumentText: transactionalTextValue,
+    clubDepartments: DEFAULT_DEPTS_SHARED,
+  });
   if (purposeDecision.source === "CANONICAL_COMMITTED" && purposeDecision.concept != null && gl.accountName) {
     const winnerAffinity = evaluatePurposeAccountAffinity(purposeDecision.concept, gl.accountName);
     if (winnerAffinity == null) {
@@ -1108,6 +1174,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         eligibleAccounts: filtered.eligible,
         departmentKey: deptKeyPD,
         departmentAccountNamePatterns: deptPatsPD,
+        capitalDecision: sharedCapitalDecision.decision,
+        capitalDecisionConfidence: sharedCapitalDecision.confidence,
       });
       purposeDrivenDiagnostic = pdResult.diagnostic;
       if (pdResult.winner) {
@@ -1851,6 +1919,62 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    purchasedItemIntelligence: (() => {
+      // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08) — pack the shared
+      // purchased-item authorities for the projection layer + inspect-
+      // wi diagnostic. Amendment #16/§27: founder-facing category is
+      // derived from capital-decision + department only when both are
+      // sufficiently supported; otherwise it stays null and the
+      // projection falls through to the purpose label.
+      const items = sharedPurchasedItems.map((it) => {
+        const c = sharedItemCompleteness.get(it.sourceLineItemIndex);
+        return {
+          description: it.description,
+          manufacturer: it.manufacturer,
+          model: it.model,
+          sku: it.sku,
+          serialNumber: it.serialNumber,
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          extension: it.extension,
+          evidenceQuality: it.evidenceQuality,
+          completeness: (c?.completeness ?? "UNKNOWN") as
+            "COMPLETE_ASSET" | "COMPONENT" | "CONSUMABLE" | "SERVICE" | "UNKNOWN",
+          completenessConfidence: c?.confidence ?? 0,
+        };
+      });
+      const capital = sharedCapitalDecision;
+      const dept = sharedDept.leader;
+      const deptDefensible = sharedDept.isDefensible;
+      // Founder-facing category composition. Requires the capital
+      // decision to be committed (confidence ≥ 40); department is
+      // OPTIONAL for the general "Equipment Purchase" / "Repairs &
+      // Maintenance" fallback. When department is independently
+      // supported (defensible) it prefixes the category.
+      let founderFacingCategory: string | null = null;
+      if (capital.confidence >= 40) {
+        const deptPrefix = deptDefensible && dept ? dept.displayName + " " : "";
+        if (capital.decision === "CAPITAL_CANDIDATE") {
+          founderFacingCategory = (deptPrefix + "Equipment Purchase").trim();
+        } else if (capital.decision === "REPAIR_MAINTENANCE") {
+          founderFacingCategory = (deptPrefix + "Repairs & Maintenance").trim();
+        } else if (capital.decision === "OPERATING") {
+          // Operating: don't invent a category from thin air — the
+          // purpose label already carries the concept ("Fuel", etc.).
+          founderFacingCategory = null;
+        }
+      }
+      return {
+        items,
+        capitalDecision: capital.decision,
+        capitalConfidence: capital.confidence,
+        capitalDiagnostic: capital.diagnostic,
+        departmentLeaderKey: dept?.key ?? null,
+        departmentLeaderName: dept?.displayName ?? null,
+        departmentIsDefensible: deptDefensible,
+        founderFacingCategory,
+      };
+    })(),
     accountingIntelligence: (() => {
       // Sprint 3 · Checkpoint 16A — hierarchical accounting
       // intelligence. Consumed additively by the projection layer

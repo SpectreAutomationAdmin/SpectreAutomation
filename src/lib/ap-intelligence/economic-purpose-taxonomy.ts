@@ -259,15 +259,24 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
     lineItems: CanonicalLineItem[],
     ctx: EconomicPurposeContext,
   ): PurposeClassification[] {
-    const purchaseLines = lineItems.filter(
-      (li) => li.role === "PRIMARY_PURCHASE" || li.role === "SURCHARGE" || li.role === "FREIGHT",
-    );
-    // If no primary purchase lines exist but there are non-tax rows,
-    // widen the pool so a document with only a service description
-    // still gets classified.
-    const pool = purchaseLines.length > 0
-      ? purchaseLines
-      : lineItems.filter((li) => li.role !== "TAX");
+    // Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #9) —
+    // fix taxonomy contamination by scoping primary-purpose
+    // classification to PRIMARY_PURCHASE lines only. Auxiliary rows
+    // (SURCHARGE / FREIGHT / TAX / SUMMARY_ROW_REJECTED / CREDIT /
+    // DISCOUNT / INTEREST / PENALTY) do NOT determine the primary
+    // economic purpose when substantive PRIMARY_PURCHASE rows exist.
+    //
+    // This fixes the "Alberta Tire Levy ADF" SURCHARGE leaking
+    // "tire" vocabulary into EQUIPMENT_PARTS classification for
+    // invoices whose real primary purchase is a mower engine.
+    const primaryLines = lineItems.filter((li) => li.role === "PRIMARY_PURCHASE");
+    // If NO PRIMARY_PURCHASE lines exist at all, widen to auxiliary
+    // roles so a document with only a service/surcharge description
+    // still gets some classification signal — but SURCHARGE tokens
+    // never determine the primary concept when a primary line exists.
+    const pool = primaryLines.length > 0
+      ? primaryLines
+      : lineItems.filter((li) => li.role !== "TAX" && li.role !== "SUMMARY_ROW_REJECTED");
 
     const scores = new Map<EconomicPurposeConcept, {
       score: number;

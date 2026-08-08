@@ -42,6 +42,14 @@ export interface PurposeDrivenRankerInput {
   departmentAccountNamePatterns?: RegExp[];
   /** Vendor-history hint — supporting only, capped. */
   vendorHistoryPreferredAccountNumbers?: string[];
+  /** Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #12) —
+   *  purchased-item substance signals. When CAPITAL_CANDIDATE is
+   *  well-supported, ASSET-type accounts (category CAPITAL_ASSETS)
+   *  receive strong support. When REPAIR_MAINTENANCE is supported,
+   *  EXPENSE R&M accounts receive support and capital accounts are
+   *  contradicted. */
+  capitalDecision?: "CAPITAL_CANDIDATE" | "OPERATING" | "REPAIR_MAINTENANCE" | "UNRESOLVED";
+  capitalDecisionConfidence?: number;
 }
 
 export interface PurposeDrivenScoredAccount {
@@ -57,6 +65,11 @@ export interface PurposeDrivenScoredAccount {
     departmentAffinity: number;
     lineItemJaccard: number;
     vendorHistoryBoost: number;
+    /** Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #12) —
+     *  contribution from CapitalEvidenceDecision. Positive when the
+     *  account matches the decided nature (asset vs R&M expense);
+     *  negative when contradicted. */
+    capitalNatureBoost: number;
   };
   total: number;
   contradictions: string[];
@@ -129,6 +142,15 @@ const W_LINE_ITEM_JACCARD_MAX = 20;
 const W_VENDOR_HISTORY_BOOST = 6;            // supporting only, capped
 const W_NON_POSTABLE_PENALTY = -100;         // effectively removes
 const W_INACTIVE_PENALTY = -100;
+// Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #12) —
+// capital-decision boosts. Applied only when
+// capitalDecisionConfidence >= 40 (COMMIT_MIN_CONFIDENCE mirror).
+const W_CAPITAL_ASSET_MATCH = 22;            // asset acct when CAPITAL_CANDIDATE
+const W_CAPITAL_ASSET_CATEGORY = 8;          // categoryKey capitalAssets
+const W_RM_EXPENSE_MATCH = 22;               // R&M expense when REPAIR_MAINTENANCE
+const W_RM_EXPENSE_NAME_HIT = 8;             // account name contains repair/maintenance
+const W_CAPITAL_ACCOUNT_CONTRADICTION = -30; // asset acct when REPAIR_MAINTENANCE
+const W_RM_EXPENSE_CONTRADICTION = -14;      // R&M expense when CAPITAL_CANDIDATE
 
 /** A defensible winner needs at least this to promote. Set moderately
  *  so a strong ontology + type + line-item Jaccard combination can
@@ -168,6 +190,7 @@ export function rankPurposeDrivenAccounts(input: PurposeDrivenRankerInput): Purp
       departmentAffinity: 0,
       lineItemJaccard: 0,
       vendorHistoryBoost: 0,
+      capitalNatureBoost: 0,
     };
     const contradictions: string[] = [];
 
@@ -226,6 +249,46 @@ export function rankPurposeDrivenAccounts(input: PurposeDrivenRankerInput): Purp
       components.vendorHistoryBoost += W_VENDOR_HISTORY_BOOST;
     }
 
+    // (h) Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #12) —
+    // capital-decision boosts. Applied only when the decision was
+    // committed (confidence >= 40 in evaluateCapitalEvidence). The
+    // capital-decision authority is separate from taxonomy purpose;
+    // it may reinforce or contradict a given account regardless of
+    // purpose.
+    const capitalDecision = input.capitalDecision;
+    const capitalConfidence = input.capitalDecisionConfidence ?? 0;
+    if (capitalDecision && capitalConfidence >= 40) {
+      const typeUpper = a.type.toUpperCase();
+      const nameLower = a.name.toLowerCase();
+      const rmNameHit = /\b(?:repair|maintenance|r&m|r\/m)\b/.test(nameLower);
+      const catUpper = (a.categoryKey ?? "").toUpperCase();
+      if (capitalDecision === "CAPITAL_CANDIDATE") {
+        if (typeUpper === "ASSET") {
+          components.capitalNatureBoost += W_CAPITAL_ASSET_MATCH;
+          if (catUpper.includes("CAPITAL") || catUpper.includes("FIXED")) {
+            components.capitalNatureBoost += W_CAPITAL_ASSET_CATEGORY;
+          }
+        } else if (rmNameHit) {
+          components.capitalNatureBoost += W_RM_EXPENSE_CONTRADICTION;
+          contradictions.push("capital_candidate_but_account_is_rm_expense");
+        }
+      } else if (capitalDecision === "REPAIR_MAINTENANCE") {
+        if (typeUpper === "EXPENSE" && rmNameHit) {
+          components.capitalNatureBoost += W_RM_EXPENSE_MATCH + W_RM_EXPENSE_NAME_HIT;
+        } else if (typeUpper === "EXPENSE" && purposeExpectedRoles(concept).some((r) => String(r).includes("R&M") || String(r).includes("REPAIR"))) {
+          components.capitalNatureBoost += W_RM_EXPENSE_MATCH;
+        } else if (typeUpper === "ASSET") {
+          components.capitalNatureBoost += W_CAPITAL_ACCOUNT_CONTRADICTION;
+          contradictions.push("repair_maintenance_but_account_is_asset");
+        }
+      } else if (capitalDecision === "OPERATING") {
+        if (typeUpper === "ASSET") {
+          components.capitalNatureBoost += W_CAPITAL_ACCOUNT_CONTRADICTION;
+          contradictions.push("operating_purchase_but_account_is_asset");
+        }
+      }
+    }
+
     // Posting readiness: eligibility filter should have removed
     // non-postable, but belt-and-braces.
     let postable = a.isActive && !a.isHeader && !a.isControlAccount && a.allowManualPosting !== false;
@@ -258,7 +321,7 @@ export function rankPurposeDrivenAccounts(input: PurposeDrivenRankerInput): Purp
     candidates: scored,
     winner,
     totalConsidered: input.eligibleAccounts.length,
-    diagnostic: `purpose=${concept} totalCoA=${input.eligibleAccounts.length} winner=${winner?.accountNumber ?? "none"}(${winner?.total ?? 0}) 2nd=${scored[1]?.accountNumber ?? "-"}(${scored[1]?.total ?? 0})`,
+    diagnostic: `purpose=${concept} totalCoA=${input.eligibleAccounts.length} capital=${input.capitalDecision ?? "n/a"}(${input.capitalDecisionConfidence ?? 0}) winner=${winner?.accountNumber ?? "none"}(${winner?.total ?? 0}) 2nd=${scored[1]?.accountNumber ?? "-"}(${scored[1]?.total ?? 0})`,
   };
 }
 

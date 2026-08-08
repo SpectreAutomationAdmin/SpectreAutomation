@@ -37,7 +37,13 @@ export type CanonicalLineItemRole =
   /** Penalty / late fee / NSF. */
   | "PENALTY"
   /** Tax component. Should not flow into economic-purpose classification. */
-  | "TAX";
+  | "TAX"
+  /** Sprint 3 · Phase 4 Slice 5.3 (2026-08-08, amendment #1) —
+   *  an itemized-summary row ("N Lines Total" / "Items Total" /
+   *  "Product Total" / "Parts Total" / "Net Total"). Preserved for
+   *  reconciliation but never a PRIMARY_PURCHASE. Downstream
+   *  purpose / capital / GL reasoning MUST ignore this role. */
+  | "SUMMARY_ROW_REJECTED";
 
 // -----------------------------------------------------------------------------
 // Source strategy — how the row was reconstructed.
