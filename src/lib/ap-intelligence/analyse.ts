@@ -1497,7 +1497,31 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           deptPatsStageA.some((p) => p.test(matches[0].full?.name ?? ""));
         const picked = matches[0];
         const picked_c = picked.c;
-        if ((picked_c.confidence ?? 0) >= 20) {
+        // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08,
+        // amendment #5) — Stage A nature-promotion must also go
+        // through the SEMANTIC_MATCH override gate. Stage A promotes
+        // an account from the raw ranker's top-N when its type
+        // matches the classified nature — but without the gate, a
+        // low-confidence nature (e.g. INTEREST_OR_PENALTY(20)
+        // matched on a policy-footer "finance charge" phrase) can
+        // stomp a canonical FUEL / EQUIPMENT_PARTS purpose. The
+        // gate blocks that path.
+        const stageAGate = evaluateSemanticMatchGate({
+          natureLeader: natureForRanker.leader,
+          natureConfidence: natureForRanker.leaderConfidence,
+          natureIsDefensible: natureForRanker.isDefensible,
+          candidateAccountType: picked.full?.type ?? null,
+          purposeDecision: purposeDecision ?? {
+            source: "ABSTAIN" as const, concept: null, confidence: 0, label: "unresolved",
+            canonicalTop3: [], legacyCandidates: [],
+            diagnostic: "no purpose decision available at Stage A",
+          },
+          // Stage A always operates AFTER the base ranker. This is
+          // not a "base abstained" call site — we're OVERRIDING a
+          // base pick. Use the strict threshold.
+          baseRankerAbstained: false,
+        });
+        if ((picked_c.confidence ?? 0) >= 20 && stageAGate.allow) {
           const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
           gl = {
             ...gl,
@@ -1507,12 +1531,18 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
             fsGroupKey: picked_c.fsGroupKey,
             source: "SEMANTIC_MATCH",
             confidence: blended,
-            reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}(raw_${picked_c.confidence})`,
+            reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}(raw_${picked_c.confidence},gate=allow)`,
             leaderIsPostable: picked_c.postable,
             leaderPostingBlockers: picked_c.postingBlockers,
             autoApprovalEligible: false,
           };
           promoted = true;
+        } else if ((picked_c.confidence ?? 0) >= 20 && !stageAGate.allow) {
+          logger.info("ap-intelligence.stage-a-promotion.gate-denied", {
+            clubId: args.clubId, docIdTail: doc.id.slice(-6),
+            candidate: picked_c.accountNumber,
+            denials: stageAGate.denials.join("|"),
+          });
         }
       }
       // Stage B (16C §5 + 16D §3+§12) — full nature-scoped COA
