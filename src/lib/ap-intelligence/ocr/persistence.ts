@@ -121,11 +121,23 @@ export async function findOcrExtraction(identity: OcrIdentity): Promise<OcrExtra
 export async function findLatestOcrExtractionForDocument(args: {
   clubId: string;
   ingestedDocumentId: string;
+  /** Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — filter by
+   *  pageNumber. When omitted, defaults to `0` = whole-document
+   *  extractions ONLY. This preserves the pre-5.1 semantics of the
+   *  strategy router (which reads only whole-document canonical
+   *  extractions to feed synthesizePdfTextFromCanonical) so that
+   *  per-page targeted OCR rows added by Slice 5.1 do NOT accidentally
+   *  overwrite the whole-document supplier/totals via the router's
+   *  canonical-wins merge. Per-page rows are consumed by
+   *  analyse.ts's Slice 5.1 fusion path instead. */
+  pageNumber?: number;
 }): Promise<OcrExtractionRow | null> {
+  const pageNumber = args.pageNumber ?? 0;
   return prisma.documentOcrExtraction.findFirst({
     where: {
       clubId: args.clubId,
       ingestedDocumentId: args.ingestedDocumentId,
+      pageNumber,
     },
     orderBy: { createdAt: "desc" },
   }) as Promise<OcrExtractionRow | null>;
