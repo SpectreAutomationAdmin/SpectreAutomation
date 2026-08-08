@@ -62,6 +62,13 @@ export interface CategoryHoverAllocationsProps {
   currency: string;
   currencyShowCode: boolean;
   testid?: string;
+  /** Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08, amendment
+   *  #8) — canonical purpose label used as fallback when `category`
+   *  is null. Renders as the cell text with `purposeReason` tooltip.
+   *  Distinct from the "purpose unresolved" state (both null =
+   *  render "—"). */
+  purposeLabel?: string | null;
+  purposeReason?: string | null;
 }
 
 /** Renders the Category readout cell with hover/focus disclosure
@@ -69,7 +76,7 @@ export interface CategoryHoverAllocationsProps {
  *  allocation projection is absent, renders the same plain-string
  *  behaviour the prior ReadoutCell did. */
 export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
-  const { category, allocations, currency, currencyShowCode, testid } = props;
+  const { category, allocations, currency, currencyShowCode, testid, purposeLabel, purposeReason } = props;
   const [open, setOpen] = useState(false);
   const cellRef = useRef<HTMLDivElement | null>(null);
   const popoverId = "cat-hover-" + (testid ?? "default");
@@ -78,6 +85,12 @@ export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
     category === "Multiple"
     && allocations != null
     && (allocations.entries?.length ?? 0) >= 1;
+
+  // Amendment #8: when GL commits to null but purpose is understood,
+  // surface the purpose label in the Category cell with a compact
+  // tooltip reason. Distinct from the truly-unresolved state (both
+  // category and purposeLabel null → render "—").
+  const usePurposeFallback = !category && purposeLabel;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!shouldDisclose) return;
@@ -96,12 +109,22 @@ export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
     return () => window.removeEventListener("keydown", h);
   }, [open]);
 
-  const cellV = category ?? "—";
-  const tone = category ? undefined : "observation";
+  const cellV = category ?? (usePurposeFallback ? purposeLabel! : "—");
+  const tone = category ? undefined : (usePurposeFallback ? "observation" : "observation");
 
   if (!shouldDisclose) {
+    // Amendment #8: purpose-fallback cell — same layout as the plain
+    // ReadoutCell but with the purposeReason tooltip surfaced via
+    // `title` (native browser tooltip; keyboard users get it via
+    // aria-label). Non-modal, no popover — mirrors the existing
+    // ReadoutCell footprint exactly.
     return (
-      <div className="cell" data-testid={testid}>
+      <div
+        className="cell"
+        data-testid={testid}
+        title={usePurposeFallback ? (purposeReason ?? undefined) : undefined}
+        aria-label={usePurposeFallback && purposeReason ? `Category ${cellV} — ${purposeReason}` : undefined}
+      >
         <div className="k">Category</div>
         <div className={`v${tone ? " " + tone : ""}`}>{cellV}</div>
       </div>

@@ -384,6 +384,17 @@ export interface ApInvoiceCardIntelligence {
   };
   category: {
     label: string | null;                     // Human-facing e.g. "Kitchen supplies"
+    /** Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08, amendment
+     *  #8) — human-readable canonical purpose label (Fuel, Equipment
+     *  Parts, etc.) surfaced when GL is unresolved but purpose is
+     *  defensibly understood. Renders as the Category cell text with
+     *  a "Purpose identified · GL account requires review" tooltip,
+     *  never conflated with the "purpose unresolved" state.
+     *  Optional to preserve backward compatibility with pre-5.2
+     *  fixture-shape callers. */
+    purposeLabel?: string | null;
+    /** Reason text for the tooltip. Optional per the above. */
+    purposeReason?: string | null;
     glAccountNumber: string | null;
     glAccountName: string | null;
     capitalState: "OPERATING" | "CAPITAL" | "AMBIGUOUS" | "INSUFFICIENT_EVIDENCE" | null;
@@ -1011,6 +1022,28 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       label: noCoa
         ? null
         : (analysis?.allocations?.cardCategory ?? categoryLabel),
+      // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08,
+      // amendment #8) — canonical purpose fallback. When GL commits
+      // to null but the analyser produced a defensible canonical
+      // purpose, surface the purpose label in the Category cell so
+      // the founder sees Spectre's understood classification rather
+      // than a bare "—". Distinct from the "purpose unresolved"
+      // state (which surfaces nothing).
+      purposeLabel: noCoa ? null : (
+        (analysis?.purposeDecision
+          && analysis.purposeDecision.source !== "ABSTAIN"
+          && analysis.purposeDecision.label
+          && !(analysis.purposeDecision.label.startsWith("Purpose") || analysis.purposeDecision.label.startsWith("Contradictory")))
+          ? analysis.purposeDecision.label
+          : null
+      ),
+      purposeReason: noCoa ? null : (
+        (analysis?.purposeDecision
+          && analysis.purposeDecision.source !== "ABSTAIN"
+          && (gl?.accountNumber ?? null) == null)
+          ? "Purpose identified · GL account requires review"
+          : null
+      ),
       glAccountNumber: noCoa ? null : (gl?.accountNumber ?? null),
       glAccountName: noCoa ? null : (gl?.accountName ?? null),
       capitalState,

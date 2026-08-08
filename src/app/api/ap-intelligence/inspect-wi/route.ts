@@ -382,6 +382,8 @@ export async function POST(req: Request) {
           confidence: c.confidence ?? null,
           postable: c.postable ?? null,
         })),
+        purposeDecision: (result as { purposeDecision?: { source: string; concept: string | null; confidence: number; label: string; diagnostic: string } }).purposeDecision ?? null,
+        glReason: (result as { gl?: { reason?: string } }).gl?.reason ?? null,
       };
     } catch (err) {
       analyseResult = { error: err instanceof Error ? err.message : "unknown" };

@@ -88,12 +88,27 @@ interface NatureLexicon {
   weakTerms: RegExp[];            // firing any → weak evidence (+1)
   antiTerms?: RegExp[];           // firing any → contradicts nature (-2)
   amountSensitivity?: "high" | "low"; // does dollar amount matter?
+  /** Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08, amendment
+   *  #6) — when true, `strongTerms` must match a LINE-ITEM
+   *  description (not the aggregate `surface` which includes
+   *  document-body text). Prevents capital-nature signals from
+   *  firing on street-name matches ("17 Capital Circle" in a
+   *  supplier address) or column headings ("MODEL #" as a table
+   *  header) that are provenance, not transactional evidence.
+   *  Currently applied to CAPITAL_ASSET only. */
+  strongTermsRequireLineItem?: boolean;
 }
 
 // GENERAL — used for any tenant with a chart of accounts.
 const NATURE_LEXICONS: NatureLexicon[] = [
   {
     nature: "CAPITAL_ASSET",
+    // Amendment #6: capital-signal terms must anchor on the PURCHASED
+    // ITEM, not on ambient document surface. A supplier address
+    // containing "17 Capital Circle" or a column heading "MODEL #"
+    // does not establish that this transaction is a capital purchase.
+    // The `strongTermsRequireLineItem: true` flag below enforces that
+    // these regexes only fire against `lineItemDescriptions`.
     strongTerms: [
       /\b(?:equipment|machinery|vehicle|appliance)\b/i,
       /\b(?:install(?:ation)?|installed)\b/i,
@@ -107,6 +122,7 @@ const NATURE_LEXICONS: NatureLexicon[] = [
       /\buseful\s+life\b/i,
       /\bpurchase\s+order\s*(?:#|no\.?)?/i,
     ],
+    strongTermsRequireLineItem: true,
     weakTerms: [
       /\b(?:acquisition|acquire|purchase)\b/i,
       /\breplace(?:ment)?\b/i,
@@ -391,8 +407,15 @@ export function classifyAccountingNature(input: AccountingNatureInput): Accounti
     const contradicting: string[] = [];
     let raw = 0;
 
+    // Amendment #6: capital-signal strong terms require a line-item
+    // hit (not aggregate surface). This prevents street-name and
+    // column-header leakage from producing false CAPITAL_ASSET
+    // scores.
+    const strongScanSurface = lex.strongTermsRequireLineItem
+      ? input.lineItemDescriptions.join("\n")
+      : surface;
     for (const p of lex.strongTerms) {
-      if (p.test(surface)) {
+      if (p.test(strongScanSurface)) {
         raw += STRONG_WEIGHT;
         supporting.push(`strong:${p.source}`);
       }

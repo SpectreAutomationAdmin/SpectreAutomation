@@ -161,6 +161,11 @@ export interface ApAnalyseResult {
   // NOT used to automatically post multiple journal lines this
   // checkpoint.
   splitGlRecommendations: SplitRecommendation[];
+  // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08) — canonical
+  // economic-purpose decision. Projection layer uses this to
+  // populate `category.purposeLabel` when GL commits to null but
+  // purpose is defensibly understood.
+  purposeDecision: EconomicPurposeDecision | null;
   // Sprint 3 · Checkpoint 15V — canonical multi-GL allocation output.
   // Every AP invoice now produces a list of per-purpose allocations
   // with per-allocation recommended account, alternatives, tax
@@ -1014,6 +1019,125 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
   }
 
+  // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08) — full-
+  // eligible-COA purpose-driven ranker (§1 + §2). Runs when the base
+  // ranker + ontology guard have not produced a defensible winner
+  // AND the canonical purpose is COMMIT-ELIGIBLE (purpose decision
+  // clears the evidence-quality gate). Scores EVERY Phase-2-eligible
+  // account — never depends on the base ranker's top-N.
+  //
+  // Ontology name-substring matches are a strong BOOST, not a
+  // pre-filter. An account with no ontology match but strong nature
+  // + department + line-item Jaccard can still win.
+  //
+  // The evidence-quality gate protects against high-confidence
+  // taxonomy scores over weak primary-item descriptions (e.g. a
+  // "2 Lines Total" summary row winning the taxonomy but not
+  // constituting real primary-item evidence): commitEligible is
+  // false when
+  // the primary-purchase description is short OR summary-shape OR
+  // lacks a discriminative substring for the concept — in which case
+  // this ranker skips and the analyser truthfully abstains.
+  let purposeDrivenDiagnostic: string | null = null;
+  let purposeEvidenceQualityDiag: string | null = null;
+  const winnerIsNull = gl.accountNumber == null;
+  const winnerNonPostable = gl.accountName == null || !gl.leaderIsPostable;
+  if (purposeDecision != null && (winnerIsNull || winnerNonPostable)) {
+    const { assessPurposeEvidenceQuality } = await import("./purpose-evidence-quality");
+    const evidenceQuality = assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout);
+    purposeEvidenceQualityDiag = evidenceQuality.diagnostic;
+    if (evidenceQuality.commitEligible) {
+      const { rankPurposeDrivenAccounts } = await import("./purpose-driven-ranker");
+      const { filterEligibleAccounts } = await import("@/lib/accounting/eligibility");
+      const eligibleAccountsForPurpose = await prisma.account.findMany({
+        where: { clubId: args.clubId, isActive: true, isHeader: false },
+        select: {
+          id: true, accountNumber: true, name: true, type: true,
+          normalBalance: true, isActive: true, isHeader: true,
+          allowManualPosting: true, isControlAccount: true,
+          isBankAccount: true, isCashAccount: true, archivedAt: true,
+          fundApplicability: true,
+          accountRole: true,
+          category: { select: { key: true, name: true } },
+          fsGroup: { select: { key: true, name: true } },
+        },
+      });
+      const asEligibilityView = eligibleAccountsForPurpose.map((a) => ({
+        id: a.id, accountNumber: a.accountNumber, name: a.name, type: a.type,
+        normalBalance: a.normalBalance, isActive: a.isActive, isHeader: a.isHeader,
+        allowManualPosting: a.allowManualPosting, isControlAccount: a.isControlAccount,
+        isBankAccount: a.isBankAccount, isCashAccount: a.isCashAccount,
+        archivedAt: a.archivedAt, fundApplicability: a.fundApplicability,
+        categoryKey: a.category?.key ?? null,
+        fsGroupKey: a.fsGroup?.key ?? null,
+        accountRole: a.accountRole ?? "STANDARD",
+      }));
+      const filtered = filterEligibleAccounts(asEligibilityView, {
+        transactionKind: "AP_INVOICE",
+        expectedDebitRole,
+        departmentHint: null,
+        capitalizationEvidence: {
+          supported: capital.state === "CAPITAL",
+          confidence: capital.state === "CAPITAL" ? 80 : 0,
+        },
+      });
+      // Department hint via existing 16D inference — pattern list boosts
+      // department-qualifying accounts.
+      const {
+        inferDepartment: inferDeptPD, DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_PD,
+        departmentAccountNamePatterns: deptPatternsPD,
+      } = await import("./department-inference");
+      const uniqDescsPD = Array.from(new Set(
+        canonicalLineItemsFromLayout.map((li) => li.description).filter(Boolean),
+      ));
+      const deptPD = inferDeptPD({
+        supplierName: extraction.vendor.guessedName,
+        lineItemDescriptions: uniqDescsPD,
+        fullDocumentText: transactionalTextValue,
+        clubDepartments: DEFAULT_DEPTS_PD,
+      });
+      const deptKeyPD = deptPD.leader?.key ?? deptPD.ranked.find((d) => d.score > 0)?.key ?? null;
+      const deptPatsPD = deptKeyPD ? deptPatternsPD(deptKeyPD) : [];
+
+      const pdResult = rankPurposeDrivenAccounts({
+        purposeDecision,
+        natureLeader: "UNKNOWN", // recomputed below if analyse.ts already produced natureForRanker
+        natureConfidence: 0,
+        natureIsDefensible: false,
+        canonicalLineItems: canonicalLineItemsFromLayout,
+        eligibleAccounts: filtered.eligible,
+        departmentKey: deptKeyPD,
+        departmentAccountNamePatterns: deptPatsPD,
+      });
+      purposeDrivenDiagnostic = pdResult.diagnostic;
+      if (pdResult.winner) {
+        logger.info("ap-intelligence.purpose-driven-ranker.promotion", {
+          clubId: args.clubId, docIdTail: doc.id.slice(-6),
+          concept: purposeDecision.concept,
+          winner: pdResult.winner.accountNumber,
+          score: pdResult.winner.total,
+        });
+        gl = {
+          ...gl,
+          accountNumber: pdResult.winner.accountNumber,
+          accountName: pdResult.winner.accountName,
+          categoryKey: filtered.eligible.find((a) => a.accountNumber === pdResult.winner!.accountNumber)?.categoryKey ?? null,
+          fsGroupKey: filtered.eligible.find((a) => a.accountNumber === pdResult.winner!.accountNumber)?.fsGroupKey ?? null,
+          source: "ECONOMIC_PURPOSE",
+          confidence: Math.min(90, pdResult.winner.total),
+          reason: `purpose_driven_full_coa_search:${purposeDecision.concept}(${purposeDecision.confidence},quality=${evidenceQuality.quality})->${pdResult.winner.accountNumber}(score=${pdResult.winner.total},considered=${pdResult.totalConsidered})`,
+          leaderIsPostable: pdResult.winner.postable,
+          leaderPostingBlockers: [],
+          autoApprovalEligible: false,
+          requiresReview: pdResult.winner.total < 60,
+        };
+      }
+    }
+  }
+  // Persist diagnostics for downstream inspection.
+  void purposeDrivenDiagnostic;
+  void purposeEvidenceQualityDiag;
+
   // Sprint 3 · Checkpoint 15T — compute amount hierarchy and tax /
   // credit groups. Printed total is preserved verbatim regardless
   // of whether the tax allocation reconciles (founder rule §6).
@@ -1689,6 +1813,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     amountHierarchy,
     taxGroupsResult,
     splitGlRecommendations: gl.splitRecommendations,
+    // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08, amendment
+    // #8) — expose the canonical purpose decision so the projection
+    // layer can render the purpose label in the founder-facing
+    // Category cell when GL commits to null but purpose is
+    // defensibly understood.
+    purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
     accountingIntelligence: (() => {

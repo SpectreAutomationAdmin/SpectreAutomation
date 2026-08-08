@@ -848,6 +848,8 @@ function renderApCollapsedBody(
           currency={ap.gross.currency ?? "CAD"}
           currencyShowCode={ap.currencyShowCode !== false}
           testid="ap-readout-category"
+          purposeLabel={ap.category.purposeLabel ?? null}
+          purposeReason={ap.category.purposeReason ?? null}
         />
         <ReadoutCell
           k="Confidence"
