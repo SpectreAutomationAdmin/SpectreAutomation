@@ -669,6 +669,33 @@ export function clusterSupplierEvidence(evidence: SupplierIdentityEvidence[]): S
   return Array.from(candidatesByIdentity.values());
 }
 
+/** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+ *  detect candidates that look like a personal name ("FIRST LAST"
+ *  two-word all-caps or Title-Case) so they can be down-weighted
+ *  when competing against organisation candidates. This handles
+ *  invoices with no explicit "Bill To" label above the recipient
+ *  (e.g. OXIO's addressee-style layout). Genuine two-word org
+ *  names (e.g. "OXIO INTERNATIONAL") are not affected because they
+ *  either contain a corp suffix elsewhere or are single-word. */
+function looksLikePersonName(raw: string): boolean {
+  const words = raw.trim().split(/\s+/);
+  if (words.length !== 2) return false;
+  const isPersonShape = (w: string): boolean =>
+    w.length >= 2 && w.length <= 12 && /^[A-Z][a-z]+$|^[A-Z]+$/.test(w);
+  if (!words.every(isPersonShape)) return false;
+  // Exclude common organisation words that pass the person-shape
+  // pattern (RIDGE, SPRINGS, GOLF, CLUB, etc.). If either word is
+  // in the org-word list, don't treat as a person.
+  const ORG_WORDS = new Set([
+    "GOLF", "CLUB", "COUNTRY", "RIDGE", "SPRINGS", "PARK", "PROPERTIES",
+    "COMPANY", "GROUP", "PARTNERS", "SERVICES", "INTERNATIONAL", "GLOBAL",
+    "SOLUTIONS", "SYSTEMS", "ENTERPRISES", "INDUSTRIES", "MANAGEMENT",
+    "MEDIA", "STUDIOS", "WORKS", "TECHNOLOGIES", "ENERGY", "MINING",
+    "MECHANICAL", "PLUMBING", "ELECTRICAL", "LANDSCAPING", "CONSTRUCTION",
+  ]);
+  return !words.some((w) => ORG_WORDS.has(w.toUpperCase()));
+}
+
 /** Compute independent-evidence-family count + confidence for every
  *  candidate. Uses the founder's §5 confidence model + §6 family
  *  bucketing so contact-block observations count as ONE family. */
@@ -715,6 +742,33 @@ export function scoreSupplierCandidates(candidates: SupplierIdentityCandidate[])
       || types.has("REPEATED_BRANDING")
       || types.has("REMITTANCE_ENTITY");
     if (!hasIdentityText) confidence = Math.min(confidence, 55);
+    // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+    // person-name deprioritization. If the winning identity value
+    // matches a two-word person-shape, cap confidence at 50 (below
+    // commitment threshold) unless the candidate is corroborated
+    // by ≥2 identity-text families (e.g. matched by both header
+    // AND legal text). This handles OXIO-shape invoices where a
+    // recipient name appears in an addressee block WITHOUT an
+    // explicit "Bill To:" label.
+    const displayVal = c.displayName ?? c.operatingNameCandidate ?? c.legalNameCandidate ?? "";
+    if (looksLikePersonName(displayVal) && c.independentEvidenceFamilies < 2) {
+      confidence = Math.min(confidence, 50);
+    }
+    // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+    // earlier-line tiebreaker. When multiple candidates tie on
+    // family count + strongest signal, prefer the one whose primary
+    // identity evidence appears earliest in the document — the
+    // supplier letterhead is almost always FIRST. Small bump
+    // (0.5 pt per 10 lines earlier) keeps the tiebreaker gentle.
+    const primaryLine = c.evidence
+      .filter((e) => e.type === "HEADER_ORG_TEXT" || e.type === "LEGAL_ENTITY_TEXT")
+      .map((e) => e.region?.lineIndex ?? Number.POSITIVE_INFINITY)
+      .reduce((min, n) => Math.min(min, n), Number.POSITIVE_INFINITY);
+    if (Number.isFinite(primaryLine)) {
+      // Penalize by ~0.5 pt per 10 lines from the top.
+      const positionPenalty = Math.min(5, primaryLine / 10);
+      confidence -= positionPenalty;
+    }
     c.confidence = Math.max(0, Math.min(100, Math.round(confidence)));
   }
 }
