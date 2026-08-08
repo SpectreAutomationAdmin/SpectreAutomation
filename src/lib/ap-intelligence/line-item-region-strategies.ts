@@ -103,6 +103,14 @@ const HEADER_TOKENS: Array<{ role: "sku" | "description" | "quantity" | "unitPri
 const AMOUNT_TOKEN = /^\$?\s*-?\d{1,3}(?:,\d{3})*(?:\.\d{2})?$|^-?\d+\.\d{2}$/;
 const CURRENCY_AMOUNT_INLINE = /(?:CA\$|US\$|\$)\s*(-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)|(-?\d{1,3}(?:,\d{3})*\.\d{2})/;
 
+// Sprint 3 · Phase 4 Slice 5.3 completion (2026-08-08, §1+§2+§3) —
+// unit-of-measure vocabulary used to (a) filter measurement tags out
+// of numeric-cell resolution and (b) associate a unit label with the
+// shipped quantity. Closed list of standard measurement tokens; NOT
+// supplier / product / SKU literals.
+const UNIT_TAG_TOKEN = /^(?:EA|EACH|PC|PCS|HR|HRS|HOUR|HOURS|MIN|DAY|DAYS|WK|WEEK|MO|MONTH|YR|YEAR|KG|LB|LBS|OZ|GAL|GALLON|GALLONS|L|LITER|LITRE|ML|M|CM|MM|FT|IN|SF|LF|CF|BX|BOX|CS|CASE|PK|PKG|SET|ROLL|ROLLS|BAG|BAGS|BUNDLE|BUNDLES|DRUM|PALLET)$/i;
+const NUMERIC_ONLY_TOKEN = /^-?\d+(?:\.\d+)?$/;
+
 const POLICY_HINTS =
   /(?:policy|return|terms|conditions|liability|not\s*paid|f\.?o\.?b\.|please\s*note|copy|original|do\s+not\s+pay|questions?\s+contact|contact\s+us|refer\s+a\s+friend|learn\s+more)/i;
 
@@ -190,16 +198,27 @@ export function reconstructClassicColumnTable(
   //   Phase 3: emit CanonicalLineItem[], rejecting itemized-summary
   //            shapes (§1) as reconciliation-only evidence rather
   //            than PRIMARY_PURCHASE.
+  interface CellToken { text: string; x: number; }
+  interface CellResolution {
+    value: number | null;
+    picked: string | null;
+    candidates: string[];
+    unit: string | null;
+  }
   interface RowCandidate {
     y: number;
     page: number;
     workingItems: ReturnType<typeof splitFusedItemsAcrossColumns>;
-    cells: Map<string, string[]>;
+    /** Physical tokens per semantic cell, position-preserved so
+     *  future consumers can address multiple physical subcolumns
+     *  even when the header detector only resolved a coarse role
+     *  (§3 completion pass). */
+    physicalCells: Map<string, CellToken[]>;
     skuRaw: string;
     descRaw: string;
-    qtyRaw: string;
-    unitRaw: string;
-    amtRaw: string;
+    qtyResolved: CellResolution;
+    unitResolved: CellResolution;
+    amtResolved: CellResolution;
     hasAmount: boolean;
     hasSkuOrDesc: boolean;
     isSummaryShape: boolean;
@@ -218,21 +237,32 @@ export function reconstructClassicColumnTable(
     if (SUMMARY_ROW_LEADING.test(text)) break;
     if (POLICY_HINTS.test(text) && !endsWithAmount(text)) continue;
     const workingItems = splitFusedItemsAcrossColumns(line.items, columns);
-    const cells = new Map<string, string[]>();
+    // §3 completion pass: preserve tokens with position so multiple
+    // physical subcolumns can survive coarse header detection.
+    const physicalCells = new Map<string, CellToken[]>();
     for (const it of workingItems.items) {
       const col = nearestColumn(it, columns);
       if (col == null) continue;
-      const arr = cells.get(col.role) ?? [];
-      arr.push(it.text.trim());
-      cells.set(col.role, arr);
+      const arr = physicalCells.get(col.role) ?? [];
+      arr.push({ text: it.text.trim(), x: it.x });
+      physicalCells.set(col.role, arr);
     }
-    if (cells.size === 0) continue;
-    const skuRaw = (cells.get("sku") ?? []).join(" ").trim();
-    const descRaw = (cells.get("description") ?? []).join(" ").trim();
-    const qtyRaw = (cells.get("quantity") ?? []).join(" ").trim();
-    const unitRaw = (cells.get("unitPrice") ?? []).join(" ").trim();
-    const amtRaw = (cells.get("amount") ?? []).join(" ").trim();
-    const hasAmount = AMOUNT_TOKEN.test(amtRaw);
+    if (physicalCells.size === 0) continue;
+    const skuTokens = physicalCells.get("sku") ?? [];
+    const descTokens = physicalCells.get("description") ?? [];
+    const qtyTokens = physicalCells.get("quantity") ?? [];
+    const unitTokens = physicalCells.get("unitPrice") ?? [];
+    const amtTokens = physicalCells.get("amount") ?? [];
+    const skuRaw = skuTokens.map((t) => t.text).join(" ").trim();
+    const descRaw = descTokens.map((t) => t.text).join(" ").trim();
+    // §1 completion pass: token-aware monetary resolution. Filter
+    // measurement-unit tags, take the rightmost AMOUNT_TOKEN-shaped
+    // token as the semantic value (invoice numeric columns are almost
+    // universally right-aligned). Preserve all candidates as evidence.
+    const qtyResolved = resolveQuantityCell(qtyTokens);
+    const unitResolved = resolveMonetaryCell(unitTokens);
+    const amtResolved = resolveMonetaryCell(amtTokens);
+    const hasAmount = amtResolved.value != null;
     const hasSkuOrDesc = skuRaw.length > 0 || descRaw.length > 2;
     if (!hasAmount && !hasSkuOrDesc) continue;
     // Extract a leading-token like "1 30807" (line# + product-code)
@@ -241,8 +271,9 @@ export function reconstructClassicColumnTable(
     const leadingToken = leadingTokenMatch ? `${leadingTokenMatch[1]} ${leadingTokenMatch[2]}` : null;
     candidates.push({
       y: line.y, page: line.page,
-      workingItems, cells,
-      skuRaw, descRaw, qtyRaw, unitRaw, amtRaw,
+      workingItems, physicalCells,
+      skuRaw, descRaw,
+      qtyResolved, unitResolved, amtResolved,
       hasAmount, hasSkuOrDesc,
       isSummaryShape: descRaw ? isItemizedSummaryDescription(descRaw) : false,
       leadingToken,
@@ -262,7 +293,10 @@ export function reconstructClassicColumnTable(
   for (let i = 0; i < candidates.length; i++) {
     if (merged.has(i)) continue;
     const a = candidates[i];
-    const aIsDescOnly = a.descRaw.length >= 3 && !a.hasAmount && !a.qtyRaw && !a.unitRaw;
+    const aIsDescOnly = a.descRaw.length >= 3
+      && !a.hasAmount
+      && a.qtyResolved.value == null
+      && a.unitResolved.value == null;
     if (!aIsDescOnly) continue;
     // Look for an amount-only counterpart within a small y-band.
     for (let j = 0; j < candidates.length; j++) {
@@ -285,10 +319,10 @@ export function reconstructClassicColumnTable(
       if (intervening) continue;
       // Corroboration signal.
       const tokensMatch = a.leadingToken != null && b.leadingToken != null && a.leadingToken === b.leadingToken;
-      // Merge: adopt A's desc, take B's numeric cells.
-      a.qtyRaw = b.qtyRaw;
-      a.unitRaw = b.unitRaw;
-      a.amtRaw = b.amtRaw;
+      // Merge: adopt A's desc, take B's resolved numeric cells.
+      a.qtyResolved = b.qtyResolved;
+      a.unitResolved = b.unitResolved;
+      a.amtResolved = b.amtResolved;
       a.hasAmount = true;
       a.workingItems = { items: [...a.workingItems.items, ...b.workingItems.items], usedProportionalSplit: a.workingItems.usedProportionalSplit || b.workingItems.usedProportionalSplit };
       // Cite this merge on the candidate so the emitted row keeps
@@ -308,7 +342,11 @@ export function reconstructClassicColumnTable(
 
     // Wrapped description merge into the previous emitted item — same
     // rule as before but running against the merged candidate set.
-    if (!c.hasAmount && c.descRaw.length > 0 && !c.skuRaw && !c.qtyRaw && items.length > 0) {
+    if (!c.hasAmount
+        && c.descRaw.length > 0
+        && !c.skuRaw
+        && c.qtyResolved.value == null
+        && items.length > 0) {
       const prev = items[items.length - 1];
       if (c.y - (prev.region?.y ?? 0) < 20 && prev.description.length < 200) {
         prev.description = `${prev.description} ${c.descRaw}`.trim().slice(0, 200);
@@ -317,9 +355,9 @@ export function reconstructClassicColumnTable(
       }
     }
 
-    const quantity = parseNumber(c.qtyRaw);
-    const unitPrice = parseAmount(c.unitRaw);
-    const extension = parseAmount(c.amtRaw);
+    const quantity = c.qtyResolved.value;
+    const unitPrice = c.unitResolved.value;
+    const extension = c.amtResolved.value;
 
     let description = c.descRaw;
     if (!description || description.length < 3) {
@@ -341,6 +379,21 @@ export function reconstructClassicColumnTable(
     ];
     if (c.workingItems.usedProportionalSplit) {
       cites.push({ kind: "proportional_character_split", detail: "pdf.js emitted a fused row across ≥2 column centres" });
+    }
+    // §1 completion pass: when a semantic cell resolved from multiple
+    // physical candidates, cite them so the founder-facing diagnostic
+    // shows how the value was selected.
+    if (c.amtResolved.candidates.length > 1) {
+      cites.push({
+        kind: "column_alignment",
+        detail: `amount_candidates=[${c.amtResolved.candidates.join(",")}] picked=${c.amtResolved.picked}(rightmost-x)`,
+      });
+    }
+    if (c.unitResolved.candidates.length > 1) {
+      cites.push({
+        kind: "column_alignment",
+        detail: `unitPrice_candidates=[${c.unitResolved.candidates.join(",")}] picked=${c.unitResolved.picked}(rightmost-x)`,
+      });
     }
     const mergeProvenance = (c as RowCandidate & { mergeProvenance?: { fromY: number; toY: number; tokensMatch: boolean } }).mergeProvenance;
     if (mergeProvenance) {
@@ -366,7 +419,9 @@ export function reconstructClassicColumnTable(
       description: description || (c.skuRaw ? `Item ${c.skuRaw}` : "line item"),
       sku: c.skuRaw || null,
       quantity,
-      unit: null,
+      // §2 completion pass: measurement unit surfaced from the
+      // quantity cell (EA / PCS / HR / GAL / …) when present.
+      unit: c.qtyResolved.unit,
       unitPrice,
       extension,
       role,
@@ -629,4 +684,61 @@ function parseAmount(raw: string): number | null {
   if (!AMOUNT_TOKEN.test(raw.trim()) && !/^-?\d+(?:\.\d{1,2})?$/.test(clean)) return null;
   const n = Number(clean);
   return Number.isFinite(n) ? n : null;
+}
+
+// Sprint 3 · Phase 4 Slice 5.3 completion (2026-08-08, §1) —
+// Token-aware monetary cell resolver. When a semantic column contains
+// multiple physical tokens (e.g. unit-price + amount fall into the
+// same coarse "amount" cell), pick the rightmost AMOUNT_TOKEN-shaped
+// value as the semantic value. Invoice numeric columns are almost
+// universally right-aligned; the rightmost valid amount in the cell
+// is the column's value. Non-amount / measurement-tag tokens are
+// filtered out first. Returns candidates so the founder-facing
+// diagnostic can show how the value was selected.
+function resolveMonetaryCell(tokens: Array<{ text: string; x: number }>): {
+  value: number | null;
+  picked: string | null;
+  candidates: string[];
+  unit: string | null;
+} {
+  const unit = tokens.find((t) => UNIT_TAG_TOKEN.test(t.text))?.text ?? null;
+  const monetary = tokens
+    .filter((t) => !UNIT_TAG_TOKEN.test(t.text))
+    .filter((t) => AMOUNT_TOKEN.test(t.text.trim()));
+  if (monetary.length === 0) return { value: null, picked: null, candidates: [], unit };
+  // Rightmost x wins (right-aligned column value).
+  const sorted = [...monetary].sort((a, b) => b.x - a.x);
+  const picked = sorted[0];
+  return {
+    value: parseAmount(picked.text),
+    picked: picked.text,
+    candidates: monetary.map((c) => c.text),
+    unit,
+  };
+}
+
+// §2 completion pass — quantity resolver: strip measurement tags,
+// take the rightmost purely-numeric token (typically the shipped
+// / invoiced quantity in an Order/Backorder/Shipped triple). Also
+// records the associated unit tag (EA / PCS / …) when present so
+// downstream consumers can preserve it on the CanonicalLineItem.
+function resolveQuantityCell(tokens: Array<{ text: string; x: number }>): {
+  value: number | null;
+  picked: string | null;
+  candidates: string[];
+  unit: string | null;
+} {
+  const unit = tokens.find((t) => UNIT_TAG_TOKEN.test(t.text))?.text ?? null;
+  const numeric = tokens
+    .filter((t) => !UNIT_TAG_TOKEN.test(t.text))
+    .filter((t) => NUMERIC_ONLY_TOKEN.test(t.text.replace(/,/g, "")));
+  if (numeric.length === 0) return { value: null, picked: null, candidates: [], unit };
+  const sorted = [...numeric].sort((a, b) => b.x - a.x);
+  const picked = sorted[0];
+  return {
+    value: parseNumber(picked.text),
+    picked: picked.text,
+    candidates: numeric.map((c) => c.text),
+    unit,
+  };
 }
