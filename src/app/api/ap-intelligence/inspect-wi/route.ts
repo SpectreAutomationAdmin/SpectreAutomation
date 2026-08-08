@@ -371,6 +371,17 @@ export async function POST(req: Request) {
           accountName: a.accountName ?? null,
           score: a.score ?? null,
         })),
+        // Sprint 3 · Phase 4 Slice 5.2 completion audit (2026-08-08) —
+        // full base-ranker candidate list so we can see if
+        // purpose-compatible accounts (e.g. 6025 Fuel, 6031 R & M -
+        // Ground Equip, 1506 Equipment & Fixtures - Grounds) were
+        // ranked below the top-5 cutoff.
+        glCandidatesFull: ((result as { gl?: { candidates?: Array<{ accountNumber?: string; accountName?: string; confidence?: number; postable?: boolean }> } }).gl?.candidates ?? []).map((c) => ({
+          accountNumber: c.accountNumber ?? null,
+          accountName: c.accountName ?? null,
+          confidence: c.confidence ?? null,
+          postable: c.postable ?? null,
+        })),
       };
     } catch (err) {
       analyseResult = { error: err instanceof Error ? err.message : "unknown" };
