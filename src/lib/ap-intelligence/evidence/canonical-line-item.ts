@@ -169,7 +169,7 @@ const FREIGHT_KEYWORDS = /\b(freight|shipping|delivery|carriage|transport|courie
 const INTEREST_KEYWORDS = /\b(interest|finance\s*charge)\b/i;
 const PENALTY_KEYWORDS = /\b(penalty|late\s*fee|late\s*payment|nsf|returned\s*cheque|dishonour)\b/i;
 const TAX_KEYWORDS =
-  /\b(gst|hst|pst|qst|vat|tvq|tps|sales\s*tax|value[-\s]added\s*tax|goods\s+and\s+services\s+tax|harmonized\s+sales\s+tax|provincial\s+sales\s+tax)\b/i;
+  /(?:\b(?:gst|hst|pst|qst|vat|tvq|tps|sales\s*tax|value[-\s]added\s*tax|goods\s+and\s+services\s+tax|harmonized\s+sales\s+tax|provincial\s+sales\s+tax)\b)|(?:G\.S\.T\.|H\.S\.T\.|P\.S\.T\.|Q\.S\.T\.|V\.A\.T\.)/i;
 
 /** Classify a row's accounting role from its description + sign.
  *  Order of precedence:

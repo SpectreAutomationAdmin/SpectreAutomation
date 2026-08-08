@@ -73,6 +73,10 @@ describe("Slice 5 · classifyLineItemRole", () => {
     expect(classifyLineItemRole("GST / HST", 12).role).toBe("TAX");
     expect(classifyLineItemRole("Value-added tax", 3).role).toBe("TAX");
   });
+  it("classifies dotted acronyms G.S.T. / H.S.T. as TAX (Slice 5 fix)", () => {
+    expect(classifyLineItemRole("G.S.T./H.S.T.", 3706).role).toBe("TAX");
+    expect(classifyLineItemRole("P.S.T.", 100).role).toBe("TAX");
+  });
   it("classifies penalty / late-fee as PENALTY", () => {
     expect(classifyLineItemRole("Late payment penalty", 25).role).toBe("PENALTY");
   });

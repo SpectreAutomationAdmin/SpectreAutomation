@@ -48,9 +48,14 @@ export interface LineItemRegion {
 // Shared regex catalogues — GENERAL only.
 // -----------------------------------------------------------------------------
 
-/** Summary / footer labels — every strategy stops at these. */
+/** Summary / footer / policy labels — every strategy stops at these
+ *  OR skips the row. Slice 5: extended with policy-footer prefixes
+ *  that carry a currency-looking token nearby ("Invoice due upon
+ *  receipt...", "Administration fee: 2.00% per month...", "on all
+ *  overdue amounts..."). These are prose paragraphs, not line items,
+ *  even when their tail happens to end with a decimal amount. */
 const SUMMARY_ROW_LEADING =
-  /^(?:sub\s*[-]?\s*total|total|balance(?:\s*due)?|amount\s*due|invoice\s*total|payment|discount|credit(?:s)?|gst|hst|pst|qst|vat|tax(?:es)?(?:\/fees)?|shipping|freight|surcharge|convenience\s*fee|charges?|thank\s*you|please\s*remit|amount\s*enclosed|previous\s*balance|new\s*charges|adjustment|ongoing\s*charges|pending\s*payments|total\s*due|due)\b/i;
+  /^(?:sub\s*[-]?\s*total|total|balance(?:\s*due)?|amount\s*due|invoice\s*total|payment|discount|credit(?:s)?|gst|hst|pst|qst|vat|tax(?:es)?(?:\/fees)?|shipping|freight|surcharge|convenience\s*fee|charges?|thank\s*you|please\s*remit|please\s*write|amount\s*enclosed|previous\s*balance|new\s*charges|adjustment|ongoing\s*charges|pending\s*payments|total\s*due|due|invoice\s*due|administration\s*fee|on\s*all\s*overdue|account'?s?\s*terms|terms\s*and\s*conditions|all\s+merchandise|the\s+property\s+of|until\s*full\s*payment)\b/i;
 
 /** Category-block labels (Ongoing charges / Taxes and Fees / Credits /
  *  Pending payments / etc.) — used by CATEGORY_BLOCK strategy to
