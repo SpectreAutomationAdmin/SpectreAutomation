@@ -95,6 +95,11 @@ export interface BuildEvidenceInput {
    *  DIRECTLY from this canonical list so downstream consumers see a
    *  single source. */
   canonicalLineItems?: CanonicalLineItem[];
+  /** Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #8) —
+   *  additive supplier-identity evidence (e.g. VISUAL_LOGO). Merged
+   *  into the text-derived evidence pool inside
+   *  `selectSupplierFromText`. */
+  supplierAdditionalEvidence?: import("./supplier-identity").SupplierIdentityEvidence[];
 }
 
 /** Confidence dial per source strategy — used when the underlying
@@ -406,7 +411,9 @@ export function buildCanonicalEvidence(input: BuildEvidenceInput): CanonicalInvo
   // the ranker + selector propagate it as the ApAnalyseResult
   // supplier. When it abstains, we leave the candidate pool as-is
   // (the ranker's sentence/veto rules will still exclude bad picks).
-  const supplierIdentity: SupplierSelection = selectSupplierFromText(input.text);
+  const supplierIdentity: SupplierSelection = selectSupplierFromText(input.text, {
+    additionalEvidence: input.supplierAdditionalEvidence ?? [],
+  });
   if (supplierIdentity.winner) {
     const w = supplierIdentity.winner;
     // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —

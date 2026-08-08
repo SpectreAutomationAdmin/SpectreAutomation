@@ -538,6 +538,13 @@ export interface ParseArgs {
   // downstream consumers should treat the document as having no
   // structured line-item evidence.
   canonicalLineItems?: import("./evidence/canonical-line-item").CanonicalLineItem[];
+  // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #8) —
+  // additive supplier-identity evidence (e.g. VISUAL_LOGO from
+  // Textract). Threaded to selectSupplierFromText via
+  // BuildEvidenceInput. Supplier scoring architecture unchanged;
+  // this evidence participates in the same clustering + scoring
+  // pool as text-derived evidence.
+  supplierAdditionalEvidence?: import("./evidence/supplier-identity").SupplierIdentityEvidence[];
 }
 
 export interface ParseResult {
@@ -826,6 +833,7 @@ export function parseInvoiceText(args: ParseArgs): ParseResult {
     },
     pageCount: 1,
     canonicalLineItems: args.canonicalLineItems ?? [],
+    supplierAdditionalEvidence: args.supplierAdditionalEvidence ?? [],
   });
   const selection = selectCanonicalFields(canonicalEvidence);
 

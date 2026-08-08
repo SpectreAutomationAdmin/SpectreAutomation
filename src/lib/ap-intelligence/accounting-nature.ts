@@ -49,10 +49,25 @@ export interface AccountingNatureInput {
   lineItemDescriptions: string[];  // may include recovered items from positioned layout
   fullDocumentText: string | null;
   capitalStateFromClassifier: CapitalVsOperatingState | null;
-  // Tenant capitalization threshold in cents (from ClubProfile.capital_expense_min).
-  // Used ONLY as a supporting signal, NEVER as sole classifier.
+  // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #3) —
+  // capital threshold + totalCents preserved on the input for
+  // backward compatibility but NEVER used to classify nature.
+  // Amount is a review-policy signal, not accounting-nature
+  // evidence. Kept in the type so removing them is a no-op for
+  // callers.
   capitalThresholdCents: number | null;
   totalCents: number | null;
+  /** Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4) — the
+   *  DOCUMENT-ROLE-AWARE transactional text (from
+   *  transactional-text.ts). When provided, this replaces
+   *  `fullDocumentText` as the scan source for nature evidence so
+   *  supplier/recipient address, footer, policy and boilerplate
+   *  regions cannot contribute (fixes street-name false positives
+   *  in supplier addresses and policy-footer regex false positives
+   *  such as "finance charge" appearing in terms-and-conditions
+   *  paragraphs). When absent, falls back to fullDocumentText for
+   *  compatibility. */
+  transactionalText?: string | null;
 }
 
 export interface AccountingNatureAssessment {
@@ -352,9 +367,15 @@ const CLUSTER_BONUS_3_LINES = 6;   // ≥3 distinct-line component matches
 const CLUSTER_BONUS_5_LINES = 8;   // ≥5 distinct-line component matches
 
 export function classifyAccountingNature(input: AccountingNatureInput): AccountingNatureAssessment {
+  // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4) — prefer
+  // the DOCUMENT-ROLE-AWARE transactional text when provided.
+  // Falls back to fullDocumentText for callers that haven't been
+  // migrated. Supplier / recipient / footer / policy regions never
+  // enter here when the caller passes `transactionalText`.
+  const documentSurfaceText = input.transactionalText ?? input.fullDocumentText ?? "";
   const surfaceLines = [
     ...input.lineItemDescriptions,
-    input.fullDocumentText ?? "",
+    documentSurfaceText,
     input.extraction?.description ?? "",
   ].filter(Boolean);
   const surface = surfaceLines.join("\n");
@@ -413,14 +434,16 @@ export function classifyAccountingNature(input: AccountingNatureInput): Accounti
       }
     }
 
-    // Amount sensitivity — a high-value invoice above the tenant
-    // threshold nudges CAPITAL_ASSET up modestly, but only when
-    // there's already at least one supporting keyword. NEVER
-    // classify as CAPITAL_ASSET on amount alone.
-    if (lex.amountSensitivity === "high" && supporting.length > 0 && input.totalCents != null && input.capitalThresholdCents != null && input.totalCents >= input.capitalThresholdCents) {
-      raw += 2;
-      supporting.push(`amount_above_capital_threshold(${input.totalCents}c ≥ ${input.capitalThresholdCents}c)`);
-    }
+    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #3) —
+    // amount is REMOVED entirely from accounting-nature evidence.
+    // A high invoice total may affect REVIEW POLICY elsewhere but
+    // it cannot be evidence that a purchase is capital. The old
+    // `amount_above_capital_threshold(...)` supporting signal was
+    // the smoking-gun defect on large-value equipment invoices
+    // (elected CAPITAL_ASSET on amount alone). Keeping it silently
+    // would let the classifier continue laundering money-magnitude
+    // into accounting nature.
+    void lex.amountSensitivity;
 
     // External classifier alignment.
     if (input.capitalStateFromClassifier === "CAPITAL" && lex.nature === "CAPITAL_ASSET" && supporting.length > 0) {

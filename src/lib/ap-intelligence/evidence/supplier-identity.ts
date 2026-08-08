@@ -828,9 +828,26 @@ export function selectSupplier(candidates: SupplierIdentityCandidate[], opts: {
   };
 }
 
-/** End-to-end helper: text → evidence → clusters → scored → selected. */
-export function selectSupplierFromText(text: string, opts?: { commitmentThreshold?: number }): SupplierSelection {
-  const evidence = collectTextSupplierEvidence(text);
+/** End-to-end helper: text → evidence → clusters → scored → selected.
+ *
+ *  Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #8) —
+ *  additive `additionalEvidence` input for VISUAL_LOGO / branding
+ *  evidence produced by the Slice-5.1 visual-branding-extractor.
+ *  Supplier scoring rules are UNCHANGED — branding evidence is
+ *  merged into the SAME evidence pool the text path produces and
+ *  flows through the SAME clustering + scoring + selection. The
+ *  frozen Slice-4-reopen scoring surface is preserved.
+ *
+ *  Downstream reports (from analyse.ts) publish whether branding
+ *  changed evidence-family count, confidence, or the selected
+ *  supplier — per amendment #8. */
+export function selectSupplierFromText(
+  text: string,
+  opts?: { commitmentThreshold?: number; additionalEvidence?: SupplierIdentityEvidence[] },
+): SupplierSelection {
+  const textEvidence = collectTextSupplierEvidence(text);
+  const additional = opts?.additionalEvidence ?? [];
+  const evidence = additional.length > 0 ? [...textEvidence, ...additional] : textEvidence;
   const candidates = clusterSupplierEvidence(evidence);
   scoreSupplierCandidates(candidates);
   return selectSupplier(candidates, opts ?? {});

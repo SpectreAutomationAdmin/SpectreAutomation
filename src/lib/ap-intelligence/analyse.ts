@@ -46,7 +46,14 @@ import { extractConceptsForAccount } from "./gl-account-concepts";
 // Sprint 3 · Checkpoint 15V Addendum-2 — coordinate-aware layout
 // extraction for supplier-block detection.
 import { extractPdfLayout } from "./pdf-layout-extract";
-import { detectLayoutRegions, pickSupplierRegion } from "./layout-regions";
+import { detectLayoutRegions, pickSupplierRegion, type LayoutRegion } from "./layout-regions";
+// Sprint 3 · Phase 4 Slice 5.2 (2026-08-08) — document-role-aware
+// transactional text + canonical purpose authority + SEMANTIC_MATCH
+// gate + weak concept→GL ontology.
+import { buildTransactionalText, transactionalTextDiagnostic } from "./transactional-text";
+import { resolveEconomicPurpose, type EconomicPurposeDecision } from "./economic-purpose-authority";
+import { evaluateSemanticMatchGate } from "./semantic-match-gate";
+import { evaluatePurposeAccountAffinity } from "./purpose-to-gl-ontology";
 // Sprint 3 · Checkpoint 15W — document-class assessment so the
 // pipeline distinguishes image-only PDFs from healthy-text PDFs
 // before invoking downstream extractors that could otherwise
@@ -268,6 +275,16 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   let targetedOcrDispatchLog: Array<{ page: number; reasons: string[]; outcome: string; rowIdTail: string }> = [];
   let visualBrandingEvidence: SupplierIdentityEvidence[] = [];
   let fusedOcrExtractionRowIds: string[] = [];
+  // Sprint 3 · Phase 4 Slice 5.2 — layout regions + transactional text
+  // + resolved economic-purpose decision. Computed once per document
+  // and threaded into every accounting-reasoning consumer so the
+  // classifier surface is consistent (supplier/policy/footer never
+  // leak into accounting nature or purpose evidence).
+  let allLayoutRegions: LayoutRegion[] = [];
+  let transactionalTextValue: string | null = null;
+  let transactionalTextDiag: string | null = null;
+  let purposeDecision: EconomicPurposeDecision | null = null;
+  let semanticMatchGateEvaluations: Array<{ candidateAccountNumber: string; allow: boolean; denials: string[] }> = [];
   let accountingNatureAssessment: AccountingNatureAssessment | null = null;
   // Sprint 3 · Checkpoint 15Y-Rejected — keep the PdfLayout in
   // scope so the positioned-layout rescue path can consume it
@@ -321,8 +338,25 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       if (routed.layout) {
         pdfLayout = routed.layout;   // 15Y-Rejected — retained for post-parse rescue
         const regions = detectLayoutRegions(routed.layout.visualLines);
+        allLayoutRegions = regions;
         const supplier = pickSupplierRegion(regions);
         if (supplier) supplierRegionText = supplier.text;
+        // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4) —
+        // build DOCUMENT-ROLE-AWARE transactional text. Supplier /
+        // recipient / policy / footer regions are excluded so that
+        // downstream accounting-nature + purpose classifiers cannot
+        // pick up street-name matches ("Capital Circle") or policy-
+        // paragraph regex matches ("finance charge of X% per month").
+        try {
+          const tx = buildTransactionalText(regions);
+          transactionalTextValue = tx.text;
+          transactionalTextDiag = transactionalTextDiagnostic(tx);
+        } catch (txe) {
+          logger.warn("ap-intelligence.transactional-text.error", {
+            clubId: args.clubId, docIdTail: doc.id.slice(-6),
+            message: (txe as Error).message.slice(0, 200),
+          });
+        }
         // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — replaced the
         // old positioned-table-reconstruct call with the ONE canonical
         // line-item authority. The authority runs region detection +
@@ -568,6 +602,12 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     emailSubject: args.emailSubject ?? null,
     emailSenderAddress: args.emailSenderAddress ?? null,
     canonicalLineItems: canonicalLineItemsFromLayout,
+    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #8) —
+    // additive visual-branding evidence for the frozen supplier
+    // orchestrator. Supplier scoring rules unchanged; branding
+    // participates as one more evidence source alongside text /
+    // domain / contact-block.
+    supplierAdditionalEvidence: visualBrandingEvidence,
   });
   let extraction: ExtractedInvoice = pdfOk
     ? parsed.invoice
@@ -1141,10 +1181,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       supplierName: mergedExtraction.vendor.guessedName,
       lineItemDescriptions: uniqDescs,
       fullDocumentText: pdfText || null,
+      transactionalText: transactionalTextValue,
       capitalStateFromClassifier: capital.state,
       capitalThresholdCents: capitalMinCents,
       totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
     });
+
+    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #1) —
+    // resolve the canonical economic-purpose decision once, HERE,
+    // so it can gate the nature-scoped SEMANTIC_MATCH override
+    // below and be published on the diagnostic.
+    if (purposeDecision == null) {
+      purposeDecision = resolveEconomicPurpose({
+        canonicalLineItems: canonicalLineItemsFromLayout,
+        supplierName: mergedExtraction.vendor.guessedName,
+        transactionalText: transactionalTextValue,
+        hasPenaltyLine: canonicalLineItemsFromLayout.some((li) => li.role === "PENALTY"),
+        hasMembershipLine: canonicalLineItemsFromLayout.some((li) =>
+          /\b(member(?:ship)?\s*(?:dues|fee))\b/i.test(li.description)),
+        hasProfessionalCredentialContext: (mergedExtraction.vendor.guessedName ?? "").match(
+          /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
+      });
+    }
 
     const shouldPromote =
       natureForRanker.isDefensible &&
@@ -1316,7 +1374,36 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           const ldrDeptMatches = deptPatterns.length > 0 &&
             deptPatterns.some((p) => p.test(ldr.account.name));
           const shouldOverride = !promoted || (ldrDeptMatches && !stageAPickedDeptMatch);
-          if (shouldOverride) {
+          // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #5) —
+          // strengthened SEMANTIC_MATCH override gate. The override
+          // may only proceed when ALL of: nature confidence clears
+          // threshold; nature is defensible; nature is compatible
+          // with the committed canonical purpose; the candidate
+          // account type is compatible with the nature; no stronger
+          // canonical evidence contradicts. Confidence alone is not
+          // enough. This closes the class of defect where a low-
+          // confidence nature (e.g. 20-33) elected a full-COA
+          // account whose type was incompatible with the canonical
+          // purchase — a "confidence-laundering" path §25 warns
+          // against.
+          const gateInput = {
+            natureLeader: natureForRanker.leader,
+            natureConfidence: natureForRanker.leaderConfidence,
+            natureIsDefensible: natureForRanker.isDefensible,
+            candidateAccountType: ldr.account.type ?? null,
+            purposeDecision: purposeDecision ?? {
+              source: "ABSTAIN" as const, concept: null, confidence: 0, label: "unresolved",
+              canonicalTop3: [], legacyCandidates: [],
+              diagnostic: "no purpose decision available",
+            },
+          };
+          const gateOutcome = evaluateSemanticMatchGate(gateInput);
+          semanticMatchGateEvaluations.push({
+            candidateAccountNumber: ldr.account.accountNumber,
+            allow: gateOutcome.allow,
+            denials: gateOutcome.denials,
+          });
+          if (shouldOverride && gateOutcome.allow) {
             gl = {
               ...gl,
               accountNumber: ldr.account.accountNumber,
@@ -1325,11 +1412,17 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
               fsGroupKey: ldr.account.fsGroupKey ?? null,
               source: "SEMANTIC_MATCH",
               confidence: Math.min(natureForRanker.leaderConfidence, Math.min(95, ldr.score)),
-              reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount},dept=${deptKey ?? "none"},dept_match=${ldrDeptMatches})`,
+              reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount},dept=${deptKey ?? "none"},dept_match=${ldrDeptMatches},gate=allow)`,
               leaderIsPostable: ldr.isPostable,
               leaderPostingBlockers: ldr.postingBlockers as any,
               autoApprovalEligible: false,
             };
+          } else if (shouldOverride && !gateOutcome.allow) {
+            logger.info("ap-intelligence.semantic-match.override-denied", {
+              clubId: args.clubId, docIdTail: doc.id.slice(-6),
+              candidate: ldr.account.accountNumber,
+              denials: gateOutcome.denials.join("|"),
+            });
           }
         }
       }

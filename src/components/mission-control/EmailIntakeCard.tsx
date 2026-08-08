@@ -42,6 +42,7 @@ import InlineConversationPanel, { type ConversationDetail } from "./InlineConver
 import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import CreateVendorAndPostModal from "./CreateVendorAndPostModal";
+import { CategoryHoverAllocations } from "./CategoryHoverAllocations";
 import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/lib/mission-control";
 // 15P-5: the one canonical AP-action derivation. Both the primary-
 // button label and the modal-open decision come from this function
@@ -841,10 +842,11 @@ function renderApCollapsedBody(
           tone={ap.purchaseOrder.poNumber || ap.invoiceNumber ? undefined : "observation"}
           testid="ap-readout-po-or-invoice"
         />
-        <ReadoutCell
-          k="Category"
-          v={ap.category.label ?? "—"}
-          tone={ap.category.label ? undefined : "observation"}
+        <CategoryHoverAllocations
+          category={ap.category.label ?? null}
+          allocations={ap.allocations ?? null}
+          currency={ap.gross.currency ?? "CAD"}
+          currencyShowCode={ap.currencyShowCode !== false}
           testid="ap-readout-category"
         />
         <ReadoutCell
