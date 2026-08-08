@@ -382,6 +382,46 @@ export function collectTextSupplierEvidence(text: string): SupplierIdentityEvide
     }
     return tokensFound >= 2;
   };
+  // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+  // reject candidates that contain a run of ≥4 digits. Real org
+  // names may include a small digit (3M, 7-Eleven) but do not
+  // include a 4+ digit sequence like a statement number
+  // ("OXIO-23375874"), invoice reference, phone fragment, or
+  // account number. This blocks statement-number-as-supplier
+  // without a supplier-specific literal.
+  const containsLongDigitRun = (raw: string): boolean => /\d{4,}/.test(raw);
+  // Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) —
+  // pdf-parse label-pair concatenations ("Bill ToShip To" from
+  // adjacent "Bill To:" and "Ship To:" columns; "InvoiceCustomer"
+  // etc.). Detect by looking for a camelCase boundary
+  // (lowercase→uppercase) where BOTH sides are known label words.
+  const isLabelPairConcat = (raw: string): boolean => {
+    // Only run on strings without whitespace at the boundary.
+    const boundaries = [...raw.matchAll(/[a-z](?=[A-Z])/g)];
+    if (boundaries.length === 0) return false;
+    const LABEL_WORDS = new Set([
+      "BILL", "SHIP", "SOLD", "REMIT", "INVOICE", "STATEMENT", "CUSTOMER",
+      "CLIENT", "ACCOUNT", "PAYMENT", "DATE", "PAGE", "TIME", "ORDER",
+      "ITEM", "PRODUCT", "TOTAL", "TAX", "DUE", "TO", "FROM", "REF",
+      "MEMO", "NOTES",
+    ]);
+    for (const b of boundaries) {
+      const idx = b.index!;
+      // Left side: consume from a preceding word-boundary up to idx.
+      let leftStart = idx;
+      while (leftStart > 0 && /[A-Za-z]/.test(raw[leftStart - 1])) leftStart--;
+      const leftWord = raw.slice(leftStart, idx + 1).toUpperCase();
+      // Right side: consume from idx+1 forward.
+      let rightEnd = idx + 1;
+      while (rightEnd < raw.length && /[A-Za-z]/.test(raw[rightEnd])) rightEnd++;
+      const rightWord = raw.slice(idx + 1, rightEnd).toUpperCase();
+      // Also check bare labels + trailing "To" ("BillTo", "ShipTo").
+      const leftIsLabel = LABEL_WORDS.has(leftWord) || LABEL_WORDS.has(leftWord.replace(/TO$/, ""));
+      const rightIsLabel = LABEL_WORDS.has(rightWord);
+      if (leftIsLabel && rightIsLabel) return true;
+    }
+    return false;
+  };
   const HEADER_SUFFIX_LESS_LINE = /^[A-Z][A-Za-z0-9&.'\-]+(?:\s+[A-Z][A-Za-z0-9&.'\-]+){0,5}$/;
   for (let i = 0; i < Math.min(headerCutoff, totalLines); i++) {
     const raw = lines[i].trim();
@@ -395,6 +435,11 @@ export function collectTextSupplierEvidence(text: string): SupplierIdentityEvide
     if (HEADER_STOPLIST.has(raw.toUpperCase())) continue;
     // Reject pdf-parse column-header concatenations (DATEPAGE etc.).
     if (isColumnHeaderConcat(raw)) continue;
+    // Reject label-pair concatenations ("Bill ToShip To" etc.).
+    if (isLabelPairConcat(raw)) continue;
+    // Reject candidates containing a long digit run (statement
+    // numbers, invoice references, phone fragments, account #s).
+    if (containsLongDigitRun(raw)) continue;
     // Guard: reject generic labels via the same predicate the
     // orchestrator uses downstream (§5). Prevents FEES / SERVICES /
     // TAXES/FEES / CHARGES from becoming a candidate at seeding time.
