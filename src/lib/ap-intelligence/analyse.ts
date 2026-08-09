@@ -205,6 +205,21 @@ export interface ApAnalyseResult {
   // + the object-aware capital decision. Downstream projection uses
   // it for the founder-facing category chip when GL cannot commit
   // and to surface diagnostic detail in inspect-wi.
+  // Sprint 3 · Phase 4 Slice 5.6 (2026-08-09) — external product
+  // research trigger + provider outcome exposed for inspect-wi
+  // auditability (§25).
+  externalResearchTrace?: {
+    considered: boolean;
+    triggered: boolean;
+    providerKind: string;
+    cacheHit: boolean;
+    quotaAllowed: boolean;
+    quotaRemaining: number;
+    fingerprint: string | null;
+    reason: string;
+    externalLookupCount: number;
+    externalLatencyMs: number;
+  };
   // Sprint 3 · Phase 4 Slice 5.5 (2026-08-08) — Capital-aware
   // ranking result. Emitted whenever the ranker was active
   // (CapitalEvidenceDecision committed at defensible confidence).
@@ -1086,21 +1101,176 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // "engine"/"seat"/etc. as evidence, not verdict.
   const sharedPurchasedObjects = new PurchasedObjectProvider().interpret(canonicalLineItemsFromLayout);
 
-  // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
-  // Resolution. Runs BEFORE capital-evidence so the capital authority
-  // can consume resolved identity rather than raw purchased-object
-  // evidence. Providers default to Null (no external calls) — Slice
-  // 5.4 scaffolding ships with external research DISABLED pending
-  // §43 founder sign-off. When enabled the caller swaps in a live
-  // ProductReferenceProvider; the accounting pipeline is unchanged.
+  // Sprint 3 · Phase 4 Slice 5.6 (2026-08-09) — Product Identity
+  // Resolution with controlled external product research authorised.
+  //
+  // Provider selection is env-driven via getProductReferenceProvider()
+  // (§3). Default remains NullProductReferenceProvider — activation
+  // on staging requires PRODUCT_REFERENCE_PROVIDER=claude-web-search
+  // + PRODUCT_REFERENCE_API_KEY set. External calls are gated by:
+  //   1. externalCorroborationRequired flag from the amended §10
+  //      Slice-5.5 trigger (material accounting ambiguity)
+  //   2. per-club daily quota (§18)
+  //   3. cache hit on manufacturer+model+partNumber fingerprint (§17)
+  //   4. circuit-breaker on repeated provider failure (§19)
+  //
+  // Founder §20: external evidence never writes a GL. It flows back
+  // through ProductIdentityResolution → CapitalEvidenceDecision →
+  // capital-aware ranker. Accounting authorities remain internal.
   const { resolveProductIdentity: resolveProductIdentityShared } = await import("./product-identity-resolution");
   const { NullPricePlausibilityProvider } = await import("./price-plausibility");
-  const { NullProductReferenceProvider } = await import("./product-reference-provider");
-  const sharedProductIdentity = await resolveProductIdentityShared({
+  const {
+    getProductReferenceProvider,
+    activeProviderKind,
+  } = await import("./external-product-reference/factory");
+  const {
+    tryConsumeDailyQuota,
+    currentClubDailyCount,
+    DEFAULT_RATE_LIMIT,
+  } = await import("./external-product-reference/rate-limiter");
+  const { fingerprintProductRequest } = await import("./product-reference-provider");
+  const { InMemoryProductReferenceCache } = await import("./product-reference-provider");
+  // Process-lifetime cache singleton (in-memory per §17 — a Redis /
+  // DB-backed cache is a Slice 5.7 hardening item).
+  const cache = ((globalThis as unknown as { __spectreProductRefCache?: InstanceType<typeof InMemoryProductReferenceCache> }).__spectreProductRefCache ??=
+    new InMemoryProductReferenceCache());
+
+  const rawProvider = getProductReferenceProvider();
+  const configuredProviderKind = activeProviderKind();
+
+  // Two-pass strategy: (a) run internal-only resolution first with a
+  // Null external provider so we always compute internal candidates
+  // and know whether externalCorroborationRequired fires; (b) if
+  // required AND provider is configured AND quota available AND no
+  // cache hit, THEN invoke the real provider and re-resolve with the
+  // fetched evidence.
+  const internalOnlyIdentity = await resolveProductIdentityShared({
     objects: sharedPurchasedObjects,
     pricePlausibilityProvider: new NullPricePlausibilityProvider(),
-    productReferenceProvider: new NullProductReferenceProvider(),
+    productReferenceProvider: null,
   });
+
+  // Build the fingerprintable request from the current primary
+  // purchased object (§4/§17 — no invoice-scoped identity).
+  const primaryObjectForRefRequest = sharedPurchasedObjects.length > 0
+    ? [...sharedPurchasedObjects].sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0]
+    : null;
+  const refRequest = primaryObjectForRefRequest ? {
+    brandCandidates: primaryObjectForRefRequest.brandCandidates.map((b) => b.value),
+    modelCandidates: primaryObjectForRefRequest.modelCandidates.map((m) => m.value),
+    skuCandidates: primaryObjectForRefRequest.skuCandidates.map((s) => s.value),
+    serialCandidates: primaryObjectForRefRequest.serialCandidates.map((s) => s.value),
+    descriptionExcerpt: primaryObjectForRefRequest.description.slice(0, 200),
+    observedUnitPrice: primaryObjectForRefRequest.unitPrice ?? null,
+    currency: null,
+    maxCalls: DEFAULT_RATE_LIMIT.perRequestMaxQueries,
+  } : null;
+  const refRequestFingerprint = refRequest ? fingerprintProductRequest(refRequest) : null;
+
+  let externalTrigger: {
+    considered: boolean;
+    triggered: boolean;
+    providerKind: string;
+    cacheHit: boolean;
+    quotaAllowed: boolean;
+    quotaRemaining: number;
+    fingerprint: string | null;
+    reason: string;
+  } = {
+    considered: false,
+    triggered: false,
+    providerKind: configuredProviderKind,
+    cacheHit: false,
+    quotaAllowed: true,
+    quotaRemaining: DEFAULT_RATE_LIMIT.perClubPerDay - currentClubDailyCount(args.clubId),
+    fingerprint: refRequestFingerprint,
+    reason: "",
+  };
+
+  let sharedProductIdentity = internalOnlyIdentity;
+
+  if (internalOnlyIdentity.externalCorroborationRequired
+      && refRequest != null
+      && refRequestFingerprint != null
+      && configuredProviderKind !== "null"
+      && configuredProviderKind !== "null-fallback") {
+    externalTrigger.considered = true;
+    // Cache lookup first (§17). Cache key is manufacturer|model|part
+    // — invoice-independent per §17.
+    const cachedRef = primaryObjectForRefRequest && primaryObjectForRefRequest.modelCandidates[0]
+      ? cache.get(
+          primaryObjectForRefRequest.brandCandidates[0]?.value ?? "",
+          primaryObjectForRefRequest.modelCandidates[0].value,
+          primaryObjectForRefRequest.skuCandidates[0]?.value ?? null,
+        )
+      : null;
+
+    if (cachedRef) {
+      externalTrigger.cacheHit = true;
+      externalTrigger.triggered = false;
+      externalTrigger.reason = `cache hit — re-using ${cachedRef.sourceEvidence.length} previously-fetched evidence records; product cache entry firstSeen=${cachedRef.firstSeenAt}`;
+      // Build a MockProvider-shape that just replays cached evidence.
+      const { FixtureProductReferenceProvider } = await import("./external-product-reference/fixture-provider");
+      const cachedProvider = new FixtureProductReferenceProvider();
+      cachedProvider.seedByFingerprint(refRequestFingerprint, {
+        state: cachedRef.sourceEvidence.length > 0 ? "RESOLVED" : "NO_RESULTS",
+        products: cachedRef.sourceEvidence,
+      });
+      sharedProductIdentity = await resolveProductIdentityShared({
+        objects: sharedPurchasedObjects,
+        pricePlausibilityProvider: new NullPricePlausibilityProvider(),
+        productReferenceProvider: cachedProvider,
+      });
+    } else {
+      // Quota check (§18)
+      const quota = tryConsumeDailyQuota(args.clubId);
+      externalTrigger.quotaAllowed = quota.allowed;
+      externalTrigger.quotaRemaining = quota.remaining;
+      if (!quota.allowed) {
+        externalTrigger.reason = quota.reason ?? "daily quota exceeded";
+      } else {
+        externalTrigger.triggered = true;
+        externalTrigger.reason = `external research triggered — provider=${configuredProviderKind} fingerprint=${refRequestFingerprint}`;
+        logger.info("ap-intelligence.slice5-6.external-research.triggered", {
+          clubId: args.clubId,
+          docIdTail: doc.id.slice(-6),
+          provider: configuredProviderKind,
+          fingerprint: refRequestFingerprint,
+          quotaRemaining: quota.remaining,
+        });
+        sharedProductIdentity = await resolveProductIdentityShared({
+          objects: sharedPurchasedObjects,
+          pricePlausibilityProvider: new NullPricePlausibilityProvider(),
+          productReferenceProvider: rawProvider,
+        });
+        // If the provider returned evidence, cache it under the
+        // manufacturer|model|partNumber key so 100 invoices don't
+        // cause 100 searches (§17).
+        if (sharedProductIdentity.selected != null
+            && sharedProductIdentity.status === "RESOLVED_WITH_EXTERNAL_CORROBORATION"
+            && primaryObjectForRefRequest?.modelCandidates[0]) {
+          cache.put({
+            manufacturer: primaryObjectForRefRequest.brandCandidates[0]?.value ?? "",
+            model: primaryObjectForRefRequest.modelCandidates[0].value,
+            partNumber: primaryObjectForRefRequest.skuCandidates[0]?.value ?? null,
+            productFamily: sharedProductIdentity.selected.objectType,
+            objectType: sharedProductIdentity.selected.objectType,
+            sourceEvidence: [],   // populated when the concrete
+                                   // provider returns ProductReferenceEvidence[]
+            confidence: sharedProductIdentity.confidence,
+            firstSeenAt: new Date().toISOString(),
+            lastVerifiedAt: new Date().toISOString(),
+            expiresAt: null,   // 180-day TTL is enforced by the cache's
+                               // expiresAt check when set
+          });
+        }
+      }
+    }
+  } else if (internalOnlyIdentity.externalCorroborationRequired) {
+    externalTrigger.considered = true;
+    externalTrigger.triggered = false;
+    externalTrigger.reason = `external corroboration required BUT provider=${configuredProviderKind} — falling back to internal-only resolution`;
+  }
 
   const sharedCapitalDecision = evaluateCapitalObjectShared({
     objects: sharedPurchasedObjects,
@@ -2238,6 +2408,18 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    externalResearchTrace: {
+      considered: externalTrigger.considered,
+      triggered: externalTrigger.triggered,
+      providerKind: externalTrigger.providerKind,
+      cacheHit: externalTrigger.cacheHit,
+      quotaAllowed: externalTrigger.quotaAllowed,
+      quotaRemaining: externalTrigger.quotaRemaining,
+      fingerprint: externalTrigger.fingerprint,
+      reason: externalTrigger.reason,
+      externalLookupCount: sharedProductIdentity.externalLookupCount,
+      externalLatencyMs: sharedProductIdentity.externalLatencyMs,
+    },
     capitalAwareRanking: capitalAwareRankingResult ? {
       active: capitalAwareRankingResult.active,
       winnerAccountNumber: capitalAwareRankingResult.winner?.accountNumber ?? null,

@@ -79,7 +79,7 @@ function objectFromDesc(description: string, extension = 100): PurchasedObjectId
   const li: CanonicalLineItem = {
     description, quantity: 1, unit: "EA", unitPrice: extension, extension,
     sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null,
-  } as CanonicalLineItem;
+  } as unknown as CanonicalLineItem;
   return new DeterministicPurchasedObjectProvider().interpret([li]);
 }
 
@@ -309,7 +309,7 @@ describe("§15.9 amended §10 trigger — absolute-confidence branch", () => {
     // Wide relative gap alone is not enough — absolute confidence
     // must clear the threshold too.
     const objects = new DeterministicPurchasedObjectProvider().interpret([
-      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-99999999", quantity: 1, unit: "EA", unitPrice: 5000, extension: 5000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
+      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-99999999", quantity: 1, unit: "EA", unitPrice: 5000, extension: 5000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
     ]);
     const result = await resolveProductIdentity({
       objects,
@@ -339,7 +339,7 @@ describe("§15.10 low confidence but no material accounting divergence → no ex
   it("does NOT flag externalCorroborationRequired when candidates all imply the same accounting nature", async () => {
     // Two COMPONENT-shape candidates both with low scores.
     const objects = new DeterministicPurchasedObjectProvider().interpret([
-      { description: "Ball bearing repair kit", quantity: 1, unit: "EA", unitPrice: 50, extension: 50, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
+      { description: "Ball bearing repair kit", quantity: 1, unit: "EA", unitPrice: 50, extension: 50, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
     ]);
     const result = await resolveProductIdentity({
       objects,
@@ -359,8 +359,8 @@ describe("§15.11 high confidence + wide gap → no external", () => {
   it("does NOT flag externalCorroborationRequired for a decisive description", async () => {
     // Diesel + qty + gallons: decisive CONSUMABLE with wide gap.
     const objects = new DeterministicPurchasedObjectProvider().interpret([
-      { description: "Diesel fuel bulk delivery 500 gallons", quantity: 1, unit: "GAL", unitPrice: 2000, extension: 2000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
-      { description: "Diesel fuel second tank 250 gallons", quantity: 1, unit: "GAL", unitPrice: 1000, extension: 1000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
+      { description: "Diesel fuel bulk delivery 500 gallons", quantity: 1, unit: "GAL", unitPrice: 2000, extension: 2000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
+      { description: "Diesel fuel second tank 250 gallons", quantity: 1, unit: "GAL", unitPrice: 1000, extension: 1000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
     ]);
     const result = await resolveProductIdentity({
       objects,
@@ -378,7 +378,7 @@ describe("§15.11 high confidence + wide gap → no external", () => {
 describe("§15.12 external provider TIMEOUT / NO_RESULTS / CONFLICTING → no guessed identity", () => {
   it("TIMEOUT keeps status AMBIGUOUS and does not select an identity", async () => {
     const objects = new DeterministicPurchasedObjectProvider().interpret([
-      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-77777777", quantity: 1, unit: "EA", unitPrice: 70000, extension: 70000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
+      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-77777777", quantity: 1, unit: "EA", unitPrice: 70000, extension: 70000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
     ]);
     const slow: ProductReferenceProvider = {
       async resolve(_req: ProductReferenceRequest): Promise<ProductReferenceResult> {
@@ -398,7 +398,7 @@ describe("§15.12 external provider TIMEOUT / NO_RESULTS / CONFLICTING → no gu
   });
   it("NO_RESULTS keeps status AMBIGUOUS", async () => {
     const objects = new DeterministicPurchasedObjectProvider().interpret([
-      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-77777777", quantity: 1, unit: "EA", unitPrice: 5000, extension: 5000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as CanonicalLineItem,
+      { description: "ACME X-4000 WIDGET ENGINE Serial #: SN-77777777", quantity: 1, unit: "EA", unitPrice: 5000, extension: 5000, sku: null, tax: null, role: "PRIMARY_PURCHASE", lineNumber: null } as unknown as CanonicalLineItem,
     ]);
     const empty: ProductReferenceProvider = {
       async resolve() {
