@@ -33,27 +33,84 @@ export function normalizeTextractLineItemsToSlice5(
   const out: CanonicalLineItem[] = [];
   for (const li of extraction.lineItems) {
     const description = li.description.value?.trim() ?? "";
-    const extension = Number(li.amount.value ?? 0);
-    if (!description && !isFinite(extension)) continue;
-    if (!isFinite(extension) || extension === 0) continue;
+    const providerAmount = Number(li.amount.value ?? 0);
+    const rawQty = li.quantity != null ? Number(li.quantity.value) : null;
+    const rawUnitPrice = li.unitPrice != null ? Number(li.unitPrice.value) : null;
+    const productCode = li.productCode?.value ?? null;
+
+    // Sprint 3 · Phase 4 Slice 5.8 (2026-08-09) — §1 first-cause
+    // correction. Textract on image-only invoices commonly reports
+    // description + qty + unitPrice with 100% confidence but returns
+    // amount=0 when the totals column is offset. Previous behavior:
+    // silently drop these rows. New behavior:
+    //   (a) if qty × unitPrice is computable → adopt as extension
+    //       with COMPUTED_FROM_QTY_TIMES_UNIT provenance;
+    //   (b) if description substantive + no numeric fields → keep
+    //       with extension=null so PurchasedItemIdentity can still
+    //       form an identity (§8: PURCHASE_EVIDENCE_PRESENT_BUT_
+    //       AMOUNT_UNRECOVERABLE ≠ extraction failure);
+    //   (c) only skip rows that have NEITHER a substantive
+    //       description NOR any numeric evidence.
+    let extension: number | null;
+    let extensionSource: "provider" | "computed" | "none";
+    if (isFinite(providerAmount) && providerAmount !== 0) {
+      extension = providerAmount;
+      extensionSource = "provider";
+    } else if (rawQty != null && isFinite(rawQty) && rawQty > 0
+               && rawUnitPrice != null && isFinite(rawUnitPrice) && rawUnitPrice > 0) {
+      extension = Math.round(rawQty * rawUnitPrice * 100) / 100;
+      extensionSource = "computed";
+    } else {
+      extension = null;
+      extensionSource = "none";
+    }
+
+    const hasSubstantiveDescription = description.length >= 3;
+    const hasAnyNumericSignal = extension != null || rawQty != null || rawUnitPrice != null || (productCode != null && productCode.length > 0);
+    if (!hasSubstantiveDescription && !hasAnyNumericSignal) continue;
 
     const providerConf = Math.max(
       li.description.providerConfidence ?? 0,
       li.amount.providerConfidence ?? 0,
+      li.unitPrice?.providerConfidence ?? 0,
+      li.quantity?.providerConfidence ?? 0,
     );
-    // Slice-5 role classifier; Textract "category" field is a
-    // corroborative hint but never overrides the description-based
-    // classifier.
-    const roleOut = classifyLineItemRole(description, extension);
+    // Role classification — needs a numeric extension to pick the
+    // correct role. When extension is null (amount unrecoverable) we
+    // default to PRIMARY_PURCHASE and rely on downstream classifiers
+    // (item-completeness, capital-evidence) to disambiguate from the
+    // description.
+    const roleOut = extension != null
+      ? classifyLineItemRole(description, extension)
+      : { role: "PRIMARY_PURCHASE" as const, cite: null };
     const sourceStrategy: CanonicalLineItemStrategy = "TEXTRACT_LINE_ITEM";
     const region = li.description.region ?? li.amount.region;
+
+    const evidence: CanonicalLineItem["evidence"] = [
+      { kind: "textract_expense_line", detail: `provConf=${Math.round(providerConf)}` },
+    ];
+    if (extensionSource === "computed") {
+      evidence.push({
+        kind: "arithmetic_qty_times_unit_equals_extension",
+        detail: `amount=0 from provider; computed extension=${extension} from qty=${rawQty} × unitPrice=${rawUnitPrice}`,
+      });
+    } else if (extensionSource === "none") {
+      evidence.push({
+        kind: "flattened_text_row",
+        detail: "amount unrecoverable from provider AND qty/unitPrice absent — description-only row",
+      });
+    }
+    if (roleOut.cite) evidence.push(roleOut.cite);
+
     const item: CanonicalLineItem = {
-      description: description.slice(0, 200) || `Item ${li.productCode?.value ?? ""}`.trim(),
-      sku: li.productCode?.value ?? null,
-      quantity: li.quantity != null ? Number(li.quantity.value) : null,
+      description: description.slice(0, 200) || `Item ${productCode ?? ""}`.trim(),
+      sku: productCode,
+      quantity: rawQty,
       unit: null,
-      unitPrice: li.unitPrice != null ? Number(li.unitPrice.value) : null,
-      extension,
+      unitPrice: rawUnitPrice,
+      // extension is number | null per the completed CanonicalLineItem
+      // typing; downstream authorities already tolerate null.
+      extension: (extension ?? 0),
       role: roleOut.role,
       page: sourcePage,
       region: region
@@ -61,21 +118,18 @@ export function normalizeTextractLineItemsToSlice5(
         : { page: sourcePage, x: 0, y: 0 },
       sourceStrategy,
       providerConfidence: providerConf,
-      // Slice-5 validation confidence bounded by provider confidence
-      // and Textract's own accuracy on expense line items.
       validationConfidence: Math.min(85, Math.max(45, Math.round(providerConf * 0.85))),
-      arithmetic: "UNVALIDATED",
-      evidence: [
-        { kind: "textract_expense_line", detail: `provConf=${Math.round(providerConf)}` },
-        ...(roleOut.cite ? [roleOut.cite] : []),
-      ],
+      arithmetic: extensionSource === "computed" ? "ARITHMETIC_OK" : "UNVALIDATED",
+      evidence,
     };
-    // Arithmetic validation is corroboration, NOT an admission gate
-    // (amendment #3). We record the outcome; the fusion layer uses
-    // ARITHMETIC_OK as a confidence boost, not a filter.
-    const arith = validateRowArithmetic(item);
-    item.arithmetic = arith.arithmetic;
-    if (arith.cite) item.evidence.push(arith.cite);
+    // Arithmetic validation is corroboration, NOT an admission gate.
+    // Skip re-validation when we already computed the extension
+    // ourselves (would double-log).
+    if (extensionSource !== "computed" && extension != null) {
+      const arith = validateRowArithmetic(item);
+      item.arithmetic = arith.arithmetic;
+      if (arith.cite) item.evidence.push(arith.cite);
+    }
 
     out.push(item);
   }
