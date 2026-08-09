@@ -273,17 +273,44 @@ function parseClaudeResponse(response: unknown, queryFingerprint: string): Parse
   const contentBlocks = r.content ?? [];
 
   // Collect cited source URLs from the tool_use / tool_result blocks
-  // so we can attribute individual evidence facts. Each search result
-  // Anthropic returns arrives as a block with source info.
+  // so we can attribute individual evidence facts.
+  //
+  // Anthropic's web_search_20250305 returns tool blocks with shape:
+  //   { type: "web_search_tool_result", content: [
+  //     { type: "web_search_result", url, title, encrypted_content, ... }
+  //   ]}
+  // AND text blocks with citations shape:
+  //   { type: "text", text: "...", citations: [{ type: "web_search_result_location", url, title, cited_text }] }
+  // Both surfaces are inspected so we capture every source Anthropic
+  // used, whether the model cited them inline or not.
+  const seenUrls = new Set<string>();
   const citedSources: Array<{ url: string; title: string; tier: ReturnType<typeof classifySourceTier> }> = [];
-  for (const block of contentBlocks) {
+  const addSource = (url?: string, title?: string) => {
+    if (!url || seenUrls.has(url)) return;
+    seenUrls.add(url);
+    citedSources.push({
+      url,
+      title: title ?? "",
+      tier: classifySourceTier(url),
+    });
+  };
+  for (const block of contentBlocks as Array<Record<string, unknown>>) {
+    // Direct top-level source hint (older shape)
     const src = (block as { source?: { url?: string; title?: string } }).source;
-    if (src?.url) {
-      citedSources.push({
-        url: src.url,
-        title: src.title ?? "",
-        tier: classifySourceTier(src.url),
-      });
+    if (src?.url) addSource(src.url, src.title);
+    // web_search_tool_result block — inner content array carries the search results
+    if (block.type === "web_search_tool_result") {
+      const inner = (block as { content?: Array<{ type?: string; url?: string; title?: string }> }).content ?? [];
+      for (const r of inner) {
+        if (r.type === "web_search_result" && r.url) addSource(r.url, r.title);
+      }
+    }
+    // text-block citations
+    const citations = (block as { citations?: Array<{ type?: string; url?: string; title?: string }> }).citations ?? [];
+    for (const c of citations) {
+      if ((c.type === "web_search_result_location" || c.type === "web_search_citation") && c.url) {
+        addSource(c.url, c.title);
+      }
     }
   }
 

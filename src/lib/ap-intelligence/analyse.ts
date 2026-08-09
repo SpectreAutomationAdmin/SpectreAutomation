@@ -1274,25 +1274,42 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           diagnostic: sharedProductIdentity.diagnostic,
           reason: sharedProductIdentity.reason,
         });
-        // If the provider returned evidence, cache it under the
-        // manufacturer|model|partNumber key so 100 invoices don't
-        // cause 100 searches (§17).
-        if (sharedProductIdentity.selected != null
-            && sharedProductIdentity.status === "RESOLVED_WITH_EXTERNAL_CORROBORATION"
-            && primaryObjectForRefRequest?.modelCandidates[0]) {
+        // Slice 5.6 live-acceptance §17: cache ANY successful external
+        // call under the manufacturer|model|partNumber key so a repeat
+        // analysis of the SAME product-identity doesn't fire another
+        // 24-second web_search. Cache stores the parsed evidence
+        // records the provider returned; when resolution status is
+        // AMBIGUOUS (evidence returned but not enough to commit), we
+        // still cache so the next call sees the same input state and
+        // can decide identically without another provider hit.
+        if (primaryObjectForRefRequest?.modelCandidates[0]
+            && sharedProductIdentity.externalLookupCount > 0
+            && (sharedProductIdentity.externalEvidence?.length ?? 0) > 0) {
           cache.put({
             manufacturer: primaryObjectForRefRequest.brandCandidates[0]?.value ?? "",
             model: primaryObjectForRefRequest.modelCandidates[0].value,
             partNumber: primaryObjectForRefRequest.skuCandidates[0]?.value ?? null,
-            productFamily: sharedProductIdentity.selected.objectType,
-            objectType: sharedProductIdentity.selected.objectType,
-            sourceEvidence: [],   // populated when the concrete
-                                   // provider returns ProductReferenceEvidence[]
+            productFamily: sharedProductIdentity.selected?.objectType ?? "UNKNOWN",
+            objectType: sharedProductIdentity.selected?.objectType ?? "UNKNOWN",
+            sourceEvidence: (sharedProductIdentity.externalEvidence ?? []).map((e) => ({
+              evidenceType: e.evidenceType as "OEM_PRODUCT_MATCH" | "OEM_PART_MATCH" | "OEM_SPECIFICATION" | "AUTHORIZED_DEALER_MATCH" | "MARKET_COMPARABLE" | "PRICE_PLAUSIBILITY",
+              sourceDomain: e.sourceDomain,
+              sourceTitle: e.sourceTitle,
+              retrievedAt: new Date().toISOString(),
+              queryFingerprint: refRequestFingerprint ?? "",
+              matchedManufacturer: e.matchedManufacturer,
+              matchedModel: e.matchedModel,
+              matchedPartNumber: null,
+              matchedProductFamily: e.matchedProductFamily,
+              observedPrice: null,
+              currency: null,
+              confidence: e.confidence,
+              evidenceSnippet: e.evidenceSnippet,
+            })),
             confidence: sharedProductIdentity.confidence,
             firstSeenAt: new Date().toISOString(),
             lastVerifiedAt: new Date().toISOString(),
-            expiresAt: null,   // 180-day TTL is enforced by the cache's
-                               // expiresAt check when set
+            expiresAt: null,
           });
         }
       }
