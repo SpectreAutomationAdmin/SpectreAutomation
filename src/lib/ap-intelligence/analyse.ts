@@ -267,6 +267,17 @@ export interface ApAnalyseResult {
     externalCorroborationRequired: boolean;
     externalLookupCount: number;
     externalLatencyMs: number;
+    externalProviderDiagnostic?: string;
+    externalEvidence?: Array<{
+      sourceDomain: string | null;
+      sourceTitle: string | null;
+      evidenceType: string;
+      matchedManufacturer: string | null;
+      matchedModel: string | null;
+      matchedProductFamily: string | null;
+      confidence: number;
+      evidenceSnippet: string;
+    }>;
     diagnostic: string;
     selectedObjectType: string | null;
     candidates: Array<{
@@ -1238,10 +1249,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           fingerprint: refRequestFingerprint,
           quotaRemaining: quota.remaining,
         });
+        const beforeExternalStatus = internalOnlyIdentity.status;
+        const beforeExternalTop = internalOnlyIdentity.candidates[0]?.objectType;
+        const beforeExternalScore = internalOnlyIdentity.candidates[0]?.internalEvidenceScore;
         sharedProductIdentity = await resolveProductIdentityShared({
           objects: sharedPurchasedObjects,
           pricePlausibilityProvider: new NullPricePlausibilityProvider(),
           productReferenceProvider: rawProvider,
+        });
+        logger.info("ap-intelligence.slice5-6.external-research.completed", {
+          clubId: args.clubId,
+          docIdTail: doc.id.slice(-6),
+          externalLookupCount: sharedProductIdentity.externalLookupCount,
+          externalLatencyMs: sharedProductIdentity.externalLatencyMs,
+          statusBefore: beforeExternalStatus,
+          statusAfter: sharedProductIdentity.status,
+          topBefore: beforeExternalTop,
+          topAfter: sharedProductIdentity.candidates[0]?.objectType,
+          topScoreBefore: beforeExternalScore,
+          topScoreAfter: sharedProductIdentity.candidates[0]?.internalEvidenceScore,
+          selectedObjectType: sharedProductIdentity.selected?.objectType ?? null,
+          diagnostic: sharedProductIdentity.diagnostic,
+          reason: sharedProductIdentity.reason,
         });
         // If the provider returned evidence, cache it under the
         // manufacturer|model|partNumber key so 100 invoices don't
@@ -2446,6 +2475,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       externalCorroborationRequired: sharedProductIdentity.externalCorroborationRequired,
       externalLookupCount: sharedProductIdentity.externalLookupCount,
       externalLatencyMs: sharedProductIdentity.externalLatencyMs,
+      externalProviderDiagnostic: sharedProductIdentity.externalProviderDiagnostic,
+      externalEvidence: sharedProductIdentity.externalEvidence,
       diagnostic: sharedProductIdentity.diagnostic,
       selectedObjectType: sharedProductIdentity.selected?.objectType ?? null,
       candidates: sharedProductIdentity.candidates.map((c) => ({

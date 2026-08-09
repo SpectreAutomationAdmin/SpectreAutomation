@@ -101,6 +101,23 @@ export interface ProductIdentityResolution {
   externalCorroborationRequired: boolean;
   externalLookupCount: number;
   externalLatencyMs: number;
+  /** Slice 5.6 live acceptance §25: provider diagnostic message
+   *  surfaced for auditability. May include error / rate-limit
+   *  / no-results state descriptions. Never contains credentials. */
+  externalProviderDiagnostic?: string;
+  /** Slice 5.6 live acceptance §5: accepted external evidence set
+   *  for founder-facing audit. Each entry carries source domain,
+   *  tier classification, evidence type, and bounded snippet. */
+  externalEvidence?: Array<{
+    sourceDomain: string | null;
+    sourceTitle: string | null;
+    evidenceType: string;
+    matchedManufacturer: string | null;
+    matchedModel: string | null;
+    matchedProductFamily: string | null;
+    confidence: number;
+    evidenceSnippet: string;
+  }>;
 
   diagnostic: string;
 }
@@ -394,6 +411,17 @@ export async function resolveProductIdentity(
     externalCorroborationRequired: materialAmbiguity && !externallyResolved,
     externalLookupCount,
     externalLatencyMs,
+    externalProviderDiagnostic: externalResults?.diagnostic,
+    externalEvidence: externalResults?.products?.map((p) => ({
+      sourceDomain: p.sourceDomain,
+      sourceTitle: p.sourceTitle,
+      evidenceType: p.evidenceType,
+      matchedManufacturer: p.matchedManufacturer,
+      matchedModel: p.matchedModel,
+      matchedProductFamily: p.matchedProductFamily,
+      confidence: p.confidence,
+      evidenceSnippet: p.evidenceSnippet,
+    })),
     diagnostic,
   };
 }

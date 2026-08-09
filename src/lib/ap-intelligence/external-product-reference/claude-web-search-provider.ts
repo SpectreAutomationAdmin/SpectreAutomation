@@ -57,7 +57,7 @@ export class ClaudeWebSearchProductReferenceProvider implements ProductReference
 
   constructor(config: ClaudeWebSearchProviderConfig) {
     this.config = {
-      model: "claude-sonnet-4-5",   // pinned deliberately
+      model: "claude-sonnet-4-5",   // current-family default; override via PRODUCT_REFERENCE_MODEL env var
       providerName: "claude-web-search",
       rateLimit: DEFAULT_RATE_LIMIT,
       ...config,
