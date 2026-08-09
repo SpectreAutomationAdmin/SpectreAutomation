@@ -2188,11 +2188,35 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       fsGroupKey: a.fsGroup?.key ?? null,
       accountRole: a.accountRole ?? "STANDARD",
     }));
+    // Slice 5.6 live-acceptance §14: when external evidence
+    // produced a functional product family (e.g. "Groundsmaster 3500
+    // Series", "fairway mower"), fold that text into the department
+    // inference input so the department can be derived from PRODUCT
+    // FUNCTION rather than only from purchased-object description
+    // vocabulary. The purchased-object description alone may not
+    // contain the functional noun ("mower") even when the product
+    // family clearly does.
+    const externalProductFamilyText = (sharedProductIdentity.externalEvidence ?? [])
+      .map((e) => e.matchedProductFamily)
+      .filter((s): s is string => typeof s === "string" && s.length > 0)
+      .join(" ");
+    const augmentedDeptDescs = externalProductFamilyText
+      ? [...sharedUniqDescs, externalProductFamilyText]
+      : sharedUniqDescs;
+    const augmentedDept = externalProductFamilyText
+      ? inferDeptShared({
+          supplierName: extraction.vendor.guessedName,
+          lineItemDescriptions: augmentedDeptDescs,
+          fullDocumentText: transactionalTextValue,
+          clubDepartments: DEFAULT_DEPTS_SHARED,
+        })
+      : sharedDept;
+
     capitalAwareRankingResult = rankCapitalAwareAccounts({
       capitalDecision: sharedCapitalDecision,
       productIdentity: sharedProductIdentity,
       purchasedObjects: sharedPurchasedObjects,
-      departmentResult: sharedDept,
+      departmentResult: augmentedDept,
       eligibleAccounts: capEligibleView,
       vendorHistoryPreferredAccountNumbers: [],
     });
