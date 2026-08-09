@@ -1256,6 +1256,8 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           objects: sharedPurchasedObjects,
           pricePlausibilityProvider: new NullPricePlausibilityProvider(),
           productReferenceProvider: rawProvider,
+          externalTimeoutMs: DEFAULT_RATE_LIMIT.wholeJobTimeoutMs,
+          externalCallCap: DEFAULT_RATE_LIMIT.perRequestMaxQueries,
         });
         logger.info("ap-intelligence.slice5-6.external-research.completed", {
           clubId: args.clubId,
