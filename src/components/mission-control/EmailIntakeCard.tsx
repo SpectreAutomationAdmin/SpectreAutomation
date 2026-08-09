@@ -808,6 +808,40 @@ function renderApCollapsedBody(
   const pill = pillForApWorkflow(ap.workflowState);
   const senderLine = buildApSenderLine(ap);
 
+  // Post-Slice-3 lifecycle contract (2026-08-09) — §5, §13, §14.
+  //
+  // While the projection reports ANALYSIS_PENDING the card MUST NOT
+  // draw the ReadoutCell row (which would render dashes for Amount /
+  // Invoice / Category), MUST NOT render the confidence disclosure
+  // (which would report NEEDS_REVIEW off null fields), and MUST NOT
+  // give the founder an accounting action based on non-existent
+  // facts. It draws a compact pending shell instead: pill · sender ·
+  // attachment filename · "Spectre is reading the attached invoice."
+  //
+  // Note that ApActionRow's `deriveApAction` already short-circuits
+  // ANALYSIS_PENDING to EXPAND_ONLY at src/lib/mission-control/ap-action.ts,
+  // so the primary action button is safe. This branch handles the
+  // card body — the readout row and the recommendation strip.
+  if (ap.workflowState === "ANALYSIS_PENDING") {
+    const filename = ap.primaryAttachment?.filename ?? null;
+    return (
+      <>
+        <div className="spectre-mc-item-head">
+          <span className={`spectre-mc-pill ${pill.tone}`} data-testid="ap-workflow-pill">{pill.label}</span>
+          <span className="spectre-mc-id-tag">{data.idTag}</span>
+          <span className="spectre-mc-ts">{data.timestampLabel}</span>
+        </div>
+        <h3 id={`title-${data.workIntakeItemId}`} data-testid="ap-title">
+          <span className="spectre-mc-pending-title">Analysis pending</span>
+        </h3>
+        <p className="spectre-mc-work" data-testid="ap-work-summary-pending">
+          Spectre is reading the attached invoice{filename ? ` (${filename})` : ""}. Founder-facing facts will
+          publish together once the canonical analysis completes.
+        </p>
+      </>
+    );
+  }
+
   return (
     <>
       <div className="spectre-mc-item-head">

@@ -24,6 +24,7 @@ import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-
 import { EXTRACTION_RULE_VERSION } from "@/lib/ap-intelligence/types";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 import { loadOcrExtractionRevision } from "@/lib/ap-intelligence/ocr/persistence";
+import { isAnalysisVersionCurrent } from "@/lib/ap-intelligence/analysis-version";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
 // for the AP-card intelligence projection.
@@ -832,6 +833,15 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   const intake = await prisma.workIntakeItem.findFirst({
     where: { id: intakeId, clubId },
     select: {
+      // Post-Slice-3 lifecycle contract (2026-08-09) — the projection
+      // must be able to distinguish "analysis has never run for this
+      // WI" and "analysis is stale" from "analysis is current". OCR /
+      // reanalyse workers deliberately clear `analysisVersion` to `null`
+      // to force a re-projection; when that clears we must NOT publish
+      // founder-facing AP conclusions from the still-live analyser call
+      // (which may return a partial / OCR-pending shape).
+      analysisVersion: true,
+      lastAnalysedAt: true,
       findings: { where: { state: { in: ["CONFIRMED", "OBSERVED"] } }, select: { key: true, severity: true, statement: true } },
       origins: {
         where: { kind: "INGESTED_DOCUMENT", role: "PRIMARY" },
@@ -963,6 +973,40 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     extractedVendorDomain: extraction?.vendor.guessedDomain ?? null,
     matchedVendorId: analysis?.vendor.state === "MATCHED" ? (analysis.vendor.candidates[0]?.id ?? null) : null,
   });
+
+  // ---------------------------------------------------------------------
+  // Post-Slice-3 lifecycle contract (2026-08-09) — §1, §4, §5, §6.
+  //
+  // A stable AP snapshot is available when:
+  //   1. The analyser call above returned a non-null ApAnalyseResult
+  //      AND
+  //   2. The WorkIntakeItem's stored analysisVersion matches the
+  //      current composite fingerprint (i.e. the analysis is not
+  //      stale and not currently being replayed by a worker).
+  //
+  // When either condition fails the founder-facing publication MUST
+  // be a coherent "ANALYSIS_PENDING" shell — not a partial card with
+  // dashes for supplier / invoice / amount / category. Historically
+  // the projection returned null/dashed fields with workflowState
+  // "NEEDS_JUDGMENT" (mapPhase3ToLegacyDisplayState(null) branch),
+  // which read to the founder as an AP-intelligence failure rather
+  // than an in-progress state — the leak this contract fixes.
+  // ---------------------------------------------------------------------
+  const analysisIsStable =
+    analysis != null && isAnalysisVersionCurrent(intake.analysisVersion);
+
+  if (!analysisIsStable) {
+    const pendingValue: LinkedIntelligenceForEmail["invoiceSummary"] = buildPendingInvoiceSummary({
+      sourceEmail,
+      senderRelationship,
+      doc,
+      hasAnalysis: analysis != null,
+      hasStoredVersion: !!intake.analysisVersion,
+      lastAnalysedAt: intake.lastAnalysedAt,
+    });
+    apSummaryCache.set(cacheKey, { at: Date.now(), value: pendingValue });
+    return pendingValue;
+  }
 
   // Invoice cadence — prior invoices for THIS vendor this quarter.
   // 15L: also counts prior APInvoice rows for the same normalised
@@ -1183,6 +1227,83 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   // Control renders within this window skip the re-parse entirely.
   apSummaryCache.set(cacheKey, { at: Date.now(), value });
   return value;
+}
+
+// -----------------------------------------------------------------------------
+// Post-Slice-3 lifecycle contract (2026-08-09) — pending shell.
+//
+// Returned by `buildApCardSummary` when the WI's canonical analysis is not
+// stable (never run for this WI, or a worker has cleared analysisVersion to
+// force a re-analysis). Every AP fact field is null; workflowState is
+// "ANALYSIS_PENDING"; workflowReason is founder-facing copy.
+//
+// The card renderer branches on `workflowState === "ANALYSIS_PENDING"` and
+// draws a compact pending body (no readout row, no confidence, no primary
+// action) — see `renderApPendingBody` in EmailIntakeCard.tsx.
+// -----------------------------------------------------------------------------
+export function buildPendingInvoiceSummary(args: {
+  sourceEmail: { senderName: string; senderAddress: string; internetMessageId: string | null } | null;
+  senderRelationship: "VENDOR" | "EMPLOYEE_FORWARD" | "OTHER";
+  doc: { id: string; filename: string; sourceKind: string; sourceReferenceId: string | null } | null;
+  hasAnalysis: boolean;
+  hasStoredVersion: boolean;
+  lastAnalysedAt: Date | null;
+}): NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]> {
+  const { sourceEmail, senderRelationship, doc } = args;
+  // hasAnalysis / hasStoredVersion / lastAnalysedAt are captured on the
+  // args signature for future lifecycle-observability work (they let a
+  // caller distinguish "never analysed" from "cleared for re-analysis"
+  // without a second DB round-trip). Intentionally not surfaced in the
+  // founder-facing payload today.
+  return {
+    sender: {
+      name: sourceEmail?.senderName ?? null,
+      email: sourceEmail?.senderAddress ?? null,
+      relationship: senderRelationship,
+    },
+    extractedVendor: { name: null },
+    vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
+    invoiceNumber: null,
+    gross: { amount: null, currency: null },
+    paymentTerms: null,
+    paymentTermsSource: null,
+    purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
+    category: {
+      label: null,
+      purposeLabel: null,
+      purposeReason: null,
+      glAccountNumber: null,
+      glAccountName: null,
+      capitalState: null,
+      source: null,
+      alternates: [],
+    },
+    gstVerification: null,
+    gstRatePercent: null,
+    extractedVendorProfile: null,
+    invoiceCadenceThisQuarter: null,
+    confidence: null,
+    confidenceInputs: undefined,
+    workflowState: "ANALYSIS_PENDING",
+    phase3Decision: null,
+    workflowReason: "Spectre is reading the attached invoice.",
+    unresolvedFindingCount: 0,
+    primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
+    allocations: null,
+    workCardFacts: {
+      documentFacts: {
+        supplierNamePresent: false,
+        payableReferencePresent: false,
+        invoiceDatePresent: false,
+        dueDatePresent: false,
+        grossTotalPresent: false,
+        currencyPresent: false,
+      },
+      vendorResolution: { state: "SUPPLIER_UNRESOLVED" },
+      codingProposal: { state: "PROVISIONAL", hasCategoryLabel: false, hasAllocations: false },
+      postingReadiness: { ready: false, blockerCount: 0 },
+    },
+  };
 }
 
 /**
