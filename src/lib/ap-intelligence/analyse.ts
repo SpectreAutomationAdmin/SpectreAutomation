@@ -2217,6 +2217,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       productIdentity: sharedProductIdentity,
       purchasedObjects: sharedPurchasedObjects,
       departmentResult: augmentedDept,
+      additionalDeptSurface: externalProductFamilyText,
       eligibleAccounts: capEligibleView,
       vendorHistoryPreferredAccountNumbers: [],
     });

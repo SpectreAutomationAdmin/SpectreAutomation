@@ -71,6 +71,11 @@ export interface CapitalAwareRankingInput {
   vendorHistoryPreferredAccountNumbers?: string[];
   /** Committed capital-decision confidence threshold. Default 40. */
   commitFloor?: number;
+  /** Slice 5.6 live-acceptance §14: additional text surface (e.g.
+   *  external product-family names) that the functional-department
+   *  inferrer will scan for department-vocabulary hits alongside
+   *  purchased-object descriptions. Pass empty string to opt out. */
+  additionalDeptSurface?: string;
 }
 
 export interface CapitalAwareCandidate {
@@ -141,7 +146,11 @@ const FUNCTIONAL_DEPT_VOCAB: Record<string, RegExp[]> = {
   grounds: [
     /\b(?:mower|greensmower|walking\s*mower|fairway\s*mower|rough\s*mower|reel\s*mower|rotary\s*mower)\b/i,
     /\b(?:tractor|utility\s*vehicle|aerator|topdresser|sprayer|blower|verticutter)\b/i,
-    /\b(?:turf|fairway|greens?|rough|tee\s*box(?:es)?|irrigation|fertili(?:z|s)er|topdressing|pesticide|herbicide|fungicide|insecticide|golf\s*course)\b/i,
+    // §14 completion — prefix patterns so grounds-adjacent product
+    // families ("Groundsmaster", "Groundskeeper", etc.) match.
+    /\bgrounds[a-z]*\b/i,
+    /\bturf[a-z]*\b/i,
+    /\b(?:fairway|greens?|rough|tee\s*box(?:es)?|irrigation|fertili(?:z|s)er|topdressing|pesticide|herbicide|fungicide|insecticide|golf\s*course)\b/i,
     /\b(?:golf\s*cart|cart\s*fleet)\b/i,
   ],
   kitchen: [
@@ -228,7 +237,7 @@ export function rankCapitalAwareAccounts(
   // the inbound department-inference authority did not commit — a
   // function-driven signal can be strong enough on its own for a
   // department-compatible capital account.
-  const functionalDept = inferFunctionalDepartment(input.purchasedObjects);
+  const functionalDept = inferFunctionalDepartment(input.purchasedObjects, input.additionalDeptSurface);
 
   // Score every eligible account.
   const compatible: CapitalAwareCandidate[] = [];
@@ -497,8 +506,14 @@ function scoreCandidate(args: {
 // Functional department inference from purchased-object evidence (§5)
 // -----------------------------------------------------------------------------
 
-function inferFunctionalDepartment(objects: PurchasedObjectIdentity[]): string | null {
-  const surface = objects.map((o) => o.description).join(" ");
+function inferFunctionalDepartment(
+  objects: PurchasedObjectIdentity[],
+  additionalSurface?: string,
+): string | null {
+  const surface = [
+    objects.map((o) => o.description).join(" "),
+    additionalSurface ?? "",
+  ].join(" ");
   if (surface.trim().length === 0) return null;
   const scores: Record<string, number> = {};
   for (const [deptKey, patterns] of Object.entries(FUNCTIONAL_DEPT_VOCAB)) {
