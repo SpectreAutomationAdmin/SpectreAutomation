@@ -52,6 +52,11 @@ import {
   type ResolvedPaymentTerms,
 } from "@/lib/ap-intelligence/payment-terms-resolve";
 import type { ProposedApEntry } from "@/lib/ap-intelligence/proposed-ap-entry";
+import {
+  deriveVendorStepConfidence,
+  deriveCodingStepConfidence,
+} from "@/lib/mission-control/modal-confidence";
+import ModalConfidenceLine from "./ModalConfidenceLine";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -687,7 +692,7 @@ export default function CreateVendorAndPostModal({
             </div>
             <p className="spectre-cvap-sub">
               {step === "PROFILE"
-                ? "Review the extracted profile. Every populated field came from the invoice — chips beside each field show the source and confidence."
+                ? "Review the extracted profile. Every populated field came from the invoice — chips beside each field show where the value was found."
                 : step === "AP_CODING"
                 ? `Review the AP coding for ${createdVendorName ?? "the vendor"} and post the invoice.`
                 : `Vendor "${createdVendorName}" saved. Return to the Work Intake to complete the AP posting.`}
@@ -797,6 +802,78 @@ export default function CreateVendorAndPostModal({
             )}
           </section>
         ) : null}
+
+        {/* Slice 3 §5-§8 — Supplier identity confidence. Focused on
+             the vendor-step decision; kept subtle so the profile grid
+             remains the primary surface. Vendor-match state is shown
+             SEPARATELY per §6 so a strong document identity is not
+             collapsed into "Low" merely because there is no on-file
+             vendor row. */}
+        {(() => {
+          const v = deriveVendorStepConfidence(ap);
+          return (
+            <section
+              className="spectre-cvap-section spectre-cvap-section--tight"
+              data-testid="cvap-vendor-confidence"
+            >
+              <div className="spectre-cvap-supplier-row">
+                <div className="spectre-cvap-supplier-primary">
+                  <span className="spectre-cvap-supplier-name" data-testid="cvap-vendor-proposed-name">
+                    {v.proposedName}
+                  </span>
+                  <ModalConfidenceLine
+                    label="Supplier identity"
+                    decision={v.supplier}
+                    testid="cvap-vendor-supplier-confidence"
+                  />
+                </div>
+                <div
+                  className="spectre-cvap-supplier-match"
+                  data-testid="cvap-vendor-match-state"
+                  data-vendor-match={v.vendorMatch.state}
+                >
+                  <span className="spectre-cvap-supplier-match-label">Vendor match</span>
+                  <span className="spectre-cvap-supplier-match-value">{v.vendorMatch.label}</span>
+                </div>
+              </div>
+              <style jsx>{`
+                .spectre-cvap-supplier-row {
+                  display: flex;
+                  flex-wrap: wrap;
+                  gap: 24px;
+                  align-items: baseline;
+                  justify-content: space-between;
+                }
+                .spectre-cvap-supplier-primary {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                }
+                .spectre-cvap-supplier-name {
+                  font-size: 13.5px;
+                  font-weight: 500;
+                  color: var(--spectre-ink, #1a1e24);
+                }
+                .spectre-cvap-supplier-match {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 2px;
+                  text-align: right;
+                }
+                .spectre-cvap-supplier-match-label {
+                  font-size: 10.5px;
+                  text-transform: uppercase;
+                  letter-spacing: 0.05em;
+                  color: var(--spectre-muted, #566473);
+                }
+                .spectre-cvap-supplier-match-value {
+                  font-size: 12px;
+                  color: var(--spectre-ink, #1a1e24);
+                }
+              `}</style>
+            </section>
+          );
+        })()}
 
         <section
           className={`spectre-cvap-section ${usingExisting ? "spectre-cvap-section--dim" : ""}`}
@@ -1050,58 +1127,152 @@ export default function CreateVendorAndPostModal({
           </div>
         </section>
 
-        {/* 2. Coding — GL, department, fund, alternates */}
-        <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-coding">
-          <div className="spectre-cvap-subheading">Coding</div>
-          <div className="spectre-cvap-profile-grid">
-            <ProfileField label="Expense / asset account" span={2}
-              provenance={ap.category.source ? `${sourceLabel(ap.category.source)} · confidence ${ap.confidence ?? "—"}%` : null}>
-              <input type="text" className="spectre-input"
-                value={coding.glAccountNumber ? `${coding.glAccountNumber} · ${coding.glAccountName}` : ""}
-                readOnly data-testid="cvap-coding-gl" />
-            </ProfileField>
-            <ProfileField label="Payment terms (days)" provenance={paymentTermsProvenanceHuman}>
-              <input type="number" className="spectre-input" min={0}
-                value={coding.paymentTermsDays ?? ""}
-                onChange={(e) => setCoding((c) => ({ ...c, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))}
-                data-testid="cvap-coding-terms" />
-            </ProfileField>
-            <ProfileField label="Invoice #">
-              <input type="text" className="spectre-input" value={coding.invoiceNumber}
-                onChange={(e) => setCoding((c) => ({ ...c, invoiceNumber: e.target.value }))}
-                data-testid="cvap-coding-invoice" />
-            </ProfileField>
-            <ProfileField label="Invoice date">
-              <input type="date" className="spectre-input" value={coding.invoiceDateIso.slice(0, 10)}
-                onChange={(e) => setCoding((c) => ({ ...c, invoiceDateIso: new Date(e.target.value).toISOString() }))}
-                data-testid="cvap-coding-invoice-date" />
-            </ProfileField>
-            <ProfileField label="Due date (override)">
-              <input type="date" className="spectre-input" value={coding.explicitInvoiceDueDateIso?.slice(0, 10) ?? ""}
-                onChange={(e) => setCoding((c) => ({ ...c, explicitInvoiceDueDateIso: e.target.value ? new Date(e.target.value).toISOString() : null }))}
-                data-testid="cvap-coding-due-date" />
-            </ProfileField>
-          </div>
-          {ap.category.alternates.length > 0 ? (
-            <details className="spectre-cvap-alt" data-testid="cvap-alternates">
-              <summary>Alternate GL candidates ({ap.category.alternates.length})</summary>
-              <ul>
-                {ap.category.alternates.map((a) => (
-                  <li key={a.accountNumber}>
-                    <button
-                      type="button"
-                      className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
-                      onClick={() => setCoding((c) => ({ ...c, glAccountNumber: a.accountNumber, glAccountName: a.accountName }))}
-                      data-testid={`cvap-alt-${a.accountNumber}`}
-                    >
-                      {a.accountNumber} · {a.accountName} ({a.confidence}%)
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-        </section>
+        {/* 2. Coding — GL, department, fund, alternates
+             Slice 3 §9-§15 — confidence header sits ABOVE the coding
+             grid. Transaction understanding + GL recommendation are
+             shown as decision-specific qualitative labels; the
+             recommended account itself remains visible in the grid
+             regardless of confidence (§10). */}
+        {(() => {
+          const c = deriveCodingStepConfidence(ap);
+          return (
+            <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-coding">
+              <div className="spectre-cvap-coding-head">
+                <div className="spectre-cvap-subheading">Coding</div>
+                <div className="spectre-cvap-coding-confidence" data-testid="cvap-coding-confidence-row">
+                  <ModalConfidenceLine
+                    label="Transaction understanding"
+                    decision={c.transaction}
+                    testid="cvap-coding-transaction-confidence"
+                  />
+                  <ModalConfidenceLine
+                    label="GL recommendation"
+                    decision={c.gl}
+                    testid="cvap-coding-gl-confidence"
+                  />
+                </div>
+              </div>
+              {c.recommendedAccount ? (
+                <div className="spectre-cvap-coding-recommend" data-testid="cvap-coding-recommended">
+                  <span className="spectre-cvap-coding-recommend-label">Recommended account</span>
+                  <span className="spectre-cvap-coding-recommend-value">
+                    <span className="acct-num">{c.recommendedAccount.number}</span>{" "}
+                    <span className="acct-name">{c.recommendedAccount.name}</span>
+                  </span>
+                </div>
+              ) : c.recommendedAccountAbstained ? (
+                <div className="spectre-cvap-coding-recommend" data-testid="cvap-coding-recommended-abstain">
+                  <span className="spectre-cvap-coding-recommend-label">Recommended account</span>
+                  <span className="spectre-cvap-coding-recommend-value spectre-cvap-coding-recommend-abstain">
+                    Needs review — Spectre understands the purchase but did not commit to a single GL account
+                  </span>
+                </div>
+              ) : null}
+              <div className="spectre-cvap-profile-grid">
+                <ProfileField label="Expense / asset account" span={2}>
+                  <input type="text" className="spectre-input"
+                    value={coding.glAccountNumber ? `${coding.glAccountNumber} · ${coding.glAccountName}` : ""}
+                    readOnly data-testid="cvap-coding-gl" />
+                </ProfileField>
+                <ProfileField label="Payment terms (days)" provenance={paymentTermsProvenanceHuman}>
+                  <input type="number" className="spectre-input" min={0}
+                    value={coding.paymentTermsDays ?? ""}
+                    onChange={(e) => setCoding((c) => ({ ...c, paymentTermsDays: e.target.value ? parseInt(e.target.value, 10) : null }))}
+                    data-testid="cvap-coding-terms" />
+                </ProfileField>
+                <ProfileField label="Invoice #">
+                  <input type="text" className="spectre-input" value={coding.invoiceNumber}
+                    onChange={(e) => setCoding((c) => ({ ...c, invoiceNumber: e.target.value }))}
+                    data-testid="cvap-coding-invoice" />
+                </ProfileField>
+                <ProfileField label="Invoice date">
+                  <input type="date" className="spectre-input" value={coding.invoiceDateIso.slice(0, 10)}
+                    onChange={(e) => setCoding((c) => ({ ...c, invoiceDateIso: new Date(e.target.value).toISOString() }))}
+                    data-testid="cvap-coding-invoice-date" />
+                </ProfileField>
+                <ProfileField label="Due date (override)">
+                  <input type="date" className="spectre-input" value={coding.explicitInvoiceDueDateIso?.slice(0, 10) ?? ""}
+                    onChange={(e) => setCoding((c) => ({ ...c, explicitInvoiceDueDateIso: e.target.value ? new Date(e.target.value).toISOString() : null }))}
+                    data-testid="cvap-coding-due-date" />
+                </ProfileField>
+              </div>
+              {/* Slice 3 §12-§13 — humanised GL alternative disclosure.
+                   Progressive: hidden by default under a <details>.
+                   Each row explains WHY the alternative was not picked
+                   in founder language, never a score. */}
+              {c.glAlternatives.length > 0 ? (
+                <details className="spectre-cvap-alt" data-testid="cvap-alternates">
+                  <summary>Other compatible accounts ({c.glAlternatives.length})</summary>
+                  <ul>
+                    {c.glAlternatives.map((a) => (
+                      <li key={a.accountNumber} data-testid={`cvap-alt-${a.accountNumber}`}>
+                        <div className="spectre-cvap-alt-account">
+                          <button
+                            type="button"
+                            className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
+                            onClick={() => setCoding((prev) => ({ ...prev, glAccountNumber: a.accountNumber, glAccountName: a.accountName }))}
+                            data-testid={`cvap-alt-pick-${a.accountNumber}`}
+                          >
+                            {a.accountNumber} · {a.accountName}
+                          </button>
+                        </div>
+                        <div className="spectre-cvap-alt-reason" data-testid={`cvap-alt-reason-${a.accountNumber}`}>
+                          {a.rejectionReason}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+              <style jsx>{`
+                .spectre-cvap-coding-head {
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: baseline;
+                  gap: 16px;
+                  flex-wrap: wrap;
+                  margin-bottom: 6px;
+                }
+                .spectre-cvap-coding-confidence {
+                  display: inline-flex;
+                  gap: 18px;
+                  flex-wrap: wrap;
+                }
+                .spectre-cvap-coding-recommend {
+                  display: flex;
+                  gap: 10px;
+                  align-items: baseline;
+                  margin-bottom: 8px;
+                  padding: 6px 10px;
+                  background: rgba(0, 0, 0, 0.02);
+                  border-left: 2px solid var(--spectre-accent, #2f5832);
+                  border-radius: 2px;
+                }
+                .spectre-cvap-coding-recommend-label {
+                  font-size: 10.5px;
+                  text-transform: uppercase;
+                  letter-spacing: 0.05em;
+                  color: var(--spectre-muted, #566473);
+                }
+                .spectre-cvap-coding-recommend-value {
+                  font-size: 12.5px;
+                  color: var(--spectre-ink, #1a1e24);
+                }
+                .spectre-cvap-coding-recommend-abstain {
+                  color: var(--spectre-status-warning, #a86200);
+                  font-style: italic;
+                }
+                .spectre-cvap-alt-account { margin-bottom: 2px; }
+                .spectre-cvap-alt-reason {
+                  font-size: 11.5px;
+                  font-style: italic;
+                  color: var(--spectre-muted, #566473);
+                  margin: 2px 0 8px 12px;
+                }
+              `}</style>
+            </section>
+          );
+        })()}
 
         {/* Sprint 3 · Checkpoint 15V — Allocations section. Renders
              the multi-GL allocations when the analyser produced 2+
@@ -1109,7 +1280,15 @@ export default function CreateVendorAndPostModal({
              account picker (from alternatives). Journal preview
              below still reconciles all debits + recoverable tax to
              the AP credit. */}
-        {ap.allocations && ap.allocations.entries.length >= 2 ? (
+        {ap.allocations && ap.allocations.entries.length >= 2 ? (() => {
+          // Slice 3 §16-§17 — per-allocation confidence. The overall
+          // transaction may be strong while a single allocation's GL
+          // is only Moderate; the founder must see that per-row, not
+          // collapsed into one badge.
+          const codingCv = deriveCodingStepConfidence(ap);
+          const allocConfById: Record<string, typeof codingCv.allocations[number]> = {};
+          for (const a of codingCv.allocations) allocConfById[a.entryId] = a;
+          return (
           <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-allocations">
             <div className="spectre-cvap-subheading">
               GL allocations
@@ -1125,15 +1304,19 @@ export default function CreateVendorAndPostModal({
                   <th>Description</th>
                   <th className="num">Amount</th>
                   <th>Tax</th>
+                  <th>Confidence</th>
                 </tr>
               </thead>
               <tbody>
-                {ap.allocations.entries.map((entry) => (
+                {ap.allocations!.entries.map((entry) => {
+                  const conf = allocConfById[entry.id];
+                  return (
                   <tr
                     key={entry.id}
                     data-testid={`cvap-allocation-${entry.id}`}
                     data-concept={entry.economicPurposeConcept}
                     data-account={entry.recommendedAccount?.accountNumber ?? "unresolved"}
+                    data-allocation-confidence={conf?.level ?? "MODERATE"}
                   >
                     <td className="dim">{entry.economicPurposeConcept.replace(/_/g, " ")}</td>
                     <td>
@@ -1158,39 +1341,52 @@ export default function CreateVendorAndPostModal({
                       />
                     </td>
                     <td className="dim">{entry.taxTreatment}</td>
+                    <td
+                      className="dim"
+                      data-testid={`cvap-allocation-confidence-${entry.id}`}
+                      title={conf?.reason ?? undefined}
+                    >
+                      {conf?.label ?? "Moderate"}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
                 <tr>
                   <td colSpan={3} className="total-label">Allocations subtotal</td>
-                  <td className="num" data-testid="cvap-allocations-subtotal">{money(ap.allocations.totals.allocationsSubtotal.toFixed(2))}</td>
+                  <td className="num" data-testid="cvap-allocations-subtotal">{money(ap.allocations!.totals.allocationsSubtotal.toFixed(2))}</td>
+                  <td />
                   <td />
                 </tr>
-                {ap.allocations.totals.creditTotal > 0 ? (
+                {ap.allocations!.totals.creditTotal > 0 ? (
                   <tr>
                     <td colSpan={3} className="total-label">Credits</td>
-                    <td className="num" data-testid="cvap-allocations-credits">{money((-ap.allocations.totals.creditTotal).toFixed(2))}</td>
+                    <td className="num" data-testid="cvap-allocations-credits">{money((-ap.allocations!.totals.creditTotal).toFixed(2))}</td>
+                    <td />
                     <td />
                   </tr>
                 ) : null}
                 <tr>
                   <td colSpan={3} className="total-label">Tax</td>
-                  <td className="num" data-testid="cvap-allocations-tax">{money(ap.allocations.totals.taxTotal.toFixed(2))}</td>
+                  <td className="num" data-testid="cvap-allocations-tax">{money(ap.allocations!.totals.taxTotal.toFixed(2))}</td>
+                  <td />
                   <td />
                 </tr>
                 <tr>
                   <td colSpan={3} className="total-label">Gross payable (Accounts Payable credit)</td>
-                  <td className="num" data-testid="cvap-allocations-gross">{money(ap.allocations.totals.grossTotal.toFixed(2))}</td>
+                  <td className="num" data-testid="cvap-allocations-gross">{money(ap.allocations!.totals.grossTotal.toFixed(2))}</td>
+                  <td />
                   <td />
                 </tr>
               </tbody>
             </table>
             <p className="spectre-cvap-note">
-              {Math.abs(ap.allocations.totals.allocationVariance) < 0.02
+              {Math.abs(ap.allocations!.totals.allocationVariance) < 0.02
                 ? "Allocations + tax − credits balance the Accounts Payable credit."
-                : `Variance ${money(ap.allocations.totals.allocationVariance.toFixed(2))} between allocations and printed gross — review before posting.`}
+                : `Variance ${money(ap.allocations!.totals.allocationVariance.toFixed(2))} between allocations and printed gross — review before posting.`}
             </p>
           </section>
-        ) : null}
+          );
+        })() : null}
 
         {/* 3. Tax split */}
         <section className="spectre-cvap-section spectre-cvap-section--tight" data-testid="cvap-step2-tax">
@@ -1608,17 +1804,6 @@ function provenanceLabel(f: { value: string | null; confidence: number; source: 
     "prior-invoice":    "From a prior invoice",
     "vendor-profile":   "From existing vendor profile",
   };
-  const label = sourceHuman[f.source] ?? `From ${f.source}`;
-  return f.confidence > 0 ? `${label} · ${f.confidence}%` : label;
+  return sourceHuman[f.source] ?? `From ${f.source}`;
 }
 
-function sourceLabel(s: ApInvoiceCardIntelligence["category"]["source"]): string {
-  switch (s) {
-    case "VENDOR_DEFAULT":    return "the vendor's default expense account";
-    case "PRIOR_CODING":      return "the vendor's prior coding history";
-    case "NAME_KEYWORD":      return "an invoice + account-name keyword match";
-    case "CAPITAL_CLASS_MAP": return "the capital-class classifier";
-    case "NONE":
-    case null:                return "no supported match";
-  }
-}
