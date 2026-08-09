@@ -32,17 +32,19 @@ WORKDIR /app
 RUN apk add --no-cache libc6-compat openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — the ProductReference
-# addition pushed the postgres schema past the point where Prisma
-# generate fits inside V8's default 1.5 GB heap on Fly's remote
-# builder. Set the heap ceiling BEFORE prisma generate (previously
-# only set later, for `next build`).
-ENV NODE_OPTIONS="--max-old-space-size=3840"
 ENV NEXT_TELEMETRY_DISABLED=1
-# Generate the Postgres Prisma client explicitly. If prisma-postgres/
-# is missing or out of sync, this fails fast and the image cannot be
-# built — surfacing schema drift before it reaches production.
-RUN npx prisma generate --schema prisma-postgres/schema.prisma
+# Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) — heap
+# ceilings must be split per RUN because they compete for the same
+# 4 GB container budget on Fly's shared-cpu-2x builder:
+#   * prisma generate: modest heap; 2 GB is generous. Setting it
+#     too high (3840) had V8 pre-reserve enough address space that
+#     the OS OOM-killed the compile step for the prisma engine.
+#   * next build: memory-heavy "Collecting page data" phase. 3840
+#     is safe once tsc/eslint are disabled (see next.config.js).
+# NODE_OPTIONS at the ENV level would apply to BOTH steps and one
+# of them always loses, so we inline it per RUN.
+RUN NODE_OPTIONS="--max-old-space-size=2048" \
+    npx prisma generate --schema prisma-postgres/schema.prisma
 # Build-only placeholders. Next.js 14's "Collecting page data" phase
 # evaluates every route module, which transitively imports src/lib/env.ts
 # and runs Zod validation at module load. DATABASE_URL and
@@ -51,7 +53,8 @@ RUN npx prisma generate --schema prisma-postgres/schema.prisma
 # so they are NOT baked into any image layer and are NOT visible at
 # runtime. The real Fly secrets are injected by the platform when the
 # container starts and re-parsed by env.ts at process boot.
-RUN DATABASE_URL="postgresql://build:build@build.invalid:5432/build_placeholder?sslmode=require" \
+RUN NODE_OPTIONS="--max-old-space-size=3840" \
+    DATABASE_URL="postgresql://build:build@build.invalid:5432/build_placeholder?sslmode=require" \
     SPECTRE_SESSION_SECRET="build-time-placeholder-32-chars-min-abcdefghijk" \
     npm run build
 
