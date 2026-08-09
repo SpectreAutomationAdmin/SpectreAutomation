@@ -9696,3 +9696,46 @@ model ApIntakeSource {
   @@index([clubId, ingestedDocumentId])
 }
 
+// Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — durable, GLOBAL product
+// reference knowledge. §6 Option C: product FACTS reusable across
+// tenants; tenant ACCOUNTING conclusions re-derive per-tenant.
+model ProductReference {
+  id                        String    @id @default(cuid())
+
+  normalizedKey             String    @unique
+  normalizedManufacturer    String
+  normalizedModel           String
+  normalizedPartNumber      String?
+
+  productFamily             String?
+  objectType                String?
+  identityEvidenceJson      String    @default("[]")
+  sourceEvidenceJson        String    @default("[]")
+
+  evidenceQuality           String    @default("UNKNOWN")
+  confidence                Float     @default(0)
+
+  researchState             String    @default("PENDING")
+
+  provider                  String?
+  providerVersion           String?
+  researchVersion           String    @default("1")
+  evidenceSchemaVersion     String    @default("1")
+
+  identityVerifiedAt        DateTime?
+  identityExpiresAt         DateTime?
+  priceExpiresAt            DateTime?
+
+  researchAttempts          Int       @default(0)
+  lastResearchAttemptAt     DateTime?
+  lastResearchError         String?
+  nextRetryAt               DateTime?
+
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@index([researchState])
+  @@index([normalizedManufacturer, normalizedModel])
+  @@index([nextRetryAt])
+}
+
