@@ -1910,6 +1910,60 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         autoApprovalEligible: false,
         requiresReview: true,
       };
+      // Also clear the multi-GL allocation cardCategory so the
+      // founder-facing projection falls through to the object-
+      // oriented label rather than surfacing a stale draft
+      // allocation (which shares the same underlying evidence
+      // that just contradicted the primary GL).
+      gatedAllocations = {
+        ...gatedAllocations,
+        cardCategory: null,
+        requiresReview: true,
+      };
+    }
+  }
+
+  // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08, §31
+  // Outcome B) — parallel guard for the allocation engine even when
+  // gl remained postable. When the primary purchased object has HIGH
+  // evidence of a durable-asset context AND the allocation
+  // cardCategory names an interest / penalty / bank-charge / fee /
+  // inventory account (all of which contradict durable-asset
+  // treatment), clear the allocation cardCategory so the projection
+  // does not surface a plausible-but-wrong category chip.
+  if (gatedAllocations?.cardCategory && sharedPurchasedObjects.length > 0) {
+    const primary2 = [...sharedPurchasedObjects]
+      .sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
+    const durableAssetContext2 = primary2
+      && primary2.evidenceQuality === "HIGH"
+      && (
+        primary2.objectRole === "COMPLETE_MACHINE"
+        || primary2.objectRole === "SERIALIZED_COMPONENT"
+        || (primary2.objectRole === "UNKNOWN"
+            && primary2.brandCandidates.length > 0
+            && primary2.modelCandidates.length > 0)
+      );
+    const catLower = gatedAllocations.cardCategory.toLowerCase();
+    const catContradicts =
+      /\binterest\b/.test(catLower)
+      || /\bfinance\s*charge\b/.test(catLower)
+      || /\bpenalty\b/.test(catLower)
+      || /\blate\s*fee\b/.test(catLower)
+      || /\bbank\s*charges?\b/.test(catLower)
+      || /\bcredit\s*card\s*fees?\b/.test(catLower)
+      || /\binventory\s*-\s*(?:liquor|beer|wine|food|beverage)\b/.test(catLower);
+    if (durableAssetContext2 && catContradicts) {
+      logger.info("ap-intelligence.slice5-3.object-contradiction-guard.cleared-allocation", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        clearedCardCategory: gatedAllocations.cardCategory,
+        primaryObjectRole: primary2.objectRole,
+      });
+      gatedAllocations = {
+        ...gatedAllocations,
+        cardCategory: null,
+        requiresReview: true,
+      };
     }
   }
 
