@@ -1232,11 +1232,16 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
 
   let sharedProductIdentity = internalOnlyIdentity;
 
+  // Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — always consult the
+  // durable ProductReference store when external corroboration is
+  // required. The web tier no longer instantiates the paid provider
+  // (activeProviderKind() is "null" here), so a check on that would
+  // never fire. The durable path either replays cached evidence, or
+  // enqueues research for the worker (which is where the provider
+  // singleton lives after §15 secret-move).
   if (internalOnlyIdentity.externalCorroborationRequired
       && refRequest != null
-      && refRequestFingerprint != null
-      && configuredProviderKind !== "null"
-      && configuredProviderKind !== "null-fallback") {
+      && refRequestFingerprint != null) {
     externalTrigger.considered = true;
 
     // §J dedupe-BEFORE-quota: consult the durable global cache
