@@ -43,7 +43,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 #     is safe once tsc/eslint are disabled (see next.config.js).
 # NODE_OPTIONS at the ENV level would apply to BOTH steps and one
 # of them always loses, so we inline it per RUN.
-RUN NODE_OPTIONS="--max-old-space-size=2048" \
+RUN NODE_OPTIONS="--max-old-space-size=2560" \
     npx prisma generate --schema prisma-postgres/schema.prisma
 # Build-only placeholders. Next.js 14's "Collecting page data" phase
 # evaluates every route module, which transitively imports src/lib/env.ts
