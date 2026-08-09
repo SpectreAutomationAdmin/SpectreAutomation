@@ -448,7 +448,71 @@ export interface ApInvoiceCardIntelligence {
   invoiceCadenceThisQuarter: number | null;
   // Confidence blended from extraction state + vendor match
   // certainty + reconcile state, expressed as a 0-100 integer.
+  //
+  // Sprint 3 · Phase 5 Slice 1 status (2026-08-09) — this legacy
+  // blend is preserved for API-contract compatibility but is NO
+  // LONGER what the founder-facing card renders. The card renders
+  // decision-specific qualitative confidence via
+  // `deriveFounderConfidenceView(ap)`. See Slice 2 additions below
+  // for the projected inputs that adapter now consumes.
   confidence: number | null;
+  /** Sprint 3 · Phase 5 Slice 2 (2026-08-09) — bounded read-only
+   *  copy of frozen Phase 4 confidence / evidence signals for the
+   *  compact-card Confidence UX adapter. Each sub-field is a pure
+   *  structural read from `analyseIngestedInvoice` output; no
+   *  computation, no decision recomputation, no side effects.
+   *
+   *  Adapter consumers must remain PRESENTATION ONLY. Nothing here
+   *  may feed a workflow gate or a posting decision. */
+  confidenceInputs?: {
+    supplier?: {
+      /** Same enum as vendorMatch.state — copied so the adapter can
+       *  branch without walking two paths. */
+      matchState: "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "INSUFFICIENT_SIGNAL" | null;
+      /** How many ExtractedVendorProfile signals are populated
+       *  (address / website / phone / tax registration / etc.).
+       *  Cardinal count 0-N. */
+      profileSignalCount: number;
+    };
+    transaction?: {
+      /** analyseResult.purposeDecision.source */
+      economicPurposeSource: string | null;
+      /** analyseResult.purposeDecision.confidence (0-100) */
+      economicPurposeConfidence: number | null;
+      /** analyseResult.purchasedObjectIntelligence.objects.length */
+      purchasedObjectCount: number;
+      /** analyseResult.productIdentityResolution.status */
+      productIdentityStatus: string | null;
+      /** analyseResult.productIdentityResolution.confidence */
+      productIdentityConfidence: number | null;
+      /** analyseResult.capital.state — already exposed on
+       *  `category.capitalState`; duplicated here for adapter
+       *  convenience. Not new information. */
+      capitalTreatmentState: "OPERATING" | "CAPITAL" | "AMBIGUOUS" | "INSUFFICIENT_EVIDENCE" | null;
+      /** analyseResult.purchasedItemIntelligence.capitalConfidence */
+      capitalTreatmentConfidence: number | null;
+      /** analyseResult.accountingIntelligence.natureConfidence */
+      natureConfidence: number | null;
+      /** analyseResult.accountingIntelligence.natureIsDefensible */
+      natureIsDefensible: boolean;
+      /** allocation count (already on `allocations.entries.length`;
+       *  duplicated for adapter convenience). */
+      allocationCount: number;
+    };
+    gl?: {
+      /** analyseResult.gl.candidates[0].confidence — the winner's
+       *  scored confidence (0-100). Currently the projection copies
+       *  only alternates[1..5]; index 0 is the winner. */
+      winnerConfidence: number | null;
+      /** Number of semantically-compatible ranker candidates
+       *  (analyseResult.gl.candidates.length capped at 6). */
+      compatibleCount: number;
+      /** The strongest alternate's confidence, if any. */
+      strongestAlternateConfidence: number | null;
+      /** True when analyseResult.gl.accountNumber is null. */
+      abstained: boolean;
+    };
+  };
   // Precomputed workflow state — drives the pill, primary action,
   // and recommendation branch on the card. See deriveWorkflowState.
   //
@@ -1107,6 +1171,12 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     // model per §3. Each dimension is populated independently of the
     // others; no cross-blanking.
     workCardFacts: buildWorkCardFacts({ analysis, noCoa, workflowState }),
+    // Sprint 3 · Phase 5 Slice 2 (2026-08-09) — bounded read-only
+    // copy of frozen Phase 4 confidence signals for the compact-card
+    // Confidence UX adapter. Every field below is a pure structural
+    // read from the analyseResult — no computation, no decision
+    // recomputation, no side effects.
+    confidenceInputs: buildConfidenceInputs({ analysis, extractedVendorProfile: analysis?.vendorProfile ?? null }),
   };
 
   // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission
@@ -1487,6 +1557,69 @@ function deriveApWorkflowReason(
       if (a.reconcile.state === "VENDOR_MISMATCH") return `Invoice reference already exists on a different vendor. Investigate before approving.`;
       return `Review the extracted invoice facts before advancing.`;
   }
+}
+
+/**
+ * Sprint 3 · Phase 5 Slice 2 (2026-08-09) — bounded read-only
+ * `confidenceInputs` projection. Copies (never computes) frozen
+ * Phase 4 confidence / evidence signals so the founder-facing
+ * confidence adapter can operate on structural facts rather than a
+ * single legacy `category.source` enum.
+ *
+ * Every field below is either a copy of an analyseResult scalar or
+ * a pure structural count (array.length / boolean checks). NO
+ * analysis is invoked. NO decision is recomputed.
+ */
+function buildConfidenceInputs(args: {
+  analysis: ApAnalyseResult | null;
+  extractedVendorProfile: ExtractedVendorProfile | null;
+}): NonNullable<ApInvoiceCardIntelligence["confidenceInputs"]> | undefined {
+  const a = args.analysis;
+  if (!a) return undefined;
+
+  // Supplier signal count — how many ExtractedVendorProfile fields
+  // are populated. Structural read; no scoring.
+  const p = args.extractedVendorProfile;
+  const supplierSignals = [
+    p?.address?.line1?.value,
+    p?.website?.value,
+    p?.phone?.value,
+    p?.taxRegistrationNumber?.value,
+    p?.vatNumber?.value,
+    p?.paymentTerms?.value,
+    p?.customerSupportEmail?.value,
+    p?.arEmail?.value,
+    p?.remittanceEmail?.value,
+    p?.fax?.value,
+  ].filter(Boolean).length;
+
+  const supplier = {
+    matchState: (a.vendor?.state ?? null) as "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "INSUFFICIENT_SIGNAL" | null,
+    profileSignalCount: supplierSignals,
+  };
+
+  const transaction = {
+    economicPurposeSource: a.purposeDecision?.source ?? null,
+    economicPurposeConfidence: a.purposeDecision?.confidence ?? null,
+    purchasedObjectCount: a.purchasedObjectIntelligence?.objects?.length ?? 0,
+    productIdentityStatus: a.productIdentityResolution?.status ?? null,
+    productIdentityConfidence: a.productIdentityResolution?.confidence ?? null,
+    capitalTreatmentState: (a.capital?.state ?? null) as "OPERATING" | "CAPITAL" | "AMBIGUOUS" | "INSUFFICIENT_EVIDENCE" | null,
+    capitalTreatmentConfidence: a.purchasedItemIntelligence?.capitalConfidence ?? null,
+    natureConfidence: a.accountingIntelligence?.natureConfidence ?? null,
+    natureIsDefensible: a.accountingIntelligence?.natureIsDefensible ?? false,
+    allocationCount: a.allocations?.allocations?.length ?? 0,
+  };
+
+  const glCandidates = a.gl?.candidates ?? [];
+  const gl = {
+    winnerConfidence: glCandidates[0]?.confidence ?? null,
+    compatibleCount: Math.min(glCandidates.length, 6),
+    strongestAlternateConfidence: glCandidates[1]?.confidence ?? null,
+    abstained: (a.gl?.accountNumber ?? null) == null,
+  };
+
+  return { supplier, transaction, gl };
 }
 
 /**

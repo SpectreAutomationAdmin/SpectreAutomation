@@ -1,25 +1,17 @@
-// Sprint 3 · Phase 5 · Slice 1 (2026-08-09) — founder-facing
-// confidence disclosure for the AP Work Intake card.
+// Sprint 3 · Phase 5 · Slice 2 (2026-08-09) — decision-specific
+// founder-confidence disclosure. Slice 2 rewrite separates WORKFLOW
+// STATE from INTELLIGENCE CONFIDENCE per §1/§10:
 //
-// This component REPLACES the prior generic "Confidence: 95 %" cell
-// with:
+//   Compact card: qualitative weakest-material-dimension summary
+//     ("High" · "Moderate · Category" · "Low · Supplier" ·
+//      "Needs review · GL"). Workflow blockers no longer override it.
 //
-//   • Closed card: qualitative summary label ("High confidence" /
-//     "Moderate confidence" / "Needs review") derived from the
-//     WORST of the three visible decisions (Supplier / Category / GL).
-//     This mirrors the founder-perspective rule that a weak GL is
-//     surfaced immediately even when supplier + category are strong.
+//   Popover: two sections —
+//     Intelligence: Supplier · Transaction understanding · GL
+//     Workflow:     Review required / other Phase 3 state
 //
-//   • Hover / focus / Enter / Space: opens a compact popover showing
-//     per-decision confidence + humanised evidence phrases.
-//
-//   • Escape or focus-out: dismisses.
-//
-// Interaction pattern MIRRORS the existing CategoryHoverAllocations
-// component (accessibility, ARIA, keyboard, focus retention). No new
-// interaction idiom introduced.
-//
-// PRESENTATION ONLY. The frozen Phase 4 backend is untouched.
+// Interaction pattern unchanged from Slice 1 (mirrors
+// CategoryHoverAllocations for accessibility parity).
 
 "use client";
 
@@ -29,7 +21,6 @@ import { deriveFounderConfidenceView } from "@/lib/mission-control/founder-confi
 
 interface Props {
   ap: ApInvoiceCardIntelligence;
-  /** Preserved for the c15i2-variant-d source-contract test. */
   testid?: string;
 }
 
@@ -55,17 +46,21 @@ export function ApCardConfidenceDisclosure(props: Props) {
     return () => window.removeEventListener("keydown", h);
   }, [open]);
 
+  // §13 — no aggressive status colors. HIGH gets the muted success
+  // accent; NEEDS_REVIEW gets the muted warning accent; MODERATE and
+  // LOW get no accent (typography differentiates them).
   const toneClass = view.summaryLevel === "HIGH"
     ? "confidence"
     : view.summaryLevel === "NEEDS_REVIEW"
       ? "observation"
-      : ""; // Moderate / Low → no accent (Instrument neutrality per §13)
+      : "";
 
   return (
     <div
       className="cell conf-hover"
       data-testid={testid}
       data-confidence-level={view.summaryLevel}
+      data-confidence-dimension={view.weakestDimension ?? ""}
       ref={cellRef}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -94,9 +89,18 @@ export function ApCardConfidenceDisclosure(props: Props) {
           className="conf-hover-popover"
           data-testid={`${testid}-popover`}
         >
-          <Row testid={`${testid}-supplier`} label="Supplier" d={view.supplier} />
-          <Row testid={`${testid}-category`} label="Category" d={view.category} />
-          <Row testid={`${testid}-gl`} label="GL" d={view.gl} />
+          <div className="section">
+            <div className="section-heading">Intelligence</div>
+            <Row testid={`${testid}-supplier`} label="Supplier" d={view.supplier} />
+            <Row testid={`${testid}-category`} label="Transaction understanding" d={view.transaction} />
+            <Row testid={`${testid}-gl`} label="GL recommendation" d={view.gl} />
+          </div>
+          {view.workflow.hasBlockers ? (
+            <div className="section" data-testid={`${testid}-workflow`}>
+              <div className="section-heading">Workflow</div>
+              <div className="workflow-line">Review required</div>
+            </div>
+          ) : null}
         </div>
       ) : null}
       <style jsx>{`
@@ -108,8 +112,8 @@ export function ApCardConfidenceDisclosure(props: Props) {
           top: calc(100% + 6px);
           right: 0;
           z-index: 20;
-          min-width: 320px;
-          max-width: 480px;
+          min-width: 340px;
+          max-width: 500px;
           padding: 10px 12px;
           background: var(--spectre-surface, #fbfaf7);
           color: var(--spectre-ink, #1a1e24);
@@ -120,8 +124,18 @@ export function ApCardConfidenceDisclosure(props: Props) {
           line-height: 1.4;
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 12px;
         }
+        .section { display: flex; flex-direction: column; gap: 8px; }
+        .section-heading {
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          color: var(--spectre-muted, #566473);
+          border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+          padding-bottom: 3px;
+        }
+        .workflow-line { font-style: italic; color: var(--spectre-muted, #566473); }
       `}</style>
     </div>
   );
@@ -146,9 +160,8 @@ function Row({ testid, label, d }: RowProps) {
         </ul>
       ) : null}
       <style jsx>{`
-        .row { border-top: 1px solid rgba(0, 0, 0, 0.06); padding-top: 6px; }
-        .row:first-child { border-top: 0; padding-top: 0; }
-        .row-head { display: flex; justify-content: space-between; gap: 12px; }
+        .row { }
+        .row-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
         .row-label {
           font-size: 10.5px;
           text-transform: uppercase;
@@ -156,9 +169,9 @@ function Row({ testid, label, d }: RowProps) {
           color: var(--spectre-muted, #566473);
         }
         .row-level { font-weight: 500; }
-        .row-level.lvl-high    { color: var(--spectre-status-success, #2f5832); }
+        .row-level.lvl-high { color: var(--spectre-status-success, #2f5832); }
         .row-level.lvl-needs_review { color: var(--spectre-status-warning, #a86200); }
-        .row-level.lvl-low     { color: var(--spectre-status-warning, #a86200); }
+        .row-level.lvl-low { color: var(--spectre-status-warning, #a86200); }
         .row-reason { margin-top: 2px; font-style: italic; color: var(--spectre-muted, #566473); }
         .row-supporting { margin: 4px 0 0 14px; padding: 0; }
         .row-supporting li { margin-bottom: 2px; }

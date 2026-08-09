@@ -55,12 +55,14 @@ test.describe("Phase 5 Slice 1 · Confidence UX — 5 real cards", () => {
       await page.waitForLoadState("networkidle").catch(() => { /* ignore */ });
       const card = await findCard(page, c.wiSuffix);
 
-      // §5-§6 · Summary label — NEVER a percentage
+      // §5-§6 · §11 Slice 2 update — Summary label is either "High"
+      // (all HIGH) or "<Level> · <Dimension>" (weakest material
+      // intelligence dimension). Never a raw percentage.
       const summary = card.locator('[data-testid="ap-readout-confidence"] .v').first();
       const summaryText = ((await summary.textContent()) ?? "").trim();
       console.log(`[${c.label}] confidence summary = "${summaryText}"`);
-      // The visible text must be one of the accepted qualitative labels.
-      expect(summaryText).toMatch(/^(High confidence|Moderate confidence|Low confidence|Needs review)/i);
+      // Accept the new Slice 2 formats.
+      expect(summaryText).toMatch(/^(High|Moderate\s*·\s*(Supplier|Category|GL)|Low\s*·\s*(Supplier|Category|GL)|Needs review\s*·\s*(Supplier|Category|GL))/);
       // Must NOT show a raw percentage.
       expect(summaryText).not.toMatch(/\d{1,3}\s*%/);
 
