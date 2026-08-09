@@ -21,6 +21,7 @@
 import type { PurchasedItemIdentity } from "./purchased-item-identity";
 import type { ItemCompletenessResult, ItemCompleteness } from "./item-completeness";
 import type { PurchasedObjectIdentity } from "./purchased-object-identity";
+import type { ProductIdentityResolution } from "./product-identity-resolution";
 
 // -----------------------------------------------------------------------------
 // Public types
@@ -76,6 +77,15 @@ export interface CapitalObjectEvidenceInput {
   objects: PurchasedObjectIdentity[];
   poRequestorText?: string | null;
   supplierName?: string | null;
+  /** Slice 5.4 (2026-08-08, §19 + §20): resolved product identity
+   *  when the ProductIdentityResolution layer produced a defensible
+   *  result. When present AND status is RESOLVED_INTERNAL /
+   *  RESOLVED_WITH_EXTERNAL_CORROBORATION, the object type it names
+   *  is treated as STRONG capital evidence — replacing the raw
+   *  vocabulary-based guessing on this row. Founder §1 invariant:
+   *  the resolution layer may consider price for OBJECT IDENTITY,
+   *  but this capital layer NEVER consumes price directly. */
+  resolvedProductIdentity?: ProductIdentityResolution | null;
 }
 
 // -----------------------------------------------------------------------------
@@ -127,6 +137,17 @@ export function evaluateCapitalObjectEvidence(
   let operatingScore = 0;
   let rm = 0;
 
+  // Slice 5.4 (§19+§20): consume ProductIdentityResolution first
+  // when it is defensibly resolved. This replaces raw vocabulary-
+  // based capital guessing on the primary object's row with the
+  // authority's committed object type.
+  const resolved = input.resolvedProductIdentity;
+  const resolvedPrimaryIndex = resolved?.selected?.sourceObjectIndex ?? null;
+  const isResolvedSufficiently = resolved != null && (
+    resolved.status === "RESOLVED_INTERNAL"
+    || resolved.status === "RESOLVED_WITH_EXTERNAL_CORROBORATION"
+  ) && resolved.selected != null;
+
   if (input.objects.length === 0) {
     return {
       decision: "UNRESOLVED",
@@ -146,7 +167,45 @@ export function evaluateCapitalObjectEvidence(
   for (const obj of input.objects) {
     const hasIdentifier = obj.serialCandidates.length > 0 || obj.modelCandidates.length > 0 || obj.skuCandidates.length > 0;
 
-    switch (obj.objectRole) {
+    // Slice 5.4: when this is the resolved primary AND the identity
+    // resolution committed, use the resolved object type instead of
+    // the raw scoring output. §20 explicit: "If external/internal
+    // evidence resolves COMPLETE_MACHINE then that is strong
+    // evidence toward CAPITAL_CANDIDATE."
+    let effectiveRole = obj.objectRole as string;
+    if (isResolvedSufficiently && obj.sourceLineItemIndex === resolvedPrimaryIndex) {
+      const resolvedType = resolved!.selected!.objectType;
+      if (resolvedType === "COMPLETE_MACHINE") {
+        effectiveRole = "COMPLETE_MACHINE";
+        durable.push({
+          kind: "complete_machine_with_identifier",
+          detail: `product-identity resolution → COMPLETE_MACHINE (${resolved!.status}, confidence=${resolved!.confidence}). ${resolved!.reason}`,
+          strength: "strong",
+        });
+        capital += 25;   // authoritative bonus on top of role scoring
+      } else if (resolvedType === "REPLACEMENT_ENGINE" || resolvedType === "SERIALIZED_COMPONENT") {
+        effectiveRole = "SERIALIZED_COMPONENT";
+        durable.push({
+          kind: "serialized_component",
+          detail: `product-identity resolution → ${resolvedType} (${resolved!.status}). ${resolved!.reason}`,
+          strength: "medium",
+        });
+        // Serialized-component classification adds weakly to both
+        // sides (per SERIALIZED_COMPONENT branch below) so replacement
+        // engine reads as REPAIR_MAINTENANCE unless capital-project
+        // context appears.
+      } else if (resolvedType === "REPLACEMENT_COMPONENT") {
+        effectiveRole = "COMPONENT";
+      } else if (resolvedType === "ACCESSORY") {
+        effectiveRole = "ACCESSORY";
+      } else if (resolvedType === "CONSUMABLE") {
+        effectiveRole = "CONSUMABLE";
+      } else if (resolvedType === "SERVICE") {
+        effectiveRole = "SERVICE";
+      }
+    }
+
+    switch (effectiveRole as typeof obj.objectRole) {
       case "COMPLETE_MACHINE": {
         if (hasIdentifier) {
           capital += W_COMPLETE_MACHINE_STRONG;

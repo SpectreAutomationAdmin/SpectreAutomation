@@ -205,6 +205,33 @@ export interface ApAnalyseResult {
   // + the object-aware capital decision. Downstream projection uses
   // it for the founder-facing category chip when GL cannot commit
   // and to surface diagnostic detail in inspect-wi.
+  // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
+  // Resolution result. Slice 5.4 scaffolding ships with Null
+  // providers active (no external calls) so status will typically
+  // be RESOLVED_INTERNAL, AMBIGUOUS, or UNRESOLVED. When a real
+  // external provider is authorised, RESOLVED_WITH_EXTERNAL_
+  // CORROBORATION becomes achievable.
+  productIdentityResolution?: {
+    status: string;
+    confidence: number;
+    evidenceQuality: string;
+    reason: string;
+    externalCorroborationRequired: boolean;
+    externalLookupCount: number;
+    externalLatencyMs: number;
+    diagnostic: string;
+    selectedObjectType: string | null;
+    candidates: Array<{
+      objectType: string;
+      internalEvidenceScore: number;
+      pricePlausibilityBand?: string;
+      pricePlausibilityScore?: number;
+      externalEvidenceScore?: number;
+      supportingCount: number;
+      contradictionsCount: number;
+      reason: string;
+    }>;
+  };
   purchasedObjectIntelligence?: {
     objects: Array<{
       description: string;
@@ -1025,10 +1052,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // capital branch consumes PurchasedObjectIdentity[] and treats
   // "engine"/"seat"/etc. as evidence, not verdict.
   const sharedPurchasedObjects = new PurchasedObjectProvider().interpret(canonicalLineItemsFromLayout);
+
+  // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
+  // Resolution. Runs BEFORE capital-evidence so the capital authority
+  // can consume resolved identity rather than raw purchased-object
+  // evidence. Providers default to Null (no external calls) — Slice
+  // 5.4 scaffolding ships with external research DISABLED pending
+  // §43 founder sign-off. When enabled the caller swaps in a live
+  // ProductReferenceProvider; the accounting pipeline is unchanged.
+  const { resolveProductIdentity: resolveProductIdentityShared } = await import("./product-identity-resolution");
+  const { NullPricePlausibilityProvider } = await import("./price-plausibility");
+  const { NullProductReferenceProvider } = await import("./product-reference-provider");
+  const sharedProductIdentity = await resolveProductIdentityShared({
+    objects: sharedPurchasedObjects,
+    pricePlausibilityProvider: new NullPricePlausibilityProvider(),
+    productReferenceProvider: new NullProductReferenceProvider(),
+  });
+
   const sharedCapitalDecision = evaluateCapitalObjectShared({
     objects: sharedPurchasedObjects,
     poRequestorText: null,
     supplierName: extraction.vendor.guessedName,
+    resolvedProductIdentity: sharedProductIdentity,
   });
   // Department leader from object-identity-primary inference
   // (completion pass §18: object application beats vendor).
@@ -2062,6 +2107,27 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    productIdentityResolution: {
+      status: sharedProductIdentity.status,
+      confidence: sharedProductIdentity.confidence,
+      evidenceQuality: sharedProductIdentity.evidenceQuality,
+      reason: sharedProductIdentity.reason,
+      externalCorroborationRequired: sharedProductIdentity.externalCorroborationRequired,
+      externalLookupCount: sharedProductIdentity.externalLookupCount,
+      externalLatencyMs: sharedProductIdentity.externalLatencyMs,
+      diagnostic: sharedProductIdentity.diagnostic,
+      selectedObjectType: sharedProductIdentity.selected?.objectType ?? null,
+      candidates: sharedProductIdentity.candidates.map((c) => ({
+        objectType: c.objectType,
+        internalEvidenceScore: c.internalEvidenceScore,
+        pricePlausibilityBand: c.pricePlausibilityBand,
+        pricePlausibilityScore: c.pricePlausibilityScore,
+        externalEvidenceScore: c.externalEvidenceScore,
+        supportingCount: c.supportingEvidence.length,
+        contradictionsCount: c.contradictions.length,
+        reason: c.reason,
+      })),
+    },
     purchasedObjectIntelligence: {
       objects: sharedPurchasedObjects.map((o) => ({
         description: o.description,

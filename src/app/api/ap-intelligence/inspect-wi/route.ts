@@ -388,6 +388,9 @@ export async function POST(req: Request) {
         // substance authorities exposed for founder-facing diagnostic.
         // Purchased items are truncated to first 8 to bound response
         // size; capital decision and department leader are complete.
+        // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
+        // Resolution surfaced for the founder-facing diagnostic.
+        productIdentityResolution: result.productIdentityResolution ?? null,
         // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08) —
         // PurchasedObject authority exposed for the founder-facing
         // diagnostic. Truncated to first 8 objects to bound response.
