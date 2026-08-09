@@ -2565,7 +2565,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         } : undefined,
       })),
       contradictedPoolCount: capitalAwareRankingResult.contradictedPool.length,
-      contradictedPool: capitalAwareRankingResult.contradictedPool.slice(0, 20).map((c) => ({
+      contradictedPool: capitalAwareRankingResult.contradictedPool.slice(0, 240).map((c) => ({
         accountNumber: c.accountNumber,
         accountName: c.accountName,
         totalScore: c.totalScore,
