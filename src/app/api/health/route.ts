@@ -130,9 +130,19 @@ export async function GET() {
   // §13 completion gate: schemaIncompatible rows > 0 signals a
   // deployed evidence version mismatch — surface as warn so the
   // async pipeline is not falsely reported healthy.
-  const productReferenceWarn = productReference.stats
-    ? productReference.stats.schemaIncompatible > 0
-    : false;
+  //
+  // Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) §7 — also
+  // warn on INFRASTRUCTURE_UNCONFIGURED rows. Their presence IS
+  // the diagnostic signal that required research was blocked by a
+  // misconfigured worker at some point. Once ops corrects the
+  // worker and the next render re-enqueues, the state transitions
+  // away from INFRASTRUCTURE_UNCONFIGURED and the warn clears.
+  // Presence check only; never exposes the secret.
+  const unconfiguredCount = productReference.stats?.byState?.INFRASTRUCTURE_UNCONFIGURED ?? 0;
+  const productReferenceWarn = !!productReference.stats && (
+    productReference.stats.schemaIncompatible > 0
+    || unconfiguredCount > 0
+  );
 
   const finalStatus = status === "fail"
     ? "fail"

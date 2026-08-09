@@ -129,10 +129,15 @@ function shortCircuitFromLookup(lookup: ReferenceLookupOutcome): EnqueueDecision
         reference: lookup.reference,
         canRetryAfter: lookup.canRetryAfter,
       };
-    // MISS, HIT_EXPIRED, HIT_SCHEMA_INCOMPATIBLE → fall through to claim+enqueue.
+    // MISS, HIT_EXPIRED, HIT_SCHEMA_INCOMPATIBLE, HIT_INFRASTRUCTURE_UNCONFIGURED
+    // → fall through to claim+enqueue. INFRASTRUCTURE_UNCONFIGURED is
+    // rerunnable per §3: once ops has configured the provider, the
+    // next request should re-attempt research exactly once (idempotency
+    // key + normalizedKey UNIQUE dedupe additional concurrent renders).
     case "MISS":
     case "HIT_EXPIRED":
     case "HIT_SCHEMA_INCOMPATIBLE":
+    case "HIT_INFRASTRUCTURE_UNCONFIGURED":
       return null;
   }
 }

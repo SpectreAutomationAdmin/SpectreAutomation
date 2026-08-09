@@ -43,7 +43,13 @@ export type ProductReferenceResearchState =
   | "FAILED_RETRYABLE"
   | "FAILED_TERMINAL"
   | "NO_RESULT"
-  | "CONFLICTING_EVIDENCE";
+  | "CONFLICTING_EVIDENCE"
+  // Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) — §3 audit
+  // correction. `INFRASTRUCTURE_UNCONFIGURED` means external research
+  // was required, but the execution environment did not have an enabled
+  // provider capable of performing it. It is NOT a factual conclusion
+  // about the product. Rerunnable once configuration is corrected.
+  | "INFRASTRUCTURE_UNCONFIGURED";
 
 export interface NormalizedProductKey {
   normalizedManufacturer: string;
@@ -91,7 +97,10 @@ export function normalizeKeyFromRequest(req: ProductReferenceRequest): Normalize
   });
 }
 
-/** Lookup result — communicates freshness AND schema compatibility. */
+/** Lookup result — communicates freshness AND schema compatibility.
+ *  Distinct kinds preserve diagnostic clarity across ops surfaces
+ *  (per §3: HIT_INFRASTRUCTURE_UNCONFIGURED must not be conflated
+ *  with HIT_EXPIRED even though both are rerunnable). */
 export type ReferenceLookupOutcome =
   | { kind: "HIT_USABLE"; reference: DurableProductReference }
   | { kind: "HIT_PENDING"; reference: DurableProductReference }
@@ -100,6 +109,7 @@ export type ReferenceLookupOutcome =
   | { kind: "HIT_TERMINAL"; reference: DurableProductReference }
   | { kind: "HIT_EXPIRED"; reference: DurableProductReference }
   | { kind: "HIT_SCHEMA_INCOMPATIBLE"; reference: DurableProductReference }
+  | { kind: "HIT_INFRASTRUCTURE_UNCONFIGURED"; reference: DurableProductReference }
   | { kind: "MISS" };
 
 export interface DurableProductReference {
@@ -271,6 +281,12 @@ export async function lookupProductReference(
     case "NO_RESULT":
     case "CONFLICTING_EVIDENCE":
       return { kind: "HIT_TERMINAL", reference };
+    case "INFRASTRUCTURE_UNCONFIGURED":
+      // §3 correction — infrastructure/config failure is NOT a
+      // factual conclusion. Rerunnable once ops configures the
+      // provider. Distinct lookup kind preserves diagnostic clarity
+      // so ops surfaces can tell it apart from HIT_EXPIRED.
+      return { kind: "HIT_INFRASTRUCTURE_UNCONFIGURED", reference };
     case "NOT_REQUIRED":
       return { kind: "HIT_USABLE", reference };
     default:
@@ -306,7 +322,8 @@ export async function claimProductReferenceForResearch(
     });
     return { reference: rowToDurable(created), claimed: true };
   } catch (err) {
-    // P2002 = unique constraint violation. Someone else won. Read back.
+    // P2002 = unique constraint violation. Someone else won OR the
+    // row exists from a prior attempt. Read back + optionally re-claim.
     const msg = err instanceof Error ? err.message : String(err);
     if (!/unique|P2002|SQLITE_CONSTRAINT/i.test(msg)) throw err;
     const existing = await prisma.productReference.findUnique({
@@ -328,6 +345,33 @@ export async function claimProductReferenceForResearch(
         },
       });
       return { reference: rowToDurable(retry), claimed: true };
+    }
+    // §3 correction — INFRASTRUCTURE_UNCONFIGURED is a rerunnable
+    // sentinel that says "the paid provider was never actually
+    // consulted." Once infrastructure is fixed, the FIRST call to
+    // claim gets to transition the row back to PENDING; the DB-side
+    // updateMany with a state guard makes that atomic across
+    // concurrent renders / instances. Losers get the already-
+    // transitioned row back and { claimed: false } so no duplicate
+    // job is enqueued.
+    //
+    // Scope-limited on purpose: FAILED_RETRYABLE past cooldown is
+    // NOT touched here — that path uses the worker-side retry
+    // machinery. Only the config-failure sentinel is re-claimable
+    // from the web-request path.
+    const transitioned = await prisma.productReference.updateMany({
+      where: {
+        id: existing.id,
+        researchState: "INFRASTRUCTURE_UNCONFIGURED",
+      },
+      data: {
+        researchState: "PENDING",
+        lastResearchError: null,
+      },
+    });
+    if (transitioned.count === 1) {
+      const claimed = await prisma.productReference.findUnique({ where: { id: existing.id } });
+      return { reference: rowToDurable(claimed!), claimed: true };
     }
     return { reference: rowToDurable(existing), claimed: false };
   }
@@ -382,7 +426,12 @@ export async function recordResearchOutcome(args: {
       researchState = "FAILED_RETRYABLE";
       break;
     case "PROVIDER_DISABLED":
-      researchState = "FAILED_TERMINAL";
+      // §3 correction — PROVIDER_DISABLED is a config outcome, not a
+      // research outcome. The paid provider was never actually
+      // consulted. Persisting FAILED_TERMINAL would globally poison
+      // this product identity across every tenant once ops fixes the
+      // configuration. Use the distinct rerunnable state instead.
+      researchState = "INFRASTRUCTURE_UNCONFIGURED";
       break;
     default:
       researchState = "NO_RESULT";

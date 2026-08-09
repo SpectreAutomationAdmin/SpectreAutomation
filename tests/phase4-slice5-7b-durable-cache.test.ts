@@ -704,6 +704,173 @@ describe("§28.19-22 governance + defensive states", () => {
     }
   });
 
+  // -----------------------------------------------------------------
+  // §3 follow-up — INFRASTRUCTURE_UNCONFIGURED is a rerunnable
+  // sentinel, NOT a factual terminal. Adding tests here (numbered
+  // 23-26) to prove the correction.
+  // -----------------------------------------------------------------
+
+  it("§3.23 PROVIDER_DISABLED persists as INFRASTRUCTURE_UNCONFIGURED, not FAILED_TERMINAL", async () => {
+    const { runProductReferenceResearchJob } = await import(
+      "@/lib/ap-intelligence/external-product-reference/research-worker"
+    );
+    const { claimProductReferenceForResearch, normalizeProductKey } = await import(
+      "@/lib/ap-intelligence/external-product-reference/durable-cache"
+    );
+    const { _resetProductReferenceProviderForTest } = await import(
+      "@/lib/ap-intelligence/external-product-reference/factory"
+    );
+    // NullProvider returns state=PROVIDER_DISABLED (the exact scenario
+    // that previously poisoned rows before §3 correction).
+    _resetProductReferenceProviderForTest({
+      async resolve() {
+        return { state: "PROVIDER_DISABLED", callCount: 0, products: [], prices: [], diagnostic: "no provider" };
+      },
+    });
+    const key = normalizeProductKey({ manufacturer: SYN.mfr, model: SYN.model, partNumber: SYN.part })!;
+    await claimProductReferenceForResearch(key);
+    await runProductReferenceResearchJob({
+      jobId: "j",
+      payload: {
+        normalizedKey: key,
+        refRequest: { brandCandidates: [SYN.mfr], modelCandidates: [SYN.model], skuCandidates: [SYN.part], serialCandidates: [], descriptionExcerpt: "", observedUnitPrice: null, currency: null, maxCalls: 2 },
+        dependents: [], researchVersion: "1",
+      },
+    });
+    const row = await prisma.productReference.findUnique({ where: { normalizedKey: key.normalizedKey } });
+    expect(row?.researchState).toBe("INFRASTRUCTURE_UNCONFIGURED");
+    expect(row?.researchState).not.toBe("FAILED_TERMINAL");
+    _resetProductReferenceProviderForTest(null);
+  });
+
+  it("§3.24 INFRASTRUCTURE_UNCONFIGURED → provider later configured → next lookup allows exactly one re-enqueue", async () => {
+    // Seed an existing INFRASTRUCTURE_UNCONFIGURED row (as if worker
+    // had no provider when it processed the first attempt).
+    await prisma.productReference.create({
+      data: {
+        normalizedKey: SYN.key,
+        normalizedManufacturer: SYN.mfr, normalizedModel: SYN.model,
+        normalizedPartNumber: SYN.part,
+        researchState: "INFRASTRUCTURE_UNCONFIGURED",
+        provider: "null",
+        identityEvidenceJson: "[]", sourceEvidenceJson: "[]",
+        researchVersion: "1", evidenceSchemaVersion: "1",
+        lastResearchError: "no product-reference provider configured",
+      },
+    });
+    const { lookupProductReference, normalizeProductKey } = await import(
+      "@/lib/ap-intelligence/external-product-reference/durable-cache"
+    );
+    const key = normalizeProductKey({ manufacturer: SYN.mfr, model: SYN.model, partNumber: SYN.part })!;
+
+    // Lookup must return the distinct diagnostic kind, NOT HIT_TERMINAL.
+    const lookup = await lookupProductReference(key);
+    expect(lookup.kind).toBe("HIT_INFRASTRUCTURE_UNCONFIGURED");
+
+    // Enqueue helper must fall through to claim + enqueue exactly once.
+    const { ensureProductResearchEnqueued } = await import(
+      "@/lib/ap-intelligence/external-product-reference/enqueue"
+    );
+    const req = {
+      refRequest: { brandCandidates: [SYN.mfr], modelCandidates: [SYN.model], skuCandidates: [SYN.part], serialCandidates: [], descriptionExcerpt: "", observedUnitPrice: null, currency: null, maxCalls: 2 },
+      clubId: "c1", ingestedDocumentId: "d1",
+    };
+    const first = await ensureProductResearchEnqueued(req);
+    expect(first.kind).toBe("RESEARCH_JUST_ENQUEUED");
+
+    const row = await prisma.productReference.findUnique({ where: { normalizedKey: SYN.key } });
+    expect(row?.researchState).toBe("PENDING");
+
+    const jobs = await prisma.backgroundJob.count({
+      where: { kind: "PRODUCT_REFERENCE_RESEARCH", idempotencyKey: { contains: SYN.key } },
+    });
+    expect(jobs).toBe(1);
+  });
+
+  it("§3.25 concurrent re-enqueue on INFRASTRUCTURE_UNCONFIGURED — only one winner", async () => {
+    await prisma.productReference.create({
+      data: {
+        normalizedKey: SYN.key,
+        normalizedManufacturer: SYN.mfr, normalizedModel: SYN.model,
+        normalizedPartNumber: SYN.part,
+        researchState: "INFRASTRUCTURE_UNCONFIGURED",
+        provider: "null",
+        identityEvidenceJson: "[]", sourceEvidenceJson: "[]",
+        researchVersion: "1", evidenceSchemaVersion: "1",
+      },
+    });
+    const { ensureProductResearchEnqueued } = await import(
+      "@/lib/ap-intelligence/external-product-reference/enqueue"
+    );
+    const req = {
+      refRequest: { brandCandidates: [SYN.mfr], modelCandidates: [SYN.model], skuCandidates: [SYN.part], serialCandidates: [], descriptionExcerpt: "", observedUnitPrice: null, currency: null, maxCalls: 2 },
+      clubId: "c1", ingestedDocumentId: "d1",
+    };
+    const results = await Promise.all([
+      ensureProductResearchEnqueued(req),
+      ensureProductResearchEnqueued(req),
+      ensureProductResearchEnqueued(req),
+    ]);
+    const enqueued = results.filter((r) => r.kind === "RESEARCH_JUST_ENQUEUED").length;
+    expect(enqueued).toBe(1);
+    const jobs = await prisma.backgroundJob.count({
+      where: { kind: "PRODUCT_REFERENCE_RESEARCH", idempotencyKey: { contains: SYN.key } },
+    });
+    expect(jobs).toBe(1);
+  });
+
+  it("§3.26 repeated refresh while provider remains unconfigured is bounded — one PENDING at a time", async () => {
+    // Simulate: worker still misconfigured — every worker run produces
+    // INFRASTRUCTURE_UNCONFIGURED. Web-tier refresh must not spawn
+    // uncontrolled duplicate jobs.
+    const { runProductReferenceResearchJob } = await import(
+      "@/lib/ap-intelligence/external-product-reference/research-worker"
+    );
+    const { claimProductReferenceForResearch, normalizeProductKey } = await import(
+      "@/lib/ap-intelligence/external-product-reference/durable-cache"
+    );
+    const { _resetProductReferenceProviderForTest } = await import(
+      "@/lib/ap-intelligence/external-product-reference/factory"
+    );
+    _resetProductReferenceProviderForTest({
+      async resolve() {
+        return { state: "PROVIDER_DISABLED", callCount: 0, products: [], prices: [], diagnostic: "" };
+      },
+    });
+    const key = normalizeProductKey({ manufacturer: SYN.mfr, model: SYN.model, partNumber: SYN.part })!;
+
+    // Round 1: claim + worker executes + persists INFRASTRUCTURE_UNCONFIGURED.
+    await claimProductReferenceForResearch(key);
+    await runProductReferenceResearchJob({
+      jobId: "j1",
+      payload: {
+        normalizedKey: key,
+        refRequest: { brandCandidates: [SYN.mfr], modelCandidates: [SYN.model], skuCandidates: [SYN.part], serialCandidates: [], descriptionExcerpt: "", observedUnitPrice: null, currency: null, maxCalls: 2 },
+        dependents: [], researchVersion: "1",
+      },
+    });
+    let row = await prisma.productReference.findUnique({ where: { normalizedKey: SYN.key } });
+    expect(row?.researchState).toBe("INFRASTRUCTURE_UNCONFIGURED");
+
+    // Round 2: 5 concurrent renders — each falls through to claim.
+    // Only one may transition INFRASTRUCTURE_UNCONFIGURED → PENDING.
+    const { ensureProductResearchEnqueued } = await import(
+      "@/lib/ap-intelligence/external-product-reference/enqueue"
+    );
+    const req = {
+      refRequest: { brandCandidates: [SYN.mfr], modelCandidates: [SYN.model], skuCandidates: [SYN.part], serialCandidates: [], descriptionExcerpt: "", observedUnitPrice: null, currency: null, maxCalls: 2 },
+      clubId: "c1", ingestedDocumentId: "d1",
+    };
+    const results = await Promise.all(Array.from({ length: 5 }, () => ensureProductResearchEnqueued(req)));
+    const enqueued = results.filter((r) => r.kind === "RESEARCH_JUST_ENQUEUED").length;
+    expect(enqueued).toBe(1);
+    const jobs = await prisma.backgroundJob.count({
+      where: { kind: "PRODUCT_REFERENCE_RESEARCH", idempotencyKey: { contains: SYN.key } },
+    });
+    expect(jobs).toBe(1);
+    _resetProductReferenceProviderForTest(null);
+  });
+
   it("unresolvable key (empty model) rejects cleanly without touching DB", async () => {
     const { ensureProductResearchEnqueued } = await import(
       "@/lib/ap-intelligence/external-product-reference/enqueue"
