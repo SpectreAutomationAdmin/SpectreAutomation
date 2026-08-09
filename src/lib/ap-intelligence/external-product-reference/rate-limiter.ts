@@ -21,10 +21,10 @@ export interface RateLimitConfig {
 
 export const DEFAULT_RATE_LIMIT: RateLimitConfig = {
   perClubPerDay: 50,             // §18 initial staging limit
-  perRequestMaxQueries: 3,       // one identity question + up to 2 disambiguation
+  perRequestMaxQueries: 2,       // one identity question + up to 1 disambiguation
   perRequestMaxSources: 6,       // up to 6 candidate source URLs per query
   perRequestTimeoutMs: 8000,     // single request budget
-  wholeJobTimeoutMs: 20000,      // total wall-clock across all queries
+  wholeJobTimeoutMs: 60000,      // web_search + fetch + parse budget
   retryCeiling: 1,               // one retry on transient failure only
   circuitBreakerFailureThreshold: 5,
   circuitBreakerCooldownMs: 5 * 60_000,   // 5-minute cool-off
