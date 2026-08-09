@@ -32,17 +32,17 @@ WORKDIR /app
 RUN apk add --no-cache libc6-compat openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — the ProductReference
+# addition pushed the postgres schema past the point where Prisma
+# generate fits inside V8's default 1.5 GB heap on Fly's remote
+# builder. Set the heap ceiling BEFORE prisma generate (previously
+# only set later, for `next build`).
+ENV NODE_OPTIONS="--max-old-space-size=3584"
+ENV NEXT_TELEMETRY_DISABLED=1
 # Generate the Postgres Prisma client explicitly. If prisma-postgres/
 # is missing or out of sync, this fails fast and the image cannot be
 # built — surfacing schema drift before it reaches production.
 RUN npx prisma generate --schema prisma-postgres/schema.prisma
-ENV NEXT_TELEMETRY_DISABLED=1
-# Sprint 2 Step 8 (2026-07-20) — Next.js build was OOMing at V8's
-# default 1.5 GB heap on Fly's shared-cpu-2x remote builder (4 GB RAM).
-# The build "completed" but left .next/ without a BUILD_ID, so the
-# runtime crashed with "Could not find a production build". 3072 MB
-# fits comfortably inside the builder's 4 GB.
-ENV NODE_OPTIONS="--max-old-space-size=3584"
 # Build-only placeholders. Next.js 14's "Collecting page data" phase
 # evaluates every route module, which transitively imports src/lib/env.ts
 # and runs Zod validation at module load. DATABASE_URL and
