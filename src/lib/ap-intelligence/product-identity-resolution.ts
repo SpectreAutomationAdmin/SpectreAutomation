@@ -249,20 +249,47 @@ export async function resolveProductIdentity(
   const top = combined[0];
   const second = combined[1] ?? { c: null, total: 0 };
   const internalGap = top.total - second.total;
-  // Material capital ambiguity fires when BOTH a durable-side
-  // candidate (COMPLETE_MACHINE) AND a component-side candidate
-  // (REPLACEMENT_ENGINE / SERIALIZED_COMPONENT / REPLACEMENT_COMPONENT)
-  // sit within MATERIAL_AMBIGUITY_MIN_GAP of the top candidate. This
-  // catches the 1091559-shape case where component candidates score
-  // slightly above the complete-machine candidate but the two are
-  // close enough that external corroboration meaningfully helps.
+  // Slice 5.5 §10 amended trigger: material capital ambiguity fires
+  // when BOTH conditions hold:
+  //   (A) competing candidate object types would produce materially
+  //       different accounting treatment (durable vs component OR
+  //       durable vs consumable OR capital-install vs service etc.);
+  //   AND
+  //   (B) either (i) top-two candidates are close on relative gap OR
+  //             (ii) the top candidate's ABSOLUTE score is below
+  //                  the identity-confidence-for-material-decision
+  //                  threshold.
+  // A wide relative gap between two weak candidates does not mean
+  // the purchased object has been strongly identified.
   const isDurable = (t: ProductObjectType) => t === "COMPLETE_MACHINE";
   const isComponentOrRepair = (t: ProductObjectType) =>
     t === "REPLACEMENT_ENGINE" || t === "SERIALIZED_COMPONENT" || t === "REPLACEMENT_COMPONENT";
+  const isConsumable = (t: ProductObjectType) => t === "CONSUMABLE";
+  const isService = (t: ProductObjectType) => t === "SERVICE";
+  // Material accounting divergence: any two candidates whose object
+  // types would yield different capital / operating / repair
+  // treatments qualify.
+  const materialDivergentPair = (a: ProductObjectType, b: ProductObjectType): boolean => {
+    // durable vs component/consumable/service — always material
+    if (isDurable(a) && (isComponentOrRepair(b) || isConsumable(b) || isService(b))) return true;
+    if (isDurable(b) && (isComponentOrRepair(a) || isConsumable(a) || isService(a))) return true;
+    // component vs consumable — different accounting treatment
+    if (isComponentOrRepair(a) && isConsumable(b)) return true;
+    if (isComponentOrRepair(b) && isConsumable(a)) return true;
+    return false;
+  };
+  // "In-band" candidates for the relative-gap check.
   const inBand = combined.filter((x) => (top.total - x.total) < MATERIAL_AMBIGUITY_MIN_GAP);
-  const bandHasDurable = inBand.some((x) => isDurable(x.c.objectType));
-  const bandHasComponent = inBand.some((x) => isComponentOrRepair(x.c.objectType));
-  const materialAmbiguity = bandHasDurable && bandHasComponent;
+  const relativeCandidateAmbiguity = inBand.some((x) =>
+    x !== top && materialDivergentPair(top.c.objectType, x.c.objectType),
+  );
+  // Absolute-confidence check: if the top score is under this
+  // threshold AND ANY other candidate is materially divergent, the
+  // identity is not strongly established even at wide relative gap.
+  const IDENTITY_CONFIDENCE_FOR_MATERIAL_DECISION = 45;
+  const absoluteIdentityBelowThreshold = top.total < IDENTITY_CONFIDENCE_FOR_MATERIAL_DECISION
+    && candidates.some((c) => materialDivergentPair(top.c.objectType, c.objectType));
+  const materialAmbiguity = relativeCandidateAmbiguity || absoluteIdentityBelowThreshold;
 
   let externalLookupCount = 0;
   let externalLatencyMs = 0;

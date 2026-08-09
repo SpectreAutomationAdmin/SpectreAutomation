@@ -388,6 +388,11 @@ export async function POST(req: Request) {
         // substance authorities exposed for founder-facing diagnostic.
         // Purchased items are truncated to first 8 to bound response
         // size; capital decision and department leader are complete.
+        // Sprint 3 · Phase 4 Slice 5.5 (2026-08-08) — Capital-aware
+        // ranker result exposed with per-dimension scoring so the
+        // founder-facing diagnostic can show WHY each candidate won
+        // or lost. Truncated to top 20 compatible candidates.
+        capitalAwareRanking: result.capitalAwareRanking ?? null,
         // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
         // Resolution surfaced for the founder-facing diagnostic.
         productIdentityResolution: result.productIdentityResolution ?? null,

@@ -205,6 +205,39 @@ export interface ApAnalyseResult {
   // + the object-aware capital decision. Downstream projection uses
   // it for the founder-facing category chip when GL cannot commit
   // and to surface diagnostic detail in inspect-wi.
+  // Sprint 3 · Phase 4 Slice 5.5 (2026-08-08) — Capital-aware
+  // ranking result. Emitted whenever the ranker was active
+  // (CapitalEvidenceDecision committed at defensible confidence).
+  // The per-account dimension diagnostics let the founder inspect
+  // WHY each candidate won or lost.
+  capitalAwareRanking?: {
+    active: boolean;
+    winnerAccountNumber: string | null;
+    abstained: boolean;
+    abstentionReason: string | null;
+    compatiblePool: Array<{
+      accountNumber: string;
+      accountName: string;
+      totalScore: number;
+      natureCompat: string;
+      dimensions: {
+        accountingNature: number;
+        department: number;
+        purpose: number;
+        objectIdentity: number;
+        accountNameSimilarity: number;
+        category: number;
+        fsGroup: number;
+        history: number;
+        postingEligibility: number;
+      };
+      supportingEvidence: string[];
+      contradictions: string[];
+      postable: boolean;
+    }>;
+    contradictedPoolCount: number;
+    diagnostic: string;
+  };
   // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
   // Resolution result. Slice 5.4 scaffolding ships with Null
   // providers active (no external calls) so status will typically
@@ -1900,6 +1933,104 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
   }
 
+  // Sprint 3 · Phase 4 Slice 5.5 (2026-08-08, §3-§7) —
+  // capital-aware full-COA ranker. When CapitalEvidenceDecision
+  // commits to a defensible non-UNRESOLVED nature, this authority
+  // narrows the eligible tenant COA to accounting-nature-COMPATIBLE
+  // accounts BEFORE ranking. Purpose/keyword scoring alone no longer
+  // outranks committed capital nature. Per-dimension scoring is
+  // exposed on the diagnostic for founder review.
+  //
+  // Truthful abstention preserved: when multiple compatible
+  // candidates exist without a defensible discriminator, gl is
+  // cleared to null with a specific abstention reason rather than
+  // choosing arbitrarily.
+  let capitalAwareRankingResult: import("./accounting-nature-compatibility").CapitalAwareRankingResult | null = null;
+  if (sharedCapitalDecision.decision !== "UNRESOLVED"
+      && sharedCapitalDecision.confidence >= 40) {
+    const { rankCapitalAwareAccounts } = await import("./accounting-nature-compatibility");
+    const capEligibleAccounts = await prisma.account.findMany({
+      where: { clubId: args.clubId, isActive: true, isHeader: false },
+      select: {
+        accountNumber: true, name: true, type: true,
+        normalBalance: true, isActive: true, isHeader: true,
+        allowManualPosting: true, isControlAccount: true,
+        isBankAccount: true, isCashAccount: true,
+        accountRole: true,
+        category: { select: { key: true } },
+        fsGroup: { select: { key: true } },
+      },
+    });
+    const capEligibleView = capEligibleAccounts.map((a) => ({
+      accountNumber: a.accountNumber, name: a.name, type: a.type,
+      normalBalance: a.normalBalance, isActive: a.isActive, isHeader: a.isHeader,
+      allowManualPosting: a.allowManualPosting, isControlAccount: a.isControlAccount,
+      isBankAccount: a.isBankAccount, isCashAccount: a.isCashAccount,
+      categoryKey: a.category?.key ?? null,
+      fsGroupKey: a.fsGroup?.key ?? null,
+      accountRole: a.accountRole ?? "STANDARD",
+    }));
+    capitalAwareRankingResult = rankCapitalAwareAccounts({
+      capitalDecision: sharedCapitalDecision,
+      productIdentity: sharedProductIdentity,
+      purchasedObjects: sharedPurchasedObjects,
+      departmentResult: sharedDept,
+      eligibleAccounts: capEligibleView,
+      vendorHistoryPreferredAccountNumbers: [],
+    });
+    if (capitalAwareRankingResult.active) {
+      logger.info("ap-intelligence.slice5-5.capital-aware-ranker.result", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        decision: sharedCapitalDecision.decision,
+        confidence: sharedCapitalDecision.confidence,
+        winner: capitalAwareRankingResult.winner?.accountNumber ?? "abstain",
+        winnerScore: capitalAwareRankingResult.winner?.totalScore ?? 0,
+        compatiblePoolCount: capitalAwareRankingResult.compatiblePool.length,
+        abstained: capitalAwareRankingResult.abstained,
+        abstentionReason: capitalAwareRankingResult.abstentionReason,
+      });
+      if (capitalAwareRankingResult.winner != null) {
+        // The capital-aware winner OVERRIDES any prior purpose-driven
+        // or Stage A/B leader when the committed accounting nature
+        // makes the prior leader incompatible.
+        const w = capitalAwareRankingResult.winner;
+        gl = {
+          ...gl,
+          accountNumber: w.accountNumber,
+          accountName: w.accountName,
+          categoryKey: capEligibleView.find((a) => a.accountNumber === w.accountNumber)?.categoryKey ?? null,
+          fsGroupKey: capEligibleView.find((a) => a.accountNumber === w.accountNumber)?.fsGroupKey ?? null,
+          source: "SEMANTIC_MATCH",
+          confidence: Math.min(90, w.totalScore),
+          reason: `capital-aware nature-compatible search: decision=${sharedCapitalDecision.decision}(${sharedCapitalDecision.confidence}) → ${w.accountNumber} (${w.accountName}) totalScore=${w.totalScore} natureCompat=${w.natureCompat} dims=${JSON.stringify(w.dimensions)}`,
+          leaderIsPostable: w.postable,
+          leaderPostingBlockers: [],
+          autoApprovalEligible: false,
+          requiresReview: false,
+        };
+      } else if (capitalAwareRankingResult.abstained) {
+        // Nature-compatible pool exists but no defensible winner —
+        // clear any prior gl and surface a truthful abstention reason
+        // per §7.
+        gl = {
+          ...gl,
+          accountNumber: null,
+          accountName: null,
+          categoryKey: null,
+          fsGroupKey: null,
+          source: "NONE",
+          confidence: 0,
+          reason: `capital-aware ranker abstained: ${capitalAwareRankingResult.abstentionReason}. Decision=${sharedCapitalDecision.decision}(${sharedCapitalDecision.confidence}). Compatible pool size=${capitalAwareRankingResult.compatiblePool.length}.`,
+          leaderIsPostable: false,
+          leaderPostingBlockers: [],
+          autoApprovalEligible: false,
+          requiresReview: true,
+        };
+      }
+    }
+  }
+
   // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08, §31
   // Outcome B) — object-authority contradiction guard. Applied AFTER
   // Stage A/B nature-scoped promotion. When purchased-object evidence
@@ -2107,6 +2238,24 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     purposeDecision: purposeDecision ?? null,
     allocations: gatedAllocations,
     documentAssessment: mergedAssessment,
+    capitalAwareRanking: capitalAwareRankingResult ? {
+      active: capitalAwareRankingResult.active,
+      winnerAccountNumber: capitalAwareRankingResult.winner?.accountNumber ?? null,
+      abstained: capitalAwareRankingResult.abstained,
+      abstentionReason: capitalAwareRankingResult.abstentionReason,
+      compatiblePool: capitalAwareRankingResult.compatiblePool.slice(0, 20).map((c) => ({
+        accountNumber: c.accountNumber,
+        accountName: c.accountName,
+        totalScore: c.totalScore,
+        natureCompat: c.natureCompat,
+        dimensions: c.dimensions,
+        supportingEvidence: c.supportingEvidence,
+        contradictions: c.contradictions,
+        postable: c.postable,
+      })),
+      contradictedPoolCount: capitalAwareRankingResult.contradictedPool.length,
+      diagnostic: capitalAwareRankingResult.diagnostic,
+    } : undefined,
     productIdentityResolution: {
       status: sharedProductIdentity.status,
       confidence: sharedProductIdentity.confidence,
