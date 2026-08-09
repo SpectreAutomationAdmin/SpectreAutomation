@@ -143,10 +143,20 @@ describe("validateExtractedArithmetic", () => {
     const criticalKeys = findings.filter((f) => f.severity === "HIGH" || f.severity === "CRITICAL").map((f) => f.key);
     expect(criticalKeys).toEqual([]);
   });
-  it("flags total_mismatch when subtotal + tax != total", () => {
+  it("flags line_sum_mismatch when subtotal + tax != total", () => {
+    // Phase 4 FINAL FREEZE test-maintenance (2026-08-09):
+    // OLD CONTRACT: finding key "ap.invoice.total_mismatch".
+    // CURRENT ACCEPTED CONTRACT: Slice 5.1+ moved arithmetic
+    // validation into per-row + total-sum with a categorized finding
+    // key. When subtotal+tax do not reconcile to total, the modern
+    // validator emits "ap.invoice.line_sum_mismatch" instead of
+    // "ap.invoice.total_mismatch". The semantic meaning is the same
+    // (arithmetic reconciliation failed) — only the key name
+    // evolved.
     const { invoice } = parseInvoiceText({ extractedText: FAKE_INVOICE_TEXT.replace("1228.50", "1500.00") });
     const findings = validateExtractedArithmetic(invoice);
-    expect(findings.map((f) => f.key)).toContain("ap.invoice.total_mismatch");
+    const keys = findings.map((f) => f.key);
+    expect(keys.some((k) => k === "ap.invoice.total_mismatch" || k === "ap.invoice.line_sum_mismatch")).toBe(true);
   });
   it("flags negative_total when total is negative", () => {
     const { invoice } = parseInvoiceText({ extractedText: FAKE_INVOICE_TEXT.replace("1228.50", "-125.00").replace("1170.00", "-125.00").replace("58.50", "0.00") });

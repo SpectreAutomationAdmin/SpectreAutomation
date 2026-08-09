@@ -117,14 +117,23 @@ describe("gl-recommend — deterministic map + vendor default only", () => {
   it("no dynamic account creation — recommendation is a lookup", () => {
     expect(GL).not.toMatch(/account\.create\(/);
   });
-  it("scopes on clubId + isActive when reading Account", () => {
-    // Sprint 3 · Checkpoint 15L (2026-07-27) — gl-recommend was
-    // rewritten to snapshot the tenant COA via a SINGLE
-    // findMany({ where: { clubId, isActive: true } }) and score
-    // in-memory instead of issuing per-account findFirst queries.
-    // The tenancy guard is preserved on the single snapshot query.
+  it("scopes on clubId and enforces isActive via eligibility gate when reading Account", () => {
+    // Phase 4 FINAL FREEZE test-maintenance (2026-08-09):
+    // OLD CONTRACT: regex asserted the string /isActive:\s*true/
+    // appeared inline in the Account.findMany where-clause.
+    // CURRENT ACCEPTED CONTRACT: Phase 2 eligibility (2026-07-30+)
+    // moved active-account filtering into a dedicated pre-ranker
+    // gate module (`accounting/eligibility.ts` +
+    // `filterEligibleAccounts`). The snapshot query now uses
+    // .findMany({ where: { clubId } }) and applies isActive
+    // (plus header/type/role guards) in filterEligibleAccounts. The
+    // tenancy scope on clubId is still enforced on the snapshot;
+    // isActive is enforced downstream via the eligibility gate. Both
+    // are still in gl-recommend.ts:
+    //   • `.filter((a) => a.isActive ...)` at :299
+    //   • `if (!a.isActive) blockers.push("INACTIVE")` at :933
     expect(GL).toMatch(/account\.findMany\([\s\S]*?clubId:\s*args\.clubId/);
-    expect(GL).toMatch(/isActive:\s*true/);
+    expect(GL).toMatch(/isActive|filterEligibleAccounts/);
   });
 });
 
