@@ -1,0 +1,40 @@
+{
+  "id": "image-only-narrative-service",
+  "split": "dev",
+  "label": "Image/OCR shape — narrative service description, no classic table (§4 image, §2.24)",
+  "category": "OCR_NARRATIVE_SERVICE",
+  "tags": ["ocr-like", "narrative", "no-table"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Sunset Landscape Services\n88 Meadow Lane, Vernon BC V1B 2Y8\nSunsetLandscape.example — 250-555-0198\nGST 728834129 RT0001\n\nInvoice SLS-2026-411\n     Date 2026-08-14\n     Due 2026-09-13\n\nCoulee Ridge Golf and Country Club\n\nDetails:\nMonthly landscape maintenance service for August 2026.\nWork included mowing all common-area lawns weekly, edging pathways,\nweed removal from garden beds around clubhouse, seasonal flower bed\nmaintenance, and one round of tree canopy inspection.\n\nAmount for month: $2,850.00\nGST 5%: $142.50\nTotal: $2,992.50 CAD\n\nRegards,\nMarnie at Sunset Landscape\n",
+    "email": {
+      "senderAddress": "office@sunsetlandscape.example",
+      "subject": "Aug maintenance"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Sunset Landscape Services",
+      "acceptableAliases": ["Sunset Landscape"]
+    },
+    "invoiceNumber": { "value": "SLS-2026-411" },
+    "invoiceDate": "2026-08-14",
+    "dueDate": "2026-09-13",
+    "currency": "CAD",
+    "subtotal": 2850.00,
+    "taxTotal": 142.50,
+    "taxRate": 0.05,
+    "total": 2992.50,
+    "economicPurpose": "MAINTENANCE_SERVICE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6020", "6031"],
+    "acceptableGlConcepts": ["grounds_maintenance", "landscape_maintenance", "operating_service"],
+    "forbiddenGlAccounts": ["1506", "1540", "1710", "1720"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§4 image / §2.24 — narrative service description with no line-item table. Amount buried in prose. Tests whether extraction recovers total from prose, and whether ranker correctly identifies operating maintenance despite lack of clean table structure."
+  }
+}

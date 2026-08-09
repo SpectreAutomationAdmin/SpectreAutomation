@@ -1,0 +1,40 @@
+{
+  "id": "adversarial-operating-with-model-numbers",
+  "split": "dev",
+  "label": "Operating repair invoice with strong model/serial context that must NOT force capital (§2.17)",
+  "category": "ADVERSARIAL_OPERATING",
+  "tags": ["adversarial", "operating", "model-numbers-noise"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Cascade Turf Repair Ltd.\n331 Service Alley · Kamloops BC V2C 1P1\nGST# 719283441 RT0001\n\nINVOICE\nInvoice CTR-2026-3311\nDate: 2026-08-09\nDue Date: 2026-09-08\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nSERVICE PERFORMED:\nRoutine mower deck repair for Toro Reelmaster RM-5510-D — asset tag CR-GR-04412,\nSerial# TRM5510D-A-2210033, engine hours 4,410\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nReplace mower deck bearings                 6       35.40       212.40\nAdjust hydraulic drive linkage              1       92.00        92.00\nLabour (2.5 hrs @ $135/hr)                  1      337.50       337.50\n\n                                       Subtotal:     641.90\n                                       GST (5%):      32.10\n                                       Total:       674.00 CAD\n\nAsset returned to service. No warranty on bearings.\n",
+    "email": {
+      "senderAddress": "service@cascadeturfrepair.example",
+      "subject": "CTR-2026-3311 mower service"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Cascade Turf Repair Ltd.",
+      "acceptableAliases": ["Cascade Turf Repair"]
+    },
+    "invoiceNumber": { "value": "CTR-2026-3311" },
+    "invoiceDate": "2026-08-09",
+    "dueDate": "2026-09-08",
+    "currency": "CAD",
+    "subtotal": 641.90,
+    "taxTotal": 32.10,
+    "taxRate": 0.05,
+    "total": 674.00,
+    "economicPurpose": "REPAIR_MAINTENANCE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6031", "6020"],
+    "acceptableGlConcepts": ["operating_repair", "grounds_maintenance"],
+    "forbiddenGlAccounts": ["1506", "1540", "1570"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment", "capitalizable_component"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.17 — has model number, serial number, asset tag (equipment-context evidence) but the WORK is ordinary R&M (bearings, labour). Presence of serialization ≠ capital purpose. Must remain operating."
+  }
+}

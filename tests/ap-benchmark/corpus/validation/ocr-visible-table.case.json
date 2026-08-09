@@ -1,0 +1,45 @@
+{
+  "id": "ocr-visible-table",
+  "split": "validation",
+  "label": "Image/OCR shape — clean line-item table recovered (§4 image, §2.23)",
+  "category": "OCR_TABULAR",
+  "tags": ["ocr-like", "structured-table"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "OrchardValley Chemical Co.\n55 Farm Road, Lethbridge AB\n\nInvoice OVC-2026-88112\nDate 2026-08-11    Due 2026-09-10\n\nBill to:\nCoulee Ridge Golf & Country Club\n\nProduct                          Qty    Unit Price   Amount\n72-9361 CUP-SCALP ANTI            4      48.76        195.04\n253-154 SEAL-OIL                 12       6.20         74.40\n100-5703 SPACER-BEARING ASM       5     140.48        702.40\n\nSubtotal                                             971.84\nGST 5%                                                48.59\nTotal                                              1020.43 CAD\n",
+    "email": {
+      "senderAddress": "billing@orchardvalley.example",
+      "subject": "OVC-2026-88112"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "OrchardValley Chemical Co.",
+      "acceptableAliases": ["OrchardValley Chemical"]
+    },
+    "invoiceNumber": { "value": "OVC-2026-88112" },
+    "invoiceDate": "2026-08-11",
+    "dueDate": "2026-09-10",
+    "currency": "CAD",
+    "subtotal": 971.84,
+    "taxTotal": 48.59,
+    "taxRate": 0.05,
+    "total": 1020.43,
+    "lineItems": [
+      { "descriptionContains": "CUP", "amountApprox": 195.04, "quantityApprox": 4 },
+      { "descriptionContains": "SEAL", "amountApprox": 74.40, "quantityApprox": 12 },
+      { "descriptionContains": "SPACER", "amountApprox": 702.40, "quantityApprox": 5 }
+    ],
+    "economicPurpose": "REPAIR_PART",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6031", "6025"],
+    "acceptableGlConcepts": ["repair_parts", "grounds_supplies", "operating_repair"],
+    "forbiddenGlAccounts": ["1506", "1540", "1710"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment", "contra_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§4/§2.23 — OCR-visible line-item table with SKU-style codes + qty + unit price + amount. Mimics the shape of a scanned invoice successfully processed by Textract. Should route to R&M / grounds supplies. Multiple qty>1 items + small unit prices indicate consumable spare parts, not capital."
+  }
+}

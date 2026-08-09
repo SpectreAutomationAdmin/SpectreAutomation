@@ -1,0 +1,35 @@
+{
+  "id": "h-04-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #4",
+  "category": "BLIND",
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Cascade Pavement Solutions Ltd.\n1189 Aggregate Road · Kamloops BC V2H 1B1\nGST# 728123441 RT0001\n\nAIA PROGRESS BILLING — APPLICATION #2\nInvoice CPS-2026-AIA-778\nDate: 2026-08-16\nDue Date: 2026-09-15\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nProject: Parking Lot Expansion & Cart Path Widening\nProject code: PCP-2026-CIP\nEstimated substantial completion: 2027-04-30\n\nWork this period: sub-base grading, geotextile installation (60% of scope 2 of 6)\n\nDESCRIPTION                                       AMOUNT\nSub-base grading + geotextile — Phase 2 of 6      88,400.00\n(Not yet placed in service — CIP)\n\n                                       Subtotal:  88,400.00\n                                       GST (5%):   4,420.00\n                                       Total:    92,820.00 CAD\n\nAsset remains Work in Progress. Multi-phase project.\n",
+    "email": {
+      "senderAddress": "billing@cascadepavement.example",
+      "subject": "CPS-2026-AIA-778 progress"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Cascade Pavement Solutions Ltd.", "acceptableAliases": ["Cascade Pavement Solutions"] },
+    "invoiceNumber": { "value": "CPS-2026-AIA-778" },
+    "invoiceDate": "2026-08-16",
+    "dueDate": "2026-09-15",
+    "currency": "CAD",
+    "subtotal": 88400.00,
+    "taxTotal": 4420.00,
+    "taxRate": 0.05,
+    "total": 92820.00,
+    "economicPurpose": "CAPITAL_CONSTRUCTION_IN_PROGRESS",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1560", "1530"],
+    "acceptableGlConcepts": ["construction_in_progress", "capital_improvement_wip"],
+    "forbiddenGlAccounts": ["6020", "6031", "1710", "1720", "3100"],
+    "forbiddenGlConcepts": ["operating_repair", "contra_asset", "completed_capital_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "H-04 blind: CIP paving project. Acceptable = CIP or capital improvements. Operating + contra + revenue forbidden."
+  }
+}

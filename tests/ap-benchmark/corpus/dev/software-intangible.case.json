@@ -1,0 +1,39 @@
+{
+  "id": "software-intangible",
+  "split": "dev",
+  "label": "Software / intangible asset purchase — perpetual licence (§2.12)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["intangible", "software", "perpetual-licence"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Clubhouse Software Systems Inc.\n1188 Enterprise Drive · Toronto ON M5V 3B2\nGST# 891123441 RT0001\nHST# 891123441 RT0001\n\nINVOICE\nInvoice CSS-A26-2201\nDate: 2026-08-11\nDue Date: 2026-09-10\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                                       AMOUNT\nMember Management Suite — perpetual licence,\n  50-user seat (v9.4), includes lifetime updates    24,500.00\nImplementation + data migration (one-time)          6,200.00\n\n                                       Subtotal:  30,700.00\n                                       GST (5%):   1,535.00\n                                       Total:    32,235.00 CAD\n\nPerpetual licence — no annual renewal.\nSoftware installed on-premises at Coulee Ridge server.\n",
+    "email": {
+      "senderAddress": "billing@clubhousesoftware.example",
+      "subject": "CSS-A26-2201"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Clubhouse Software Systems Inc.",
+      "acceptableAliases": ["Clubhouse Software Systems", "Clubhouse Software"]
+    },
+    "invoiceNumber": { "value": "CSS-A26-2201" },
+    "invoiceDate": "2026-08-11",
+    "dueDate": "2026-09-10",
+    "currency": "CAD",
+    "subtotal": 30700.00,
+    "taxTotal": 1535.00,
+    "taxRate": 0.05,
+    "total": 32235.00,
+    "economicPurpose": "SOFTWARE_INTANGIBLE_ASSET",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1610"],
+    "acceptableGlConcepts": ["software_intangible", "intangible_asset", "capitalizable_software"],
+    "forbiddenGlAccounts": ["6072", "6065", "1710", "1730"],
+    "forbiddenGlConcepts": ["telephone_internet", "professional_services", "contra_asset", "accumulated_amortization"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.12 — perpetual software licence with lifetime updates + one-time implementation = intangible capital asset (1610). Must NOT route to Telephone & Internet (6072) or Professional Services (6065). Accum-amort contra (1730) FORBIDDEN as AP debit."
+  }
+}

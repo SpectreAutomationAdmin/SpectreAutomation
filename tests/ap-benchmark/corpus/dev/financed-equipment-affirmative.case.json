@@ -1,0 +1,40 @@
+{
+  "id": "financed-equipment-affirmative",
+  "split": "dev",
+  "label": "Complete equipment WITH affirmative financing evidence (§2.10)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["complete-machine", "financed", "lease-purchase"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Northern Golf Machinery Ltd.\n5578 Industrial Boulevard · Regina SK S4N 6G7\nGST# 812733441 RT0001\n\nINVOICE\nInvoice NGM-A26-9987\nDate: 2026-08-16\nDue Date: 2026-09-15\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nGreensmaster GM-5010 Triplex                1   94,200.00    94,200.00\n  Serial# GM5010-A-77118\nRoll-out training + commissioning           1    1,250.00     1,250.00\n\n                                       Subtotal:  95,450.00\n                                       GST (5%):   4,772.50\n                                       Total:   100,222.50 CAD\n\n===\nFINANCING TERMS — CIT Equipment Finance Canada Corp.\nContract number: CIT-EF-2026-A-0442\nLease type: 5-year capital lease with $1 buy-out\nMonthly payment: $1,884.15\nFirst payment due: 2026-09-15\nAsset title held by CIT until final payment.\n===\n",
+    "email": {
+      "senderAddress": "sales@northerngolfmachinery.example",
+      "subject": "GM5010 delivery + CIT finance confirmation"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Northern Golf Machinery Ltd.",
+      "acceptableAliases": ["Northern Golf Machinery"]
+    },
+    "invoiceNumber": { "value": "NGM-A26-9987" },
+    "invoiceDate": "2026-08-16",
+    "dueDate": "2026-09-15",
+    "currency": "CAD",
+    "subtotal": 95450.00,
+    "taxTotal": 4772.50,
+    "taxRate": 0.05,
+    "total": 100222.50,
+    "economicPurpose": "COMPLETE_EQUIPMENT_FINANCED",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1570", "1506", "1540"],
+    "acceptableGlConcepts": ["equipment_under_financing", "financed_equipment", "capital_equipment_grounds"],
+    "forbiddenGlAccounts": ["6020", "6031", "1710", "1720"],
+    "forbiddenGlConcepts": ["operating_repair", "grounds_maintenance"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.10 — affirmative financing evidence: CIT contract number, capital lease with buy-out, title held by lessor. 1570 is the PREFERRED account. 1506/1540 acceptable as a generic capital fallback. Operating accounts FORBIDDEN."
+  }
+}

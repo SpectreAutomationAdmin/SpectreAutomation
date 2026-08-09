@@ -1,0 +1,35 @@
+{
+  "id": "h-07-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #7",
+  "category": "BLIND",
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "GreenView Landscape Solutions Ltd.\n988 Meadow Circle · Chilliwack BC V2P 8T4\nGST 833441166 RT0001\n\nInvoice GVL-A26-1188\nDate 2026-08-10\nDue 2026-09-09\n\nBill to:\nCoulee Ridge Golf & Country Club\n\nMonthly Groundskeeping Service — August 2026\nCovers weekly mowing, seasonal edging, mulch top-up on garden beds,\nand common-area tree pruning as directed by Head Superintendent.\n\nService period: 2026-08-01 → 2026-08-31\n\nMonth total: $3,450.00\nGST 5%: $172.50\nTotal: $3,622.50 CAD\n",
+    "email": {
+      "senderAddress": "office@greenview.example",
+      "subject": "Aug service"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "GreenView Landscape Solutions Ltd.", "acceptableAliases": ["GreenView Landscape Solutions", "GreenView"] },
+    "invoiceNumber": { "value": "GVL-A26-1188" },
+    "invoiceDate": "2026-08-10",
+    "dueDate": "2026-09-09",
+    "currency": "CAD",
+    "subtotal": 3450.00,
+    "taxTotal": 172.50,
+    "taxRate": 0.05,
+    "total": 3622.50,
+    "economicPurpose": "MAINTENANCE_SERVICE",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6020", "6031"],
+    "acceptableGlConcepts": ["grounds_maintenance", "landscape_service"],
+    "forbiddenGlAccounts": ["1506", "1540", "1710"],
+    "forbiddenGlConcepts": ["capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "H-07 blind: narrative service description, no table. Must recover total from prose + route operating."
+  }
+}

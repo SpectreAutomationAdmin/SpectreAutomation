@@ -1314,6 +1314,19 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     poRequestorText: null,
     supplierName: extraction.vendor.guessedName,
     resolvedProductIdentity: sharedProductIdentity,
+    // Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — pass the
+    // transactional text so CapitalEvidenceDecision can detect
+    // structural CAPITAL signals (placed-in-service, structure/
+    // building, land, complete-unit-delivered, asset-enhancement,
+    // CIP-explicit) that don't live at the object-role level.
+    // Prefers transactionalTextValue (Slice 5.2 amendment #4 —
+    // supplier/recipient/policy/footer regions already excluded) so
+    // street names and policy paragraphs cannot false-positive.
+    // Falls back to raw pdfText when the layout-based route wasn't
+    // exercised (extractedTextOverride path — synthetic benchmark).
+    documentBodyText: (transactionalTextValue != null && transactionalTextValue.trim().length > 0)
+      ? transactionalTextValue
+      : pdfText,
   });
   // Department leader from object-identity-primary inference
   // (completion pass §18: object application beats vendor).

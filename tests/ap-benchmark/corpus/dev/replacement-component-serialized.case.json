@@ -1,0 +1,40 @@
+{
+  "id": "replacement-component-serialized",
+  "split": "dev",
+  "label": "Serialized replacement engine — capitalizable component (§2.7, §2.8)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["replacement-component", "serialized", "capital-enhancement"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Diamond Turf Parts & Service\n210 Compressor Ave · Saskatoon SK S7N 4B1\nGST# 723441189 RT0001\n\nINVOICE\nInvoice DTPS-2026-11288\nDate: 2026-08-12\nDue Date: 2026-09-11\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nSCOPE: Complete engine replacement — Toro Reelmaster 5510 (asset tag CR-GR-04412)\nOriginal engine failed catastrophically at 8,220 hrs. Replacement is a\nNEW OEM Kubota V2607-CR-TE4 diesel engine — extends useful life 5 years.\nAsset capitalization threshold ($5,000) exceeded.\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nKubota V2607-CR-TE4 diesel engine (NEW)     1   11,850.00    11,850.00\n  Serial# KUBV2607-A-2210033\nInstallation labour (8 hrs @ $145/hr)       1    1,160.00     1,160.00\n\n                                       Subtotal:  13,010.00\n                                       GST (5%):     650.50\n                                       Total:    13,660.50 CAD\n",
+    "email": {
+      "senderAddress": "service@diamondturf.example",
+      "subject": "DTPS-2026-11288 engine replacement"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Diamond Turf Parts & Service",
+      "acceptableAliases": ["Diamond Turf"]
+    },
+    "invoiceNumber": { "value": "DTPS-2026-11288" },
+    "invoiceDate": "2026-08-12",
+    "dueDate": "2026-09-11",
+    "currency": "CAD",
+    "subtotal": 13010.00,
+    "taxTotal": 650.50,
+    "taxRate": 0.05,
+    "total": 13660.50,
+    "economicPurpose": "CAPITALIZABLE_REPLACEMENT_COMPONENT",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540"],
+    "acceptableGlConcepts": ["capitalizable_component", "asset_enhancement", "capital_equipment_grounds"],
+    "forbiddenGlAccounts": ["6031", "6020", "1710", "1720"],
+    "forbiddenGlConcepts": ["operating_repair"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.7 §2.8 — serialized component replacement, explicit enhancement ('extends useful life 5 years'), above capitalization threshold. Should be capitalized to the equipment account, NOT expensed as ordinary R&M (6031)."
+  }
+}

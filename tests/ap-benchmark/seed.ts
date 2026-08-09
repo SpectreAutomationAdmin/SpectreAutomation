@@ -59,6 +59,18 @@ export async function seedBenchmarkTenant(
     { accountNumber: "1506", name: "Equipment & Fixtures — Grounds", type: "ASSET", normalBalance: "DEBIT" },
     { accountNumber: "1530", name: "Course Improvements", type: "ASSET", normalBalance: "DEBIT" },
     { accountNumber: "1540", name: "Equipment & Vehicles", type: "ASSET", normalBalance: "DEBIT" },
+    // Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — extended capital
+    // account families needed to exercise §2 §7 scenarios (CIP,
+    // financing, software/intangible, prepaid, inventory, buildings,
+    // land). Each is a legitimate ASSET postable as AP debit.
+    { accountNumber: "1560", name: "Construction in Progress", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1570", name: "Equipment Under Financing", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1610", name: "Software & Intangibles", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1410", name: "Prepaid Expenses", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1250", name: "Inventory — F&B", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1260", name: "Inventory — Pro Shop", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1550", name: "Buildings & Structures", type: "ASSET", normalBalance: "DEBIT" },
+    { accountNumber: "1580", name: "Land", type: "ASSET", normalBalance: "DEBIT" },
 
     // Contra-asset accounts — MUST NOT be recommended for AP debit.
     // Uses the abbreviation "Accum Deprec" specifically so the

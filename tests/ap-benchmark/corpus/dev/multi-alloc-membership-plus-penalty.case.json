@@ -1,0 +1,39 @@
+{
+  "id": "multi-alloc-membership-plus-penalty",
+  "split": "dev",
+  "label": "Multi-allocation: professional membership + interest/penalty (§2 multi-allocation, §15)",
+  "category": "MULTI_ALLOCATION",
+  "tags": ["multi-allocation", "professional-membership", "interest-penalty"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Professional Golf Course Superintendents Association\n1421 Fairway Drive · Toronto ON M6A 2A2\nGST# 892123441 RT0001\n\nRENEWAL INVOICE — LATE\nInvoice PGCSA-2026-9002\nDate: 2026-08-08\nDue Date: 2026-09-07\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nMember: John Simmons, Superintendent\n\nDESCRIPTION                                       AMOUNT\nAnnual professional membership dues — 2026-2027    495.00\nLate renewal interest charge (2 months × 1.5%)      14.85\n\n                                       Subtotal:     509.85\n                                       GST (5%):      25.49\n                                       Total:       535.34 CAD\n\nMember must re-register in good standing.\n",
+    "email": {
+      "senderAddress": "membership@pgcsa.example",
+      "subject": "PGCSA-2026-9002 renewal"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Professional Golf Course Superintendents Association",
+      "acceptableAliases": ["PGCSA", "Professional Golf Course Superintendents Assn"]
+    },
+    "invoiceNumber": { "value": "PGCSA-2026-9002" },
+    "invoiceDate": "2026-08-08",
+    "dueDate": "2026-09-07",
+    "currency": "CAD",
+    "subtotal": 509.85,
+    "taxTotal": 25.49,
+    "taxRate": 0.05,
+    "total": 535.34,
+    "economicPurpose": "MULTI_ALLOCATION_MEMBERSHIP_AND_INTEREST",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6064", "6065"],
+    "acceptableGlConcepts": ["professional_dues", "membership_dues", "professional_services", "multi_allocation"],
+    "forbiddenGlAccounts": ["6020", "6031", "1506", "1710"],
+    "forbiddenGlConcepts": ["grounds_maintenance", "operating_repair", "capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 2,
+    "notes": "§15 multi-allocation — dues ($495 → 6064) + interest/penalty ($14.85 → separate allocation, typically interest expense but the synthetic COA lacks one; 6065 as fallback). Founder-facing category should be 'Multiple' per CPA precedent. Allocations must be independently reasoned. Sum reconciles to $509.85 subtotal + $25.49 tax."
+  }
+}

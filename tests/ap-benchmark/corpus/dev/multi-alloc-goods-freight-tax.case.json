@@ -1,0 +1,40 @@
+{
+  "id": "multi-alloc-goods-freight-tax",
+  "split": "dev",
+  "label": "Multi-allocation: goods + freight (§15)",
+  "category": "MULTI_ALLOCATION",
+  "tags": ["multi-allocation", "goods-and-freight"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Turfway Wholesale Distributors\n2277 Distribution Lane · Winnipeg MB R3T 6C1\nGST# 811123441 RT0001\n\nINVOICE\nInvoice TWD-A26-77414\nDate: 2026-08-09\nDue Date: 2026-09-08\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nGolf tees, wooden, box of 1000              48       28.00     1,344.00\nDivot mix, 40lb bag                         50       18.50       925.00\nFreight — Winnipeg to Coulee Ridge           1      285.00       285.00\n\n                                       Subtotal:   2,554.00\n                                       GST (5%):     127.70\n                                       Total:     2,681.70 CAD\n",
+    "email": {
+      "senderAddress": "orders@turfwaywholesale.example",
+      "subject": "TWD-A26-77414"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Turfway Wholesale Distributors",
+      "acceptableAliases": ["Turfway Wholesale"]
+    },
+    "invoiceNumber": { "value": "TWD-A26-77414" },
+    "invoiceDate": "2026-08-09",
+    "dueDate": "2026-09-08",
+    "currency": "CAD",
+    "subtotal": 2554.00,
+    "taxTotal": 127.70,
+    "taxRate": 0.05,
+    "total": 2681.70,
+    "economicPurpose": "GOODS_PLUS_FREIGHT",
+    "departmentHints": ["Grounds", "Pro Shop"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6025", "6020"],
+    "acceptableGlConcepts": ["grounds_supplies", "operating_supplies_with_freight"],
+    "forbiddenGlAccounts": ["1506", "1540", "1710"],
+    "forbiddenGlConcepts": ["capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§15 — goods + freight commonly capitalized to the goods (freight-in). Single allocation acceptable if freight is bundled into goods cost; two allocations acceptable if tenant convention separates freight. Both must land in operating (6025/6020). Capital FORBIDDEN."
+  }
+}

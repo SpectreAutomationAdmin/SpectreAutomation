@@ -1,0 +1,9 @@
+a0c00d42519ea9b59d846f6cbb28d2ba255df24f51fa5c682e331c6e396fc5c0 *manifest.json
+17ce7eaf68be19cce7e082b3dc64032879a2c0b93f25ce55b7e53211fb780824 *holdout/h-01-blind.case.json
+28b2dc4befb4fa5eefda8d095099d0a67833dfa03ec927cd85b4f7cc89f69cbb *holdout/h-02-blind.case.json
+fba379f7996639d31d60efae5a8e76e16e55822ae943850483e355645864d97f *holdout/h-03-blind.case.json
+eb059983a75d4d2c5a99202cfecae80c4513fc6dfe686192e81d8c1dc3e012dd *holdout/h-04-blind.case.json
+f08ba132a47b366dd7bf8c151b2a4a03ded84d47f5f457443870528d99e91339 *holdout/h-05-blind.case.json
+ebc3808cc96e2f1218e2d720d2d3b17b04eb6fb1d840fc55d90646a3f5582462 *holdout/h-06-blind.case.json
+90905de230408aa8583b9bc19e61393df0b09573d6366b952a0501e0a73f8901 *holdout/h-07-blind.case.json
+e4da994e6a27e3ce6de9419dddfd824e02b5454042543de3f9055067ea44c210 *holdout/h-08-blind.case.json

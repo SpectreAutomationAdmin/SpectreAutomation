@@ -1,0 +1,39 @@
+{
+  "id": "building-acquisition",
+  "split": "validation",
+  "label": "Building/structure acquisition (§2.4)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["building", "capital-depreciable"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Prairie Steel Building Systems Ltd.\n8811 Fabrication Rd · Regina SK S4Y 6C7\nGST# 891234441 RT0001\n\nINVOICE — FINAL DELIVERY & ACCEPTANCE\nInvoice PSBS-2026-A-441\nDate: 2026-08-13\nDue Date: 2026-09-12\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                                       AMOUNT\nMaintenance shed — pre-engineered steel building,\n  60' × 80' × 18' clear-span, insulated,\n  concrete slab on grade included, fully erected\n  and inspected 2026-08-08                        128,400.00\nSite preparation + delivery                        6,850.00\n\n                                       Subtotal: 135,250.00\n                                       GST (5%):   6,762.50\n                                       Total:   142,012.50 CAD\n\nBuilding accepted by owner; substantial completion 2026-08-08.\n",
+    "email": {
+      "senderAddress": "billing@prairiesteelbuildings.example",
+      "subject": "PSBS-2026-A-441 final"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Prairie Steel Building Systems Ltd.",
+      "acceptableAliases": ["Prairie Steel Building Systems"]
+    },
+    "invoiceNumber": { "value": "PSBS-2026-A-441" },
+    "invoiceDate": "2026-08-13",
+    "dueDate": "2026-09-12",
+    "currency": "CAD",
+    "subtotal": 135250.00,
+    "taxTotal": 6762.50,
+    "taxRate": 0.05,
+    "total": 142012.50,
+    "economicPurpose": "BUILDING_ACQUISITION",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1550"],
+    "acceptableGlConcepts": ["building", "capital_building", "structure"],
+    "forbiddenGlAccounts": ["1580", "1560", "1710", "1720", "6020"],
+    "forbiddenGlConcepts": ["land", "construction_in_progress", "contra_asset", "grounds_maintenance"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.4 — completed building delivered + accepted. Substantial completion date present. Land (1580) FORBIDDEN — this is a structure, not land. CIP (1560) FORBIDDEN — construction is complete. 1550 Buildings is correct."
+  }
+}

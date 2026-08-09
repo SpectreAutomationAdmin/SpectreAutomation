@@ -1,0 +1,40 @@
+{
+  "id": "inventory-fnb-restock",
+  "split": "dev",
+  "label": "F&B inventory restock — inventory asset (§2.14)",
+  "category": "INVENTORY_INVOICE",
+  "tags": ["inventory", "fnb"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Wescan Beverage Distributors Ltd.\n5522 Warehouse Way · Calgary AB T2E 8M2\nGST# 811223441 RT0001\n\nINVOICE\nInvoice WBD-A26-88401\nDate: 2026-08-10\nDue Date: 2026-09-09\n\nBILL TO:\nCoulee Ridge Golf & Country Club — Clubhouse Lounge\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nMolson Canadian 24-pack bottles            18       48.00       864.00\nCoors Light 24-pack cans                   12       46.20       554.40\nJameson Irish Whiskey 750mL                24       38.75       930.00\nMcGuinness Vodka 1.14L                     18       31.20       561.60\n\n                                       Subtotal:   2,910.00\n                                       GST (5%):     145.50\n                                       Total:     3,055.50 CAD\n\nInventory replenishment — Lounge. Received 2026-08-11.\n",
+    "email": {
+      "senderAddress": "orders@wescanbeverage.example",
+      "subject": "WBD-A26-88401 restock"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Wescan Beverage Distributors Ltd.",
+      "acceptableAliases": ["Wescan Beverage Distributors", "Wescan Beverage"]
+    },
+    "invoiceNumber": { "value": "WBD-A26-88401" },
+    "invoiceDate": "2026-08-10",
+    "dueDate": "2026-09-09",
+    "currency": "CAD",
+    "subtotal": 2910.00,
+    "taxTotal": 145.50,
+    "taxRate": 0.05,
+    "total": 3055.50,
+    "economicPurpose": "INVENTORY_PURCHASE",
+    "departmentHints": ["F&B", "Lounge"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1250", "5101"],
+    "acceptableGlConcepts": ["inventory_fnb", "beverage_inventory", "beverage_cost_of_sales"],
+    "forbiddenGlAccounts": ["6020", "6031", "1710", "1506"],
+    "forbiddenGlConcepts": ["operating_repair", "grounds_maintenance", "capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.14 — beverage restock. Either inventory asset (1250) or F&B beverage cost of sales (5101) is acceptable depending on tenant's inventory-vs-COGS convention. Grounds accounts FORBIDDEN. Capital equipment FORBIDDEN."
+  }
+}

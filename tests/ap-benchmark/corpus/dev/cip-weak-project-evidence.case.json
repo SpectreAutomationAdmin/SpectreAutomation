@@ -1,0 +1,39 @@
+{
+  "id": "cip-weak-project-evidence",
+  "split": "dev",
+  "label": "Construction — weak project evidence, must NOT commit to CIP without support (§2.2)",
+  "category": "AMBIGUOUS_CAPITAL",
+  "tags": ["cip-negative", "weak-evidence", "abstention-preferred"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Foothills Contracting Ltd.\n891 Concrete Lane · Airdrie AB T4B 4M2\nGST# 892831234 RT0001\n\nINVOICE\nInvoice FCL-2026-A2201\nDate: 2026-08-14\nDue Date: 2026-09-13\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                                       AMOUNT\nConcrete pad — parking area, 8m x 12m             4,850.00\nLabour                                            1,120.00\n\n                                       Subtotal:   5,970.00\n                                       GST (5%):     298.50\n                                       Total:     6,268.50 CAD\n\nWorkmanship guaranteed 12 months.\n",
+    "email": {
+      "senderAddress": "office@foothillscontracting.example",
+      "subject": "Invoice A2201"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Foothills Contracting Ltd.",
+      "acceptableAliases": ["Foothills Contracting"]
+    },
+    "invoiceNumber": { "value": "FCL-2026-A2201" },
+    "invoiceDate": "2026-08-14",
+    "dueDate": "2026-09-13",
+    "currency": "CAD",
+    "subtotal": 5970.00,
+    "taxTotal": 298.50,
+    "taxRate": 0.05,
+    "total": 6268.50,
+    "economicPurpose": "AMBIGUOUS_CAPITAL_OR_OPERATING",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1530", "6020"],
+    "acceptableGlConcepts": ["course_improvement", "grounds_maintenance", "operating_expense"],
+    "forbiddenGlAccounts": ["1560", "1710", "1720", "3100"],
+    "forbiddenGlConcepts": ["construction_in_progress", "contra_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.2 — small concrete pad with NO project code, NO AIA billing, NO 'not yet placed in service' language, NO substantial completion date. CIP requires affirmative project evidence per Slice 5.7A. Either operating maintenance or capital improvement (1530) is acceptable; CIP (1560) is FORBIDDEN without project evidence."
+  }
+}

@@ -50,7 +50,17 @@ export interface CapitalEvidence {
     | "durable_use_indicator"
     | "no_functional_evidence"
     | "conflicting_completeness_between_items"
-    | "replacement_language";
+    | "replacement_language"
+    // Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — evidence-composition
+    // correction. New evidence families surface CAPITAL signals that
+    // the Slice 5.3 completion-pass primary object roles did not detect
+    // on their own. Each family is structural (regex over document
+    // body text) — NO supplier/invoice/product-specific conditions.
+    | "placed_in_service_language"
+    | "structure_or_building_recognized"
+    | "land_acquisition_recognized"
+    | "complete_unit_delivered_language"
+    | "asset_enhancement_language";
   detail: string;
   strength: "strong" | "medium" | "weak";
 }
@@ -86,6 +96,14 @@ export interface CapitalObjectEvidenceInput {
    *  the resolution layer may consider price for OBJECT IDENTITY,
    *  but this capital layer NEVER consumes price directly. */
   resolvedProductIdentity?: ProductIdentityResolution | null;
+  /** Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — invoice body text
+   *  passed for evidence-composition detection of CAPITAL signals
+   *  that don't live at the object-role level (placed-in-service
+   *  language, structure/building recognition, land recognition,
+   *  complete-unit-delivered language, asset-enhancement language).
+   *  Same trust posture as poRequestorText: pattern-based, no
+   *  supplier/invoice/product-specific conditions. */
+  documentBodyText?: string | null;
 }
 
 // -----------------------------------------------------------------------------
@@ -98,6 +116,50 @@ const DURABLE_USE_RE =
   /\b(?:useful\s+life|multi[-\s]?year|long[-\s]?term|permanent\s+install|fixed\s+installation)\b/i;
 const PROJECT_PO_RE =
   /\b(?:project\s*(?:#|no\.?|number)|capital\s+project|asset\s+register)\b/i;
+
+// Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — evidence-composition
+// vocabularies. Each pattern targets a distinct STRUCTURAL signal that
+// distinguishes CAPITAL from OPERATING. NO supplier/invoice/product/
+// SKU literals — only class-of-thing regex.
+
+/** Placed-in-service / substantial completion language. Marks a
+ *  completed capital improvement or delivered asset that has been
+ *  accepted. §11 "placed-in-service context" + "construction
+ *  completion state". */
+const PLACED_IN_SERVICE_RE =
+  /\b(?:placed\s+in\s+service|substantial\s+completion|work\s+completed|project\s+closed|final\s+invoice|delivered\s+and\s+inspected|accepted\s+by\s+owner|accepted\s+by\s+the\s+owner|substantially\s+complete|inspected\s+(?:and|\+)\s+accepted)\b/i;
+
+/** Structure / building / shed recognition. §11 "complete functional
+ *  object" extended to buildings and permanent structures. Includes
+ *  clear-span, pre-engineered, steel/timber structural descriptors. */
+const STRUCTURE_BUILDING_RE =
+  /\b(?:pre[-\s]?engineered\s+(?:steel\s+)?building|steel\s+building|clear[-\s]?span|maintenance\s+shed|storage\s+shed|equipment\s+shed|structure\s+(?:erected|constructed)|erected\s+and\s+inspected|building\s+accepted|concrete\s+slab\s+on\s+grade|structural\s+steel)\b/i;
+
+/** Land acquisition recognition. §11 "complete functional object" for
+ *  non-depreciable land. Structural indicators: parcel, hectares,
+ *  concession, closing statement + land-purchase phrasing. */
+const LAND_ACQUISITION_RE =
+  /\b(?:land\s+purchase|land\s+acquisition|purchase\s+price\s*[-–—]\s*(?:lot|parcel|acre)|land\s+only|title\s+transfer|closing\s+statement|hectares?\s+adjacent|parcel\s+adjacent|no\s+buildings\)|concession\s+\d+|rm\s+of\s+\w+)\b/i;
+
+/** Complete-unit-delivered language. §11 "complete functional object"
+ *  where the LINE ITEM is a complete machine (e.g. "Complete unit,
+ *  delivered assembled", "commissioned"). Adds bonus weight even when
+ *  the object role classifier is COMPLETE_MACHINE — it distinguishes
+ *  a genuinely delivered asset from a repair job. */
+const COMPLETE_UNIT_DELIVERED_RE =
+  /\b(?:complete\s+unit,?\s+delivered\s+assembled|commissioned|roll[-\s]?out\s+(?:training|installation)|new\s+oem|delivered\s+assembled|assembled\s+and\s+delivered|complete\s+machine)\b/i;
+
+/** Asset-enhancement language. §11 "asset enhancement" — extends
+ *  useful life, replaces a major functional subsystem with a life-
+ *  extending component. Distinguishes capitalizable component
+ *  replacement from ordinary R&M. */
+const ASSET_ENHANCEMENT_RE =
+  /\b(?:extends?\s+(?:the\s+)?useful\s+life|life[-\s]?extension|life\s+extending|capitaliz(?:e|able|ation)\s+threshold|above\s+(?:the\s+)?capitalization\s+threshold|major\s+component\s+replacement|significant\s+enhancement|permanent\s+improvement)\b/i;
+
+/** CIP explicit language. §11 "project/CIP context". Distinguishes
+ *  progress work still in construction from completed asset. */
+const CIP_EXPLICIT_RE =
+  /\b(?:construction\s+in\s+progress|work\s+in\s+progress\b(?!\s+for\s+repair)|not\s+yet\s+placed\s+in\s+service|aia\s+(?:g702|g703|progress\s+billing)|application\s+for\s+payment|progress\s+billing|multi[-\s]?phase\s+project|anticipated\s+substantial\s+completion|substantial\s+completion\s+[:—-]\s*20\d{2}[-/]\d{1,2}[-/]\d{1,2}\s+(?:or\s+later)?)\b/i;
 
 // -----------------------------------------------------------------------------
 // Weights — object-aware branch (completion pass)
@@ -119,6 +181,17 @@ const W_REPLACEMENT_LANGUAGE = 18;
 const W_CONSTRUCTION_IMPROVEMENT = 20;
 const W_PROJECT_PO = 12;
 const W_DURABLE_USE = 8;
+
+// Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — evidence-composition
+// weights. Deliberately calibrated to be additive with existing
+// object-role scoring, NOT to override it. Each threshold is
+// structural — no supplier/invoice/product-specific conditions.
+const W_PLACED_IN_SERVICE = 22;              // placed-in-service / substantial completion
+const W_STRUCTURE_BUILDING = 25;             // building/structure recognition (strong)
+const W_LAND_ACQUISITION = 25;               // land recognition (strong)
+const W_COMPLETE_UNIT_DELIVERED = 15;        // "complete unit, delivered assembled"
+const W_ASSET_ENHANCEMENT = 15;              // "extends useful life"
+const W_CIP_EXPLICIT = 22;                   // "not yet placed in service" / AIA progress
 
 const COMMIT_MIN_CONFIDENCE = 40;
 const GAP_MIN = 12;
@@ -352,6 +425,85 @@ export function evaluateCapitalObjectEvidence(
         kind: "durable_use_indicator",
         detail: input.poRequestorText.slice(0, 80),
         strength: "weak",
+      });
+    }
+  }
+
+  // Sprint 3 · Phase 4 Slice 5.9 (2026-08-09) — evidence-composition
+  // detection over invoice body text. Each pattern targets a distinct
+  // STRUCTURAL signal. No supplier/invoice/SKU/product-specific
+  // literals. Additive to object-role scoring above.
+  if (input.documentBodyText) {
+    const body = input.documentBodyText;
+
+    // Structure / building recognition — strong capital signal.
+    // A LINE ITEM describing a building (no serial#, no model#) would
+    // score as UNKNOWN or CONSUMABLE in the object role loop above;
+    // this pattern rescues the building interpretation.
+    if (STRUCTURE_BUILDING_RE.test(body)) {
+      capital += W_STRUCTURE_BUILDING;
+      durable.push({
+        kind: "structure_or_building_recognized",
+        detail: `body text contains building/structure signals`,
+        strength: "strong",
+      });
+    }
+
+    // Land acquisition — strong capital signal. Same rescue pattern.
+    if (LAND_ACQUISITION_RE.test(body)) {
+      capital += W_LAND_ACQUISITION;
+      durable.push({
+        kind: "land_acquisition_recognized",
+        detail: `body text contains land-acquisition signals`,
+        strength: "strong",
+      });
+    }
+
+    // Placed-in-service / substantial completion — completed capital
+    // asset. Distinguishes a completed capital improvement (→ finished
+    // asset account) from ordinary R&M service.
+    if (PLACED_IN_SERVICE_RE.test(body)) {
+      capital += W_PLACED_IN_SERVICE;
+      durable.push({
+        kind: "placed_in_service_language",
+        detail: `body text contains placed-in-service / completion signals`,
+        strength: "strong",
+      });
+    }
+
+    // CIP-explicit language. Marks progress-in-work. Also treated as
+    // capital (CIP is a capital account) — the ranker decides between
+    // CIP account and completed-asset account downstream via
+    // Slice 5.7A CIP evidence detector.
+    if (CIP_EXPLICIT_RE.test(body)) {
+      capital += W_CIP_EXPLICIT;
+      durable.push({
+        kind: "construction_or_improvement_context",
+        detail: `body text contains explicit CIP/progress language`,
+        strength: "strong",
+      });
+    }
+
+    // Complete-unit-delivered language — reinforces COMPLETE_MACHINE
+    // over ordinary R&M when warranty/repair boilerplate co-occurs
+    // with a real complete-unit line item.
+    if (COMPLETE_UNIT_DELIVERED_RE.test(body)) {
+      capital += W_COMPLETE_UNIT_DELIVERED;
+      durable.push({
+        kind: "complete_unit_delivered_language",
+        detail: `body text contains complete-unit-delivered signals`,
+        strength: "medium",
+      });
+    }
+
+    // Asset-enhancement language — capitalizable major component
+    // replacement (extends useful life).
+    if (ASSET_ENHANCEMENT_RE.test(body)) {
+      capital += W_ASSET_ENHANCEMENT;
+      durable.push({
+        kind: "asset_enhancement_language",
+        detail: `body text contains asset-enhancement / life-extension signals`,
+        strength: "medium",
       });
     }
   }

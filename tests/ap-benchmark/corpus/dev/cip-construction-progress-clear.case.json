@@ -1,0 +1,43 @@
+{
+  "id": "cip-construction-progress-clear",
+  "split": "dev",
+  "label": "Construction progress — clear CIP project evidence (§2.1)",
+  "category": "CIP_INVOICE",
+  "tags": ["cip", "construction-in-progress", "capital"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Prairie Course Construction Inc.\n2255 Industrial Drive · Calgary AB T3E 6A9\nGST# 872634567 RT0001\n\nAIA PROGRESS BILLING\nInvoice PCC-2026-0341\nDate: 2026-08-15\nDue Date: 2026-09-14\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nProject: New Practice Facility & Short-Game Area\nProject Code: PGF-2026-CIP\n\nAPPLICATION FOR PAYMENT NO. 4\nContract: New Practice Facility Construction (24-month build)\nProject start: 2026-04-01\nAnticipated substantial completion: 2027-06-30\nWork progress this period: earthworks phase 3 of 5\n\nDESCRIPTION                                       AMOUNT\nEarthworks & sub-grade preparation — Phase 3    142,500.00\n(Not yet placed in service)\n\n                                       Subtotal:  142,500.00\n                                       GST (5%):    7,125.00\n                                       Total:    149,625.00 CAD\n\nProgress billing per AIA G702/G703.\nAsset remains Work in Progress until substantial completion.\n",
+    "email": {
+      "senderAddress": "billing@prairiecourseconstruction.example",
+      "subject": "Progress Application #4"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Prairie Course Construction Inc.",
+      "acceptableAliases": ["Prairie Course Construction"]
+    },
+    "invoiceNumber": { "value": "PCC-2026-0341" },
+    "invoiceDate": "2026-08-15",
+    "dueDate": "2026-09-14",
+    "currency": "CAD",
+    "subtotal": 142500.00,
+    "taxTotal": 7125.00,
+    "taxRate": 0.05,
+    "total": 149625.00,
+    "lineItems": [
+      { "descriptionContains": "Earthworks", "amountApprox": 142500.00 }
+    ],
+    "economicPurpose": "CAPITAL_CONSTRUCTION_IN_PROGRESS",
+    "departmentHints": ["Grounds", "Course improvements"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1560", "1530"],
+    "acceptableGlConcepts": ["construction_in_progress", "cip", "capital_improvement_wip"],
+    "forbiddenGlAccounts": ["6020", "6031", "1710", "1720", "3100", "4100", "5100"],
+    "forbiddenGlConcepts": ["operating_repair", "grounds_maintenance", "contra_asset", "revenue", "completed_capital_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.1 — clear CIP evidence: project code, AIA progress billing, 'not yet placed in service', substantial completion date. Should route to CIP account, NOT to a completed capital account."
+  }
+}

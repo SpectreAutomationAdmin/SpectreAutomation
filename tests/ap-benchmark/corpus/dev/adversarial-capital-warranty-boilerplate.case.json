@@ -1,0 +1,40 @@
+{
+  "id": "adversarial-capital-warranty-boilerplate",
+  "split": "dev",
+  "label": "Capital equipment with 'repair'/'warranty' boilerplate that must NOT hijack purpose (§2.16)",
+  "category": "ADVERSARIAL_CAPITAL",
+  "tags": ["adversarial", "capital", "warranty-noise", "repair-boilerplate"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Precision Groundskeepers Supply\n4477 Vendor Way · Vancouver BC V6H 2A1\nGST# 728834471 RT0001\n\nINVOICE\nInvoice PGS-A26-11842\nDate: 2026-08-17\nDue Date: 2026-09-16\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nGreensmaster GM-3250-C Triplex Reel Mower   1   58,900.00    58,900.00\n  Serial# GM3250C-A-88221\n  Complete unit, delivered assembled\n\n                                       Subtotal:  58,900.00\n                                       GST (5%):   2,945.00\n                                       Total:    61,845.00 CAD\n\n===\nWARRANTY & SERVICE TERMS\nRepair coverage: 2-year parts and labour warranty included.\nRoutine maintenance intervals: every 250 operating hours.\nRepair depot: PGS Vancouver service centre.\nCustomer maintenance responsibilities apply.\n===\n",
+    "email": {
+      "senderAddress": "sales@precisionground.example",
+      "subject": "PGS-A26-11842"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Precision Groundskeepers Supply",
+      "acceptableAliases": ["Precision Groundskeepers"]
+    },
+    "invoiceNumber": { "value": "PGS-A26-11842" },
+    "invoiceDate": "2026-08-17",
+    "dueDate": "2026-09-16",
+    "currency": "CAD",
+    "subtotal": 58900.00,
+    "taxTotal": 2945.00,
+    "taxRate": 0.05,
+    "total": 61845.00,
+    "economicPurpose": "COMPLETE_EQUIPMENT_PURCHASE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540"],
+    "acceptableGlConcepts": ["complete_equipment", "capital_equipment_grounds"],
+    "forbiddenGlAccounts": ["6031", "6020", "1710", "1720"],
+    "forbiddenGlConcepts": ["operating_repair", "grounds_maintenance"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.16 — capital equipment purchase. Warranty + repair + maintenance boilerplate at the bottom of the invoice must NOT hijack the economic purpose classifier. Actual line item is a complete new mower; the warranty text is future promise, not current work. Purpose = CAPITAL, not REPAIR."
+  }
+}

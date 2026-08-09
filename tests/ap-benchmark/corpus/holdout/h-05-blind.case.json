@@ -1,0 +1,35 @@
+{
+  "id": "h-05-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #5",
+  "category": "BLIND",
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Ridgeway Turf Equipment Ltd.\n8807 Machinery Row · Regina SK S4Y 3J1\nGST# 812234441 RT0001\n\nINVOICE\nInvoice RTEL-A26-3387\nDate: 2026-08-14\nDue Date: 2026-09-13\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nSaracen SFM-6000 Rough Mower (NEW)          1   42,800.00    42,800.00\n  Serial# SFM6000-A-A-11244\n  ROPS canopy + safety kit included\nDelivery + setup                            1      680.00       680.00\n\n                                       Subtotal:  43,480.00\n                                       GST (5%):   2,174.00\n                                       Total:    45,654.00 CAD\n\nPayable NET 30. Owner-financed (no lease).\n",
+    "email": {
+      "senderAddress": "sales@ridgewayturf.example",
+      "subject": "RTEL-A26-3387"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Ridgeway Turf Equipment Ltd.", "acceptableAliases": ["Ridgeway Turf Equipment"] },
+    "invoiceNumber": { "value": "RTEL-A26-3387" },
+    "invoiceDate": "2026-08-14",
+    "dueDate": "2026-09-13",
+    "currency": "CAD",
+    "subtotal": 43480.00,
+    "taxTotal": 2174.00,
+    "taxRate": 0.05,
+    "total": 45654.00,
+    "economicPurpose": "COMPLETE_EQUIPMENT_PURCHASE",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540"],
+    "acceptableGlConcepts": ["complete_equipment", "capital_equipment_grounds"],
+    "forbiddenGlAccounts": ["1570", "6020", "6031", "1710"],
+    "forbiddenGlConcepts": ["equipment_under_financing", "operating_repair", "contra_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "H-05 blind: complete equipment, no financing. 1570 FORBIDDEN (no lease). 1506/1540 acceptable. Operating FORBIDDEN."
+  }
+}

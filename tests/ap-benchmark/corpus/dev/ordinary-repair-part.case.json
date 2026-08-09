@@ -1,0 +1,40 @@
+{
+  "id": "ordinary-repair-part",
+  "split": "dev",
+  "label": "Ordinary repair part (belts, filters, seals) — operating R&M (§2.9)",
+  "category": "OPERATING_INVOICE",
+  "tags": ["repair-part", "operating", "must-not-capitalize"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Rocky Mountain Turf Parts\n88 Depot Row · Kelowna BC V1Y 7H2\nGST# 782634441 RT0001\n\nINVOICE\nInvoice RMTP-2026-88041\nDate: 2026-08-10\nDue Date: 2026-09-09\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nOil filter — Toro 100-9863                 12       14.20       170.40\nHydraulic seal kit — 253-140                6       28.75       172.50\nDrive belt — 100-5710                       4       32.10       128.40\n\n                                       Subtotal:     471.30\n                                       GST (5%):      23.57\n                                       Total:       494.87 CAD\n\nStandard scheduled maintenance parts.\n",
+    "email": {
+      "senderAddress": "orders@rmturfparts.example",
+      "subject": "RMTP-2026-88041"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Rocky Mountain Turf Parts",
+      "acceptableAliases": ["Rocky Mountain Turf"]
+    },
+    "invoiceNumber": { "value": "RMTP-2026-88041" },
+    "invoiceDate": "2026-08-10",
+    "dueDate": "2026-09-09",
+    "currency": "CAD",
+    "subtotal": 471.30,
+    "taxTotal": 23.57,
+    "taxRate": 0.05,
+    "total": 494.87,
+    "economicPurpose": "REPAIR_MAINTENANCE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6031", "6025", "6020"],
+    "acceptableGlConcepts": ["operating_repair", "grounds_maintenance", "repair_parts"],
+    "forbiddenGlAccounts": ["1506", "1540", "1570", "1710", "1720"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment", "capitalizable_component"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.9 — small consumable spare parts (filters/seals/belts) at low prices. Must remain operating R&M — capital accounts FORBIDDEN. Adversarial: has model numbers similar to the capital case, but qty>1 + low unit price + 'scheduled maintenance parts' language must trigger operating."
+  }
+}

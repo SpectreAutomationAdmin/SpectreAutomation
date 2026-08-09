@@ -1,0 +1,39 @@
+{
+  "id": "land-acquisition",
+  "split": "validation",
+  "label": "Land parcel acquisition (§2.5)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["land", "capital-non-depreciable"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "West End Realty Group Ltd. (Broker Trust Account)\n2244 Broker Lane · Vancouver BC V6E 3P1\nGST# 728341556 RT0001\n\nCLOSING STATEMENT / INVOICE\nInvoice WERG-2026-CLOSE-4407\nDate: 2026-08-16\nDue Date: 2026-08-30\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nRE: Land purchase — Lot 44, Concession 6, RM of Vulcan, AB\n    Parcel: 4.85 hectares adjacent to Hole 12 fairway\n\nDESCRIPTION                                       AMOUNT\nPurchase price — Lot 44 (land only, no buildings)  185,000.00\nBroker commission (2%)                              3,700.00\nLegal + registration fees                             875.00\n\n                                       Subtotal: 189,575.00\n                                       GST (5%):   9,478.75\n                                       Total:   199,053.75 CAD\n\nTitle transfer scheduled 2026-09-01.\n",
+    "email": {
+      "senderAddress": "closing@westendrealty.example",
+      "subject": "WERG-2026-CLOSE-4407 closing statement"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "West End Realty Group Ltd.",
+      "acceptableAliases": ["West End Realty", "West End Realty Group"]
+    },
+    "invoiceNumber": { "value": "WERG-2026-CLOSE-4407" },
+    "invoiceDate": "2026-08-16",
+    "dueDate": "2026-08-30",
+    "currency": "CAD",
+    "subtotal": 189575.00,
+    "taxTotal": 9478.75,
+    "taxRate": 0.05,
+    "total": 199053.75,
+    "economicPurpose": "LAND_ACQUISITION",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1580"],
+    "acceptableGlConcepts": ["land", "capital_land_acquisition"],
+    "forbiddenGlAccounts": ["1710", "1720", "1730", "6020", "1560"],
+    "forbiddenGlConcepts": ["contra_asset", "grounds_maintenance", "construction_in_progress", "depreciation"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.5 — land purchase with broker commission + legal fees. Land is non-depreciable — must NOT land on a depreciable-asset account (1506/1540/1550) OR a contra/CIP account. 1580 Land is the only correct target."
+  }
+}

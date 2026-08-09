@@ -1,0 +1,39 @@
+{
+  "id": "multi-alloc-goods-plus-service",
+  "split": "dev",
+  "label": "Multi-allocation: goods + separate service line (§15)",
+  "category": "MULTI_ALLOCATION",
+  "tags": ["multi-allocation", "goods-and-service"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "AquaTech Irrigation Services\n1088 Water Way · Kelowna BC V1Y 8Z1\nGST# 728914441 RT0001\n\nINVOICE\nInvoice ATS-2026-11189\nDate: 2026-08-15\nDue Date: 2026-09-14\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nHunter I-25 rotor sprinkler head            24       98.50     2,364.00\nOn-site installation labour (12 hrs)         1    1,620.00     1,620.00\n\n                                       Subtotal:   3,984.00\n                                       GST (5%):     199.20\n                                       Total:     4,183.20 CAD\n",
+    "email": {
+      "senderAddress": "billing@aquatech.example",
+      "subject": "ATS-2026-11189"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "AquaTech Irrigation Services",
+      "acceptableAliases": ["AquaTech Irrigation"]
+    },
+    "invoiceNumber": { "value": "ATS-2026-11189" },
+    "invoiceDate": "2026-08-15",
+    "dueDate": "2026-09-14",
+    "currency": "CAD",
+    "subtotal": 3984.00,
+    "taxTotal": 199.20,
+    "taxRate": 0.05,
+    "total": 4183.20,
+    "economicPurpose": "GOODS_PLUS_SERVICE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6020", "6025", "6031"],
+    "acceptableGlConcepts": ["irrigation_supplies", "operating_supplies_plus_service", "grounds_maintenance"],
+    "forbiddenGlAccounts": ["1710", "1720", "3100"],
+    "forbiddenGlConcepts": ["contra_asset", "revenue", "equity"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "notes": "§15 — irrigation parts + installation. Both allocations operating grounds. Either single-allocation or two-allocation acceptable. No capital because these are consumable irrigation parts (rotor heads), and the total ($4K) is below common capitalization thresholds. Contra + revenue + equity FORBIDDEN."
+  }
+}

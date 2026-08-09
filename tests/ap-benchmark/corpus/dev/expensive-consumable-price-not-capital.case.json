@@ -1,0 +1,40 @@
+{
+  "id": "expensive-consumable-price-not-capital",
+  "split": "dev",
+  "label": "Expensive consumable — price must NOT force capital treatment (§2.18, §11)",
+  "category": "OPERATING_INVOICE",
+  "tags": ["consumable", "price-adversarial", "operating"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Ag Chem Solutions Ltd.\n1710 Rural Route 4 · Lethbridge AB T1J 5N4\nGST# 691223441 RT0001\n\nINVOICE\nInvoice ACSL-2026-77118\nDate: 2026-08-14\nDue Date: 2026-09-13\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nPrimo Maxx growth regulator, 4L jug          12     380.00     4,560.00\nDaconil Weatherstik fungicide, 10L pail        8     640.00     5,120.00\nRoundup PowerMax herbicide, 20L pail            6     540.00     3,240.00\n\n                                       Subtotal:  12,920.00\n                                       GST (5%):     646.00\n                                       Total:    13,566.00 CAD\n\nSeasonal chemical application program. All product consumed by end of Q4.\n",
+    "email": {
+      "senderAddress": "orders@agchemsolutions.example",
+      "subject": "ACSL-2026-77118"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Ag Chem Solutions Ltd.",
+      "acceptableAliases": ["Ag Chem Solutions"]
+    },
+    "invoiceNumber": { "value": "ACSL-2026-77118" },
+    "invoiceDate": "2026-08-14",
+    "dueDate": "2026-09-13",
+    "currency": "CAD",
+    "subtotal": 12920.00,
+    "taxTotal": 646.00,
+    "taxRate": 0.05,
+    "total": 13566.00,
+    "economicPurpose": "CONSUMABLE_SUPPLIES",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6025", "6020"],
+    "acceptableGlConcepts": ["grounds_supplies", "consumable_chemicals", "grounds_operating"],
+    "forbiddenGlAccounts": ["1506", "1540", "1570", "1710", "1720"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment", "capitalizable_component"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.18 §11 — total $13.5K exceeds many capitalization thresholds, but consumable chemicals (jugs, pails, 'consumed by end of Q4') are NEVER capital regardless of price. Price alone must not force capital treatment."
+  }
+}

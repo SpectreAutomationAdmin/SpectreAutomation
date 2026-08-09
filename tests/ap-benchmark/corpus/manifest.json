@@ -1,5 +1,5 @@
 {
-  "version": "v2-2026-08-06",
+  "version": "v3-2026-08-09-slice5.9",
   "sealed": true,
   "split": {
     "dev": [
@@ -20,22 +20,48 @@
       "corpus/dev/duplicate-gst-summary-remittance.case.json",
       "corpus/dev/statement-plus-account-number.case.json",
       "corpus/dev/credit-memo.case.json",
-      "corpus/dev/po-without-invoice-number.case.json"
+      "corpus/dev/po-without-invoice-number.case.json",
+      "corpus/dev/cip-construction-progress-clear.case.json",
+      "corpus/dev/cip-weak-project-evidence.case.json",
+      "corpus/dev/completed-capital-improvement.case.json",
+      "corpus/dev/complete-equipment-serialized.case.json",
+      "corpus/dev/financed-equipment-affirmative.case.json",
+      "corpus/dev/replacement-component-serialized.case.json",
+      "corpus/dev/ordinary-repair-part.case.json",
+      "corpus/dev/adversarial-capital-warranty-boilerplate.case.json",
+      "corpus/dev/adversarial-operating-with-model-numbers.case.json",
+      "corpus/dev/expensive-consumable-price-not-capital.case.json",
+      "corpus/dev/low-price-durable-equipment.case.json",
+      "corpus/dev/software-intangible.case.json",
+      "corpus/dev/prepaid-insurance.case.json",
+      "corpus/dev/inventory-fnb-restock.case.json",
+      "corpus/dev/multi-alloc-membership-plus-penalty.case.json",
+      "corpus/dev/multi-alloc-goods-freight-tax.case.json",
+      "corpus/dev/multi-alloc-goods-plus-service.case.json",
+      "corpus/dev/image-only-narrative-service.case.json"
     ],
     "validation": [
       "corpus/validation/mixed-tax-invoice.case.json",
       "corpus/validation/professional-membership.case.json",
-      "corpus/validation/food-service-invoice.case.json"
+      "corpus/validation/food-service-invoice.case.json",
+      "corpus/validation/land-acquisition.case.json",
+      "corpus/validation/building-acquisition.case.json",
+      "corpus/validation/ocr-visible-table.case.json"
     ],
     "holdout": [
       "corpus/holdout/h-01-blind.case.json",
       "corpus/holdout/h-02-blind.case.json",
-      "corpus/holdout/h-03-blind.case.json"
+      "corpus/holdout/h-03-blind.case.json",
+      "corpus/holdout/h-04-blind.case.json",
+      "corpus/holdout/h-05-blind.case.json",
+      "corpus/holdout/h-06-blind.case.json",
+      "corpus/holdout/h-07-blind.case.json",
+      "corpus/holdout/h-08-blind.case.json"
     ]
   },
   "policy": {
     "holdoutBlindness": "Cases in holdout/ MUST NOT be examined while tuning rules. Runner prints only pass/fail for holdout cases — never raw extraction detail or divergence reasons — unless invoked with --reveal-holdout.",
     "productionLiterals": "Nothing in this manifest may be branched on by production code. Fixture literals belong only in tests/ap-benchmark/.",
-    "growingCorpus": "V1 covers the founder-required minimum document classes. Add new cases with `id` unique, `split` explicit, and a founder-recorded acceptance if it changes scoring thresholds."
+    "growingCorpus": "V3 expands V2 with Slice 5.9 capital/CIP/financing/software/prepaid/inventory/multi-allocation/OCR-shape scenarios (§2). H-04..H-08 are NEW blind holdout cases sealed for Slice 5.9 acceptance; H-01..H-03 remain historical evidence (revealed 2026-08-09 in the Phase 4 Generalization Audit)."
   }
 }

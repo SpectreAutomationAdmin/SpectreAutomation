@@ -1,0 +1,39 @@
+{
+  "id": "prepaid-insurance",
+  "split": "dev",
+  "label": "Prepaid annual insurance — prepaid expense asset (§2.13)",
+  "category": "PREPAID_INVOICE",
+  "tags": ["prepaid", "insurance"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "SunLife Commercial Insurance\n700 Bay Street · Toronto ON M5G 1Z6\nGST# 728123441 RT0001\n\nINVOICE / PREMIUM STATEMENT\nInvoice SLC-2026-A-88221\nDate: 2026-08-15\nDue Date: 2026-09-14\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nPOLICY: Commercial General Liability + Property + Directors & Officers\nCoverage period: 2026-09-01 → 2027-08-31 (12 months prepaid annual premium)\n\nDESCRIPTION                                       AMOUNT\nCommercial General Liability — annual premium    14,850.00\nProperty (all-risk) — annual premium             28,200.00\nDirectors & Officers — annual premium             6,700.00\n\n                                       Subtotal:  49,750.00\n                                       GST (5%):   2,487.50\n                                       Total:    52,237.50 CAD\n\nPremium prepaid in full for the coverage period.\n",
+    "email": {
+      "senderAddress": "billing@sunlifecommercial.example",
+      "subject": "Annual insurance renewal"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "SunLife Commercial Insurance",
+      "acceptableAliases": ["SunLife Commercial", "SunLife"]
+    },
+    "invoiceNumber": { "value": "SLC-2026-A-88221" },
+    "invoiceDate": "2026-08-15",
+    "dueDate": "2026-09-14",
+    "currency": "CAD",
+    "subtotal": 49750.00,
+    "taxTotal": 2487.50,
+    "taxRate": 0.05,
+    "total": 52237.50,
+    "economicPurpose": "PREPAID_EXPENSE",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1410"],
+    "acceptableGlConcepts": ["prepaid_expense", "prepaid_insurance"],
+    "forbiddenGlAccounts": ["6020", "6031", "1710", "3100"],
+    "forbiddenGlConcepts": ["operating_repair", "contra_asset", "equity"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.13 — annual premium prepaid for future coverage period. Should route to Prepaid Expenses (1410), NOT to insurance expense (which doesn't even exist in this synthetic COA). Model doesn't need to know 'insurance' semantics — just recognize prepaid asset."
+  }
+}

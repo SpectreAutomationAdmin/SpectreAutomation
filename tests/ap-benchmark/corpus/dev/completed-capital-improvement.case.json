@@ -1,0 +1,40 @@
+{
+  "id": "completed-capital-improvement",
+  "split": "dev",
+  "label": "Completed capital improvement — placed in service (§2.3)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["capital", "placed-in-service", "course-improvement"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Alberta Turf Renewal Inc.\n1447 Fairway Boulevard · Edmonton AB T5J 3Y2\nGST# 833441122 RT0001\n\nFINAL INVOICE — WORK COMPLETED\nInvoice ATR-2026-FIN-118\nDate: 2026-08-11\nDue Date: 2026-09-10\n\nBILL TO:\nCoulee Ridge Golf & Country Club\nProject: Hole 7 Bunker Rebuild — COMPLETED 2026-08-08\n\nDESCRIPTION                                       AMOUNT\nBunker rebuild — Hole 7 (final invoice)         38,750.00\nWork completed and placed in service 2026-08-08.\nAll deliverables inspected + accepted by Head Superintendent.\n\n                                       Subtotal:  38,750.00\n                                       GST (5%):   1,937.50\n                                       Total:    40,687.50 CAD\n\nProject closed. No further invoices for this scope of work.\n",
+    "email": {
+      "senderAddress": "billing@albertaturf.example",
+      "subject": "Final — Hole 7 project complete"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Alberta Turf Renewal Inc.",
+      "acceptableAliases": ["Alberta Turf Renewal"]
+    },
+    "invoiceNumber": { "value": "ATR-2026-FIN-118" },
+    "invoiceDate": "2026-08-11",
+    "dueDate": "2026-09-10",
+    "currency": "CAD",
+    "subtotal": 38750.00,
+    "taxTotal": 1937.50,
+    "taxRate": 0.05,
+    "total": 40687.50,
+    "economicPurpose": "CAPITAL_IMPROVEMENT_COMPLETED",
+    "departmentHints": ["Grounds", "Course improvements"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1530"],
+    "acceptableGlConcepts": ["course_improvement", "capital_improvement_completed", "placed_in_service"],
+    "forbiddenGlAccounts": ["1560", "6020", "6031", "1710", "1720"],
+    "forbiddenGlConcepts": ["construction_in_progress", "operating_repair", "grounds_maintenance", "contra_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.3 — same vendor class as CIP case, but 'work completed', 'placed in service', 'project closed' language marks completion. Must route to 1530 (Course Improvements — completed asset), NOT to 1560 (CIP)."
+  }
+}

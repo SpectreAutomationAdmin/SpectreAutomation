@@ -1,0 +1,43 @@
+{
+  "id": "complete-equipment-serialized",
+  "split": "dev",
+  "label": "Complete durable equipment — serialized, no financing evidence (§2.6, §2.11)",
+  "category": "CAPITAL_INVOICE",
+  "tags": ["complete-machine", "serialized", "no-financing"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "TurfPro Equipment Sales\n8811 Distribution Way · Winnipeg MB R3T 5V4\nGST# 774811223 RT0001\n\nINVOICE\nInvoice TPES-A2026-4409\nDate: 2026-08-13\nDue Date: 2026-09-12\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nSaracen Fairway Mower SFM-8500              1   68,500.00    68,500.00\n  Serial# SFM-2026-118842\n  Includes: rear roller, brush kit, spare blades set\nDelivery + setup                            1      750.00       750.00\n\n                                       Subtotal:  69,250.00\n                                       GST (5%):   3,462.50\n                                       Total:    72,712.50 CAD\n\nPayable NET 30. No financing arranged.\n",
+    "email": {
+      "senderAddress": "sales@turfpro.example",
+      "subject": "TPES-A2026-4409"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "TurfPro Equipment Sales",
+      "acceptableAliases": ["TurfPro Equipment"]
+    },
+    "invoiceNumber": { "value": "TPES-A2026-4409" },
+    "invoiceDate": "2026-08-13",
+    "dueDate": "2026-09-12",
+    "currency": "CAD",
+    "subtotal": 69250.00,
+    "taxTotal": 3462.50,
+    "taxRate": 0.05,
+    "total": 72712.50,
+    "lineItems": [
+      { "descriptionContains": "Saracen", "amountApprox": 68500.00, "quantityApprox": 1 }
+    ],
+    "economicPurpose": "COMPLETE_EQUIPMENT_PURCHASE",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540"],
+    "acceptableGlConcepts": ["complete_equipment", "capital_equipment_grounds"],
+    "forbiddenGlAccounts": ["1570", "6020", "6031", "1710", "1720"],
+    "forbiddenGlConcepts": ["equipment_under_financing", "operating_repair", "grounds_maintenance"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.6 + §2.11 — complete machine, serialized, but 'no financing arranged' means the financing-specific account (1570) is FORBIDDEN. Should route to a general capital equipment account (1506 or 1540)."
+  }
+}

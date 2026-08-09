@@ -1,0 +1,35 @@
+{
+  "id": "h-08-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #8",
+  "category": "BLIND",
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Vantage Uniform & Textile Company\n1188 Fabric Blvd · Winnipeg MB R3T 3H1\nGST# 728123441 RT0001\n\nINVOICE\nInvoice VUT-A26-11884\nDate: 2026-08-11\nDue Date: 2026-09-10\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nStaff uniform polo shirts (custom logo)   36       42.50     1,530.00\nAprons — kitchen                          18       28.00       504.00\nTablecloths, banquet, 90\" round           24       55.00     1,320.00\nMonogramming service                        1      380.00       380.00\n\n                                       Subtotal:   3,734.00\n                                       GST (5%):     186.70\n                                       Total:     3,920.70 CAD\n\nItems delivered to Clubhouse Lounge + Kitchen.\n",
+    "email": {
+      "senderAddress": "orders@vantageuniform.example",
+      "subject": "VUT-A26-11884"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Vantage Uniform & Textile Company", "acceptableAliases": ["Vantage Uniform"] },
+    "invoiceNumber": { "value": "VUT-A26-11884" },
+    "invoiceDate": "2026-08-11",
+    "dueDate": "2026-09-10",
+    "currency": "CAD",
+    "subtotal": 3734.00,
+    "taxTotal": 186.70,
+    "taxRate": 0.05,
+    "total": 3920.70,
+    "economicPurpose": "UNIFORMS_AND_LINENS",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6025", "5100"],
+    "acceptableGlConcepts": ["operating_supplies", "uniforms", "fnb_supplies"],
+    "forbiddenGlAccounts": ["1506", "1540", "1710", "6031"],
+    "forbiddenGlConcepts": ["capital_equipment", "operating_repair", "contra_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "H-08 blind: unfamiliar-to-corpus category (uniforms + linens). Tests generalization to a new purchase class. Operating supplies acceptable; capital + R&M FORBIDDEN."
+  }
+}

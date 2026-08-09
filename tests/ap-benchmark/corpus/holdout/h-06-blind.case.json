@@ -1,0 +1,35 @@
+{
+  "id": "h-06-blind",
+  "split": "holdout",
+  "label": "Blind holdout case #6",
+  "category": "BLIND",
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Aurora Turf Repair Depot\n2244 Wrench Way · Winnipeg MB R3T 4B1\nGST# 728834441 RT0001\n\nINVOICE\nInvoice ATRD-2026-8871\nDate: 2026-08-12\nDue Date: 2026-09-11\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nSERVICE PERFORMED: Field-repair of Toro Reelmaster 4110 (asset tag CR-GR-04412)\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nHydraulic hose (3/8\" × 24\")                4       28.40       113.60\nHydraulic filter cartridge                  1       46.20        46.20\nField labour, 1.5 hrs @ $140/hr             1      210.00       210.00\n\n                                       Subtotal:     369.80\n                                       GST (5%):      18.49\n                                       Total:       388.29 CAD\n\nAsset returned to service on 2026-08-13.\n",
+    "email": {
+      "senderAddress": "service@auroraturfrepair.example",
+      "subject": "ATRD-2026-8871"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": { "name": "Aurora Turf Repair Depot", "acceptableAliases": ["Aurora Turf Repair"] },
+    "invoiceNumber": { "value": "ATRD-2026-8871" },
+    "invoiceDate": "2026-08-12",
+    "dueDate": "2026-09-11",
+    "currency": "CAD",
+    "subtotal": 369.80,
+    "taxTotal": 18.49,
+    "taxRate": 0.05,
+    "total": 388.29,
+    "economicPurpose": "REPAIR_MAINTENANCE",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6031", "6020"],
+    "acceptableGlConcepts": ["operating_repair", "grounds_maintenance"],
+    "forbiddenGlAccounts": ["1506", "1540", "1570"],
+    "forbiddenGlConcepts": ["complete_equipment", "capital_equipment"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "H-06 blind: ordinary R&M with asset tag context. Must remain operating."
+  }
+}

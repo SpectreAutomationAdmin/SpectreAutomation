@@ -1,0 +1,40 @@
+{
+  "id": "low-price-durable-equipment",
+  "split": "dev",
+  "label": "Low-priced durable equipment — price must not force operating (§2.19)",
+  "category": "AMBIGUOUS_CAPITAL",
+  "tags": ["capital-threshold", "low-price", "adversarial"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Fairway Tools & Small Equipment Ltd.\n2233 Warehouse Way · Delta BC V4G 1B4\nGST# 672834471 RT0001\n\nINVOICE\nInvoice FTSE-2026-A4409\nDate: 2026-08-12\nDue Date: 2026-09-11\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                              QTY   UNIT PRICE    AMOUNT\nEcholot ZL-450 walk-behind aerator          1    1,880.00     1,880.00\n  Serial# ECHZL450-A-11844\n  Includes: tine kit, oil, operator manual\n  5-year expected useful life\n\n                                       Subtotal:   1,880.00\n                                       GST (5%):      94.00\n                                       Total:     1,974.00 CAD\n",
+    "email": {
+      "senderAddress": "sales@fairwaytools.example",
+      "subject": "FTSE-2026-A4409"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Fairway Tools & Small Equipment Ltd.",
+      "acceptableAliases": ["Fairway Tools"]
+    },
+    "invoiceNumber": { "value": "FTSE-2026-A4409" },
+    "invoiceDate": "2026-08-12",
+    "dueDate": "2026-09-11",
+    "currency": "CAD",
+    "subtotal": 1880.00,
+    "taxTotal": 94.00,
+    "taxRate": 0.05,
+    "total": 1974.00,
+    "economicPurpose": "AMBIGUOUS_CAPITAL_OR_OPERATING",
+    "departmentHints": ["Grounds"],
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["1506", "1540", "6025"],
+    "acceptableGlConcepts": ["small_equipment", "complete_equipment", "grounds_supplies"],
+    "forbiddenGlAccounts": ["1710", "1720", "3100", "4100"],
+    "forbiddenGlConcepts": ["contra_asset", "revenue", "equity"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "§2.19 — total <$2000 is below many capitalization thresholds, but the item IS a durable complete unit with a 5-year useful life and serial number. Either capital (1506/1540 under tenant policy) or operating supplies (6025) is acceptable depending on the tenant's capitalization threshold. Price alone must not force operating."
+  }
+}
