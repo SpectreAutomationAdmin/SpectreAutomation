@@ -1855,6 +1855,64 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
   }
 
+  // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08, §31
+  // Outcome B) — object-authority contradiction guard. Applied AFTER
+  // Stage A/B nature-scoped promotion. When purchased-object evidence
+  // is HIGH-quality AND identifies a durable-asset context
+  // (COMPLETE_MACHINE / SERIALIZED_COMPONENT / bundled ACCESSORY /
+  // ambiguous UNKNOWN with model+brand present) AND the current GL
+  // leader's account name matches interest / penalty / bank-charge /
+  // finance-fee patterns, the leader is CONTRADICTED — those account
+  // types are incompatible with a durable-asset transaction regardless
+  // of what a footer phrase's raw ranker score suggested. Guard clears
+  // the GL to null so the founder-facing card falls through to the
+  // object-oriented category chip. No fabricated GL (§20 + §31).
+  if (gl.accountNumber != null && sharedPurchasedObjects.length > 0) {
+    const primary = [...sharedPurchasedObjects]
+      .sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
+    const durableAssetContext = primary
+      && primary.evidenceQuality === "HIGH"
+      && (
+        primary.objectRole === "COMPLETE_MACHINE"
+        || primary.objectRole === "SERIALIZED_COMPONENT"
+        || (primary.objectRole === "UNKNOWN"
+            && primary.brandCandidates.length > 0
+            && primary.modelCandidates.length > 0)
+      );
+    const leaderName = (gl.accountName ?? "").toLowerCase();
+    const isInterestOrFeeAccount =
+      /\binterest\b/.test(leaderName)
+      || /\bfinance\s*charge\b/.test(leaderName)
+      || /\bpenalty\b/.test(leaderName)
+      || /\blate\s*fee\b/.test(leaderName)
+      || /\bbank\s*charges?\b/.test(leaderName)
+      || /\bcredit\s*card\s*fees?\b/.test(leaderName);
+    if (durableAssetContext && isInterestOrFeeAccount) {
+      logger.info("ap-intelligence.slice5-3.object-contradiction-guard.cleared-gl", {
+        clubId: args.clubId,
+        docIdTail: doc.id.slice(-6),
+        clearedAccount: gl.accountNumber,
+        clearedName: gl.accountName,
+        primaryObjectRole: primary.objectRole,
+        primaryModel: primary.modelCandidates[0]?.value,
+      });
+      gl = {
+        ...gl,
+        accountNumber: null,
+        accountName: null,
+        categoryKey: null,
+        fsGroupKey: null,
+        source: "NONE",
+        confidence: 0,
+        reason: `Slice 5.3 object-authority guard: cleared draft ${gl.accountNumber} (${gl.accountName}) — purchased-object evidence identifies a durable-asset context that is incompatible with interest / fee accounts. Object role=${primary.objectRole}, model candidates=${primary.modelCandidates.map((m) => m.value).join("|")}. Capital vs operating treatment remains UNRESOLVED — review required.`,
+        leaderIsPostable: false,
+        leaderPostingBlockers: [],
+        autoApprovalEligible: false,
+        requiresReview: true,
+      };
+    }
+  }
+
   // Phase 2.1 (2026-08-06) §A6 — Phase 0 vs Phase 2 disagreement
   // logging. Both containment layers run below; here we snapshot
   // what Phase 2 concluded so the Phase 0 wire (next block) can
