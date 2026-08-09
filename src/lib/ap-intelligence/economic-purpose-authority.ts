@@ -151,6 +151,16 @@ export interface EconomicPurposeAuthorityInput {
   hasPenaltyLine: boolean;
   hasMembershipLine: boolean;
   hasProfessionalCredentialContext: boolean;
+  /** Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §6 authority
+   *  consumption. When the upstream PurchasedObjectIdentity layer
+   *  has committed a role for a line, pass it through so the
+   *  taxonomy classifier can demote adjectival EQUIPMENT_PARTS /
+   *  REPAIR_MAINTENANCE cues on COMPLETE_MACHINE rows. Aligned by
+   *  index with `canonicalLineItems`. */
+  purchasedObjectRolesByLineIndex?: Array<
+    "COMPLETE_MACHINE" | "SERIALIZED_COMPONENT" | "COMPONENT"
+    | "ACCESSORY" | "CONSUMABLE" | "SERVICE" | "UNKNOWN" | null
+  >;
 }
 
 const CANONICAL_PROVIDER = new DeterministicTaxonomyProvider();
@@ -158,7 +168,16 @@ const CANONICAL_PROVIDER = new DeterministicTaxonomyProvider();
 export function resolveEconomicPurpose(input: EconomicPurposeAuthorityInput): EconomicPurposeDecision {
   const canonicalTop3 = CANONICAL_PROVIDER.classify(input.canonicalLineItems, {
     supplierName: input.supplierName,
+    // Slice 5.10 §3 authority hierarchy needs body text for
+    // boilerplate-zone detection. transactionalText is preferred
+    // (Slice 5.2 supplier/recipient/footer already excluded). When
+    // the layout-based extractor didn't run (synthetic benchmark
+    // TEXT_OVERRIDE path), the caller passes null / empty — we do
+    // NOT synthesize the raw pdfText here because
+    // resolveEconomicPurpose's contract already guarantees the
+    // caller has scoped the text appropriately.
     fullDocumentText: input.transactionalText,
+    purchasedObjectRolesByLineIndex: input.purchasedObjectRolesByLineIndex,
   });
   const canonicalTop = canonicalTop3[0] ?? null;
 

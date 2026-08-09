@@ -1104,15 +1104,34 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // Weak-ontology boost is intentionally modest (§2) — used only
   // when the winner IS INCOMPATIBLE with the committed purpose.
   if (purposeDecision == null) {
+    // Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §6 authority
+    // consumption. Compute PurchasedObjectIdentity roles ONCE here so
+    // the taxonomy classifier can consume them (this is a cheap
+    // deterministic transform of canonicalLineItems). The value is
+    // reused a few lines below as `sharedPurchasedObjects` — same
+    // provider instance, same input, so the reordering is neutral.
+    const { DeterministicPurchasedObjectProvider: PurchasedObjectProviderEarly } =
+      await import("./purchased-object-identity");
+    const purposeRoleObjects = new PurchasedObjectProviderEarly().interpret(canonicalLineItemsFromLayout);
+    const rolesByLineIndex: Array<
+      "COMPLETE_MACHINE" | "SERIALIZED_COMPONENT" | "COMPONENT"
+      | "ACCESSORY" | "CONSUMABLE" | "SERVICE" | "UNKNOWN" | null
+    > = canonicalLineItemsFromLayout.map((_li, idx) => {
+      const obj = purposeRoleObjects.find((o) => o.sourceLineItemIndex === idx);
+      return obj?.objectRole ?? null;
+    });
     purposeDecision = resolveEconomicPurpose({
       canonicalLineItems: canonicalLineItemsFromLayout,
       supplierName: extraction.vendor.guessedName,
-      transactionalText: transactionalTextValue,
+      transactionalText: (transactionalTextValue != null && transactionalTextValue.trim().length > 0)
+        ? transactionalTextValue
+        : (pdfText || null),
       hasPenaltyLine: canonicalLineItemsFromLayout.some((li) => li.role === "PENALTY"),
       hasMembershipLine: canonicalLineItemsFromLayout.some((li) =>
         /\b(member(?:ship)?\s*(?:dues|fee))\b/i.test(li.description)),
       hasProfessionalCredentialContext: (extraction.vendor.guessedName ?? "").match(
         /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
+      purchasedObjectRolesByLineIndex: rolesByLineIndex,
     });
   }
 
@@ -1817,6 +1836,15 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // so it can gate the nature-scoped SEMANTIC_MATCH override
     // below and be published on the diagnostic.
     if (purposeDecision == null) {
+      // Slice 5.10 — same PurchasedObjectIdentity-role consumption.
+      const purposeRoleObjects2 = new PurchasedObjectProvider().interpret(canonicalLineItemsFromLayout);
+      const rolesByLineIndex2: Array<
+        "COMPLETE_MACHINE" | "SERIALIZED_COMPONENT" | "COMPONENT"
+        | "ACCESSORY" | "CONSUMABLE" | "SERVICE" | "UNKNOWN" | null
+      > = canonicalLineItemsFromLayout.map((_li, idx) => {
+        const obj = purposeRoleObjects2.find((o) => o.sourceLineItemIndex === idx);
+        return obj?.objectRole ?? null;
+      });
       purposeDecision = resolveEconomicPurpose({
         canonicalLineItems: canonicalLineItemsFromLayout,
         supplierName: mergedExtraction.vendor.guessedName,
@@ -1826,6 +1854,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           /\b(member(?:ship)?\s*(?:dues|fee))\b/i.test(li.description)),
         hasProfessionalCredentialContext: (mergedExtraction.vendor.guessedName ?? "").match(
           /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
+        purchasedObjectRolesByLineIndex: rolesByLineIndex2,
       });
     }
 

@@ -225,6 +225,21 @@ export interface PurposeEvidenceCite {
   cue: string;
   strength: "strong" | "medium" | "weak";
   reason: string;
+  // Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — evidence provenance
+  // for §2 role model + §3 authority hierarchy. `authorityTier` is
+  // 1 (primary transaction), 2 (transaction context), 3 (ancillary),
+  // or 4 (boilerplate / warranty terms / footer). `sourceType` names
+  // where the cue actually appeared. Backfilled to every citation
+  // this classifier emits so downstream diagnostics can prove the
+  // provenance behind any purpose commitment.
+  authorityTier?: 1 | 2 | 3 | 4;
+  sourceType?:
+    | "line_item_primary_purchase"
+    | "line_item_aux"
+    | "purchased_object_role"
+    | "transactional_body_text"
+    | "body_boilerplate_zone"
+    | "supplier_name";
 }
 
 export interface PurposeClassification {
@@ -238,7 +253,81 @@ export interface PurposeClassification {
 export interface EconomicPurposeContext {
   supplierName?: string | null;
   fullDocumentText?: string | null;
+  // Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §6 authority
+  // consumption. When available, the taxonomy classifier consults
+  // per-line PurchasedObjectIdentity roles so a COMPLETE_MACHINE
+  // classification on a line item overrides cue-based EQUIPMENT_PARTS
+  // or REPAIR_MAINTENANCE hits from adjectival tokens in the same
+  // description (e.g. "Reel Mower" → mower is a complete unit, not
+  // a "reel" part).
+  //
+  // The array is aligned index-with-index against the same
+  // `lineItems` list passed to `classify()`.
+  purchasedObjectRolesByLineIndex?: Array<
+    "COMPLETE_MACHINE"
+    | "SERIALIZED_COMPONENT"
+    | "COMPONENT"
+    | "ACCESSORY"
+    | "CONSUMABLE"
+    | "SERVICE"
+    | "UNKNOWN"
+    | null
+  >;
 }
+
+// Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §2 evidence-role /
+// §3 authority-hierarchy support. Structural boundary detection for
+// low-authority document zones (warranty, terms & conditions,
+// payment terms, service-terms boilerplate). Class-of-thing patterns
+// only — NO supplier / invoice / SKU / vendor literals.
+const BOILERPLATE_ZONE_HEADERS = [
+  /^={2,}\s*(?:warranty|service\s+terms|terms\s+(?:and|&)\s+conditions|payment\s+terms|standard\s+terms|conditions\s+of\s+sale)[\s&]*(?:warranty|service\s+terms|terms)?\s*={2,}$/im,
+  /^\s*warranty\s*(?:&|and)\s*service\s+terms\s*$/im,
+  /^\s*warranty\s+(?:&|and)\s+maintenance\s+terms\s*$/im,
+  /^\s*terms\s*(?:&|and)\s*conditions\s*$/im,
+  /^\s*payment\s+terms\s*$/im,
+  /^\s*standard\s+(?:terms|conditions|warranty)\s*$/im,
+  /^\s*service\s+&?\s*repair\s+terms\s*$/im,
+];
+
+/** §3 Tier-4 zone extraction. Splits body text at the first
+ *  boilerplate-zone header we can find. Text BEFORE the header is
+ *  transactional (Tier 1-2). Text AFTER is boilerplate (Tier 4).
+ *  If no header is found, everything is treated as transactional. */
+function splitBodyIntoZones(text: string): { transactional: string; boilerplate: string } {
+  if (!text || text.length === 0) return { transactional: "", boilerplate: "" };
+  let earliestBoilerplateStart = -1;
+  for (const re of BOILERPLATE_ZONE_HEADERS) {
+    const m = re.exec(text);
+    if (m && (earliestBoilerplateStart === -1 || m.index < earliestBoilerplateStart)) {
+      earliestBoilerplateStart = m.index;
+    }
+  }
+  if (earliestBoilerplateStart === -1) {
+    return { transactional: text, boilerplate: "" };
+  }
+  return {
+    transactional: text.slice(0, earliestBoilerplateStart),
+    boilerplate: text.slice(earliestBoilerplateStart),
+  };
+}
+
+// §3 additional Tier-1 contradictions specific to REPAIR_MAINTENANCE
+// when project-completion context is present. These signals do NOT
+// automatically classify capital; they merely CONTRADICT operating-
+// repair when they co-occur with a rebuild/repair-style word on the
+// primary line item. Class-of-thing patterns only.
+const REPAIR_CONTRADICTED_BY_PROJECT_STATE = [
+  /\bplaced\s+in\s+service\b/i,
+  /\bsubstantial\s+completion\b/i,
+  /\bwork\s+completed\b/i,
+  /\bproject\s+closed\b/i,
+  /\bfinal\s+invoice[^a-z]/i,   // "final invoice" but not "final invoiced"
+  /\bdelivered\s+and\s+inspected\b/i,
+  /\bconstruction\s+in\s+progress\b/i,
+  /\baia\s+(?:g702|g703|progress\s+billing)\b/i,
+  /\bapplication\s+for\s+payment\b/i,
+];
 
 export interface EconomicPurposeProvider {
   readonly kind: string;
@@ -292,17 +381,72 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
     };
 
     // STRONG: line-item descriptions.
-    pool.forEach((li, idx) => {
+    //
+    // Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §6 authority
+    // consumption. When PurchasedObjectIdentity has committed the
+    // line to a role, we use that role to CONTEXTUALIZE the cue
+    // matching:
+    //
+    //   role = COMPLETE_MACHINE
+    //     → EQUIPMENT_PARTS / REPAIR_MAINTENANCE hits on this line
+    //       are DEMOTED to weak (they are almost always adjectives
+    //       inside a machine model name like "Reel Mower"). Non-
+    //       maintenance concepts still fire STRONG.
+    //     → CAPITAL_EQUIPMENT hits (mower/tractor/etc.) fire STRONG.
+    //   role = SERVICE  → REPAIR_MAINTENANCE stays STRONG.
+    //   role = COMPONENT / SERIALIZED_COMPONENT / CONSUMABLE / etc.
+    //     → normal behaviour.
+    //   role = null / UNKNOWN → normal behaviour (backward-compatible).
+    //
+    // This is authoritative consumption, NOT a keyword blacklist.
+    const roles = ctx.purchasedObjectRolesByLineIndex ?? [];
+    // Note: `roles` is aligned against the caller's `lineItems`, but
+    // our internal `pool` is filtered. Map back via the original
+    // index carried on the line item via reference equality against
+    // the original list.
+    // §6/§11 defensive helper. When the line's authoritative role is
+    // COMPLETE_MACHINE we demote EQUIPMENT_PARTS/REPAIR_MAINTENANCE
+    // cues on that line. Additionally — and independent of role
+    // detection — when the SAME description matches a CAPITAL_EQUIPMENT
+    // machine-noun cue (mower / tractor / etc.) we also treat that
+    // line as complete-machine for demotion purposes. The compound
+    // noun ("Reel Mower", "Fairway Mower", "Utility Tractor") makes
+    // the EQUIPMENT_PARTS token adjectival. This backs the
+    // PurchasedObjectIdentity signal when line-item extraction has
+    // split the machine description across rows.
+    const CAPITAL_MACHINE_NOUN_RE_LOCAL =
+      /\b(?:mower|tractor|utility\s*vehicle|golf\s*cart|aerator|topdresser|sprayer|blower|greensmower|walking\s*mower|fairway\s*mower|rough\s*mower|hvac\s*unit|compressor|generator|forklift|new\s+equipment|complete\s+unit|complete\s+system|new\s+machine)\b/i;
+
+    pool.forEach((li) => {
+      const originalIndex = lineItems.indexOf(li);
       const desc = li.description;
+      const role = originalIndex >= 0 && originalIndex < roles.length ? roles[originalIndex] : null;
+      const lineDescLooksLikeCompleteMachine = CAPITAL_MACHINE_NOUN_RE_LOCAL.test(desc);
+      const isCompleteMachineRole = role === "COMPLETE_MACHINE" || lineDescLooksLikeCompleteMachine;
       for (const def of CONCEPTS) {
+        // §6/§11 — when the line's authoritative role is
+        // COMPLETE_MACHINE, EQUIPMENT_PARTS and REPAIR_MAINTENANCE
+        // cues on THIS line are almost always adjectival ("Reel
+        // Mower", "Turf Repair Ltd." etc.) rather than the true
+        // economic purpose. Demote the strength.
+        const demoteForCompleteMachine = isCompleteMachineRole
+          && (def.concept === "EQUIPMENT_PARTS" || def.concept === "REPAIR_MAINTENANCE");
         for (const cue of def.cues) {
           if (cue.test(desc)) {
-            record(def.concept, def.cueStrength, {
-              lineItemIndex: idx,
+            const strength: "strong" | "medium" | "weak" = demoteForCompleteMachine ? "weak" : "strong";
+            const weight = demoteForCompleteMachine
+              ? Math.round(def.cueStrength * 0.15)
+              : def.cueStrength;
+            record(def.concept, weight, {
+              lineItemIndex: originalIndex,
               lineItemDescription: desc.slice(0, 80),
               cue: cue.source,
-              strength: "strong",
-              reason: `line-item description matches ${def.label} concept`,
+              strength,
+              reason: demoteForCompleteMachine
+                ? `line-item cue for ${def.label} demoted — PurchasedObjectIdentity=COMPLETE_MACHINE on this row (§6)`
+                : `line-item description matches ${def.label} concept`,
+              authorityTier: 1,
+              sourceType: "line_item_primary_purchase",
             }, false);
           }
         }
@@ -310,11 +454,13 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
           for (const cue of def.contradictions) {
             if (cue.test(desc)) {
               record(def.concept, -Math.round(def.cueStrength * 0.4), {
-                lineItemIndex: idx,
+                lineItemIndex: originalIndex,
                 lineItemDescription: desc.slice(0, 80),
                 cue: cue.source,
                 strength: "strong",
                 reason: `line-item description contradicts ${def.label}`,
+                authorityTier: 1,
+                sourceType: "line_item_primary_purchase",
               }, true);
             }
           }
@@ -322,20 +468,75 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
       }
     });
 
-    // MEDIUM: full-document text (only when a line-item hit is
-    // already present — never as sole evidence).
+    // Sprint 3 · Phase 4 Slice 5.10 (2026-08-09) — §3 authority
+    // hierarchy. Split full document text into transactional zone
+    // (Tier 2) and boilerplate zone (Tier 4). Cues hitting only the
+    // boilerplate zone contribute at Tier 4 (weak) and cannot beat
+    // primary Tier-1 evidence per §8 hard rule.
     const text = (ctx.fullDocumentText ?? "").slice(0, 8000);
     if (text) {
+      const zones = splitBodyIntoZones(text);
+      // MEDIUM: transactional-zone body text (only when a line-item
+      // hit is already present — never as sole evidence).
       for (const def of CONCEPTS) {
         const existing = scores.get(def.concept);
         if (!existing) continue; // don't originate from doc text alone
         for (const cue of def.cues) {
-          if (cue.test(text)) {
+          if (zones.transactional && cue.test(zones.transactional)) {
             record(def.concept, Math.round(def.cueStrength * 0.35), {
               cue: cue.source,
               strength: "medium",
-              reason: `document text reinforces ${def.label}`,
+              reason: `transactional-zone body text reinforces ${def.label}`,
+              authorityTier: 2,
+              sourceType: "transactional_body_text",
             }, false);
+          }
+        }
+      }
+      // WEAK / Tier-4: boilerplate zone cues get very small weight
+      // and can never dominate primary evidence. §8: no purpose
+      // commitment may be made SOLELY from boilerplate.
+      if (zones.boilerplate) {
+        for (const def of CONCEPTS) {
+          const existing = scores.get(def.concept);
+          if (!existing) continue; // never originate purpose from boilerplate
+          for (const cue of def.cues) {
+            if (cue.test(zones.boilerplate)) {
+              // §4: boilerplate warranty/repair language must not
+              // become purchase substance. Contribution is tiny
+              // (5% instead of 35%) and clearly tagged Tier-4 so
+              // downstream diagnostics prove the demotion.
+              record(def.concept, Math.round(def.cueStrength * 0.05), {
+                cue: cue.source,
+                strength: "weak",
+                reason: `boilerplate-zone cue (warranty/terms footer) — Tier-4 authority`,
+                authorityTier: 4,
+                sourceType: "body_boilerplate_zone",
+              }, false);
+            }
+          }
+        }
+      }
+
+      // §10 — REPAIR_MAINTENANCE contradictions from project-state
+      // signals. If ANY transactional-zone text says "placed in
+      // service" / "project closed" / "substantial completion" /
+      // etc., that contradicts an OPERATING repair interpretation
+      // regardless of whether "rebuild" was on the line item. This
+      // does NOT commit CAPITAL — it just removes the false-positive
+      // pull on REPAIR_MAINTENANCE.
+      const repairScore = scores.get("REPAIR_MAINTENANCE");
+      if (repairScore && zones.transactional) {
+        for (const re of REPAIR_CONTRADICTED_BY_PROJECT_STATE) {
+          if (re.test(zones.transactional)) {
+            const def = CONCEPTS.find((c) => c.concept === "REPAIR_MAINTENANCE")!;
+            record("REPAIR_MAINTENANCE", -Math.round(def.cueStrength * 0.6), {
+              cue: re.source,
+              strength: "strong",
+              reason: `project-state signal contradicts operating REPAIR_MAINTENANCE (§10)`,
+              authorityTier: 1,
+              sourceType: "transactional_body_text",
+            }, true);
           }
         }
       }
@@ -353,6 +554,8 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
               cue: cue.source,
               strength: "weak",
               reason: `supplier name contains cue for ${def.label}`,
+              authorityTier: 3,
+              sourceType: "supplier_name",
             }, false);
           }
         }
