@@ -43,6 +43,7 @@ import ReplyComposer from "./ReplyComposer";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import CreateVendorAndPostModal from "./CreateVendorAndPostModal";
 import { CategoryHoverAllocations } from "./CategoryHoverAllocations";
+import { ApCardConfidenceDisclosure } from "./ApCardConfidenceDisclosure";
 import type { LinkedIntelligenceForEmail, ApInvoiceCardIntelligence } from "@/lib/mission-control";
 // 15P-5: the one canonical AP-action derivation. Both the primary-
 // button label and the modal-open decision come from this function
@@ -851,17 +852,12 @@ function renderApCollapsedBody(
           purposeLabel={ap.category.purposeLabel ?? null}
           purposeReason={ap.category.purposeReason ?? null}
         />
-        <ReadoutCell
-          k="Confidence"
-          v={ap.confidence != null ? `${ap.confidence} %` : "—"}
-          tone={
-            ap.confidence == null ? "observation"
-            : ap.confidence >= 85 ? "confidence"
-            : ap.confidence >= 60 ? undefined
-            : "observation"
-          }
-          testid="ap-readout-confidence"
-        />
+        {/* Sprint 3 · Phase 5 · Slice 1 (2026-08-09) — decision-
+            specific confidence disclosure replaces the generic
+            "Confidence: 95 %" cell. Preserves data-testid + cell
+            position + column count for existing source-contract test
+            (c15i2-variant-d-ap-card-source-contract). */}
+        <ApCardConfidenceDisclosure ap={ap} testid="ap-readout-confidence" />
       </div>
 
       <div className="spectre-mc-rec" data-testid="ap-recommendation">
