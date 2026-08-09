@@ -33,6 +33,26 @@ import type { CapitalDecision, CapitalEvidenceDecisionResult } from "./capital-e
 import type { ProductIdentityResolution } from "./product-identity-resolution";
 import type { PurchasedObjectIdentity } from "./purchased-object-identity";
 import type { DepartmentInferenceResult } from "./department-inference";
+import {
+  resolveAccountSemantics,
+  type AccountSemantics,
+  type CapitalAccountRole,
+  type AccountFunctionalRole,
+  type SemanticsProvenance,
+} from "./account-semantics";
+import {
+  detectCipEvidence,
+  type CipEvidenceResult,
+} from "./account-semantics/cip-evidence";
+import {
+  detectFinancingEvidence,
+  type FinancingEvidenceResult,
+} from "./account-semantics/financing-evidence";
+import {
+  evaluateCompatibilityGate,
+  type CompatibilityGateResult,
+  type CompatibilityVerdict,
+} from "./account-semantics/compatibility-gate";
 
 // -----------------------------------------------------------------------------
 // Public types
@@ -76,6 +96,16 @@ export interface CapitalAwareRankingInput {
    *  inferrer will scan for department-vocabulary hits alongside
    *  purchased-object descriptions. Pass empty string to opt out. */
   additionalDeptSurface?: string;
+  /** Slice 5.7A: transactional functional signals fed to the
+   *  compatibility gate (§Amendment 2). Typically composed from
+   *  purchased-object descriptions + external product-family text
+   *  + supplier context — the same surface functional-department
+   *  inference uses. */
+  transactionFunctionalSignals?: string[];
+  /** Optional additional text for CIP + financing evidence
+   *  detection (e.g. supplier notes, PO metadata). Purchased
+   *  object descriptions are always included by the detector. */
+  additionalEvidenceTexts?: string[];
 }
 
 export interface CapitalAwareCandidate {
@@ -98,6 +128,13 @@ export interface CapitalAwareCandidate {
   totalScore: number;
   supportingEvidence: string[];
   contradictions: string[];
+  // Slice 5.7A §16 diagnostics — every capital candidate exposes
+  // its account semantics, per-dimension compatibility verdict, and
+  // final verdict for founder auditability.
+  semantics?: AccountSemantics;
+  compatibility?: CompatibilityGateResult;
+  finalVerdict?: CompatibilityVerdict;
+  rejectionReasons?: string[];
 }
 
 export interface CapitalAwareRankingResult {
@@ -239,15 +276,54 @@ export function rankCapitalAwareAccounts(
   // department-compatible capital account.
   const functionalDept = inferFunctionalDepartment(input.purchasedObjects, input.additionalDeptSurface);
 
+  // Slice 5.7A: compute CIP + financing evidence ONCE per document,
+  // then apply the compatibility gate per account BEFORE scoring.
+  const cipEvidence = detectCipEvidence(input.purchasedObjects, input.additionalEvidenceTexts ?? []);
+  const financingEvidence = detectFinancingEvidence(input.purchasedObjects, input.additionalEvidenceTexts ?? []);
+
+  // Transaction-side functional signals: purchased-object descriptions
+  // + external product-family text + supplier context. Used by the
+  // gate to distinguish organizational department from transactional
+  // function (§Amendment 2).
+  const transactionSignals = input.transactionFunctionalSignals
+    ?? [
+      ...input.purchasedObjects.map((o) => o.description),
+      input.additionalDeptSurface ?? "",
+    ].filter(Boolean);
+
+  const transactionDepartment = input.departmentResult.leader?.key
+    ?? functionalDept
+    ?? null;
+
+  const primaryObjectType = input.productIdentity.selected?.objectType ?? null;
+
   // Score every eligible account.
   const compatible: CapitalAwareCandidate[] = [];
   const contradicted: CapitalAwareCandidate[] = [];
 
   for (const acct of input.eligibleAccounts) {
-    const compat = evaluateAccountingNatureCompatibility(acct, decision);
+    // 1. Resolve account semantics from configured / structural /
+    //    name-inference sources per §Amendment 3.
+    const semantics = resolveAccountSemantics(acct);
+
+    // 2. Run the compatibility gate BEFORE scoring per §COMPATIBILITY
+    //    GATE. This produces a per-dimension verdict + final verdict.
+    const gate = evaluateCompatibilityGate({
+      semantics,
+      capitalDecision: decision,
+      productObjectType: primaryObjectType,
+      transactionDepartment,
+      transactionFunctionalSignals: transactionSignals,
+      cipEvidence,
+      financingEvidence,
+    });
+
+    // 3. Legacy per-dimension score is retained for diagnostic
+    //    continuity + tie-breaking within the compatible pool.
+    const legacyCompat = evaluateAccountingNatureCompatibility(acct, decision);
     const cand = scoreCandidate({
       account: acct,
-      natureCompat: compat,
+      natureCompat: legacyCompat,
       decision,
       productIdentity: input.productIdentity,
       purchasedObjects: input.purchasedObjects,
@@ -255,7 +331,32 @@ export function rankCapitalAwareAccounts(
       functionalDept,
       vendorHistory: new Set(input.vendorHistoryPreferredAccountNumbers ?? []),
     });
-    if (compat === "INCOMPATIBLE" || compat === "CONTRADICTED") {
+    cand.semantics = semantics;
+    cand.compatibility = gate;
+    cand.finalVerdict = gate.finalVerdict;
+    cand.rejectionReasons = gate.rejectionReasons;
+
+    // Slice 5.7A: gate-verdict adjustment. A PREFERRED-overall
+    // candidate collects a bonus so it can separate from merely
+    // COMPATIBLE alternatives — but only when the underlying
+    // dimensions positively support it (§Amendment 1 explicit:
+    // "equipment alone" does not make an account preferred).
+    if (gate.finalVerdict === "PREFERRED") {
+      cand.dimensions.purpose += 12;
+      cand.supportingEvidence.push(`gateVerdict=PREFERRED (semantic authority)`);
+    } else if (gate.finalVerdict === "CONDITIONALLY_COMPATIBLE") {
+      // Conditional accounts (e.g. financing without evidence, CIP
+      // with only weak evidence) should not outrank an unconditional
+      // COMPATIBLE candidate. Apply a small negative to break ties.
+      cand.dimensions.purpose -= 4;
+      cand.supportingEvidence.push(`gateVerdict=CONDITIONALLY_COMPATIBLE (special condition not fully met)`);
+    }
+    // Recompute total after gate adjustment.
+    cand.totalScore = Object.values(cand.dimensions).reduce((s, v) => s + v, 0);
+
+    // §COMPATIBILITY GATE: pool assignment now derives from the gate
+    // verdict, not from a single-dimension legacy nature compat.
+    if (gate.finalVerdict === "INCOMPATIBLE" || gate.finalVerdict === "CONTRADICTED") {
       contradicted.push(cand);
     } else {
       compatible.push(cand);

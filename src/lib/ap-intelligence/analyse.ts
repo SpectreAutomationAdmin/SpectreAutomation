@@ -249,8 +249,34 @@ export interface ApAnalyseResult {
       supportingEvidence: string[];
       contradictions: string[];
       postable: boolean;
+      // Slice 5.7A §16 rich diagnostics
+      capitalAccountRole?: string;
+      capitalRoleSource?: string;
+      accountFunctionalRole?: string;
+      functionalRoleSource?: string;
+      organizationalDepartment?: string | null;
+      finalVerdict?: string;
+      rejectionReasons?: string[];
+      dimensionVerdicts?: {
+        nature?: { verdict: string; reason: string };
+        capitalRole?: { verdict: string; reason: string };
+        functionalRole?: { verdict: string; reason: string };
+        department?: { verdict: string; reason: string };
+        specialCondition?: { verdict: string; reason: string };
+      };
     }>;
     contradictedPoolCount: number;
+    // Slice 5.7A §16: surface contradicted candidates + rejection
+    // reasons so the founder can see WHY each was excluded.
+    contradictedPool?: Array<{
+      accountNumber: string;
+      accountName: string;
+      totalScore: number;
+      finalVerdict?: string;
+      rejectionReasons?: string[];
+      capitalAccountRole?: string;
+      accountFunctionalRole?: string;
+    }>;
     diagnostic: string;
   };
   // Sprint 3 · Phase 4 Slice 5.4 (2026-08-08) — Product Identity
@@ -2212,12 +2238,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         })
       : sharedDept;
 
+    // Slice 5.7A: assemble the transactional functional signal
+    // surface for the compatibility gate. This is the same evidence
+    // set the augmented department inference sees plus the raw
+    // canonical line items (which include any additional text like
+    // "Alberta Tire Levy ADF" that might carry function context).
+    const transactionFunctionalSignals = [
+      ...sharedPurchasedObjects.map((o) => o.description),
+      externalProductFamilyText,
+      transactionalTextValue ?? "",
+    ].filter((s) => typeof s === "string" && s.length > 0);
+    const additionalEvidenceTexts = [
+      transactionalTextValue ?? "",
+    ].filter(Boolean);
+
     capitalAwareRankingResult = rankCapitalAwareAccounts({
       capitalDecision: sharedCapitalDecision,
       productIdentity: sharedProductIdentity,
       purchasedObjects: sharedPurchasedObjects,
       departmentResult: augmentedDept,
       additionalDeptSurface: externalProductFamilyText,
+      transactionFunctionalSignals,
+      additionalEvidenceTexts,
       eligibleAccounts: capEligibleView,
       vendorHistoryPreferredAccountNumbers: [],
     });
@@ -2507,8 +2549,31 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         supportingEvidence: c.supportingEvidence,
         contradictions: c.contradictions,
         postable: c.postable,
+        capitalAccountRole: c.semantics?.capitalRole,
+        capitalRoleSource: c.semantics?.capitalRoleSource,
+        accountFunctionalRole: c.semantics?.functionalRole,
+        functionalRoleSource: c.semantics?.functionalRoleSource,
+        organizationalDepartment: c.semantics?.organizationalDepartment,
+        finalVerdict: c.finalVerdict,
+        rejectionReasons: c.rejectionReasons,
+        dimensionVerdicts: c.compatibility ? {
+          nature: c.compatibility.natureCompatibility,
+          capitalRole: c.compatibility.capitalRoleCompatibility,
+          functionalRole: c.compatibility.functionalRoleCompatibility,
+          department: c.compatibility.departmentCompatibility,
+          specialCondition: c.compatibility.specialConditionCompatibility,
+        } : undefined,
       })),
       contradictedPoolCount: capitalAwareRankingResult.contradictedPool.length,
+      contradictedPool: capitalAwareRankingResult.contradictedPool.slice(0, 20).map((c) => ({
+        accountNumber: c.accountNumber,
+        accountName: c.accountName,
+        totalScore: c.totalScore,
+        finalVerdict: c.finalVerdict,
+        rejectionReasons: c.rejectionReasons,
+        capitalAccountRole: c.semantics?.capitalRole,
+        accountFunctionalRole: c.semantics?.functionalRole,
+      })),
       diagnostic: capitalAwareRankingResult.diagnostic,
     } : undefined,
     productIdentityResolution: {
