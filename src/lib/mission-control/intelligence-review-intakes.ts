@@ -24,7 +24,6 @@ import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-
 import { EXTRACTION_RULE_VERSION } from "@/lib/ap-intelligence/types";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 import { loadOcrExtractionRevision } from "@/lib/ap-intelligence/ocr/persistence";
-import { isAnalysisVersionCurrent } from "@/lib/ap-intelligence/analysis-version";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
 // for the AP-card intelligence projection.
@@ -977,23 +976,25 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   // ---------------------------------------------------------------------
   // Post-Slice-3 lifecycle contract (2026-08-09) — §1, §4, §5, §6.
   //
-  // A stable AP snapshot is available when:
-  //   1. The analyser call above returned a non-null ApAnalyseResult
-  //      AND
-  //   2. The WorkIntakeItem's stored analysisVersion matches the
-  //      current composite fingerprint (i.e. the analysis is not
-  //      stale and not currently being replayed by a worker).
+  // A stable AP snapshot is available when the analyser call above
+  // returned a non-null ApAnalyseResult. `analyseIngestedInvoice`
+  // runs FRESH on every projection request (subject to the 90s
+  // apSummaryCache), so a non-null result IS the current-composite
+  // output regardless of the WorkIntakeItem's stored analysisVersion
+  // (the stored field is a cache-invalidation signal for workers,
+  // not the source of truth for what the projection just computed).
   //
-  // When either condition fails the founder-facing publication MUST
-  // be a coherent "ANALYSIS_PENDING" shell — not a partial card with
-  // dashes for supplier / invoice / amount / category. Historically
-  // the projection returned null/dashed fields with workflowState
-  // "NEEDS_JUDGMENT" (mapPhase3ToLegacyDisplayState(null) branch),
+  // When the analyser could not produce a result — `docRef` null in
+  // the narrow window before `upsertOrigins` runs, or the analyser
+  // threw — the founder-facing publication MUST be a coherent
+  // "ANALYSIS_PENDING" shell, not a partial card with dashes for
+  // supplier / invoice / amount / category. Historically that
+  // branch returned dashed fields with workflowState
+  // "NEEDS_JUDGMENT" (via `mapPhase3ToLegacyDisplayState(null)`),
   // which read to the founder as an AP-intelligence failure rather
   // than an in-progress state — the leak this contract fixes.
   // ---------------------------------------------------------------------
-  const analysisIsStable =
-    analysis != null && isAnalysisVersionCurrent(intake.analysisVersion);
+  const analysisIsStable = analysis != null;
 
   if (!analysisIsStable) {
     const pendingValue: LinkedIntelligenceForEmail["invoiceSummary"] = buildPendingInvoiceSummary({
