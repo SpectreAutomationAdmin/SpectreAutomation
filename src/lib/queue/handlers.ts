@@ -239,6 +239,20 @@ registerHandler<{
   return runAPInvoiceReanalyseJob({ jobId, payload });
 });
 
+// Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — async external product
+// research. Worker is the ONLY component that calls the paid provider
+// after Slice 5.7B cutover. See
+// src/lib/ap-intelligence/external-product-reference/research-worker.ts.
+registerHandler("PRODUCT_REFERENCE_RESEARCH", async ({ payload, jobId }) => {
+  const { runProductReferenceResearchJob } = await import(
+    "../ap-intelligence/external-product-reference/research-worker"
+  );
+  return runProductReferenceResearchJob({
+    jobId,
+    payload: payload as import("../ap-intelligence/external-product-reference/research-worker").ProductReferenceResearchPayload,
+  });
+});
+
 /**
  * Sprint 2 B4.1 — Which mailbox JobKinds are implemented today. Used
  * by a future health endpoint to distinguish "reserved" from "live".

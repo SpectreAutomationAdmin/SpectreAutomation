@@ -89,7 +89,22 @@ export type JobKind =
   // to one re-analyse. Handler is a no-op when no state has changed.
   // Payload: { clubId, ingestedDocumentId, triggerSource: "ocr" | "manual" }
   // Handler: src/lib/ap-intelligence/reanalyse-worker.ts
-  | "AP_INVOICE_REANALYSE";
+  | "AP_INVOICE_REANALYSE"
+  // Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — external product
+  // research moved fully asynchronous per §2.
+  //
+  // Idempotency: enqueue with key
+  //   `product-reference:{normalizedKey}:{researchVersion}`
+  // Where normalizedKey = `${MANUFACTURER}|${MODEL}|${PART}`
+  // uppercased. Global (no clubId in the key) so identical products
+  // across tenants collapse to one paid provider call per version.
+  // The ProductReference DB row's PENDING → RUNNING state transition
+  // is the durable "in-flight" marker; the unique BackgroundJob key
+  // guarantees at-most-one enqueued job for the same key.
+  //
+  // Payload: { normalizedKey, refRequest, dependentDocumentIds, dependentClubIds }
+  // Handler: src/lib/ap-intelligence/external-product-reference/research-worker.ts
+  | "PRODUCT_REFERENCE_RESEARCH";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

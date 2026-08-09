@@ -1157,7 +1157,6 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const { resolveProductIdentity: resolveProductIdentityShared } = await import("./product-identity-resolution");
   const { NullPricePlausibilityProvider } = await import("./price-plausibility");
   const {
-    getProductReferenceProvider,
     activeProviderKind,
   } = await import("./external-product-reference/factory");
   const {
@@ -1166,13 +1165,20 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     DEFAULT_RATE_LIMIT,
   } = await import("./external-product-reference/rate-limiter");
   const { fingerprintProductRequest } = await import("./product-reference-provider");
-  const { InMemoryProductReferenceCache } = await import("./product-reference-provider");
-  // Process-lifetime cache singleton (in-memory per §17 — a Redis /
-  // DB-backed cache is a Slice 5.7 hardening item).
-  const cache = ((globalThis as unknown as { __spectreProductRefCache?: InstanceType<typeof InMemoryProductReferenceCache> }).__spectreProductRefCache ??=
-    new InMemoryProductReferenceCache());
+  // Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — external research is
+  // now asynchronous. The web tier NEVER invokes the paid provider
+  // directly (§B founder gate). Flow:
+  //   1. compute internal identity
+  //   2. if externalCorroborationRequired → look up durable
+  //      ProductReference (DB-backed, global, tenant-independent)
+  //   3. if COMPLETED → replay cached evidence, re-resolve, done
+  //   4. else → enqueue PRODUCT_REFERENCE_RESEARCH, return truthful
+  //      current internal-only state with `researchStatus` populated
+  //   5. worker completes research + enqueues AP_INVOICE_REANALYSE;
+  //      next analyse() call hits step 3
+  const { ensureProductResearchEnqueued, evidenceToReplayResult } =
+    await import("./external-product-reference/enqueue");
 
-  const rawProvider = getProductReferenceProvider();
   const configuredProviderKind = activeProviderKind();
 
   // Two-pass strategy: (a) run internal-only resolution first with a
@@ -1232,114 +1238,66 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       && configuredProviderKind !== "null"
       && configuredProviderKind !== "null-fallback") {
     externalTrigger.considered = true;
-    // Cache lookup first (§17). Cache key is manufacturer|model|part
-    // — invoice-independent per §17.
-    const cachedRef = primaryObjectForRefRequest && primaryObjectForRefRequest.modelCandidates[0]
-      ? cache.get(
-          primaryObjectForRefRequest.brandCandidates[0]?.value ?? "",
-          primaryObjectForRefRequest.modelCandidates[0].value,
-          primaryObjectForRefRequest.skuCandidates[0]?.value ?? null,
-        )
-      : null;
 
-    if (cachedRef) {
+    // §J dedupe-BEFORE-quota: consult the durable global cache
+    // first. Refreshing Mission Control 20 times must not consume
+    // 20 paid invocations. Quota is only relevant when we are
+    // actually about to enqueue new research.
+    const decision = await ensureProductResearchEnqueued({
+      refRequest,
+      clubId: args.clubId,
+      ingestedDocumentId: doc.id,
+    });
+
+    if (decision.kind === "REUSED_COMPLETED") {
       externalTrigger.cacheHit = true;
       externalTrigger.triggered = false;
-      externalTrigger.reason = `cache hit — re-using ${cachedRef.sourceEvidence.length} previously-fetched evidence records; product cache entry firstSeen=${cachedRef.firstSeenAt}`;
-      // Build a MockProvider-shape that just replays cached evidence.
+      externalTrigger.reason = `durable cache hit — reusing ${decision.reference.identityEvidenceJson.length} evidence records; identityVerifiedAt=${decision.reference.identityVerifiedAt?.toISOString() ?? "n/a"}`;
+      // Replay the persisted evidence through the existing resolver so
+      // downstream capital/department/GL logic sees identical shape.
       const { FixtureProductReferenceProvider } = await import("./external-product-reference/fixture-provider");
       const cachedProvider = new FixtureProductReferenceProvider();
+      const replay = evidenceToReplayResult(decision.reference);
       cachedProvider.seedByFingerprint(refRequestFingerprint, {
-        state: cachedRef.sourceEvidence.length > 0 ? "RESOLVED" : "NO_RESULTS",
-        products: cachedRef.sourceEvidence,
+        state: replay.state,
+        products: replay.products,
       });
       sharedProductIdentity = await resolveProductIdentityShared({
         objects: sharedPurchasedObjects,
         pricePlausibilityProvider: new NullPricePlausibilityProvider(),
         productReferenceProvider: cachedProvider,
       });
-    } else {
-      // Quota check (§18)
-      const quota = tryConsumeDailyQuota(args.clubId);
-      externalTrigger.quotaAllowed = quota.allowed;
-      externalTrigger.quotaRemaining = quota.remaining;
-      if (!quota.allowed) {
-        externalTrigger.reason = quota.reason ?? "daily quota exceeded";
-      } else {
-        externalTrigger.triggered = true;
-        externalTrigger.reason = `external research triggered — provider=${configuredProviderKind} fingerprint=${refRequestFingerprint}`;
-        logger.info("ap-intelligence.slice5-6.external-research.triggered", {
-          clubId: args.clubId,
-          docIdTail: doc.id.slice(-6),
-          provider: configuredProviderKind,
-          fingerprint: refRequestFingerprint,
-          quotaRemaining: quota.remaining,
-        });
-        const beforeExternalStatus = internalOnlyIdentity.status;
-        const beforeExternalTop = internalOnlyIdentity.candidates[0]?.objectType;
-        const beforeExternalScore = internalOnlyIdentity.candidates[0]?.internalEvidenceScore;
-        sharedProductIdentity = await resolveProductIdentityShared({
-          objects: sharedPurchasedObjects,
-          pricePlausibilityProvider: new NullPricePlausibilityProvider(),
-          productReferenceProvider: rawProvider,
-          externalTimeoutMs: DEFAULT_RATE_LIMIT.wholeJobTimeoutMs,
-          externalCallCap: DEFAULT_RATE_LIMIT.perRequestMaxQueries,
-        });
-        logger.info("ap-intelligence.slice5-6.external-research.completed", {
-          clubId: args.clubId,
-          docIdTail: doc.id.slice(-6),
-          externalLookupCount: sharedProductIdentity.externalLookupCount,
-          externalLatencyMs: sharedProductIdentity.externalLatencyMs,
-          statusBefore: beforeExternalStatus,
-          statusAfter: sharedProductIdentity.status,
-          topBefore: beforeExternalTop,
-          topAfter: sharedProductIdentity.candidates[0]?.objectType,
-          topScoreBefore: beforeExternalScore,
-          topScoreAfter: sharedProductIdentity.candidates[0]?.internalEvidenceScore,
-          selectedObjectType: sharedProductIdentity.selected?.objectType ?? null,
-          diagnostic: sharedProductIdentity.diagnostic,
-          reason: sharedProductIdentity.reason,
-        });
-        // Slice 5.6 live-acceptance §17: cache ANY successful external
-        // call under the manufacturer|model|partNumber key so a repeat
-        // analysis of the SAME product-identity doesn't fire another
-        // 24-second web_search. Cache stores the parsed evidence
-        // records the provider returned; when resolution status is
-        // AMBIGUOUS (evidence returned but not enough to commit), we
-        // still cache so the next call sees the same input state and
-        // can decide identically without another provider hit.
-        if (primaryObjectForRefRequest?.modelCandidates[0]
-            && sharedProductIdentity.externalLookupCount > 0
-            && (sharedProductIdentity.externalEvidence?.length ?? 0) > 0) {
-          cache.put({
-            manufacturer: primaryObjectForRefRequest.brandCandidates[0]?.value ?? "",
-            model: primaryObjectForRefRequest.modelCandidates[0].value,
-            partNumber: primaryObjectForRefRequest.skuCandidates[0]?.value ?? null,
-            productFamily: sharedProductIdentity.selected?.objectType ?? "UNKNOWN",
-            objectType: sharedProductIdentity.selected?.objectType ?? "UNKNOWN",
-            sourceEvidence: (sharedProductIdentity.externalEvidence ?? []).map((e) => ({
-              evidenceType: e.evidenceType as "OEM_PRODUCT_MATCH" | "OEM_PART_MATCH" | "OEM_SPECIFICATION" | "AUTHORIZED_DEALER_MATCH" | "MARKET_COMPARABLE" | "PRICE_PLAUSIBILITY",
-              sourceDomain: e.sourceDomain,
-              sourceTitle: e.sourceTitle,
-              retrievedAt: new Date().toISOString(),
-              queryFingerprint: refRequestFingerprint ?? "",
-              matchedManufacturer: e.matchedManufacturer,
-              matchedModel: e.matchedModel,
-              matchedPartNumber: null,
-              matchedProductFamily: e.matchedProductFamily,
-              observedPrice: null,
-              currency: null,
-              confidence: e.confidence,
-              evidenceSnippet: e.evidenceSnippet,
-            })),
-            confidence: sharedProductIdentity.confidence,
-            firstSeenAt: new Date().toISOString(),
-            lastVerifiedAt: new Date().toISOString(),
-            expiresAt: null,
-          });
-        }
-      }
+    } else if (decision.kind === "REUSED_TERMINAL") {
+      // §H — do NOT re-enqueue for NO_RESULT / CONFLICTING / terminal.
+      externalTrigger.cacheHit = true;
+      externalTrigger.triggered = false;
+      externalTrigger.reason = `durable terminal cache — state=${decision.reference.researchState}, not retrying`;
+    } else if (decision.kind === "AWAITING_PENDING"
+      || decision.kind === "AWAITING_RUNNING"
+      || decision.kind === "AWAITING_COOLDOWN"
+      || decision.kind === "RESEARCH_JUST_ENQUEUED") {
+      // §20 truthful "research pending" — analyser returns internal-
+      // only result; worker will complete + enqueue AP_INVOICE_REANALYSE
+      // which re-invokes this exact code path (which will hit
+      // REUSED_COMPLETED on the second run).
+      externalTrigger.cacheHit = false;
+      externalTrigger.triggered = decision.kind === "RESEARCH_JUST_ENQUEUED";
+      externalTrigger.reason = decision.kind === "RESEARCH_JUST_ENQUEUED"
+        ? `research enqueued (jobId=${decision.jobId ?? "n/a"}); refresh once complete`
+        : `research pending in durable store (state=${decision.reference.researchState})`;
+    } else if (decision.kind === "UNRESOLVABLE_KEY") {
+      externalTrigger.triggered = false;
+      externalTrigger.reason = `unresolvable product key: ${decision.reason}`;
+    } else if (decision.kind === "RESEARCH_ENQUEUE_FAILED") {
+      externalTrigger.triggered = false;
+      externalTrigger.reason = `research enqueue failed: ${decision.error}`;
     }
+
+    // §18 daily quota is now consulted ONLY when the worker actually
+    // runs the paid provider. Web-side never consumes quota; the
+    // in-memory quota counter still exists as a diagnostic surface
+    // and defensive floor for legacy call-sites.
+    void tryConsumeDailyQuota; void currentClubDailyCount; void DEFAULT_RATE_LIMIT;
   } else if (internalOnlyIdentity.externalCorroborationRequired) {
     externalTrigger.considered = true;
     externalTrigger.triggered = false;

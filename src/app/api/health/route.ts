@@ -65,18 +65,84 @@ export async function GET() {
   // parity when a rolling deploy is in flight or a stale worker
   // is suspected.
   const { ELIGIBILITY_RULE_VERSION } = await import("@/lib/accounting/eligibility");
+  const {
+    PRODUCT_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+    PRODUCT_REFERENCE_RESEARCH_VERSION,
+  } = await import("@/lib/ap-intelligence/external-product-reference/versions");
+  const { activeProviderKind } = await import("@/lib/ap-intelligence/external-product-reference/factory");
+  const { productReferenceStats } = await import("@/lib/ap-intelligence/external-product-reference/durable-cache");
+  const { currentAnalysisVersion } = await import("@/lib/ap-intelligence/analysis-version");
+
+  // §13 Sprint 3 Phase 4 Slice 5.7B: expose enough version + queue state
+  // for ops to detect web/worker drift or a stuck ProductReference queue.
+  let productReference: {
+    evidenceSchemaVersion: string;
+    researchVersion: string;
+    providerKind: string;
+    providerConfigured: boolean;
+    stats: Awaited<ReturnType<typeof productReferenceStats>> | null;
+    queueDepth: { pending: number; running: number; dlq: number };
+  };
+  try {
+    const [stats, pending, running, dlq] = await Promise.all([
+      productReferenceStats(),
+      prisma.backgroundJob.count({
+        where: { kind: "PRODUCT_REFERENCE_RESEARCH", status: { in: ["QUEUED", "SCHEDULED"] } },
+      }),
+      prisma.backgroundJob.count({
+        where: { kind: "PRODUCT_REFERENCE_RESEARCH", status: "RUNNING" },
+      }),
+      prisma.backgroundJob.count({
+        where: { kind: "PRODUCT_REFERENCE_RESEARCH", status: "DEAD_LETTER" },
+      }),
+    ]);
+    productReference = {
+      evidenceSchemaVersion: PRODUCT_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+      researchVersion: PRODUCT_REFERENCE_RESEARCH_VERSION,
+      providerKind: activeProviderKind(),
+      providerConfigured: !!process.env.PRODUCT_REFERENCE_API_KEY,
+      stats,
+      queueDepth: { pending, running, dlq },
+    };
+  } catch (err) {
+    productReference = {
+      evidenceSchemaVersion: PRODUCT_REFERENCE_EVIDENCE_SCHEMA_VERSION,
+      researchVersion: PRODUCT_REFERENCE_RESEARCH_VERSION,
+      providerKind: activeProviderKind(),
+      providerConfigured: !!process.env.PRODUCT_REFERENCE_API_KEY,
+      stats: null,
+      queueDepth: { pending: -1, running: -1, dlq: -1 },
+    };
+    // Do not fail health just because this diagnostic block errored;
+    // the fundamental DB check already covers connectivity.
+    void err;
+  }
+
   const apIntelligence = {
+    analysisVersion: currentAnalysisVersion(),
     eligibilityRuleVersion: ELIGIBILITY_RULE_VERSION,
     workflowDecisionVersion: 1,   // bumped when computeApWorkflowDecision changes shape
     phase0Enabled: (process.env.AP_INTELLIGENCE_PHASE0_SAFETY ?? "1") !== "0",
     phase2Enabled: (process.env.AP_INTELLIGENCE_PHASE2_ELIGIBILITY ?? "1") !== "0",
+    productReference,
   };
 
+  // §13 completion gate: schemaIncompatible rows > 0 signals a
+  // deployed evidence version mismatch — surface as warn so the
+  // async pipeline is not falsely reported healthy.
+  const productReferenceWarn = productReference.stats
+    ? productReference.stats.schemaIncompatible > 0
+    : false;
+
+  const finalStatus = status === "fail"
+    ? "fail"
+    : (status === "warn" || productReferenceWarn ? "warn" : "ok");
+
   return NextResponse.json({
-    status,
+    status: finalStatus,
     version: process.env.SPECTRE_VERSION ?? "dev",
     apIntelligence,
     checks,
     timestamp: new Date().toISOString(),
-  }, { status: status === "fail" ? 503 : 200 });
+  }, { status: finalStatus === "fail" ? 503 : 200 });
 }

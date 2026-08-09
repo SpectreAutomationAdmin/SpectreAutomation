@@ -9673,3 +9673,70 @@ model ApIntakeSource {
   @@index([clubId, ingestedDocumentId])
 }
 
+// Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — durable, GLOBAL product
+// reference knowledge. §6 Option C: product FACTS (manufacturer, model,
+// object type, component relationships) are reusable across tenants;
+// tenant ACCOUNTING conclusions (department, capital, GL) are never
+// stored here and always re-derive per-tenant via analyseIngestedInvoice.
+//
+// Privacy invariants (§7, §29): this table must NEVER contain
+//   clubId · invoiceNumber · workIntakeItemId · emailMessageId
+//   · member/customer/vendor identity · bank/tax/payment data
+//   · full webpage bodies · full invoice text.
+// The persistence audit in ap-intelligence/tests/product-reference-privacy.test.ts
+// enforces this at CI.
+model ProductReference {
+  id                        String    @id @default(cuid())
+
+  // Canonical dedupe key: `${MANUFACTURER}|${MODEL}|${PART}` uppercased.
+  // Empty segments allowed (e.g. no partNumber). Unique globally.
+  normalizedKey             String    @unique
+
+  normalizedManufacturer    String
+  normalizedModel           String
+  normalizedPartNumber      String?
+
+  // Derived facts (from provider evidence). Nullable when research is
+  // pending / inconclusive.
+  productFamily             String?
+  objectType                String?
+  // Bounded structured facts. Never a full webpage body.
+  identityEvidenceJson      String    @default("[]")
+  sourceEvidenceJson        String    @default("[]")
+
+  evidenceQuality           String    @default("UNKNOWN") // HIGH | MEDIUM | LOW | UNKNOWN
+  confidence                Float     @default(0)
+
+  // §9 research state model — explicit, never inferred from null fields.
+  researchState             String    @default("PENDING")
+  // NOT_REQUIRED | PENDING | RUNNING | COMPLETED
+  // | FAILED_RETRYABLE | FAILED_TERMINAL | NO_RESULT | CONFLICTING_EVIDENCE
+
+  // §12 versioning — factual evidence is re-usable across accounting
+  // releases so long as the evidence schema version matches. Bump
+  // researchVersion to force controlled re-research.
+  provider                  String?
+  providerVersion           String?
+  researchVersion           String    @default("1")
+  evidenceSchemaVersion     String    @default("1")
+
+  // §8 TTL policy — identity is long-lived; price observations decay
+  // faster. Nullable expiresAt = no expiry.
+  identityVerifiedAt        DateTime?
+  identityExpiresAt         DateTime?
+  priceExpiresAt            DateTime?
+
+  // Operational counters (§17 retry policy).
+  researchAttempts          Int       @default(0)
+  lastResearchAttemptAt     DateTime?
+  lastResearchError         String?
+  nextRetryAt               DateTime?
+
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@index([researchState])
+  @@index([normalizedManufacturer, normalizedModel])
+  @@index([nextRetryAt])
+}
+
