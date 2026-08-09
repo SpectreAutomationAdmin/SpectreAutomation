@@ -42,7 +42,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # The build "completed" but left .next/ without a BUILD_ID, so the
 # runtime crashed with "Could not find a production build". 3072 MB
 # fits comfortably inside the builder's 4 GB.
-ENV NODE_OPTIONS="--max-old-space-size=3072"
+ENV NODE_OPTIONS="--max-old-space-size=3584"
 # Build-only placeholders. Next.js 14's "Collecting page data" phase
 # evaluates every route module, which transitively imports src/lib/env.ts
 # and runs Zod validation at module load. DATABASE_URL and
