@@ -56,11 +56,15 @@ export class ClaudeWebSearchProductReferenceProvider implements ProductReference
   private readonly config: ClaudeWebSearchProviderConfig;
 
   constructor(config: ClaudeWebSearchProviderConfig) {
+    // Spread config first, then apply defaults for undefined-only
+    // fields. Otherwise `...config` clobbers defaults with undefined
+    // (e.g. when factory passes `model: process.env.MODEL` and the
+    // env var is unset).
     this.config = {
-      model: "claude-sonnet-4-5",   // current-family default; override via PRODUCT_REFERENCE_MODEL env var
-      providerName: "claude-web-search",
-      rateLimit: DEFAULT_RATE_LIMIT,
       ...config,
+      model: config.model ?? "claude-sonnet-4-5",
+      providerName: config.providerName ?? "claude-web-search",
+      rateLimit: config.rateLimit ?? DEFAULT_RATE_LIMIT,
     };
   }
 
