@@ -37,7 +37,7 @@ COPY . .
 # generate fits inside V8's default 1.5 GB heap on Fly's remote
 # builder. Set the heap ceiling BEFORE prisma generate (previously
 # only set later, for `next build`).
-ENV NODE_OPTIONS="--max-old-space-size=3584"
+ENV NODE_OPTIONS="--max-old-space-size=3840"
 ENV NEXT_TELEMETRY_DISABLED=1
 # Generate the Postgres Prisma client explicitly. If prisma-postgres/
 # is missing or out of sync, this fails fast and the image cannot be
