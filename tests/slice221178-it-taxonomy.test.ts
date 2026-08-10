@@ -144,7 +144,7 @@ describe("§4 gl-concepts synonym coverage", () => {
 // -----------------------------------------------------------------------------
 
 import { computeAllocations } from "@/lib/ap-intelligence/gl-allocations";
-import type { LineItem } from "@/lib/ap-intelligence/types";
+import type { LineItem } from "@/lib/ap-intelligence/line-items-extract";
 
 function makeLine(desc: string, amount: number): LineItem {
   return {
