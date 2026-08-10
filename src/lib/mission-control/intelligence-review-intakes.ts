@@ -1366,17 +1366,40 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           ? "Purpose identified · GL account requires review"
           : null
       ),
-      // Sprint 3 · 221178 follow-on (Correction D) — when the
-      // canonical allocation authority says "Multiple", the founder-
-      // facing single-GL fields MUST be null. Otherwise the narrative
-      // composer (EmailIntakeCard `renderApWorkSummary`) reads them
-      // and produces "Prepared a proposed entry to post $X to GL
-      // ####" while the Category cell simultaneously says "Multiple"
-      // and the popover shows different accounts — the three-way
-      // contradiction the audit exposed. The narrative falls through
-      // to the Multiple branch instead.
-      glAccountNumber: (noCoa || analysis?.allocations?.cardCategory === "Multiple") ? null : (gl?.accountNumber ?? null),
-      glAccountName: (noCoa || analysis?.allocations?.cardCategory === "Multiple") ? null : (gl?.accountName ?? null),
+      // Sprint 3 · 221178 follow-on (Correction D) — the founder-
+      // facing single-GL fields MUST reflect the same accounting
+      // authority as the Category cell + Multiple popover + AP
+      // Coding modal. Never the DOCUMENT-LEVEL `analysis.gl` when
+      // the ALLOCATION AUTHORITY has a different (or Multiple)
+      // outcome. Three cases:
+      //   - noCoa                              → null
+      //   - allocation authority = Multiple    → null (narrative
+      //     branches to the Multiple sentence)
+      //   - allocation authority = single      → the SINGLE
+      //     allocation's recommended GL, NOT `analysis.gl`. Ranker
+      //     Authority slice (2026-08-10) fix: on 221178 the single
+      //     allocation resolves to 6054 Computer & IT Services
+      //     while the document-level `analysis.gl` still recommends
+      //     6071 Subscriptions. The narrative must follow the
+      //     allocation authority.
+      //   - allocation authority = null/empty  → fall back to
+      //     `analysis.gl` (legacy path — no allocation opinion).
+      glAccountNumber: (() => {
+        if (noCoa) return null;
+        const allocs = analysis?.allocations?.allocations ?? [];
+        const material = allocs.filter((a) => a.recommendedAccount != null && Math.abs(a.amount) >= 0.01);
+        if (material.length >= 2) return null; // Multiple
+        if (material.length === 1) return material[0].recommendedAccount!.accountNumber;
+        return gl?.accountNumber ?? null;
+      })(),
+      glAccountName: (() => {
+        if (noCoa) return null;
+        const allocs = analysis?.allocations?.allocations ?? [];
+        const material = allocs.filter((a) => a.recommendedAccount != null && Math.abs(a.amount) >= 0.01);
+        if (material.length >= 2) return null;
+        if (material.length === 1) return material[0].recommendedAccount!.accountName;
+        return gl?.accountName ?? null;
+      })(),
       capitalState,
       source: noCoa ? null : ((gl?.source ?? "NONE") as ApInvoiceCardIntelligence["category"]["source"]),
       alternates: noCoa || !gl?.candidates ? [] : gl.candidates.slice(1, 5).map((c) => ({
