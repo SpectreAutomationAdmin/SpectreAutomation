@@ -236,7 +236,7 @@ describe("§29 coherent publication (post-analysis)", () => {
     expect(c.invoiceNumber).toBe("B0037FC");
     expect(c.gross.amount).toBe("2532.92");
     expect(c.category.glAccountNumber).toBe("6025");
-    expect(c.confidenceInputs?.gl.winnerConfidence).toBe(90);
+    expect(c.confidenceInputs?.gl?.winnerConfidence).toBe(90);
   });
 
   it("scenario-10-11: OCR-pending vs OCR-complete are represented by ANALYSIS_PENDING vs a completed shape (never by a partially-published card)", () => {

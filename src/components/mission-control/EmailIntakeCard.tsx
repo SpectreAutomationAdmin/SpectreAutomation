@@ -1232,7 +1232,30 @@ function ApWorkSummary({ ap }: { ap: ApInvoiceCardIntelligence }) {
             return <>{" "}Vendor match indeterminate — extracted signals were insufficient.</>;
         }
       })()}
-      {grossToken && glToken ? (
+      {/* Sprint 3 · 221178 follow-on (Correction D) — Multiple
+           allocation branch. When the canonical allocation authority
+           says the invoice splits across ≥2 accounts, the narrative
+           must NOT claim the invoice posts wholly to one GL. Copy is
+           deliberately compact. Unresolved allocations get a
+           truthful "requires review" trailer. */}
+      {ap.allocations && ap.allocations.entries.length >= 2 ? (() => {
+        const n = ap.allocations.entries.length;
+        const unresolvedCount = ap.allocations.entries.filter((e) => e.recommendedAccount == null).length;
+        if (unresolvedCount > 0) {
+          return (
+            <>{" "}
+              Prepared a proposed split entry across {n} accounting allocations with{" "}
+              <strong data-testid="ap-work-unresolved-count">{unresolvedCount}</strong> requiring review.
+            </>
+          );
+        }
+        return (
+          <>{" "}
+            Prepared a proposed split entry across{" "}
+            <strong data-testid="ap-work-allocation-count">{n}</strong> accounting allocations.
+          </>
+        );
+      })() : grossToken && glToken ? (
         <>
           {" "}Prepared a proposed entry to post{" "}
           <span className="ref" data-testid="ap-work-gross-ref"><strong>{grossToken}</strong></span>{" "}

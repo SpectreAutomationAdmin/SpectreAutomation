@@ -157,34 +157,72 @@ export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
         {cellV}
         <span className="cat-hover-caret" aria-hidden="true"> ▾</span>
       </div>
-      {open ? (
-        <div
-          id={popoverId}
-          role="dialog"
-          className="cat-hover-popover"
-          data-testid={testid ? `${testid}-popover` : undefined}
-        >
-          <div className="cat-hover-title">Allocations</div>
-          <div className="cat-hover-list">
-            {allocations.entries.map((e) => (
-              <div key={e.id} className="cat-hover-row">
-                <span className="cat-hover-acct">
-                  {e.recommendedAccount
-                    ? `GL ${e.recommendedAccount.accountNumber} ${e.recommendedAccount.accountName}`
-                    : "Unresolved allocation"}
-                </span>
-                <span className="cat-hover-amt">
-                  {formatAmount(e.amount, currency, currencyShowCode)}
-                </span>
+      {open ? (() => {
+        // Sprint 3 · 221178 follow-on (Corrections A + D · §10-§11).
+        // Row-sum vs subtotal invariant: if the visible allocation
+        // entries sum to a value materially different from the
+        // canonical allocations subtotal, the popover MUST NOT
+        // display a reconciled Subtotal / Total footer. The UI does
+        // not fabricate arithmetic; it shows an "Allocation review
+        // required" trailer and leaves the raw rows visible so the
+        // founder can see the mismatch.
+        const rowSum = allocations.entries.reduce((s, e) => s + (e.amount || 0), 0);
+        const rowsReconcileToSubtotal =
+          Math.abs(rowSum - allocations.totals.allocationsSubtotal) < 0.02;
+        return (
+          <div
+            id={popoverId}
+            role="dialog"
+            className="cat-hover-popover"
+            data-testid={testid ? `${testid}-popover` : undefined}
+            data-rows-reconciled={rowsReconcileToSubtotal ? "true" : "false"}
+          >
+            <div className="cat-hover-title">Allocations</div>
+            <div className="cat-hover-list">
+              {allocations.entries.map((e) => (
+                <div key={e.id} className="cat-hover-row">
+                  <span className="cat-hover-acct">
+                    {e.recommendedAccount
+                      ? `GL ${e.recommendedAccount.accountNumber} ${e.recommendedAccount.accountName}`
+                      : "Unresolved allocation"}
+                  </span>
+                  <span className="cat-hover-amt">
+                    {formatAmount(e.amount, currency, currencyShowCode)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {rowsReconcileToSubtotal ? (
+              <div className="cat-hover-totals" data-testid={testid ? `${testid}-totals` : undefined}>
+                <div className="cat-hover-total-row">
+                  <span>Subtotal</span>
+                  <span>{formatAmount(allocations.totals.allocationsSubtotal, currency, currencyShowCode)}</span>
+                </div>
+                {allocations.totals.taxTotal > 0 ? (
+                  <div className="cat-hover-total-row">
+                    <span>Tax</span>
+                    <span>{formatAmount(allocations.totals.taxTotal, currency, currencyShowCode)}</span>
+                  </div>
+                ) : null}
+                {allocations.totals.creditTotal > 0 ? (
+                  <div className="cat-hover-total-row">
+                    <span>Credits</span>
+                    <span>{formatAmount(-allocations.totals.creditTotal, currency, currencyShowCode)}</span>
+                  </div>
+                ) : null}
+                <div className="cat-hover-total cat-hover-total-final">
+                  <span>Total</span>
+                  <span>{formatAmount(allocations.totals.grossTotal, currency, currencyShowCode)}</span>
+                </div>
               </div>
-            ))}
+            ) : (
+              <div className="cat-hover-review" data-testid={testid ? `${testid}-review-required` : undefined}>
+                Allocation review required — line amounts do not yet reconcile to the invoice subtotal.
+              </div>
+            )}
           </div>
-          <div className="cat-hover-total">
-            <span>Total</span>
-            <span>{formatAmount(allocations.totals.grossTotal, currency, currencyShowCode)}</span>
-          </div>
-        </div>
-      ) : null}
+        );
+      })() : null}
       <style jsx>{`
         .cat-hover { position: relative; cursor: help; }
         .cat-hover:focus-visible { outline: 2px solid var(--spectre-focus, #6b7c8f); outline-offset: 2px; }
@@ -229,6 +267,34 @@ export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
           justify-content: space-between;
           font-weight: 600;
           font-variant-numeric: tabular-nums;
+        }
+        .cat-hover-totals {
+          margin-top: 6px;
+          padding-top: 5px;
+          border-top: 1px solid rgba(0, 0, 0, 0.08);
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .cat-hover-total-row {
+          display: flex;
+          justify-content: space-between;
+          font-variant-numeric: tabular-nums;
+          font-size: 11.5px;
+          color: var(--spectre-muted, #566473);
+        }
+        .cat-hover-total-final {
+          margin-top: 3px;
+          padding-top: 4px;
+          border-top: 1px solid rgba(0, 0, 0, 0.08);
+        }
+        .cat-hover-review {
+          margin-top: 6px;
+          padding-top: 5px;
+          border-top: 1px solid rgba(0, 0, 0, 0.08);
+          font-size: 11.5px;
+          font-style: italic;
+          color: var(--spectre-status-warning, #a86200);
         }
       `}</style>
     </div>

@@ -77,6 +77,53 @@ export function isItemizedSummaryDescription(description: string): boolean {
   return ITEMIZED_SUMMARY_RE.test(description.trim());
 }
 
+/** Sprint 3 · 221178 follow-on (2026-08-10) — generalized totals-block
+ *  rejection. The Slice 5.3 filter only catches "N Lines Total"-shaped
+ *  descriptions that are anchored at the start of the row. Real
+ *  invoices routinely include a labelled summary row whose description
+ *  starts with a legitimate token (a date, category label, month) and
+ *  ENDS with SUBTOTAL / TOTAL / TAX / etc. — e.g. "June, 2026. Service
+ *  Contract Fees. SUBTOTAL". Founder rule (Correction A):
+ *
+ *    A row whose description CONTAINS a totals-block token AND has
+ *    NEITHER a quantity NOR a unit price is a document summary, not
+ *    a purchased item. Real purchased lines have both a quantity
+ *    and a unit price when the tenant COA expects a line-item shape.
+ *
+ *  Reverse control: descriptions like "Total Care Maintenance Plan"
+ *  or "Tax Preparation Services" that carry BOTH a quantity AND a
+ *  unit price are NOT rejected — they're legitimate product / service
+ *  purchases that happen to share a token with a summary label.
+ *
+ *  Deliberately conservative: only fires when a totals token AND
+ *  missing structural evidence are BOTH present. False-reject risk
+ *  is bounded. */
+const TOTALS_TOKEN_WORD_RE =
+  /\b(?:sub[\s-]?total|net\s?total|invoice\s?total|items?\s?total|products?\s?total|parts?\s?total|lines?\s?total|amount\s?due|balance(?:\s?due)?|total\s?due|total|gst|hst|pst|qst|vat|tax)\b/i;
+
+export function isTotalsBlockRowRejected(row: {
+  description: string;
+  quantity: number | null;
+  unitPrice: number | null;
+}): { reject: boolean; reason: string | null } {
+  const raw = (row.description ?? "").trim();
+  if (!raw) return { reject: false, reason: null };
+  const hasTotalsToken = TOTALS_TOKEN_WORD_RE.test(raw);
+  if (!hasTotalsToken) return { reject: false, reason: null };
+  // Real purchased line — has both a quantity and a unit price.
+  if (row.quantity != null && row.unitPrice != null) {
+    return { reject: false, reason: null };
+  }
+  const missing =
+    row.quantity == null && row.unitPrice == null ? "no quantity and no unit price"
+    : row.quantity == null ? "no quantity"
+    : "no unit price";
+  return {
+    reject: true,
+    reason: `totals-block row: description contains summary token with ${missing}`,
+  };
+}
+
 /** Category-block labels (Ongoing charges / Taxes and Fees / Credits /
  *  Pending payments / etc.) — used by CATEGORY_BLOCK strategy to
  *  identify anchor rows. GENERIC statement-style labels only. */
@@ -420,15 +467,26 @@ export function reconstructClassicColumnTable(
       });
     }
 
-    const isSummary = isItemizedSummaryDescription(description);
+    const isItemizedSummary = isItemizedSummaryDescription(description);
+    // Sprint 3 · 221178 follow-on (Correction A) — generalized
+    // totals-block rejection. Catches embedded SUBTOTAL / TOTAL / TAX
+    // tokens the Slice 5.3 anchored filter misses.
+    const totalsBlock = isTotalsBlockRowRejected({ description, quantity, unitPrice });
+    const isSummary = isItemizedSummary || totalsBlock.reject;
     const { role, cite: roleCite } = isSummary
       ? { role: "SUMMARY_ROW_REJECTED" as const, cite: null }
       : classifyLineItemRole(description, extension);
     if (roleCite) cites.push(roleCite);
-    if (isSummary) {
+    if (isItemizedSummary) {
       cites.push({
         kind: "flattened_text_row",
         detail: `itemized_summary_rejected: "${description.slice(0, 60)}"`,
+      });
+    }
+    if (totalsBlock.reject) {
+      cites.push({
+        kind: "flattened_text_row",
+        detail: `totals_block_row_rejected: "${description.slice(0, 60)}" (${totalsBlock.reason})`,
       });
     }
 

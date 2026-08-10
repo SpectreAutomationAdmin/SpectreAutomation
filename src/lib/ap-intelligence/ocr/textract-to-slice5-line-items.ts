@@ -15,6 +15,7 @@
 import type { CanonicalDocumentExtraction, CanonicalLineItem as TextractLineItem } from "../document-extractors/canonical-model";
 import type { CanonicalLineItem, CanonicalLineItemStrategy } from "../evidence/canonical-line-item";
 import { classifyLineItemRole, validateRowArithmetic } from "../evidence/canonical-line-item";
+import { isItemizedSummaryDescription, isTotalsBlockRowRejected } from "../line-item-region-strategies";
 
 export interface TextractLineItemNormalizationOptions {
   /** Page number of the source page relative to the SOURCE document
@@ -75,14 +76,22 @@ export function normalizeTextractLineItemsToSlice5(
       li.unitPrice?.providerConfidence ?? 0,
       li.quantity?.providerConfidence ?? 0,
     );
+    // Sprint 3 · 221178 follow-on (Correction A) — apply the same
+    // generalized summary-row rejection as the native/pdf.js path.
+    // Textract on some invoices returns a SUBTOTAL / TAX / TOTAL row
+    // as an "expense line" — those must not become PRIMARY_PURCHASE.
+    const isItemizedSummary = isItemizedSummaryDescription(description);
+    const totalsBlock = isTotalsBlockRowRejected({ description, quantity: rawQty, unitPrice: rawUnitPrice });
     // Role classification — needs a numeric extension to pick the
     // correct role. When extension is null (amount unrecoverable) we
     // default to PRIMARY_PURCHASE and rely on downstream classifiers
     // (item-completeness, capital-evidence) to disambiguate from the
     // description.
-    const roleOut = extension != null
-      ? classifyLineItemRole(description, extension)
-      : { role: "PRIMARY_PURCHASE" as const, cite: null };
+    const roleOut = (isItemizedSummary || totalsBlock.reject)
+      ? { role: "SUMMARY_ROW_REJECTED" as const, cite: null }
+      : extension != null
+        ? classifyLineItemRole(description, extension)
+        : { role: "PRIMARY_PURCHASE" as const, cite: null };
     const sourceStrategy: CanonicalLineItemStrategy = "TEXTRACT_LINE_ITEM";
     const region = li.description.region ?? li.amount.region;
 

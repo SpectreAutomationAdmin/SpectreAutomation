@@ -23,6 +23,7 @@
 // still parse cleanly.
 
 import { parseDocumentLayout, associateDescriptionAmounts } from "./document-layout";
+import { isTotalsBlockRowRejected } from "./line-item-region-strategies";
 
 export type LineTaxTreatment =
   | "taxable"
@@ -237,6 +238,15 @@ export function extractLineItems(text: string): LineItem[] {
     const midTokens = description.match(/(\d+(?:\.\d+)?)\s+\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/);
     const quantity = midTokens ? Number(midTokens[1]) : null;
     const unitPrice = midTokens ? Number(midTokens[2].replace(/[,]/g, "")) : null;
+
+    // Sprint 3 · 221178 follow-on (Correction A) — generalized
+    // totals-block rejection. Catches SUBTOTAL / TOTAL / TAX tokens
+    // that sit inside a longer description ("June, 2026. Service
+    // Contract Fees. SUBTOTAL") which the leading-anchored SUMMARY
+    // filters above miss. Requires missing qty AND/OR unit price to
+    // avoid false-rejecting legitimate lines like "Total Care
+    // Maintenance Plan" or "Tax Preparation Services".
+    if (isTotalsBlockRowRejected({ description, quantity, unitPrice }).reject) continue;
 
     // Classify tax treatment for THIS row.
     const evidence: LineEvidenceKind[] = ["amount_only"];
