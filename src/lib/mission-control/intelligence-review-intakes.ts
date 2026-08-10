@@ -802,6 +802,76 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       }
       emailIntakesByCanonicalAp.set(s.canonicalApIntakeId, arr);
     }
+
+    // Additional discovery path for pre-post-15S siblings that never
+    // received an ApIntakeSource row. Walk each canonical AP intake's
+    // PRIMARY IngestedDocument → IngestedDocument.sourceReferenceId
+    // (the ORIGINAL EmailAttachment.id at first ingest) → EmailAttachment
+    // → EmailMessage → EmailWorkIntakeOrigin(PRIMARY) → email intake.
+    // This is the exact CPA-shape defect: the original CPA email
+    // (2026-07-28) pre-dates the ApIntakeSource table, but its
+    // IngestedDocument.sourceReferenceId still names the original
+    // attachment. Without this pass, the retransmit's chip renders
+    // as an orphan (no visible original).
+    const canonicalIntakes = await prisma.workIntakeItem.findMany({
+      where: { id: { in: canonicalIdsInBatch }, clubId: args.clubId },
+      select: {
+        id: true,
+        origins: { where: { kind: "INGESTED_DOCUMENT", role: "PRIMARY" }, select: { referenceId: true }, take: 1 },
+      },
+    });
+    const canonicalToDocId = new Map<string, string>();
+    for (const ci of canonicalIntakes) {
+      const docId = ci.origins[0]?.referenceId;
+      if (docId) canonicalToDocId.set(ci.id, docId);
+    }
+    const docIds = Array.from(canonicalToDocId.values());
+    if (docIds.length > 0) {
+      const docs = await prisma.ingestedDocument.findMany({
+        where: { id: { in: docIds }, clubId: args.clubId, sourceKind: "EMAIL_ATTACHMENT" },
+        select: { id: true, sourceReferenceId: true },
+      });
+      const originalAttachmentByDocId = new Map<string, string>();
+      for (const d of docs) if (d.sourceReferenceId) originalAttachmentByDocId.set(d.id, d.sourceReferenceId);
+      const originalAttachmentIds = Array.from(originalAttachmentByDocId.values());
+      if (originalAttachmentIds.length > 0) {
+        const origAtts = await prisma.emailAttachment.findMany({
+          where: { id: { in: originalAttachmentIds } },
+          select: {
+            id: true,
+            emailMessage: {
+              select: {
+                id: true,
+                workIntakeOrigins: {
+                  where: { role: "PRIMARY" },
+                  select: { workIntakeItemId: true, workIntakeItem: { select: { createdAt: true } } },
+                  take: 1,
+                },
+              },
+            },
+          },
+        });
+        const emailIntakeByAttId = new Map<string, { emailIntakeId: string; createdAt: Date }>();
+        for (const a of origAtts) {
+          const emailIntakeId = a.emailMessage?.workIntakeOrigins[0]?.workIntakeItemId;
+          const createdAt = a.emailMessage?.workIntakeOrigins[0]?.workIntakeItem?.createdAt;
+          if (emailIntakeId && createdAt) {
+            emailIntakeByAttId.set(a.id, { emailIntakeId, createdAt });
+          }
+        }
+        for (const [canonicalId, docId] of canonicalToDocId) {
+          const originalAttId = originalAttachmentByDocId.get(docId);
+          if (!originalAttId) continue;
+          const original = emailIntakeByAttId.get(originalAttId);
+          if (!original) continue;
+          const arr = emailIntakesByCanonicalAp.get(canonicalId) ?? [];
+          if (!arr.some((x) => x.emailIntakeId === original.emailIntakeId)) {
+            arr.push(original);
+          }
+          emailIntakesByCanonicalAp.set(canonicalId, arr);
+        }
+      }
+    }
   }
   // Sort each canonical's siblings ascending by createdAt so index 0
   // is the ORIGINAL (earliest) and index N>0 are duplicates.
