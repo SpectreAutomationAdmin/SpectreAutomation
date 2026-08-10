@@ -23,7 +23,7 @@ import { EXTRACTION_RULE_VERSION } from "./types";
 // helpers and we don't want to churn its public API; but the number
 // MUST be bumped in this file whenever supplier-extract.ts changes.
 export const SUPPLIER_EXTRACT_VERSION      = 3;   // 15Q rev + 15R rev + person-with-credential + region suffix + two-word min
-export const LINE_ITEMS_EXTRACT_VERSION    = 4;   // 15Q rev + summary-tail refactor + 221178 follow-on generalized totals-block classifier
+export const LINE_ITEMS_EXTRACT_VERSION    = 5;   // 15Q rev + summary-tail refactor + 221178 follow-on generalized totals-block classifier + Ranker Authority slice: empty-description fallback + carry-forward rejection
 export const TAX_RECONCILE_VERSION         = 2;   // 15Q rev
 export const IDENTIFIER_TAXONOMY_VERSION   = 1;
 export const ECONOMIC_PURPOSE_VERSION      = 2;   // + 221178 IT-taxonomy slice: CYBERSECURITY_SERVICE concept + backup/storage cues on SOFTWARE_SUBSCRIPTION

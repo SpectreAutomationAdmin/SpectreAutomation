@@ -101,15 +101,47 @@ export function isItemizedSummaryDescription(description: string): boolean {
 const TOTALS_TOKEN_WORD_RE =
   /\b(?:sub[\s-]?total|net\s?total|invoice\s?total|items?\s?total|products?\s?total|parts?\s?total|lines?\s?total|amount\s?due|balance(?:\s?due)?|total\s?due|total|gst|hst|pst|qst|vat|tax)\b/i;
 
+// Sprint 3 · Ranker Authority slice (2026-08-10) — expanded totals-
+// block vocabulary. Includes carry-forward / prior-balance / balance-
+// forward phrasings that recurring-statement invoices (e.g. CPA
+// Alberta member statement) use as rollup rows the earlier filter
+// missed. Kept a separate regex so the two rule shapes (leading-word
+// summary vs. embedded-token summary) remain independently testable.
+const CARRY_FORWARD_TOKEN_WORD_RE =
+  /\b(?:prior\s?balance|balance\s?forward|previously\s?billed|carry\s?forward|opening\s?balance|previous\s?charges?|previous\s?balance|amount\s?forward)\b/i;
+
+// Sprint 3 · Ranker Authority slice (2026-08-10) — reserved literal
+// used by the emit site (line-item-region-strategies.ts:494) when a
+// candidate row has NO extractable description text AND NO SKU. The
+// classifier below rejects rows whose sole descriptive text is one
+// of these fallback placeholders combined with missing structural
+// evidence — CPA staging fixture proved this exact shape (a $1,360
+// subtotal row with description "line item").
+const EMPTY_DESCRIPTION_FALLBACKS = new Set(["line item", "item", "charge", "amount", ""]);
+
 export function isTotalsBlockRowRejected(row: {
   description: string;
   quantity: number | null;
   unitPrice: number | null;
 }): { reject: boolean; reason: string | null } {
   const raw = (row.description ?? "").trim();
+  const both_null = row.quantity == null && row.unitPrice == null;
+
+  // Empty / fallback description + no structural evidence → almost
+  // certainly a summary rollup or extraction artifact. Real purchased
+  // lines carry SOME description text (SKU, product name, service
+  // period, etc.). Fires ONLY when qty AND unitPrice are both null.
+  if (both_null && EMPTY_DESCRIPTION_FALLBACKS.has(raw.toLowerCase())) {
+    return {
+      reject: true,
+      reason: `totals-block row: empty / fallback description "${raw || "(empty)"}" with no quantity and no unit price`,
+    };
+  }
+
   if (!raw) return { reject: false, reason: null };
   const hasTotalsToken = TOTALS_TOKEN_WORD_RE.test(raw);
-  if (!hasTotalsToken) return { reject: false, reason: null };
+  const hasCarryForward = CARRY_FORWARD_TOKEN_WORD_RE.test(raw);
+  if (!hasTotalsToken && !hasCarryForward) return { reject: false, reason: null };
   // Real purchased line — has both a quantity and a unit price.
   if (row.quantity != null && row.unitPrice != null) {
     return { reject: false, reason: null };
@@ -118,9 +150,10 @@ export function isTotalsBlockRowRejected(row: {
     row.quantity == null && row.unitPrice == null ? "no quantity and no unit price"
     : row.quantity == null ? "no quantity"
     : "no unit price";
+  const kind = hasCarryForward ? "carry-forward token" : "summary token";
   return {
     reject: true,
-    reason: `totals-block row: description contains summary token with ${missing}`,
+    reason: `totals-block row: description contains ${kind} with ${missing}`,
   };
 }
 

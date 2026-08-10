@@ -74,10 +74,12 @@ describe("Correction A — isTotalsBlockRowRejected (generalized totals-block cl
     }
   });
 
-  describe("safety — empty / non-totals descriptions never trip the classifier", () => {
+  describe("safety — non-totals descriptions never trip the classifier", () => {
+    // Post-Ranker-Authority-slice (2026-08-10): empty / whitespace /
+    // extractor-fallback descriptions with null qty AND unit price
+    // ARE rejected as summary rollups (CPA "line item" case). Real
+    // purchase text — even without qty/unit — is kept.
     const cases = [
-      { description: "", quantity: null, unitPrice: null },
-      { description: "   ", quantity: null, unitPrice: null },
       { description: "Ordinary line", quantity: null, unitPrice: null },
       { description: "Software License Renewal", quantity: null, unitPrice: null },
       { description: "Fuel purchase", quantity: null, unitPrice: null },
@@ -87,6 +89,10 @@ describe("Correction A — isTotalsBlockRowRejected (generalized totals-block cl
         expect(isTotalsBlockRowRejected(c).reject).toBe(false);
       });
     }
+    it("rejects empty / whitespace description with no structural evidence (Ranker Authority slice)", () => {
+      expect(isTotalsBlockRowRejected({ description: "", quantity: null, unitPrice: null }).reject).toBe(true);
+      expect(isTotalsBlockRowRejected({ description: "   ", quantity: null, unitPrice: null }).reject).toBe(true);
+    });
   });
 
   describe("interaction with the Slice 5.3 anchored filter", () => {

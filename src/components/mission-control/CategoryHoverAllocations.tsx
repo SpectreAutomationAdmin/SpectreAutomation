@@ -158,17 +158,24 @@ export function CategoryHoverAllocations(props: CategoryHoverAllocationsProps) {
         <span className="cat-hover-caret" aria-hidden="true"> ▾</span>
       </div>
       {open ? (() => {
-        // Sprint 3 · 221178 follow-on (Corrections A + D · §10-§11).
-        // Row-sum vs subtotal invariant: if the visible allocation
-        // entries sum to a value materially different from the
-        // canonical allocations subtotal, the popover MUST NOT
-        // display a reconciled Subtotal / Total footer. The UI does
-        // not fabricate arithmetic; it shows an "Allocation review
-        // required" trailer and leaves the raw rows visible so the
-        // founder can see the mismatch.
+        // Sprint 3 · 221178 follow-on (Corrections A + D · §10-§11)
+        // AND Ranker Authority slice (2026-08-10 · §17 defense-in-
+        // depth). The popover renders "Allocation review required"
+        // when ANY of the following contradicts reconciliation:
+        //
+        //   (a) Row-sum ≠ canonical allocationsSubtotal (my earlier
+        //       row-vs-subtotal check — same-source drift)
+        //   (b) allocationVariance ≠ 0 (subtotal + tax ≠ gross —
+        //       the CPA-shape defect where phantom lines inflate
+        //       the subtotal while the gross remains truthful)
+        //
+        // Either mismatch means the founder must not see a
+        // reconciled-looking totals block. The UI never fabricates
+        // arithmetic.
         const rowSum = allocations.entries.reduce((s, e) => s + (e.amount || 0), 0);
         const rowsReconcileToSubtotal =
-          Math.abs(rowSum - allocations.totals.allocationsSubtotal) < 0.02;
+          Math.abs(rowSum - allocations.totals.allocationsSubtotal) < 0.02
+          && Math.abs(allocations.totals.allocationVariance) < 0.02;
         return (
           <div
             id={popoverId}
