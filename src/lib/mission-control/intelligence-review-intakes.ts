@@ -742,55 +742,71 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     relationshipByAttachment.set(s.emailAttachmentId, s.relationship);
   }
 
-  // Sprint 3 · 221178 next slice · PART B — build a cross-index of
-  // (canonical AP intake) → { emailIntakeId of the ORIGINAL_SUBMISSION,
-  // list of all sibling submissions }. When a later email intake's
-  // ApIntakeSource carries a RETRANSMISSION / POSSIBLE_DUPLICATE
-  // relationship, the resolver surfaces the ORIGINAL_SUBMISSION's
-  // emailIntakeId so the founder-facing card can render a "Duplicate
-  // of ..." chip and the accounting-isolation contract (§17) is
-  // visibly satisfied.
-  const originalEmailIntakeByCanonicalAp = new Map<string, { emailIntakeId: string; createdAt: Date }>();
+  // Sprint 3 · 221178 next slice · PART B (2026-08-10, v2) — the
+  // true duplicate signal is "multiple email intakes reference the
+  // same canonical AP intake." This works regardless of whether the
+  // ApIntakeSource.relationship enum was populated (pre-15S records
+  // may only have the RETRANSMISSION row without an ORIGINAL_SUBMISSION
+  // row — the CPA case on staging).
+  //
+  // Build a global map from canonical AP intake id → list of all
+  // email intakes (in the current batch OR discovered via a bounded
+  // sibling lookup) that reference it. The EARLIEST email intake by
+  // its parent WI's createdAt is treated as the ORIGINAL for chip
+  // rendering purposes; every other sibling is a duplicate.
+  const emailIntakesByCanonicalAp = new Map<string, Array<{ emailIntakeId: string; createdAt: Date }>>();
+  // Seed from the current batch — every attachment we already fetched.
+  const batchEmailIntakeCreatedAt = new Map<string, Date>();
+  {
+    const batchOrigins = await prisma.workIntakeItem.findMany({
+      where: { id: { in: args.emailIntakeIds } },
+      select: { id: true, createdAt: true },
+    });
+    for (const o of batchOrigins) batchEmailIntakeCreatedAt.set(o.id, o.createdAt);
+  }
   for (const s of explicitSources) {
-    if (s.relationship !== "ORIGINAL_SUBMISSION") continue;
     const emailIntakeId = attachmentIdsToEmailIntake.get(s.emailAttachmentId);
     if (!emailIntakeId) continue;
-    const existing = originalEmailIntakeByCanonicalAp.get(s.canonicalApIntakeId);
-    // First-original wins if multiple somehow claim ORIGINAL.
-    if (!existing || existing.createdAt > s.createdAt) {
-      originalEmailIntakeByCanonicalAp.set(s.canonicalApIntakeId, { emailIntakeId, createdAt: s.createdAt });
+    const createdAt = batchEmailIntakeCreatedAt.get(emailIntakeId) ?? s.createdAt;
+    const arr = emailIntakesByCanonicalAp.get(s.canonicalApIntakeId) ?? [];
+    if (!arr.some((x) => x.emailIntakeId === emailIntakeId)) {
+      arr.push({ emailIntakeId, createdAt });
     }
+    emailIntakesByCanonicalAp.set(s.canonicalApIntakeId, arr);
   }
-  // Fallback: if the original submission's ApIntakeSource is not in
-  // the current batch (e.g. it lives on an email intake that wasn't
-  // in `emailIntakeIds`), query for it so cards can still name the
-  // sibling.
-  const canonicalIdsNeedingOriginal = Array.from(canonicalApByAttachment.values()).filter(
-    (canonicalId) => !originalEmailIntakeByCanonicalAp.has(canonicalId),
-  );
-  if (canonicalIdsNeedingOriginal.length > 0) {
-    const fallbacks = await prisma.apIntakeSource.findMany({
+  // Bounded sibling discovery — for every canonical AP intake that
+  // has at least one attachment in the current batch, find OTHER
+  // ApIntakeSource rows on the same canonical AND join back to
+  // their parent email intake ids. This catches the case where the
+  // ORIGINAL submission's parent email is NOT in the current batch
+  // (paged out, RESOLVED, etc.) but the RETRANSMIT is — the
+  // retransmit card can still name the sibling for chip rendering.
+  const canonicalIdsInBatch = Array.from(emailIntakesByCanonicalAp.keys());
+  if (canonicalIdsInBatch.length > 0) {
+    const siblingSources = await prisma.apIntakeSource.findMany({
       where: {
         clubId: args.clubId,
-        canonicalApIntakeId: { in: canonicalIdsNeedingOriginal },
-        relationship: "ORIGINAL_SUBMISSION",
+        canonicalApIntakeId: { in: canonicalIdsInBatch },
       },
-      select: { canonicalApIntakeId: true, emailAttachmentId: true, createdAt: true },
-      orderBy: { createdAt: "asc" },
+      select: { canonicalApIntakeId: true, emailAttachmentId: true, createdAt: true, emailMessage: {
+        select: { id: true, workIntakeOrigins: { where: { role: "PRIMARY" }, select: { workIntakeItemId: true, workIntakeItem: { select: { createdAt: true } } }, take: 1 } },
+      } },
     });
-    // Walk attachmentId → emailMessageId → emailWorkIntakeOrigin(PRIMARY)
-    // → emailIntakeId. Fallbacks are typically small (1-2 records).
-    for (const f of fallbacks) {
-      if (originalEmailIntakeByCanonicalAp.has(f.canonicalApIntakeId)) continue;
-      const att = await prisma.emailAttachment.findFirst({
-        where: { id: f.emailAttachmentId },
-        select: { emailMessage: { select: { id: true, workIntakeOrigins: { where: { role: "PRIMARY" }, select: { workIntakeItemId: true }, take: 1 } } } },
-      });
-      const emailIntakeId = att?.emailMessage?.workIntakeOrigins[0]?.workIntakeItemId;
-      if (emailIntakeId) {
-        originalEmailIntakeByCanonicalAp.set(f.canonicalApIntakeId, { emailIntakeId, createdAt: f.createdAt });
+    for (const s of siblingSources) {
+      const emailIntakeId = s.emailMessage?.workIntakeOrigins[0]?.workIntakeItemId;
+      const createdAt = s.emailMessage?.workIntakeOrigins[0]?.workIntakeItem?.createdAt ?? s.createdAt;
+      if (!emailIntakeId) continue;
+      const arr = emailIntakesByCanonicalAp.get(s.canonicalApIntakeId) ?? [];
+      if (!arr.some((x) => x.emailIntakeId === emailIntakeId)) {
+        arr.push({ emailIntakeId, createdAt });
       }
+      emailIntakesByCanonicalAp.set(s.canonicalApIntakeId, arr);
     }
+  }
+  // Sort each canonical's siblings ascending by createdAt so index 0
+  // is the ORIGINAL (earliest) and index N>0 are duplicates.
+  for (const [, arr] of emailIntakesByCanonicalAp) {
+    arr.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   // Legacy fallback — pre-15S rows without ApIntakeSource. Bounded
@@ -869,27 +885,30 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       : statementAttCount > 0 ? "statement"
       : "email";
 
-    // Sprint 3 · 221178 next slice · PART B — surface duplicate-
-    // submission relationship. For each canonical AP intake this
-    // email points at, if its ApIntakeSource is a RETRANSMISSION /
-    // POSSIBLE_DUPLICATE AND the ORIGINAL_SUBMISSION lives on a
-    // DIFFERENT email intake, name that email intake so the card
-    // can render a "Duplicate of …" chip.
+    // Sprint 3 · 221178 next slice · PART B (v2) — surface duplicate-
+    // submission relationship based on batch-level canonical grouping.
+    // The FIRST card (earliest createdAt) for a canonical AP intake
+    // is the ORIGINAL; every subsequent card is a RETRANSMISSION /
+    // POSSIBLE_DUPLICATE. Works whether or not the ApIntakeSource
+    // relationship enum was ever populated for the ORIGINAL row.
     let duplicateOfEmailIntakeId: string | null = null;
     let duplicateSubmissionRelationship: "ORIGINAL_SUBMISSION" | "RETRANSMISSION" | "POSSIBLE_DUPLICATE" | null = null;
     for (const a of realAtts) {
-      const rel = relationshipByAttachment.get(a.id);
       const canonicalId = canonicalApByAttachment.get(a.id);
-      if (!rel || !canonicalId) continue;
-      if (rel === "RETRANSMISSION" || rel === "POSSIBLE_DUPLICATE") {
-        const original = originalEmailIntakeByCanonicalAp.get(canonicalId);
-        if (original && original.emailIntakeId !== emailIntakeId) {
-          duplicateOfEmailIntakeId = original.emailIntakeId;
-          duplicateSubmissionRelationship = rel as "RETRANSMISSION" | "POSSIBLE_DUPLICATE";
-          break;
-        }
-      } else if (rel === "ORIGINAL_SUBMISSION") {
+      if (!canonicalId) continue;
+      const siblings = emailIntakesByCanonicalAp.get(canonicalId) ?? [];
+      if (siblings.length < 2) continue; // no duplicate — one email owns this canonical
+      if (siblings[0].emailIntakeId === emailIntakeId) {
         duplicateSubmissionRelationship = "ORIGINAL_SUBMISSION";
+      } else {
+        // This card is a duplicate submission of an earlier sibling.
+        // Prefer the explicit ApIntakeSource.relationship if it
+        // signals POSSIBLE_DUPLICATE; otherwise report RETRANSMISSION.
+        const explicitRel = relationshipByAttachment.get(a.id);
+        duplicateSubmissionRelationship =
+          explicitRel === "POSSIBLE_DUPLICATE" ? "POSSIBLE_DUPLICATE" : "RETRANSMISSION";
+        duplicateOfEmailIntakeId = siblings[0].emailIntakeId;
+        break;
       }
     }
 
