@@ -338,6 +338,28 @@ export interface LinkedIntelligenceForEmail {
     reconciliationState: string | null;
     unresolvedFindingCount: number;
   };
+  /** Sprint 3 · 221178 next slice · PART B (2026-08-10) — duplicate-
+   *  email isolation surface. When two parent EMAIL WIs share the
+   *  same canonical AP child (SHA-dedup at IngestedDocument), this
+   *  field is populated on the LATER submission's projection. The
+   *  card renderer surfaces a "Duplicate of an earlier submission"
+   *  chip so the founder can see that the two cards represent one
+   *  invoice instance.
+   *
+   *  Populated by walking `ApIntakeSource.relationship`:
+   *    ORIGINAL_SUBMISSION → duplicateOfEmailIntakeId = null
+   *    RETRANSMISSION / POSSIBLE_DUPLICATE → duplicateOfEmailIntakeId
+   *      = the emailIntakeId of the ORIGINAL_SUBMISSION source
+   *      (or the earliest sibling if the original is not retrievable).
+   *
+   *  Posting safety (§21 audit): NOT enforcement — enforcement
+   *  already lives at [_post-ap-invoice-actions.ts:154] which
+   *  refuses on `wi.status === "RESOLVED"`. Since both cards target
+   *  the SAME AP intake id, resolving from Card A blocks a
+   *  subsequent post from Card B. This projection field is a
+   *  founder-facing signal, not a gate. */
+  duplicateOfEmailIntakeId?: string | null;
+  duplicateSubmissionRelationship?: "ORIGINAL_SUBMISSION" | "RETRANSMISSION" | "POSSIBLE_DUPLICATE" | null;
 }
 
 // Sprint 3 Checkpoint 15I-2 — the operational-intelligence
@@ -704,17 +726,71 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     where: { clubId: args.clubId, emailAttachmentId: { in: attachmentIds } },
     select: {
       emailAttachmentId: true, ingestedDocumentId: true, canonicalApIntakeId: true,
+      relationship: true, createdAt: true,
       canonicalApIntake: { select: { classification: true } },
     },
   });
   const docsByAttachment = new Map<string, { id: string; classification: string }>();
   const canonicalApByAttachment = new Map<string, string>();
+  const relationshipByAttachment = new Map<string, string>();
   for (const s of explicitSources) {
     docsByAttachment.set(s.emailAttachmentId, {
       id: s.ingestedDocumentId,
       classification: s.canonicalApIntake.classification === "AP_INVOICE_REVIEW" ? "INVOICE" : "UNKNOWN",
     });
     canonicalApByAttachment.set(s.emailAttachmentId, s.canonicalApIntakeId);
+    relationshipByAttachment.set(s.emailAttachmentId, s.relationship);
+  }
+
+  // Sprint 3 · 221178 next slice · PART B — build a cross-index of
+  // (canonical AP intake) → { emailIntakeId of the ORIGINAL_SUBMISSION,
+  // list of all sibling submissions }. When a later email intake's
+  // ApIntakeSource carries a RETRANSMISSION / POSSIBLE_DUPLICATE
+  // relationship, the resolver surfaces the ORIGINAL_SUBMISSION's
+  // emailIntakeId so the founder-facing card can render a "Duplicate
+  // of ..." chip and the accounting-isolation contract (§17) is
+  // visibly satisfied.
+  const originalEmailIntakeByCanonicalAp = new Map<string, { emailIntakeId: string; createdAt: Date }>();
+  for (const s of explicitSources) {
+    if (s.relationship !== "ORIGINAL_SUBMISSION") continue;
+    const emailIntakeId = attachmentIdsToEmailIntake.get(s.emailAttachmentId);
+    if (!emailIntakeId) continue;
+    const existing = originalEmailIntakeByCanonicalAp.get(s.canonicalApIntakeId);
+    // First-original wins if multiple somehow claim ORIGINAL.
+    if (!existing || existing.createdAt > s.createdAt) {
+      originalEmailIntakeByCanonicalAp.set(s.canonicalApIntakeId, { emailIntakeId, createdAt: s.createdAt });
+    }
+  }
+  // Fallback: if the original submission's ApIntakeSource is not in
+  // the current batch (e.g. it lives on an email intake that wasn't
+  // in `emailIntakeIds`), query for it so cards can still name the
+  // sibling.
+  const canonicalIdsNeedingOriginal = Array.from(canonicalApByAttachment.values()).filter(
+    (canonicalId) => !originalEmailIntakeByCanonicalAp.has(canonicalId),
+  );
+  if (canonicalIdsNeedingOriginal.length > 0) {
+    const fallbacks = await prisma.apIntakeSource.findMany({
+      where: {
+        clubId: args.clubId,
+        canonicalApIntakeId: { in: canonicalIdsNeedingOriginal },
+        relationship: "ORIGINAL_SUBMISSION",
+      },
+      select: { canonicalApIntakeId: true, emailAttachmentId: true, createdAt: true },
+      orderBy: { createdAt: "asc" },
+    });
+    // Walk attachmentId → emailMessageId → emailWorkIntakeOrigin(PRIMARY)
+    // → emailIntakeId. Fallbacks are typically small (1-2 records).
+    for (const f of fallbacks) {
+      if (originalEmailIntakeByCanonicalAp.has(f.canonicalApIntakeId)) continue;
+      const att = await prisma.emailAttachment.findFirst({
+        where: { id: f.emailAttachmentId },
+        select: { emailMessage: { select: { id: true, workIntakeOrigins: { where: { role: "PRIMARY" }, select: { workIntakeItemId: true }, take: 1 } } } },
+      });
+      const emailIntakeId = att?.emailMessage?.workIntakeOrigins[0]?.workIntakeItemId;
+      if (emailIntakeId) {
+        originalEmailIntakeByCanonicalAp.set(f.canonicalApIntakeId, { emailIntakeId, createdAt: f.createdAt });
+      }
+    }
   }
 
   // Legacy fallback — pre-15S rows without ApIntakeSource. Bounded
@@ -793,6 +869,30 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       : statementAttCount > 0 ? "statement"
       : "email";
 
+    // Sprint 3 · 221178 next slice · PART B — surface duplicate-
+    // submission relationship. For each canonical AP intake this
+    // email points at, if its ApIntakeSource is a RETRANSMISSION /
+    // POSSIBLE_DUPLICATE AND the ORIGINAL_SUBMISSION lives on a
+    // DIFFERENT email intake, name that email intake so the card
+    // can render a "Duplicate of …" chip.
+    let duplicateOfEmailIntakeId: string | null = null;
+    let duplicateSubmissionRelationship: "ORIGINAL_SUBMISSION" | "RETRANSMISSION" | "POSSIBLE_DUPLICATE" | null = null;
+    for (const a of realAtts) {
+      const rel = relationshipByAttachment.get(a.id);
+      const canonicalId = canonicalApByAttachment.get(a.id);
+      if (!rel || !canonicalId) continue;
+      if (rel === "RETRANSMISSION" || rel === "POSSIBLE_DUPLICATE") {
+        const original = originalEmailIntakeByCanonicalAp.get(canonicalId);
+        if (original && original.emailIntakeId !== emailIntakeId) {
+          duplicateOfEmailIntakeId = original.emailIntakeId;
+          duplicateSubmissionRelationship = rel as "RETRANSMISSION" | "POSSIBLE_DUPLICATE";
+          break;
+        }
+      } else if (rel === "ORIGINAL_SUBMISSION") {
+        duplicateSubmissionRelationship = "ORIGINAL_SUBMISSION";
+      }
+    }
+
     map.set(emailIntakeId, {
       apReviewIntakeIds: apIds,
       statementReviewIntakeIds: stIds,
@@ -802,6 +902,8 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
       dominantFacet,
       invoiceSummary,
       statementSummary,
+      duplicateOfEmailIntakeId,
+      duplicateSubmissionRelationship,
     });
   }));
   logger.info("mission-control.linked-intelligence.projected", {

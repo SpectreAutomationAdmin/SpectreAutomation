@@ -807,6 +807,7 @@ function renderApCollapsedBody(
 ) {
   const pill = pillForApWorkflow(ap.workflowState);
   const senderLine = buildApSenderLine(ap);
+  const linked = data.linkedIntelligence;
 
   // Post-Slice-3 lifecycle contract (2026-08-09) — §5, §13, §14.
   //
@@ -862,6 +863,33 @@ function renderApCollapsedBody(
       <div className="spectre-mc-sender" data-testid="ap-sender-line">
         <span className="from">{senderLine}</span>
       </div>
+
+      {/* Sprint 3 · 221178 next slice · PART B (2026-08-10) — duplicate-
+           submission surface. When the projection identifies the
+           email as a RETRANSMISSION of an earlier submission of the
+           same underlying invoice (SHA-dedup at IngestedDocument),
+           render a compact "Duplicate of an earlier submission" chip
+           so the founder can see that both cards represent one
+           invoice instance. Accounting arithmetic is already
+           isolated per card; posting is idempotent at
+           `wi.status === "RESOLVED"`. This chip is a visibility aid,
+           not an enforcement gate. */}
+      {(linked?.duplicateSubmissionRelationship === "RETRANSMISSION"
+        || linked?.duplicateSubmissionRelationship === "POSSIBLE_DUPLICATE") ? (
+        <div
+          className="spectre-mc-dup-chip"
+          data-testid="ap-duplicate-submission"
+          data-relationship={linked.duplicateSubmissionRelationship}
+          data-duplicate-of={linked.duplicateOfEmailIntakeId ?? ""}
+        >
+          <span className="lbl">Duplicate submission</span>
+          <span className="detail">
+            {linked.duplicateSubmissionRelationship === "POSSIBLE_DUPLICATE"
+              ? "This document may already have been submitted."
+              : "This is a retransmit of an earlier submission of the same document. Both cards reference one invoice; only one can post."}
+          </span>
+        </div>
+      ) : null}
 
       <p className="spectre-mc-work" data-testid="ap-work-summary">
         <ApWorkSummary ap={ap} />

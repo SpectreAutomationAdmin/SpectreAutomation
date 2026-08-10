@@ -1161,6 +1161,33 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     letter-spacing: -0.01em; font-weight: 600;
   }
 
+  /* Sprint 3 · 221178 next slice · PART B (2026-08-10) — duplicate-
+     submission chip. Sits between the sender line and the work
+     summary on cards whose parent EMAIL WI shares one canonical
+     AP intake with another email submission. */
+  .spectre-mc-dup-chip {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: var(--spectre-space-2);
+    padding: 6px 10px;
+    background: rgba(168, 98, 0, 0.06);
+    border-left: 2px solid var(--spectre-status-warning, #a86200);
+    border-radius: 2px;
+    font-size: 11.5px;
+  }
+  .spectre-mc-dup-chip .lbl {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--spectre-status-warning, #a86200);
+    font-weight: 600;
+  }
+  .spectre-mc-dup-chip .detail {
+    color: var(--spectre-muted, #566473);
+    font-style: italic;
+  }
+
   /* --- Data readout ------------------------------------------ */
   .spectre-mc-readout {
     margin-top: var(--spectre-space-3);
