@@ -79,6 +79,13 @@ export const ACCOUNTING_CONCEPTS: AccountingConcept[] = [
       "software subscription", "saas subscription", "saas", "cloud subscription",
       "hosting subscription", "software licence", "software license", "annual software",
       "monthly software", "software service", "software as a service", "cloud service",
+      // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — modern
+      // SaaS-adjacent purchase vocabulary. Backup / cloud storage /
+      // data storage are consistently sold as recurring cloud
+      // subscriptions and rightly route through IS_IT_SOFTWARE.
+      "online backup", "cloud backup", "offsite backup", "backup storage",
+      "backup service", "storage fee", "data storage", "cloud storage",
+      "data backup",
     ],
     parent: "memberships_and_subscriptions",
     contradicts: ["professional_membership_dues"],
@@ -88,6 +95,31 @@ export const ACCOUNTING_CONCEPTS: AccountingConcept[] = [
     // account as a software-subscription account.
     fsGroupKeyHints: ["IS_IT_SOFTWARE"],
     categoryKeyHints: [],
+    depth: 2,
+  },
+  {
+    // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — cybersecurity
+    // service is materially different from ordinary IT services and
+    // from software subscriptions. Antivirus / endpoint protection /
+    // security-monitoring are legitimate purchases that today land
+    // in "__unresolved__" because no concept synonym covers them.
+    // Tenant COA typically supports these via `Computer & IT Services`
+    // (IS_IT_SOFTWARE) OR a dedicated `Security` account
+    // (IS_OTHER_EXPENSES); the ranker picks based on account
+    // availability.
+    id: "cybersecurity_service",
+    canonicalName: "Cybersecurity / endpoint protection service",
+    synonyms: [
+      "cyber security", "cybersecurity", "endpoint protection",
+      "antivirus", "anti-virus", "anti virus",
+      "edr", "mdr", "security monitoring", "network security",
+      "information security", "security service", "threat detection",
+      "vulnerability scanning", "penetration test",
+    ],
+    parent: "it_services",
+    contradicts: [],
+    fsGroupKeyHints: ["IS_IT_SOFTWARE"],
+    categoryKeyHints: ["ADMIN_EXPENSES"],
     depth: 2,
   },
   {
@@ -286,6 +318,17 @@ export const ACCOUNTING_CONCEPTS: AccountingConcept[] = [
     synonyms: [
       "it services", "computer services", "information technology",
       "technology services", "managed it", "it support",
+      // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — expand
+      // vocabulary WITHOUT introducing "maintenance"-containing
+      // synonyms. "Maintenance" tokens on account NAMES (e.g.
+      // "R & M Preventative Maintenance") would then inadvertently
+      // attract 6033-shape accounts under an it_services cluster.
+      // Document-level coherence (gl-allocations §2b) alone handles
+      // the "Service Maintenance Fee on an IT-dominant invoice"
+      // reclassification.
+      "computer support", "technology support",
+      "workstation service", "endpoint service",
+      "helpdesk", "help desk", "computer & it",
     ],
     parent: null,
     contradicts: [],

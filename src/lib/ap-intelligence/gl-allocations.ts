@@ -567,6 +567,42 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
     assignConceptToLine(line, docFallback?.conceptId ?? null),
   );
 
+  // Step 2b: Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) §6 —
+  // document-level coherence. When ≥2 resolved sibling lines carry
+  // an `IS_IT_SOFTWARE` fsGroupKeyHint (i.e. the invoice's dominant
+  // family is IT), reclassify any line matched to
+  // `repairs_and_maintenance` to `it_services`. Also promote
+  // `unresolved` lines to `it_services` on the same coherence
+  // grounds. Founder rule §5: "Service Maintenance Fee" on an IT-
+  // majority invoice is IT-service maintenance, not physical R&M.
+  //
+  // Conservative: only fires when ≥2 siblings independently classify
+  // as IT — one stray IT-adjacent line does not reclassify others.
+  // Reverse controls (§9): a real R&M invoice (mower repair) has no
+  // IT siblings → this pass never fires. OXIO's telecom invoice
+  // has TELECOM classification (not IS_IT_SOFTWARE) → not affected.
+  const itHintSiblings = assignments.filter((a) => {
+    if (!a.conceptId) return false;
+    const c = CONCEPT_BY_ID[a.conceptId];
+    return !!c && c.fsGroupKeyHints.includes("IS_IT_SOFTWARE");
+  }).length;
+  if (itHintSiblings >= 2) {
+    for (let i = 0; i < assignments.length; i++) {
+      const a = assignments[i];
+      if (a.conceptId === "repairs_and_maintenance"
+        || a.conceptId === "building_maintenance"
+        || a.conceptId === "course_maintenance"
+        || a.conceptId === "equipment_repair") {
+        assignments[i] = {
+          ...a,
+          conceptId: "it_services",
+          conceptSource: "document_fallback",
+          matchedPhrase: a.matchedPhrase + " (reclassified: IT-dominant invoice)",
+        };
+      }
+    }
+  }
+
   // Step 3: raw clustering by concept.
   const rawClusters = buildClusters(assignments);
 

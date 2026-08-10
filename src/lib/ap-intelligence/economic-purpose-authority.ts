@@ -120,6 +120,7 @@ const CONCEPT_LABELS: Record<EconomicPurposeConcept, string> = {
   TELECOMMUNICATIONS: "Telecommunications service",
   INTERNET_CONNECTIVITY: "Internet / connectivity",
   SOFTWARE_SUBSCRIPTION: "Software / SaaS subscription",
+  CYBERSECURITY_SERVICE: "Cybersecurity / endpoint protection service",
   PROFESSIONAL_MEMBERSHIP: "Professional membership dues",
   PROFESSIONAL_SERVICES: "Professional / advisory services",
   FOOD: "Food purchases",

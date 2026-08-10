@@ -30,6 +30,7 @@ export type EconomicPurposeConcept =
   | "TELECOMMUNICATIONS"
   | "INTERNET_CONNECTIVITY"
   | "SOFTWARE_SUBSCRIPTION"
+  | "CYBERSECURITY_SERVICE"
   | "PROFESSIONAL_MEMBERSHIP"
   | "PROFESSIONAL_SERVICES"
   | "FOOD"
@@ -60,7 +61,10 @@ interface ConceptDefinition {
   label: string;
 }
 
-const CONCEPTS: ConceptDefinition[] = [
+// Exported for cue-coverage tests only. The classifier and its
+// diagnostic API remain the public runtime surface. Internal call
+// sites continue to reference `CONCEPTS` via the alias below.
+export const CANONICAL_PURPOSE_CONCEPTS: ConceptDefinition[] = [
   {
     concept: "FUEL",
     label: "Fuel / petroleum product",
@@ -119,8 +123,26 @@ const CONCEPTS: ConceptDefinition[] = [
     label: "Software / SaaS subscription",
     cues: [
       /\b(software\s*(?:licen[cs]e|subscription)|saas|user\s*licen[cs]e|seat\s*licen[cs]e|annual\s*subscription|cloud\s*service|monthly\s*subscription|renewal\s*—?\s*software)\b/i,
+      // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — cloud
+      // storage / backup / data storage are consistently sold as
+      // recurring cloud subscriptions.
+      /\b(online\s*backup|cloud\s*backup|offsite\s*backup|backup\s*storage|backup\s*service|cloud\s*storage|data\s*storage|data\s*backup|hosted\s*storage)\b/i,
     ],
     cueStrength: 78,
+  },
+  {
+    // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — cybersecurity
+    // as a first-class purpose. Antivirus / endpoint protection /
+    // security monitoring belong here, not in physical R&M or in
+    // Telephone & Internet or in ordinary Licenses. Tenant COA
+    // typically supports these via `Computer & IT Services` or a
+    // dedicated `Security` account.
+    concept: "CYBERSECURITY_SERVICE",
+    label: "Cybersecurity / endpoint protection service",
+    cues: [
+      /\b(cyber\s*security|cybersecurity|endpoint\s*protection|antivirus|anti[-\s]?virus|edr|mdr|security\s*monitoring|network\s*security|information\s*security|threat\s*detection|vulnerability\s*scan(?:ning)?|penetration\s*test)\b/i,
+    ],
+    cueStrength: 80,
   },
   {
     concept: "PROFESSIONAL_MEMBERSHIP",
@@ -214,6 +236,9 @@ const CONCEPTS: ConceptDefinition[] = [
     cueStrength: 78,
   },
 ];
+
+// Internal alias — every classifier call site below uses `CONCEPTS`.
+const CONCEPTS = CANONICAL_PURPOSE_CONCEPTS;
 
 // -----------------------------------------------------------------------------
 // Provider interface
