@@ -952,7 +952,16 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // nothing (image-only docs where OCR is pending).
   const lineItemsExtracted: LineItem[] = canonicalLineItemsFromLayout.length > 0
     ? canonicalLineItemsFromLayout
-        .filter((li) => li.role !== "TAX")
+        // Sprint 3 · 221178 follow-on (Correction A completion) — also
+        // exclude SUMMARY_ROW_REJECTED so the phantom SUBTOTAL row
+        // (marked by the generalized totals-block classifier upstream
+        // in line-item-region-strategies.ts / textract-to-slice5-line-
+        // items.ts) does NOT feed the allocation composer. Without
+        // this filter the extractor rejects the row from the founder-
+        // facing lineItems list but the allocation composer still
+        // sees it, producing the impossible 4,752 unresolved bucket
+        // the audit found on 221178.
+        .filter((li) => li.role !== "TAX" && li.role !== "SUMMARY_ROW_REJECTED")
         .map((li) => ({
           description: li.description,
           quantity: li.quantity ?? null,
