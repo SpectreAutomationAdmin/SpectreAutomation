@@ -51,12 +51,30 @@ const INCOMPATIBLE_FSGROUP_FAMILIES: Record<string, Set<string>> = {
   IS_IT_SOFTWARE: new Set([
     "IS_REPAIRS_MAINTENANCE",
     "IS_TELEPHONE_INTERNET",
+    "IS_PAYROLL",
   ]),
   IS_REPAIRS_MAINTENANCE: new Set([
     "IS_IT_SOFTWARE",
+    "IS_PAYROLL",
   ]),
   IS_TELEPHONE_INTERNET: new Set([
     "IS_IT_SOFTWARE",
+    "IS_PAYROLL",
+  ]),
+  IS_PAYROLL: new Set([
+    // Payroll is broadly incompatible with any non-payroll cluster.
+    // The founder-frozen `rulePayrollAccountExcluded` already fires
+    // in the document-level eligibility service (Payroll semantics
+    // slice), but the allocation composer's per-cluster pool does
+    // NOT run that service. Encoding payroll here makes the same
+    // guard apply to per-cluster candidate filtering — no more
+    // "Wages - Maintenance" sneaking into the it_services cluster
+    // via lexical overlap on "Maintenance".
+    "IS_IT_SOFTWARE",
+    "IS_REPAIRS_MAINTENANCE",
+    "IS_TELEPHONE_INTERNET",
+    "IS_LICENCES_PERMITS",
+    "IS_MEMBERSHIPS_SUBS",
   ]),
 };
 
@@ -77,10 +95,15 @@ export function isFsGroupFamilyIncompatibleWithCluster(
 ): boolean {
   if (!accountFsGroupKey) return false;
   if (!clusterFsGroupHints || clusterFsGroupHints.length === 0) return false;
+  // Family agrees with itself — if the account is in the cluster's own
+  // hint list, it is compatible regardless of the matrix.
+  if (clusterFsGroupHints.includes(accountFsGroupKey)) return false;
+  // Symmetric lookup — the matrix may list the pair from EITHER side.
+  const accountIncompatibleSet = INCOMPATIBLE_FSGROUP_FAMILIES[accountFsGroupKey];
   for (const hint of clusterFsGroupHints) {
-    if (hint === accountFsGroupKey) return false; // family agrees with itself
-    const incompatibleSet = INCOMPATIBLE_FSGROUP_FAMILIES[hint];
-    if (incompatibleSet?.has(accountFsGroupKey)) return true;
+    const hintIncompatibleSet = INCOMPATIBLE_FSGROUP_FAMILIES[hint];
+    if (hintIncompatibleSet?.has(accountFsGroupKey)) return true;
+    if (accountIncompatibleSet?.has(hint)) return true;
   }
   return false;
 }

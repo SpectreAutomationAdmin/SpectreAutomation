@@ -58,6 +58,26 @@ describe("family-incompatibility matrix (§2 authority hierarchy)", () => {
     expect(isFsGroupFamilyIncompatibleWithCluster("IS_MEMBERSHIPS_SUBS", ["IS_IT_SOFTWARE"])).toBe(false);
   });
 
+  it("§2 · post-v196 regression guard — IS_PAYROLL is incompatible with every non-payroll cluster (composer-side payroll gate)", () => {
+    // The document-level `rulePayrollAccountExcluded` fires in
+    // `filterEligibleAccounts` for the general ranker. The
+    // allocation composer's per-cluster pool does NOT run that
+    // service — so the family-incompatibility matrix must also
+    // exclude IS_PAYROLL from any non-payroll cluster, otherwise
+    // "Wages - Maintenance" sneaks into an IT cluster via
+    // lexical overlap (v196 staging regression that motivated
+    // this test).
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_IT_SOFTWARE"])).toBe(true);
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_REPAIRS_MAINTENANCE"])).toBe(true);
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_TELEPHONE_INTERNET"])).toBe(true);
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_LICENCES_PERMITS"])).toBe(true);
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_MEMBERSHIPS_SUBS"])).toBe(true);
+    // Payroll IS compatible with itself — a legitimate payroll-
+    // provider invoice whose cluster concept hints at IS_PAYROLL
+    // (future concept) would allow wages accounts.
+    expect(isFsGroupFamilyIncompatibleWithCluster("IS_PAYROLL", ["IS_PAYROLL"])).toBe(false);
+  });
+
   it("diagnostic helper names the offending hint", () => {
     const d = describeFsGroupFamilyIncompatibility("IS_REPAIRS_MAINTENANCE", ["IS_IT_SOFTWARE"]);
     expect(d).toContain("IS_REPAIRS_MAINTENANCE");

@@ -27,7 +27,7 @@ export const LINE_ITEMS_EXTRACT_VERSION    = 5;   // 15Q rev + summary-tail refa
 export const TAX_RECONCILE_VERSION         = 2;   // 15Q rev
 export const IDENTIFIER_TAXONOMY_VERSION   = 1;
 export const ECONOMIC_PURPOSE_VERSION      = 2;   // + 221178 IT-taxonomy slice: CYBERSECURITY_SERVICE concept + backup/storage cues on SOFTWARE_SUBSCRIPTION
-export const GL_RECOMMEND_VERSION          = 4;   // 15Q rev + IS_MEMBERSHIPS_SUBS taxonomy + posting-eligibility separation + threshold 60 + 221178 IT-taxonomy: it_services / software_subscription synonym expansion + cybersecurity_service concept + document-level IT coherence
+export const GL_RECOMMEND_VERSION          = 5;   // 15Q rev + IS_MEMBERSHIPS_SUBS taxonomy + posting-eligibility separation + threshold 60 + 221178 IT-taxonomy: it_services / software_subscription synonym expansion + cybersecurity_service concept + document-level IT coherence + Ranker Authority: family-incompatibility matrix (symmetric) with payroll gate at composer level
 
 /**
  * The composite AP analysis version. Written to
