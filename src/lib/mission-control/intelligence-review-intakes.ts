@@ -24,6 +24,7 @@ import { EXTRACTOR_VERSION as VENDOR_PROFILE_EXTRACTOR_VERSION } from "@/lib/ap-
 import { EXTRACTION_RULE_VERSION } from "@/lib/ap-intelligence/types";
 import type { ExtractedVendorProfile } from "@/lib/ap-intelligence/vendor-profile-extract";
 import { loadOcrExtractionRevision } from "@/lib/ap-intelligence/ocr/persistence";
+import { currentAnalysisVersion } from "@/lib/ap-intelligence/analysis-version";
 
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — process-local TTL cache
 // for the AP-card intelligence projection.
@@ -97,7 +98,18 @@ function apSummaryCacheKey(
   // the next projection sees a new cache key — no browser refresh
   // required to invoke OCR (already async) AND no stale "pending"
   // card lingering after the extraction completes.
-  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::apix=${EXTRACTION_RULE_VERSION}::vend=${vendorRevision}::apinv=${apInvRevision}::ocr=${ocrRevision}`;
+  //
+  // Sprint 3 · 221178 follow-on (2026-08-10) — include the FULL
+  // composite `currentAnalysisVersion()` so ANY component version
+  // bump (LINE_ITEMS_EXTRACT_VERSION, SUPPLIER_EXTRACT_VERSION, GL_
+  // RECOMMEND_VERSION, etc.) auto-invalidates cached projections.
+  // The previous key only included EXTRACTION_RULE_VERSION, so
+  // bumping a sibling version would leave cached entries returning
+  // pre-fix payloads for up to AP_SUMMARY_TTL_MS (90 s) after
+  // deploy — which is what happened when LINE_ITEMS_EXTRACT_VERSION
+  // bumped 3 → 4 during Correction A and the 221178 popover kept
+  // rendering the pre-fix allocations.
+  return `${intakeId}::${docId ?? "no-doc"}::coa=${coaRevision}::vpx=${VENDOR_PROFILE_EXTRACTOR_VERSION}::apix=${EXTRACTION_RULE_VERSION}::ver=${currentAnalysisVersion()}::vend=${vendorRevision}::apinv=${apInvRevision}::ocr=${ocrRevision}`;
 }
 
 // Sprint 3 · Checkpoint 15L — cheap per-club COA revision fingerprint.
