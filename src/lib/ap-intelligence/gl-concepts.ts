@@ -442,7 +442,7 @@ export const ACCOUNTING_CONCEPTS: AccountingConcept[] = [
     synonyms: ["repair", "repairs", "maintenance", "service call", "servicing"],
     parent: null,
     contradicts: [],
-    fsGroupKeyHints: ["IS_REPAIRS_MAINT"],
+    fsGroupKeyHints: ["IS_REPAIRS_MAINTENANCE"],
     categoryKeyHints: [],
     depth: 1,
   },

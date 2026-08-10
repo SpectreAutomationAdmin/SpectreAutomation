@@ -28,6 +28,7 @@ import {
   ruleContraAsset, ruleNormalBalanceContradiction,
   ruleNatureAssetExcluded,
   ruleAccountRoleContraAsset, ruleAccountRoleForbidden,
+  rulePayrollAccountExcluded,
   postingBlockerFundApplicability,
 } from "./rules-structural";
 
@@ -67,6 +68,10 @@ export function evaluateEligibility(
   push(ruleAccountRoleForbidden(a));
   // Nature-conditioned — applied last so structural reasons dominate.
   push(ruleNatureAssetExcluded(a, ctx));
+  // Sprint 3 · 221178 semantics slice (2026-08-10) — payroll-account
+  // compatibility gate. Runs after nature so more-specific asset /
+  // nature reasons dominate first. See rulePayrollAccountExcluded.
+  push(rulePayrollAccountExcluded(a, ctx));
 
   const postingBlockers: AccountingPostingBlocker[] = [];
   const pb = postingBlockerFundApplicability(a, ctx);

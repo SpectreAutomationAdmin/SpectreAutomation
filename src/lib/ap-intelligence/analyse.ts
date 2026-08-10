@@ -1084,6 +1084,22 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         supported: capital.state === "CAPITAL",
         confidence: capital.state === "CAPITAL" ? 80 : 0,
       },
+      // Sprint 3 · 221178 semantics slice (2026-08-10) — affirmative
+      // payroll-evidence flag. When FALSE / absent, the eligibility
+      // gate excludes PAYROLL_ONLY accounts (fsGroupKey ===
+      // "IS_PAYROLL") from the ranker's candidate pool, closing the
+      // 221178 defect where "Service Maintenance Fee" landed on
+      // "6008 Wages - Maintenance" purely by lexical overlap.
+      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
+        .detectPayrollEvidence({
+          vendorNames: [
+            extraction.vendor.guessedName,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
+          ],
+          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
+          documentText: pdfOk ? pdfText : null,
+        }).hasPayrollEvidence,
     },
   });
   const confidenceDimensions = computeConfidenceDimensions({

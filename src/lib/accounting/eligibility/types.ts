@@ -33,6 +33,15 @@ export interface AccountingTransactionContext {
     supported: boolean;
     confidence: number;
   };
+  /** Sprint 3 · 221178 semantics slice (2026-08-10) — affirmative
+   *  payroll-evidence flag. When TRUE, PAYROLL_ONLY accounts
+   *  (fsGroupKey === "IS_PAYROLL") remain eligible candidates;
+   *  when FALSE / absent, they are excluded from ranking with
+   *  `PAYROLL_ACCOUNT_REQUIRES_PAYROLL_EVIDENCE`.
+   *
+   *  Set by the ap-intelligence layer's payroll-evidence detector.
+   *  Never inferred from lexical account/description overlap. */
+  hasPayrollEvidence?: boolean;
 }
 
 /** Structured, machine-readable exclusion reasons. Every rule
@@ -51,7 +60,8 @@ export type AccountingEligibilityReason =
   | "NORMAL_BALANCE_CONTRADICTION"
   | "TRANSACTION_NATURE_INCOMPATIBLE"
   | "SYSTEM_ACCOUNT_NOT_USER_POSTABLE"
-  | "ARCHIVED";
+  | "ARCHIVED"
+  | "PAYROLL_ACCOUNT_REQUIRES_PAYROLL_EVIDENCE";
 
 /** Posting-readiness blockers. An account can be semantically the
  *  correct choice and still fail to auto-post if it needs config.
@@ -112,4 +122,7 @@ export interface AccountEligibilityView {
 }
 
 // Phase 2.1 (2026-08-06) — bumped to 2 for accountRole rule.
-export const ELIGIBILITY_RULE_VERSION = 2;
+// Sprint 3 · 221178 semantics slice (2026-08-10) — bumped to 3 for
+// rulePayrollAccountExcluded (fsGroupKey === "IS_PAYROLL" requires
+// affirmative payroll evidence).
+export const ELIGIBILITY_RULE_VERSION = 3;

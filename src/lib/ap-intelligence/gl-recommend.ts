@@ -176,6 +176,11 @@ export interface GlRecommendationArgs {
     expectedDebitRole: import("@/lib/accounting/eligibility").ExpectedDebitRole;
     departmentHint?: string | null;
     capitalizationEvidence?: { supported: boolean; confidence: number };
+    /** Sprint 3 · 221178 semantics slice (2026-08-10) — affirmative
+     *  payroll-evidence flag threaded from the ap-intelligence layer.
+     *  When TRUE, PAYROLL_ONLY accounts remain candidates; when
+     *  FALSE / absent, they are excluded. See rulePayrollAccountExcluded. */
+    hasPayrollEvidence?: boolean;
   } | null;
 }
 
@@ -271,6 +276,7 @@ export async function recommendGlAccount(args: GlRecommendationArgs): Promise<Gl
     expectedDebitRole: args.eligibilityContext?.expectedDebitRole ?? "UNKNOWN",
     departmentHint: args.eligibilityContext?.departmentHint ?? null,
     capitalizationEvidence: args.eligibilityContext?.capitalizationEvidence,
+    hasPayrollEvidence: args.eligibilityContext?.hasPayrollEvidence ?? false,
   };
 
   let eligibilityRejected: AccountEligibilityResult[] = [];

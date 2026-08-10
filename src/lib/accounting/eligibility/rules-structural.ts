@@ -160,6 +160,46 @@ export function ruleNatureAssetExcluded(
   }
 }
 
+/** Sprint 3 · 221178 semantics slice (2026-08-10) — payroll-account
+ *  compatibility gate. Runs after nature-conditioned rules so the
+ *  more-specific asset / nature reasons dominate first.
+ *
+ *  Founder rule (§4 · §5 · §21): PAYROLL_ONLY accounts must not be
+ *  candidates for ordinary third-party AP invoices without
+ *  affirmative payroll evidence. Payroll classification is
+ *  structural — `fsGroupKey === "IS_PAYROLL"` OR
+ *  `categoryKey === "PAYROLL_BENEFITS"` (the canonical taxonomy pair;
+ *  populated at import time by src/lib/imports/coa-predictor.ts).
+ *
+ *  Reverse controls (§11):
+ *    - Genuine payroll expense (evidence present) → account remains
+ *      candidate.
+ *    - Outsourced maintenance / consulting / contractor / janitorial
+ *      / equipment-repair with no payroll evidence → PAYROLL_ONLY
+ *      accounts excluded.
+ *    - Legitimate `Total Care Maintenance Plan`-style line whose
+ *      description shares a token with a wage account name → not
+ *      affected here (this rule looks at the ACCOUNT's fsGroupKey,
+ *      not the line description).
+ *
+ *  Founder rule (§6): do not depend on Social Insurance Number
+ *  detection to establish payroll evidence.
+ *
+ *  Founder rule (§8): mixed accounts — the tenant may still
+ *  legitimately need to post an AP invoice to a payroll-related
+ *  account in edge cases. The default is conservative (exclude
+ *  without evidence); mixed override remains a future policy call. */
+export function rulePayrollAccountExcluded(
+  a: AccountEligibilityView,
+  ctx: AccountingTransactionContext,
+): AccountingEligibilityReason | null {
+  const isPayrollAccount =
+    a.fsGroupKey === "IS_PAYROLL" || a.categoryKey === "PAYROLL_BENEFITS";
+  if (!isPayrollAccount) return null;
+  if (ctx.hasPayrollEvidence === true) return null;
+  return "PAYROLL_ACCOUNT_REQUIRES_PAYROLL_EVIDENCE";
+}
+
 // ---------------------------------------------------------------------------
 // Posting-readiness rules — DO NOT remove the account from ranking.
 // Surface a blocker so the workflow projection can show "review
