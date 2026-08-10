@@ -180,13 +180,20 @@ describe("§6 document-level IT coherence", () => {
       printedTax: 180.68,
       printedTotal: 3794.18,
     });
-    // Doc-coherence pass fires — line 1's concept is reclassified.
-    // Its assigned concept in the emitted cluster is `it_services`
-    // (NOT `repairs_and_maintenance`).
+    // Doc-coherence pass fires — line 1's concept is reclassified
+    // away from repairs_and_maintenance. Downstream, the ranker's
+    // family-incompatibility gate (Ranker Authority slice)
+    // additionally excludes R&M accounts from IT clusters, so 6054
+    // wins even for the "Service Maintenance Fee" line. Merged
+    // same-account clusters may collapse the IT concepts down to a
+    // single allocation — that's the correct consolidation per
+    // §11 "safe grouping."
     const conceptsSeen = res.allocations.map((a) => a.economicPurpose.concept);
-    expect(conceptsSeen).toContain("it_services");
     expect(conceptsSeen).not.toContain("repairs_and_maintenance");
-    expect(conceptsSeen).toContain("cybersecurity_service");
+    // At least one IT-family concept present (it_services or the
+    // more-specific children — post-merge this is typically just
+    // it_services since same-account clusters collapse).
+    expect(conceptsSeen.some((c) => c === "it_services" || c === "cybersecurity_service" || c === "software_subscription_service")).toBe(true);
 
     // Backup / cyber / antivirus now RESOLVE (they were the
     // unresolved cluster before this slice). No allocation carries
@@ -195,10 +202,13 @@ describe("§6 document-level IT coherence", () => {
       expect(a.recommendedAccount).not.toBeNull();
     }
 
-    // At least one allocation lands on 6054 Computer & IT Services
-    // (the IT-resolved cluster from backup / cyber / antivirus).
+    // 6054 Computer & IT Services carries the IT allocations.
+    // The Ranker Authority slice family-gate ALSO excludes 6033 R&M
+    // from any IT cluster's candidate pool — so R&M no longer wins
+    // for the Service Maintenance Fee line.
     const accountsChosen = res.allocations.map((a) => a.recommendedAccount?.accountNumber).filter(Boolean);
     expect(accountsChosen).toContain("6054");
+    expect(accountsChosen).not.toContain("6033");
 
     // Arithmetic reconciles to invoice subtotal.
     expect(Number(res.totals.allocationsSubtotal.toFixed(2))).toBe(3613.5);

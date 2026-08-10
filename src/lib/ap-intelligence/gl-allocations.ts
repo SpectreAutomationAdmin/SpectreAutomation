@@ -38,6 +38,7 @@
 
 import { rankAccountsPure, type PostingBlocker } from "./gl-recommend";
 import type { AccountView } from "./gl-account-concepts";
+import { isFsGroupFamilyIncompatibleWithCluster } from "./account-semantics/family-incompatibility";
 import { extractQueryConcepts, dominantQueryConcept, type QueryConcept } from "./gl-query-concepts";
 import { ACCOUNTING_CONCEPTS, CONCEPT_BY_ID } from "./gl-concepts";
 import { matchStrongestPhrase } from "./gl-similarity";
@@ -308,8 +309,23 @@ function rankClusters(args: {
         evidenceSnippet: `Cluster concept "${clusterConcept.canonicalName}"`,
       });
     }
+    // Sprint 3 · Ranker Authority slice (2026-08-10, §2 · §4) —
+    // COMPATIBILITY BEFORE RELEVANCE. When the cluster's concept
+    // carries fsGroupKeyHints (e.g. `IS_IT_SOFTWARE` for
+    // it_services / cybersecurity_service / software_subscription),
+    // exclude accounts whose own fsGroupKey is materially
+    // incompatible BEFORE the relevance scorer runs. This prevents
+    // the "Service Maintenance Fee" line's lexical "maintenance"
+    // token from letting a Repairs & Maintenance account defeat a
+    // Computer & IT Services account after the transaction has been
+    // classified as IT_SERVICES. Symmetric — a genuine R&M invoice
+    // excludes IS_IT_SOFTWARE accounts from its r&m cluster.
+    const clusterFsGroupHints = clusterConcept?.fsGroupKeyHints ?? [];
+    const eligibleAccounts = clusterFsGroupHints.length > 0
+      ? args.accounts.filter((a) => !isFsGroupFamilyIncompatibleWithCluster(a.fsGroupKey, clusterFsGroupHints))
+      : args.accounts;
     const ranked = rankAccountsPure({
-      accounts: args.accounts,
+      accounts: eligibleAccounts,
       queryConcepts,
       postingBlockersByAccount: args.postingBlockersByAccount,
     });
