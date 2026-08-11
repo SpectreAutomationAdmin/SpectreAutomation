@@ -39,15 +39,16 @@ import type { AccountView } from "@/lib/ap-intelligence/gl-account-concepts";
 // ---------------------------------------------------------------------------
 
 function makeAccount(o: Partial<AccountView> & { number: string; name: string; type?: string }): AccountView {
+  const { number, name, ...rest } = o;
   return {
-    id: `acct-${o.number}`,
-    accountNumber: o.number,
-    name: o.name,
-    categoryKey: o.categoryKey ?? null,
+    id: `acct-${number}`,
+    accountNumber: number,
+    name,
+    categoryKey: null,
     categoryName: null,
-    fsGroupKey: o.fsGroupKey ?? null,
+    fsGroupKey: null,
     fsGroupName: null,
-    ...o,
+    ...rest,
   } as AccountView;
 }
 
@@ -248,6 +249,7 @@ describe("Phase 4 · §6-§7 · genuine competitor qualification", () => {
         { family: "CAPITAL_NATURE", kind: "NATURE_COMPAT", contribution: 15, description: "x", countedTowardScore: true, role: "DECISION" },
       ],
       contradictions: [],
+      contradictionPenalty: 0,
       postable: true,
       postingBlockers: [],
     };
@@ -543,6 +545,7 @@ function makeCandidate(
     familyContributions,
     evidence,
     contradictions: [],
+    contradictionPenalty: 0,
     postable: true,
     postingBlockers: [],
   } as CanonicalCandidate;

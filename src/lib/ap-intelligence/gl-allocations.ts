@@ -36,7 +36,7 @@
 // grounded in the line's own text — a small side charge retains its
 // own allocation even when it's a small fraction of the invoice.
 
-import { rankAccountsPure, type PostingBlocker } from "./gl-recommend";
+import { type PostingBlocker } from "./gl-recommend";
 import type { AccountView } from "./gl-account-concepts";
 import { isFsGroupFamilyIncompatibleWithCluster } from "./account-semantics/family-incompatibility";
 import { extractQueryConcepts, dominantQueryConcept, type QueryConcept } from "./gl-query-concepts";
@@ -44,6 +44,17 @@ import { ACCOUNTING_CONCEPTS, CONCEPT_BY_ID } from "./gl-concepts";
 import { matchStrongestPhrase } from "./gl-similarity";
 import type { LineItem, LineTaxTreatment } from "./line-items-extract";
 import type { PurposeCandidate } from "./economic-purpose";
+// Phase 4R · Phase 5 (2026-08-11) — allocations now use the SAME
+// canonical ranker + recommendation-policy + confidence-assessment
+// pipeline as document-level classification. See rankClusterCanonically()
+// below. Legacy rankAccountsPure ranker no longer invoked here.
+import {
+  rankCanonical,
+  type CanonicalCandidate,
+  type NormalisedTransactionInterpretation,
+} from "./canonical-ranker";
+import { evaluateRecommendationPolicy, type RecommendationStatus } from "./recommendation-policy";
+import { assessCanonicalConfidence, type CanonicalConfidenceAssessment } from "./canonical-confidence";
 
 export type AllocationTaxTreatment =
   | "TAXABLE"
@@ -84,6 +95,15 @@ export interface ApGlAllocation {
   taxAmount: number | null;
   recommendedAccount: AllocationRecommendedAccount | null;   // null when unresolved
   alternatives: AllocationAlternative[];
+  // Phase 4R · Phase 5 (2026-08-11) — per-allocation canonical
+  // provenance. Each allocation now runs through the SAME canonical
+  // ranker + recommendation-policy + confidence-assessment pipeline
+  // as document-level classification. Allocation confidence and
+  // genuine competitors come from the canonical competition; no
+  // parallel allocation ranker exists after Phase 5.
+  canonicalWinnerAccountNumber?: string | null;
+  recommendationStatus?: import("./recommendation-policy").RecommendationStatus;
+  canonicalConfidence?: import("./canonical-confidence").CanonicalConfidenceAssessment;
 }
 
 export interface AllocationTotals {
@@ -128,6 +148,30 @@ export interface AllocationInput {
   printedSubtotal: number | null;
   printedTax: number | null;
   printedTotal: number | null;
+  // Phase 4R · Phase 5 (2026-08-11) — global signals passed as
+  // CLUSTER-shared context. Individual clusters still rank
+  // independently from their own line items + concept, but shared
+  // signals (department, nature, capital decision, purchased-object
+  // durable-asset context, financing evidence, gate-preferred lists,
+  // vendor identity/history) are provided as read-only context. §6:
+  // these are legitimately global — one cluster's evidence still
+  // cannot force another's winner because the per-cluster query
+  // concepts remain the primary scoring driver.
+  globalSignals?: {
+    departmentKey?: string | null;
+    departmentAccountNamePatterns?: ReadonlyArray<RegExp>;
+    natureLeader?: string;
+    natureConfidence?: number;
+    natureIsDefensible?: boolean;
+    capitalDecision?: "CAPITAL_CANDIDATE" | "OPERATING" | "REPAIR_MAINTENANCE" | "UNRESOLVED" | null;
+    capitalConfidence?: number;
+    hasHighQualityDurableAssetContext?: boolean;
+    hasFinancingEvidence?: boolean;
+    preferredAccountNumbers?: ReadonlyArray<string>;
+    contradictedAccountNumbers?: ReadonlyArray<string>;
+    priorCodingAccountNumbers?: ReadonlyArray<string>;
+    matchedVendorId?: string | null;
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -263,9 +307,155 @@ function buildClusters(assignments: LineAssignment[]): RawCluster[] {
 // Rank each cluster against the full tenant COA
 // -----------------------------------------------------------------------------
 
+/** Legacy-shaped candidate emitted by rankClusterCanonically so
+ *  downstream toAllocations() / mergeSameAccountClusters() code
+ *  can continue to consume the pre-Phase-5 shape without change. */
+interface AllocationRankedRow {
+  accountNumber: string;
+  accountName: string;
+  semanticScore: number;
+  rank: number;
+  postingBlockers: PostingBlocker[];
+}
+
 interface RankedCluster {
   cluster: RawCluster;
-  rankedTop: ReturnType<typeof rankAccountsPure>;
+  rankedTop: AllocationRankedRow[];
+  /** Phase 4R · Phase 5 (2026-08-11) — canonical outputs for this
+   *  cluster. Same shape/semantics as document-level canonical
+   *  classification. */
+  canonical?: {
+    winnerAccountNumber: string | null;
+    recommendationStatus: RecommendationStatus;
+    confidence: CanonicalConfidenceAssessment;
+    /** Full canonical candidates in canonical order (winner = candidates[0]
+     *  when RECOMMEND or ABSTAIN). Retained for provenance. */
+    candidates: ReadonlyArray<CanonicalCandidate>;
+  };
+}
+
+/**
+ * Phase 4R · Phase 5 · per-cluster canonical ranker.
+ *
+ * Each allocation cluster runs through the SAME canonical ranker used
+ * for document-level classification. Inputs:
+ *   - cluster's own line items (never the whole invoice)
+ *   - cluster's dominant concept as a synthetic queryConcept
+ *     (existing behaviour — allocation retains cluster-scoped evidence
+ *     so one cluster's evidence cannot force another's winner, §6)
+ *   - global signals passed by the caller (supplier / department /
+ *     capital nature) treated as CLUSTER-shared context
+ *   - eligible accounts pre-filtered by fsGroupKey hints
+ *
+ * Emits both:
+ *   - the compat rankedTop rows toAllocations already consumes
+ *   - the full canonical result + recommendation policy + confidence
+ *     assessment attached to the RankedCluster for per-allocation
+ *     projection
+ */
+function rankClusterCanonically(input: {
+  cluster: RawCluster;
+  eligibleAccounts: AccountView[];
+  queryConcepts: QueryConcept[];
+  postingBlockersByAccount: Map<string, PostingBlocker[]>;
+  globalSignals: {
+    departmentKey: string | null;
+    departmentAccountNamePatterns: ReadonlyArray<RegExp>;
+    natureLeader: string;
+    natureConfidence: number;
+    natureIsDefensible: boolean;
+    capitalDecision: "CAPITAL_CANDIDATE" | "OPERATING" | "REPAIR_MAINTENANCE" | "UNRESOLVED" | null;
+    capitalConfidence: number;
+    hasHighQualityDurableAssetContext: boolean;
+    hasFinancingEvidence: boolean;
+    preferredAccountNumbers?: ReadonlyArray<string>;
+    contradictedAccountNumbers?: ReadonlyArray<string>;
+    priorCodingAccountNumbers: ReadonlyArray<string>;
+    matchedVendorId: string | null;
+  };
+}): RankedCluster {
+  const clusterLines = input.cluster.assignments.map((a) => a.line);
+  const clusterConceptId = input.cluster.conceptId;
+  const transaction: NormalisedTransactionInterpretation = {
+    purposeConcept: clusterConceptId ?? null,
+    purposeConfidence: clusterConceptId ? 85 : 0,
+    purposeQuality: clusterConceptId ? "MEDIUM" : "NONE",
+    capitalDecision: input.globalSignals.capitalDecision,
+    capitalConfidence: input.globalSignals.capitalConfidence,
+    natureLeader: input.globalSignals.natureLeader,
+    natureConfidence: input.globalSignals.natureConfidence,
+    natureIsDefensible: input.globalSignals.natureIsDefensible,
+    preferredAccountNumbers: input.globalSignals.preferredAccountNumbers,
+    contradictedAccountNumbers: input.globalSignals.contradictedAccountNumbers,
+    hasHighQualityDurableAssetContext: input.globalSignals.hasHighQualityDurableAssetContext,
+    hasFinancingEvidence: input.globalSignals.hasFinancingEvidence,
+    departmentKey: input.globalSignals.departmentKey,
+    departmentAccountNamePatterns: input.globalSignals.departmentAccountNamePatterns,
+    canonicalLineItems: clusterLines.map((li) => ({
+      description: li.description ?? "",
+      role: "PRIMARY_PURCHASE",
+      extension: li.amount ?? null,
+    })),
+    queryConcepts: input.queryConcepts.map((qc) => ({
+      conceptId: qc.conceptId,
+      weight: qc.weight,
+      source: qc.source,
+      evidenceSnippet: qc.evidenceSnippet,
+    })),
+    vendor: {
+      matchedVendorId: input.globalSignals.matchedVendorId,
+      defaultAccountId: null,
+      priorCodingAccountNumbers: input.globalSignals.priorCodingAccountNumbers,
+    },
+    documentPhraseText: null,
+  };
+  const result = rankCanonical({
+    transaction,
+    eligibleAccounts: input.eligibleAccounts,
+    postingBlockersByAccount: input.postingBlockersByAccount,
+  });
+  const canonicalStatus = result.status;
+  const winnerAccountNumber = (canonicalStatus === "RECOMMEND" || canonicalStatus === "ABSTAIN")
+    ? result.candidates[0]?.accountNumber ?? null
+    : null;
+  const canonicalAbstentionReason =
+    canonicalStatus === "ABSTAIN" || canonicalStatus === "NO_ELIGIBLE_CANDIDATES" || canonicalStatus === "ANALYSIS_FAILURE"
+      ? result.abstentionReason
+      : null;
+  const recommendation = evaluateRecommendationPolicy({
+    canonicalStatus,
+    canonicalWinnerAccountNumber: winnerAccountNumber,
+    canonicalAbstentionReason,
+    // Allocations run after document-level extraction; upstream field
+    // quality is a document-wide concern, not a per-cluster one. If
+    // the document's field quality is bad, gl.recommendationStatus
+    // already reflects ABSTAIN_QUALITY and the overall allocation
+    // review policy (§10) handles it at the analyse.ts layer.
+    fieldQualityEligible: true,
+    fieldQualityAbstentionReasons: [],
+  });
+  const confidence = assessCanonicalConfidence({ canonical: result, recommendation });
+  // Project canonical candidates into the compat rankedTop shape.
+  const candidates = (canonicalStatus === "RECOMMEND" || canonicalStatus === "ABSTAIN")
+    ? result.candidates
+    : [];
+  const rankedTop: AllocationRankedRow[] = candidates.map((c, i) => ({
+    accountNumber: c.accountNumber,
+    accountName: c.accountName,
+    semanticScore: c.score,
+    rank: i + 1,
+    postingBlockers: [...c.postingBlockers] as PostingBlocker[],
+  }));
+  return {
+    cluster: input.cluster,
+    rankedTop,
+    canonical: {
+      winnerAccountNumber,
+      recommendationStatus: recommendation.status,
+      confidence,
+      candidates,
+    },
+  };
 }
 
 /** Phase 4R (2026-08-10) — walk the concept-hierarchy upward to
@@ -294,7 +484,9 @@ function rankClusters(args: {
   accounts: AccountView[];
   postingBlockersByAccount: Map<string, PostingBlocker[]>;
   vendorHistoryConceptIds?: string[];
+  globalSignals?: AllocationInput["globalSignals"];
 }): RankedCluster[] {
+  const g = args.globalSignals ?? {};
   return args.clusters.map((cluster) => {
     if (!cluster.conceptId) {
       return { cluster, rankedTop: [] };
@@ -369,12 +561,31 @@ function rankClusters(args: {
       // so allocation still succeeds on tenant COAs that lack the
       // ideal family.
     }
-    const ranked = rankAccountsPure({
-      accounts: eligibleAccounts,
+    // Phase 4R · Phase 5 — canonical per-cluster ranker replaces
+    // the legacy rankAccountsPure. Same evidence-role model, same
+    // recommendation policy, same confidence assessment as
+    // document-level classification.
+    return rankClusterCanonically({
+      cluster,
+      eligibleAccounts,
       queryConcepts,
       postingBlockersByAccount: args.postingBlockersByAccount,
+      globalSignals: {
+        departmentKey: g.departmentKey ?? null,
+        departmentAccountNamePatterns: g.departmentAccountNamePatterns ?? [],
+        natureLeader: g.natureLeader ?? "UNKNOWN",
+        natureConfidence: g.natureConfidence ?? 0,
+        natureIsDefensible: g.natureIsDefensible ?? false,
+        capitalDecision: g.capitalDecision ?? null,
+        capitalConfidence: g.capitalConfidence ?? 0,
+        hasHighQualityDurableAssetContext: g.hasHighQualityDurableAssetContext ?? false,
+        hasFinancingEvidence: g.hasFinancingEvidence ?? false,
+        preferredAccountNumbers: g.preferredAccountNumbers,
+        contradictedAccountNumbers: g.contradictedAccountNumbers,
+        priorCodingAccountNumbers: g.priorCodingAccountNumbers ?? [],
+        matchedVendorId: g.matchedVendorId ?? null,
+      },
     });
-    return { cluster, rankedTop: ranked };
   });
 }
 
@@ -500,6 +711,10 @@ function toAllocations(clusters: RankedCluster[]): ApGlAllocation[] {
       taxAmount,
       recommendedAccount,
       alternatives,
+      // Phase 4R · Phase 5 — per-allocation canonical provenance.
+      canonicalWinnerAccountNumber: r.canonical?.winnerAccountNumber ?? null,
+      recommendationStatus: r.canonical?.recommendationStatus,
+      canonicalConfidence: r.canonical?.confidence,
     };
   });
 }
@@ -670,11 +885,14 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
   const rawClusters = buildClusters(assignments);
 
   // Step 4: rank each cluster against the full tenant COA.
+  // Phase 4R · Phase 5 — canonical per-cluster ranker + policy +
+  // confidence assessment.
   const ranked = rankClusters({
     clusters: rawClusters,
     accounts: input.accounts,
     postingBlockersByAccount: input.postingBlockersByAccount,
     vendorHistoryConceptIds: input.vendorHistoryConceptIds,
+    globalSignals: input.globalSignals,
   });
 
   // Step 5: merge clusters that select the same account.

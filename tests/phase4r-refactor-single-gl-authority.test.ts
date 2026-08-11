@@ -500,7 +500,40 @@ describe("Phase 4R · static architectural guard against post-ranking GL overrid
       + `The single-authority invariant \`analysis.gl.accountNumber === analysis.gl.candidates[0].accountNumber\` `
       + `is ESTABLISHED. ANY new override site regresses the architecture.`,
     ).toBeLessThanOrEqual(EXPECTED_MAX_SITES_DURING_REFACTOR);
-    console.log(`[static-guard] analyse.ts override sites: ${overrideMatches.length} (target after Phase 3: 0)`);
+  });
+
+  // Phase 4R · Phase 5 (2026-08-11) — allocation-level authority guard.
+  it("gl-allocations.ts contains no post-ranking allocation account override or rankAccountsPure call", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve("src/lib/ap-intelligence/gl-allocations.ts"),
+      "utf8",
+    ) as string;
+    // Detects the shapes that would constitute a post-canonical
+    // allocation account override:
+    //   allocation.accountNumber = <new value>
+    //   recommendedAccount = { accountNumber: <new value> ... }
+    // Also detects any re-introduction of the legacy rankAccountsPure
+    // ranker inside the allocations runtime (the compat import
+    // itself is removed; a runtime call would fail typecheck, but the
+    // guard catches string references too as a belt-and-braces
+    // architectural protection).
+    const allocationOverride = /allocation(?:\.recommendedAccount|s?\[[^\]]+\])(?:\.accountNumber)?\s*=\s*[^=]/g;
+    const legacyRankerCall = /rankAccountsPure\s*\(/g;
+    const allocMatches = [...src.matchAll(allocationOverride)];
+    const legacyMatches = [...src.matchAll(legacyRankerCall)];
+    expect(
+      allocMatches.length,
+      `gl-allocations.ts contains ${allocMatches.length} post-ranking allocation account overrides. `
+      + `Every allocation winner must come from the canonical ranker; no substitution after ranking.`,
+    ).toBe(0);
+    expect(
+      legacyMatches.length,
+      `gl-allocations.ts still calls the legacy rankAccountsPure ranker. `
+      + `Phase 5 replaced it with the canonical per-cluster ranker.`,
+    ).toBe(0);
+    console.log(`[static-guard] gl-allocations.ts: ${allocMatches.length} overrides, ${legacyMatches.length} legacy calls (target: 0/0)`);
   });
 });
 

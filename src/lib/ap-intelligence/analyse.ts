@@ -1409,17 +1409,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     }
     allocationPostingBlockers.set(a.id, blockers);
   }
-  const allocations = computeAllocations({
-    lineItems: lineItemsExtracted,
-    accounts: allocationAccounts,
-    postingBlockersByAccount: allocationPostingBlockers,
-    economicPurposeCandidates: economicPurpose,
-    fullDocumentText: pdfOk ? pdfText : null,
-    supplierName: extraction.vendor.guessedName,
-    printedSubtotal,
-    printedTax,
-    printedTotal,
-  });
+  // Phase 4R · Phase 5 (2026-08-11) — allocations run AFTER the
+  // canonical facade so per-cluster ranking receives the same
+  // globalSignals (nature, capital, purchased-object) as
+  // document-level classification. See computeAllocations call
+  // below, immediately after the canonical facade block.
 
   // ---- Assemble findings for WorkIntakeFinding persistence ---------------
   const findings: FindingInput[] = [];
@@ -1715,13 +1709,69 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // during projection: gl.recommendationStatus === "ABSTAIN_QUALITY"
   // when field-quality is insufficient (winner provenance preserved
   // via gl.canonicalWinnerAccountNumber). We continue to clear the
-  // allocation cardCategory under the same condition here — that
-  // migration belongs to Phase 5 (allocation-ranker alignment); the
-  // allocation surface is scoped separately from single-GL selection.
-  let gatedAllocations = allocations;
+  // allocation cardCategory under the same condition here.
+  //
+  // Phase 4R · Phase 5 (2026-08-11) — allocations run canonically
+  // AFTER the canonical facade completes so per-cluster ranking
+  // consumes the same globalSignals as document-level classification
+  // (nature classifier output, capital decision, purchased-object
+  // durable-asset context, financing evidence, department signals,
+  // vendor identity/history). Each allocation cluster then runs
+  // through the SAME canonical ranker + recommendation policy +
+  // confidence assessment as document-level GL — one authority for
+  // both single- and multi-account invoices.
+  const {
+    departmentAccountNamePatterns: deptPatternsForAlloc,
+  } = await import("./department-inference");
+  const deptKeyForAlloc = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
+  const deptPatsForAlloc = deptKeyForAlloc ? deptPatternsForAlloc(deptKeyForAlloc) : [];
+  const allocations = computeAllocations({
+    lineItems: lineItemsExtracted,
+    accounts: allocationAccounts,
+    postingBlockersByAccount: allocationPostingBlockers,
+    economicPurposeCandidates: economicPurpose,
+    fullDocumentText: pdfOk ? pdfText : null,
+    supplierName: extraction.vendor.guessedName,
+    printedSubtotal,
+    printedTax,
+    printedTotal,
+    globalSignals: {
+      departmentKey: deptKeyForAlloc,
+      departmentAccountNamePatterns: deptPatsForAlloc,
+      natureLeader: natureForCanonical.leader,
+      natureConfidence: natureForCanonical.leaderConfidence,
+      natureIsDefensible: natureForCanonical.isDefensible,
+      capitalDecision: (natureForCanonical.isDefensible && natureForCanonical.leader === "REPAIR_AND_MAINTENANCE")
+        ? "REPAIR_MAINTENANCE"
+        : (capital.state === "CAPITAL" ? "CAPITAL_CANDIDATE" : capital.state === "OPERATING" ? "OPERATING" : "UNRESOLVED"),
+      capitalConfidence: capital.state === "CAPITAL" ? 80 : capital.state === "OPERATING" ? 80 : 0,
+      hasHighQualityDurableAssetContext: (() => {
+        if (sharedPurchasedObjects.length === 0) return false;
+        const primary = [...sharedPurchasedObjects].sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
+        return !!primary && primary.evidenceQuality === "HIGH" && (
+          primary.objectRole === "COMPLETE_MACHINE"
+          || primary.objectRole === "SERIALIZED_COMPONENT"
+          || (primary.objectRole === "UNKNOWN" && primary.brandCandidates.length > 0 && primary.modelCandidates.length > 0)
+        );
+      })(),
+      hasFinancingEvidence: false,
+      matchedVendorId: vendor.state === "MATCHED" ? vendor.candidates[0]?.id ?? null : null,
+    },
+  });
+
+  // Phase 4R · Phase 5 (§9) — overall multi-allocation review policy.
+  // If ANY material allocation cluster requires review (recommendation
+  // status is not RECOMMEND), the overall allocation surface requires
+  // review. No auto-approval across a mixed-status allocation set.
+  const anyAllocationNeedsReview = allocations.allocations.some(
+    (a) => a.recommendationStatus != null && a.recommendationStatus !== "RECOMMEND",
+  );
+  let gatedAllocations = anyAllocationNeedsReview
+    ? { ...allocations, requiresReview: true }
+    : allocations;
   if (gl.recommendationStatus === "ABSTAIN_QUALITY") {
     gatedAllocations = {
-      ...allocations,
+      ...gatedAllocations,
       cardCategory: null,
       requiresReview: true,
     };
@@ -1745,49 +1795,18 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   });
 
 
-  // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08, §31
-  // Outcome B) — parallel guard for the allocation engine even when
-  // gl remained postable. When the primary purchased object has HIGH
-  // evidence of a durable-asset context AND the allocation
-  // cardCategory names an interest / penalty / bank-charge / fee /
-  // inventory account (all of which contradict durable-asset
-  // treatment), clear the allocation cardCategory so the projection
-  // does not surface a plausible-but-wrong category chip.
-  if (gatedAllocations?.cardCategory && sharedPurchasedObjects.length > 0) {
-    const primary2 = [...sharedPurchasedObjects]
-      .sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
-    const durableAssetContext2 = primary2
-      && primary2.evidenceQuality === "HIGH"
-      && (
-        primary2.objectRole === "COMPLETE_MACHINE"
-        || primary2.objectRole === "SERIALIZED_COMPONENT"
-        || (primary2.objectRole === "UNKNOWN"
-            && primary2.brandCandidates.length > 0
-            && primary2.modelCandidates.length > 0)
-      );
-    const catLower = gatedAllocations.cardCategory.toLowerCase();
-    const catContradicts =
-      /\binterest\b/.test(catLower)
-      || /\bfinance\s*charge\b/.test(catLower)
-      || /\bpenalty\b/.test(catLower)
-      || /\blate\s*fee\b/.test(catLower)
-      || /\bbank\s*charges?\b/.test(catLower)
-      || /\bcredit\s*card\s*fees?\b/.test(catLower)
-      || /\binventory\s*-\s*(?:liquor|beer|wine|food|beverage)\b/.test(catLower);
-    if (durableAssetContext2 && catContradicts) {
-      logger.info("ap-intelligence.slice5-3.object-contradiction-guard.cleared-allocation", {
-        clubId: args.clubId,
-        docIdTail: doc.id.slice(-6),
-        clearedCardCategory: gatedAllocations.cardCategory,
-        primaryObjectRole: primary2.objectRole,
-      });
-      gatedAllocations = {
-        ...gatedAllocations,
-        cardCategory: null,
-        requiresReview: true,
-      };
-    }
-  }
+  // Phase 4R · Phase 5 (2026-08-11, §11) — the parallel Slice 5.3
+  // cardCategory guard is REMOVED. It used account-NAME regex on the
+  // derived cardCategory to clear it when a durable-asset context
+  // was present. That intelligence is now handled correctly upstream:
+  // per-cluster canonical ranking emits OBJECT_ROLE_CONTRADICTION
+  // (-22) on fee-family fsGroupKey accounts when
+  // hasHighQualityDurableAssetContext is true and hasFinancingEvidence
+  // is false (see canonical-ranker.ts). Fee-family accounts therefore
+  // lose the per-cluster canonical competition rather than being
+  // suppressed by a post-projection category-name regex. Founder §11:
+  // "make it consume canonical evidence rather than constructing a
+  // separate competitor universe."
 
   // Phase 2.1 (2026-08-06) §A6 — Phase 0 vs Phase 2 disagreement
   // logging. Both containment layers run below; here we snapshot
@@ -2265,7 +2284,32 @@ function computeConfidenceDimensions(args: {
     }
   })();
 
+  // Phase 4R · Phase 5 (§12) — glClassification is a compat projection
+  // of the AUTHORITATIVE canonical confidence assessment. Consumers
+  // that need the full canonical assessment read gl.canonicalConfidence
+  // directly; this legacy dimension is a numeric compat surface for
+  // the confidence-dimensions payload used by Mission Control.
+  //
+  // Numeric mapping (documented so downstream code doesn't reconstruct):
+  //   HIGH             → 90
+  //   MODERATE         → 60
+  //   LOW              → 25
+  //   REVIEW_REQUIRED  →  0
+  //   (canonicalConfidence absent — legacy or pre-canonical path)
+  //                    → derived from gl.confidence with source mapping
   const glClassification: DimensionResult = (() => {
+    const canonical = gl.canonicalConfidence;
+    if (canonical) {
+      const confMap: Record<string, number> = {
+        HIGH: 90, MODERATE: 60, LOW: 25, REVIEW_REQUIRED: 0,
+      };
+      const src: DimensionSource = canonical.level === "REVIEW_REQUIRED" ? "system_default" : "computed";
+      return {
+        confidence: confMap[canonical.level] ?? 0,
+        source: src,
+        reason: canonical.humanReadableReason,
+      };
+    }
     if (gl.source === "NONE" || gl.confidence == null) {
       return { confidence: 0, source: "system_default", reason: gl.reason };
     }
