@@ -464,14 +464,20 @@ describe("Phase 4R · static architectural guard against post-ranking GL overrid
     // Phase 3.2 (Group A migration, 2026-08-11) reduced count from
     // 10 to 7 by eliminating purpose_ontology_promotion +
     // purpose_ontology_abstain + purpose_driven_full_coa_search
-    // override sites. The ceiling is now 7. A NEW site (count > 7)
-    // is architectural regression.
-    const EXPECTED_MAX_SITES_DURING_REFACTOR = 7;
+    // override sites.
+    // Phase 3.3 (Group B migration, 2026-08-11) reduced count from
+    // 7 to 4 by eliminating nature_promoted (Stage A promotion),
+    // nature_scoped_full_coa_search (Stage B full-COA fallback),
+    // and Phase 2 eligibility recheck. Nature signals now feed
+    // canonical ranking as a pre-ranking input (CAPITAL_NATURE
+    // family) instead of a post-ranking selector. The ceiling is
+    // now 4. A NEW site (count > 4) is architectural regression.
+    const EXPECTED_MAX_SITES_DURING_REFACTOR = 4;
     expect(
       overrideMatches.length,
       `analyse.ts contains ${overrideMatches.length} \`gl = { ...gl, accountNumber: ... }\` `
-      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} after Phase 3.2). `
-      + `A NEW site indicates architectural regression. Groups B-E must eliminate the remaining sites.`,
+      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} after Phase 3.3). `
+      + `A NEW site indicates architectural regression. Groups C-E must eliminate the remaining sites.`,
     ).toBeLessThanOrEqual(EXPECTED_MAX_SITES_DURING_REFACTOR);
     console.log(`[static-guard] analyse.ts override sites: ${overrideMatches.length} (target after Phase 3: 0)`);
   });

@@ -73,6 +73,14 @@ export interface CanonicalFacadeArgs {
   departmentAccountNamePatterns: ReadonlyArray<RegExp>;
   vendorHistoryConceptIds: string[];
   vendorHistoryPreferredAccountNumbers: string[];
+  /** Phase 4R · Phase 3.3 — nature signals folded into canonical input.
+   *  Replaces Group B's post-ranking nature_promoted /
+   *  nature_scoped_full_coa_search / Phase 2 eligibility recheck
+   *  authorities. Nature type compat / mismatch becomes CAPITAL_NATURE
+   *  family evidence (soft contradiction) inside canonical scoring. */
+  natureLeader?: string;
+  natureConfidence?: number;
+  natureIsDefensible?: boolean;
 }
 
 /** Runs the canonical ranker and returns a GlRecommendation-shaped
@@ -152,15 +160,38 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
   // 4. Build NormalisedTransactionInterpretation.
   const purposeConcept = args.purposeDecision?.concept ?? args.economicPurposeCandidates?.[0]?.classificationConcept ?? null;
   const purposeConfidence = args.purposeDecision?.confidence ?? args.economicPurposeCandidates?.[0]?.score ?? 0;
+  // Phase 4R · Phase 3.3 — prefer the nature classifier's authoritative
+  // output when the caller provides it (analyse.ts computes
+  // classifyAccountingNature BEFORE the canonical call in the Phase 3.3
+  // migration). Fall back to the coarse purpose-derived nature for
+  // callers that don't feed nature signals directly.
+  const natureLeader = args.natureLeader ?? purposeConceptToNature(purposeConcept, args.capital.state);
+  const natureConfidence = args.natureConfidence ?? purposeConfidence;
+  const natureIsDefensible = args.natureIsDefensible
+    ?? (args.purposeQuality === "HIGH" || args.purposeQuality === "MEDIUM");
+  // Phase 4R · Phase 3.3 — when the accounting-nature classifier
+  // commits to REPAIR_AND_MAINTENANCE (defensibly), promote the
+  // canonical-ranker capitalDecision to REPAIR_MAINTENANCE so the
+  // RM_EXPENSE_MATCH / CAPITAL_ACCOUNT_CONTRADICTION observations
+  // fire. This replaces Group B's post-ranking rm/asset steering
+  // with pre-ranking scoring evidence — no post-ranking selector.
+  const capitalDecisionResolved: "CAPITAL_CANDIDATE" | "OPERATING" | "REPAIR_MAINTENANCE" | "UNRESOLVED" | null =
+    (natureIsDefensible && (natureLeader === "REPAIR_AND_MAINTENANCE" || natureLeader === "REPAIR_MAINTENANCE"))
+      ? "REPAIR_MAINTENANCE"
+      : capitalDecisionFromState(args.capital.state);
+  const capitalConfidenceResolved =
+    args.capital.state === "CAPITAL" ? 80
+    : args.capital.state === "OPERATING" ? 80
+    : (capitalDecisionResolved === "REPAIR_MAINTENANCE" ? natureConfidence : 0);
   const transaction: NormalisedTransactionInterpretation = {
     purposeConcept,
     purposeConfidence,
     purposeQuality: args.purposeQuality,
-    capitalDecision: capitalDecisionFromState(args.capital.state),
-    capitalConfidence: args.capital.state === "CAPITAL" ? 80 : args.capital.state === "OPERATING" ? 80 : 0,
-    natureLeader: purposeConceptToNature(purposeConcept, args.capital.state),
-    natureConfidence: purposeConfidence,
-    natureIsDefensible: args.purposeQuality === "HIGH" || args.purposeQuality === "MEDIUM",
+    capitalDecision: capitalDecisionResolved,
+    capitalConfidence: capitalConfidenceResolved,
+    natureLeader,
+    natureConfidence,
+    natureIsDefensible,
     departmentKey: args.departmentKey,
     departmentAccountNamePatterns: args.departmentAccountNamePatterns,
     canonicalLineItems: args.canonicalLineItems.map((li) => ({

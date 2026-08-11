@@ -959,6 +959,113 @@ describe("§14 concrete ranking examples for the checkpoint", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 3.3 · §5 — repair-vs-replacement runtime tests
+//
+// These lock in the Phase 3.3 architectural contract: nature signals
+// arrive as a PRE-RANKING input to canonical scoring (CAPITAL_NATURE
+// family), not as a POST-ranking selector. The migration eliminated
+// nature_promoted + nature_scoped_full_coa_search + Phase 2
+// eligibility recheck. What replaced them must:
+//   - promote a CAPITAL_ASSET account when nature classifier says
+//     acquisition (defensible=true)
+//   - promote a REPAIRS_MAINTENANCE expense when nature classifier
+//     says repair (defensible=true)
+//   - not pick a strongly-typed winner when nature is UNKNOWN and
+//     line-item text is ambiguous (margin small OR ABSTAIN)
+// ---------------------------------------------------------------------------
+
+describe("Phase 3.3 · §5 — repair-vs-replacement uses pre-ranking nature signals", () => {
+  it("equipment acquisition · CAPITAL_ASSET nature defensible → ASSET account wins over R&M expense", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        // Nature classifier committed to CAPITAL_ASSET.
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        // Capital classifier concurs.
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 85,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Fairway mower complete unit delivered", role: "PRIMARY_PURCHASE", extension: 52000 },
+        ],
+        queryConcepts: [
+          { conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "fairway mower complete unit" },
+        ],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // ASSET wins — nature-compat + capital-nature-compat both fire
+      // on Equipment & Fixtures; R&M expense receives capital-nature
+      // contradiction and cannot beat the asset.
+      expect(result.candidates[0].accountType).toBe("ASSET");
+    }
+  });
+
+  it("equipment repair · REPAIR_MAINTENANCE nature defensible → EXPENSE account wins over ASSET", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        // Nature classifier committed to REPAIR_MAINTENANCE.
+        natureLeader: "REPAIR_MAINTENANCE",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "REPAIR_MAINTENANCE",
+        capitalConfidence: 80,
+        purposeConcept: "REPAIR_MAINTENANCE",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Mower service call quarterly labour hydraulic hose replacement", role: "PRIMARY_PURCHASE", extension: 640 },
+        ],
+        queryConcepts: [
+          { conceptId: "repairs_and_maintenance", weight: 18, source: "line_item_description", evidenceSnippet: "service call quarterly labour" },
+        ],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // EXPENSE wins — ASSET account cannot outrank an R&M-nature
+      // transaction under CAPITAL_NATURE family scoring.
+      expect(result.candidates[0].accountType).toBe("EXPENSE");
+    }
+  });
+
+  it("ambiguous equipment work · UNKNOWN nature, weak text → NO strongly-typed lock-in (small margin or ABSTAIN)", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        // Nature classifier cannot commit.
+        natureLeader: "UNKNOWN",
+        natureConfidence: 0,
+        natureIsDefensible: false,
+        capitalDecision: "UNRESOLVED",
+        capitalConfidence: 0,
+        purposeConcept: null,
+        purposeConfidence: 0,
+        purposeQuality: "NONE",
+        canonicalLineItems: [
+          { description: "Equipment work — see attached", role: "PRIMARY_PURCHASE", extension: 1200 },
+        ],
+        queryConcepts: [],
+      }),
+    }));
+    // Either ABSTAIN, or if it does RECOMMEND, the margin to runner-up
+    // is small (< 20) — reflecting that nature ambiguity denies the
+    // canonical ranker a confident winner.
+    if (result.status === "RECOMMEND") {
+      expect(result.separation.marginToRunnerUp).toBeLessThan(20);
+    } else {
+      expect(["ABSTAIN", "NO_ELIGIBLE_CANDIDATES"]).toContain(result.status);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §35 anti-overfitting
 // ---------------------------------------------------------------------------
 

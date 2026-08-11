@@ -496,15 +496,28 @@ const PURPOSE_CATEGORY_HINTS: Record<string, ReadonlyArray<string>> = {
   PENALTY: ["OTHER_EXPENSES"],
 };
 
-/** Nature → acceptable account types. */
+/** Nature → acceptable account types.
+ *
+ *  Accepts both the canonical-ranker-native literals and the wider
+ *  vocabulary that `classifyAccountingNature` in accounting-nature.ts
+ *  emits (Phase 4R · Phase 3.3, 2026-08-11). The two vocabularies
+ *  differ in three names (REPAIR_MAINTENANCE vs REPAIR_AND_MAINTENANCE,
+ *  plus TAX_OR_REGULATORY / INTEREST_OR_PENALTY / PREPAID_EXPENSE
+ *  from the classifier). Duplicating the entries here keeps the
+ *  facade a pure projection — no vocabulary translation required.
+ */
 const ACCEPTABLE_TYPES_BY_NATURE: Record<string, ReadonlySet<string>> = {
   CAPITAL_ASSET: new Set(["ASSET"]),
   OPERATING_EXPENSE: new Set(["EXPENSE"]),
   REPAIR_MAINTENANCE: new Set(["EXPENSE"]),
+  REPAIR_AND_MAINTENANCE: new Set(["EXPENSE"]),
   COST_OF_SALES: new Set(["EXPENSE", "COST_OF_SALES", "COGS"]),
   INVENTORY: new Set(["ASSET"]),
+  PREPAID_EXPENSE: new Set(["ASSET"]),
   UTILITY_OR_RECURRING_SERVICE: new Set(["EXPENSE"]),
   PROFESSIONAL_SERVICE: new Set(["EXPENSE"]),
+  TAX_OR_REGULATORY: new Set(["EXPENSE"]),
+  INTEREST_OR_PENALTY: new Set(["EXPENSE"]),
   UNKNOWN: new Set(["EXPENSE", "ASSET"]),
 };
 

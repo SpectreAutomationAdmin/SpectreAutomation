@@ -1422,79 +1422,6 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     fullDocumentText: transactionalTextValue,
     clubDepartments: DEFAULT_DEPTS_SHARED,
   });
-  // ==========================================================================
-  // Phase 4R · single-GL-authority refactor · Phase 3.2 (2026-08-11).
-  //
-  // Canonical runtime authority — replaces the Group A post-ranking
-  // override chain (purpose_ontology_promotion + purpose_ontology_abstain
-  // + purpose_driven_full_coa_search) with ONE ranked competition.
-  //
-  // Before this migration, the initial `recommendGlAccount` result
-  // above could be OVERWRITTEN by up to three subsequent override
-  // sites that ran their own selection logic without rebuilding
-  // `gl.candidates`. That violated the founder §1 invariant
-  //   analysis.gl.accountNumber === analysis.gl.candidates[0].accountNumber
-  //
-  // Now: `runCanonicalGlRanking` runs the canonical family-based
-  // ranker once. Its result is a pure projection of the canonical
-  // ranker output (§11 no business logic in the facade). Winner is
-  // candidates[0] by structural type contract. Purpose ontology
-  // becomes evidence inside the competition (TRANSACTION_TEXT
-  // family) — not a post-ranking authority.
-  //
-  // Purpose/ontology intelligence preserved:
-  //   Site A1 (purpose_ontology_promotion) → PURPOSE_TYPE_COMPAT +
-  //     PURPOSE_CATEGORY_HINT + ONTOLOGY_NAME_MATCH observations
-  //     inside TRANSACTION_TEXT family (rankCanonical scoring).
-  //   Site A2 (purpose_ontology_abstain) → structural: when no
-  //     candidate scores above COMMIT_MIN_SCORE, the canonical
-  //     result is ABSTAIN with candidates[0] preserved (§8 —
-  //     abstention does not destroy ranking provenance).
-  //   Site A3 (purpose_driven_full_coa_search / Pipeline B) →
-  //     rankCanonical ALREADY iterates the ENTIRE eligible COA.
-  //     No separate "if empty then run full-COA" fallback — one
-  //     competition, always.
-  {
-    const { runCanonicalGlRanking } = await import("./canonical-runtime-facade");
-    const { departmentAccountNamePatterns: deptPatternsForCanonical } =
-      await import("./department-inference");
-    const deptKeyForCanonical = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
-    const deptPatsForCanonical = deptKeyForCanonical ? deptPatternsForCanonical(deptKeyForCanonical) : [];
-    const { assessPurposeEvidenceQuality } = await import("./purpose-evidence-quality");
-    const purposeQualityForCanonical = purposeDecision != null
-      ? assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout).quality
-      : "NONE";
-    gl = await runCanonicalGlRanking({
-      clubId: args.clubId,
-      extraction,
-      vendor,
-      capital,
-      economicPurposeCandidates: economicPurpose,
-      purposeDecision,
-      purposeQuality: purposeQualityForCanonical,
-      canonicalLineItems: canonicalLineItemsFromLayout,
-      lineItemsExtracted,
-      fullDocumentText:
-        transactionalTextValue != null && transactionalTextValue.trim().length > 0
-          ? transactionalTextValue
-          : (pdfOk ? pdfText : null),
-      expectedDebitRole,
-      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
-        .detectPayrollEvidence({
-          vendorNames: [
-            extraction.vendor.guessedName,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
-          ],
-          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
-          documentText: pdfOk ? pdfText : null,
-        }).hasPayrollEvidence,
-      departmentKey: deptKeyForCanonical,
-      departmentAccountNamePatterns: deptPatsForCanonical,
-      vendorHistoryConceptIds: [],
-      vendorHistoryPreferredAccountNumbers: [],
-    });
-  }
 
 
   // Sprint 3 · Checkpoint 15T — compute amount hierarchy and tax /
@@ -1705,6 +1632,119 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const gateResult2 = applyFieldQualityGate({ extraction: mergedExtraction, fullText: pdfText });
   mergedExtraction = gateResult2.extraction;
   fieldQualityGate = gateResult2.gate;
+
+  // ==========================================================================
+  // Phase 4R · single-GL-authority refactor · Phase 3.2 (2026-08-11).
+  //
+  // Canonical runtime authority — replaces the Group A post-ranking
+  // override chain (purpose_ontology_promotion + purpose_ontology_abstain
+  // + purpose_driven_full_coa_search) with ONE ranked competition.
+  //
+  // Before this migration, the initial `recommendGlAccount` result
+  // above could be OVERWRITTEN by up to three subsequent override
+  // sites that ran their own selection logic without rebuilding
+  // `gl.candidates`. That violated the founder §1 invariant
+  //   analysis.gl.accountNumber === analysis.gl.candidates[0].accountNumber
+  //
+  // Now: `runCanonicalGlRanking` runs the canonical family-based
+  // ranker once. Its result is a pure projection of the canonical
+  // ranker output (§11 no business logic in the facade). Winner is
+  // candidates[0] by structural type contract. Purpose ontology
+  // becomes evidence inside the competition (TRANSACTION_TEXT
+  // family) — not a post-ranking authority.
+  //
+  // Purpose/ontology intelligence preserved:
+  //   Site A1 (purpose_ontology_promotion) → PURPOSE_TYPE_COMPAT +
+  //     PURPOSE_CATEGORY_HINT + ONTOLOGY_NAME_MATCH observations
+  //     inside TRANSACTION_TEXT family (rankCanonical scoring).
+  //   Site A2 (purpose_ontology_abstain) → structural: when no
+  //     candidate scores above COMMIT_MIN_SCORE, the canonical
+  //     result is ABSTAIN with candidates[0] preserved (§8 —
+  //     abstention does not destroy ranking provenance).
+  //   Site A3 (purpose_driven_full_coa_search / Pipeline B) →
+  //     rankCanonical ALREADY iterates the ENTIRE eligible COA.
+  //     No separate "if empty then run full-COA" fallback — one
+  //     competition, always.
+  // ==========================================================================
+  // Phase 4R · Phase 3.3 (2026-08-11) — nature signals folded into
+  // canonical input BEFORE ranking (§13 ordering rule). This replaces
+  // Group B's post-ranking authorities (nature_promoted +
+  // nature_scoped_full_coa_search + Phase 2 eligibility recheck).
+  //
+  // Nature is now a PRE-RANKING input to the single canonical
+  // competition. `rankCanonical` already emits NATURE_COMPAT /
+  // NATURE_INCOMPATIBLE / ACCOUNT_ROLE_MATCH observations in the
+  // CAPITAL_NATURE family, plus explicit contradictions for
+  // materially incompatible types. No post-ranking selector is
+  // reintroduced.
+  //
+  // Classification per §2:
+  //   - Nature type compat/mismatch → SOFT CONTRADICTION (scoring
+  //     evidence in CAPITAL_NATURE family)
+  //   - Nature-scoped full-COA search → REDUNDANT: rankCanonical
+  //     already iterates the ENTIRE eligibleAccounts by construction.
+  //   - Phase 2 eligibility recheck → REDUNDANT: eligibility is
+  //     enforced BEFORE canonical ranking via filterEligibleAccounts
+  //     inside runCanonicalGlRanking (§6 hard eligibility upstream).
+  // ==========================================================================
+  const natureForCanonical = classifyAccountingNature({
+    extraction: mergedExtraction,
+    supplierName: mergedExtraction.vendor.guessedName,
+    lineItemDescriptions: Array.from(new Set([
+      ...mergedExtraction.lineItems.map((li) => li.description),
+      ...mergedLineItems.map((li) => li.description),
+      ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
+    ].filter((d): d is string => typeof d === "string" && d.length > 0))),
+    fullDocumentText: pdfText || null,
+    transactionalText: transactionalTextValue,
+    capitalStateFromClassifier: capital.state,
+    capitalThresholdCents: capitalMinCents,
+    totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
+  });
+  {
+    const { runCanonicalGlRanking } = await import("./canonical-runtime-facade");
+    const { departmentAccountNamePatterns: deptPatternsForCanonical } =
+      await import("./department-inference");
+    const deptKeyForCanonical = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
+    const deptPatsForCanonical = deptKeyForCanonical ? deptPatternsForCanonical(deptKeyForCanonical) : [];
+    const { assessPurposeEvidenceQuality } = await import("./purpose-evidence-quality");
+    const purposeQualityForCanonical = purposeDecision != null
+      ? assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout).quality
+      : "NONE";
+    gl = await runCanonicalGlRanking({
+      clubId: args.clubId,
+      extraction,
+      vendor,
+      capital,
+      economicPurposeCandidates: economicPurpose,
+      purposeDecision,
+      purposeQuality: purposeQualityForCanonical,
+      canonicalLineItems: canonicalLineItemsFromLayout,
+      lineItemsExtracted,
+      fullDocumentText:
+        transactionalTextValue != null && transactionalTextValue.trim().length > 0
+          ? transactionalTextValue
+          : (pdfOk ? pdfText : null),
+      expectedDebitRole,
+      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
+        .detectPayrollEvidence({
+          vendorNames: [
+            extraction.vendor.guessedName,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
+          ],
+          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
+          documentText: pdfOk ? pdfText : null,
+        }).hasPayrollEvidence,
+      departmentKey: deptKeyForCanonical,
+      departmentAccountNamePatterns: deptPatsForCanonical,
+      vendorHistoryConceptIds: [],
+      vendorHistoryPreferredAccountNumbers: [],
+      natureLeader: natureForCanonical.leader,
+      natureConfidence: natureForCanonical.leaderConfidence,
+      natureIsDefensible: natureForCanonical.isDefensible,
+    });
+  }
   let gatedAllocations = allocations;
   if (!fieldQualityGate.glEligible) {
     // Force GL abstention. Preserves candidate list for diagnostics
@@ -1735,395 +1775,6 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     };
   }
 
-  // Sprint 3 · Checkpoint 16B (2026-08-04) — nature-driven GL
-  // promotion. When the ranker abstained (gl.accountNumber === null)
-  // but the accounting-nature classifier produced a defensible
-  // classification, promote the highest-scored candidate that
-  // matches BOTH the nature's expected account-type AND (loosely)
-  // one of the nature's category hints. This is §6's hierarchical
-  // model: nature defines the semantic search space; the promoted
-  // candidate is the leader within that space.
-  //
-  // Confidence-driven per §8:
-  //   * nature.confidence ≥ 60 → strong constraint: promote nature-
-  //     matching candidate even if a higher-raw-score non-matching
-  //     candidate exists
-  //   * 30 ≤ confidence < 60 → moderate: promote only when the
-  //     ranker abstained OR the top candidate lost to the anti-
-  //     contamination gate
-  //   * confidence < 30 → do NOT promote; use base ranker outcome
-  //
-  // Uses the reconstructed line-items list + full text via the
-  // classifier so promotion honours EVERY page's evidence (§2).
-  {
-    // Compute nature here (before the accountingIntelligence IIFE
-    // in the return) so we can consult it for promotion.
-    const uniqDescs = Array.from(new Set([
-      ...mergedExtraction.lineItems.map((li) => li.description),
-      ...mergedLineItems.map((li) => li.description),
-      ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
-    ].filter((d): d is string => typeof d === "string" && d.length > 0)));
-    const natureForRanker = classifyAccountingNature({
-      extraction: mergedExtraction,
-      supplierName: mergedExtraction.vendor.guessedName,
-      lineItemDescriptions: uniqDescs,
-      fullDocumentText: pdfText || null,
-      transactionalText: transactionalTextValue,
-      capitalStateFromClassifier: capital.state,
-      capitalThresholdCents: capitalMinCents,
-      totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
-    });
-
-    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #1) —
-    // resolve the canonical economic-purpose decision once, HERE,
-    // so it can gate the nature-scoped SEMANTIC_MATCH override
-    // below and be published on the diagnostic.
-    if (purposeDecision == null) {
-      // Slice 5.10 — same PurchasedObjectIdentity-role consumption.
-      const purposeRoleObjects2 = new PurchasedObjectProvider().interpret(canonicalLineItemsFromLayout);
-      const rolesByLineIndex2: Array<
-        "COMPLETE_MACHINE" | "SERIALIZED_COMPONENT" | "COMPONENT"
-        | "ACCESSORY" | "CONSUMABLE" | "SERVICE" | "UNKNOWN" | null
-      > = canonicalLineItemsFromLayout.map((_li, idx) => {
-        const obj = purposeRoleObjects2.find((o) => o.sourceLineItemIndex === idx);
-        return obj?.objectRole ?? null;
-      });
-      purposeDecision = resolveEconomicPurpose({
-        canonicalLineItems: canonicalLineItemsFromLayout,
-        supplierName: mergedExtraction.vendor.guessedName,
-        transactionalText: transactionalTextValue,
-        hasPenaltyLine: canonicalLineItemsFromLayout.some((li) => li.role === "PENALTY"),
-        hasMembershipLine: canonicalLineItemsFromLayout.some((li) =>
-          /\b(member(?:ship)?\s*(?:dues|fee))\b/i.test(li.description)),
-        hasProfessionalCredentialContext: (mergedExtraction.vendor.guessedName ?? "").match(
-          /\b(?:association|society|college|institute|CPA|Chartered|Order\s+of)\b/i) != null,
-        purchasedObjectRolesByLineIndex: rolesByLineIndex2,
-      });
-    }
-
-    const shouldPromote =
-      natureForRanker.isDefensible &&
-      (gl.accountNumber == null || natureForRanker.leaderConfidence >= 60);
-    if (shouldPromote) {
-      const { accountTypesForNature } = await import("./accounting-nature");
-      const { rankNatureScopedAccounts } = await import("./nature-scoped-ranker");
-      const wantTypes = new Set(accountTypesForNature(natureForRanker.leader));
-      const accountLookup = new Map(
-        accountsForAllocations.map((a) => [a.id, a]),
-      );
-      const candidates = (gl.candidates ?? []).map((c) => {
-        const full = accountLookup.get(c.accountId);
-        return { c, full };
-      });
-      // Stage A — try to promote from the raw ranker's top-N. Cheap.
-      const matches = candidates.filter(({ c, full }) => {
-        if (!full) return false;
-        return wantTypes.has(full.type);
-      });
-      // 16D §12 — department tie-break: if we have a defensible
-      // department leader, prefer top-N candidates whose account
-      // name contains a department-qualifying token.
-      const {
-        inferDepartment: inferDeptStageA,
-        DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_STAGE_A,
-        departmentAccountNamePatterns: deptPatternsStageA,
-      } = await import("./department-inference");
-      const uniqDescsStageA = Array.from(new Set([
-        ...mergedExtraction.lineItems.map((li) => li.description),
-        ...mergedLineItems.map((li) => li.description),
-        ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
-      ].filter((d): d is string => typeof d === "string" && d.length > 0)));
-      const deptStageA = inferDeptStageA({
-        supplierName: mergedExtraction.vendor.guessedName,
-        lineItemDescriptions: uniqDescsStageA,
-        fullDocumentText: pdfText || null,
-        clubDepartments: DEFAULT_DEPTS_STAGE_A,
-      });
-      // 16D — for ranker tie-break we use the highest-scoring
-      // department candidate even when below the defensibility
-      // threshold. Supplier-only signals cannot cross defensibility
-      // (§6: vendor name alone = weak evidence) but they CAN break
-      // a ranker tie between two otherwise-equal accounts.
-      const deptStageAHint = deptStageA.leader?.key
-        ?? deptStageA.ranked.find((d) => d.score > 0)?.key
-        ?? null;
-      const deptPatsStageA = deptStageAHint ? deptPatternsStageA(deptStageAHint) : [];
-      let promoted = false;
-      let stageAPickedDeptMatch = false;
-      if (matches.length > 0) {
-        matches.sort((a, b) => {
-          // Department preference first: an account matching the
-          // department leader beats one that doesn't (when both
-          // have comparable raw confidence).
-          const aDept = deptPatsStageA.some((p) => p.test(a.full?.name ?? "")) ? 1 : 0;
-          const bDept = deptPatsStageA.some((p) => p.test(b.full?.name ?? "")) ? 1 : 0;
-          if (aDept !== bDept) return bDept - aDept;
-          const cd = (b.c.confidence ?? 0) - (a.c.confidence ?? 0);
-          if (cd !== 0) return cd;
-          return a.c.accountNumber.localeCompare(b.c.accountNumber);
-        });
-        stageAPickedDeptMatch = deptPatsStageA.length > 0 &&
-          deptPatsStageA.some((p) => p.test(matches[0].full?.name ?? ""));
-        const picked = matches[0];
-        const picked_c = picked.c;
-        // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08,
-        // amendment #5) — Stage A nature-promotion must also go
-        // through the SEMANTIC_MATCH override gate. Stage A promotes
-        // an account from the raw ranker's top-N when its type
-        // matches the classified nature — but without the gate, a
-        // low-confidence nature (e.g. INTEREST_OR_PENALTY(20)
-        // matched on a policy-footer "finance charge" phrase) can
-        // stomp a canonical FUEL / EQUIPMENT_PARTS purpose. The
-        // gate blocks that path.
-        const stageAGate = evaluateSemanticMatchGate({
-          natureLeader: natureForRanker.leader,
-          natureConfidence: natureForRanker.leaderConfidence,
-          natureIsDefensible: natureForRanker.isDefensible,
-          candidateAccountType: picked.full?.type ?? null,
-          purposeDecision: purposeDecision ?? {
-            source: "ABSTAIN" as const, concept: null, confidence: 0, label: "unresolved",
-            canonicalTop3: [], legacyCandidates: [],
-            diagnostic: "no purpose decision available at Stage A",
-          },
-          // Stage A always operates AFTER the base ranker. This is
-          // not a "base abstained" call site — we're OVERRIDING a
-          // base pick. Use the strict threshold.
-          baseRankerAbstained: false,
-        });
-        if ((picked_c.confidence ?? 0) >= 20 && stageAGate.allow) {
-          const blended = Math.min(picked_c.confidence ?? 0, natureForRanker.leaderConfidence);
-          gl = {
-            ...gl,
-            accountNumber: picked_c.accountNumber,
-            accountName: picked_c.accountName,
-            categoryKey: picked_c.categoryKey,
-            fsGroupKey: picked_c.fsGroupKey,
-            source: "SEMANTIC_MATCH",
-            confidence: blended,
-            reason: `nature_promoted:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${picked_c.accountNumber}(raw_${picked_c.confidence},gate=allow)`,
-            leaderIsPostable: picked_c.postable,
-            leaderPostingBlockers: picked_c.postingBlockers,
-            autoApprovalEligible: false,
-          };
-          promoted = true;
-        } else if ((picked_c.confidence ?? 0) >= 20 && !stageAGate.allow) {
-          logger.info("ap-intelligence.stage-a-promotion.gate-denied", {
-            clubId: args.clubId, docIdTail: doc.id.slice(-6),
-            candidate: picked_c.accountNumber,
-            denials: stageAGate.denials.join("|"),
-          });
-        }
-      }
-      // Stage B (16C §5 + 16D §3+§12) — full nature-scoped COA
-      // branch search WITH department inference. Ranks every
-      // nature-compatible account in the tenant COA, excludes
-      // contra / depreciation / header / inactive / control
-      // accounts, boosts accounts whose name contains department-
-      // qualifying tokens when invoice evidence supports a
-      // department.
-      //
-      // 16D — Stage B ALSO runs when Stage A promoted an account
-      // that does NOT match the hint-department. This ensures a
-      // department-specific account (e.g. R & M - Ground Equip)
-      // beats a generic account (e.g. Supplies - Backshop) that
-      // happened to appear higher in the raw ranker's top-5.
-      const stageBShouldRun = !promoted || (deptPatsStageA.length > 0 && !stageAPickedDeptMatch);
-      if (stageBShouldRun) {
-        const allCoa = await prisma.account.findMany({
-          where: { clubId: args.clubId, isActive: true },
-          select: {
-            id: true, accountNumber: true, name: true, type: true,
-            isHeader: true, isControlAccount: true,
-            allowManualPosting: true, fundApplicability: true,
-            category: { select: { key: true, name: true } },
-            fsGroup: { select: { key: true, name: true } },
-          },
-        });
-        const uniqDescsNS = Array.from(new Set([
-          ...mergedExtraction.lineItems.map((li) => li.description),
-          ...mergedLineItems.map((li) => li.description),
-          ...(tableReconstruction?.lineItems ?? []).map((li) => li.description),
-        ].filter((d): d is string => typeof d === "string" && d.length > 0)));
-
-        // 16D §3+§4+§12 — compute department candidates + pass to
-        // the ranker. Uses the tenant's department taxonomy
-        // (defaults when tenant hasn't configured one).
-        const {
-          inferDepartment,
-          DEFAULT_CLUB_DEPARTMENTS,
-          departmentAccountNamePatterns,
-        } = await import("./department-inference");
-        const departmentResult = inferDepartment({
-          supplierName: mergedExtraction.vendor.guessedName,
-          lineItemDescriptions: uniqDescsNS,
-          fullDocumentText: pdfText || null,
-          clubDepartments: DEFAULT_CLUB_DEPARTMENTS,
-        });
-        // 16D — hint department: highest-scoring candidate even
-        // when below defensibility threshold. Used ONLY as a
-        // ranker tie-break (not primary signal).
-        const deptKey = departmentResult.leader?.key
-          ?? departmentResult.ranked.find((d) => d.score > 0)?.key
-          ?? null;
-        const deptPatterns = deptKey ? departmentAccountNamePatterns(deptKey) : [];
-
-        const scoped = rankNatureScopedAccounts({
-          nature: natureForRanker.leader,
-          natureConfidence: natureForRanker.leaderConfidence,
-          allAccounts: allCoa.map((a) => ({
-            id: a.id,
-            accountNumber: a.accountNumber,
-            name: a.name,
-            type: a.type,
-            isActive: true,
-            isHeader: a.isHeader ?? false,
-            isControlAccount: a.isControlAccount ?? false,
-            allowManualPosting: a.allowManualPosting ?? true,
-            categoryKey: a.category?.key ?? null,
-            categoryName: a.category?.name ?? null,
-            fsGroupKey: a.fsGroup?.key ?? null,
-            fsGroupName: a.fsGroup?.name ?? null,
-            fundApplicability: a.fundApplicability,
-          })),
-          lineItemDescriptions: uniqDescsNS,
-          fullDocumentText: pdfText || null,
-          supplierName: mergedExtraction.vendor.guessedName,
-          departmentKey: deptKey,
-          departmentAccountNamePatterns: deptPatterns,
-        });
-        if (scoped.leader) {
-          const ldr = scoped.leader;
-          // 16D — override rule when Stage A already promoted:
-          // only take Stage B's leader if it matches the hint-
-          // department AND Stage A didn't. This prevents Stage B
-          // from stomping a fine Stage A choice with a lower-
-          // scoring account.
-          const ldrDeptMatches = deptPatterns.length > 0 &&
-            deptPatterns.some((p) => p.test(ldr.account.name));
-          const shouldOverride = !promoted || (ldrDeptMatches && !stageAPickedDeptMatch);
-          // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #5) —
-          // strengthened SEMANTIC_MATCH override gate. The override
-          // may only proceed when ALL of: nature confidence clears
-          // threshold; nature is defensible; nature is compatible
-          // with the committed canonical purpose; the candidate
-          // account type is compatible with the nature; no stronger
-          // canonical evidence contradicts. Confidence alone is not
-          // enough. This closes the class of defect where a low-
-          // confidence nature (e.g. 20-33) elected a full-COA
-          // account whose type was incompatible with the canonical
-          // purchase — a "confidence-laundering" path §25 warns
-          // against.
-          const gateInput = {
-            natureLeader: natureForRanker.leader,
-            natureConfidence: natureForRanker.leaderConfidence,
-            natureIsDefensible: natureForRanker.isDefensible,
-            candidateAccountType: ldr.account.type ?? null,
-            purposeDecision: purposeDecision ?? {
-              source: "ABSTAIN" as const, concept: null, confidence: 0, label: "unresolved",
-              canonicalTop3: [], legacyCandidates: [],
-              diagnostic: "no purpose decision available",
-            },
-            // When the base ranker abstained (no winner), the gate
-            // relaxes its confidence threshold — a defensible-but-
-            // moderate nature is preferable to a null answer.
-            baseRankerAbstained: gl.accountNumber == null,
-          };
-          const gateOutcome = evaluateSemanticMatchGate(gateInput);
-          semanticMatchGateEvaluations.push({
-            candidateAccountNumber: ldr.account.accountNumber,
-            allow: gateOutcome.allow,
-            denials: gateOutcome.denials,
-          });
-          if (shouldOverride && gateOutcome.allow) {
-            gl = {
-              ...gl,
-              accountNumber: ldr.account.accountNumber,
-              accountName: ldr.account.name,
-              categoryKey: ldr.account.categoryKey ?? null,
-              fsGroupKey: ldr.account.fsGroupKey ?? null,
-              source: "SEMANTIC_MATCH",
-              confidence: Math.min(natureForRanker.leaderConfidence, Math.min(95, ldr.score)),
-              reason: `nature_scoped_full_coa_search:${natureForRanker.leader}(${natureForRanker.leaderConfidence})->${ldr.account.accountNumber}(compat=${scoped.compatibleAccountCount},excluded=${scoped.excludedAccountCount},dept=${deptKey ?? "none"},dept_match=${ldrDeptMatches},gate=allow)`,
-              leaderIsPostable: ldr.isPostable,
-              leaderPostingBlockers: ldr.postingBlockers as any,
-              autoApprovalEligible: false,
-            };
-          } else if (shouldOverride && !gateOutcome.allow) {
-            logger.info("ap-intelligence.semantic-match.override-denied", {
-              clubId: args.clubId, docIdTail: doc.id.slice(-6),
-              candidate: ldr.account.accountNumber,
-              denials: gateOutcome.denials.join("|"),
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // Post-16H Phase 2 (2026-08-06) — post-promotion eligibility
-  // check. Nature-scoped promotion above ranks the full COA
-  // independently of the base ranker's eligibility filter, so it
-  // can re-introduce an ineligible account. Re-evaluate the
-  // promoted leader against the same eligibility service; if
-  // ineligible, abstain. This is the SECOND enforcement site for
-  // Phase 2 — the pre-ranker filter is the first.
-  {
-    const {
-      evaluateEligibility,
-      isPhase2EligibilityEnabled,
-    } = await import("@/lib/accounting/eligibility");
-    if (isPhase2EligibilityEnabled() && gl.accountNumber != null) {
-      const { prisma: prismaClient } = await import("@/lib/prisma");
-      const acct = await prismaClient.account.findFirst({
-        where: { clubId: args.clubId, accountNumber: gl.accountNumber },
-        select: {
-          id: true, accountNumber: true, name: true, type: true, normalBalance: true,
-          isActive: true, isHeader: true, allowManualPosting: true,
-          isControlAccount: true, isBankAccount: true, isCashAccount: true,
-          archivedAt: true, fundApplicability: true,
-          accountRole: true,
-          category: { select: { key: true } }, fsGroup: { select: { key: true } },
-        },
-      });
-      if (acct) {
-        const verdict = evaluateEligibility({
-          id: acct.id, accountNumber: acct.accountNumber, name: acct.name,
-          type: acct.type, normalBalance: acct.normalBalance,
-          isActive: acct.isActive, isHeader: acct.isHeader,
-          allowManualPosting: acct.allowManualPosting,
-          isControlAccount: acct.isControlAccount,
-          isBankAccount: acct.isBankAccount, isCashAccount: acct.isCashAccount,
-          archivedAt: acct.archivedAt,
-          fundApplicability: acct.fundApplicability,
-          categoryKey: acct.category?.key ?? null,
-          fsGroupKey: acct.fsGroup?.key ?? null,
-          accountRole: acct.accountRole ?? "STANDARD",
-        }, {
-          transactionKind: "AP_INVOICE",
-          expectedDebitRole,
-          capitalizationEvidence: {
-            supported: capital.state === "CAPITAL",
-            confidence: capital.state === "CAPITAL" ? 80 : 0,
-          },
-        });
-        if (!verdict.eligible) {
-          gl = {
-            ...gl,
-            accountNumber: null, accountName: null,
-            categoryKey: null, fsGroupKey: null,
-            source: "NONE",
-            confidence: null,
-            reason: `Phase 2 accounting eligibility rejected the promoted leader ${verdict.accountNumber}: ${verdict.exclusionReasons.join(", ")}. No supported recommendation — review required.`,
-            candidates: [],
-            leaderIsPostable: false,
-            leaderPostingBlockers: [],
-            autoApprovalEligible: false,
-            requiresReview: true,
-          };
-        }
-      }
-    }
-  }
 
   // Sprint 3 · Phase 4 Slice 5.5 (2026-08-08, §3-§7) —
   // capital-aware full-COA ranker. When CapitalEvidenceDecision
