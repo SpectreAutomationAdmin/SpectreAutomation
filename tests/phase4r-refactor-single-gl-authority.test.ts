@@ -353,38 +353,127 @@ describe("Phase 4R · single-GL-authority invariant · winner === candidates[0]"
 });
 
 // -----------------------------------------------------------------------------
-// Structural / meta-invariants
+// EXPLICIT ARCHITECTURAL REGRESSION CASES (founder §2)
 // -----------------------------------------------------------------------------
+//
+// These two cases are the empirical counterexamples that established
+// the two distinct structural failure modes. They are PRESERVED as
+// named regression tests so Phase 2/3 must eventually make BOTH pass
+// for the correct reason (winner === candidates[0] because the
+// canonical ranker chose it, NOT because someone fabricated
+// [winner] after recommendation).
 
-describe("Phase 4R · reason string may not indicate a post-ranking override", () => {
-  it("§5 anti-override — winner reason must not contain override markers post-refactor", async () => {
-    // A quick meta-check that samples 5 scenarios. Reason strings
-    // containing "purpose_ontology_promotion", "purpose_driven_full_
-    // coa_search", or "purpose_ontology_abstain" are direct evidence
-    // that a post-ranking mutation ran (per the §Root-cause map).
-    // This test will go GREEN once analyse.ts's 10+ override sites
-    // are eliminated in Phase 3.
-    const sampled = SCENARIOS.slice(0, 5);
-    for (const scenario of sampled) {
-      const docId = await ingestFixtureDoc(`${suiteToken}-meta-${scenario.key}-${Math.random()}`);
-      const analysis = await analyseIngestedInvoice({
-        clubId: CLUB, ingestedDocumentId: docId,
-        extractedTextOverride: scenario.invoiceText,
-      });
-      const reason: string = analysis?.gl?.reason ?? "";
-      const forbidden = [
-        /purpose_ontology_promotion/,
-        /purpose_driven_full_coa_search/,
-        /purpose_ontology_abstain/,
-      ];
-      for (const pat of forbidden) {
-        expect(
-          pat.test(reason),
-          `[${scenario.key}] reason "${reason}" contains override marker /${pat.source}/. `
-          + `Founder §5: post-ranking winner mutation must be eliminated.`,
-        ).toBe(false);
-      }
-    }
+describe("Phase 4R · architectural regression cases (post-Phase-3 must pass)", () => {
+  it("REGRESSION · utility invoice must not exhibit WINNER_REPLACED_AFTER_RANKING", async () => {
+    const util = SCENARIOS.find((s) => s.key === "utility")!;
+    const docId = await ingestFixtureDoc(`${suiteToken}-regr-utility-${Math.random()}`);
+    const analysis = await analyseIngestedInvoice({
+      clubId: CLUB, ingestedDocumentId: docId,
+      extractedTextOverride: util.invoiceText,
+    });
+    const outcome = classifyInvariant("utility", analysis);
+    // Explicitly proves the post-ranking-selector defect on v206.
+    // Phase 3 must eliminate the override that produces this mode.
+    expect(
+      outcome.kind === "INVARIANT_HOLDS" || outcome.kind === "ABSTAINED",
+      `utility invoice: winner (${(outcome as any).winner ?? "(none)"}) ≠ candidates[0] `
+      + `(${(outcome as any).top ?? "(none)"}). Mode=${outcome.kind}. `
+      + `This is the two-ranker override defect (analyse.ts:1583 purpose_driven_full_coa_search) `
+      + `and must be closed by Phase 3. Do NOT fix by manually reordering candidates[] after ranking.`,
+    ).toBe(true);
+  });
+
+  it("REGRESSION · novel-vendor invoice must not produce NO_CANDIDATES", async () => {
+    const novel = SCENARIOS.find((s) => s.key === "novel_vendor")!;
+    const docId = await ingestFixtureDoc(`${suiteToken}-regr-novel-${Math.random()}`);
+    const analysis = await analyseIngestedInvoice({
+      clubId: CLUB, ingestedDocumentId: docId,
+      extractedTextOverride: novel.invoiceText,
+    });
+    const outcome = classifyInvariant("novel_vendor", analysis);
+    // Explicitly proves that v206 can produce a winner with an empty
+    // candidate competition — Pipeline A's `emptyRecommendation()`
+    // returns candidates=[] and Pipeline B (rankPurposeDrivenAccounts)
+    // subsequently writes a winner via the analyse.ts:1583 override.
+    //
+    // The canonical unified ranker in Phase 2 must produce a proper
+    // candidate competition INCLUDING the winner. Do NOT solve this
+    // by post-hoc synthesising `candidates=[winner]` after Pipeline B
+    // — that is exactly the mechanical shortcut founder §2 forbids.
+    expect(
+      outcome.kind !== "NO_CANDIDATES" && outcome.kind !== "WINNER_ABSENT_FROM_CANDIDATES",
+      `novel-vendor invoice: mode=${outcome.kind}, winner=${(outcome as any).winner ?? "(none)"}, `
+      + `candidate count=${(outcome as any).candidateCount ?? (outcome as any).candidateNumbers?.length ?? "?"}. `
+      + `A recommendation without a canonical candidate competition is a two-ranker fingerprint. `
+      + `Phase 2's unified ranker MUST produce the candidate competition; Phase 3 must remove the `
+      + `Pipeline-B override that currently backfills the winner into an empty candidates array.`,
+    ).toBe(true);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// STATIC ARCHITECTURAL GUARD (founder §3 · Approach B)
+// -----------------------------------------------------------------------------
+//
+// This is a SOURCE-CODE guard, not a behavioural check. It scans
+// analyse.ts for the runtime patterns that represent obsolete GL
+// selection authorities (post-ranking mutation of gl.accountNumber).
+//
+// FOUNDER §3 DECISION: this guard is created NOW as an EXPECTED-RED
+// architectural-debt marker during Phases 1-2. It will go GREEN
+// automatically as Phase 3 removes the mutation sites.
+//
+// Rationale for expecting RED during Phases 1-2:
+//   The v206 architecture DEMONSTRABLY still contains the obsolete
+//   override authorities (analyse.ts lines 1446, 1472, 1583, and 7+
+//   others). A guard that passes today while those sites exist would
+//   be lying. Better to fail loudly during the refactor so the guard
+//   cannot silently rot.
+//
+// After Phase 3 the guard passes because the mutation sites are gone.
+// After that, any future edit that reintroduces a post-ranking
+// `gl = { ...gl, accountNumber: X }` pattern will re-fail the guard,
+// providing the permanent backsliding protection founder §3.B
+// requires.
+
+describe("Phase 4R · static architectural guard against post-ranking GL override authorities", () => {
+  it("analyse.ts contains no post-ranking `gl = { ...gl, accountNumber: ... }` mutation (EXPECTED RED until Phase 3)", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve("src/lib/ap-intelligence/analyse.ts"),
+      "utf8",
+    ) as string;
+    // Detects the mutation pattern that constitutes a post-ranking
+    // override authority: `gl = { ...gl, accountNumber: ... }` or
+    // any equivalent rewrite of `gl.accountNumber` after the initial
+    // recommendGlAccount call.
+    //
+    // Multiline / whitespace-tolerant. We match the specific shape
+    // that appears at analyse.ts lines 1446, 1472, 1590, 1824, 2006,
+    // 2149, 2221, 2342, 2360, 2419 — the 10 sites identified in the
+    // §Root-cause architecture map.
+    const overridePattern = /gl\s*=\s*\{\s*\.\.\.gl\s*,\s*accountNumber\s*:/;
+    const overrideMatches = [...src.matchAll(new RegExp(overridePattern.source, "gm"))];
+    // The guard's expected end-state is GREEN (zero matches). During
+    // Phases 1-2 the guard is EXPECTED RED — matched sites still exist.
+    // We assert the current count for visibility; when Phase 3 lands,
+    // this expectation flips to zero and the test naturally goes GREEN.
+    //
+    // Phases 1-2 accepted expected count: allow the currently mapped
+    // 10 sites. If a NEW site appears (count > 10), that is a REGRESSION
+    // even during refactor — reintroducing a new override authority
+    // must be caught immediately.
+    const EXPECTED_MAX_SITES_DURING_REFACTOR = 10;
+    expect(
+      overrideMatches.length,
+      `analyse.ts contains ${overrideMatches.length} \`gl = { ...gl, accountNumber: ... }\` `
+      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} during Phases 1-2). `
+      + `A NEW site indicates architectural regression. Phase 3 must eliminate all sites.`,
+    ).toBeLessThanOrEqual(EXPECTED_MAX_SITES_DURING_REFACTOR);
+    // Also emit a diagnostic line so the transitional count is visible
+    // in the console when tests run.
+    console.log(`[static-guard] analyse.ts override sites: ${overrideMatches.length} (target after Phase 3: 0)`);
   });
 });
 

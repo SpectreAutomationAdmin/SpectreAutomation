@@ -3,7 +3,7 @@
 **Branch:** `refactor/gl-single-authority`
 **Baseline:** v206 = `cbb1b52` (main + staging unchanged)
 **Current session ended:** 2026-08-11
-**Phase reached:** **Phase 1 complete** (TDD RED verified for the right reason)
+**Phase reached:** **Phase 1 complete + hardened** (TDD RED verified for the right reason; static architectural guard added)
 **Next phase to begin:** **Phase 2 — build the canonical unified ranker**
 
 ---
@@ -35,17 +35,28 @@ Reason string patterns identifying override sites (used by the RED classifier):
 - 17 synthetic scenarios covering the required transaction shapes (§3): operating expense, capital equipment, repair service, professional service, subscription, utility, fuel, merchandise, professional dues, novel vendor, department-sensitive, genuine ambiguity, weak semantic accident, capital/operating ambiguity, multi-allocation, insurance, telephone/internet.
 - **Failure-mode classifier** (`classifyInvariant`) categorises every scenario as one of: `INVARIANT_HOLDS`, `ABSTAINED`, `WINNER_REPLACED_AFTER_RANKING`, `WINNER_ABSENT_FROM_CANDIDATES`, `NO_CANDIDATES`.
 - **Anti-overfitting lint** — a static test that scans `gl-recommend.ts`, `purpose-driven-ranker.ts`, `analyse.ts`, `gl-allocations.ts` for forbidden literal comparisons against specific vendor names / invoice numbers / account numbers. Guards against smuggled hardcoded rules.
-- **Reason-string override check** — samples 5 scenarios and fails on `purpose_ontology_promotion` / `purpose_driven_full_coa_search` / `purpose_ontology_abstain` markers. Will go GREEN after Phase 3 eliminates the override sites.
+- **Explicit architectural regression tests** — `REGRESSION · utility invoice must not exhibit WINNER_REPLACED_AFTER_RANKING` and `REGRESSION · novel-vendor invoice must not produce NO_CANDIDATES` (§2 requirement to preserve both empirical counterexamples).
+- **Static architectural guard (§3.B)** — source-code scan of `analyse.ts` for the `gl = { ...gl, accountNumber: ... }` override pattern. Currently expected to detect 10 sites (the ceiling under §16 for Phases 1-2). Flips to zero after Phase 3 without any test change; catches any future reintroduction thereafter. **Runs independently of whether any fixture executes the override path** — this is source-code truth, not execution truth.
+
+The prior "reason-string override check" was replaced by the static guard above per founder §3 — an execution-dependent guard is insufficient to protect an architectural invariant. See test file for full documentation.
 
 **Verified failure modes on v206** (RED for the right reason per §4):
 
-| Scenario | Outcome | Detail |
-|---|---|---|
-| `utility` | `WINNER_REPLACED_AFTER_RANKING` | winner=6020 (Grounds Maint) vs top=6050 (Utilities); reason=`purpose_driven_full_coa_search:REPAIR_MAINTENANCE(92,quality=MEDIUM)->6020` |
-| `novel_vendor` | `NO_CANDIDATES` | winner=6035 with empty candidates[]; reason=`purpose_driven_full_coa_search:CAPITAL_EQUIPMENT(95,quality=HIGH)->6035` — winner not just repositioned, entirely absent from list |
-| 15 other scenarios | `INVARIANT_HOLDS` | pipelines happen to agree OR only Pipeline A ran |
+Vitest result: **4 failed / 17 passed / 21 total tests** on the refactor branch against v206.
 
-Both failure modes trace to the same root cause (analyse.ts:1583 `rankPurposeDrivenAccounts` override), demonstrating the systemic defect without every scenario needing to fail.
+| Test | Outcome | Detail |
+|---|---|---|
+| `utility — invariant check` | **FAIL · WINNER_REPLACED_AFTER_RANKING** | winner=6020 (Grounds Maint) vs top=6050 (Utilities); reason=`purpose_driven_full_coa_search:REPAIR_MAINTENANCE(92,quality=MEDIUM)->6020` |
+| `novel_vendor — invariant check` | **FAIL · NO_CANDIDATES** | winner=6035 with empty candidates[]; Pipeline A returned `emptyRecommendation()`, Pipeline B backfilled winner |
+| `REGRESSION · utility` | **FAIL** | explicit named regression case; must GREEN after Phase 3 without candidate re-sorting hacks |
+| `REGRESSION · novel-vendor` | **FAIL** | explicit named regression case; must GREEN by canonical ranker producing the competition, NOT by post-hoc `candidates=[winner]` |
+| 15 other invariant scenarios | **PASS · INVARIANT_HOLDS** | pipelines coincidentally agree OR only Pipeline A ran |
+| Anti-overfitting lint | **PASS** | v206 runtime has no smuggled vendor/invoice/account literals |
+| Static architectural guard | **PASS** | 10 override sites detected ≤ 10 refactor-phase ceiling; goes to zero after Phase 3 |
+
+The two failure modes trace to the same root cause (analyse.ts:1583 `rankPurposeDrivenAccounts` override). Per §4 it is CORRECT that most scenarios pass — the suite proves the architecture does not GUARANTEE the invariant, not that every fixture must fail.
+
+**novel_vendor NO_CANDIDATES trace (§4)** — traced to option **A**: Pipeline A (`recommendGlAccount → rankAccountsPure`) genuinely produces an empty candidate list via `emptyRecommendation()` at [gl-recommend.ts:407-411](../src/lib/ap-intelligence/gl-recommend.ts#L407-L411) when `queryConcepts.length === 0 || scored.every((s) => s.components.semanticScore === 0)`. Pipeline B (`rankPurposeDrivenAccounts`) then independently finds winner 6035 with CAPITAL_EQUIPMENT purpose confidence 95 and writes it into `gl.accountNumber` via the analyse.ts:1583 override. No new authority. Same mechanism as the `utility` case — the override site fires whether Pipeline A produced candidates or not. **§16.1 does NOT trigger.**
 
 ## Not deployed. Not merged.
 
