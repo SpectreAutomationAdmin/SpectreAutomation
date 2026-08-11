@@ -330,42 +330,42 @@ function extractMoney(text: string, labels: string[], ruleKeyBase: string) {
  * GST + QST, HST alone) surface a taxTotal that reconciles with
  * subtotal + total.
  *
- * The prior extractor used first-line-wins ordering — for a
- * "GST 5%: 50.25 / PST 7%: 70.35" invoice it returned only 50.25
- * and the reconcile stage would report ALLOCATION_VARIANCE. The
- * summing helper preserves each component line so the reconciler
- * can present the correct sum AND log which components were
- * observed (useful diagnostic when a tenant's tax setup is
- * misconfigured).
+ * Phase 4R remediation (2026-08-10) — Multi-Tax Evidence:
+ * distinct-amount tax lines under the SAME label (e.g. two
+ * separate GST charges on different taxable bases — CPA Alberta
+ * prints GST 5% on $400 = $20 AND GST 5% on $810 = $40.50) MUST
+ * survive as separate components and SUM. Prior behaviour keyed
+ * the dedup by `label` alone, so the second observation
+ * overwrote the first and $60.50 collapsed to $40.50. The dedup
+ * key is now `(label, amount)`: repeated OBSERVATIONS of the same
+ * tax charge (label + amount identical) collapse; distinct
+ * amounts under the same label are preserved and summed.
  *
- * Returns null when fewer than TWO distinct tax component lines
- * were found — in that case the caller should keep the existing
- * single-line result (which handles combined "GST/HST: 50.25"
- * lines correctly).
+ * Returns null when fewer than TWO distinct components survive —
+ * the caller falls back to a single-line search (which handles
+ * combined "GST/HST: 50.25" lines correctly).
  */
 function extractTaxSum(
   text: string,
 ): { value: string; hint: ParseHint; components: Array<{ label: string; amount: number }> } | null {
   const lineRegex = /^\s*(GST|HST|PST|QST|TPS|TVQ|VAT|Sales\s+Tax)\s*(?:\(?\s*\d+(?:\.\d+)?\s*%?\s*\)?)?\s*[:=]?\s*[^\n\r]*?([0-9]{1,3}(?:[,][0-9]{3})*(?:\.[0-9]{2})|[0-9]+\.[0-9]{2})\s*(?:CAD|USD|EUR|GBP)?\s*$/i;
   const components: Array<{ label: string; amount: number }> = [];
+  const seenKey = new Set<string>();
   for (const raw of text.split(/\r?\n/)) {
     const m = raw.match(lineRegex);
     if (!m) continue;
     const label = m[1].toUpperCase().replace(/\s+/g, " ");
     const amount = Number(m[2].replace(/,/g, ""));
     if (!isFinite(amount) || amount < 0) continue;
-    // Skip zero-amount lines — they inflate the count without
-    // contributing (many invoices print "PST: 0.00" to be explicit
-    // that no PST applies, and treating that as a "distinct
-    // component" would wrongly trigger the sum path).
     if (amount === 0) continue;
-    // Dedupe: same label repeated on multiple lines (e.g. per-item
-    // GST breakdown) — we only want the SUMMARY line, so the last
-    // occurrence per label wins. Callers that want per-line breakout
-    // should use the layout layer directly.
-    const existing = components.findIndex((c) => c.label === label);
-    if (existing >= 0) components[existing].amount = amount;
-    else components.push({ label, amount });
+    // Phase 4R (§6) — dedup by (label, amount): repeated observations
+    // of the SAME tax charge collapse; different amounts under the
+    // same label represent separate tax groups on different taxable
+    // bases and MUST both survive to be summed.
+    const key = `${label}|${amount.toFixed(2)}`;
+    if (seenKey.has(key)) continue;
+    seenKey.add(key);
+    components.push({ label, amount });
   }
   if (components.length < 2) return null;
   const sum = components.reduce((a, c) => a + c.amount, 0);

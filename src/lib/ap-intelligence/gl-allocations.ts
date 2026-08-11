@@ -268,6 +268,27 @@ interface RankedCluster {
   rankedTop: ReturnType<typeof rankAccountsPure>;
 }
 
+/** Phase 4R (2026-08-10) — walk the concept-hierarchy upward to
+ *  gather effective fsGroupKeyHints. A leaf concept without direct
+ *  hints inherits its parent's hints. Depth-1 root concepts have
+ *  their own hints. Deduplicated. */
+function computeEffectiveClusterHints(concept: { id: string; parent: string | null; fsGroupKeyHints: string[] } | undefined | null): string[] {
+  if (!concept) return [];
+  const collected: string[] = [];
+  let cursor: { id: string; parent: string | null; fsGroupKeyHints: string[] } | undefined = concept;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    for (const h of cursor.fsGroupKeyHints) {
+      if (!collected.includes(h)) collected.push(h);
+    }
+    if (cursor.fsGroupKeyHints.length > 0) break; // stop at first depth with hints
+    if (!cursor.parent) break;
+    cursor = CONCEPT_BY_ID[cursor.parent];
+  }
+  return collected;
+}
+
 function rankClusters(args: {
   clusters: RawCluster[];
   accounts: AccountView[];
@@ -310,20 +331,44 @@ function rankClusters(args: {
       });
     }
     // Sprint 3 · Ranker Authority slice (2026-08-10, §2 · §4) —
-    // COMPATIBILITY BEFORE RELEVANCE. When the cluster's concept
-    // carries fsGroupKeyHints (e.g. `IS_IT_SOFTWARE` for
-    // it_services / cybersecurity_service / software_subscription),
-    // exclude accounts whose own fsGroupKey is materially
-    // incompatible BEFORE the relevance scorer runs. This prevents
-    // the "Service Maintenance Fee" line's lexical "maintenance"
-    // token from letting a Repairs & Maintenance account defeat a
-    // Computer & IT Services account after the transaction has been
-    // classified as IT_SERVICES. Symmetric — a genuine R&M invoice
-    // excludes IS_IT_SOFTWARE accounts from its r&m cluster.
-    const clusterFsGroupHints = clusterConcept?.fsGroupKeyHints ?? [];
-    const eligibleAccounts = clusterFsGroupHints.length > 0
-      ? args.accounts.filter((a) => !isFsGroupFamilyIncompatibleWithCluster(a.fsGroupKey, clusterFsGroupHints))
-      : args.accounts;
+    // Phase 4R (2026-08-10) — Purpose-specific compatibility.
+    //
+    // Compute effective cluster hints by WALKING UP the concept
+    // hierarchy: a leaf concept like `equipment_repair` (no direct
+    // hints) inherits its parent `repairs_and_maintenance`'s hints
+    // `[IS_REPAIRS_MAINTENANCE]`. Similarly `telephony` /
+    // `connectivity_internet` inherit `communications`'s
+    // `[IS_TELEPHONE_INTERNET, IS_COMMUNICATIONS]`.
+    //
+    // Filter strategy = "prefer-if-available":
+    //   1. Start from the payroll-hard-exclusion filter (family-
+    //      incompatibility.ts — payroll only).
+    //   2. If the cluster has effective hints AND ≥1 non-payroll
+    //      account in the COA carries a matching fsGroupKey,
+    //      restrict the pool to those matching accounts. Purpose is
+    //      authority (§13, §22): a `telephony` cluster prefers
+    //      Telephone accounts even inside an IT-provider invoice.
+    //   3. If NO account matches the hints, retain the full non-
+    //      payroll pool — the relevance scorer picks the best
+    //      available account. Prevents a semantically-strong line
+    //      from being made impossible to allocate on a tenant COA
+    //      that lacks the ideal family.
+    const clusterFsGroupHints = computeEffectiveClusterHints(clusterConcept);
+    const nonPayrollAccounts = args.accounts.filter(
+      (a) => !isFsGroupFamilyIncompatibleWithCluster(a.fsGroupKey, clusterFsGroupHints),
+    );
+    let eligibleAccounts = nonPayrollAccounts;
+    if (clusterFsGroupHints.length > 0) {
+      const hintMatching = nonPayrollAccounts.filter(
+        (a) => a.fsGroupKey != null && clusterFsGroupHints.includes(a.fsGroupKey),
+      );
+      if (hintMatching.length > 0) {
+        eligibleAccounts = hintMatching;
+      }
+      // else: no hint-matching account — keep the non-payroll pool
+      // so allocation still succeeds on tenant COAs that lack the
+      // ideal family.
+    }
     const ranked = rankAccountsPure({
       accounts: eligibleAccounts,
       queryConcepts,
@@ -584,19 +629,22 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
   );
 
   // Step 2b: Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) §6 —
-  // document-level coherence. When ≥2 resolved sibling lines carry
-  // an `IS_IT_SOFTWARE` fsGroupKeyHint (i.e. the invoice's dominant
-  // family is IT), reclassify any line matched to
-  // `repairs_and_maintenance` to `it_services`. Also promote
-  // `unresolved` lines to `it_services` on the same coherence
-  // grounds. Founder rule §5: "Service Maintenance Fee" on an IT-
-  // majority invoice is IT-service maintenance, not physical R&M.
+  // document-level coherence.
   //
-  // Conservative: only fires when ≥2 siblings independently classify
-  // as IT — one stray IT-adjacent line does not reclassify others.
-  // Reverse controls (§9): a real R&M invoice (mower repair) has no
-  // IT siblings → this pass never fires. OXIO's telecom invoice
-  // has TELECOM classification (not IS_IT_SOFTWARE) → not affected.
+  // Phase 4R remediation (2026-08-10) — narrowed. When ≥2 resolved
+  // sibling lines carry an `IS_IT_SOFTWARE` fsGroupKeyHint, promote
+  // the GENERIC `repairs_and_maintenance` bucket to `it_services`
+  // (that generic bucket usually represents "the word 'maintenance'
+  // appeared with no domain-specific context" — on Club Support
+  // 221178, "Service Maintenance Fee" is IT service maintenance).
+  //
+  // §20 / §22 reverse control: SPECIFIC R&M children —
+  // `equipment_repair` (mentions specific equipment), `building_
+  // maintenance` (mentions building/roof/HVAC), `course_maintenance`
+  // (mentions greens/fairway) — are STRONGLY identified per-line
+  // purposes and MUST NOT be overwritten by document family. An IT
+  // provider that separately invoices "repair server hardware" gets
+  // `equipment_repair` and keeps eligibility for R&M accounts.
   const itHintSiblings = assignments.filter((a) => {
     if (!a.conceptId) return false;
     const c = CONCEPT_BY_ID[a.conceptId];
@@ -605,10 +653,9 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
   if (itHintSiblings >= 2) {
     for (let i = 0; i < assignments.length; i++) {
       const a = assignments[i];
-      if (a.conceptId === "repairs_and_maintenance"
-        || a.conceptId === "building_maintenance"
-        || a.conceptId === "course_maintenance"
-        || a.conceptId === "equipment_repair") {
+      // ONLY override the GENERIC r&m bucket. Specific R&M children
+      // stay put — their evidence is stronger than document family.
+      if (a.conceptId === "repairs_and_maintenance") {
         assignments[i] = {
           ...a,
           conceptId: "it_services",

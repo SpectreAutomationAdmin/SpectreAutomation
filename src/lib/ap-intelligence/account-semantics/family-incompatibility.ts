@@ -1,81 +1,104 @@
-// Sprint 3 · Ranker Authority slice (2026-08-10) — generalized
-// family-incompatibility gate for per-cluster GL ranking.
+// Sprint 3 · Phase 4R remediation (2026-08-10) — payroll-only hard
+// incompatibility gate + purpose-specific compatibility scoring.
 //
-// Founder rule (§2 · §4): "Account-name lexical similarity must NOT
-// overpower a materially incompatible accounting meaning." The
-// existing ranker aggregates directLineMatch + accountNameSimilarity
-// + fsGroupTaxonomySimilarity into one score. When a line's own
-// tokens ("maintenance") happen to match a competitor account's name
-// ("R & M Preventative Maintenance"), the lexical channel can outrun
-// the fsGroupKey channel and the material-substance winner loses.
+// The Phase 4 baseline treated IT ↔ R&M, IT ↔ Telephone/Internet as
+// HARD MUTUAL EXCLUSIONS. Real-world evidence (Club Support: managed
+// IT + VoIP + hardware repair on ONE invoice) proved this too
+// coarse: a legitimate line was made impossible to route to its
+// correct account. Founder ruling (§13): supplier/invoice family is
+// CONTEXT; PURCHASED PURPOSE is AUTHORITY.
 //
-// This module implements the §4 "compatibility before relevance"
-// principle: given a cluster's canonical concept, exclude accounts
-// whose fsGroupKey belongs to a KNOWN materially-incompatible family
-// BEFORE relevance scoring runs. Lexical similarity remains useful
-// for tie-breaking between accounts that ARE mutually compatible;
-// it stops deciding between materially different accounting
-// substances.
+// This module now encodes only the ONE hard incompatibility that
+// generalises across every tenant COA:
 //
-// The matrix is deliberately small and symmetric. It encodes only
-// the mutual exclusions that generalize across tenants:
+//   PAYROLL  ↔  every non-payroll family
 //
-//   IT SOFTWARE  ↔ REPAIRS AND MAINTENANCE
-//   IT SOFTWARE  ↔ TELEPHONE AND INTERNET
-//   PAYROLL      ↔ everything else (payroll is guarded separately by
-//                 rulePayrollAccountExcluded — kept here for
-//                 completeness / documentation)
+// Every other purpose-driven compatibility is scored at ranking time
+// by `purpose-account-compatibility.ts` — the ranker prefers accounts
+// whose FS group is STRONG/VALID for the CLUSTER'S OWN CONCEPT, but
+// no account is HARD-EXCLUDED merely because a sibling cluster on the
+// same invoice speaks a different family.
 //
-// Not encoded: mutual compatibilities within a family (e.g. multiple
-// IT accounts), close-adjacent families where a tenant COA could
-// legitimately post either (e.g. IT SOFTWARE ↔ LICENCES_PERMITS —
-// the tenant may house cloud subscriptions in either), or minor
-// distinctions the ranker's relevance layer handles well.
-//
-// §3 rule: this is NOT a boost for one specific account. It is a
-// generalized structural gate.
 // §5 reverse controls (proven by tests):
-//   - Genuine R&M invoice (mower repair) → IS_IT_SOFTWARE accounts
-//     excluded from the r&m cluster (§5 test C).
-//   - OXIO Internet invoice → IS_REPAIRS_MAINTENANCE excluded (§5).
-//   - Cybersecurity invoice → IS_REPAIRS_MAINTENANCE and
-//     IS_TELEPHONE_INTERNET excluded (§5).
-//   - Software subscription → IS_REPAIRS_MAINTENANCE excluded (§5).
-//   - Ambiguous "maintenance fee" (no IT / physical context) → NO
-//     exclusion fires, ranker falls back to normal (§5 abstention).
+//   - Genuine R&M invoice (mower repair) → payroll accounts excluded
+//     from the r&m cluster; IT-adjacent accounts remain eligible
+//     (ranker prefers R&M via compatibility scoring, not exclusion).
+//   - OXIO Internet invoice → payroll excluded; Telephone accounts
+//     preferred via purpose-compatibility scoring.
+//   - IT-provider invoice with a VoIP line → cluster concept
+//     `telephony`, Telephone accounts REMAIN eligible; the family
+//     matrix does NOT exclude them.
+//   - IT-provider invoice with a hardware repair line → cluster
+//     concept `equipment_repair` (a specific R&M child), R&M
+//     accounts REMAIN eligible.
+//   - Payroll — external AP supplier with no affirmative payroll
+//     evidence → payroll-only accounts still HARD-excluded (§15).
 
-// Small symmetric matrix keyed by fsGroupKey. Two families that
-// each list the other are MUTUALLY INCOMPATIBLE. Add pairs by
-// listing them in BOTH directions.
+// Phase 4R remediation (2026-08-10) — Purpose-specific compatibility.
+//
+// The previous matrix listed IT ↔ R&M, IT ↔ Telephone/Internet, and
+// R&M ↔ IT as HARD MUTUAL EXCLUSIONS. The founder ruling (§13):
+// "supplier/invoice family is CONTEXT. Purchased purpose is
+// AUTHORITY." An IT-family invoice can legitimately contain VoIP
+// (IS_TELEPHONE_INTERNET), hardware repair (IS_REPAIRS_MAINTENANCE),
+// software subscription (IS_IT_SOFTWARE), cloud storage, and
+// cybersecurity. Blanket-excluding those families from an IT cluster
+// pool made the correct account impossible.
+//
+// The rule that survives is PAYROLL (§15): an external ordinary AP
+// invoice with no affirmative payroll evidence must not route to a
+// payroll-only account, because that would post supplier payments
+// through a payroll bucket — a true source/accounting-substance
+// incompatibility, not just semantic disagreement. This one hard
+// gate remains, symmetric.
+//
+// All other purpose-driven compatibility is now scored via
+// `purpose-account-compatibility.ts` at ranking time: the ranker
+// prefers accounts whose FS group has STRONG or VALID compatibility
+// with the CLUSTER'S OWN CONCEPT (not the invoice's overall
+// family), and lexical similarity acts as a tie-breaker between
+// compatible accounts. That preserves per-line purpose authority
+// (§22) without excluding legitimate cross-family purchases.
 const INCOMPATIBLE_FSGROUP_FAMILIES: Record<string, Set<string>> = {
-  IS_IT_SOFTWARE: new Set([
-    "IS_REPAIRS_MAINTENANCE",
-    "IS_TELEPHONE_INTERNET",
-    "IS_PAYROLL",
-  ]),
-  IS_REPAIRS_MAINTENANCE: new Set([
-    "IS_IT_SOFTWARE",
-    "IS_PAYROLL",
-  ]),
-  IS_TELEPHONE_INTERNET: new Set([
-    "IS_IT_SOFTWARE",
-    "IS_PAYROLL",
-  ]),
+  // Payroll HARD gate — symmetric.
   IS_PAYROLL: new Set([
-    // Payroll is broadly incompatible with any non-payroll cluster.
-    // The founder-frozen `rulePayrollAccountExcluded` already fires
-    // in the document-level eligibility service (Payroll semantics
-    // slice), but the allocation composer's per-cluster pool does
-    // NOT run that service. Encoding payroll here makes the same
-    // guard apply to per-cluster candidate filtering — no more
-    // "Wages - Maintenance" sneaking into the it_services cluster
-    // via lexical overlap on "Maintenance".
     "IS_IT_SOFTWARE",
     "IS_REPAIRS_MAINTENANCE",
     "IS_TELEPHONE_INTERNET",
     "IS_LICENCES_PERMITS",
     "IS_MEMBERSHIPS_SUBS",
+    "IS_UTILITIES",
+    "IS_OFFICE_SUPPLIES",
+    "IS_PROFESSIONAL_FEES",
+    "IS_INSURANCE",
+    "IS_INTEREST_EXPENSE",
+    "IS_BANK_CHARGES",
+    "IS_COGS_FOOD",
+    "IS_COGS_BEV",
+    "IS_FB_SUPPLIES",
+    "IS_COURSE_MAINT",
+    "IS_OTHER_EXPENSES",
+    "IS_COMMUNICATIONS",
   ]),
+  // Reverse edges of the payroll gate — a NON-payroll cluster must
+  // never accept a payroll account.
+  IS_IT_SOFTWARE: new Set(["IS_PAYROLL"]),
+  IS_REPAIRS_MAINTENANCE: new Set(["IS_PAYROLL"]),
+  IS_TELEPHONE_INTERNET: new Set(["IS_PAYROLL"]),
+  IS_LICENCES_PERMITS: new Set(["IS_PAYROLL"]),
+  IS_MEMBERSHIPS_SUBS: new Set(["IS_PAYROLL"]),
+  IS_UTILITIES: new Set(["IS_PAYROLL"]),
+  IS_OFFICE_SUPPLIES: new Set(["IS_PAYROLL"]),
+  IS_PROFESSIONAL_FEES: new Set(["IS_PAYROLL"]),
+  IS_INSURANCE: new Set(["IS_PAYROLL"]),
+  IS_INTEREST_EXPENSE: new Set(["IS_PAYROLL"]),
+  IS_BANK_CHARGES: new Set(["IS_PAYROLL"]),
+  IS_COGS_FOOD: new Set(["IS_PAYROLL"]),
+  IS_COGS_BEV: new Set(["IS_PAYROLL"]),
+  IS_FB_SUPPLIES: new Set(["IS_PAYROLL"]),
+  IS_COURSE_MAINT: new Set(["IS_PAYROLL"]),
+  IS_OTHER_EXPENSES: new Set(["IS_PAYROLL"]),
+  IS_COMMUNICATIONS: new Set(["IS_PAYROLL"]),
 };
 
 /** Return TRUE when a cluster whose concept hints at `clusterFsGroupHints`

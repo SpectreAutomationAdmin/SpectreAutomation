@@ -24,10 +24,10 @@ import { EXTRACTION_RULE_VERSION } from "./types";
 // MUST be bumped in this file whenever supplier-extract.ts changes.
 export const SUPPLIER_EXTRACT_VERSION      = 3;   // 15Q rev + 15R rev + person-with-credential + region suffix + two-word min
 export const LINE_ITEMS_EXTRACT_VERSION    = 5;   // 15Q rev + summary-tail refactor + 221178 follow-on generalized totals-block classifier + Ranker Authority slice: empty-description fallback + carry-forward rejection
-export const TAX_RECONCILE_VERSION         = 2;   // 15Q rev
+export const TAX_RECONCILE_VERSION         = 3;   // Phase 4R: multi-tax (label,amount) dedup + residual reconciliation for CPA-shape multi-GST invoices
 export const IDENTIFIER_TAXONOMY_VERSION   = 1;
 export const ECONOMIC_PURPOSE_VERSION      = 2;   // + 221178 IT-taxonomy slice: CYBERSECURITY_SERVICE concept + backup/storage cues on SOFTWARE_SUBSCRIPTION
-export const GL_RECOMMEND_VERSION          = 5;   // 15Q rev + IS_MEMBERSHIPS_SUBS taxonomy + posting-eligibility separation + threshold 60 + 221178 IT-taxonomy: it_services / software_subscription synonym expansion + cybersecurity_service concept + document-level IT coherence + Ranker Authority: family-incompatibility matrix (symmetric) with payroll gate at composer level
+export const GL_RECOMMEND_VERSION          = 6;   // Phase 4R: family-incompatibility now payroll-only (removed broad IT↔R&M / IT↔Telecom exclusions); IT-dominant reclassifier narrowed to generic R&M only, preserving specific R&M children (equipment_repair, building_maintenance, course_maintenance)
 
 /**
  * The composite AP analysis version. Written to
