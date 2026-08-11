@@ -477,14 +477,19 @@ describe("Phase 4R · static architectural guard against post-ranking GL overrid
     // gate now runs in the facade upstream of canonical ranking;
     // PREFERRED / INCOMPATIBLE verdicts become CAPITAL_NATURE
     // observations (NATURE_GATE_PREFERRED / NATURE_GATE_CONTRADICTED).
-    // Ceiling is now 2. A NEW site (count > 2) is architectural
-    // regression.
-    const EXPECTED_MAX_SITES_DURING_REFACTOR = 2;
+    // Phase 3.5 (Group D migration, 2026-08-11) reduced count from
+    // 2 to 1 by eliminating the Slice 5.3 object-authority guard
+    // (durable-asset context vs interest/fee account name-regex).
+    // Replaced with taxonomy-based (fsGroupKey) scoring evidence in
+    // the CAPITAL_NATURE family (OBJECT_ROLE_CONTRADICTION), defeasible
+    // via hasFinancingEvidence. Ceiling is now 1. A NEW site (count > 1)
+    // is architectural regression.
+    const EXPECTED_MAX_SITES_DURING_REFACTOR = 1;
     expect(
       overrideMatches.length,
       `analyse.ts contains ${overrideMatches.length} \`gl = { ...gl, accountNumber: ... }\` `
-      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} after Phase 3.4). `
-      + `A NEW site indicates architectural regression. Groups D-E must eliminate the remaining sites.`,
+      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} after Phase 3.5). `
+      + `A NEW site indicates architectural regression. Group E (field-quality abstention as policy wrapper) must eliminate the last site.`,
     ).toBeLessThanOrEqual(EXPECTED_MAX_SITES_DURING_REFACTOR);
     console.log(`[static-guard] analyse.ts override sites: ${overrideMatches.length} (target after Phase 3: 0)`);
   });

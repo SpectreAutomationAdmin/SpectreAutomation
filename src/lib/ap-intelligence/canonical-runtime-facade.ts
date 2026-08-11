@@ -203,6 +203,25 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     args.capital.state === "CAPITAL" ? 80
     : args.capital.state === "OPERATING" ? 80
     : (capitalDecisionResolved === "REPAIR_MAINTENANCE" ? natureConfidence : 0);
+  // Phase 4R · Phase 3.5 (Group D) — durable-asset context signal
+  // computed from purchased-object evidence. Same rule the deleted
+  // Slice 5.3 object-authority guard used, moved here so it becomes
+  // pre-ranking scoring evidence via NormalisedTransactionInterpretation.
+  let hasHighQualityDurableAssetContext = false;
+  let hasFinancingEvidenceForRanker = false;
+  if (args.purchasedObjects != null && args.purchasedObjects.length > 0) {
+    const primary = [...args.purchasedObjects]
+      .sort((a, b) => (b.extension ?? 0) - (a.extension ?? 0))[0];
+    hasHighQualityDurableAssetContext = !!primary
+      && primary.evidenceQuality === "HIGH"
+      && (
+        primary.objectRole === "COMPLETE_MACHINE"
+        || primary.objectRole === "SERIALIZED_COMPONENT"
+        || (primary.objectRole === "UNKNOWN"
+            && primary.brandCandidates.length > 0
+            && primary.modelCandidates.length > 0)
+      );
+  }
   // Phase 4R · Phase 3.4 (Group C) — pre-ranking compatibility-gate
   // evaluation. Runs the founder-approved compatibility gate for every
   // eligible account against the capital decision + product identity +
@@ -218,6 +237,7 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
   if (args.capitalDecisionFull != null && args.purchasedObjects != null && args.productIdentity != null) {
     const cipEvidence = detectCipEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
     const financingEvidence = detectFinancingEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
+    hasFinancingEvidenceForRanker = financingEvidence.found;
     const txFuncSignals = args.transactionFunctionalSignals
       ?? args.purchasedObjects.map((o) => o.description).filter(Boolean);
     const primaryObjectType = args.productIdentity.selected?.objectType ?? null;
@@ -255,6 +275,8 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     natureIsDefensible,
     preferredAccountNumbers,
     contradictedAccountNumbers,
+    hasHighQualityDurableAssetContext,
+    hasFinancingEvidence: hasFinancingEvidenceForRanker,
     departmentKey: args.departmentKey,
     departmentAccountNamePatterns: args.departmentAccountNamePatterns,
     canonicalLineItems: args.canonicalLineItems.map((li) => ({
@@ -461,6 +483,7 @@ function mapEvidenceKindToLegacy(kind: string): string {
     case "RM_EXPENSE_CONTRADICTION":
     case "CAPITAL_ACCOUNT_CONTRADICTION":
     case "NATURE_GATE_CONTRADICTED":
+    case "OBJECT_ROLE_CONTRADICTION":
       return "CONTRADICTION_PENALTY";
     case "DEPARTMENT_AFFINITY":
     case "ACCOUNT_ROLE_MATCH":

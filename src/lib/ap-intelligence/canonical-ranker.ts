@@ -133,6 +133,24 @@ export interface NormalisedTransactionInterpretation {
    *  scoring evidence inside the single canonical rank. */
   preferredAccountNumbers?: ReadonlyArray<string>;
   contradictedAccountNumbers?: ReadonlyArray<string>;
+
+  /** Phase 4R · Phase 3.5 (Group D) — purchased-object substance signal.
+   *  True when the primary purchased object is HIGH-quality evidence of
+   *  a durable-asset context (COMPLETE_MACHINE / SERIALIZED_COMPONENT /
+   *  UNKNOWN with brand+model). Used by canonical scoring to contradict
+   *  fee-family EXPENSE accounts (IS_INTEREST_EXPENSE / IS_BANK_CHARGES
+   *  / IS_MERCHANT_FEES) by TAXONOMY (fsGroupKey) — not by account-name
+   *  regex — when the transaction clearly represents a physical purchase
+   *  and no financing evidence is present. Replaces Group D's
+   *  post-canonical object-authority guard. */
+  hasHighQualityDurableAssetContext?: boolean;
+  /** Phase 4R · Phase 3.5 (Group D) — financing signal (from facade
+   *  detectFinancingEvidence). When true, the transaction may
+   *  legitimately involve interest/fee accounts even if a durable asset
+   *  is also present (e.g., financed equipment lease). Used to guard
+   *  the durable-asset-vs-fee contradiction so it defeasibly disables
+   *  when the transaction genuinely represents financing. */
+  hasFinancingEvidence?: boolean;
 }
 
 /** Complete input to `rankCanonical`. */
@@ -377,6 +395,10 @@ const WEIGHTS = {
   // purchasedObjects + capital decision + CIP/financing evidence.
   NATURE_GATE_PREFERRED: 12,         // account passes gate as PREFERRED
   NATURE_GATE_CONTRADICTED: -20,     // account rejected as INCOMPATIBLE/CONTRADICTED
+  // Phase 4R · Phase 3.5 (Group D) — durable-asset object contradicts
+  // fee-family EXPENSE accounts (fsGroupKey taxonomy-based, not name
+  // regex). Defeasible: only fires when financing evidence is absent.
+  OBJECT_ROLE_CONTRADICTION: -22,    // durable asset with no financing evidence vs IS_INTEREST_EXPENSE / IS_BANK_CHARGES / IS_MERCHANT_FEES
   // VENDOR_HISTORY family (max 20)
   VENDOR_DEFAULT_MATCH: 15,
   PRIOR_CODING_MATCH: 12,
@@ -842,6 +864,38 @@ function scoreCandidateAgainstTransaction(
       code: "nature_gate_contradicted",
       penalty: -WEIGHTS.NATURE_GATE_CONTRADICTED,
       description: `compatibility gate rejected account "${account.name}"`,
+    });
+  }
+
+  // Phase 4R · Phase 3.5 (Group D) — taxonomy-based durable-asset vs
+  // fee-family contradiction. Replaces the post-canonical
+  // object-authority guard that used to clear gl.accountNumber via
+  // regex on account NAME. Now uses fsGroupKey taxonomy (§3 founder
+  // constraint: contradiction derives from transaction interpretation
+  // AND account taxonomy/role, not from account-name regex or
+  // account-number literals). Defeasible via hasFinancingEvidence so
+  // genuine interest/financing invoices are not suppressed.
+  const FEE_FAMILY_FS_GROUPS = new Set([
+    "IS_INTEREST_EXPENSE",
+    "IS_BANK_CHARGES",
+    "IS_MERCHANT_FEES",
+  ]);
+  if (
+    transaction.hasHighQualityDurableAssetContext
+    && !transaction.hasFinancingEvidence
+    && account.fsGroupKey
+    && FEE_FAMILY_FS_GROUPS.has(account.fsGroupKey)
+  ) {
+    observations.push({
+      family: "CAPITAL_NATURE",
+      kind: "OBJECT_ROLE_CONTRADICTION",
+      contribution: WEIGHTS.OBJECT_ROLE_CONTRADICTION,
+      description: `durable-asset object context is incompatible with fee-family account (fsGroup=${account.fsGroupKey})`,
+    });
+    contradictions.push({
+      code: "durable_asset_object_vs_fee_family_account",
+      penalty: -WEIGHTS.OBJECT_ROLE_CONTRADICTION,
+      description: `Transaction has HIGH-quality durable-asset purchased-object evidence and no financing evidence; account "${account.name}" (fsGroup=${account.fsGroupKey}) is a fee-family account and cannot post this transaction.`,
     });
   }
 

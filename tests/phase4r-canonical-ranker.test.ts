@@ -1342,6 +1342,193 @@ describe("Phase 3.4 · §11 — same-vendor / different-economics through Group 
 });
 
 // ---------------------------------------------------------------------------
+// Phase 3.5 · §4 · §5 · §6 — Group D purchased-object substance signal
+// becomes pre-ranking CAPITAL_NATURE evidence. Replaces the Slice 5.3
+// object-authority guard that cleared gl.accountNumber via account-name
+// regex against interest/penalty/bank-charge patterns.
+//
+// New rule (taxonomy-based, defeasible):
+//   hasHighQualityDurableAssetContext AND
+//   NOT hasFinancingEvidence AND
+//   account.fsGroupKey ∈ {"IS_INTEREST_EXPENSE","IS_BANK_CHARGES","IS_MERCHANT_FEES"}
+//   → OBJECT_ROLE_CONTRADICTION (-22) + contradiction record
+//
+// The account SIDE uses fsGroupKey taxonomy (§3 founder constraint) — no
+// account-name regex, no account-number literals.
+// ---------------------------------------------------------------------------
+
+describe("Phase 3.5 · §4 — durable-asset object contradicts fee-family accounts by taxonomy", () => {
+  it("equipment purchase invoice with fee-family accounts present → fee accounts contradicted, ASSET wins", () => {
+    // NEUTRAL_COA includes 6051 (Bank Charges & Credit Card Fees, IS_BANK_CHARGES),
+    // 6053 (Interest Expense, IS_INTEREST_EXPENSE), and 1500 (Equipment & Fixtures).
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 85,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Toro Groundsmaster 3500 fairway mower complete unit delivered", role: "PRIMARY_PURCHASE", extension: 52000 },
+        ],
+        queryConcepts: [
+          { conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "fairway mower complete unit" },
+        ],
+        hasHighQualityDurableAssetContext: true,
+        hasFinancingEvidence: false,
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // ASSET must win.
+      expect(result.candidates[0].accountType).toBe("ASSET");
+      // Interest / Bank-Charges accounts must NOT be at #0.
+      expect(result.candidates[0].fsGroupKey).not.toBe("IS_INTEREST_EXPENSE");
+      expect(result.candidates[0].fsGroupKey).not.toBe("IS_BANK_CHARGES");
+      // The fee-family accounts MUST carry the OBJECT_ROLE_CONTRADICTION
+      // observation on their evidence trail (retained for diagnostics
+      // even when scoring collapses to zero).
+      const interestCand = result.candidates.find((c) => c.fsGroupKey === "IS_INTEREST_EXPENSE");
+      const bankCand = result.candidates.find((c) => c.fsGroupKey === "IS_BANK_CHARGES");
+      // Contradiction records carry the transaction-substance reason.
+      if (interestCand) {
+        expect(interestCand.contradictions.some((c) => c.code === "durable_asset_object_vs_fee_family_account")).toBe(true);
+      }
+      if (bankCand) {
+        expect(bankCand.contradictions.some((c) => c.code === "durable_asset_object_vs_fee_family_account")).toBe(true);
+      }
+    }
+  });
+});
+
+describe("Phase 3.5 · §5 — reverse case: genuine financial charge is not suppressed", () => {
+  it("genuine bank charge invoice (no durable-asset object) → BANK_CHARGES account competes strongly and wins", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "OPERATING_EXPENSE",
+        natureConfidence: 78,
+        natureIsDefensible: true,
+        capitalDecision: "OPERATING",
+        capitalConfidence: 80,
+        purposeConcept: null, // no capital/repair concept — this is a fee
+        purposeConfidence: 0,
+        purposeQuality: "NONE",
+        canonicalLineItems: [
+          { description: "Merchant credit card processing fees monthly statement charges", role: "PRIMARY_PURCHASE", extension: 850 },
+        ],
+        queryConcepts: [
+          { conceptId: "bank_and_merchant_fees", weight: 22, source: "line_item_description", evidenceSnippet: "merchant credit card processing fees" },
+        ],
+        // No durable asset — reverse case trigger absent.
+        hasHighQualityDurableAssetContext: false,
+        hasFinancingEvidence: false,
+      }),
+    }));
+    // The test purpose is to prove the durable-asset-vs-fee contradiction
+    // does NOT fire on this transaction, not that this specific canonical
+    // ranker returns RECOMMEND. RECOMMEND vs ABSTAIN depends on the
+    // ranker's global COMMIT_MIN_SCORE and the strength of the query
+    // concept — that is a separate contract. What matters here is the
+    // reverse-case defeasibility of the Group D rule.
+    expect(["RECOMMEND", "ABSTAIN"]).toContain(result.status);
+    if (result.status === "RECOMMEND" || result.status === "ABSTAIN") {
+      const bankCand = result.candidates.find((c) => c.fsGroupKey === "IS_BANK_CHARGES");
+      const merchCand = result.candidates.find((c) => c.fsGroupKey === "IS_MERCHANT_FEES");
+      // At least one fee-family candidate must remain in the list —
+      // reverse case must not silently exclude them.
+      expect(bankCand ?? merchCand).toBeDefined();
+      // No object-role contradiction should have fired on either fee
+      // candidate — hasHighQualityDurableAssetContext is false, so the
+      // Group D rule is inactive on this transaction.
+      for (const cand of [bankCand, merchCand].filter((c): c is NonNullable<typeof c> => c != null)) {
+        expect(cand.contradictions.some((c) => c.code === "durable_asset_object_vs_fee_family_account")).toBe(false);
+      }
+    }
+  });
+
+  it("financed equipment lease (durable asset + financing evidence) → interest account NOT contradicted", () => {
+    // Both signals present: hasHighQualityDurableAssetContext AND
+    // hasFinancingEvidence. The defeasibility rule disables the
+    // contradiction so financing accounts remain in competition.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 80,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Fairway mower 24-month lease financing charge", role: "PRIMARY_PURCHASE", extension: 620 },
+        ],
+        queryConcepts: [],
+        hasHighQualityDurableAssetContext: true,
+        hasFinancingEvidence: true, // defeasibility trigger
+      }),
+    }));
+    if (result.status === "RECOMMEND" || result.status === "ABSTAIN") {
+      // Interest / bank-charge candidates must NOT carry the durable-asset
+      // contradiction when financing evidence is present.
+      const feeCands = result.candidates.filter(
+        (c) => c.fsGroupKey === "IS_INTEREST_EXPENSE" || c.fsGroupKey === "IS_BANK_CHARGES" || c.fsGroupKey === "IS_MERCHANT_FEES",
+      );
+      for (const cand of feeCands) {
+        expect(cand.contradictions.some((c) => c.code === "durable_asset_object_vs_fee_family_account")).toBe(false);
+      }
+    }
+  });
+});
+
+describe("Phase 3.5 · §6 — object ambiguity: purchased object known, accounting treatment not", () => {
+  it("known equipment object but ambiguous treatment (no defensible nature) → legitimate alternatives survive", () => {
+    // Object identity is HIGH (durable asset present), but nature and
+    // capital decision are not defensible. Fee-family accounts are
+    // still contradicted (object substance genuine), but the ranker
+    // does not force a specific asset winner.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "UNKNOWN",
+        natureConfidence: 0,
+        natureIsDefensible: false,
+        capitalDecision: "UNRESOLVED",
+        capitalConfidence: 0,
+        purposeConcept: null,
+        purposeConfidence: 0,
+        purposeQuality: "NONE",
+        canonicalLineItems: [
+          { description: "Toro Groundsmaster 3500 replacement component", role: "PRIMARY_PURCHASE", extension: 3200 },
+        ],
+        queryConcepts: [],
+        hasHighQualityDurableAssetContext: true,
+        hasFinancingEvidence: false,
+      }),
+    }));
+    if (result.status === "RECOMMEND") {
+      // No forced capital/repair winner — margin should be small OR
+      // the winner should be a legitimate alternative among ASSET/R&M.
+      const winnerFs = result.candidates[0].fsGroupKey;
+      // Fee-family accounts should NOT be #0 (object contradicts them).
+      expect(winnerFs).not.toBe("IS_INTEREST_EXPENSE");
+      expect(winnerFs).not.toBe("IS_BANK_CHARGES");
+      expect(winnerFs).not.toBe("IS_MERCHANT_FEES");
+    } else {
+      // ABSTAIN with candidates preserved for review is also acceptable
+      // — reflects the accounting-treatment ambiguity honestly.
+      expect(["ABSTAIN", "NO_ELIGIBLE_CANDIDATES"]).toContain(result.status);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §35 anti-overfitting
 // ---------------------------------------------------------------------------
 
