@@ -1760,31 +1760,28 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
         transactionalTextValue ?? "",
       ].filter((s) => typeof s === "string" && s.length > 0),
       additionalEvidenceTexts: [transactionalTextValue ?? ""].filter(Boolean),
+      // Phase 4R · Phase 3.6 (Group E) — field-quality gate result
+      // passed to the facade as recommendation-policy input, NOT as a
+      // selector. The facade's evaluateRecommendationPolicy() consumes
+      // it to decide RECOMMEND / ABSTAIN_QUALITY. Winner provenance
+      // is preserved on gl.canonicalWinnerAccountNumber even under
+      // ABSTAIN_QUALITY (§4). Replaces the deleted post-canonical
+      // gl.accountNumber = null override.
+      fieldQualityEligible: fieldQualityGate.glEligible,
+      fieldQualityAbstentionReasons: fieldQualityGate.abstentionReasons,
     });
   }
+  // Phase 4R · Phase 3.6 (Group E, 2026-08-11) — the post-canonical
+  // gl.accountNumber = null override for field-quality abstention has
+  // been deleted. The facade now applies the recommendation policy
+  // during projection: gl.recommendationStatus === "ABSTAIN_QUALITY"
+  // when field-quality is insufficient (winner provenance preserved
+  // via gl.canonicalWinnerAccountNumber). We continue to clear the
+  // allocation cardCategory under the same condition here — that
+  // migration belongs to Phase 5 (allocation-ranker alignment); the
+  // allocation surface is scoped separately from single-GL selection.
   let gatedAllocations = allocations;
-  if (!fieldQualityGate.glEligible) {
-    // Force GL abstention. Preserves candidate list for diagnostics
-    // but nulls the SELECTED account so the projection displays
-    // "review required" with a truthful reason.
-    gl = {
-      ...gl,
-      accountNumber: null,
-      accountName: null,
-      categoryKey: null,
-      fsGroupKey: null,
-      source: "NONE",
-      confidence: 0,
-      reason: `abstained_field_quality:${fieldQualityGate.abstentionReasons.join(",")}`,
-      candidates: gl.candidates ?? [],
-      autoApprovalEligible: false,
-    };
-    // §9 rule: contaminated extraction must not yield a confident
-    // multi-GL allocation either. Preserve the entries for
-    // diagnostics (auditors may want to see what the ranker would
-    // have produced), but null the SURFACED category and force
-    // requiresReview so the projection does not show a plausible
-    // GL/category. See gl-allocations.AllocationResult shape.
+  if (gl.recommendationStatus === "ABSTAIN_QUALITY") {
     gatedAllocations = {
       ...allocations,
       cardCategory: null,

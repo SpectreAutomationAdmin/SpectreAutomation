@@ -149,6 +149,17 @@ export interface GlRecommendation {
   totalAccountsEvaluated: number;
   requiresReview: boolean;
   splitRecommendations: SplitRecommendation[];
+  // Phase 4R · Phase 3.6 (Group E, 2026-08-11) — explicit
+  // recommendation-status model separated from ranking authority.
+  // See src/lib/ap-intelligence/recommendation-policy.ts for the full
+  // status set. `canonicalWinnerAccountNumber` preserves winner
+  // provenance under ABSTAIN so downstream diagnostics can show
+  // "review required, top-ranked was X" without violating the
+  // single-authority invariant (§4).
+  recommendationStatus?: "RECOMMEND" | "ABSTAIN_QUALITY" | "ABSTAIN_AMBIGUITY" | "ABSTAIN_NO_CANDIDATES" | "ABSTAIN_ANALYSIS_FAILURE";
+  abstentionCategory?: "QUALITY" | "AMBIGUITY" | "NO_CANDIDATES" | "ANALYSIS_FAILURE" | null;
+  abstentionReasons?: string[];
+  canonicalWinnerAccountNumber?: string | null;
 }
 
 export interface GlRecommendationArgs {

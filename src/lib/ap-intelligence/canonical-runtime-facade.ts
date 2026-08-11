@@ -37,6 +37,7 @@ import { resolveAccountSemantics } from "./account-semantics";
 import { detectCipEvidence } from "./account-semantics/cip-evidence";
 import { detectFinancingEvidence } from "./account-semantics/financing-evidence";
 import { evaluateCompatibilityGate } from "./account-semantics/compatibility-gate";
+import { evaluateRecommendationPolicy, type RecommendationDecision } from "./recommendation-policy";
 
 // Local mirror — the ranker's expected debit role vocabulary.
 export type ExpectedDebitRoleLocal = "CAPITAL_ASSET" | "OPERATING_EXPENSE" | "UNKNOWN";
@@ -101,6 +102,15 @@ export interface CanonicalFacadeArgs {
   purchasedObjects?: ReadonlyArray<PurchasedObjectIdentity>;
   transactionFunctionalSignals?: string[];
   additionalEvidenceTexts?: string[];
+  /** Phase 4R · Phase 3.6 (Group E) — field-quality gate result
+   *  computed upstream. Consumed by the recommendation-policy
+   *  evaluator inside the facade; the facade never selects an account
+   *  based on this signal. When true, the canonical winner may be
+   *  presented as a recommendation; when false, the projection
+   *  returns status ABSTAIN_QUALITY with winner provenance
+   *  preserved on `canonicalWinnerAccountNumber` (§4 preservation). */
+  fieldQualityEligible?: boolean;
+  fieldQualityAbstentionReasons?: readonly string[];
 }
 
 /** Runs the canonical ranker and returns a GlRecommendation-shaped
@@ -117,7 +127,13 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     orderBy: { accountNumber: "asc" },
   });
   if (accountsRaw.length === 0) {
-    return emptyGlRecommendation("No chart of accounts is loaded on this club — cannot recommend a GL account.");
+    return {
+      ...emptyGlRecommendation("No chart of accounts is loaded on this club — cannot recommend a GL account."),
+      recommendationStatus: "ABSTAIN_NO_CANDIDATES",
+      abstentionCategory: "NO_CANDIDATES",
+      abstentionReasons: ["no_chart_of_accounts_loaded"],
+      canonicalWinnerAccountNumber: null,
+    };
   }
 
   // 2. Apply Phase-2 accounting eligibility (hard eligibility per §6).
@@ -164,7 +180,13 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     });
   }
   if (eligibleAccounts.length === 0) {
-    return emptyGlRecommendation("No eligible expense or asset accounts survive Phase-2 eligibility for this transaction.");
+    return {
+      ...emptyGlRecommendation("No eligible expense or asset accounts survive Phase-2 eligibility for this transaction."),
+      recommendationStatus: "ABSTAIN_NO_CANDIDATES",
+      abstentionCategory: "NO_CANDIDATES",
+      abstentionReasons: ["no_eligible_accounts_after_phase2_filter"],
+      canonicalWinnerAccountNumber: null,
+    };
   }
 
   // 3. Extract query concepts using the shared primitive (§4 -
@@ -306,12 +328,45 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     postingBlockersByAccount,
   };
   const result = rankCanonical(input);
-  return projectCanonicalToGl(result, filtered.eligible.length);
+
+  // Phase 4R · Phase 3.6 (Group E) — recommendation-quality policy.
+  // Evaluated AFTER canonical ranking but BEFORE projection so the
+  // projected GlRecommendation carries an explicit recommendation
+  // status. This module never selects an account; it only reads
+  // canonical status + field-quality gate result and decides whether
+  // the canonical winner may be presented as an automated
+  // recommendation. Winner provenance is preserved on
+  // `canonicalWinnerAccountNumber` regardless of ABSTAIN reason (§4).
+  const canonicalStatus = result.status;
+  const canonicalWinnerAccountNumber = (canonicalStatus === "RECOMMEND" || canonicalStatus === "ABSTAIN")
+    ? result.candidates[0]?.accountNumber ?? null
+    : null;
+  const canonicalAbstentionReason = canonicalStatus === "ABSTAIN"
+    ? result.abstentionReason
+    : canonicalStatus === "NO_ELIGIBLE_CANDIDATES" || canonicalStatus === "ANALYSIS_FAILURE"
+      ? result.abstentionReason
+      : null;
+  const recommendation = evaluateRecommendationPolicy({
+    canonicalStatus,
+    canonicalWinnerAccountNumber,
+    canonicalAbstentionReason,
+    fieldQualityEligible: args.fieldQualityEligible ?? true,
+    fieldQualityAbstentionReasons: args.fieldQualityAbstentionReasons ?? [],
+  });
+
+  return projectCanonicalToGl(result, filtered.eligible.length, recommendation);
 }
 
 /** Pure projection: CanonicalRankerResult → GlRecommendation.
- *  §11: no business logic, no account selection. */
-function projectCanonicalToGl(result: CanonicalRankerResult, totalAccountsEvaluated: number): GlRecommendation {
+ *  §11: no business logic, no account selection.
+ *  Phase 3.6: accepts a RecommendationDecision from the policy
+ *  evaluator so recommendationStatus/abstentionCategory/reasons +
+ *  winner-provenance are projected consistently. */
+function projectCanonicalToGl(
+  result: CanonicalRankerResult,
+  totalAccountsEvaluated: number,
+  recommendation: RecommendationDecision,
+): GlRecommendation {
   const glCandidates: GlCandidate[] = result.status === "RECOMMEND" || result.status === "ABSTAIN"
     ? result.candidates.map((c) => ({
         accountId: c.accountId,
@@ -337,19 +392,33 @@ function projectCanonicalToGl(result: CanonicalRankerResult, totalAccountsEvalua
     : [];
   if (result.status === "RECOMMEND") {
     const winner = result.candidates[0];
+    // Phase 4R · Phase 3.6 (Group E): even though canonical returned
+    // RECOMMEND, the recommendation-policy may downgrade to
+    // ABSTAIN_QUALITY when upstream extraction is too weak. Legacy
+    // compat: project accountNumber = null in that case while
+    // preserving candidates + winner-provenance (§10). The policy
+    // NEVER selects a different account — it only decides whether
+    // to expose the canonical winner as an automated recommendation.
+    const projectAccount = recommendation.status === "RECOMMEND";
     return {
       ruleVersion: 2,
-      accountNumber: winner.accountNumber,
-      accountName: winner.accountName,
-      categoryKey: winner.categoryKey,
-      fsGroupKey: winner.fsGroupKey,
-      confidence: winner.score,
-      reason: `canonical_ranker:${result.candidates.length}candidates:winner=${winner.accountNumber}(score=${winner.score},margin=${result.separation.marginToRunnerUp}${result.separation.isDeterministicTieBreak ? ",tie" : ""})`,
-      source: "SEMANTIC_MATCH",
+      accountNumber: projectAccount ? winner.accountNumber : null,
+      accountName: projectAccount ? winner.accountName : null,
+      categoryKey: projectAccount ? winner.categoryKey : null,
+      fsGroupKey: projectAccount ? winner.fsGroupKey : null,
+      confidence: projectAccount ? winner.score : null,
+      reason: projectAccount
+        ? `canonical_ranker:${result.candidates.length}candidates:winner=${winner.accountNumber}(score=${winner.score},margin=${result.separation.marginToRunnerUp}${result.separation.isDeterministicTieBreak ? ",tie" : ""})`
+        : recommendation.reason,
+      source: projectAccount ? "SEMANTIC_MATCH" : "NONE",
       candidates: glCandidates,
-      leaderIsPostable: winner.postable,
-      leaderPostingBlockers: [...winner.postingBlockers] as PostingBlocker[],
-      autoApprovalEligible: false,
+      leaderIsPostable: projectAccount ? winner.postable : false,
+      leaderPostingBlockers: projectAccount ? [...winner.postingBlockers] as PostingBlocker[] : [],
+      autoApprovalEligible: recommendation.autoApprovalEligible && projectAccount,
+      recommendationStatus: recommendation.status,
+      abstentionCategory: recommendation.abstentionCategory,
+      abstentionReasons: recommendation.abstentionReasons,
+      canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
       rationale: {
         selectedAccountId: winner.accountId,
         selectedConcept: null,
@@ -376,6 +445,9 @@ function projectCanonicalToGl(result: CanonicalRankerResult, totalAccountsEvalua
     // gl.accountNumber is null (compat with legacy nullable shape),
     // BUT gl.candidates still holds the canonical competition so
     // downstream code can inspect candidates[0] for the winner.
+    // Phase 3.6: recommendation status is either ABSTAIN_QUALITY
+    // (field-quality gate rejected) or ABSTAIN_AMBIGUITY (canonical
+    // itself abstained). Both preserve candidates + canonicalWinner.
     const winner = result.candidates[0];
     return {
       ruleVersion: 2,
@@ -384,12 +456,18 @@ function projectCanonicalToGl(result: CanonicalRankerResult, totalAccountsEvalua
       categoryKey: null,
       fsGroupKey: null,
       confidence: null,
-      reason: `canonical_ranker_abstain:${result.abstentionReason} · candidate #0 was ${winner.accountNumber} (score=${winner.score})`,
+      reason: recommendation.status === "ABSTAIN_QUALITY"
+        ? recommendation.reason
+        : `canonical_ranker_abstain:${result.abstentionReason} · candidate #0 was ${winner.accountNumber} (score=${winner.score})`,
       source: "NONE",
       candidates: glCandidates,
       leaderIsPostable: false,
       leaderPostingBlockers: [],
       autoApprovalEligible: false,
+      recommendationStatus: recommendation.status,
+      abstentionCategory: recommendation.abstentionCategory,
+      abstentionReasons: recommendation.abstentionReasons,
+      canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
       rationale: {
         selectedAccountId: null,
         selectedConcept: null,
@@ -412,7 +490,13 @@ function projectCanonicalToGl(result: CanonicalRankerResult, totalAccountsEvalua
     };
   }
   // NO_ELIGIBLE_CANDIDATES / ANALYSIS_FAILURE — empty.
-  return emptyGlRecommendation(result.abstentionReason);
+  return {
+    ...emptyGlRecommendation(recommendation.reason),
+    recommendationStatus: recommendation.status,
+    abstentionCategory: recommendation.abstentionCategory,
+    abstentionReasons: recommendation.abstentionReasons,
+    canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
+  };
 }
 
 function emptyGlRecommendation(reason: string): GlRecommendation {
