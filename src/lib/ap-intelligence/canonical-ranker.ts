@@ -200,8 +200,11 @@ export type CanonicalEvidenceFamily =
   | "VENDOR_HISTORY"
   | "DEPARTMENT_CONTEXT";
 
-/** Machine-readable evidence emitted by the ranker. Phase 4 will add
- *  `role: "DECISION" | "DIAGNOSTIC"` derived empirically. */
+/** Machine-readable evidence emitted by the ranker. Phase 4 added
+ *  `role: "DECISION" | "DIAGNOSTIC"` assigned during MAX-within-family
+ *  collapse (see collapseByFamily). See docs/phase-4-evidence-integrity
+ *  for the empirical derivation of the DECISION rule. */
+export type CanonicalEvidenceRole = "DECISION" | "DIAGNOSTIC";
 export interface CanonicalEvidence {
   family: CanonicalEvidenceFamily;
   /** Sub-kind within family — e.g. "LINE_ITEM_MATCH" / "ONTOLOGY_MATCH" /
@@ -216,6 +219,31 @@ export interface CanonicalEvidence {
    *  score. False when it was suppressed by the family MAX-collapse
    *  (retained for engineering diagnostics per §4). */
   countedTowardScore: boolean;
+  /** Phase 4R · Phase 4 (2026-08-11) — DECISION vs DIAGNOSTIC role.
+   *  DECISION: this observation materially contributes to the
+   *    candidate's accounting reasoning (may feed founder-facing
+   *    explanations, competitor qualification, confidence).
+   *  DIAGNOSTIC: retained for engineering traceability but too weak
+   *    or too correlated to represent substantive accounting support.
+   *
+   *  Empirical rule (derived from observed ranker weights + the
+   *  COMMIT_MIN_SCORE=30 threshold, see calibration in
+   *  docs/phase-4-evidence-integrity.md):
+   *
+   *    Suppressed positives (countedTowardScore=false) → DIAGNOSTIC always
+   *      (they were correlated with a stronger sibling; retained only
+   *      for engineering).
+   *    Contradictions (contribution < 0) with |contribution| >= 10 → DECISION
+   *      (they materially change ranking outcome).
+   *    Positive counted observations with contribution >= 10 → DECISION
+   *      (single observation carries >=1/3 of COMMIT_MIN_SCORE).
+   *    Positive counted observations with contribution >= 5 AND
+   *      family total >= 15 → DECISION (small observation is part of a
+   *      family that materially contributes; family cap ranges 12-40
+   *      so 15 is the "meaningful family narrative" floor).
+   *    Everything else → DIAGNOSTIC.
+   */
+  role: CanonicalEvidenceRole;
 }
 
 /** Machine-readable contradiction reason. */
@@ -431,9 +459,50 @@ interface RawObservation {
   description: string;
 }
 
+/** Phase 4R · Phase 4 (2026-08-11) — empirical DECISION-role rule.
+ *  Assigns role at the point where family totals are known (§4 —
+ *  do not reverse-engineer role in downstream projections).
+ *
+ *  Absolute thresholds are grounded in the ranker's own weights:
+ *    - COMMIT_MIN_SCORE = 30 (canonical winner floor)
+ *    - Individual weights range 5..25 (see WEIGHTS)
+ *    - Family caps: TRANSACTION_TEXT max ~40, TAXONOMY_ALIGNMENT
+ *      max ~30, CAPITAL_NATURE max ~25 (via MAX-within-family)
+ *
+ *  DECISION rule:
+ *    - suppressed positives (countedTowardScore === false) → DIAGNOSTIC
+ *      (a stronger sibling carried the family; this one is retained
+ *      only for engineering traceability)
+ *    - contradictions (contribution < 0) with |contribution| >= 10
+ *      → DECISION (they materially change ranking outcome —
+ *      NATURE_INCOMPATIBLE_PENALTY=-18, RM_EXPENSE_CONTRADICTION=-12,
+ *      NATURE_GATE_CONTRADICTED=-20, OBJECT_ROLE_CONTRADICTION=-22)
+ *    - positive counted observations with |contribution| >= 10
+ *      → DECISION (carries >=1/3 of COMMIT_MIN_SCORE alone)
+ *    - positive counted observations with 5 <= |contribution| < 10
+ *      AND |familyContribution| >= 15 → DECISION (small individual
+ *      observation but part of a meaningfully-contributing family)
+ *    - everything else → DIAGNOSTIC
+ */
+function classifyEvidenceRole(
+  contribution: number,
+  countedTowardScore: boolean,
+  familyContribution: number,
+): CanonicalEvidenceRole {
+  const abs = Math.abs(contribution);
+  const familyAbs = Math.abs(familyContribution);
+  const isContradiction = contribution < 0;
+  if (!countedTowardScore) return "DIAGNOSTIC";
+  if (isContradiction) return abs >= 10 ? "DECISION" : "DIAGNOSTIC";
+  if (abs >= 10) return "DECISION";
+  if (abs >= 5 && familyAbs >= 15) return "DECISION";
+  return "DIAGNOSTIC";
+}
+
 /** Collapse a candidate's raw observations by family (MAX within
  *  family) and emit the CanonicalEvidence array with `countedTowardScore`
- *  markers for diagnostics per §4. */
+ *  + `role` markers per §4. Roles are computed here (not in the
+ *  projection) so downstream code doesn't reverse-engineer them. */
 function collapseByFamily(observations: RawObservation[]): {
   familyContributions: Record<CanonicalEvidenceFamily, number>;
   evidence: CanonicalEvidence[];
@@ -468,15 +537,18 @@ function collapseByFamily(observations: RawObservation[]): {
     // Sum negatives.
     const negativeSum = negative.reduce((s, o) => s + o.contribution, 0);
     familyContributions[family] = winningContribution + negativeSum;
+    const familyTotal = familyContributions[family];
     // Emit evidence — winning observation counted, others suppressed
-    // but retained for diagnostics.
+    // but retained for diagnostics. Role assigned inline per §4.
     for (const o of positive) {
+      const counted = o === winningObs;
       evidence.push({
         family,
         kind: o.kind,
         contribution: o.contribution,
         description: o.description,
-        countedTowardScore: o === winningObs,
+        countedTowardScore: counted,
+        role: classifyEvidenceRole(o.contribution, counted, familyTotal),
       });
     }
     for (const o of negative) {
@@ -486,6 +558,7 @@ function collapseByFamily(observations: RawObservation[]): {
         contribution: o.contribution,
         description: o.description,
         countedTowardScore: true,
+        role: classifyEvidenceRole(o.contribution, true, familyTotal),
       });
     }
   }

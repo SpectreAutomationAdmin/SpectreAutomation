@@ -160,6 +160,11 @@ export interface GlRecommendation {
   abstentionCategory?: "QUALITY" | "AMBIGUITY" | "NO_CANDIDATES" | "ANALYSIS_FAILURE" | null;
   abstentionReasons?: string[];
   canonicalWinnerAccountNumber?: string | null;
+  // Phase 4R · Phase 4 (2026-08-11) — canonical confidence assessment
+  // (evidence-integrity model). Same canonical competition drives
+  // winner + confidence + genuine competitors. See
+  // src/lib/ap-intelligence/canonical-confidence.ts.
+  canonicalConfidence?: import("./canonical-confidence").CanonicalConfidenceAssessment;
 }
 
 export interface GlRecommendationArgs {

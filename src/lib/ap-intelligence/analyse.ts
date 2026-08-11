@@ -21,7 +21,7 @@ import { validateExtractedArithmetic } from "./validate";
 import { resolveVendorForExtraction, type VendorResolveResult } from "./vendor-resolve";
 import { reconcileAgainstAp, type ReconcileResult } from "./reconcile";
 import { classifyCapitalVsOperating, type CapitalVsOperatingRecommendation } from "./capital-vs-operating";
-import { recommendGlAccount, type GlRecommendation, type SplitRecommendation } from "./gl-recommend";
+import { type GlRecommendation, type SplitRecommendation } from "./gl-recommend";
 import { extractVendorProfile, type ExtractedVendorProfile } from "./vendor-profile-extract";
 import { resolveDocumentStorage } from "@/lib/documents/storage";
 import { getSetting } from "@/lib/enterprise/settings";
@@ -1073,75 +1073,13 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     : capital.state === "OPERATING" ? "OPERATING_EXPENSE"
     : "UNKNOWN";
 
-  let gl = await recommendGlAccount({
-    clubId: args.clubId,
-    vendorId: vendor.state === "MATCHED" ? vendor.candidates[0].id : null,
-    capitalState: capital.state,
-    capitalClass: capital.capitalClass,
-    // Sprint 3 · Checkpoint 15L — pass the extraction so the recommender
-    // can do a name-keyword search against the tenant's COA even when
-    // no vendor record exists yet (the founder-observed Microsoft case).
-    extraction,
-    // Sprint 3 · Checkpoint 15T — hand the recommender the classifier
-    // output produced HERE. This is the only path that carries the
-    // full-document-phrase evidence into the GL boost logic; the
-    // recommender's own classifier call cannot see the raw text.
-    economicPurposeCandidates: economicPurpose,
-    // Sprint 3 · Checkpoint 15U — pass the full extracted document
-    // text + the richer line items with tax classification. Both
-    // feed the query-concept extractor's document-phrase and line-
-    // item channels respectively.
-    //
-    // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #4+#6) —
-    // when a defensible transactional-text view exists, pass THAT
-    // to the ranker's document-phrase channel instead of the raw
-    // pdfText. Supplier / recipient / footer / policy regions are
-    // excluded so document-phrase evidence cannot fire on
-    // "Telephone" / "Internet" appearing in a supplier address
-    // block or "finance charge" appearing in a terms paragraph.
-    // Falls back to raw pdfText when transactional text is empty
-    // (image-only PDF, OCR pending) to preserve legacy behaviour.
-    fullDocumentText:
-      transactionalTextValue != null && transactionalTextValue.trim().length > 0
-        ? transactionalTextValue
-        : (pdfOk ? pdfText : null),
-    extractedLineItems: lineItemsExtracted,
-    // Post-16H Phase 2 — eligibility context.
-    eligibilityContext: {
-      expectedDebitRole,
-      capitalizationEvidence: {
-        supported: capital.state === "CAPITAL",
-        confidence: capital.state === "CAPITAL" ? 80 : 0,
-      },
-      // Sprint 3 · 221178 semantics slice (2026-08-10) — affirmative
-      // payroll-evidence flag. When FALSE / absent, the eligibility
-      // gate excludes PAYROLL_ONLY accounts (fsGroupKey ===
-      // "IS_PAYROLL") from the ranker's candidate pool, closing the
-      // 221178 defect where "Service Maintenance Fee" landed on
-      // "6008 Wages - Maintenance" purely by lexical overlap.
-      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
-        .detectPayrollEvidence({
-          vendorNames: [
-            extraction.vendor.guessedName,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
-          ],
-          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
-          documentText: pdfOk ? pdfText : null,
-        }).hasPayrollEvidence,
-    },
-  });
-  const confidenceDimensions = computeConfidenceDimensions({
-    supplierExtraction,
-    extraction,
-    lineItemsExtracted,
-    taxReconciliation,
-    printedSubtotal,
-    printedTax,
-    printedTotal,
-    vendorResolve: vendor,
-    gl,
-  });
+  // Phase 4R · Phase 4 (2026-08-11) — legacy Pipeline A ranker
+  // (`recommendGlAccount`) removed. Confidence dimensions are now
+  // computed AFTER the canonical facade runs, using the canonical
+  // winner as the `glClassification` dimension input. This eliminates
+  // the last runtime path where a document-level GL competition
+  // executed in parallel to the canonical ranker.
+  let gl: GlRecommendation;
 
   // Sprint 3 · Phase 4 Slice 5.2 (2026-08-08, amendment #2+#6) —
   // post-base-ranker purpose-compatibility guard. When the canonical
@@ -1788,6 +1726,23 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       requiresReview: true,
     };
   }
+
+  // Phase 4R · Phase 4 (2026-08-11) — confidenceDimensions runs
+  // AFTER canonical so the glClassification dimension is fed by the
+  // canonical winner (or ABSTAIN reason), not by a legacy Pipeline A
+  // guess. Eliminates the last "canonical chooses winner while legacy
+  // ranker explains confidence" architectural split.
+  const confidenceDimensions = computeConfidenceDimensions({
+    supplierExtraction,
+    extraction,
+    lineItemsExtracted,
+    taxReconciliation,
+    printedSubtotal,
+    printedTax,
+    printedTotal,
+    vendorResolve: vendor,
+    gl,
+  });
 
 
   // Sprint 3 · Phase 4 Slice 5.3 completion pass (2026-08-08, §31

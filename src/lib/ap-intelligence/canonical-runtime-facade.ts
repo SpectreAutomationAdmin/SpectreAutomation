@@ -38,6 +38,7 @@ import { detectCipEvidence } from "./account-semantics/cip-evidence";
 import { detectFinancingEvidence } from "./account-semantics/financing-evidence";
 import { evaluateCompatibilityGate } from "./account-semantics/compatibility-gate";
 import { evaluateRecommendationPolicy, type RecommendationDecision } from "./recommendation-policy";
+import { assessCanonicalConfidence, type CanonicalConfidenceAssessment } from "./canonical-confidence";
 
 // Local mirror — the ranker's expected debit role vocabulary.
 export type ExpectedDebitRoleLocal = "CAPITAL_ASSET" | "OPERATING_EXPENSE" | "UNKNOWN";
@@ -354,7 +355,13 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     fieldQualityAbstentionReasons: args.fieldQualityAbstentionReasons ?? [],
   });
 
-  return projectCanonicalToGl(result, filtered.eligible.length, recommendation);
+  // Phase 4R · Phase 4 (2026-08-11) — canonical confidence assessment.
+  // Derives HIGH/MODERATE/LOW/REVIEW_REQUIRED from the same canonical
+  // competition + recommendation decision. Genuine competitors are
+  // qualified from candidates only — no parallel alternate pool.
+  const confidence = assessCanonicalConfidence({ canonical: result, recommendation });
+
+  return projectCanonicalToGl(result, filtered.eligible.length, recommendation, confidence);
 }
 
 /** Pure projection: CanonicalRankerResult → GlRecommendation.
@@ -366,6 +373,7 @@ function projectCanonicalToGl(
   result: CanonicalRankerResult,
   totalAccountsEvaluated: number,
   recommendation: RecommendationDecision,
+  confidence: CanonicalConfidenceAssessment,
 ): GlRecommendation {
   const glCandidates: GlCandidate[] = result.status === "RECOMMEND" || result.status === "ABSTAIN"
     ? result.candidates.map((c) => ({
@@ -419,6 +427,7 @@ function projectCanonicalToGl(
       abstentionCategory: recommendation.abstentionCategory,
       abstentionReasons: recommendation.abstentionReasons,
       canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
+      canonicalConfidence: confidence,
       rationale: {
         selectedAccountId: winner.accountId,
         selectedConcept: null,
@@ -468,6 +477,7 @@ function projectCanonicalToGl(
       abstentionCategory: recommendation.abstentionCategory,
       abstentionReasons: recommendation.abstentionReasons,
       canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
+      canonicalConfidence: confidence,
       rationale: {
         selectedAccountId: null,
         selectedConcept: null,
@@ -496,6 +506,7 @@ function projectCanonicalToGl(
     abstentionCategory: recommendation.abstentionCategory,
     abstentionReasons: recommendation.abstentionReasons,
     canonicalWinnerAccountNumber: recommendation.canonicalWinnerAccountNumber,
+    canonicalConfidence: confidence,
   };
 }
 
