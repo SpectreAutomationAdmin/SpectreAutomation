@@ -1402,30 +1402,28 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       })(),
       capitalState,
       source: noCoa ? null : ((gl?.source ?? "NONE") as ApInvoiceCardIntelligence["category"]["source"]),
-      // Phase 4R FINAL evidence-authority (2026-08-11) — semantic-
-      // admissibility filter (fsGroupKey OR categoryKey match).
-      // Popover alternates share the same competitive-set semantics
-      // as GL confidence (§28 "confidence popover alternatives must
-      // use the same competitive set"). Never again displays
-      // "Nearest alternative: Bank Charges" for a Grounds Equipment
-      // winner merely because Bank Charges ranked second numerically.
+      // Phase 4R FINAL closure (2026-08-11) — popover alternates use
+      // the SAME evidence-authority filter as buildConfidenceInputs.gl
+      // (§28 "confidence popover alternatives must use the same
+      // competitive set"). A candidate is only shown as a "nearest
+      // alternative" when it has SUBSTANTIVE evidence — never merely
+      // because it shares a fsGroupKey or categoryKey or has lexical
+      // overlap with an account name.
       alternates: (() => {
         if (noCoa || !gl?.candidates) return [];
-        const winnerFsGroupKey = gl.candidates[0]?.fsGroupKey ?? null;
-        const winnerCategoryKey = gl.candidates[0]?.categoryKey ?? null;
-        const runnersUp = gl.candidates.slice(1);
-        const filtered = (winnerFsGroupKey != null || winnerCategoryKey != null)
-          ? runnersUp.filter((c) => {
-              const fsGroupMatch = winnerFsGroupKey != null && c.fsGroupKey === winnerFsGroupKey;
-              const categoryMatch = winnerCategoryKey != null && c.categoryKey === winnerCategoryKey;
-              return fsGroupMatch || categoryMatch;
-            })
-          : runnersUp;
-        return filtered.slice(0, 4).map((c) => ({
-          accountNumber: c.accountNumber,
-          accountName: c.accountName,
-          confidence: c.confidence,
-        }));
+        const SUBSTANTIVE = new Set([
+          "LINE_ITEM_MATCH", "ECONOMIC_PURPOSE", "DOCUMENT_PHRASE",
+          "PRIOR_CODING", "VENDOR_DEFAULT", "CAPITAL_CLASS_MAP",
+        ]);
+        return gl.candidates
+          .slice(1)
+          .filter((c) => (c.evidence ?? []).some((e) => SUBSTANTIVE.has(e.kind)))
+          .slice(0, 4)
+          .map((c) => ({
+            accountNumber: c.accountNumber,
+            accountName: c.accountName,
+            confidence: c.confidence,
+          }));
       })(),
     },
     gstVerification: gstResult.state,
@@ -2068,16 +2066,78 @@ function buildConfidenceInputs(args: {
   //
   //   Fallback: when winner has no fsGroupKey AND no categoryKey,
   //   retain the legacy pass-through so allocation still resolves.
+  // Phase 4R FINAL closure (2026-08-11) — semantic-admissibility
+  // via RECOMMENDER EVIDENCE KINDS (§1-§7).
+  //
+  //   Prior filters (v201 same-fsGroup; v202 same-fsGroup OR
+  //   same-categoryKey) were taxonomy-key heuristics. Club Support
+  //   221178 proved they are insufficient: 6030 R&M Cart Paths
+  //   survived the categoryKey match for winner 6054 Computer & IT
+  //   Services (both `ADMIN_EXPENSES`), driving a spurious
+  //   "Moderate · GL" from a semantically nonsensical alternative.
+  //
+  //   Permanent rule (founder §4): confidence uses the SAME
+  //   substantive gates the recommender itself used to admit a
+  //   candidate. That authority is already encoded in
+  //   `GlCandidate.evidence` — each candidate's evidence array lists
+  //   WHY it ranked. Some kinds are SUBSTANTIVE evidence of
+  //   accounting fit; others are proxies (lexical / taxonomy).
+  //
+  //   SUBSTANTIVE evidence kinds (from the recommender's own
+  //   taxonomy):
+  //     - LINE_ITEM_MATCH    — a line-item description named this
+  //                            account's concept
+  //     - ECONOMIC_PURPOSE   — the invoice's committed purpose maps
+  //                            to this account
+  //     - DOCUMENT_PHRASE    — a document-level phrase matched
+  //     - PRIOR_CODING       — vendor history routes here
+  //     - VENDOR_DEFAULT     — vendor's default expense account
+  //     - CAPITAL_CLASS_MAP  — capital classifier mapped this
+  //                            asset class
+  //
+  //   PROXY-only kinds (NAME_KEYWORD, CATEGORY_MATCH, FS_GROUP_MATCH,
+  //   SPECIFICITY_BOOST, CONTRADICTION_PENALTY) alone do NOT admit a
+  //   candidate to the confidence-competitive set. The candidate
+  //   remains in raw ranker diagnostics — it just cannot reduce
+  //   founder-facing confidence or appear as "nearest alternative".
+  //
+  //   Reverse-control matrix generalises correctly:
+  //     - Cart Paths vs IT (Club Support 221178): 6030's evidence is
+  //       NAME_KEYWORD only (matched "Maintenance") → EXCLUDED → HIGH
+  //     - Bank Charges vs Grounds Equipment (1091559): 6051's
+  //       evidence is CATEGORY_MATCH / FS_GROUP_MATCH proxy only →
+  //       EXCLUDED → HIGH
+  //     - Two IT accounts with substantive per-line evidence (IT
+  //       Services + Subscriptions) → BOTH ADMITTED → MODERATE if
+  //       close
+  //     - Finished asset vs CIP with no project evidence: CIP has no
+  //       DOCUMENT_PHRASE evidence → EXCLUDED → HIGH
+  //     - Finished asset vs CIP with real project evidence: CIP
+  //       earns DOCUMENT_PHRASE → ADMITTED → MODERATE (§10.F)
+  //
+  //   The winner itself is not filtered — this filter only decides
+  //   which RUNNERS-UP can reduce confidence. Winner confidence is
+  //   handled by `winnerConfidence` independently.
+  const SUBSTANTIVE_EVIDENCE_KINDS = new Set([
+    "LINE_ITEM_MATCH",
+    "ECONOMIC_PURPOSE",
+    "DOCUMENT_PHRASE",
+    "PRIOR_CODING",
+    "VENDOR_DEFAULT",
+    "CAPITAL_CLASS_MAP",
+  ]);
+  function hasSubstantiveEvidence(evidence: ReadonlyArray<{ kind: string }> | undefined | null): boolean {
+    if (!evidence) return false;
+    for (const e of evidence) {
+      if (SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind)) return true;
+    }
+    return false;
+  }
+
   const glCandidates = a.gl?.candidates ?? [];
-  const winnerFsGroupKey = glCandidates[0]?.fsGroupKey ?? null;
-  const winnerCategoryKey = glCandidates[0]?.categoryKey ?? null;
-  const semanticallyCompetitiveAlternates = (winnerFsGroupKey != null || winnerCategoryKey != null)
-    ? glCandidates.slice(1).filter((c) => {
-        const fsGroupMatch = winnerFsGroupKey != null && c.fsGroupKey === winnerFsGroupKey;
-        const categoryMatch = winnerCategoryKey != null && c.categoryKey === winnerCategoryKey;
-        return fsGroupMatch || categoryMatch;
-      })
-    : glCandidates.slice(1);
+  const semanticallyCompetitiveAlternates = glCandidates
+    .slice(1)
+    .filter((c) => hasSubstantiveEvidence(c.evidence));
   const gl = {
     winnerConfidence: glCandidates[0]?.confidence ?? null,
     compatibleCount: Math.min(1 + semanticallyCompetitiveAlternates.length, 6),
