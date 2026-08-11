@@ -1422,191 +1422,80 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     fullDocumentText: transactionalTextValue,
     clubDepartments: DEFAULT_DEPTS_SHARED,
   });
-  if (purposeDecision.source === "CANONICAL_COMMITTED" && purposeDecision.concept != null && gl.accountName) {
-    const winnerAffinity = evaluatePurposeAccountAffinity(purposeDecision.concept, gl.accountName);
-    if (winnerAffinity == null) {
-      // Winner has no ontology tie to the committed purpose. Look
-      // for the highest-scoring alternative that does.
-      const alternatives = gl.candidates ?? [];
-      let promoted: typeof alternatives[number] | null = null;
-      for (const alt of alternatives) {
-        if (alt.accountId === gl.candidates[0]?.accountId) continue;
-        const affinity = evaluatePurposeAccountAffinity(purposeDecision.concept, alt.accountName);
-        if (affinity && alt.postable) {
-          promoted = alt;
-          break;
-        }
-      }
-      if (promoted) {
-        logger.info("ap-intelligence.purpose-ontology.override", {
-          clubId: args.clubId, docIdTail: doc.id.slice(-6),
-          concept: purposeDecision.concept,
-          from: gl.accountNumber, to: promoted.accountNumber,
-        });
-        gl = {
-          ...gl,
-          accountNumber: promoted.accountNumber,
-          accountName: promoted.accountName,
-          categoryKey: promoted.categoryKey,
-          fsGroupKey: promoted.fsGroupKey,
-          source: "ECONOMIC_PURPOSE",
-          confidence: Math.min(promoted.confidence + 8, 90),
-          reason: `purpose_ontology_promotion:${purposeDecision.concept}(${purposeDecision.confidence})->${promoted.accountNumber}(base_conf=${promoted.confidence},from=${gl.accountNumber})`,
-          leaderIsPostable: promoted.postable,
-          leaderPostingBlockers: promoted.postingBlockers,
-          autoApprovalEligible: false,
-        };
-      } else {
-        // Amendment #11: "A recommendation that is merely less
-        // wrong does not pass." When the winner is INCOMPATIBLE
-        // with a committed canonical purpose AND no compatible
-        // alternative exists in the base ranker's candidates, we
-        // ABSTAIN — clearing the winner is more honest than letting
-        // a wrong high-confidence answer stand. Nature-scoped
-        // Stage B may still widen the search.
-        logger.info("ap-intelligence.purpose-ontology.abstain", {
-          clubId: args.clubId, docIdTail: doc.id.slice(-6),
-          concept: purposeDecision.concept,
-          clearedWinner: gl.accountNumber,
-        });
-        gl = {
-          ...gl,
-          accountNumber: null,
-          accountName: null,
-          categoryKey: null,
-          fsGroupKey: null,
-          source: "NONE",
-          confidence: null,
-          reason: `purpose_ontology_abstain:${purposeDecision.concept}(${purposeDecision.confidence}) — no purpose-compatible candidate in ranker top-N; base winner ${gl.accountNumber} ${JSON.stringify(gl.accountName)} was incompatible`,
-          leaderIsPostable: false,
-          leaderPostingBlockers: [],
-          autoApprovalEligible: false,
-          requiresReview: true,
-        };
-      }
-    }
-  }
-
-  // Sprint 3 · Phase 4 Slice 5.2 completion (2026-08-08) — full-
-  // eligible-COA purpose-driven ranker (§1 + §2). Runs when the base
-  // ranker + ontology guard have not produced a defensible winner
-  // AND the canonical purpose is COMMIT-ELIGIBLE (purpose decision
-  // clears the evidence-quality gate). Scores EVERY Phase-2-eligible
-  // account — never depends on the base ranker's top-N.
+  // ==========================================================================
+  // Phase 4R · single-GL-authority refactor · Phase 3.2 (2026-08-11).
   //
-  // Ontology name-substring matches are a strong BOOST, not a
-  // pre-filter. An account with no ontology match but strong nature
-  // + department + line-item Jaccard can still win.
+  // Canonical runtime authority — replaces the Group A post-ranking
+  // override chain (purpose_ontology_promotion + purpose_ontology_abstain
+  // + purpose_driven_full_coa_search) with ONE ranked competition.
   //
-  // The evidence-quality gate protects against high-confidence
-  // taxonomy scores over weak primary-item descriptions (e.g. a
-  // "2 Lines Total" summary row winning the taxonomy but not
-  // constituting real primary-item evidence): commitEligible is
-  // false when
-  // the primary-purchase description is short OR summary-shape OR
-  // lacks a discriminative substring for the concept — in which case
-  // this ranker skips and the analyser truthfully abstains.
-  let purposeDrivenDiagnostic: string | null = null;
-  let purposeEvidenceQualityDiag: string | null = null;
-  const winnerIsNull = gl.accountNumber == null;
-  const winnerNonPostable = gl.accountName == null || !gl.leaderIsPostable;
-  if (purposeDecision != null && (winnerIsNull || winnerNonPostable)) {
+  // Before this migration, the initial `recommendGlAccount` result
+  // above could be OVERWRITTEN by up to three subsequent override
+  // sites that ran their own selection logic without rebuilding
+  // `gl.candidates`. That violated the founder §1 invariant
+  //   analysis.gl.accountNumber === analysis.gl.candidates[0].accountNumber
+  //
+  // Now: `runCanonicalGlRanking` runs the canonical family-based
+  // ranker once. Its result is a pure projection of the canonical
+  // ranker output (§11 no business logic in the facade). Winner is
+  // candidates[0] by structural type contract. Purpose ontology
+  // becomes evidence inside the competition (TRANSACTION_TEXT
+  // family) — not a post-ranking authority.
+  //
+  // Purpose/ontology intelligence preserved:
+  //   Site A1 (purpose_ontology_promotion) → PURPOSE_TYPE_COMPAT +
+  //     PURPOSE_CATEGORY_HINT + ONTOLOGY_NAME_MATCH observations
+  //     inside TRANSACTION_TEXT family (rankCanonical scoring).
+  //   Site A2 (purpose_ontology_abstain) → structural: when no
+  //     candidate scores above COMMIT_MIN_SCORE, the canonical
+  //     result is ABSTAIN with candidates[0] preserved (§8 —
+  //     abstention does not destroy ranking provenance).
+  //   Site A3 (purpose_driven_full_coa_search / Pipeline B) →
+  //     rankCanonical ALREADY iterates the ENTIRE eligible COA.
+  //     No separate "if empty then run full-COA" fallback — one
+  //     competition, always.
+  {
+    const { runCanonicalGlRanking } = await import("./canonical-runtime-facade");
+    const { departmentAccountNamePatterns: deptPatternsForCanonical } =
+      await import("./department-inference");
+    const deptKeyForCanonical = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
+    const deptPatsForCanonical = deptKeyForCanonical ? deptPatternsForCanonical(deptKeyForCanonical) : [];
     const { assessPurposeEvidenceQuality } = await import("./purpose-evidence-quality");
-    const evidenceQuality = assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout);
-    purposeEvidenceQualityDiag = evidenceQuality.diagnostic;
-    if (evidenceQuality.commitEligible) {
-      const { rankPurposeDrivenAccounts } = await import("./purpose-driven-ranker");
-      const { filterEligibleAccounts } = await import("@/lib/accounting/eligibility");
-      const eligibleAccountsForPurpose = await prisma.account.findMany({
-        where: { clubId: args.clubId, isActive: true, isHeader: false },
-        select: {
-          id: true, accountNumber: true, name: true, type: true,
-          normalBalance: true, isActive: true, isHeader: true,
-          allowManualPosting: true, isControlAccount: true,
-          isBankAccount: true, isCashAccount: true, archivedAt: true,
-          fundApplicability: true,
-          accountRole: true,
-          category: { select: { key: true, name: true } },
-          fsGroup: { select: { key: true, name: true } },
-        },
-      });
-      const asEligibilityView = eligibleAccountsForPurpose.map((a) => ({
-        id: a.id, accountNumber: a.accountNumber, name: a.name, type: a.type,
-        normalBalance: a.normalBalance, isActive: a.isActive, isHeader: a.isHeader,
-        allowManualPosting: a.allowManualPosting, isControlAccount: a.isControlAccount,
-        isBankAccount: a.isBankAccount, isCashAccount: a.isCashAccount,
-        archivedAt: a.archivedAt, fundApplicability: a.fundApplicability,
-        categoryKey: a.category?.key ?? null,
-        fsGroupKey: a.fsGroup?.key ?? null,
-        accountRole: a.accountRole ?? "STANDARD",
-      }));
-      const filtered = filterEligibleAccounts(asEligibilityView, {
-        transactionKind: "AP_INVOICE",
-        expectedDebitRole,
-        departmentHint: null,
-        capitalizationEvidence: {
-          supported: capital.state === "CAPITAL",
-          confidence: capital.state === "CAPITAL" ? 80 : 0,
-        },
-      });
-      // Department hint via existing 16D inference — pattern list boosts
-      // department-qualifying accounts.
-      const {
-        inferDepartment: inferDeptPD, DEFAULT_CLUB_DEPARTMENTS: DEFAULT_DEPTS_PD,
-        departmentAccountNamePatterns: deptPatternsPD,
-      } = await import("./department-inference");
-      const uniqDescsPD = Array.from(new Set(
-        canonicalLineItemsFromLayout.map((li) => li.description).filter(Boolean),
-      ));
-      const deptPD = inferDeptPD({
-        supplierName: extraction.vendor.guessedName,
-        lineItemDescriptions: uniqDescsPD,
-        fullDocumentText: transactionalTextValue,
-        clubDepartments: DEFAULT_DEPTS_PD,
-      });
-      const deptKeyPD = deptPD.leader?.key ?? deptPD.ranked.find((d) => d.score > 0)?.key ?? null;
-      const deptPatsPD = deptKeyPD ? deptPatternsPD(deptKeyPD) : [];
-
-      const pdResult = rankPurposeDrivenAccounts({
-        purposeDecision,
-        natureLeader: "UNKNOWN", // recomputed below if analyse.ts already produced natureForRanker
-        natureConfidence: 0,
-        natureIsDefensible: false,
-        canonicalLineItems: canonicalLineItemsFromLayout,
-        eligibleAccounts: filtered.eligible,
-        departmentKey: deptKeyPD,
-        departmentAccountNamePatterns: deptPatsPD,
-        capitalDecision: sharedCapitalDecision.decision,
-        capitalDecisionConfidence: sharedCapitalDecision.confidence,
-      });
-      purposeDrivenDiagnostic = pdResult.diagnostic;
-      if (pdResult.winner) {
-        logger.info("ap-intelligence.purpose-driven-ranker.promotion", {
-          clubId: args.clubId, docIdTail: doc.id.slice(-6),
-          concept: purposeDecision.concept,
-          winner: pdResult.winner.accountNumber,
-          score: pdResult.winner.total,
-        });
-        gl = {
-          ...gl,
-          accountNumber: pdResult.winner.accountNumber,
-          accountName: pdResult.winner.accountName,
-          categoryKey: filtered.eligible.find((a) => a.accountNumber === pdResult.winner!.accountNumber)?.categoryKey ?? null,
-          fsGroupKey: filtered.eligible.find((a) => a.accountNumber === pdResult.winner!.accountNumber)?.fsGroupKey ?? null,
-          source: "ECONOMIC_PURPOSE",
-          confidence: Math.min(90, pdResult.winner.total),
-          reason: `purpose_driven_full_coa_search:${purposeDecision.concept}(${purposeDecision.confidence},quality=${evidenceQuality.quality})->${pdResult.winner.accountNumber}(score=${pdResult.winner.total},considered=${pdResult.totalConsidered})`,
-          leaderIsPostable: pdResult.winner.postable,
-          leaderPostingBlockers: [],
-          autoApprovalEligible: false,
-          requiresReview: pdResult.winner.total < 60,
-        };
-      }
-    }
+    const purposeQualityForCanonical = purposeDecision != null
+      ? assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout).quality
+      : "NONE";
+    gl = await runCanonicalGlRanking({
+      clubId: args.clubId,
+      extraction,
+      vendor,
+      capital,
+      economicPurposeCandidates: economicPurpose,
+      purposeDecision,
+      purposeQuality: purposeQualityForCanonical,
+      canonicalLineItems: canonicalLineItemsFromLayout,
+      lineItemsExtracted,
+      fullDocumentText:
+        transactionalTextValue != null && transactionalTextValue.trim().length > 0
+          ? transactionalTextValue
+          : (pdfOk ? pdfText : null),
+      expectedDebitRole,
+      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
+        .detectPayrollEvidence({
+          vendorNames: [
+            extraction.vendor.guessedName,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
+            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
+          ],
+          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
+          documentText: pdfOk ? pdfText : null,
+        }).hasPayrollEvidence,
+      departmentKey: deptKeyForCanonical,
+      departmentAccountNamePatterns: deptPatsForCanonical,
+      vendorHistoryConceptIds: [],
+      vendorHistoryPreferredAccountNumbers: [],
+    });
   }
-  // Persist diagnostics for downstream inspection.
-  void purposeDrivenDiagnostic;
-  void purposeEvidenceQualityDiag;
+
 
   // Sprint 3 · Checkpoint 15T — compute amount hierarchy and tax /
   // credit groups. Printed total is preserved verbatim regardless

@@ -195,7 +195,12 @@ describe("analyseIngestedInvoice — end-to-end", () => {
     // purpose evidence — the ranker uses that instead of falling
     // back to the vendor default. Both sources arrive at 6020;
     // accept either as the semantically-valid current behavior.
-    expect(["ECONOMIC_PURPOSE", "VENDOR_DEFAULT"]).toContain(analysis.gl.source);
+    // Phase 4R Phase 3.2 (2026-08-11) — canonical runtime authority
+    // consolidates all source-derived signals into ONE ranked competition
+    // and emits "SEMANTIC_MATCH" for RECOMMEND results (§12 Class B: the
+    // per-source enum values were implementation details of the old
+    // scoring model, superseded by canonical evidence-family semantics).
+    expect(["ECONOMIC_PURPOSE", "VENDOR_DEFAULT", "SEMANTIC_MATCH"]).toContain(analysis.gl.source);
   });
 
   it("returns DOCUMENT_UNREADABLE when text is empty", async () => {

@@ -460,19 +460,19 @@ describe("Phase 4R · static architectural guard against post-ranking GL overrid
     // We assert the current count for visibility; when Phase 3 lands,
     // this expectation flips to zero and the test naturally goes GREEN.
     //
-    // Phases 1-2 accepted expected count: allow the currently mapped
-    // 10 sites. If a NEW site appears (count > 10), that is a REGRESSION
-    // even during refactor — reintroducing a new override authority
-    // must be caught immediately.
-    const EXPECTED_MAX_SITES_DURING_REFACTOR = 10;
+    // Progression ceiling: 10 → 7 (Group A) → 4 (Group B) → 2 (Group C) → 1 (Group D) → 0 (Group E).
+    // Phase 3.2 (Group A migration, 2026-08-11) reduced count from
+    // 10 to 7 by eliminating purpose_ontology_promotion +
+    // purpose_ontology_abstain + purpose_driven_full_coa_search
+    // override sites. The ceiling is now 7. A NEW site (count > 7)
+    // is architectural regression.
+    const EXPECTED_MAX_SITES_DURING_REFACTOR = 7;
     expect(
       overrideMatches.length,
       `analyse.ts contains ${overrideMatches.length} \`gl = { ...gl, accountNumber: ... }\` `
-      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} during Phases 1-2). `
-      + `A NEW site indicates architectural regression. Phase 3 must eliminate all sites.`,
+      + `override sites (expected max ${EXPECTED_MAX_SITES_DURING_REFACTOR} after Phase 3.2). `
+      + `A NEW site indicates architectural regression. Groups B-E must eliminate the remaining sites.`,
     ).toBeLessThanOrEqual(EXPECTED_MAX_SITES_DURING_REFACTOR);
-    // Also emit a diagnostic line so the transitional count is visible
-    // in the console when tests run.
     console.log(`[static-guard] analyse.ts override sites: ${overrideMatches.length} (target after Phase 3: 0)`);
   });
 });
