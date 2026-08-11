@@ -26,8 +26,8 @@ export const SUPPLIER_EXTRACT_VERSION      = 3;   // 15Q rev + 15R rev + person-
 export const LINE_ITEMS_EXTRACT_VERSION    = 5;   // 15Q rev + summary-tail refactor + 221178 follow-on generalized totals-block classifier + Ranker Authority slice: empty-description fallback + carry-forward rejection
 export const TAX_RECONCILE_VERSION         = 3;   // Phase 4R: multi-tax (label,amount) dedup + residual reconciliation for CPA-shape multi-GST invoices
 export const IDENTIFIER_TAXONOMY_VERSION   = 1;
-export const ECONOMIC_PURPOSE_VERSION      = 2;   // + 221178 IT-taxonomy slice: CYBERSECURITY_SERVICE concept + backup/storage cues on SOFTWARE_SUBSCRIPTION
-export const GL_RECOMMEND_VERSION          = 6;   // Phase 4R: family-incompatibility now payroll-only (removed broad IT↔R&M / IT↔Telecom exclusions); IT-dominant reclassifier narrowed to generic R&M only, preserving specific R&M children (equipment_repair, building_maintenance, course_maintenance)
+export const ECONOMIC_PURPOSE_VERSION      = 3;   // + 221178 IT-taxonomy slice + Phase 4R FINAL: capital-evidence higher-order authority commit (resolved COMPLETE_MACHINE via ProductIdentityResolution overrides lexical component ambiguity per §12)
+export const GL_RECOMMEND_VERSION          = 6;   // Phase 4R: family-incompatibility now payroll-only (removed broad IT↔R&M / IT↔Telecom exclusions); IT-dominant reclassifier narrowed to generic R&M only, preserving specific R&M children (equipment_repair, building_maintenance, course_maintenance). Phase 4R FINAL: analyseResult exposes canonicalSupplierIdentity for evidence-authority consumption; no ranker change.
 
 /**
  * The composite AP analysis version. Written to

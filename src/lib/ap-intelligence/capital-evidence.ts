@@ -237,6 +237,14 @@ export function evaluateCapitalObjectEvidence(
   }
 
   let componentLines = 0;
+  // Phase 4R FINAL evidence-authority (2026-08-11) — §12: Resolved
+  // PurchasedObjectIdentity > individual ambiguous noun token.
+  // Track whether the resolved primary object committed to COMPLETE_
+  // MACHINE via the authority, so we can rely on the resolved-authority
+  // commit branch downstream even when lexical evidence on other
+  // objects adds ambiguity.
+  let resolvedPrimaryIsCompleteMachine = false;
+  let resolvedPrimaryConfidence = 0;
   for (const obj of input.objects) {
     const hasIdentifier = obj.serialCandidates.length > 0 || obj.modelCandidates.length > 0 || obj.skuCandidates.length > 0;
 
@@ -256,6 +264,8 @@ export function evaluateCapitalObjectEvidence(
           strength: "strong",
         });
         capital += 25;   // authoritative bonus on top of role scoring
+        resolvedPrimaryIsCompleteMachine = true;
+        resolvedPrimaryConfidence = resolved!.confidence;
       } else if (resolvedType === "REPLACEMENT_ENGINE" || resolvedType === "SERIALIZED_COMPONENT") {
         effectiveRole = "SERIALIZED_COMPONENT";
         durable.push({
@@ -508,6 +518,57 @@ export function evaluateCapitalObjectEvidence(
     }
   }
 
+  // Phase 4R FINAL evidence-authority (2026-08-11) — §12 · §16 · §17:
+  // Higher-order authority commit branch.
+  //
+  //   Founder rule §12: Resolved PurchasedObjectIdentity > individual
+  //   ambiguous noun token. When ProductIdentityResolution has
+  //   AUTHORITATIVELY committed to COMPLETE_MACHINE (RESOLVED_INTERNAL
+  //   or RESOLVED_WITH_EXTERNAL_CORROBORATION), the primary object IS
+  //   a complete durable asset — lower-order lexical evidence such as
+  //   an "engine" token embedded in the machine's model name should
+  //   NOT force AMBIGUOUS.
+  //
+  //   Founder rule §16: capital decision must support a positive
+  //   commit. Prior architecture had CAPITAL_CANDIDATE nearly
+  //   unreachable when weak SERIALIZED_COMPONENT / SERVICE weights
+  //   on the primary object closed the gap. This branch restores
+  //   the ability to commit under genuine authority.
+  //
+  //   Gate — CAPITAL_CANDIDATE commit fires when ALL are true:
+  //     - resolved primary object type is COMPLETE_MACHINE
+  //     - resolution status is RESOLVED_INTERNAL / _WITH_EXTERNAL_
+  //       CORROBORATION (already required by isResolvedSufficiently)
+  //     - resolution confidence ≥ 50 (moderate+ authority)
+  //     - operatingScore ≤ capital (no explicit service purchase
+  //       from a DIFFERENT object dominates — replaces §12
+  //       "lower-order evidence may remain provenance but not veto")
+  //     - CIP_EXPLICIT_RE did not fire (project-in-progress evidence
+  //       would properly route to CIP account via ranker; that's a
+  //       distinct capital sub-decision, §18)
+  //
+  //   §14 economic-value tie-breaker is IMPLICITLY consumed via
+  //   productIdentityResolution.confidence — ProductIdentityResolution
+  //   itself uses `pricePlausibilityScore` per its own §14 authority
+  //   when adjudicating COMPLETE_MACHINE vs REPLACEMENT_COMPONENT.
+  //   If that layer resolved COMPLETE_MACHINE at moderate+ confidence,
+  //   economic plausibility is ALREADY part of that resolution.
+  //
+  //   Reverse controls preserved:
+  //     - replacement engine only → REPLACEMENT_ENGINE, not
+  //       COMPLETE_MACHINE, gate does not fire
+  //     - engine overhaul service → SERVICE dominates operatingScore
+  //       or rm, and resolvedPrimaryIsCompleteMachine is false
+  //     - CIP project → CIP_EXPLICIT_RE fires, gate suppressed;
+  //       ranker routes to CIP account
+  const cipExplicitPresent = input.documentBodyText != null
+    && CIP_EXPLICIT_RE.test(input.documentBodyText);
+  const authorityCommitEligible =
+    resolvedPrimaryIsCompleteMachine
+    && resolvedPrimaryConfidence >= 50
+    && operatingScore <= capital
+    && !cipExplicitPresent;
+
   const ranked: Array<[CapitalDecision, number]> = [
     ["CAPITAL_CANDIDATE", capital],
     ["REPAIR_MAINTENANCE", rm],
@@ -520,7 +581,14 @@ export function evaluateCapitalObjectEvidence(
 
   let decision: CapitalDecision;
   let confidence: number;
-  if (topScore < COMMIT_MIN_CONFIDENCE) {
+
+  if (authorityCommitEligible) {
+    // Higher-order authority overrides scoring ambiguity. Confidence
+    // sourced from the ProductIdentityResolution's own commitment
+    // strength, floored at 60.
+    decision = "CAPITAL_CANDIDATE";
+    confidence = Math.max(60, Math.min(95, resolvedPrimaryConfidence));
+  } else if (topScore < COMMIT_MIN_CONFIDENCE) {
     decision = "UNRESOLVED";
     confidence = Math.min(50, topScore);
   } else if (gap < GAP_MIN) {
@@ -539,7 +607,9 @@ export function evaluateCapitalObjectEvidence(
     durableAssetEvidence: durable,
     operatingEvidence: operating,
     contradictions,
-    diagnostic: `capital=${capital} rm=${rm} op=${operatingScore} gap=${gap} → ${decision}(${confidence})`,
+    diagnostic: `capital=${capital} rm=${rm} op=${operatingScore} gap=${gap}`
+      + (authorityCommitEligible ? ` · resolved-authority-commit COMPLETE_MACHINE conf=${resolvedPrimaryConfidence}` : "")
+      + ` → ${decision}(${confidence})`,
   };
 }
 

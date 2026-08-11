@@ -1402,18 +1402,24 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       })(),
       capitalState,
       source: noCoa ? null : ((gl?.source ?? "NONE") as ApInvoiceCardIntelligence["category"]["source"]),
-      // Phase 4R final freeze-blocker (2026-08-11) — §17/§18: alternates
-      // that reach the founder-facing popover are the confidence-
-      // competitive set only. Filter to same fsGroupKey as winner so
-      // a Bank Charges account never appears as "nearest alternative"
-      // to an Equipment & Fixtures winner. When the winner has no
-      // fsGroupKey, retain the legacy behaviour.
+      // Phase 4R FINAL evidence-authority (2026-08-11) — semantic-
+      // admissibility filter (fsGroupKey OR categoryKey match).
+      // Popover alternates share the same competitive-set semantics
+      // as GL confidence (§28 "confidence popover alternatives must
+      // use the same competitive set"). Never again displays
+      // "Nearest alternative: Bank Charges" for a Grounds Equipment
+      // winner merely because Bank Charges ranked second numerically.
       alternates: (() => {
         if (noCoa || !gl?.candidates) return [];
         const winnerFsGroupKey = gl.candidates[0]?.fsGroupKey ?? null;
+        const winnerCategoryKey = gl.candidates[0]?.categoryKey ?? null;
         const runnersUp = gl.candidates.slice(1);
-        const filtered = winnerFsGroupKey != null
-          ? runnersUp.filter((c) => c.fsGroupKey === winnerFsGroupKey)
+        const filtered = (winnerFsGroupKey != null || winnerCategoryKey != null)
+          ? runnersUp.filter((c) => {
+              const fsGroupMatch = winnerFsGroupKey != null && c.fsGroupKey === winnerFsGroupKey;
+              const categoryMatch = winnerCategoryKey != null && c.categoryKey === winnerCategoryKey;
+              return fsGroupMatch || categoryMatch;
+            })
           : runnersUp;
         return filtered.slice(0, 4).map((c) => ({
           accountNumber: c.accountNumber,
@@ -1948,27 +1954,30 @@ function buildConfidenceInputs(args: {
   const a = args.analysis;
   if (!a) return undefined;
 
-  // Supplier signal count — Phase 4R final freeze-blocker (2026-08-11):
+  // Supplier signal count — Phase 4R FINAL evidence-authority
+  // (2026-08-11):
   //
-  //   Founder §3: "prominent invoice identity branding is strong
-  //   supplier evidence." Prior implementation counted only
-  //   ExtractedVendorProfile FIELDS (address / website / phone / tax
-  //   reg / etc.). This missed the most direct supplier evidence
-  //   families the pipeline surfaces: the supplier-extractor's own
-  //   scored positive evidence (positional_header, has_legal_suffix,
-  //   explicit_language, issuer_language, sender_domain_match) and
-  //   the fact that the extractor committed to a name with meaningful
-  //   confidence.
+  //   Founder §1: every confidence dimension should consume the SAME
+  //   canonical authority that produced the underlying decision. For
+  //   supplier: canonical SupplierIdentity (SupplierSelection.diagnostic
+  //   independentEvidenceGroups + confidence + supportingEvidence +
+  //   contradictions). The prior proxy layer (profile-field count +
+  //   extractor positive-kind count + commit bonus) is REMOVED here in
+  //   favour of the canonical authority when present.
   //
-  //   Result on OXIO: extractedVendorProfile had 0-1 fields → LOW
-  //   even though the invoice printed OXIO prominently at the top
-  //   and the extractor's supplier.confidence was moderate/high.
+  //   Fallback path — if canonicalSupplierIdentity is null (empty /
+  //   unreadable document paths), fall back to the ExtractedVendorProfile
+  //   field count so this projection remains defined for every input.
   //
-  //   Fix: count ExtractedVendorProfile fields AS BEFORE, PLUS give
-  //   credit for supplier-extractor evidence families. Cap the extra
-  //   contribution at +2 so a well-branded no-address invoice can
-  //   still clear the ≥3 threshold for HIGH via multiple independent
-  //   signals, but a single weak signal cannot manufacture HIGH.
+  //   The value written into profileSignalCount is the AUTHORITATIVE
+  //   count of independent evidence families supporting the selected
+  //   supplier (0..N). deriveSupplierConfidence's NOT_FOUND branch
+  //   already treats ≥3 as HIGH, ≥2 as MODERATE, <2 as LOW — those
+  //   thresholds now consume authoritative counts, not proxies.
+  //
+  //   Contradiction reduction: when the canonical selection carries any
+  //   contradiction evidence, subtract 1 from the effective count
+  //   (§7 "conflicting logo/legal name → review"). Never below 0.
   const p = args.extractedVendorProfile;
   const profileFieldSignals = [
     p?.address?.line1?.value,
@@ -1983,26 +1992,31 @@ function buildConfidenceInputs(args: {
     p?.fax?.value,
   ].filter(Boolean).length;
 
-  // Founder §3 branding-authority: count distinct supplier-extractor
-  // positive-evidence kinds on the winning candidate. Distinct kinds
-  // are ALREADY independent families (positional_header vs
-  // has_legal_suffix vs sender_domain_match are structurally different
-  // observations). Cap at 2 additional to avoid runaway inflation.
-  const supplierExt = (a as unknown as { supplier?: { value: string | null; confidence: number; candidates?: Array<{ positive?: Array<{ kind: string }> }> } }).supplier;
-  const winnerCandidate = supplierExt?.candidates?.[0];
-  const distinctPositiveKinds = new Set(
-    (winnerCandidate?.positive ?? []).map((e) => e.kind),
-  ).size;
-  const brandingSignals = Math.min(2, distinctPositiveKinds);
+  const canonicalSi = (a as unknown as {
+    canonicalSupplierIdentity?: {
+      confidence: number;
+      independentEvidenceGroups: number;
+      supportingEvidence: string[];
+      abstained: boolean;
+      contradictionCount: number;
+      displayName: string | null;
+    } | null;
+  }).canonicalSupplierIdentity;
 
-  // Founder §3 + §4 (identity ≠ match): a committed extractor with
-  // moderate-or-better confidence is itself independent evidence that
-  // the invoice identifies its supplier. Adds +1 (capped by the
-  // brandingSignals min above only for that lane).
-  const extractorCommitBonus =
-    (supplierExt?.value != null && (supplierExt.confidence ?? 0) >= 50) ? 1 : 0;
-
-  const supplierSignals = profileFieldSignals + brandingSignals + extractorCommitBonus;
+  let supplierSignals: number;
+  if (canonicalSi != null && !canonicalSi.abstained) {
+    // Canonical authority path — SupplierIdentity has a winner.
+    // independentEvidenceGroups is ALREADY the authoritative family
+    // count (correlated observations from the same physical block are
+    // ONE family per SupplierSelection's own §6 definition).
+    const raw = canonicalSi.independentEvidenceGroups;
+    const contradictionPenalty = canonicalSi.contradictionCount > 0 ? 1 : 0;
+    supplierSignals = Math.max(0, raw - contradictionPenalty);
+  } else {
+    // Fallback path — no canonical winner. Use the ExtractedVendorProfile
+    // field count only. Empty / abstained documents naturally stay LOW.
+    supplierSignals = profileFieldSignals;
+  }
 
   const supplier = {
     matchState: (a.vendor?.state ?? null) as "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "INSUFFICIENT_SIGNAL" | null,
@@ -2022,39 +2036,50 @@ function buildConfidenceInputs(args: {
     allocationCount: a.allocations?.allocations?.length ?? 0,
   };
 
-  // Phase 4R final freeze-blocker (2026-08-11) — §17/§18 GL confidence
-  // must compare the winner against SEMANTICALLY COMPETITIVE alternates,
-  // not arbitrary numeric runners-up.
+  // Phase 4R FINAL evidence-authority (2026-08-11) — §21/§23 GL
+  // confidence competitive set derived from SEMANTIC ADMISSIBILITY,
+  // not exact fsGroupKey equality.
   //
-  //   Founder observation on 1091559: nearest alternate reported as
-  //   "6051 Bank Charges & Credit Card Fees" against a winner of
-  //   1506 Equipment & Fixtures - Grounds. Two fundamentally
-  //   different accounting substances — the alternate should have
-  //   ZERO effect on confidence. Prior code took the raw
-  //   glCandidates[1] regardless of semantic admissibility, driving
-  //   Moderate GL confidence on invoices whose winner had no genuine
-  //   competitor.
+  //   The v201 fix filtered on `c.fsGroupKey === winner.fsGroupKey`.
+  //   Correct for 1091559 (dropped 6051 Bank Charges) but too crude
+  //   as the permanent architecture: a semantically legitimate
+  //   alternate may live in a DIFFERENT fsGroup (finished-equipment
+  //   vs CIP is the canonical example — different fs-groups, both
+  //   plausible for the same substance when project evidence exists).
   //
-  //   Fix: SEMANTICALLY-COMPETITIVE filter. An alternate enters the
-  //   confidence-relevant set only when its fsGroupKey MATCHES the
-  //   winner's fsGroupKey (same accounting-substance family). This
-  //   is a strict projection — the recommender's own pool + eligibility
-  //   gates already produced these candidates; here we ask "of the
-  //   remaining eligible candidates, which are same-family enough to
-  //   count as a real alternative decision?".
+  //   Permanent rule: an alternate enters the confidence-competitive
+  //   set when it is semantically admissible relative to the winner
+  //   AND to the invoice's own economic substance. Test conditions
+  //   available from the ranker's own output (already filtered for
+  //   posting-eligibility / role / nature / purpose / department /
+  //   family-incompatibility upstream):
   //
-  //   Reverse control: two same-fs-group candidates close in score →
-  //   MODERATE preserved. Bank Charges vs Fixed Assets → dropped.
+  //   1. Same fsGroupKey as winner → same accounting substance → COMPETITIVE
+  //   2. Same categoryKey as winner but different fsGroupKey → potentially
+  //      competitive (e.g. two ADMIN_EXPENSES accounts with distinct fs-
+  //      groups) → COMPETITIVE
+  //   3. Different fsGroupKey AND different categoryKey → material
+  //      accounting-substance difference → NOT COMPETITIVE
+  //
+  //   This lets a same-category cross-fsGroup alternative like
+  //   CIP-vs-Equipment become competitive when both are legitimately
+  //   ASSET candidates, while still excluding Bank Charges (different
+  //   category + different fsGroup) for a Grounds Equipment winner.
+  //
+  //   Fallback: when winner has no fsGroupKey AND no categoryKey,
+  //   retain the legacy pass-through so allocation still resolves.
   const glCandidates = a.gl?.candidates ?? [];
   const winnerFsGroupKey = glCandidates[0]?.fsGroupKey ?? null;
-  const semanticallyCompetitiveAlternates = winnerFsGroupKey != null
-    ? glCandidates.slice(1).filter((c) => c.fsGroupKey === winnerFsGroupKey)
-    : glCandidates.slice(1); // fall back to all runners-up when winner
-                             // has no fsGroupKey (rare — mostly for
-                             // uncategorised accounts).
+  const winnerCategoryKey = glCandidates[0]?.categoryKey ?? null;
+  const semanticallyCompetitiveAlternates = (winnerFsGroupKey != null || winnerCategoryKey != null)
+    ? glCandidates.slice(1).filter((c) => {
+        const fsGroupMatch = winnerFsGroupKey != null && c.fsGroupKey === winnerFsGroupKey;
+        const categoryMatch = winnerCategoryKey != null && c.categoryKey === winnerCategoryKey;
+        return fsGroupMatch || categoryMatch;
+      })
+    : glCandidates.slice(1);
   const gl = {
     winnerConfidence: glCandidates[0]?.confidence ?? null,
-    // Semantically-competitive count includes the winner + same-family alternates.
     compatibleCount: Math.min(1 + semanticallyCompetitiveAlternates.length, 6),
     strongestAlternateConfidence: semanticallyCompetitiveAlternates[0]?.confidence ?? null,
     abstained: (a.gl?.accountNumber ?? null) == null,

@@ -142,6 +142,35 @@ export interface ApAnalyseResult {
   // intelligence outputs, wired through to the card projection so
   // the review UI can render per-dimension confidence + provenance.
   supplier: SupplierExtraction;
+  // Sprint 3 · Phase 4R final freeze-blocker (2026-08-11) — canonical
+  // SupplierIdentity authority projection. Threaded from
+  // parsed.canonicalEvidence.supplierIdentity so downstream confidence
+  // consumers read the AUTHORITATIVE evidence-family count + selection
+  // confidence + supporting evidence types + abstention state, rather
+  // than approximating supplier evidence from ExtractedVendorProfile
+  // field counts + SupplierExtraction positive-kind counts. Founder
+  // rule §1: every founder confidence dimension should consume the
+  // SAME canonical authority that produced the underlying decision.
+  //
+  // null when the pipeline path did not produce a canonical
+  // supplierIdentity selection (e.g. empty/unreadable document).
+  canonicalSupplierIdentity: {
+    /** Selection confidence 0-100 from `SupplierSelection.diagnostic.confidence`. */
+    confidence: number;
+    /** Count of INDEPENDENT evidence families supporting the winner
+     *  from `SupplierSelection.diagnostic.independentEvidenceGroups`. */
+    independentEvidenceGroups: number;
+    /** Distinct evidence types present (HEADER_ORG_TEXT / VISUAL_LOGO /
+     *  WEBSITE_DOMAIN / TAX_REGISTRATION / etc.). */
+    supportingEvidence: string[];
+    /** True when SupplierSelection abstained (no winner). */
+    abstained: boolean;
+    /** Count of contradiction evidence items — non-zero implies a
+     *  materially conflicting identity signal survived clustering. */
+    contradictionCount: number;
+    /** Winner display name for diagnostic surfaces. */
+    displayName: string | null;
+  } | null;
   lineItemsExtracted: LineItem[];
   taxReconciliation: TaxReconciliation;
   identifiers: IdentifierCandidate[];
@@ -2537,6 +2566,18 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     extractionTextLength: mergedExtraction.extractedTextChars,
     vendorProfile,
     supplier: supplierExtraction,
+    canonicalSupplierIdentity: (() => {
+      const si = (parsed.canonicalEvidence as unknown as { supplierIdentity?: { winner: unknown; abstained: boolean; diagnostic: { selectedSupplier: string | null; confidence: number; independentEvidenceGroups: number; supportingEvidence: string[]; contradictions: string[] } } })?.supplierIdentity;
+      if (!si) return null;
+      return {
+        confidence: si.diagnostic.confidence,
+        independentEvidenceGroups: si.diagnostic.independentEvidenceGroups,
+        supportingEvidence: si.diagnostic.supportingEvidence,
+        abstained: si.abstained,
+        contradictionCount: si.diagnostic.contradictions?.length ?? 0,
+        displayName: si.diagnostic.selectedSupplier,
+      };
+    })(),
     lineItemsExtracted: mergedLineItems,
     taxReconciliation,
     identifiers,
