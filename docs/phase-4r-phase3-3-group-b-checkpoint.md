@@ -81,19 +81,92 @@ The maximum single-family contribution from `CAPITAL_NATURE` is 25 —
 less than either `TRANSACTION_TEXT` (40) or `TAXONOMY_ALIGNMENT` (30).
 Nature can tie-break; it cannot dominate.
 
-## §15.5 · Repair-vs-replacement runtime tests (Phase 3.3 §5)
+## §15.5 · Repair-vs-replacement runtime tests (Phase 3.3 §5) — actual accounting outcomes
 
 Three new tests added to `tests/phase4r-canonical-ranker.test.ts`
 in the `Phase 3.3 · §5 — repair-vs-replacement uses pre-ranking
-nature signals` describe block:
+nature signals` describe block. All three GREEN. The actual
+canonical-ranker outcomes are documented below so the accounting
+result — not merely the assertion — is retained as a Phase 3
+regression control.
 
-| Test | Nature input | Expected outcome |
-|------|--------------|------------------|
-| equipment acquisition | `natureLeader: "CAPITAL_ASSET"` + defensible + `capitalDecision: "CAPITAL_CANDIDATE"` + `purposeConcept: "CAPITAL_EQUIPMENT"` | winner accountType === `ASSET` |
-| equipment repair | `natureLeader: "REPAIR_MAINTENANCE"` + defensible + `capitalDecision: "REPAIR_MAINTENANCE"` + `purposeConcept: "REPAIR_MAINTENANCE"` | winner accountType === `EXPENSE` |
-| ambiguous equipment work | `natureLeader: "UNKNOWN"` + `capitalDecision: "UNRESOLVED"` + `purposeConcept: null` | `separation.marginToRunnerUp < 20` OR status ∈ {`ABSTAIN`, `NO_ELIGIBLE_CANDIDATES`} |
+### Case 1 · equipment acquisition
 
-All three GREEN.
+Input interpretation:
+
+- `natureLeader = "CAPITAL_ASSET"`, `natureConfidence = 84`, `natureIsDefensible = true`
+- `capitalDecision = "CAPITAL_CANDIDATE"`, `capitalConfidence = 82`
+- `purposeConcept = "CAPITAL_EQUIPMENT"`, `purposeQuality = "HIGH"`
+- Line item: "Fairway mower complete unit delivered" · $52,000
+
+Actual outcome:
+
+| Rank | Account | Type | Score | CAPITAL_NATURE evidence | Contradiction |
+|------|---------|------|-------|--------------------------|---------------|
+| #0 (winner) | 1500 Equipment & Fixtures | ASSET | 38 | `NATURE_COMPAT(+15)`, `CAPITAL_ASSET_MATCH(+20)`, `CAPITAL_ASSET_CATEGORY_BONUS(+6)` | (none) |
+| #1 | 5000 Cost of Goods Sold - Merchandise | EXPENSE | 0 | `NATURE_INCOMPATIBLE(-18)` | `nature_CAPITAL_ASSET_rejects_type_EXPENSE(18)` |
+| #2 | 6020 Grounds Maintenance | EXPENSE | 0 | `NATURE_INCOMPATIBLE(-18)`, `RM_EXPENSE_CONTRADICTION(-12)` | `nature_CAPITAL_ASSET_rejects_type_EXPENSE(18)`, `capital_candidate_but_account_is_rm_expense(12)` |
+
+Margin: **38** (ASSET > EXPENSE by full winning score). Ranker
+status: **RECOMMEND**. No Group B post-ranking selector fired
+(none exists in the code — Group B was fully deleted). The winner
+was selected by canonical scoring alone.
+
+### Case 2 · equipment repair
+
+Input interpretation:
+
+- `natureLeader = "REPAIR_MAINTENANCE"`, `natureConfidence = 84`, `natureIsDefensible = true`
+- `capitalDecision = "REPAIR_MAINTENANCE"`, `capitalConfidence = 80`
+- `purposeConcept = "REPAIR_MAINTENANCE"`, `purposeQuality = "HIGH"`
+- Line item: "Mower service call quarterly labour hydraulic hose replacement" · $640
+
+Actual outcome:
+
+| Rank | Account | Type | Score | CAPITAL_NATURE evidence | Contradiction |
+|------|---------|------|-------|--------------------------|---------------|
+| #0 (winner) | 6020 Grounds Maintenance | EXPENSE | 59 | `NATURE_COMPAT(+15)`, `RM_EXPENSE_MATCH(+20)` | (none) |
+| #1 (tie) | 6033 R & M Preventative Maintenance | EXPENSE | 59 | `NATURE_COMPAT(+15)`, `RM_EXPENSE_MATCH(+20)` | (none) |
+| #2 | 6035 R & M - Ground Equipment | EXPENSE | 52 | `NATURE_COMPAT(+15)` | (none) |
+
+Margin: **0** to #1 (deterministic tie-break, tied count = 1);
+margin to #2 is 7. Ranker status: **RECOMMEND**. Winner accountType
+is EXPENSE — the ASSET account (1500 Equipment & Fixtures) is
+absent from the top-3 because it received
+`CAPITAL_ACCOUNT_CONTRADICTION(-25)`. No Group B post-ranking
+selector fired.
+
+The Grounds vs. Preventative-Maintenance tie is honest ambiguity
+between two equally-scored R&M expense accounts — canonical
+ranking preserves that ambiguity in `candidates[0..1]` for
+downstream review rather than picking arbitrarily. This is the
+`§11 canonical engine represents "A is slightly stronger than B"`
+contract intact.
+
+### Case 3 · ambiguous equipment work
+
+Input interpretation:
+
+- `natureLeader = "UNKNOWN"`, `natureConfidence = 0`, `natureIsDefensible = false`
+- `capitalDecision = "UNRESOLVED"`, `capitalConfidence = 0`
+- `purposeConcept = null`, `purposeQuality = "NONE"`
+- Line item: "Equipment work — see attached" · $1,200
+
+Actual outcome:
+
+| Rank | Account | Type | Score | CAPITAL_NATURE evidence | Contradiction |
+|------|---------|------|-------|--------------------------|---------------|
+| #0 | 1500 Equipment & Fixtures | ASSET | 18 | `NATURE_COMPAT(+15)` | (none) |
+| #1 (tie) | 6035 R & M - Ground Equipment | EXPENSE | 18 | `NATURE_COMPAT(+15)` | (none) |
+| #2 | 5000 Cost of Goods Sold - Merchandise | EXPENSE | 14 | `NATURE_COMPAT(+15)` | (none) |
+
+Margin: **0** to #1 (deterministic tie-break, tied count = 1).
+Ranker status: **ABSTAIN** — the top score (18) is below
+`COMMIT_MIN_SCORE = 30`, so no winner is promoted. `gl.accountNumber`
+returns null, `gl.candidates` remains populated with the
+candidates in canonical-ranker order for diagnostic surfacing.
+This is truthful abstention preserved (§8). No Group B fallback
+selector picked a plausible-but-unsupported winner.
 
 ## §15.6 · Service-vs-goods / recurring-vs-capital coverage
 
@@ -216,6 +289,72 @@ invented and no accounting concept had to be redesigned.
   `CAPITAL_ACCOUNT_CONTRADICTION` observations fire. This
   replaces Group B's post-ranking rm/asset steering with
   pre-ranking scoring evidence.
+
+### §15.14a · Facade purity audit (Phase 3.4 verification)
+
+`canonical-runtime-facade.ts` was fully audited before the
+Phase 3.4 authorization. Confirmed the facade does NOT:
+
+- reorder canonical candidates — `projectCanonicalToGl` maps
+  `result.candidates` 1:1 preserving order
+- mutate canonical candidate scores after `rankCanonical()` —
+  scores are read verbatim from `c.score`; no writes to the
+  candidates array post-rank
+- promote an R&M account after ranking — RM lifting is
+  strictly **pre-ranking** (line 172-185, before line 223 `rankCanonical(input)`)
+- replace `candidates[0]` — `winner = result.candidates[0]` is a read
+- inject a different `gl.accountNumber` — `winner.accountNumber` is
+  used verbatim in the projection
+- conduct a second local candidate competition — there is no
+  second `rankCanonical` call and no local iteration over candidates
+- conditionally substitute another account based on R&M vocabulary
+  — no substitution branch exists
+
+RM lifting classification (§1 documentation requirement):
+
+| Aspect | Value |
+|--------|-------|
+| Source fact | `natureLeader === "REPAIR_AND_MAINTENANCE"` from `classifyAccountingNature()` computed upstream in analyse.ts |
+| Interpretation field | `NormalisedTransactionInterpretation.capitalDecision` (set to `"REPAIR_MAINTENANCE"`) |
+| Evidence family | `CAPITAL_NATURE` (via `RM_EXPENSE_MATCH` + `CAPITAL_ACCOUNT_CONTRADICTION` observations that only fire when `capitalDecision === "REPAIR_MAINTENANCE"`) |
+| Correlated with existing nature signals? | Yes — `RM_EXPENSE_MATCH` is correlated with `NATURE_COMPAT` since both key off the same nature leader |
+| Correlation suppression | MAX-within-family in `rankCanonical` scores collapses correlated observations; the CAPITAL_NATURE family cap (25 pre-cap; 40 post-emphasis) bounds their combined contribution |
+
+RM lifting is INPUT enrichment, not output mutation. It expresses
+an intelligence the accounting-nature classifier already computed
+in a field the ranker scores against. It does not select an
+account.
+
+## §15.14b · Outstanding integration gate (unresolved before merge/deploy)
+
+Targeted-suite success across Groups A–B (and by Phase 3.4 also
+Group C) does **not** substitute for the final integration gate.
+
+Before any merge of the `refactor/gl-single-authority` branch to
+`main` or any deployment of the architectural refactor candidate,
+the complete repository quality suite MUST run:
+
+- `npm run typecheck`
+- `npm run scan:placeholders`
+- Every vitest suite in `tests/` (not just AP intelligence)
+- `npm run nav:audit`
+- `npm run workflow:audit` where applicable
+
+The four pre-existing `tests/mission-control-c14c.test.ts` failures
+(mailbox reply / MSAL scope subsystem) must be handled transparently:
+
+- Reproduced on untouched `v206` / `main` baseline (verified via
+  `git stash` + rerun in this session — same failure count)
+- Classified as pre-existing (not introduced by Phase 4R)
+- Evidence of identical failure state preserved
+- Not silently waived under a Phase 4R umbrella
+
+Any NEW quality failure — or any change in the c14c failure
+signature — after the refactor must be investigated before merge.
+
+This gate remains **outstanding** and will remain so through Phase
+3.4 · 3.5 · 3.6 until the group migrations complete and the branch
+is ready for merge.
 
 ## §15.15 · Tests run + broader regression
 
