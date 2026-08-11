@@ -1402,22 +1402,39 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       })(),
       capitalState,
       source: noCoa ? null : ((gl?.source ?? "NONE") as ApInvoiceCardIntelligence["category"]["source"]),
-      // Phase 4R FINAL closure (2026-08-11) — popover alternates use
-      // the SAME evidence-authority filter as buildConfidenceInputs.gl
-      // (§28 "confidence popover alternatives must use the same
-      // competitive set"). A candidate is only shown as a "nearest
-      // alternative" when it has SUBSTANTIVE evidence — never merely
-      // because it shares a fsGroupKey or categoryKey or has lexical
-      // overlap with an account name.
+      // Phase 4R FINAL confidence integrity closeout (2026-08-11) —
+      // popover alternates apply the same TWO gates as
+      // buildConfidenceInputs.gl (§12 disclosure integrity):
+      //   Gate 1: dedupe by canonical accountId + hard-exclude winner
+      //   Gate 2: transaction-supported substantive evidence
+      //           (kind ∈ SUBSTANTIVE AND score ≥ 8)
+      //
+      // §11 invariant: an account cannot appear as its own nearest
+      // alternative. §7 invariant: incidental low-score relatedness
+      // is not evidence of a plausible accounting alternative.
       alternates: (() => {
         if (noCoa || !gl?.candidates) return [];
         const SUBSTANTIVE = new Set([
           "LINE_ITEM_MATCH", "ECONOMIC_PURPOSE", "DOCUMENT_PHRASE",
           "PRIOR_CODING", "VENDOR_DEFAULT", "CAPITAL_CLASS_MAP",
         ]);
+        const MIN_SCORE = 8;
+        const winnerId = gl.candidates[0]?.accountId ?? null;
+        const seen = new Set<string>();
         return gl.candidates
           .slice(1)
-          .filter((c) => (c.evidence ?? []).some((e) => SUBSTANTIVE.has(e.kind)))
+          .filter((c) => {
+            // Gate 1: identity distinctness
+            if (c.accountId == null) return false;
+            if (winnerId != null && c.accountId === winnerId) return false;
+            if (seen.has(c.accountId)) return false;
+            seen.add(c.accountId);
+            return true;
+          })
+          .filter((c) =>
+            // Gate 2: transaction-supported substantive evidence
+            (c.evidence ?? []).some((e) => SUBSTANTIVE.has(e.kind) && (e.score ?? 0) >= MIN_SCORE),
+          )
           .slice(0, 4)
           .map((c) => ({
             accountNumber: c.accountNumber,
@@ -2118,6 +2135,57 @@ function buildConfidenceInputs(args: {
   //   The winner itself is not filtered — this filter only decides
   //   which RUNNERS-UP can reduce confidence. Winner confidence is
   //   handled by `winnerConfidence` independently.
+  // Phase 4R FINAL confidence integrity closeout (2026-08-11) —
+  // GL confidence competition requires DISTINCT, SEMANTICALLY
+  // PLAUSIBLE, TRANSACTION-SUPPORTED alternatives. Two gates.
+  //
+  // FIRST-FAILURE BOUNDARIES this closes:
+  //   Club Support 221178 — the founder-facing popover showed
+  //     "Nearest alternative: 6054 Computer & IT Services" — the
+  //     same canonical account as the WINNER. The v203 evidence-
+  //     kind filter admitted it because a duplicate candidate
+  //     object for the winner's own accountId surfaced through a
+  //     second generation path in the ranker output, and the
+  //     projection did not deduplicate. An account cannot compete
+  //     against itself. §3 Gate 1 fixes this.
+  //   Oakcreek 1091559 — the founder-facing popover showed
+  //     "Nearest alternative: 6051 Bank Charges & Credit Card Fees".
+  //     The v203 filter admitted 6051 because it carried a
+  //     substantive evidence KIND (ECONOMIC_PURPOSE or similar)
+  //     via incidental low-strength concept relatedness. §4 Gate 2
+  //     tightens: substantive evidence must have meaningful
+  //     transaction support, not near-zero score contributions.
+  //
+  // Gate 1 — IDENTITY DISTINCTNESS (§3):
+  //   - Alternates deduplicated by canonical `accountId`.
+  //   - The winner's `accountId` is HARD-EXCLUDED from alternates
+  //     (winner cannot be its own runner-up).
+  //
+  // Gate 2 — TRANSACTION-SUPPORTED SEMANTIC PLAUSIBILITY (§4, §7):
+  //   Alternate admitted only when its evidence array contains at
+  //   least one SUBSTANTIVE kind (LINE_ITEM_MATCH / ECONOMIC_PURPOSE
+  //   / DOCUMENT_PHRASE / PRIOR_CODING / VENDOR_DEFAULT /
+  //   CAPITAL_CLASS_MAP) with score >= MIN_SUBSTANTIVE_SCORE. Score
+  //   below the threshold is incidental relatedness / near-zero
+  //   contribution — not real accounting alternative evidence.
+  //
+  //   MIN_SUBSTANTIVE_SCORE = 8. Chosen empirically as the boundary
+  //   below which contribution is "the concept has some distant
+  //   relatedness" rather than "this account represents the
+  //   transaction." Aligned with the ranker's own SPECIFICITY_BONUS_PER_DEPTH
+  //   scale (small integer contributions).
+  //
+  // Reverse controls preserved:
+  //   - Same-account duplication (§13.A) → Gate 1 removes duplicate
+  //   - Nonsense runner-up (§13.B) → Gate 2 score threshold excludes
+  //   - Legitimate close alternative (§13.C) → both alternates have
+  //     substantive evidence with meaningful score → MODERATE
+  //   - No runner-up (§13.D) → alternates array empty, no confidence
+  //     manufactured
+  //   - Independent uncertainty (§13.E) → transaction/capital dims
+  //     remain their honest state; GL alone reaches HIGH
+  //   - Multi-allocation (§13.F, CPA) → deriveGlConfidence Multiple
+  //     branch runs first; per-allocation authority owns the answer
   const SUBSTANTIVE_EVIDENCE_KINDS = new Set([
     "LINE_ITEM_MATCH",
     "ECONOMIC_PURPOSE",
@@ -2126,20 +2194,34 @@ function buildConfidenceInputs(args: {
     "VENDOR_DEFAULT",
     "CAPITAL_CLASS_MAP",
   ]);
-  function hasSubstantiveEvidence(evidence: ReadonlyArray<{ kind: string }> | undefined | null): boolean {
+  const MIN_SUBSTANTIVE_SCORE = 8;
+  function hasTransactionSupportedEvidence(evidence: ReadonlyArray<{ kind: string; score: number }> | undefined | null): boolean {
     if (!evidence) return false;
     for (const e of evidence) {
-      if (SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind)) return true;
+      if (SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind) && (e.score ?? 0) >= MIN_SUBSTANTIVE_SCORE) return true;
     }
     return false;
   }
 
-  const glCandidates = a.gl?.candidates ?? [];
-  const semanticallyCompetitiveAlternates = glCandidates
-    .slice(1)
-    .filter((c) => hasSubstantiveEvidence(c.evidence));
+  const glCandidatesRaw = a.gl?.candidates ?? [];
+  const winnerAccountId = glCandidatesRaw[0]?.accountId ?? null;
+
+  // Gate 1: dedupe alternates by canonical accountId + exclude winner.
+  const seenAlternateIds = new Set<string>();
+  const distinctAlternates = glCandidatesRaw.slice(1).filter((c) => {
+    if (c.accountId == null) return false;
+    if (winnerAccountId != null && c.accountId === winnerAccountId) return false;
+    if (seenAlternateIds.has(c.accountId)) return false;
+    seenAlternateIds.add(c.accountId);
+    return true;
+  });
+
+  // Gate 2: keep only alternates with transaction-supported substantive evidence.
+  const semanticallyCompetitiveAlternates = distinctAlternates
+    .filter((c) => hasTransactionSupportedEvidence(c.evidence as ReadonlyArray<{ kind: string; score: number }>));
+
   const gl = {
-    winnerConfidence: glCandidates[0]?.confidence ?? null,
+    winnerConfidence: glCandidatesRaw[0]?.confidence ?? null,
     compatibleCount: Math.min(1 + semanticallyCompetitiveAlternates.length, 6),
     strongestAlternateConfidence: semanticallyCompetitiveAlternates[0]?.confidence ?? null,
     abstained: (a.gl?.accountNumber ?? null) == null,

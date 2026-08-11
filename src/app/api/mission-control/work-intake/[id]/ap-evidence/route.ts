@@ -203,6 +203,24 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       accountName: analysis.gl.accountName,
       reason: analysis.gl.reason,
       source: analysis.gl.source,
+      // Sprint 3 · Phase 4R FINAL confidence integrity closeout
+      // (2026-08-11) — bounded diagnostic exposing the top ranker
+      // candidates + their canonical account IDs + evidence-kind
+      // arrays. Required by §8/§14 (analysis → projection → DOM
+      // parity) so we can prove the first-failure boundary for
+      // duplicate-account-as-runner-up and nonsensical-alternate
+      // cases. Bounded to top 6 candidates and short evidence
+      // detail. No PII, no invoice bytes.
+      candidates: (analysis.gl.candidates ?? []).slice(0, 6).map((c) => ({
+        accountId: c.accountId,
+        accountNumber: c.accountNumber,
+        accountName: c.accountName,
+        fsGroupKey: c.fsGroupKey,
+        categoryKey: c.categoryKey,
+        confidence: c.confidence,
+        evidenceKinds: (c.evidence ?? []).map((e) => e.kind),
+        evidenceCount: (c.evidence ?? []).length,
+      })),
     },
     persistedFindings: intake.findings,
     availableActions: {
