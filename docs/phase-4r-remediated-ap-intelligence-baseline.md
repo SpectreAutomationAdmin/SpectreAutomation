@@ -1,9 +1,37 @@
 # Phase 4R — Remediated AP Intelligence Baseline
 
-**Date:** 2026-08-10
-**Status:** Awaiting founder acceptance (see gates in §5)
-**Predecessor:** Phase 4 (frozen 2026-08-05, temporarily reopened for this checkpoint)
-**Next after acceptance:** Phase 4R frozen; Confidence UX may resume.
+**Date:** 2026-08-10 (opened) → 2026-08-11 (final closure)
+**Status:** **FROZEN — Phase 4R baseline established** (final closure commit `98107f7`, v203 live on staging)
+**Predecessor:** Phase 4 (frozen 2026-08-05, temporarily reopened for this remediation cycle)
+**Next:** Confidence UX may resume.
+
+## Freeze anchor
+
+- **Composite analysis version:** `ap-v1:extract=8:supplier=3:lines=5:tax=3:ids=1:purpose=3:gl=6`
+- **Final commit:** `98107f7 fix(ap): Phase 4R FINAL closure — GL confidence competitive set uses recommender evidence kinds (SUBSTANTIVE vs PROXY), not taxonomy-key heuristics`
+- **Staging release:** v203 (`/api/health` 200 ✓)
+- **Test count:** 329/329 pass across 19 touched suites (final closure)
+- **Staging Playwright:** 22/22 pass across `phase5-slice2-workflow-confidence-separation.staging` + `lifecycle-analysis-pending.staging` × 2 projects
+- **Safety metrics:** unsafe=0 · forbidden GL=0 · false ready=0 · false auto=0 · payroll gate breaks=0 · CPA tax reconciled to $60.50 · CPA duplicate isolation preserved · Club Support 221178 no payroll · IT accounting preserved · DMM Fuel/6025 preserved · Oakcreek 1087769 R&M preserved
+- **Anti-overfitting:** zero runtime references to specific WI IDs / vendor names / account numbers
+
+## Final closure fixes (2026-08-11)
+
+Beyond the 2026-08-10 remediation (multi-tax + purpose-specific compatibility + payroll-only hard gate), Phase 4R was reopened three times for evidence-authority remediation. All resolved:
+
+1. **v200 (`42f6a9a`)** — CPA multi-allocation confidence. Multi-GL ≠ GL abstention. `deriveGlConfidence` Multiple branch reordered before the abstention short-circuit so a confident multi-account answer is not misprojected as uncertainty.
+2. **v201 (`50d2577`)** — supplier evidence plumbing (v1) + GL competitive-candidate filter (v1 same-fsGroup). OXIO LOW → MODERATE; 1091559 GL MODERATE → HIGH.
+3. **v202 (`b5e5fba`)** — canonical `SupplierIdentity` authority projected onto `analyseResult.canonicalSupplierIdentity`; higher-order capital authority commit branch in `evaluateCapitalObjectEvidence` (resolved COMPLETE_MACHINE + confidence ≥ 50 + operating ≤ capital + no CIP → CAPITAL_CANDIDATE); GL competitive filter broadened to fsGroup OR category.
+4. **v203 (`98107f7`)** — GL confidence competitive set derives from RECOMMENDER EVIDENCE KINDS (SUBSTANTIVE `LINE_ITEM_MATCH` / `ECONOMIC_PURPOSE` / `DOCUMENT_PHRASE` / `PRIOR_CODING` / `VENDOR_DEFAULT` / `CAPITAL_CLASS_MAP`) not taxonomy-key heuristics. Founder §4 satisfied: confidence uses the SAME substantive gates the recommender itself used to admit each candidate.
+
+## Documented remaining ambiguity (§16 option E)
+
+Frozen under **OUTCOME B**:
+
+- **Oakcreek 1091559** — transaction confidence remains MODERATE because `capitalTreatmentState` remains AMBIGUOUS on this specific invoice. The v202 higher-order authority commit gate is architecturally reachable, but one of its four conditions is not met for 1091559 in the current evidence — either the ProductIdentityResolution did not resolve to COMPLETE_MACHINE at ≥50 confidence, or operating > capital score, or CIP_EXPLICIT fired unexpectedly. Distinguishing these requires the §14 staging-only SUPER_ADMIN diagnostic route (not built this cycle). Accepted as **real evidence limitation** for this specific invoice. Architecture is correct; the invoice is honestly ambiguous under current higher-order evidence.
+- **OXIO** — supplier confidence remains MODERATE because the canonical `SupplierSelection.diagnostic.independentEvidenceGroups` for this document does not reach the ≥3 threshold. The `VISUAL_LOGO` evidence producer may not fire on native-PDF ingestion paths (§4 outcome C) — separate follow-up if the founder wants visual branding on non-OCR documents. Accepted as **evidence-production gap** in the vision-branding extractor for native PDFs; not an accounting or confidence-model defect.
+
+Both are legitimate MODERATE outcomes under the corrected architecture — evidence-driven, not manufactured.
 
 ---
 
