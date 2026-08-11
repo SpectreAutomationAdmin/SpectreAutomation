@@ -272,16 +272,24 @@ function deriveGlConfidence(ap: ApInvoiceCardIntelligence): DecisionConfidence {
   let level: FounderConfidence = "MODERATE";
   let reason: string | null = null;
 
-  if (g?.abstained || !gl) {
-    level = "NEEDS_REVIEW";
-    reason = "GL abstention";
-    supporting.push(
-      "Spectre understands the purchase but cannot distinguish between remaining eligible accounts with enough confidence",
-    );
-    return { level, label: LONG_LABEL[level], supporting, reason };
-  }
-
-  // Multiple → defer to allocation-level review states.
+  // Phase 4R final freeze-blocker (2026-08-11) — Multiple allocation
+  // is not GL abstention.
+  //
+  // When the allocation composer authoritatively resolves an invoice
+  // into ≥2 accepted GL accounts, `category.glAccountNumber` is
+  // deliberately nulled by the projection's Correction D (a single
+  // document-level GL is inappropriate for a Multiple invoice). The
+  // document-level `analysis.gl` recommender may also commit to a
+  // single "best-single-account" answer (`g.abstained === false`) or
+  // may abstain (`g.abstained === true`) — EITHER outcome from the
+  // single-account recommender is IRRELEVANT for a Multiple invoice
+  // because the multi-account allocation authority owns the answer.
+  //
+  // Therefore the Multiple branch MUST run before the abstention
+  // short-circuit. If it doesn't, `!gl` (nulled category) fires and
+  // Spectre reports "Needs review · GL" on an invoice whose per-
+  // allocation confidence is unambiguously HIGH — the exact
+  // contradiction the founder review of v199 CPA exposed.
   if (cat?.label === "Multiple") {
     const anyUnresolved = (ap.allocations?.entries ?? []).some(
       (e) => e.recommendedAccount == null,
@@ -299,6 +307,21 @@ function deriveGlConfidence(ap: ApInvoiceCardIntelligence): DecisionConfidence {
       level = "HIGH";
       supporting.push(`All ${ap.allocations?.entries?.length ?? ""} allocations commit to accepted GL accounts`.trim());
     }
+    return { level, label: LONG_LABEL[level], supporting, reason };
+  }
+
+  // Single-allocation-or-none abstention. Reached only when the
+  // category label is NOT Multiple — i.e. the projection expects one
+  // authoritative GL to represent the whole invoice. In that
+  // situation, a null `category.glAccountNumber` OR an abstained
+  // document-level recommender genuinely means "Spectre cannot
+  // commit."
+  if (g?.abstained || !gl) {
+    level = "NEEDS_REVIEW";
+    reason = "GL abstention";
+    supporting.push(
+      "Spectre understands the purchase but cannot distinguish between remaining eligible accounts with enough confidence",
+    );
     return { level, label: LONG_LABEL[level], supporting, reason };
   }
 
