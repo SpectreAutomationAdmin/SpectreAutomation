@@ -3,8 +3,8 @@
 **Branch:** `refactor/gl-single-authority`
 **Baseline:** v206 = `cbb1b52` (main + staging unchanged)
 **Current session ended:** 2026-08-11
-**Phase reached:** **Phase 1 complete + hardened** (TDD RED verified for the right reason; static architectural guard added)
-**Next phase to begin:** **Phase 2 — build the canonical unified ranker**
+**Phase reached:** **Phase 1 complete + hardened; Phase 2.1 + 2.2 complete** (scoring analysis documented + canonical types define invariant-by-construction; rankCanonical implementation body deferred to next session per §12 checkpoint discipline)
+**Next phase to begin:** **Phase 2.3 — implement rankCanonical() body**
 
 ---
 
@@ -64,9 +64,35 @@ The two failure modes trace to the same root cause (analyse.ts:1583 `rankPurpose
 - Not pushed (feature branch is local; push at end of Phase 6 or when ready for founder review).
 - Main + staging remain on v206. Founder-facing behaviour unchanged.
 
-## Phase 2 · what to do next session
+## Phase 2 progress this session
 
-**Goal:** build ONE canonical unified ranker that consolidates the accounting intelligence currently distributed between `rankAccountsPure` and `rankPurposeDrivenAccounts`. Do NOT create a third ranker (§6). Do NOT sum scores naively (§7).
+**Phase 2.1 · scoring semantics + correlation analysis (COMPLETE)**
+- New: [docs/phase-4r-unified-ranker-scoring.md](./phase-4r-unified-ranker-scoring.md)
+- Documents both pipelines' candidate universes, empty-recommendation exits, signal/weight tables, evidence emission rules, winner semantics.
+- **Correlation finding**: 8-10 signals across the two pipelines are largely correlated derivatives of the same invoice phrase. Naïve sum would inflate one observation to 100+ points.
+- **Consolidation rule** (§3.3): signals grouped into 5 evidence FAMILIES; MAX within family (collapse correlated signals), SUM across families (independent information sources).
+- Families: `TRANSACTION_TEXT`, `TAXONOMY_ALIGNMENT`, `NATURE_ROLE`, `VENDOR_HISTORY`, `DEPARTMENT_CONTEXT`.
+- Canonical score scale: 0..100 harmonised. `RECOMMEND` at 60-90, `MODERATE` 40-60, `ABSTAIN` below commit floor.
+
+**Phase 2.2 · canonical output contract (COMPLETE)**
+- New: [src/lib/ap-intelligence/canonical-ranker.ts](../src/lib/ap-intelligence/canonical-ranker.ts) — types + placeholder implementation.
+- **Discriminated result union** enforces §1 invariant BY CONSTRUCTION:
+  - `RECOMMEND` — non-empty `RankedCandidatesNonEmpty` tuple (winner === candidates[0] structurally); no separate `winnerAccountNumber` field can diverge
+  - `ABSTAIN` — same tuple shape; winner still candidates[0]; separate `abstentionReason`
+  - `NO_ELIGIBLE_CANDIDATES` — empty candidates by type; distinct from ABSTAIN (§7)
+  - `ANALYSIS_FAILURE` — empty candidates by type; distinct from NO_ELIGIBLE_CANDIDATES (§7)
+- `canonicalWinnerAccountNumber()` accessor reads `candidates[0]` directly — no way for downstream code to select a different account without violating the type.
+- New: [tests/phase4r-canonical-ranker.test.ts](../tests/phase4r-canonical-ranker.test.ts) — 6 type-contract tests all PASS. Locks the placeholder as-is so Phase 2.3 must deliberately replace it.
+
+**Phase 2.3 · implementation body (NEXT SESSION)**
+Design in scoring doc §6 · implementation plan for Phase 2.3:
+1. Reuse existing scoring primitives: `conceptRelatedness`, `extractConceptsForAccount`, `extractQueryConcepts`, contradiction logic (from Pipeline A); `PURPOSE_ACCOUNT_TYPE`, `PURPOSE_CATEGORY_HINTS`, `evaluatePurposeAccountAffinity`, Jaccard tokeniser (from Pipeline B).
+2. Score each candidate per family; collapse within family (MAX), sum across families.
+3. Emit `CanonicalEvidence[]` per candidate — Phase 4 will add `role: DECISION|DIAGNOSTIC`; Phase 2.3 emits raw `contribution` only so Phase 4's threshold derivation has real data.
+4. Sort by score, produce discriminated `CanonicalRankerResult`.
+5. Correlation-avoidance unit tests: staged fixtures where two correlated signals are ON simultaneously, prove score does not double-count.
+
+## Phase 2 · what to do next session
 
 ### 2.1 — Read + document current scoring semantics BEFORE writing code
 
@@ -168,11 +194,13 @@ Operational context limits are NOT stop conditions.
 ## Continuation instructions for next session
 
 1. `git checkout refactor/gl-single-authority`
-2. Confirm `git log --oneline -3` shows the Phase 1 commit at head.
-3. Confirm `npx vitest run tests/phase4r-refactor-single-gl-authority.test.ts` still fails on `utility` (WINNER_REPLACED_AFTER_RANKING) and `novel_vendor` (NO_CANDIDATES).
-4. Begin Phase 2.1 (scoring semantics documentation) — do NOT skip.
-5. Do not investigate the architecture from scratch — it is documented above and in the §Investigation report from the prior session. Consult those first.
-6. Do not modify main. Do not deploy. Deployment happens after Phase 6 gate.
+2. Confirm `git log --oneline -3` shows the latest Phase 2.1/2.2 commit at head.
+3. Confirm `npx vitest run tests/phase4r-refactor-single-gl-authority.test.ts tests/phase4r-canonical-ranker.test.ts` shows the expected state: 4 failed (utility + novel_vendor invariant checks + their explicit regressions) / 23 passed (15 invariant-holds scenarios + anti-overfitting + static guard + 6 type-contract + placeholder lock).
+4. **Read [docs/phase-4r-unified-ranker-scoring.md](./phase-4r-unified-ranker-scoring.md) first** — it documents the scoring semantics AND the consolidation rules that Phase 2.3 must implement. Do not re-derive the scoring analysis.
+5. Begin Phase 2.3 by implementing the family-based scoring in `rankCanonical()`. The placeholder must be deliberately replaced (test in `phase4r-canonical-ranker.test.ts` locks its current behaviour so accidental leaves are caught).
+6. Correlation-avoidance tests: add to `phase4r-canonical-ranker.test.ts` — stage synthetic inputs where multiple signals in the same evidence family are ON, prove score is MAX not SUM within the family.
+7. Migrate `tests/c15u-recommender-ranking.test.ts` (30+ tests) — likely candidates: change tests that assert specific score numbers to the harmonised 0..100 scale.
+8. Do not modify `analyse.ts`. Do not deploy. Deployment happens after Phase 6 gate.
 
 ## Session commit
 
