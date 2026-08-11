@@ -1419,16 +1419,25 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           "PRIOR_CODING", "VENDOR_DEFAULT", "CAPITAL_CLASS_MAP",
         ]);
         const MIN_SCORE = 8;
-        const winnerId = gl.candidates[0]?.accountId ?? null;
-        const seen = new Set<string>();
+        // Gate 1: canonical winner identity — from the recommendation
+        // authority (gl.accountNumber), not from candidates[0]. Track
+        // both accountNumber + accountId axes.
+        const winnerNumber = gl.accountNumber ?? null;
+        const winnerCand = winnerNumber != null
+          ? gl.candidates.find((c) => c.accountNumber === winnerNumber) ?? null
+          : (gl.candidates[0] ?? null);
+        const winnerId = winnerCand?.accountId ?? null;
+        const seenNumbers = new Set<string>();
+        const seenIds = new Set<string>();
         return gl.candidates
-          .slice(1)
           .filter((c) => {
-            // Gate 1: identity distinctness
-            if (c.accountId == null) return false;
-            if (winnerId != null && c.accountId === winnerId) return false;
-            if (seen.has(c.accountId)) return false;
-            seen.add(c.accountId);
+            if (c.accountNumber == null) return false;
+            if (winnerNumber != null && c.accountNumber === winnerNumber) return false;
+            if (c.accountId != null && winnerId != null && c.accountId === winnerId) return false;
+            if (seenNumbers.has(c.accountNumber)) return false;
+            if (c.accountId != null && seenIds.has(c.accountId)) return false;
+            seenNumbers.add(c.accountNumber);
+            if (c.accountId != null) seenIds.add(c.accountId);
             return true;
           })
           .filter((c) =>
@@ -2204,15 +2213,36 @@ function buildConfidenceInputs(args: {
   }
 
   const glCandidatesRaw = a.gl?.candidates ?? [];
-  const winnerAccountId = glCandidatesRaw[0]?.accountId ?? null;
+  // Gate 1: canonical winner identity — resolved from `a.gl.accountNumber`
+  // (the recommendation authority) rather than `candidates[0]`, because
+  // the ranker's top-scored candidate is not always the selected winner
+  // (Club Support 221178 proved this: candidates[0] = 6033 R&M but
+  // `a.gl.accountNumber` = 6071 Subscriptions selected via a different
+  // path). Winner identity is tracked on BOTH accountId AND accountNumber
+  // so dedupe/exclusion works regardless of which the ranker populated.
+  const winnerAccountNumber = a.gl?.accountNumber ?? null;
+  const winnerCandidate = winnerAccountNumber != null
+    ? glCandidatesRaw.find((c) => c.accountNumber === winnerAccountNumber) ?? null
+    : (glCandidatesRaw[0] ?? null);
+  const winnerAccountId = winnerCandidate?.accountId ?? null;
+  const winnerNumbers = new Set<string>();
+  const winnerIds = new Set<string>();
+  if (winnerAccountNumber != null) winnerNumbers.add(winnerAccountNumber);
+  if (winnerAccountId != null) winnerIds.add(winnerAccountId);
 
-  // Gate 1: dedupe alternates by canonical accountId + exclude winner.
   const seenAlternateIds = new Set<string>();
-  const distinctAlternates = glCandidatesRaw.slice(1).filter((c) => {
-    if (c.accountId == null) return false;
-    if (winnerAccountId != null && c.accountId === winnerAccountId) return false;
-    if (seenAlternateIds.has(c.accountId)) return false;
-    seenAlternateIds.add(c.accountId);
+  const seenAlternateNumbers = new Set<string>();
+  const distinctAlternates = glCandidatesRaw.filter((c) => {
+    if (c.accountNumber == null) return false;
+    // Hard-exclude winner (either identity axis).
+    if (winnerNumbers.has(c.accountNumber)) return false;
+    if (c.accountId != null && winnerIds.has(c.accountId)) return false;
+    // Dedupe by accountNumber (canonical COA identity used by
+    // recommendation/posting) AND accountId (DB primary key).
+    if (seenAlternateNumbers.has(c.accountNumber)) return false;
+    if (c.accountId != null && seenAlternateIds.has(c.accountId)) return false;
+    seenAlternateNumbers.add(c.accountNumber);
+    if (c.accountId != null) seenAlternateIds.add(c.accountId);
     return true;
   });
 
