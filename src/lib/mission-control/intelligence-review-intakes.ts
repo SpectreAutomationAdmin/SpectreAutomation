@@ -1419,14 +1419,20 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           "PRIOR_CODING", "VENDOR_DEFAULT", "CAPITAL_CLASS_MAP",
         ]);
         const MIN_SCORE = 8;
-        // Gate 1: canonical winner identity — from the recommendation
-        // authority (gl.accountNumber), not from candidates[0]. Track
-        // both accountNumber + accountId axes.
+        const MIN_REL = 0.40;
+        const substScore = (evidence: ReadonlyArray<{ kind: string; score: number }> | undefined | null): number => {
+          if (!evidence) return 0;
+          let t = 0;
+          for (const e of evidence) if (SUBSTANTIVE.has(e.kind) && (e.score ?? 0) >= MIN_SCORE) t += e.score;
+          return t;
+        };
+        // Gate 1: canonical winner identity from recommendation authority.
         const winnerNumber = gl.accountNumber ?? null;
         const winnerCand = winnerNumber != null
           ? gl.candidates.find((c) => c.accountNumber === winnerNumber) ?? null
           : (gl.candidates[0] ?? null);
         const winnerId = winnerCand?.accountId ?? null;
+        const winnerScore = substScore(winnerCand?.evidence as ReadonlyArray<{ kind: string; score: number }> | undefined);
         const seenNumbers = new Set<string>();
         const seenIds = new Set<string>();
         return gl.candidates
@@ -1440,10 +1446,16 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
             if (c.accountId != null) seenIds.add(c.accountId);
             return true;
           })
-          .filter((c) =>
-            // Gate 2: transaction-supported substantive evidence
-            (c.evidence ?? []).some((e) => SUBSTANTIVE.has(e.kind) && (e.score ?? 0) >= MIN_SCORE),
-          )
+          .filter((c) => {
+            // Gate 2 proportional: ≥ 40% of winner's substantive score.
+            const altScore = substScore(c.evidence as ReadonlyArray<{ kind: string; score: number }>);
+            if (altScore <= 0) return false;
+            if (winnerScore <= 0) {
+              const items = (c.evidence ?? []).filter((e) => SUBSTANTIVE.has(e.kind) && (e.score ?? 0) >= MIN_SCORE);
+              return items.length >= 2 || items.some((e) => (e.score ?? 0) >= 20);
+            }
+            return altScore >= winnerScore * MIN_REL;
+          })
           .slice(0, 4)
           .map((c) => ({
             accountNumber: c.accountNumber,
@@ -2204,12 +2216,16 @@ function buildConfidenceInputs(args: {
     "CAPITAL_CLASS_MAP",
   ]);
   const MIN_SUBSTANTIVE_SCORE = 8;
-  function hasTransactionSupportedEvidence(evidence: ReadonlyArray<{ kind: string; score: number }> | undefined | null): boolean {
-    if (!evidence) return false;
+  const MIN_RELATIVE_STRENGTH = 0.40;
+  function substantiveScore(evidence: ReadonlyArray<{ kind: string; score: number }> | undefined | null): number {
+    if (!evidence) return 0;
+    let total = 0;
     for (const e of evidence) {
-      if (SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind) && (e.score ?? 0) >= MIN_SUBSTANTIVE_SCORE) return true;
+      if (SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind) && (e.score ?? 0) >= MIN_SUBSTANTIVE_SCORE) {
+        total += e.score;
+      }
     }
-    return false;
+    return total;
   }
 
   const glCandidatesRaw = a.gl?.candidates ?? [];
@@ -2246,9 +2262,43 @@ function buildConfidenceInputs(args: {
     return true;
   });
 
-  // Gate 2: keep only alternates with transaction-supported substantive evidence.
-  const semanticallyCompetitiveAlternates = distinctAlternates
-    .filter((c) => hasTransactionSupportedEvidence(c.evidence as ReadonlyArray<{ kind: string; score: number }>));
+  // Gate 2: PROPORTIONAL transaction-supported substantive evidence.
+  // An alternate is confidence-competitive when its total substantive-
+  // evidence score is ≥ 40% of the winner's substantive-evidence
+  // score. Absolute-only score thresholds were insufficient: on the
+  // Club Support 221178 candidate list, the winner had 5 LINE_ITEM_MATCH
+  // items while runners-up had 1 each — every runner-up passed the
+  // absolute ≥ 8 gate but represented one-fifth of the substantive
+  // signal.
+  //
+  // Proportional test compares like-with-like — the ranker's own
+  // scoring produces evidence weights on the same scale, so a
+  // candidate at < 40% of the winner's substantive weight is
+  // structurally not a serious competing interpretation of the same
+  // transaction.
+  //
+  // Winner substantive score comes from the RESOLVED winner candidate
+  // (matched by accountNumber), not candidates[0] (which may differ
+  // from the recommendation authority).
+  const winnerSubstantiveScore = substantiveScore(winnerCandidate?.evidence as ReadonlyArray<{ kind: string; score: number }> | undefined);
+  const semanticallyCompetitiveAlternates = distinctAlternates.filter((c) => {
+    const altScore = substantiveScore(c.evidence as ReadonlyArray<{ kind: string; score: number }>);
+    if (altScore <= 0) return false;
+    if (winnerSubstantiveScore <= 0) {
+      // Winner has no substantive evidence — cannot compute a
+      // proportion. Fall back to a stricter absolute check: ≥ 2
+      // substantive items OR a single item ≥ 20. This handles edge
+      // cases where the winner was chosen via a non-substantive path
+      // (e.g. capital-class map alone) yet a lexically-boosted
+      // alternate should still be excluded.
+      const items = (c.evidence ?? []).filter((e) =>
+        SUBSTANTIVE_EVIDENCE_KINDS.has(e.kind) && (e.score ?? 0) >= MIN_SUBSTANTIVE_SCORE,
+      );
+      if (items.length >= 2) return true;
+      return items.some((e) => (e.score ?? 0) >= 20);
+    }
+    return altScore >= winnerSubstantiveScore * MIN_RELATIVE_STRENGTH;
+  });
 
   const gl = {
     winnerConfidence: glCandidatesRaw[0]?.confidence ?? null,
