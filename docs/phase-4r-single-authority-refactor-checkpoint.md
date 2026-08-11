@@ -3,8 +3,8 @@
 **Branch:** `refactor/gl-single-authority`
 **Baseline:** v206 = `cbb1b52` (main + staging unchanged)
 **Current session ended:** 2026-08-11
-**Phase reached:** **Phase 1 complete + hardened; Phase 2.1 + 2.2 + 2.3 complete** (canonical unified ranker implemented with family-based scoring + correlation-avoidance + full coverage tests + concrete ranking examples for six accounting shapes)
-**Next phase to begin:** **Phase 2 legacy suite migration + Phase 3 — remove analyse.ts post-ranking override authorities**
+**Phase reached:** **Phase 2 exit gate CLOSED + Phase 3.1 audit COMPLETE** (canonical engine + tie-state + contradictions + Phase 3 override-migration plan documented)
+**Next phase to begin:** **Phase 3.2 — migrate Group A (purpose/ontology overrides at analyse.ts lines 1446, 1472, 1590)**
 
 ---
 
