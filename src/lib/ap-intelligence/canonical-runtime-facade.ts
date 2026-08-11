@@ -29,6 +29,14 @@ import type { LineItem } from "./line-items-extract";
 import type { CapitalVsOperatingRecommendation } from "./capital-vs-operating";
 import type { CapitalVsOperatingState, ExtractedInvoice } from "./types";
 import type { VendorResolveResult } from "./vendor-resolve";
+import type { CapitalEvidenceDecisionResult } from "./capital-evidence";
+import type { ProductIdentityResolution } from "./product-identity-resolution";
+import type { PurchasedObjectIdentity } from "./purchased-object-identity";
+import type { EligibleAccountView } from "./accounting-nature-compatibility";
+import { resolveAccountSemantics } from "./account-semantics";
+import { detectCipEvidence } from "./account-semantics/cip-evidence";
+import { detectFinancingEvidence } from "./account-semantics/financing-evidence";
+import { evaluateCompatibilityGate } from "./account-semantics/compatibility-gate";
 
 // Local mirror — the ranker's expected debit role vocabulary.
 export type ExpectedDebitRoleLocal = "CAPITAL_ASSET" | "OPERATING_EXPENSE" | "UNKNOWN";
@@ -81,6 +89,18 @@ export interface CanonicalFacadeArgs {
   natureLeader?: string;
   natureConfidence?: number;
   natureIsDefensible?: boolean;
+  /** Phase 4R · Phase 3.4 (Group C) — capital intelligence signals
+   *  used to compute per-account compatibility-gate verdicts BEFORE
+   *  canonical ranking. Replaces the Group C capital-aware full-COA
+   *  ranker. When all four are provided, the facade runs the gate for
+   *  each eligible account and passes PREFERRED / INCOMPATIBLE +
+   *  CONTRADICTED verdicts through as per-account scoring evidence
+   *  inside the CAPITAL_NATURE family. */
+  capitalDecisionFull?: CapitalEvidenceDecisionResult;
+  productIdentity?: ProductIdentityResolution;
+  purchasedObjects?: ReadonlyArray<PurchasedObjectIdentity>;
+  transactionFunctionalSignals?: string[];
+  additionalEvidenceTexts?: string[];
 }
 
 /** Runs the canonical ranker and returns a GlRecommendation-shaped
@@ -183,6 +203,47 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     args.capital.state === "CAPITAL" ? 80
     : args.capital.state === "OPERATING" ? 80
     : (capitalDecisionResolved === "REPAIR_MAINTENANCE" ? natureConfidence : 0);
+  // Phase 4R · Phase 3.4 (Group C) — pre-ranking compatibility-gate
+  // evaluation. Runs the founder-approved compatibility gate for every
+  // eligible account against the capital decision + product identity +
+  // purchased-object context + CIP/financing evidence + department
+  // functional signals. Emits two lists (preferred + contradicted)
+  // that the canonical ranker consumes as CAPITAL_NATURE-family
+  // observations. This REPLACES the Group C capital-aware full-COA
+  // ranker whose winner-selection role was a second competition; the
+  // gate here does not select an account, only scores per-account
+  // features.
+  let preferredAccountNumbers: string[] | undefined;
+  let contradictedAccountNumbers: string[] | undefined;
+  if (args.capitalDecisionFull != null && args.purchasedObjects != null && args.productIdentity != null) {
+    const cipEvidence = detectCipEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
+    const financingEvidence = detectFinancingEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
+    const txFuncSignals = args.transactionFunctionalSignals
+      ?? args.purchasedObjects.map((o) => o.description).filter(Boolean);
+    const primaryObjectType = args.productIdentity.selected?.objectType ?? null;
+    const preferred: string[] = [];
+    const contradicted: string[] = [];
+    for (const acct of filtered.eligible) {
+      // filtered.eligible has the full EligibleAccountView shape that
+      // resolveAccountSemantics + evaluateCompatibilityGate consume.
+      const semantics = resolveAccountSemantics(acct as unknown as EligibleAccountView);
+      const gate = evaluateCompatibilityGate({
+        semantics,
+        capitalDecision: args.capitalDecisionFull.decision,
+        productObjectType: primaryObjectType,
+        transactionDepartment: args.departmentKey,
+        transactionFunctionalSignals: txFuncSignals,
+        cipEvidence,
+        financingEvidence,
+      });
+      if (gate.finalVerdict === "PREFERRED") preferred.push(acct.accountNumber);
+      if (gate.finalVerdict === "INCOMPATIBLE" || gate.finalVerdict === "CONTRADICTED") {
+        contradicted.push(acct.accountNumber);
+      }
+    }
+    preferredAccountNumbers = preferred;
+    contradictedAccountNumbers = contradicted;
+  }
   const transaction: NormalisedTransactionInterpretation = {
     purposeConcept,
     purposeConfidence,
@@ -192,6 +253,8 @@ export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<
     natureLeader,
     natureConfidence,
     natureIsDefensible,
+    preferredAccountNumbers,
+    contradictedAccountNumbers,
     departmentKey: args.departmentKey,
     departmentAccountNamePatterns: args.departmentAccountNamePatterns,
     canonicalLineItems: args.canonicalLineItems.map((li) => ({
@@ -386,6 +449,7 @@ function mapEvidenceKindToLegacy(kind: string): string {
     case "CAPITAL_ASSET_CATEGORY_BONUS":
     case "RM_EXPENSE_MATCH":
     case "NATURE_COMPAT":
+    case "NATURE_GATE_PREFERRED":
       return "CAPITAL_CLASS_MAP";
     case "ACCOUNT_NAME_SIMILARITY":
     case "FS_GROUP_TAXONOMY":
@@ -396,6 +460,7 @@ function mapEvidenceKindToLegacy(kind: string): string {
     case "NATURE_INCOMPATIBLE":
     case "RM_EXPENSE_CONTRADICTION":
     case "CAPITAL_ACCOUNT_CONTRADICTION":
+    case "NATURE_GATE_CONTRADICTED":
       return "CONTRADICTION_PENALTY";
     case "DEPARTMENT_AFFINITY":
     case "ACCOUNT_ROLE_MATCH":

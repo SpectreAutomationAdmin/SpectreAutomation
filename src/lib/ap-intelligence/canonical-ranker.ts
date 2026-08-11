@@ -115,6 +115,24 @@ export interface NormalisedTransactionInterpretation {
 
   /** Full document text — for document-phrase evidence emission. */
   documentPhraseText: string | null;
+
+  /** Phase 4R · Phase 3.4 (Group C) — compatibility-gate verdicts
+   *  computed upstream (facade) from productIdentity + purchasedObjects
+   *  + capital decision + CIP/financing evidence + department signals.
+   *  Replaces Group C's capital-aware full-COA ranker with pre-ranking
+   *  scoring evidence inside the CAPITAL_NATURE family. When populated,
+   *  every account.accountNumber listed here receives the corresponding
+   *  observation during canonical scoring.
+   *
+   *  preferredAccountNumbers → NATURE_GATE_PREFERRED (+12)
+   *  contradictedAccountNumbers → NATURE_GATE_CONTRADICTED (-20) + contradiction
+   *
+   *  MAX-within-family scoring already collapses correlated CAPITAL_NATURE
+   *  observations, so these do not double-count against NATURE_COMPAT /
+   *  CAPITAL_ASSET_MATCH / RM_EXPENSE_MATCH. Not a second competition —
+   *  scoring evidence inside the single canonical rank. */
+  preferredAccountNumbers?: ReadonlyArray<string>;
+  contradictedAccountNumbers?: ReadonlyArray<string>;
 }
 
 /** Complete input to `rankCanonical`. */
@@ -354,6 +372,11 @@ const WEIGHTS = {
   RM_EXPENSE_MATCH: 20,              // R&M expense when REPAIR_MAINTENANCE
   CAPITAL_ACCOUNT_CONTRADICTION: -25, // asset account when REPAIR_MAINTENANCE
   RM_EXPENSE_CONTRADICTION: -12,     // R&M expense when CAPITAL_CANDIDATE
+  // Phase 4R · Phase 3.4 (Group C) — pre-ranking compatibility-gate
+  // verdicts, computed upstream in the facade from productIdentity +
+  // purchasedObjects + capital decision + CIP/financing evidence.
+  NATURE_GATE_PREFERRED: 12,         // account passes gate as PREFERRED
+  NATURE_GATE_CONTRADICTED: -20,     // account rejected as INCOMPATIBLE/CONTRADICTED
   // VENDOR_HISTORY family (max 20)
   VENDOR_DEFAULT_MATCH: 15,
   PRIOR_CODING_MATCH: 12,
@@ -792,6 +815,34 @@ function scoreCandidateAgainstTransaction(
         });
       }
     }
+  }
+
+  // Phase 4R · Phase 3.4 (Group C) — compatibility-gate verdicts
+  // computed by the facade upstream. Emitted as CAPITAL_NATURE-family
+  // observations so MAX-within-family collapses correlated signals
+  // (NATURE_COMPAT / CAPITAL_ASSET_MATCH already fire from the leader-
+  // driven path). NOT a second competition — pre-scored per-account
+  // features that reach the ranker as evidence.
+  if (transaction.preferredAccountNumbers && transaction.preferredAccountNumbers.includes(account.accountNumber)) {
+    observations.push({
+      family: "CAPITAL_NATURE",
+      kind: "NATURE_GATE_PREFERRED",
+      contribution: WEIGHTS.NATURE_GATE_PREFERRED,
+      description: `compatibility gate: PREFERRED for this transaction`,
+    });
+  }
+  if (transaction.contradictedAccountNumbers && transaction.contradictedAccountNumbers.includes(account.accountNumber)) {
+    observations.push({
+      family: "CAPITAL_NATURE",
+      kind: "NATURE_GATE_CONTRADICTED",
+      contribution: WEIGHTS.NATURE_GATE_CONTRADICTED,
+      description: `compatibility gate: contradicted (nature/functional/department mismatch or missing CIP/financing evidence)`,
+    });
+    contradictions.push({
+      code: "nature_gate_contradicted",
+      penalty: -WEIGHTS.NATURE_GATE_CONTRADICTED,
+      description: `compatibility gate rejected account "${account.name}"`,
+    });
   }
 
   // ---------- VENDOR_HISTORY family ----------------------------------

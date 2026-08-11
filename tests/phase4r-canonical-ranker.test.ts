@@ -1066,6 +1066,282 @@ describe("Phase 3.3 · §5 — repair-vs-replacement uses pre-ranking nature sig
 });
 
 // ---------------------------------------------------------------------------
+// Phase 3.4 · §8 · §10 · §11 — Group C capital-competition + department +
+// same-vendor/different-economics locked into canonical scoring via
+// preferredAccountNumbers / contradictedAccountNumbers (pre-ranking
+// compatibility-gate output from the facade).
+//
+// The gate is evaluated in the facade (canonical-runtime-facade.ts)
+// against productIdentity + purchasedObjects + capital decision +
+// CIP/financing evidence + department signals. Its per-account verdict
+// arrives at rankCanonical as a scoring signal, NOT a second competition.
+// These tests exercise the ranker directly with the pre-computed lists
+// so the scoring contract is locked in.
+// ---------------------------------------------------------------------------
+
+describe("Phase 3.4 · §8 — capital vs expense competition uses pre-ranking gate verdicts", () => {
+  it("durable equipment acquisition · PREFERRED asset gate lock-in → ASSET wins", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 85,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Utility vehicle chassis complete delivery", role: "PRIMARY_PURCHASE", extension: 42000 },
+        ],
+        queryConcepts: [
+          { conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "utility vehicle chassis complete" },
+        ],
+        // The compatibility gate marked the ASSET account as PREFERRED
+        // for this transaction (COMPLETE_MACHINE product identity +
+        // capital decision + department alignment).
+        preferredAccountNumbers: ["1500"],
+        // Fee-family accounts contradicted (financing/interest without evidence).
+        contradictedAccountNumbers: ["6053", "6051"],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      expect(result.candidates[0].accountType).toBe("ASSET");
+      // NATURE_GATE_PREFERRED observation must be present on the winner.
+      const gatePreferred = result.candidates[0].evidence.find(
+        (e) => e.family === "CAPITAL_NATURE" && e.kind === "NATURE_GATE_PREFERRED",
+      );
+      expect(gatePreferred).toBeDefined();
+      expect(gatePreferred?.contribution).toBeGreaterThan(0);
+    }
+  });
+
+  it("ordinary equipment repair · gate marks R&M expense PREFERRED → EXPENSE wins, ASSET penalised", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "REPAIR_MAINTENANCE",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "REPAIR_MAINTENANCE",
+        capitalConfidence: 80,
+        purposeConcept: "REPAIR_MAINTENANCE",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Service call replace hydraulic hose fitting", role: "PRIMARY_PURCHASE", extension: 420 },
+        ],
+        queryConcepts: [
+          { conceptId: "repairs_and_maintenance", weight: 18, source: "line_item_description", evidenceSnippet: "service call replace hose" },
+        ],
+        preferredAccountNumbers: ["6035"], // R&M - Ground Equipment
+        contradictedAccountNumbers: ["1500"], // Equipment & Fixtures contradicted for R&M work
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // Winner must be an EXPENSE (not the contradicted ASSET).
+      expect(result.candidates[0].accountType).toBe("EXPENSE");
+      // The gate-preferred account 6035 must carry NATURE_GATE_PREFERRED
+      // evidence; it may not always be #0 because 6020 (Grounds
+      // Maintenance) and 6033 (R&M Preventative Maintenance) can tie
+      // or edge past on other signals — that's honest ambiguity between
+      // R&M-family expense accounts, preserved by canonical ranking.
+      const preferredCand = result.candidates.find((c) => c.accountNumber === "6035");
+      expect(preferredCand).toBeDefined();
+      const gatePref = preferredCand?.evidence.find(
+        (e) => e.family === "CAPITAL_NATURE" && e.kind === "NATURE_GATE_PREFERRED",
+      );
+      expect(gatePref).toBeDefined();
+      // The contradicted ASSET account must NOT be #0.
+      expect(result.candidates[0].accountNumber).not.toBe("1500");
+    }
+  });
+
+  it("borderline capitalization · no gate verdict → legitimate competition, no forced capital winner", () => {
+    // Facts insufficient for the gate to commit either way. No entries
+    // in preferred/contradicted lists — canonical ranking runs on its
+    // other signals only.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "UNKNOWN",
+        natureConfidence: 0,
+        natureIsDefensible: false,
+        capitalDecision: "UNRESOLVED",
+        capitalConfidence: 0,
+        purposeConcept: null,
+        purposeConfidence: 0,
+        purposeQuality: "NONE",
+        canonicalLineItems: [
+          { description: "Replacement component installed", role: "PRIMARY_PURCHASE", extension: 1800 },
+        ],
+        queryConcepts: [],
+        // Deliberately empty — gate abstained.
+        preferredAccountNumbers: [],
+        contradictedAccountNumbers: [],
+      }),
+    }));
+    // Ambiguous → margin small or ABSTAIN — no forced capital lock-in.
+    if (result.status === "RECOMMEND") {
+      expect(result.separation.marginToRunnerUp).toBeLessThan(20);
+    } else {
+      expect(["ABSTAIN", "NO_ELIGIBLE_CANDIDATES"]).toContain(result.status);
+    }
+  });
+
+  it("high-value operating expense · amount alone does not force capital classification", () => {
+    // Very large invoice but nature is UTILITY_OR_RECURRING_SERVICE.
+    // Even without an explicit PREFERRED asset entry, the EXPENSE
+    // account should win because there's no capital-decision signal.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "UTILITY_OR_RECURRING_SERVICE",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "OPERATING",
+        capitalConfidence: 80,
+        purposeConcept: "TELECOMMUNICATIONS",
+        purposeConfidence: 75,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Enterprise fibre internet monthly service", role: "PRIMARY_PURCHASE", extension: 24000 },
+        ],
+        queryConcepts: [
+          { conceptId: "utilities", weight: 15, source: "line_item_description", evidenceSnippet: "monthly service" },
+        ],
+        // ASSET account contradicted for a recurring service.
+        contradictedAccountNumbers: ["1500"],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      expect(result.candidates[0].accountType).toBe("EXPENSE");
+    }
+  });
+});
+
+describe("Phase 3.4 · §10 — department + capital interact inside the same canonical score", () => {
+  it("capital acquisition benefiting Grounds → department-specific asset (via departmentAccountNamePatterns) wins over generic asset", () => {
+    // Two ASSET accounts — one generic Equipment & Fixtures, one
+    // Grounds-Equipment (added for this test). The department pattern
+    // gives the department-specific asset a DEPARTMENT_AFFINITY boost,
+    // which combines with the capital-nature CAPITAL_ASSET_MATCH.
+    const COA_WITH_GROUNDS_ASSET = [
+      ...NEUTRAL_COA,
+      makeAccount({ number: "1510", name: "Grounds Equipment - Fixed Assets", type: "ASSET", categoryKey: "CAPITAL_ASSETS", fsGroupKey: "IS_FIXED_ASSETS" }),
+    ];
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: COA_WITH_GROUNDS_ASSET,
+      transaction: makeTransaction({
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 85,
+        purposeQuality: "HIGH",
+        departmentKey: "grounds",
+        // Pattern matches names containing "grounds" (case-insensitive).
+        departmentAccountNamePatterns: [/grounds/i],
+        canonicalLineItems: [
+          { description: "Fairway mower complete unit delivered", role: "PRIMARY_PURCHASE", extension: 52000 },
+        ],
+        queryConcepts: [
+          { conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "fairway mower complete unit" },
+        ],
+        // The gate PREFERRED both asset accounts.
+        preferredAccountNumbers: ["1500", "1510"],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // Department-specific asset should win over generic asset.
+      expect(result.candidates[0].accountNumber).toBe("1510");
+      expect(result.candidates[0].accountType).toBe("ASSET");
+    }
+  });
+});
+
+describe("Phase 3.4 · §11 — same-vendor / different-economics through Group C", () => {
+  it("vendor historically coded to R&M expense · current invoice is capital acquisition → ASSET wins (capital evidence overcomes prior coding)", () => {
+    const rmExpense = NEUTRAL_COA.find((a) => a.accountNumber === "6035")!;
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 85,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Commercial fairway mower complete unit", role: "PRIMARY_PURCHASE", extension: 48000 },
+        ],
+        queryConcepts: [
+          { conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "commercial fairway mower complete" },
+        ],
+        vendor: {
+          matchedVendorId: "vendor-1",
+          defaultAccountId: rmExpense.id,
+          priorCodingAccountNumbers: [rmExpense.accountNumber],
+        },
+        preferredAccountNumbers: ["1500"],
+        contradictedAccountNumbers: [rmExpense.accountNumber],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // ASSET must win — capital evidence + gate PREFERRED overcomes
+      // the vendor's historical R&M coding.
+      expect(result.candidates[0].accountType).toBe("ASSET");
+    }
+  });
+
+  it("vendor historically coded to capital asset · current invoice is ordinary repair → EXPENSE wins", () => {
+    const asset = NEUTRAL_COA.find((a) => a.accountNumber === "1500")!;
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        natureLeader: "REPAIR_MAINTENANCE",
+        natureConfidence: 84,
+        natureIsDefensible: true,
+        capitalDecision: "REPAIR_MAINTENANCE",
+        capitalConfidence: 80,
+        purposeConcept: "REPAIR_MAINTENANCE",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        canonicalLineItems: [
+          { description: "Mower quarterly service labour hose replacement", role: "PRIMARY_PURCHASE", extension: 380 },
+        ],
+        queryConcepts: [
+          { conceptId: "repairs_and_maintenance", weight: 18, source: "line_item_description", evidenceSnippet: "quarterly service labour" },
+        ],
+        vendor: {
+          matchedVendorId: "vendor-2",
+          defaultAccountId: asset.id,
+          priorCodingAccountNumbers: [asset.accountNumber],
+        },
+        preferredAccountNumbers: ["6035"],
+        contradictedAccountNumbers: ["1500"],
+      }),
+    }));
+    expect(result.status).toBe("RECOMMEND");
+    if (result.status === "RECOMMEND") {
+      // EXPENSE must win — repair evidence + gate PREFERRED overcomes
+      // the vendor's historical asset coding.
+      expect(result.candidates[0].accountType).toBe("EXPENSE");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §35 anti-overfitting
 // ---------------------------------------------------------------------------
 
