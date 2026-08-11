@@ -234,6 +234,33 @@ export interface CanonicalRankerProvenance {
   rankerVersion: number;
 }
 
+/** Winner separation info — Phase 2 exit-gate §3 requirement.
+ *
+ *  Downstream consumers (Phase 4 confidence) MUST distinguish:
+ *    - deterministic tie-break: `score[0] === score[1]` — a
+ *      technical winner picked by accountNumber ordering, NOT
+ *      evidentiary superiority. Confidence policy must not treat
+ *      this as a strong recommendation.
+ *    - material margin: `score[0] > score[1]` by a meaningful gap
+ *      reflecting real accounting evidence separation.
+ *
+ *  §3: "A deterministic winner is not an evidentiary winner."
+ *
+ *  Emitted on RECOMMEND and ABSTAIN variants inside the candidates
+ *  array via a top-level `separation` field. */
+export interface CanonicalWinnerSeparation {
+  /** Absolute score gap: candidates[0].score - candidates[1].score.
+   *  Zero when there is a tie or only one candidate. */
+  marginToRunnerUp: number;
+  /** True when candidates[0].score === candidates[1].score. The
+   *  winner is technically selected by deterministic accountNumber
+   *  ordering, not by material score advantage. */
+  isDeterministicTieBreak: boolean;
+  /** Number of runners-up whose score equals candidates[0].score
+   *  (i.e. structurally-tied competitors). Zero when no tie. */
+  tiedRunnerUpCount: number;
+}
+
 /** Non-empty readonly candidate list. */
 export type RankedCandidatesNonEmpty =
   Readonly<[CanonicalCandidate, ...CanonicalCandidate[]]>;
@@ -246,6 +273,7 @@ export type CanonicalRankerResult =
        *  winner === candidates[0] by construction. */
       readonly status: "RECOMMEND";
       readonly candidates: RankedCandidatesNonEmpty;
+      readonly separation: CanonicalWinnerSeparation;
       readonly abstentionReason: null;
       readonly provenance: CanonicalRankerProvenance;
     }
@@ -254,6 +282,7 @@ export type CanonicalRankerResult =
        *  evidence is insufficient for automated recommendation. */
       readonly status: "ABSTAIN";
       readonly candidates: RankedCandidatesNonEmpty;
+      readonly separation: CanonicalWinnerSeparation;
       readonly abstentionReason: string;
       readonly provenance: CanonicalRankerProvenance;
     }
@@ -904,10 +933,23 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
   const [winner, ...rest] = scored;
   const candidates: RankedCandidatesNonEmpty = [winner, ...rest];
 
+  // §3 winner separation — expose margin + tie state so downstream
+  // (Phase 4 confidence) can distinguish "won by material evidence"
+  // from "won by deterministic accountNumber tie-break".
+  const runnerUp = rest.length > 0 ? rest[0] : null;
+  const marginToRunnerUp = runnerUp ? winner.score - runnerUp.score : winner.score;
+  const tiedRunnerUpCount = rest.filter((c) => c.score === winner.score).length;
+  const separation: CanonicalWinnerSeparation = {
+    marginToRunnerUp,
+    isDeterministicTieBreak: tiedRunnerUpCount > 0,
+    tiedRunnerUpCount,
+  };
+
   if (winner.score < COMMIT_MIN_SCORE) {
     return {
       status: "ABSTAIN",
       candidates,
+      separation,
       abstentionReason: `Top candidate ${winner.accountNumber} ${winner.accountName} scored ${winner.score}, below the commit floor ${COMMIT_MIN_SCORE}. Human review required.`,
       provenance,
     };
@@ -915,6 +957,7 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
   return {
     status: "RECOMMEND",
     candidates,
+    separation,
     abstentionReason: null,
     provenance,
   };

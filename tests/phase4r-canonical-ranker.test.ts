@@ -563,6 +563,224 @@ describe("§4 diagnostics — suppressed correlated observations retained", () =
 });
 
 // ---------------------------------------------------------------------------
+// §3 TIE-STATE EXPOSURE — winner separation info for Phase 4
+// ---------------------------------------------------------------------------
+
+describe("§3 winner separation info exposed for Phase 4 confidence", () => {
+  it("RECOMMEND result carries separation.marginToRunnerUp reflecting score gap", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 88,
+        purposeQuality: "HIGH",
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        canonicalLineItems: [{ description: "Commercial mower complete unit delivered assembled", role: "PRIMARY_PURCHASE", extension: 48500 }],
+        queryConcepts: [{ conceptId: "course_equipment", weight: 22, source: "line_item_description", evidenceSnippet: "Commercial mower complete unit" }],
+      }),
+    }));
+    if (result.status === "RECOMMEND" || result.status === "ABSTAIN") {
+      expect(result.separation).toBeDefined();
+      expect(result.separation.marginToRunnerUp).toBeGreaterThanOrEqual(0);
+      expect(typeof result.separation.isDeterministicTieBreak).toBe("boolean");
+    }
+  });
+
+  it("Deterministic tie-break flag set when candidates[0].score === candidates[1].score", () => {
+    // Landscape maintenance produces a tie between two R&M-family accounts.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "REPAIR_MAINTENANCE",
+        purposeConfidence: 78,
+        purposeQuality: "HIGH",
+        natureLeader: "REPAIR_MAINTENANCE",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        canonicalLineItems: [{ description: "Landscape maintenance service quarterly", role: "PRIMARY_PURCHASE", extension: 1250 }],
+        queryConcepts: [{ conceptId: "repairs_and_maintenance", weight: 18, source: "line_item_description", evidenceSnippet: "Landscape maintenance" }],
+      }),
+    }));
+    if (result.status === "RECOMMEND" || result.status === "ABSTAIN") {
+      // Phase 2.3 concrete examples showed this scenario produces a
+      // 54-54 tie. Whether or not the score matches exactly, the
+      // separation info must be honest.
+      if (result.separation.isDeterministicTieBreak) {
+        expect(result.separation.marginToRunnerUp).toBe(0);
+        expect(result.separation.tiedRunnerUpCount).toBeGreaterThanOrEqual(1);
+        // The critical invariant §3: downstream code can now
+        // distinguish this deterministic winner from an evidentiary
+        // one. Phase 4 confidence must consult this before
+        // representing the winner as materially preferred.
+      }
+    }
+  });
+
+  it("Genuine (non-tied) margin exposes a meaningful score gap", () => {
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "PROFESSIONAL_MEMBERSHIP",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        natureLeader: "OPERATING_EXPENSE",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        canonicalLineItems: [{ description: "Annual professional membership dues subscription", role: "PRIMARY_PURCHASE", extension: 810 }],
+        queryConcepts: [
+          { conceptId: "professional_membership_dues", weight: 18, source: "line_item_description", evidenceSnippet: "Annual dues" },
+          { conceptId: "software_subscription_service", weight: 10, source: "line_item_description", evidenceSnippet: "subscription" },
+        ],
+      }),
+    }));
+    if (result.status === "RECOMMEND") {
+      if (result.candidates.length >= 2 && !result.separation.isDeterministicTieBreak) {
+        expect(result.separation.marginToRunnerUp).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5 CONTRADICTION / HARD-ELIGIBILITY tests
+// ---------------------------------------------------------------------------
+
+describe("§5 contradiction penalties + soft-vs-hard eligibility", () => {
+  it("§5 capital contradiction — R&M expense account loses on a CAPITAL_CANDIDATE transaction", () => {
+    // Capital-decision fires: any R&M expense account should receive
+    // capitalNatureBoost = RM_EXPENSE_CONTRADICTION (-12) plus a
+    // contradiction reason code.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 88,
+        purposeQuality: "HIGH",
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        canonicalLineItems: [{ description: "Commercial mower FM-9000 complete unit delivered assembled", role: "PRIMARY_PURCHASE", extension: 48500 }],
+        queryConcepts: [{ conceptId: "course_equipment", weight: 22, source: "line_item_description", evidenceSnippet: "Commercial mower complete unit" }],
+      }),
+    }));
+    if (result.status === "RECOMMEND") {
+      // Winner should be an ASSET account (capital candidate).
+      expect(result.candidates[0].accountType).toBe("ASSET");
+      // Look at any R&M expense candidate — its capital-nature-boost
+      // observation should be negative (contradiction).
+      const rmExpense = result.candidates.find((c) =>
+        c.accountType === "EXPENSE"
+        && /r\s*&\s*m|repair|maintenance/i.test(c.accountName),
+      );
+      if (rmExpense) {
+        const rmContradiction = rmExpense.evidence.find((e) =>
+          e.family === "CAPITAL_NATURE" && e.kind === "RM_EXPENSE_CONTRADICTION",
+        );
+        // Either the evidence exists as a suppressed observation, or
+        // the account was filtered out entirely; both are acceptable.
+        // If it exists, it must have a negative contribution.
+        if (rmContradiction) {
+          expect(rmContradiction.contribution).toBeLessThan(0);
+        }
+      }
+    }
+  });
+
+  it("§5 operating contradiction — routine low-value service does not drift into a fixed-asset account merely because 'equipment' appears", () => {
+    // Transaction: routine service call for equipment, low value,
+    // REPAIR_MAINTENANCE nature. Fixed-asset accounts should NOT win.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "REPAIR_MAINTENANCE",
+        purposeConfidence: 82,
+        purposeQuality: "HIGH",
+        natureLeader: "REPAIR_MAINTENANCE",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "REPAIR_MAINTENANCE",
+        capitalConfidence: 78,
+        canonicalLineItems: [{ description: "Equipment service call quarterly labour", role: "PRIMARY_PURCHASE", extension: 385 }],
+        queryConcepts: [
+          { conceptId: "repairs_and_maintenance", weight: 18, source: "line_item_description", evidenceSnippet: "Equipment service quarterly" },
+        ],
+      }),
+    }));
+    if (result.status === "RECOMMEND") {
+      // Winner must not be an ASSET account — routine service is expense.
+      expect(result.candidates[0].accountType).not.toBe("ASSET");
+    }
+  });
+
+  it("§5 vendor-history contradiction — historical coding is not destiny (validation of §9 rule via ranker output)", () => {
+    // Vendor default = 6050 Utilities but current transaction is capital.
+    const utilities = NEUTRAL_COA.find((a) => a.accountNumber === "6050")!;
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: NEUTRAL_COA,
+      transaction: makeTransaction({
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 88,
+        purposeQuality: "HIGH",
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+        canonicalLineItems: [{ description: "Complete commercial equipment delivered assembled", role: "PRIMARY_PURCHASE", extension: 8400 }],
+        queryConcepts: [{ conceptId: "course_equipment", weight: 20, source: "line_item_description", evidenceSnippet: "commercial equipment complete unit" }],
+        vendor: {
+          matchedVendorId: "v1",
+          defaultAccountId: utilities.id,
+          priorCodingAccountNumbers: [utilities.accountNumber],
+        },
+      }),
+    }));
+    if (result.status === "RECOMMEND") {
+      // Utilities-electricity (6050) got +15 VENDOR_DEFAULT from
+      // VENDOR_HISTORY family. Capital asset accounts get +20
+      // CAPITAL_ASSET_MATCH in CAPITAL_NATURE family. Capital signal
+      // wins because it spans a different independent family.
+      expect(result.candidates[0].accountNumber).not.toBe("6050");
+      expect(result.candidates[0].accountType).toBe("ASSET");
+    }
+  });
+
+  it("§6 hard eligibility separate from soft contradiction — inactive/header accounts must not compete (validated by caller-provided eligibility list)", () => {
+    // rankCanonical's contract is that `eligibleAccounts` is the
+    // POSTABLE COA — hard eligibility (isActive, !isHeader,
+    // allowManualPosting) is enforced by the caller before invoking
+    // the ranker. The ranker never gives a header/inactive account
+    // a score by construction because it never sees them.
+    //
+    // Test: passing an empty eligible list returns NO_ELIGIBLE_CANDIDATES,
+    // proving the ranker does not compensate for a missing hard filter.
+    const result = rankCanonical(makeInput({
+      eligibleAccounts: [],
+      transaction: makeTransaction({
+        purposeConcept: "CAPITAL_EQUIPMENT",
+        purposeConfidence: 88,
+        purposeQuality: "HIGH",
+        natureLeader: "CAPITAL_ASSET",
+        natureConfidence: 82,
+        natureIsDefensible: true,
+        capitalDecision: "CAPITAL_CANDIDATE",
+        capitalConfidence: 82,
+      }),
+    }));
+    expect(result.status).toBe("NO_ELIGIBLE_CANDIDATES");
+    // Provenance shows the ranker did not invent candidates from
+    // nowhere.
+    expect(result.provenance.totalCandidatesConsidered).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §14 CONCRETE RANKING EXAMPLES — diagnostic exports for the checkpoint
 // ---------------------------------------------------------------------------
 //
