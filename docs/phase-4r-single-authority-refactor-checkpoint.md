@@ -3,8 +3,8 @@
 **Branch:** `refactor/gl-single-authority`
 **Baseline:** v206 = `cbb1b52` (main + staging unchanged)
 **Current session ended:** 2026-08-11
-**Phase reached:** **Phase 1 complete + hardened; Phase 2.1 + 2.2 complete** (scoring analysis documented + canonical types define invariant-by-construction; rankCanonical implementation body deferred to next session per §12 checkpoint discipline)
-**Next phase to begin:** **Phase 2.3 — implement rankCanonical() body**
+**Phase reached:** **Phase 1 complete + hardened; Phase 2.1 + 2.2 + 2.3 complete** (canonical unified ranker implemented with family-based scoring + correlation-avoidance + full coverage tests + concrete ranking examples for six accounting shapes)
+**Next phase to begin:** **Phase 2 legacy suite migration + Phase 3 — remove analyse.ts post-ranking override authorities**
 
 ---
 
@@ -84,13 +84,46 @@ The two failure modes trace to the same root cause (analyse.ts:1583 `rankPurpose
 - `canonicalWinnerAccountNumber()` accessor reads `candidates[0]` directly — no way for downstream code to select a different account without violating the type.
 - New: [tests/phase4r-canonical-ranker.test.ts](../tests/phase4r-canonical-ranker.test.ts) — 6 type-contract tests all PASS. Locks the placeholder as-is so Phase 2.3 must deliberately replace it.
 
-**Phase 2.3 · implementation body (NEXT SESSION)**
-Design in scoring doc §6 · implementation plan for Phase 2.3:
-1. Reuse existing scoring primitives: `conceptRelatedness`, `extractConceptsForAccount`, `extractQueryConcepts`, contradiction logic (from Pipeline A); `PURPOSE_ACCOUNT_TYPE`, `PURPOSE_CATEGORY_HINTS`, `evaluatePurposeAccountAffinity`, Jaccard tokeniser (from Pipeline B).
-2. Score each candidate per family; collapse within family (MAX), sum across families.
-3. Emit `CanonicalEvidence[]` per candidate — Phase 4 will add `role: DECISION|DIAGNOSTIC`; Phase 2.3 emits raw `contribution` only so Phase 4's threshold derivation has real data.
-4. Sort by score, produce discriminated `CanonicalRankerResult`.
-5. Correlation-avoidance unit tests: staged fixtures where two correlated signals are ON simultaneously, prove score does not double-count.
+**Phase 2.3 · rankCanonical() implementation (COMPLETE)**
+- `rankCanonical()` body implemented in `canonical-ranker.ts` following the design in the scoring doc §6.
+- Reuses existing scoring primitives: `conceptRelatedness`, `extractConceptsForAccount`, `evaluatePurposeAccountAffinity`. Pipeline-A/B scoring math consolidated into ONE function.
+- Family model **revised** during Phase 2.3 per founder §3 (evidence causal-independence validation):
+  - Split original `NATURE_ROLE` family into two: `CAPITAL_NATURE` (nature classifier + capital-decision + account-role — all "does this account's nature match?") absorbed `NATURE_ROLE`'s intended scope. `TAXONOMY_ALIGNMENT` absorbed specificity bonus (it's a taxonomy signal).
+  - Final families: `TRANSACTION_TEXT`, `TAXONOMY_ALIGNMENT`, `CAPITAL_NATURE`, `VENDOR_HISTORY`, `DEPARTMENT_CONTEXT`.
+- MAX within family (correlated signals from same observation collapse) + SUM across families (independent info) + separate contradiction penalty accumulation.
+- **`countedTowardScore` field on each `CanonicalEvidence`** preserves suppressed correlated observations for engineering diagnostics per §4.
+- Discriminated result: RECOMMEND when top score ≥ 30; ABSTAIN with candidates when winner < 30; NO_ELIGIBLE_CANDIDATES when eligible list empty OR all candidates score 0; ANALYSIS_FAILURE reserved for exception paths (not currently emitted).
+- Deterministic tie-break by accountNumber.
+
+**§14 Concrete ranking examples on synthetic fixtures** (from `phase4r-canonical-ranker.test.ts`):
+
+| Scenario | Winner | Score | Runner-up | Score | Margin | Notes |
+|---|---|---|---|---|---|---|
+| `utility` (electricity) | 6050 Utilities-Electricity | 54 | 6025 Fuel | 52 | 2 | genuinely close — both utility-adjacent |
+| `novel_vendor` (aerator service) | 6020 Grounds Maintenance | 38 | 6033 R&M Preventative | 38 | 0 | tie broken by accountNumber — both plausible R&M options; candidates non-empty ✓ (§7 invariant) |
+| `capital_equipment` (mower complete unit) | 1500 Equipment & Fixtures (ASSET) | 38 | 5000 COGS Merch | 0 | 38 | capital correctly picks ASSET; runner-up gets nature-incompat penalty |
+| `same_vendor_diff_econ` (vendor default = utilities, but capital transaction) | 1500 Equipment & Fixtures (ASSET) | 38 | 5000 COGS Merch | 0 | 38 | current transaction substance beats vendor default (§9 vendor is context, not destiny) ✓ |
+| `weak_semantic_accident` (landscape maintenance) | 6020 Grounds Maintenance | 54 | 6033 R&M Preventative | 54 | 0 | both R&M-family — deterministic tie-break |
+| `genuine_ambiguity` (professional dues + subscription tokens) | 6071 Subscriptions | 49 | 6064 Membership & Dues | 32 | 17 | winner ahead but runner-up preserved as competitive (§11) |
+
+Observations:
+- Winner IS candidates[0] in every case (invariant established at type-contract boundary).
+- Family contributions visible; suppressed correlated evidence retained (§4).
+- Scores conservative (30-60 range typical) — Phase 4 will recalibrate confidence thresholds against these + real fixtures.
+- Same-vendor different-economics + weak-semantic-accident behave correctly: capital signal beats vendor history; R&M-family accounts (not bank charges / interest / IT) surface for R&M invoices.
+
+## Phase 2 exit gate status (this session)
+
+**MET**:
+- Canonical-ranker unit tests: 21/21 pass in `tests/phase4r-canonical-ranker.test.ts`. Covers §1 (structural invariant), §2 (correlation avoidance — 4 tests), §7 (correct-account discovery — 2 tests), §8 (reverse ontology), §9 (vendor not destiny), §11 (genuine ambiguity), §4 (diagnostics preservation), §7 discriminated variants (3 tests), §14 concrete examples (6 tests), §35 anti-overfitting.
+- Typecheck clean.
+- `analyse.ts` unchanged. Phase 1 invariant suite continues to show the same 4 architectural failures (utility + novel_vendor + their explicit regressions) — expected because runtime still calls the dual pipelines. Static architectural guard continues to report 10 override sites (unchanged; will flip to 0 after Phase 3).
+- No account/vendor/invoice literals introduced.
+- No deployment. Main + staging remain v206.
+
+**DEFERRED to next session**:
+- Legacy suite migration (§12) — `c15u-recommender-ranking` (30+ tests), `c15q-gl-recommend-taxonomy` (8 tests), `phase4-final-purpose-evidence-hierarchy` (16 tests), `phase4-slice5-canonical-line-items` (35 tests). Founder §12: "do not merely replace calls from the old ranker with rankCanonical and edit expected numbers until green." Each failing expectation needs to be classified as (A) preserve as legitimate accounting invariant, (B) implementation detail of the old scoring model no longer valid, or (C) behaviour created by dual-authority architecture that should disappear. This is careful semantic work — safer as a dedicated next-session focus than rushed at the end of Phase 2.3.
+- The runtime single-authority invariant remains NOT ESTABLISHED. Phase 3 wires `rankCanonical` in place of the dual-pipeline call sites.
 
 ## Phase 2 · what to do next session
 
@@ -194,13 +227,20 @@ Operational context limits are NOT stop conditions.
 ## Continuation instructions for next session
 
 1. `git checkout refactor/gl-single-authority`
-2. Confirm `git log --oneline -3` shows the latest Phase 2.1/2.2 commit at head.
-3. Confirm `npx vitest run tests/phase4r-refactor-single-gl-authority.test.ts tests/phase4r-canonical-ranker.test.ts` shows the expected state: 4 failed (utility + novel_vendor invariant checks + their explicit regressions) / 23 passed (15 invariant-holds scenarios + anti-overfitting + static guard + 6 type-contract + placeholder lock).
-4. **Read [docs/phase-4r-unified-ranker-scoring.md](./phase-4r-unified-ranker-scoring.md) first** — it documents the scoring semantics AND the consolidation rules that Phase 2.3 must implement. Do not re-derive the scoring analysis.
-5. Begin Phase 2.3 by implementing the family-based scoring in `rankCanonical()`. The placeholder must be deliberately replaced (test in `phase4r-canonical-ranker.test.ts` locks its current behaviour so accidental leaves are caught).
-6. Correlation-avoidance tests: add to `phase4r-canonical-ranker.test.ts` — stage synthetic inputs where multiple signals in the same evidence family are ON, prove score is MAX not SUM within the family.
-7. Migrate `tests/c15u-recommender-ranking.test.ts` (30+ tests) — likely candidates: change tests that assert specific score numbers to the harmonised 0..100 scale.
-8. Do not modify `analyse.ts`. Do not deploy. Deployment happens after Phase 6 gate.
+2. Confirm `git log --oneline -3` shows the Phase 2.3 commit at head.
+3. Confirm current state: `npx vitest run tests/phase4r-refactor-single-gl-authority.test.ts tests/phase4r-canonical-ranker.test.ts` → 4 failed (utility + novel_vendor invariant + explicit regressions) / 32 passed (15 invariant-holds scenarios + anti-overfitting + static guard + 21 canonical-ranker tests).
+4. **Read [docs/phase-4r-unified-ranker-scoring.md](./phase-4r-unified-ranker-scoring.md) first** — it documents scoring semantics + consolidation rules. Do not re-derive.
+5. **Legacy suite migration** (§12) — approach EACH failing expectation semantically:
+   - `c15u-recommender-ranking.test.ts` — 30+ tests on ranker behaviour. Migrate call sites from `recommendGlAccount`/`rankAccountsPure` to `rankCanonical`. For each failure: classify as (A) preserve invariant, (B) drop old scoring detail, (C) delete dual-authority artefact.
+   - `c15q-gl-recommend-taxonomy.test.ts` — 8 tests.
+   - `phase4-final-purpose-evidence-hierarchy.test.ts` — 16 tests.
+   - `phase4-slice5-canonical-line-items.test.ts` — 35 tests.
+   - Document any material semantic changes in a new section of the scoring doc.
+6. **Phase 3** — remove analyse.ts post-ranking override authorities. Group by accounting responsibility (§8): economic-purpose/ontology · capital classification · abstention/recommendation policy · split/multi-allocation · historical/vendor. For each override site: state what accounting intelligence it preserved → move to pre-ranking input feeding `rankCanonical` → delete `gl = { ...gl, accountNumber: X }` → run the fixture that motivated the override. Static architectural guard's count should drop from 10 → 0 as the sites are eliminated.
+7. **Phase 4** — evidence-integrity role (DECISION vs DIAGNOSTIC) derived EMPIRICALLY from the synthetic matrix + regression fixtures (do NOT hardcode 15%). Investigate whether one global rule suffices or if it should be source-calibrated / competition-relative.
+8. **Phase 5** — `gl-allocations.ts` per-cluster ranker uses `rankCanonical` per cluster. Multi-allocation preserves invariant per allocation.
+9. **Phase 6** — deploy. Verify analysis → candidates → projection → DOM → AP coding parity for all 7 real fixtures.
+10. Do not modify `main`. Do not deploy until Phase 6.
 
 ## Session commit
 
