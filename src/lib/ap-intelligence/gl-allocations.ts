@@ -202,9 +202,14 @@ const SPECIAL_HANDLING_CONCEPTS = new Set<string>([
 // concept.
 const PER_LINE_CONCEPT_MIN_STRENGTH = 55;
 
-// Recommendation confidence gate (§13). Alignment with the 15U min-
-// relevance threshold.
-const RECOMMENDATION_MIN_SCORE = 40;
+// Phase 4R · Phase 6 (2026-08-11) — RECOMMENDATION_MIN_SCORE=40
+// removed. It was the pre-Phase-5 legacy `rankAccountsPure` scoring
+// threshold used at two sites (toAllocations + mergeSameAccountClusters)
+// to decide review-eligibility / merge-eligibility. Both sites now
+// consume the canonical recommendation policy (r.canonical.recommendationStatus)
+// which the per-cluster canonical ranker already computed via
+// evaluateRecommendationPolicy(). No independent numeric threshold
+// remains in the allocation projection or merge path.
 
 // -----------------------------------------------------------------------------
 // Per-line concept assignment
@@ -598,7 +603,17 @@ function mergeSameAccountClusters(ranked: RankedCluster[]): RankedCluster[] {
   const unresolved: RankedCluster[] = [];
   for (const r of ranked) {
     const top = r.rankedTop[0];
-    if (!top || top.semanticScore < RECOMMENDATION_MIN_SCORE) {
+    // Phase 4R · Phase 6 (2026-08-11) — same-defect migration as
+    // toAllocations. Merge eligibility now reads the canonical
+    // recommendation status rather than a legacy numeric threshold
+    // (RECOMMENDATION_MIN_SCORE=40 was calibrated to the pre-Phase-5
+    // rankAccountsPure scale and does not match the canonical
+    // scoring scale). Clusters where canonical policy said ABSTAIN /
+    // NO_CANDIDATES / ANALYSIS_FAILURE go to unresolved; clusters
+    // with a canonical RECOMMEND are eligible to be merged with
+    // siblings that picked the same account.
+    const canonicalRecommend = r.canonical?.recommendationStatus === "RECOMMEND";
+    if (!top || !canonicalRecommend) {
       // No confident recommendation — retain as its own cluster (may
       // be merged into unresolved allocation later).
       unresolved.push(r);
@@ -675,13 +690,26 @@ function toAllocations(clusters: RankedCluster[]): ApGlAllocation[] {
     const taxRate = pickTaxRate(r.cluster.assignments);
     const taxAmount = pickTaxAmount(r.cluster.assignments);
     const top = r.rankedTop[0] ?? null;
+    // Phase 4R · Phase 6 (2026-08-11) — allocation projection reads
+    // canonical recommendation policy (already computed per-cluster
+    // in rankClusterCanonically), NOT a legacy numeric score
+    // threshold. The Phase 5 canonical ranker's own COMMIT_MIN_SCORE
+    // (30) already gated RECOMMEND vs ABSTAIN before we get here;
+    // re-applying the pre-Phase-5 RECOMMENDATION_MIN_SCORE=40 threshold
+    // was flagging valid canonical RECOMMENDs (scoring 30-39) as
+    // requiring review, which then broke deriveCardCategory.
+    // toAllocations remains a pure projection: it consumes
+    // r.canonical.recommendationStatus, does not re-decide.
+    const requiresReview = r.canonical
+      ? r.canonical.recommendationStatus !== "RECOMMEND"
+      : (top == null);
     const recommendedAccount: AllocationRecommendedAccount | null = top
       ? {
           accountId: `a-${top.accountNumber}`,
           accountNumber: top.accountNumber,
           accountName: top.accountName,
           confidence: Math.min(95, top.semanticScore),
-          requiresReview: top.semanticScore < RECOMMENDATION_MIN_SCORE,
+          requiresReview,
           postingBlockers: top.postingBlockers,
         }
       : null;

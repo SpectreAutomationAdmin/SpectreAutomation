@@ -264,6 +264,104 @@ describe("Phase 5 · §11 · cardCategory guard removal is safe", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 6 · projection semantics lock-in (2026-08-11)
+// ---------------------------------------------------------------------------
+//
+// Contract: allocation `requiresReview` derives from the canonical
+// recommendation policy, NOT from an independent numeric score
+// threshold. Locks the Phase 6 fix that removed the legacy
+// RECOMMENDATION_MIN_SCORE=40 threshold from toAllocations and
+// mergeSameAccountClusters.
+//
+// The canonical ranker's COMMIT_MIN_SCORE (30) already gates
+// RECOMMEND vs ABSTAIN. When canonical produces a RECOMMEND with a
+// score in the 30-39 range (a valid canonical winner), allocation
+// projection MUST NOT flag it requiresReview merely because it's
+// below the pre-Phase-5 legacy threshold. Doing so previously
+// caused deriveCardCategory to filter valid allocations out of the
+// "material" count, breaking Scenario B + C in c15v-allocations.
+
+describe("Phase 6 · projection semantics · allocation requiresReview derives from canonical recommendation policy", () => {
+  it("RECOMMEND canonical status → allocation requiresReview === false, regardless of raw score", () => {
+    // Construct an invoice where the canonical per-cluster ranker will
+    // produce a RECOMMEND with a modest score (in the 30-49 range,
+    // above canonical COMMIT_MIN_SCORE but potentially below the
+    // former legacy 40 threshold). Any cluster whose canonical policy
+    // returns RECOMMEND must NOT be flagged requiresReview.
+    const result = computeAllocations({
+      lineItems: [
+        makeLine({ lineNo: 1, description: "Membership dues annual professional association fee", amount: 480 }),
+      ],
+      accounts: MIXED_COA,
+      postingBlockersByAccount: emptyPostingBlockers(),
+      economicPurposeCandidates: null,
+      fullDocumentText: null,
+      supplierName: null,
+      printedSubtotal: 480,
+      printedTax: 0,
+      printedTotal: 480,
+    });
+    for (const alloc of result.allocations) {
+      if (alloc.recommendationStatus === "RECOMMEND" && alloc.recommendedAccount) {
+        // MUST NOT re-apply a legacy numeric threshold. The recommendation
+        // policy is already authoritative.
+        expect(alloc.recommendedAccount.requiresReview).toBe(false);
+      }
+    }
+  });
+
+  it("non-RECOMMEND canonical status → allocation requiresReview === true", () => {
+    // Ambiguous line with no strong concept anchor — canonical is
+    // likely to ABSTAIN, and the allocation MUST reflect that as
+    // requiresReview=true.
+    const result = computeAllocations({
+      lineItems: [
+        makeLine({ lineNo: 1, description: "Item — see attached", amount: 250 }),
+      ],
+      accounts: MIXED_COA,
+      postingBlockersByAccount: emptyPostingBlockers(),
+      economicPurposeCandidates: null,
+      fullDocumentText: null,
+      supplierName: null,
+      printedSubtotal: 250,
+      printedTax: 0,
+      printedTotal: 250,
+    });
+    for (const alloc of result.allocations) {
+      // Every non-RECOMMEND cluster (ABSTAIN_*) must have
+      // requiresReview=true OR recommendedAccount=null.
+      if (alloc.recommendationStatus != null && alloc.recommendationStatus !== "RECOMMEND") {
+        if (alloc.recommendedAccount != null) {
+          expect(alloc.recommendedAccount.requiresReview).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("legacy RECOMMENDATION_MIN_SCORE=40 threshold does not appear anywhere in gl-allocations.ts", () => {
+    // Anti-regression guard: the pre-Phase-5 numeric threshold
+    // constant was removed in Phase 6. If it comes back (via a
+    // future patch that reintroduces the same duplicated-policy
+    // defect), this test fails immediately.
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve("src/lib/ap-intelligence/gl-allocations.ts"),
+      "utf8",
+    ) as string;
+    // The constant declaration and any comparison of `semanticScore < 40`
+    // are both forbidden as review-eligibility deciders. Comments
+    // documenting the removal are allowed — those explain HISTORY.
+    // We forbid: any const/let declaration OR any active runtime
+    // comparison expression using the exact constant name or the
+    // literal 40 vs semanticScore.
+    expect(src).not.toMatch(/^\s*const\s+RECOMMENDATION_MIN_SCORE\s*=/m);
+    expect(src).not.toMatch(/semanticScore\s*<\s*RECOMMENDATION_MIN_SCORE/);
+    expect(src).not.toMatch(/semanticScore\s*<\s*40\b/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §23 · Anti-overfitting (no literals in the migrated allocation path)
 // ---------------------------------------------------------------------------
 
