@@ -62,7 +62,7 @@ function makeLine(o: { lineNo: number; description: string; amount: number }): L
     description: o.description,
     amount: o.amount,
     quantity: null,
-    unitCost: null,
+    unitPrice: null,
     taxRate: null,
     taxAmount: null,
     taxTreatment: "unknown" as const,
