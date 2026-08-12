@@ -1633,76 +1633,63 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     capitalThresholdCents: capitalMinCents,
     totalCents: mergedExtraction.total ? Math.round(Number(mergedExtraction.total) * 100) : null,
   });
-  {
-    const { runCanonicalGlRanking } = await import("./canonical-runtime-facade");
-    const { departmentAccountNamePatterns: deptPatternsForCanonical } =
-      await import("./department-inference");
-    const deptKeyForCanonical = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
-    const deptPatsForCanonical = deptKeyForCanonical ? deptPatternsForCanonical(deptKeyForCanonical) : [];
-    const { assessPurposeEvidenceQuality } = await import("./purpose-evidence-quality");
-    const purposeQualityForCanonical = purposeDecision != null
-      ? assessPurposeEvidenceQuality(purposeDecision, canonicalLineItemsFromLayout).quality
-      : "NONE";
-    gl = await runCanonicalGlRanking({
-      clubId: args.clubId,
-      extraction,
-      vendor,
-      capital,
-      economicPurposeCandidates: economicPurpose,
-      purposeDecision,
-      purposeQuality: purposeQualityForCanonical,
-      canonicalLineItems: canonicalLineItemsFromLayout,
-      lineItemsExtracted,
-      fullDocumentText:
-        transactionalTextValue != null && transactionalTextValue.trim().length > 0
-          ? transactionalTextValue
-          : (pdfOk ? pdfText : null),
-      expectedDebitRole,
-      hasPayrollEvidence: (await import("./account-semantics/payroll-evidence"))
-        .detectPayrollEvidence({
-          vendorNames: [
-            extraction.vendor.guessedName,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
-            vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
-          ],
-          lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
-          documentText: pdfOk ? pdfText : null,
-        }).hasPayrollEvidence,
-      departmentKey: deptKeyForCanonical,
-      departmentAccountNamePatterns: deptPatsForCanonical,
-      vendorHistoryConceptIds: [],
-      vendorHistoryPreferredAccountNumbers: [],
-      natureLeader: natureForCanonical.leader,
-      natureConfidence: natureForCanonical.leaderConfidence,
-      natureIsDefensible: natureForCanonical.isDefensible,
-      // Phase 4R · Phase 3.4 (Group C) — capital intelligence signals.
-      // The facade runs the founder-approved compatibility gate per
-      // account BEFORE canonical ranking; PREFERRED / INCOMPATIBLE
-      // verdicts become CAPITAL_NATURE-family observations. Replaces
-      // the Group C capital-aware full-COA ranker (deleted below).
-      capitalDecisionFull: sharedCapitalDecision,
-      productIdentity: sharedProductIdentity,
-      purchasedObjects: sharedPurchasedObjects,
-      transactionFunctionalSignals: [
-        ...sharedPurchasedObjects.map((o) => o.description),
-        (sharedProductIdentity.externalEvidence ?? [])
-          .map((e) => e.matchedProductFamily)
-          .filter((s): s is string => typeof s === "string" && s.length > 0)
-          .join(" "),
-        transactionalTextValue ?? "",
-      ].filter((s) => typeof s === "string" && s.length > 0),
-      additionalEvidenceTexts: [transactionalTextValue ?? ""].filter(Boolean),
-      // Phase 4R · Phase 3.6 (Group E) — field-quality gate result
-      // passed to the facade as recommendation-policy input, NOT as a
-      // selector. The facade's evaluateRecommendationPolicy() consumes
-      // it to decide RECOMMEND / ABSTAIN_QUALITY. Winner provenance
-      // is preserved on gl.canonicalWinnerAccountNumber even under
-      // ABSTAIN_QUALITY (§4). Replaces the deleted post-canonical
-      // gl.accountNumber = null override.
-      fieldQualityEligible: fieldQualityGate.glEligible,
-      fieldQualityAbstentionReasons: fieldQualityGate.abstentionReasons,
-    });
-  }
+  // ==========================================================================
+  // Phase 4R · Phase 7 (2026-08-12) · CLUSTER-OWNED CLASSIFICATION.
+  //
+  // The founder-approved architecture: THE ECONOMIC TRANSACTION CLUSTER
+  // IS THE UNIT OF GL CLASSIFICATION. `analyseIngestedInvoice` no
+  // longer runs a second document-level canonical competition here.
+  // Compute WHOLE-DOCUMENT context ONCE (compat-gate verdict lists,
+  // financing-evidence flag, eligible-account pool) then let
+  // `computeAllocations` run per-cluster canonical ranking. After
+  // clustering, project the cluster results into `gl` via
+  // `projectClustersToGlRecommendation` (see gl-allocations.ts).
+  //
+  // For single-cluster invoices: `gl` mirrors the single cluster's
+  // canonical result (winner, candidates, confidence, recommendation
+  // status). For multi-cluster invoices: `gl.accountNumber = null`
+  // with aggregated confidence / recommendation status.
+  //
+  // Founder §9: "Do not implement this merely as show allocation
+  // winner instead of document winner. Remove the duplicate document
+  // classification call for single-cluster invoices." — this is that
+  // removal. `runCanonicalGlRanking` is no longer called from this
+  // pipeline.
+  // ==========================================================================
+  const { computeGlobalContextForClusters } = await import("./canonical-runtime-facade");
+  const { departmentAccountNamePatterns: deptPatternsForCanonical } =
+    await import("./department-inference");
+  const deptKeyForCanonical = sharedDept.leader?.key ?? sharedDept.ranked.find((d) => d.score > 0)?.key ?? null;
+  const deptPatsForCanonical = deptKeyForCanonical ? deptPatternsForCanonical(deptKeyForCanonical) : [];
+  const hasPayrollEvidenceForClusters = (await import("./account-semantics/payroll-evidence"))
+    .detectPayrollEvidence({
+      vendorNames: [
+        extraction.vendor.guessedName,
+        vendor.state === "MATCHED" ? vendor.candidates[0]?.legalName : null,
+        vendor.state === "MATCHED" ? vendor.candidates[0]?.operatingName : null,
+      ],
+      lineItemDescriptions: lineItemsExtracted.map((li) => li.description ?? ""),
+      documentText: pdfOk ? pdfText : null,
+    }).hasPayrollEvidence;
+  const globalContext = await computeGlobalContextForClusters({
+    clubId: args.clubId,
+    expectedDebitRole,
+    hasPayrollEvidence: hasPayrollEvidenceForClusters,
+    departmentKey: deptKeyForCanonical,
+    capital,
+    capitalDecisionFull: sharedCapitalDecision,
+    productIdentity: sharedProductIdentity,
+    purchasedObjects: sharedPurchasedObjects,
+    transactionFunctionalSignals: [
+      ...sharedPurchasedObjects.map((o) => o.description),
+      (sharedProductIdentity.externalEvidence ?? [])
+        .map((e) => e.matchedProductFamily)
+        .filter((s): s is string => typeof s === "string" && s.length > 0)
+        .join(" "),
+      transactionalTextValue ?? "",
+    ].filter((s) => typeof s === "string" && s.length > 0),
+    additionalEvidenceTexts: [transactionalTextValue ?? ""].filter(Boolean),
+  });
   // Phase 4R · Phase 3.6 (Group E, 2026-08-11) — the post-canonical
   // gl.accountNumber = null override for field-quality abstention has
   // been deleted. The facade now applies the recommendation policy
@@ -1754,15 +1741,33 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           || (primary.objectRole === "UNKNOWN" && primary.brandCandidates.length > 0 && primary.modelCandidates.length > 0)
         );
       })(),
-      hasFinancingEvidence: false,
+      hasFinancingEvidence: globalContext.hasFinancingEvidence,
       matchedVendorId: vendor.state === "MATCHED" ? vendor.candidates[0]?.id ?? null : null,
+      // Phase 4R · Phase 7 (2026-08-12) — pre-baked compatibility-gate
+      // verdict lists computed ONCE per invoice (whole-document context)
+      // and fed to every cluster as globalSignals per founder §4.
+      preferredAccountNumbers: globalContext.preferredAccountNumbers,
+      contradictedAccountNumbers: globalContext.contradictedAccountNumbers,
     },
   });
 
-  // Phase 4R · Phase 5 (§9) — overall multi-allocation review policy.
-  // If ANY material allocation cluster requires review (recommendation
-  // status is not RECOMMEND), the overall allocation surface requires
-  // review. No auto-approval across a mixed-status allocation set.
+  // Phase 4R · Phase 7 (2026-08-12) — cluster-owned projection.
+  // The document GL result is derived from the cluster canonical
+  // results, not from a second document-level canonical competition.
+  // Single-cluster invoice → gl mirrors cluster[0]. Multi-cluster →
+  // gl.accountNumber = null + aggregated recommendationStatus +
+  // aggregated canonicalConfidence per founder §7 Option A + §8.
+  const { projectClustersToGlRecommendation } = await import("./gl-allocations");
+  gl = projectClustersToGlRecommendation(allocations.allocations, {
+    fieldQualityEligible: fieldQualityGate.glEligible,
+    fieldQualityAbstentionReasons: fieldQualityGate.abstentionReasons,
+    totalAccountsEvaluated: globalContext.totalAccountsEvaluated,
+  });
+
+  // Phase 4R · Phase 5 (§9) — overall multi-allocation review policy
+  // (unchanged from Phase 5). Any non-RECOMMEND cluster flips the
+  // allocation surface to requiresReview. Field-quality ABSTAIN
+  // additionally nulls cardCategory.
   const anyAllocationNeedsReview = allocations.allocations.some(
     (a) => a.recommendationStatus != null && a.recommendationStatus !== "RECOMMEND",
   );

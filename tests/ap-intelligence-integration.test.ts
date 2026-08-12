@@ -167,12 +167,33 @@ describe("analyseIngestedInvoice — end-to-end", () => {
     // account 1530 is not seeded in the test tenant COA. The ranker
     // now returns an OPERATING grounds account (6020) as a
     // semantically-adjacent fallback — Phase 0 guarantees it's not
-    // a forbidden account. The fixture behavior is documented in
-    // the frozen 42-case dev+val benchmark corpus (capital-
-    // irrigation.case.json). Accept both 1530 (if 1530 seeded)
+    // a forbidden account. Accept both 1530 (if 1530 seeded)
     // and any operating grounds account (6020 / 6031 / 6025) as
     // semantically-valid current behavior.
-    expect(["1530", "6020", "6031", "6025"]).toContain(analysis.gl.accountNumber);
+    //
+    // Phase 4R · Phase 7 (2026-08-12) — cluster-owned architecture
+    // update: the invoice has TWO line items (pump acquisition + installation
+    // labour). Under cluster-owned classification a mixed-economic
+    // invoice becomes multi-cluster, so gl.accountNumber may legitimately
+    // be null (no single truthful document-level account). The valid
+    // recognition should be observed on the ALLOCATIONS or on
+    // gl.canonicalWinnerAccountNumber (single-cluster). Assert that
+    // one of the expected accounts appears SOMEWHERE authoritative —
+    // either as the doc-level winner (if single-cluster) or in the
+    // allocation recommendations (if multi-cluster).
+    const validAccts = new Set(["1530", "6020", "6031", "6025"]);
+    const seen = new Set<string>();
+    if (analysis.gl.accountNumber) seen.add(analysis.gl.accountNumber);
+    if (analysis.gl.canonicalWinnerAccountNumber) seen.add(analysis.gl.canonicalWinnerAccountNumber);
+    for (const a of analysis.allocations?.allocations ?? []) {
+      const acct = a.recommendedAccount?.accountNumber;
+      if (acct) seen.add(acct);
+    }
+    const anyValid = [...seen].some((a) => validAccts.has(a));
+    expect(
+      anyValid,
+      `expected one of ${[...validAccts]} to appear as doc-level winner, canonical winner, or allocation account. Actual seen: ${[...seen].join(",") || "(empty)"}`,
+    ).toBe(true);
     expect(analysis.reconcile.state).toBe("NOT_FOUND");
     expect(analysis.findings.some((f) => f.key === "ap.invoice.capital_candidate")).toBe(true);
   });

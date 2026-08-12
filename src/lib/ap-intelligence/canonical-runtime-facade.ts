@@ -117,6 +117,140 @@ export interface CanonicalFacadeArgs {
 /** Runs the canonical ranker and returns a GlRecommendation-shaped
  *  result. This is the single authorised path for GL selection under
  *  Phase 3.2 architecture. */
+// Phase 4R · Phase 7 (2026-08-12) — cluster-owned architecture. The
+// old `runCanonicalGlRanking` function ran a SECOND canonical
+// competition at document scope over the full invoice's queryConcepts
+// (including fullDocumentText). The founder's Option A architectural
+// correction removes that second competition. Document-level GL
+// classification now comes from PROJECTING the per-cluster canonical
+// results (see `projectClustersToGlRecommendation` in gl-allocations.ts).
+//
+// This helper preserves the WHOLE-DOCUMENT contextual signal that the
+// old facade computed as a side-effect: the per-account compatibility-
+// gate verdict lists (preferred / contradicted). Those verdicts are
+// legitimately GLOBAL — the compatibility gate classifies accounts by
+// their SEMANTIC ROLE relative to the transaction as a whole (e.g.,
+// interest accounts are contradicted when the invoice contains no
+// financing evidence anywhere). Fed into every cluster as globalSignals.
+//
+// The single-authority invariant is preserved: this function does
+// NOT run rankCanonical. It only prepares whole-document context.
+// Ranking happens per-cluster inside `rankClusterCanonically`.
+export interface GlobalContextForClusters {
+  totalAccountsEvaluated: number;
+  eligibleAccountCount: number;
+  hasFinancingEvidence: boolean;
+  preferredAccountNumbers: string[];
+  contradictedAccountNumbers: string[];
+  // Loaded here so callers can reuse the account list for allocation.
+  eligibleAccountsForAllocation: ReadonlyArray<{
+    id: string; accountNumber: string; name: string;
+    categoryKey: string | null; categoryName: string | null;
+    fsGroupKey: string | null; fsGroupName: string | null;
+    type: string;
+  }>;
+}
+
+export async function computeGlobalContextForClusters(args: {
+  clubId: string;
+  expectedDebitRole: ExpectedDebitRoleLocal;
+  hasPayrollEvidence: boolean;
+  departmentKey: string | null;
+  capital: CapitalVsOperatingRecommendation;
+  capitalDecisionFull?: CapitalEvidenceDecisionResult;
+  productIdentity?: ProductIdentityResolution;
+  purchasedObjects?: ReadonlyArray<PurchasedObjectIdentity>;
+  transactionFunctionalSignals?: string[];
+  additionalEvidenceTexts?: string[];
+}): Promise<GlobalContextForClusters> {
+  const accountsRaw = await prisma.account.findMany({
+    where: { clubId: args.clubId },
+    include: {
+      category: { select: { key: true, name: true } },
+      fsGroup: { select: { key: true, name: true } },
+    },
+    orderBy: { accountNumber: "asc" },
+  });
+  const eligibilityCtx: AccountingTransactionContext = {
+    transactionKind: "AP_INVOICE",
+    expectedDebitRole: args.expectedDebitRole,
+    departmentHint: args.departmentKey ?? null,
+    capitalizationEvidence: {
+      supported: args.capital.state === "CAPITAL",
+      confidence: args.capital.state === "CAPITAL" ? 80 : 0,
+    },
+    hasPayrollEvidence: args.hasPayrollEvidence,
+  };
+  const eligibilityViews = accountsRaw.map((a) => ({
+    id: a.id, accountNumber: a.accountNumber, name: a.name,
+    type: a.type, normalBalance: a.normalBalance,
+    isActive: a.isActive, isHeader: a.isHeader,
+    allowManualPosting: a.allowManualPosting,
+    isControlAccount: a.isControlAccount,
+    isBankAccount: a.isBankAccount, isCashAccount: a.isCashAccount,
+    archivedAt: a.archivedAt, fundApplicability: a.fundApplicability,
+    categoryKey: a.category?.key ?? null,
+    fsGroupKey: a.fsGroup?.key ?? null,
+    accountRole: (a as unknown as { accountRole?: string }).accountRole ?? "STANDARD",
+  }));
+  const filtered = filterEligibleAccounts(eligibilityViews, eligibilityCtx);
+  const eligibleAccountsForAllocation = filtered.eligible.map((a) => ({
+    id: a.id,
+    accountNumber: a.accountNumber,
+    name: a.name,
+    categoryKey: a.categoryKey ?? null,
+    categoryName: null,
+    fsGroupKey: a.fsGroupKey ?? null,
+    fsGroupName: null,
+    type: a.type,
+  }));
+  // Compatibility-gate evaluation (§4 global context, per founder).
+  const preferred: string[] = [];
+  const contradicted: string[] = [];
+  let hasFinancingEvidence = false;
+  if (args.capitalDecisionFull != null && args.purchasedObjects != null && args.productIdentity != null) {
+    const cipEvidence = detectCipEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
+    const financingEvidence = detectFinancingEvidence(args.purchasedObjects as PurchasedObjectIdentity[], args.additionalEvidenceTexts ?? []);
+    hasFinancingEvidence = financingEvidence.found;
+    const txFuncSignals = args.transactionFunctionalSignals
+      ?? args.purchasedObjects.map((o) => o.description).filter(Boolean);
+    const primaryObjectType = args.productIdentity.selected?.objectType ?? null;
+    for (const acct of filtered.eligible) {
+      const semantics = resolveAccountSemantics(acct as unknown as EligibleAccountView);
+      const gate = evaluateCompatibilityGate({
+        semantics,
+        capitalDecision: args.capitalDecisionFull.decision,
+        productObjectType: primaryObjectType,
+        transactionDepartment: args.departmentKey,
+        transactionFunctionalSignals: txFuncSignals,
+        cipEvidence,
+        financingEvidence,
+      });
+      if (gate.finalVerdict === "PREFERRED") preferred.push(acct.accountNumber);
+      if (gate.finalVerdict === "INCOMPATIBLE" || gate.finalVerdict === "CONTRADICTED") {
+        contradicted.push(acct.accountNumber);
+      }
+    }
+  }
+  return {
+    totalAccountsEvaluated: filtered.eligible.length,
+    eligibleAccountCount: filtered.eligible.length,
+    hasFinancingEvidence,
+    preferredAccountNumbers: preferred,
+    contradictedAccountNumbers: contradicted,
+    eligibleAccountsForAllocation,
+  };
+}
+
+/**
+ * @deprecated Phase 4R · Phase 7 (2026-08-12) — the document-level
+ * canonical run has been removed. `analyseIngestedInvoice` no longer
+ * calls this function. The cluster-owned architecture in
+ * gl-allocations.ts is the sole GL classification path. This function
+ * remains as a temporary compat export for callers we haven't
+ * migrated yet (none in `src/` at time of Phase 7). Delete after
+ * external callers are migrated.
+ */
 export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<GlRecommendation> {
   // 1. Load the tenant COA.
   const accountsRaw = await prisma.account.findMany({

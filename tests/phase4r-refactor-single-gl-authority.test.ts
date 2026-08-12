@@ -535,6 +535,39 @@ describe("Phase 4R · static architectural guard against post-ranking GL overrid
     ).toBe(0);
     console.log(`[static-guard] gl-allocations.ts: ${allocMatches.length} overrides, ${legacyMatches.length} legacy calls (target: 0/0)`);
   });
+
+  // Phase 4R · Phase 7 (2026-08-12) — cluster-owned architecture guard.
+  // analyse.ts must NOT call runCanonicalGlRanking. The document-level
+  // canonical competition was removed; GL classification is derived
+  // exclusively from per-cluster canonical results via
+  // projectClustersToGlRecommendation. If this pattern comes back it
+  // reintroduces the duplicate-competition defect that Phase 7
+  // eliminated (see docs/phase-4r-phase7-single-authority-architecture-proposal.md).
+  it("analyse.ts contains no runCanonicalGlRanking runtime call (Phase 7 cluster-owned invariant)", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(
+      path.resolve("src/lib/ap-intelligence/analyse.ts"),
+      "utf8",
+    ) as string;
+    // Match ONLY runtime invocations, not comments and not import
+    // statements. A call site looks like `runCanonicalGlRanking(` or
+    // `= runCanonicalGlRanking;` or `await runCanonicalGlRanking(...)`.
+    // Strip line/block comments so historical documentation of the
+    // removal doesn't false-positive.
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")     // block comments
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1"); // line comments (avoid urls)
+    const callPattern = /(?<!function\s)runCanonicalGlRanking\s*\(/g;
+    const callMatches = [...stripped.matchAll(callPattern)];
+    expect(
+      callMatches.length,
+      `analyse.ts contains ${callMatches.length} runCanonicalGlRanking() runtime call(s). `
+      + `Phase 7 cluster-owned architecture forbids the doc-level canonical competition. `
+      + `Project cluster results via projectClustersToGlRecommendation instead.`,
+    ).toBe(0);
+    console.log(`[static-guard] analyse.ts runCanonicalGlRanking runtime calls: ${callMatches.length} (target: 0)`);
+  });
 });
 
 describe("Phase 4R · anti-overfitting lint", () => {

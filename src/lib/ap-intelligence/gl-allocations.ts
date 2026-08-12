@@ -36,7 +36,7 @@
 // grounded in the line's own text — a small side charge retains its
 // own allocation even when it's a small fraction of the invoice.
 
-import { type PostingBlocker } from "./gl-recommend";
+import { type PostingBlocker, type GlRecommendation, type GlCandidate } from "./gl-recommend";
 import type { AccountView } from "./gl-account-concepts";
 import { isFsGroupFamilyIncompatibleWithCluster } from "./account-semantics/family-incompatibility";
 import { extractQueryConcepts, dominantQueryConcept, type QueryConcept } from "./gl-query-concepts";
@@ -493,9 +493,16 @@ function rankClusters(args: {
 }): RankedCluster[] {
   const g = args.globalSignals ?? {};
   return args.clusters.map((cluster) => {
-    if (!cluster.conceptId) {
-      return { cluster, rankedTop: [] };
-    }
+    // Phase 4R · Phase 7 (2026-08-12) — cluster-owned architecture:
+    // even unresolved clusters (no dominant concept identified from
+    // line-item text) still run through the canonical ranker on their
+    // OWN line-item + globalSignals evidence. Previously we early-
+    // exited on !conceptId because the doc-level canonical facade
+    // would produce a fallback recommendation. Under cluster-owned
+    // architecture there is no fallback: unresolved clusters must
+    // still get their fair chance at canonical ranking, and
+    // rankCanonical will honestly ABSTAIN when its own scoring
+    // produces no candidate above COMMIT_MIN_SCORE.
     // Sprint 3 · Checkpoint 15V — per-cluster ranking is grounded in
     // the cluster's own CONCEPT + its own line evidence. The
     // cluster's conceptId (from per-line evidence OR from document-
@@ -973,4 +980,264 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4R · Phase 7 (2026-08-12) — cluster-owned document GL projection.
+//
+// The founder-approved architecture: THE ECONOMIC TRANSACTION CLUSTER IS THE
+// UNIT OF GL CLASSIFICATION. `analyseIngestedInvoice` no longer runs a
+// second document-level canonical competition; it consumes the cluster
+// canonical results already computed by `rankClusterCanonically` and
+// projects them into a `GlRecommendation`.
+//
+// - Single-cluster invoice: document GL === cluster canonical result
+//   (winner, candidates, confidence, recommendationStatus, provenance).
+// - Multi-cluster invoice: gl.accountNumber = null (no single truthful
+//   account). Overall status = strictest cluster status (any ABSTAIN_*
+//   → overall reflects that category). Overall confidence = weakest
+//   cluster level. Overall requiresReview = any cluster requires review.
+// - Field-quality fail: overall ABSTAIN_QUALITY regardless of cluster
+//   outcomes; canonical winner (if any) preserved on
+//   `gl.canonicalWinnerAccountNumber` for single-cluster only.
+// - No allocations at all: NO_ELIGIBLE_CANDIDATES.
+// ---------------------------------------------------------------------------
+
+type ProjClusterMinimal = Pick<
+  ApGlAllocation,
+  "canonicalWinnerAccountNumber" | "recommendationStatus" | "canonicalConfidence" | "recommendedAccount"
+>;
+
+/**
+ * Aggregation precedence for recommendation status across clusters (§7):
+ *   any ABSTAIN_QUALITY         → overall ABSTAIN_QUALITY
+ *   else any ABSTAIN_ANALYSIS_FAILURE → overall ABSTAIN_ANALYSIS_FAILURE
+ *   else any ABSTAIN_NO_CANDIDATES    → overall ABSTAIN_NO_CANDIDATES
+ *   else any ABSTAIN_AMBIGUITY        → overall ABSTAIN_AMBIGUITY
+ *   else all RECOMMEND               → overall RECOMMEND
+ */
+function aggregateRecommendationStatus(
+  statuses: ReadonlyArray<import("./recommendation-policy").RecommendationStatus | undefined>,
+): import("./recommendation-policy").RecommendationStatus {
+  const defined = statuses.filter((s): s is import("./recommendation-policy").RecommendationStatus => s != null);
+  if (defined.length === 0) return "ABSTAIN_NO_CANDIDATES";
+  if (defined.some((s) => s === "ABSTAIN_QUALITY")) return "ABSTAIN_QUALITY";
+  if (defined.some((s) => s === "ABSTAIN_ANALYSIS_FAILURE")) return "ABSTAIN_ANALYSIS_FAILURE";
+  if (defined.some((s) => s === "ABSTAIN_NO_CANDIDATES")) return "ABSTAIN_NO_CANDIDATES";
+  if (defined.some((s) => s === "ABSTAIN_AMBIGUITY")) return "ABSTAIN_AMBIGUITY";
+  return "RECOMMEND";
+}
+
+/**
+ * Aggregation precedence for confidence level across clusters (§8):
+ *   any REVIEW_REQUIRED → REVIEW_REQUIRED
+ *   else any LOW        → LOW
+ *   else any MODERATE   → MODERATE
+ *   else all HIGH       → HIGH
+ */
+function aggregateConfidenceLevel(
+  levels: ReadonlyArray<import("./canonical-confidence").ConfidenceLevel | undefined>,
+): import("./canonical-confidence").ConfidenceLevel {
+  const defined = levels.filter((l): l is import("./canonical-confidence").ConfidenceLevel => l != null);
+  if (defined.length === 0) return "REVIEW_REQUIRED";
+  if (defined.some((l) => l === "REVIEW_REQUIRED")) return "REVIEW_REQUIRED";
+  if (defined.some((l) => l === "LOW")) return "LOW";
+  if (defined.some((l) => l === "MODERATE")) return "MODERATE";
+  return "HIGH";
+}
+
+export interface ProjectClustersToGlOpts {
+  fieldQualityEligible: boolean;
+  fieldQualityAbstentionReasons: ReadonlyArray<string>;
+  totalAccountsEvaluated: number;
+}
+
+export function projectClustersToGlRecommendation(
+  allocations: ReadonlyArray<ApGlAllocation>,
+  opts: ProjectClustersToGlOpts,
+): GlRecommendation {
+  // Case A · no allocations at all → NO_ELIGIBLE_CANDIDATES.
+  if (allocations.length === 0) {
+    return emptyGlRec(opts.totalAccountsEvaluated, "no_allocations_derived_from_invoice", {
+      recommendationStatus: "ABSTAIN_NO_CANDIDATES",
+      abstentionCategory: "NO_CANDIDATES",
+      abstentionReasons: ["no_allocations_derived_from_invoice"],
+    });
+  }
+
+  // Case B · field-quality fail → ABSTAIN_QUALITY overall regardless
+  // of cluster outcomes. Winner provenance retained for single cluster.
+  if (!opts.fieldQualityEligible) {
+    const single = allocations.length === 1 ? allocations[0] : null;
+    return emptyGlRec(opts.totalAccountsEvaluated, `abstained_field_quality:${opts.fieldQualityAbstentionReasons.join(",")}`, {
+      recommendationStatus: "ABSTAIN_QUALITY",
+      abstentionCategory: "QUALITY",
+      abstentionReasons: [...opts.fieldQualityAbstentionReasons],
+      canonicalWinnerAccountNumber: single?.canonicalWinnerAccountNumber ?? null,
+      canonicalConfidence: single?.canonicalConfidence,
+    });
+  }
+
+  // Case C · single-cluster invoice → gl mirrors cluster canonical
+  // result. This is the founder-approved single-authority rule for
+  // single-cluster invoices: exactly ONE accounting competition
+  // determined the answer.
+  if (allocations.length === 1) {
+    return projectSingleClusterToGl(allocations[0], opts.totalAccountsEvaluated);
+  }
+
+  // Case D · multi-cluster invoice → gl.accountNumber = null (per
+  // founder §7 Option A: no synthetic representative GL). Overall
+  // status/confidence aggregated across clusters.
+  const statuses = allocations.map((a) => a.recommendationStatus);
+  const levels = allocations.map((a) => a.canonicalConfidence?.level);
+  const overallStatus = aggregateRecommendationStatus(statuses);
+  const overallLevel = aggregateConfidenceLevel(levels);
+  const abstentionReasons = allocations.flatMap((a) => a.canonicalConfidence?.reasonCodes ?? []);
+  return emptyGlRec(opts.totalAccountsEvaluated,
+    `multi_allocation:${allocations.length}_clusters · status=${overallStatus} · confidence=${overallLevel}`,
+    {
+      recommendationStatus: overallStatus,
+      abstentionCategory: overallStatus === "RECOMMEND" ? null : (
+        overallStatus === "ABSTAIN_QUALITY" ? "QUALITY"
+        : overallStatus === "ABSTAIN_AMBIGUITY" ? "AMBIGUITY"
+        : overallStatus === "ABSTAIN_NO_CANDIDATES" ? "NO_CANDIDATES"
+        : "ANALYSIS_FAILURE"
+      ),
+      abstentionReasons,
+      canonicalWinnerAccountNumber: null,
+      canonicalConfidence: {
+        level: overallLevel,
+        winnerAccountId: null,
+        winnerAccountNumber: null,
+        winnerScore: null,
+        winnerDecisionEvidenceCount: 0,
+        winnerDecisionFamilyCount: 0,
+        winnerContradictions: [],
+        genuineCompetitors: [],
+        marginToStrongestCompetitor: null,
+        isDeterministicTieBreak: false,
+        recommendationStatus: overallStatus,
+        reasonCodes: [`multi_allocation_aggregate:${allocations.length}_clusters`, `overall_status:${overallStatus}`, `overall_level:${overallLevel}`],
+        humanReadableReason: `Multi-allocation invoice (${allocations.length} clusters) — overall ${overallLevel}. Per-allocation results are authoritative; no single document-level GL account.`,
+      },
+    },
+  );
+}
+
+function projectSingleClusterToGl(
+  alloc: ApGlAllocation,
+  totalAccountsEvaluated: number,
+): GlRecommendation {
+  const rec = alloc.recommendedAccount;
+  const status = alloc.recommendationStatus ?? "ABSTAIN_NO_CANDIDATES";
+  const conf = alloc.canonicalConfidence;
+  const isRecommend = status === "RECOMMEND" && rec != null;
+  return {
+    ruleVersion: 2,
+    accountNumber: isRecommend ? rec!.accountNumber : null,
+    accountName: isRecommend ? rec!.accountName : null,
+    categoryKey: null,
+    fsGroupKey: null,
+    confidence: isRecommend ? rec!.confidence : null,
+    reason: isRecommend
+      ? `cluster_owned_projection:single_cluster:winner=${rec!.accountNumber}(conf=${rec!.confidence})`
+      : `cluster_owned_projection:single_cluster:${status.toLowerCase()}`,
+    source: isRecommend ? "SEMANTIC_MATCH" : "NONE",
+    candidates: (() => {
+      if (rec != null) {
+        const alts = alloc.alternatives.map((a) => ({
+          accountId: a.accountId,
+          accountNumber: a.accountNumber,
+          accountName: a.accountName,
+          categoryKey: null as string | null,
+          fsGroupKey: null as string | null,
+          confidence: a.score,
+          evidence: [],
+          postable: true,
+          postingBlockers: [] as PostingBlocker[],
+        }));
+        const winnerCand: GlCandidate = {
+          accountId: rec.accountId,
+          accountNumber: rec.accountNumber,
+          accountName: rec.accountName,
+          categoryKey: null,
+          fsGroupKey: null,
+          confidence: rec.confidence,
+          evidence: [],
+          postable: !rec.requiresReview,
+          postingBlockers: rec.postingBlockers ?? [],
+        };
+        return [winnerCand, ...alts];
+      }
+      return [];
+    })(),
+    leaderIsPostable: isRecommend ? !rec!.requiresReview : false,
+    leaderPostingBlockers: isRecommend ? (rec!.postingBlockers ?? []) : [],
+    autoApprovalEligible: isRecommend && conf?.level === "HIGH",
+    rationale: {
+      selectedAccountId: isRecommend ? rec!.accountId : null,
+      selectedConcept: null,
+      supportingDocumentEvidence: [],
+      supportingTaxonomyEvidence: [],
+      contradictedAccountConcepts: [],
+      alternativeAccounts: alloc.alternatives.slice(0, 4).map((a) => ({
+        accountId: a.accountId,
+        accountNumber: a.accountNumber,
+        accountName: a.accountName,
+        semanticScore: a.score,
+        reason: `cluster alternative score ${a.score}`,
+      })),
+      requiresReview: !isRecommend,
+      minRelevanceThreshold: 30,
+    },
+    totalAccountsEvaluated,
+    requiresReview: !isRecommend,
+    splitRecommendations: [],
+    recommendationStatus: status,
+    abstentionCategory: status === "RECOMMEND" ? null : (
+      status === "ABSTAIN_QUALITY" ? "QUALITY"
+      : status === "ABSTAIN_AMBIGUITY" ? "AMBIGUITY"
+      : status === "ABSTAIN_NO_CANDIDATES" ? "NO_CANDIDATES"
+      : "ANALYSIS_FAILURE"
+    ),
+    abstentionReasons: conf?.reasonCodes ?? [],
+    canonicalWinnerAccountNumber: alloc.canonicalWinnerAccountNumber ?? null,
+    canonicalConfidence: conf,
+  };
+}
+
+function emptyGlRec(
+  totalAccountsEvaluated: number,
+  reason: string,
+  extras: Partial<GlRecommendation>,
+): GlRecommendation {
+  return {
+    ruleVersion: 2,
+    accountNumber: null,
+    accountName: null,
+    categoryKey: null,
+    fsGroupKey: null,
+    confidence: null,
+    reason,
+    source: "NONE",
+    candidates: [],
+    leaderIsPostable: false,
+    leaderPostingBlockers: [],
+    autoApprovalEligible: false,
+    rationale: {
+      selectedAccountId: null,
+      selectedConcept: null,
+      supportingDocumentEvidence: [],
+      supportingTaxonomyEvidence: [],
+      contradictedAccountConcepts: [],
+      alternativeAccounts: [],
+      requiresReview: true,
+      minRelevanceThreshold: 30,
+    },
+    totalAccountsEvaluated,
+    requiresReview: true,
+    splitRecommendations: [],
+    ...extras,
+  };
 }
