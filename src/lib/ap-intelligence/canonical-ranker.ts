@@ -499,8 +499,74 @@ function classifyEvidenceRole(
   return "DIAGNOSTIC";
 }
 
-/** Collapse a candidate's raw observations by family (MAX within
- *  family) and emit the CanonicalEvidence array with `countedTowardScore`
+/** Phase 4R · Phase 7.2E-a (2026-08-13) — evidence-independence key.
+ *
+ *  Derives a provenance identifier per observation so `collapseByFamily`
+ *  can distinguish correlated derivatives (multiple transformations of
+ *  the same source fact) from genuinely independent observations
+ *  (different reasoning paths / different physical invoice lines).
+ *
+ *  Same origin key ⇒ correlated ⇒ MAX-collapse.
+ *  Different origin keys within the same family ⇒ potentially
+ *  independent ⇒ bounded SUM (cap = INDEPENDENT_ORIGINS_CAP).
+ *
+ *  Origin is inferred from the observation `kind` + `description`
+ *  because `RawObservation` didn't previously retain per-line
+ *  provenance directly. Per-line kinds (LINE_ITEM_MATCH,
+ *  ECONOMIC_PURPOSE, DOCUMENT_PHRASE, PRIOR_CODING, SUPPLIER_CONTEXT)
+ *  use `${kind}:${description}` — each qc's evidenceSnippet encodes
+ *  the source phrase / concept so distinct sources produce distinct
+ *  descriptions. Whole-invoice kinds share one origin per authority
+ *  (purpose_authority / nature_classifier / capital_classifier /
+ *  compat_gate / taxonomy_alignment / vendor_default / department /
+ *  line_item_jaccard).
+ *
+ *  Founder §3: "The aggregation rule should reason from provenance."
+ *  Founder §5: "Do not permit unbounded stacking."
+ */
+const INDEPENDENT_ORIGINS_CAP = 2;
+
+function inferObservationOrigin(obs: RawObservation): string {
+  const k = obs.kind;
+  // Per-line / per-source kinds — description encodes the source
+  // phrase or concept so distinct sources produce distinct origins.
+  if (k === "LINE_ITEM_MATCH" || k === "ECONOMIC_PURPOSE"
+      || k === "DOCUMENT_PHRASE" || k === "PRIOR_CODING"
+      || k === "SUPPLIER_CONTEXT" || k === "NAME_KEYWORD") {
+    return `${k}:${obs.description}`;
+  }
+  // Whole-invoice signals derived from single classifier/authority.
+  if (k === "PURPOSE_TYPE_COMPAT" || k === "PURPOSE_TYPE_MISMATCH"
+      || k === "PURPOSE_CATEGORY_HINT" || k === "ONTOLOGY_NAME_MATCH") {
+    return "purpose_authority";
+  }
+  if (k === "NATURE_COMPAT" || k === "NATURE_INCOMPATIBLE"
+      || k === "ACCOUNT_ROLE_MATCH") {
+    return "nature_classifier";
+  }
+  if (k === "CAPITAL_ASSET_MATCH" || k === "CAPITAL_ASSET_CATEGORY_BONUS"
+      || k === "RM_EXPENSE_MATCH" || k === "RM_EXPENSE_CONTRADICTION"
+      || k === "CAPITAL_ACCOUNT_CONTRADICTION") {
+    return "capital_classifier";
+  }
+  if (k === "NATURE_GATE_PREFERRED" || k === "NATURE_GATE_CONTRADICTED"
+      || k === "OBJECT_ROLE_CONTRADICTION") {
+    return "compat_gate";
+  }
+  if (k === "ACCOUNT_NAME_SIMILARITY" || k === "FS_GROUP_TAXONOMY"
+      || k === "CATEGORY_TAXONOMY" || k === "SPECIFICITY_BONUS") {
+    return "taxonomy_alignment";
+  }
+  if (k === "VENDOR_DEFAULT") return "vendor_default";
+  if (k === "LINE_ITEM_JACCARD") return "line_item_jaccard";
+  if (k === "DEPARTMENT_AFFINITY") return "department";
+  // Unknown kind — treat as unique so it counts independently.
+  return `${k}:${obs.description}`;
+}
+
+/** Collapse a candidate's raw observations by family (Phase 7.2E-a:
+ *  correlated-group MAX + bounded independent SUM within family) and
+ *  emit the CanonicalEvidence array with `countedTowardScore`
  *  + `role` markers per §4. Roles are computed here (not in the
  *  projection) so downstream code doesn't reverse-engineer them. */
 function collapseByFamily(observations: RawObservation[]): {
@@ -526,6 +592,16 @@ function collapseByFamily(observations: RawObservation[]): {
     // Split positive vs negative — MAX applies to positive observations
     // only. Negative observations (contradictions within a family)
     // SUM because they represent distinct penalties.
+    //
+    // Phase 4R · Phase 7.2E-a (2026-08-13) — bounded-corroboration
+    // aggregation was ATTEMPTED at this location but REVERTED under
+    // §8 mandatory safety (unsafe rose from 0 to 1 on
+    // `statement-of-account`). See docs/phase-4r-phase72e-a-checkpoint.md
+    // for the full report. `inferObservationOrigin` +
+    // `INDEPENDENT_ORIGINS_CAP` remain in the file above so a future
+    // slice can re-attempt with a stricter gate (e.g. only apply
+    // bounded SUM when the document is classified INVOICE and the
+    // canonical purpose committed). MAX-within-family restored.
     const positive = obs.filter((o) => o.contribution >= 0);
     const negative = obs.filter((o) => o.contribution < 0);
     let winningContribution = 0;
