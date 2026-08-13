@@ -39,6 +39,7 @@
 import { type PostingBlocker, type GlRecommendation, type GlCandidate } from "./gl-recommend";
 import type { AccountView } from "./gl-account-concepts";
 import { isFsGroupFamilyIncompatibleWithCluster } from "./account-semantics/family-incompatibility";
+import { normalizeToCanonicalPurpose } from "./semantic-normalization";
 import {
   discoverCandidates,
   unionEligiblePool,
@@ -771,21 +772,23 @@ function rankClusters(args: {
         priorCodingAccountNumbers: g.priorCodingAccountNumbers ?? [],
         matchedVendorId: g.matchedVendorId ?? null,
       },
-      // Phase 4R · Phase 7.2C (2026-08-13) — semantic-bridge wiring
-      // fix. Passes the canonical EconomicPurposeConcept enum value
-      // (e.g. "FUEL") so canonical-ranker's ONTOLOGY_NAME_MATCH /
-      // PURPOSE_TYPE_COMPAT / PURPOSE_CATEGORY_HINT paths look up
-      // the correct semantic tables. Only fires when the canonical
-      // purpose classifier committed (source === CANONICAL_COMMITTED
-      // or CANONICAL_LEGACY_CONCUR).
-      canonicalPurposeConcept: (() => {
-        const pd = args.discoveryContext?.purposeDecision;
-        if (!pd || !pd.concept) return null;
-        if (pd.source === "CANONICAL_COMMITTED" || pd.source === "CANONICAL_LEGACY_CONCUR") {
-          return pd.concept;
-        }
-        return null;
-      })(),
+      // Phase 4R · Phase 7.2D (2026-08-13) — semantic-normalization
+      // boundary. Every canonical-input path now goes through the
+      // single normalisation primitive in semantic-normalization.ts.
+      //
+      // Phase 7.2C fixed the committed-canonical branch but left the
+      // fallback branch shipping the lowercase cluster.conceptId
+      // (which fails PURPOSE_ACCOUNT_NAME_SUBSTRINGS / PURPOSE_ACCOUNT_TYPE
+      // / PURPOSE_CATEGORY_HINT lookups). Phase 7.2D §5 restores
+      // semantic parity by translating the cluster concept id to a
+      // canonical EconomicPurposeConcept via the reverse map in
+      // semantic-normalization.ts, so multi-cluster / per-line-fallback
+      // / image-narrative invoices all reach canonical with the same
+      // vocabulary as committed-canonical invoices.
+      canonicalPurposeConcept: normalizeToCanonicalPurpose({
+        purposeDecision: args.discoveryContext?.purposeDecision,
+        clusterConceptId: cluster.conceptId,
+      }).canonicalPurposeConcept,
     });
   });
 }

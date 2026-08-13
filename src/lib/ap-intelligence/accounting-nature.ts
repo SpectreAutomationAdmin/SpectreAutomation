@@ -195,6 +195,36 @@ const NATURE_LEXICONS: NatureLexicon[] = [
     ],
     antiTerms: [
       /\bmodel\s*(?:#|no\.?)\s*[A-Z0-9\-]+.*(?:new|complete\s+unit)/i,
+      // Phase 4R · Phase 7.2D (2026-08-13) — project-completion
+      // signals contradict operating-repair when they co-occur with
+      // a rebuild/repair-style word on the primary line item.
+      //
+      // Classifier symmetry with economic-purpose-taxonomy.ts:345-355
+      // (REPAIR_CONTRADICTED_BY_PROJECT_STATE). The purpose classifier
+      // has always treated these as REPAIR_MAINTENANCE contradictions;
+      // the accounting-nature classifier did not, which allowed
+      // "bunker rebuild — placed in service — final invoice" to
+      // commit REPAIR_AND_MAINTENANCE nature, override the capital
+      // classifier's CAPITAL_CANDIDATE (see canonical-runtime-facade
+      // .ts:355-358), and silently disable RM_EXPENSE_CONTRADICTION
+      // (canonical-ranker.ts:878-889) — the sole safety guard against
+      // routing completed capital work to operating expense. This
+      // extension is the missing generic accounting principle
+      // (founder §11).
+      //
+      // Class-of-thing patterns only; no vendor/invoice/account
+      // literals. Preserves legitimate repairs, maintenance, low-
+      // value operating items, and high-value operating services
+      // (none of which carry project-completion vocabulary).
+      /\bplaced\s+in\s+service\b/i,
+      /\bsubstantial\s+completion\b/i,
+      /\bwork\s+completed\b/i,
+      /\bproject\s+closed\b/i,
+      /\bfinal\s+invoice[^a-z]/i,
+      /\bdelivered\s+and\s+inspected\b/i,
+      /\bconstruction\s+in\s+progress\b/i,
+      /\baia\s+(?:g702|g703|progress\s+billing)\b/i,
+      /\bapplication\s+for\s+payment\b/i,
     ],
     amountSensitivity: "low",
   },
