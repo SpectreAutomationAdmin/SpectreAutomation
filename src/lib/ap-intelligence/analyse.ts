@@ -1385,6 +1385,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     where: { clubId: args.clubId, isActive: true, isHeader: false, type: { in: ["EXPENSE", "ASSET"] } },
     select: {
       id: true, accountNumber: true, name: true, type: true, accountRole: true,
+      normalBalance: true, isActive: true, isHeader: true, archivedAt: true,
       allowManualPosting: true, fundApplicability: true,
       isBankAccount: true, isCashAccount: true, isControlAccount: true,
       category: { select: { key: true, name: true } },
@@ -1744,6 +1745,39 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // canonical SOFTWARE_SUBSCRIPTION decision (conf 96) and the
     // legacy purpose vote failed the >=40 threshold.
     purposeDecision: purposeDecision ?? null,
+    // Phase 4R · Phase 7.2B (2026-08-13) — discovery context for
+    // legacy-direct discovery providers (candidate-discovery/). Never
+    // read by canonical ranking. Founder Option B authorisation.
+    discoveryContext: {
+      richAccounts: accountsForAllocations.map((a) => ({
+        id: a.id,
+        accountNumber: a.accountNumber,
+        name: a.name,
+        type: a.type,
+        normalBalance: a.normalBalance,
+        isActive: a.isActive,
+        isHeader: a.isHeader,
+        allowManualPosting: a.allowManualPosting,
+        isControlAccount: (a as { isControlAccount?: boolean }).isControlAccount ?? false,
+        isBankAccount: (a as { isBankAccount?: boolean }).isBankAccount ?? false,
+        isCashAccount: (a as { isCashAccount?: boolean }).isCashAccount ?? false,
+        archivedAt: (a as { archivedAt?: Date | null }).archivedAt ?? null,
+        fundApplicability: a.fundApplicability,
+        categoryKey: a.category?.key ?? null,
+        categoryName: a.category?.name ?? null,
+        fsGroupKey: a.fsGroup?.key ?? null,
+        fsGroupName: a.fsGroup?.name ?? null,
+        accountRole: (a as { accountRole?: string | null }).accountRole ?? null,
+      })),
+      purposeDecision: purposeDecision ?? null,
+      capitalDecision: sharedCapitalDecision,
+      productIdentity: sharedProductIdentity,
+      purchasedObjects: sharedPurchasedObjects,
+      departmentInference: sharedDept,
+      vendorHistoryPreferredAccountNumbers: [],
+      natureClassification: natureForCanonical,
+      supplierName: extraction.vendor.guessedName,
+    },
     printedSubtotal,
     printedTax,
     printedTotal,

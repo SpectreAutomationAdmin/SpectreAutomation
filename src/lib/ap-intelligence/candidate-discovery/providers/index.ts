@@ -1,38 +1,57 @@
-// Phase 4R · Phase 7.2 (2026-08-13) — Discovery provider registry.
-// Order is diagnostic only; the union orchestrator dedupes by
-// accountId. Provenance from every provider that surfaced an
-// account is retained on the resulting DiscoveredAccountCandidate.
+// Phase 4R · Phase 7.2B (2026-08-13) — Discovery provider registry.
+//
+// Phase 7.2B: replaced the synthetic taxonomy-table providers with
+// direct invocations of v206's actual discovery functions. Synthetic
+// providers (capitalAwareDiscovery / natureScopedDiscovery /
+// purposeOntologyDiscovery / semanticFullCoaDiscovery) preserved on
+// disk for ablation testing but NOT active by default. This is
+// consistent with the founder's §26 directive: "Do not delete the
+// old AP intelligence code — preserve it as a reference implementation."
 
 import type { DiscoveryProvider } from "..";
+import { purposeDrivenDirectDiscovery } from "./purpose-driven-direct";
+import { natureScopedDirectDiscovery } from "./nature-scoped-direct";
+import { capitalAwareDirectDiscovery } from "./capital-aware-direct";
+import { vendorHistoryDiscovery } from "./vendor-history";
+// Synthetic providers — kept for ablation testing; not active by default.
 import { capitalAwareDiscovery } from "./capital-aware";
 import { natureScopedDiscovery } from "./nature-scoped";
 import { purposeOntologyDiscovery } from "./purpose-ontology";
 import { semanticFullCoaDiscovery } from "./semantic-full-coa";
-import { vendorHistoryDiscovery } from "./vendor-history";
 
-/** All Phase 7.2A discovery providers, registered in a stable order.
- *  Consumers must NOT weight candidates by provider order or count.
- *
- *  Env-flag toggles for ablation. Default = ALL providers active. Set
- *  AP_DISCOVERY_DISABLE=capital_aware,nature_scoped,... to disable
- *  named providers for one benchmark run without editing code. */
+/** Env-flag toggles for ablation. Default set is the Phase 7.2B
+ *  legacy-direct providers + vendor-history. Set
+ *  AP_DISCOVERY_ENABLE_SYNTHETIC=1 to re-enable Phase 7.2A synthetic
+ *  providers alongside the direct ones (useful for A/B testing).
+ *  Set AP_DISCOVERY_DISABLE=<kinds> to disable named providers. */
 function envDisabledSet(): Set<string> {
   const raw = process.env.AP_DISCOVERY_DISABLE ?? "";
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
+function envSyntheticEnabled(): boolean {
+  return process.env.AP_DISCOVERY_ENABLE_SYNTHETIC === "1"
+      || process.env.AP_DISCOVERY_ENABLE_SYNTHETIC === "true";
+}
 export const ALL_DISCOVERY_PROVIDERS: readonly DiscoveryProvider[] = ((): readonly DiscoveryProvider[] => {
   const disabled = envDisabledSet();
-  const all: DiscoveryProvider[] = [
-    capitalAwareDiscovery,
-    natureScopedDiscovery,
-    purposeOntologyDiscovery,
-    semanticFullCoaDiscovery,
+  const active: DiscoveryProvider[] = [
+    purposeDrivenDirectDiscovery,
+    natureScopedDirectDiscovery,
+    capitalAwareDirectDiscovery,
     vendorHistoryDiscovery,
   ];
-  return all.filter((p) => !disabled.has(p.kind));
+  if (envSyntheticEnabled()) {
+    active.push(semanticFullCoaDiscovery);
+    // NOTE: synthetic capitalAwareDiscovery / natureScopedDiscovery
+    // / purposeOntologyDiscovery are OMITTED — they would double-fire
+    // with the direct providers under the same source-kind labels.
+  }
+  return active.filter((p) => !disabled.has(p.kind));
 })();
 
 export {
+  purposeDrivenDirectDiscovery, natureScopedDirectDiscovery,
+  capitalAwareDirectDiscovery, vendorHistoryDiscovery,
   capitalAwareDiscovery, natureScopedDiscovery, purposeOntologyDiscovery,
-  semanticFullCoaDiscovery, vendorHistoryDiscovery,
+  semanticFullCoaDiscovery,
 };

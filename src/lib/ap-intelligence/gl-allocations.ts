@@ -162,6 +162,12 @@ export interface AllocationInput {
   // cluster identity (overrides per-line synonym matches except for
   // SPECIAL_HANDLING lines or very-strong-distinct signals).
   purposeDecision?: EconomicPurposeDecision | null;
+  // Phase 4R · Phase 7.2B (2026-08-13) — legacy-direct discovery
+  // context (rich accounts + already-computed evidence) threaded
+  // from analyse.ts to the candidate-discovery layer. Consumed by
+  // discover-only providers that call v206 discovery functions
+  // directly. Never read by canonical ranking.
+  discoveryContext?: import("./candidate-discovery/legacy-bridge").DiscoveryContext;
   // Phase 4R · Phase 5 (2026-08-11) — global signals passed as
   // CLUSTER-shared context. Individual clusters still rank
   // independently from their own line items + concept, but shared
@@ -595,6 +601,7 @@ function rankClusters(args: {
   postingBlockersByAccount: Map<string, PostingBlocker[]>;
   vendorHistoryConceptIds?: string[];
   globalSignals?: AllocationInput["globalSignals"];
+  discoveryContext?: AllocationInput["discoveryContext"];
 }): RankedCluster[] {
   const g = args.globalSignals ?? {};
   return args.clusters.map((cluster) => {
@@ -705,6 +712,7 @@ function rankClusters(args: {
       clusterLineDescriptions: clusterLines.map((l) => l.description),
       clusterConceptId: cluster.conceptId,
       clusterFsGroupHints,
+      discoveryContext: args.discoveryContext,
       globalSignals: {
         supplierName: null, // reserved for a future slice; not needed by current providers
         natureLeader: g.natureLeader ?? null,
@@ -1101,6 +1109,7 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
     postingBlockersByAccount: input.postingBlockersByAccount,
     vendorHistoryConceptIds: input.vendorHistoryConceptIds,
     globalSignals: input.globalSignals,
+    discoveryContext: input.discoveryContext,
   });
 
   // Step 5: merge clusters that select the same account.

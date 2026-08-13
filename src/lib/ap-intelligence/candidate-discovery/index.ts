@@ -33,6 +33,8 @@
 // directive dated 2026-08-13.
 
 import type { AccountView } from "../gl-account-concepts";
+import type { DiscoveryContext } from "./legacy-bridge";
+export type { DiscoveryContext } from "./legacy-bridge";
 
 // ---------------------------------------------------------------------------
 // Public contract
@@ -80,6 +82,11 @@ export interface CandidateDiscoveryInput {
   clusterFsGroupHints: string[];
   /** Global signals shared across all clusters on the invoice. */
   globalSignals: DiscoveryGlobalSignals;
+  /** Phase 7.2B (2026-08-13) — analyse.ts-computed context threaded
+   *  through AllocationInput. Consumed by legacy-direct providers
+   *  (purpose-driven-direct, nature-scoped-direct, capital-aware-
+   *  direct). Optional so pre-Phase-7.2B tests still work. */
+  discoveryContext?: DiscoveryContext;
 }
 
 export interface DiscoveryGlobalSignals {
