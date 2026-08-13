@@ -489,13 +489,26 @@ function rankClusterCanonically(input: {
     priorCodingAccountNumbers: ReadonlyArray<string>;
     matchedVendorId: string | null;
   };
+  /** Phase 4R · Phase 7.2C (2026-08-13) — canonical purpose concept
+   *  (EconomicPurposeConcept enum value like "FUEL"/"SOFTWARE_SUBSCRIPTION").
+   *  When present AND committed, populates transaction.purposeConcept
+   *  so canonical-ranker's ONTOLOGY_NAME_MATCH /
+   *  PURPOSE_TYPE_COMPAT / PURPOSE_CATEGORY_HINT paths
+   *  (canonical-ranker.ts:709-745) look up the correct semantic-
+   *  bridge tables. Prior to this the cluster's ACCOUNTING_CONCEPTS
+   *  id (lowercase snake_case) was passed, which never matched the
+   *  UPPERCASE PURPOSE_ACCOUNT_NAME_SUBSTRINGS keys and left the
+   *  semantic-alignment observation dead. This is a wiring fix, not
+   *  a weight change. */
+  canonicalPurposeConcept?: string | null;
 }): RankedCluster {
   const clusterLines = input.cluster.assignments.map((a) => a.line);
   const clusterConceptId = input.cluster.conceptId;
+  const effectivePurposeConcept = input.canonicalPurposeConcept ?? clusterConceptId ?? null;
   const transaction: NormalisedTransactionInterpretation = {
-    purposeConcept: clusterConceptId ?? null,
-    purposeConfidence: clusterConceptId ? 85 : 0,
-    purposeQuality: clusterConceptId ? "MEDIUM" : "NONE",
+    purposeConcept: effectivePurposeConcept,
+    purposeConfidence: effectivePurposeConcept ? 85 : 0,
+    purposeQuality: effectivePurposeConcept ? "MEDIUM" : "NONE",
     capitalDecision: input.globalSignals.capitalDecision,
     capitalConfidence: input.globalSignals.capitalConfidence,
     natureLeader: input.globalSignals.natureLeader,
@@ -758,6 +771,21 @@ function rankClusters(args: {
         priorCodingAccountNumbers: g.priorCodingAccountNumbers ?? [],
         matchedVendorId: g.matchedVendorId ?? null,
       },
+      // Phase 4R · Phase 7.2C (2026-08-13) — semantic-bridge wiring
+      // fix. Passes the canonical EconomicPurposeConcept enum value
+      // (e.g. "FUEL") so canonical-ranker's ONTOLOGY_NAME_MATCH /
+      // PURPOSE_TYPE_COMPAT / PURPOSE_CATEGORY_HINT paths look up
+      // the correct semantic tables. Only fires when the canonical
+      // purpose classifier committed (source === CANONICAL_COMMITTED
+      // or CANONICAL_LEGACY_CONCUR).
+      canonicalPurposeConcept: (() => {
+        const pd = args.discoveryContext?.purposeDecision;
+        if (!pd || !pd.concept) return null;
+        if (pd.source === "CANONICAL_COMMITTED" || pd.source === "CANONICAL_LEGACY_CONCUR") {
+          return pd.concept;
+        }
+        return null;
+      })(),
     });
   });
 }
