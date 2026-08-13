@@ -1719,6 +1719,13 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     economicPurposeCandidates: economicPurpose,
     fullDocumentText: pdfOk ? pdfText : null,
     supplierName: extraction.vendor.guessedName,
+    // Phase 4R · Phase 7.1 (2026-08-13) — pass canonical purpose
+    // decision so clustering uses it as authoritative concept when
+    // CANONICAL_COMMITTED. Fixes 221178 fragmentation: 5 IT-service
+    // lines split into 3 clusters because clustering ignored the
+    // canonical SOFTWARE_SUBSCRIPTION decision (conf 96) and the
+    // legacy purpose vote failed the >=40 threshold.
+    purposeDecision: purposeDecision ?? null,
     printedSubtotal,
     printedTax,
     printedTotal,

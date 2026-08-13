@@ -44,6 +44,8 @@ import { ACCOUNTING_CONCEPTS, CONCEPT_BY_ID } from "./gl-concepts";
 import { matchStrongestPhrase } from "./gl-similarity";
 import type { LineItem, LineTaxTreatment } from "./line-items-extract";
 import type { PurposeCandidate } from "./economic-purpose";
+import type { EconomicPurposeDecision } from "./economic-purpose-authority";
+import type { EconomicPurposeConcept } from "./economic-purpose-taxonomy";
 // Phase 4R · Phase 5 (2026-08-11) — allocations now use the SAME
 // canonical ranker + recommendation-policy + confidence-assessment
 // pipeline as document-level classification. See rankClusterCanonically()
@@ -148,6 +150,12 @@ export interface AllocationInput {
   printedSubtotal: number | null;
   printedTax: number | null;
   printedTotal: number | null;
+  // Phase 4R · Phase 7.1 (2026-08-13) — canonical purpose decision
+  // consumed by clustering per founder investigation of 221178.
+  // When CANONICAL_COMMITTED, its concept becomes the primary
+  // cluster identity (overrides per-line synonym matches except for
+  // SPECIAL_HANDLING lines or very-strong-distinct signals).
+  purposeDecision?: EconomicPurposeDecision | null;
   // Phase 4R · Phase 5 (2026-08-11) — global signals passed as
   // CLUSTER-shared context. Individual clusters still rank
   // independently from their own line items + concept, but shared
@@ -223,7 +231,23 @@ interface LineAssignment {
   matchedPhrase: string;
 }
 
-function assignConceptToLine(line: LineItem, docFallbackConceptId: string | null): LineAssignment {
+// Phase 4R · Phase 7.1 (2026-08-13) — economic-clustering correction
+// per founder investigation of 221178. When a per-line synonym match
+// is a SPECIAL_HANDLING concept, or when it is very strong (>= 80)
+// AND materially different from the document-canonical concept, the
+// per-line concept wins to preserve legitimate tax/materiality
+// independence. Otherwise, if the document canonical purpose is
+// CANONICAL_COMMITTED, the document-canonical concept is authoritative
+// for cluster identity — the classifier's whole-document evidence is
+// stronger than any single line's raw synonym match.
+const PER_LINE_OVERRIDE_STRENGTH = 80;
+
+function assignConceptToLine(
+  line: LineItem,
+  docFallbackConceptId: string | null,
+  canonicalDocConceptId: string | null,
+  canonicalIsCommitted: boolean,
+): LineAssignment {
   // Search the whole catalog for the strongest per-line concept match.
   let best: { conceptId: string; strength: number; phrase: string; depth: number } | null = null;
   for (const concept of ACCOUNTING_CONCEPTS) {
@@ -235,6 +259,29 @@ function assignConceptToLine(line: LineItem, docFallbackConceptId: string | null
         || (Math.abs(hit.strength - best.strength) <= 3 && concept.depth > best.depth)) {
       best = { conceptId: concept.id, strength: hit.strength, phrase: hit.matchedPhrase, depth: concept.depth };
     }
+  }
+  // Phase 7.1: when the document canonical concept is committed, use
+  // it as the primary cluster identity UNLESS the per-line match is
+  // (a) a SPECIAL_HANDLING concept (interest/penalty/delivery/freight
+  // etc. — retain independent allocation per §6) or (b) very strong
+  // AND concept-different from the document canonical (legitimate
+  // distinct economic component).
+  if (canonicalIsCommitted && canonicalDocConceptId) {
+    const perLineIsSpecial = best != null && SPECIAL_HANDLING_CONCEPTS.has(best.conceptId);
+    const perLineIsStrongDistinct = best != null
+      && best.strength >= PER_LINE_OVERRIDE_STRENGTH
+      && best.conceptId !== canonicalDocConceptId;
+    if (!perLineIsSpecial && !perLineIsStrongDistinct) {
+      return {
+        line,
+        conceptId: canonicalDocConceptId,
+        conceptSource: "document_fallback",
+        matchStrength: 85,
+        matchedPhrase: best?.phrase ?? "",
+      };
+    }
+    // else fall through — per-line wins because it's SPECIAL_HANDLING
+    // or a very strong distinct signal.
   }
   if (best) {
     return { line, conceptId: best.conceptId, conceptSource: "line_description", matchStrength: best.strength, matchedPhrase: best.phrase };
@@ -252,19 +299,71 @@ function assignConceptToLine(line: LineItem, docFallbackConceptId: string | null
 function documentFallbackConcept(args: {
   economicPurposeCandidates: PurposeCandidate[] | null;
   fullDocumentText: string | null;
+  purposeDecision?: EconomicPurposeDecision | null;
 }): { conceptId: string; supportingEvidence: string[] } | null {
+  // Phase 4R · Phase 7.1 (2026-08-13) — prefer the CANONICAL purpose
+  // decision when the classifier committed. Founder investigation of
+  // 221178: the CANONICAL purposeDecision correctly identified
+  // SOFTWARE_SUBSCRIPTION at confidence 96 (CANONICAL_COMMITTED) but
+  // the legacy economicPurposeCandidates top score was only 33,
+  // failing the >= 40 threshold. The document consequently had no
+  // fallback concept and the 5 IT-service line items fragmented into
+  // multiple clusters. Fix: consume the canonical decision when
+  // committed — its whole-document evidence is stronger than the
+  // legacy vote.
+  if (args.purposeDecision != null
+      && args.purposeDecision.concept != null
+      && (args.purposeDecision.source === "CANONICAL_COMMITTED"
+          || args.purposeDecision.source === "CANONICAL_LEGACY_CONCUR")) {
+    const conceptId = CANONICAL_PURPOSE_TO_CONCEPT[args.purposeDecision.concept];
+    if (conceptId) {
+      return {
+        conceptId,
+        supportingEvidence: [`Document canonical purpose "${args.purposeDecision.label}" (source=${args.purposeDecision.source}, confidence=${args.purposeDecision.confidence})`],
+      };
+    }
+  }
   const purpose = args.economicPurposeCandidates?.[0];
   if (purpose && purpose.score >= 40) {
     const conceptId = PURPOSE_TO_CONCEPT[purpose.purpose];
     if (conceptId) {
       return {
         conceptId,
-        supportingEvidence: [`Document purpose "${purpose.classificationConcept}" (score ${purpose.score})`],
+        supportingEvidence: [`Document legacy purpose "${purpose.classificationConcept}" (score ${purpose.score})`],
       };
     }
   }
   return null;
 }
+
+// Phase 4R · Phase 7.1 (2026-08-13) — canonical purpose → concept
+// catalog id. Maps the Slice-5 canonical EconomicPurposeConcept enum
+// (economic-purpose-taxonomy.ts) to concept ids in the ACCOUNTING_CONCEPTS
+// catalog (gl-concepts.ts). Not exhaustive — covers the common
+// canonical concepts. Unmapped canonical concepts fall through to
+// the legacy PURPOSE_TO_CONCEPT (or unresolved) path.
+const CANONICAL_PURPOSE_TO_CONCEPT: Partial<Record<EconomicPurposeConcept, string>> = {
+  SOFTWARE_SUBSCRIPTION: "software_subscription_service",
+  CYBERSECURITY_SERVICE: "cybersecurity_service",
+  TELECOMMUNICATIONS: "telephony",
+  INTERNET_CONNECTIVITY: "connectivity_internet",
+  REPAIR_MAINTENANCE: "repairs_and_maintenance",
+  BUILDING_MAINTENANCE: "repairs_and_maintenance",
+  COURSE_MAINTENANCE: "course_maintenance_supplies",
+  PROFESSIONAL_MEMBERSHIP: "professional_membership_dues",
+  PROFESSIONAL_SERVICES: "professional_services",
+  FOOD: "food_cost_of_sales",
+  BEVERAGE: "beverage_cost_of_sales",
+  FREIGHT_DELIVERY: "delivery_and_freight",
+  OFFICE_SUPPLIES: "office_supplies_general",
+  INTEREST: "finance_interest_charge",
+  PENALTY: "late_payment_penalty",
+  // Concepts NOT mapped (no direct concept-catalog id): FUEL,
+  // LUBRICANTS, EQUIPMENT, EQUIPMENT_PARTS, CAPITAL_EQUIPMENT,
+  // OTHER, UNKNOWN. These canonical concepts fall through to
+  // legacy PURPOSE_TO_CONCEPT or per-line matching; adding
+  // catalog entries for them is out of scope for Phase 7.1.
+};
 
 // Duplicate of the mapping in gl-query-concepts.ts, kept local so
 // this module can be tested in isolation without imports cycles.
@@ -870,15 +969,35 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
     };
   }
 
-  // Step 1: document-level fallback concept.
+  // Step 1: document-level fallback concept. Phase 7.1 (2026-08-13)
+  // now consumes canonical purposeDecision (if committed) in
+  // preference to the legacy economicPurposeCandidates vote.
   const docFallback = documentFallbackConcept({
     economicPurposeCandidates: input.economicPurposeCandidates,
     fullDocumentText: input.fullDocumentText,
+    purposeDecision: input.purposeDecision ?? null,
   });
 
-  // Step 2: per-line concept assignment.
+  // Step 2: per-line concept assignment. Phase 7.1: when the
+  // canonical document purpose is committed, its concept overrides
+  // per-line synonym matches EXCEPT for SPECIAL_HANDLING or very-
+  // strong-distinct signals. This corrects the 221178 fragmentation
+  // where 5 IT-service lines were splitting on incidental synonym
+  // matches despite canonical committing to SOFTWARE_SUBSCRIPTION.
+  const canonicalIsCommitted = input.purposeDecision != null
+    && (input.purposeDecision.source === "CANONICAL_COMMITTED"
+        || input.purposeDecision.source === "CANONICAL_LEGACY_CONCUR")
+    && input.purposeDecision.concept != null;
+  const canonicalDocConceptId = canonicalIsCommitted && input.purposeDecision?.concept
+    ? (CANONICAL_PURPOSE_TO_CONCEPT[input.purposeDecision.concept] ?? null)
+    : null;
   const assignments = positiveLines.map((line) =>
-    assignConceptToLine(line, docFallback?.conceptId ?? null),
+    assignConceptToLine(
+      line,
+      docFallback?.conceptId ?? null,
+      canonicalDocConceptId,
+      canonicalIsCommitted && canonicalDocConceptId != null,
+    ),
   );
 
   // Step 2b: Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) §6 —
