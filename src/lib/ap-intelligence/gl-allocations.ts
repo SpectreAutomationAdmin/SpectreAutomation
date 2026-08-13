@@ -523,8 +523,11 @@ function rankClusters(args: {
     // Synthetic cluster-concept evidence — always add the cluster's
     // dominant concept as a supporting query signal so the ranker
     // can route an opaque line to the semantically correct account.
-    const clusterConcept = CONCEPT_BY_ID[cluster.conceptId];
-    if (clusterConcept) {
+    // Phase 7: cluster.conceptId may be null (unresolved cluster).
+    // Skip synthetic concept evidence when null; rankCanonical still
+    // scores against cluster line-item text + globalSignals.
+    const clusterConcept = cluster.conceptId ? CONCEPT_BY_ID[cluster.conceptId] : null;
+    if (cluster.conceptId && clusterConcept) {
       queryConcepts.push({
         conceptId: cluster.conceptId,
         concept: clusterConcept,

@@ -247,9 +247,9 @@ export async function computeGlobalContextForClusters(args: {
  * canonical run has been removed. `analyseIngestedInvoice` no longer
  * calls this function. The cluster-owned architecture in
  * gl-allocations.ts is the sole GL classification path. This function
- * remains as a temporary compat export for callers we haven't
- * migrated yet (none in `src/` at time of Phase 7). Delete after
- * external callers are migrated.
+ * remains as a compat export for callers we haven't migrated yet
+ * (none in `src/` at time of Phase 7). Delete after external
+ * callers are migrated.
  */
 export async function runCanonicalGlRanking(args: CanonicalFacadeArgs): Promise<GlRecommendation> {
   // 1. Load the tenant COA.
