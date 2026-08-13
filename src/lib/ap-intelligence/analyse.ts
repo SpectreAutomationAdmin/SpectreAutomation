@@ -1384,8 +1384,9 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   const accountsForAllocations = await prisma.account.findMany({
     where: { clubId: args.clubId, isActive: true, isHeader: false, type: { in: ["EXPENSE", "ASSET"] } },
     select: {
-      id: true, accountNumber: true, name: true, type: true,
+      id: true, accountNumber: true, name: true, type: true, accountRole: true,
       allowManualPosting: true, fundApplicability: true,
+      isBankAccount: true, isCashAccount: true, isControlAccount: true,
       category: { select: { key: true, name: true } },
       fsGroup: { select: { key: true, name: true } },
     },
@@ -1398,6 +1399,23 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     categoryName: a.category?.name ?? null,
     fsGroupKey: a.fsGroup?.key ?? null,
     fsGroupName: a.fsGroup?.name ?? null,
+    // Phase 4R · Phase 7.2 (2026-08-13) — hard-eligibility flags so
+    // the discovery union cannot surface bank/cash/control accounts
+    // as AP debits. Consumed by
+    // src/lib/ap-intelligence/candidate-discovery/.
+    //
+    // NOTE: `type` and `accountRole` are DELIBERATELY not propagated
+    // into AccountView until candidate-recall is proven adequate —
+    // canonical-ranker.ts reads `account.type` and activates
+    // CAPITAL_ASSET_MATCH +20 when it sees ASSET, which is a
+    // SCORING change (forbidden by Phase 7.2 directive §12 "Do not
+    // change canonical weights yet"). Discovery providers that need
+    // type-awareness must consult account-side heuristics (name /
+    // fsGroup / categoryKey) instead of `acct.type`.
+    isBankAccount: (a as { isBankAccount?: boolean }).isBankAccount ?? false,
+    isCashAccount: (a as { isCashAccount?: boolean }).isCashAccount ?? false,
+    isControlAccount: (a as { isControlAccount?: boolean }).isControlAccount ?? false,
+    allowManualPosting: a.allowManualPosting,
   }));
   const allocationPostingBlockers = new Map<string, Array<import("./gl-recommend").PostingBlocker>>();
   for (const a of accountsForAllocations) {

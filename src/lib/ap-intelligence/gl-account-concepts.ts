@@ -21,6 +21,17 @@ export interface AccountView {
   categoryName: string | null;
   fsGroupKey: string | null;
   fsGroupName: string | null;
+  // Phase 4R · Phase 7.2 (2026-08-13) — OPTIONAL fields consumed by
+  // the candidate-discovery layer (`candidate-discovery/`). All
+  // pre-Phase-7.2 consumers ignore them. Populated by the projection
+  // in `analyse.ts` where the underlying Prisma query already selects
+  // these columns; safe to omit in test-only fixtures.
+  type?: string | null;
+  accountRole?: string | null;
+  isBankAccount?: boolean;
+  isCashAccount?: boolean;
+  isControlAccount?: boolean;
+  allowManualPosting?: boolean;
 }
 
 export interface AccountConceptMatch {

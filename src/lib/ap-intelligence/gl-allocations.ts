@@ -39,6 +39,12 @@
 import { type PostingBlocker, type GlRecommendation, type GlCandidate } from "./gl-recommend";
 import type { AccountView } from "./gl-account-concepts";
 import { isFsGroupFamilyIncompatibleWithCluster } from "./account-semantics/family-incompatibility";
+import {
+  discoverCandidates,
+  unionEligiblePool,
+  type CandidateDiscoveryInput,
+} from "./candidate-discovery";
+import { ALL_DISCOVERY_PROVIDERS } from "./candidate-discovery/providers";
 import { extractQueryConcepts, dominantQueryConcept, type QueryConcept } from "./gl-query-concepts";
 import { ACCOUNTING_CONCEPTS, CONCEPT_BY_ID } from "./gl-concepts";
 import { matchStrongestPhrase } from "./gl-similarity";
@@ -675,6 +681,51 @@ function rankClusters(args: {
       // so allocation still succeeds on tenant COAs that lack the
       // ideal family.
     }
+    // Phase 4R · Phase 7.2 (2026-08-13) — CANDIDATE-DISCOVERY UNION.
+    //
+    // Founder architectural law (§1 of the Phase 7.2 directive):
+    //   "Spectre may have multiple independent ways to DISCOVER
+    //    plausible GL accounts, but exactly one mechanism may RANK
+    //    and SELECT the GL account."
+    //
+    // Phase 7.1 restricted `eligibleAccounts` to the hint-matched
+    // subset (or full non-payroll pool when no hints matched). The
+    // forensic v206-vs-Phase7.1 comparison established that this
+    // narrowed the candidate pool below v206's recall floor and
+    // dropped GL Top-1 accuracy from 17/42 to 9/42.
+    //
+    // Phase 7.2 restores v206's discovery capability WITHOUT
+    // restoring its multi-authority winner selection: discovery
+    // providers (candidate-discovery/providers) each contribute
+    // ACCOUNT IDENTITIES only, and the union widens the eligible
+    // pool. `rankCanonical` remains the sole winner-selection
+    // authority. Discovery frequency is NOT accounting evidence.
+    const discoveryInput: CandidateDiscoveryInput = {
+      eligibleAccounts: nonPayrollAccounts, // full non-payroll pool for discovery scanning
+      clusterLineDescriptions: clusterLines.map((l) => l.description),
+      clusterConceptId: cluster.conceptId,
+      clusterFsGroupHints,
+      globalSignals: {
+        supplierName: null, // reserved for a future slice; not needed by current providers
+        natureLeader: g.natureLeader ?? null,
+        natureIsDefensible: g.natureIsDefensible ?? false,
+        natureConfidence: g.natureConfidence ?? 0,
+        capitalDecision: g.capitalDecision ?? null,
+        capitalConfidence: g.capitalConfidence ?? 0,
+        hasHighQualityDurableAssetContext: g.hasHighQualityDurableAssetContext ?? false,
+        hasFinancingEvidence: g.hasFinancingEvidence ?? false,
+        departmentKey: g.departmentKey ?? null,
+        priorCodingAccountNumbers: g.priorCodingAccountNumbers ?? [],
+        preferredAccountNumbers: g.preferredAccountNumbers ?? [],
+        contradictedAccountNumbers: g.contradictedAccountNumbers ?? [],
+      },
+    };
+    const discovery = discoverCandidates(ALL_DISCOVERY_PROVIDERS, discoveryInput);
+    // Union the hint-preferred pool with discovered candidates. Hard
+    // eligibility (payroll exclusion, active/postable status) is
+    // already applied to `nonPayrollAccounts`; discovery only adds
+    // candidates from within that pool.
+    eligibleAccounts = unionEligiblePool(eligibleAccounts, nonPayrollAccounts, discovery);
     // Phase 4R · Phase 5 — canonical per-cluster ranker replaces
     // the legacy rankAccountsPure. Same evidence-role model, same
     // recommendation policy, same confidence assessment as
