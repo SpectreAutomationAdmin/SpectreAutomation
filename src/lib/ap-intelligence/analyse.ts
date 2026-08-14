@@ -1068,9 +1068,54 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // is computed AFTER the ranker (see `classifyAccountingNature`
   // call further down) — that finer resolution feeds nature-scoped
   // promotion, not the pre-ranking eligibility gate.
+  // Phase 4R · Phase 7.2I-b (2026-08-13) — compositional capital
+  // admission. A defensible structured accounting conclusion from ONE
+  // treatment classifier (accounting-nature) may widen the eligible
+  // candidate universe even when ANOTHER classifier (capital-vs-operating)
+  // is unresolved. Composition rule per founder §7.2I-b:
+  //
+  //   IF `accountingNature.leader === "CAPITAL_ASSET"` AND
+  //      `accountingNature.isDefensible === true`
+  //   THEN ASSET accounts are admissible at Phase-2 eligibility,
+  //        EVEN WHEN `capital-vs-operating.state !== "CAPITAL"`.
+  //
+  //   Does NOT force an asset winner.
+  //   Does NOT exclude expense candidates.
+  //   Does NOT mark the invoice RECOMMEND automatically.
+  //   Does NOT bypass canonical ranking.
+  //   Canonical ranker still decides after seeing all candidates.
+  //
+  // Pre-nature check uses line-item evidence available at this point
+  // in the pipeline (before the facade's fuller `natureForCanonical`
+  // computation). Same classifier, same defensibility threshold —
+  // just an earlier read for the eligibility gate.
+  //
+  // §isDefensible semantics: leader score >= 20 (raw >= 3, i.e. at
+  // least one STRONG_WEIGHT match) AND leader has ≥1 supporting
+  // evidence entry. Score 20 corresponds to a single strongTerm
+  // match on the line-item description — a modest bar but not
+  // trivial, and it explicitly requires supporting evidence
+  // (not amount alone).
+  const preNatureForEligibility = classifyAccountingNature({
+    extraction,
+    supplierName: extraction.vendor.guessedName,
+    lineItemDescriptions: lineItemsExtracted
+      .map((li) => li.description)
+      .filter((d): d is string => typeof d === "string" && d.length > 0),
+    fullDocumentText: pdfOk ? pdfText : null,
+    capitalStateFromClassifier: capital.state,
+    capitalThresholdCents: null,
+    totalCents: null,
+    transactionalText: null,
+  });
+  const natureAdmitsCapitalAsset =
+    preNatureForEligibility.leader === "CAPITAL_ASSET"
+    && preNatureForEligibility.isDefensible;
+
   const expectedDebitRole: import("@/lib/accounting/eligibility").ExpectedDebitRole =
     capital.state === "CAPITAL" ? "CAPITAL_ASSET"
     : capital.state === "OPERATING" ? "OPERATING_EXPENSE"
+    : natureAdmitsCapitalAsset ? "CAPITAL_ASSET"
     : "UNKNOWN";
 
   // Phase 4R · Phase 4 (2026-08-11) — legacy Pipeline A ranker

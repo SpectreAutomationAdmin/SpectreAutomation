@@ -679,6 +679,50 @@ export const CONCEPT_BY_ID: Readonly<Record<string, AccountingConcept>> =
 // how semantically close two concepts are.
 // -----------------------------------------------------------------------------
 
+/** Phase 4R · Phase 7.2I-a (2026-08-13) — named cross-tree
+ *  accounting-affinity relationship.
+ *
+ *  Two concepts that live in different ontology trees but explicitly
+ *  co-belong to the same financial-statement group (via non-empty
+ *  intersection of `fsGroupKeyHints`) represent the same accounting
+ *  family for classification purposes, even without a tree edge.
+ *
+ *  Example: `software_subscription_service` (parent
+ *  `memberships_and_subscriptions`) and `it_services` (parent `null`)
+ *  live in different ontology trees. `conceptRelatedness` would
+ *  return 0 for the pair. But both carry `IS_IT_SOFTWARE` in their
+ *  `fsGroupKeyHints`, meaning both are considered part of the IT /
+ *  software financial-statement family in the club's COA. A human
+ *  accountant recognises "SaaS backup subscription" as legitimately
+ *  posting to a "Computer & IT Services" account for this reason.
+ *
+ *  Value = 35: strictly BELOW grandparent (40), well below sibling
+ *  (55), well below parent (65), well below identity (100). Higher
+ *  than 0 so the affinity contributes non-trivially; low enough that
+ *  a direct ontology relation always wins.
+ *
+ *  Every existing `fsGroupKeyHint` value in `ACCOUNTING_CONCEPTS`
+ *  (audited 2026-08-13) is a specific accounting subcategory
+ *  (`IS_IT_SOFTWARE`, `IS_UTILITIES`, `IS_REPAIRS_MAINTENANCE`,
+ *  `IS_COGS_FOOD`, etc.). There are no broad statement-level buckets
+ *  like "IS_OPERATING_EXPENSE" — safe to bridge unconditionally
+ *  across shared hints. If a future broad hint is introduced, add
+ *  an exclusion list at that point rather than lowering this value. */
+const SHARED_FS_GROUP_AFFINITY = 35;
+
+/** Return true when two concepts explicitly co-belong to at least
+ *  one financial-statement group. Requires BOTH sides to have a
+ *  non-empty `fsGroupKeyHints`; a concept with no declared hints
+ *  makes no claim about its statement group and cannot bridge. */
+function sharedFsGroupAffinity(a: AccountingConcept, b: AccountingConcept): boolean {
+  if (!a.fsGroupKeyHints?.length) return false;
+  if (!b.fsGroupKeyHints?.length) return false;
+  for (const h of a.fsGroupKeyHints) {
+    if (b.fsGroupKeyHints.includes(h)) return true;
+  }
+  return false;
+}
+
 export function conceptRelatedness(aId: string, bId: string): number {
   if (aId === bId) return 100;
   const a = CONCEPT_BY_ID[aId];
@@ -694,6 +738,8 @@ export function conceptRelatedness(aId: string, bId: string): number {
   const bParent = b.parent ? CONCEPT_BY_ID[b.parent] : null;
   if (aParent && aParent.parent === b.id) return 40;
   if (bParent && bParent.parent === a.id) return 40;
+  // Phase 4R · Phase 7.2I-a — cross-tree shared FS-group affinity.
+  if (sharedFsGroupAffinity(a, b)) return SHARED_FS_GROUP_AFFINITY;
   return 0;
 }
 

@@ -257,15 +257,43 @@ export function cmpForbiddenGl(e: ExpectedTruth, a: AnalyserSnapshot): Comparato
   };
 }
 
+// Phase 4R · Phase 7.2I Step 0 (2026-08-13) — workflow-state label
+// vocabulary alias. Fixtures were written with human-facing labels
+// (`REVIEW_REQUIRED`) while the runtime enum in
+// `src/lib/ap-intelligence/workflow/decision.ts:22` uses machine-facing
+// labels (`NEEDS_JUDGMENT`). Phase 7.2H R9 identified 4 cases where
+// runtime reasoning was correct (correct GL top-1 recommended) but
+// the workflowState comparator counted the label mismatch as a
+// failure.
+//
+// Both names describe the same product state: "recommendation
+// surfaced, workflow requires human review before posting."
+// Aliasing them collapses the label mismatch into a PASS without
+// changing runtime behaviour.
+const WORKFLOW_STATE_ALIASES: Record<string, ReadonlyArray<string>> = {
+  REVIEW_REQUIRED: ["NEEDS_JUDGMENT"],
+  NEEDS_JUDGMENT: ["REVIEW_REQUIRED"],
+};
+
+function workflowStatesMatch(actual: string | null, expected: string): boolean {
+  if (actual === expected) return true;
+  const aliases = WORKFLOW_STATE_ALIASES[expected] ?? [];
+  return actual != null && aliases.includes(actual);
+}
+
 export function cmpWorkflowType(e: ExpectedTruth, a: AnalyserSnapshot): ComparatorResult | null {
   if (!e.expectedWorkflowType) return null;
-  const ok = (a.workflowState ?? "") === e.expectedWorkflowType;
+  const ok = workflowStatesMatch(a.workflowState ?? null, e.expectedWorkflowType);
   return {
     dimension: "workflowState",
     verdict: ok ? "PASS" : (a.workflowState ? "PARTIAL" : "FAIL"),
     score: ok ? 1 : (a.workflowState ? 0.3 : 0),
     actual: a.workflowState, expected: e.expectedWorkflowType,
-    reason: ok ? `Workflow state matched expected.` : `Workflow state ${a.workflowState ?? "(none)"} did not match expected ${e.expectedWorkflowType}.`,
+    reason: ok
+      ? (a.workflowState === e.expectedWorkflowType
+          ? `Workflow state matched expected.`
+          : `Workflow state ${a.workflowState} matches expected ${e.expectedWorkflowType} (alias).`)
+      : `Workflow state ${a.workflowState ?? "(none)"} did not match expected ${e.expectedWorkflowType}.`,
   };
 }
 
