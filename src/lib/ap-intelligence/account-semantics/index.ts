@@ -319,6 +319,37 @@ function derivePostingRole(
   if (account.isBankAccount) return { postingRole: "BANK", source: "ACCOUNT_ROLE" };
   if (account.isCashAccount) return { postingRole: "CASH", source: "ACCOUNT_ROLE" };
   if (account.isControlAccount) return { postingRole: "CONTROL", source: "ACCOUNT_ROLE" };
+
+  // Phase 4R · Phase 7.2N · Fix 1 (2026-08-14) — fsGroup structural
+  // fallback. Real production COAs (e.g. Coulee Ridge staging) store
+  // cash-equivalent accounts as `type = ASSET, accountRole = STANDARD,
+  // isBankAccount = false, isCashAccount = false, fsGroupKey =
+  // BS_CASH_EQUIVALENTS`. Without this fallback, `derivePostingRole`
+  // returns STANDARD → `structuralPostingRestrictions = []` → tier
+  // assignment leaves 1000 Petty Cash / 1001 Bank-General / 9900
+  // Bank-Credit Facilities as valid AP debit candidates that win by
+  // lexical similarity. Founder §1 invariant:
+  //   "An account classified under BS_CASH_EQUIVALENTS must not be an
+  //    ordinary AP coding destination merely because tenant-specific
+  //    bank/cash boolean flags are false."
+  //
+  // Fs-group structural family is the primary structured evidence
+  // per Founder §2; the more specific BANK-vs-CASH diagnostic role
+  // uses a bounded name check (only to distinguish the two — the
+  // ineligibility itself does not depend on the name). Every AP
+  // structural-eligibility rule downstream reads
+  // AccountSemantics.postingRole / structuralPostingRestrictions —
+  // never re-parses the account name.
+  const fsg = (account.fsGroupKey ?? "").toUpperCase();
+  const nameLower = (account.name ?? "").toLowerCase();
+  if (fsg === "BS_CASH_EQUIVALENTS") {
+    // Bounded diagnostic name check to distinguish BANK vs CASH;
+    // both produce the same downstream posting restriction so the
+    // ineligibility does not depend on this name match.
+    if (/\bbank\b/i.test(nameLower)) return { postingRole: "BANK", source: "FS_GROUP" };
+    return { postingRole: "CASH", source: "FS_GROUP" };
+  }
+
   return { postingRole: "STANDARD", source: "ACCOUNT_ROLE" };
 }
 
