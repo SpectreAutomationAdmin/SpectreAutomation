@@ -141,6 +141,19 @@ export interface CaseRunResult {
     /** Number of candidates suppressed by the Phase 0 containment
      *  gate on this run (0 when containment is disabled). */
     phase0Suppressions?: number;
+    // Phase 4R · Phase 7.2G (2026-08-13) — raw canonical vs committed
+    // separation. Founder §1: report ranking accuracy separately from
+    // recommendation rate.
+    canonicalWinnerAccountNumber?: string | null;
+    recommendationStatus?: string | null;
+    canonicalConfidenceLevel?: string | null;
+    canonicalWinnerScore?: number | null;
+    runnerUpScore?: number | null;
+    marginToRunnerUp?: number | null;
+    isDeterministicTieBreak?: boolean | null;
+    genuineCompetitorCount?: number | null;
+    abstentionCategory?: string | null;
+    abstentionReasons?: string[] | null;
   };
 }
 

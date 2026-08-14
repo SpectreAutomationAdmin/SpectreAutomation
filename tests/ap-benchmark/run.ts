@@ -189,8 +189,20 @@ async function projectAnalyserSnapshot(analysis: unknown): Promise<AnalyserSnaps
     gl?: {
       accountNumber?: string | null; accountName?: string | null;
       source?: string | null; confidence?: number | null;
-      candidates?: Array<{ accountNumber: string }>;
+      candidates?: Array<{ accountNumber: string; semanticScore?: number }>;
       reason?: string | null;
+      // Phase 4R · Phase 7.2G — raw canonical + policy fields.
+      canonicalWinnerAccountNumber?: string | null;
+      recommendationStatus?: string | null;
+      abstentionCategory?: string | null;
+      abstentionReasons?: string[] | null;
+      canonicalConfidence?: {
+        level?: string;
+        winnerScore?: number | null;
+        marginToStrongestCompetitor?: number | null;
+        isDeterministicTieBreak?: boolean;
+        genuineCompetitors?: Array<unknown>;
+      };
     };
   };
   const supplierName = a.extraction?.supplier?.guessedName ?? a.extraction?.vendor?.guessedName ?? null;
@@ -221,6 +233,17 @@ async function projectAnalyserSnapshot(analysis: unknown): Promise<AnalyserSnaps
     glCandidateNumbers: (a.gl?.candidates ?? []).map((c) => c.accountNumber),
     glReason: a.gl?.reason ?? null,
     workflowState: decision.state,
+    // Phase 4R · Phase 7.2G — raw canonical + policy fields
+    canonicalWinnerAccountNumber: a.gl?.canonicalWinnerAccountNumber ?? null,
+    recommendationStatus: a.gl?.recommendationStatus ?? null,
+    canonicalConfidenceLevel: a.gl?.canonicalConfidence?.level ?? null,
+    canonicalWinnerScore: a.gl?.canonicalConfidence?.winnerScore ?? null,
+    runnerUpScore: (a.gl?.candidates?.[1]?.semanticScore) ?? null,
+    marginToRunnerUp: a.gl?.canonicalConfidence?.marginToStrongestCompetitor ?? null,
+    isDeterministicTieBreak: a.gl?.canonicalConfidence?.isDeterministicTieBreak ?? null,
+    genuineCompetitorCount: a.gl?.canonicalConfidence?.genuineCompetitors?.length ?? null,
+    abstentionCategory: a.gl?.abstentionCategory ?? null,
+    abstentionReasons: a.gl?.abstentionReasons ?? null,
     autoApprovalExclusions: decision.autoApprovalExclusions,
     workflowBlockers: decision.blockers.map((b) => b.code),
     workflowDimensionStatuses: Object.fromEntries(
@@ -269,6 +292,17 @@ async function runOneCase(
       glLeaderName: snapshot.glLeaderName,
       glConfidence: snapshot.glConfidence,
       workflowState: snapshot.workflowState,
+      // Phase 4R · Phase 7.2G — raw canonical vs committed separation.
+      canonicalWinnerAccountNumber: snapshot.canonicalWinnerAccountNumber,
+      recommendationStatus: snapshot.recommendationStatus,
+      canonicalConfidenceLevel: snapshot.canonicalConfidenceLevel,
+      canonicalWinnerScore: snapshot.canonicalWinnerScore,
+      runnerUpScore: snapshot.runnerUpScore,
+      marginToRunnerUp: snapshot.marginToRunnerUp,
+      isDeterministicTieBreak: snapshot.isDeterministicTieBreak,
+      genuineCompetitorCount: snapshot.genuineCompetitorCount,
+      abstentionCategory: snapshot.abstentionCategory,
+      abstentionReasons: snapshot.abstentionReasons,
     },
   };
 }

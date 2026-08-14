@@ -32,6 +32,22 @@ export interface AnalyserSnapshot {
   autoApprovalExclusions?: string[];
   workflowBlockers?: string[];
   workflowDimensionStatuses?: Record<string, string>;
+  // Phase 4R · Phase 7.2G (2026-08-13) — raw canonical vs committed
+  // separation per founder §1. `canonicalWinnerAccountNumber` is what
+  // rankCanonical selected as candidates[0]; `recommendationStatus`
+  // is whether policy allowed it to surface. `glLeaderAccountNumber`
+  // (above) is null on ABSTAIN — this pair distinguishes ranking
+  // accuracy from recommendation rate.
+  canonicalWinnerAccountNumber?: string | null;
+  recommendationStatus?: string | null;
+  canonicalConfidenceLevel?: string | null;
+  canonicalWinnerScore?: number | null;
+  runnerUpScore?: number | null;
+  marginToRunnerUp?: number | null;
+  isDeterministicTieBreak?: boolean | null;
+  genuineCompetitorCount?: number | null;
+  abstentionCategory?: string | null;
+  abstentionReasons?: string[] | null;
 }
 
 function normalizeName(v: string): string {
