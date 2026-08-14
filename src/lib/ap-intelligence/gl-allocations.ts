@@ -1302,11 +1302,55 @@ export function projectClustersToGlRecommendation(
   // Case D · multi-cluster invoice → gl.accountNumber = null (per
   // founder §7 Option A: no synthetic representative GL). Overall
   // status/confidence aggregated across clusters.
+  //
+  // Phase 4R · Phase 7.2E-b (2026-08-13) — multi-cluster projection
+  // semantics per founder §§3-6:
+  //   ALL CLUSTERS RECOMMEND → MULTIPLE_RESOLVED (requiresReview=false,
+  //     source="MULTI_ALLOCATION_RESOLVED", candidates populated from
+  //     per-allocation winners for engineering/UI visibility).
+  //   ANY CLUSTER NON-RECOMMEND → MULTIPLE_REVIEW_REQUIRED
+  //     (requiresReview=true, source reflects the aggregate abstain
+  //     category, resolved cluster winners still populated in
+  //     candidates so the UI can show them).
+  //   NO clusters resolved / analysis failure → preserve existing
+  //     abstain semantics.
+  //
+  // §4: gl.accountNumber remains null — projection cannot select a
+  //     document-level GL winner (largest / first / highest-confidence
+  //     / most common / majority — all forbidden).
+  // §5: document confidence aggregation uses weakest-material-cluster
+  //     semantics (already in aggregateConfidenceLevel).
+  // §9: per-cluster canonical winners preserved via the candidates
+  //     field for founder/AP inspection.
   const statuses = allocations.map((a) => a.recommendationStatus);
   const levels = allocations.map((a) => a.canonicalConfidence?.level);
   const overallStatus = aggregateRecommendationStatus(statuses);
   const overallLevel = aggregateConfidenceLevel(levels);
   const abstentionReasons = allocations.flatMap((a) => a.canonicalConfidence?.reasonCodes ?? []);
+  const allResolved = overallStatus === "RECOMMEND";
+  const humanReason = allResolved
+    ? `Multi-allocation invoice (${allocations.length} clusters) — MULTIPLE_RESOLVED. Every allocation resolved to a canonical winner at ${overallLevel} confidence. Per-allocation results are authoritative; no single document-level GL account.`
+    : `Multi-allocation invoice (${allocations.length} clusters) — MULTIPLE_REVIEW_REQUIRED (${overallStatus}). At least one allocation requires review. Resolved allocations preserved; per-allocation results are authoritative.`;
+  // §9 provenance: expose per-allocation winners as gl.candidates so
+  // downstream consumers (UI / benchmark comparator / audit) can see
+  // the resolved coding. Ordering by original allocation index — NOT
+  // by score — because ranking one over another would violate §4.
+  const perAllocationCandidates = allocations
+    .filter((a) => a.recommendedAccount != null && a.canonicalWinnerAccountNumber != null)
+    .map((a) => ({
+      accountId: a.recommendedAccount!.accountId,
+      accountNumber: a.recommendedAccount!.accountNumber,
+      accountName: a.recommendedAccount!.accountName,
+      confidence: a.recommendedAccount!.confidence,
+      rank: 0,
+      requiresReview: a.recommendedAccount!.requiresReview,
+      postingBlockers: a.recommendedAccount!.postingBlockers,
+      semanticScore: a.canonicalConfidence?.winnerScore ?? 0,
+      evidence: [],
+      categoryKey: null,
+      fsGroupKey: null,
+      postable: a.recommendedAccount!.postingBlockers.length === 0,
+    }));
   return emptyGlRec(opts.totalAccountsEvaluated,
     `multi_allocation:${allocations.length}_clusters · status=${overallStatus} · confidence=${overallLevel}`,
     {
@@ -1319,6 +1363,17 @@ export function projectClustersToGlRecommendation(
       ),
       abstentionReasons,
       canonicalWinnerAccountNumber: null,
+      // §3 ALL CLUSTERS RECOMMEND: requiresReview=false. Resolved
+      // multi-allocation is a valid final state, not review-required.
+      // §4: source stays "NONE" for gl.accountNumber (correctly null);
+      // a MULTI_ALLOCATION_RESOLVED signal is carried on the flag +
+      // reason field. Downstream projection derives cardCategory =
+      // "Multiple" via the allocations, not via a new source enum.
+      requiresReview: !allResolved,
+      // §9: expose per-allocation winners so the UI + benchmark can
+      // see what Spectre understands the invoice to code to. Ordered
+      // by original allocation position — no ranking implied.
+      candidates: perAllocationCandidates,
       canonicalConfidence: {
         level: overallLevel,
         winnerAccountId: null,
@@ -1331,8 +1386,13 @@ export function projectClustersToGlRecommendation(
         marginToStrongestCompetitor: null,
         isDeterministicTieBreak: false,
         recommendationStatus: overallStatus,
-        reasonCodes: [`multi_allocation_aggregate:${allocations.length}_clusters`, `overall_status:${overallStatus}`, `overall_level:${overallLevel}`],
-        humanReadableReason: `Multi-allocation invoice (${allocations.length} clusters) — overall ${overallLevel}. Per-allocation results are authoritative; no single document-level GL account.`,
+        reasonCodes: [
+          `multi_allocation_aggregate:${allocations.length}_clusters`,
+          `overall_status:${overallStatus}`,
+          `overall_level:${overallLevel}`,
+          allResolved ? "multiple_resolved" : "multiple_review_required",
+        ],
+        humanReadableReason: humanReason,
       },
     },
   );
