@@ -50,7 +50,17 @@ export type DiscoverySource =
   | { kind: "nature_scoped"; nature: string; reason: string }
   | { kind: "capital_aware"; decision: string; reason: string }
   | { kind: "semantic_full_coa"; reason: string }
-  | { kind: "vendor_history"; accountNumber: string };
+  | { kind: "vendor_history"; accountNumber: string }
+  // Phase 4R · Phase 7.2K (2026-08-13) — treatment-aware retrieval.
+  // Discovery metadata for Model B (Phase 7.2L) tier assignment.
+  // NEVER a source of canonical score.
+  | {
+      kind: "treatment_aware";
+      alignment: "PRIMARY" | "PLAUSIBLE" | "CONTRADICTED";
+      statementRole: string;
+      accountingClass: string;
+      defensibility: "STRONG" | "WEAK" | "UNRESOLVED";
+    };
 
 /** A candidate discovered by ONE OR MORE discovery mechanisms.
  *  Deduplicated by account identity across all sources — a candidate
@@ -189,6 +199,7 @@ export function discoverCandidates(
     capital_aware: 0,
     semantic_full_coa: 0,
     vendor_history: 0,
+    treatment_aware: 0,
   };
   for (const provider of providers) {
     for (const hit of provider.discover(input)) {

@@ -35,9 +35,8 @@ function mkAsset(o: Partial<AccountEligibilityView> = {}): AccountEligibilityVie
 }
 function mkCtx(o: Partial<AccountingTransactionContext> = {}): AccountingTransactionContext {
   return {
+    transactionKind: "AP_INVOICE",
     expectedDebitRole: "UNKNOWN",
-    invoiceAmountCents: 500000,
-    capitalizationEvidence: null,
     hasPayrollEvidence: false,
     ...o,
   };
@@ -72,7 +71,7 @@ describe("Phase 7.2I-b · compositional capital admission — asset eligibility"
     expect(withoutCapEv).toBe("TRANSACTION_NATURE_INCOMPATIBLE");
     const withCapEv = ruleNatureAssetExcluded(mkAsset(), mkCtx({
       expectedDebitRole: "REPAIR_AND_MAINTENANCE",
-      capitalizationEvidence: { supported: true, reasons: ["test"] },
+      capitalizationEvidence: { supported: true, confidence: 80 },
     }));
     expect(withCapEv).toBeNull();
   });

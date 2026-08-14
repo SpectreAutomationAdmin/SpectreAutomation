@@ -13,6 +13,11 @@ import { purposeDrivenDirectDiscovery } from "./purpose-driven-direct";
 import { natureScopedDirectDiscovery } from "./nature-scoped-direct";
 import { capitalAwareDirectDiscovery } from "./capital-aware-direct";
 import { vendorHistoryDiscovery } from "./vendor-history";
+// Phase 4R · Phase 7.2K (2026-08-13) — treatment-aware retrieval.
+// Consumes composed CanonicalAccountingTreatment from discoveryContext;
+// emits candidates with PRIMARY / PLAUSIBLE alignment metadata for
+// Model B (Phase 7.2L) tier assignment. No score contribution.
+import { treatmentAwareDiscovery } from "./treatment-aware";
 // Synthetic providers — kept for ablation testing; not active by default.
 import { capitalAwareDiscovery } from "./capital-aware";
 import { natureScopedDiscovery } from "./nature-scoped";
@@ -39,6 +44,8 @@ export const ALL_DISCOVERY_PROVIDERS: readonly DiscoveryProvider[] = ((): readon
     natureScopedDirectDiscovery,
     capitalAwareDirectDiscovery,
     vendorHistoryDiscovery,
+    // Phase 4R · Phase 7.2K (2026-08-13).
+    treatmentAwareDiscovery,
   ];
   if (envSyntheticEnabled()) {
     active.push(semanticFullCoaDiscovery);
@@ -52,6 +59,7 @@ export const ALL_DISCOVERY_PROVIDERS: readonly DiscoveryProvider[] = ((): readon
 export {
   purposeDrivenDirectDiscovery, natureScopedDirectDiscovery,
   capitalAwareDirectDiscovery, vendorHistoryDiscovery,
+  treatmentAwareDiscovery,
   capitalAwareDiscovery, natureScopedDiscovery, purposeOntologyDiscovery,
   semanticFullCoaDiscovery,
 };

@@ -64,9 +64,134 @@ export type SemanticsProvenance =
   | "NAME_INFERENCE"
   | "UNKNOWN";
 
+// Phase 4R · Phase 7.2K (2026-08-13) — extended AP-relevant account
+// semantics per founder §2. AccountSemantics becomes the SINGLE typed
+// AP interpretation of an account. Downstream AP reasoning must not
+// repeatedly re-interpret raw account.type / fsGroupKey / account
+// name / capital-role fields — every treatment-sensitive read consults
+// this artefact.
+
+/** Structural posting role — derived from Account.accountRole +
+ *  boolean flags. Represents STRUCTURAL restrictions on posting
+ *  (bank/cash/control/contra), NOT accounting-treatment inference. */
+export type PostingRole =
+  | "STANDARD"
+  | "CONTRA_ASSET"
+  | "CONTRA_REVENUE"
+  | "CONTRA_LIABILITY"
+  | "CONTROL"
+  | "CLEARING"
+  | "BANK"
+  | "CASH";
+
+/** Coarse financial-statement role. Aligns with the composed
+ *  treatment's `statementRole` for tier assignment (Phase 7.2L). */
+export type AccountStatementRole =
+  | "BALANCE_SHEET_CAPITAL_ASSET"
+  | "BALANCE_SHEET_CURRENT_ASSET"
+  | "BALANCE_SHEET_LIABILITY"
+  | "BALANCE_SHEET_EQUITY"
+  | "REVENUE"
+  | "OPERATING_EXPENSE"
+  | "COST_OF_SALES"
+  | "OTHER"
+  | "UNKNOWN";
+
+/** Distinguishes inventory-asset and prepaid-asset roles at the
+ *  current-asset level. Complements `AccountStatementRole`. */
+export type InventoryPrepaidRole =
+  | "INVENTORY"
+  | "PREPAID_ASSET"
+  | "NONE";
+
+/** Accounting-class taxonomy — the "what economic thing does this
+ *  account represent?" layer. Broader than functional/capital role.
+ *  Used for tier assignment inside a statementRole cohort. */
+export type AccountingClass =
+  | "FUEL_EXPENSE"
+  | "IT_SERVICES"
+  | "SOFTWARE_INTANGIBLE"
+  | "PROFESSIONAL_SERVICES"
+  | "MEMBERSHIP_DUES"
+  | "REPAIRS_MAINTENANCE"
+  | "GROUNDS_MAINTENANCE"
+  | "UTILITIES_TELECOM"
+  | "INSURANCE_EXPENSE"
+  | "INTEREST_FINANCE_CHARGE"
+  | "TAXES_LICENSES"
+  | "OFFICE_SUPPLIES"
+  | "FOOD_INVENTORY"
+  | "FOOD_COST_OF_SALES"
+  | "BEVERAGE_INVENTORY"
+  | "BEVERAGE_COST_OF_SALES"
+  | "MERCHANDISE_INVENTORY"
+  | "PARTS_INVENTORY"
+  | "PREPAID_INSURANCE"
+  | "PREPAID_OTHER"
+  | "LAND"
+  | "BUILDING"
+  | "EQUIPMENT_ASSET"
+  | "VEHICLE_ASSET"
+  | "FURNITURE_FIXTURES_ASSET"
+  | "SOFTWARE_INTANGIBLE_ASSET"
+  | "LEASEHOLD_IMPROVEMENT_ASSET"
+  | "CIP_ASSET"
+  | "PAYROLL_EXPENSE"
+  | "OTHER_EXPENSE"
+  | "OTHER_ASSET"
+  | "NON_AP_POSTABLE"
+  | "UNKNOWN";
+
+/** Enumerated structural posting restrictions surfaced from the
+ *  underlying COA row. Consumers can inspect this instead of the
+ *  raw boolean flags. */
+export type StructuralPostingRestriction =
+  | "INACTIVE"
+  | "ARCHIVED"
+  | "HEADER_ACCOUNT"
+  | "MANUAL_POSTING_PROHIBITED"
+  | "BANK_ACCOUNT"
+  | "CASH_ACCOUNT"
+  | "CONTROL_ACCOUNT"
+  | "CONTRA_ASSET"
+  | "REVENUE_TYPE"
+  | "EQUITY_TYPE"
+  | "LIABILITY_TYPE"
+  | "PAYROLL_RESTRICTED";
+
 export interface AccountSemantics {
   accountNumber: string;
   accountName: string;
+
+  // -------- Phase 4R · Phase 7.2K (2026-08-13) extensions --------
+  // These fields form the AP-intelligence layer's SINGLE typed view.
+  // Downstream consumers MUST consult these instead of re-interpreting
+  // raw account.type / fsGroupKey / accountRole / name.
+
+  /** Structural posting role. Mirrors Account.accountRole with a
+   *  boolean-flag overlay for legacy accounts pre-backfill. */
+  postingRole: PostingRole;
+  postingRoleSource: SemanticsProvenance;
+
+  /** Coarse financial-statement role. Aligns with composed treatment. */
+  statementRole: AccountStatementRole;
+  statementRoleSource: SemanticsProvenance;
+
+  /** Distinguishes inventory vs prepaid vs other current asset. */
+  inventoryPrepaidRole: InventoryPrepaidRole;
+  inventoryPrepaidRoleSource: SemanticsProvenance;
+
+  /** Accounting-class taxonomy — used for tier assignment inside a
+   *  statementRole cohort in Model B (Phase 7.2L). */
+  accountingClass: AccountingClass;
+  accountingClassSource: SemanticsProvenance;
+
+  /** Structural restrictions on posting. Enumeration is exhaustive
+   *  and stable so eligibility rules can consume without ad-hoc
+   *  boolean lookups. */
+  structuralPostingRestrictions: ReadonlyArray<StructuralPostingRestriction>;
+
+  // -------- Pre-Phase-7.2K fields (preserved) --------
   capitalRole: CapitalAccountRole;
   capitalRoleSource: SemanticsProvenance;
   functionalRole: AccountFunctionalRole;
@@ -80,6 +205,11 @@ export interface AccountSemantics {
    *  requested later. */
   ambiguities: string[];
 }
+
+/** Alias — the founder's directive language uses
+ *  "CanonicalAccountSemantics"; the existing implementation name is
+ *  `AccountSemantics`. Same shape; alias avoids a rename churn. */
+export type CanonicalAccountSemantics = AccountSemantics;
 
 // -----------------------------------------------------------------------------
 // Vocabularies — closed, generic. NO supplier / product / SKU literal.
@@ -128,9 +258,38 @@ export function resolveAccountSemantics(account: EligibleAccountView): AccountSe
     source: organizationalDepartmentSource,
   } = deriveOrganizationalDepartment(account, ambiguities);
 
+  // Phase 4R · Phase 7.2K (2026-08-13) — new AP-relevant semantic
+  // dimensions derived ONCE from underlying COA metadata.
+  const {
+    postingRole,
+    source: postingRoleSource,
+  } = derivePostingRole(account);
+  const {
+    statementRole,
+    source: statementRoleSource,
+  } = deriveStatementRole(account, capitalRole);
+  const {
+    inventoryPrepaidRole,
+    source: inventoryPrepaidRoleSource,
+  } = deriveInventoryPrepaidRole(account, statementRole);
+  const {
+    accountingClass,
+    source: accountingClassSource,
+  } = deriveAccountingClass(account, statementRole, capitalRole, inventoryPrepaidRole);
+  const structuralPostingRestrictions = deriveStructuralPostingRestrictions(account, postingRole);
+
   return {
     accountNumber: account.accountNumber,
     accountName: account.name,
+    postingRole,
+    postingRoleSource,
+    statementRole,
+    statementRoleSource,
+    inventoryPrepaidRole,
+    inventoryPrepaidRoleSource,
+    accountingClass,
+    accountingClassSource,
+    structuralPostingRestrictions,
     capitalRole,
     capitalRoleSource,
     functionalRole,
@@ -139,6 +298,231 @@ export function resolveAccountSemantics(account: EligibleAccountView): AccountSe
     organizationalDepartmentSource,
     ambiguities,
   };
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.2K derivations — POSTING ROLE
+// -----------------------------------------------------------------------------
+
+function derivePostingRole(
+  account: EligibleAccountView,
+): { postingRole: PostingRole; source: SemanticsProvenance } {
+  const configured = (account.accountRole ?? "").toUpperCase();
+  if (configured === "CONTRA_ASSET") return { postingRole: "CONTRA_ASSET", source: "CONFIGURED" };
+  if (configured === "CONTRA_REVENUE") return { postingRole: "CONTRA_REVENUE", source: "CONFIGURED" };
+  if (configured === "CONTRA_LIABILITY") return { postingRole: "CONTRA_LIABILITY", source: "CONFIGURED" };
+  if (configured === "CONTROL") return { postingRole: "CONTROL", source: "CONFIGURED" };
+  if (configured === "CLEARING") return { postingRole: "CLEARING", source: "CONFIGURED" };
+  if (configured === "BANK") return { postingRole: "BANK", source: "CONFIGURED" };
+  if (configured === "CASH") return { postingRole: "CASH", source: "CONFIGURED" };
+  // Boolean-flag fallback for accounts pre-accountRole backfill.
+  if (account.isBankAccount) return { postingRole: "BANK", source: "ACCOUNT_ROLE" };
+  if (account.isCashAccount) return { postingRole: "CASH", source: "ACCOUNT_ROLE" };
+  if (account.isControlAccount) return { postingRole: "CONTROL", source: "ACCOUNT_ROLE" };
+  return { postingRole: "STANDARD", source: "ACCOUNT_ROLE" };
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.2K derivations — STATEMENT ROLE
+// -----------------------------------------------------------------------------
+
+function deriveStatementRole(
+  account: EligibleAccountView,
+  capitalRole: CapitalAccountRole,
+): { statementRole: AccountStatementRole; source: SemanticsProvenance } {
+  const type = (account.type ?? "").toUpperCase();
+  const categoryKey = (account.categoryKey ?? "").toUpperCase();
+  const fsGroupKey = (account.fsGroupKey ?? "").toUpperCase();
+  const nameLower = (account.name ?? "").toLowerCase();
+
+  if (type === "REVENUE") return { statementRole: "REVENUE", source: "CONFIGURED" };
+  if (type === "EQUITY") return { statementRole: "BALANCE_SHEET_EQUITY", source: "CONFIGURED" };
+  if (type === "LIABILITY") return { statementRole: "BALANCE_SHEET_LIABILITY", source: "CONFIGURED" };
+
+  if (type === "ASSET") {
+    // Capital vs current asset distinction.
+    if (capitalRole !== "NOT_CAPITAL_ASSET" && capitalRole !== "UNKNOWN") {
+      return { statementRole: "BALANCE_SHEET_CAPITAL_ASSET", source: "CATEGORY" };
+    }
+    if (categoryKey === "CAPITAL_ASSETS" || fsGroupKey.startsWith("BS_CAPITAL") || fsGroupKey === "BS_CIP") {
+      return { statementRole: "BALANCE_SHEET_CAPITAL_ASSET", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "BS_INVENTORY" || categoryKey === "INVENTORY" || /\binventor(y|ies)\b/.test(nameLower)) {
+      return { statementRole: "BALANCE_SHEET_CURRENT_ASSET", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "BS_PREPAID" || categoryKey === "PREPAID_EXPENSES" || /\bprepaid\b/.test(nameLower)) {
+      return { statementRole: "BALANCE_SHEET_CURRENT_ASSET", source: "FS_GROUP" };
+    }
+    return { statementRole: "BALANCE_SHEET_CURRENT_ASSET", source: "CATEGORY" };
+  }
+
+  if (type === "EXPENSE") {
+    // COGS distinction — accounts explicitly categorised as cost-of-sales
+    // OR fsGroupKey signalling COGS OR name signalling.
+    if (categoryKey.includes("COST_OF_SALES") || categoryKey.includes("COGS")
+      || fsGroupKey.includes("COGS") || fsGroupKey.includes("COST_OF_SALES")
+      || /\bcost\s+of\s+(?:sales|goods)\b/.test(nameLower)) {
+      return { statementRole: "COST_OF_SALES", source: "FS_GROUP" };
+    }
+    return { statementRole: "OPERATING_EXPENSE", source: "CATEGORY" };
+  }
+
+  return { statementRole: "UNKNOWN", source: "UNKNOWN" };
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.2K derivations — INVENTORY / PREPAID ROLE
+// -----------------------------------------------------------------------------
+
+function deriveInventoryPrepaidRole(
+  account: EligibleAccountView,
+  statementRole: AccountStatementRole,
+): { inventoryPrepaidRole: InventoryPrepaidRole; source: SemanticsProvenance } {
+  if (statementRole !== "BALANCE_SHEET_CURRENT_ASSET") {
+    return { inventoryPrepaidRole: "NONE", source: "CATEGORY" };
+  }
+  const categoryKey = (account.categoryKey ?? "").toUpperCase();
+  const fsGroupKey = (account.fsGroupKey ?? "").toUpperCase();
+  const nameLower = (account.name ?? "").toLowerCase();
+  if (fsGroupKey === "BS_INVENTORY" || categoryKey === "INVENTORY"
+    || /\binventor(y|ies)\b/.test(nameLower) || /\bstock\b/.test(nameLower)) {
+    return { inventoryPrepaidRole: "INVENTORY", source: "FS_GROUP" };
+  }
+  if (fsGroupKey === "BS_PREPAID" || categoryKey === "PREPAID_EXPENSES"
+    || /\bprepaid\b/.test(nameLower)) {
+    return { inventoryPrepaidRole: "PREPAID_ASSET", source: "FS_GROUP" };
+  }
+  return { inventoryPrepaidRole: "NONE", source: "UNKNOWN" };
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.2K derivations — ACCOUNTING CLASS
+// -----------------------------------------------------------------------------
+
+function deriveAccountingClass(
+  account: EligibleAccountView,
+  statementRole: AccountStatementRole,
+  capitalRole: CapitalAccountRole,
+  inventoryPrepaidRole: InventoryPrepaidRole,
+): { accountingClass: AccountingClass; source: SemanticsProvenance } {
+  const nameLower = (account.name ?? "").toLowerCase();
+  const categoryKey = (account.categoryKey ?? "").toUpperCase();
+  const fsGroupKey = (account.fsGroupKey ?? "").toUpperCase();
+
+  // Structural non-postable classes short-circuit.
+  if (statementRole === "REVENUE"
+    || statementRole === "BALANCE_SHEET_EQUITY"
+    || statementRole === "BALANCE_SHEET_LIABILITY") {
+    return { accountingClass: "NON_AP_POSTABLE", source: "CONFIGURED" };
+  }
+
+  // Capital asset classes.
+  if (statementRole === "BALANCE_SHEET_CAPITAL_ASSET") {
+    if (capitalRole === "LAND_ASSET") return { accountingClass: "LAND", source: "NAME_INFERENCE" };
+    if (capitalRole === "BUILDING_ASSET") return { accountingClass: "BUILDING", source: "NAME_INFERENCE" };
+    if (capitalRole === "VEHICLE_ASSET") return { accountingClass: "VEHICLE_ASSET", source: "NAME_INFERENCE" };
+    if (capitalRole === "FURNITURE_FIXTURES_ASSET") return { accountingClass: "FURNITURE_FIXTURES_ASSET", source: "NAME_INFERENCE" };
+    if (capitalRole === "SOFTWARE_INTANGIBLE") return { accountingClass: "SOFTWARE_INTANGIBLE_ASSET", source: "NAME_INFERENCE" };
+    if (capitalRole === "LEASEHOLD_IMPROVEMENT") return { accountingClass: "LEASEHOLD_IMPROVEMENT_ASSET", source: "NAME_INFERENCE" };
+    if (capitalRole === "CONSTRUCTION_IN_PROGRESS") return { accountingClass: "CIP_ASSET", source: "FS_GROUP" };
+    // EQUIPMENT_ASSET, CAPITAL_IMPROVEMENT, OTHER_CAPITAL_ASSET → equipment
+    return { accountingClass: "EQUIPMENT_ASSET", source: "CATEGORY" };
+  }
+
+  // Current asset — inventory vs prepaid distinction.
+  if (statementRole === "BALANCE_SHEET_CURRENT_ASSET") {
+    if (inventoryPrepaidRole === "INVENTORY") {
+      if (/\bf\s*&\s*b\b|\bfood\b/.test(nameLower)) return { accountingClass: "FOOD_INVENTORY", source: "NAME_INFERENCE" };
+      if (/\bbeverage\b|\bbar\b|\bliquor\b|\bwine\b/.test(nameLower)) return { accountingClass: "BEVERAGE_INVENTORY", source: "NAME_INFERENCE" };
+      if (/\bmerchandise\b|\bpro\s*shop\b/.test(nameLower)) return { accountingClass: "MERCHANDISE_INVENTORY", source: "NAME_INFERENCE" };
+      if (/\bpart(s)?\b/.test(nameLower)) return { accountingClass: "PARTS_INVENTORY", source: "NAME_INFERENCE" };
+      return { accountingClass: "MERCHANDISE_INVENTORY", source: "UNKNOWN" };
+    }
+    if (inventoryPrepaidRole === "PREPAID_ASSET") {
+      if (/\binsurance\b/.test(nameLower)) return { accountingClass: "PREPAID_INSURANCE", source: "NAME_INFERENCE" };
+      return { accountingClass: "PREPAID_OTHER", source: "NAME_INFERENCE" };
+    }
+    return { accountingClass: "OTHER_ASSET", source: "UNKNOWN" };
+  }
+
+  // COST_OF_SALES branch.
+  if (statementRole === "COST_OF_SALES") {
+    if (/\bf\s*&\s*b\b|\bfood\b/.test(nameLower)) return { accountingClass: "FOOD_COST_OF_SALES", source: "NAME_INFERENCE" };
+    if (/\bbeverage\b|\bbar\b|\bliquor\b|\bwine\b/.test(nameLower)) return { accountingClass: "BEVERAGE_COST_OF_SALES", source: "NAME_INFERENCE" };
+    return { accountingClass: "FOOD_COST_OF_SALES", source: "UNKNOWN" };
+  }
+
+  // OPERATING_EXPENSE branch — sub-class by name / fsGroup taxonomy.
+  if (statementRole === "OPERATING_EXPENSE") {
+    if (fsGroupKey === "IS_PAYROLL" || categoryKey === "PAYROLL_BENEFITS") {
+      return { accountingClass: "PAYROLL_EXPENSE", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "IS_IT_SOFTWARE" || /\b(?:computer|it\s+services|software|saas)\b/.test(nameLower)) {
+      // Distinguish intangible-asset (BS) vs IT-service expense (P&L).
+      if (/\bintangible\b/.test(nameLower)) return { accountingClass: "SOFTWARE_INTANGIBLE", source: "NAME_INFERENCE" };
+      return { accountingClass: "IT_SERVICES", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "IS_FUEL_LUBRICANTS" || /\bfuel\b|\blubric/.test(nameLower)) {
+      return { accountingClass: "FUEL_EXPENSE", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "IS_UTILITIES" || fsGroupKey === "IS_TELEPHONE_INTERNET" || fsGroupKey === "IS_COMMUNICATIONS"
+      || /\b(?:utilit(?:y|ies)|hydro|electric|water|gas|telephone|internet|telecom)\b/.test(nameLower)) {
+      return { accountingClass: "UTILITIES_TELECOM", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "IS_REPAIRS_MAINTENANCE" || categoryKey === "REPAIRS_MAINTENANCE"
+      || /\b(?:repair|maintenance|r&m|r\/m)\b/.test(nameLower)) {
+      // Grounds maintenance more specific.
+      if (/\bgrounds?\b/.test(nameLower)) return { accountingClass: "GROUNDS_MAINTENANCE", source: "NAME_INFERENCE" };
+      return { accountingClass: "REPAIRS_MAINTENANCE", source: "FS_GROUP" };
+    }
+    if (/\bgrounds?\s+maintenance\b/.test(nameLower)) {
+      return { accountingClass: "GROUNDS_MAINTENANCE", source: "NAME_INFERENCE" };
+    }
+    if (/\bprofessional\s+service|\blegal\b|\baudit|\bconsult|\baccounting\b/.test(nameLower)) {
+      return { accountingClass: "PROFESSIONAL_SERVICES", source: "NAME_INFERENCE" };
+    }
+    if (/\bmembership|\bdues\b/.test(nameLower)) return { accountingClass: "MEMBERSHIP_DUES", source: "NAME_INFERENCE" };
+    if (/\binsurance\b/.test(nameLower)) return { accountingClass: "INSURANCE_EXPENSE", source: "NAME_INFERENCE" };
+    if (fsGroupKey === "IS_INTEREST_EXPENSE" || fsGroupKey === "IS_BANK_CHARGES"
+      || /\binterest|\bfinance\s+charge|\bpenalt|\blate\s+fee|\bbank\s+charge/.test(nameLower)) {
+      return { accountingClass: "INTEREST_FINANCE_CHARGE", source: "FS_GROUP" };
+    }
+    if (fsGroupKey === "IS_TAXES_LICENSES" || /\btax|\blicense|\bpermit\b/.test(nameLower)) {
+      return { accountingClass: "TAXES_LICENSES", source: "FS_GROUP" };
+    }
+    if (/\boffice\s+supplies|\bsupplies\b|\bpostage\b/.test(nameLower)) {
+      return { accountingClass: "OFFICE_SUPPLIES", source: "NAME_INFERENCE" };
+    }
+    return { accountingClass: "OTHER_EXPENSE", source: "UNKNOWN" };
+  }
+
+  return { accountingClass: "UNKNOWN", source: "UNKNOWN" };
+}
+
+// -----------------------------------------------------------------------------
+// Phase 7.2K derivations — STRUCTURAL POSTING RESTRICTIONS
+// -----------------------------------------------------------------------------
+
+function deriveStructuralPostingRestrictions(
+  account: EligibleAccountView,
+  postingRole: PostingRole,
+): ReadonlyArray<StructuralPostingRestriction> {
+  const out: StructuralPostingRestriction[] = [];
+  if (account.isActive === false) out.push("INACTIVE");
+  if (account.isHeader) out.push("HEADER_ACCOUNT");
+  if (account.allowManualPosting === false) out.push("MANUAL_POSTING_PROHIBITED");
+  if (postingRole === "BANK") out.push("BANK_ACCOUNT");
+  if (postingRole === "CASH") out.push("CASH_ACCOUNT");
+  if (postingRole === "CONTROL") out.push("CONTROL_ACCOUNT");
+  if (postingRole === "CONTRA_ASSET") out.push("CONTRA_ASSET");
+  const type = (account.type ?? "").toUpperCase();
+  if (type === "REVENUE") out.push("REVENUE_TYPE");
+  if (type === "EQUITY") out.push("EQUITY_TYPE");
+  if (type === "LIABILITY") out.push("LIABILITY_TYPE");
+  const fsGroupKey = (account.fsGroupKey ?? "").toUpperCase();
+  const categoryKey = (account.categoryKey ?? "").toUpperCase();
+  if (fsGroupKey === "IS_PAYROLL" || categoryKey === "PAYROLL_BENEFITS") out.push("PAYROLL_RESTRICTED");
+  return out;
 }
 
 // -----------------------------------------------------------------------------

@@ -94,6 +94,10 @@ export interface DiscoveryContext {
   natureClassification: AccountingNatureAssessment | null;
   /** Optional supplier name for legacy signal composition. */
   supplierName: string | null;
+  /** Phase 4R · Phase 7.2K (2026-08-13) — composed accounting treatment.
+   *  Consumed by the treatment-aware discovery provider ONLY.
+   *  Never used to score, hard-filter, or select a winner (Founder §1). */
+  canonicalAccountingTreatment?: import("../treatment-composition").CanonicalAccountingTreatment;
 }
 
 // ---------------------------------------------------------------------------

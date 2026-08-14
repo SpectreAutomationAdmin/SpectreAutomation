@@ -1822,6 +1822,16 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       vendorHistoryPreferredAccountNumbers: [],
       natureClassification: natureForCanonical,
       supplierName: extraction.vendor.guessedName,
+      // Phase 4R · Phase 7.2K (2026-08-13) — compose the accounting
+      // treatment ONCE from the two treatment classifiers and thread
+      // it into discovery. Consumed by treatmentAwareDiscovery only.
+      // Founder §1 & §8: interpretation artefact + discovery metadata.
+      // NOT wired to natureLeader, capitalDecision, or the ranker.
+      canonicalAccountingTreatment: (await import("./treatment-composition")).composeAccountingTreatment({
+        capitalState: capital.state,
+        capitalSupportingEvidence: capital.supportingEvidence,
+        nature: natureForCanonical,
+      }),
     },
     printedSubtotal,
     printedTax,
