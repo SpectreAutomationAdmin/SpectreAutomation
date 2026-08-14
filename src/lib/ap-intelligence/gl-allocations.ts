@@ -169,6 +169,13 @@ export interface AllocationInput {
   // discover-only providers that call v206 discovery functions
   // directly. Never read by canonical ranking.
   discoveryContext?: import("./candidate-discovery/legacy-bridge").DiscoveryContext;
+  /** Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved AccountSemantics
+   *  keyed by accountId. Threaded from analyse.ts into
+   *  rankClusterCanonically → rankCanonical for tier assignment ONLY.
+   *  Founder §6 "intentional typed canonical input" for the semantic
+   *  information that would otherwise leak via the AccountView.type
+   *  loose cast. */
+  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
   // Phase 4R · Phase 5 (2026-08-11) — global signals passed as
   // CLUSTER-shared context. Individual clusters still rank
   // independently from their own line items + concept, but shared
@@ -502,6 +509,14 @@ function rankClusterCanonically(input: {
    *  semantic-alignment observation dead. This is a wiring fix, not
    *  a weight change. */
   canonicalPurposeConcept?: string | null;
+  /** Phase 4R · Phase 7.2L (2026-08-13) — composed accounting
+   *  treatment. Consumed by canonical-ranker's tier assignment
+   *  (`assignCandidateTier`) and comparator (`canonicalCompare`).
+   *  Never used to score a candidate directly. */
+  canonicalAccountingTreatment?: import("./treatment-composition").CanonicalAccountingTreatment;
+  /** Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved account
+   *  semantics for tier assignment (see AllocationInput comment). */
+  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
 }): RankedCluster {
   const clusterLines = input.cluster.assignments.map((a) => a.line);
   const clusterConceptId = input.cluster.conceptId;
@@ -521,6 +536,10 @@ function rankClusterCanonically(input: {
     hasFinancingEvidence: input.globalSignals.hasFinancingEvidence,
     departmentKey: input.globalSignals.departmentKey,
     departmentAccountNamePatterns: input.globalSignals.departmentAccountNamePatterns,
+    // Phase 4R · Phase 7.2L (2026-08-13) — thread composed treatment
+    // into the ranker so tier assignment + hierarchical comparator
+    // can consume it. Never used to score directly.
+    canonicalAccountingTreatment: input.canonicalAccountingTreatment,
     canonicalLineItems: clusterLines.map((li) => ({
       description: li.description ?? "",
       role: "PRIMARY_PURCHASE",
@@ -543,6 +562,10 @@ function rankClusterCanonically(input: {
     transaction,
     eligibleAccounts: input.eligibleAccounts,
     postingBlockersByAccount: input.postingBlockersByAccount,
+    // Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved semantics for
+    // tier assignment. Consumed by tier-assignment code only; scoring
+    // observations remain unaffected.
+    accountSemanticsByAccountId: input.accountSemanticsByAccountId,
   });
   const canonicalStatus = result.status;
   const winnerAccountNumber = (canonicalStatus === "RECOMMEND" || canonicalStatus === "ABSTAIN")
@@ -616,6 +639,8 @@ function rankClusters(args: {
   vendorHistoryConceptIds?: string[];
   globalSignals?: AllocationInput["globalSignals"];
   discoveryContext?: AllocationInput["discoveryContext"];
+  // Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved AccountSemantics.
+  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
 }): RankedCluster[] {
   const g = args.globalSignals ?? {};
   return args.clusters.map((cluster) => {
@@ -789,6 +814,10 @@ function rankClusters(args: {
         purposeDecision: args.discoveryContext?.purposeDecision,
         clusterConceptId: cluster.conceptId,
       }).canonicalPurposeConcept,
+      // Phase 4R · Phase 7.2L (2026-08-13) — thread composed treatment
+      // from discoveryContext into rankCanonical for tier assignment.
+      canonicalAccountingTreatment: args.discoveryContext?.canonicalAccountingTreatment,
+      accountSemanticsByAccountId: args.accountSemanticsByAccountId,
     });
   });
 }
@@ -1141,6 +1170,7 @@ export function computeAllocations(input: AllocationInput): AllocationResult {
     vendorHistoryConceptIds: input.vendorHistoryConceptIds,
     globalSignals: input.globalSignals,
     discoveryContext: input.discoveryContext,
+    accountSemanticsByAccountId: input.accountSemanticsByAccountId,
   });
 
   // Step 5: merge clusters that select the same account.

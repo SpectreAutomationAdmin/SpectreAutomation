@@ -252,6 +252,8 @@ describe("Phase 4 · §6-§7 · genuine competitor qualification", () => {
       contradictionPenalty: 0,
       postable: true,
       postingBlockers: [],
+      tier: "PLAUSIBLE",
+      tierReason: "test-fixture",
     };
     // Duplicate identity — should be filtered.
     const dup: CanonicalCandidate = { ...winner };
@@ -548,5 +550,7 @@ function makeCandidate(
     contradictionPenalty: 0,
     postable: true,
     postingBlockers: [],
+    tier: "PLAUSIBLE",
+    tierReason: "test-fixture",
   } as CanonicalCandidate;
 }

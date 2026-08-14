@@ -29,6 +29,9 @@ import { extractConceptsForAccount } from "./gl-account-concepts";
 import type { PostingBlocker } from "./gl-recommend";
 import { conceptRelatedness, isContradiction } from "./gl-concepts";
 import { evaluatePurposeAccountAffinity } from "./purpose-to-gl-ontology";
+// Phase 4R · Phase 7.2L (2026-08-13) — static import for tier assignment.
+// account-semantics has NO import of canonical-ranker (verified) so no cycle.
+import { resolveAccountSemantics as _resolveAccountSemantics } from "./account-semantics";
 
 /** Local mirror of purposeExpectedRoles from purpose-driven-ranker.ts.
  *  Kept private to canonical-ranker so this file has no dependency on
@@ -151,6 +154,14 @@ export interface NormalisedTransactionInterpretation {
    *  the durable-asset-vs-fee contradiction so it defeasibly disables
    *  when the transaction genuinely represents financing. */
   hasFinancingEvidence?: boolean;
+
+  /** Phase 4R · Phase 7.2L (2026-08-13) — composed accounting treatment
+   *  (the CanonicalAccountingTreatment from treatment-composition.ts).
+   *  Consumed ONLY by the tier-assignment step inside rankCanonical.
+   *  Never used to score a candidate directly. When absent, tier
+   *  assignment falls back to OPEN_TREATMENT mode (every eligible
+   *  account is PLAUSIBLE). */
+  canonicalAccountingTreatment?: import("./treatment-composition").CanonicalAccountingTreatment;
 }
 
 /** Complete input to `rankCanonical`. */
@@ -158,7 +169,58 @@ export interface CanonicalRankerInput {
   transaction: NormalisedTransactionInterpretation;
   eligibleAccounts: ReadonlyArray<AccountView>;
   postingBlockersByAccount: Map<string, PostingBlocker[]>;
+  /** Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved
+   *  CanonicalAccountSemantics per account, keyed by accountId.
+   *  Consumed by tier assignment ONLY. Kept separate from AccountView
+   *  so scoring observations (NATURE_COMPAT, CAPITAL_ASSET_MATCH,
+   *  PURPOSE_TYPE_COMPAT) that read `accountType` don't silently
+   *  change activation pattern (see analyse.ts comment at
+   *  `allocationAccounts` for the rationale — Founder §14 activation-
+   *  change safety on LOCKED cases). */
+  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4R · Phase 7.2L (2026-08-13) — Hierarchical canonical competition.
+//
+// Founder §1: "rankCanonical() remains the ONLY winner-selection authority."
+//
+// Phase 7.2L introduces a TIER dimension applied INSIDE rankCanonical
+// before the numeric sort. Tier is an organizing dimension, NOT another
+// evidence weight (Founder §8). The comparator respects tier priority
+// ONLY when the composed treatment is defensibly asserted
+// (ASSERTED_TREATMENT mode); under OPEN_TREATMENT mode the existing
+// flat score decides (Founder §3).
+//
+// Semantic contracts consumed:
+//   - CanonicalAccountingTreatment (from transaction.canonicalAccountingTreatment)
+//   - CanonicalAccountSemantics (resolved per candidate)
+//
+// See docs/phase-4r-phase72l-checkpoint.md for the full design.
+// ---------------------------------------------------------------------------
+
+/** Treatment compatibility tier per Founder §2. Tier is metadata on
+ *  each `CanonicalCandidate`; canonical ordering respects tier
+ *  priority conditionally (see `CompetitionMode`). */
+export type CandidateTier =
+  | "PRIMARY"        // account semantics directly match asserted treatment
+  | "PLAUSIBLE"      // legitimate cross-treatment / unresolved-treatment candidate
+  | "CONTRADICTED"   // structurally postable but materially inconsistent with ASSERTED treatment
+  | "INELIGIBLE";    // reserved for structural posting restrictions ONLY
+
+/** Competition mode per Founder §3.
+ *
+ *  ASSERTED_TREATMENT: composed treatment defensibility is STRONG.
+ *    Tier priority governs cross-tier ordering (PRIMARY before
+ *    PLAUSIBLE before CONTRADICTED). Within a tier, existing numeric
+ *    score decides.
+ *
+ *  OPEN_TREATMENT: composed treatment defensibility is WEAK or
+ *    UNRESOLVED, or treatment is absent. Tier priority DOES NOT
+ *    govern cross-tier ordering; existing flat numeric score decides
+ *    across all tiers. INELIGIBLE candidates are still last (they
+ *    are structural, not treatment-inferred). */
+export type CompetitionMode = "ASSERTED_TREATMENT" | "OPEN_TREATMENT";
 
 // ---------------------------------------------------------------------------
 // Evidence model (Phase 4 will add DECISION/DIAGNOSTIC role; Phase 2
@@ -288,6 +350,17 @@ export interface CanonicalCandidate {
   /** Posting eligibility (surfaced from the eligibility filter). */
   postable: boolean;
   postingBlockers: ReadonlyArray<PostingBlocker>;
+
+  /** Phase 4R · Phase 7.2L (2026-08-13) — treatment compatibility tier.
+   *  Metadata, NOT score. Consumed by the sort comparator under
+   *  ASSERTED_TREATMENT competition mode. Under OPEN_TREATMENT mode,
+   *  tier does not affect ordering (except INELIGIBLE which is always
+   *  last — structural). */
+  tier: CandidateTier;
+
+  /** Phase 4R · Phase 7.2L — human-readable tier assignment reason
+   *  for founder-facing explanations + engineering diagnostics. */
+  tierReason: string;
 }
 
 /** Provenance metadata for §9 winner-provenance requirement. */
@@ -1147,11 +1220,30 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
     .join(" ");
   const itemTokens = tokenize(itemDescriptions);
 
-  // Score each candidate.
+  // Phase 4R · Phase 7.2L (2026-08-13) — competition mode derived
+  // from composed treatment defensibility. Governs whether tier
+  // priority participates in cross-tier ordering (Founder §3).
+  const treatment = input.transaction.canonicalAccountingTreatment;
+  const competitionMode: CompetitionMode = treatment?.defensibility === "STRONG"
+    ? "ASSERTED_TREATMENT"
+    : "OPEN_TREATMENT";
+
+  // Score each candidate + derive tier metadata (§Founder 5 — tier
+  // consumes typed CanonicalAccountSemantics + CanonicalAccountingTreatment,
+  // NOT raw account.type / fsGroupKey / natureLeader / capital-state
+  // strings).
   const scored: CanonicalCandidate[] = [];
   const rulesFiredSet = new Set<string>();
   for (const account of eligible) {
-    const accountType = (account as unknown as { type?: string }).type ?? "EXPENSE";
+    // Phase 4R · Phase 7.2L — account.type resolution. `AccountView.type`
+    // is the intentional typed canonical input; when the caller has not
+    // populated it (legacy fixtures), default to "EXPENSE" so scoring
+    // observations that need account type remain conservative. Previously
+    // this used an `as unknown as { type?: string }` cast — the Phase
+    // 7.2K checkpoint audit flagged it as a semantic backdoor. Phase
+    // 7.2L consumes AccountView.type explicitly via the interface's
+    // optional field (already declared in gl-account-concepts.ts).
+    const accountType = account.type ?? "EXPENSE";
     const { observations, contradictions } = scoreCandidateAgainstTransaction(
       account,
       accountType,
@@ -1172,6 +1264,20 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
     const normalisedScore = Math.min(100, Math.round((rawScore / RAW_SCORE_CAP) * 100));
     const postingBlockers = input.postingBlockersByAccount.get(account.id) ?? [];
     const postable = postingBlockers.length === 0;
+
+    // Phase 4R · Phase 7.2L — tier assignment. Prefer pre-resolved
+    // semantics from the input map; fall back to internal resolver
+    // (uses `accountType` defaulted to "EXPENSE" — the exact
+    // scoring-behavior-preserving default).
+    const preResolved = input.accountSemanticsByAccountId?.get(account.id);
+    const { tier, tierReason } = assignCandidateTier({
+      account,
+      accountType,
+      postable,
+      treatment,
+      preResolvedSemantics: preResolved,
+    });
+
     scored.push({
       accountId: account.id,
       accountNumber: account.accountNumber,
@@ -1186,14 +1292,28 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
       contradictions,
       postable,
       postingBlockers,
+      tier,
+      tierReason,
     });
   }
 
-  // Sort by score desc; deterministic tie-break on accountNumber.
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return a.accountNumber.localeCompare(b.accountNumber);
-  });
+  // Phase 4R · Phase 7.2L — hierarchical comparator (Founder §9).
+  // Deterministic. Reads competition mode (already derived above).
+  //
+  //   INELIGIBLE candidates are ALWAYS last regardless of mode
+  //     (structural, not treatment-inferred).
+  //   Under ASSERTED_TREATMENT: PRIMARY > PLAUSIBLE > CONTRADICTED,
+  //     then existing score desc, then accountNumber (tie-break).
+  //   Under OPEN_TREATMENT: existing score desc governs (INELIGIBLE
+  //     still last), then accountNumber (tie-break). Tier does NOT
+  //     influence cross-tier ordering because treatment defensibility
+  //     is too weak to structurally suppress a legitimate cross-family
+  //     candidate (Founder §3).
+  //
+  // Winner is candidates[0] by construction — single-authority
+  // invariant preserved. Tier is metadata inside candidates, NOT a
+  // second selector.
+  scored.sort((a, b) => canonicalCompare(a, b, competitionMode));
 
   const provenance: CanonicalRankerProvenance = {
     rulesFired: [...rulesFiredSet],
@@ -1246,4 +1366,194 @@ export function rankCanonical(input: CanonicalRankerInput): CanonicalRankerResul
     abstentionReason: null,
     provenance,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4R · Phase 7.2L — Tier assignment + hierarchical comparator.
+//
+// PURE functions. No side effects. Deterministic. Testable in isolation.
+// ---------------------------------------------------------------------------
+
+/** Numeric tier priority for deterministic ordering. Lower number =
+ *  higher priority. Used ONLY by the comparator under ASSERTED_TREATMENT
+ *  mode. Under OPEN_TREATMENT mode, only INELIGIBLE priority matters
+ *  (INELIGIBLE always last). */
+function tierPriority(tier: CandidateTier): number {
+  switch (tier) {
+    case "PRIMARY": return 0;
+    case "PLAUSIBLE": return 1;
+    case "CONTRADICTED": return 2;
+    case "INELIGIBLE": return 3;
+  }
+}
+
+/** Assign a candidate tier from AccountSemantics + composed treatment.
+ *  Founder §5: uses typed semantic contracts, not raw fields. Founder
+ *  §2: INELIGIBLE reserved for structural posting restrictions only —
+ *  never for inferred treatment mismatch. */
+function assignCandidateTier(input: {
+  account: AccountView;
+  accountType: string;
+  postable: boolean;
+  treatment: import("./treatment-composition").CanonicalAccountingTreatment | undefined;
+  /** Pre-resolved AccountSemantics keyed on the caller side (analyse.ts).
+   *  When provided, tier assignment reads statementRole/accountingClass
+   *  from here instead of re-deriving via `account.type ?? "EXPENSE"`. */
+  preResolvedSemantics?: { statementRole: string; accountingClass: string };
+}): { tier: CandidateTier; tierReason: string } {
+  const { account, postable, treatment, preResolvedSemantics } = input;
+
+  // Structural INELIGIBLE — Founder §2 & §4. Only true posting
+  // restrictions land here. Consumes the semantic contract's
+  // structuralPostingRestrictions via `postable` (already derived
+  // from postingBlockersByAccount) + a defensive check on
+  // AccountView's structural flags.
+  if (!postable) {
+    return { tier: "INELIGIBLE", tierReason: "postable=false (structural posting restriction)" };
+  }
+  if ((account as unknown as { isBankAccount?: boolean }).isBankAccount === true
+    || (account as unknown as { isCashAccount?: boolean }).isCashAccount === true
+    || (account as unknown as { isControlAccount?: boolean }).isControlAccount === true) {
+    return { tier: "INELIGIBLE", tierReason: "bank/cash/control account (structural)" };
+  }
+
+  // No composed treatment → OPEN_TREATMENT semantics — every otherwise
+  // postable candidate is PLAUSIBLE. Founder §3: weak treatment
+  // evidence must not structurally suppress a candidate.
+  if (!treatment) {
+    return { tier: "PLAUSIBLE", tierReason: "no composed treatment; open competition" };
+  }
+
+  // Resolve AccountSemantics.statementRole and .accountingClass via
+  // the SINGLE typed derivation. Founder §5. Prefer pre-resolved map
+  // (caller has AccountSemantics already computed from real
+  // Account.type / accountRole / flags).
+  const semantics = preResolvedSemantics ?? resolveAccountSemanticsForCandidate(account);
+
+  // NON_AP_POSTABLE accountingClass is a structural signal (REVENUE /
+  // LIABILITY / EQUITY types). Mark INELIGIBLE per Founder §4.
+  if (semantics.statementRole === "REVENUE"
+    || semantics.statementRole === "BALANCE_SHEET_EQUITY"
+    || semantics.statementRole === "BALANCE_SHEET_LIABILITY") {
+    return { tier: "INELIGIBLE", tierReason: `structurally non-AP-postable: ${semantics.statementRole}` };
+  }
+
+  // UNRESOLVED treatment → every remaining candidate is PLAUSIBLE
+  // (Founder §6 — hierarchy must not manufacture certainty).
+  if (treatment.defensibility === "UNRESOLVED") {
+    return { tier: "PLAUSIBLE", tierReason: "treatment unresolved; open competition" };
+  }
+
+  // Direct statement-role match → PRIMARY.
+  if (treatment.statementRole !== "UNKNOWN"
+    && semantics.statementRole === treatment.statementRole) {
+    return {
+      tier: "PRIMARY",
+      tierReason: `account.statementRole=${semantics.statementRole} matches treatment.statementRole`,
+    };
+  }
+
+  // Related-family PLAUSIBLE match — expense family (OPERATING_EXPENSE ↔
+  // COST_OF_SALES) or asset family (BALANCE_SHEET_CAPITAL_ASSET ↔
+  // BALANCE_SHEET_CURRENT_ASSET). Founder §4: cross-family plausibility.
+  if (isRelatedStatementFamilyRanker(semantics.statementRole, treatment.statementRole)) {
+    return {
+      tier: "PLAUSIBLE",
+      tierReason: `account.statementRole=${semantics.statementRole} in related family of treatment.statementRole=${treatment.statementRole}`,
+    };
+  }
+
+  // Founder §4: CONTRADICTED requires actual accounting contradiction.
+  // Under WEAK defensibility (already filtered out above — WEAK is
+  // OPEN_TREATMENT mode which uses PLAUSIBLE), we only reach here
+  // when defensibility is STRONG. Structural incompatibility on
+  // STRONG treatment = CONTRADICTED.
+  if (treatment.defensibility === "STRONG") {
+    return {
+      tier: "CONTRADICTED",
+      tierReason: `account.statementRole=${semantics.statementRole} structurally inconsistent with STRONG treatment.statementRole=${treatment.statementRole}`,
+    };
+  }
+
+  // WEAK defensibility fallback → PLAUSIBLE (never CONTRADICTED on
+  // weak evidence — Founder §5).
+  return {
+    tier: "PLAUSIBLE",
+    tierReason: `account.statementRole=${semantics.statementRole} vs treatment.statementRole=${treatment.statementRole} (WEAK defensibility — PLAUSIBLE)`,
+  };
+}
+
+/** Related-family match for tier assignment. Mirrors the classifier
+ *  in treatment-aware.ts to keep both provider + ranker consistent. */
+function isRelatedStatementFamilyRanker(
+  accountRole: string,
+  treatmentRole: import("./treatment-composition").CanonicalAccountingTreatment["statementRole"],
+): boolean {
+  if (treatmentRole === "UNKNOWN") return true;
+  if ((treatmentRole === "OPERATING_EXPENSE" || treatmentRole === "COST_OF_SALES")
+    && (accountRole === "OPERATING_EXPENSE" || accountRole === "COST_OF_SALES")) {
+    return true;
+  }
+  if ((treatmentRole === "BALANCE_SHEET_CAPITAL_ASSET"
+        || treatmentRole === "BALANCE_SHEET_CURRENT_ASSET")
+    && (accountRole === "BALANCE_SHEET_CAPITAL_ASSET"
+        || accountRole === "BALANCE_SHEET_CURRENT_ASSET")) {
+    return true;
+  }
+  return false;
+}
+
+/** Resolver — consumes the SINGLE typed derivation of
+ *  CanonicalAccountSemantics from account-semantics/index.ts. Called
+ *  once per candidate per rank call; volume is bounded (dozens of
+ *  accounts). No cyclic dependency (account-semantics does not import
+ *  canonical-ranker). */
+function resolveAccountSemanticsForCandidate(account: AccountView):
+  { statementRole: string; accountingClass: string } {
+  return _resolveAccountSemantics({
+    accountNumber: account.accountNumber,
+    name: account.name,
+    type: account.type ?? "EXPENSE",
+    normalBalance: "DEBIT",
+    isActive: true,
+    isHeader: false,
+    allowManualPosting: account.allowManualPosting ?? true,
+    isControlAccount: account.isControlAccount ?? false,
+    isBankAccount: account.isBankAccount ?? false,
+    isCashAccount: account.isCashAccount ?? false,
+    categoryKey: account.categoryKey ?? null,
+    fsGroupKey: account.fsGroupKey ?? null,
+    accountRole: account.accountRole ?? null,
+  });
+}
+
+/** Phase 4R · Phase 7.2L hierarchical comparator. Deterministic.
+ *  Winner === candidates[0] by construction — this comparator alone
+ *  produces the final ordering. NO second selector runs after this.
+ *  (Structural test in tests/phase4r-phase72l-hierarchy-invariants.test.ts
+ *  asserts this.) */
+function canonicalCompare(
+  a: CanonicalCandidate,
+  b: CanonicalCandidate,
+  mode: CompetitionMode,
+): number {
+  // INELIGIBLE is ALWAYS last regardless of mode. Structural.
+  const aPri = tierPriority(a.tier);
+  const bPri = tierPriority(b.tier);
+  const aInel = a.tier === "INELIGIBLE" ? 1 : 0;
+  const bInel = b.tier === "INELIGIBLE" ? 1 : 0;
+  if (aInel !== bInel) return aInel - bInel;
+
+  // Under ASSERTED_TREATMENT, tier priority governs cross-tier order
+  // (PRIMARY before PLAUSIBLE before CONTRADICTED). Founder §3.
+  if (mode === "ASSERTED_TREATMENT" && a.tier !== b.tier) {
+    return aPri - bPri;
+  }
+
+  // Under OPEN_TREATMENT (or within a tier under either mode):
+  // existing numeric score decides. Founder §9.
+  if (b.score !== a.score) return b.score - a.score;
+
+  // Deterministic tie-break on accountNumber. Unchanged from pre-L.
+  return a.accountNumber.localeCompare(b.accountNumber);
 }

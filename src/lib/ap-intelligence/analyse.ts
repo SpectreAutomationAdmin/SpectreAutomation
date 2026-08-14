@@ -1450,14 +1450,21 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     // as AP debits. Consumed by
     // src/lib/ap-intelligence/candidate-discovery/.
     //
-    // NOTE: `type` and `accountRole` are DELIBERATELY not propagated
-    // into AccountView until candidate-recall is proven adequate —
-    // canonical-ranker.ts reads `account.type` and activates
-    // CAPITAL_ASSET_MATCH +20 when it sees ASSET, which is a
-    // SCORING change (forbidden by Phase 7.2 directive §12 "Do not
-    // change canonical weights yet"). Discovery providers that need
-    // type-awareness must consult account-side heuristics (name /
-    // fsGroup / categoryKey) instead of `acct.type`.
+    // Phase 4R · Phase 7.2L (2026-08-13) — `type` and `accountRole`
+    // remain DELIBERATELY not propagated on AccountView. Founder §6's
+    // "no hidden backdoor" constraint is satisfied via a SEPARATE typed
+    // channel — `accountSemanticsByAccountId` (Map<string,
+    // {statementRole,accountingClass}>) — passed into rankCanonical
+    // for tier assignment. Ranker scoring continues to default
+    // account.type="EXPENSE" so pre-L score-computation semantics
+    // remain unchanged. Rationale: propagating type here would activate
+    // NATURE_COMPAT (+15) for ASSET accounts under defensible
+    // CAPITAL_ASSET nature — an activation change that regressed the
+    // LOCKED `vague-body-invoice-attachment` case (score 3→40, false
+    // RECOMMEND). §14 forbids weight/activation changes.
+    //
+    // Discovery providers that need type-awareness continue to consult
+    // richAccounts (which DOES carry type) via discoveryContext.
     isBankAccount: (a as { isBankAccount?: boolean }).isBankAccount ?? false,
     isCashAccount: (a as { isCashAccount?: boolean }).isCashAccount ?? false,
     isControlAccount: (a as { isControlAccount?: boolean }).isControlAccount ?? false,
@@ -1472,6 +1479,36 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       blockers.push("FUND_APPLICABILITY_UNMAPPED");
     }
     allocationPostingBlockers.set(a.id, blockers);
+  }
+
+  // Phase 4R · Phase 7.2L (2026-08-13) — pre-resolve typed
+  // CanonicalAccountSemantics for every account and pass the map into
+  // the ranker via a side channel. This is the "intentional typed
+  // canonical input" per Founder §6 — replaces the loose account.type
+  // cast in canonical-ranker.ts without changing the scorer's
+  // activation pattern.
+  const { resolveAccountSemantics: _resolveSemanticsForRanker } = await import("./account-semantics");
+  const accountSemanticsByAccountId = new Map<string, { statementRole: string; accountingClass: string }>();
+  for (const a of accountsForAllocations) {
+    const semantics = _resolveSemanticsForRanker({
+      accountNumber: a.accountNumber,
+      name: a.name,
+      type: a.type,
+      normalBalance: a.normalBalance,
+      isActive: a.isActive,
+      isHeader: a.isHeader,
+      allowManualPosting: a.allowManualPosting,
+      isControlAccount: (a as { isControlAccount?: boolean }).isControlAccount ?? false,
+      isBankAccount: (a as { isBankAccount?: boolean }).isBankAccount ?? false,
+      isCashAccount: (a as { isCashAccount?: boolean }).isCashAccount ?? false,
+      categoryKey: a.category?.key ?? null,
+      fsGroupKey: a.fsGroup?.key ?? null,
+      accountRole: (a as { accountRole?: string | null }).accountRole ?? null,
+    });
+    accountSemanticsByAccountId.set(a.id, {
+      statementRole: semantics.statementRole,
+      accountingClass: semantics.accountingClass,
+    });
   }
   // Phase 4R · Phase 5 (2026-08-11) — allocations run AFTER the
   // canonical facade so per-cluster ranking receives the same
@@ -1780,6 +1817,11 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
     lineItems: lineItemsExtracted,
     accounts: allocationAccounts,
     postingBlockersByAccount: allocationPostingBlockers,
+    // Phase 4R · Phase 7.2L (2026-08-13) — typed AccountSemantics map
+    // for tier assignment in rankCanonical. Founder §6 "intentional
+    // typed canonical input" for the account.type / accountRole
+    // information consumed only by tier assignment.
+    accountSemanticsByAccountId,
     economicPurposeCandidates: economicPurpose,
     fullDocumentText: pdfOk ? pdfText : null,
     supplierName: extraction.vendor.guessedName,
