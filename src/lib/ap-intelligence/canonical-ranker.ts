@@ -162,6 +162,17 @@ export interface NormalisedTransactionInterpretation {
    *  assignment falls back to OPEN_TREATMENT mode (every eligible
    *  account is PLAUSIBLE). */
   canonicalAccountingTreatment?: import("./treatment-composition").CanonicalAccountingTreatment;
+
+  /** Phase 4R · Phase 7.2M-B (2026-08-13) — accounting-class hint
+   *  derived per-cluster from (purpose + treatment.statementRole).
+   *  Consumed by the new ACCOUNTING_CLASS_MATCH observation (TAXONOMY_
+   *  ALIGNMENT family) which fires when it equals the candidate's
+   *  `AccountSemantics.accountingClass`. Structured evidence — routes
+   *  the accounting-class taxonomy proposition through the existing
+   *  TAXONOMY_ALIGNMENT family (reuses FS_GROUP_TAXONOMY_MAX = 15).
+   *  Null when the transaction interpretation cannot defensibly
+   *  derive a class hint (Founder §2 no-guessing). */
+  accountingClassHint?: string | null;
 }
 
 /** Complete input to `rankCanonical`. */
@@ -806,6 +817,77 @@ const ACCEPTABLE_TYPES_BY_NATURE: Record<string, ReadonlySet<string>> = {
   UNKNOWN: new Set(["EXPENSE", "ASSET"]),
 };
 
+// ---------------------------------------------------------------------------
+// Phase 4R · Phase 7.2M-B (2026-08-13) — accounting-class hint derivation.
+//
+// Founder §2: derived ONLY from already-established transaction
+// interpretation — never guessed. Founder-authorised mapping table
+// per §2 examples: purpose + treatment.statementRole → AccountingClass.
+//
+// Missing mappings return null → no ACCOUNTING_CLASS_MATCH emission
+// (Founder §3 gate).
+// ---------------------------------------------------------------------------
+
+/** Purpose × statementRole → accountingClass mapping. The keys are
+ *  EconomicPurposeConcept string values (canonical purpose vocabulary,
+ *  UPPERCASE). Only pairs with a defensibly-derivable class are
+ *  listed; every other combination returns null. */
+const PURPOSE_STATEMENT_TO_CLASS: Record<string, Record<string, string>> = {
+  // OPERATING_EXPENSE-treatment purpose → operating expense class
+  SOFTWARE_SUBSCRIPTION: { OPERATING_EXPENSE: "IT_SERVICES" },
+  FUEL: { OPERATING_EXPENSE: "FUEL_EXPENSE" },
+  REPAIR_MAINTENANCE: { OPERATING_EXPENSE: "REPAIRS_MAINTENANCE" },
+  BUILDING_MAINTENANCE: { OPERATING_EXPENSE: "REPAIRS_MAINTENANCE" },
+  COURSE_MAINTENANCE: { OPERATING_EXPENSE: "GROUNDS_MAINTENANCE" },
+  MAINTENANCE_SERVICE: { OPERATING_EXPENSE: "GROUNDS_MAINTENANCE" },
+  PROFESSIONAL_SERVICES: { OPERATING_EXPENSE: "PROFESSIONAL_SERVICES" },
+  PROFESSIONAL_MEMBERSHIP: { OPERATING_EXPENSE: "MEMBERSHIP_DUES" },
+  TELECOMMUNICATIONS: { OPERATING_EXPENSE: "UTILITIES_TELECOM" },
+  INTERNET_CONNECTIVITY: { OPERATING_EXPENSE: "UTILITIES_TELECOM" },
+  UTILITIES: { OPERATING_EXPENSE: "UTILITIES_TELECOM" },
+  INSURANCE: { OPERATING_EXPENSE: "INSURANCE_EXPENSE" },
+  INTEREST_EXPENSE: { OPERATING_EXPENSE: "INTEREST_FINANCE_CHARGE" },
+  PENALTY: { OPERATING_EXPENSE: "INTEREST_FINANCE_CHARGE" },
+  TAX_LICENSE: { OPERATING_EXPENSE: "TAXES_LICENSES" },
+  OFFICE_SUPPLIES: { OPERATING_EXPENSE: "OFFICE_SUPPLIES" },
+  EQUIPMENT_PARTS: { OPERATING_EXPENSE: "REPAIRS_MAINTENANCE" },
+
+  // COST_OF_SALES-treatment
+  FOOD: { COST_OF_SALES: "FOOD_COST_OF_SALES" },
+  BEVERAGE: { COST_OF_SALES: "BEVERAGE_COST_OF_SALES" },
+  FOOD_AND_BEVERAGE_COST_OF_SALES: { COST_OF_SALES: "FOOD_COST_OF_SALES" },
+
+  // BALANCE_SHEET_CURRENT_ASSET-treatment
+  INVENTORY_ACQUISITION: { BALANCE_SHEET_CURRENT_ASSET: "FOOD_INVENTORY" }, // most common; specific case may differ
+  PREPAID_EXPENSE: { BALANCE_SHEET_CURRENT_ASSET: "PREPAID_INSURANCE" },
+
+  // BALANCE_SHEET_CAPITAL_ASSET-treatment
+  CAPITAL_EQUIPMENT: { BALANCE_SHEET_CAPITAL_ASSET: "EQUIPMENT_ASSET" },
+  CAPITAL_IMPROVEMENT: { BALANCE_SHEET_CAPITAL_ASSET: "EQUIPMENT_ASSET" },
+  LAND_ACQUISITION: { BALANCE_SHEET_CAPITAL_ASSET: "LAND" },
+  BUILDING_ACQUISITION: { BALANCE_SHEET_CAPITAL_ASSET: "BUILDING" },
+  SOFTWARE_INTANGIBLE: { BALANCE_SHEET_CAPITAL_ASSET: "SOFTWARE_INTANGIBLE_ASSET" },
+  CONSTRUCTION_IN_PROGRESS: { BALANCE_SHEET_CAPITAL_ASSET: "CIP_ASSET" },
+  FINANCED_EQUIPMENT_ACQUISITION: { BALANCE_SHEET_CAPITAL_ASSET: "EQUIPMENT_ASSET" },
+};
+
+/** Derive `accountingClassHint` from a per-cluster purpose concept +
+ *  the composed treatment's statementRole. Returns null when either
+ *  input is missing, when treatment defensibility is not STRONG, or
+ *  when no mapping exists. Pure function — testable in isolation. */
+export function deriveAccountingClassHint(input: {
+  purposeConcept: string | null;
+  treatment: import("./treatment-composition").CanonicalAccountingTreatment | undefined;
+}): string | null {
+  const { purposeConcept, treatment } = input;
+  if (!treatment) return null;
+  if (treatment.defensibility !== "STRONG") return null;
+  if (!purposeConcept) return null;
+  const stmtRoleMap = PURPOSE_STATEMENT_TO_CLASS[purposeConcept];
+  if (!stmtRoleMap) return null;
+  return stmtRoleMap[treatment.statementRole] ?? null;
+}
+
 const NAME_TOKEN_RE = /[A-Za-z][A-Za-z0-9]{2,}/g;
 
 function tokenize(text: string): Set<string> {
@@ -981,6 +1063,53 @@ function scoreCandidateAgainstTransaction(
         kind: "SPECIFICITY_BONUS",
         contribution: WEIGHTS.SPECIFICITY_BONUS_PER_DEPTH * (bestDepth - 1),
         description: `deep concept match (depth ${bestDepth}) — specificity bonus`,
+      });
+    }
+  }
+
+  // Phase 4R · Phase 7.2M-B (2026-08-13) — ACCOUNTING_CLASS_MATCH.
+  //
+  // Structured accounting-class alignment (Founder §1 primitive).
+  // Fires when transaction-derived accountingClassHint matches the
+  // candidate's AccountSemantics.accountingClass. Uses the existing
+  // TAXONOMY_ALIGNMENT family + FS_GROUP_TAXONOMY_MAX = 15 weight
+  // (principled reuse — same evidence class as the fsGroup taxonomy
+  // channel that is unreachable on seed COAs lacking fsGroupKey).
+  //
+  // Gate (Founder §3):
+  //   - transaction.accountingClassHint != null
+  //   - transaction.canonicalAccountingTreatment.defensibility === STRONG
+  //   - candidate accountingClass matches hint exactly
+  //
+  // MAX-within-family collapse ensures no double-count with
+  // FS_GROUP_TAXONOMY / CATEGORY_TAXONOMY / ACCOUNT_NAME_SIMILARITY —
+  // whichever produces the strongest single signal wins the family
+  // contribution.
+  const treatmentForClass = transaction.canonicalAccountingTreatment;
+  if (transaction.accountingClassHint
+    && treatmentForClass?.defensibility === "STRONG") {
+    // Resolve candidate semantics via the SINGLE typed derivation.
+    const candidateSemantics = _resolveAccountSemantics({
+      accountNumber: account.accountNumber,
+      name: account.name,
+      type: accountType,
+      normalBalance: "DEBIT",
+      isActive: true,
+      isHeader: false,
+      allowManualPosting: account.allowManualPosting ?? true,
+      isControlAccount: account.isControlAccount ?? false,
+      isBankAccount: account.isBankAccount ?? false,
+      isCashAccount: account.isCashAccount ?? false,
+      categoryKey: account.categoryKey ?? null,
+      fsGroupKey: account.fsGroupKey ?? null,
+      accountRole: account.accountRole ?? null,
+    });
+    if (candidateSemantics.accountingClass === transaction.accountingClassHint) {
+      observations.push({
+        family: "TAXONOMY_ALIGNMENT",
+        kind: "ACCOUNTING_CLASS_MATCH",
+        contribution: WEIGHTS.FS_GROUP_TAXONOMY_MAX,
+        description: `accounting-class ${transaction.accountingClassHint} matches candidate semantics ${candidateSemantics.accountingClass}`,
       });
     }
   }

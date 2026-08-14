@@ -308,7 +308,7 @@ describe("Phase 7.2L · Founder §14 no weight/threshold changes", () => {
     // preserved). Tier does not lift score.
     expect(["NO_ELIGIBLE_CANDIDATES", "ABSTAIN"]).toContain(result.status);
     if (result.status !== "NO_ELIGIBLE_CANDIDATES") {
-      const winner = (result as { candidates: CanonicalCandidate[] }).candidates[0];
+      const winner = (result as unknown as { candidates: CanonicalCandidate[] }).candidates[0];
       expect(winner.tier).toBe("PRIMARY");
     }
   });

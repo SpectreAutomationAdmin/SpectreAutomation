@@ -61,6 +61,7 @@ import {
   rankCanonical,
   type CanonicalCandidate,
   type NormalisedTransactionInterpretation,
+  deriveAccountingClassHint as deriveAccountingClassHintForCluster,
 } from "./canonical-ranker";
 import { evaluateRecommendationPolicy, type RecommendationStatus } from "./recommendation-policy";
 import { assessCanonicalConfidence, type CanonicalConfidenceAssessment } from "./canonical-confidence";
@@ -540,6 +541,17 @@ function rankClusterCanonically(input: {
     // into the ranker so tier assignment + hierarchical comparator
     // can consume it. Never used to score directly.
     canonicalAccountingTreatment: input.canonicalAccountingTreatment,
+    // Phase 4R · Phase 7.2M-B (2026-08-13) — per-cluster accounting-
+    // class hint derivation (Founder §11 multi-alloc isolation). Each
+    // cluster derives its own hint from the cluster's purposeConcept
+    // (canonicalPurposeConcept) + the composed treatment's
+    // statementRole. Multi-allocation invoices thus attach different
+    // hints per allocation — goods cluster → goods class, freight →
+    // freight/service class, etc. No cross-cluster contamination.
+    accountingClassHint: deriveAccountingClassHintForCluster({
+      purposeConcept: effectivePurposeConcept,
+      treatment: input.canonicalAccountingTreatment,
+    }),
     canonicalLineItems: clusterLines.map((li) => ({
       description: li.description ?? "",
       role: "PRIMARY_PURCHASE",
