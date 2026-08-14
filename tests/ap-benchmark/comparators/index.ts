@@ -171,7 +171,46 @@ export function cmpGlTop1(e: ExpectedTruth, a: AnalyserSnapshot): ComparatorResu
       reason: abstained ? `Correctly abstained.` : `Recommended GL ${leader} when abstention was expected.`,
     };
   }
+  // Phase 4R · Phase 7.2H (2026-08-13) §1 — MULTIPLE_RESOLVED comparator upgrade.
+  //
+  // For multi-cluster invoices where every allocation resolved, the
+  // projection layer (Phase 7.2E-b) correctly leaves gl.accountNumber
+  // null (§4 of that phase — no doc-level winner selection) while
+  // exposing per-allocation winners in gl.candidates[]. The old
+  // "leader == null → FAIL" branch marked such cases as failures
+  // even though the accounting coding IS resolved. Grade them via
+  // the candidate list: if any per-allocation winner is in the
+  // acceptable set, PASS.
+  //
+  // Detection: MULTIPLE_RESOLVED sets `requiresReview: false` +
+  // `recommendationStatus: RECOMMEND` while leaving gl.accountNumber
+  // null. The extended snapshot exposes recommendationStatus.
   if (!leader) {
+    const isMultipleResolved = a.recommendationStatus === "RECOMMEND"
+      && (a.glCandidateNumbers?.length ?? 0) > 1;
+    if (isMultipleResolved) {
+      const acceptable = e.acceptableGlAccounts ?? [];
+      const candidates = a.glCandidateNumbers ?? [];
+      const hits = candidates.filter((n) => acceptable.includes(n));
+      const allHit = candidates.length > 0 && candidates.every((n) => acceptable.includes(n));
+      // Consider MULTIPLE_RESOLVED as PASS when EVERY per-allocation
+      // winner is in the acceptable set. Partial hits are PARTIAL,
+      // no hits are FAIL. This mirrors human "is the invoice coded
+      // acceptably?" judgement for genuine multi-allocation invoices.
+      const verdict: "PASS" | "PARTIAL" | "FAIL" = allHit ? "PASS" : hits.length > 0 ? "PARTIAL" : "FAIL";
+      return {
+        dimension: "gl-top1",
+        verdict,
+        score: allHit ? 1 : hits.length > 0 ? 0.5 : 0,
+        actual: candidates.join(",") + " [MULTIPLE_RESOLVED]",
+        expected: acceptable,
+        reason: allHit
+          ? `MULTIPLE_RESOLVED — all ${candidates.length} allocations in acceptable set.`
+          : hits.length > 0
+            ? `MULTIPLE_RESOLVED — ${hits.length}/${candidates.length} allocations in acceptable set.`
+            : `MULTIPLE_RESOLVED — no allocations in acceptable set [${acceptable.join(", ")}].`,
+      };
+    }
     return {
       dimension: "gl-top1", verdict: "FAIL", score: 0,
       actual: null, expected: e.acceptableGlAccounts ?? null,
