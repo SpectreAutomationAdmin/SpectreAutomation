@@ -132,6 +132,15 @@ const CONCEPT_LABELS: Record<EconomicPurposeConcept, string> = {
   OFFICE_SUPPLIES: "Office supplies",
   INTEREST: "Interest / finance charge",
   PENALTY: "Penalty / late fee",
+  // Phase 4R · Phase 7.2F (2026-08-13) — new accounting-nature purposes.
+  CAPITAL_IMPROVEMENT: "Capital improvement to real property",
+  LAND_ACQUISITION: "Land acquisition",
+  BUILDING_ACQUISITION: "Building / structure acquisition",
+  CONSTRUCTION_IN_PROGRESS: "Construction in progress",
+  SOFTWARE_INTANGIBLE: "Software intangible asset",
+  PREPAID_EXPENSE: "Prepaid expense",
+  INVENTORY_ACQUISITION: "Inventory acquisition",
+  FINANCED_EQUIPMENT_ACQUISITION: "Financed equipment acquisition",
   OTHER: "Other",
   UNKNOWN: "Unknown",
 };

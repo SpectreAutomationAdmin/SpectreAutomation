@@ -42,6 +42,29 @@ export type EconomicPurposeConcept =
   | "OFFICE_SUPPLIES"
   | "INTEREST"
   | "PENALTY"
+  // Phase 4R · Phase 7.2F (2026-08-13) — accounting-taxonomy concepts.
+  // Each represents a distinct accounting class where the CORRECT
+  // GL account family differs materially from CAPITAL_EQUIPMENT
+  // (mowers/tractors/machinery). Adding these enables the semantic-
+  // bridge (evaluatePurposeAccountAffinity) to differentiate ASSET
+  // accounts that all currently tie on CAPITAL_ASSET_MATCH.
+  //
+  // §4 nature-vs-role: these concepts describe TRANSACTION NATURE
+  // (what accounting event happened), which then binds to the
+  // appropriate ACCOUNT ROLE via PURPOSE_ACCOUNT_NAME_SUBSTRINGS.
+  //
+  // §17 anti-overfitting: each is a real accounting distinction
+  // codified in GAAP/IFRS (structural improvement vs equipment,
+  // land, buildings, construction-in-progress, software intangible,
+  // prepaid expense, inventory acquisition, financed equipment).
+  | "CAPITAL_IMPROVEMENT"        // structural improvements to existing real property
+  | "LAND_ACQUISITION"            // land purchase (non-depreciable)
+  | "BUILDING_ACQUISITION"        // building / structure purchase
+  | "CONSTRUCTION_IN_PROGRESS"    // in-progress capital work not yet placed in service
+  | "SOFTWARE_INTANGIBLE"         // perpetual software licence / intangible asset
+  | "PREPAID_EXPENSE"             // insurance / annual policy / period-of-benefit
+  | "INVENTORY_ACQUISITION"       // goods held for resale / F&B restock
+  | "FINANCED_EQUIPMENT_ACQUISITION" // equipment purchased under financing
   | "OTHER"
   | "UNKNOWN";
 
@@ -234,6 +257,98 @@ export const CANONICAL_PURPOSE_CONCEPTS: ConceptDefinition[] = [
       /\b(penalty|late\s*fee|late\s*payment|nsf|returned\s*cheque|dishonour)\b/i,
     ],
     cueStrength: 78,
+  },
+  // Phase 4R · Phase 7.2F (2026-08-13) — accounting-taxonomy cues.
+  // §5 mandatory (accum-depr semantics preserved by 7.2A hard-exclusion);
+  // §6 capital-improvement/CIP; §8 balance-sheet/P&L role coverage.
+  // Every cue is a class-of-thing pattern from common accounting practice.
+  {
+    concept: "CAPITAL_IMPROVEMENT",
+    label: "Capital improvement to existing real property",
+    cues: [
+      /\b(rebuild|renovation|redevelop(?:ment)?|resurface|regrade|reconstruct(?:ion)?|expansion\s+of\s+(?:the\s+)?(?:bunker|tee|green|fairway|building|clubhouse|structure))\b/i,
+      /\b(bunker|tee|green|fairway|cart\s*path|greenway|drainage|irrigation)\s+(?:rebuild|renovation|redevelop|resurface|reconstruction|installation|construction|expansion|improvement)\b/i,
+      /\b(course\s+improvement|land\s+improvement|leasehold\s+improvement)s?\b/i,
+      /\b(placed\s+in\s+service|placed-in-service|substantial\s+completion)\b/i,
+    ],
+    cueStrength: 80,
+  },
+  {
+    concept: "LAND_ACQUISITION",
+    label: "Land acquisition (non-depreciable)",
+    cues: [
+      /\b(land\s+(?:purchase|acquisition|parcel|lot|acquired)|acreage|parcel\s+of\s+land|acres\s+of\s+(?:land|property))\b/i,
+      /\b(purchase\s+of\s+land|acquisition\s+of\s+(?:land|property\s+parcel))\b/i,
+    ],
+    cueStrength: 82,
+  },
+  {
+    concept: "BUILDING_ACQUISITION",
+    label: "Building / structure acquisition",
+    cues: [
+      /\b(building\s+(?:purchase|acquisition|acquired)|purchase\s+of\s+(?:the\s+)?(?:building|structure|clubhouse|facility))\b/i,
+      /\b(acquisition\s+of\s+(?:building|structure)|purchase\s+of\s+real\s+property)\b/i,
+    ],
+    cueStrength: 82,
+  },
+  {
+    concept: "CONSTRUCTION_IN_PROGRESS",
+    label: "Construction in progress (uncompleted capital)",
+    cues: [
+      /\b(construction\s+in\s+progress|CIP\b|work\s+in\s+progress\s+—?\s*(?:construction|capital)|uncompleted\s+(?:construction|capital))\b/i,
+      /\baia\s+(?:g702|g703|progress\s+billing)\b/i,
+      /\bapplication\s+for\s+payment\s+(?:no\.?|#|number)?\s*\d+/i,
+      /\bprogress\s+(?:billing|invoice|payment)\s+(?:no\.?|#|number)?\s*\d+/i,
+    ],
+    cueStrength: 82,
+    // A CIP cue on the same document that ALSO says "placed in service"
+    // means the capital work is COMPLETED — that's CAPITAL_IMPROVEMENT
+    // territory, not CIP. Contradiction resolves the two.
+    contradictions: [
+      /\b(placed\s+in\s+service|placed-in-service|substantial\s+completion|work\s+completed|project\s+closed|final\s+invoice[^a-z])\b/i,
+    ],
+  },
+  {
+    concept: "SOFTWARE_INTANGIBLE",
+    label: "Software intangible asset (perpetual licence)",
+    cues: [
+      /\b(perpetual\s+(?:software\s+)?licen[cs]e|software\s+capitalization|capitalized\s+software|purchased\s+software\s+for\s+internal\s+use)\b/i,
+      /\b(intangible\s+asset|trademark|patent|copyright)\s+(?:purchase|acquisition)\b/i,
+      /\b(one[-\s]?time\s+software\s+purchase|software\s+asset)\b/i,
+    ],
+    cueStrength: 78,
+    // If clearly a SUBSCRIPTION (annual/monthly), route SOFTWARE_SUBSCRIPTION not INTANGIBLE.
+    contradictions: [
+      /\b(annual\s+subscription|monthly\s+subscription|saas\s+subscription|recurring\s+subscription)\b/i,
+    ],
+  },
+  {
+    concept: "PREPAID_EXPENSE",
+    label: "Prepaid expense (insurance / annual policy)",
+    cues: [
+      /\b(prepaid\s+(?:insurance|expense|premium)|annual\s+premium|policy\s+period\s+(?:covering|of)|insurance\s+premium\s+for\s+the\s+year|coverage\s+period)\b/i,
+      /\b(insurance\s+policy\s+—?\s*annual|prepay\s+for\s+the\s+year)\b/i,
+    ],
+    cueStrength: 78,
+  },
+  {
+    concept: "INVENTORY_ACQUISITION",
+    label: "Inventory acquisition (goods for resale / F&B restock)",
+    cues: [
+      /\b(inventory\s+(?:purchase|restock|acquisition)|for\s+resale|goods\s+for\s+resale|restock\s+order)\b/i,
+      /\b(f\s*&\s*b\s+restock|beverage\s+restock|beer\s+restock|wine\s+restock|liquor\s+restock)\b/i,
+      /\b(pro\s*shop\s+(?:merchandise|inventory|restock))\b/i,
+    ],
+    cueStrength: 76,
+  },
+  {
+    concept: "FINANCED_EQUIPMENT_ACQUISITION",
+    label: "Equipment purchased under financing / capital lease",
+    cues: [
+      /\b(equipment\s+(?:under\s+)?financing|capital\s+lease|financing\s+agreement|financed\s+equipment|equipment\s+loan|loan\s+for\s+equipment)\b/i,
+      /\b(monthly\s+lease\s+payment|equipment\s+lease\s+payment|finance\s+lease)\b/i,
+    ],
+    cueStrength: 76,
   },
 ];
 

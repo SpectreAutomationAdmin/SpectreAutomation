@@ -44,6 +44,35 @@ const PURPOSE_ACCOUNT_NAME_SUBSTRINGS: Partial<Record<EconomicPurposeConcept, Re
   CAPITAL_EQUIPMENT: [
     "equipment", "vehicle",
   ],
+  // Phase 4R · Phase 7.2F (2026-08-13) — accounting-taxonomy account
+  // affinity. Each substring is a class-of-thing name pattern that
+  // maps a canonical transaction nature to the correct ACCOUNT ROLE
+  // family. Every entry corresponds to a real accounting distinction.
+  CAPITAL_IMPROVEMENT: [
+    "course improvement", "land improvement", "leasehold improvement",
+    "improvement", "improvements",
+  ],
+  LAND_ACQUISITION: [
+    "land",
+  ],
+  BUILDING_ACQUISITION: [
+    "building", "buildings", "structure", "structures", "clubhouse",
+  ],
+  CONSTRUCTION_IN_PROGRESS: [
+    "construction in progress", "work in progress", "cip",
+  ],
+  SOFTWARE_INTANGIBLE: [
+    "software", "intangible", "intangibles",
+  ],
+  PREPAID_EXPENSE: [
+    "prepaid",
+  ],
+  INVENTORY_ACQUISITION: [
+    "inventory",
+  ],
+  FINANCED_EQUIPMENT_ACQUISITION: [
+    "financed", "under financing", "equipment under financing", "capital lease",
+  ],
   TELECOMMUNICATIONS: [
     "telephone", "telecom", "communications",
   ],
