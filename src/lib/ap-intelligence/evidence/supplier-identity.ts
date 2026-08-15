@@ -208,6 +208,85 @@ export function isGenericLabelCandidate(value: string): boolean {
   return false;
 }
 
+// Sprint 3 · Phase 4R Phase B (2026-08-15) §B1 + §B2 — pure-geographic
+// phrase detector. Recognises single-token country/province/state names
+// AND small phrases (≤4 tokens) whose every token is a geographic
+// literal: a country name, a Canadian province, or a US state name.
+// A bare "Canada" line, or "Calgary Alberta Canada", or "Redmond WA" —
+// these are recipient-address fragments split by pdf-parse's linear
+// text projection of a multi-column Sold-To/Bill-To block. They are
+// NEVER supplier identities.
+//
+// This does NOT block legitimate legal names that CONTAIN a geographic
+// token (e.g. "Canada Golf Supply Inc.", "Alberta Equipment Ltd.")
+// because those names are emitted upstream by the suffix-required
+// LEGAL_ENTITY_TEXT path and the suffix-less emitter's own early
+// `LEGAL_SUFFIX_RE.test(raw)` continue guard skips them entirely.
+// A city name paired with a non-geographic word (e.g. "Calgary Golf")
+// also survives because "Golf" is not in the geographic sets below.
+//
+// No country blacklist, no vendor-specific case, no "Canada" literal
+// in the reject path — just the principled rule that a pure address
+// fragment is not a supplier.
+const COUNTRY_TOKENS = new Set([
+  "canada", "usa", "america", "unitedstates", "unitedkingdom", "uk",
+  "australia", "mexico", "germany", "france", "spain", "italy",
+  "netherlands", "belgium", "switzerland", "austria", "ireland",
+  "sweden", "norway", "denmark", "finland", "portugal", "poland",
+  "china", "japan", "korea", "india", "brazil", "argentina",
+  "singapore", "hongkong", "taiwan", "newzealand", "southafrica",
+]);
+const CA_PROVINCE_TOKENS = new Set([
+  "alberta", "bc", "britishcolumbia", "manitoba", "newbrunswick",
+  "newfoundland", "newfoundlandandlabrador", "novascotia", "nwt",
+  "northwestterritories", "nunavut", "ontario", "pei",
+  "princeedwardisland", "quebec", "qc", "saskatchewan", "yukon",
+  "ab", "mb", "nb", "nl", "ns", "nt", "nu", "on", "pe", "qc", "sk", "yt",
+]);
+const US_STATE_TOKENS = new Set([
+  "alabama", "alaska", "arizona", "arkansas", "california",
+  "colorado", "connecticut", "delaware", "florida", "georgia",
+  "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas",
+  "kentucky", "louisiana", "maine", "maryland", "massachusetts",
+  "michigan", "minnesota", "mississippi", "missouri", "montana",
+  "nebraska", "nevada", "newhampshire", "newjersey", "newmexico",
+  "newyork", "northcarolina", "northdakota", "ohio", "oklahoma",
+  "oregon", "pennsylvania", "rhodeisland", "southcarolina",
+  "southdakota", "tennessee", "texas", "utah", "vermont", "virginia",
+  "washington", "westvirginia", "wisconsin", "wyoming",
+  "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga",
+  "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md",
+  "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj",
+  "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc",
+  "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy",
+]);
+const GEOGRAPHIC_TOKENS = new Set<string>([
+  ...COUNTRY_TOKENS,
+  ...CA_PROVINCE_TOKENS,
+  ...US_STATE_TOKENS,
+]);
+export function isPureGeographicPhrase(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  // Two checks, either sufficient:
+  //   (a) the whole phrase, joined + normalized, matches a multi-word
+  //       geographic literal ("United States" → "unitedstates", "New
+  //       Brunswick" → "newbrunswick", "British Columbia" →
+  //       "britishcolumbia").
+  //   (b) every whitespace-split token is a single-token geographic
+  //       literal ("Alberta Canada" → both hit; "Calgary Alberta
+  //       Canada" — three tokens each hit).
+  const wholeNorm = trimmed.toLowerCase().replace(/[^a-z]/g, "");
+  if (wholeNorm.length === 0) return false;
+  if (GEOGRAPHIC_TOKENS.has(wholeNorm)) return true;
+  const tokens = trimmed
+    .split(/\s+/)
+    .map((t) => t.toLowerCase().replace(/[^a-z]/g, ""))
+    .filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 4) return false;
+  return tokens.every((t) => GEOGRAPHIC_TOKENS.has(t));
+}
+
 /** Sprint 3 · Post-16H Phase 4 Slice 4-reopen (2026-08-07) — §6
  *  independent-evidence-FAMILY count. Multiple observations from
  *  the same physical letterhead/contact block are correlated and
@@ -433,6 +512,22 @@ export function collectTextSupplierEvidence(text: string): SupplierIdentityEvide
     if (!HEADER_SUFFIX_LESS_LINE.test(raw)) continue;
     // Must not be a stoplist word (case-insensitive comparison).
     if (HEADER_STOPLIST.has(raw.toUpperCase())) continue;
+    // Sprint 3 · Phase 4R Phase B (2026-08-15) §B1 + §B2 — reject bare
+    // geographic-token candidates. A country / province / state name
+    // alone (or in combination with only geographic tokens) is NEVER
+    // a legitimate supplier identity — it is a recipient-address
+    // fragment that slipped past the address rejection because the
+    // pdf-parse text-linearisation split multi-column recipient
+    // blocks. This is the root cause of the Microsoft #E0701097E3
+    // "Canada" defect: three Sold-To/Bill-To/Service Usage columns
+    // each ended in a bare "Canada" line, and the suffix-less header
+    // emitter admitted each as a HEADER_ORG_TEXT candidate at
+    // confidence 78.
+    // Generalises to Canadian provinces, US states, and common
+    // country names. Legitimate legal names containing these words
+    // (e.g. "Canada Golf Supply Inc.") are unaffected because they
+    // hit the LEGAL_SUFFIX_RE early-continue above.
+    if (isPureGeographicPhrase(raw)) continue;
     // Reject pdf-parse column-header concatenations (DATEPAGE etc.).
     if (isColumnHeaderConcat(raw)) continue;
     // Reject label-pair concatenations ("Bill ToShip To" etc.).
