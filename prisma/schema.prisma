@@ -226,6 +226,11 @@ model Club {
   insightAlerts              InsightAlert[]
   clubSettings               ClubSetting[]
   searchIndexEntries         SearchIndexEntry[]
+  // Phase 20 (Member Database) — segmentation + custom-field back-relations.
+  memberGroups                    MemberGroup[]
+  memberGroupAssignments          MemberGroupAssignment[]
+  memberCustomFieldDefinitions    MemberCustomFieldDefinition[]
+  memberCustomFieldValues         MemberCustomFieldValue[]
   // Phase 7 — integrations / POS / LLM
   integrationSettings        IntegrationSetting[]
   integrationChecks          IntegrationCheck[]
@@ -816,6 +821,16 @@ model Member {
   state                 String?
   postalCode            String?
   country               String?
+  // Phase 20 (Member Database) — extended demographic fields for the
+  // admin Member Profile so a founder can render a Tucker-Hersam-style
+  // record without a second table. All optional so no existing tenant
+  // is invalidated by the migration.
+  middleName            String?
+  nickname              String?
+  salutation            String?
+  gender                String?
+  homePhone             String?
+  profileImageUrl       String?
   status                String     @default("ONBOARDING")
   joinDate              DateTime?
   membershipCategory    String?
@@ -874,6 +889,11 @@ model Member {
   // term-specific records; one Member can hold multiple historical
   // BoardRoles and currently active committee memberships).
   boardRoles                   BoardRole[]                   @relation("BoardRoleMember")
+  // Phase 20 (Member Database) — many-to-many segmentation groups + a
+  // per-club extensible custom-field payload. See MemberGroup /
+  // MemberGroupAssignment / MemberCustomFieldDefinition below.
+  groupAssignments             MemberGroupAssignment[]
+  customFieldValues            MemberCustomFieldValue[]
 
   // Phase 13I — pilot-scale search/list pages routinely filter on clubId+status
   // and on lastName/email when an implementation team is cleaning up imports.
@@ -1399,10 +1419,103 @@ model MemberHouseholdMember {
   email        String?
   phone        String?
   dateOfBirth  DateTime?
+  // Phase 20 (Member Database) — same optional demographic fields as
+  // Member so the admin Member Profile person-switcher renders the
+  // same Basic Details grid for every person on the membership.
+  middleName      String?
+  nickname        String?
+  salutation      String?
+  gender          String?
+  homePhone       String?
+  profileImageUrl String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 20 — Member Database + Member Profile (2026-08-15)
+// ---------------------------------------------------------------------------
+// Segmentation groups (Sailing Approved, Tennis, Wednesday Night Racing…).
+// Per-club, unique by name inside a club. The many-to-many junction is
+// `MemberGroupAssignment` — kept as an explicit model rather than an
+// implicit `@relation` so we can carry auditing fields (assignedAt +
+// assignedByUserId) without another schema change later.
+model MemberGroup {
+  id              String                  @id @default(cuid())
+  clubId          String
+  club            Club                    @relation(fields: [clubId], references: [id])
+  name            String
+  sortOrder       Int                     @default(100)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  assignments     MemberGroupAssignment[]
+
+  @@unique([clubId, name])
+  @@index([clubId, sortOrder])
+}
+
+model MemberGroupAssignment {
+  id                String       @id @default(cuid())
+  clubId            String
+  club              Club         @relation(fields: [clubId], references: [id])
+  memberId          String
+  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId           String
+  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt        DateTime     @default(now())
+  assignedByUserId  String?
+
+  @@unique([memberId, groupId])
+  @@index([clubId, groupId])
+  @@index([memberId])
+}
+
+// Extensible custom-fields per club (Resignation, Interested in RC?, …).
+// Modelled as `Definition` + sparse `Value` — a single member row does
+// not carry a nullable column for every conceivable field, and adding a
+// new club-defined field is a data write rather than a migration.
+//
+// `kind` is a UI-hint discriminator: TEXT | LONG_TEXT | BOOLEAN | DATE |
+// NUMBER | SELECT. All values are stored as a single `valueText` string
+// so the schema stays portable across SQLite (staging + dev) and
+// Postgres (production); typed parsing is a client concern.
+model MemberCustomFieldDefinition {
+  id           String                      @id @default(cuid())
+  clubId       String
+  club         Club                        @relation(fields: [clubId], references: [id])
+  key          String                      // stable snake_case identifier
+  label        String                      // founder-facing label
+  kind         String                      @default("TEXT")
+  helpText     String?
+  optionsJson  String?                     // JSON list for SELECT
+  sortOrder    Int                         @default(100)
+  archivedAt   DateTime?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  values       MemberCustomFieldValue[]
+
+  @@unique([clubId, key])
+  @@index([clubId, sortOrder])
+}
+
+model MemberCustomFieldValue {
+  id             String                      @id @default(cuid())
+  clubId         String
+  club           Club                        @relation(fields: [clubId], references: [id])
+  memberId       String
+  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId   String
+  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText      String?
+  updatedAt      DateTime                    @updatedAt
+  updatedByUserId String?
+
+  @@unique([memberId, definitionId])
+  @@index([clubId, definitionId])
 }
 
 // Member-facing documents (statements, forms, signed agreements).
