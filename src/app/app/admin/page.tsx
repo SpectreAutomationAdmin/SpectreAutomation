@@ -28,6 +28,7 @@ import EmailIntakeCard, { type EmailFeedCardData } from "@/components/mission-co
 import IntelligenceReviewCard from "@/components/mission-control/IntelligenceReviewCard";
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
+import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
@@ -103,20 +104,28 @@ export default async function MissionControlPage({
           Nothing appended. Do NOT reintroduce a standalone tenant
           context row above the greeting — the tenant is established
           by the header rail. */}
-      {/* Header line — greeting + date/sync ---------------------- */}
-      <div className="spectre-mc-header">
-        <h1 className="spectre-mc-greeting">
-          {greetingWord}, {firstName}.
-        </h1>
-        <div className="spectre-mc-header-meta">
-          <span className="date">{dateLabel} · {timeLabel}</span>
-          <FeedSyncedStatusPill status={feedSyncedStatus} />
-          <MissionControlLiveRefresh
-            initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
-            initialSyncedAt={snapshot.syncedAt.toISOString()}
-          />
+      {/* Header line — greeting + date/sync ----------------------
+          Phase 4R rev-6 (2026-08-15) — the auto-poll + manual refresh
+          state now share ONE source of truth via <LiveRefreshProvider>.
+          The provider wraps the header meta row so both the Feed
+          Synced pill (which owns the visible refresh icon + label
+          swap) and the New Items banner (headless bg-refresh
+          responder) subscribe to the same context. */}
+      <LiveRefreshProvider
+        initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
+        initialSyncedAt={snapshot.syncedAt.toISOString()}
+      >
+        <div className="spectre-mc-header">
+          <h1 className="spectre-mc-greeting">
+            {greetingWord}, {firstName}.
+          </h1>
+          <div className="spectre-mc-header-meta">
+            <span className="date">{dateLabel} · {timeLabel}</span>
+            <FeedSyncedStatusPill status={feedSyncedStatus} />
+            <MissionControlLiveRefresh />
+          </div>
         </div>
-      </div>
+      </LiveRefreshProvider>
 
       {/* State line — one-sentence orientation ------------------- */}
       {/* Sprint 3 · Checkpoint 16G Stage A — the overnight sentence

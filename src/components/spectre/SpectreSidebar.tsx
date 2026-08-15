@@ -133,10 +133,17 @@ export function SpectreSidebar({
       data-testid="spectre-sidebar"
       data-collapsed={collapsed ? "true" : "false"}
     >
-      {/* Identity block */}
+      {/* Identity block.
+          Phase 4R rev-6 (2026-08-15) — pinned to the same vertical
+          height as the topbar via `.spectre-sidebar-identity` so
+          the divider beneath it aligns with the topbar's bottom
+          border. Combined with the nav's rev-6 padding-top token
+          (see `.spectre-sidebar-nav-scroll`), the first nav item
+          baseline lines up with the greeting baseline in the
+          workspace on the same horizontal band. */}
       <div
         className={cn(
-          "flex items-center gap-3 px-4 py-4 border-b border-[color:var(--spectre-border-hairline)]",
+          "spectre-sidebar-identity flex items-center gap-3 px-4 border-b border-[color:var(--spectre-border-hairline)]",
           collapsed && "justify-center px-2",
         )}
       >
@@ -196,7 +203,7 @@ export function SpectreSidebar({
           identity and dives straight into navigation. */}
 
       {/* Nav */}
-      <nav className="mt-3 flex-1 overflow-y-auto pb-3">
+      <nav className="spectre-sidebar-nav-scroll flex-1 overflow-y-auto pb-3">
         <div className="space-y-0.5">
           {visibleTopLevel.map((item) => {
             const active = item.href === activeHref;
