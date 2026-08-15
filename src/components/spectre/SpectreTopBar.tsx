@@ -20,11 +20,11 @@ import {
   IconChevronDown,
   IconMoon,
   IconMonitor,
-  IconSearch,
   IconSun,
 } from "./icons";
 import { useSpectreTheme } from "./ThemeProvider";
 import { HeaderContextRail } from "./HeaderContextRail";
+import { GlobalSearch } from "./GlobalSearch";
 import type { Crumb } from "@/lib/chrome/breadcrumb";
 
 type Props = {
@@ -99,13 +99,11 @@ export function SpectreTopBar({
 
       {/* Right — controls */}
       <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          aria-label="Search (⌘K)"
-          className="spectre-btn spectre-btn--ghost spectre-btn--icon"
-        >
-          <IconSearch size={16} />
-        </button>
+        {/* Phase 4R rev-4 (2026-08-15) — canonical global-search entry
+            point. Collapsed = icon, expanded = inline input +
+            predictive grouped dropdown. Replaces the previous dummy
+            IconSearch button AND the redundant sidebar search field. */}
+        <GlobalSearch />
         <button
           type="button"
           aria-label="Notifications"

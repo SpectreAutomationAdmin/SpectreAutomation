@@ -497,6 +497,79 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
       box-shadow: var(--spectre-shadow-floating);
       padding: var(--spectre-space-3);
       animation: spectre-pop-in var(--spectre-motion-base) var(--spectre-ease) both;  }
+
+  /* ---- Global search (Phase 4R rev-4 · 2026-08-15) --------------
+     Compact command-search pattern. Collapsed = icon button.
+     Expanded = inline input in the topbar left rail + a compact
+     grouped dropdown of predictive results. Restrained typography;
+     no neon; no oversized cards; no border-heavy chrome. */
+  .spectre-global-search { position: relative; display: inline-flex; align-items: center; }
+  .spectre-global-search-expanded {
+    display: inline-flex; align-items: center; gap: 8px;
+    width: 320px; height: 34px;
+    padding: 0 12px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: var(--spectre-radius-input, 6px);
+    color: var(--spectre-text-primary);
+    box-shadow: var(--spectre-shadow-focus-soft, none);
+    transition: border-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-global-search-expanded:focus-within {
+    border-color: var(--spectre-accent);
+  }
+  .spectre-global-search-expanded input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    font-size: 13px; color: var(--spectre-text-primary);
+  }
+  .spectre-global-search-expanded input::placeholder {
+    color: var(--spectre-text-muted);
+  }
+  .spectre-global-search-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0;
+    width: 460px; max-height: 460px; overflow-y: auto;
+    background: var(--spectre-surface-elevated);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: var(--spectre-shadow-floating);
+    padding: 6px;
+    z-index: 60;
+  }
+  .spectre-global-search-status {
+    padding: 12px 12px; font-size: 12px;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-global-search-status--error { color: var(--spectre-status-warning, #b45309); }
+  .spectre-global-search-group + .spectre-global-search-group {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-global-search-group-label {
+    padding: 6px 10px 4px;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 600;
+  }
+  .spectre-global-search-row {
+    display: block; width: 100%; text-align: left;
+    padding: 8px 10px;
+    background: transparent; border: none; border-radius: 4px;
+    cursor: pointer;
+    transition: background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-global-search-row:hover,
+  .spectre-global-search-row.is-active,
+  .spectre-global-search-row:focus-visible {
+    background: var(--spectre-surface-hover, rgba(0,0,0,0.04));
+    outline: none;
+  }
+  .spectre-global-search-row-primary {
+    font-size: 13px; color: var(--spectre-text-primary); font-weight: 500;
+  }
+  .spectre-global-search-row-secondary {
+    font-size: 11.5px; color: var(--spectre-text-muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
   .spectre-tooltip {    background: var(--spectre-text-primary);
       color: var(--spectre-text-inverse);
       padding: 5px 8px;
@@ -541,15 +614,21 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     min-width: 0; flex: 1;
   }
   .spectre-header-rail-tenant {
-    font-size: var(--spectre-type-body-sm-size);
+    /* Phase 4R rev-4 (2026-08-15) — tenant is now visually more
+       prominent than the breadcrumb per founder brief §14. Slightly
+       larger, stronger weight, and full primary ink; the breadcrumb
+       stays at its existing muted body-small tone so the hierarchy
+       reads immediately without introducing a badge/pill/box. */
+    font-size: 14px;
+    line-height: 18px;
     color: var(--spectre-text-primary);
-    font-weight: 500;
-    letter-spacing: 0.005em;
+    font-weight: 600;
+    letter-spacing: 0.002em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    max-width: 40ch;
+    max-width: 44ch;
   }
   .spectre-header-rail-sep {
-    width: 1px; height: 14px;
+    width: 1px; height: 16px;
     background: var(--spectre-border-hairline);
     flex-shrink: 0;
   }

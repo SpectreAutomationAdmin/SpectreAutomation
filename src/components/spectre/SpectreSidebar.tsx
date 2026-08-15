@@ -26,8 +26,6 @@ import {
 } from "@/components/sidebar-nav-data";
 import {
   IconChevronRight,
-  IconChevronLeft,
-  IconSearch,
   IconHome,
   IconInbox,
   IconCog,
@@ -190,35 +188,12 @@ export function SpectreSidebar({
         )}
       </div>
 
-      {/* Search entry (⌘K) */}
-      <div className={cn("px-3 pt-3", collapsed && "px-2")}>
-        {collapsed ? (
-          <button
-            type="button"
-            aria-label="Search (⌘K)"
-            className="spectre-btn spectre-btn--ghost w-full h-9"
-          >
-            <IconSearch size={16} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            aria-label="Search (⌘K)"
-            className={cn(
-              "flex items-center gap-2 w-full px-3 h-9 rounded-spectre-input border transition-colors duration-spectre-fast ease-spectre",
-            )}
-            style={{
-              background: "var(--spectre-surface)",
-              borderColor: "var(--spectre-border-default)",
-              color: "var(--spectre-text-muted)",
-            }}
-          >
-            <IconSearch size={14} />
-            <span className="text-[13px]">Search</span>
-            <span className="spectre-kbd ml-auto">⌘K</span>
-          </button>
-        )}
-      </div>
+      {/* Phase 4R rev-4 (2026-08-15) — the sidebar-scoped search
+          field was retired here. The canonical global search now
+          lives in the top-right of `SpectreTopBar` via
+          `<GlobalSearch>` so there is ONE search entry point for
+          the whole application. The sidebar begins with the product
+          identity and dives straight into navigation. */}
 
       {/* Nav */}
       <nav className="mt-3 flex-1 overflow-y-auto pb-3">
