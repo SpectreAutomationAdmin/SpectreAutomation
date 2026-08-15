@@ -31,6 +31,7 @@ import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusP
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
+import { greetingWordForInstant } from "@/lib/mission-control/local-time";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,14 @@ export default async function MissionControlPage({
   const feedSyncedStatus = await loadFeedSyncedStatus(clubId, principal.id);
 
   const firstName = user.name?.split(" ")[0] ?? "there";
-  const greetingWord = greetingForHour(snapshot.syncedAt);
+  // Phase 4R rev-3 (2026-08-15) — greeting derives from the club's
+  // IANA timezone (snapshot.clubTimezone.ianaZone), not from the
+  // server's local hour. Prior bug: `greetingForHour(new Date())`
+  // read the Fly container's local hour (UTC), so 15:00 in Alberta
+  // rendered "Good evening" (21:00 UTC). Now uses the shared
+  // greeting utility so every consumer of "what time is it for
+  // this tenant?" reads from one source of truth.
+  const greetingWord = greetingWordForInstant(snapshot.syncedAt, snapshot.clubTimezone.ianaZone);
 
   // Sprint 3 · Checkpoint 16G Stage A — use the club's configured
   // IANA timezone (snapshot.clubTimezone), never a hardcoded fallback.
@@ -303,12 +311,11 @@ export default async function MissionControlPage({
 // Small stateless renderers
 // ---------------------------------------------------------------------------
 
-function greetingForHour(d: Date): string {
-  const h = d.getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
-}
+// Phase 4R rev-3 (2026-08-15) — the previous local `greetingForHour`
+// helper read `d.getHours()`, which resolves in the SERVER's local
+// timezone (Fly Docker container = UTC). It has been replaced by
+// `greetingWordForInstant` in `src/lib/mission-control/local-time.ts`
+// which resolves against the club's IANA timezone.
 
 // Sprint 2 Checkpoint 14C — pack a WorkItem into the props shape the
 // EmailIntakeCard client component consumes. Only called when
