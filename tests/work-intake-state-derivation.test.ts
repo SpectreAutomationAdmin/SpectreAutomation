@@ -40,11 +40,11 @@ function mkDecision(state: ApWorkflowDecision["state"], blockerCodes: string[]):
   return {
     state,
     dimensions: [],
-    blockers: blockerCodes.map((code) => ({ code, message: code, dimensionKey: "test" })),
+    blockers: blockerCodes.map((code) => ({ code, message: code, dimensionKey: "supplierIdentity" })),
     warnings: [],
     rationale: [],
     autoApprovalExclusions: [],
-  } as ApWorkflowDecision;
+  } as unknown as ApWorkflowDecision;
 }
 
 describe("Defect A · mapPhase3ToLegacyDisplayState — action-matrix rows", () => {

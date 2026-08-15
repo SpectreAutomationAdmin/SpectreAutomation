@@ -944,10 +944,34 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     // Sprint 3 Checkpoint 15I-2 — projections run in parallel per
     // email intake. Each `summariseApIntake` is cached process-locally
     // to bound the PDF re-parse cost on repeat loads.
-    const [invoiceSummary, statementSummary] = await Promise.all([
+    const [invoiceSummaryLive, statementSummary] = await Promise.all([
       apIds.length > 0 ? summariseApIntake(args.clubId, apIds[0]) : Promise.resolve(undefined),
       stIds.length > 0 ? summariseStatementIntake(args.clubId, stIds[0]) : Promise.resolve(undefined),
     ]);
+
+    // Sprint 3 · Phase 4R Completed-State Immutability (2026-08-15) §A5 —
+    // if the parent email WI is completed AND a frozen cardSnapshot
+    // exists on its WorkCompletionEvent, OVERLAY the founder-facing
+    // fields from the snapshot onto the live projection. This ensures
+    // Completed History shows the approved historical facts; auxiliary
+    // fields (sender relationship, payment terms, PO variance, etc.)
+    // continue to come from live projection so the shape stays complete.
+    //
+    // Legacy fallback: when the WI is completed but no snapshot exists
+    // (predates Phase 4R Completed-State Immutability, or an API-route
+    // path did not compose one), invoiceSummary comes from live
+    // projection unchanged — same behaviour as before this slice.
+    let invoiceSummary = invoiceSummaryLive;
+    if (invoiceSummaryLive && apIds.length > 0) {
+      const { readCompletedCardFacts } = await import("@/lib/work-intake/read-completed-card-facts");
+      const frozen = await readCompletedCardFacts({
+        clubId: args.clubId,
+        workIntakeItemId: emailIntakeId,
+      });
+      if (frozen.source === "frozen") {
+        invoiceSummary = overlayCardSnapshotOnInvoiceSummary(invoiceSummaryLive, frozen.snapshot);
+      }
+    }
 
     const dominantFacet: LinkedIntelligenceForEmail["dominantFacet"] =
       invoiceAttCount > 0 && statementAttCount > 0 ? "invoice+statement"
@@ -1002,6 +1026,68 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     elapsedMs: Date.now() - projectionStart,
   });
   return map;
+}
+
+/**
+ * Sprint 3 · Phase 4R Completed-State Immutability (2026-08-15) §A5 —
+ * overlay the founder-facing frozen snapshot fields onto the live
+ * invoiceSummary projection. Founder-facing columns (supplier /
+ * invoice # / amount / GL / category / vendor match / workflow state /
+ * recommendation) come from the snapshot; auxiliary shape fields
+ * (sender relationship, payment terms, PO variance, GST verification,
+ * findings count, alternates) continue from live projection so the
+ * shape stays complete.
+ *
+ * Only fields that are explicitly present in the snapshot overwrite
+ * the live value — a null in the snapshot leaves the live value
+ * untouched (defence against a partial snapshot rendering blank).
+ */
+function overlayCardSnapshotOnInvoiceSummary(
+  live: NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]>,
+  snap: import("@/lib/work-intake/completion-snapshot").CompletionCardSnapshot,
+): NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]> {
+  return {
+    ...live,
+    extractedVendor: {
+      name: snap.supplierDisplayName ?? live.extractedVendor.name,
+    },
+    vendorMatch: {
+      ...live.vendorMatch,
+      state: (snap.vendorMatchState as typeof live.vendorMatch.state)
+        ?? live.vendorMatch.state,
+      matchedName: snap.vendorDisplayName ?? live.vendorMatch.matchedName,
+      matchedVendorId: snap.vendorId ?? live.vendorMatch.matchedVendorId,
+    },
+    invoiceNumber: snap.invoiceNumber ?? live.invoiceNumber,
+    gross: {
+      amount: snap.total != null ? snap.total.toFixed(2) : live.gross.amount,
+      currency: snap.currency ?? live.gross.currency,
+    },
+    purchaseOrder: {
+      ...live.purchaseOrder,
+      poNumber: snap.purchaseOrder ?? live.purchaseOrder.poNumber,
+    },
+    category: {
+      ...live.category,
+      label: snap.categoryLabel ?? live.category.label,
+      glAccountNumber: snap.glAccountNumber ?? live.category.glAccountNumber,
+      glAccountName: snap.glAccountName ?? live.category.glAccountName,
+    },
+    // Overlay workflow state ONLY when the snapshot captured one that
+    // matches a valid enum value in the projection shape. Guards
+    // against a future snapshot writer stamping an unknown pill.
+    workflowState: (() => {
+      const valid = new Set([
+        "READY_FOR_APPROVAL", "VENDOR_MATCH_REQUIRED", "MISSING_INFORMATION",
+        "NEEDS_JUDGMENT", "POSSIBLE_DUPLICATE", "CHART_OF_ACCOUNTS_REQUIRED",
+        "ANALYSIS_PENDING", "UNSUPPORTED",
+      ]);
+      return snap.workflowState && valid.has(snap.workflowState)
+        ? (snap.workflowState as typeof live.workflowState)
+        : live.workflowState;
+    })(),
+    workflowReason: snap.recommendationSummary ?? live.workflowReason,
+  };
 }
 
 async function summariseApIntake(clubId: string, intakeId: string): Promise<LinkedIntelligenceForEmail["invoiceSummary"]> {

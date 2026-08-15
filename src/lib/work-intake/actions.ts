@@ -15,6 +15,7 @@
 import { prisma } from "@/lib/prisma";
 import { workIntakeReadableByPrincipal } from "@/lib/work-intake/tenant";
 import type { Principal } from "@/lib/rbac";
+import type { CompletionCardSnapshot } from "./completion-snapshot";
 
 interface ActionCtx {
   principal: Principal;
@@ -50,7 +51,23 @@ export class WorkIntakeActionError extends Error {
   }
 }
 
-export async function resolveIntake(ctx: ActionCtx, note?: string, opts?: { completionType?: "RESOLVED" | "REPLIED_AND_CLOSED" | "OTHER" }): Promise<void> {
+export async function resolveIntake(
+  ctx: ActionCtx,
+  note?: string,
+  opts?: {
+    completionType?: "RESOLVED" | "REPLIED_AND_CLOSED" | "OTHER";
+    /** Phase 4R Completed-State Immutability (2026-08-15) — the
+     *  founder-facing card facts as rendered at the moment the user
+     *  clicked the terminal-transition button. Persisted on
+     *  WorkCompletionEvent.metadataJson.cardSnapshot so Completed
+     *  History renders the approved historical facts, not whatever
+     *  the analyser reports today. Optional: legacy callers that do
+     *  not have a projection to pass (e.g. informational Resolve of
+     *  a non-AP item) may omit; the reader falls back to live
+     *  projection with a "legacy" source marker. */
+    cardSnapshot?: CompletionCardSnapshot | null;
+  },
+): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
   await prisma.$transaction([
     prisma.workIntakeItem.update({
@@ -83,6 +100,7 @@ export async function resolveIntake(ctx: ActionCtx, note?: string, opts?: { comp
       clubId: it.clubId,
       completedByUserId: ctx.principal.id,
       completionType: opts?.completionType ?? "RESOLVED",
+      cardSnapshot: opts?.cardSnapshot ?? null,
     });
   } catch {
     // Never block resolve on event emission.
