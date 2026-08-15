@@ -187,8 +187,25 @@ export interface CanonicalRankerInput {
    *  PURPOSE_TYPE_COMPAT) that read `accountType` don't silently
    *  change activation pattern (see analyse.ts comment at
    *  `allocationAccounts` for the rationale — Founder §14 activation-
-   *  change safety on LOCKED cases). */
-  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
+   *  change safety on LOCKED cases).
+   *
+   *  Phase 7.2N Fix 1C (2026-08-14): widened to include `postingRole`
+   *  and `structuralPostingRestrictions` so `assignCandidateTier`
+   *  consumes the SINGLE typed semantic-contract source for
+   *  structural INELIGIBLE decisions. Removes the raw-boolean
+   *  reinterpretation that made Fix 1 a functional no-op. */
+  accountSemanticsByAccountId?: Map<string, TierSemanticsInput>;
+}
+
+/** Shared type for the pre-resolved semantics passed from analyse.ts
+ *  into rankCanonical for tier assignment. All four fields are
+ *  authoritatively derived by `resolveAccountSemantics` in
+ *  `account-semantics/index.ts` — never re-interpreted here. */
+export interface TierSemanticsInput {
+  statementRole: string;
+  accountingClass: string;
+  postingRole: string;
+  structuralPostingRestrictions: ReadonlyArray<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,31 +1536,58 @@ function tierPriority(tier: CandidateTier): number {
 /** Assign a candidate tier from AccountSemantics + composed treatment.
  *  Founder §5: uses typed semantic contracts, not raw fields. Founder
  *  §2: INELIGIBLE reserved for structural posting restrictions only —
- *  never for inferred treatment mismatch. */
+ *  never for inferred treatment mismatch.
+ *
+ *  Phase 7.2N Fix 1C (2026-08-14): `structuralPostingRestrictions` on
+ *  the pre-resolved `CanonicalAccountSemantics` is the AUTHORITATIVE
+ *  source for structural INELIGIBLE. Previous raw-boolean re-
+ *  interpretation (isBankAccount / isCashAccount / isControlAccount
+ *  read directly from AccountView) has been REMOVED — those checks
+ *  duplicated `derivePostingRole`'s boolean-flag chain but bypassed
+ *  its fs-group fallback (Fix 1's BS_CASH_EQUIVALENTS extension),
+ *  making Fix 1 a functional no-op on the real Coulee Ridge COA.
+ *
+ *  Now: semantic contract in → tier decision out. One source of truth. */
 function assignCandidateTier(input: {
   account: AccountView;
   accountType: string;
   postable: boolean;
   treatment: import("./treatment-composition").CanonicalAccountingTreatment | undefined;
   /** Pre-resolved AccountSemantics keyed on the caller side (analyse.ts).
-   *  When provided, tier assignment reads statementRole/accountingClass
-   *  from here instead of re-deriving via `account.type ?? "EXPENSE"`. */
-  preResolvedSemantics?: { statementRole: string; accountingClass: string };
+   *  When provided, tier assignment reads statementRole/accountingClass/
+   *  postingRole/structuralPostingRestrictions from here — NEVER
+   *  re-interprets raw account.type / fsGroupKey / isBankAccount /
+   *  isCashAccount / isControlAccount. */
+  preResolvedSemantics?: TierSemanticsInput;
 }): { tier: CandidateTier; tierReason: string } {
   const { account, postable, treatment, preResolvedSemantics } = input;
 
-  // Structural INELIGIBLE — Founder §2 & §4. Only true posting
-  // restrictions land here. Consumes the semantic contract's
-  // structuralPostingRestrictions via `postable` (already derived
-  // from postingBlockersByAccount) + a defensive check on
-  // AccountView's structural flags.
+  // Structural INELIGIBLE — Founder §2 & §4. Two paths land here:
+  //
+  // (a) postable=false — derived upstream from the posting-blockers
+  //     map (allowManualPosting / fundApplicability / etc). This
+  //     path predates Fix 1C and remains as the eligibility-gate
+  //     escape hatch for restrictions computed outside the semantics
+  //     contract.
+  //
+  // (b) semantics.structuralPostingRestrictions non-empty — Fix 1C
+  //     bridge from the SEMANTIC CONTRACT to the ranker tier gate.
+  //     `derivePostingRole` (`account-semantics/index.ts`) is the
+  //     single authoritative source for BANK/CASH/CONTROL/etc.
+  //     structural roles (configured accountRole → boolean flags →
+  //     fs-group taxonomy). `deriveStructuralPostingRestrictions`
+  //     emits BANK_ACCOUNT/CASH_ACCOUNT/CONTROL_ACCOUNT/etc from
+  //     `postingRole`. When this array is non-empty, the account is
+  //     structurally restricted regardless of what the raw booleans
+  //     said. THIS is the source of truth.
   if (!postable) {
     return { tier: "INELIGIBLE", tierReason: "postable=false (structural posting restriction)" };
   }
-  if ((account as unknown as { isBankAccount?: boolean }).isBankAccount === true
-    || (account as unknown as { isCashAccount?: boolean }).isCashAccount === true
-    || (account as unknown as { isControlAccount?: boolean }).isControlAccount === true) {
-    return { tier: "INELIGIBLE", tierReason: "bank/cash/control account (structural)" };
+  if (preResolvedSemantics && preResolvedSemantics.structuralPostingRestrictions.length > 0) {
+    return {
+      tier: "INELIGIBLE",
+      tierReason: `structural restriction: ${preResolvedSemantics.structuralPostingRestrictions.join(",")} (from CanonicalAccountSemantics.postingRole=${preResolvedSemantics.postingRole})`,
+    };
   }
 
   // No composed treatment → OPEN_TREATMENT semantics — every otherwise
@@ -1637,9 +1681,8 @@ function isRelatedStatementFamilyRanker(
  *  once per candidate per rank call; volume is bounded (dozens of
  *  accounts). No cyclic dependency (account-semantics does not import
  *  canonical-ranker). */
-function resolveAccountSemanticsForCandidate(account: AccountView):
-  { statementRole: string; accountingClass: string } {
-  return _resolveAccountSemantics({
+function resolveAccountSemanticsForCandidate(account: AccountView): TierSemanticsInput {
+  const full = _resolveAccountSemantics({
     accountNumber: account.accountNumber,
     name: account.name,
     type: account.type ?? "EXPENSE",
@@ -1654,6 +1697,12 @@ function resolveAccountSemanticsForCandidate(account: AccountView):
     fsGroupKey: account.fsGroupKey ?? null,
     accountRole: account.accountRole ?? null,
   });
+  return {
+    statementRole: full.statementRole,
+    accountingClass: full.accountingClass,
+    postingRole: full.postingRole,
+    structuralPostingRestrictions: full.structuralPostingRestrictions,
+  };
 }
 
 /** Phase 4R · Phase 7.2L hierarchical comparator. Deterministic.

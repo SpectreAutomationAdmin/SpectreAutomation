@@ -71,9 +71,23 @@ function mkInput(
   o: {
     accounts: AccountView[];
     treatment?: CanonicalAccountingTreatment;
-    semantics?: Map<string, { statementRole: string; accountingClass: string }>;
+    semantics?: Map<string, { statementRole: string; accountingClass: string; postingRole?: string; structuralPostingRestrictions?: ReadonlyArray<string> }>;
   },
 ): CanonicalRankerInput {
+  // Phase 7.2N Fix 1C — TierSemanticsInput now requires postingRole +
+  // structuralPostingRestrictions. Backfill with harmless defaults
+  // (STANDARD / empty) when tests don't explicitly set them.
+  const widened = o.semantics
+    ? new Map(Array.from(o.semantics.entries()).map(([k, v]) => [
+        k,
+        {
+          statementRole: v.statementRole,
+          accountingClass: v.accountingClass,
+          postingRole: v.postingRole ?? "STANDARD",
+          structuralPostingRestrictions: v.structuralPostingRestrictions ?? [],
+        },
+      ]))
+    : undefined;
   return {
     transaction: {
       purposeConcept: null,
@@ -94,7 +108,7 @@ function mkInput(
     },
     eligibleAccounts: o.accounts,
     postingBlockersByAccount: new Map(),
-    accountSemanticsByAccountId: o.semantics,
+    accountSemanticsByAccountId: widened,
   };
 }
 

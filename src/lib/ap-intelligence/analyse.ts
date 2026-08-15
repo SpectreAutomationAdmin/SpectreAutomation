@@ -1488,7 +1488,7 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
   // cast in canonical-ranker.ts without changing the scorer's
   // activation pattern.
   const { resolveAccountSemantics: _resolveSemanticsForRanker } = await import("./account-semantics");
-  const accountSemanticsByAccountId = new Map<string, { statementRole: string; accountingClass: string }>();
+  const accountSemanticsByAccountId = new Map<string, import("./canonical-ranker").TierSemanticsInput>();
   for (const a of accountsForAllocations) {
     const semantics = _resolveSemanticsForRanker({
       accountNumber: a.accountNumber,
@@ -1505,9 +1505,20 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
       fsGroupKey: a.fsGroup?.key ?? null,
       accountRole: (a as { accountRole?: string | null }).accountRole ?? null,
     });
+    // Phase 4R · Phase 7.2N Fix 1C (2026-08-14) — widened to include
+    // postingRole + structuralPostingRestrictions so
+    // assignCandidateTier consumes the SINGLE typed semantic-contract
+    // source for structural INELIGIBLE decisions. Fix 1 was a
+    // functional no-op because the ranker's raw-boolean check for
+    // isBankAccount/isCashAccount bypassed Fix 1's fs-group
+    // structural fallback. This map is now the sole authoritative
+    // channel between AccountSemantics derivation and ranker tier
+    // consumption.
     accountSemanticsByAccountId.set(a.id, {
       statementRole: semantics.statementRole,
       accountingClass: semantics.accountingClass,
+      postingRole: semantics.postingRole,
+      structuralPostingRestrictions: semantics.structuralPostingRestrictions,
     });
   }
   // Phase 4R · Phase 5 (2026-08-11) — allocations run AFTER the

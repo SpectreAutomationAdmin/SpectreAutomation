@@ -176,7 +176,7 @@ export interface AllocationInput {
    *  Founder §6 "intentional typed canonical input" for the semantic
    *  information that would otherwise leak via the AccountView.type
    *  loose cast. */
-  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
+  accountSemanticsByAccountId?: Map<string, import("./canonical-ranker").TierSemanticsInput>;
   // Phase 4R · Phase 5 (2026-08-11) — global signals passed as
   // CLUSTER-shared context. Individual clusters still rank
   // independently from their own line items + concept, but shared
@@ -517,7 +517,7 @@ function rankClusterCanonically(input: {
   canonicalAccountingTreatment?: import("./treatment-composition").CanonicalAccountingTreatment;
   /** Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved account
    *  semantics for tier assignment (see AllocationInput comment). */
-  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
+  accountSemanticsByAccountId?: Map<string, import("./canonical-ranker").TierSemanticsInput>;
 }): RankedCluster {
   const clusterLines = input.cluster.assignments.map((a) => a.line);
   const clusterConceptId = input.cluster.conceptId;
@@ -652,7 +652,7 @@ function rankClusters(args: {
   globalSignals?: AllocationInput["globalSignals"];
   discoveryContext?: AllocationInput["discoveryContext"];
   // Phase 4R · Phase 7.2L (2026-08-13) — pre-resolved AccountSemantics.
-  accountSemanticsByAccountId?: Map<string, { statementRole: string; accountingClass: string }>;
+  accountSemanticsByAccountId?: Map<string, import("./canonical-ranker").TierSemanticsInput>;
 }): RankedCluster[] {
   const g = args.globalSignals ?? {};
   return args.clusters.map((cluster) => {
