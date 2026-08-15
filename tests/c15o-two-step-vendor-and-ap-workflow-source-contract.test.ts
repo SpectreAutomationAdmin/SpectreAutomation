@@ -332,24 +332,22 @@ describe("15O — left sidebar widened + product name allowed to wrap", () => {
   it("collapsed sidebar width unchanged at 72 px", () => {
     expect(GLOBALS_CSS).toMatch(/--spectre-sidebar-w-collapsed: 72px/);
   });
-  // Phase 4R UI-refinement (2026-08-15) — sidebar identity is now
-  // the PRODUCT (Spectre Automation), not the tenant. Tenant
-  // identity moved into the page-context header (admin/page.tsx
-  // `.spectre-mc-tenant-context`). The wrap-to-two-lines behaviour
-  // is retained under the new class name.
-  it("sidebar identity is the product name, not the tenant", () => {
+  // Phase 4R UI-refinement rev-2 (2026-08-15) — sidebar identity
+  // is the PRODUCT (SPECTRE / AUTOMATION), rendered as a two-line
+  // eyebrow that preserves the pre-Phase-4R eyebrow styling
+  // (uppercase, small, letter-spaced, muted). Tenant identity
+  // lives in the application header rail (HeaderContextRail).
+  it("sidebar identity is the two-line SPECTRE / AUTOMATION eyebrow", () => {
     const idBlock = SIDEBAR.slice(SIDEBAR.indexOf("Identity block"), SIDEBAR.indexOf("Search entry"));
     expect(idBlock).not.toMatch(/leading-tight truncate/);
-    expect(idBlock).toMatch(/spectre-sidebar-product-name/);
     expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name"/);
-    expect(idBlock).toMatch(/Spectre Automation/);
-    // Must NOT re-emit the retired SPECTRE eyebrow / clubName combo.
+    // Both lines share the eyebrow treatment.
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name-line-1"/);
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name-line-2"/);
+    expect(idBlock).toMatch(/>\s*SPECTRE\s*</);
+    expect(idBlock).toMatch(/>\s*AUTOMATION\s*</);
+    // Retired shapes MUST NOT re-appear.
     expect(idBlock).not.toMatch(/data-testid="spectre-sidebar-club-name"/);
-    expect(idBlock).not.toMatch(/tracking-\[0\.14em\][^}]*Spectre\s*</);
-  });
-  it("CSS defines a 2-line clamp for the product name", () => {
-    const rule = GLOBALS_CSS.slice(GLOBALS_CSS.indexOf(".spectre-sidebar-product-name"));
-    expect(rule).toMatch(/-webkit-line-clamp: 2/);
-    expect(rule).toMatch(/word-break: break-word/);
+    expect(idBlock).not.toMatch(/Coulee Ridge/);
   });
 });

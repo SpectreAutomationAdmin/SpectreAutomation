@@ -106,6 +106,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           userName={user.name}
           userRole={user.role}
           settingsHref="/app/admin/settings"
+          tenantName={clubName}
         />
       }
       spectreClubAccentStyle={spectreClubAccentStyle}

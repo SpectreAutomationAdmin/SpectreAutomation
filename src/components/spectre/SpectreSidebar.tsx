@@ -154,22 +154,37 @@ export function SpectreSidebar({
         </div>
         {!collapsed && (
           <div className="min-w-0">
-            {/* Phase 4R UI-refinement (2026-08-15) — the persistent
-                sidebar identifies the PRODUCT (Spectre Automation),
-                not the current tenant. The tenant/club identity now
-                lives in the page-context header (see
-                src/app/app/admin/page.tsx §Header). One textual
-                rendering only — never `SPECTRE` eyebrow + `Spectre
-                Automation`, never product + club stacked. May wrap
-                naturally onto two lines on the 288 px sidebar; that
-                still constitutes one product name. */}
+            {/* Phase 4R UI-refinement rev-2 (2026-08-15) — the
+                persistent sidebar identifies the PRODUCT (Spectre
+                Automation), not the current tenant. Both words share
+                the previously-approved eyebrow treatment (uppercase,
+                small, letter-spaced, muted) and stack on two lines
+                so `AUTOMATION` sits directly beneath `SPECTRE`. This
+                intentionally preserves the pre-rev-2 eyebrow
+                elegance while stating the full product name. Tenant
+                identity now lives in the application header rail
+                (see src/components/spectre/HeaderContextRail.tsx).
+                No third line — never "SPECTRE Spectre Automation",
+                never a repeated wordmark. */}
             <div
-              className="text-[14px] font-semibold leading-tight spectre-sidebar-product-name"
-              style={{ color: "var(--spectre-text-primary)" }}
+              className="spectre-sidebar-product-name"
               data-testid="spectre-sidebar-product-name"
               title="Spectre Automation"
             >
-              Spectre Automation
+              <div
+                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
+                style={{ color: "var(--spectre-text-muted)" }}
+                data-testid="spectre-sidebar-product-name-line-1"
+              >
+                SPECTRE
+              </div>
+              <div
+                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
+                style={{ color: "var(--spectre-text-muted)" }}
+                data-testid="spectre-sidebar-product-name-line-2"
+              >
+                AUTOMATION
+              </div>
             </div>
           </div>
         )}

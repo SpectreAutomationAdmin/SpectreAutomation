@@ -528,6 +528,31 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-tab:focus-visible { outline: none;
    box-shadow: var(--spectre-shadow-focus);
    border-radius: 4px 4px 0 0; }
+  /* --- Header rail (tenant + breadcrumbs) -----------------------
+     Phase 4R UI-refinement rev-2 (2026-08-15) — the application
+     header now renders tenant identity BEFORE the breadcrumb chain
+     on the same layer. Tenant carries slightly more contextual
+     prominence than a breadcrumb crumb (primary ink, medium weight)
+     but stays restrained so it never competes with the page
+     greeting. A hairline vertical separator visually groups the
+     two without introducing badge/pill treatment. */
+  .spectre-header-rail {
+    display: flex; align-items: center; gap: 12px;
+    min-width: 0; flex: 1;
+  }
+  .spectre-header-rail-tenant {
+    font-size: var(--spectre-type-body-sm-size);
+    color: var(--spectre-text-primary);
+    font-weight: 500;
+    letter-spacing: 0.005em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 40ch;
+  }
+  .spectre-header-rail-sep {
+    width: 1px; height: 14px;
+    background: var(--spectre-border-hairline);
+    flex-shrink: 0;
+  }
   /* --- Breadcrumbs --------------------------------------------- */
   .spectre-crumbs {    display: flex;
    align-items: center;
@@ -837,18 +862,15 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
  * ================================================================ */
 
 @layer components {
-  /* --- Header line (greeting + sync) ----------------------------- */
-  /* Phase 4R UI-refinement (2026-08-15) — tenant identity moved
-     out of the greeting into its own context line rendered above.
-     `.spectre-mc-greeting .club` is retained but hidden as a
-     safety net: any consumer that still emits it will no longer
-     duplicate the tenant on the page. */
-  .spectre-mc-tenant-context {
-    font-size: 12px; line-height: 16px; font-weight: 500;
-    color: var(--spectre-text-muted);
-    letter-spacing: 0.01em;
-    margin-bottom: var(--spectre-space-1);
-  }
+  /* --- Header line (greeting + sync) -----------------------------
+     Phase 4R UI-refinement rev-2 (2026-08-15) — tenant identity was
+     briefly rendered as a `.spectre-mc-tenant-context` row above the
+     greeting; the founder relocated it into the application-header
+     rail (`.spectre-header-rail-tenant`) so the hierarchy reads
+     Tenant → Navigation → Page Content rather than
+     Navigation → Tenant → Page Content. `.spectre-mc-greeting .club`
+     stays hidden as a safety net for any legacy consumer that still
+     emits the club span. */
   .spectre-mc-header {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: var(--spectre-space-6); margin-bottom: var(--spectre-space-4);
