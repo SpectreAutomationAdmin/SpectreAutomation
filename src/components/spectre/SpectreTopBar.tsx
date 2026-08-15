@@ -32,16 +32,30 @@ type Props = {
 
 // Auto-derive crumbs from the current pathname when the caller does
 // not supply them. Segments in the pathname map to titlecase words;
-// `/app/admin/design-system/foo` → Home · Admin · Design System · Foo.
+// `/app/admin/design-system/foo` → App · Admin · Design System · Foo.
+//
+// Phase 4R UI-refinement (2026-08-15) — path-scoped label overrides.
+// The prior derivation prettified `admin` uniformly, so the exact
+// Mission Control route `/app/admin` rendered `App > Admin` even
+// though Mission Control is the actual page. Overrides let a specific
+// full path (or a segment at a specific depth) render a friendlier
+// leaf label without regressing sub-routes like /app/admin/members
+// (still `App > Admin > Members`).
+const PATH_LEAF_LABEL_OVERRIDES: Record<string, string> = {
+  "/app/admin": "Mission Control",
+  "/app/member": "Member Portal",
+};
 function deriveCrumbsFromPath(pathname: string): Crumb[] {
   const parts = pathname.split("/").filter(Boolean);
   const seen: string[] = [];
   return parts.map((part, i) => {
     seen.push(part);
+    const currentPath = "/" + seen.join("/");
     const isLast = i === parts.length - 1;
+    const override = isLast ? PATH_LEAF_LABEL_OVERRIDES[currentPath] : undefined;
     return {
-      label: prettify(part),
-      href: isLast ? undefined : "/" + seen.join("/"),
+      label: override ?? prettify(part),
+      href: isLast ? undefined : currentPath,
     };
   });
 }

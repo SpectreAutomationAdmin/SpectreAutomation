@@ -194,11 +194,15 @@ export function Sidebar({
   return (
     <aside className="w-64 shrink-0 border-r border-stone-200 bg-white min-h-screen">
       <div className="px-6 py-6 border-b border-stone-200">
-        {/* The "Spectre" wordmark is internal — club staff (admin) can
-            see who powers the platform, but members should be shielded
-            from the engine and just see their own club's identity. */}
-        <div className="text-xs uppercase tracking-widest text-stone-400">Spectre</div>
-        <div className="mt-1 font-serif text-lg leading-tight text-club-ink">{clubName}</div>
+        {/* Phase 4R UI-refinement (2026-08-15) — the persistent
+            sidebar identifies the PRODUCT (Spectre Automation), not
+            the current tenant. Tenant identity lives in the page-
+            context header instead (see admin/page.tsx §Header).
+            One rendering only — never `SPECTRE` eyebrow + `Spectre
+            Automation`, never product + club stacked. */}
+        <div className="font-serif text-lg leading-tight text-club-ink" data-testid="admin-sidebar-product-name">
+          Spectre Automation
+        </div>
         <div className="mt-2 text-xs text-stone-500">Administration</div>
       </div>
       <nav className="px-3 py-4 space-y-0.5">

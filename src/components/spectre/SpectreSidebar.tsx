@@ -154,26 +154,22 @@ export function SpectreSidebar({
         </div>
         {!collapsed && (
           <div className="min-w-0">
+            {/* Phase 4R UI-refinement (2026-08-15) — the persistent
+                sidebar identifies the PRODUCT (Spectre Automation),
+                not the current tenant. The tenant/club identity now
+                lives in the page-context header (see
+                src/app/app/admin/page.tsx §Header). One textual
+                rendering only — never `SPECTRE` eyebrow + `Spectre
+                Automation`, never product + club stacked. May wrap
+                naturally onto two lines on the 288 px sidebar; that
+                still constitutes one product name. */}
             <div
-              className="text-[10px] uppercase tracking-[0.14em] font-semibold"
-              style={{ color: "var(--spectre-text-muted)" }}
-            >
-              Spectre
-            </div>
-            {/* Sprint 3 · Checkpoint 15O — the club identity may wrap
-                to two lines so long names like "Coulee Ridge Golf &
-                Country Club" fit legibly on the widened 288px
-                sidebar. `truncate` was rejected because it silently
-                dropped "& Country Club". Line-clamp caps at two
-                lines so an unusually long identity still can't push
-                the search / nav below the fold. */}
-            <div
-              className="text-[13px] font-semibold leading-tight spectre-sidebar-club-name"
+              className="text-[14px] font-semibold leading-tight spectre-sidebar-product-name"
               style={{ color: "var(--spectre-text-primary)" }}
-              data-testid="spectre-sidebar-club-name"
-              title={clubName}
+              data-testid="spectre-sidebar-product-name"
+              title="Spectre Automation"
             >
-              {clubName}
+              Spectre Automation
             </div>
           </div>
         )}

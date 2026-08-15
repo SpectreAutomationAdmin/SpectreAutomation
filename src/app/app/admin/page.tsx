@@ -87,11 +87,25 @@ export default async function MissionControlPage({
 
   return (
     <div>
+      {/* Phase 4R UI-refinement (2026-08-15) — tenant identity is
+          now context (small line above the greeting) rather than a
+          duplicated hero heading. The greeting reads only
+          "Good {morning/afternoon/evening}, {firstName}." The
+          tenant name comes from the active club branding — no
+          hard-coded Coulee Ridge literal — so the same treatment
+          works for every Spectre customer. */}
+      {clubName ? (
+        <p
+          className="spectre-mc-tenant-context"
+          data-testid="spectre-mc-tenant-context"
+        >
+          {clubName}
+        </p>
+      ) : null}
       {/* Header line — greeting + date/sync ---------------------- */}
       <div className="spectre-mc-header">
         <h1 className="spectre-mc-greeting">
           {greetingWord}, {firstName}.
-          {clubName ? <span className="club">{clubName}</span> : null}
         </h1>
         <div className="spectre-mc-header-meta">
           <span className="date">{dateLabel} · {timeLabel}</span>

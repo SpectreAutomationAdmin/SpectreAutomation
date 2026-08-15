@@ -324,7 +324,7 @@ describe("15O — vendor timeline has a hard lower bound at Vendor.createdAt", (
 // Sidebar width (Phase 11)
 // ---------------------------------------------------------------------------
 
-describe("15O — left sidebar widened + club name allowed to wrap", () => {
+describe("15O — left sidebar widened + product name allowed to wrap", () => {
   it("expanded sidebar width increased from 248 to 288 px", () => {
     expect(GLOBALS_CSS).toMatch(/--spectre-sidebar-w-expanded: 288px/);
     expect(GLOBALS_CSS).not.toMatch(/--spectre-sidebar-w-expanded: 248px/);
@@ -332,17 +332,23 @@ describe("15O — left sidebar widened + club name allowed to wrap", () => {
   it("collapsed sidebar width unchanged at 72 px", () => {
     expect(GLOBALS_CSS).toMatch(/--spectre-sidebar-w-collapsed: 72px/);
   });
-  it("club identity div drops `truncate` in favour of a two-line clamp", () => {
-    // The pre-15O `truncate` on the club name div is gone.
+  // Phase 4R UI-refinement (2026-08-15) — sidebar identity is now
+  // the PRODUCT (Spectre Automation), not the tenant. Tenant
+  // identity moved into the page-context header (admin/page.tsx
+  // `.spectre-mc-tenant-context`). The wrap-to-two-lines behaviour
+  // is retained under the new class name.
+  it("sidebar identity is the product name, not the tenant", () => {
     const idBlock = SIDEBAR.slice(SIDEBAR.indexOf("Identity block"), SIDEBAR.indexOf("Search entry"));
     expect(idBlock).not.toMatch(/leading-tight truncate/);
-    expect(idBlock).toMatch(/spectre-sidebar-club-name/);
-    expect(idBlock).toMatch(/data-testid="spectre-sidebar-club-name"/);
-    // Full name preserved as title attr for tooltip fallback.
-    expect(idBlock).toMatch(/title=\{clubName\}/);
+    expect(idBlock).toMatch(/spectre-sidebar-product-name/);
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name"/);
+    expect(idBlock).toMatch(/Spectre Automation/);
+    // Must NOT re-emit the retired SPECTRE eyebrow / clubName combo.
+    expect(idBlock).not.toMatch(/data-testid="spectre-sidebar-club-name"/);
+    expect(idBlock).not.toMatch(/tracking-\[0\.14em\][^}]*Spectre\s*</);
   });
-  it("CSS defines a 2-line clamp for the club name", () => {
-    const rule = GLOBALS_CSS.slice(GLOBALS_CSS.indexOf(".spectre-sidebar-club-name"));
+  it("CSS defines a 2-line clamp for the product name", () => {
+    const rule = GLOBALS_CSS.slice(GLOBALS_CSS.indexOf(".spectre-sidebar-product-name"));
     expect(rule).toMatch(/-webkit-line-clamp: 2/);
     expect(rule).toMatch(/word-break: break-word/);
   });
