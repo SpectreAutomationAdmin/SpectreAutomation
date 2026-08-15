@@ -16,6 +16,7 @@ import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { IconChevronRight } from "./icons";
 import { deriveBreadcrumbs, type Crumb } from "@/lib/chrome/breadcrumb";
+import { useBreadcrumbLabels } from "./breadcrumb-labels";
 
 type Props = {
   tenantName?: string | null;
@@ -24,7 +25,16 @@ type Props = {
 
 export function HeaderContextRail({ tenantName, breadcrumbs }: Props) {
   const pathname = usePathname() ?? "";
-  const derivedCrumbs = useMemo(() => deriveBreadcrumbs(pathname), [pathname]);
+  // Phase 4R rev-5 (2026-08-15) — dynamic entity labels (vendor.legalName,
+  // invoice.number, etc.) are supplied by the owning page via
+  // <RegisterBreadcrumbLabel/> and read here through the shared
+  // provider. Missing labels fall back to the "Detail" placeholder
+  // in `deriveBreadcrumbs` — a cuid is NEVER shown to the user.
+  const dynamicLabels = useBreadcrumbLabels();
+  const derivedCrumbs = useMemo(
+    () => deriveBreadcrumbs(pathname, { dynamicLabels }),
+    [pathname, dynamicLabels],
+  );
   const crumbs = breadcrumbs ?? derivedCrumbs;
 
   return (

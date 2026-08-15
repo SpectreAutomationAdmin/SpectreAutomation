@@ -13,6 +13,7 @@ import Link from "next/link";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { loadVendorTimeline } from "@/lib/vendor-timeline";
+import { RegisterBreadcrumbLabel } from "@/components/spectre/breadcrumb-labels";
 
 export default async function VendorTimelinePage({ params }: { params: { id: string } }) {
   const principal = await getCurrentPrincipal();
@@ -22,8 +23,16 @@ export default async function VendorTimelinePage({ params }: { params: { id: str
   if (!timeline) notFound();
   const { header, events } = timeline;
 
+  const vendorDisplayName = header?.operatingName ?? header?.legalName ?? null;
   return (
     <div className="p-8 max-w-[1200px] mx-auto" data-testid="vendor-timeline-page">
+      {/* Phase 4R rev-5 (2026-08-15) — register the vendor's display
+          name against its cuid so the breadcrumb renders
+          "App > AP > Vendors > Microsoft Corporation > Timeline"
+          instead of leaking the internal id. */}
+      {vendorDisplayName ? (
+        <RegisterBreadcrumbLabel id={params.id} label={vendorDisplayName} />
+      ) : null}
       <div className="mb-6 flex items-start justify-between">
         <div>
           <div className="text-[11px] uppercase tracking-[0.10em] text-[var(--spectre-text-secondary)]">Vendor timeline</div>
