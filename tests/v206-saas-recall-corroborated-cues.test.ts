@@ -32,9 +32,9 @@ function mkLine(description: string, opts: Partial<CanonicalLineItem> = {}): Can
   return {
     description,
     role: "PRIMARY_PURCHASE",
-    amount: null,
+    extension: 0,
     quantity: null,
-    unitCost: null,
+    unitPrice: null,
     ...opts,
   } as CanonicalLineItem;
 }
@@ -266,10 +266,10 @@ describe("v206 SaaS-recall — real-200824-shaped regression fixture (§6)", () 
     // descriptions. Mirrors the SHAPE of #200824: multiple SaaS plan
     // lines with commitment cadence, small dollar total.
     const items = [
-      mkLine("Business Standard - 1 Year Commit Paid Monthly.", { quantity: "26", unitCost: "17.85", amount: "464.10" }),
-      mkLine("Business Basic - 1 Year Commit Paid Monthly.", { quantity: "5", unitCost: "8.51", amount: "42.55" }),
-      mkLine("Business Premium - Monthly Commit.", { quantity: "5", unitCost: "35.76", amount: "178.80" }),
-      mkLine("Visio Plan 2 - 1 Year Commit Paid Monthly.", { quantity: "2", unitCost: "21.42", amount: "42.84" }),
+      mkLine("Business Standard - 1 Year Commit Paid Monthly.", { quantity: 26, unitPrice:17.85, extension:464.10 }),
+      mkLine("Business Basic - 1 Year Commit Paid Monthly.", { quantity: 5, unitPrice:8.51, extension:42.55 }),
+      mkLine("Business Premium - Monthly Commit.", { quantity: 5, unitPrice:35.76, extension:178.80 }),
+      mkLine("Visio Plan 2 - 1 Year Commit Paid Monthly.", { quantity: 2, unitPrice:21.42, extension:42.84 }),
     ];
     const decision = resolveEconomicPurpose({
       canonicalLineItems: items,

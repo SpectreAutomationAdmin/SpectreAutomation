@@ -1258,7 +1258,7 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   }) : null;
   const workflowState = noCoa
     ? "CHART_OF_ACCOUNTS_REQUIRED" as const
-    : mapPhase3ToLegacyDisplayState(phase3Decision);
+    : mapPhase3ToLegacyDisplayState(phase3Decision, analysis);
   const workflowReason = noCoa
     ? "GL coding unavailable — no chart of accounts is loaded for this club. Import the club's chart of accounts before approving any AP posting."
     : composeWorkflowReasonFromDecision(phase3Decision, analysis);
@@ -1810,6 +1810,7 @@ async function resolvePaymentTerms(args: {
  *  "Ready for approval" (no automatic posting). */
 export function mapPhase3ToLegacyDisplayState(
   d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
+  analysis?: ApAnalyseResult | null,
 ): ApInvoiceCardIntelligence["workflowState"] {
   if (!d) return "NEEDS_JUDGMENT";
   // Duplicate is a special-case label that pre-dates Phase 3.
@@ -1824,20 +1825,60 @@ export function mapPhase3ToLegacyDisplayState(
     case "READY_FOR_APPROVAL":
       return "READY_FOR_APPROVAL";
     case "NEEDS_JUDGMENT": {
-      // Preserve the specific VENDOR_MATCH_REQUIRED label when the
-      // ONLY blocker is the vendor. Otherwise the general
-      // NEEDS_JUDGMENT pill is truthful.
       const codes = d.blockers.map((b) => b.code);
       const onlyVendor =
         codes.length > 0 && codes.every((c) => c === "VENDOR_UNRESOLVED");
       if (onlyVendor) return "VENDOR_MATCH_REQUIRED";
-      // Missing information label preserved when critical extraction
-      // facts are absent (supplier / payable reference / total).
-      const missingCore =
-        codes.includes("SUPPLIER_UNRESOLVED") ||
-        codes.includes("PAYABLE_REFERENCE_MISSING") ||
-        codes.includes("GROSS_TOTAL_UNRESOLVED");
-      if (missingCore) return "MISSING_INFORMATION";
+
+      // v206 Work Intake state correction (2026-08-15). Founder direction
+      // §2/§3: MISSING_INFORMATION is reserved for cases where required
+      // invoice facts are ACTUALLY ABSENT. A missing vendor RECORD (with
+      // supplier name + coding + invoice number + total all present) is a
+      // workflow/setup task ("Create vendor & post"), not an information
+      // deficiency. A low-confidence-numeric blocker on a value that IS
+      // present is a review issue, not a request-information trigger.
+      //
+      // Previous behaviour: any SUPPLIER_UNRESOLVED / PAYABLE_REFERENCE_MISSING
+      // / GROSS_TOTAL_UNRESOLVED blocker → MISSING_INFORMATION, regardless
+      // of whether the extracted value actually existed. That collapsed
+      // Club Support #220824 (supplier=Club Support Inc extracted, invoice
+      // number=220824 extracted, total=$778.16 extracted, GL=6071
+      // Subscriptions committed, only missing = Vendor row) into a
+      // "Request information" card that asked the founder to email the
+      // supplier for information Spectre already had.
+      const extraction = analysis?.extraction;
+      const gl = analysis?.gl;
+      const supplierNameKnown = !!extraction?.vendor?.guessedName?.trim();
+      const invoiceRefKnown = !!extraction?.invoiceNumber?.trim();
+      const grossTotalKnown = extraction?.total != null;
+      const glCodingKnown = !!gl?.accountNumber;
+
+      // A blocker only signals an actual info absence when the underlying
+      // extracted value is missing. If the value is present but confidence
+      // is below the numeric floor, it's a review/verification issue, not
+      // an information gap.
+      const actualInfoAbsent =
+        (codes.includes("SUPPLIER_UNRESOLVED") && !supplierNameKnown) ||
+        (codes.includes("PAYABLE_REFERENCE_MISSING") && !invoiceRefKnown) ||
+        (codes.includes("GROSS_TOTAL_UNRESOLVED") && !grossTotalKnown);
+      if (actualInfoAbsent) return "MISSING_INFORMATION";
+
+      // Missing-vendor + core-facts-and-GL-all-known → VENDOR_MATCH_REQUIRED
+      // (Create vendor & post). The vendor blocker becomes the primary
+      // remaining workflow step.
+      if (
+        codes.includes("VENDOR_UNRESOLVED")
+        && supplierNameKnown
+        && invoiceRefKnown
+        && grossTotalKnown
+        && glCodingKnown
+      ) {
+        return "VENDOR_MATCH_REQUIRED";
+      }
+
+      // Everything else with residual blockers (GL absent, allocation
+      // variance, tax unreconciled with vendor present, etc.) is a
+      // human-judgment condition on existing information.
       return "NEEDS_JUDGMENT";
     }
     default:
@@ -1850,7 +1891,7 @@ export function mapPhase3ToLegacyDisplayState(
  *  card's short-sentence style. */
 export function composeWorkflowReasonFromDecision(
   d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
-  _analysis: ApAnalyseResult | null,
+  analysis: ApAnalyseResult | null,
 ): string {
   if (!d) return "Analysis unavailable — open review to inspect.";
   if (d.state === "EXTRACTION_PENDING") {
@@ -1862,7 +1903,26 @@ export function composeWorkflowReasonFromDecision(
   if (d.state === "READY_FOR_APPROVAL" || d.state === "AUTO_APPROVAL_ELIGIBLE") {
     return "All required dimensions cleared. Human sign-off remaining.";
   }
-  // NEEDS_JUDGMENT — surface the primary blocker.
+  // v206 Work Intake state correction (2026-08-15). When the display
+  // state is VENDOR_MATCH_REQUIRED, the primary blocker sentence
+  // ("supplier is not resolved" etc.) is not the founder-actionable
+  // reason — the workflow step is vendor creation. Surface that
+  // directly so the narrative aligns with the primary action button.
+  const codes = d.blockers.map((b) => b.code);
+  const supplierNameKnown = !!analysis?.extraction?.vendor?.guessedName?.trim();
+  const invoiceRefKnown = !!analysis?.extraction?.invoiceNumber?.trim();
+  const grossTotalKnown = analysis?.extraction?.total != null;
+  const glCodingKnown = !!analysis?.gl?.accountNumber;
+  const vendorMatchIsPrimary =
+    codes.includes("VENDOR_UNRESOLVED")
+    && supplierNameKnown && invoiceRefKnown && grossTotalKnown && glCodingKnown
+    && !(codes.includes("SUPPLIER_UNRESOLVED") && !supplierNameKnown)
+    && !(codes.includes("PAYABLE_REFERENCE_MISSING") && !invoiceRefKnown)
+    && !(codes.includes("GROSS_TOTAL_UNRESOLVED") && !grossTotalKnown);
+  if (vendorMatchIsPrimary) {
+    return "Supplier identified from invoice but no matching vendor record exists — create the vendor to complete posting.";
+  }
+  // NEEDS_JUDGMENT / MISSING_INFORMATION — surface the primary blocker.
   const primary = d.blockers[0];
   if (primary) return primary.message;
   return "Reviewer judgment required.";
