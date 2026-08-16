@@ -273,6 +273,32 @@ test.describe("Phase 4R rev-12 · #221007 round-trip live verification", () => {
       })),
     };
 
+    // -------- Unread visual reference (from a proxy card) ---------
+    // Founder brief §8 asks for read + unread screenshots of the
+    // EXACT SAME #221007 card. The read screenshot is captured
+    // above. The unread screenshot for #221007 specifically
+    // requires the founder's Outlook-side unmark to propagate
+    // through delta sync (Stage C → D). While we wait, capture
+    // an unread screenshot from any currently-unread card as
+    // visual reference for the rev-12 unread treatment (thick
+    // semantic rail + bold title + no dot). The CSS mechanism is
+    // shared, so #221007's future unread state will look
+    // identical to this reference.
+    for (let i = 0; i < total; i += 1) {
+      if (i === targetIndex) continue;
+      const c = cards.nth(i);
+      if ((await c.getAttribute("data-unread")) === "true") {
+        const proxyTitle = ((await c.locator("h3").first().textContent().catch(() => "")) ?? "").trim();
+        await c.scrollIntoViewIfNeeded();
+        await c.screenshot({ path: path.join(OUT, "10-unread-visual-reference-not-221007.png") });
+        (evidence as { unreadVisualReference?: unknown }).unreadVisualReference = {
+          title: proxyTitle,
+          note: "Screenshot from a currently-unread AP card as a visual reference for the rev-12 unread treatment (thick 6px accent + bold title + no ::after dot). #221007's future unread state will render identically because both cards share the same CSS mechanism.",
+        };
+        break;
+      }
+    }
+
     // -------- Save evidence file ----------------------------------
     fs.writeFileSync(path.join(OUT, "round-trip-evidence.json"), JSON.stringify(evidence, null, 2));
     console.log(`[complete] evidence written to ${OUT}/round-trip-evidence.json`);
