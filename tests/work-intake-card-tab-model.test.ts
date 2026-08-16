@@ -171,86 +171,131 @@ describe("CSS — retired accordion styles gone, new tab-driven styles present",
   });
 });
 
-describe("Rev-8 CSS — tab strip forms the top edge of the card", () => {
-  // Rev-8 (2026-08-15): the tab strip sits flush against the
-  // card's top border, forms the visual top edge, and the card's
-  // top padding is retired so the tabs are not "inside" a padded
-  // rectangle. These pins guarantee a future refactor cannot
-  // silently reintroduce the pre-rev-8 padded look.
-  it(".spectre-mc-item has no top padding (tabs sit at the top edge)", () => {
-    // `padding: 0 20px 16px 20px` — the top value must be 0.
-    // Match on the four-value shorthand where the first value is 0.
-    const block = CSS.slice(CSS.indexOf(".spectre-mc-item {"));
-    // Take just the .spectre-mc-item ruleset (first `}` after the selector).
-    const rule = block.slice(0, block.indexOf("}"));
-    expect(rule).toMatch(/padding:\s*0\s+20px\s+16px\s+20px/);
-  });
-  it(".spectre-mc-item has overflow:hidden so tab strip is clipped by the top corners", () => {
-    const block = CSS.slice(CSS.indexOf(".spectre-mc-item {"));
-    const rule = block.slice(0, block.indexOf("}"));
-    expect(rule).toMatch(/overflow:\s*hidden/);
-  });
-  it("no later cascade rule silently reintroduces .spectre-mc-item padding-top > 0", () => {
-    // Regression guard for the 15I-2 density pass at ~line 1505 that
-    // used to set `padding-top: 14px; padding-bottom: 14px` and quietly
-    // undid rev-8's flush-to-top-edge padding. Any future
-    // `.spectre-mc-item { padding-top: <N>px }` override must land at 0.
-    const rx = /\.spectre-mc-item\s*\{[^}]*?padding-top:\s*(\d+)px/g;
-    let m: RegExpExecArray | null;
-    const violations: number[] = [];
-    while ((m = rx.exec(CSS)) !== null) {
-      const px = Number(m[1]);
-      if (px > 0) violations.push(px);
-    }
-    expect(violations, `every .spectre-mc-item padding-top override must be 0; found ${JSON.stringify(violations)}`).toEqual([]);
-  });
-  it(".spectre-mc-tabs base margin is scoped away from the --card variant", () => {
-    // The base .spectre-mc-tabs rule and the .spectre-mc-tabs--card
-    // rule have equal specificity, so the base's later margin used
-    // to leak an 8px margin-top onto the card strip and push it
-    // away from the top edge. Rev-8 pins the :not() scoping.
-    expect(CSS).toMatch(/\.spectre-mc-tabs:not\(\.spectre-mc-tabs--card\)\s*\{[^}]*margin:/);
-  });
-  it(".spectre-mc-tabs--card bleeds horizontally to the card's inner edges via negative margins", () => {
-    const idx = CSS.indexOf(".spectre-mc-tabs--card {");
-    const rule = CSS.slice(idx, idx + 500);
-    // margin: 0 -20px 12px -20px  →  horizontal negatives reach the card's border.
-    expect(rule).toMatch(/margin:\s*0\s+-20px\s+12px\s+-20px/);
-  });
-});
-
-describe("Rev-8 CSS — active tab merges into the body (tabbed-document feel)", () => {
-  it("active tab paints the surface colour over the strip's divider via box-shadow", () => {
-    // `box-shadow: 0 1px 0 0 var(--spectre-surface)` — a 1px surface-coloured
-    // strip immediately below the tab that "erases" the divider under it.
-    const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab--active");
-    expect(idx, "active-tab modifier ruleset must exist").toBeGreaterThan(0);
-    const rule = CSS.slice(idx, idx + 400);
-    expect(rule).toMatch(/box-shadow:\s*0\s+1px\s+0\s+0\s+var\(--spectre-surface\)/);
-    // AND the active tab renders on the card's surface colour so the
-    // "attached to body" illusion holds.
-    expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
-  });
-});
-
-describe("Rev-8 CSS — stable baseline height across Summary ↔ Attachments", () => {
-  it(".spectre-mc-tab-body min-height is the rev-8 380px baseline (not the retired 140px)", () => {
-    const idx = CSS.indexOf(".spectre-mc-tab-body");
+describe("Rev-9 CSS — outer article is a bare wrapper; visible chrome lives on the frame", () => {
+  // Rev-9 (2026-08-15) — the founder rejected the rev-8 "grey
+  // rectangle with a full-width tab band on top" treatment. The
+  // outer article now carries NO visible border, NO background,
+  // NO padding, NO rounded rectangle. The visible card chrome
+  // is on `.spectre-mc-item-frame`, and the tabs float ABOVE
+  // that frame at compact rev-7 proportions.
+  it(".spectre-mc-item outer wrapper has no visible border / bg / padding", () => {
+    const idx = CSS.indexOf(".spectre-mc-item {");
     expect(idx).toBeGreaterThan(0);
-    // Find the FIRST .spectre-mc-tab-body ruleset (the base one).
-    const rule = CSS.slice(idx, idx + 400);
-    // Baseline must be at least 300px so Summary content fits without
-    // Attachments causing a visual shrink. The current pin is 380px.
-    const match = rule.match(/min-height:\s*(\d+)px/);
-    expect(match, "min-height must be defined on .spectre-mc-tab-body").toBeTruthy();
-    const minHeight = Number(match![1]);
-    expect(minHeight, "rev-8 baseline is ≥ 300px so Summary ↔ Attachments do not shift the feed")
-      .toBeGreaterThanOrEqual(300);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/background:\s*transparent/);
+    expect(rule).toMatch(/border:\s*0/);
+    expect(rule).toMatch(/padding:\s*0/);
+    // Regression guards: rev-8 chrome must NOT reappear.
+    expect(rule).not.toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
+    expect(rule).not.toMatch(/box-shadow:\s*var\(--spectre-shadow-subtle\)/);
+    expect(rule).not.toMatch(/overflow:\s*hidden/);
   });
-  it("no screenshot-specific hard-coded card height (no `height: 282px`)", () => {
-    // Guard against reintroducing a single-viewport magic number
-    // to fake stable height.
-    expect(CSS).not.toMatch(/\.spectre-mc-item\b[^}]*\bheight:\s*282px/);
-    expect(CSS).not.toMatch(/\.spectre-mc-tab-body\b[^}]*\bheight:\s*282px/);
+  it(".spectre-mc-item-frame carries the visible chrome (border, bg, shadow, radius, padding, left-accent)", () => {
+    const idx = CSS.indexOf(".spectre-mc-item-frame {");
+    expect(idx, ".spectre-mc-item-frame ruleset must exist").toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
+    expect(rule).toMatch(/border:\s*1px solid var\(--spectre-border-hairline\)/);
+    expect(rule).toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
+    expect(rule).toMatch(/box-shadow:\s*var\(--spectre-shadow-subtle\)/);
+    expect(rule).toMatch(/padding:\s*\d+px \d+px/);
+    expect(rule).toMatch(/border-left-width:\s*3px/);
+  });
+  it("state-variant left-accent binds to the FRAME, not the invisible article", () => {
+    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
+    // Rev-8's pattern of setting the accent on the invisible article must not recur.
+    expect(CSS).not.toMatch(/\.spectre-mc-item\.judgment\s*\{\s*border-left-color/);
+  });
+});
+
+describe("Rev-9 CSS — tabs are compact rev-7-style, self-sizing, floating above the frame", () => {
+  it("no full-width grey rail — .spectre-mc-tabs--card is inline-flex, not stretched", () => {
+    const idx = CSS.indexOf(".spectre-mc-tabs--card {");
+    expect(idx).toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/display:\s*inline-flex/);
+    // Regression guards against rev-8 grey-rail treatment.
+    expect(rule).not.toMatch(/background:\s*var\(--spectre-surface-hover/);
+    expect(rule).not.toMatch(/margin:\s*0\s+-20px/);
+    expect(rule).not.toMatch(/border-bottom:\s*1px solid/);
+    // Sits 12 px in from the card's left edge (clears the accent gutter).
+    expect(rule).toMatch(/margin:\s*0\s+0\s+-1px\s+12px/);
+  });
+  it("each tab is compact — small font, tight padding, self-sized to its label", () => {
+    const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab {");
+    expect(idx).toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    // Rev-7-style proportions: font ≤ 12.5 px, horizontal padding ≤ 12 px.
+    const fontMatch = rule.match(/font-size:\s*([\d.]+)px/);
+    expect(fontMatch).toBeTruthy();
+    expect(Number(fontMatch![1]), "compact rev-7 font-size").toBeLessThanOrEqual(12.5);
+    const padMatch = rule.match(/padding:\s*(\d+)px\s+(\d+)px/);
+    expect(padMatch, "explicit padding pin").toBeTruthy();
+    expect(Number(padMatch![2]), "horizontal padding ≤ 12 px").toBeLessThanOrEqual(12);
+    // Individual tab has its own border — that's what draws each
+    // tab as a discrete protrusion, not a flat item on a rail.
+    expect(rule).toMatch(/border:\s*1px solid var\(--spectre-border-hairline\)/);
+    // Rounded top corners only — the tab's bottom edge merges
+    // seamlessly with the frame border below.
+    expect(rule).toMatch(/border-top-left-radius:\s*\d+px/);
+    expect(rule).toMatch(/border-top-right-radius:\s*\d+px/);
+    expect(rule).toMatch(/border-bottom-left-radius:\s*0/);
+    expect(rule).toMatch(/border-bottom-right-radius:\s*0/);
+  });
+  it("active tab shares the frame surface and overlaps the frame's top border", () => {
+    const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab--active");
+    expect(idx).toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
+    expect(rule).toMatch(/box-shadow:\s*0\s+1px\s+0\s+0\s+var\(--spectre-surface\)/);
+  });
+});
+
+describe("Rev-9 CSS — no global min-height on tab bodies", () => {
+  it("the retired rev-8 global 380px baseline is gone", () => {
+    // Rev-9 uses a per-card measured baseline applied via INLINE
+    // style on `.spectre-mc-item-frame`, not a CSS rule. A global
+    // min-height on `.spectre-mc-tab-body` (or the frame) would be
+    // the wrong shape — it would force one baseline on every card.
+    const bodyIdx = CSS.indexOf(".spectre-mc-tab-body");
+    if (bodyIdx > 0) {
+      const rule = CSS.slice(bodyIdx, bodyIdx + CSS.slice(bodyIdx).indexOf("}"));
+      expect(rule, "no global min-height on .spectre-mc-tab-body").not.toMatch(/min-height:\s*\d+px/);
+    }
+    const frameIdx = CSS.indexOf(".spectre-mc-item-frame {");
+    const frameRule = CSS.slice(frameIdx, frameIdx + CSS.slice(frameIdx).indexOf("}"));
+    expect(frameRule, "no static min-height on .spectre-mc-item-frame").not.toMatch(/min-height:\s*\d+px/);
+  });
+});
+
+describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () => {
+  it("EmailIntakeCard imports useLayoutEffect + useRef for the measurement hook", () => {
+    expect(CARD).toMatch(/import\s*\{[^}]*useLayoutEffect[^}]*\}\s*from\s*["']react["']/);
+    expect(CARD).toMatch(/import\s*\{[^}]*useRef[^}]*\}\s*from\s*["']react["']/);
+  });
+  it("EmailIntakeCard declares summaryRef + summaryBaseline state", () => {
+    expect(CARD).toMatch(/const summaryRef\s*=\s*useRef</);
+    expect(CARD).toMatch(/const\s*\[\s*summaryBaseline\s*,\s*setSummaryBaseline\s*\]\s*=\s*useState/);
+  });
+  it("EmailIntakeCard wires a ResizeObserver keyed to tab === 'spectre-summary'", () => {
+    expect(CARD).toMatch(/if \(tab !== "spectre-summary"\) return;/);
+    expect(CARD).toMatch(/new ResizeObserver/);
+    expect(CARD).toMatch(/obs\.observe\(el\);/);
+    expect(CARD).toMatch(/obs\.disconnect\(\);/);
+  });
+  it("frame receives the measured baseline as inline min-height only when a non-Summary tab is active", () => {
+    // Applying it during Summary would freeze Summary against legitimate
+    // shrinks — the anti-shrink invariant is only meaningful for
+    // Attachments/Conversation.
+    expect(CARD).toMatch(/tab !== "spectre-summary" && summaryBaseline !== null/);
+    expect(CARD).toMatch(/minHeight:\s*`\$\{summaryBaseline\}px`/);
+  });
+  it("frame div carries a data-testid so Playwright can measure it directly", () => {
+    expect(CARD).toMatch(/className="spectre-mc-item-frame"[\s\S]{0,80}data-testid="card-frame"/);
+  });
+  it("summaryRef is attached to the Summary body only (measures Summary — not the frame)", () => {
+    expect(CARD).toMatch(/<div ref=\{summaryRef\} className="spectre-mc-item-body" data-testid="card-summary">/);
   });
 });

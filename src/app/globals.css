@@ -1116,34 +1116,52 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Feed item ---------------------------------------------- */
+  /* Phase 4R rev-9 (2026-08-15) — the outer <article> is a BARE
+     wrapper. It carries no visible border, no background, no
+     shadow, no rounded rectangle. All visible card chrome lives
+     on `.spectre-mc-item-frame` below. This is what allows the
+     tabs to sit ABOVE the frame and physically form the top
+     boundary rather than sitting inside a padded rectangle. */
   .spectre-mc-item {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin-bottom: var(--spectre-space-3);
+  }
+  /* Rev-9 frame — the visible card. Border + rounded corners +
+     shadow + left-accent + interior padding live here. The tabs
+     above (see .spectre-mc-tabs--card) overlap the frame's top
+     border via a -1px bottom margin so the active tab merges into
+     the frame surface below it. */
+  .spectre-mc-item-frame {
     background: var(--spectre-surface);
     border: 1px solid var(--spectre-border-hairline);
     border-radius: var(--spectre-radius-panel);
     box-shadow: var(--spectre-shadow-subtle);
-    margin-bottom: var(--spectre-space-3);
-    /* Phase 4R rev-8 (2026-08-15) — top padding removed so the
-       CardTabBar (below) sits flush against the card's top border,
-       forming the visual top edge of the card. Side + bottom
-       padding preserved for the body's interior rhythm. */
-    padding: 0 20px 16px 20px;
+    padding: 14px 20px;
     border-left-width: 3px;
     border-left-color: var(--spectre-border-strong);
-    /* Clip the CardTabBar's bleed-to-edges margin against the
-       card's rounded top corners so tabs never appear to overflow. */
-    overflow: hidden;
+    /* Prevent the rounded top-left corner from clipping the active
+       tab that intentionally overlaps the frame's top edge. */
+    position: relative;
     transition: border-color var(--spectre-motion-slow) var(--spectre-ease),
                 box-shadow  var(--spectre-motion-slow) var(--spectre-ease);
   }
-  .spectre-mc-item:hover {
+  .spectre-mc-item:hover .spectre-mc-item-frame {
     border-color: var(--spectre-border-strong);
     box-shadow: var(--spectre-shadow-elevated);
   }
-  .spectre-mc-item.judgment { border-left-color: var(--spectre-status-warning); }
-  .spectre-mc-item.approval { border-left-color: var(--spectre-status-success); }
-  .spectre-mc-item.comm     { border-left-color: var(--spectre-status-info); }
-  .spectre-mc-item.done     { border-left-color: var(--spectre-status-success); opacity: 0.86; padding: 12px 20px; }
-  .spectre-mc-item.info-item{ border-left-color: var(--spectre-border-strong); padding: 12px 20px; }
+  /* Semantic left-accent binds to the frame via the article's state
+     class. This keeps the accent inside the visible card chrome. */
+  .spectre-mc-item.judgment .spectre-mc-item-frame { border-left-color: var(--spectre-status-warning); }
+  .spectre-mc-item.approval .spectre-mc-item-frame { border-left-color: var(--spectre-status-success); }
+  .spectre-mc-item.comm     .spectre-mc-item-frame { border-left-color: var(--spectre-status-info); }
+  /* Rev-9 — state variants apply left-accent + opacity to the
+     frame, not the (invisible) article. Padding overrides are gone
+     because the frame carries the padding. */
+  .spectre-mc-item.done     { opacity: 0.86; }
+  .spectre-mc-item.done     .spectre-mc-item-frame { border-left-color: var(--spectre-status-success); padding: 10px 20px; }
+  .spectre-mc-item.info-item .spectre-mc-item-frame { border-left-color: var(--spectre-border-strong); padding: 10px 20px; }
 
   .spectre-mc-item-head {
     display: flex; align-items: center; gap: 10px;
@@ -1402,44 +1420,52 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Sprint 3 Checkpoint 15I — Variant D card interaction ---- */
-  /* Phase 4R rev-7 (2026-08-15) — every Work Intake card is now
-     tab-driven. Phase 4R rev-8 (2026-08-15) — the tab strip is the
-     top edge of the card and every tab body renders at a stable
-     baseline min-height so switching Summary ↔ Attachments does
-     not cause the feed to jump. `.spectre-mc-item-body` holds the
-     Spectre Summary content. */
+  /* Phase 4R rev-9 (2026-08-15) — tabbed-document geometry. The
+     tab group is INLINE-flex so it sizes to its labels (no
+     full-width bleed, no grey rail). Each tab is a small pill-
+     shaped protrusion above the frame; the active tab shares the
+     frame's surface background and overlaps the frame's top
+     border by 1px so it reads as one continuous surface with the
+     body below. Inactive tabs sit on the page background with a
+     hairline outline. */
   .spectre-mc-item-body {
     display: block;
   }
-  /* Rev-8 tab strip — sits flush against the card's top border,
-     bleeds to the card's inner edges, and reads as the top edge
-     of the card. The strip's bottom border is the divider between
-     tabs and body; the active tab's bottom border merges into the
-     card surface so the tab feels attached to the body below. */
   .spectre-mc-tabs--card {
-    margin: 0 -20px 12px -20px;
-    padding: 0 20px;
-    background: var(--spectre-surface-hover, rgba(20, 18, 12, 0.02));
-    border-bottom: 1px solid var(--spectre-border-hairline, rgba(20, 18, 12, 0.09));
-    display: flex; gap: 0;
-    flex-wrap: wrap;
+    display: inline-flex;
+    gap: 2px;
+    /* Sit above the frame's top border, starting 12 px in so the
+       left-accent gutter is visually clear of the tabs. The -1px
+       bottom margin makes the active tab's bottom border overlap
+       and erase 1 px of the frame's top border, merging tab into
+       body. */
+    margin: 0 0 -1px 12px;
+    padding: 0;
+    background: transparent;
+    border-bottom: 0;
+    position: relative;
+    z-index: 1;
+    /* Take the tab strip out of the normal document flow's height
+       accounting downward — the frame below owns the height. Only
+       the tab strip's UP direction is what protrudes. */
   }
   .spectre-mc-tabs--card .spectre-mc-tab {
-    background: transparent;
-    border: 1px solid transparent;
+    background: var(--spectre-bg, transparent);
+    border: 1px solid var(--spectre-border-hairline);
     border-bottom: 0;
-    padding: 10px 14px;
-    font-size: 12.5px;
+    /* Compact rev-7 proportions — labels only as wide as their
+       text; two-line vertical padding; small font. */
+    padding: 4px 10px 5px 10px;
+    font-size: 11.5px;
     font-weight: 500;
+    letter-spacing: 0.002em;
     color: var(--spectre-text-secondary);
     cursor: pointer;
-    /* No top radius on the strip itself — the CARD owns the
-       top-corner arc via its own border-radius + overflow:hidden. */
-    border-radius: 0;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
     position: relative;
-    /* Nudge tab down 1px so its bottom edge overlaps the strip's
-       divider; the active state then paints over it. */
-    top: 1px;
     transition: color var(--spectre-motion-fast) var(--spectre-ease),
                 background-color var(--spectre-motion-fast) var(--spectre-ease);
   }
@@ -1451,25 +1477,24 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     background: var(--spectre-surface);
     color: var(--spectre-text-primary);
     font-weight: 600;
-    /* Merge the active tab's bottom edge into the body below by
-       painting the surface colour over the strip's divider. */
+    /* Active tab's bottom sits 1px BELOW the frame's top border —
+       the surface-coloured strip below the tab paints over the
+       frame border and produces a seamless merge. */
+    padding-bottom: 6px;
     box-shadow: 0 1px 0 0 var(--spectre-surface);
   }
   .spectre-mc-tabs--card .spectre-mc-tab:focus-visible {
     outline: 2px solid var(--spectre-accent, var(--spectre-status-success));
     outline-offset: -2px;
-    border-radius: 2px;
+    border-radius: 4px;
   }
-  /* Rev-8 stable baseline — every tab body meets this minimum so
-     Summary ↔ Attachments do not shift the card outer height. A
-     Conversation tab whose thread exceeds this baseline may grow
-     naturally; nothing is clipped and no nested scrollbar is
-     introduced. The 380 px baseline covers the typical Spectre
-     Summary layout (pill + title + sender + narrative + 4-cell
-     readout + recommendation + actions row + interior gaps). */
+  /* Rev-9 — no global 380px min-height. Per-card Summary baseline
+     is measured at runtime and applied via inline style to the
+     frame (see EmailIntakeCard). Attachments preserves that
+     baseline; Conversation may grow past it. */
   .spectre-mc-tab-body {
-    min-height: 380px;
-    padding: 0 0 var(--spectre-space-1);
+    display: block;
+    padding: 0;
   }
   .spectre-mc-tab-actions {
     display: flex; gap: 6px; margin-top: var(--spectre-space-2);
@@ -1501,11 +1526,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   /* Density pass to match Ace Foods reference exactly. The
      reference card's outer padding is 16px 20px + a 3px left rail
      → 17px inner padding-left; interior spacing is tighter than
-     the pre-15I-2 defaults. Phase 4R rev-8 (2026-08-15) — the
-     TOP padding is intentionally 0 so the CardTabBar forms the
-     card's top edge; only the bottom stays at 14px. */
-  .spectre-mc-item {
-    padding-top: 0;
+     the pre-15I-2 defaults. Phase 4R rev-9 (2026-08-15) — the
+     density-pass padding now lives on the FRAME (the visible
+     bordered surface), not the bare-wrapper article. */
+  .spectre-mc-item-frame {
+    padding-top: 12px;
     padding-bottom: 14px;
   }
   .spectre-mc-item h3 {
@@ -2732,17 +2757,44 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     padding: 0;
     margin: 0;
   }
+  /* Phase 4R rev-9 (2026-08-15) — compact single-line row density
+     so a 4-6 attachment list fits within a typical Summary
+     baseline height. Row layout is: filename (grow) · meta (fixed)
+     · action buttons (fixed). Each row is ~32 px total. */
   .spectre-mc-attachment-list li {
-    padding: var(--spectre-space-2) var(--spectre-space-3);
+    display: flex;
+    align-items: center;
+    gap: var(--spectre-space-2);
+    padding: 4px 10px;
     border: 1px solid var(--spectre-border-hairline);
     border-radius: var(--spectre-radius-button);
-    margin-bottom: var(--spectre-space-2);
+    margin-bottom: 4px;
     background: var(--spectre-surface);
+    font-size: 12px;
+    line-height: 20px;
+    min-height: 0;
+  }
+  .spectre-mc-attachment-list li strong {
+    font-weight: 600;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-attachment-list li .spectre-review-muted {
+    color: var(--spectre-text-muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .spectre-mc-attachment-list li > div:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .spectre-mc-attachment-list li > div:last-child {
-    margin-top: var(--spectre-space-1);
+    margin-top: 0;
     display: flex;
-    gap: var(--spectre-space-1);
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   /* Document preview modal. Full-viewport backdrop; preview area

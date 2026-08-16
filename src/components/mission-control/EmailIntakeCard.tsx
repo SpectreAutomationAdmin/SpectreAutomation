@@ -39,7 +39,7 @@
 //   • Sender identity remains SEPARATE from extracted vendor identity.
 //   • Tenant isolation preserved end-to-end.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
 import ReplyComposer from "./ReplyComposer";
@@ -155,6 +155,44 @@ export default function EmailIntakeCard({ data }: Props) {
   >(null);
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
+
+  // Phase 4R rev-9 (2026-08-15) — per-card Summary baseline.
+  // While the Spectre Summary panel is mounted (default tab), a
+  // ResizeObserver captures its rendered height and stores it as
+  // `summaryBaseline`. That baseline is then applied as an inline
+  // `min-height` on the frame surface when a non-Summary tab is
+  // active, so switching to Attachments (or a short Conversation)
+  // does not shrink the visible card and cause the feed to jump.
+  // Attachments compresses to a single-line row density (see
+  // `.spectre-mc-attachment-list` in globals.css) so a typical
+  // 4-6 attachment list fits within the Summary baseline. If
+  // Conversation is longer than the baseline the frame grows
+  // naturally — the min-height is a FLOOR, not a cap.
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  const [summaryBaseline, setSummaryBaseline] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (tab !== "spectre-summary") return;
+    const el = summaryRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    // Seed an initial measurement synchronously so the first non-
+    // Summary tab click already has a baseline available.
+    setSummaryBaseline((prev) => {
+      const h = el.offsetHeight;
+      return prev === h ? prev : h;
+    });
+    const obs = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h =
+          entry.borderBoxSize?.[0]?.blockSize ??
+          (entry.target as HTMLElement).offsetHeight;
+        // Only update on visually meaningful changes (≥ 1 px) so
+        // sub-pixel jitter cannot start an update loop.
+        setSummaryBaseline((prev) => (prev !== null && Math.abs(prev - h) < 1 ? prev : Math.round(h)));
+      }
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [tab]);
 
   const isUnread = !readLocal;
   const isResolved = data.workIntakeStatus === "RESOLVED";
@@ -289,6 +327,17 @@ export default function EmailIntakeCard({ data }: Props) {
 
   // --- render ------------------------------------------------------------
   const semanticClass = isResolved ? "done" : data.state;
+  // Phase 4R rev-9 — apply the measured Summary baseline as an
+  // inline min-height on the frame ONLY when a non-Summary tab is
+  // active. Applying it while Summary is active would freeze the
+  // measurement against legitimate content shrinks (e.g. an
+  // error-state that removes lines from the readout); the anti-
+  // shrink invariant is only meaningful when the user has left
+  // Summary for a shorter panel.
+  const frameStyle =
+    tab !== "spectre-summary" && summaryBaseline !== null
+      ? { minHeight: `${summaryBaseline}px` }
+      : undefined;
 
   return (
     <article
@@ -304,13 +353,25 @@ export default function EmailIntakeCard({ data }: Props) {
       {/* Phase 4R rev-7 (2026-08-15) — tab bar at the top of the
           card. Card content BELOW is entirely tab-driven; the
           Spectre Summary is no longer a persistent header above the
-          other tabs. */}
+          other tabs. Phase 4R rev-9 (2026-08-15) — tabs are OUTSIDE
+          the visible frame; each tab visually protrudes above the
+          frame and merges into its top border. */}
       <CardTabBar
         available={availableTabs}
         active={tab}
         onChange={handleTabChange}
       />
 
+      {/* Phase 4R rev-9 (2026-08-15) — visible frame. Carries the
+          border, background, shadow, rounded corners, left-accent,
+          and interior padding. Per-card Summary baseline is applied
+          as inline min-height when a non-Summary tab is active so
+          the outer frame does not shrink on tab swaps. */}
+      <div
+        className="spectre-mc-item-frame"
+        data-testid="card-frame"
+        style={frameStyle}
+      >
       {tab === "spectre-summary" && (
         <>
           {/* Spectre Summary body. Same collapsed-body render helpers
@@ -319,7 +380,7 @@ export default function EmailIntakeCard({ data }: Props) {
               narrative · 4-cell readout · recommendation) is
               unchanged. `expanded` prop kept as a compat argument
               to the AP renderer; it no longer controls layout. */}
-          <div className="spectre-mc-item-body" data-testid="card-summary">
+          <div ref={summaryRef} className="spectre-mc-item-body" data-testid="card-summary">
             {ap
               ? renderApCollapsedBody(data, ap, false, () => setCvapModalOpen(true))
               : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
@@ -497,8 +558,15 @@ export default function EmailIntakeCard({ data }: Props) {
               {attachments.length === 0 ? <li>No attachments.</li> : null}
               {attachments.map((a) => (
                 <li key={a.id} data-testid={`unified-attachment-${a.id}`}>
-                  <div><strong>{a.filename}</strong></div>
-                  <div className="spectre-review-muted">{a.classification} · {a.mimeType} · {Math.round(a.byteLength / 1024)} KB</div>
+                  {/* Phase 4R rev-9 (2026-08-15) — single-line row
+                      density: filename + meta collapse into one
+                      column; buttons sit right-aligned on the
+                      same row. Compact enough that a 4-6 file
+                      list fits within the Summary baseline. */}
+                  <div>
+                    <strong>{a.filename}</strong>
+                    <span className="spectre-review-muted"> · {Math.round(a.byteLength / 1024)} KB</span>
+                  </div>
                   <div>
                     <button
                       type="button"
@@ -506,7 +574,7 @@ export default function EmailIntakeCard({ data }: Props) {
                       onClick={() => setPdfModal({ documentId: a.id, filename: a.filename })}
                       data-testid={`unified-attachment-preview-${a.id}`}
                     >
-                      View PDF
+                      View
                     </button>
                     <a
                       href={`/api/documents/${encodeURIComponent(a.id)}/download`}
@@ -522,6 +590,7 @@ export default function EmailIntakeCard({ data }: Props) {
           )}
         </div>
       )}
+      </div>
 
       {pdfModal ? (
         <DocumentPreviewModal
