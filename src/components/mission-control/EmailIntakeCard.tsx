@@ -39,7 +39,8 @@
 //   • Sender identity remains SEPARATE from extracted vendor identity.
 //   • Tenant isolation preserved end-to-end.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useWorkFeedActive } from "./WorkFeedActiveContext";
 import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
 import ReplyComposer from "./ReplyComposer";
@@ -139,7 +140,22 @@ export default function EmailIntakeCard({ data }: Props) {
   // Open/Collapse state. Every card renders its tab body inline;
   // switching tabs replaces the entire body. Default tab is always
   // `spectre-summary`.
+  // Phase 4R rev-14 (2026-08-16) — `tab` is this card's OWN
+  // preference. What renders is `effectiveTab` below, which is
+  // masked to "spectre-summary" whenever this card is not the
+  // currently-active work item in the feed. See
+  // src/components/mission-control/WorkFeedActiveContext.tsx.
   const [tab, setTab] = useState<Tab>("spectre-summary");
+  // Feed-level active-card gate. Declared HERE (immediately after
+  // `tab`) so downstream hooks — the useLayoutEffect that runs the
+  // ResizeObserver — can key on `effectiveTab` without a TDZ error.
+  const workFeedActive = useWorkFeedActive();
+  const isThisCardActive =
+    workFeedActive != null && workFeedActive.activeWorkItemId === data.workIntakeItemId;
+  const effectiveTab: Tab = useMemo<Tab>(
+    () => (isThisCardActive ? tab : "spectre-summary"),
+    [isThisCardActive, tab],
+  );
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +211,12 @@ export default function EmailIntakeCard({ data }: Props) {
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const [summaryBaseline, setSummaryBaseline] = useState<number | null>(null);
   useLayoutEffect(() => {
-    if (tab !== "spectre-summary") return;
+    // Rev-14: the observer runs whenever the VISUAL tab is
+    // Summary — which happens both when this card is active AND
+    // when it's been programmatically collapsed to Summary
+    // (inactive). Either way the summary panel is mounted and
+    // measurable. `effectiveTab` is the right key here.
+    if (effectiveTab !== "spectre-summary") return;
     const el = frameRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     // Seed an initial measurement synchronously so the first
@@ -216,7 +237,7 @@ export default function EmailIntakeCard({ data }: Props) {
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [tab]);
+  }, [effectiveTab]);
 
   const isUnread = !readLocal;
   const isResolved = data.workIntakeStatus === "RESOLVED";
@@ -291,15 +312,21 @@ export default function EmailIntakeCard({ data }: Props) {
 
   // Phase 4R rev-7 (2026-08-15) — the sole tab-change hook. Owns
   // read/unread transition + lazy load of the target tab's data.
+  // Rev-14: `workFeedActive` / `isThisCardActive` / `effectiveTab`
+  // are declared earlier in the function so the ResizeObserver
+  // useLayoutEffect can key on effectiveTab without a TDZ error.
+  //
   // Mark-read fires on ANY tab click (previously fired on Open) — a
   // user-intent gesture. Merely rendering the feed still does not
-  // mark items read.
+  // mark items read. Rev-14 adds the setActiveCard call: a tab
+  // click also declares "this card is what I'm working with now."
   const handleTabChange = useCallback((next: Tab) => {
     setTab(next);
+    if (workFeedActive) workFeedActive.setActiveCard(data.workIntakeItemId);
     void markReadOnce();
     if (next === "conversation") void loadConversationOnce();
     if (next === "attachments") void loadAttachmentsOnce();
-  }, [markReadOnce, loadConversationOnce, loadAttachmentsOnce]);
+  }, [markReadOnce, loadConversationOnce, loadAttachmentsOnce, workFeedActive, data.workIntakeItemId]);
 
   const handleResolve = useCallback(async (evt: React.MouseEvent) => {
     evt.stopPropagation();
@@ -358,8 +385,11 @@ export default function EmailIntakeCard({ data }: Props) {
   // error-state that removes lines from the readout); the anti-
   // shrink invariant is only meaningful when the user has left
   // Summary for a shorter panel.
+  // Rev-14: min-height baseline follows the VISUAL tab (effectiveTab),
+  // not the underlying `tab` preference, so a card that has visually
+  // collapsed to AI Summary uses Summary's natural height.
   const frameStyle =
-    tab !== "spectre-summary" && summaryBaseline !== null
+    effectiveTab !== "spectre-summary" && summaryBaseline !== null
       ? { minHeight: `${summaryBaseline}px` }
       : undefined;
 
@@ -370,7 +400,7 @@ export default function EmailIntakeCard({ data }: Props) {
       data-work-intake-item-id={data.workIntakeItemId}
       data-email-id={data.emailMessageId}
       data-unread={isUnread ? "true" : "false"}
-      data-active-tab={tab}
+      data-active-tab={effectiveTab}
       data-resolved={isResolved ? "true" : "false"}
       aria-labelledby={`title-${data.workIntakeItemId}`}
     >
@@ -382,7 +412,7 @@ export default function EmailIntakeCard({ data }: Props) {
           frame and merges into its top border. */}
       <CardTabBar
         available={availableTabs}
-        active={tab}
+        active={effectiveTab}
         onChange={handleTabChange}
       />
 
@@ -397,7 +427,7 @@ export default function EmailIntakeCard({ data }: Props) {
         data-testid="card-frame"
         style={frameStyle}
       >
-      {tab === "spectre-summary" && (
+      {effectiveTab === "spectre-summary" && (
         // Phase 4R rev-9.1 (2026-08-15) — summaryRef sits on this
         // wrapper (NOT on the body div alone) so the measured
         // baseline includes both the Summary body AND the actions
@@ -489,6 +519,11 @@ export default function EmailIntakeCard({ data }: Props) {
               // delete / post) yields a NEW action whose `.modal`
               // block dictates the correct shape.
               if (!ap) return;
+              // Rev-14: primary-action click is a meaningful
+              // interaction; declare this card active so any
+              // other card that was on Attachments/Conversation
+              // resets to AI Summary.
+              if (workFeedActive) workFeedActive.setActiveCard(data.workIntakeItemId);
               const action = deriveApAction(ap);
               if (action.modal.open) {
                 if (action.modal.initialStep === "AP_CODING") {
@@ -544,7 +579,7 @@ export default function EmailIntakeCard({ data }: Props) {
       {/* Conversation tab body — the card body when
           tab === "conversation". Spectre Summary content is NOT
           rendered above this. */}
-      {tab === "conversation" && (
+      {effectiveTab === "conversation" && (
         <div className="spectre-mc-tab-body" data-testid="card-conversation">
           {
               loading ? <div className="spectre-mc-inline-status" role="status">Loading conversation…</div>
@@ -582,7 +617,7 @@ export default function EmailIntakeCard({ data }: Props) {
       {/* Attachments tab body — the card body when
           tab === "attachments". Spectre Summary content is NOT
           rendered above this. */}
-      {tab === "attachments" && (
+      {effectiveTab === "attachments" && (
         <div className="spectre-mc-tab-body" data-testid="card-attachments">
           {attachments === null ? (
             <div className="spectre-mc-inline-status" role="status">Loading attachments…</div>
@@ -669,8 +704,12 @@ function tabsFor(data: EmailFeedCardData): Tab[] {
   return tabs;
 }
 
+// Phase 4R rev-14 (2026-08-16) — founder-facing tab labels. The
+// internal Tab identifier "spectre-summary" is intentionally kept
+// to avoid a cascade rename of intelligence services + source
+// contract pins; only the visible LABEL becomes "AI Summary".
 const CARD_TAB_LABEL: Record<Tab, string> = {
-  "spectre-summary": "Spectre Summary",
+  "spectre-summary": "AI Summary",
   conversation:      "Conversation",
   attachments:       "Attachments",
 };

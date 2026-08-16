@@ -29,6 +29,7 @@ import IntelligenceReviewCard from "@/components/mission-control/IntelligenceRev
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
 import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
+import { WorkFeedActiveProvider } from "@/components/mission-control/WorkFeedActiveContext";
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
@@ -222,6 +223,12 @@ export default async function MissionControlPage({
               <p className="spectre-mc-work">Nothing requires your judgment or approval at the moment.</p>
             </div>
           ) : (
+            /* Phase 4R rev-14 (2026-08-16) — the feed wraps every
+               Work Intake card in a shared active-card context so
+               that switching between cards visually collapses the
+               previous card back to AI Summary. See
+               src/components/mission-control/WorkFeedActiveContext.tsx. */
+            <WorkFeedActiveProvider>{(
             (() => {
               // Sprint 3 · Checkpoint 16H rejection (2026-08-06) —
               // Completed History timeline separators (§16). Only
@@ -258,6 +265,7 @@ export default async function MissionControlPage({
                 );
               });
             })()
+          )}</WorkFeedActiveProvider>
           )}
         </section>
 

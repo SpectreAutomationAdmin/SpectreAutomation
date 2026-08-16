@@ -2845,18 +2845,31 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     font-size: 11.5px;
     white-space: nowrap;
   }
+  /* Phase 4R rev-14 (2026-08-16) — attachment actions moved next
+     to the filename cluster. Rev-9's `flex: 1 1 auto` on the
+     filename column pushed the action buttons to the far-right
+     edge of the card via implicit `justify-content: space-between`
+     behaviour, disconnecting the actions from the file they
+     belonged to. Rev-14 shrinks the filename column so it takes
+     only the width it needs; the row uses `gap` to space the
+     actions immediately after the filename cluster with an
+     intentional 12-px gap. `min-width: 0` + `overflow: hidden`
+     stay so long filenames still truncate before overflowing. */
   .spectre-mc-attachment-list li > div:first-child {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    margin-right: 8px;
   }
   .spectre-mc-attachment-list li > div:last-child {
     margin-top: 0;
     display: flex;
     gap: 4px;
     flex-shrink: 0;
+    /* No `margin-left: auto` — the row's `gap` handles spacing
+       and keeps actions attached to the filename. */
   }
 
   /* Document preview modal. Full-viewport backdrop; preview area

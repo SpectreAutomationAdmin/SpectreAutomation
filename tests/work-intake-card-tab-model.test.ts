@@ -57,11 +57,19 @@ describe("Card tab model — three founder-facing tabs only", () => {
   });
 
   it("CARD_TAB_LABEL maps the three tabs to founder-facing labels", () => {
+    // Rev-14 (2026-08-16): the visible label for the default tab
+    // is now "AI Summary" (was "Spectre Summary"). The internal
+    // identifier stays "spectre-summary" — the founder brief §1
+    // explicitly warns against a cascade rename of intelligence
+    // services / component identifiers.
     const start = CARD.indexOf("const CARD_TAB_LABEL");
-    const block = CARD.slice(start, start + 400);
-    expect(block).toMatch(/"spectre-summary":\s*"Spectre Summary"/);
+    const block = CARD.slice(start, start + 500);
+    expect(block).toMatch(/"spectre-summary":\s*"AI Summary"/);
     expect(block).toMatch(/conversation:\s*"Conversation"/);
     expect(block).toMatch(/attachments:\s*"Attachments"/);
+    // Regression guard: the old "Spectre Summary" label must not
+    // survive as an active mapping.
+    expect(block).not.toMatch(/"spectre-summary":\s*"Spectre Summary"/);
   });
 });
 
@@ -99,7 +107,9 @@ describe("Card default state + no-accordion contract", () => {
     // Rev-7 replaces data-expanded with data-active-tab so DOM
     // consumers (Playwright, unit tests, styling) can read the
     // currently selected tab without opening the card first.
-    expect(CARD).toMatch(/data-active-tab=\{tab\}/);
+    // Rev-14 (2026-08-16): the attribute is driven by `effectiveTab`
+    // (the feed-level active gate) instead of the raw `tab` state.
+    expect(CARD).toMatch(/data-active-tab=\{effectiveTab\}/);
     expect(CARD_CODE).not.toMatch(/data-expanded=/);
   });
 });
@@ -116,18 +126,18 @@ describe("Card tab bar + tab body wiring", () => {
     expect(tabBarIdx).toBeLessThan(attachmentsBodyIdx);
   });
 
-  it("each tab body renders only when its tab is active (no persistent summary above others)", () => {
-    expect(CARD).toMatch(/\{tab === "spectre-summary" && \(/);
-    expect(CARD).toMatch(/\{tab === "conversation" && \(/);
-    expect(CARD).toMatch(/\{tab === "attachments" && \(/);
+  it("each tab body renders only when its (effective) tab is active — rev-14 uses effectiveTab", () => {
+    expect(CARD).toMatch(/\{effectiveTab === "spectre-summary" && \(/);
+    expect(CARD).toMatch(/\{effectiveTab === "conversation" && \(/);
+    expect(CARD).toMatch(/\{effectiveTab === "attachments" && \(/);
   });
 
-  it("action row lives INSIDE the spectre-summary branch (understand + act)", () => {
+  it("action row lives INSIDE the (effective) spectre-summary branch (understand + act)", () => {
     // The spectre-mc-actions block sits inside the
-    // `tab === "spectre-summary"` fragment — verify by proximity.
-    const summaryOpen = CARD.indexOf('{tab === "spectre-summary" && (');
+    // `effectiveTab === "spectre-summary"` fragment — verify by proximity.
+    const summaryOpen = CARD.indexOf('{effectiveTab === "spectre-summary" && (');
     const actionsIdx = CARD.indexOf('className="spectre-mc-actions"');
-    const conversationOpen = CARD.indexOf('{tab === "conversation" && (');
+    const conversationOpen = CARD.indexOf('{effectiveTab === "conversation" && (');
     expect(actionsIdx).toBeGreaterThan(summaryOpen);
     expect(actionsIdx).toBeLessThan(conversationOpen);
   });
@@ -314,8 +324,12 @@ describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () 
     expect(CARD).toMatch(/const frameRef\s*=\s*useRef</);
     expect(CARD).toMatch(/const\s*\[\s*summaryBaseline\s*,\s*setSummaryBaseline\s*\]\s*=\s*useState/);
   });
-  it("EmailIntakeCard wires a ResizeObserver keyed to tab === 'spectre-summary'", () => {
-    expect(CARD).toMatch(/if \(tab !== "spectre-summary"\) return;/);
+  it("EmailIntakeCard wires a ResizeObserver keyed to effectiveTab === 'spectre-summary'", () => {
+    // Rev-14 (2026-08-16) — key on `effectiveTab`, not raw `tab`.
+    // Both a truly-active-Summary card and a programmatically-
+    // reset-to-Summary card have the summary panel mounted and
+    // measurable; the observer should run in both cases.
+    expect(CARD).toMatch(/if \(effectiveTab !== "spectre-summary"\) return;/);
     // Observer must watch the frame, not the summary body/shell.
     expect(CARD).toMatch(/const el\s*=\s*frameRef\.current;/);
     expect(CARD).toMatch(/new ResizeObserver/);
@@ -323,10 +337,10 @@ describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () 
     expect(CARD).toMatch(/obs\.disconnect\(\);/);
   });
   it("frame receives the measured baseline as inline min-height only when a non-Summary tab is active", () => {
-    // Applying it during Summary would freeze Summary against legitimate
-    // shrinks — the anti-shrink invariant is only meaningful for
-    // Attachments/Conversation.
-    expect(CARD).toMatch(/tab !== "spectre-summary" && summaryBaseline !== null/);
+    // Rev-14: gate on effectiveTab so a card that VISUALLY collapsed
+    // to Summary uses Summary's natural height, not the inherited
+    // non-Summary baseline.
+    expect(CARD).toMatch(/effectiveTab !== "spectre-summary" && summaryBaseline !== null/);
     expect(CARD).toMatch(/minHeight:\s*`\$\{summaryBaseline\}px`/);
   });
   it("frame div carries a data-testid so Playwright can measure it directly", () => {
@@ -629,5 +643,105 @@ describe("Rev-13 refresh-mailbox API — barrier + status endpoints", () => {
     // If Graph value differs from mirror, WRITE the new value with
     // fresh lastSyncedAt.
     expect(POST).toMatch(/data:\s*\{\s*isRead:\s*body\.isRead,\s*lastSyncedAt:\s*new Date\(\)\s*\}/);
+  });
+});
+
+describe("Rev-14 — AI Summary label + feed-level active card + attachment layout", () => {
+  const CONTEXT = read("src/components/mission-control/WorkFeedActiveContext.tsx");
+  const PAGE = read("src/app/app/admin/page.tsx");
+
+  it("WorkFeedActiveContext exposes activeWorkItemId + setActiveCard through a Provider", () => {
+    expect(CONTEXT).toMatch(/activeWorkItemId:\s*string\s*\|\s*null/);
+    expect(CONTEXT).toMatch(/setActiveCard:\s*\(workItemId:\s*string\)\s*=>\s*void/);
+    expect(CONTEXT).toMatch(/export function WorkFeedActiveProvider/);
+    expect(CONTEXT).toMatch(/export function useWorkFeedActive/);
+    // The setter must be idempotent — flipping between two cards
+    // should not thrash React on same-id updates.
+    expect(CONTEXT).toMatch(/prev === workItemId\s*\?\s*prev\s*:\s*workItemId/);
+  });
+  it("the admin feed page wraps the Work Intake feed in WorkFeedActiveProvider", () => {
+    expect(PAGE).toMatch(/import\s*\{\s*WorkFeedActiveProvider\s*\}\s*from/);
+    // The provider wraps the IIFE that renders the card list.
+    expect(PAGE).toMatch(/<WorkFeedActiveProvider>/);
+    expect(PAGE).toMatch(/<\/WorkFeedActiveProvider>/);
+  });
+
+  it("EmailIntakeCard consumes WorkFeedActiveContext and derives effectiveTab from it", () => {
+    expect(CARD).toMatch(/import\s*\{\s*useWorkFeedActive\s*\}\s*from/);
+    expect(CARD).toMatch(/const workFeedActive\s*=\s*useWorkFeedActive\(\)/);
+    // isThisCardActive derived from context.activeWorkItemId vs this card's ID.
+    expect(CARD).toMatch(/workFeedActive\.activeWorkItemId === data\.workIntakeItemId/);
+    // effectiveTab: card's own `tab` iff active, else "spectre-summary".
+    expect(CARD).toMatch(/const effectiveTab: Tab = useMemo<Tab>\([\s\S]{0,200}\(isThisCardActive \? tab : "spectre-summary"\)/);
+  });
+  it("user tab click calls setActiveCard AND setTab AND markReadOnce (atomic user interaction)", () => {
+    // handleTabChange = user tab click. It's the smallest well-defined
+    // meaningful interaction and must be the one that declares this
+    // card active.
+    const handlerIdx = CARD.indexOf("const handleTabChange = useCallback(");
+    expect(handlerIdx).toBeGreaterThan(0);
+    const block = CARD.slice(handlerIdx, handlerIdx + 700);
+    expect(block).toMatch(/setTab\(next\);/);
+    expect(block).toMatch(/workFeedActive\.setActiveCard\(data\.workIntakeItemId\)/);
+    expect(block).toMatch(/void markReadOnce\(\);/);
+  });
+  it("AP primary action click also calls setActiveCard (declares this card active)", () => {
+    // Founder brief §5 — primary actions count as meaningful
+    // interaction. The rev-13 mark-read call was already there;
+    // rev-14 adds the setActiveCard call so a primary-action-only
+    // interaction still resets other cards.
+    const onPrimaryIdx = CARD.indexOf("onPrimary={() => {");
+    expect(onPrimaryIdx).toBeGreaterThan(0);
+    const block = CARD.slice(onPrimaryIdx, onPrimaryIdx + 1400);
+    expect(block).toMatch(/workFeedActive\.setActiveCard\(data\.workIntakeItemId\)/);
+  });
+  it("effectiveTab (not raw `tab`) drives data-active-tab, CardTabBar active, and body branches", () => {
+    // Regression guard: the retired direct `tab` usage in these
+    // sites reintroduces the "every card can be on Attachments"
+    // multi-active bug the rev-14 brief §4 forbids.
+    expect(CARD).toMatch(/data-active-tab=\{effectiveTab\}/);
+    expect(CARD).toMatch(/active=\{effectiveTab\}/);
+    expect(CARD).toMatch(/\{effectiveTab === "spectre-summary" && \(/);
+    expect(CARD).toMatch(/\{effectiveTab === "conversation" && \(/);
+    expect(CARD).toMatch(/\{effectiveTab === "attachments" && \(/);
+    expect(CARD).not.toMatch(/data-active-tab=\{tab\}/);
+    expect(CARD).not.toMatch(/\{tab === "spectre-summary" && \(/);
+    expect(CARD).not.toMatch(/\{tab === "conversation" && \(/);
+    expect(CARD).not.toMatch(/\{tab === "attachments" && \(/);
+  });
+  it("frameStyle min-height baseline gate also uses effectiveTab", () => {
+    // Otherwise a card that VISUALLY collapsed to Summary would
+    // still apply the non-Summary min-height and could shift the
+    // feed vertically on a reset.
+    expect(CARD).toMatch(/effectiveTab !== "spectre-summary" && summaryBaseline !== null/);
+  });
+  it("ResizeObserver useLayoutEffect keys on effectiveTab (matches the visual mount)", () => {
+    expect(CARD).toMatch(/if \(effectiveTab !== "spectre-summary"\) return;/);
+    expect(CARD).toMatch(/\}, \[effectiveTab\]\);/);
+  });
+
+  it("attachment row: filename column shrinks (flex 0 1 auto), actions immediately follow (no margin-left auto)", () => {
+    // Rev-14 fix: replace `flex: 1 1 auto` on the filename cluster
+    // (which pushed the action cluster to the far-right edge via
+    // implicit space-between behaviour) with `flex: 0 1 auto` so
+    // the filename takes only the width it needs. The row's `gap`
+    // then keeps actions attached to the filename cluster.
+    const filenameIdx = CSS.indexOf(".spectre-mc-attachment-list li > div:first-child");
+    expect(filenameIdx).toBeGreaterThan(0);
+    const filenameRule = CSS.slice(filenameIdx, filenameIdx + CSS.slice(filenameIdx).indexOf("}"));
+    expect(filenameRule).toMatch(/flex:\s*0\s+1\s+auto/);
+    expect(filenameRule).not.toMatch(/flex:\s*1\s+1\s+auto/);
+
+    const actionsIdx = CSS.indexOf(".spectre-mc-attachment-list li > div:last-child");
+    expect(actionsIdx).toBeGreaterThan(0);
+    const actionsRuleRaw = CSS.slice(actionsIdx, actionsIdx + CSS.slice(actionsIdx).indexOf("}"));
+    // Strip CSS block + line comments so a comment mentioning the
+    // retired `margin-left: auto` pattern doesn't false-positive.
+    const actionsRule = actionsRuleRaw
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    expect(actionsRule).not.toMatch(/margin-left:\s*auto/);
+    // flex-shrink: 0 stays so actions never squeeze under filename pressure.
+    expect(actionsRule).toMatch(/flex-shrink:\s*0/);
   });
 });
