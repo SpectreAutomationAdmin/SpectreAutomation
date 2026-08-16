@@ -170,3 +170,66 @@ describe("CSS — retired accordion styles gone, new tab-driven styles present",
     expect(CSS).toMatch(/\.spectre-mc-item-body\s*\{/);
   });
 });
+
+describe("Rev-8 CSS — tab strip forms the top edge of the card", () => {
+  // Rev-8 (2026-08-15): the tab strip sits flush against the
+  // card's top border, forms the visual top edge, and the card's
+  // top padding is retired so the tabs are not "inside" a padded
+  // rectangle. These pins guarantee a future refactor cannot
+  // silently reintroduce the pre-rev-8 padded look.
+  it(".spectre-mc-item has no top padding (tabs sit at the top edge)", () => {
+    // `padding: 0 20px 16px 20px` — the top value must be 0.
+    // Match on the four-value shorthand where the first value is 0.
+    const block = CSS.slice(CSS.indexOf(".spectre-mc-item {"));
+    // Take just the .spectre-mc-item ruleset (first `}` after the selector).
+    const rule = block.slice(0, block.indexOf("}"));
+    expect(rule).toMatch(/padding:\s*0\s+20px\s+16px\s+20px/);
+  });
+  it(".spectre-mc-item has overflow:hidden so tab strip is clipped by the top corners", () => {
+    const block = CSS.slice(CSS.indexOf(".spectre-mc-item {"));
+    const rule = block.slice(0, block.indexOf("}"));
+    expect(rule).toMatch(/overflow:\s*hidden/);
+  });
+  it(".spectre-mc-tabs--card bleeds horizontally to the card's inner edges via negative margins", () => {
+    const idx = CSS.indexOf(".spectre-mc-tabs--card {");
+    const rule = CSS.slice(idx, idx + 500);
+    // margin: 0 -20px 12px -20px  →  horizontal negatives reach the card's border.
+    expect(rule).toMatch(/margin:\s*0\s+-20px\s+12px\s+-20px/);
+  });
+});
+
+describe("Rev-8 CSS — active tab merges into the body (tabbed-document feel)", () => {
+  it("active tab paints the surface colour over the strip's divider via box-shadow", () => {
+    // `box-shadow: 0 1px 0 0 var(--spectre-surface)` — a 1px surface-coloured
+    // strip immediately below the tab that "erases" the divider under it.
+    const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab--active");
+    expect(idx, "active-tab modifier ruleset must exist").toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + 400);
+    expect(rule).toMatch(/box-shadow:\s*0\s+1px\s+0\s+0\s+var\(--spectre-surface\)/);
+    // AND the active tab renders on the card's surface colour so the
+    // "attached to body" illusion holds.
+    expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
+  });
+});
+
+describe("Rev-8 CSS — stable baseline height across Summary ↔ Attachments", () => {
+  it(".spectre-mc-tab-body min-height is the rev-8 380px baseline (not the retired 140px)", () => {
+    const idx = CSS.indexOf(".spectre-mc-tab-body");
+    expect(idx).toBeGreaterThan(0);
+    // Find the FIRST .spectre-mc-tab-body ruleset (the base one).
+    const rule = CSS.slice(idx, idx + 400);
+    // Baseline must be at least 300px so Summary content fits without
+    // Attachments causing a visual shrink. The current pin is 380px.
+    const match = rule.match(/min-height:\s*(\d+)px/);
+    expect(match, "min-height must be defined on .spectre-mc-tab-body").toBeTruthy();
+    const minHeight = Number(match![1]);
+    expect(minHeight, "rev-8 baseline is ≥ 300px so Summary ↔ Attachments do not shift the feed")
+      .toBeGreaterThanOrEqual(300);
+  });
+  it("no screenshot-specific hard-coded card height (no `height: 282px`)", () => {
+    // Guard against reintroducing a single-viewport magic number
+    // to fake stable height.
+    expect(CSS).not.toMatch(/\.spectre-mc-item\b[^}]*\bheight:\s*282px/);
+    expect(CSS).not.toMatch(/\.spectre-mc-tab-body\b[^}]*\bheight:\s*282px/);
+  });
+});
