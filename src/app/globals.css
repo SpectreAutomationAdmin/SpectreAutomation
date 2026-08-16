@@ -2711,20 +2711,20 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 
   /* Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) —
      Tab bar + document preview modal + attachment list. All tokens. */
-  .spectre-mc-tabs {
+  /* Phase 4R rev-9 (2026-08-15) — every property in the legacy
+     base rule is scoped to :not(.spectre-mc-tabs--card) so the
+     card modifier's inline-flex + margin + no-border-bottom
+     values win uncontested. Both rules have equal specificity
+     (0,1,0) so cascade order would otherwise let the later base
+     rule silently override the earlier card modifier (same bug
+     class as the rev-8 → rev-9 cascade collision on margin). */
+  .spectre-mc-tabs:not(.spectre-mc-tabs--card) {
     display: flex;
     gap: var(--spectre-space-1);
     flex-wrap: wrap;
+    margin: var(--spectre-space-2) 0;
     border-bottom: 1px solid var(--spectre-border-hairline);
     padding-bottom: 0;
-  }
-  /* Phase 4R rev-8 (2026-08-15) — the vertical margin only applies
-     to legacy tab bars that are NOT the card-scoped strip. The
-     card variant needs margin:0 on top so the strip sits flush
-     against the card border. Scoping the base rule keeps the two
-     modifiers from colliding in the cascade. */
-  .spectre-mc-tabs:not(.spectre-mc-tabs--card) {
-    margin: var(--spectre-space-2) 0;
   }
   .spectre-mc-tab {
     background: transparent;

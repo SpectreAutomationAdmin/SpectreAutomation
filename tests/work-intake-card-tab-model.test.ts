@@ -251,6 +251,16 @@ describe("Rev-9 CSS — tabs are compact rev-7-style, self-sizing, floating abov
     expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
     expect(rule).toMatch(/box-shadow:\s*0\s+1px\s+0\s+0\s+var\(--spectre-surface\)/);
   });
+  it("base .spectre-mc-tabs rule is fully scoped away from the --card variant", () => {
+    // Rev-8 was bitten twice by the base .spectre-mc-tabs rule
+    // silently overriding the --card modifier at equal specificity.
+    // Rev-9 pins the fix: the base rule must ONLY target
+    // .spectre-mc-tabs:not(.spectre-mc-tabs--card), so the card
+    // strip's inline-flex + tabless border-bottom + zero-margin
+    // shape can never be overridden by cascade order.
+    expect(CSS).not.toMatch(/\n\s*\.spectre-mc-tabs\s*\{/);
+    expect(CSS).toMatch(/\.spectre-mc-tabs:not\(\.spectre-mc-tabs--card\)\s*\{[^}]*display:\s*flex/);
+  });
 });
 
 describe("Rev-9 CSS — no global min-height on tab bodies", () => {
