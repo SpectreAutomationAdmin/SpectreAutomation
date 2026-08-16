@@ -1832,6 +1832,58 @@ async function seedPhase5(
     hireDate: "2018-01-15",
   });
 
+  // HR-1 (2026-08-16) — sensitive-slice fixtures. Employee B has a
+  // complete HR record (SIN + banking + tax); Employee D is
+  // mid-onboarding (invitation issued, no sensitive data captured
+  // yet). Every ciphertext blob is written through the KMS scope="HR"
+  // path so scope-key rotation reaches these rows too. The
+  // sinLastThree / accountLastFour columns carry only the safe
+  // suffix — matching what the masked-read helpers surface.
+  const {
+    upsertSin: seedUpsertSin,
+  } = await import("../src/lib/hr/sensitive-identity");
+  const {
+    upsertBankAccount: seedUpsertBank,
+    activateBankAccount: seedActivateBank,
+  } = await import("../src/lib/hr/bank-account");
+  const {
+    upsertTaxProfile: seedUpsertTax,
+  } = await import("../src/lib/hr/tax-profile");
+  const {
+    issueInvitation: seedIssueInvitation,
+  } = await import("../src/lib/hr/invitations");
+
+  const employeeB = await payrollService.createEmployee(principal, clubId, {
+    firstName: "Bethany", lastName: "Nakamura", email: "bethany.n@silversprings.club",
+    departmentCode: "FB", positionCode: posServer.code,
+    compensationType: "HOURLY", payRate: 22,
+    hireDate: "2024-05-20",
+  });
+  await seedUpsertSin(principal, employeeB.id, "123456789");
+  await seedUpsertBank(principal, employeeB.id, {
+    institutionNumber: "003",
+    transitNumber: "12345",
+    accountNumber: "9876543210",
+    holderName: "Bethany Nakamura",
+  });
+  await seedActivateBank(principal, employeeB.id);
+  await seedUpsertTax(principal, employeeB.id, {
+    province: "ON",
+    td1FormVersion: "2026-01",
+    effectiveFrom: new Date("2026-01-01"),
+    federalClaim: "15705.00",
+    provincialClaim: "12399.00",
+    additionalDeductions: "50.00",
+  });
+
+  const employeeD = await payrollService.createEmployee(principal, clubId, {
+    firstName: "Devon", lastName: "Okafor", email: "devon.o@silversprings.club",
+    departmentCode: "COURSE", positionCode: posCourse.code,
+    compensationType: "HOURLY", payRate: 21,
+    hireDate: "2026-08-01",
+  });
+  await seedIssueInvitation(principal, employeeD.id, { ttlHours: 24 * 7 });
+
   // --- Asset categories, locations, demo asset
   const buildingsCat = await prisma.assetCategory.create({
     data: {
@@ -1912,7 +1964,7 @@ async function seedPhase5(
     await budgetService.activateBudget(principal, budget.id);
   }
 
-  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 3 employees, 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
+  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 5 employees (3 baseline + Employee B full HR + Employee D onboarding), 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
 }
 
 // Founder rule 2026-07-01 v14.9 — tag every seeded JournalEntry as
