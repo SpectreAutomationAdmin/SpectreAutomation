@@ -90,12 +90,14 @@ test.describe("Rev-12 defect reproduction", () => {
       rows,
     }, null, 2));
 
-    // At least one card must exhibit the defect for this reproduction
-    // to be useful. If zero, the founder's reported bug can't be
-    // reproduced with the current data.
+    // Rev-12 acceptance: the fix REMOVES the OR-latch. This
+    // assertion now enforces the corrected behaviour — no card
+    // should show "Outlook says unread but Spectre says read".
+    // Pre-fix on staging v238 this ran with defect count = 7/9;
+    // post-fix on staging v239+ it must be 0.
     const defectCount = rows.filter(r => r.defectMatches221007OrEquivalent).length;
-    console.log(`[repro] defect count = ${defectCount} / ${total}`);
-    expect(defectCount, "at least one card must exhibit the Outlook-unread-but-Spectre-read defect for the repro to be meaningful").toBeGreaterThan(0);
+    console.log(`[repro] defect count = ${defectCount} / ${total} (rev-12 target = 0)`);
+    expect(defectCount, "rev-12 loader source-split: no card may show Outlook-unread but Spectre-read (retires the rev-10 OR-latch)").toBe(0);
 
     await ctx.close();
   });
