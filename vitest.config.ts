@@ -12,6 +12,7 @@ export default defineConfig({
     globals: false,
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup.ts"],
+    globalSetup: ["tests/global-setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
     // Tests share a single SQLite DB; serialize to avoid file-lock contention.
