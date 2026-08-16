@@ -99,7 +99,7 @@ export async function GET(req: NextRequest) {
     take: 5,
     select: {
       id: true, status: true, attempts: true, createdAt: true,
-      scheduledFor: true, payload: true, lastError: true,
+      scheduledFor: true, payloadJson: true, idempotencyKey: true,
     },
   });
 
