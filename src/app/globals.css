@@ -1501,9 +1501,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   /* Density pass to match Ace Foods reference exactly. The
      reference card's outer padding is 16px 20px + a 3px left rail
      → 17px inner padding-left; interior spacing is tighter than
-     the pre-15I-2 defaults. */
+     the pre-15I-2 defaults. Phase 4R rev-8 (2026-08-15) — the
+     TOP padding is intentionally 0 so the CardTabBar forms the
+     card's top edge; only the bottom stays at 14px. */
   .spectre-mc-item {
-    padding-top: 14px;
+    padding-top: 0;
     padding-bottom: 14px;
   }
   .spectre-mc-item h3 {
@@ -2688,9 +2690,16 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     display: flex;
     gap: var(--spectre-space-1);
     flex-wrap: wrap;
-    margin: var(--spectre-space-2) 0;
     border-bottom: 1px solid var(--spectre-border-hairline);
     padding-bottom: 0;
+  }
+  /* Phase 4R rev-8 (2026-08-15) — the vertical margin only applies
+     to legacy tab bars that are NOT the card-scoped strip. The
+     card variant needs margin:0 on top so the strip sits flush
+     against the card border. Scoping the base rule keeps the two
+     modifiers from colliding in the cascade. */
+  .spectre-mc-tabs:not(.spectre-mc-tabs--card) {
+    margin: var(--spectre-space-2) 0;
   }
   .spectre-mc-tab {
     background: transparent;

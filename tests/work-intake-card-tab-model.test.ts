@@ -190,6 +190,27 @@ describe("Rev-8 CSS — tab strip forms the top edge of the card", () => {
     const rule = block.slice(0, block.indexOf("}"));
     expect(rule).toMatch(/overflow:\s*hidden/);
   });
+  it("no later cascade rule silently reintroduces .spectre-mc-item padding-top > 0", () => {
+    // Regression guard for the 15I-2 density pass at ~line 1505 that
+    // used to set `padding-top: 14px; padding-bottom: 14px` and quietly
+    // undid rev-8's flush-to-top-edge padding. Any future
+    // `.spectre-mc-item { padding-top: <N>px }` override must land at 0.
+    const rx = /\.spectre-mc-item\s*\{[^}]*?padding-top:\s*(\d+)px/g;
+    let m: RegExpExecArray | null;
+    const violations: number[] = [];
+    while ((m = rx.exec(CSS)) !== null) {
+      const px = Number(m[1]);
+      if (px > 0) violations.push(px);
+    }
+    expect(violations, `every .spectre-mc-item padding-top override must be 0; found ${JSON.stringify(violations)}`).toEqual([]);
+  });
+  it(".spectre-mc-tabs base margin is scoped away from the --card variant", () => {
+    // The base .spectre-mc-tabs rule and the .spectre-mc-tabs--card
+    // rule have equal specificity, so the base's later margin used
+    // to leak an 8px margin-top onto the card strip and push it
+    // away from the top edge. Rev-8 pins the :not() scoping.
+    expect(CSS).toMatch(/\.spectre-mc-tabs:not\(\.spectre-mc-tabs--card\)\s*\{[^}]*margin:/);
+  });
   it(".spectre-mc-tabs--card bleeds horizontally to the card's inner edges via negative margins", () => {
     const idx = CSS.indexOf(".spectre-mc-tabs--card {");
     const rule = CSS.slice(idx, idx + 500);
