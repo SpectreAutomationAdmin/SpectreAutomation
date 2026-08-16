@@ -59,10 +59,18 @@ export async function GET(req: NextRequest) {
 
   // Loosen the tenant scoping to make diagnosis easier — this is a
   // staging-only endpoint. Report what actually exists.
+  // Rev-12 verification (2026-08-16) — return the timestamps needed
+  // to reconstruct the sync ordering: EmailMessage.lastSyncedAt,
+  // EmailMessage.updatedAt, and (if the email is found) the
+  // MailboxConnection's lastSuccessfulSyncAt + lastAttemptedSyncAt.
   const email = emailMessageId
     ? await prisma.emailMessage.findFirst({
         where: { id: emailMessageId },
-        select: { id: true, clubId: true, isRead: true, updatedAt: true, graphMessageId: true },
+        select: {
+          id: true, clubId: true, isRead: true,
+          updatedAt: true, lastSyncedAt: true, receivedAt: true,
+          graphMessageId: true, mailboxConnectionId: true,
+        },
       })
     : null;
 
@@ -78,13 +86,36 @@ export async function GET(req: NextRequest) {
         })
       : [];
 
-  const mutation = email
-    ? await prisma.outlookMarkReadMutation.findFirst({
+  // Rev-12 — return the FULL mutation history (up to 5) so the
+  // #221007 verification can see every attempt + any SUPERSEDED
+  // status the worker recorded.
+  const mutationHistory = email
+    ? await prisma.outlookMarkReadMutation.findMany({
         where: { emailMessageId: email.id },
         orderBy: { updatedAt: "desc" },
+        take: 5,
         select: {
-          status: true, attemptCount: true, lastAttemptAt: true,
-          completedAt: true, errorCode: true, workIntakeItemId: true,
+          id: true, status: true, attemptCount: true,
+          createdAt: true, updatedAt: true,
+          lastAttemptAt: true, completedAt: true,
+          errorCode: true, workIntakeItemId: true,
+          triggeredByUserId: true,
+        },
+      })
+    : [];
+  const mutation = mutationHistory[0] ?? null;
+
+  // Rev-12 — mailbox sync timestamps for the connection that owns
+  // this email. Lets the verification confirm whether a sync ran
+  // AFTER a founder Outlook-side change.
+  const mailboxSync = email
+    ? await prisma.mailboxConnection.findUnique({
+        where: { id: email.mailboxConnectionId },
+        select: {
+          id: true, status: true,
+          lastSuccessfulSyncAt: true,
+          lastAttemptedSyncAt: true,
+          deltaLink: true,
         },
       })
     : null;
@@ -107,9 +138,20 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     callerClubId: clubId,
+    serverTimestamp: new Date().toISOString(),
     email,
     origins,
     mutation,
+    mutationHistory,
+    mailboxSync: mailboxSync
+      ? {
+          id: mailboxSync.id,
+          status: mailboxSync.status,
+          lastSuccessfulSyncAt: mailboxSync.lastSuccessfulSyncAt,
+          lastAttemptedSyncAt: mailboxSync.lastAttemptedSyncAt,
+          hasDeltaLink: !!mailboxSync.deltaLink,
+        }
+      : null,
     recentJobs,
     featureFlags: {
       isEmailMarkReadOnInteractionEnabled: (await import("@/lib/env")).isEmailMarkReadOnInteractionEnabled(),
