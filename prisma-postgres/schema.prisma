@@ -8885,7 +8885,7 @@ model OutlookMarkReadMutation {
   emailMessageId        String
   graphMessageId        String
   mailboxConnectionId   String
-  // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED
+  // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED | SUPERSEDED
   status                String    @default("PENDING")
   attemptCount          Int       @default(0)
   lastAttemptAt         DateTime?
@@ -8894,12 +8894,30 @@ model OutlookMarkReadMutation {
   // The user who triggered the mark-read (for audit — the card
   // interaction is per-user even though Outlook's isRead is shared).
   triggeredByUserId     String?
+  // Phase 4R rev-13 (2026-08-16) — the read/unread cycle is
+  // reversible. Each Spectre-initiated mark-read intent is its
+  // own GENERATION with an immutable audit trail. Historical
+  // SUCCEEDED / FAILED_TERMINAL / SUPERSEDED rows must NEVER
+  // block a later legitimate intent (see rev-12 diagnostic
+  // Defect B). `generationCursor` records the EmailMessage's
+  // `updatedAt` timestamp (or `graphMessageId` fingerprint) at
+  // enqueue time so per-row provenance is auditable; it is not
+  // load-bearing at write time.
+  generationCursor      String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  @@unique([mailboxConnectionId, emailMessageId])
+  // Rev-13: the @@unique([mailboxConnectionId, emailMessageId])
+  // is INTENTIONALLY REMOVED. Each new read-generation creates a
+  // new row; historical rows remain as immutable audit. Active-
+  // intent deduplication is enforced at the ENQUEUE site by
+  // querying for a currently-active row (status IN
+  // ['PENDING','RUNNING','RETRYABLE']) rather than at the DB
+  // constraint layer. See src/lib/work-intake/actions.ts +
+  // src/lib/mailbox/mark-read.ts.
   @@index([clubId, status])
   @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
 }
 
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's

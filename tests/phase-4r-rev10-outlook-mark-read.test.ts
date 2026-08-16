@@ -95,8 +95,12 @@ describe("Rev-10 source contract — queue + worker wiring", () => {
     expect(actions).toMatch(/if \(email\.softDeletedAt\) continue;/);
     // Feature-flag gate.
     expect(actions).toMatch(/isEmailMarkReadOnInteractionEnabled/);
-    // Idempotency key uses (mailboxConnectionId, emailMessageId).
-    expect(actions).toMatch(/idempotencyKey:\s*`mailbox-mark-read:\$\{email\.mailboxConnectionId\}:\$\{email\.id\}`/);
+    // Rev-13 — idempotencyKey now includes the newly-created
+    // mutation row's ID so each generation gets its own key. The
+    // rev-10 pattern `mailbox-mark-read:{conn}:{email}` (without
+    // a generation cursor) is retired because it collided
+    // permanently with the historical row's key.
+    expect(actions).toMatch(/idempotencyKey:\s*`mailbox-mark-read:\$\{email\.mailboxConnectionId\}:\$\{email\.id\}:\$\{mutation\.id\}`/);
   });
   it("loader consults EmailWorkIntakeOrigin PRIMARY-role emails for the isUnread decision", () => {
     // Rev-10 pinned an OR-latch formula (viewerHasRead || outlookRead)
@@ -269,8 +273,10 @@ describe.skipIf(BEHAVIOURAL_UNAVAILABLE)("Rev-10 behaviour — Spectre → Outlo
     });
     expect(after?.isRead).toBe(true);
     // Mutation row records SUCCEEDED.
-    const mutation = await prisma.outlookMarkReadMutation.findUnique({
-      where: { mailboxConnectionId_emailMessageId: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id } },
+    // Rev-13 (2026-08-16) — the retired @@unique compound key is gone; use findFirst instead.
+    const mutation = await prisma.outlookMarkReadMutation.findFirst({
+      where: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id },
+      orderBy: { createdAt: "desc" },
       select: { status: true, completedAt: true },
     });
     expect(mutation?.status).toBe("SUCCEEDED");
@@ -342,8 +348,10 @@ describe.skipIf(BEHAVIOURAL_UNAVAILABLE)("Rev-10 behaviour — Spectre → Outlo
       graphMessageId: email.graphMessageId, mailboxConnectionId: email.mailboxConnectionId,
       triggeredByUserId: principal.id,
     })).rejects.toBeDefined();
-    const mutation = await prisma.outlookMarkReadMutation.findUnique({
-      where: { mailboxConnectionId_emailMessageId: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id } },
+    // Rev-13 (2026-08-16) — the retired @@unique compound key is gone; use findFirst instead.
+    const mutation = await prisma.outlookMarkReadMutation.findFirst({
+      where: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id },
+      orderBy: { createdAt: "desc" },
       select: { status: true, errorCode: true },
     });
     expect(mutation?.status).toBe("RETRYABLE");
@@ -363,8 +371,10 @@ describe.skipIf(BEHAVIOURAL_UNAVAILABLE)("Rev-10 behaviour — Spectre → Outlo
       triggeredByUserId: principal.id,
     });
     expect(out.status).toBe("FAILED_TERMINAL");
-    const mutation = await prisma.outlookMarkReadMutation.findUnique({
-      where: { mailboxConnectionId_emailMessageId: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id } },
+    // Rev-13 (2026-08-16) — the retired @@unique compound key is gone; use findFirst instead.
+    const mutation = await prisma.outlookMarkReadMutation.findFirst({
+      where: { mailboxConnectionId: email.mailboxConnectionId, emailMessageId: email.id },
+      orderBy: { createdAt: "desc" },
       select: { status: true },
     });
     expect(mutation?.status).toBe("FAILED_TERMINAL");

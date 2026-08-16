@@ -8916,12 +8916,16 @@ model OutlookMarkReadMutation {
   completedAt           DateTime?
   errorCode             String?
   triggeredByUserId     String?
+  // Rev-13 audit-only cursor — see postgres schema for docs.
+  generationCursor      String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  @@unique([mailboxConnectionId, emailMessageId])
+  // Rev-13 removes @@unique([mailboxConnectionId, emailMessageId]).
+  // See postgres schema for the full architectural note.
   @@index([clubId, status])
   @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
 }
 
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's

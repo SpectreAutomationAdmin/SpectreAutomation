@@ -29,7 +29,7 @@ interface SummaryPayload {
   workItemIds: string[];
 }
 
-export type RefreshError = "network" | "unauthenticated" | "server" | null;
+export type RefreshError = "network" | "unauthenticated" | "server" | "sync_failed" | "sync_timeout" | "no_mailbox" | null;
 
 export interface LiveRefreshState {
   /** ISO of the last successful sync. */
@@ -87,47 +87,126 @@ export function LiveRefreshProvider({
     return document.querySelectorAll(".spectre-mc-inline-expansion").length > 0;
   }, []);
 
+  // Rev-13 (2026-08-16) — the manual refresh path must ACTUALLY
+  // synchronise the mailbox before flipping FEED SYNCED back on.
+  // Prior to rev-13 it only re-read the Prisma DB (Defect A in the
+  // rev-12 diagnostic), so an Outlook-side unread change couldn't
+  // reach Spectre even after the founder clicked refresh.
+  //
+  // Manual sequence:
+  //   1. POST /api/mission-control/refresh-mailbox → enqueues
+  //      MAILBOX_DELTA_SYNC (or INITIAL_SYNC for fresh mailboxes)
+  //      and returns { jobIds, mailboxConnectionIds }.
+  //   2. Poll GET /api/mission-control/refresh-mailbox/status?jobIds=…
+  //      every 1s until allTerminal OR a 30s wall-clock timeout.
+  //   3. If anyFailed → set error "sync_failed"; do NOT flip pill.
+  //   4. If terminal-success → fetch snapshot-summary + router.refresh
+  //      + flip pill back to FEED SYNCED.
+  //   5. If timeout → set error "sync_timeout"; do NOT flip pill.
+  //
+  // Background auto-refresh (source === "background") is UNCHANGED
+  // and remains SILENT — it still hits snapshot-summary only and
+  // never enqueues a sync. This preserves the founder's brief §13:
+  // the visible REFRESHING… state is a manual-click affordance only.
+  const MANUAL_SYNC_TIMEOUT_MS = 30_000;
+  const MANUAL_SYNC_POLL_MS = 1_000;
+
+  const doBackgroundRefresh = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = "background";
+    setBackgroundRefreshing(true);
+    try {
+      const res = await fetch("/api/mission-control/snapshot-summary", { method: "GET" });
+      if (res.status === 401) return; // silent — no error state on background
+      if (!res.ok) return;
+      const body = (await res.json()) as SummaryPayload;
+      const newlyArrivedIds = body.workItemIds.filter((id) => !knownIdsRef.current.has(id));
+      if (anyPaneExpanded() && newlyArrivedIds.length > 0) {
+        setNewItemsAvailable(newlyArrivedIds.length);
+        return;
+      }
+      knownIdsRef.current = new Set(body.workItemIds);
+      setSyncedAt(new Date(body.syncedAt));
+      setNewItemsAvailable(0);
+      router.refresh();
+    } catch {
+      // Silent on background — never surfaces an error to the pill.
+    } finally {
+      inFlightRef.current = null;
+      setBackgroundRefreshing(false);
+    }
+  }, [anyPaneExpanded, router]);
+
+  const doManualRefresh = useCallback(async () => {
+    // A manual click always wins over an in-flight background; wait
+    // for background to release inFlightRef, then take it.
+    if (inFlightRef.current === "manual") return;
+    inFlightRef.current = "manual";
+    setManualRefreshing(true);
+    setError(null);
+    const startedAt = Date.now();
+    try {
+      // 1. Enqueue the mailbox sync barrier.
+      const enqRes = await fetch("/api/mission-control/refresh-mailbox", { method: "POST" });
+      if (enqRes.status === 401) { setError("unauthenticated"); return; }
+      if (enqRes.status === 409) { setError("no_mailbox"); return; }
+      if (!enqRes.ok) { setError("server"); return; }
+      const enqBody = (await enqRes.json()) as { jobIds: string[] };
+      if (!enqBody.jobIds || enqBody.jobIds.length === 0) {
+        setError("no_mailbox");
+        return;
+      }
+      // 2. Poll job status until every job is terminal OR timeout.
+      const jobIdsCsv = enqBody.jobIds.join(",");
+      let allTerminal = false;
+      let anyFailed = false;
+      while (Date.now() - startedAt < MANUAL_SYNC_TIMEOUT_MS) {
+        await new Promise((r) => setTimeout(r, MANUAL_SYNC_POLL_MS));
+        const statusRes = await fetch(
+          `/api/mission-control/refresh-mailbox/status?jobIds=${encodeURIComponent(jobIdsCsv)}`,
+        );
+        if (statusRes.status === 401) { setError("unauthenticated"); return; }
+        if (!statusRes.ok) continue; // transient — keep polling within the timeout
+        const statusBody = (await statusRes.json()) as { allTerminal: boolean; anyFailed: boolean };
+        if (statusBody.allTerminal) {
+          allTerminal = true;
+          anyFailed = statusBody.anyFailed;
+          break;
+        }
+      }
+      if (!allTerminal) {
+        setError("sync_timeout");
+        return;
+      }
+      if (anyFailed) {
+        setError("sync_failed");
+        return;
+      }
+      // 3. Mailbox sync succeeded. Now re-read the DB projection
+      //    and re-render.
+      const summaryRes = await fetch("/api/mission-control/snapshot-summary", { method: "GET" });
+      if (summaryRes.status === 401) { setError("unauthenticated"); return; }
+      if (!summaryRes.ok) { setError("server"); return; }
+      const summaryBody = (await summaryRes.json()) as SummaryPayload;
+      knownIdsRef.current = new Set(summaryBody.workItemIds);
+      setSyncedAt(new Date(summaryBody.syncedAt));
+      setNewItemsAvailable(0);
+      setError(null);
+      router.refresh();
+    } catch {
+      setError("network");
+    } finally {
+      inFlightRef.current = null;
+      setManualRefreshing(false);
+    }
+  }, [router]);
+
   const doRefresh = useCallback(
     async (source: "manual" | "background") => {
-      // Never coalesce a manual refresh with a background one —
-      // a user click always wins.
-      if (inFlightRef.current === "manual") return;
-      // A background poll should not run if a manual is pending.
-      if (source === "background" && inFlightRef.current) return;
-      inFlightRef.current = source;
-      if (source === "manual") setManualRefreshing(true);
-      else setBackgroundRefreshing(true);
-      // Clear a prior error only when starting a new attempt of the
-      // same class — a manual retry should visibly reset the error;
-      // a quiet background poll should NOT reset a manual failure
-      // (the user needs to see it).
-      if (source === "manual") setError(null);
-      try {
-        const res = await fetch("/api/mission-control/snapshot-summary", { method: "GET" });
-        if (res.status === 401) { setError("unauthenticated"); return; }
-        if (!res.ok) { setError("server"); return; }
-        const body = (await res.json()) as SummaryPayload;
-        const newlyArrivedIds = body.workItemIds.filter((id) => !knownIdsRef.current.has(id));
-        if (source === "background" && anyPaneExpanded() && newlyArrivedIds.length > 0) {
-          // Do not yank the page out from under the reviewer — show
-          // the "N new items" banner instead.
-          setNewItemsAvailable(newlyArrivedIds.length);
-          return;
-        }
-        knownIdsRef.current = new Set(body.workItemIds);
-        setSyncedAt(new Date(body.syncedAt));
-        setNewItemsAvailable(0);
-        if (source === "manual") setError(null);
-        router.refresh();
-      } catch {
-        setError("network");
-      } finally {
-        inFlightRef.current = null;
-        if (source === "manual") setManualRefreshing(false);
-        else setBackgroundRefreshing(false);
-      }
+      if (source === "manual") return doManualRefresh();
+      return doBackgroundRefresh();
     },
-    [anyPaneExpanded, router],
+    [doBackgroundRefresh, doManualRefresh],
   );
 
   // Background poll.

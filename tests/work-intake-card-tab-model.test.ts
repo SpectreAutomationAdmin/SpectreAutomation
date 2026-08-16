@@ -450,12 +450,155 @@ describe("Rev-12 mark-read worker — stale-mutation guard", () => {
     expect(MARK_READ).toMatch(/lastSyncedAt:\s*true/);
   });
   it("skips the PATCH (NOT_REQUIRED) if a sync ran after the mutation was queued AND the mirror is still unread", () => {
-    // Guard shape: existingMutation.attemptCount >= 1 AND status
-    // not terminal AND email.lastSyncedAt > existingMutation.createdAt.
-    expect(MARK_READ).toMatch(/lastSyncedAt\s*>\s*existingMutation\.createdAt/);
+    // Rev-13: guard now scopes to THIS specific mutation row's
+    // createdAt (each generation has its own row).
+    expect(MARK_READ).toMatch(/lastSyncedAt\s*>\s*mutationRow\.createdAt/);
     // Records SUPERSEDED status so future observability shows the
     // guard triggered (not a silent skip).
     expect(MARK_READ).toMatch(/status:\s*"SUPERSEDED"/);
     expect(MARK_READ).toMatch(/superseded_by_outlook_unread/);
+  });
+});
+
+describe("Rev-13 mark-read worker — retires permanent SUCCEEDED latch", () => {
+  const MARK_READ = read("src/lib/mailbox/mark-read.ts");
+  const ACTIONS = read("src/lib/work-intake/actions.ts");
+  it("worker takes markReadMutationId from payload and does NOT lookup by (mailbox, email)", () => {
+    // The retired pattern: `where: { mailboxConnectionId_emailMessageId: { ... } }`
+    // was the source of the permanent latch. Rev-13 loads a specific
+    // mutation row by ID (or creates one for backward-compat).
+    expect(MARK_READ).not.toMatch(/mailboxConnectionId_emailMessageId/);
+    expect(MARK_READ).toMatch(/markReadMutationId\?:\s*string/);
+    expect(MARK_READ).toMatch(/payload\.markReadMutationId/);
+  });
+  it("worker has NO short-circuit on mutation.status === 'SUCCEEDED'", () => {
+    // Rev-10's smoking-gun bug: worker returned early if it found a
+    // historical SUCCEEDED row for (mailbox, email). Rev-13 uses
+    // per-generation rows and MUST NOT have that check as executable
+    // code. A comment explaining the retirement is fine — strip
+    // comments before scanning.
+    const codeOnly = MARK_READ
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(codeOnly).not.toMatch(/\.status === "SUCCEEDED"/);
+    expect(codeOnly).not.toMatch(/status:\s*"SUCCEEDED"\s*\}\s*\)\s*\{/);
+  });
+  it("enqueue site (actions.ts) creates a new mutation row per interaction", () => {
+    expect(ACTIONS).toMatch(/outlookMarkReadMutation\.create/);
+    // The row's ID is threaded into the payload so worker + enqueue
+    // agree on which generation is executing.
+    expect(ACTIONS).toMatch(/markReadMutationId:\s*mutation\.id/);
+    // generationCursor captures the email's updatedAt at enqueue
+    // time for audit provenance.
+    expect(ACTIONS).toMatch(/generationCursor:\s*email\.updatedAt\.toISOString/);
+  });
+  it("enqueue site dedupes ONLY active intents (PENDING/RUNNING/RETRYABLE)", () => {
+    // Historical statuses (SUCCEEDED, FAILED_TERMINAL, NOT_REQUIRED,
+    // SUPERSEDED) must NOT block a fresh generation.
+    expect(ACTIONS).toMatch(/ACTIVE_STATUSES\s*=\s*\["PENDING",\s*"RUNNING",\s*"RETRYABLE"\]/);
+    expect(ACTIONS).toMatch(/status:\s*\{\s*in:\s*\[\.\.\.ACTIVE_STATUSES\]/);
+    // Log statement when dedupe fires — proves the guard is
+    // observable, not silent.
+    expect(ACTIONS).toMatch(/active-intent-dedupe/);
+  });
+  it("Prisma schema has NO @@unique on (mailboxConnectionId, emailMessageId)", () => {
+    const postgresSchema = read("prisma-postgres/schema.prisma");
+    // The @@unique that latched a message for life is retired. New
+    // composite index preserves query performance for the active-
+    // intent dedupe. Find the model block ending at the FIRST
+    // top-of-line `}`. Strip Prisma `//` line comments before
+    // scanning so a comment mentioning the retired constraint
+    // doesn't false-positive the pin.
+    const modelStart = postgresSchema.indexOf("model OutlookMarkReadMutation {");
+    const rest = postgresSchema.slice(modelStart);
+    const closingRel = rest.search(/\n\}/);
+    const rawBlock = rest.slice(0, closingRel + 2);
+    const block = rawBlock.replace(/\/\/.*$/gm, "");
+    expect(block).not.toMatch(/@@unique\(\[mailboxConnectionId,\s*emailMessageId\]\)/);
+    // Rev-13 audit column + composite index for active-intent queries.
+    expect(block).toMatch(/generationCursor\s+String\?/);
+    expect(block).toMatch(/@@index\(\[mailboxConnectionId,\s*emailMessageId,\s*status\]\)/);
+  });
+});
+
+describe("Rev-13 sync — tri-state isRead + hasAttachments (missing != false)", () => {
+  const NORMALIZE = read("src/lib/mailbox/normalize.ts");
+  const SYNC = read("src/lib/mailbox/sync.ts");
+  it("NormalizedEmail types isRead + hasAttachments as boolean | undefined", () => {
+    expect(NORMALIZE).toMatch(/isRead:\s*boolean\s*\|\s*undefined/);
+    expect(NORMALIZE).toMatch(/hasAttachments:\s*boolean\s*\|\s*undefined/);
+  });
+  it("normalize preserves undefined for absent Graph properties (not `?? false`)", () => {
+    // The lethal coercion was `raw.isRead ?? false` — it corrupted
+    // `undefined` (Graph didn't send) into `false` (unread).
+    // Rev-13 uses `typeof === 'boolean'` guards which propagate
+    // undefined faithfully.
+    expect(NORMALIZE).toMatch(/isRead:\s*typeof\s+raw\.isRead\s*===\s*"boolean"\s*\?\s*raw\.isRead\s*:\s*undefined/);
+    expect(NORMALIZE).toMatch(/hasAttachments:\s*typeof\s+raw\.hasAttachments\s*===\s*"boolean"\s*\?\s*raw\.hasAttachments\s*:\s*undefined/);
+    // The retired coercion pattern must not recur:
+    expect(NORMALIZE).not.toMatch(/isRead:\s*raw\.isRead\s*\?\?\s*false/);
+    expect(NORMALIZE).not.toMatch(/hasAttachments:\s*raw\.hasAttachments\s*\?\?\s*false/);
+  });
+  it("sync includes isRead in UPDATE data only when normalized value is a boolean", () => {
+    // Conditional assignment on the update DTO.
+    expect(SYNC).toMatch(/if \(typeof norm\.isRead === "boolean"\) updateData\.isRead = norm\.isRead;/);
+    expect(SYNC).toMatch(/if \(typeof norm\.hasAttachments === "boolean"\) updateData\.hasAttachments = norm\.hasAttachments;/);
+  });
+  it("sync CREATE branch still supplies a boolean default for new rows", () => {
+    // First-seen records need a concrete seed value; false is safe
+    // until the next full-property delta arrives.
+    expect(SYNC).toMatch(/isRead:\s*typeof norm\.isRead === "boolean" \? norm\.isRead : false/);
+    expect(SYNC).toMatch(/hasAttachments:\s*typeof norm\.hasAttachments === "boolean" \? norm\.hasAttachments : false/);
+  });
+});
+
+describe("Rev-13 manual Feed Sync — actual mailbox sync barrier", () => {
+  const CTX = read("src/components/mission-control/LiveRefreshContext.tsx");
+  it("manual refresh POSTs to /api/mission-control/refresh-mailbox (enqueue barrier)", () => {
+    expect(CTX).toMatch(/fetch\("\/api\/mission-control\/refresh-mailbox",\s*\{\s*method:\s*"POST"\s*\}/);
+  });
+  it("manual refresh polls /refresh-mailbox/status until every job is terminal OR timeout", () => {
+    expect(CTX).toMatch(/\/api\/mission-control\/refresh-mailbox\/status\?jobIds=/);
+    expect(CTX).toMatch(/allTerminal:\s*boolean;\s*anyFailed:\s*boolean/);
+    expect(CTX).toMatch(/statusBody\.allTerminal/);
+    // 30-second wall-clock timeout.
+    expect(CTX).toMatch(/MANUAL_SYNC_TIMEOUT_MS\s*=\s*30_000/);
+  });
+  it("manual refresh sets error 'sync_failed' when any polled job ended in a failed status", () => {
+    expect(CTX).toMatch(/setError\("sync_failed"\)/);
+    expect(CTX).toMatch(/setError\("sync_timeout"\)/);
+    expect(CTX).toMatch(/setError\("no_mailbox"\)/);
+  });
+  it("background refresh path remains SILENT — no sync barrier, no visible error state", () => {
+    // doBackgroundRefresh hits the snapshot-summary GET only, never
+    // enqueues a mailbox sync. Founder brief §13.
+    expect(CTX).toMatch(/const doBackgroundRefresh\s*=\s*useCallback/);
+    // Extract the background function body — it must NOT reference
+    // the refresh-mailbox endpoint.
+    const bgIdx = CTX.indexOf("const doBackgroundRefresh");
+    const bgEnd = CTX.indexOf("}, [anyPaneExpanded, router]);", bgIdx);
+    expect(bgIdx).toBeGreaterThan(0);
+    expect(bgEnd).toBeGreaterThan(bgIdx);
+    const bgBody = CTX.slice(bgIdx, bgEnd);
+    expect(bgBody, "background refresh must NOT enqueue a mailbox sync").not.toMatch(/refresh-mailbox/);
+  });
+});
+
+describe("Rev-13 refresh-mailbox API — barrier + status endpoints", () => {
+  const POST = read("src/app/api/mission-control/refresh-mailbox/route.ts");
+  const STATUS = read("src/app/api/mission-control/refresh-mailbox/status/route.ts");
+  it("POST enqueues MAILBOX_DELTA_SYNC (or INITIAL_SYNC for fresh mailboxes)", () => {
+    expect(POST).toMatch(/MAILBOX_DELTA_SYNC/);
+    expect(POST).toMatch(/MAILBOX_INITIAL_SYNC/);
+    expect(POST).toMatch(/mb\.deltaLink\s*\?\s*"MAILBOX_DELTA_SYNC"\s*:\s*"MAILBOX_INITIAL_SYNC"/);
+  });
+  it("POST returns 202 with jobIds so the client can poll status", () => {
+    expect(POST).toMatch(/jobIds:\s*string\[\]/);
+    expect(POST).toMatch(/status:\s*202/);
+  });
+  it("status endpoint distinguishes terminal vs failed job states", () => {
+    expect(STATUS).toMatch(/TERMINAL_JOB_STATUSES\s*=\s*new Set\(\["COMPLETED",\s*"DEAD_LETTER",\s*"CANCELLED"\]\)/);
+    expect(STATUS).toMatch(/allTerminal/);
+    expect(STATUS).toMatch(/anyFailed/);
   });
 });

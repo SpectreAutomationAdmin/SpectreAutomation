@@ -1,26 +1,51 @@
-// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read worker.
+// Phase 4R rev-13 (2026-08-16) — Outlook mark-as-read worker.
 //
 // One canonical Outlook mark-read worker consumed by the Work
 // Intake action `mark_read` when the founder first meaningfully
 // interacts with an email-backed unread work item.
 //
-// The handler mirrors `src/lib/mailbox/archive.ts`:
-//   1. Loads the EmailMessage + MailboxConnection.
-//   2. Idempotency: upsert an OutlookMarkReadMutation keyed by
-//      (mailboxConnectionId, emailMessageId). A second click can
-//      not enqueue a duplicate Graph PATCH.
-//   3. Short-circuits NOT_REQUIRED if the message is already
+// REV-13 ARCHITECTURAL CHANGE — no permanent latch:
+//   * Rev-10 modelled ONE mutation row per (mailbox, message),
+//     enforced by `@@unique([mailboxConnectionId, emailMessageId])`,
+//     and short-circuited any second invocation on
+//     `mutation.status === "SUCCEEDED"`. That created a permanent
+//     LIFETIME latch: after the very first successful Spectre-side
+//     mark-read, no subsequent click could ever mark the same
+//     message read again in Outlook.
+//   * Rev-13 retires the (mailbox, message) unique constraint.
+//     Each read-generation is a separate row. Active-intent
+//     deduplication happens at the ENQUEUE site
+//     (src/lib/work-intake/actions.ts), which checks for a row
+//     with status IN ('PENDING','RUNNING','RETRYABLE') before
+//     creating a new one. Historical SUCCEEDED / FAILED_TERMINAL /
+//     SUPERSEDED / NOT_REQUIRED rows remain as immutable audit
+//     history and do NOT block new intents.
+//
+// The enqueue site creates the OutlookMarkReadMutation row (with
+// status=PENDING) and passes its `id` to the worker via the job
+// payload. The worker loads the row by id, executes Graph, and
+// updates the same row through its lifecycle. There is no
+// upsert — each row belongs to exactly one generation.
+//
+// The handler:
+//   1. Loads the EmailMessage + the specific mutation row keyed by
+//      `markReadMutationId`.
+//   2. Short-circuits NOT_REQUIRED if the message is already
 //      isRead=true in the local mirror (a delta sync already
-//      caught the change or Graph accepted a prior PATCH).
-//   4. Obtains a fresh delegated bearer token, verifies scope
-//      grantedScopes ∋ Mail.ReadWrite, calls
+//      caught the change or a concurrent generation succeeded).
+//   3. SUPERSEDED guard (this generation only): if a mailbox sync
+//      has ingested a fresh isRead=false AFTER this specific
+//      mutation was queued AND this is a retry, treat as
+//      superseded — Outlook contradicted the queued intent.
+//   4. Scope allowlist + per-user grantedScopes gate.
+//   5. Obtains a fresh delegated bearer token, calls
 //      Graph PATCH /me/messages/{id} { "isRead": true }.
-//   5. Updates the local EmailMessage.isRead = true so the loader
-//      reflects the change immediately without waiting for the
-//      next delta sync.
-//   6. Retryable errors throw so the queue backs off + retries;
-//      terminal errors are recorded on the mutation and the queue
-//      marks the job failed. NOT_REQUIRED never retries.
+//   6. Updates the local EmailMessage.isRead = true so the loader
+//      reflects read immediately without waiting for the next
+//      delta sync.
+//   7. Retryable errors throw so the queue backs off + retries
+//      against the SAME mutation row; terminal errors close the
+//      row and the queue marks the job failed.
 
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/observability/logger";
@@ -28,10 +53,10 @@ import { APPROVED_DELEGATED_SCOPES } from "@/lib/integrations/microsoft-graph-de
 
 export type MarkReadOutcome =
   | { status: "SUCCEEDED"; markReadMutationId: string }
-  | { status: "NOT_REQUIRED"; reason: string }
-  | { status: "PENDING_SCOPE"; missingScopes: string[] }
-  | { status: "RETRYABLE"; error: string }
-  | { status: "FAILED_TERMINAL"; error: string };
+  | { status: "NOT_REQUIRED"; reason: string; markReadMutationId?: string }
+  | { status: "PENDING_SCOPE"; missingScopes: string[]; markReadMutationId?: string }
+  | { status: "RETRYABLE"; error: string; markReadMutationId?: string }
+  | { status: "FAILED_TERMINAL"; error: string; markReadMutationId?: string };
 
 export interface MailboxMarkReadPayload {
   workIntakeItemId: string;
@@ -39,6 +64,11 @@ export interface MailboxMarkReadPayload {
   graphMessageId: string;
   mailboxConnectionId: string;
   triggeredByUserId?: string;
+  // Rev-13: the enqueue site creates the mutation row and passes
+  // its ID here. Older enqueued jobs (pre-rev-13) may not carry
+  // this field; when absent, the worker creates a fresh row so
+  // the transition is backward-compatible during a rolling deploy.
+  markReadMutationId?: string;
 }
 
 const REQUIRED_SCOPES = ["Mail.ReadWrite"];
@@ -57,6 +87,7 @@ export async function runMailboxMarkRead(
       isRead: true,
       softDeletedAt: true,
       lastSyncedAt: true,
+      updatedAt: true,
     },
   });
   if (!email) {
@@ -64,68 +95,89 @@ export async function runMailboxMarkRead(
     return { status: "FAILED_TERMINAL", error: "EmailMessage not found" };
   }
   if (email.softDeletedAt) {
-    return { status: "NOT_REQUIRED", reason: "email_soft_deleted" };
+    return { status: "NOT_REQUIRED", reason: "email_soft_deleted", markReadMutationId: payload.markReadMutationId };
   }
-  // Short-circuit if a delta sync (or a prior PATCH) already flipped it.
-  if (email.isRead) {
-    return { status: "NOT_REQUIRED", reason: "already_read_in_local_mirror" };
-  }
-  // Phase 4R rev-12 stale-mutation guard (founder brief §7).
-  // If we're on a retry attempt AND a mailbox sync has run AFTER
-  // this mutation was created AND the mirror STILL says the email
-  // is unread, treat that as Outlook actively contradicting the
-  // Spectre-side click:
-  //   - The founder may have marked the email unread in Outlook
-  //     after clicking here (during our backoff window).
-  //   - OR the founder has not touched Outlook at all and Outlook
-  //     genuinely reports unread — respecting that is still safer
-  //     than repeatedly overriding Outlook's current state.
-  // On the FIRST attempt this guard is bypassed (a delta sync can
-  // fire between enqueue and immediate execution, but there is no
-  // meaningful contradiction to protect against yet — we've never
-  // told Graph anything).
-  const existingMutation = await prisma.outlookMarkReadMutation.findUnique({
-    where: {
-      mailboxConnectionId_emailMessageId: {
-        mailboxConnectionId: email.mailboxConnectionId,
+
+  // 2. Resolve / create the mutation row for THIS generation.
+  //    Enqueue-site creation is the normal path. During rollout
+  //    (worker running rev-13 with an in-flight pre-rev-13 job),
+  //    the payload may not carry markReadMutationId — in which
+  //    case we create a fresh row here.
+  let mutationRow = payload.markReadMutationId
+    ? await prisma.outlookMarkReadMutation.findUnique({
+        where: { id: payload.markReadMutationId },
+        select: {
+          id: true, status: true, attemptCount: true,
+          createdAt: true, errorCode: true,
+        },
+      })
+    : null;
+
+  if (!mutationRow) {
+    mutationRow = await prisma.outlookMarkReadMutation.create({
+      data: {
+        clubId: email.clubId,
+        workIntakeItemId: payload.workIntakeItemId,
         emailMessageId: email.id,
+        graphMessageId: email.graphMessageId,
+        mailboxConnectionId: email.mailboxConnectionId,
+        triggeredByUserId: payload.triggeredByUserId ?? null,
+        generationCursor: email.updatedAt.toISOString(),
+        status: "RUNNING",
+        attemptCount: 1,
+        lastAttemptAt: new Date(),
       },
-    },
-    select: { createdAt: true, attemptCount: true, status: true },
-  });
+      select: {
+        id: true, status: true, attemptCount: true,
+        createdAt: true, errorCode: true,
+      },
+    });
+  } else {
+    // Bump attemptCount for observability / retry accounting.
+    await prisma.outlookMarkReadMutation.update({
+      where: { id: mutationRow.id },
+      data: {
+        attemptCount: { increment: 1 },
+        lastAttemptAt: new Date(),
+        status: "RUNNING",
+      },
+    });
+  }
+
+  // 3. Short-circuit if the local mirror already says READ. A
+  //    concurrent Spectre generation or a delta sync flipped it;
+  //    this generation is a no-op.
+  if (email.isRead) {
+    await closeMutation(mutationRow.id, { status: "NOT_REQUIRED", errorCode: "already_read_in_local_mirror" });
+    return { status: "NOT_REQUIRED", reason: "already_read_in_local_mirror", markReadMutationId: mutationRow.id };
+  }
+
+  // 4. SUPERSEDED guard (this generation only) — if we've retried
+  //    at least once AND a mailbox sync has ingested a fresh
+  //    isRead=false AFTER we queued THIS mutation, Outlook has
+  //    actively contradicted the queued intent. Skip and record.
+  //    On the FIRST attempt this guard cannot trip (attemptCount
+  //    was just incremented from its initial value).
   if (
-    existingMutation &&
-    existingMutation.attemptCount >= 1 &&
-    existingMutation.status !== "SUCCEEDED" &&
-    existingMutation.status !== "FAILED_TERMINAL" &&
+    mutationRow.attemptCount >= 2 &&
     email.lastSyncedAt &&
-    email.lastSyncedAt > existingMutation.createdAt
+    email.lastSyncedAt > mutationRow.createdAt
   ) {
     logger.info("mailbox.mark-read.superseded-by-outlook", {
       workIntakeItemIdTail: payload.workIntakeItemId.slice(-6),
       emailMessageIdTail: email.id.slice(-6),
       lastSyncedAt: email.lastSyncedAt.toISOString(),
-      mutationCreatedAt: existingMutation.createdAt.toISOString(),
+      mutationCreatedAt: mutationRow.createdAt.toISOString(),
     });
-    await prisma.outlookMarkReadMutation.update({
-      where: {
-        mailboxConnectionId_emailMessageId: {
-          mailboxConnectionId: email.mailboxConnectionId,
-          emailMessageId: email.id,
-        },
-      },
-      data: {
-        status: "SUPERSEDED",
-        completedAt: new Date(),
-        errorCode: "superseded_by_outlook_unread",
-      },
+    await closeMutation(mutationRow.id, {
+      status: "SUPERSEDED",
+      errorCode: "superseded_by_outlook_unread",
     });
-    return { status: "NOT_REQUIRED", reason: "superseded_by_outlook_unread" };
+    return { status: "NOT_REQUIRED", reason: "superseded_by_outlook_unread", markReadMutationId: mutationRow.id };
   }
 
-  // 2. Scope allowlist check — Mail.ReadWrite must be in the
-  //    codebase's approved scope set. This is a static config
-  //    guard; runtime consent is checked separately below.
+  // 5. Scope allowlist check — Mail.ReadWrite must be in the
+  //    approved scope set (compile-time guard).
   const missingScopes = REQUIRED_SCOPES.filter(
     (s) => !(APPROVED_DELEGATED_SCOPES as readonly string[]).includes(s),
   );
@@ -134,46 +186,26 @@ export async function runMailboxMarkRead(
       workIntakeItemIdTail: payload.workIntakeItemId.slice(-6),
       missingScopes,
     });
-    return { status: "PENDING_SCOPE", missingScopes };
+    await closeMutation(mutationRow.id, { status: "PENDING_SCOPE", errorCode: "scope_not_allowlisted" });
+    return { status: "PENDING_SCOPE", missingScopes, markReadMutationId: mutationRow.id };
   }
 
-  // 3. Idempotency: upsert the mutation row keyed on
-  //    (mailboxConnectionId, emailMessageId). If a prior worker
-  //    already SUCCEEDED, return immediately.
-  const mutation = await upsertMutation({
-    clubId: email.clubId,
-    workIntakeItemId: payload.workIntakeItemId,
-    emailMessageId: email.id,
-    graphMessageId: email.graphMessageId,
-    mailboxConnectionId: email.mailboxConnectionId,
-    triggeredByUserId: payload.triggeredByUserId ?? null,
-  });
-  if (mutation.status === "SUCCEEDED") {
-    return { status: "SUCCEEDED", markReadMutationId: mutation.id };
-  }
-  if (mutation.status === "FAILED_TERMINAL") {
-    return {
-      status: "FAILED_TERMINAL",
-      error: mutation.errorCode ?? "prior_terminal_failure",
-    };
-  }
-
-  // 4. Check MailboxConnection.grantedScopes — user-consent gate.
+  // 6. Runtime consent gate — MailboxConnection.grantedScopes.
   const conn = await prisma.mailboxConnection.findUnique({
     where: { id: email.mailboxConnectionId },
     select: { grantedScopes: true, status: true, userId: true },
   });
   if (!conn || conn.status !== "CONNECTED") {
-    await markMutation(mutation.id, { status: "RETRYABLE", errorCode: "connection_not_ready" });
-    return { status: "RETRYABLE", error: "mailbox_connection_not_connected" };
+    await markRetryable(mutationRow.id, "connection_not_ready");
+    return { status: "RETRYABLE", error: "mailbox_connection_not_connected", markReadMutationId: mutationRow.id };
   }
   const grantedScopes = (conn.grantedScopes ?? "").split(/\s+/).filter(Boolean);
   if (!grantedScopes.map((s) => s.toLowerCase()).includes("mail.readwrite")) {
-    await markMutation(mutation.id, { status: "RETRYABLE", errorCode: "user_consent_missing" });
-    return { status: "PENDING_SCOPE", missingScopes: ["Mail.ReadWrite"] };
+    await markRetryable(mutationRow.id, "user_consent_missing");
+    return { status: "PENDING_SCOPE", missingScopes: ["Mail.ReadWrite"], markReadMutationId: mutationRow.id };
   }
 
-  // 5. Perform the Graph PATCH via the provider.
+  // 7. Perform the Graph PATCH via the provider.
   const { getFreshDelegatedAccessToken } = await import("./connect");
   const { getMicrosoftDelegatedProvider } = await import(
     "@/lib/integrations/microsoft-graph-delegated"
@@ -189,7 +221,7 @@ export async function runMailboxMarkRead(
       accessToken: tok.accessToken,
       graphMessageId: email.graphMessageId,
     });
-    // 6. Update local mirror so the loader reflects read
+    // 8. Update local mirror so the loader reflects read
     //    immediately (do not wait for next delta sync). Wrapped
     //    with the mutation write in a single transaction so both
     //    complete-or-neither in the presence of a crash.
@@ -199,7 +231,7 @@ export async function runMailboxMarkRead(
         data: { isRead: true },
       }),
       prisma.outlookMarkReadMutation.update({
-        where: { id: mutation.id },
+        where: { id: mutationRow.id },
         data: {
           status: "SUCCEEDED",
           completedAt: new Date(),
@@ -210,97 +242,49 @@ export async function runMailboxMarkRead(
     logger.info("mailbox.mark-read.succeeded", {
       workIntakeItemIdTail: payload.workIntakeItemId.slice(-6),
       emailMessageIdTail: email.id.slice(-6),
+      markReadMutationIdTail: mutationRow.id.slice(-6),
     });
-    return { status: "SUCCEEDED", markReadMutationId: mutation.id };
+    return { status: "SUCCEEDED", markReadMutationId: mutationRow.id };
   } catch (e) {
     const err = e as Error & { code?: string; status?: number };
     // Terminal error classes: 404 message-not-found, 410 gone.
-    // 401/403 permission may be transient if a token refresh
-    // helps — leave as retryable; the queue's terminal-classify
-    // will kick in on repeat.
     const isTerminal =
       err.status === 404 ||
       err.status === 410 ||
       err.code === "MESSAGE_NOT_FOUND";
     if (isTerminal) {
-      await markMutation(mutation.id, {
+      await closeMutation(mutationRow.id, {
         status: "FAILED_TERMINAL",
         errorCode: err.code ?? `http_${err.status ?? "unknown"}`,
       });
-      return { status: "FAILED_TERMINAL", error: err.message ?? "terminal_failure" };
+      return { status: "FAILED_TERMINAL", error: err.message ?? "terminal_failure", markReadMutationId: mutationRow.id };
     }
-    await markMutation(mutation.id, {
-      status: "RETRYABLE",
-      errorCode: err.code ?? `http_${err.status ?? "unknown"}`,
-    });
+    await markRetryable(mutationRow.id, err.code ?? `http_${err.status ?? "unknown"}`);
     // Throw so the queue applies exponential backoff + retries.
     throw err;
   }
 }
 
-interface MutationRow {
-  id: string;
-  status: string;
-  errorCode?: string | null;
-}
-
-async function upsertMutation(args: {
-  clubId: string;
-  workIntakeItemId: string;
-  emailMessageId: string;
-  graphMessageId: string;
-  mailboxConnectionId: string;
-  triggeredByUserId: string | null;
-}): Promise<MutationRow> {
-  // Unique constraint is on (mailboxConnectionId, emailMessageId).
-  const existing = await prisma.outlookMarkReadMutation.findUnique({
-    where: {
-      mailboxConnectionId_emailMessageId: {
-        mailboxConnectionId: args.mailboxConnectionId,
-        emailMessageId: args.emailMessageId,
-      },
-    },
-    select: { id: true, status: true, errorCode: true },
-  });
-  if (existing) {
-    if (existing.status === "SUCCEEDED" || existing.status === "FAILED_TERMINAL") {
-      return existing;
-    }
-    // Advance attemptCount + reset to RUNNING for this attempt.
-    await prisma.outlookMarkReadMutation.update({
-      where: { id: existing.id },
-      data: {
-        attemptCount: { increment: 1 },
-        lastAttemptAt: new Date(),
-        status: "RUNNING",
-      },
-    });
-    return { ...existing, status: "RUNNING" };
-  }
-  const created = await prisma.outlookMarkReadMutation.create({
-    data: {
-      clubId: args.clubId,
-      workIntakeItemId: args.workIntakeItemId,
-      emailMessageId: args.emailMessageId,
-      graphMessageId: args.graphMessageId,
-      mailboxConnectionId: args.mailboxConnectionId,
-      triggeredByUserId: args.triggeredByUserId,
-      status: "RUNNING",
-      attemptCount: 1,
-      lastAttemptAt: new Date(),
-    },
-    select: { id: true, status: true, errorCode: true },
-  });
-  return created;
-}
-
-async function markMutation(
+async function closeMutation(
   id: string,
-  data: {
-    status?: string;
-    completedAt?: Date;
-    errorCode?: string | null;
-  },
+  args: { status: string; errorCode?: string | null },
 ): Promise<void> {
-  await prisma.outlookMarkReadMutation.update({ where: { id }, data });
+  await prisma.outlookMarkReadMutation.update({
+    where: { id },
+    data: {
+      status: args.status,
+      completedAt: new Date(),
+      errorCode: args.errorCode ?? null,
+    },
+  });
+}
+
+async function markRetryable(id: string, errorCode: string): Promise<void> {
+  await prisma.outlookMarkReadMutation.update({
+    where: { id },
+    data: {
+      status: "RETRYABLE",
+      errorCode,
+    },
+  });
 }

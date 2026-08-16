@@ -334,6 +334,7 @@ async function enqueueOutlookMarkReadForLinkedEmails(args: {
           softDeletedAt: true,
           graphMessageId: true,
           mailboxConnectionId: true,
+          updatedAt: true,
         },
       },
     },
@@ -342,12 +343,69 @@ async function enqueueOutlookMarkReadForLinkedEmails(args: {
 
   const { enqueue } = await import("@/lib/queue");
   const { logger } = await import("@/lib/observability/logger");
+  // Rev-13 (2026-08-16) — status values that indicate a mark-read
+  // intent is CURRENTLY active. Historical statuses (SUCCEEDED,
+  // FAILED_TERMINAL, NOT_REQUIRED, SUPERSEDED) do NOT block a new
+  // generation — that was the rev-10 permanent-latch bug.
+  const ACTIVE_STATUSES = ["PENDING", "RUNNING", "RETRYABLE"] as const;
   for (const origin of origins) {
     const email = origin.emailMessage;
     if (!email) continue;
-    if (email.isRead) continue; // already read in Outlook mirror
+    // Rev-13 — the stale-mirror short-circuit is preserved as an
+    // optimisation (if we already know the email is read, don't
+    // enqueue a PATCH that would be a no-op). The rev-12 bug was
+    // NOT this check; it was the permanent SUCCEEDED latch on the
+    // mutation row. After Fix A ships, the manual Feed Sync path
+    // guarantees the local mirror is fresh before the founder
+    // clicks the card, so this check will not lag reality.
+    if (email.isRead) continue;
     if (email.softDeletedAt) continue;
     try {
+      // Rev-13 active-intent dedupe (Fix B). If there is already an
+      // active mutation row for THIS (mailboxConnection, email) —
+      // status IN ('PENDING','RUNNING','RETRYABLE') — a duplicate
+      // click during that window must NOT create a second row or a
+      // second Graph PATCH. Historical rows are ignored.
+      const existingActive = await prisma.outlookMarkReadMutation.findFirst({
+        where: {
+          mailboxConnectionId: email.mailboxConnectionId,
+          emailMessageId: email.id,
+          status: { in: [...ACTIVE_STATUSES] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, createdAt: true },
+      });
+      if (existingActive) {
+        logger.info("work-intake.mark-read.active-intent-dedupe", {
+          workIntakeItemIdTail: args.workIntakeItemId.slice(-6),
+          emailMessageIdTail: email.id.slice(-6),
+          activeMutationIdTail: existingActive.id.slice(-6),
+          activeStatus: existingActive.status,
+        });
+        continue;
+      }
+
+      // Rev-13 (Fix B) — CREATE a new mutation row for this
+      // generation. `generationCursor` records the email's
+      // updatedAt at enqueue time; the worker loads the row by
+      // id and closes it through its own lifecycle (SUCCEEDED /
+      // FAILED_TERMINAL / SUPERSEDED / NOT_REQUIRED). Historical
+      // rows for prior generations remain as immutable audit.
+      const mutation = await prisma.outlookMarkReadMutation.create({
+        data: {
+          clubId: email.clubId,
+          workIntakeItemId: args.workIntakeItemId,
+          emailMessageId: email.id,
+          graphMessageId: email.graphMessageId,
+          mailboxConnectionId: email.mailboxConnectionId,
+          triggeredByUserId: args.triggeredByUserId,
+          generationCursor: email.updatedAt.toISOString(),
+          status: "PENDING",
+          attemptCount: 0,
+        },
+        select: { id: true },
+      });
+
       await enqueue({
         kind: "MAILBOX_MARK_READ",
         clubId: email.clubId,
@@ -357,10 +415,14 @@ async function enqueueOutlookMarkReadForLinkedEmails(args: {
           graphMessageId: email.graphMessageId,
           mailboxConnectionId: email.mailboxConnectionId,
           triggeredByUserId: args.triggeredByUserId,
+          markReadMutationId: mutation.id,
         },
-        // Enqueue is idempotent at the queue layer via the key,
-        // and the worker is idempotent via OutlookMarkReadMutation.
-        idempotencyKey: `mailbox-mark-read:${email.mailboxConnectionId}:${email.id}`,
+        // Rev-13 — idempotencyKey includes the mutation ID so each
+        // generation has its own key. The queue layer's dedupe still
+        // collapses truly concurrent enqueues of the same key (rare
+        // if the active-intent guard above is honoured). Historical
+        // COMPLETED queue rows do not block, per queue semantics.
+        idempotencyKey: `mailbox-mark-read:${email.mailboxConnectionId}:${email.id}:${mutation.id}`,
       });
     } catch (e) {
       // Failure to enqueue must NOT roll back the local
