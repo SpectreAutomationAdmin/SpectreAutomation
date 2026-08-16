@@ -1884,6 +1884,117 @@ async function seedPhase5(
   });
   await seedIssueInvitation(principal, employeeD.id, { ttlHours: 24 * 7 });
 
+  // HR-1 admin-workflows slice (2026-08-16) — Employee A + Employee C
+  // fixtures. These exercise the canonical employee CRUD, EmployeeDocument
+  // profile-photo + resume back-pointers, EmploymentPeriod effective
+  // dating, and onboarding-session APPROVED state without touching
+  // SIN / bank / tax (Employee A) or the Member link (Employee C — a
+  // family relationship exists out-of-band with a Member row, but the
+  // Employee row's memberId MUST stay NULL).
+  const {
+    createEmployee: seedCreateEmployee,
+  } = await import("../src/lib/hr/employees");
+  const {
+    openEmploymentPeriod: seedOpenPeriod,
+  } = await import("../src/lib/hr/employment-periods");
+  const {
+    uploadEmployeeDocument: seedUploadDoc,
+  } = await import("../src/lib/hr/documents");
+  const {
+    createSession: seedCreateSession,
+    transitionSession: seedTransitionSession,
+  } = await import("../src/lib/hr/onboarding-sessions");
+
+  // --- Employee A — Alexandra Reyes. Not a Member. Full onboarding
+  //     completed (APPROVED); profile photo + resume as
+  //     EmployeeDocument rows; open employment period from hire date.
+  const employeeA = await seedCreateEmployee(principal, clubId, {
+    firstName: "Alexandra", lastName: "Reyes",
+    email: "alexandra.r@silversprings.club",
+    departmentId: adminDept?.id ?? null,
+    positionId: posAdmin.id,
+    compensationType: "SALARY", payRate: 65000,
+    hireDate: "2024-03-15",
+    employmentType: "FULL_TIME",
+    employeeLifecycle: "ACTIVE",
+  });
+  const alexandraPhoto = await seedUploadDoc(principal, employeeA.id, {
+    category: "profile_photo",
+    storageKey: "s3://spectre-hr/seed/alexandra-photo.jpg",
+    contentSha256: "a".repeat(64),
+    sizeBytes: 87_400,
+    mimeType: "image/jpeg",
+    displayName: "Alexandra Reyes — profile photo",
+  });
+  const alexandraResume = await seedUploadDoc(principal, employeeA.id, {
+    category: "resume",
+    storageKey: "s3://spectre-hr/seed/alexandra-resume.pdf",
+    contentSha256: "b".repeat(64),
+    sizeBytes: 152_300,
+    mimeType: "application/pdf",
+    displayName: "Alexandra Reyes — resume",
+  });
+  await prisma.employee.update({
+    where: { id: employeeA.id },
+    data: {
+      profilePhotoDocumentId: alexandraPhoto.id,
+      resumeDocumentId: alexandraResume.id,
+    },
+  });
+  await seedOpenPeriod(principal, employeeA.id, {
+    effectiveFrom: new Date("2024-03-15"),
+    employmentType: "FULL_TIME",
+    reason: "HIRE",
+    departmentId: adminDept?.id ?? null,
+    positionId: posAdmin.id,
+  });
+  // Onboarding — DRAFT -> INVITED -> IN_PROGRESS -> SUBMITTED -> APPROVED.
+  const sessionA = await seedCreateSession(principal, employeeA.id);
+  await seedTransitionSession(principal, sessionA.id, "INVITED");
+  await seedTransitionSession(principal, sessionA.id, "IN_PROGRESS", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeA.id,
+  });
+  await seedTransitionSession(principal, sessionA.id, "SUBMITTED", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeA.id,
+  });
+  await seedTransitionSession(principal, sessionA.id, "APPROVED");
+
+  // --- Employee C — Carmen Sato. Child-of-Member (family relationship
+  //     is out-of-band with an existing Member; the Employee row's
+  //     memberId MUST stay NULL — do NOT link. F&B server, open
+  //     employment period, onboarding APPROVED.
+  const employeeC = await seedCreateEmployee(principal, clubId, {
+    firstName: "Carmen", lastName: "Sato",
+    email: "carmen.s@silversprings.club",
+    departmentId: fbDept?.id ?? null,
+    positionId: posServer.id,
+    compensationType: "HOURLY", payRate: 18,
+    hireDate: "2025-06-01",
+    employmentType: "PART_TIME",
+    employeeLifecycle: "ACTIVE",
+  });
+  // Explicitly assert the invariant: Employee C is NOT linked to a
+  // Member, even though a Sato family Member exists in the club.
+  if (employeeC.memberId !== null) {
+    throw new Error("Employee C fixture must have memberId=null (child-of-Member is out-of-band)");
+  }
+  await seedOpenPeriod(principal, employeeC.id, {
+    effectiveFrom: new Date("2025-06-01"),
+    employmentType: "PART_TIME",
+    reason: "HIRE",
+    departmentId: fbDept?.id ?? null,
+    positionId: posServer.id,
+  });
+  const sessionC = await seedCreateSession(principal, employeeC.id);
+  await seedTransitionSession(principal, sessionC.id, "INVITED");
+  await seedTransitionSession(principal, sessionC.id, "IN_PROGRESS", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeC.id,
+  });
+  await seedTransitionSession(principal, sessionC.id, "SUBMITTED", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeC.id,
+  });
+  await seedTransitionSession(principal, sessionC.id, "APPROVED");
+
   // --- Asset categories, locations, demo asset
   const buildingsCat = await prisma.assetCategory.create({
     data: {
@@ -1964,7 +2075,7 @@ async function seedPhase5(
     await budgetService.activateBudget(principal, budget.id);
   }
 
-  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 5 employees (3 baseline + Employee B full HR + Employee D onboarding), 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
+  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 7 employees (3 baseline + Employee B full HR + Employee D onboarding + Employee A onboarded + Employee C onboarded), 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
 }
 
 // Founder rule 2026-07-01 v14.9 — tag every seeded JournalEntry as
