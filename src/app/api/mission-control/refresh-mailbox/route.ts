@@ -138,8 +138,122 @@ export async function POST() {
     }
   }
 
+  // Phase 4R rev-13 SECOND FINDING (2026-08-16) — MAILBOX_INITIAL_SYNC
+  // scopes to the inbox folder, but a Work Intake card's linked email
+  // can be OUT of the inbox (e.g. archived by the rev-16H
+  // post-completion archive worker, moved to another folder in Outlook,
+  // etc.). Live evidence on staging: #221007 has
+  // `parentFolderId != inbox`, so inbox delta AND inbox list both
+  // return zero rows for that message, and its DB mirror sits at a
+  // stale `isRead=true` forever regardless of how many syncs run.
+  //
+  // The founder-facing contract is "manual refresh must make the
+  // mirror agree with Graph for every currently-visible Work Intake
+  // card." So we ALSO re-verify each visible email-backed intake by
+  // calling Graph directly per-message. Bounded: caller's own club,
+  // up to 50 open items, each ~200-500ms → typically ≤10s inline.
+  // Runs BEFORE the response so the client's snapshot-summary poll
+  // sees the updated mirror as soon as the POST returns.
+  let reverifiedCount = 0;
+  let reverifyErrors = 0;
+  try {
+    const { getFreshDelegatedAccessToken } = await import("@/lib/mailbox/connect");
+    // Open Work Intake items in this club that have a PRIMARY email
+    // origin. Skip RESOLVED / SUPPRESSED to bound the work.
+    const openIntakes = await prisma.workIntakeItem.findMany({
+      where: {
+        clubId,
+        status: { in: ["OPEN", "IN_PROGRESS", "DEFERRED", "INFORMATIONAL"] },
+        emailOrigins: { some: { role: "PRIMARY" } },
+      },
+      select: {
+        id: true,
+        emailOrigins: {
+          where: { role: "PRIMARY" },
+          take: 1,
+          select: {
+            emailMessage: {
+              select: {
+                id: true, graphMessageId: true, mailboxConnectionId: true,
+                isRead: true,
+              },
+            },
+          },
+        },
+      },
+      take: 50,
+      orderBy: { createdAt: "desc" },
+    });
+    // Group by mailbox so we can amortise one token per connection.
+    const byMailbox = new Map<string, Array<{ emailId: string; graphMessageId: string; currentIsRead: boolean }>>();
+    for (const it of openIntakes) {
+      const em = it.emailOrigins[0]?.emailMessage;
+      if (!em) continue;
+      if (!byMailbox.has(em.mailboxConnectionId)) byMailbox.set(em.mailboxConnectionId, []);
+      byMailbox.get(em.mailboxConnectionId)!.push({
+        emailId: em.id, graphMessageId: em.graphMessageId, currentIsRead: em.isRead,
+      });
+    }
+    for (const [mailboxId, emails] of byMailbox.entries()) {
+      try {
+        const tok = await getFreshDelegatedAccessToken({
+          mailboxConnectionId: mailboxId,
+          callerClubId: clubId,
+          callerUserId: principal.id,
+        });
+        for (const e of emails) {
+          try {
+            const url =
+              `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(e.graphMessageId)}` +
+              `?$select=isRead`;
+            const res = await fetch(url, {
+              headers: { Authorization: `Bearer ${tok.accessToken}` },
+            });
+            if (!res.ok) {
+              reverifyErrors += 1;
+              continue;
+            }
+            const body = (await res.json()) as { isRead?: boolean };
+            if (typeof body.isRead !== "boolean") continue;
+            if (body.isRead === e.currentIsRead) {
+              // Mirror already agrees; skip DB write.
+              continue;
+            }
+            // Rev-13 tri-state write — this is the whole point of the
+            // manual refresh barrier: bring the mirror in agreement
+            // with the current Graph state, regardless of folder.
+            await prisma.emailMessage.update({
+              where: { id: e.emailId },
+              data: { isRead: body.isRead, lastSyncedAt: new Date() },
+            });
+            reverifiedCount += 1;
+          } catch {
+            reverifyErrors += 1;
+          }
+        }
+      } catch {
+        reverifyErrors += emails.length;
+      }
+    }
+  } catch (e) {
+    // Re-verify is a best-effort augmentation on top of the queued
+    // sync. Failure here does not fail the whole refresh — the client
+    // will still get the sync job's result. Log for observability.
+    const { logger } = await import("@/lib/observability/logger");
+    logger.warn("mission-control.refresh-mailbox.reverify-failed", {
+      clubIdTail: clubId.slice(-6),
+      error: (e as Error).message,
+    });
+  }
+
   return NextResponse.json(
-    { jobIds, mailboxConnectionIds, enqueuedAt: enqueuedAt.toISOString() },
+    {
+      jobIds,
+      mailboxConnectionIds,
+      enqueuedAt: enqueuedAt.toISOString(),
+      reverifiedCount,
+      reverifyErrors,
+    },
     { status: 202 },
   );
 }
