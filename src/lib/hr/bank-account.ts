@@ -59,19 +59,21 @@ function normaliseDigits(input: string, expectedLen: number | { min: number; max
   return stripped;
 }
 
-// KMS secret references are keyed off employeeId. The schema does
-// not @unique employeeId on EmployeeBankAccount (multiple historical
-// rows per employee would be permitted), but the service layer
-// treats "current banking" as the single most recent row and updates
-// it in place. Historical rows are re-encrypted lazily on the next
-// write.
+// KMS secret references are keyed off employeeId. Historical rows are
+// retained (INACTIVE / REJECTED); the "current" row is the sole row
+// in a non-terminal status (PENDING_PENNY_TEST or VERIFIED). HR-1H
+// (2026-08-16) adds a Postgres+SQLite partial unique index enforcing
+// at most one VERIFIED row per employee at the DB level — see
+// prisma-postgres/migrations/20260817_hr1h_banking_verified_partial_unique.
 function institutionRef(employeeId: string) { return `bank:${employeeId}:institution`; }
 function transitRef(employeeId: string) { return `bank:${employeeId}:transit`; }
 function accountRef(employeeId: string) { return `bank:${employeeId}:account`; }
 
+const NON_TERMINAL_STATUSES = ["PENDING_PENNY_TEST", "VERIFIED"] as const;
+
 async function findCurrentBank(employeeId: string) {
   return prisma.employeeBankAccount.findFirst({
-    where: { employeeId },
+    where: { employeeId, status: { in: [...NON_TERMINAL_STATUSES] } },
     orderBy: { updatedAt: "desc" },
   });
 }
@@ -144,21 +146,16 @@ export async function upsertBankAccount(
     actorUserId: principal.id,
   });
 
-  const updated = before
-    ? await prisma.employeeBankAccount.update({
-        where: { id: before.id },
-        data: {
-          institutionSecretRef: institutionCipher,
-          transitSecretRef: transitCipher,
-          accountSecretRef: accountCipher,
-          accountLastFour,
-          holderName,
-          // Any banking edit voids a previously activated account.
-          status: "PENDING_PENNY_TEST",
-          activatedAt: null,
-        },
-      })
-    : await prisma.employeeBankAccount.create({
+  // HR-1H history preservation:
+  //   - No current row → create a fresh PENDING_PENNY_TEST.
+  //   - Current row is PENDING_PENNY_TEST → update in place (typo /
+  //     re-entry workflow; nothing was ever a payroll destination).
+  //   - Current row is VERIFIED → move it to INACTIVE and create a
+  //     new PENDING_PENNY_TEST row in one $transaction. The old row's
+  //     activatedAt is preserved as historical activation timestamp.
+  const updated = await (async () => {
+    if (!before) {
+      return prisma.employeeBankAccount.create({
         data: {
           clubId: employee.clubId,
           employeeId,
@@ -170,6 +167,39 @@ export async function upsertBankAccount(
           status: "PENDING_PENNY_TEST",
         },
       });
+    }
+    if (before.status === "PENDING_PENNY_TEST") {
+      return prisma.employeeBankAccount.update({
+        where: { id: before.id },
+        data: {
+          institutionSecretRef: institutionCipher,
+          transitSecretRef: transitCipher,
+          accountSecretRef: accountCipher,
+          accountLastFour,
+          holderName,
+        },
+      });
+    }
+    // before.status === "VERIFIED" — preserve history.
+    return prisma.$transaction(async (tx) => {
+      await tx.employeeBankAccount.update({
+        where: { id: before.id },
+        data: { status: "INACTIVE" },
+      });
+      return tx.employeeBankAccount.create({
+        data: {
+          clubId: employee.clubId,
+          employeeId,
+          institutionSecretRef: institutionCipher,
+          transitSecretRef: transitCipher,
+          accountSecretRef: accountCipher,
+          accountLastFour,
+          holderName,
+          status: "PENDING_PENNY_TEST",
+        },
+      });
+    });
+  })();
 
   await audit(principal, {
     action: "hr.bank.write.update",
@@ -181,6 +211,7 @@ export async function upsertBankAccount(
           accountLastFour: before.accountLastFour,
           holderName: before.holderName,
           status: before.status,
+          replacedRowId: before.id !== updated.id ? before.id : null,
         }
       : null,
     after: {

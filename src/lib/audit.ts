@@ -45,7 +45,26 @@ export async function audit(actor: Principal | { id: string } | null, input: Aud
 
 // Stable, size-bounded JSON serializer. Strips functions, large blobs, and
 // known-sensitive keys.
-const SENSITIVE_KEYS = new Set(["passwordHash", "password", "mfaSecret", "cardNumber", "cvv", "accountNumber", "ssn", "sin"]);
+// HR-1H (2026-08-16) — extended for HR defense-in-depth. Canonical HR
+// services in src/lib/hr/** never pass these keys to audit(), but the
+// generic redaction here is the second line of defense if a future
+// contributor accidentally hands the audit layer a raw sensitive
+// payload. Includes both plaintext HR field names and the *SecretRef
+// ciphertext blob names (ciphertext isn't plaintext, but logging
+// encrypted blobs into audit rows is operationally noisy and creates
+// a key-rotation cleanup obligation).
+const SENSITIVE_KEYS = new Set([
+  // pre-HR
+  "passwordHash", "password", "mfaSecret", "cardNumber", "cvv", "accountNumber", "ssn", "sin",
+  // HR plaintext identifiers (canonical services never send these to audit)
+  "institutionNumber", "transitNumber",
+  "federalClaim", "provincialClaim", "additionalDeductions", "additionalDeduction",
+  // HR ciphertext blobs (KMS envelope refs; noisy in audit)
+  "sinSecretRef",
+  "institutionSecretRef", "transitSecretRef", "accountSecretRef",
+  "federalClaimSecretRef", "provincialClaimSecretRef",
+  "additionalDeductionSecretRef", "additionalDeductionsSecretRef",
+]);
 const MAX_LENGTH = 16_000;
 
 function safeStringify(value: unknown): string {

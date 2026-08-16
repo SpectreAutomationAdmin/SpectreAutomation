@@ -29,10 +29,32 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         DATABASE_URL: `file:${TEST_DB_PATH.replace(/\\/g, "/")}`,
       },
     });
+    // HR-1H (2026-08-16) — Prisma cannot declare partial unique
+    // indexes for SQLite in its schema DSL. `db push` reads the
+    // schema (not migrations), so we replay the partial-unique DDL
+    // here so vitest exercises the same invariant that prisma migrate
+    // applies in production Postgres. Keep this list in lock-step
+    // with prisma/migrations/*_partial_unique/*.sql.
+    await applyPartialUniqueIndexes(TEST_DB_PATH);
   }
 
   return async () => {
     if (IS_POSTGRES_TEST) return;
     try { if (existsSync(TEST_DB_PATH)) rmSync(TEST_DB_PATH); } catch { /* noop */ }
   };
+}
+
+async function applyPartialUniqueIndexes(dbPath: string): Promise<void> {
+  const { PrismaClient } = await import("@prisma/client");
+  const client = new PrismaClient({
+    datasources: { db: { url: `file:${dbPath.replace(/\\/g, "/")}` } },
+  });
+  try {
+    await client.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "EmployeeBankAccount_employeeId_verified_key" ` +
+        `ON "EmployeeBankAccount" ("employeeId") WHERE status = 'VERIFIED';`,
+    );
+  } finally {
+    await client.$disconnect();
+  }
 }
