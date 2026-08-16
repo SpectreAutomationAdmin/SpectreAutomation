@@ -219,6 +219,28 @@ async function main() {
   await prisma.timeClockEvent.deleteMany();
   await prisma.payrollPeriod.deleteMany();
   await prisma.labourBudget.deleteMany();
+  // HR-1 (2026-08-16) — child tables of Employee (+ session children
+  // of session). FK-correct deletion order: grandchildren → children
+  // → parents. Everything below must delete BEFORE `employee` so the
+  // ON DELETE CASCADE / RESTRICT chain has nothing to trip on.
+  await prisma.employeeOnboardingResponse.deleteMany();      // FK → session + question
+  await prisma.employeeOnboardingStateTransition.deleteMany(); // FK → employee (+ optional session)
+  await prisma.employeeOnboardingSession.deleteMany();       // FK → employee
+  await prisma.employeeOnboardingInvitation.deleteMany();    // FK → employee
+  await prisma.employeeOnboardingQuestion.deleteMany();      // FK → club (nullable)
+  await prisma.employeeEmergencyContact.deleteMany();
+  await prisma.employeeCredential.deleteMany();
+  // EmployeeDocument BEFORE Employee — Employee has FKs
+  // profilePhotoDocumentId / resumeDocumentId pointing INTO it.
+  await prisma.employeeDocument.deleteMany();
+  await prisma.employeeTaxProfile.deleteMany();
+  await prisma.employeeBankAccount.deleteMany();
+  await prisma.employeeSensitiveIdentity.deleteMany();
+  await prisma.payrollDeduction.deleteMany();
+  await prisma.payrollBenefit.deleteMany();
+  await prisma.payrollProfile.deleteMany();
+  await prisma.employeeCompensation.deleteMany();
+  await prisma.employmentPeriod.deleteMany();
   await prisma.employee.deleteMany();
   await prisma.employeePosition.deleteMany();
   await prisma.lessonPayable.deleteMany();

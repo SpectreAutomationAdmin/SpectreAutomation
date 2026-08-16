@@ -23,7 +23,15 @@ import { env } from "../env";
 // values. Every MailboxConnection / GraphSubscription row stores KMS
 // envelope references under this scope. Rotating a scope key rotates
 // every mailbox token in one operation.
-export type KmsScope = "WEBHOOK" | "BILLING" | "POS" | "SSO" | "PUSH" | "API" | "SMTP" | "MAILBOX";
+//
+// HR-1 (2026-08-16): "HR" scope for employee-owned personal secrets —
+// SIN plaintext, banking (institution / transit / account numbers),
+// and CRA / provincial tax-form fields (TD1 federal/provincial claim
+// amounts, additional deduction requests). Every ciphertext blob on
+// EmployeeSensitiveIdentity, EmployeeBankAccount, and
+// EmployeeTaxProfile is wrapped under this scope so a single key
+// rotation covers all HR-owned employee secrets for a club.
+export type KmsScope = "WEBHOOK" | "BILLING" | "POS" | "SSO" | "PUSH" | "API" | "SMTP" | "MAILBOX" | "HR";
 
 export interface KmsProvider {
   name: string;
