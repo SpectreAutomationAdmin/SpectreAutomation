@@ -285,12 +285,18 @@ describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () 
     expect(CARD).toMatch(/import\s*\{[^}]*useLayoutEffect[^}]*\}\s*from\s*["']react["']/);
     expect(CARD).toMatch(/import\s*\{[^}]*useRef[^}]*\}\s*from\s*["']react["']/);
   });
-  it("EmailIntakeCard declares summaryRef + summaryBaseline state", () => {
-    expect(CARD).toMatch(/const summaryRef\s*=\s*useRef</);
+  it("EmailIntakeCard declares frameRef + summaryBaseline state", () => {
+    // Rev-9.2 — the observer targets the FRAME (not the summary
+    // shell) because box-sizing:border-box is global, so min-height
+    // on the frame is compared against the frame's OUTER rectangle;
+    // measuring anything else means applying the wrong number back.
+    expect(CARD).toMatch(/const frameRef\s*=\s*useRef</);
     expect(CARD).toMatch(/const\s*\[\s*summaryBaseline\s*,\s*setSummaryBaseline\s*\]\s*=\s*useState/);
   });
   it("EmailIntakeCard wires a ResizeObserver keyed to tab === 'spectre-summary'", () => {
     expect(CARD).toMatch(/if \(tab !== "spectre-summary"\) return;/);
+    // Observer must watch the frame, not the summary body/shell.
+    expect(CARD).toMatch(/const el\s*=\s*frameRef\.current;/);
     expect(CARD).toMatch(/new ResizeObserver/);
     expect(CARD).toMatch(/obs\.observe\(el\);/);
     expect(CARD).toMatch(/obs\.disconnect\(\);/);

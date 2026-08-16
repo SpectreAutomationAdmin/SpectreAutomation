@@ -158,24 +158,34 @@ export default function EmailIntakeCard({ data }: Props) {
 
   // Phase 4R rev-9 (2026-08-15) — per-card Summary baseline.
   // While the Spectre Summary panel is mounted (default tab), a
-  // ResizeObserver captures its rendered height and stores it as
-  // `summaryBaseline`. That baseline is then applied as an inline
-  // `min-height` on the frame surface when a non-Summary tab is
-  // active, so switching to Attachments (or a short Conversation)
-  // does not shrink the visible card and cause the feed to jump.
-  // Attachments compresses to a single-line row density (see
+  // ResizeObserver captures the FRAME's natural outer height and
+  // stores it as `summaryBaseline`. That value is then applied as
+  // an inline `min-height` on the same frame when a non-Summary
+  // tab is active, so switching to Attachments (or a short
+  // Conversation) does not shrink the visible card and cause the
+  // feed to jump.
+  //
+  // We measure the FRAME (not the summary body or shell) because
+  // the project applies `box-sizing: border-box` globally — so
+  // min-height on the frame is compared against the frame's outer
+  // rectangle, not its content area. Measuring the frame's outer
+  // rectangle and applying it back as min-height keeps the two
+  // sides of the comparison in the same coordinate system.
+  //
+  // Attachments compresses to single-line row density (see
   // `.spectre-mc-attachment-list` in globals.css) so a typical
   // 4-6 attachment list fits within the Summary baseline. If
   // Conversation is longer than the baseline the frame grows
   // naturally — the min-height is a FLOOR, not a cap.
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const summaryRef = useRef<HTMLDivElement | null>(null);
   const [summaryBaseline, setSummaryBaseline] = useState<number | null>(null);
   useLayoutEffect(() => {
     if (tab !== "spectre-summary") return;
-    const el = summaryRef.current;
+    const el = frameRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    // Seed an initial measurement synchronously so the first non-
-    // Summary tab click already has a baseline available.
+    // Seed an initial measurement synchronously so the first
+    // non-Summary tab click already has a baseline available.
     setSummaryBaseline((prev) => {
       const h = el.offsetHeight;
       return prev === h ? prev : h;
@@ -368,6 +378,7 @@ export default function EmailIntakeCard({ data }: Props) {
           as inline min-height when a non-Summary tab is active so
           the outer frame does not shrink on tab swaps. */}
       <div
+        ref={frameRef}
         className="spectre-mc-item-frame"
         data-testid="card-frame"
         style={frameStyle}
