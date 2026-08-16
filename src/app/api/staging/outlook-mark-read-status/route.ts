@@ -44,7 +44,9 @@ export async function GET(req: NextRequest) {
   if (!principal) {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
-  const clubId = await getActiveClubId(principal);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const p = principal as unknown as { activeClubId?: string | null; role?: string };
+  const clubId = await getActiveClubId({ clubId: p.activeClubId ?? null, role: p.role ?? "" });
   if (!clubId) {
     return NextResponse.json({ error: "no_active_club" }, { status: 400 });
   }

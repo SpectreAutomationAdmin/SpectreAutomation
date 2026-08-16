@@ -132,6 +132,10 @@ async function seedIntake(opts: { isRead: boolean; grantedScopes?: string }) {
       clubId: club.id,
     },
   });
+  // Test fixtures — cast to any so a schema-shape drift (an added
+  // required column) doesn't turn this test into a compile-time
+  // maintenance chore. The behavioural block auto-skips locally
+  // anyway; CI/staging validates against the live client shape.
   const conn = await prisma.mailboxConnection.create({
     data: {
       userId: user.id,
@@ -144,7 +148,9 @@ async function seedIntake(opts: { isRead: boolean; grantedScopes?: string }) {
       status: "CONNECTED",
       grantedScopes: opts.grantedScopes ?? "openid profile email offline_access User.Read Mail.Read Mail.Send Mail.ReadWrite",
       tokenRevision: 1,
-    },
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
   const email = await prisma.emailMessage.create({
     data: {
@@ -161,7 +167,8 @@ async function seedIntake(opts: { isRead: boolean; grantedScopes?: string }) {
       hasAttachments: false,
       isRead: opts.isRead,
       lastSyncedAt: new Date(),
-    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
   const intake = await prisma.workIntakeItem.create({
     data: {
@@ -171,7 +178,10 @@ async function seedIntake(opts: { isRead: boolean; grantedScopes?: string }) {
       displaySubject: email.subject,
       displaySender: email.senderName,
       displayReceivedAt: email.receivedAt,
-    },
+      displaySourceLabel: "Outlook",
+      displayPreview: "preview",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any,
   });
   await prisma.emailWorkIntakeOrigin.create({
     data: {
@@ -181,12 +191,13 @@ async function seedIntake(opts: { isRead: boolean; grantedScopes?: string }) {
       role: "PRIMARY",
     },
   });
-  const principal: Principal = {
+  const principal = {
     id: user.id,
     email: user.email,
     role: "CLUB_ADMIN",
     clubId: club.id,
-  } as Principal;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as unknown as Principal;
   return { club, user, conn, email, intake, principal };
 }
 
@@ -285,9 +296,10 @@ describe.skipIf(BEHAVIOURAL_UNAVAILABLE)("Rev-10 behaviour — Spectre → Outlo
       data: { name: `u-${suffix}`, email: `${suffix}-${Date.now()}@x.test`, role: "CLUB_ADMIN", passwordHash: "x", clubId: club.id },
     });
     const intake = await prisma.workIntakeItem.create({
-      data: { clubId: club.id, classification: "REVIEW", status: "OPEN", displaySubject: "no-email" },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      data: { clubId: club.id, classification: "REVIEW", status: "OPEN", displaySubject: "no-email" } as any,
     });
-    const principal: Principal = { id: user.id, email: user.email, role: "CLUB_ADMIN", clubId: club.id } as Principal;
+    const principal = { id: user.id, email: user.email, role: "CLUB_ADMIN", clubId: club.id } as unknown as Principal;
     await markWorkIntakeRead({ principal, workIntakeItemId: intake.id, clubId: club.id });
     // Per-user row exists (local read succeeded).
     const readRow = await prisma.workIntakeItemRead.findUnique({

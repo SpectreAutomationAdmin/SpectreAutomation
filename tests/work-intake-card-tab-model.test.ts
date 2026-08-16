@@ -171,93 +171,109 @@ describe("CSS — retired accordion styles gone, new tab-driven styles present",
   });
 });
 
-describe("Rev-9 CSS — outer article is a bare wrapper; visible chrome lives on the frame", () => {
-  // Rev-9 (2026-08-15) — the founder rejected the rev-8 "grey
-  // rectangle with a full-width tab band on top" treatment. The
-  // outer article now carries NO visible border, NO background,
-  // NO padding, NO rounded rectangle. The visible card chrome
-  // is on `.spectre-mc-item-frame`, and the tabs float ABOVE
-  // that frame at compact rev-7 proportions.
-  it(".spectre-mc-item outer wrapper has no visible border / bg / padding", () => {
+describe("Rev-11 CSS — outer article once again owns the visible card chrome", () => {
+  // Phase 4R rev-11 (2026-08-15) — founder review rejected the
+  // rev-9 "bare wrapper + protruding-tabs" file-folder framing and
+  // requested the earlier single-card treatment. The article now
+  // carries the visible border, background, shadow, radius, and
+  // orange left workflow accent. The `.spectre-mc-item-frame` div
+  // remains in the DOM as a bare passthrough (for the ResizeObserver
+  // `frameRef` + inline min-height baseline behaviour retained
+  // from rev-9.2) but draws no chrome.
+  it(".spectre-mc-item article owns the visible card chrome", () => {
     const idx = CSS.indexOf(".spectre-mc-item {");
     expect(idx).toBeGreaterThan(0);
-    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
-    expect(rule).toMatch(/background:\s*transparent/);
-    expect(rule).toMatch(/border:\s*0/);
-    expect(rule).toMatch(/padding:\s*0/);
-    // Regression guards: rev-8 chrome must NOT reappear.
-    expect(rule).not.toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
-    expect(rule).not.toMatch(/box-shadow:\s*var\(--spectre-shadow-subtle\)/);
-    expect(rule).not.toMatch(/overflow:\s*hidden/);
-  });
-  it(".spectre-mc-item-frame carries the visible chrome (border, bg, shadow, radius, padding, left-accent)", () => {
-    const idx = CSS.indexOf(".spectre-mc-item-frame {");
-    expect(idx, ".spectre-mc-item-frame ruleset must exist").toBeGreaterThan(0);
     const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
     expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
     expect(rule).toMatch(/border:\s*1px solid var\(--spectre-border-hairline\)/);
     expect(rule).toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
     expect(rule).toMatch(/box-shadow:\s*var\(--spectre-shadow-subtle\)/);
-    expect(rule).toMatch(/padding:\s*\d+px \d+px/);
+    expect(rule).toMatch(/padding:\s*\d+px \d+px \d+px \d+px/);
     expect(rule).toMatch(/border-left-width:\s*3px/);
+    // Regression guards: the rev-9 bare-wrapper shape must NOT recur.
+    expect(rule).not.toMatch(/background:\s*transparent/);
+    expect(rule).not.toMatch(/border:\s*0/);
   });
-  it("state-variant left-accent binds to the FRAME, not the invisible article", () => {
-    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
-    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
-    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
-    // Rev-8's pattern of setting the accent on the invisible article must not recur.
-    expect(CSS).not.toMatch(/\.spectre-mc-item\.judgment\s*\{\s*border-left-color/);
+  it(".spectre-mc-item-frame is a bare passthrough (no visible chrome)", () => {
+    const idx = CSS.indexOf(".spectre-mc-item-frame {");
+    expect(idx, ".spectre-mc-item-frame ruleset must exist (holds frameRef + inline min-height)").toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/background:\s*transparent/);
+    expect(rule).toMatch(/border:\s*0/);
+    expect(rule).toMatch(/box-shadow:\s*none/);
+    expect(rule).toMatch(/padding:\s*0/);
+    // Regression guards: rev-9 chrome must NOT recur on the frame.
+    expect(rule).not.toMatch(/background:\s*var\(--spectre-surface\)/);
+    expect(rule).not.toMatch(/border:\s*1px solid/);
+    expect(rule).not.toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
+  });
+  it("state-variant left-accent binds to the ARTICLE (which owns the visible border again)", () => {
+    // Match either the base ruleset OR any later override.
+    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s*\{[^}]*border-left-color:\s*var\(--spectre-status-warning\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s*\{[^}]*border-left-color:\s*var\(--spectre-status-success\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s*\{[^}]*border-left-color:\s*var\(--spectre-status-info\)/);
+    // Rev-9's pattern (accent on the frame) must NOT recur.
+    expect(CSS).not.toMatch(/\.spectre-mc-item\.judgment\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
   });
 });
 
-describe("Rev-9 CSS — tabs are compact rev-7-style, self-sizing, floating above the frame", () => {
-  it("no full-width grey rail — .spectre-mc-tabs--card is inline-flex, not stretched", () => {
+describe("Rev-11 CSS — tabs live INSIDE the card at compact rev-7 proportions", () => {
+  it("tab strip is a flex row inside the card interior (no protrusion, no bleed)", () => {
     const idx = CSS.indexOf(".spectre-mc-tabs--card {");
     expect(idx).toBeGreaterThan(0);
     const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
-    expect(rule).toMatch(/display:\s*inline-flex/);
-    // Regression guards against rev-8 grey-rail treatment.
+    // Regression guards: the rev-9 protruding-tabs mechanics must NOT recur.
+    expect(rule).not.toMatch(/display:\s*inline-flex/);
+    expect(rule).not.toMatch(/margin:\s*0\s+0\s+-1px\s+12px/);
+    expect(rule).not.toMatch(/z-index:\s*1/);
+    // Positive assertions: sits inside the card with a hairline
+    // separator underneath and 12px of breathing room to the body.
+    expect(rule).toMatch(/display:\s*flex/);
+    expect(rule).toMatch(/margin:\s*0\s+0\s+12px\s+0/);
+    expect(rule).toMatch(/border-bottom:\s*1px solid var\(--spectre-border-hairline\)/);
+    // Regression guards: no grey rail, no bleed-to-edges.
     expect(rule).not.toMatch(/background:\s*var\(--spectre-surface-hover/);
     expect(rule).not.toMatch(/margin:\s*0\s+-20px/);
-    expect(rule).not.toMatch(/border-bottom:\s*1px solid/);
-    // Sits 12 px in from the card's left edge (clears the accent gutter).
-    expect(rule).toMatch(/margin:\s*0\s+0\s+-1px\s+12px/);
   });
-  it("each tab is compact — small font, tight padding, self-sized to its label", () => {
+  it("each tab is compact rev-7 proportions with transparent-until-active borders", () => {
     const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab {");
     expect(idx).toBeGreaterThan(0);
     const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
-    // Rev-7-style proportions: font ≤ 12.5 px, horizontal padding ≤ 12 px.
+    // Rev-7-style proportions retained: font ≤ 12.5 px, hpad ≤ 12 px.
     const fontMatch = rule.match(/font-size:\s*([\d.]+)px/);
     expect(fontMatch).toBeTruthy();
-    expect(Number(fontMatch![1]), "compact rev-7 font-size").toBeLessThanOrEqual(12.5);
+    expect(Number(fontMatch![1]), "compact font-size").toBeLessThanOrEqual(12.5);
     const padMatch = rule.match(/padding:\s*(\d+)px\s+(\d+)px/);
     expect(padMatch, "explicit padding pin").toBeTruthy();
     expect(Number(padMatch![2]), "horizontal padding ≤ 12 px").toBeLessThanOrEqual(12);
-    // Individual tab has its own border — that's what draws each
-    // tab as a discrete protrusion, not a flat item on a rail.
-    expect(rule).toMatch(/border:\s*1px solid var\(--spectre-border-hairline\)/);
-    // Rounded top corners only — the tab's bottom edge merges
-    // seamlessly with the frame border below.
+    // Inactive tabs have a transparent border so they read as
+    // understated text controls, not as boxed buttons.
+    expect(rule).toMatch(/border:\s*1px solid transparent/);
+    // Tab bottom overlaps the strip's border-bottom by 1 px so the
+    // active state's `border-bottom-color: surface` merges cleanly.
+    expect(rule).toMatch(/margin-bottom:\s*-1px/);
+    // Rounded top corners only.
     expect(rule).toMatch(/border-top-left-radius:\s*\d+px/);
     expect(rule).toMatch(/border-top-right-radius:\s*\d+px/);
     expect(rule).toMatch(/border-bottom-left-radius:\s*0/);
     expect(rule).toMatch(/border-bottom-right-radius:\s*0/);
   });
-  it("active tab shares the frame surface and overlaps the frame's top border", () => {
+  it("active tab reads as a subtle bordered box that merges into the card body", () => {
     const idx = CSS.indexOf(".spectre-mc-tabs--card .spectre-mc-tab--active");
     expect(idx).toBeGreaterThan(0);
     const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
     expect(rule).toMatch(/background:\s*var\(--spectre-surface\)/);
-    expect(rule).toMatch(/box-shadow:\s*0\s+1px\s+0\s+0\s+var\(--spectre-surface\)/);
+    expect(rule).toMatch(/border-color:\s*var\(--spectre-border-hairline\)/);
+    // The bottom border matches the surface colour so it disappears
+    // into the card interior — completing the tabs-in-card merge.
+    expect(rule).toMatch(/border-bottom-color:\s*var\(--spectre-surface\)/);
+    // Regression guard: rev-9's box-shadow-merge mechanism is gone.
+    expect(rule).not.toMatch(/box-shadow:\s*0\s+1px\s+0\s+0/);
   });
   it("base .spectre-mc-tabs rule is fully scoped away from the --card variant", () => {
-    // Rev-8 was bitten twice by the base .spectre-mc-tabs rule
-    // silently overriding the --card modifier at equal specificity.
-    // Rev-9 pins the fix: the base rule must ONLY target
+    // Preserved rev-9 fix: the base rule must ONLY target
     // .spectre-mc-tabs:not(.spectre-mc-tabs--card), so the card
-    // strip's inline-flex + tabless border-bottom + zero-margin
-    // shape can never be overridden by cascade order.
+    // strip's shape is never overridden by cascade order.
     expect(CSS).not.toMatch(/\n\s*\.spectre-mc-tabs\s*\{/);
     expect(CSS).toMatch(/\.spectre-mc-tabs:not\(\.spectre-mc-tabs--card\)\s*\{[^}]*display:\s*flex/);
   });
