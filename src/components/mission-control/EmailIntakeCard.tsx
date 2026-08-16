@@ -120,7 +120,21 @@ const PILL_LABEL: Record<EmailFeedCardData["state"], string> = {
 
 export default function EmailIntakeCard({ data }: Props) {
   const router = useRouter();
+  // Phase 4R rev-12 (2026-08-16) — `readLocal` is an OPTIMISTIC UI
+  // flag ONLY. It flips true the instant the founder clicks so the
+  // dot / bold title disappear without waiting for the round trip,
+  // but the SERVER projection (`data.isUnread`) is the authority:
+  // whenever the server re-projects, we honour the new value. This
+  // is what prevents the rev-10 latch — an Outlook-side unread
+  // ("read → unread" via delta sync) will drop through as
+  // `data.isUnread=true`, and the useEffect below resets the
+  // optimistic override so the card renders unread again.
   const [readLocal, setReadLocal] = useState(!data.isUnread);
+  useEffect(() => {
+    // Server re-projected → drop any optimistic override so the
+    // canonical Outlook state (via the loader) wins.
+    setReadLocal(!data.isUnread);
+  }, [data.isUnread]);
   // Phase 4R rev-7 (2026-08-15) — the card no longer has an
   // Open/Collapse state. Every card renders its tab body inline;
   // switching tabs replaces the entire body. Default tab is always

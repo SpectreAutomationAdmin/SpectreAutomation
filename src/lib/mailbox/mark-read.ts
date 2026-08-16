@@ -56,6 +56,7 @@ export async function runMailboxMarkRead(
       mailboxConnectionId: true,
       isRead: true,
       softDeletedAt: true,
+      lastSyncedAt: true,
     },
   });
   if (!email) {
@@ -68,6 +69,58 @@ export async function runMailboxMarkRead(
   // Short-circuit if a delta sync (or a prior PATCH) already flipped it.
   if (email.isRead) {
     return { status: "NOT_REQUIRED", reason: "already_read_in_local_mirror" };
+  }
+  // Phase 4R rev-12 stale-mutation guard (founder brief §7).
+  // If we're on a retry attempt AND a mailbox sync has run AFTER
+  // this mutation was created AND the mirror STILL says the email
+  // is unread, treat that as Outlook actively contradicting the
+  // Spectre-side click:
+  //   - The founder may have marked the email unread in Outlook
+  //     after clicking here (during our backoff window).
+  //   - OR the founder has not touched Outlook at all and Outlook
+  //     genuinely reports unread — respecting that is still safer
+  //     than repeatedly overriding Outlook's current state.
+  // On the FIRST attempt this guard is bypassed (a delta sync can
+  // fire between enqueue and immediate execution, but there is no
+  // meaningful contradiction to protect against yet — we've never
+  // told Graph anything).
+  const existingMutation = await prisma.outlookMarkReadMutation.findUnique({
+    where: {
+      mailboxConnectionId_emailMessageId: {
+        mailboxConnectionId: email.mailboxConnectionId,
+        emailMessageId: email.id,
+      },
+    },
+    select: { createdAt: true, attemptCount: true, status: true },
+  });
+  if (
+    existingMutation &&
+    existingMutation.attemptCount >= 1 &&
+    existingMutation.status !== "SUCCEEDED" &&
+    existingMutation.status !== "FAILED_TERMINAL" &&
+    email.lastSyncedAt &&
+    email.lastSyncedAt > existingMutation.createdAt
+  ) {
+    logger.info("mailbox.mark-read.superseded-by-outlook", {
+      workIntakeItemIdTail: payload.workIntakeItemId.slice(-6),
+      emailMessageIdTail: email.id.slice(-6),
+      lastSyncedAt: email.lastSyncedAt.toISOString(),
+      mutationCreatedAt: existingMutation.createdAt.toISOString(),
+    });
+    await prisma.outlookMarkReadMutation.update({
+      where: {
+        mailboxConnectionId_emailMessageId: {
+          mailboxConnectionId: email.mailboxConnectionId,
+          emailMessageId: email.id,
+        },
+      },
+      data: {
+        status: "SUPERSEDED",
+        completedAt: new Date(),
+        errorCode: "superseded_by_outlook_unread",
+      },
+    });
+    return { status: "NOT_REQUIRED", reason: "superseded_by_outlook_unread" };
   }
 
   // 2. Scope allowlist check — Mail.ReadWrite must be in the

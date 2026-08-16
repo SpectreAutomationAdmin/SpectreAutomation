@@ -207,11 +207,16 @@ describe("Rev-11 CSS — outer article once again owns the visible card chrome",
     expect(rule).not.toMatch(/border:\s*1px solid/);
     expect(rule).not.toMatch(/border-radius:\s*var\(--spectre-radius-panel\)/);
   });
-  it("state-variant left-accent binds to the ARTICLE (which owns the visible border again)", () => {
-    // Match either the base ruleset OR any later override.
-    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s*\{[^}]*border-left-color:\s*var\(--spectre-status-warning\)/);
-    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s*\{[^}]*border-left-color:\s*var\(--spectre-status-success\)/);
-    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s*\{[^}]*border-left-color:\s*var\(--spectre-status-info\)/);
+  it("state-variant accent binds to the ARTICLE (which owns the visible border again)", () => {
+    // Rev-11 required `border-left-color: <state>` directly on each
+    // state class. Rev-12 routes the accent through the
+    // `--card-accent` CSS variable instead — the base rule sets
+    // `border-left-color: var(--card-accent)` once and each state
+    // sets the variable. Accept EITHER shape so the pin doesn't
+    // regress a valid refactor.
+    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s*\{[^}]*(border-left-color|--card-accent):\s*var\(--spectre-status-warning\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s*\{[^}]*(border-left-color|--card-accent):\s*var\(--spectre-status-success\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s*\{[^}]*(border-left-color|--card-accent):\s*var\(--spectre-status-info\)/);
     // Rev-9's pattern (accent on the frame) must NOT recur.
     expect(CSS).not.toMatch(/\.spectre-mc-item\.judgment\s+\.spectre-mc-item-frame\s*\{[^}]*border-left-color/);
   });
@@ -338,5 +343,119 @@ describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () 
     // The interior body div still carries its founder-facing testid
     // for Playwright + downstream tests.
     expect(CARD).toMatch(/<div className="spectre-mc-item-body" data-testid="card-summary">/);
+  });
+});
+
+describe("Rev-12 CSS — unread cue is the existing accent thicker, not a green dot", () => {
+  // Phase 4R rev-12 (2026-08-16) — founder brief §9 explicitly
+  // retires the green ::after unread dot (it added a colour
+  // orthogonal to the semantic palette and conflated unread with
+  // a work-type). Rev-12 uses one signal: the LEFT-EDGE ACCENT
+  // WIDENS while unread, from 3 px to 6 px, keeping the same
+  // semantic colour. Layout is preserved by compensating
+  // padding-left so total content-area offset is unchanged.
+  it("no green ::after unread dot exists on the article or the frame", () => {
+    // The dot lived on .spectre-mc-item--unread::after (rev-11) or
+    // .spectre-mc-item-frame::after (rev-10). Both must be gone.
+    expect(CSS).not.toMatch(/\.spectre-mc-item--unread::after/);
+    expect(CSS).not.toMatch(/\.spectre-mc-item--unread\s+\.spectre-mc-item-frame::after/);
+    // Guard against the ::after rule being kept with a different
+    // shape: the green status-success dot pattern.
+    expect(CSS).not.toMatch(/content:\s*""[\s\S]{0,200}background:\s*var\(--spectre-status-success\)[\s\S]{0,200}border-radius:\s*50%/);
+  });
+  it(".spectre-mc-item declares --card-accent CSS var and border-left-color reads it", () => {
+    const idx = CSS.indexOf(".spectre-mc-item {");
+    expect(idx).toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    expect(rule).toMatch(/--card-accent:\s*var\(--spectre-border-strong\)/);
+    expect(rule).toMatch(/border-left-color:\s*var\(--card-accent\)/);
+  });
+  it("state variants set --card-accent (not a direct border-left-color)", () => {
+    // Semantic accent is applied via the CSS variable so both the
+    // read border-left and the (potential) unread reinforcement
+    // reference one source of truth.
+    expect(CSS).toMatch(/\.spectre-mc-item\.judgment\s*\{[^}]*--card-accent:\s*var\(--spectre-status-warning\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.approval\s*\{[^}]*--card-accent:\s*var\(--spectre-status-success\)/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.comm\s*\{[^}]*--card-accent:\s*var\(--spectre-status-info\)/);
+    // .done and .info-item also set the variable (they may also
+    // override padding, tolerated here).
+    expect(CSS).toMatch(/\.spectre-mc-item\.done\s*\{[^}]*--card-accent:/);
+    expect(CSS).toMatch(/\.spectre-mc-item\.info-item\s*\{[^}]*--card-accent:/);
+  });
+  it("unread thickens the accent (border-left-width 6px) AND compensates padding-left (17px)", () => {
+    const idx = CSS.indexOf(".spectre-mc-item--unread {");
+    expect(idx).toBeGreaterThan(0);
+    const rule = CSS.slice(idx, idx + CSS.slice(idx).indexOf("}"));
+    // Thicker accent — noticeable but restrained (founder brief §11).
+    expect(rule).toMatch(/border-left-width:\s*6px/);
+    // Padding compensation preserves content position (§13).
+    expect(rule).toMatch(/padding-left:\s*17px/);
+    // Regression: rev-11's darker background was overwrought;
+    // rev-12 drops the surface tint so the accent thickness is
+    // the primary unread signal.
+    expect(rule).not.toMatch(/background:\s*color-mix/);
+  });
+  it("unread bolder title cue retained (secondary reinforcement)", () => {
+    expect(CSS).toMatch(/\.spectre-mc-item--unread h3\s*\{[^}]*font-weight:\s*700/);
+  });
+  it(".done + --unread and .info-item + --unread also compensate padding-left", () => {
+    // Both state variants override padding to 10px 20px. When
+    // combined with unread the same 3px padding-left reduction
+    // is needed to preserve content position.
+    expect(CSS).toMatch(/\.spectre-mc-item\.done\.spectre-mc-item--unread[\s\S]{0,80}\.spectre-mc-item\.info-item\.spectre-mc-item--unread\s*\{[^}]*padding-left:\s*17px/);
+  });
+});
+
+describe("Rev-12 loader — Outlook is canonical for email-backed items (no OR-latch)", () => {
+  const LOADER = read("src/lib/mission-control/index.ts");
+  it("applyViewerReadState splits behaviour by whether the item has a PRIMARY email origin", () => {
+    // A single fetch that produces (a) which items have any PRIMARY
+    // email and (b) which have any PRIMARY email whose isRead=false.
+    expect(LOADER).toMatch(/const primaryOrigins\s*=\s*await prisma\.emailWorkIntakeOrigin\.findMany/);
+    expect(LOADER).toMatch(/role:\s*"PRIMARY"/);
+    expect(LOADER).toMatch(/const hasPrimaryEmail\s*=\s*new Set<string>/);
+    expect(LOADER).toMatch(/const anyPrimaryUnread\s*=\s*new Set<string>/);
+    // Explicit check that isRead === false (not truthiness — matches founder brief §6).
+    expect(LOADER).toMatch(/origin\.emailMessage\.isRead === false/);
+  });
+  it("email-backed items: isUnread comes ONLY from Outlook (viewer's per-user row is ignored)", () => {
+    // Guard: the assignment must reference `anyPrimaryUnread`, NOT
+    // the per-user readSet, for the email-backed branch.
+    expect(LOADER).toMatch(/if \(hasPrimaryEmail\.has\(item\.workIntakeItemId\)\) \{[\s\S]{0,400}item\.isUnread\s*=\s*anyPrimaryUnread\.has\(item\.workIntakeItemId\);/);
+    // Explicit anti-regression: the old OR-latch formula must NOT
+    // survive anywhere in the loader.
+    expect(LOADER).not.toMatch(/!item\.viewerHasRead && !outlookAlreadyRead/);
+    expect(LOADER).not.toMatch(/viewerHasRead \|\| outlookAlreadyRead/);
+  });
+  it("non-email items: isUnread comes from per-user WorkIntakeItemRead (pre-rev-10 behaviour)", () => {
+    expect(LOADER).toMatch(/\} else \{[\s\S]{0,300}item\.isUnread\s*=\s*!viewerHasRead;/);
+  });
+});
+
+describe("Rev-12 component — optimistic UI, no permanent latch", () => {
+  it("readLocal is initialised from data.isUnread AND kept in sync via useEffect", () => {
+    // Founder brief root-cause pinning: the pre-rev-12 useState
+    // initialiser was NEVER re-read on prop change, so a card that
+    // was clicked once stayed 'read' locally even after the server
+    // re-projected `isUnread: true`. Rev-12 adds a useEffect that
+    // resets readLocal whenever the server flips data.isUnread.
+    expect(CARD).toMatch(/useState\(!data\.isUnread\)/);
+    expect(CARD).toMatch(/useEffect\(\(\) => \{[\s\S]{0,300}setReadLocal\(!data\.isUnread\);[\s\S]{0,100}\}, \[data\.isUnread\]\);/);
+  });
+});
+
+describe("Rev-12 mark-read worker — stale-mutation guard", () => {
+  const MARK_READ = read("src/lib/mailbox/mark-read.ts");
+  it("selects lastSyncedAt on the email so the guard can compare timestamps", () => {
+    expect(MARK_READ).toMatch(/lastSyncedAt:\s*true/);
+  });
+  it("skips the PATCH (NOT_REQUIRED) if a sync ran after the mutation was queued AND the mirror is still unread", () => {
+    // Guard shape: existingMutation.attemptCount >= 1 AND status
+    // not terminal AND email.lastSyncedAt > existingMutation.createdAt.
+    expect(MARK_READ).toMatch(/lastSyncedAt\s*>\s*existingMutation\.createdAt/);
+    // Records SUPERSEDED status so future observability shows the
+    // guard triggered (not a silent skip).
+    expect(MARK_READ).toMatch(/status:\s*"SUPERSEDED"/);
+    expect(MARK_READ).toMatch(/superseded_by_outlook_unread/);
   });
 });

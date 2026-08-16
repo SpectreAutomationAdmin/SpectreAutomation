@@ -98,13 +98,21 @@ describe("Rev-10 source contract — queue + worker wiring", () => {
     // Idempotency key uses (mailboxConnectionId, emailMessageId).
     expect(actions).toMatch(/idempotencyKey:\s*`mailbox-mark-read:\$\{email\.mailboxConnectionId\}:\$\{email\.id\}`/);
   });
-  it("loader ORs the two read signals (per-user OR outlook)", () => {
-    // Loader must query EmailWorkIntakeOrigin with role=PRIMARY and OR
-    // emailMessage.isRead into the unread decision.
+  it("loader consults EmailWorkIntakeOrigin PRIMARY-role emails for the isUnread decision", () => {
+    // Rev-10 pinned an OR-latch formula (viewerHasRead || outlookRead)
+    // which turned out to be a founder-visible bug: an
+    // Outlook-side unread could never make the card unread again if
+    // the user had ever clicked it. Rev-12 corrected the model — the
+    // loader now splits by "does this item have an email origin?"
+    // and, for email-backed items, Outlook is authoritative. This
+    // pin now enforces the CONTEMPORARY correct shape.
     expect(loader).toMatch(/emailWorkIntakeOrigin\.findMany/);
     expect(loader).toMatch(/role:\s*"PRIMARY"/);
-    expect(loader).toMatch(/primaryReadIntakeIds\.add/);
-    expect(loader).toMatch(/item\.isUnread\s*=\s*!item\.viewerHasRead\s*&&\s*!outlookAlreadyRead/);
+    // Contemporary rev-12 shape — enforced by the dedicated
+    // rev-12 loader pins in tests/work-intake-card-tab-model.test.ts.
+    expect(loader).toMatch(/anyPrimaryUnread\.has\(item\.workIntakeItemId\)/);
+    // The retired OR-latch formula must NOT recur.
+    expect(loader).not.toMatch(/item\.isUnread\s*=\s*!item\.viewerHasRead\s*&&\s*!outlookAlreadyRead/);
   });
   it("feature flag defaults ON (only literal 'false' opts out)", () => {
     expect(env).toMatch(/OUTLOOK_MARK_READ_ON_INTERACTION_ENABLED:\s*z\.enum\(\["true",\s*"false"\]\)\.default\("true"\)/);

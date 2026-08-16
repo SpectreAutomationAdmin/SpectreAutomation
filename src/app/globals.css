@@ -1128,6 +1128,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
      only the "protruding-tabs / partial-border document" visual
      mechanics are retired. */
   .spectre-mc-item {
+    /* Phase 4R rev-12 (2026-08-16) — `--card-accent` is the state
+       colour used for the left-edge accent. Read/unread reuses THIS
+       same colour and only varies the thickness, so a scanner can
+       infer both the work TYPE (colour) and the READ state
+       (thickness) at a glance. Setting the accent via a CSS var
+       lets both the read border-left-color and the unread
+       inset-shadow reference one source of truth per state. */
+    --card-accent: var(--spectre-border-strong);
     background: var(--spectre-surface);
     border: 1px solid var(--spectre-border-hairline);
     border-radius: var(--spectre-radius-panel);
@@ -1135,7 +1143,7 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     margin-bottom: var(--spectre-space-3);
     padding: 12px 20px 14px 20px;
     border-left-width: 3px;
-    border-left-color: var(--spectre-border-strong);
+    border-left-color: var(--card-accent);
     transition: border-color var(--spectre-motion-slow) var(--spectre-ease),
                 box-shadow  var(--spectre-motion-slow) var(--spectre-ease);
   }
@@ -1143,13 +1151,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     border-color: var(--spectre-border-strong);
     box-shadow: var(--spectre-shadow-elevated);
   }
-  /* Semantic left-accent — back on the article now that it owns the
-     visible border. */
-  .spectre-mc-item.judgment { border-left-color: var(--spectre-status-warning); }
-  .spectre-mc-item.approval { border-left-color: var(--spectre-status-success); }
-  .spectre-mc-item.comm     { border-left-color: var(--spectre-status-info); }
-  .spectre-mc-item.done     { border-left-color: var(--spectre-status-success); opacity: 0.86; padding: 10px 20px; }
-  .spectre-mc-item.info-item{ border-left-color: var(--spectre-border-strong); padding: 10px 20px; }
+  /* Semantic accent — one CSS variable per state; border-left-color
+     picks it up automatically via var(--card-accent). Rev-12
+     replaces the direct border-left-color declarations. */
+  .spectre-mc-item.judgment  { --card-accent: var(--spectre-status-warning); }
+  .spectre-mc-item.approval  { --card-accent: var(--spectre-status-success); }
+  .spectre-mc-item.comm      { --card-accent: var(--spectre-status-info); }
+  .spectre-mc-item.done      { --card-accent: var(--spectre-status-success); opacity: 0.86; padding: 10px 20px; }
+  .spectre-mc-item.info-item { --card-accent: var(--spectre-border-strong); padding: 10px 20px; }
   /* Bare passthrough — rev-11 strips ALL chrome from the frame.
      It stays in the DOM so the rev-9.2 ResizeObserver `frameRef`
      continues to measure it and the inline `min-height` inline
@@ -1588,42 +1597,40 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
      row on the left. Once read, all four cues disappear together
      and the card returns to its normal weight. Card dimensions +
      structure are unchanged (founder brief §11). */
-  /* Phase 4R rev-11 (2026-08-15) — unread visual layer now sits on
-     the ARTICLE (which owns the surface again) instead of the
-     frame (bare passthrough). Behaviour is unchanged: subtle 3 %
-     darker surface, bolder title, slightly darker context text,
-     small round unread dot in the top-right corner. The dot's
-     origin is the article's padding box, which coincides with the
-     visible card interior — same visual result as rev-10 with the
-     frame carrying it. */
+  /* Phase 4R rev-12 (2026-08-16) — unread cue is the existing
+     work-type accent BECOMING THICKER, not a separate colour.
+     Founder brief §9 + §10 explicitly retire the green ::after
+     dot: it added a colour orthogonal to the semantic palette
+     (AP orange, informational, approval, etc.) and conflated
+     "unread" with a work-type. Rev-12 uses ONE signal: the
+     left-edge accent widens from 3 px → 6 px while unread. Same
+     semantic colour, stronger visual weight.
+
+     Layout preservation (founder brief §13): total content-area
+     left offset is `border-left + padding-left`. To thicken the
+     border-left without shifting content 3 px to the right, we
+     REDUCE `padding-left` by the same 3 px so the sum is
+     unchanged. Content position + width identical read ↔ unread. */
   .spectre-mc-item--unread {
-    background: color-mix(in oklab, var(--spectre-surface) 97%, var(--spectre-text-primary));
-    position: relative;
+    border-left-width: 6px;
+    padding-left: 17px; /* 20px read - 3px extra border = 17px */
   }
-  /* Small unread dot — absolute-positioned in the top-right
-     corner of the card. Same footprint on every card regardless
-     of tab/state so read/unread transitions don't shift layout. */
-  .spectre-mc-item--unread::after {
-    content: "";
-    position: absolute;
-    top: 12px;
-    right: 12px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--spectre-status-success);
-    /* Subtle glow so the dot reads as "attention" without being
-       neon. 22 % surrounding halo, no animation. */
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--spectre-status-success) 22%, transparent);
-    pointer-events: none;
-  }
-  /* Bolder title + sender when unread. */
+  /* Bolder title while unread — a secondary cue that reinforces
+     the thicker accent, per brief §12. */
   .spectre-mc-item--unread h3 {
     font-weight: 700;
   }
   .spectre-mc-item--unread .spectre-mc-context {
     color: var(--spectre-text-primary);
     font-weight: 500;
+  }
+  /* Also handle the .done and .info-item padding variants: their
+     read state uses padding: 10px 20px. When unread the same
+     3 px extra border-left needs the same 3 px padding-left
+     compensation to preserve content position. */
+  .spectre-mc-item.done.spectre-mc-item--unread,
+  .spectre-mc-item.info-item.spectre-mc-item--unread {
+    padding-left: 17px;
   }
   .spectre-mc-pill-unread {
     font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
