@@ -21,13 +21,24 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { prisma } from "@/lib/prisma";
 
+// Next.js 14 dynamic mode — never pre-render this route.
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 function isStagingDebugEnabled(): boolean {
-  return process.env.STAGING_DEBUG_ENDPOINTS_ENABLED === "true";
+  // Read via bracket syntax so Next.js can't statically inline the
+  // value at build time (dot syntax on process.env is sometimes
+  // subject to constant folding in the compiler).
+  const raw = process.env["STAGING_DEBUG_ENDPOINTS_ENABLED"];
+  return raw === "true";
 }
 
 export async function GET(req: NextRequest) {
   if (!isStagingDebugEnabled()) {
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return NextResponse.json(
+      { error: "not_found", flag: process.env["STAGING_DEBUG_ENDPOINTS_ENABLED"] ?? null },
+      { status: 404 },
+    );
   }
   const principal = await getCurrentPrincipal();
   if (!principal) {
