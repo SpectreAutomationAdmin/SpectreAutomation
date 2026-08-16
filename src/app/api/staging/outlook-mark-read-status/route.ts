@@ -136,6 +136,69 @@ export async function GET(req: NextRequest) {
     },
   });
 
+  // Rev-12 live-Graph probe (2026-08-16, DIAGNOSTIC ONLY) — when
+  // `probeGraph=1` is set, fetch the message DIRECTLY from Microsoft
+  // Graph so we can compare live Graph state against the local
+  // mirror. Requires a valid delegated token for the connection.
+  const shouldProbeGraph = req.nextUrl.searchParams.get("probeGraph") === "1";
+  type GraphProbe = {
+    isRead?: boolean | null;
+    subject?: string | null;
+    receivedDateTime?: string | null;
+    lastModifiedDateTime?: string | null;
+    conversationId?: string | null;
+    parentFolderId?: string | null;
+    error?: string;
+  } | null;
+  let graphProbe: GraphProbe = null;
+  if (shouldProbeGraph && email && mailboxSync) {
+    try {
+      const { getFreshDelegatedAccessToken } = await import("@/lib/mailbox/connect");
+      const conn = await prisma.mailboxConnection.findUnique({
+        where: { id: email.mailboxConnectionId },
+        select: { userId: true, clubId: true },
+      });
+      if (conn) {
+        const tok = await getFreshDelegatedAccessToken({
+          mailboxConnectionId: email.mailboxConnectionId,
+          callerClubId: conn.clubId,
+          callerUserId: conn.userId,
+        });
+        const url =
+          `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(email.graphMessageId)}` +
+          `?$select=id,subject,isRead,receivedDateTime,lastModifiedDateTime,conversationId,parentFolderId`;
+        const res = await fetch(url, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${tok.accessToken}` },
+        });
+        if (res.ok) {
+          const body = await res.json() as {
+            isRead?: boolean;
+            subject?: string;
+            receivedDateTime?: string;
+            lastModifiedDateTime?: string;
+            conversationId?: string;
+            parentFolderId?: string;
+          };
+          graphProbe = {
+            isRead: typeof body.isRead === "boolean" ? body.isRead : null,
+            subject: body.subject ?? null,
+            receivedDateTime: body.receivedDateTime ?? null,
+            lastModifiedDateTime: body.lastModifiedDateTime ?? null,
+            conversationId: body.conversationId ?? null,
+            parentFolderId: body.parentFolderId ?? null,
+          };
+        } else {
+          graphProbe = { error: `graph_http_${res.status}` };
+        }
+      } else {
+        graphProbe = { error: "connection_not_found" };
+      }
+    } catch (e) {
+      graphProbe = { error: `probe_failed: ${(e as Error).message}` };
+    }
+  }
+
   return NextResponse.json({
     callerClubId: clubId,
     serverTimestamp: new Date().toISOString(),
@@ -153,6 +216,7 @@ export async function GET(req: NextRequest) {
         }
       : null,
     recentJobs,
+    graphProbe,
     featureFlags: {
       isEmailMarkReadOnInteractionEnabled: (await import("@/lib/env")).isEmailMarkReadOnInteractionEnabled(),
     },
