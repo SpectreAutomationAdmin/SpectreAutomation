@@ -94,9 +94,24 @@ export async function POST() {
   const jobIds: string[] = [];
   const mailboxConnectionIds: string[] = [];
   for (const mb of nonTerminalMailboxes) {
-    // Fresh connections without a deltaLink need MAILBOX_INITIAL_SYNC;
-    // established connections use MAILBOX_DELTA_SYNC (much cheaper).
-    const kind = mb.deltaLink ? "MAILBOX_DELTA_SYNC" : "MAILBOX_INITIAL_SYNC";
+    // Rev-13 (2026-08-16) — always MAILBOX_INITIAL_SYNC on manual
+    // refresh, not MAILBOX_DELTA_SYNC. Rationale:
+    //
+    // Microsoft Graph's inbox delta stream does NOT reliably surface
+    // isRead-flag flips made by Outlook clients. The rev-13 first
+    // acceptance run proved this on staging: after the founder
+    // marked #221007 unread in Outlook, three separate delta polls
+    // completed with `messagesExamined: 0` while a direct Graph
+    // query confirmed `isRead: false`. Because manual refresh's
+    // whole purpose is to make the mirror agree with Graph RIGHT
+    // NOW, we must use the full-inbox path that re-fetches current
+    // values for every message in the recent window. Cost: one
+    // extra Graph request bounded to SYNC_SCOPE.pageSize per page;
+    // the founder is manually asking for a barrier, so the cost is
+    // acceptable. Automatic background sync remains DELTA-only
+    // (auto-sync-scheduler) — this override applies only to the
+    // manual refresh code path.
+    const kind = "MAILBOX_INITIAL_SYNC";
     // Rev-13 — idempotencyKey includes a timestamp bucket so rapid
     // repeat clicks collapse (the queue's QUEUED/RUNNING guard) but a
     // new founder-initiated refresh after a sync completes always

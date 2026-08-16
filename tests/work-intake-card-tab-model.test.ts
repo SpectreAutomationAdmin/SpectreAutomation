@@ -587,10 +587,20 @@ describe("Rev-13 manual Feed Sync — actual mailbox sync barrier", () => {
 describe("Rev-13 refresh-mailbox API — barrier + status endpoints", () => {
   const POST = read("src/app/api/mission-control/refresh-mailbox/route.ts");
   const STATUS = read("src/app/api/mission-control/refresh-mailbox/status/route.ts");
-  it("POST enqueues MAILBOX_DELTA_SYNC (or INITIAL_SYNC for fresh mailboxes)", () => {
-    expect(POST).toMatch(/MAILBOX_DELTA_SYNC/);
+  it("POST enqueues MAILBOX_INITIAL_SYNC on manual refresh (delta stream is unreliable for isRead flips)", () => {
+    // Rev-13 acceptance discovered that Microsoft Graph's inbox
+    // delta stream does not always surface isRead-flag flips made
+    // by Outlook clients (staging: 3 delta polls returned
+    // messagesExamined=0 while Graph reported isRead=false for
+    // the same message). Manual refresh MUST re-enumerate the
+    // inbox with current values to satisfy the founder-facing
+    // "make Spectre agree with Outlook" contract.
     expect(POST).toMatch(/MAILBOX_INITIAL_SYNC/);
-    expect(POST).toMatch(/mb\.deltaLink\s*\?\s*"MAILBOX_DELTA_SYNC"\s*:\s*"MAILBOX_INITIAL_SYNC"/);
+    expect(POST).toMatch(/const kind = "MAILBOX_INITIAL_SYNC"/);
+    // Regression guard: no MAILBOX_DELTA_SYNC path in the manual
+    // refresh endpoint.
+    const codeOnly = POST.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(codeOnly).not.toMatch(/MAILBOX_DELTA_SYNC/);
   });
   it("POST returns 202 with jobIds so the client can poll status", () => {
     expect(POST).toMatch(/jobIds:\s*string\[\]/);
