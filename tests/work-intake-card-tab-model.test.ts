@@ -305,7 +305,16 @@ describe("Rev-9 component — per-card Summary baseline via ResizeObserver", () 
   it("frame div carries a data-testid so Playwright can measure it directly", () => {
     expect(CARD).toMatch(/className="spectre-mc-item-frame"[\s\S]{0,80}data-testid="card-frame"/);
   });
-  it("summaryRef is attached to the Summary body only (measures Summary — not the frame)", () => {
-    expect(CARD).toMatch(/<div ref=\{summaryRef\} className="spectre-mc-item-body" data-testid="card-summary">/);
+  it("summaryRef is attached to a wrapper that contains BOTH the summary body and actions row", () => {
+    // Rev-9.1 (2026-08-15) — the ref lives on `.card-summary-shell`
+    // wrapper so the measured baseline includes the actions row
+    // beneath the summary body. If the ref sits on the body alone,
+    // the frame min-height applied to non-Summary tabs is short by
+    // the actions-row height (~40 px) and Attachments visibly
+    // shrinks — the exact defect founder review called out.
+    expect(CARD).toMatch(/<div ref=\{summaryRef\} data-testid="card-summary-shell">/);
+    // The interior body div still carries its founder-facing testid
+    // for Playwright + downstream tests.
+    expect(CARD).toMatch(/<div className="spectre-mc-item-body" data-testid="card-summary">/);
   });
 });

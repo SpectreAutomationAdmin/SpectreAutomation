@@ -373,14 +373,22 @@ export default function EmailIntakeCard({ data }: Props) {
         style={frameStyle}
       >
       {tab === "spectre-summary" && (
-        <>
+        // Phase 4R rev-9.1 (2026-08-15) — summaryRef sits on this
+        // wrapper (NOT on the body div alone) so the measured
+        // baseline includes both the Summary body AND the actions
+        // row below it. Applying only the body's height as
+        // min-height leaves the Attachments frame shorter by the
+        // actions row's height (~40 px), reintroducing the exact
+        // "card visibly shrinks on tab swap" defect founder review
+        // called out.
+        <div ref={summaryRef} data-testid="card-summary-shell">
           {/* Spectre Summary body. Same collapsed-body render helpers
               the previous accordion used — the founder-approved
               intelligence hierarchy (pill · title · sender · Spectre
               narrative · 4-cell readout · recommendation) is
               unchanged. `expanded` prop kept as a compat argument
               to the AP renderer; it no longer controls layout. */}
-          <div ref={summaryRef} className="spectre-mc-item-body" data-testid="card-summary">
+          <div className="spectre-mc-item-body" data-testid="card-summary">
             {ap
               ? renderApCollapsedBody(data, ap, false, () => setCvapModalOpen(true))
               : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
@@ -505,7 +513,7 @@ export default function EmailIntakeCard({ data }: Props) {
           </>
         )}
           </div>
-        </>
+        </div>
       )}
 
       {/* Conversation tab body — the card body when
