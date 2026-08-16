@@ -611,4 +611,23 @@ describe("Rev-13 refresh-mailbox API — barrier + status endpoints", () => {
     expect(STATUS).toMatch(/allTerminal/);
     expect(STATUS).toMatch(/anyFailed/);
   });
+  it("POST re-verifies each open Work Intake email directly via Graph (per-message GET) — inbox sync alone is insufficient", () => {
+    // Second live finding: inbox delta/list won't return messages
+    // moved out of the inbox (Spectre archives, Outlook moves), so
+    // the manual refresh must ALSO re-fetch isRead for each visible
+    // Work Intake's linked email. Bounded to ≤50 items per club.
+    expect(POST).toMatch(/reverifiedCount/);
+    expect(POST).toMatch(/workIntakeItem\.findMany/);
+    expect(POST).toMatch(/emailOrigins:\s*\{\s*some:\s*\{\s*role:\s*"PRIMARY"\s*\}\s*\}/);
+    expect(POST).toMatch(/status:\s*\{\s*in:\s*\["OPEN",\s*"IN_PROGRESS",\s*"DEFERRED",\s*"INFORMATIONAL"\]\s*\}/);
+    // Bounded and grouped by mailbox for one token per connection.
+    expect(POST).toMatch(/take:\s*50/);
+    expect(POST).toMatch(/byMailbox\.set/);
+    // Per-message Graph GET with $select=isRead.
+    expect(POST).toMatch(/\/v1\.0\/me\/messages\/\$\{encodeURIComponent\(e\.graphMessageId\)\}/);
+    expect(POST).toMatch(/\?\$select=isRead/);
+    // If Graph value differs from mirror, WRITE the new value with
+    // fresh lastSyncedAt.
+    expect(POST).toMatch(/data:\s*\{\s*isRead:\s*body\.isRead,\s*lastSyncedAt:\s*new Date\(\)\s*\}/);
+  });
 });
