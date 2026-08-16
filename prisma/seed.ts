@@ -1995,6 +1995,115 @@ async function seedPhase5(
   });
   await seedTransitionSession(principal, sessionC.id, "APPROVED");
 
+  // HR-1 financial-systems slice (2026-08-16) — canonical
+  // EmployeeCompensation rows + PayrollProfile foundation.
+  //
+  // Every seeded Employee gets ONE current EmployeeCompensation row
+  // via the compensation service so the shadow-write invariant on
+  // `Employee.payRate` is exercised end-to-end (both columns hold
+  // the fixture rate). Employees A, B, C also get ACTIVE
+  // PayrollProfiles — this exercises the full activation-precondition
+  // path (current compensation + SIN + VERIFIED bank). Employee A and
+  // C had no SIN / bank on file from the admin-workflows fixtures;
+  // we seed the trio here so activation succeeds. Employee D stays
+  // DRAFT because it is intentionally mid-onboarding (no SIN / bank
+  // captured yet).
+  //
+  // These calls go through the service — never a raw
+  // `prisma.employeeCompensation.create` and never a raw
+  // `prisma.payrollProfile.update({ activatedAt })`. Doing so would
+  // bypass the exclusive-writer invariant on `Employee.payRate` and
+  // the activation-precondition guard.
+  const {
+    changeCompensation: seedChangeCompensation,
+  } = await import("../src/lib/hr/compensation");
+  const {
+    upsertPayrollProfile: seedUpsertPayrollProfile,
+    activatePayrollProfile: seedActivatePayrollProfile,
+  } = await import("../src/lib/hr/payroll-profile");
+
+  // Employee B — already has SIN + VERIFIED bank + tax from the
+  // security-compliance block above. Seed compensation matching the
+  // fixture rate on Employee.payRate, then activate PayrollProfile.
+  await seedChangeCompensation(principal, employeeB.id, {
+    effectiveFrom: new Date("2024-05-20"),
+    amount: 22,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertPayrollProfile(principal, employeeB.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeB.id);
+
+  // Employee D — invited but not yet onboarded. Seed compensation so
+  // Employee.payRate stays in step with the canonical column, but
+  // leave PayrollProfile DRAFT (no activation) — SIN / bank are
+  // intentionally not on file.
+  await seedChangeCompensation(principal, employeeD.id, {
+    effectiveFrom: new Date("2026-08-01"),
+    amount: 21,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertPayrollProfile(principal, employeeD.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+  });
+
+  // Employee A — ACTIVE full-time salary. Seed the activation trio
+  // (compensation + SIN + VERIFIED bank) then activate PayrollProfile.
+  await seedChangeCompensation(principal, employeeA.id, {
+    effectiveFrom: new Date("2024-03-15"),
+    amount: 65000,
+    cadence: "SALARY",
+    currency: "CAD",
+  });
+  await seedUpsertSin(principal, employeeA.id, "234567891");
+  await seedUpsertBank(principal, employeeA.id, {
+    institutionNumber: "004",
+    transitNumber: "23456",
+    accountNumber: "1122334455",
+    holderName: "Alexandra Reyes",
+  });
+  await seedActivateBank(principal, employeeA.id);
+  await seedUpsertPayrollProfile(principal, employeeA.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "MONTHLY_SALARY",
+    payFrequency: "MONTHLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeA.id);
+
+  // Employee C — ACTIVE part-time hourly. Same activation trio, then
+  // activate. Employee C.memberId stays NULL (the admin-workflows
+  // fixture asserts the child-of-Member invariant).
+  await seedChangeCompensation(principal, employeeC.id, {
+    effectiveFrom: new Date("2025-06-01"),
+    amount: 18,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertSin(principal, employeeC.id, "345678912");
+  await seedUpsertBank(principal, employeeC.id, {
+    institutionNumber: "010",
+    transitNumber: "34567",
+    accountNumber: "2233445566",
+    holderName: "Carmen Sato",
+  });
+  await seedActivateBank(principal, employeeC.id);
+  await seedUpsertPayrollProfile(principal, employeeC.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeC.id);
+
   // --- Asset categories, locations, demo asset
   const buildingsCat = await prisma.assetCategory.create({
     data: {
