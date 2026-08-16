@@ -8867,6 +8867,41 @@ model OutlookArchiveMutation {
   @@index([workIntakeId])
 }
 
+// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
+//
+// When a founder first meaningfully interacts with an unread
+// email-backed Work Intake card, Spectre PATCHes the source
+// message with `isRead: true` via Microsoft Graph. That call is
+// enqueued (never blocking the UI click) and this row is the
+// durable idempotency + audit record for one such call.
+//
+// Uniqueness on (mailboxConnectionId, emailMessageId) ensures a
+// second click cannot enqueue a duplicate Graph PATCH — the worker
+// finds the existing SUCCEEDED row and returns immediately.
+model OutlookMarkReadMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeItemId      String
+  emailMessageId        String
+  graphMessageId        String
+  mailboxConnectionId   String
+  // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED
+  status                String    @default("PENDING")
+  attemptCount          Int       @default(0)
+  lastAttemptAt         DateTime?
+  completedAt           DateTime?
+  errorCode             String?
+  // The user who triggered the mark-read (for audit — the card
+  // interaction is per-user even though Outlook's isRead is shared).
+  triggeredByUserId     String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([mailboxConnectionId, emailMessageId])
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+}
+
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
 // Commitments proposals. Spectre-inferred deadlines derived from
 // genuine WorkIntake evidence. Kept separate from real Outlook

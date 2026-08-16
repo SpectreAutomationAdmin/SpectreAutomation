@@ -1564,11 +1564,49 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Sprint 2 Checkpoint 14B — Email intake accents ----------- */
-  /* Unread accent: 4px left border in muted green + subject
-     semi-bold (already the default weight for h3 inside item). */
-  .spectre-mc-item--unread {
-    border-left-width: 4px;
-    border-left-color: var(--spectre-status-success);
+  /* Phase 4R rev-10 (2026-08-15) — the pre-rev-10 treatment set a
+     4 px muted-green left border on the (now invisible) outer
+     article — which (a) had no effect on rev-9 since the border
+     moved to the frame, and (b) would have COMPETED with the
+     orange workflow accent per founder brief §10. Rev-10 replaces
+     that with an inbox-style subtle treatment: bolder title,
+     slightly darker sender/context text, a subtle background
+     lift on the frame, and a small unread dot in the top-right
+     corner where it doesn't compete with the pill+id-tag+timestamp
+     row on the left. Once read, all four cues disappear together
+     and the card returns to its normal weight. Card dimensions +
+     structure are unchanged (founder brief §11). */
+  .spectre-mc-item--unread .spectre-mc-item-frame {
+    /* Subtly stronger surface contrast — 3 % darker than default.
+       Uses color-mix so it composes correctly with the theme's
+       surface token instead of hard-coding a colour. */
+    background: color-mix(in oklab, var(--spectre-surface) 97%, var(--spectre-text-primary));
+    position: relative;
+  }
+  /* Small unread dot — absolute-positioned in the top-right
+     corner of the frame. Same footprint on every card regardless
+     of tab/state so read/unread transitions don't shift layout. */
+  .spectre-mc-item--unread .spectre-mc-item-frame::after {
+    content: "";
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--spectre-status-success);
+    /* Subtle glow so the dot reads as "attention" without being
+       neon. 30 % surrounding halo, no animation. */
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--spectre-status-success) 22%, transparent);
+    pointer-events: none;
+  }
+  /* Bolder title + sender when unread. */
+  .spectre-mc-item--unread h3 {
+    font-weight: 700;
+  }
+  .spectre-mc-item--unread .spectre-mc-context {
+    color: var(--spectre-text-primary);
+    font-weight: 500;
   }
   .spectre-mc-pill-unread {
     font-size: 10px; font-weight: 700; letter-spacing: 0.05em;

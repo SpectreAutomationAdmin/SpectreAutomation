@@ -8900,6 +8900,30 @@ model OutlookArchiveMutation {
   @@index([workIntakeId])
 }
 
+// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
+// See prisma-postgres/schema.prisma for full docs; this is the
+// SQLite mirror for dev/test parity.
+model OutlookMarkReadMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeItemId      String
+  emailMessageId        String
+  graphMessageId        String
+  mailboxConnectionId   String
+  status                String    @default("PENDING")
+  attemptCount          Int       @default(0)
+  lastAttemptAt         DateTime?
+  completedAt           DateTime?
+  errorCode             String?
+  triggeredByUserId     String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([mailboxConnectionId, emailMessageId])
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+}
+
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
 // Commitments proposals. Spectre-inferred deadlines derived from
 // genuine WorkIntake evidence (invoice due dates, payroll cutoffs,

@@ -381,6 +381,41 @@ export interface LookupSentMessagesResult {
   messages: RawGraphSentMessage[];
 }
 
+// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read.
+//
+// One canonical delegated write that flips the `isRead` bit on an
+// individual Outlook message. Used by the Work Intake card when a
+// founder first meaningfully interacts with an unread email-backed
+// item; the local WorkIntakeItemRead upsert happens synchronously
+// and this Graph PATCH is queued so a slow or offline mailbox
+// cannot block the UI click.
+//
+// Contract:
+//   Endpoint: PATCH /v1.0/me/messages/{graphMessageId}
+//   Payload:  { "isRead": true }
+//   Response: 200 OK with the updated message body.
+//   Scope:    Mail.ReadWrite (already in APPROVED_DELEGATED_SCOPES).
+//
+// This mutation is intentionally the smallest possible change:
+//   - Does NOT move the message (folder unchanged).
+//   - Does NOT alter categories, flag, importance, or any other
+//     property.
+//   - Does NOT touch the conversation — only the individual
+//     message identified by graphMessageId.
+//
+// Idempotent by nature: setting `isRead: true` on an already-read
+// message is accepted by Graph as a 200 OK no-op. The caller still
+// gates on `EmailMessage.isRead === false` before enqueue, and the
+// OutlookMarkReadMutation row provides cross-worker idempotency.
+export interface MarkMessageReadArgs {
+  accessToken: string;
+  graphMessageId: string;
+}
+export interface MarkMessageReadResult {
+  graphMessageId: string;
+  markedReadAt: Date;
+}
+
 export interface MicrosoftDelegatedProvider {
   buildAuthorizationUrl(args: AuthorizationUrlArgs): Promise<string>;
   exchangeCode(args: CodeExchangeArgs): Promise<TokenResponse>;
@@ -460,6 +495,11 @@ export interface MicrosoftDelegatedProvider {
    *  real Graph message id. See LookupSentMessagesArgs docs for the
    *  validated Graph query contract. */
   lookupSentMessagesInConversation(args: LookupSentMessagesArgs): Promise<LookupSentMessagesResult>;
+  /** Phase 4R rev-10 (2026-08-15) — mark a single Outlook message
+   *  as read. Smallest possible mutation: flips only the `isRead`
+   *  bit, does not move the message or touch any other property.
+   *  See MarkMessageReadArgs for the full contract. */
+  markMessageRead(args: MarkMessageReadArgs): Promise<MarkMessageReadResult>;
 }
 
 export interface GetAttachmentBytesArgs {
@@ -719,6 +759,38 @@ function createMsalMicrosoftDelegatedProvider(): MicrosoftDelegatedProvider {
         resultingGraphMessageId: body.id,
         destinationFolderId: body.parentFolderId ?? args.destinationId,
         movedAt: new Date(),
+      };
+    },
+    async markMessageRead(args) {
+      // Phase 4R rev-10 (2026-08-15) — delegated mark-as-read.
+      //
+      // Endpoint: PATCH /v1.0/me/messages/{graphMessageId}
+      // Payload:  { "isRead": true }
+      //
+      // Graph accepts this as an idempotent update; a message that
+      // is already `isRead: true` returns 200 OK unchanged. We
+      // still gate at the enqueue site to avoid pointless PATCH
+      // traffic when a delta sync has already caught the change.
+      //
+      // We ONLY set `isRead`. Any other message property (folder,
+      // categories, flag, importance) is untouched by design —
+      // founder brief §14 explicitly forbids side effects.
+      if (!args.graphMessageId) throw new Error("markMessageRead requires graphMessageId");
+      const url = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(args.graphMessageId)}`;
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ isRead: true }),
+      });
+      if (!res.ok) throw graphErrorFromResponse(res);
+      // Response body is the updated message; we don't need to read
+      // it — the Graph 200 OK is sufficient proof of the mutation.
+      return {
+        graphMessageId: args.graphMessageId,
+        markedReadAt: new Date(),
       };
     },
     async lookupSentMessagesInConversation(args) {

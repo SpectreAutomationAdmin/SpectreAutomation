@@ -268,6 +268,15 @@ export async function assignToSelf(ctx: ActionCtx): Promise<void> {
  *
  * Tenant guard applies via loadAuthorisedIntake — a user can only
  * mark-read intakes they can already see.
+ *
+ * Phase 4R rev-10 (2026-08-15) — after the local upsert, propagate
+ * the read state to Outlook for every linked PRIMARY email whose
+ * current local mirror still reports isRead=false. The Graph PATCH
+ * is enqueued so a slow or offline mailbox cannot block the UI
+ * click. Idempotency is guarded by the OutlookMarkReadMutation
+ * unique constraint on (mailboxConnectionId, emailMessageId) — a
+ * second click cannot enqueue a duplicate PATCH. Non-email items
+ * (no linked email) skip the enqueue entirely.
  */
 export async function markWorkIntakeRead(ctx: ActionCtx): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
@@ -284,4 +293,84 @@ export async function markWorkIntakeRead(ctx: ActionCtx): Promise<void> {
       userId: ctx.principal.id,
     },
   });
+  await enqueueOutlookMarkReadForLinkedEmails({
+    workIntakeItemId: it.id,
+    triggeredByUserId: ctx.principal.id,
+  });
+}
+
+/**
+ * Phase 4R rev-10 helper — enqueue a MAILBOX_MARK_READ job for
+ * each PRIMARY-role linked email whose local mirror still reports
+ * `isRead === false`. Non-email items produce zero jobs.
+ *
+ * We only touch PRIMARY origins (never EVIDENCE) so an unrelated
+ * evidence email attached to a card is not mutated in Outlook.
+ * `EMAIL_MARK_READ_ON_INTERACTION_ENABLED` gates the whole feature
+ * so the write path can be flipped off in an emergency without a
+ * rollback.
+ */
+async function enqueueOutlookMarkReadForLinkedEmails(args: {
+  workIntakeItemId: string;
+  triggeredByUserId: string;
+}): Promise<void> {
+  const { isEmailMarkReadOnInteractionEnabled } = await import("@/lib/env");
+  if (!isEmailMarkReadOnInteractionEnabled()) return;
+
+  // Find PRIMARY linked emails whose local mirror still reports unread.
+  // Non-email items produce an empty list and skip the enqueue.
+  const origins = await prisma.emailWorkIntakeOrigin.findMany({
+    where: {
+      workIntakeItemId: args.workIntakeItemId,
+      role: "PRIMARY",
+    },
+    select: {
+      emailMessageId: true,
+      emailMessage: {
+        select: {
+          id: true,
+          clubId: true,
+          isRead: true,
+          softDeletedAt: true,
+          graphMessageId: true,
+          mailboxConnectionId: true,
+        },
+      },
+    },
+  });
+  if (origins.length === 0) return; // non-email item or evidence-only card
+
+  const { enqueue } = await import("@/lib/queue");
+  const { logger } = await import("@/lib/observability/logger");
+  for (const origin of origins) {
+    const email = origin.emailMessage;
+    if (!email) continue;
+    if (email.isRead) continue; // already read in Outlook mirror
+    if (email.softDeletedAt) continue;
+    try {
+      await enqueue({
+        kind: "MAILBOX_MARK_READ",
+        clubId: email.clubId,
+        payload: {
+          workIntakeItemId: args.workIntakeItemId,
+          emailMessageId: email.id,
+          graphMessageId: email.graphMessageId,
+          mailboxConnectionId: email.mailboxConnectionId,
+          triggeredByUserId: args.triggeredByUserId,
+        },
+        // Enqueue is idempotent at the queue layer via the key,
+        // and the worker is idempotent via OutlookMarkReadMutation.
+        idempotencyKey: `mailbox-mark-read:${email.mailboxConnectionId}:${email.id}`,
+      });
+    } catch (e) {
+      // Failure to enqueue must NOT roll back the local
+      // WorkIntakeItemRead upsert — the founder still gets a
+      // responsive local read. Log and continue.
+      logger.warn("work-intake.mark-read.enqueue-failed", {
+        workIntakeItemIdTail: args.workIntakeItemId.slice(-6),
+        emailMessageIdTail: email.id.slice(-6),
+        error: (e as Error).message,
+      });
+    }
+  }
 }

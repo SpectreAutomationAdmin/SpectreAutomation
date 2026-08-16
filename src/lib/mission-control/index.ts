@@ -543,12 +543,43 @@ async function projectViewerReadState(
     select: { workIntakeItemId: true },
   });
   const readSet = new Set(rows.map((r) => r.workIntakeItemId));
+  // Phase 4R rev-10 (2026-08-15) — Outlook-side reads must flip the
+  // card without waiting for a Spectre click. Load the mirrored
+  // `isRead` from the newest PRIMARY linked email for each intake
+  // in ONE query; treat "any primary email is read in Outlook" as
+  // a read signal that ORs with the per-user WorkIntakeItemRead row.
+  //
+  // Rationale: EmailMessage.isRead mirrors the shared mailbox flag.
+  // If the user reads the email directly in Outlook (or on their
+  // phone, or a colleague reads it), the next delta sync flips
+  // this bit to true and the card should stop shouting for
+  // attention — brief §4.
+  const primaryReadIntakeIds = new Set<string>();
+  const primaryOrigins = await prisma.emailWorkIntakeOrigin.findMany({
+    where: {
+      workIntakeItemId: { in: intakeIds },
+      role: "PRIMARY",
+    },
+    select: {
+      workIntakeItemId: true,
+      emailMessage: { select: { isRead: true } },
+    },
+  });
+  for (const origin of primaryOrigins) {
+    if (origin.emailMessage?.isRead) {
+      primaryReadIntakeIds.add(origin.workIntakeItemId);
+    }
+  }
   for (const item of workItems) {
     if (!item.workIntakeItemId) continue;
     item.viewerHasRead = readSet.has(item.workIntakeItemId);
-    // The card's isUnread flag now reflects the per-user state.
-    // The prior EmailMessage.isRead-derived value is superseded.
-    item.isUnread = !item.viewerHasRead;
+    const outlookAlreadyRead = primaryReadIntakeIds.has(item.workIntakeItemId);
+    // Card is unread iff BOTH signals say unread:
+    //   - the viewer has not clicked it, AND
+    //   - no PRIMARY linked email reports isRead=true in the
+    //     local mirror (which is updated by delta sync AND by the
+    //     Spectre → Outlook mark-read worker's local commit).
+    item.isUnread = !item.viewerHasRead && !outlookAlreadyRead;
   }
 }
 
