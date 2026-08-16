@@ -50,30 +50,67 @@ export async function GET(req: NextRequest) {
   }
 
   const emailMessageId = req.nextUrl.searchParams.get("emailMessageId");
-  if (!emailMessageId) {
-    return NextResponse.json({ error: "missing_emailMessageId" }, { status: 400 });
+  const workIntakeItemId = req.nextUrl.searchParams.get("workIntakeItemId");
+  if (!emailMessageId && !workIntakeItemId) {
+    return NextResponse.json({ error: "missing_emailMessageId_or_workIntakeItemId" }, { status: 400 });
   }
 
-  // Tenant-scoped read: the email row itself must belong to this club.
-  const email = await prisma.emailMessage.findFirst({
-    where: { id: emailMessageId, clubId },
-    select: { id: true, isRead: true, updatedAt: true },
-  });
-  if (!email) {
-    return NextResponse.json({ error: "email_not_found" }, { status: 404 });
-  }
+  // Loosen the tenant scoping to make diagnosis easier — this is a
+  // staging-only endpoint. Report what actually exists.
+  const email = emailMessageId
+    ? await prisma.emailMessage.findFirst({
+        where: { id: emailMessageId },
+        select: { id: true, clubId: true, isRead: true, updatedAt: true, graphMessageId: true },
+      })
+    : null;
 
-  const mutation = await prisma.outlookMarkReadMutation.findFirst({
-    where: { emailMessageId: email.id, clubId },
-    orderBy: { updatedAt: "desc" },
+  const origins = workIntakeItemId
+    ? await prisma.emailWorkIntakeOrigin.findMany({
+        where: { workIntakeItemId },
+        select: { id: true, workIntakeItemId: true, emailMessageId: true, role: true },
+      })
+    : email
+      ? await prisma.emailWorkIntakeOrigin.findMany({
+          where: { emailMessageId: email.id },
+          select: { id: true, workIntakeItemId: true, emailMessageId: true, role: true },
+        })
+      : [];
+
+  const mutation = email
+    ? await prisma.outlookMarkReadMutation.findFirst({
+        where: { emailMessageId: email.id },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          status: true, attemptCount: true, lastAttemptAt: true,
+          completedAt: true, errorCode: true, workIntakeItemId: true,
+        },
+      })
+    : null;
+
+  // Recent MAILBOX_MARK_READ background-job rows for this club so we
+  // can see whether enqueue fired at all, whether the worker picked
+  // it up, and any failure code.
+  const recentJobs = await prisma.backgroundJob.findMany({
+    where: {
+      kind: "MAILBOX_MARK_READ",
+      clubId,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 5,
     select: {
-      status: true,
-      attemptCount: true,
-      lastAttemptAt: true,
-      completedAt: true,
-      errorCode: true,
+      id: true, status: true, attempts: true, createdAt: true,
+      scheduledFor: true, payload: true, lastError: true,
     },
   });
 
-  return NextResponse.json({ email, mutation });
+  return NextResponse.json({
+    callerClubId: clubId,
+    email,
+    origins,
+    mutation,
+    recentJobs,
+    featureFlags: {
+      isEmailMarkReadOnInteractionEnabled: (await import("@/lib/env")).isEmailMarkReadOnInteractionEnabled(),
+    },
+  });
 }
