@@ -1,42 +1,45 @@
 "use client";
 
 // Sprint 3 Checkpoint 15I (2026-07-26) — Variant D card body.
+// Phase 4R rev-7 (2026-08-15) — simplified 3-tab card model.
 //
 // Founder-approved design reference:
 //   public/design-concepts/mission-control/variant-d-instrument.html
 //
-// This component renders an email-derived Work Intake item using the
-// Variant D card shell: `.spectre-mc-item` outer, `.spectre-mc-pill`
-// eyebrow, `h3` operational headline, `.spectre-mc-sender` metadata
-// line, `.spectre-mc-work` prose, `.spectre-mc-readout` instrument-
-// panel metric strip, `.spectre-mc-rec` recommendation strip, and a
-// compact `.spectre-mc-actions` row with queue-level actions only.
-//
-// Interaction contract (Checkpoint 15I):
-//   • Clicking the primary card surface marks-read AND expands the
-//     card in place (accordion). Nested buttons/tabs `stopPropagation`.
-//   • Read state is per-user (WorkIntakeItemRead table). The card
-//     calls POST /api/work-intake/action { action: "mark_read" } on
-//     first expand.
-//   • Merely rendering the feed does NOT flip read state.
-//   • Contextual tabs — Conversation | Attachments | Invoice Review |
-//     Statement Review | Activity. Only the tabs relevant to the
-//     linked intelligence render.
-//   • Resolve fires POST { action: "resolve" } and triggers a
-//     router.refresh() so the item drops from the active feed.
+// Rev-7 interaction contract (supersedes the rev-6 Open/Collapse
+// accordion):
+//   • Every card exposes exactly three founder-facing tabs at the top:
+//       Spectre Summary | Conversation | Attachments
+//     The tab selection drives the ENTIRE card body — the Spectre
+//     Summary is not persisted as a header above the other tabs.
+//   • The default tab on first render is `spectre-summary`.
+//   • Attachments tab renders only when the intake has at least one
+//     attachment; the tab strip hides the entry otherwise.
+//   • The former Invoice Review / Statement Review tabs are RETIRED
+//     from founder-facing navigation — their content was a projection
+//     of `ap-evidence` whose founder-visible fields (vendor / invoice
+//     # / amount / category / confidence / recommendation) already
+//     live inside the Spectre Summary. The underlying `ap-evidence`
+//     endpoint remains for diagnostics + tests.
+//   • The former Activity tab is retired — audit rows continue to
+//     land in the `WorkIntakeAudit` table; the founder just does not
+//     get a dedicated card tab for them.
+//   • Read/unread: the previous rev-6 model fired mark-read on
+//     Open-click. With Open removed, mark-read now fires on the first
+//     tab interaction (any tab click). Merely rendering the card still
+//     does not flip read state — same product rule.
+//   • Resolve / Restore still fire POST { action: … } and trigger a
+//     router.refresh().
 //
 // Preserves all Sprint 3 Checkpoint 15H behaviour:
 //   • One canonical parent card per email conversation (loader-level
 //     suppression of child AP / Statement intakes)
 //   • Blob-URL PDF preview via DocumentPreviewModal (CSP object-src +
 //     frame-src permit `blob:` per src/middleware.ts)
-//   • Sender identity remains SEPARATE from extracted vendor identity:
-//     the sender-line in the collapsed body shows the email `from`
-//     name; the Invoice Review tab shows the PDF-extracted vendor
-//     name. They are never conflated.
+//   • Sender identity remains SEPARATE from extracted vendor identity.
 //   • Tenant isolation preserved end-to-end.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineConversationPanel, { type ConversationDetail } from "./InlineConversationPanel";
 import ReplyComposer from "./ReplyComposer";
@@ -100,7 +103,10 @@ export interface EmailFeedCardData {
 
 interface Props { data: EmailFeedCardData }
 
-type Tab = "conversation" | "attachments" | "invoice" | "statement" | "activity";
+// Phase 4R rev-7 (2026-08-15) — founder-facing tab set. Reduced
+// from five to three. `invoice` / `statement` / `activity` are
+// retired for founder-facing navigation.
+type Tab = "spectre-summary" | "conversation" | "attachments";
 
 const PILL_LABEL: Record<EmailFeedCardData["state"], string> = {
   judgment: "Needs judgment",
@@ -114,9 +120,12 @@ const PILL_LABEL: Record<EmailFeedCardData["state"], string> = {
 
 export default function EmailIntakeCard({ data }: Props) {
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
   const [readLocal, setReadLocal] = useState(!data.isUnread);
-  const [tab, setTab] = useState<Tab>(defaultTabFor(data));
+  // Phase 4R rev-7 (2026-08-15) — the card no longer has an
+  // Open/Collapse state. Every card renders its tab body inline;
+  // switching tabs replaces the entire body. Default tab is always
+  // `spectre-summary`.
+  const [tab, setTab] = useState<Tab>("spectre-summary");
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,14 +146,15 @@ export default function EmailIntakeCard({ data }: Props) {
     // form used for NEEDS_JUDGMENT.
     | { kind: "STEP_2"; vendorId: string; vendorName: string; autoResolved: boolean }
   >({ kind: "STEP_1" });
-  const [apEvidence, setApEvidence] = useState<unknown | null>(null);
-  const [statementEvidence, setStatementEvidence] = useState<unknown | null>(null);
+  // Phase 4R rev-7 (2026-08-15) — apEvidence + statementEvidence
+  // are no longer rendered as founder-facing tabs. The endpoints
+  // remain (used by diagnostics, tests, and the CVAP modal) but
+  // this component no longer proxies them into tab bodies.
   const [attachments, setAttachments] = useState<
     Array<{ id: string; filename: string; mimeType: string; byteLength: number; classification: string; receivedAt: string }> | null
   >(null);
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
-  const openButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const isUnread = !readLocal;
   const isResolved = data.workIntakeStatus === "RESOLVED";
@@ -160,8 +170,9 @@ export default function EmailIntakeCard({ data }: Props) {
 
   useEffect(() => {
     // If the linked intelligence changes and the current tab is no
-    // longer in the available set, snap back to the default.
-    if (!availableTabs.includes(tab)) setTab(availableTabs[0] ?? "activity");
+    // longer in the available set, snap back to the Spectre Summary
+    // default (which is always present).
+    if (!availableTabs.includes(tab)) setTab("spectre-summary");
   }, [availableTabs, tab]);
 
   const loadConversationOnce = useCallback(async () => {
@@ -194,34 +205,13 @@ export default function EmailIntakeCard({ data }: Props) {
     } catch { setAttachments([]); }
   }, [data.workIntakeItemId, attachments]);
 
-  const loadApEvidenceOnce = useCallback(async () => {
-    if (apEvidence !== null || !linked || linked.apReviewIntakeIds.length === 0) return;
-    try {
-      const apIntakeId = linked.apReviewIntakeIds[0];
-      const res = await fetch(
-        `/api/mission-control/work-intake/${encodeURIComponent(apIntakeId)}/ap-evidence`,
-        { method: "GET" },
-      );
-      if (!res.ok) { setApEvidence({ error: "load_failed" }); return; }
-      setApEvidence(await res.json());
-    } catch { setApEvidence({ error: "network" }); }
-  }, [apEvidence, linked]);
+  // Phase 4R rev-7 (2026-08-15) — loadApEvidenceOnce +
+  // loadStatementEvidenceOnce retired with the invoice-review /
+  // statement-review tabs. The underlying endpoints still exist for
+  // tests + the CVAP modal (which fetches its own evidence lazily).
 
-  const loadStatementEvidenceOnce = useCallback(async () => {
-    if (statementEvidence !== null || !linked || linked.statementReviewIntakeIds.length === 0) return;
-    try {
-      const stIntakeId = linked.statementReviewIntakeIds[0];
-      const res = await fetch(
-        `/api/mission-control/work-intake/${encodeURIComponent(stIntakeId)}/statement-evidence`,
-        { method: "GET" },
-      );
-      if (!res.ok) { setStatementEvidence({ error: "load_failed" }); return; }
-      setStatementEvidence(await res.json());
-    } catch { setStatementEvidence({ error: "network" }); }
-  }, [statementEvidence, linked]);
-
-  // Fire the mark-read side effect the first time the user opens the
-  // card. Idempotent server-side — repeated calls are no-ops.
+  // Fire the mark-read side effect the first time the user clicks
+  // any tab. Idempotent server-side — repeated calls are no-ops.
   const markReadOnce = useCallback(async () => {
     if (readLocal || !data.workIntakeItemId) return;
     setReadLocal(true);
@@ -237,18 +227,17 @@ export default function EmailIntakeCard({ data }: Props) {
     }
   }, [readLocal, data.workIntakeItemId]);
 
-  const handlePrimarySurfaceClick = useCallback(() => {
-    if (expanded) { setExpanded(false); return; }
-    setExpanded(true);
+  // Phase 4R rev-7 (2026-08-15) — the sole tab-change hook. Owns
+  // read/unread transition + lazy load of the target tab's data.
+  // Mark-read fires on ANY tab click (previously fired on Open) — a
+  // user-intent gesture. Merely rendering the feed still does not
+  // mark items read.
+  const handleTabChange = useCallback((next: Tab) => {
+    setTab(next);
     void markReadOnce();
-    // Lazy-load the initial tab's data on first expand.
-    const initial = defaultTabFor(data);
-    setTab(initial);
-    if (initial === "conversation") void loadConversationOnce();
-    if (initial === "attachments") void loadAttachmentsOnce();
-    if (initial === "invoice") void loadApEvidenceOnce();
-    if (initial === "statement") void loadStatementEvidenceOnce();
-  }, [expanded, markReadOnce, data, loadConversationOnce, loadAttachmentsOnce, loadApEvidenceOnce, loadStatementEvidenceOnce]);
+    if (next === "conversation") void loadConversationOnce();
+    if (next === "attachments") void loadAttachmentsOnce();
+  }, [markReadOnce, loadConversationOnce, loadAttachmentsOnce]);
 
   const handleResolve = useCallback(async (evt: React.MouseEvent) => {
     evt.stopPropagation();
@@ -308,62 +297,44 @@ export default function EmailIntakeCard({ data }: Props) {
       data-work-intake-item-id={data.workIntakeItemId}
       data-email-id={data.emailMessageId}
       data-unread={isUnread ? "true" : "false"}
-      data-expanded={expanded ? "true" : "false"}
+      data-active-tab={tab}
       data-resolved={isResolved ? "true" : "false"}
       aria-labelledby={`title-${data.workIntakeItemId}`}
     >
-      {/* Primary click surface — everything visible in Variant D up to
-          the recommendation strip. Not a <button> to preserve inner
-          semantic content (h3, dl, etc.); role/keyboard support wired
-          explicitly. */}
-      <div
-        className="spectre-mc-item-surface"
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={handlePrimarySurfaceClick}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            handlePrimarySurfaceClick();
-          }
-        }}
-        ref={openButtonRef as unknown as React.Ref<HTMLDivElement>}
-        data-testid="card-surface"
-      >
-        {/* Sprint 3 · Checkpoint 16G Stage D — domain gating.
-            AP renderer runs ONLY when both (a) linked-intelligence
-            has an AP invoice summary AND (b) workDomain is AP (or
-            absent, for backward compatibility). Non-AP domains route
-            to renderDomainCollapsedBody which uses the domain
-            view-model and never emits VENDOR / INVOICE / AP STATUS /
-            AMOUNT fields on non-AP cards. */}
-        {/* Sprint 3 · Checkpoint 16H rejection #4 (2026-08-06) — AP
-            presentation wins whenever an ApInvoiceCardIntelligence
-            is linked, regardless of the email's own `workDomain`
-            (which is classified from the email BODY at ingest time,
-            before the attachment analysis has run). Otherwise a
-            "For your review" email whose attached PDF is now
-            recognised as an invoice would keep rendering the
-            GENERAL / INFORMATIONAL shell while its Create-vendor
-            button sits at the bottom — an incoherent hybrid card.
-            Founder §6: one canonical AP work card. */}
-        {ap
-          ? renderApCollapsedBody(data, ap, expanded, () => setCvapModalOpen(true))
-          : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
-            ? renderDomainCollapsedBody(data)
-            : renderEmailCollapsedBody(data)}
-      </div>
+      {/* Phase 4R rev-7 (2026-08-15) — tab bar at the top of the
+          card. Card content BELOW is entirely tab-driven; the
+          Spectre Summary is no longer a persistent header above the
+          other tabs. */}
+      <CardTabBar
+        available={availableTabs}
+        active={tab}
+        onChange={handleTabChange}
+      />
 
-      {/* Actions — queue-level (AP mode: primary is the AP workflow
-          domain action; Resolve is a secondary overflow). Interior
-          clicks stopPropagation so nested buttons never toggle the
-          accordion. */}
-      <div
-        className="spectre-mc-actions"
-        onClick={(e) => e.stopPropagation()}
-        role="presentation"
-      >
+      {tab === "spectre-summary" && (
+        <>
+          {/* Spectre Summary body. Same collapsed-body render helpers
+              the previous accordion used — the founder-approved
+              intelligence hierarchy (pill · title · sender · Spectre
+              narrative · 4-cell readout · recommendation) is
+              unchanged. `expanded` prop kept as a compat argument
+              to the AP renderer; it no longer controls layout. */}
+          <div className="spectre-mc-item-body" data-testid="card-summary">
+            {ap
+              ? renderApCollapsedBody(data, ap, false, () => setCvapModalOpen(true))
+              : data.workDomain && data.workDomain !== "ACCOUNTS_PAYABLE"
+                ? renderDomainCollapsedBody(data)
+                : renderEmailCollapsedBody(data)}
+          </div>
+
+          {/* Actions row — queue-level. Lives inside the Spectre
+              Summary tab per the rev-7 conceptual split (Summary =
+              understand + act). No wrapping click handler here — the
+              card body no longer toggles a collapsed state. */}
+          <div
+            className="spectre-mc-actions"
+            role="presentation"
+          >
         {isResolved ? (
           // Sprint 3 · Checkpoint 16H completion §11-13 — completed
           // cards render a Restore action (not a static label).
@@ -437,18 +408,17 @@ export default function EmailIntakeCard({ data }: Props) {
                   setCvapModalMode({ kind: "STEP_1" });
                 }
                 setCvapModalOpen(true);
-                if (!expanded) void markReadOnce();
+                void markReadOnce();
                 return;
               }
-              // Non-modal actions (duplicate, missing info,
-              // COA required) still expand the card + jump to the
-              // Invoice Review tab where their workflows live.
-              if (!expanded) {
-                setExpanded(true);
-                void markReadOnce();
-              }
-              setTab("invoice");
-              void loadApEvidenceOnce();
+              // Phase 4R rev-7 (2026-08-15) — non-modal actions
+              // (duplicate, missing info, COA required) previously
+              // jumped to the Invoice Review tab. That tab has been
+              // retired; the equivalent founder-facing information
+              // now lives in the Spectre Summary body the card is
+              // already showing. Fire mark-read and let the summary
+              // stand.
+              void markReadOnce();
             }}
             onOpenPdf={ap.primaryAttachment
               ? () => setPdfModal({ documentId: ap.primaryAttachment!.documentId, filename: ap.primaryAttachment!.filename })
@@ -473,40 +443,16 @@ export default function EmailIntakeCard({ data }: Props) {
             ) : null}
           </>
         )}
-        <div className="grow" />
-        <button
-          type="button"
-          className="spectre-btn spectre-btn--tertiary spectre-btn--sm"
-          onClick={handlePrimarySurfaceClick}
-          data-testid="card-toggle"
-          aria-expanded={expanded}
-        >
-          {expanded ? "Collapse" : "Open"}
-        </button>
-      </div>
+          </div>
+        </>
+      )}
 
-      {/* Expanded region — tabs + tab body. All clicks here stop
-          propagating so they don't re-collapse the card. */}
-      {expanded ? (
-        <div
-          className="spectre-mc-item-expanded"
-          onClick={(e) => e.stopPropagation()}
-          role="presentation"
-          data-testid="email-inline-expansion"
-        >
-          <TabBar
-            available={availableTabs}
-            active={tab}
-            onChange={(next) => {
-              setTab(next);
-              if (next === "conversation" || next === "activity") void loadConversationOnce();
-              if (next === "attachments") void loadAttachmentsOnce();
-              if (next === "invoice") void loadApEvidenceOnce();
-              if (next === "statement") void loadStatementEvidenceOnce();
-            }}
-          />
-          <div className="spectre-mc-tab-body" data-testid="unified-tab-body">
-            {tab === "conversation" && (
+      {/* Conversation tab body — the card body when
+          tab === "conversation". Spectre Summary content is NOT
+          rendered above this. */}
+      {tab === "conversation" && (
+        <div className="spectre-mc-tab-body" data-testid="card-conversation">
+          {
               loading ? <div className="spectre-mc-inline-status" role="status">Loading conversation…</div>
               : error ? <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">Could not load the conversation.</div>
               : detail ? (
@@ -535,55 +481,47 @@ export default function EmailIntakeCard({ data }: Props) {
                 </>
               )
               : null
-            )}
-            {tab === "attachments" && (
-              attachments === null ? <div className="spectre-mc-inline-status" role="status">Loading attachments…</div>
-              : (
-                <ul className="spectre-mc-attachment-list" data-testid="unified-attachment-list">
-                  {attachments.length === 0 ? <li>No attachments.</li> : null}
-                  {attachments.map((a) => (
-                    <li key={a.id} data-testid={`unified-attachment-${a.id}`}>
-                      <div><strong>{a.filename}</strong></div>
-                      <div className="spectre-review-muted">{a.classification} · {a.mimeType} · {Math.round(a.byteLength / 1024)} KB</div>
-                      <div>
-                        <button
-                          type="button"
-                          className="spectre-btn spectre-btn--sm spectre-btn--secondary"
-                          onClick={() => setPdfModal({ documentId: a.id, filename: a.filename })}
-                          data-testid={`unified-attachment-preview-${a.id}`}
-                        >
-                          View PDF
-                        </button>
-                        <a
-                          href={`/api/documents/${encodeURIComponent(a.id)}/download`}
-                          className="spectre-btn spectre-btn--sm spectre-btn--ghost"
-                          download={a.filename}
-                        >
-                          Download
-                        </a>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )
-            )}
-            {tab === "invoice" && (
-              apEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading invoice review…</div>
-              : <InvoiceFacetPane payload={apEvidence as ApEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
-            )}
-            {tab === "statement" && (
-              statementEvidence === null ? <div className="spectre-mc-inline-status" role="status">Loading statement reconciliation…</div>
-              : <StatementFacetPane payload={statementEvidence as StatementEvidence} onOpenPdf={(docId, filename) => setPdfModal({ documentId: docId, filename })} />
-            )}
-            {tab === "activity" && (
-              detail ? (
-                <p className="spectre-review-muted">See conversation tab for message history. Item-level activity timeline arrives in the follow-up entity-timeline checkpoint.</p>
-              ) : loading ? <div className="spectre-mc-inline-status" role="status">Loading activity…</div>
-              : <p className="spectre-review-muted">No activity to show yet.</p>
-            )}
-          </div>
+          }
         </div>
-      ) : null}
+      )}
+
+      {/* Attachments tab body — the card body when
+          tab === "attachments". Spectre Summary content is NOT
+          rendered above this. */}
+      {tab === "attachments" && (
+        <div className="spectre-mc-tab-body" data-testid="card-attachments">
+          {attachments === null ? (
+            <div className="spectre-mc-inline-status" role="status">Loading attachments…</div>
+          ) : (
+            <ul className="spectre-mc-attachment-list" data-testid="unified-attachment-list">
+              {attachments.length === 0 ? <li>No attachments.</li> : null}
+              {attachments.map((a) => (
+                <li key={a.id} data-testid={`unified-attachment-${a.id}`}>
+                  <div><strong>{a.filename}</strong></div>
+                  <div className="spectre-review-muted">{a.classification} · {a.mimeType} · {Math.round(a.byteLength / 1024)} KB</div>
+                  <div>
+                    <button
+                      type="button"
+                      className="spectre-btn spectre-btn--sm spectre-btn--secondary"
+                      onClick={() => setPdfModal({ documentId: a.id, filename: a.filename })}
+                      data-testid={`unified-attachment-preview-${a.id}`}
+                    >
+                      View PDF
+                    </button>
+                    <a
+                      href={`/api/documents/${encodeURIComponent(a.id)}/download`}
+                      className="spectre-btn spectre-btn--sm spectre-btn--ghost"
+                      download={a.filename}
+                    >
+                      Download
+                    </a>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {pdfModal ? (
         <DocumentPreviewModal
@@ -617,41 +555,27 @@ export default function EmailIntakeCard({ data }: Props) {
 }
 
 // -------------------------------------------------------------------------
-// Tab plumbing (contextual — Variant D §3.3)
+// Tab plumbing (Phase 4R rev-7 · 2026-08-15)
 // -------------------------------------------------------------------------
 
 function tabsFor(data: EmailFeedCardData): Tab[] {
+  // Spectre Summary + Conversation always present. Attachments only
+  // when the intake actually has one — otherwise the tab entry hides.
   const linked = data.linkedIntelligence;
-  const tabs: Tab[] = ["conversation"];
+  const tabs: Tab[] = ["spectre-summary", "conversation"];
   if ((linked?.attachmentCount ?? 0) > 0) tabs.push("attachments");
-  // Sprint 3 · Checkpoint 16G Stage D — Invoice Review / Statement
-  // Review tabs are AP-only. A membership / governance / general
-  // card must never see them even if a coincidental attachment was
-  // classified INVOICE.
-  const isAp = !data.workDomain || data.workDomain === "ACCOUNTS_PAYABLE";
-  if (isAp && (linked?.invoiceAttachmentCount ?? 0) > 0) tabs.push("invoice");
-  if (isAp && (linked?.statementAttachmentCount ?? 0) > 0) tabs.push("statement");
-  tabs.push("activity");
   return tabs;
 }
 
-function defaultTabFor(data: EmailFeedCardData): Tab {
-  const linked = data.linkedIntelligence;
-  if ((linked?.invoiceAttachmentCount ?? 0) > 0) return "invoice";
-  if ((linked?.statementAttachmentCount ?? 0) > 0) return "statement";
-  return "conversation";
-}
+const CARD_TAB_LABEL: Record<Tab, string> = {
+  "spectre-summary": "Spectre Summary",
+  conversation:      "Conversation",
+  attachments:       "Attachments",
+};
 
-function TabBar({ available, active, onChange }: { available: Tab[]; active: Tab; onChange: (t: Tab) => void }) {
-  const LABEL: Record<Tab, string> = {
-    conversation: "Conversation",
-    attachments: "Attachments",
-    invoice: "Invoice Review",
-    statement: "Statement Review",
-    activity: "Activity",
-  };
+function CardTabBar({ available, active, onChange }: { available: Tab[]; active: Tab; onChange: (t: Tab) => void }) {
   return (
-    <div className="spectre-mc-tabs" role="tablist" data-testid="unified-tabs">
+    <div className="spectre-mc-tabs spectre-mc-tabs--card" role="tablist" data-testid="card-tabs">
       {available.map((t) => (
         <button
           key={t}
@@ -660,126 +584,14 @@ function TabBar({ available, active, onChange }: { available: Tab[]; active: Tab
           aria-selected={active === t}
           className={`spectre-mc-tab${active === t ? " spectre-mc-tab--active" : ""}`}
           onClick={(e) => { e.stopPropagation(); onChange(t); }}
-          data-testid={`unified-tab-${t}`}
+          data-testid={`card-tab-${t}`}
         >
-          {LABEL[t]}
+          {CARD_TAB_LABEL[t]}
         </button>
       ))}
     </div>
   );
 }
-
-// -------------------------------------------------------------------------
-// Invoice + Statement facet panes (preserved from Checkpoint 15H)
-// -------------------------------------------------------------------------
-
-interface ApEvidence {
-  document: { id: string; filename: string; mimeType: string; byteLength: number };
-  extraction: {
-    state: string;
-    invoiceNumber: string | null;
-    invoiceDate: string | null;
-    total: string | null;
-    subtotal: string | null;
-    taxTotal: string | null;
-    currency: string | null;
-    vendor: { guessedName: string | null; guessedTaxNumber: string | null };
-    warnings: string[];
-  };
-  vendorResolution: { state: string };
-  capitalRecommendation: { state: string; reasoning: string };
-  glRecommendation: { accountNumber: string | null; accountName: string | null; reason: string };
-  sourceCorrespondence?: { senderName: string | null; senderAddress: string | null; subject: string | null; receivedAt: string };
-  error?: string;
-}
-interface StatementEvidence {
-  document: { id: string; filename: string; mimeType: string; byteLength: number };
-  vendor: { legalName: string; operatingName: string | null } | null;
-  statementSummary: { statementDate: string | null; openingBalance: string; closingBalance: string; currency: string; reconciliationState: string };
-  lines: Array<{ id: string; sequence: number; referenceNumber: string | null; description: string | null; debitAmount: string; creditAmount: string; matches: Array<{ matchState: string }> }>;
-  findings: Array<{ id: string; key: string; severity: string; statement: string }>;
-  error?: string;
-}
-
-function InvoiceFacetPane({ payload, onOpenPdf }: { payload: ApEvidence; onOpenPdf: (docId: string, filename: string) => void }) {
-  if (payload.error) return <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">Invoice review could not load.</div>;
-  return (
-    <div className="spectre-review-pane" data-testid="unified-invoice-pane">
-      <section className="spectre-review-section">
-        <h4>Extracted invoice facts</h4>
-        <p className="spectre-review-muted">
-          <strong>Vendor (from PDF):</strong> {payload.extraction.vendor.guessedName ?? "not extracted"}
-          {payload.extraction.vendor.guessedTaxNumber ? <> · Tax #: {payload.extraction.vendor.guessedTaxNumber}</> : null}
-        </p>
-        {payload.sourceCorrespondence ? (
-          <p className="spectre-review-muted">
-            <strong>Received from (email sender — provenance only):</strong>{" "}
-            {payload.sourceCorrespondence.senderName ?? payload.sourceCorrespondence.senderAddress ?? "unknown"}
-          </p>
-        ) : null}
-        <dl className="spectre-review-facts">
-          <div className="spectre-review-fact"><dt>Invoice #</dt><dd>{payload.extraction.invoiceNumber ?? "Not extracted — review required"}</dd></div>
-          <div className="spectre-review-fact"><dt>Invoice date</dt><dd>{payload.extraction.invoiceDate ?? "Not extracted — review required"}</dd></div>
-          <div className="spectre-review-fact"><dt>Subtotal</dt><dd>{payload.extraction.subtotal ? `${payload.extraction.currency ?? "CAD"} ${payload.extraction.subtotal}` : "Not extracted"}</dd></div>
-          <div className="spectre-review-fact"><dt>Tax</dt><dd>{payload.extraction.taxTotal ? `${payload.extraction.currency ?? "CAD"} ${payload.extraction.taxTotal}` : "Not extracted"}</dd></div>
-          <div className="spectre-review-fact spectre-review-fact--strong"><dt>Total</dt><dd>{payload.extraction.total ? `${payload.extraction.currency ?? "CAD"} ${payload.extraction.total}` : "Not extracted — review required"}</dd></div>
-          <div className="spectre-review-fact"><dt>Extraction state</dt><dd>{payload.extraction.state}</dd></div>
-          <div className="spectre-review-fact"><dt>Vendor resolution</dt><dd>{payload.vendorResolution.state}</dd></div>
-          <div className="spectre-review-fact"><dt>Capital vs Operating</dt><dd>{payload.capitalRecommendation.state}</dd></div>
-          <div className="spectre-review-fact"><dt>GL recommendation</dt><dd>{payload.glRecommendation.accountNumber ? `${payload.glRecommendation.accountNumber} — ${payload.glRecommendation.accountName ?? ""}` : "None"}</dd></div>
-        </dl>
-        {payload.extraction.warnings.length > 0 ? (
-          <div className="spectre-review-warnings" role="note">
-            <strong>Extraction warnings</strong>
-            <ul>{payload.extraction.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
-          </div>
-        ) : null}
-        <div className="spectre-review-doc-actions">
-          <button
-            type="button"
-            className="spectre-btn spectre-btn--sm spectre-btn--primary"
-            onClick={() => onOpenPdf(payload.document.id, payload.document.filename)}
-            data-testid="unified-invoice-view-pdf"
-          >
-            View invoice PDF
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function StatementFacetPane({ payload, onOpenPdf }: { payload: StatementEvidence; onOpenPdf: (docId: string, filename: string) => void }) {
-  if (payload.error) return <div className="spectre-mc-inline-status spectre-mc-inline-status--error" role="alert">Statement review could not load.</div>;
-  const sum = payload.statementSummary;
-  return (
-    <div className="spectre-review-pane" data-testid="unified-statement-pane">
-      <section className="spectre-review-section">
-        <h4>Reconciliation summary</h4>
-        <p className="spectre-review-muted">
-          <strong>Vendor:</strong> {payload.vendor ? (payload.vendor.operatingName ?? payload.vendor.legalName) : "Unresolved"}
-        </p>
-        <dl className="spectre-review-facts">
-          <div className="spectre-review-fact"><dt>Statement date</dt><dd>{sum.statementDate?.slice(0, 10) ?? "—"}</dd></div>
-          <div className="spectre-review-fact"><dt>Opening</dt><dd>{sum.currency} {sum.openingBalance}</dd></div>
-          <div className="spectre-review-fact spectre-review-fact--strong"><dt>Closing</dt><dd>{sum.currency} {sum.closingBalance}</dd></div>
-          <div className="spectre-review-fact"><dt>State</dt><dd>{sum.reconciliationState}</dd></div>
-        </dl>
-        <div className="spectre-review-doc-actions">
-          <button
-            type="button"
-            className="spectre-btn spectre-btn--sm spectre-btn--primary"
-            onClick={() => onOpenPdf(payload.document.id, payload.document.filename)}
-            data-testid="unified-statement-view-pdf"
-          >
-            View statement PDF
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15I-2 (2026-07-27) — Variant D AP-invoice card body.
 //

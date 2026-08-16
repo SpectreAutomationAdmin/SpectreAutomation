@@ -72,7 +72,11 @@ describe("15O — vendor name click behaviour on the AP card", () => {
     expect(CARD).not.toMatch(/\/app\/admin\/ap\/vendors\/provisional/);
   });
   it("onVendorClick opens the modal (setCvapModalOpen(true))", () => {
-    expect(CARD).toMatch(/renderApCollapsedBody\(data, ap, expanded, \(\) => setCvapModalOpen\(true\)\)/);
+    // Rev-7 (Phase 4R · 2026-08-15) — the card no longer has an
+    // `expanded` local; the AP collapsed-body renderer now receives
+    // `false` as its expanded arg (kept as a compat parameter). The
+    // onVendorClick wiring is otherwise unchanged.
+    expect(CARD).toMatch(/renderApCollapsedBody\(data, ap, false, \(\) => setCvapModalOpen\(true\)\)/);
   });
 });
 

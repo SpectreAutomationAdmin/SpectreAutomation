@@ -135,54 +135,51 @@ describe("MC snapshot builder — wires suppression + linkedIntelligence", () =>
   });
 });
 
-describe("EmailIntakeCard — tabbed layout + work-type eyebrow + View PDF", () => {
-  it("declares the tab set: conversation | attachments | invoice | statement | activity", () => {
-    expect(EMAIL_CARD).toMatch(/type Tab = "conversation" \| "attachments" \| "invoice" \| "statement" \| "activity"/);
+describe("EmailIntakeCard — tabbed layout (Phase 4R rev-7 · 2026-08-15 supersede)", () => {
+  // Rev-7 reduces the founder-facing tab set from five to three
+  // (spectre-summary | conversation | attachments). Invoice Review
+  // / Statement Review / Activity are retired; their content lives
+  // inside the Spectre Summary (Invoice/Statement) or is
+  // server-side only (Activity).
+  it("declares the rev-7 tab set: spectre-summary | conversation | attachments", () => {
+    expect(EMAIL_CARD).toMatch(/type Tab\s*=\s*"spectre-summary"\s*\|\s*"conversation"\s*\|\s*"attachments";/);
   });
-  it("expanded state reveals the tab body (Variant D collapsed body is always visible; tabs sit below it)", () => {
-    // Sprint 3 Checkpoint 15I supersedes the 15H "useTabbedLayout"
-    // switch — the Variant D card always renders its collapsed body,
-    // and the expanded region below it houses the tab set.
+  it("Rev-7: no {expanded ? …} accordion wrapper remains — cards are tab-driven", () => {
     expect(EMAIL_CARD).toMatch(/const availableTabs = tabsFor\(data\)/);
-    expect(EMAIL_CARD).toMatch(/\{expanded \?/);
-    expect(EMAIL_CARD).toMatch(/spectre-mc-item-expanded/);
+    expect(EMAIL_CARD).not.toMatch(/\{expanded \?/);
+    expect(EMAIL_CARD).not.toMatch(/spectre-mc-item-expanded/);
   });
-  it("renders a TabBar sub-component with role=tablist / role=tab", () => {
-    expect(EMAIL_CARD).toMatch(/function TabBar\(/);
+  it("renders a CardTabBar sub-component with role=tablist / role=tab", () => {
+    expect(EMAIL_CARD).toMatch(/function CardTabBar\(/);
     expect(EMAIL_CARD).toMatch(/role="tablist"/);
     expect(EMAIL_CARD).toMatch(/role="tab"/);
     expect(EMAIL_CARD).toMatch(/aria-selected/);
   });
-  it("tab-label vocab preserved on the TabBar", () => {
-    // 15I removed the worktype eyebrow, but the tab body still uses
-    // the same tab labels for continuity with 15H.
+  it("rev-7 tab-label vocab", () => {
+    expect(EMAIL_CARD).toMatch(/"spectre-summary":\s*"Spectre Summary"/);
     expect(EMAIL_CARD).toMatch(/conversation:\s*"Conversation"/);
     expect(EMAIL_CARD).toMatch(/attachments:\s*"Attachments"/);
-    expect(EMAIL_CARD).toMatch(/invoice:\s*"Invoice Review"/);
-    expect(EMAIL_CARD).toMatch(/statement:\s*"Statement Review"/);
-    expect(EMAIL_CARD).toMatch(/activity:\s*"Activity"/);
+    expect(EMAIL_CARD).not.toMatch(/invoice:\s*"Invoice Review"/);
+    expect(EMAIL_CARD).not.toMatch(/statement:\s*"Statement Review"/);
+    expect(EMAIL_CARD).not.toMatch(/activity:\s*"Activity"/);
   });
-  it("PDF preview is offered via the DocumentPreviewModal (moved into the Attachments + Invoice/Statement tabs)", () => {
-    // The collapsed-row "View PDF" button was removed per §3.4;
-    // the modal itself is still wired inside the tab bodies.
+  it("PDF preview is offered via the DocumentPreviewModal (Attachments tab)", () => {
     expect(EMAIL_CARD).toMatch(/import DocumentPreviewModal/);
     expect(EMAIL_CARD).toMatch(/<DocumentPreviewModal/);
   });
-  it("renders InvoiceFacetPane + StatementFacetPane inside the tab body", () => {
-    expect(EMAIL_CARD).toMatch(/function InvoiceFacetPane\(/);
-    expect(EMAIL_CARD).toMatch(/function StatementFacetPane\(/);
+  it("Rev-7: InvoiceFacetPane + StatementFacetPane retired with their tabs", () => {
+    expect(EMAIL_CARD).not.toMatch(/function InvoiceFacetPane\(/);
+    expect(EMAIL_CARD).not.toMatch(/function StatementFacetPane\(/);
   });
-  it("lazy-loads AP evidence, statement evidence, and attachments from their respective endpoints", () => {
-    // Sprint 3 Checkpoint 15I renamed the closures from `ensureXLoaded`
-    // to `loadXOnce` — same one-shot lazy-load semantics.
-    expect(EMAIL_CARD).toMatch(/loadApEvidenceOnce/);
-    expect(EMAIL_CARD).toMatch(/loadStatementEvidenceOnce/);
+  it("Rev-7: only lazy-loads conversation + attachments (invoice/statement evidence is no longer proxied through the card)", () => {
+    expect(EMAIL_CARD).toMatch(/loadConversationOnce/);
     expect(EMAIL_CARD).toMatch(/loadAttachmentsOnce/);
-    // AP + Statement evidence are fetched from the CHILD intake id
-    // (not the email intake), because that's where the AP/Statement
-    // findings + extraction live in the DB.
-    expect(EMAIL_CARD).toMatch(/\/api\/mission-control\/work-intake\/.*\/ap-evidence/);
-    expect(EMAIL_CARD).toMatch(/\/api\/mission-control\/work-intake\/.*\/statement-evidence/);
+    expect(EMAIL_CARD).not.toMatch(/loadApEvidenceOnce\(/);
+    expect(EMAIL_CARD).not.toMatch(/loadStatementEvidenceOnce\(/);
+    // The ap-evidence + statement-evidence endpoints STILL EXIST
+    // (used by tests + the CVAP modal); the card just no longer
+    // proxies them into tab bodies. Assert against calls in the
+    // card, not the presence of the endpoint URL elsewhere.
     // Attachments are fetched from the EMAIL intake id — the
     // /documents route walks the email origin chain.
     expect(EMAIL_CARD).toMatch(/\/api\/mission-control\/work-intake\/.*\/documents/);

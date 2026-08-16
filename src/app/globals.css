@@ -1395,34 +1395,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Sprint 3 Checkpoint 15I — Variant D card interaction ---- */
-  /* The card is now click-to-expand. Its primary click surface is
-     a role="button" wrapper around everything above the actions
-     row. The actions row itself does NOT toggle expansion — its
-     buttons stopPropagation so Resolve / Snooze fire independently
-     of the outer surface click. */
-  .spectre-mc-item-surface {
+  /* Phase 4R rev-7 (2026-08-15) — every Work Intake card is now
+     tab-driven. The primary click surface / role="button" wrapper +
+     Open/Collapse accordion is retired; each tab body renders
+     directly inside the article. `.spectre-mc-item-body` holds the
+     Spectre Summary content (formerly the collapsed body). */
+  .spectre-mc-item-body {
     display: block;
-    cursor: pointer;
-    outline: none;
   }
-  .spectre-mc-item-surface:focus-visible {
-    outline: 2px solid var(--spectre-status-success);
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-  /* Sprint 3 · Checkpoint 15L — the surface hover MUST NOT wash the
-     card body in a grey fill. The founder-approved behaviour: the
-     card body colour is unchanged, only the edge shadow / left rail
-     may subtly strengthen (that treatment lives on `.spectre-mc-item`
-     itself). Keyboard focus visibility comes from the
-     `:focus-visible` outline above. */
-  .spectre-mc-item-surface:hover {
-    background: transparent;
-  }
-  .spectre-mc-item-expanded {
-    margin-top: var(--spectre-space-3);
-    padding-top: var(--spectre-space-3);
-    border-top: 1px solid var(--spectre-border-hairline, rgba(20, 18, 12, 0.09));
+  /* Card-scoped tab bar — subtle underline treatment, sits above
+     the tab body. Retained the .spectre-mc-tabs class name so the
+     tab typography inherits the shared vocabulary; the --card
+     modifier tightens the border so the tabs read as OWNED by the
+     card, not by a separate wrapping panel. */
+  .spectre-mc-tabs--card {
+    margin: 0 calc(-1 * var(--spectre-space-4)) var(--spectre-space-3);
+    padding: 0 var(--spectre-space-4);
+    border-bottom: 1px solid var(--spectre-border-hairline, rgba(20, 18, 12, 0.09));
   }
   .spectre-mc-tab-body {
     min-height: 140px;
