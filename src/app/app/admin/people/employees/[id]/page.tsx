@@ -162,8 +162,14 @@ export default async function EmployeeProfilePage({
               id: "overview",
               label: "Overview",
               content: (
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="card card-body lg:col-span-2 space-y-4">
+                // HR-2A.1 (2026-08-17) — the Club Member right rail
+                // renders ONLY when the Employee is linked to a Member
+                // (founder brief §4: "If Employee.memberId != null show
+                // a clear but restrained indicator"). When unlinked,
+                // the Profile card takes full width — no permanent
+                // "Not linked to a club Member" placeholder card.
+                <div className={memberLink ? "grid grid-cols-1 lg:grid-cols-3 gap-6" : ""}>
+                  <div className={`card card-body space-y-4 ${memberLink ? "lg:col-span-2" : ""}`}>
                     <h3 className="section-title text-lg">Profile</h3>
                     <dl className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                       <Field label="Legal name">{legalName}</Field>
@@ -188,8 +194,8 @@ export default async function EmployeeProfilePage({
                       </Field>
                     </dl>
                   </div>
-                  <div className="space-y-4">
-                    {memberLink ? (
+                  {memberLink && (
+                    <div className="space-y-4">
                       <div className="card card-body">
                         <h3 className="section-title text-lg">Club Member</h3>
                         <p className="mt-2 text-sm text-stone-600">
@@ -202,13 +208,8 @@ export default async function EmployeeProfilePage({
                           Open member profile
                         </Link>
                       </div>
-                    ) : (
-                      <div className="card card-body text-sm text-stone-500">
-                        <h3 className="section-title text-lg text-club-ink">Club Member</h3>
-                        <p className="mt-2">Not linked to a club Member.</p>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               ),
             },

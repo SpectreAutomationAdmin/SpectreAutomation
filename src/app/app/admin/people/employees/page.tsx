@@ -53,7 +53,40 @@ export default async function EmployeeDirectoryPage() {
         </Link>
       </div>
 
-      <div className="card mt-6 overflow-hidden">
+      {employees.length === 0 ? (
+        // HR-2A.1 (2026-08-17) — proper hero empty state instead of a
+        // near-empty table row floating on cream. Founder brief §10:
+        // "excessive whitespace" is a defect. Give the empty state
+        // substance (explanation of what this page will contain +
+        // primary CTA + secondary link to Onboarding) so the page
+        // reads intentional rather than unfinished.
+        <div className="card mt-6 p-10 md:p-12">
+          <div className="max-w-2xl">
+            <h2 className="font-serif text-2xl text-club-ink">
+              Your employee roster starts here.
+            </h2>
+            <p className="mt-3 text-stone-500 leading-relaxed">
+              Every active and pre-hire staff member at your club will appear here.
+              When you add someone, they enter the onboarding queue — you invite them,
+              they submit their own banking, SIN, and tax information, and Payroll
+              Admin activates them. Their lifecycle, position, and payroll readiness
+              live on this page from day one.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <Link href="/app/admin/people/employees/new" className="btn btn-primary">
+                + Add your first employee
+              </Link>
+              <Link
+                href="/app/admin/people/onboarding"
+                className="text-sm text-stone-500 hover:text-club-ink"
+              >
+                Already invited someone? Check the Onboarding queue →
+              </Link>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="card mt-6 overflow-hidden">
         <table className="table-base">
           <thead>
             <tr>
@@ -70,18 +103,6 @@ export default async function EmployeeDirectoryPage() {
             </tr>
           </thead>
           <tbody>
-            {employees.length === 0 && (
-              <tr>
-                <td colSpan={10} className="px-6 py-10 text-center">
-                  <div className="text-stone-500">No employees on file yet.</div>
-                  <div className="mt-4">
-                    <Link href="/app/admin/people/employees/new" className="btn btn-primary">
-                      + Add your first employee
-                    </Link>
-                  </div>
-                </td>
-              </tr>
-            )}
             {employees.map((e) => {
               const displayName = e.preferredName?.trim().length
                 ? `${e.preferredName} ${e.lastName}`
@@ -138,7 +159,8 @@ export default async function EmployeeDirectoryPage() {
             })}
           </tbody>
         </table>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
