@@ -3159,3 +3159,376 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     border-top: 1px solid var(--spectre-border-hairline);
   }
 }
+
+  /* ================================================================
+   * HR-2A.3 (2026-08-17) — person-profile primitives extracted from Phase 20
+   * (commit 8668cef, work-intake-state-outlook-archive-fix — not merged to main). Used by EmployeeProfileView; Member profile on hr-1-canonical-infrastructure is unchanged. Reference: attached Tucker Hersam
+   * screenshot). Dense, restrained, no floating cards.
+   * ================================================================ */
+
+  /* ---- Members Database list ------------------------------------ */
+  .spectre-members-db { max-width: 1400px; }
+  .spectre-members-db-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .spectre-members-db-title {
+    font-size: 22px; line-height: 28px; letter-spacing: -0.014em;
+    font-weight: 600; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-meta {
+    margin-top: 4px; font-size: 12px; color: var(--spectre-text-muted);
+  }
+  .spectre-members-db-filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 12px 0; margin-bottom: 12px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-members-db-search {
+    flex: 1 1 260px; min-width: 220px;
+    height: 32px; padding: 0 10px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px; background: var(--spectre-surface);
+    font-size: 13px; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-search:focus { outline: none; border-color: var(--spectre-accent); }
+  .spectre-members-db-select {
+    height: 32px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px; background: var(--spectre-surface);
+    font-size: 12px; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-clear {
+    font-size: 12px; color: var(--spectre-text-muted);
+    text-decoration: none;
+  }
+  .spectre-members-db-clear:hover { color: var(--spectre-text-primary); text-decoration: underline; }
+  .spectre-members-db-table-wrap { overflow-x: auto; }
+  .spectre-members-db-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px;
+  }
+  .spectre-members-db-table th {
+    text-align: left; padding: 8px 12px;
+    font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 600;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    white-space: nowrap;
+  }
+  .spectre-members-db-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    color: var(--spectre-text-primary); vertical-align: middle;
+  }
+  .spectre-members-db-row:hover td { background: var(--spectre-surface-hover, rgba(0,0,0,0.02)); }
+  .spectre-members-db-avatar-link { display: inline-flex; }
+  .spectre-members-db-avatar {
+    width: 28px; height: 28px; border-radius: 4px;
+    object-fit: cover; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--spectre-surface-hover, #e6e6e8);
+    color: var(--spectre-text-muted); font-size: 10px; font-weight: 600;
+  }
+  .spectre-members-db-avatar--placeholder { padding-top: 1px; letter-spacing: 0.02em; }
+  .spectre-members-db-name {
+    color: var(--spectre-text-primary); text-decoration: none; font-weight: 500;
+  }
+  .spectre-members-db-name:hover { color: var(--spectre-accent); text-decoration: underline; }
+  .spectre-members-db-link { color: var(--spectre-accent); text-decoration: none; }
+  .spectre-members-db-link:hover { text-decoration: underline; }
+  .spectre-members-db-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; color: var(--spectre-text-secondary); }
+  .spectre-members-db-empty { padding: 40px 12px; text-align: center; color: var(--spectre-text-muted); font-size: 13px; }
+  .spectre-members-db-table .col-avatar { width: 40px; }
+  .spectre-members-db-table .col-number { width: 100px; }
+  .spectre-members-db-table .col-category { width: 140px; }
+  .spectre-members-db-table .col-status { width: 100px; }
+  .spectre-members-db-table .col-phone { width: 140px; }
+  .spectre-members-db-table .col-join { width: 130px; }
+
+  /* ---- Member Profile ------------------------------------------- */
+  .spectre-person-profile { max-width: 1200px; }
+  .spectre-person-profile-flash {
+    padding: 8px 12px; border-radius: 6px; font-size: 12.5px;
+    margin-bottom: 12px;
+  }
+  .spectre-person-profile-flash--ok {
+    background: var(--spectre-status-success-bg);
+    color: var(--spectre-status-success);
+    border: 1px solid var(--spectre-status-success);
+  }
+  .spectre-person-profile-flash--err {
+    background: var(--spectre-status-error-bg, #fef2f2);
+    color: var(--spectre-status-error);
+    border: 1px solid var(--spectre-status-error);
+  }
+
+  /* Identity header — compact, matches the reference (Tucker
+     Hersam). Photo left, back arrow, name + secondary meta, ACTIVE
+     pill right. Not a hero title. */
+  .spectre-person-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0 16px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    margin-bottom: 8px;
+  }
+  .spectre-person-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 4px;
+    color: var(--spectre-text-muted); text-decoration: none;
+    transition: background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-person-back:hover { background: var(--spectre-surface-hover, rgba(0,0,0,0.05)); color: var(--spectre-text-primary); }
+  .spectre-person-header-photo {
+    width: 40px; height: 40px; border-radius: 4px;
+    background: var(--spectre-surface-hover, #e6e6e8);
+    overflow: hidden; display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .spectre-person-header-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .spectre-person-header-photo-placeholder {
+    font-size: 12px; font-weight: 600; color: var(--spectre-text-muted);
+    letter-spacing: 0.02em;
+  }
+  .spectre-person-header-body { flex: 1; min-width: 0; }
+  .spectre-person-header-name {
+    font-size: 18px; font-weight: 600; line-height: 22px;
+    color: var(--spectre-text-primary); letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .spectre-person-header-meta {
+    margin-top: 2px; display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--spectre-text-muted); letter-spacing: 0.02em;
+  }
+  .uppercase-eyebrow { text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; }
+  .spectre-person-header-sep { color: var(--spectre-text-subtle); }
+  .spectre-person-header-number {
+    color: var(--spectre-accent); text-decoration: none;
+  }
+  .spectre-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* Status pill */
+  .spectre-person-status-pill {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;
+    border: 1px solid var(--spectre-status-success);
+    background: var(--spectre-status-success-bg);
+    color: var(--spectre-status-success);
+  }
+  .spectre-person-status-pill--onboarding {
+    border-color: var(--spectre-status-warning);
+    background: var(--spectre-status-warning-bg);
+    color: var(--spectre-status-warning);
+  }
+  .spectre-person-status-pill--inactive,
+  .spectre-person-status-pill--suspended,
+  .spectre-person-status-pill--resigned {
+    border-color: var(--spectre-border-default);
+    background: var(--spectre-surface);
+    color: var(--spectre-text-muted);
+  }
+
+  /* Primary tabs — subtle underline treatment. */
+  .spectre-person-tabs {
+    display: flex; align-items: center; gap: 4px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    margin-bottom: 24px;
+  }
+  .spectre-person-tab {
+    background: transparent; border: none; padding: 10px 14px;
+    font-size: 13px; color: var(--spectre-text-muted); font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease),
+                border-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-person-tab:hover { color: var(--spectre-text-primary); }
+  .spectre-person-tab.is-active {
+    color: var(--spectre-accent);
+    border-bottom-color: var(--spectre-accent);
+  }
+  .spectre-person-tab-overflow {
+    margin-left: auto; background: transparent; border: none;
+    padding: 10px 14px; color: var(--spectre-text-muted); cursor: default;
+    font-size: 16px; line-height: 1;
+  }
+  .spectre-person-tab-overflow:disabled { opacity: 0.5; }
+
+  /* Body */
+  .spectre-person-body { padding: 0; }
+  .spectre-person-section-title {
+    font-size: 15px; font-weight: 600; color: var(--spectre-text-primary);
+    margin: 0 0 12px;
+  }
+
+  /* Person switcher — reference: "Tucker Hersam    Grace Howie ×    + add member" */
+  .spectre-person-person-switcher {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
+    padding-bottom: 10px; margin-bottom: 24px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    font-size: 13px;
+  }
+  .spectre-person-person {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--spectre-text-muted); text-decoration: none;
+    padding-bottom: 4px; border-bottom: 2px solid transparent;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-person-person:hover { color: var(--spectre-text-primary); }
+  .spectre-person-person.is-active {
+    color: var(--spectre-accent);
+    border-bottom-color: var(--spectre-accent);
+    font-weight: 500;
+  }
+  .spectre-person-person-remove { display: inline-flex; }
+  .spectre-person-person-remove-btn {
+    background: transparent; border: none; padding: 0; color: currentColor;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    opacity: 0.6;
+  }
+  .spectre-person-person-remove-btn:hover { opacity: 1; }
+  .spectre-person-person-add {
+    background: transparent; border: none; padding: 0;
+    color: var(--spectre-accent); font-size: 12.5px; cursor: pointer;
+  }
+  .spectre-person-person-add:hover { text-decoration: underline; }
+  .spectre-person-person-add-form { display: inline-flex; align-items: center; gap: 6px; }
+  .spectre-person-person-add-form input,
+  .spectre-person-person-add-form select {
+    height: 28px; padding: 0 8px; font-size: 12.5px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-primary);
+  }
+
+  /* Two-column body */
+  .spectre-person-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+    gap: 40px;
+  }
+  @media (max-width: 899px) {
+    .spectre-person-columns { grid-template-columns: 1fr; gap: 24px; }
+  }
+
+  .spectre-person-section { margin-bottom: 28px; }
+  .spectre-person-section-head {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 8px;
+  }
+  .spectre-person-eyebrow {
+    font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 600;
+    margin: 0;
+  }
+  .spectre-person-edit,
+  .spectre-person-inline-edit {
+    background: transparent; border: none; padding: 2px; margin: 0;
+    color: var(--spectre-text-muted); cursor: pointer; border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    opacity: 0.5;
+    transition: opacity var(--spectre-motion-fast) var(--spectre-ease),
+                background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-person-edit:hover,
+  .spectre-person-inline-edit:hover {
+    opacity: 1;
+    background: var(--spectre-surface-hover, rgba(0,0,0,0.05));
+  }
+
+  /* Basic Details grid — dense two-column label/value */
+  .spectre-person-grid { display: block; }
+  .spectre-person-row {
+    display: grid; grid-template-columns: 200px 1fr;
+    padding: 4px 0; align-items: baseline;
+    font-size: 13px; line-height: 20px;
+  }
+  .spectre-person-row dt,
+  .spectre-person-row > label {
+    color: var(--spectre-text-muted); font-weight: 400;
+  }
+  .spectre-person-row dd { color: var(--spectre-text-primary); margin: 0; }
+  .spectre-person-not-provided { color: var(--spectre-text-muted); font-style: normal; }
+  .spectre-person-link { color: var(--spectre-accent); text-decoration: none; }
+  .spectre-person-link:hover { text-decoration: underline; }
+  .spectre-person-empty-note {
+    font-size: 12px; color: var(--spectre-text-muted); margin: 0;
+  }
+
+  /* Edit form (inline) */
+  .spectre-person-edit-form { display: block; }
+  .spectre-person-edit-input {
+    width: 100%; max-width: 320px;
+    height: 28px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-primary);
+    font-size: 13px;
+  }
+  .spectre-person-edit-form-actions {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .spectre-person-custom-form {
+    display: inline-flex; align-items: center; gap: 6px; width: 100%;
+  }
+  .spectre-person-custom-form input {
+    flex: 1; height: 28px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); font-size: 13px;
+  }
+
+  /* Member Picture */
+  .spectre-person-picture-wrap {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  }
+  .spectre-person-picture {
+    width: 200px; height: 240px; object-fit: cover;
+    border-radius: 4px; background: var(--spectre-surface-hover, #e6e6e8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .spectre-person-picture--placeholder {
+    color: var(--spectre-text-muted); font-size: 32px; font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .spectre-person-picture-hint {
+    font-size: 11px; color: var(--spectre-text-muted); margin: 0;
+  }
+
+  /* Groups */
+  .spectre-person-groups {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .spectre-person-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-secondary);
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+    line-height: 14px;
+  }
+  .spectre-person-chip-remove {
+    background: transparent; border: none; padding: 0;
+    color: currentColor; cursor: pointer; opacity: 0.5;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .spectre-person-chip-remove:hover { opacity: 1; }
+  .spectre-person-chip--add {
+    background: transparent; color: var(--spectre-text-muted); cursor: pointer;
+    border-style: dashed;
+  }
+  .spectre-person-chip--add:hover { color: var(--spectre-text-primary); border-color: var(--spectre-text-primary); }
+  .spectre-person-group-add-form {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .spectre-person-group-add-form input {
+    height: 24px; padding: 0 8px; font-size: 11px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface);
+  }
+
+  /* Placeholder tab body (Plan / Billing / etc.) */
+  .spectre-person-placeholder-tab {
+    padding: 40px 16px; text-align: center;
+    color: var(--spectre-text-muted); font-size: 13px;
+  }
+  .spectre-person-placeholder-tab h2 {
+    font-size: 15px; color: var(--spectre-text-primary); font-weight: 600;
+    margin: 0 0 8px;
+  }
