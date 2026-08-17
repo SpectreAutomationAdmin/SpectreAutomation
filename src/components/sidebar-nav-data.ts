@@ -51,6 +51,22 @@ export const ADMIN_SECTIONS: NavSection[] = [
       { href: "/app/admin/events", label: "Club Events", perm: "events:read" },
     ],
   },
+  // HR-2A (2026-08-16) — People is the club-side administrative
+  // beginning of the employee journey: directory + add-employee +
+  // onboarding lifecycle. Placed directly after Membership so the
+  // two rosters (club members / club employees) sit next to each
+  // other in the founder-approved hospitality-oriented sequencing,
+  // and BEFORE Finance so payroll-adjacent readiness cues are
+  // upstream of the ledger surfaces that consume them.
+  {
+    id: "people",
+    label: "People",
+    icon: "people",
+    items: [
+      { href: "/app/admin/people/employees", label: "Employee Directory", perm: "hr:directory:view" },
+      { href: "/app/admin/people/onboarding", label: "Onboarding", perm: "hr:onboarding:read" },
+    ],
+  },
   {
     id: "finance",
     label: "Finance",

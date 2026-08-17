@@ -3,7 +3,9 @@ import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
+import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
+import { hasPermission } from "@/lib/rbac";
 import { Badge } from "@/components/Badge";
 import { formatCurrency, formatDate } from "@/lib/finance";
 import { Tabs } from "@/components/Tabs";
@@ -89,9 +91,23 @@ export default async function MemberProfilePage({
       collectionNotices: { orderBy: { createdAt: "desc" } },
       preferences: true,
       registrations: { include: { event: true } },
+      // HR-2A (2026-08-16) — reciprocal Employee indicator. When a
+      // Member is also a club Employee (via `Employee.memberId`), a
+      // subtle indicator is rendered on the Member profile header
+      // and (for callers with `hr:directory:view`) links to the
+      // Employee profile. No HR data is duplicated into the Member
+      // profile — this is purely a navigation affordance.
+      employee: { select: { id: true, employeeNumber: true, employeeLifecycle: true } },
     },
   });
   if (!member) notFound();
+
+  // HR-2A — permission-gated Employee link on the Member header.
+  // Callers without `hr:directory:view` see plain-text (no leak,
+  // no link).
+  const principal = await getCurrentPrincipal();
+  const canSeeEmployeeLink =
+    principal !== null && hasPermission(principal, clubId, "hr:directory:view");
 
   // Phase 18C — dining summary + recent reservations for the Dining tab.
   const { getMemberDiningSummary } = await import("@/lib/hospitality/dining-analytics");
@@ -124,6 +140,24 @@ export default async function MemberProfilePage({
             <Badge status={member.paymentMethodStatus} />
             <span className="text-sm text-stone-500">{member.memberNumber} · {member.membershipCategory ?? "—"}</span>
           </div>
+          {member.employee && (
+            <div className="mt-2 text-xs text-stone-500">
+              {canSeeEmployeeLink ? (
+                <Link
+                  href={`/app/admin/people/employees/${member.employee.id}`}
+                  className="text-club-green-700 hover:underline"
+                  data-testid="member-header-employee-link"
+                  data-required-permission="hr:directory:view"
+                >
+                  Club Employee · #{member.employee.employeeNumber}
+                </Link>
+              ) : (
+                <span data-testid="member-header-employee-text">
+                  Club Employee · #{member.employee.employeeNumber}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="text-right">
           <div className="text-xs uppercase tracking-wide text-stone-500">Current balance</div>
