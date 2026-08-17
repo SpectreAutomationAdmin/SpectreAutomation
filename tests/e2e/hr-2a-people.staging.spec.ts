@@ -81,6 +81,30 @@ test.describe("HR-2A.1 · People module staging acceptance", () => {
     (evidence as { directoryRows?: number }).directoryRows = rowCount;
 
     // ---------- §D Add Employee form ----------
+    // HR-2A.2 (2026-08-17) — DETERMINISTIC FIXTURE strategy (§16).
+    // Prior runs used a Date.now() suffix which created a new
+    // synthetic employee EVERY run — 5 accumulated on staging.
+    // Fix: one deterministic fixture identity, reused across runs.
+    // Fixture identity hoisted so BOTH the fixture-check branch
+    // and the create branch use the same values.
+    const firstName = "Playwright";
+    const lastName = "Fixture";
+    const personalEmail = "pw-hr2a-fixture@spectre-acceptance.local";
+
+    // If the fixture employee row is already on the Directory
+    // (from a prior run), skip create and click straight through
+    // to that profile. Otherwise open the Add Employee form.
+    const fixtureRow = page.locator('tr').filter({ hasText: `${firstName} ${lastName}` }).first();
+    const fixtureExists = (await fixtureRow.count()) > 0;
+    (evidence as { fixtureAlreadyExisted?: boolean }).fixtureAlreadyExisted = fixtureExists;
+    if (fixtureExists) {
+      const fixtureLink = fixtureRow.locator('a[href*="/app/admin/people/employees/c"]').first();
+      await Promise.all([
+        page.waitForURL(/\/app\/admin\/people\/employees\/c[a-z0-9]{20,}(?:\/|$)/, { timeout: 15_000 }),
+        fixtureLink.click(),
+      ]);
+      // Fast-path: jump straight to §F profile assertions.
+    } else {
     const addEmployeeBtn = page.locator('a[href="/app/admin/people/employees/new"], a:has-text("Add Employee"), button:has-text("Add Employee")').first();
     await expect(addEmployeeBtn, "Add Employee action visible").toBeVisible();
     await addEmployeeBtn.click();
@@ -88,13 +112,6 @@ test.describe("HR-2A.1 · People module staging acceptance", () => {
     await page.waitForTimeout(400);
     await expect(page).toHaveURL(/\/app\/admin\/people\/employees\/new$/);
     await page.screenshot({ path: path.join(OUT, "D-add-employee-form-empty.png"), fullPage: true });
-
-    // Fill in a synthetic pre-hire employee. Timestamp suffix avoids
-    // duplicate personal-email collisions on repeat runs.
-    const suffix = Date.now().toString(36).slice(-6);
-    const firstName = "Playwright";
-    const lastName = `Acceptance-${suffix}`;
-    const personalEmail = `pw-hr2a-${suffix}@spectre-acceptance.local`;
 
     const legalFirst = page.locator('input[name="firstName"], input[name="legalFirstName"]').first();
     const legalLast = page.locator('input[name="lastName"], input[name="legalLastName"]').first();
@@ -153,10 +170,12 @@ test.describe("HR-2A.1 · People module staging acceptance", () => {
       await page.screenshot({ path: path.join(OUT, "E1-add-employee-submit-error.png"), fullPage: true });
       throw err;
     });
+    } // end else (create-flow branch)
 
-    // Extract the new employee's id from the URL.
+    // Extract the fixture employee's id from the URL. Works for both
+    // fixture-existed (direct navigate) and fresh-create paths.
     const employeeId = new URL(page.url()).pathname.split("/").filter(Boolean).at(-1) ?? "";
-    (evidence as { createdEmployee?: unknown }).createdEmployee = { employeeId, personalEmail, expectedStartDate: startDate };
+    (evidence as { fixtureEmployee?: unknown }).fixtureEmployee = { employeeId, personalEmail };
 
     // ---------- §F Employee profile shell ----------
     // Wait for a profile-specific element (Overview tab) before

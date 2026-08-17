@@ -123,11 +123,21 @@ export default async function EmployeeProfilePage({
         ← Employee Directory
       </Link>
 
+      {/* HR-2A.2 (2026-08-17) — header mirrors Member profile
+          composition: modest avatar, h1 name, optional legal-name
+          subtitle when it differs, three-badge status row grouped
+          with an identity subordinate line, optional Member
+          reciprocal subordinate xs text. Right side hosts the
+          primary action (Invite) — same slot Member uses for
+          "Current balance". */}
       <div className="mt-3 flex flex-wrap items-start gap-6 justify-between">
         <div className="flex items-start gap-4">
-          <EmployeeAvatar firstName={profile.firstName} lastName={profile.lastName} size={64} />
+          <EmployeeAvatar firstName={profile.firstName} lastName={profile.lastName} size={44} />
           <div>
             <h1 className="page-title">{displayName}</h1>
+            {displayName !== legalName && (
+              <div className="mt-0.5 text-xs text-stone-500">Legal: {legalName}</div>
+            )}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge status={profile.employeeLifecycle} />
               <Badge status={profile.onboardingState} />
@@ -135,6 +145,7 @@ export default async function EmployeeProfilePage({
               <span className="text-sm text-stone-500">
                 {profile.employeeNumber}
                 {position?.name ? ` · ${position.name}` : ""}
+                {department?.name ? ` · ${department.name}` : ""}
               </span>
             </div>
             {memberLink && (
@@ -162,40 +173,68 @@ export default async function EmployeeProfilePage({
               id: "overview",
               label: "Overview",
               content: (
-                // HR-2A.1 (2026-08-17) — the Club Member right rail
-                // renders ONLY when the Employee is linked to a Member
-                // (founder brief §4: "If Employee.memberId != null show
-                // a clear but restrained indicator"). When unlinked,
-                // the Profile card takes full width — no permanent
-                // "Not linked to a club Member" placeholder card.
-                <div className={memberLink ? "grid grid-cols-1 lg:grid-cols-3 gap-6" : ""}>
-                  <div className={`card card-body space-y-4 ${memberLink ? "lg:col-span-2" : ""}`}>
-                    <h3 className="section-title text-lg">Profile</h3>
-                    <dl className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                      <Field label="Legal name">{legalName}</Field>
-                      <Field label="Preferred name">{profile.preferredName ?? "—"}</Field>
-                      <Field label="Employee number">{profile.employeeNumber}</Field>
-                      <Field label="Employment type">
-                        {profile.employmentType?.replace(/_/g, " ") ?? "—"}
-                      </Field>
-                      <Field label="Personal email">{profile.personalEmail ?? "—"}</Field>
-                      <Field label="Mobile phone">{profile.mobilePhone ?? "—"}</Field>
-                      <Field label="Department">{department?.name ?? "—"}</Field>
-                      <Field label="Position">{position?.name ?? "—"}</Field>
-                      <Field label="Reports to">
-                        {manager
-                          ? (manager.preferredName?.trim().length
-                              ? `${manager.preferredName} ${manager.lastName}`
-                              : `${manager.firstName} ${manager.lastName}`)
-                          : "—"}
-                      </Field>
-                      <Field label="Expected start date">
-                        {profile.expectedStartDate ? formatDate(profile.expectedStartDate) : "—"}
-                      </Field>
-                    </dl>
+                // HR-2A.2 (2026-08-17) — Overview mirrors the Member
+                // profile's grouped structure: 2/3 left column with
+                // meaningful groupings (Employment + Contact) instead
+                // of one flat field dump; 1/3 right rail with a
+                // Current status summary card and an optional Club
+                // Member card. Right rail is ALWAYS present (so the
+                // page composition is balanced) even without a Member
+                // link — the Current status card fills it.
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  <div className="lg:col-span-2 space-y-6">
+                    <div className="card card-body space-y-4">
+                      <h3 className="section-title text-lg">Employment</h3>
+                      <dl className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <Field label="Position">{position?.name ?? "—"}</Field>
+                        <Field label="Department">{department?.name ?? "—"}</Field>
+                        <Field label="Employment type">
+                          {profile.employmentType?.replace(/_/g, " ") ?? "—"}
+                        </Field>
+                        <Field label="Reports to">
+                          {manager
+                            ? (manager.preferredName?.trim().length
+                                ? `${manager.preferredName} ${manager.lastName}`
+                                : `${manager.firstName} ${manager.lastName}`)
+                            : "—"}
+                        </Field>
+                        <Field label="Expected start date">
+                          {profile.expectedStartDate ? formatDate(profile.expectedStartDate) : "—"}
+                        </Field>
+                        <Field label="Employee number">{profile.employeeNumber}</Field>
+                      </dl>
+                    </div>
+                    <div className="card card-body space-y-4">
+                      <h3 className="section-title text-lg">Contact</h3>
+                      <dl className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <Field label="Personal email">{profile.personalEmail ?? "—"}</Field>
+                        <Field label="Mobile phone">{profile.mobilePhone ?? "—"}</Field>
+                        {profile.email && <Field label="Work email">{profile.email}</Field>}
+                      </dl>
+                    </div>
                   </div>
-                  {memberLink && (
-                    <div className="space-y-4">
+                  <div className="space-y-4">
+                    <div className="card card-body">
+                      <h3 className="section-title text-lg">Current status</h3>
+                      <dl className="mt-3 space-y-3 text-sm">
+                        <StatusRow
+                          label="Lifecycle"
+                          badgeStatus={profile.employeeLifecycle}
+                          hint={lifecycleHint(profile.employeeLifecycle)}
+                        />
+                        <StatusRow
+                          label="Onboarding"
+                          badgeStatus={profile.onboardingState}
+                          hint={onboardingHint(profile.onboardingState)}
+                        />
+                        <StatusRow
+                          label="Payroll"
+                          badgeStatus={profile.payrollReadiness}
+                          hint={payrollHint(profile.payrollReadiness)}
+                        />
+                      </dl>
+                    </div>
+                    {memberLink && (
                       <div className="card card-body">
                         <h3 className="section-title text-lg">Club Member</h3>
                         <p className="mt-2 text-sm text-stone-600">
@@ -208,8 +247,8 @@ export default async function EmployeeProfilePage({
                           Open member profile
                         </Link>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               ),
             },
@@ -371,4 +410,48 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <dd className="mt-1 text-club-ink">{children}</dd>
     </div>
   );
+}
+
+function StatusRow({ label, badgeStatus, hint }: { label: string; badgeStatus: string; hint: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <dt className="text-xs uppercase tracking-wide text-stone-500">{label}</dt>
+        <dd className="mt-1 text-xs text-stone-600">{hint}</dd>
+      </div>
+      <Badge status={badgeStatus} />
+    </div>
+  );
+}
+
+function lifecycleHint(state: string): string {
+  switch (state) {
+    case "PRE_HIRE": return "Not yet activated for payroll.";
+    case "ACTIVE": return "On the club roster.";
+    case "LEAVE": return "Currently on leave.";
+    case "TERMINATED": return "No longer on the roster.";
+    default: return "";
+  }
+}
+
+function onboardingHint(state: string): string {
+  switch (state) {
+    case "DRAFT": return "Awaiting invitation.";
+    case "INVITED": return "Invitation issued, awaiting employee.";
+    case "IN_PROGRESS": return "Employee is completing their profile.";
+    case "SUBMITTED": return "Awaiting Controller review.";
+    case "APPROVED": return "Onboarding complete.";
+    case "REJECTED": return "Onboarding rejected.";
+    case "REVOKED": return "Invitation revoked.";
+    default: return "";
+  }
+}
+
+function payrollHint(state: string): string {
+  switch (state) {
+    case "NOT_READY": return "SIN, banking, or tax data missing.";
+    case "READY": return "All requirements collected; awaiting activation.";
+    case "ACTIVE": return "Payroll active for this employee.";
+    default: return "";
+  }
 }

@@ -71,6 +71,14 @@ const SPECTRE_MODE_PREFIXES: ReadonlyArray<string> = [
   // routes under `/app/admin/coa/**` (like the legacy `/coa/new`
   // full-page form) remain on legacy chrome. Exact-URL matched.
   "/app/admin/coa",
+  // HR-2A.2 (2026-08-17) — People module. Founder feedback identified
+  // that People pages were rendering through the legacy chrome while
+  // Mission Control uses the canonical Spectre chrome. `/app/admin/people`
+  // is a PREFIX match (not exact) so all sub-routes — Employee Directory,
+  // Add Employee, Employee Profile, Onboarding — render through
+  // SpectreSidebar + SpectreTopBar. Employee Profile's INTERNAL
+  // composition mirrors the Member profile visual language separately.
+  "/app/admin/people",
 ];
 
 /** URLs in `SPECTRE_MODE_PREFIXES` that should EXACT-match (i.e. not
