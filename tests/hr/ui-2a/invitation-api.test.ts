@@ -126,4 +126,83 @@ describe("HR-2A · POST /api/people/employees/[id]/invitation", () => {
     const res = await POST(makeRequest() as any, { params: { id: fx.employee.id } });
     expect(res.status).toBe(403);
   });
+
+  // HR-2A.1 (2026-08-17) — fail-secure raw-token stderr logging gate.
+  // The route logs the raw token to stderr only when BOTH
+  // NODE_ENV ∈ {"development","test"} AND SPECTRE_LOG_INVITATION_TOKENS === "1".
+  // Anything else (production, missing NODE_ENV, unset opt-in) MUST NOT log.
+  describe("raw-token stderr log gate", () => {
+    it("does NOT log the raw token by default (test env, no opt-in)", async () => {
+      const prevOptIn = process.env.SPECTRE_LOG_INVITATION_TOKENS;
+      delete process.env.SPECTRE_LOG_INVITATION_TOKENS;
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const fx = await makeAdminHrFixture();
+        currentPrincipal = fx.clubAdmin;
+        currentPrincipal.activeClubId = fx.club.id;
+        await createSession(fx.clubAdmin, fx.employee.id);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const res = await POST(makeRequest() as any, { params: { id: fx.employee.id } });
+        expect(res.status).toBe(201);
+        // The [hr-invitation] log MUST NOT have fired without opt-in.
+        const invitationLogCalls = spy.mock.calls.filter((args) =>
+          args.some((a) => typeof a === "string" && a.includes("[hr-invitation]"))
+        );
+        expect(invitationLogCalls).toHaveLength(0);
+      } finally {
+        spy.mockRestore();
+        if (prevOptIn !== undefined) process.env.SPECTRE_LOG_INVITATION_TOKENS = prevOptIn;
+      }
+    });
+
+    it("does NOT log the raw token in production even with SPECTRE_LOG_INVITATION_TOKENS=1", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("SPECTRE_LOG_INVITATION_TOKENS", "1");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const fx = await makeAdminHrFixture();
+        currentPrincipal = fx.clubAdmin;
+        currentPrincipal.activeClubId = fx.club.id;
+        await createSession(fx.clubAdmin, fx.employee.id);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const res = await POST(makeRequest() as any, { params: { id: fx.employee.id } });
+        expect(res.status).toBe(201);
+        // Production is fail-secure: opt-in alone is not enough — the
+        // gate requires NODE_ENV ∈ {development,test} AND opt-in.
+        const invitationLogCalls = spy.mock.calls.filter((args) =>
+          args.some((a) => typeof a === "string" && a.includes("[hr-invitation]"))
+        );
+        expect(invitationLogCalls).toHaveLength(0);
+      } finally {
+        spy.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("DOES log the raw token when NODE_ENV=test AND opt-in is set", async () => {
+      const prevOptIn = process.env.SPECTRE_LOG_INVITATION_TOKENS;
+      process.env.SPECTRE_LOG_INVITATION_TOKENS = "1";
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const fx = await makeAdminHrFixture();
+        currentPrincipal = fx.clubAdmin;
+        currentPrincipal.activeClubId = fx.club.id;
+        await createSession(fx.clubAdmin, fx.employee.id);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const res = await POST(makeRequest() as any, { params: { id: fx.employee.id } });
+        expect(res.status).toBe(201);
+        // Log SHOULD fire when both conditions hold — this exists so
+        // a developer running vitest with the opt-in can retrieve
+        // the token for local flow exercise.
+        const invitationLogCalls = spy.mock.calls.filter((args) =>
+          args.some((a) => typeof a === "string" && a.includes("[hr-invitation]"))
+        );
+        expect(invitationLogCalls.length).toBeGreaterThan(0);
+      } finally {
+        spy.mockRestore();
+        if (prevOptIn === undefined) delete process.env.SPECTRE_LOG_INVITATION_TOKENS;
+        else process.env.SPECTRE_LOG_INVITATION_TOKENS = prevOptIn;
+      }
+    });
+  });
 });

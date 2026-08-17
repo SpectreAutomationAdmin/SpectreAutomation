@@ -63,14 +63,30 @@ export async function POST(
       );
     }
 
-    // HR-2B replaces this stderr log with real email delivery. The
-    // raw token MUST NOT be returned to the browser — the employee-
-    // facing redemption page is not shipped yet and there is nowhere
-    // legitimate for a browser-side token to go.
-    // eslint-disable-next-line no-console -- dev-only stderr, replaced by HR-2B email delivery
-    console.error(
-      `[hr-invitation] token=${result.invitation.rawToken} employee=${params.id} expiresAt=${result.invitation.expiresAt.toISOString()} — HR-2B will replace this with real email delivery`,
-    );
+    // HR-2A.1 (2026-08-17) — TWO-LAYER FAIL-SECURE GATE for the
+    // raw-token stderr log. HR-2B replaces this entirely with real
+    // Club-branded email delivery. Until then, the token is only
+    // logged when BOTH conditions hold:
+    //   1. NODE_ENV is exactly "development" or "test"
+    //      (production and staging both run NODE_ENV=production;
+    //      an unset NODE_ENV also fails this check — fail-secure).
+    //   2. SPECTRE_LOG_INVITATION_TOKENS === "1"
+    //      (explicit local opt-in — a developer must consciously
+    //      enable this in their .env.local; never set on any
+    //      shared host).
+    // The raw token MUST NOT be returned to the browser — the
+    // employee-facing redemption page is not shipped yet and there
+    // is nowhere legitimate for a browser-side token to go.
+    const nodeEnv = process.env.NODE_ENV;
+    const invitationTokenLoggingOptIn = process.env.SPECTRE_LOG_INVITATION_TOKENS === "1";
+    const rawTokenLoggingEnabled =
+      (nodeEnv === "development" || nodeEnv === "test") && invitationTokenLoggingOptIn;
+    if (rawTokenLoggingEnabled) {
+      // eslint-disable-next-line no-console -- dev-only, gated, replaced by HR-2B email delivery
+      console.error(
+        `[hr-invitation] token=${result.invitation.rawToken} employee=${params.id} expiresAt=${result.invitation.expiresAt.toISOString()} — HR-2B will replace this with real email delivery`,
+      );
+    }
 
     return NextResponse.json(
       {
