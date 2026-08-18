@@ -79,6 +79,14 @@ const SPECTRE_MODE_PREFIXES: ReadonlyArray<string> = [
   // SpectreSidebar + SpectreTopBar. Employee Profile's INTERNAL
   // composition mirrors the Member profile visual language separately.
   "/app/admin/people",
+  // HR-2A.4 (2026-08-17) — Members recovered Phase 20 profile
+  // implementation renders on the same canonical Spectre shell. Prefix
+  // match covers `/app/admin/members`, `/app/admin/members/[id]`, and
+  // any future admin sub-routes (invites, etc). Member and Employee
+  // profiles now share both the shell chrome AND the `.spectre-person-*`
+  // profile grammar — two implementations of the same Spectre Person
+  // Profile system.
+  "/app/admin/members",
 ];
 
 /** URLs in `SPECTRE_MODE_PREFIXES` that should EXACT-match (i.e. not

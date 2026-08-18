@@ -260,7 +260,7 @@ export default function EmployeeProfileView(props: Props) {
                   <div className="spectre-person-picture spectre-person-picture--placeholder">
                     <span>{initials(employee.firstName, employee.lastName)}</span>
                   </div>
-                  <p className="spectre-person-picture-hint">Photo upload lands in HR-2B onboarding.</p>
+                  <p className="spectre-person-picture-hint">No employee photo provided.</p>
                 </div>
               </div>
 

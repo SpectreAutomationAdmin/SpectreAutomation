@@ -418,6 +418,11 @@ model Club {
   employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
+  // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
+  memberGroups                    MemberGroup[]
+  memberGroupAssignments          MemberGroupAssignment[]
+  memberCustomFieldDefinitions    MemberCustomFieldDefinition[]
+  memberCustomFieldValues         MemberCustomFieldValue[]
 }
 
 // ---------------------------------------------------------------------
@@ -839,6 +844,16 @@ model Member {
   state                 String?
   postalCode            String?
   country               String?
+  // Phase 20 (Member Database, 2026-08-15) — extended demographic
+  // fields for the admin Member Profile so a founder can render a
+  // Tucker-Hersam-style record without a second table. All optional
+  // so no existing tenant is invalidated by the migration.
+  middleName            String?
+  nickname              String?
+  salutation            String?
+  gender                String?
+  homePhone             String?
+  profileImageUrl       String?
   status                String     @default("ONBOARDING")
   joinDate              DateTime?
   membershipCategory    String?
@@ -901,6 +916,10 @@ model Member {
   // 1:1 via Employee.memberId (unique). Same-tenant invariant is
   // service-enforced.
   employee                     Employee?                     @relation("MemberAsEmployee")
+  // Phase 20 (Member Database, 2026-08-15) — many-to-many segmentation
+  // groups + a per-club extensible custom-field payload.
+  groupAssignments             MemberGroupAssignment[]
+  customFieldValues            MemberCustomFieldValue[]
 
   // Step 16 — member numbers are unique INSIDE a club. Two different
   // clubs can both have memberNumber "1432"; tenant-scoped lookup
@@ -1426,6 +1445,15 @@ model MemberHouseholdMember {
   email        String?
   phone        String?
   dateOfBirth  DateTime?
+  // Phase 20 (Member Database, 2026-08-15) — same optional demographic
+  // fields as Member so the admin Member Profile person-switcher renders
+  // one Basic Details grid for every person on the membership.
+  middleName      String?
+  nickname        String?
+  salutation      String?
+  gender          String?
+  homePhone       String?
+  profileImageUrl String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -10327,4 +10355,76 @@ model EmployeeOnboardingResponse {
   @@unique([sessionId, questionId])
   @@index([clubId])
   @@index([sessionId])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 20 — Member Database (2026-08-15)
+// Segmentation groups + extensible per-club custom-field catalog.
+// Details in `prisma/schema.prisma` (sqlite dev twin).
+// ---------------------------------------------------------------------------
+model MemberGroup {
+  id              String                  @id @default(cuid())
+  clubId          String
+  club            Club                    @relation(fields: [clubId], references: [id])
+  name            String
+  sortOrder       Int                     @default(100)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  assignments     MemberGroupAssignment[]
+
+  @@unique([clubId, name])
+  @@index([clubId, sortOrder])
+}
+
+model MemberGroupAssignment {
+  id                String       @id @default(cuid())
+  clubId            String
+  club              Club         @relation(fields: [clubId], references: [id])
+  memberId          String
+  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId           String
+  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt        DateTime     @default(now())
+  assignedByUserId  String?
+
+  @@unique([memberId, groupId])
+  @@index([clubId, groupId])
+  @@index([memberId])
+}
+
+model MemberCustomFieldDefinition {
+  id           String                      @id @default(cuid())
+  clubId       String
+  club         Club                        @relation(fields: [clubId], references: [id])
+  key          String
+  label        String
+  kind         String                      @default("TEXT")
+  helpText     String?
+  optionsJson  String?
+  sortOrder    Int                         @default(100)
+  archivedAt   DateTime?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  values       MemberCustomFieldValue[]
+
+  @@unique([clubId, key])
+  @@index([clubId, sortOrder])
+}
+
+model MemberCustomFieldValue {
+  id             String                      @id @default(cuid())
+  clubId         String
+  club           Club                        @relation(fields: [clubId], references: [id])
+  memberId       String
+  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId   String
+  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText      String?
+  updatedAt      DateTime                    @updatedAt
+  updatedByUserId String?
+
+  @@unique([memberId, definitionId])
+  @@index([clubId, definitionId])
 }
