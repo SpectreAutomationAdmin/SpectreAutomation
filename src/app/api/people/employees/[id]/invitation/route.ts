@@ -20,7 +20,10 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { isAppError } from "@/lib/errors";
 import { transitionSession } from "@/lib/hr/onboarding-sessions";
-import { sendInvitationEmail } from "@/lib/hr/invitation-email";
+import {
+  persistInvitationDelivery,
+  sendInvitationEmail,
+} from "@/lib/hr/invitation-email";
 
 const DEFAULT_INVITATION_TTL_HOURS = 168; // 7 days
 
@@ -65,39 +68,70 @@ export async function POST(
     }
 
     // HR-2B.1 (2026-08-18) — Real branded email delivery via the
-    // canonical selectEmailAdapter(clubId) stack. The raw magic-link
-    // token is embedded ONLY in the outbound email body's URL and is
-    // NEVER returned to the browser, logged to stderr, or persisted
-    // after this call.
+    // canonical selectEmailAdapter(clubId) stack.
+    // HR-2B.3 tail (2026-08-20) — inspect the send result + persist
+    // the delivery status on the invitation row + surface distinct
+    // response codes so the admin UI no longer masquerades a
+    // console-only DEV_LOGGED as SENT.
     //
-    // We look up the employee's personalEmail (fallback to work
-    // email) as the destination. If both are missing, the invitation
-    // still succeeds (a Club admin can resend after fixing contact
-    // info) but no email is delivered.
+    // The raw magic-link token is embedded ONLY in the outbound email
+    // body's URL and is NEVER returned to the browser, logged to
+    // stderr, or persisted after this call.
     const employee = await prisma.employee.findUnique({
       where: { id: params.id },
       select: { personalEmail: true, email: true },
     });
     const toEmail = employee?.personalEmail ?? employee?.email ?? null;
-    if (toEmail) {
+
+    let delivery: Awaited<ReturnType<typeof sendInvitationEmail>> | null = null;
+    if (!toEmail) {
+      // Mark NOT_ATTEMPTED so the invitation row records the operator's
+      // recoverable state (add a personal email → resend).
+      await persistInvitationDelivery(result.invitation.invitationId, {
+        status: "NOT_ATTEMPTED",
+        provider: null,
+        providerMessageId: null,
+        failureReason: "no recipient email on file",
+        externalSendConfirmed: false,
+      });
+      delivery = {
+        status: "NOT_ATTEMPTED",
+        provider: null,
+        providerMessageId: null,
+        failureReason: "no recipient email on file",
+        externalSendConfirmed: false,
+        operatorAlert: true,
+      };
+    } else {
       const publicHost = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
-      if (publicHost) {
-        try {
-          await sendInvitationEmail({
-            clubId: session.clubId,
-            employeeId: params.id,
-            toEmail,
-            rawToken: result.invitation.rawToken,
-            expiresAt: result.invitation.expiresAt,
-            publicHost,
-          });
-        } catch {
-          // Email delivery is best-effort. The invitation is still
-          // valid; a Club admin can resend if the employee didn't
-          // receive it. We deliberately do NOT log the failure with
-          // the raw token — the token is scoped to this stack frame
-          // only.
-        }
+      if (!publicHost) {
+        // Same treatment — invitation persisted but delivery not
+        // attempted because we cannot construct a redemption URL.
+        await persistInvitationDelivery(result.invitation.invitationId, {
+          status: "NOT_ATTEMPTED",
+          provider: null,
+          providerMessageId: null,
+          failureReason: "APP_URL not configured",
+          externalSendConfirmed: false,
+        });
+        delivery = {
+          status: "NOT_ATTEMPTED",
+          provider: null,
+          providerMessageId: null,
+          failureReason: "APP_URL not configured",
+          externalSendConfirmed: false,
+          operatorAlert: true,
+        };
+      } else {
+        delivery = await sendInvitationEmail({
+          clubId: session.clubId,
+          invitationId: result.invitation.invitationId,
+          employeeId: params.id,
+          toEmail,
+          rawToken: result.invitation.rawToken,
+          expiresAt: result.invitation.expiresAt,
+          publicHost,
+        });
       }
     }
 
@@ -115,13 +149,32 @@ export async function POST(
       );
     }
 
+    // Distinct HTTP outcomes — invitation is always persisted (201);
+    // the `email` block tells the UI whether external delivery
+    // actually happened. Never expose the raw token.
+    const httpStatus =
+      delivery.status === "DELIVERED" ? 201 :
+      delivery.status === "DEV_LOGGED" ? 202 :
+      delivery.status === "NOT_ATTEMPTED" ? 202 :
+      // FAILED: invitation persisted but delivery unambiguously
+      // failed. 502 tells the admin UI to surface the recoverable
+      // "invitation created, email failed" state.
+      502;
+
     return NextResponse.json(
       {
         invitationId: result.invitation.invitationId,
         expiresAt: result.invitation.expiresAt.toISOString(),
         sessionState: result.session.state,
+        email: {
+          status: delivery.status,
+          provider: delivery.provider,
+          externalSendConfirmed: delivery.externalSendConfirmed,
+          failureReason: delivery.failureReason,
+          operatorAlert: delivery.operatorAlert,
+        },
       },
-      { status: 201 },
+      { status: httpStatus },
     );
   } catch (err) {
     if (isAppError(err)) {

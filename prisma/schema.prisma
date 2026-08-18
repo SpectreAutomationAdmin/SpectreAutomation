@@ -10236,6 +10236,14 @@ model EmployeeOnboardingInvitation {
   issuedBy         User      @relation("InvitationIssuedBy", fields: [issuedByUserId], references: [id])
   createdAt        DateTime  @default(now())
 
+  // HR-2B.3 tail (2026-08-20) — delivery attempt tracking. See
+  // prisma-postgres/schema.prisma for full column semantics.
+  deliveryStatus            String?
+  deliveryProvider          String?
+  deliveryProviderMessageId String?
+  deliveryAttemptedAt       DateTime?
+  deliveryFailureReason     String?
+
   @@index([clubId])
   @@index([employeeId])
   @@index([expiresAt])

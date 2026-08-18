@@ -10235,6 +10235,35 @@ model EmployeeOnboardingInvitation {
   issuedBy         User      @relation("InvitationIssuedBy", fields: [issuedByUserId], references: [id])
   createdAt        DateTime  @default(now())
 
+  // HR-2B.3 tail (2026-08-20) — delivery attempt tracking. Populated
+  // by the invitation route after selectEmailAdapter+send. The
+  // columns here NEVER carry the raw token, plaintext SIN/banking,
+  // or a full email body.
+  //   deliveryStatus:
+  //     null            — the row was created before delivery
+  //                       tracking existed (backfill state).
+  //     NOT_ATTEMPTED   — invitation issued without a recipient
+  //                       address on file (rare).
+  //     DEV_LOGGED      — the console-only devEmailAdapter fired;
+  //                       no external email was sent. Staging with
+  //                       no EMAIL provider configured lands here.
+  //     DELIVERED       — a real provider (SES/SMTP/M365) accepted
+  //                       the message and returned a message id.
+  //     FAILED          — a real provider was selected but rejected
+  //                       the send (auth failure, verified-sender
+  //                       missing, throttling, etc.).
+  //   deliveryProvider          — "ses" | "smtp" | "microsoft365" | "console" | null
+  //   deliveryProviderMessageId — provider-returned message id
+  //                               ("dev-<ts>" for DEV_LOGGED).
+  //   deliveryAttemptedAt       — when the send() call returned.
+  //   deliveryFailureReason     — provider-returned reason for FAILED.
+  //                               Non-sensitive; safe to display.
+  deliveryStatus            String?
+  deliveryProvider          String?
+  deliveryProviderMessageId String?
+  deliveryAttemptedAt       DateTime?
+  deliveryFailureReason     String?
+
   @@index([clubId])
   @@index([employeeId])
   @@index([expiresAt])
