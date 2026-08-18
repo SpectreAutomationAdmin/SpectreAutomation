@@ -31,7 +31,6 @@ import {
 } from "@/lib/hr/td1-forms";
 import { isAppError } from "@/lib/errors";
 
-const ERROR_COOKIE = "spectre_hr_onboarding_error";
 // Short-lived cookie carrying the just-entered TD1 federal claim total
 // forward from the federal step to the provincial step. Necessary
 // because `getSelfTaxProfileMasked` deliberately hides plaintext claim
@@ -42,13 +41,10 @@ const ERROR_COOKIE = "spectre_hr_onboarding_error";
 // lifetime + scoped to /hr keeps the value out of client JS.
 const FEDERAL_CLAIM_COOKIE = "spectre_hr_td1_federal_claim";
 
-function stashError(safeMessage: string) {
-  cookies().set(ERROR_COOKIE, safeMessage, {
-    httpOnly: true,
-    sameSite: "strict",
-    maxAge: 30,
-    path: "/hr",
-  });
+// HR-2B.3.1 (2026-08-18) — cookie-based stashError removed; errors now flow via `?err=<safe>` search param.
+function withErr(path: string, safeMessage: string): string {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}err=${encodeURIComponent(safeMessage)}`;
 }
 
 function stashFederalClaim(amount: string) {
@@ -98,8 +94,7 @@ export async function saveSinAction(formData: FormData) {
     await submitSelfSin(actor, raw);
   } catch (err) {
     if (isAppError(err)) {
-      stashError(firstIssueMessage(err) ?? err.safeMessage);
-      redirect("/hr/onboarding/payroll/sin");
+      redirect(withErr("/hr/onboarding/payroll/sin", firstIssueMessage(err) ?? err.safeMessage));
     }
     throw err;
   }
@@ -113,8 +108,7 @@ export async function clearSinAction() {
     await clearSelfSin(actor);
   } catch (err) {
     if (isAppError(err)) {
-      stashError(err.safeMessage);
-      redirect("/hr/onboarding/payroll/sin");
+      redirect(withErr("/hr/onboarding/payroll/sin", err.safeMessage));
     }
     throw err;
   }
@@ -136,8 +130,7 @@ export async function saveBankAccountAction(formData: FormData) {
     });
   } catch (err) {
     if (isAppError(err)) {
-      stashError(firstIssueMessage(err) ?? err.safeMessage);
-      redirect("/hr/onboarding/payroll/direct-deposit");
+      redirect(withErr("/hr/onboarding/payroll/direct-deposit", firstIssueMessage(err) ?? err.safeMessage));
     }
     throw err;
   }
@@ -154,8 +147,7 @@ export async function uploadBankingDocumentAction(formData: FormData) {
   const categoryRaw = (formData.get("category") as string | null) ?? "void_cheque";
   const category = categoryRaw === "direct_deposit_form" ? "direct_deposit_form" : "void_cheque";
   if (!(file instanceof File) || file.size === 0) {
-    stashError("Please choose a file to upload.");
-    redirect("/hr/onboarding/payroll/direct-deposit");
+    redirect(withErr("/hr/onboarding/payroll/direct-deposit", "Please choose a file to upload."));
   }
   const bytes = Buffer.from(await (file as File).arrayBuffer());
   try {
@@ -167,8 +159,7 @@ export async function uploadBankingDocumentAction(formData: FormData) {
     });
   } catch (err) {
     if (isAppError(err)) {
-      stashError(firstIssueMessage(err) ?? err.safeMessage);
-      redirect("/hr/onboarding/payroll/direct-deposit");
+      redirect(withErr("/hr/onboarding/payroll/direct-deposit", firstIssueMessage(err) ?? err.safeMessage));
     }
     throw err;
   }
@@ -215,8 +206,7 @@ export async function saveFederalTd1Action(formData: FormData) {
   const provinceRaw = ((formData.get("province") as string | null) ?? "").trim().toUpperCase();
   const provincialSpec = getProvincialTd1(provinceRaw);
   if (!provincialSpec) {
-    stashError("Please choose the province where you'll be working.");
-    redirect("/hr/onboarding/payroll/td1-federal");
+    redirect(withErr("/hr/onboarding/payroll/td1-federal", "Please choose the province where you'll be working."));
   }
 
   const basicFederal = Number(TD1_FEDERAL_CURRENT.basicPersonalAmount);
@@ -228,8 +218,7 @@ export async function saveFederalTd1Action(formData: FormData) {
 
   const attested = (formData.get("attestation") as string | null) === "1";
   if (!attested) {
-    stashError("Please confirm the certification statement to continue.");
-    redirect("/hr/onboarding/payroll/td1-federal");
+    redirect(withErr("/hr/onboarding/payroll/td1-federal", "Please confirm the certification statement to continue."));
   }
 
   const effectiveFrom = effectiveFromForCurrentTaxYear();
@@ -250,8 +239,7 @@ export async function saveFederalTd1Action(formData: FormData) {
     stashFederalClaim(federalClaim);
   } catch (err) {
     if (isAppError(err)) {
-      stashError(firstIssueMessage(err) ?? err.safeMessage);
-      redirect("/hr/onboarding/payroll/td1-federal");
+      redirect(withErr("/hr/onboarding/payroll/td1-federal", firstIssueMessage(err) ?? err.safeMessage));
     }
     throw err;
   }
@@ -275,8 +263,7 @@ export async function saveProvincialTd1Action(formData: FormData) {
   const province = existing.province;
   const provincialSpec = getProvincialTd1(province);
   if (!provincialSpec) {
-    stashError("Please complete the federal step first — your province is not set.");
-    redirect("/hr/onboarding/payroll/td1-federal");
+    redirect(withErr("/hr/onboarding/payroll/td1-federal", "Please complete the federal step first — your province is not set."));
   }
 
   const basicProv = Number(provincialSpec.basicPersonalAmount);
@@ -291,16 +278,14 @@ export async function saveProvincialTd1Action(formData: FormData) {
   if (additionalDeductionsRaw.length > 0) {
     const n = Number(additionalDeductionsRaw);
     if (!Number.isFinite(n) || n < 0) {
-      stashError("Additional tax withheld must be a positive dollar amount.");
-      redirect("/hr/onboarding/payroll/td1-provincial");
+      redirect(withErr("/hr/onboarding/payroll/td1-provincial", "Additional tax withheld must be a positive dollar amount."));
     }
     additionalDeductions = n.toFixed(2);
   }
 
   const attested = (formData.get("attestation") as string | null) === "1";
   if (!attested) {
-    stashError("Please confirm the certification statement to continue.");
-    redirect("/hr/onboarding/payroll/td1-provincial");
+    redirect(withErr("/hr/onboarding/payroll/td1-provincial", "Please confirm the certification statement to continue."));
   }
 
   // The tax profile row carries both federal + provincial claim
@@ -327,8 +312,7 @@ export async function saveProvincialTd1Action(formData: FormData) {
     await attestSelfTd1(actor, "provincial", provincialSpec.version);
   } catch (err) {
     if (isAppError(err)) {
-      stashError(firstIssueMessage(err) ?? err.safeMessage);
-      redirect("/hr/onboarding/payroll/td1-provincial");
+      redirect(withErr("/hr/onboarding/payroll/td1-provincial", firstIssueMessage(err) ?? err.safeMessage));
     }
     throw err;
   }

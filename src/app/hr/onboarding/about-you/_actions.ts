@@ -26,17 +26,12 @@ import {
 } from "@/lib/hr/employee-self-service";
 import { prisma } from "@/lib/prisma";
 import { isAppError } from "@/lib/errors";
-import { cookies } from "next/headers";
 
-const ERROR_COOKIE = "spectre_hr_onboarding_error";
 
-function stashError(safeMessage: string) {
-  cookies().set(ERROR_COOKIE, safeMessage, {
-    httpOnly: true,
-    sameSite: "strict",
-    maxAge: 30,
-    path: "/hr",
-  });
+// HR-2B.3.1 (2026-08-18) — cookie-based stashError removed; errors now flow via `?err=<safe>` search param.
+function withErr(path: string, safeMessage: string): string {
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}err=${encodeURIComponent(safeMessage)}`;
 }
 
 async function beginActionOrRedirect() {
@@ -88,8 +83,7 @@ export async function saveNameAction(formData: FormData) {
       const first = ("issues" in err && Array.isArray((err as unknown as { issues: Array<{ message: string }> }).issues))
         ? (err as unknown as { issues: Array<{ message: string }> }).issues[0]?.message
         : null;
-      stashError(first ?? err.safeMessage);
-      redirect("/hr/onboarding/about-you/name");
+      redirect(withErr("/hr/onboarding/about-you/name", first ?? err.safeMessage));
     }
     throw err;
   }
@@ -117,8 +111,7 @@ export async function saveContactAction(formData: FormData) {
       const first = ("issues" in err && Array.isArray((err as unknown as { issues: Array<{ message: string }> }).issues))
         ? (err as unknown as { issues: Array<{ message: string }> }).issues[0]?.message
         : null;
-      stashError(first ?? err.safeMessage);
-      redirect("/hr/onboarding/about-you/contact");
+      redirect(withErr("/hr/onboarding/about-you/contact", first ?? err.safeMessage));
     }
     throw err;
   }
@@ -159,8 +152,7 @@ export async function confirmEmploymentAction(formData: FormData) {
       await markInProgress(actor);
     } catch (err) {
       if (isAppError(err)) {
-        stashError(err.safeMessage);
-        redirect("/hr/onboarding/about-you/employment");
+        redirect(withErr("/hr/onboarding/about-you/employment", err.safeMessage));
       }
       throw err;
     }
@@ -175,8 +167,7 @@ export async function confirmEmploymentAction(formData: FormData) {
       entries.push({ field, stated });
     }
     if (entries.length === 0) {
-      stashError("Please check the item(s) that need correcting and tell us what they should be.");
-      redirect("/hr/onboarding/about-you/employment");
+      redirect(withErr("/hr/onboarding/about-you/employment", "Please check the item(s) that need correcting and tell us what they should be."));
     }
     try {
       // Idempotent — drop any prior corrections for the same canonical
@@ -208,14 +199,12 @@ export async function confirmEmploymentAction(formData: FormData) {
       await markInProgress(actor);
     } catch (err) {
       if (isAppError(err)) {
-        stashError(err.safeMessage);
-        redirect("/hr/onboarding/about-you/employment");
+        redirect(withErr("/hr/onboarding/about-you/employment", err.safeMessage));
       }
       throw err;
     }
   } else {
-    stashError("Please choose an option.");
-    redirect("/hr/onboarding/about-you/employment");
+    redirect(withErr("/hr/onboarding/about-you/employment", "Please choose an option."));
   }
   revalidatePath("/hr/onboarding/about-you");
   redirect("/hr/onboarding/about-you/photo");
@@ -228,8 +217,7 @@ export async function uploadPhotoAction(formData: FormData) {
   const actor = await beginActionOrRedirect();
   const file = formData.get("photo");
   if (!(file instanceof File) || file.size === 0) {
-    stashError("Please choose a photo to upload.");
-    redirect("/hr/onboarding/about-you/photo");
+    redirect(withErr("/hr/onboarding/about-you/photo", "Please choose a photo to upload."));
   }
   const bytes = Buffer.from(await file.arrayBuffer());
   try {
@@ -244,8 +232,7 @@ export async function uploadPhotoAction(formData: FormData) {
       const first = ("issues" in err && Array.isArray((err as unknown as { issues: Array<{ message: string }> }).issues))
         ? (err as unknown as { issues: Array<{ message: string }> }).issues[0]?.message
         : null;
-      stashError(first ?? err.safeMessage);
-      redirect("/hr/onboarding/about-you/photo");
+      redirect(withErr("/hr/onboarding/about-you/photo", first ?? err.safeMessage));
     }
     throw err;
   }

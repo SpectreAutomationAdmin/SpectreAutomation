@@ -8,16 +8,13 @@
 
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { prisma } from "@/lib/prisma";
 import {
   getPayrollCompletion,
 } from "@/lib/hr/employee-self-service";
 import { OnboardingProgressRail } from "@/components/hr/OnboardingProgressRail";
-import { OnboardingStepError } from "@/components/hr/OnboardingStepError";
-
-const ERROR_COOKIE = "spectre_hr_onboarding_error";
+import { OnboardingStepErrorFromSearchParam } from "@/components/hr/OnboardingStepErrorFromSearchParam";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,9 +46,11 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
     ? employee.preferredName
     : employee.firstName;
 
-  const cookieStore = cookies();
-  const actionError = cookieStore.get(ERROR_COOKIE)?.value ?? null;
-  if (actionError) cookieStore.delete(ERROR_COOKIE);
+  // HR-2B.3.1 (2026-08-18) — see about-you/layout.tsx for rationale.
+  // The prior cookie-mutation-during-render pattern was the root
+  // cause of the founder's SIN-entry crash on staging (Next.js 14
+  // forbids cookie writes in server-component renders). Errors now
+  // flow via `?err=<msg>` search param + a client component.
 
   // About-you stages: all considered done by the time the employee is
   // inside /hr/onboarding/payroll (About-you hub redirects here only
@@ -115,7 +114,7 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
           />
         </aside>
         <section>
-          {actionError && <OnboardingStepError message={actionError} />}
+          <OnboardingStepErrorFromSearchParam />
           {children}
         </section>
       </div>

@@ -9,13 +9,10 @@
 
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { prisma } from "@/lib/prisma";
 import { OnboardingProgressRail } from "@/components/hr/OnboardingProgressRail";
-import { OnboardingStepError } from "@/components/hr/OnboardingStepError";
-
-const ERROR_COOKIE = "spectre_hr_onboarding_error";
+import { OnboardingStepErrorFromSearchParam } from "@/components/hr/OnboardingStepErrorFromSearchParam";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,9 +77,10 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
     ? employee.preferredName
     : employee.firstName;
 
-  const cookieStore = cookies();
-  const actionError = cookieStore.get(ERROR_COOKIE)?.value ?? null;
-  if (actionError) cookieStore.delete(ERROR_COOKIE);
+  // HR-2B.3.1 (2026-08-18) — Error banners now flow via `?err=<msg>`
+  // URL search param + a client component that reads it. The prior
+  // pattern (server-render cookieStore.delete) is illegal in
+  // Next.js 14 and 500s the render.
 
   return (
     <main className="mx-auto max-w-5xl px-4 pt-8 pb-16 md:pt-12 md:pb-24">
@@ -115,7 +113,7 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
           />
         </aside>
         <section>
-          {actionError && <OnboardingStepError message={actionError} />}
+          <OnboardingStepErrorFromSearchParam />
           {children}
         </section>
       </div>

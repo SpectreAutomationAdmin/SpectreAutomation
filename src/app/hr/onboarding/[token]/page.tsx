@@ -29,7 +29,7 @@
 // so a passive link-open does not consume state.
 
 import { redirect } from "next/navigation";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import {
   acquireInvitationContext,
@@ -43,9 +43,14 @@ import BeginOnboardingButton from "./BeginOnboardingButton";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Single-use, httpOnly, 30-second TTL — inline pattern matches
-// /survey/hospitality/[token]. Read-once, delete-once.
-const ERROR_COOKIE = "spectre_hr_invitation_error";
+// HR-2B.3.1 (2026-08-18) — Error messages flow via the `?err=<safe>`
+// URL search param + a server-render read. The prior pattern
+// (server-set httpOnly cookie + server-component render-time
+// cookieStore.delete) is illegal in Next.js 14 and 500s the render.
+
+function errRedirectUrl(token: string, safeMessage: string): string {
+  return `/hr/onboarding/${encodeURIComponent(token)}?err=${encodeURIComponent(safeMessage)}`;
+}
 
 // Simple SHA-256 hash of the client IP for the rate-limit identifier.
 // We intentionally do NOT store the plaintext IP anywhere.
@@ -75,12 +80,7 @@ async function beginOnboardingAction(rawToken: string) {
   // token guessers without inconveniencing legitimate employees.
   const rateResult = await consumeRate("login", `hr_invitation:${ipHash}`);
   if (!rateResult.allowed) {
-    cookies().set(
-      ERROR_COOKIE,
-      "Too many attempts from this location. Please wait a moment and try again.",
-      { httpOnly: true, sameSite: "strict", maxAge: 30, path: "/hr" },
-    );
-    redirect(`/hr/onboarding/${encodeURIComponent(rawToken)}`);
+    redirect(errRedirectUrl(rawToken, "Too many attempts from this location. Please wait a moment and try again."));
   }
 
   try {
@@ -98,13 +98,7 @@ async function beginOnboardingAction(rawToken: string) {
     });
   } catch (err) {
     if (isAppError(err)) {
-      cookies().set(ERROR_COOKIE, err.safeMessage, {
-        httpOnly: true,
-        sameSite: "strict",
-        maxAge: 30,
-        path: "/hr",
-      });
-      redirect(`/hr/onboarding/${encodeURIComponent(rawToken)}`);
+      redirect(errRedirectUrl(rawToken, err.safeMessage));
     }
     throw err;
   }
@@ -114,12 +108,13 @@ async function beginOnboardingAction(rawToken: string) {
 
 export default async function HrOnboardingWelcomePage({
   params,
+  searchParams,
 }: {
   params: { token: string };
+  searchParams?: { err?: string };
 }) {
-  const cookieStore = cookies();
-  const actionError = cookieStore.get(ERROR_COOKIE)?.value ?? null;
-  if (actionError) cookieStore.delete(ERROR_COOKIE);
+  // HR-2B.3.1 (2026-08-18) — Error banner flows via `?err=<safe>`.
+  const actionError = searchParams?.err?.trim() || null;
 
   // Look up the invitation WITHOUT redeeming it. Redemption is
   // deferred until the employee clicks "Begin onboarding" so a
