@@ -152,7 +152,10 @@ async function walkAboutYou(page: Page, fixture: Fixture, opts: { photoBytes?: B
     page.locator('button[type="submit"]').first().click(),
   ]);
 
-  await page.setInputFiles('input[type="file"][name="photo"]', {
+  // HR-2B.3.1 §3 — hidden inputs live behind the two named affordances.
+  // Use the choose-input testid (Playwright cannot simulate the native
+  // selfie capture prompt).
+  await page.setInputFiles('[data-testid="photo-choose-input"]', {
     name: "me.png",
     mimeType: "image/png",
     buffer: tinyPng,

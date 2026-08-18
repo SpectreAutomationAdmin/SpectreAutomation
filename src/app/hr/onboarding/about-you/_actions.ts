@@ -215,8 +215,21 @@ export async function confirmEmploymentAction(formData: FormData) {
 // ---------------------------------------------------------------------------
 export async function uploadPhotoAction(formData: FormData) {
   const actor = await beginActionOrRedirect();
-  const file = formData.get("photo");
-  if (!(file instanceof File) || file.size === 0) {
+  // HR-2B.3.1 (2026-08-18) §3 — the photo step renders TWO
+  // `name="photo"` inputs (selfie + choose) so the two client buttons
+  // each activate their own native input. Whichever the employee
+  // picked holds the real file; the other submits an empty File.
+  // Walk every `photo` entry and pick the first non-empty one so the
+  // server contract is unchanged.
+  const entries = formData.getAll("photo");
+  let file: File | null = null;
+  for (const e of entries) {
+    if (e instanceof File && e.size > 0) {
+      file = e;
+      break;
+    }
+  }
+  if (!file) {
     redirect(withErr("/hr/onboarding/about-you/photo", "Please choose a photo to upload."));
   }
   const bytes = Buffer.from(await file.arrayBuffer());

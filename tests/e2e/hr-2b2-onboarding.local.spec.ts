@@ -167,10 +167,14 @@ async function runHappyPath(
   ]);
 
   // ---------- Photo ----------
-  await expect(page.locator('input[type="file"][name="photo"]')).toBeVisible();
+  // HR-2B.3.1 §3 — the visible affordance is the "Choose a photo"
+  // button (native selfie capture cannot be simulated by Playwright).
+  // The underlying hidden file input carries data-testid=
+  // "photo-choose-input" and is what setInputFiles targets.
+  await expect(page.locator('[data-testid="photo-choose-button"]')).toBeVisible();
   await page.screenshot({ path: path.join(OUT, `${screenshotPrefix}05-photo-${viewportLabel}-empty.png`) });
   if (checkOverflow) await assertNoHorizontalOverflow(page, "photo-empty");
-  await page.setInputFiles('input[type="file"][name="photo"]', {
+  await page.setInputFiles('[data-testid="photo-choose-input"]', {
     name: "me.png",
     mimeType: "image/png",
     buffer: TINY_PNG,
