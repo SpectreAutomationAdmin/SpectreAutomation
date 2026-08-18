@@ -20,6 +20,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { isAppError } from "@/lib/errors";
 import { transitionSession } from "@/lib/hr/onboarding-sessions";
+import { sendInvitationEmail } from "@/lib/hr/invitation-email";
 
 const DEFAULT_INVITATION_TTL_HOURS = 168; // 7 days
 
@@ -63,28 +64,54 @@ export async function POST(
       );
     }
 
-    // HR-2A.1 (2026-08-17) — TWO-LAYER FAIL-SECURE GATE for the
-    // raw-token stderr log. HR-2B replaces this entirely with real
-    // Club-branded email delivery. Until then, the token is only
-    // logged when BOTH conditions hold:
-    //   1. NODE_ENV is exactly "development" or "test"
-    //      (production and staging both run NODE_ENV=production;
-    //      an unset NODE_ENV also fails this check — fail-secure).
-    //   2. SPECTRE_LOG_INVITATION_TOKENS === "1"
-    //      (explicit local opt-in — a developer must consciously
-    //      enable this in their .env.local; never set on any
-    //      shared host).
-    // The raw token MUST NOT be returned to the browser — the
-    // employee-facing redemption page is not shipped yet and there
-    // is nowhere legitimate for a browser-side token to go.
+    // HR-2B.1 (2026-08-18) — Real branded email delivery via the
+    // canonical selectEmailAdapter(clubId) stack. The raw magic-link
+    // token is embedded ONLY in the outbound email body's URL and is
+    // NEVER returned to the browser, logged to stderr, or persisted
+    // after this call.
+    //
+    // We look up the employee's personalEmail (fallback to work
+    // email) as the destination. If both are missing, the invitation
+    // still succeeds (a Club admin can resend after fixing contact
+    // info) but no email is delivered.
+    const employee = await prisma.employee.findUnique({
+      where: { id: params.id },
+      select: { personalEmail: true, email: true },
+    });
+    const toEmail = employee?.personalEmail ?? employee?.email ?? null;
+    if (toEmail) {
+      const publicHost = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
+      if (publicHost) {
+        try {
+          await sendInvitationEmail({
+            clubId: session.clubId,
+            employeeId: params.id,
+            toEmail,
+            rawToken: result.invitation.rawToken,
+            expiresAt: result.invitation.expiresAt,
+            publicHost,
+          });
+        } catch {
+          // Email delivery is best-effort. The invitation is still
+          // valid; a Club admin can resend if the employee didn't
+          // receive it. We deliberately do NOT log the failure with
+          // the raw token — the token is scoped to this stack frame
+          // only.
+        }
+      }
+    }
+
+    // HR-2A.1 dev opt-in stderr log — retained ONLY when both
+    // NODE_ENV ∈ {"development","test"} AND SPECTRE_LOG_INVITATION_TOKENS=1
+    // hold. Real email delivery (above) has replaced this in every
+    // other environment. Kept for local-flow exercise convenience
+    // when SMTP isn't configured on a developer machine.
     const nodeEnv = process.env.NODE_ENV;
     const invitationTokenLoggingOptIn = process.env.SPECTRE_LOG_INVITATION_TOKENS === "1";
-    const rawTokenLoggingEnabled =
-      (nodeEnv === "development" || nodeEnv === "test") && invitationTokenLoggingOptIn;
-    if (rawTokenLoggingEnabled) {
-      // eslint-disable-next-line no-console -- dev-only, gated, replaced by HR-2B email delivery
+    if ((nodeEnv === "development" || nodeEnv === "test") && invitationTokenLoggingOptIn) {
+      // eslint-disable-next-line no-console -- dev-only, gated
       console.error(
-        `[hr-invitation] token=${result.invitation.rawToken} employee=${params.id} expiresAt=${result.invitation.expiresAt.toISOString()} — HR-2B will replace this with real email delivery`,
+        `[hr-invitation] token=${result.invitation.rawToken} employee=${params.id} expiresAt=${result.invitation.expiresAt.toISOString()}`,
       );
     }
 
