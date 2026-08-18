@@ -72,6 +72,7 @@ export default async function AddEmployeePage() {
           const suffix = m.position?.name ? ` · ${m.position.name}` : "";
           return { id: m.id, label: `${displayName}${suffix}` };
         })}
+        canCreatePosition={hasPermission(principal, clubId, "hr:employee:write")}
       />
     </div>
   );

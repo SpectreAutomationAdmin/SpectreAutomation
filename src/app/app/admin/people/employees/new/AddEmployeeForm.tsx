@@ -45,6 +45,9 @@ interface Props {
   departments: AddEmployeeSelectOption[];
   positions: AddEmployeeSelectOption[];
   managers: AddEmployeeManagerOption[];
+  /** True when the operator holds `hr:employee:write` and can therefore
+   *  create a new EmployeePosition inline via POST /api/hr/positions. */
+  canCreatePosition?: boolean;
 }
 
 const EMPLOYMENT_TYPES = [
@@ -54,7 +57,7 @@ const EMPLOYMENT_TYPES = [
   { value: "CONTRACT", label: "Contract" },
 ];
 
-export default function AddEmployeeForm({ departments, positions, managers }: Props) {
+export default function AddEmployeeForm({ departments, positions: initialPositions, managers, canCreatePosition }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +68,54 @@ export default function AddEmployeeForm({ departments, positions, managers }: Pr
   const [memberCandidates, setMemberCandidates] = useState<MemberCandidate[]>([]);
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+
+  // HR-2B.3.1 §4 — position catalogue lives in local state so the
+  // inline "+ Add position" affordance can append a freshly-created
+  // position and select it without a full page reload.
+  const [positions, setPositions] = useState<AddEmployeeSelectOption[]>(initialPositions);
+  const [selectedPositionId, setSelectedPositionId] = useState<string>("");
+  const [showAddPosition, setShowAddPosition] = useState(false);
+  const [newPositionName, setNewPositionName] = useState("");
+  const [newPositionRate, setNewPositionRate] = useState("");
+  const [addingPosition, setAddingPosition] = useState(false);
+  const [positionError, setPositionError] = useState<string | null>(null);
+
+  async function submitNewPosition() {
+    const name = newPositionName.trim();
+    if (!name) {
+      setPositionError("Please give the position a name.");
+      return;
+    }
+    setPositionError(null);
+    setAddingPosition(true);
+    try {
+      const rate = newPositionRate.trim();
+      const res = await fetch("/api/hr/positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          defaultPayRate: rate.length ? Number(rate) : 0,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.position?.id) {
+        setPositionError(typeof data.error === "string" ? data.error : "Could not create position.");
+        return;
+      }
+      const created = data.position as { id: string; name: string; code: string };
+      const label = `${created.name} (${created.code})`;
+      setPositions((prev) => [...prev, { id: created.id, label }].sort((a, b) => a.label.localeCompare(b.label)));
+      setSelectedPositionId(created.id);
+      setShowAddPosition(false);
+      setNewPositionName("");
+      setNewPositionRate("");
+    } catch {
+      setPositionError("Network error — please try again.");
+    } finally {
+      setAddingPosition(false);
+    }
+  }
 
   async function searchMembers() {
     const q = memberQuery.trim();
@@ -193,13 +244,127 @@ export default function AddEmployeeForm({ departments, positions, managers }: Pr
             </select>
           </div>
           <div>
-            <label className="label" htmlFor="positionId">Position</label>
-            <select id="positionId" name="positionId" className="select" defaultValue="">
-              <option value="">— Select —</option>
-              {positions.map((p) => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </select>
+            <div className="flex items-baseline justify-between gap-3">
+              <label className="label" htmlFor="positionId">Position</label>
+              {canCreatePosition && positions.length > 0 && !showAddPosition && (
+                <button
+                  type="button"
+                  data-testid="add-position-inline-button"
+                  className="text-xs text-emerald-800 hover:text-emerald-900 underline underline-offset-4"
+                  onClick={() => {
+                    setPositionError(null);
+                    setShowAddPosition(true);
+                  }}
+                >
+                  + Add position
+                </button>
+              )}
+            </div>
+            {positions.length > 0 ? (
+              <select
+                id="positionId"
+                name="positionId"
+                className="select"
+                value={selectedPositionId}
+                onChange={(e) => setSelectedPositionId(e.target.value)}
+                data-testid="position-select"
+              >
+                <option value="">— Select —</option>
+                {positions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            ) : (
+              <div
+                className="rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-3 text-sm text-stone-700"
+                data-testid="position-empty-state"
+              >
+                No employee positions have been set up for this Club yet.
+                {canCreatePosition ? (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      data-testid="add-position-empty-button"
+                      className="text-emerald-800 hover:text-emerald-900 underline underline-offset-4"
+                      onClick={() => {
+                        setPositionError(null);
+                        setShowAddPosition(true);
+                      }}
+                    >
+                      + Add position
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-xs text-stone-500 block mt-1">Ask a Club administrator to add employee positions.</span>
+                )}
+                {/* Keep the field submittable — empty positionId is valid */}
+                <input type="hidden" name="positionId" value="" />
+              </div>
+            )}
+            {showAddPosition && (
+              <div
+                className="mt-3 rounded-md border border-stone-200 bg-white p-3 space-y-3"
+                data-testid="add-position-panel"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="label" htmlFor="newPositionName">Position name</label>
+                    <input
+                      id="newPositionName"
+                      type="text"
+                      className="input"
+                      placeholder="e.g. Head Server"
+                      value={newPositionName}
+                      onChange={(e) => setNewPositionName(e.target.value)}
+                      maxLength={80}
+                      data-testid="new-position-name"
+                    />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="newPositionRate">Default hourly rate (optional)</label>
+                    <input
+                      id="newPositionRate"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className="input"
+                      placeholder="0.00"
+                      value={newPositionRate}
+                      onChange={(e) => setNewPositionRate(e.target.value)}
+                      data-testid="new-position-rate"
+                    />
+                  </div>
+                </div>
+                {positionError && (
+                  <p className="text-xs text-red-700" role="alert" data-testid="new-position-error">{positionError}</p>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={submitNewPosition}
+                    disabled={addingPosition}
+                    data-testid="new-position-save"
+                  >
+                    {addingPosition ? "Adding…" : "Add position"}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-stone-500 hover:text-stone-800 underline"
+                    onClick={() => {
+                      setShowAddPosition(false);
+                      setNewPositionName("");
+                      setNewPositionRate("");
+                      setPositionError(null);
+                    }}
+                    disabled={addingPosition}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label className="label" htmlFor="employmentType">Employment type</label>
