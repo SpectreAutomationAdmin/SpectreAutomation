@@ -21,6 +21,9 @@ import { getEmployee } from "@/lib/hr/employees";
 import { listEmploymentPeriods } from "@/lib/hr/employment-periods";
 import { listEmployeeDocuments } from "@/lib/hr/documents";
 import { listSessions, listTransitions } from "@/lib/hr/onboarding-sessions";
+import { getSinMasked } from "@/lib/hr/sensitive-identity";
+import { getBankAccountMasked } from "@/lib/hr/bank-account";
+import { getTaxProfileMasked } from "@/lib/hr/tax-profile";
 import { isAppError } from "@/lib/errors";
 import EmployeeProfileView from "@/components/hr/EmployeeProfileView";
 
@@ -44,37 +47,64 @@ export default async function EmployeeProfilePage({
   const canReadDocuments = hasPermission(principal, profile.clubId, "hr:documents:read");
   const canReadOnboarding = hasPermission(principal, profile.clubId, "hr:onboarding:read");
   const canReadEmployment = hasPermission(principal, profile.clubId, "hr:employment:read");
+  const canReadSin = hasPermission(principal, profile.clubId, "hr:sin:read");
+  const canReadBanking = hasPermission(principal, profile.clubId, "hr:banking:read");
+  const canReadTax = hasPermission(principal, profile.clubId, "hr:tax:read");
 
-  const [employmentPeriods, documents, sessions, memberLink, department, position, manager] =
-    await Promise.all([
-      canReadEmployment ? listEmploymentPeriods(principal, profile.id) : Promise.resolve([]),
-      canReadDocuments ? listEmployeeDocuments(principal, profile.id) : Promise.resolve([]),
-      canReadOnboarding ? listSessions(principal, profile.id) : Promise.resolve([]),
-      profile.memberId
-        ? prisma.member.findUnique({
-            where: { id: profile.memberId },
-            select: { id: true, memberNumber: true, firstName: true, lastName: true, clubId: true },
-          })
-        : Promise.resolve(null),
-      profile.departmentId
-        ? prisma.department.findUnique({
-            where: { id: profile.departmentId },
-            select: { id: true, name: true, code: true },
-          })
-        : Promise.resolve(null),
-      profile.positionId
-        ? prisma.employeePosition.findUnique({
-            where: { id: profile.positionId },
-            select: { id: true, name: true, code: true },
-          })
-        : Promise.resolve(null),
-      profile.managerEmployeeId
-        ? prisma.employee.findUnique({
-            where: { id: profile.managerEmployeeId },
-            select: { id: true, firstName: true, lastName: true, preferredName: true },
-          })
-        : Promise.resolve(null),
-    ]);
+  const [
+    employmentPeriods,
+    documents,
+    sessions,
+    memberLink,
+    department,
+    position,
+    manager,
+    sinMasked,
+    bankingMasked,
+    taxProfileMasked,
+    td1Attestations,
+  ] = await Promise.all([
+    canReadEmployment ? listEmploymentPeriods(principal, profile.id) : Promise.resolve([]),
+    canReadDocuments ? listEmployeeDocuments(principal, profile.id) : Promise.resolve([]),
+    canReadOnboarding ? listSessions(principal, profile.id) : Promise.resolve([]),
+    profile.memberId
+      ? prisma.member.findUnique({
+          where: { id: profile.memberId },
+          select: { id: true, memberNumber: true, firstName: true, lastName: true, clubId: true },
+        })
+      : Promise.resolve(null),
+    profile.departmentId
+      ? prisma.department.findUnique({
+          where: { id: profile.departmentId },
+          select: { id: true, name: true, code: true },
+        })
+      : Promise.resolve(null),
+    profile.positionId
+      ? prisma.employeePosition.findUnique({
+          where: { id: profile.positionId },
+          select: { id: true, name: true, code: true },
+        })
+      : Promise.resolve(null),
+    profile.managerEmployeeId
+      ? prisma.employee.findUnique({
+          where: { id: profile.managerEmployeeId },
+          select: { id: true, firstName: true, lastName: true, preferredName: true },
+        })
+      : Promise.resolve(null),
+    canReadSin ? getSinMasked(principal, profile.id) : Promise.resolve(null),
+    canReadBanking ? getBankAccountMasked(principal, profile.id) : Promise.resolve(null),
+    canReadTax ? getTaxProfileMasked(principal, profile.id) : Promise.resolve(null),
+    canReadOnboarding
+      ? prisma.employeeOnboardingAcknowledgement.findMany({
+          where: {
+            clubId: profile.clubId,
+            employeeId: profile.id,
+            kind: { in: ["td1_federal_attestation", "td1_provincial_attestation"] },
+          },
+          select: { kind: true, acknowledgedAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
 
   const currentSession =
     sessions.find((s) => s.state === "DRAFT")
@@ -161,6 +191,34 @@ export default async function EmployeeProfilePage({
         reason: t.reason ?? null,
       }))}
       canInvite={canInvite}
+      payroll={{
+        sinMasked: canReadSin ? sinMasked : null,
+        sinAccessible: canReadSin,
+        bankingMasked: canReadBanking && bankingMasked
+          ? {
+              accountMasked: bankingMasked.accountMasked,
+              holderName: bankingMasked.holderName,
+              status: bankingMasked.status,
+              activatedAt: bankingMasked.activatedAt
+                ? bankingMasked.activatedAt.toISOString()
+                : null,
+            }
+          : null,
+        bankingAccessible: canReadBanking,
+        taxProfileMasked: canReadTax && taxProfileMasked
+          ? {
+              province: taxProfileMasked.province,
+              td1FormVersion: taxProfileMasked.td1FormVersion,
+              effectiveFrom: taxProfileMasked.effectiveFrom.toISOString(),
+              hasAdditionalDeductions: taxProfileMasked.hasAdditionalDeductions,
+            }
+          : null,
+        taxAccessible: canReadTax,
+        td1Attestations: td1Attestations.map((a) => ({
+          kind: a.kind,
+          acknowledgedAt: a.acknowledgedAt.toISOString(),
+        })),
+      }}
     />
   );
 }

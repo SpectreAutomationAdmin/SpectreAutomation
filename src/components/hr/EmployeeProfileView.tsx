@@ -97,6 +97,25 @@ interface Props {
     reason: string | null;
   }>;
   canInvite: boolean;
+  payroll?: {
+    sinMasked: string | null;
+    sinAccessible: boolean;
+    bankingMasked: {
+      accountMasked: string;
+      holderName: string;
+      status: string;
+      activatedAt: string | null;
+    } | null;
+    bankingAccessible: boolean;
+    taxProfileMasked: {
+      province: string;
+      td1FormVersion: string;
+      effectiveFrom: string;
+      hasAdditionalDeductions: boolean;
+    } | null;
+    taxAccessible: boolean;
+    td1Attestations: Array<{ kind: string; acknowledgedAt: string }>;
+  };
 }
 
 const TABS = [
@@ -128,7 +147,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, payroll } = props;
   const [tab, setTab] = useState<TabKey>("overview");
 
   const displayName = employee.preferredName?.trim().length
@@ -338,24 +357,80 @@ export default function EmployeeProfileView(props: Props) {
       )}
 
       {tab === "payroll" && (
-        <section className="spectre-person-body">
+        <section className="spectre-person-body" data-testid="employee-tab-body-payroll">
           <h2 className="spectre-person-section-title">Payroll</h2>
-          <div className="spectre-person-section">
-            {employee.payrollReadiness === "NOT_READY" ? (
-              <div>
-                <p className="spectre-person-eyebrow">Not yet configured</p>
-                <p className="mt-2 text-sm text-stone-600">
-                  Payroll setup completes during employee onboarding. Once the employee submits
-                  banking, SIN, and tax information — and Payroll Admin approves — this tab shows
-                  their payroll profile.
-                </p>
+
+          <div className="spectre-person-columns">
+            <div className="spectre-person-col-left">
+              {/* SIN */}
+              <div className="spectre-person-section" data-testid="payroll-sin">
+                <div className="spectre-person-section-head">
+                  <h3 className="spectre-person-eyebrow">Social Insurance Number</h3>
+                </div>
+                {payroll?.sinAccessible ? (
+                  payroll.sinMasked ? (
+                    <p className="text-base font-mono text-stone-900">{payroll.sinMasked}</p>
+                  ) : (
+                    <p className="spectre-person-not-provided">Not yet submitted</p>
+                  )
+                ) : (
+                  <p className="text-xs text-stone-500">Requires Payroll Admin access</p>
+                )}
               </div>
-            ) : (
-              <p className="text-sm text-stone-600">
-                Payroll readiness:{" "}
-                <span className="uppercase tracking-wide text-xs">{humanize(employee.payrollReadiness)}</span>
-              </p>
-            )}
+
+              {/* Direct deposit */}
+              <div className="spectre-person-section" data-testid="payroll-banking">
+                <div className="spectre-person-section-head">
+                  <h3 className="spectre-person-eyebrow">Direct deposit</h3>
+                </div>
+                {payroll?.bankingAccessible ? (
+                  payroll.bankingMasked ? (
+                    <div>
+                      <p className="text-sm text-stone-900">{payroll.bankingMasked.holderName}</p>
+                      <p className="mt-0.5 text-sm font-mono text-stone-700">
+                        Account ending in {payroll.bankingMasked.accountMasked.slice(-4)}
+                      </p>
+                      <p className="mt-1 text-xs uppercase tracking-wide text-stone-500">
+                        {payroll.bankingMasked.status === "VERIFIED"
+                          ? "Verified"
+                          : payroll.bankingMasked.status === "PENDING_PENNY_TEST"
+                            ? "Pending Club verification"
+                            : humanize(payroll.bankingMasked.status)}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="spectre-person-not-provided">Not yet submitted</p>
+                  )
+                ) : (
+                  <p className="text-xs text-stone-500">Requires Payroll Admin access</p>
+                )}
+              </div>
+            </div>
+
+            <div className="spectre-person-col-right">
+              {/* Federal TD1 */}
+              <div className="spectre-person-section" data-testid="payroll-td1-federal">
+                <div className="spectre-person-section-head">
+                  <h3 className="spectre-person-eyebrow">Federal TD1</h3>
+                </div>
+                <FederalTd1Panel payroll={payroll} />
+              </div>
+
+              {/* Provincial TD1 */}
+              <div className="spectre-person-section" data-testid="payroll-td1-provincial">
+                <div className="spectre-person-section-head">
+                  <h3 className="spectre-person-eyebrow">
+                    Provincial TD1
+                    {payroll?.taxAccessible && payroll.taxProfileMasked && (
+                      <span className="ml-1 text-stone-500 font-normal">
+                        ({provinceName(payroll.taxProfileMasked.province)})
+                      </span>
+                    )}
+                  </h3>
+                </div>
+                <ProvincialTd1Panel payroll={payroll} />
+              </div>
+            </div>
           </div>
         </section>
       )}
@@ -414,6 +489,72 @@ export default function EmployeeProfileView(props: Props) {
             )}
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+const PROVINCE_NAMES: Record<string, string> = {
+  AB: "Alberta", BC: "British Columbia", MB: "Manitoba", NB: "New Brunswick",
+  NL: "Newfoundland and Labrador", NS: "Nova Scotia", NT: "Northwest Territories",
+  NU: "Nunavut", ON: "Ontario", PE: "Prince Edward Island", QC: "Quebec",
+  SK: "Saskatchewan", YT: "Yukon",
+};
+
+function provinceName(code: string): string {
+  return PROVINCE_NAMES[code] ?? code;
+}
+
+function FederalTd1Panel({ payroll }: { payroll: Props["payroll"] }) {
+  if (!payroll) return <p className="spectre-person-not-provided">Not yet completed</p>;
+  if (!payroll.taxAccessible) {
+    return <p className="text-xs text-stone-500">Requires Payroll Admin access</p>;
+  }
+  const attestation = payroll.td1Attestations.find(
+    (a) => a.kind === "td1_federal_attestation",
+  );
+  if (!attestation) {
+    return <p className="spectre-person-not-provided">Not yet completed</p>;
+  }
+  return (
+    <div>
+      <p className="text-sm text-stone-900">
+        Completed {formatDate(attestation.acknowledgedAt)}
+      </p>
+      {payroll.taxProfileMasked && (
+        <p className="mt-0.5 text-xs text-stone-500">
+          Form: {payroll.taxProfileMasked.td1FormVersion}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ProvincialTd1Panel({ payroll }: { payroll: Props["payroll"] }) {
+  if (!payroll) return <p className="spectre-person-not-provided">Not yet completed</p>;
+  if (!payroll.taxAccessible) {
+    return <p className="text-xs text-stone-500">Requires Payroll Admin access</p>;
+  }
+  const attestation = payroll.td1Attestations.find(
+    (a) => a.kind === "td1_provincial_attestation",
+  );
+  if (!attestation) {
+    return <p className="spectre-person-not-provided">Not yet completed</p>;
+  }
+  return (
+    <div>
+      <p className="text-sm text-stone-900">
+        Completed {formatDate(attestation.acknowledgedAt)}
+      </p>
+      {payroll.taxProfileMasked && (
+        <p className="mt-0.5 text-xs text-stone-500">
+          Form: {payroll.taxProfileMasked.td1FormVersion}
+        </p>
+      )}
+      {payroll.taxProfileMasked?.hasAdditionalDeductions && (
+        <p className="mt-0.5 text-xs text-stone-500">
+          Additional per-pay deduction requested
+        </p>
       )}
     </div>
   );

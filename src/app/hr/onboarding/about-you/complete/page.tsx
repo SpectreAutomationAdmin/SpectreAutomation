@@ -1,12 +1,12 @@
 // HR-2B.2 (2026-08-18) — About You · Complete.
+// HR-2B.3 (2026-08-19) — wired the CTA into the payroll flow.
 //
-// Employee has finished the About You section. HR-2B.3 will replace
-// the "up next" copy with a link into the SIN / banking / TD1 flow;
-// HR-2B.5 with the final review/submit gate. For HR-2B.2 the section
-// ends here — clearly labelled as such so a founder review knows
-// what's coming.
+// Employee has finished the About You section. This screen is now the
+// hand-off to the payroll section: the primary CTA opens the payroll
+// hub, which redirects to the first incomplete payroll step.
 
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { prisma } from "@/lib/prisma";
 
@@ -37,14 +37,24 @@ export default async function AboutYouComplete() {
         Thanks, {displayName}.
       </h2>
       <p className="mt-3 text-sm text-stone-700 leading-relaxed">
-        We've saved everything you've shared so far. The next section covers
-        payroll details — the tax and banking information we need to pay you
-        correctly. We'll notify you when it's ready.
+        We&apos;ve saved everything you&apos;ve shared so far. The next
+        section covers payroll details &mdash; the tax and banking
+        information we need to pay you correctly.
       </p>
       <p className="mt-4 text-sm text-stone-500 leading-relaxed">
         You can safely close this tab and return to this link any time before
         your invitation expires.
       </p>
+
+      <div className="mt-8 flex items-center justify-end border-t border-stone-100 pt-6">
+        <Link
+          href="/hr/onboarding/payroll"
+          data-testid="continue-to-payroll"
+          className="rounded-md bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
+        >
+          Continue to payroll
+        </Link>
+      </div>
     </article>
   );
 }
