@@ -26,7 +26,7 @@
 //     employee action (see `transitionSelfSessionToInProgress`).
 //     SUBMITTED lives in HR-2B.5; APPROVED / REJECTED are staff-only.
 
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import {
@@ -40,6 +40,8 @@ import {
 } from "./documents";
 import { resolveDocumentStorage } from "../documents/storage";
 import { AppError, ConflictError, NotFoundError, ValidationError } from "../errors";
+import { encryptSecret } from "../kms";
+import { maskBankAccount, maskSin } from "../masking";
 
 // ---------------------------------------------------------------------------
 // Vocabulary.
@@ -69,8 +71,13 @@ export const CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS = [
 ] as const;
 export type ClubAuthoritativeField = (typeof CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS)[number];
 
-/** Vocabulary for `EmployeeOnboardingAcknowledgement.kind`. */
-export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = ["employment_confirmation"] as const;
+/** Vocabulary for `EmployeeOnboardingAcknowledgement.kind`.
+ *  HR-2B.3 adds the two TD1 attestations. */
+export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = [
+  "employment_confirmation",
+  "td1_federal_attestation",
+  "td1_provincial_attestation",
+] as const;
 export type OnboardingAcknowledgementKind = (typeof ONBOARDING_ACKNOWLEDGEMENT_KINDS)[number];
 
 const EMPLOYEE_ENTITY = "Employee";
@@ -693,4 +700,831 @@ export async function uploadSelfPhoto(
     meta: { actorSource: "EMPLOYEE" },
   });
   return result.document;
+}
+
+// ---------------------------------------------------------------------------
+// HR-2B.3 (2026-08-19) — Sensitive payroll surface.
+//
+// SIN, direct-deposit banking, void-cheque supporting document, and
+// federal/provincial TD1 profiles. Every function mirrors the
+// canonical HR-1 service's encryption + audit shape (never delegates
+// to a Principal-gated call) so the employee actor NEVER indirectly
+// becomes a Principal. The plaintext never leaves the encrypt/persist
+// scope; audit payloads carry only masked helpers or the "hasClaim"
+// booleans; no sensitive value ever traverses a redirect URL, cookie,
+// or server-render payload.
+// ---------------------------------------------------------------------------
+
+const SIN_ENTITY = "EmployeeSensitiveIdentity";
+const BANK_ENTITY = "EmployeeBankAccount";
+const TAX_ENTITY = "EmployeeTaxProfile";
+
+// -- SIN --------------------------------------------------------------------
+
+/**
+ * Canadian SIN Luhn checksum. Reject 9-digit numbers that pass length
+ * but fail the well-known validation rule. Applied after the digit-
+ * strip so `123 456 782` and `123-456-782` reach the same result.
+ * See CRA / Government of Canada SIN validation reference.
+ */
+function isValidSinChecksum(digits: string): boolean {
+  if (!/^\d{9}$/.test(digits)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    const d = digits.charCodeAt(i) - 48;
+    if (i % 2 === 0) {
+      sum += d;
+    } else {
+      const doubled = d * 2;
+      sum += doubled > 9 ? doubled - 9 : doubled;
+    }
+  }
+  return sum % 10 === 0;
+}
+
+function normaliseSin(input: string): string {
+  if (typeof input !== "string") {
+    throw new ValidationError([{ path: "sin", message: "SIN must be a string" }]);
+  }
+  const stripped = input.replace(/[\s\-]/g, "");
+  if (!/^\d{9}$/.test(stripped)) {
+    throw new ValidationError([{
+      path: "sin",
+      message: "That doesn't look like a valid Social Insurance Number. Check the number and try again.",
+    }]);
+  }
+  if (!isValidSinChecksum(stripped)) {
+    // Employee-facing copy — deliberately generic; NEVER echoes the
+    // entered SIN back into the error message (§7).
+    throw new ValidationError([{
+      path: "sin",
+      message: "That doesn't look like a valid Social Insurance Number. Check the number and try again.",
+    }]);
+  }
+  return stripped;
+}
+
+function sinKmsRef(employeeId: string) { return `sin:${employeeId}`; }
+
+/**
+ * Persist the employee's own SIN. Encrypts plaintext under KMS scope="HR",
+ * stores ciphertext + sinLastThree ONLY. Audit carries only the masked
+ * suffix; plaintext never enters the audit payload, error messages, or
+ * any return value. Returns the masked helper only.
+ */
+export async function submitSelfSin(
+  actor: EmployeeOnboardingActor,
+  plaintextSin: string,
+): Promise<{ sinMasked: string; sinLastThree: string }> {
+  const normalised = normaliseSin(plaintextSin);
+  const sinLastThree = normalised.slice(-3);
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const ciphertext = await encryptSecret({
+    scope: "HR",
+    secretReference: sinKmsRef(actor.employeeId),
+    plaintext: normalised,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+
+  const before = await prisma.employeeSensitiveIdentity.findUnique({
+    where: { employeeId: actor.employeeId },
+    select: { sinLastThree: true },
+  });
+
+  const updated = await prisma.employeeSensitiveIdentity.upsert({
+    where: { employeeId: actor.employeeId },
+    update: { sinSecretRef: ciphertext, sinLastThree },
+    create: {
+      clubId: actor.clubId,
+      employeeId: actor.employeeId,
+      sinSecretRef: ciphertext,
+      sinLastThree,
+    },
+  });
+
+  await audit(null, {
+    action: "hr.sin.write.update",
+    entityType: SIN_ENTITY,
+    entityId: updated.id,
+    clubId: actor.clubId,
+    before: before ? { sinLastThree: before.sinLastThree } : null,
+    after: { sinLastThree: updated.sinLastThree },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+  return { sinMasked: maskSin(sinLastThree), sinLastThree };
+}
+
+/**
+ * Return the masked SIN ("XXX XXX 123") or null. Read-only, not audited.
+ * The plaintext is NEVER rehydrated to the caller.
+ */
+export async function getSelfSinMasked(
+  actor: EmployeeOnboardingActor,
+): Promise<string | null> {
+  const row = await prisma.employeeSensitiveIdentity.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId },
+    select: { sinLastThree: true },
+  });
+  if (!row || !row.sinLastThree) return null;
+  return maskSin(row.sinLastThree);
+}
+
+/**
+ * Clear the SIN on file. Used by the "Change SIN" replacement flow:
+ * the UI clears the existing row, then the employee is presented with
+ * a blank secure entry. The replacement `submitSelfSin` call then
+ * writes the new value.
+ */
+export async function clearSelfSin(actor: EmployeeOnboardingActor): Promise<void> {
+  const existing = await prisma.employeeSensitiveIdentity.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId },
+  });
+  if (!existing) return;
+  await prisma.employeeSensitiveIdentity.delete({ where: { employeeId: actor.employeeId } });
+  await audit(null, {
+    action: "hr.sin.write.delete",
+    entityType: SIN_ENTITY,
+    entityId: existing.id,
+    clubId: actor.clubId,
+    before: { sinLastThree: existing.sinLastThree },
+    after: null,
+    meta: { actorSource: "EMPLOYEE", actorEmployeeIdTail: actor.employeeId.slice(-8) },
+  });
+}
+
+// -- Banking ----------------------------------------------------------------
+
+const BANKING_NON_TERMINAL_STATUSES = ["PENDING_PENNY_TEST", "VERIFIED"] as const;
+
+function bankInstitutionRef(employeeId: string) { return `bank:${employeeId}:institution`; }
+function bankTransitRef(employeeId: string) { return `bank:${employeeId}:transit`; }
+function bankAccountRef(employeeId: string) { return `bank:${employeeId}:account`; }
+
+function normaliseDigitsExact(input: string, expected: number, field: string): string {
+  if (typeof input !== "string") {
+    throw new ValidationError([{ path: field, message: `${field} must be a string` }]);
+  }
+  const stripped = input.replace(/[\s\-]/g, "");
+  if (!/^\d+$/.test(stripped)) {
+    throw new ValidationError([{ path: field, message: `${field} must be digits only` }]);
+  }
+  if (stripped.length !== expected) {
+    throw new ValidationError([{ path: field, message: `${field} must be exactly ${expected} digits` }]);
+  }
+  return stripped;
+}
+
+function normaliseDigitsRange(input: string, min: number, max: number, field: string): string {
+  if (typeof input !== "string") {
+    throw new ValidationError([{ path: field, message: `${field} must be a string` }]);
+  }
+  const stripped = input.replace(/[\s\-]/g, "");
+  if (!/^\d+$/.test(stripped)) {
+    throw new ValidationError([{ path: field, message: `${field} must be digits only` }]);
+  }
+  if (stripped.length < min || stripped.length > max) {
+    throw new ValidationError([{ path: field, message: `${field} must be ${min}-${max} digits` }]);
+  }
+  return stripped;
+}
+
+export interface SelfBankAccountInput {
+  holderName: string;
+  institutionNumber: string;
+  transitNumber: string;
+  accountNumber: string;
+}
+
+/**
+ * Submit / update the employee's direct-deposit banking.
+ *
+ * HR-1H history semantics mirrored EXACTLY (see bank-account.ts):
+ *   • no current row → create fresh PENDING_PENNY_TEST.
+ *   • current row PENDING_PENNY_TEST → update in place.
+ *   • current row VERIFIED → move to INACTIVE + create NEW PENDING_PENNY_TEST.
+ *
+ * The employee CANNOT set status=VERIFIED — that is a
+ * `hr:banking:approve` action, and this module never fabricates that
+ * grant. The DB partial unique index enforces the invariant even if
+ * the code drifted.
+ */
+export async function submitSelfBankAccount(
+  actor: EmployeeOnboardingActor,
+  input: SelfBankAccountInput,
+): Promise<{ id: string; accountMasked: string; holderName: string; status: string }> {
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const institution = normaliseDigitsExact(input.institutionNumber, 3, "institutionNumber");
+  const transit = normaliseDigitsExact(input.transitNumber, 5, "transitNumber");
+  const account = normaliseDigitsRange(input.accountNumber, 7, 12, "accountNumber");
+  const holderName = (input.holderName ?? "").trim();
+  if (!holderName || holderName.length < 2) {
+    throw new ValidationError([{ path: "holderName", message: "Please enter the name on the account (minimum 2 characters)." }]);
+  }
+  if (holderName.length > 200) {
+    throw new ValidationError([{ path: "holderName", message: "holderName is too long" }]);
+  }
+  const accountLastFour = account.slice(-4);
+
+  const before = await prisma.employeeBankAccount.findFirst({
+    where: { employeeId: actor.employeeId, status: { in: [...BANKING_NON_TERMINAL_STATUSES] } },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  const institutionCipher = await encryptSecret({
+    scope: "HR",
+    secretReference: bankInstitutionRef(actor.employeeId),
+    plaintext: institution,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+  const transitCipher = await encryptSecret({
+    scope: "HR",
+    secretReference: bankTransitRef(actor.employeeId),
+    plaintext: transit,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+  const accountCipher = await encryptSecret({
+    scope: "HR",
+    secretReference: bankAccountRef(actor.employeeId),
+    plaintext: account,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+
+  const updated = await (async () => {
+    if (!before) {
+      return prisma.employeeBankAccount.create({
+        data: {
+          clubId: actor.clubId,
+          employeeId: actor.employeeId,
+          institutionSecretRef: institutionCipher,
+          transitSecretRef: transitCipher,
+          accountSecretRef: accountCipher,
+          accountLastFour,
+          holderName,
+          status: "PENDING_PENNY_TEST",
+        },
+      });
+    }
+    if (before.status === "PENDING_PENNY_TEST") {
+      return prisma.employeeBankAccount.update({
+        where: { id: before.id },
+        data: {
+          institutionSecretRef: institutionCipher,
+          transitSecretRef: transitCipher,
+          accountSecretRef: accountCipher,
+          accountLastFour,
+          holderName,
+        },
+      });
+    }
+    // before.status === "VERIFIED" → history preservation.
+    return prisma.$transaction(async (tx) => {
+      await tx.employeeBankAccount.update({
+        where: { id: before.id },
+        data: { status: "INACTIVE" },
+      });
+      return tx.employeeBankAccount.create({
+        data: {
+          clubId: actor.clubId,
+          employeeId: actor.employeeId,
+          institutionSecretRef: institutionCipher,
+          transitSecretRef: transitCipher,
+          accountSecretRef: accountCipher,
+          accountLastFour,
+          holderName,
+          status: "PENDING_PENNY_TEST",
+        },
+      });
+    });
+  })();
+
+  await audit(null, {
+    action: "hr.bank.write.update",
+    entityType: BANK_ENTITY,
+    entityId: updated.id,
+    clubId: actor.clubId,
+    before: before
+      ? {
+          accountLastFour: before.accountLastFour,
+          holderName: before.holderName,
+          status: before.status,
+          replacedRowId: before.id !== updated.id ? before.id : null,
+        }
+      : null,
+    after: {
+      accountLastFour: updated.accountLastFour,
+      holderName: updated.holderName,
+      status: updated.status,
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+    },
+  });
+
+  return {
+    id: updated.id,
+    accountMasked: maskBankAccount(updated.accountLastFour ?? accountLastFour),
+    holderName: updated.holderName,
+    status: updated.status,
+  };
+}
+
+export async function getSelfBankAccountMasked(actor: EmployeeOnboardingActor): Promise<
+  | { id: string; accountMasked: string; holderName: string; status: string }
+  | null
+> {
+  const row = await prisma.employeeBankAccount.findFirst({
+    where: {
+      employeeId: actor.employeeId,
+      clubId: actor.clubId,
+      status: { in: [...BANKING_NON_TERMINAL_STATUSES] },
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!row || !row.accountLastFour) return null;
+  return {
+    id: row.id,
+    accountMasked: maskBankAccount(row.accountLastFour),
+    holderName: row.holderName,
+    status: row.status,
+  };
+}
+
+// -- Void cheque / direct-deposit supporting document ----------------------
+
+export type SelfBankingDocumentCategory = "void_cheque" | "direct_deposit_form";
+
+export interface SelfBankingDocumentInput {
+  bytes: Uint8Array | Buffer;
+  mimeType: string;
+  category: SelfBankingDocumentCategory;
+  displayName?: string | null;
+}
+
+const BANKING_DOC_ALLOWED_MIMES = new Set<string>([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/heif",
+]);
+const MAX_BANKING_DOC_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Upload a banking supporting document (void cheque or completed direct-
+ * deposit form). Sensitivity is auto-set to `RESTRICTED` via the
+ * canonical `isSensitiveCategory` mapping — these documents will NOT
+ * appear in ordinary employee-document reads.
+ *
+ * IMPORTANT: this is supporting evidence, NOT authoritative banking
+ * data (see §9 / §14). Authoritative banking submission remains
+ * `submitSelfBankAccount`. HR-2B.3 does NOT OCR the cheque.
+ */
+export async function uploadSelfBankingDocument(
+  actor: EmployeeOnboardingActor,
+  input: SelfBankingDocumentInput,
+) {
+  const mimeType = (input.mimeType ?? "").trim().toLowerCase();
+  if (!BANKING_DOC_ALLOWED_MIMES.has(mimeType)) {
+    throw new ValidationError([{
+      path: "mimeType",
+      message: "Please upload a PDF or image (JPG, PNG, or HEIC).",
+    }]);
+  }
+  if (input.category !== "void_cheque" && input.category !== "direct_deposit_form") {
+    throw new ValidationError([{
+      path: "category",
+      message: "Banking document category must be void_cheque or direct_deposit_form",
+    }]);
+  }
+  if (!isKnownCategory(input.category)) {
+    throw new AppError("HR_CATEGORY_ENUM_DRIFT", "banking document category missing from canonical enum", 500, "Server error");
+  }
+  if (!isSensitiveCategory(input.category)) {
+    throw new AppError("HR_CATEGORY_ENUM_DRIFT", "banking document unexpectedly non-sensitive", 500, "Server error");
+  }
+  const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
+  if (bytes.length === 0) {
+    throw new ValidationError([{ path: "bytes", message: "The uploaded file is empty." }]);
+  }
+  if (bytes.length > MAX_BANKING_DOC_BYTES) {
+    throw new ValidationError([{ path: "bytes", message: "File exceeds 15 MB limit." }]);
+  }
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const storage = await resolveDocumentStorage({ clubId: actor.clubId });
+  const storageKey = `hr/employees/${actor.employeeId}/${input.category}/${sha256}`;
+  await storage.put({ storageKey, body: bytes, mimeType });
+
+  const created = await prisma.employeeDocument.create({
+    data: {
+      clubId: actor.clubId,
+      employeeId: actor.employeeId,
+      storageKey,
+      contentSha256: sha256,
+      sizeBytes: bytes.length,
+      mimeType,
+      category: input.category,
+      sensitivity: "RESTRICTED",
+      displayName: input.displayName ?? null,
+      uploadedByUserId: null,
+    },
+  });
+
+  await audit(null, {
+    action: "hr.document.upload.create",
+    entityType: DOCUMENT_ENTITY,
+    entityId: created.id,
+    clubId: actor.clubId,
+    after: {
+      id: created.id,
+      category: created.category,
+      sensitivity: created.sensitivity,
+      sizeBytes: created.sizeBytes,
+      contentSha256Prefix: sha256.slice(0, 12),
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+  return created;
+}
+
+/**
+ * Return the most-recent banking supporting document for the actor's
+ * session, if any. Returns non-sensitive metadata (no storageKey).
+ */
+export async function getSelfBankingDocument(actor: EmployeeOnboardingActor): Promise<
+  | { id: string; category: string; uploadedAt: Date; sizeBytes: number; mimeType: string; displayName: string | null }
+  | null
+> {
+  const row = await prisma.employeeDocument.findFirst({
+    where: {
+      employeeId: actor.employeeId,
+      clubId: actor.clubId,
+      category: { in: ["void_cheque", "direct_deposit_form"] },
+    },
+    orderBy: { uploadedAt: "desc" },
+    select: {
+      id: true, category: true, uploadedAt: true, sizeBytes: true, mimeType: true, displayName: true,
+    },
+  });
+  return row;
+}
+
+// -- TD1 tax profile --------------------------------------------------------
+
+export type TaxJurisdiction = "federal" | "provincial";
+
+export interface SelfTaxProfileInput {
+  /** ISO-3166-2 subdivision code (e.g. "AB"). Persisted to the row as
+   *  the province of employment. */
+  province: string;
+  /** Form-version identifier from `td1-forms.ts`, e.g. "TD1-2026". */
+  td1FormVersion: string;
+  /** Applicable-from date (start of tax year, hire date, etc.). */
+  effectiveFrom: Date | string;
+  /** Fixed-2 decimal string for total federal claim amount. */
+  federalClaim: string;
+  /** Fixed-2 decimal string for total provincial claim amount. */
+  provincialClaim: string;
+  /** Optional additional per-pay deduction the employee requests. */
+  additionalDeductions?: string | null;
+}
+
+function normaliseMoney(input: string, field: string): string {
+  if (typeof input !== "string") {
+    throw new ValidationError([{ path: field, message: `${field} must be a string` }]);
+  }
+  const trimmed = input.trim();
+  if (!/^-?\d+(\.\d{1,2})?$/.test(trimmed)) {
+    throw new ValidationError([{ path: field, message: `${field} must be a decimal amount` }]);
+  }
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) {
+    throw new ValidationError([{ path: field, message: `${field} is not a finite number` }]);
+  }
+  if (num < 0) {
+    throw new ValidationError([{ path: field, message: `${field} must be zero or positive` }]);
+  }
+  return num.toFixed(2);
+}
+
+const TAX_PROVINCE_CODES = new Set([
+  "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT",
+]);
+
+/**
+ * Persist the employee's own TD1 tax profile row for the given
+ * effectiveFrom. Sensitive claim amounts are KMS-encrypted; the audit
+ * payload carries province + td1FormVersion + effectiveFrom + a
+ * `hasAdditionalDeductions` boolean — NEVER the dollar values.
+ */
+export async function submitSelfTaxProfile(
+  actor: EmployeeOnboardingActor,
+  input: SelfTaxProfileInput,
+): Promise<{ id: string; province: string; td1FormVersion: string; effectiveFrom: Date }> {
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const province = (input.province ?? "").trim().toUpperCase();
+  if (!TAX_PROVINCE_CODES.has(province)) {
+    throw new ValidationError([{ path: "province", message: "Choose the province where you'll be working." }]);
+  }
+  const td1FormVersion = (input.td1FormVersion ?? "").trim();
+  if (!td1FormVersion || td1FormVersion.length < 3) {
+    throw new ValidationError([{ path: "td1FormVersion", message: "td1FormVersion is required" }]);
+  }
+  const effectiveFrom = input.effectiveFrom instanceof Date
+    ? input.effectiveFrom
+    : new Date(input.effectiveFrom);
+  if (Number.isNaN(effectiveFrom.getTime())) {
+    throw new ValidationError([{ path: "effectiveFrom", message: "effectiveFrom is not a valid date" }]);
+  }
+
+  const federalClaim = normaliseMoney(input.federalClaim, "federalClaim");
+  const provincialClaim = normaliseMoney(input.provincialClaim, "provincialClaim");
+  const additionalDeductions = input.additionalDeductions == null
+    ? null
+    : normaliseMoney(input.additionalDeductions, "additionalDeductions");
+
+  const existing = await prisma.employeeTaxProfile.findFirst({
+    where: { employeeId: actor.employeeId, effectiveFrom },
+  });
+  const rowId = existing?.id ?? randomUUID();
+
+  const federalCipher = await encryptSecret({
+    scope: "HR",
+    secretReference: `tax:${rowId}:federal`,
+    plaintext: federalClaim,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+  const provincialCipher = await encryptSecret({
+    scope: "HR",
+    secretReference: `tax:${rowId}:provincial`,
+    plaintext: provincialClaim,
+    clubId: actor.clubId,
+    actorUserId: null,
+  });
+  const additionalCipher = additionalDeductions == null
+    ? null
+    : await encryptSecret({
+        scope: "HR",
+        secretReference: `tax:${rowId}:additional`,
+        plaintext: additionalDeductions,
+        clubId: actor.clubId,
+        actorUserId: null,
+      });
+
+  const beforeMasked = existing
+    ? {
+        province: existing.province,
+        td1FormVersion: existing.td1FormVersion,
+        effectiveFrom: existing.effectiveFrom,
+        hasAdditionalDeductions: existing.additionalDeductionSecretRef != null,
+      }
+    : null;
+
+  let row: { id: string; effectiveFrom: Date; province: string; td1FormVersion: string };
+  if (existing) {
+    const updated = await prisma.employeeTaxProfile.update({
+      where: { id: existing.id },
+      data: {
+        province,
+        td1FormVersion,
+        federalClaimSecretRef: federalCipher,
+        provincialClaimSecretRef: provincialCipher,
+        additionalDeductionSecretRef: additionalCipher,
+      },
+    });
+    row = { id: updated.id, effectiveFrom: updated.effectiveFrom, province: updated.province, td1FormVersion: updated.td1FormVersion };
+  } else {
+    const created = await prisma.employeeTaxProfile.create({
+      data: {
+        id: rowId,
+        clubId: actor.clubId,
+        employeeId: actor.employeeId,
+        province,
+        td1FormVersion,
+        effectiveFrom,
+        effectiveTo: null,
+        federalClaimSecretRef: federalCipher,
+        provincialClaimSecretRef: provincialCipher,
+        additionalDeductionSecretRef: additionalCipher,
+        notes: null,
+      },
+    });
+    row = { id: created.id, effectiveFrom: created.effectiveFrom, province: created.province, td1FormVersion: created.td1FormVersion };
+  }
+
+  await audit(null, {
+    action: "hr.tax.write.update",
+    entityType: TAX_ENTITY,
+    entityId: row.id,
+    clubId: actor.clubId,
+    before: beforeMasked,
+    // No numeric claim values in audit payload — the generic redactor
+    // does not cover these keys; keep the write path explicit.
+    after: {
+      province,
+      td1FormVersion,
+      effectiveFrom,
+      hasAdditionalDeductions: additionalCipher != null,
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+  return row;
+}
+
+/** Non-sensitive tax profile metadata. Never returns claim amounts. */
+export async function getSelfTaxProfileMasked(
+  actor: EmployeeOnboardingActor,
+  asOf: Date = new Date(),
+): Promise<
+  | {
+      id: string;
+      province: string;
+      td1FormVersion: string;
+      effectiveFrom: Date;
+      hasAdditionalDeductions: boolean;
+    }
+  | null
+> {
+  const row = await prisma.employeeTaxProfile.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, effectiveFrom: { lte: asOf } },
+    orderBy: { effectiveFrom: "desc" },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    province: row.province,
+    td1FormVersion: row.td1FormVersion,
+    effectiveFrom: row.effectiveFrom,
+    hasAdditionalDeductions: row.additionalDeductionSecretRef != null,
+  };
+}
+
+// -- Attestations -----------------------------------------------------------
+
+/**
+ * Record the employee's federal or provincial TD1 attestation. Idempotent
+ * per (sessionId, kind). Provenance carries actorEmployeeId.
+ */
+export async function attestSelfTd1(
+  actor: EmployeeOnboardingActor,
+  jurisdiction: TaxJurisdiction,
+  td1FormVersion: string,
+): Promise<void> {
+  const kind: OnboardingAcknowledgementKind =
+    jurisdiction === "federal" ? "td1_federal_attestation" : "td1_provincial_attestation";
+  const now = new Date();
+  await prisma.employeeOnboardingAcknowledgement.upsert({
+    where: {
+      sessionId_kind: { sessionId: actor.sessionId, kind },
+    },
+    create: {
+      clubId: actor.clubId,
+      sessionId: actor.sessionId,
+      employeeId: actor.employeeId,
+      kind,
+      actorEmployeeId: actor.employeeId,
+      acknowledgedAt: now,
+    },
+    update: {
+      acknowledgedAt: now,
+      actorEmployeeId: actor.employeeId,
+    },
+  });
+  await audit(null, {
+    action: "hr.onboarding.acknowledgement.update",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: `${actor.sessionId}:${kind}`,
+    clubId: actor.clubId,
+    after: { kind, td1FormVersion, acknowledgedAt: now },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+    },
+  });
+}
+
+/** Read TD1 attestation state for either jurisdiction. */
+export async function getSelfTd1Attestation(
+  actor: EmployeeOnboardingActor,
+  jurisdiction: TaxJurisdiction,
+) {
+  const kind = jurisdiction === "federal" ? "td1_federal_attestation" : "td1_provincial_attestation";
+  return prisma.employeeOnboardingAcknowledgement.findFirst({
+    where: { sessionId: actor.sessionId, clubId: actor.clubId, kind },
+    select: { id: true, acknowledgedAt: true, actorEmployeeId: true },
+  });
+}
+
+// -- Payroll section canonical completion ----------------------------------
+
+/**
+ * Return the canonical payroll completion state for the actor's
+ * onboarding session. Payroll is COMPLETE iff:
+ *   • SIN is on file (row exists, sinLastThree populated).
+ *   • Banking is on file in a non-terminal status.
+ *   • Federal TD1 profile row exists.
+ *   • Provincial TD1 profile row exists (implied by the single
+ *     `EmployeeTaxProfile` row that carries both jurisdictions'
+ *     claim amounts — HR-2B.3 combines them per Canadian TD1
+ *     structure).
+ *   • Federal TD1 attestation acknowledgement exists.
+ *   • Provincial TD1 attestation acknowledgement exists.
+ */
+export async function getPayrollCompletion(actor: EmployeeOnboardingActor): Promise<{
+  sin: boolean;
+  banking: boolean;
+  taxProfile: boolean;
+  federalAttestation: boolean;
+  provincialAttestation: boolean;
+  bankingDocument: boolean;
+  complete: boolean;
+}> {
+  const [sinRow, bankRow, taxRow, fedAtt, provAtt, docRow] = await Promise.all([
+    prisma.employeeSensitiveIdentity.findFirst({
+      where: { employeeId: actor.employeeId, clubId: actor.clubId },
+      select: { sinLastThree: true },
+    }),
+    prisma.employeeBankAccount.findFirst({
+      where: {
+        employeeId: actor.employeeId,
+        clubId: actor.clubId,
+        status: { in: [...BANKING_NON_TERMINAL_STATUSES] },
+      },
+      select: { id: true },
+    }),
+    prisma.employeeTaxProfile.findFirst({
+      where: { employeeId: actor.employeeId, clubId: actor.clubId },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, clubId: actor.clubId, kind: "td1_federal_attestation" },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, clubId: actor.clubId, kind: "td1_provincial_attestation" },
+      select: { id: true },
+    }),
+    prisma.employeeDocument.findFirst({
+      where: {
+        employeeId: actor.employeeId,
+        clubId: actor.clubId,
+        category: { in: ["void_cheque", "direct_deposit_form"] },
+      },
+      select: { id: true },
+    }),
+  ]);
+  const sin = Boolean(sinRow && sinRow.sinLastThree);
+  const banking = Boolean(bankRow);
+  const taxProfile = Boolean(taxRow);
+  const federalAttestation = Boolean(fedAtt);
+  const provincialAttestation = Boolean(provAtt);
+  const bankingDocument = Boolean(docRow);
+  const complete = sin && banking && taxProfile && federalAttestation && provincialAttestation;
+  return { sin, banking, taxProfile, federalAttestation, provincialAttestation, bankingDocument, complete };
 }
