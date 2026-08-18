@@ -131,6 +131,12 @@ export async function POST(
           rawToken: result.invitation.rawToken,
           expiresAt: result.invitation.expiresAt,
           publicHost,
+          // HR-2B.3 tail — thread the acting user id through to the
+          // delegated adapter's token-refresh audit trail. The
+          // delegated sender is the Club's designated Work Intake
+          // mailbox, NOT this principal — but the audit event for
+          // token refresh records who triggered the send.
+          callerUserId: principal.id,
         });
       }
     }
@@ -172,6 +178,11 @@ export async function POST(
           externalSendConfirmed: delivery.externalSendConfirmed,
           failureReason: delivery.failureReason,
           operatorAlert: delivery.operatorAlert,
+          // HR-2B.3 tail — when the delegated Work Intake mailbox
+          // fired the send, surface the connected mailbox address the
+          // recipient will see. Safe to display in the Club-side UI;
+          // never carries tokens or scopes.
+          senderIdentity: delivery.senderIdentity ?? null,
         },
       },
       { status: httpStatus },

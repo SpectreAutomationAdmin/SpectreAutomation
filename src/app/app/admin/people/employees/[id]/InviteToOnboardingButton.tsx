@@ -10,7 +10,7 @@
 // + `expiresAt` + a safe `email` block — the raw magic-link token
 // is NEVER returned in the response body.
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 type EmailStatus = "DELIVERED" | "DEV_LOGGED" | "FAILED" | "NOT_ATTEMPTED";
@@ -25,15 +25,39 @@ interface InvitationResponse {
     externalSendConfirmed: boolean;
     failureReason: string | null;
     operatorAlert: boolean;
+    senderIdentity: string | null;
   };
   error?: string;
+}
+
+interface SenderPreview {
+  mode: string;
+  provider: string;
+  senderIdentity: string | null;
+  ready: boolean;
 }
 
 export default function InviteToOnboardingButton({ employeeId }: { employeeId: string }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<InvitationResponse | null>(null);
+  const [preview, setPreview] = useState<SenderPreview | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  // Fetch the sender preview once on mount. Restrained by design —
+  // no polling, no config panel; just a one-line "Invitation will be
+  // sent from <email>" hint so the operator knows what to expect
+  // before clicking.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/people/employees/${employeeId}/invitation/sender-preview`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: SenderPreview | null) => {
+        if (!cancelled && data) setPreview(data);
+      })
+      .catch(() => { /* silent — preview is a hint, not a blocker */ });
+    return () => { cancelled = true; };
+  }, [employeeId]);
 
   function handleClick() {
     if (isPending) return;
@@ -62,7 +86,7 @@ export default function InviteToOnboardingButton({ employeeId }: { employeeId: s
   }
 
   if (outcome && outcome.email) {
-    const { status, provider, failureReason } = outcome.email;
+    const { status, provider, failureReason, senderIdentity } = outcome.email;
     if (status === "DELIVERED") {
       return (
         <div
@@ -70,8 +94,18 @@ export default function InviteToOnboardingButton({ employeeId }: { employeeId: s
           data-testid="invitation-outcome-delivered"
           className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
         >
-          Invitation sent. The employee will receive an email from{" "}
-          <span className="font-medium">{provider ?? "email"}</span> shortly.
+          Invitation sent{senderIdentity ? (
+            <>
+              {" from "}
+              <span className="font-medium" data-testid="invitation-outcome-sender">{senderIdentity}</span>
+            </>
+          ) : (
+            <>
+              {" via "}
+              <span className="font-medium">{provider ?? "email"}</span>
+            </>
+          )}
+          .
         </div>
       );
     }
@@ -127,6 +161,24 @@ export default function InviteToOnboardingButton({ employeeId }: { employeeId: s
       >
         {isPending ? "Issuing invitation…" : "Invite to complete onboarding"}
       </button>
+      {preview && preview.senderIdentity && (
+        <p
+          className="text-xs text-stone-500"
+          data-testid="invitation-sender-preview"
+        >
+          Invitation will be sent from{" "}
+          <span className="font-medium text-stone-700">{preview.senderIdentity}</span>
+        </p>
+      )}
+      {preview && !preview.ready && (
+        <p
+          className="text-xs text-amber-700"
+          data-testid="invitation-sender-preview-devlog"
+        >
+          No email provider is configured for this Club — the invitation will be created but no email
+          will be sent.
+        </p>
+      )}
       {error && (
         <div role="alert" data-testid="invitation-invite-error" className="text-xs text-red-700">
           {error}

@@ -407,6 +407,10 @@ model Club {
   // Sprint 3 · Post-16H Phase 3.2.
   apReviewOverrides        ApReviewOverride[]
 
+  // HR-2B.3 tail — designated outbound M365 mailbox. See prisma-postgres/schema.prisma.
+  outboundMailboxConnectionId String?
+  outboundMailboxConnection   MailboxConnection? @relation("ClubOutboundMailbox", fields: [outboundMailboxConnectionId], references: [id], onDelete: SetNull)
+
   // HR-1 (2026-08-16) — canonical people / employment / payroll
   // infrastructure. Every tenant-scoped HR table FKs back to Club.
   // EmployeeOnboardingQuestion is intentionally excluded because it
@@ -9513,6 +9517,9 @@ model MailboxConnection {
   subscriptions GraphSubscription[]
   messages      EmailMessage[]
   syncRuns      MailboxSyncRun[]
+
+  // HR-2B.3 tail — back-relation for the Club's designated outbound mailbox.
+  clubsUsingAsOutbound Club[] @relation("ClubOutboundMailbox")
 
   @@unique([userId, clubId, provider, externalUserId])
   @@index([clubId, status])

@@ -12,7 +12,7 @@
 // deliveryFailureReason is provider-supplied text (e.g. SMTP status
 // line) — never contains the token or plaintext PII.
 
-import { selectEmailAdapter, getEmailMode, type EmailMode } from "../integrations/email";
+import { selectEmailAdapter, getEmailMode, getEmailDeliveryDescriptor, type EmailMode } from "../integrations/email";
 import { prisma } from "../prisma";
 
 // ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ export type InvitationDeliveryStatus =
 
 export interface InvitationDeliveryResult {
   status: InvitationDeliveryStatus;
-  provider: "console" | "smtp" | "ses" | "microsoft365" | null;
+  provider: "console" | "smtp" | "ses" | "microsoft365" | "microsoft365_delegated" | null;
   providerMessageId: string | null;
   failureReason: string | null;
   /** Whether the message actually reached the outbound provider. False
@@ -36,6 +36,11 @@ export interface InvitationDeliveryResult {
   /** Whether an operator should be alerted. True for FAILED and
    *  DEV_LOGGED (in production/staging); false in local dev. */
   operatorAlert: boolean;
+  /** HR-2B.3 tail (2026-08-18) — when a delegated Work Intake mailbox
+   *  fired the send, the connected mailbox address the recipient will
+   *  see in the From: header. Safe to display in the Club-side UI
+   *  ("Invitation sent from <email>"). Null for every other provider. */
+  senderIdentity?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +54,10 @@ interface SendInvitationArgs {
   rawToken: string;
   expiresAt: Date;
   publicHost: string;
+  /** HR-2B.3 tail — acting user id threaded through to the delegated
+   *  adapter's token-refresh audit trail. Null for system-triggered
+   *  sends. */
+  callerUserId?: string | null;
 }
 
 interface Composed {
@@ -157,6 +166,7 @@ export function classifyDeliveryResult(
     : adapterMode === "smtp" ? "smtp"
     : adapterMode === "ses" ? "ses"
     : adapterMode === "microsoft365" ? "microsoft365"
+    : adapterMode === "microsoft365_delegated" ? "microsoft365_delegated"
     : null;
 
   // dev/console adapter always returns SENT + "dev-*" messageId.
@@ -239,7 +249,11 @@ export async function sendInvitationEmail(
     prisma.club.findUnique({ where: { id: args.clubId }, select: { name: true } }),
     prisma.employee.findUnique({
       where: { id: args.employeeId },
+      // HR-2B.3 tail — also read clubId so we can pin the
+      // invitation.clubId == employee.clubId invariant here in
+      // service code, in addition to the route-layer check.
       select: {
+        clubId: true,
         firstName: true,
         lastName: true,
         preferredName: true,
@@ -255,6 +269,19 @@ export async function sendInvitationEmail(
       provider: null,
       providerMessageId: null,
       failureReason: "employee or club not found",
+      externalSendConfirmed: false,
+      operatorAlert: true,
+    };
+  }
+  if (employee.clubId !== args.clubId) {
+    // HR-2B.3 tail — tenant-triangle enforcement. Should be
+    // structurally impossible (the route derives args.clubId from
+    // the session that carries the employee), but defence-in-depth.
+    return {
+      status: "NOT_ATTEMPTED",
+      provider: null,
+      providerMessageId: null,
+      failureReason: "employee clubId does not match invitation clubId",
       externalSendConfirmed: false,
       operatorAlert: true,
     };
@@ -282,11 +309,13 @@ export async function sendInvitationEmail(
     expiresAt: args.expiresAt,
   });
 
-  // Resolve the adapter + mode in parallel. `getEmailMode` mirrors
-  // `selectEmailAdapter`'s resolution order.
-  const [adapter, mode] = await Promise.all([
-    selectEmailAdapter(args.clubId),
+  // Resolve the adapter + mode + descriptor in parallel. `getEmailMode`
+  // mirrors `selectEmailAdapter`'s resolution order; the descriptor is
+  // used to surface the delegated sender identity in the return value.
+  const [adapter, mode, descriptor] = await Promise.all([
+    selectEmailAdapter({ clubId: args.clubId, callerUserId: args.callerUserId ?? null }),
     getEmailMode(args.clubId),
+    getEmailDeliveryDescriptor(args.clubId),
   ]);
 
   let sendResult: { status: string; providerMessageId?: string; failureReason?: string };
@@ -311,7 +340,9 @@ export async function sendInvitationEmail(
     classified.status === "FAILED" ||
     (classified.status === "DEV_LOGGED" && isProdLike) ||
     classified.status === "NOT_ATTEMPTED";
-  const result: InvitationDeliveryResult = { ...classified, operatorAlert };
+  const senderIdentity =
+    mode === "microsoft365_delegated" ? (descriptor.designatedConnectedEmail ?? null) : null;
+  const result: InvitationDeliveryResult = { ...classified, operatorAlert, senderIdentity };
 
   // Persist attempt metadata (never blocks the caller on failure).
   try {

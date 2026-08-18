@@ -395,6 +395,23 @@ model Club {
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
   mailboxOAuthTransactions MailboxOAuthTransaction[] @relation("MailboxTransactionClub")
+
+  // HR-2B.3 tail (2026-08-18) — the Club's DESIGNATED outbound
+  // Microsoft 365 mailbox. Populated by an explicit operator action
+  // (an admin pins one of the Club's connected mailboxes as the
+  // outbound sender). Nullable — a Club with no designation falls
+  // through to Priority 2 of selectEmailAdapter (per-Club
+  // IntegrationSetting) rather than silently selecting an arbitrary
+  // MailboxConnection.
+  //
+  // onDelete: SetNull — if the underlying MailboxConnection is
+  // hard-deleted, the Club's designation drops gracefully rather
+  // than orphaning a pointer. Disconnection sets MailboxConnection.
+  // status = DISCONNECTED but does NOT delete the row, so the FK
+  // remains valid; the adapter selector refuses to use a non-
+  // CONNECTED designated mailbox and reports the failure honestly.
+  outboundMailboxConnectionId String?
+  outboundMailboxConnection   MailboxConnection? @relation("ClubOutboundMailbox", fields: [outboundMailboxConnectionId], references: [id], onDelete: SetNull)
   // Sprint 3 · Post-16H Phase 3.2 (2026-08-06).
   apReviewOverrides        ApReviewOverride[]
 
@@ -9568,6 +9585,14 @@ model MailboxConnection {
   subscriptions GraphSubscription[]
   messages      EmailMessage[]
   syncRuns      MailboxSyncRun[]
+
+  // HR-2B.3 tail (2026-08-18) — back-relation for the Club's
+  // designated outbound mailbox. Zero or more Clubs may designate
+  // this connection (in practice one Club per connection because the
+  // MailboxConnection is already Club-scoped, but the plural form
+  // keeps referential integrity clean without a unique constraint
+  // that would fight the SetNull semantics on delete).
+  clubsUsingAsOutbound Club[] @relation("ClubOutboundMailbox")
 
   @@unique([userId, clubId, provider, externalUserId])
   @@index([clubId, status])
