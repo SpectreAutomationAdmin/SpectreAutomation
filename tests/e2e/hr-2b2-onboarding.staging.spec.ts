@@ -128,6 +128,24 @@ test.describe("HR-2B.2 · Employee onboarding staging acceptance", () => {
       "authenticated GET on profile-photo endpoint (no photo uploaded) must return 404 — proves route deployed + auth OK",
     ).toBe(404);
 
+    // ---------- §B2 HR-2B.3 Payroll tab — "Not yet submitted" placeholders ----------
+    // Click into the Payroll tab and screenshot the empty-state view.
+    // For staging (which mirrors production data) the founder-facing
+    // fixture Employee has not walked the /hr/onboarding/payroll flow,
+    // so every payroll section renders its "Not yet submitted" copy.
+    // This proves the HR-2B.3 read-side (masked SIN / banking / tax
+    // helpers) is wired into the admin profile without exposing any
+    // fixture-specific plaintext.
+    await page.locator('[data-testid="employee-tab-payroll"]').click();
+    await expect(page.locator('[data-testid="employee-tab-body-payroll"]')).toBeVisible();
+    await page.screenshot({
+      path: path.join(OUT, "staging-02b-admin-profile-payroll-tab.png"),
+      fullPage: true,
+    });
+    const payrollBody = (await page.locator('[data-testid="employee-tab-body-payroll"]').textContent()) ?? "";
+    (evidence as { payrollTabPlaceholdersVisible?: boolean }).payrollTabPlaceholdersVisible =
+      /Not yet submitted/i.test(payrollBody);
+
     // ---------- §D Invalid invitation neutral copy ----------
     await page.goto(
       `${avail.baseURL}/hr/onboarding/nonsense-invalid-token`,

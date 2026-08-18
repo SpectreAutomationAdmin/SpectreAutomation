@@ -23,7 +23,12 @@
 //
 // Re-running with the same --email:
 //   * reuses the same Club / Employee (upsert)
-//   * deletes any prior sessions / invitations for that employee
+//   * deletes any prior sessions / invitations / corrections /
+//     acknowledgements / responses / state-transitions for that
+//     employee — plus every EmployeeDocument row (profile_photo,
+//     void_cheque, direct_deposit_form) and every HR-2B.3 sensitive
+//     payroll row (EmployeeSensitiveIdentity, EmployeeBankAccount,
+//     EmployeeTaxProfile)
 //   * writes a FRESH invitation with a new raw token
 //   * overwrites test-results/hr-2b2-fixture.json
 //
@@ -192,8 +197,11 @@ async function upsertEmployee({ clubId, departmentId, positionId, email }) {
         data: { profilePhotoDocumentId: null },
       });
     }
+    // Wipe every EmployeeDocument row belonging to this fixture employee
+    // — HR-2B.3 added banking supporting documents (void_cheque /
+    // direct_deposit_form) which must also start clean per re-run.
     await prisma.employeeDocument.deleteMany({
-      where: { employeeId: existing.id, category: "profile_photo" },
+      where: { employeeId: existing.id },
     });
     await prisma.employee.update({
       where: { id: existing.id },
@@ -250,6 +258,13 @@ async function resetEmployeeOnboardingState(employeeId) {
   await prisma.employeeOnboardingStateTransition.deleteMany({ where: { employeeId } });
   await prisma.employeeOnboardingSession.deleteMany({ where: { employeeId } });
   await prisma.employeeOnboardingInvitation.deleteMany({ where: { employeeId } });
+  // HR-2B.3 (2026-08-19) — sensitive payroll rows the employee-side
+  // /hr/onboarding/payroll flow persists. Wipe so re-runs against the
+  // same fixture email always land on a blank SIN / banking / TD1
+  // start-state, matching About-you fixtures already wiped above.
+  await prisma.employeeSensitiveIdentity.deleteMany({ where: { employeeId } });
+  await prisma.employeeBankAccount.deleteMany({ where: { employeeId } });
+  await prisma.employeeTaxProfile.deleteMany({ where: { employeeId } });
 }
 
 async function createInvitedSession({ clubId, employeeId, initiatedByUserId }) {
