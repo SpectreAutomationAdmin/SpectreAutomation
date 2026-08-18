@@ -119,6 +119,34 @@ export default async function EmployeeProfilePage({
   const canInvite =
     hasPermission(principal, profile.clubId, "hr:onboarding:invite") &&
     currentSession?.state === "DRAFT";
+  const canWritePhoto = hasPermission(principal, profile.clubId, "hr:employee:write");
+
+  // HR-2B.3.1 (2026-08-18) §5 — Resend invitation. The Invite button
+  // covers the DRAFT case (never sent yet). Resend covers the "already
+  // been in the employee's inbox" cases:
+  //   • INVITED       — link may be lost, unused
+  //   • IN_PROGRESS   — link already redeemed but employee needs a
+  //                     fresh one to resume from another device / after
+  //                     losing the email
+  // Both branches require the operator's `hr:onboarding:invite` grant.
+  const RESEND_STATES = ["INVITED", "IN_PROGRESS"] as const;
+  const hasInviteGrant = hasPermission(principal, profile.clubId, "hr:onboarding:invite");
+  const sessionResumable =
+    currentSession != null && (RESEND_STATES as readonly string[]).includes(currentSession.state);
+  const mostRecentInvitation = hasInviteGrant
+    ? await prisma.employeeOnboardingInvitation.findFirst({
+        where: { clubId: profile.clubId, employeeId: profile.id },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, createdAt: true },
+      })
+    : null;
+  const priorInvitation = mostRecentInvitation
+    ? {
+        createdAt: mostRecentInvitation.createdAt.toISOString(),
+        recipientEmail: profile.personalEmail ?? profile.email ?? null,
+      }
+    : null;
+  const canResendInvitation = hasInviteGrant && sessionResumable && mostRecentInvitation != null;
 
   return (
     <EmployeeProfileView
@@ -191,6 +219,9 @@ export default async function EmployeeProfilePage({
         reason: t.reason ?? null,
       }))}
       canInvite={canInvite}
+      canWritePhoto={canWritePhoto}
+      canResendInvitation={canResendInvitation}
+      priorInvitation={priorInvitation}
       payroll={{
         sinMasked: canReadSin ? sinMasked : null,
         sinAccessible: canReadSin,

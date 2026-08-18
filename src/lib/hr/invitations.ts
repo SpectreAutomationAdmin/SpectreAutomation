@@ -438,3 +438,157 @@ export async function revokeInvitation(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Supersede — for the resend-invitation flow (HR-2B.3.1 §5).
+//
+// `revokeInvitation` refuses to revoke a REDEEMED invitation for good
+// reason: the historic revocation vocabulary is "the invitation was
+// killed before use". A resend, however, must be permitted even when
+// the current invitation IS redeemed — the employee already claimed
+// their session but lost the email or needs a fresh link.
+//
+// `supersedeInvitation` uses the same `revokedAt` DB column (there is
+// no separate `supersededAt` column on the invitation model), but the
+// audit action string is `hr.onboarding.invite.supersede.void` so a
+// forensic reader can distinguish "operator killed an active
+// invitation" from "operator issued a replacement over a spent one".
+// Both actions end in a WRITE_INDICATOR verb (`.void`) so support-
+// readonly and posting-guard substring gates fire correctly.
+//
+// The old token becomes unusable regardless of prior redemption:
+//   • not-yet-redeemed  → `acquireInvitationContext` throws
+//                          `InvitationRevokedError` (revokedAt set).
+//   • already-redeemed  → `acquireInvitationContext` still throws
+//                          `InvitationRevokedError` because the
+//                          revokedAt check fires BEFORE the redeemedAt
+//                          branch.
+// ---------------------------------------------------------------------------
+export async function supersedeInvitation(
+  principal: Principal,
+  invitationId: string,
+): Promise<void> {
+  const invitation = await prisma.employeeOnboardingInvitation.findUnique({
+    where: { id: invitationId },
+  });
+  if (!invitation) throw new NotFoundError(INVITATION_ENTITY, invitationId);
+  assertTenantOwned(invitation, principal);
+  requirePermission(principal, invitation.clubId, "hr:onboarding:invite");
+  await assertSensitiveActionAllowed(
+    principal,
+    invitation.clubId,
+    "hr.onboarding.invite.supersede.void",
+    INVITATION_ENTITY,
+    invitationId,
+  );
+
+  if (invitation.revokedAt) return; // already superseded / revoked
+
+  const updated = await prisma.employeeOnboardingInvitation.update({
+    where: { id: invitation.id },
+    data: { revokedAt: new Date() },
+  });
+
+  await audit(principal, {
+    action: "hr.onboarding.invite.supersede.void",
+    entityType: INVITATION_ENTITY,
+    entityId: updated.id,
+    clubId: updated.clubId,
+    before: { revokedAt: null, wasRedeemed: !!invitation.redeemedAt },
+    after: {
+      invitationIdTail: updated.id.slice(-8),
+      revokedAt: updated.revokedAt,
+    },
+    meta: { reason: "superseded_by_resend" },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Reissue — orchestrator for the HR-2B.3.1 §5 resend-invitation flow.
+//
+// Rules (founder brief §5 + §5.1 + §5.2):
+//   • Active session (DRAFT / INVITED / IN_PROGRESS) + no active
+//     invitation → issue a fresh one.
+//   • Active session + prior invitation still open (not revoked, not
+//     redeemed) → supersede that invitation, issue a fresh one.
+//   • Active session + prior invitation already redeemed → supersede
+//     it (same DB column, distinct action string), issue a fresh one.
+//     The employee's session + all their onboarding responses /
+//     acknowledgements / corrections are UNTOUCHED.
+//   • Terminal session (SUBMITTED / APPROVED / REJECTED / REVOKED) →
+//     `ConflictError` — resend is a no-op on a finished onboarding.
+//
+// This function is Principal-gated (`hr:onboarding:invite`) and
+// tenant-scoped through the underlying `loadEmployee` in
+// `issueInvitation` and `supersedeInvitation`. Callers who want the
+// email to actually leave the building must call
+// `sendInvitationEmail` themselves with the returned `rawToken`.
+// ---------------------------------------------------------------------------
+
+const REISSUE_ELIGIBLE_STATES = ["DRAFT", "INVITED", "IN_PROGRESS"] as const;
+
+export async function reissueInvitation(
+  principal: Principal,
+  employeeId: string,
+  opts: { ttlHours?: number } = {},
+): Promise<{
+  invitationId: string;
+  rawToken: string;
+  expiresAt: Date;
+  sessionState: string;
+  supersededInvitationId: string | null;
+}> {
+  const employee = await loadEmployee(principal, employeeId);
+  requirePermission(principal, employee.clubId, "hr:onboarding:invite");
+  // The heavier per-write guards fire inside issueInvitation +
+  // supersedeInvitation; this early check just refuses obviously
+  // wrong callers without any DB churn.
+
+  // Find the currently-active session for this employee. Ordered by
+  // startedAt desc so a re-invite-after-rejection resolves to the
+  // current session, not the historic rejected one.
+  const session = await prisma.employeeOnboardingSession.findFirst({
+    where: { employeeId, clubId: employee.clubId },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, state: true, clubId: true },
+  });
+  if (!session) {
+    throw new ConflictError(
+      "No onboarding session exists for this employee — create one first.",
+    );
+  }
+  if (!(REISSUE_ELIGIBLE_STATES as readonly string[]).includes(session.state)) {
+    throw new ConflictError(
+      `Cannot resend invitation for a ${session.state} session — the onboarding is already finished.`,
+    );
+  }
+
+  // Find the most recent NON-REVOKED invitation for this employee, if
+  // any. That is the one we need to supersede — leaving a revoked
+  // row already-revoked is intentional (its own audit trail).
+  const priorLive = await prisma.employeeOnboardingInvitation.findFirst({
+    where: { employeeId, clubId: employee.clubId, revokedAt: null },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  let supersededInvitationId: string | null = null;
+  if (priorLive) {
+    await supersedeInvitation(principal, priorLive.id);
+    supersededInvitationId = priorLive.id;
+  }
+
+  // Issue the fresh one via the canonical service — this fires its
+  // own audit event (`hr.onboarding.invite.update`) with a distinct
+  // invitation id.
+  const fresh = await issueInvitation(principal, employeeId, {
+    ttlHours: opts.ttlHours,
+  });
+
+  return {
+    invitationId: fresh.invitationId,
+    rawToken: fresh.rawToken,
+    expiresAt: fresh.expiresAt,
+    sessionState: session.state,
+    supersededInvitationId,
+  };
+}

@@ -29,6 +29,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { IconChevronLeft } from "@/components/spectre/icons";
 import InviteToOnboardingButton from "@/app/app/admin/people/employees/[id]/InviteToOnboardingButton";
+import AdminPhotoEditor from "@/components/hr/AdminPhotoEditor";
+import ResendOnboardingButton, {
+  type PriorInvitation,
+} from "@/app/app/admin/people/employees/[id]/ResendOnboardingButton";
 
 type Serialized<T> = T extends Date
   ? string
@@ -97,6 +101,12 @@ interface Props {
     reason: string | null;
   }>;
   canInvite: boolean;
+  canWritePhoto?: boolean;
+  /** True when the operator holds `hr:onboarding:invite` AND the
+   *  session is still resumable (DRAFT / INVITED / IN_PROGRESS)
+   *  AND at least one prior invitation exists for this employee. */
+  canResendInvitation?: boolean;
+  priorInvitation?: PriorInvitation | null;
   payroll?: {
     sinMasked: string | null;
     sinAccessible: boolean;
@@ -147,7 +157,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, payroll } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll } = props;
   const [tab, setTab] = useState<TabKey>("overview");
 
   const displayName = employee.preferredName?.trim().length
@@ -175,7 +185,7 @@ export default function EmployeeProfileView(props: Props) {
           {employee.profilePhotoDocumentId ? (
             /* eslint-disable-next-line @next/next/no-img-element -- same-origin authenticated stream endpoint, cache-controlled server-side */
             <img
-              src={`/api/hr/employees/${employee.id}/profile-photo`}
+              src={`/api/hr/employees/${employee.id}/profile-photo?v=${employee.profilePhotoDocumentId}`}
               alt={`${displayName || "Employee"} profile photo`}
               className="spectre-person-header-photo-image"
             />
@@ -290,13 +300,13 @@ export default function EmployeeProfileView(props: Props) {
                     <>
                       {/* eslint-disable-next-line @next/next/no-img-element -- same-origin authenticated stream endpoint */}
                       <img
-                        src={`/api/hr/employees/${employee.id}/profile-photo`}
+                        src={`/api/hr/employees/${employee.id}/profile-photo?v=${employee.profilePhotoDocumentId}`}
                         alt={`${displayName || "Employee"} profile photo`}
                         className="spectre-person-picture spectre-person-picture--image"
                         data-testid="employee-picture-image"
                       />
                       <p className="spectre-person-picture-hint">
-                        Uploaded by the employee during onboarding.
+                        Photo on file for this employee.
                       </p>
                     </>
                   ) : (
@@ -306,6 +316,12 @@ export default function EmployeeProfileView(props: Props) {
                       </div>
                       <p className="spectre-person-picture-hint">No employee photo provided.</p>
                     </>
+                  )}
+                  {canWritePhoto && (
+                    <AdminPhotoEditor
+                      employeeId={employee.id}
+                      hasPhoto={Boolean(employee.profilePhotoDocumentId)}
+                    />
                   )}
                 </div>
               </div>
@@ -322,6 +338,14 @@ export default function EmployeeProfileView(props: Props) {
                 {canInvite && currentSession && (
                   <div className="spectre-person-section-actions">
                     <InviteToOnboardingButton employeeId={employee.id} />
+                  </div>
+                )}
+                {canResendInvitation && (
+                  <div className="spectre-person-section-actions">
+                    <ResendOnboardingButton
+                      employeeId={employee.id}
+                      priorInvitation={priorInvitation ?? null}
+                    />
                   </div>
                 )}
               </div>
