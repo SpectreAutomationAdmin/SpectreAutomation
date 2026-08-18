@@ -111,6 +111,7 @@ export default async function EmployeeProfilePage({
         onboardingState: profile.onboardingState,
         payrollReadiness: profile.payrollReadiness,
         memberId: profile.memberId ?? null,
+        profilePhotoDocumentId: profile.profilePhotoDocumentId ?? null,
       }}
       department={department ? { id: department.id, name: department.name, code: department.code } : null}
       position={position ? { id: position.id, name: position.name, code: position.code } : null}

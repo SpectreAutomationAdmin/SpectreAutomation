@@ -30,9 +30,13 @@ import { acquireInvitationContext } from "@/lib/hr/invitations";
 import type { EmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { EmployeeOnboardingActorForbiddenError } from "@/lib/hr/employee-actor";
 import {
+  acknowledgeSelfEmployment,
+  CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS,
   EmployeeSelfWriteForbiddenFieldError,
   flagEmploymentFieldForCorrection,
+  getEmploymentAcknowledgement,
   getSelfEmployee,
+  listSelfEmploymentCorrections,
   submitSelfResponse,
   transitionSelfSessionToInProgress,
   updateSelfIdentity,
@@ -183,6 +187,89 @@ describe("HR-2B.2 · employee self-service surface", () => {
     expect(corrections.length).toBe(1);
     expect(corrections[0].field).toBe("positionId");
     expect(corrections[0].employeeStatedValue).toContain("Golf Shop Attendant");
+  });
+
+  it("flagEmploymentFieldForCorrection persists ONE row per canonical field, preserving the field identifier", async () => {
+    const { actor } = await actorForFixture();
+    for (const field of CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS) {
+      await flagEmploymentFieldForCorrection(actor, {
+        field,
+        employeeStatedValue: `stated value for ${field}`,
+      });
+    }
+    const rows = await listSelfEmploymentCorrections(actor);
+    expect(rows.length).toBe(CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS.length);
+    const byField = new Map(rows.map((r) => [r.field, r.employeeStatedValue]));
+    for (const field of CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS) {
+      expect(byField.get(field)).toBe(`stated value for ${field}`);
+    }
+    // No acknowledgement was written — the corrections branch is an
+    // explicit "not confirmed" signal.
+    const ack = await getEmploymentAcknowledgement(actor);
+    expect(ack).toBeNull();
+  });
+
+  it("acknowledgeSelfEmployment writes a durable row with kind=employment_confirmation and actorEmployeeId=actor.employeeId", async () => {
+    const { actor } = await actorForFixture();
+    await acknowledgeSelfEmployment(actor);
+    const ack = await getEmploymentAcknowledgement(actor);
+    expect(ack).toBeTruthy();
+    expect(ack!.actorEmployeeId).toBe(actor.employeeId);
+    expect(ack!.acknowledgedAt).toBeInstanceOf(Date);
+    const row = await prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, kind: "employment_confirmation" },
+    });
+    expect(row!.clubId).toBe(actor.clubId);
+    expect(row!.employeeId).toBe(actor.employeeId);
+  });
+
+  it("acknowledgeSelfEmployment is idempotent — second call updates acknowledgedAt in place (no duplicate row)", async () => {
+    const { actor } = await actorForFixture();
+    await acknowledgeSelfEmployment(actor);
+    const rows1 = await prisma.employeeOnboardingAcknowledgement.findMany({
+      where: { sessionId: actor.sessionId },
+    });
+    expect(rows1.length).toBe(1);
+    const first = rows1[0].acknowledgedAt.getTime();
+    await new Promise((r) => setTimeout(r, 20));
+    await acknowledgeSelfEmployment(actor);
+    const rows2 = await prisma.employeeOnboardingAcknowledgement.findMany({
+      where: { sessionId: actor.sessionId },
+    });
+    expect(rows2.length).toBe(1);
+    expect(rows2[0].acknowledgedAt.getTime()).toBeGreaterThanOrEqual(first);
+  });
+
+  it("acknowledgeSelfEmployment does NOT mutate any Club-authoritative employment field on the Employee row", async () => {
+    const { actor, employee } = await actorForFixture();
+    const before = await prisma.employee.findUnique({ where: { id: employee.id } });
+    await acknowledgeSelfEmployment(actor);
+    const after = await prisma.employee.findUnique({ where: { id: employee.id } });
+    expect(after!.positionId).toBe(before!.positionId);
+    expect(after!.departmentId).toBe(before!.departmentId);
+    expect(after!.employmentType).toBe(before!.employmentType);
+    expect(after!.expectedStartDate?.getTime() ?? null).toBe(before!.expectedStartDate?.getTime() ?? null);
+    // And no compensation drift.
+    expect(after!.payRate).toEqual(before!.payRate);
+  });
+
+  it("acknowledgement + corrections are session-scoped: two employees in the SAME club get independent rows", async () => {
+    const a = await actorForFixture("Ack-Session-A");
+    const b = await actorForFixture("Ack-Session-B");
+    await acknowledgeSelfEmployment(a.actor);
+    await flagEmploymentFieldForCorrection(b.actor, {
+      field: "positionId",
+      employeeStatedValue: "B's stated position",
+    });
+    const aAck = await getEmploymentAcknowledgement(a.actor);
+    const bAck = await getEmploymentAcknowledgement(b.actor);
+    expect(aAck).toBeTruthy();
+    expect(bAck).toBeNull();
+    const aCorrections = await listSelfEmploymentCorrections(a.actor);
+    const bCorrections = await listSelfEmploymentCorrections(b.actor);
+    expect(aCorrections.length).toBe(0);
+    expect(bCorrections.length).toBe(1);
+    expect(bCorrections[0].field).toBe("positionId");
   });
 
   it("flagEmploymentFieldForCorrection refuses an unknown field (probe defence)", async () => {

@@ -45,44 +45,36 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
   ]);
   if (!club || !employee) redirect("/hr/onboarding/expired");
 
-  // Read step corrections + response to determine which stages are
-  // complete. Used by the progress rail — a completed identity write
-  // marks Name/Contact as done; a photo pointer marks Photo as done;
-  // any employment correction OR the presence of an "employment_confirmed"
-  // marker response marks Employment as done. HR-2B.3+ will add its
-  // own stages here.
-  const corrections = await prisma.employeeOnboardingCorrection.findMany({
-    where: { sessionId: actor.sessionId },
-    select: { field: true, createdAt: true },
-  });
-  const employmentConfirmed = corrections.length > 0; // employee flagged a discrepancy
-  // We treat the presence of ANY of {personalEmail, mobilePhone} as
-  // the contact step being done; presence of preferredName OR a
-  // completed touch of the name step (approximated by non-empty
-  // firstName which is always true for a pre-hire) means "name done"
-  // is really "name confirmed". Use a distinct-marker approach for
-  // name: we'll track it via the "aboutYouProgress" JSON on the
-  // session in a future slice; for now, name is complete once the
-  // employee saved their preferredName OR clicked through Continue
-  // (which always writes the firstName they saw pre-filled).
-  //
-  // Practical approximation for HR-2B.2: name-complete iff the
-  // employee has posted the name form once (detected by preferredName
-  // being non-null OR the firstName having been re-written after
-  // startedAt). To keep this simple + correct for the demo, we key
-  // "name" off preferredName + Contact off personalEmail/mobilePhone
-  // + Photo off profilePhotoDocumentId + Employment off correction OR
-  // an implicit marker (recorded in the session state).
+  // Determine step completion from PERSISTED facts, not adjacent
+  // progress inference:
+  //   • Name       : employee has saved their preferredName.
+  //   • Contact    : employee has saved either personalEmail or mobilePhone.
+  //   • Employment : the durable EmployeeOnboardingAcknowledgement row
+  //                  exists (kind=employment_confirmation) OR the employee
+  //                  has flagged at least one field-level correction.
+  //   • Photo      : Employee.profilePhotoDocumentId is set.
+  const [ack, corrections] = await Promise.all([
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: {
+        sessionId: actor.sessionId,
+        clubId: actor.clubId,
+        kind: "employment_confirmation",
+      },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingCorrection.findMany({
+      where: {
+        sessionId: actor.sessionId,
+        clubId: actor.clubId,
+        field: { in: ["positionId", "departmentId", "expectedStartDate", "employmentType"] },
+      },
+      select: { field: true },
+    }),
+  ]);
   const nameDone = Boolean(employee.preferredName?.trim());
   const contactDone = Boolean(employee.personalEmail?.trim() || employee.mobilePhone?.trim());
   const photoDone = Boolean(employee.profilePhotoDocumentId);
-
-  // The employment "confirmed as correct" outcome doesn't write a row
-  // today. HR-2B.5 will formalise this via an
-  // `EmployeeOnboardingAcknowledgement` model. For HR-2B.2 we treat
-  // employment as done iff the employee has done ANY subsequent step
-  // (photo) or has flagged a correction.
-  const employmentDone = employmentConfirmed || photoDone;
+  const employmentDone = Boolean(ack) || corrections.length > 0;
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName

@@ -15,12 +15,16 @@ import {
   requireEmployeeOnboardingActor,
 } from "@/lib/hr/employee-actor";
 import {
+  acknowledgeSelfEmployment,
+  CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS,
   flagEmploymentFieldForCorrection,
   transitionSelfSessionToInProgress,
   updateSelfIdentity,
   uploadSelfPhoto,
+  type ClubAuthoritativeField,
   type SelfIdentityPatch,
 } from "@/lib/hr/employee-self-service";
+import { prisma } from "@/lib/prisma";
 import { isAppError } from "@/lib/errors";
 import { cookies } from "next/headers";
 
@@ -124,30 +128,83 @@ export async function saveContactAction(formData: FormData) {
 
 // ---------------------------------------------------------------------------
 // Employment confirmation step.
+//
+// Two outcomes:
+//   • "correct"          → persists an EmployeeOnboardingAcknowledgement
+//                          row (kind=employment_confirmation). Idempotent.
+//   • "needs_correction" → for each field the employee ticked
+//                          (correction:<field>:enabled=1) with a non-empty
+//                          `correction:<field>:value`, writes ONE
+//                          EmployeeOnboardingCorrection row carrying the
+//                          canonical field identifier + stated value.
+//                          Also removes any stale correction rows for
+//                          fields the employee UN-ticked. NO acknowledgement
+//                          row is written when corrections are outstanding.
 // ---------------------------------------------------------------------------
 export async function confirmEmploymentAction(formData: FormData) {
   const actor = await beginActionOrRedirect();
   const outcome = formData.get("outcome") as string | null;
-  const correctionNote = ((formData.get("correctionNote") as string | null) ?? "").trim();
+
   if (outcome === "correct") {
-    // Nothing to write — the employee confirmed the Club's authoritative
-    // values are right. We still advance the flow, and mark IN_PROGRESS.
-    await markInProgress(actor);
+    try {
+      // Clear any prior corrections (employee changed their mind).
+      await prisma.employeeOnboardingCorrection.deleteMany({
+        where: {
+          sessionId: actor.sessionId,
+          clubId: actor.clubId,
+          field: { in: [...CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS] },
+        },
+      });
+      await acknowledgeSelfEmployment(actor);
+      await markInProgress(actor);
+    } catch (err) {
+      if (isAppError(err)) {
+        stashError(err.safeMessage);
+        redirect("/hr/onboarding/about-you/employment");
+      }
+      throw err;
+    }
   } else if (outcome === "needs_correction") {
-    if (!correctionNote) {
-      stashError("Please tell us what needs correcting.");
+    // Gather per-field entries.
+    const entries: Array<{ field: ClubAuthoritativeField; stated: string }> = [];
+    for (const field of CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS) {
+      const enabled = (formData.get(`correction:${field}:enabled`) as string | null) === "1";
+      if (!enabled) continue;
+      const stated = ((formData.get(`correction:${field}:value`) as string | null) ?? "").trim();
+      if (!stated) continue;
+      entries.push({ field, stated });
+    }
+    if (entries.length === 0) {
+      stashError("Please check the item(s) that need correcting and tell us what they should be.");
       redirect("/hr/onboarding/about-you/employment");
     }
     try {
-      // We don't know which specific field the employee is flagging —
-      // record it against the "employmentType" bucket as a general
-      // discrepancy, with the note carrying the detail. HR-2B.5's
-      // review UI shows the raw stated value + note.
-      await flagEmploymentFieldForCorrection(actor, {
-        field: "employmentType",
-        employeeStatedValue: correctionNote,
-        note: null,
-      });
+      // Idempotent — drop any prior corrections for the same canonical
+      // fields (employee is re-submitting) and any acknowledgement
+      // (they've changed their mind — no longer "correct").
+      await prisma.$transaction([
+        prisma.employeeOnboardingCorrection.deleteMany({
+          where: {
+            sessionId: actor.sessionId,
+            clubId: actor.clubId,
+            field: { in: [...CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS] },
+          },
+        }),
+        prisma.employeeOnboardingAcknowledgement.deleteMany({
+          where: {
+            sessionId: actor.sessionId,
+            clubId: actor.clubId,
+            kind: "employment_confirmation",
+          },
+        }),
+      ]);
+      for (const e of entries) {
+        await flagEmploymentFieldForCorrection(actor, {
+          field: e.field,
+          employeeStatedValue: e.stated,
+          note: null,
+        });
+      }
       await markInProgress(actor);
     } catch (err) {
       if (isAppError(err)) {

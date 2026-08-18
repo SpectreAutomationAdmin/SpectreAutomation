@@ -419,6 +419,7 @@ model Club {
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
   employeeOnboardingCorrections EmployeeOnboardingCorrection[]
+  employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
   // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
   memberGroups                    MemberGroup[]
   memberGroupAssignments          MemberGroupAssignment[]
@@ -3221,6 +3222,7 @@ model Employee {
   onboardingSessions    EmployeeOnboardingSession[]
   onboardingTransitions EmployeeOnboardingStateTransition[]
   onboardingCorrections EmployeeOnboardingCorrection[]
+  onboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -10259,8 +10261,9 @@ model EmployeeOnboardingSession {
   rejectedAt        DateTime?
   rejectionReason   String?
 
-  responses   EmployeeOnboardingResponse[]
-  corrections EmployeeOnboardingCorrection[]
+  responses        EmployeeOnboardingResponse[]
+  corrections      EmployeeOnboardingCorrection[]
+  acknowledgements EmployeeOnboardingAcknowledgement[]
 
   @@index([clubId])
   @@index([employeeId, state])
@@ -10358,6 +10361,41 @@ model EmployeeOnboardingResponse {
   @@unique([sessionId, questionId])
   @@index([clubId])
   @@index([sessionId])
+}
+
+// EmployeeOnboardingAcknowledgement — HR-2B.2 final (2026-08-19).
+//
+// Durable record of a positive assertion the employee makes during
+// self-service onboarding. Currently the ONLY `kind` is
+// `employment_confirmation` — the employee explicitly stating that
+// the Club-provided position/department/type/start-date bundle is
+// correct. Introduced so the progress rail's "employment done"
+// signal reads a persisted fact rather than inferring from adjacent
+// progress. Future kinds (handbook_acknowledged, code_of_conduct,
+// etc.) can be added additively without further schema churn.
+//
+// Uniqueness: one active row per (sessionId, kind). Re-acknowledging
+// updates `acknowledgedAt` on the existing row.
+model EmployeeOnboardingAcknowledgement {
+  id              String                    @id @default(cuid())
+  clubId          String
+  club            Club                      @relation(fields: [clubId], references: [id])
+  sessionId       String
+  session         EmployeeOnboardingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  employeeId      String
+  employee        Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // Vocabulary: "employment_confirmation" (HR-2B.2). Future kinds
+  // will extend this string enum in the service layer.
+  kind            String
+  // Provenance — set to `actorEmployeeId` when the acknowledgement
+  // was made by the employee themselves via the self-service surface.
+  // NULL means system/staff.
+  actorEmployeeId String?
+  acknowledgedAt  DateTime                  @default(now())
+
+  @@unique([sessionId, kind])
+  @@index([clubId, sessionId])
+  @@index([clubId, employeeId])
 }
 
 // EmployeeOnboardingCorrection — HR-2B.2 (2026-08-18).

@@ -62,6 +62,7 @@ interface Props {
     onboardingState: string;
     payrollReadiness: string;
     memberId: string | null;
+    profilePhotoDocumentId: string | null;
   };
   department: { id: string; name: string; code: string | null } | null;
   position: { id: string; name: string; code: string | null } | null;
@@ -152,9 +153,18 @@ export default function EmployeeProfileView(props: Props) {
           <IconChevronLeft size={18} />
         </Link>
         <div className="spectre-person-header-photo">
-          <span className="spectre-person-header-photo-placeholder">
-            {initials(employee.firstName, employee.lastName)}
-          </span>
+          {employee.profilePhotoDocumentId ? (
+            /* eslint-disable-next-line @next/next/no-img-element -- same-origin authenticated stream endpoint, cache-controlled server-side */
+            <img
+              src={`/api/hr/employees/${employee.id}/profile-photo`}
+              alt={`${displayName || "Employee"} profile photo`}
+              className="spectre-person-header-photo-image"
+            />
+          ) : (
+            <span className="spectre-person-header-photo-placeholder">
+              {initials(employee.firstName, employee.lastName)}
+            </span>
+          )}
         </div>
         <div className="spectre-person-header-body">
           <h1 className="spectre-person-header-name">{displayName || "Employee"}</h1>
@@ -257,10 +267,27 @@ export default function EmployeeProfileView(props: Props) {
                   <h3 className="spectre-person-eyebrow">Employee Picture</h3>
                 </div>
                 <div className="spectre-person-picture-wrap">
-                  <div className="spectre-person-picture spectre-person-picture--placeholder">
-                    <span>{initials(employee.firstName, employee.lastName)}</span>
-                  </div>
-                  <p className="spectre-person-picture-hint">No employee photo provided.</p>
+                  {employee.profilePhotoDocumentId ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- same-origin authenticated stream endpoint */}
+                      <img
+                        src={`/api/hr/employees/${employee.id}/profile-photo`}
+                        alt={`${displayName || "Employee"} profile photo`}
+                        className="spectre-person-picture spectre-person-picture--image"
+                        data-testid="employee-picture-image"
+                      />
+                      <p className="spectre-person-picture-hint">
+                        Uploaded by the employee during onboarding.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="spectre-person-picture spectre-person-picture--placeholder">
+                        <span>{initials(employee.firstName, employee.lastName)}</span>
+                      </div>
+                      <p className="spectre-person-picture-hint">No employee photo provided.</p>
+                    </>
+                  )}
                 </div>
               </div>
 

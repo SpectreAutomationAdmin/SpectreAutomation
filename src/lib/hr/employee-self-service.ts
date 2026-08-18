@@ -58,20 +58,28 @@ const SELF_WRITABLE_IDENTITY_FIELDS = [
 type SelfWritableIdentityField = (typeof SELF_WRITABLE_IDENTITY_FIELDS)[number];
 
 /** Club-authoritative employment fields the employee may FLAG for
- *  Club review but never overwrite directly. */
-const CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS = [
+ *  Club review but never overwrite directly. The values here are the
+ *  canonical field identifiers persisted on `EmployeeOnboardingCorrection.field`
+ *  — HR-2B.5's review UI reads them verbatim. */
+export const CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS = [
   "positionId",
   "departmentId",
   "expectedStartDate",
   "employmentType",
 ] as const;
-type ClubAuthoritativeField = (typeof CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS)[number];
+export type ClubAuthoritativeField = (typeof CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS)[number];
+
+/** Vocabulary for `EmployeeOnboardingAcknowledgement.kind`. */
+export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = ["employment_confirmation"] as const;
+export type OnboardingAcknowledgementKind = (typeof ONBOARDING_ACKNOWLEDGEMENT_KINDS)[number];
 
 const EMPLOYEE_ENTITY = "Employee";
 const RESPONSE_ENTITY = "EmployeeOnboardingResponse";
 const DOCUMENT_ENTITY = "EmployeeDocument";
 const TRANSITION_ENTITY = "EmployeeOnboardingStateTransition";
 const SESSION_ENTITY = "EmployeeOnboardingSession";
+const ACKNOWLEDGEMENT_ENTITY = "EmployeeOnboardingAcknowledgement";
+const CORRECTION_ENTITY = "EmployeeOnboardingCorrection";
 
 // ---------------------------------------------------------------------------
 // Typed error — refuse write attempts on fields outside the allowlist.
@@ -253,16 +261,28 @@ function pickBefore(row: Awaited<ReturnType<typeof getSelfEmployee>>, keys: stri
 // Employment-field correction request.
 // ---------------------------------------------------------------------------
 export interface EmploymentCorrectionRequest {
-  field: ClubAuthoritativeField;
+  /** The canonical employment field the employee is disputing. Must be
+   *  one of `positionId` / `departmentId` / `expectedStartDate` /
+   *  `employmentType`. The value here is persisted verbatim on
+   *  `EmployeeOnboardingCorrection.field` so HR-2B.5's review UI can
+   *  render per-field controls. */
+   field: ClubAuthoritativeField;
+  /** The value the employee believes is correct — free-text (e.g.
+   *  "I was told my first day is September 21" or "Golf Shop
+   *  Attendant"). Staff resolves this into the canonical FK during
+   *  review, so no schema-level lookup is required at write time. */
   employeeStatedValue: string;
+  /** Optional extra context. */
   note?: string | null;
 }
 
 /**
  * The employee cannot mutate Club-authoritative employment fields
- * directly. Instead, they can flag a discrepancy — the fact of the
- * flag is written to the onboarding response stream under a reserved
- * question key so the Club sees it in the review flow.
+ * directly. Instead, they flag one or more discrepancies — one
+ * correction row per canonical field. Callers submitting multiple
+ * fields (e.g. "position AND department are wrong") should call this
+ * helper once per field so HR-2B.5's review UI can display each
+ * flagged item independently.
  */
 export async function flagEmploymentFieldForCorrection(
   actor: EmployeeOnboardingActor,
@@ -283,9 +303,6 @@ export async function flagEmploymentFieldForCorrection(
     throw new ValidationError([{ path: "note", message: "note is too long" }]);
   }
 
-  // Reserved response key — no `EmployeeOnboardingQuestion` row exists
-  // for it; corrections are surfaced in the review flow as a distinct
-  // artifact separate from question-catalogue answers.
   const created = await prisma.employeeOnboardingCorrection.create({
     data: {
       clubId: actor.clubId,
@@ -298,7 +315,7 @@ export async function flagEmploymentFieldForCorrection(
   });
   await audit(null, {
     action: "hr.onboarding.correction.request.update",
-    entityType: "EmployeeOnboardingCorrection",
+    entityType: CORRECTION_ENTITY,
     entityId: created.id,
     clubId: actor.clubId,
     after: { field: req.field, employeeStatedValueLength: stated.length },
@@ -306,6 +323,92 @@ export async function flagEmploymentFieldForCorrection(
       actorSource: "EMPLOYEE",
       actorEmployeeIdTail: actor.employeeId.slice(-8),
       onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Employment acknowledgement.
+// ---------------------------------------------------------------------------
+/**
+ * Persist an explicit "I confirm the Club-provided employment
+ * information is correct" assertion by the employee. Idempotent —
+ * subsequent calls update `acknowledgedAt` on the existing row (the
+ * `sessionId + kind` unique index enforces one row per kind per
+ * session). The progress rail reads this row directly rather than
+ * inferring "employment done" from adjacent progress.
+ */
+export async function acknowledgeSelfEmployment(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  const now = new Date();
+  await prisma.employeeOnboardingAcknowledgement.upsert({
+    where: {
+      sessionId_kind: { sessionId: actor.sessionId, kind: "employment_confirmation" },
+    },
+    create: {
+      clubId: actor.clubId,
+      sessionId: actor.sessionId,
+      employeeId: actor.employeeId,
+      kind: "employment_confirmation",
+      actorEmployeeId: actor.employeeId,
+      acknowledgedAt: now,
+    },
+    update: {
+      acknowledgedAt: now,
+      actorEmployeeId: actor.employeeId,
+    },
+  });
+  await audit(null, {
+    action: "hr.onboarding.acknowledgement.update",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: `${actor.sessionId}:employment_confirmation`,
+    clubId: actor.clubId,
+    after: { kind: "employment_confirmation", acknowledgedAt: now },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+}
+
+/**
+ * Read the durable employment acknowledgement, if any. Returns the
+ * row or null. HR-2B.2's About You layout reads this to determine
+ * the employment step's done state.
+ */
+export async function getEmploymentAcknowledgement(actor: EmployeeOnboardingActor) {
+  return prisma.employeeOnboardingAcknowledgement.findFirst({
+    where: {
+      sessionId: actor.sessionId,
+      clubId: actor.clubId,
+      kind: "employment_confirmation",
+    },
+    select: { id: true, acknowledgedAt: true, actorEmployeeId: true },
+  });
+}
+
+/**
+ * List the employee's own employment-field corrections. Rows are
+ * grouped by canonical field so HR-2B.5's review UI can render each
+ * discrepancy independently.
+ */
+export async function listSelfEmploymentCorrections(actor: EmployeeOnboardingActor) {
+  return prisma.employeeOnboardingCorrection.findMany({
+    where: {
+      sessionId: actor.sessionId,
+      clubId: actor.clubId,
+      field: { in: [...CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS] },
+    },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      field: true,
+      employeeStatedValue: true,
+      note: true,
+      resolvedAt: true,
+      createdAt: true,
     },
   });
 }

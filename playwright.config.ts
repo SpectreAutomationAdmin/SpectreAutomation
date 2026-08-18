@@ -24,6 +24,19 @@ export default defineConfig({
   // once we have read-only specs.
   workers: 1,
   fullyParallel: false,
+  // HR-2B.2 (2026-08-18) — auto-start `npm run dev` for local specs.
+  // `reuseExistingServer: true` outside CI keeps the founder's own
+  // dev server alive if it happens to be running on :3000 already,
+  // and prevents a second `next dev` from racing on the same port.
+  // Staging specs bypass this by pointing baseURL at the remote host.
+  webServer: {
+    command: "npm run dev",
+    url: "http://localhost:3000",
+    reuseExistingServer: !process.env.CI,
+    timeout: 180_000,
+    stdout: "ignore",
+    stderr: "pipe",
+  },
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "test-results/html" }],
