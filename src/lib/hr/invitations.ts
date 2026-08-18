@@ -230,6 +230,172 @@ export async function redeemInvitation(
 }
 
 // ---------------------------------------------------------------------------
+// Acquire onboarding context (HR-2B.2 hardening) — idempotent, resume-safe.
+//
+// The redemption HTTP action originally called `redeemInvitation()` and
+// then, in separate awaits, looked up the active session and stamped the
+// employee-onboarding cookie. A failure between the DB update and the
+// cookie write left the invitation permanently REDEEMED with no
+// authenticated employee session — the employee could not retry the
+// same magic link, and had to ask their Club for a fresh invitation.
+//
+// Invariant enforced by this function (per HR-2B.2 §0.A):
+//
+//   > A valid employee must never permanently lose onboarding access
+//   > merely because Spectre fails between invitation redemption and
+//   > establishment of their authenticated onboarding session.
+//
+// Behaviour:
+//   • First call with a valid, unrevoked, unexpired invitation:
+//     marks it REDEEMED, records the ipHash, audits "redeem".
+//     Returns { wasFirstRedemption: true }.
+//   • Subsequent call with the same token while (a) the invitation
+//     itself has not expired AND (b) the linked EmployeeOnboardingSession
+//     is still in INVITED or IN_PROGRESS: returns the same context
+//     WITHOUT re-stamping redeemedAt, audits "resume" for forensic
+//     visibility. Returns { wasFirstRedemption: false }.
+//   • Once the session has moved to SUBMITTED / APPROVED / REJECTED /
+//     REVOKED, resume is refused — the invitation is terminally spent.
+//     The employee's completion-screen route (HR-2B.5) is the correct
+//     way to see a submitted onboarding.
+//
+// This function is the single entry point the /hr/onboarding/[token]
+// welcome server-action calls. Callers do not need to compose
+// redemption + session lookup themselves; the risk window disappears.
+// ---------------------------------------------------------------------------
+export interface OnboardingContext {
+  invitationId: string;
+  clubId: string;
+  employeeId: string;
+  sessionId: string;
+  /** True on first successful redemption; false on subsequent resumes. */
+  wasFirstRedemption: boolean;
+}
+
+/**
+ * Resolve a raw magic-link token into a complete, verified onboarding
+ * context. Idempotent within the invitation's TTL and the session's
+ * pre-terminal states. See the block comment above for full semantics.
+ *
+ * Throws:
+ *   InvitationNotFoundError          — no invitation matches the token
+ *   InvitationRevokedError           — invitation was revoked by staff
+ *   InvitationExpiredError           — invitation's expiresAt is in the past
+ *   InvitationAlreadyRedeemedError   — invitation was redeemed but the
+ *                                      linked session is terminal (SUBMITTED,
+ *                                      APPROVED, REJECTED, or REVOKED)
+ */
+export async function acquireInvitationContext(
+  rawToken: string,
+  opts: { ipHash: string },
+): Promise<OnboardingContext> {
+  if (typeof rawToken !== "string" || rawToken.length === 0) {
+    throw new InvitationNotFoundError();
+  }
+  if (typeof opts?.ipHash !== "string" || opts.ipHash.length === 0) {
+    throw new ValidationError([{ path: "ipHash", message: "ipHash is required" }]);
+  }
+  const tokenHash = hashToken(rawToken);
+  const invitation = await prisma.employeeOnboardingInvitation.findUnique({
+    where: { tokenHash },
+  });
+  if (!invitation) throw new InvitationNotFoundError();
+  if (invitation.revokedAt) throw new InvitationRevokedError();
+  if (invitation.expiresAt.getTime() < Date.now()) throw new InvitationExpiredError();
+
+  // Look up the active onboarding session BEFORE we mutate anything.
+  // Order-by startedAt DESC so a re-invitation-after-rejection scenario
+  // resolves to the current session, not the historic rejected one.
+  const activeSession = await prisma.employeeOnboardingSession.findFirst({
+    where: {
+      employeeId: invitation.employeeId,
+      clubId: invitation.clubId,
+    },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, state: true },
+  });
+  if (!activeSession) {
+    // No session at all — invitation issued against an employee that
+    // was subsequently deleted or whose session was hard-purged.
+    // Treat as revoked from the employee's perspective (neutral copy).
+    throw new InvitationRevokedError();
+  }
+
+  // Sessions in SUBMITTED / APPROVED / REJECTED / REVOKED are terminal
+  // from the employee's self-service perspective. The invitation is
+  // spent — either the employee already finished, or staff moved on.
+  const RESUMABLE = ["DRAFT", "INVITED", "IN_PROGRESS"] as const;
+  const isResumable = (RESUMABLE as readonly string[]).includes(activeSession.state);
+
+  if (invitation.redeemedAt) {
+    // Resume path. Invitation was already consumed. Allow only if the
+    // session is still resumable; otherwise the invitation is spent.
+    if (!isResumable) {
+      throw new InvitationAlreadyRedeemedError();
+    }
+    await audit(null, {
+      action: "hr.onboarding.invite.update",
+      entityType: INVITATION_ENTITY,
+      entityId: invitation.id,
+      clubId: invitation.clubId,
+      after: {
+        invitationIdTail: invitation.id.slice(-8),
+        employeeIdTail: invitation.employeeId.slice(-8),
+        sessionState: activeSession.state,
+      },
+      meta: {
+        ipHashTail: opts.ipHash.slice(-8),
+        context: "resume",
+        note: "invitation already redeemed; resuming with existing session",
+      },
+    });
+    return {
+      invitationId: invitation.id,
+      clubId: invitation.clubId,
+      employeeId: invitation.employeeId,
+      sessionId: activeSession.id,
+      wasFirstRedemption: false,
+    };
+  }
+
+  // First-redemption path. Mark REDEEMED + record ipHash + audit.
+  // The session must also be resumable — if not (e.g. staff revoked
+  // it between issue and first redeem), refuse cleanly.
+  if (!isResumable) {
+    throw new InvitationRevokedError();
+  }
+  const now = new Date();
+  const updated = await prisma.employeeOnboardingInvitation.update({
+    where: { id: invitation.id },
+    data: {
+      redeemedAt: now,
+      redeemedByIpHash: opts.ipHash,
+    },
+  });
+  await audit(null, {
+    action: "hr.onboarding.invite.update",
+    entityType: INVITATION_ENTITY,
+    entityId: updated.id,
+    clubId: updated.clubId,
+    before: { redeemedAt: null },
+    after: {
+      invitationIdTail: updated.id.slice(-8),
+      employeeIdTail: updated.employeeId.slice(-8),
+      redeemedAt: updated.redeemedAt,
+      sessionState: activeSession.state,
+    },
+    meta: { ipHashTail: opts.ipHash.slice(-8), context: "redeem" },
+  });
+  return {
+    invitationId: updated.id,
+    clubId: updated.clubId,
+    employeeId: updated.employeeId,
+    sessionId: activeSession.id,
+    wasFirstRedemption: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Revoke
 // ---------------------------------------------------------------------------
 export async function revokeInvitation(

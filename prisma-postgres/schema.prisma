@@ -418,6 +418,7 @@ model Club {
   employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
+  employeeOnboardingCorrections EmployeeOnboardingCorrection[]
   // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
   memberGroups                    MemberGroup[]
   memberGroupAssignments          MemberGroupAssignment[]
@@ -3219,6 +3220,7 @@ model Employee {
   onboardingInvitations EmployeeOnboardingInvitation[]
   onboardingSessions    EmployeeOnboardingSession[]
   onboardingTransitions EmployeeOnboardingStateTransition[]
+  onboardingCorrections EmployeeOnboardingCorrection[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -10257,7 +10259,8 @@ model EmployeeOnboardingSession {
   rejectedAt        DateTime?
   rejectionReason   String?
 
-  responses EmployeeOnboardingResponse[]
+  responses   EmployeeOnboardingResponse[]
+  corrections EmployeeOnboardingCorrection[]
 
   @@index([clubId])
   @@index([employeeId, state])
@@ -10355,6 +10358,37 @@ model EmployeeOnboardingResponse {
   @@unique([sessionId, questionId])
   @@index([clubId])
   @@index([sessionId])
+}
+
+// EmployeeOnboardingCorrection — HR-2B.2 (2026-08-18).
+//
+// The employee cannot mutate Club-authoritative employment fields
+// (positionId, departmentId, expectedStartDate, employmentType)
+// directly during self-service onboarding. When the employee reports
+// a discrepancy — "You've told me I'm joining as Assistant Golf
+// Professional, but I was hired as Golf Shop Attendant" — the fact
+// is captured here for staff review, never applied silently.
+//
+// Rows are surfaced in the Club-side onboarding review UI (HR-2B.5+)
+// and resolved by a staff user (`resolvedAt` + `resolvedByUserId`).
+model EmployeeOnboardingCorrection {
+  id                  String                    @id @default(cuid())
+  clubId              String
+  club                Club                      @relation(fields: [clubId], references: [id])
+  sessionId           String
+  session             EmployeeOnboardingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  employeeId          String
+  employee            Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  // "positionId" | "departmentId" | "expectedStartDate" | "employmentType"
+  field               String
+  employeeStatedValue String
+  note                String?
+  resolvedAt          DateTime?
+  resolvedByUserId    String?
+  createdAt           DateTime                  @default(now())
+
+  @@index([clubId, sessionId])
+  @@index([clubId, employeeId])
 }
 
 // ---------------------------------------------------------------------------

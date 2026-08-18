@@ -1,26 +1,40 @@
 // HR-2B.1 (2026-08-18) — Employee-facing onboarding welcome.
+// HR-2B.2 (2026-08-18) — Redemption reliability hardening.
 //
 // Path:      /hr/onboarding/[token]
 // Auth:      public (no admin session required)
-// Redeem:    validated on page load (lookup only — invitation is NOT
-//            marked REDEEMED until the employee clicks "Begin
-//            onboarding" so re-visits from the email link don't
-//            consume the invitation)
+// Redeem:    resolved via the canonical acquireInvitationContext service,
+//            which is idempotent within the invitation TTL. If a prior
+//            redemption succeeded but cookie establishment failed, the
+//            employee can safely retry the same link — the invitation
+//            remains resumable while the session is INVITED or
+//            IN_PROGRESS. See src/lib/hr/invitations.ts §
+//            acquireInvitationContext for the full contract.
 // Branding:  Club-branded per the invitation's own clubId (never
 //            caller-supplied). No Spectre wordmark; no admin sidebar.
 //
 // On "Begin onboarding" the server action:
 //   1. Rate-limit check (per-IP hash, per HR-2B §5)
-//   2. Canonical redeemInvitation() marks REDEEMED, returns
-//      { invitationId, clubId, employeeId }
-//   3. Look up the employee's active onboarding session
-//   4. Stamp the employee-onboarding iron-session cookie
-//   5. Redirect to /hr/onboarding/session (HR-2B.2+ continuation)
+//   2. Canonical acquireInvitationContext(rawToken, {ipHash}) —
+//      idempotent redemption + session lookup in one atomic flow.
+//      Returns {invitationId, clubId, employeeId, sessionId,
+//      wasFirstRedemption}.
+//   3. Stamp the employee-onboarding iron-session cookie.
+//   4. Redirect to /hr/onboarding/about-you (HR-2B.2 conversational
+//      About You).
+//
+// State transitions (INVITED → IN_PROGRESS) do NOT fire here. They
+// fire on the FIRST real employee action inside About You, stamped
+// with EmployeeOnboardingActor provenance (actorSource=EMPLOYEE),
+// so a passive link-open does not consume state.
 
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { hashToken, redeemInvitation } from "@/lib/hr/invitations";
+import {
+  acquireInvitationContext,
+  hashToken,
+} from "@/lib/hr/invitations";
 import { establishEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
 import { consumeRate } from "@/lib/security/rate-limit";
 import { isAppError } from "@/lib/errors";
@@ -55,8 +69,7 @@ async function beginOnboardingAction(rawToken: string) {
   const ip = clientIp();
   const ipHash = hashIp(ip);
 
-  // Rate-limit BEFORE calling the redemption service. Per HR-2B §5,
-  // this is the HTTP-route obligation deferred from HR-1. Reuses the
+  // Rate-limit BEFORE calling the redemption service. Reuses the
   // canonical `login` profile (5 attempts, refill 1 per 5s) — same
   // shape as password reset: a low-cost per-IP throttle that hurts
   // token guessers without inconveniencing legitimate employees.
@@ -71,33 +84,18 @@ async function beginOnboardingAction(rawToken: string) {
   }
 
   try {
-    const { invitationId, clubId, employeeId } = await redeemInvitation(rawToken, { ipHash });
-
-    // Look up the active DRAFT/INVITED onboarding session for this
-    // employee. Transition it to IN_PROGRESS if it's currently
-    // INVITED (invitation-issued session).
-    const activeSession = await prisma.employeeOnboardingSession.findFirst({
-      where: {
-        employeeId,
-        state: { notIn: ["REVOKED", "APPROVED", "REJECTED"] },
-      },
-      orderBy: { startedAt: "desc" },
-      select: { id: true, state: true },
+    const ctx = await acquireInvitationContext(rawToken, { ipHash });
+    // Establish the employee-onboarding cookie. Because
+    // acquireInvitationContext is idempotent within the TTL, a
+    // failure between redemption and this cookie write is safe to
+    // retry — the invitation stays resumable, and the retry lands
+    // here again with the same context.
+    await establishEmployeeOnboardingSession({
+      invitationId: ctx.invitationId,
+      sessionId: ctx.sessionId,
+      employeeId: ctx.employeeId,
+      clubId: ctx.clubId,
     });
-    if (!activeSession) {
-      cookies().set(
-        ERROR_COOKIE,
-        "No active onboarding session for this invitation. Please contact your Club.",
-        { httpOnly: true, sameSite: "strict", maxAge: 30, path: "/hr" },
-      );
-      redirect(`/hr/onboarding/${encodeURIComponent(rawToken)}`);
-    }
-
-    // Establish the employee-onboarding session cookie. Session state
-    // transitions (INVITED → IN_PROGRESS → SUBMITTED) are driven by
-    // the About-You / submit paths in HR-2B.2+, where they naturally
-    // align with the employee's actions rather than firing on link
-    // open. HR-2B.1 stops at "cookie established, employee landed".
   } catch (err) {
     if (isAppError(err)) {
       cookies().set(ERROR_COOKIE, err.safeMessage, {
@@ -111,41 +109,7 @@ async function beginOnboardingAction(rawToken: string) {
     throw err;
   }
 
-  // Re-fetch the session + establish the cookie AFTER the try/catch
-  // completes. Both service calls succeeded; safe to stamp identity.
-  const activeSession = await prisma.employeeOnboardingSession.findFirst({
-    where: {
-      employeeId: (await prisma.employeeOnboardingInvitation.findUnique({
-        where: { tokenHash: hashToken(rawToken) },
-        select: { employeeId: true },
-      }))?.employeeId ?? "__none__",
-      state: { notIn: ["REVOKED", "APPROVED", "REJECTED"] },
-    },
-    orderBy: { startedAt: "desc" },
-    select: { id: true, state: true, employeeId: true, clubId: true },
-  });
-  if (!activeSession) {
-    cookies().set(ERROR_COOKIE, "No active onboarding session for this invitation.", {
-      httpOnly: true,
-      sameSite: "strict",
-      maxAge: 30,
-      path: "/hr",
-    });
-    redirect(`/hr/onboarding/${encodeURIComponent(rawToken)}`);
-  }
-  const invitationRow = await prisma.employeeOnboardingInvitation.findUnique({
-    where: { tokenHash: hashToken(rawToken) },
-    select: { id: true },
-  });
-  if (!invitationRow) redirect(`/hr/onboarding/expired`);
-  await establishEmployeeOnboardingSession({
-    invitationId: invitationRow.id,
-    sessionId: activeSession.id,
-    employeeId: activeSession.employeeId,
-    clubId: activeSession.clubId,
-  });
-
-  redirect(`/hr/onboarding/session`);
+  redirect(`/hr/onboarding/about-you`);
 }
 
 export default async function HrOnboardingWelcomePage({
@@ -157,8 +121,10 @@ export default async function HrOnboardingWelcomePage({
   const actionError = cookieStore.get(ERROR_COOKIE)?.value ?? null;
   if (actionError) cookieStore.delete(ERROR_COOKIE);
 
-  // Look up the invitation WITHOUT redeeming it. Redemption only
-  // happens when the employee clicks "Begin onboarding".
+  // Look up the invitation WITHOUT redeeming it. Redemption is
+  // deferred until the employee clicks "Begin onboarding" so a
+  // preview-link crawler (e.g. an email-client's link scanner)
+  // cannot consume the invitation on the employee's behalf.
   let invitation: {
     id: string;
     clubName: string;
@@ -170,7 +136,7 @@ export default async function HrOnboardingWelcomePage({
     expiresAt: Date;
     isExpired: boolean;
     isRevoked: boolean;
-    isRedeemed: boolean;
+    isTerminallySpent: boolean;
   } | null = null;
 
   try {
@@ -182,6 +148,8 @@ export default async function HrOnboardingWelcomePage({
         expiresAt: true,
         revokedAt: true,
         redeemedAt: true,
+        clubId: true,
+        employeeId: true,
         club: { select: { name: true } },
         employee: {
           select: {
@@ -195,6 +163,22 @@ export default async function HrOnboardingWelcomePage({
       },
     });
     if (row) {
+      const isExpired = row.expiresAt < new Date();
+      const isRevoked = row.revokedAt !== null;
+      // If already-redeemed AND the session is terminal, treat as
+      // spent. If already-redeemed AND session is still resumable,
+      // the welcome page is safe to render — clicking Begin
+      // onboarding will re-acquire the context (idempotent).
+      let isTerminallySpent = false;
+      if (row.redeemedAt && !isExpired && !isRevoked) {
+        const session = await prisma.employeeOnboardingSession.findFirst({
+          where: { employeeId: row.employeeId, clubId: row.clubId },
+          orderBy: { startedAt: "desc" },
+          select: { state: true },
+        });
+        const resumable = session && ["DRAFT", "INVITED", "IN_PROGRESS"].includes(session.state);
+        isTerminallySpent = !resumable;
+      }
       invitation = {
         id: row.id,
         clubName: row.club.name,
@@ -204,16 +188,16 @@ export default async function HrOnboardingWelcomePage({
         positionName: row.employee.position?.name ?? null,
         expectedStartDate: row.employee.expectedStartDate,
         expiresAt: row.expiresAt,
-        isExpired: row.expiresAt < new Date(),
-        isRevoked: row.revokedAt !== null,
-        isRedeemed: row.redeemedAt !== null,
+        isExpired,
+        isRevoked,
+        isTerminallySpent,
       };
     }
   } catch {
     // fall through — invitation stays null, invalid page renders
   }
 
-  if (!invitation || invitation.isExpired || invitation.isRevoked || invitation.isRedeemed) {
+  if (!invitation || invitation.isExpired || invitation.isRevoked || invitation.isTerminallySpent) {
     return <InvalidInvitationPage />;
   }
 

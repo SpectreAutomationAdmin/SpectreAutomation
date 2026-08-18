@@ -427,6 +427,7 @@ model Club {
   employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
+  employeeOnboardingCorrections EmployeeOnboardingCorrection[]
   // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
   memberGroups                    MemberGroup[]
   memberGroupAssignments          MemberGroupAssignment[]
@@ -3214,6 +3215,7 @@ model Employee {
   onboardingInvitations EmployeeOnboardingInvitation[]
   onboardingSessions    EmployeeOnboardingSession[]
   onboardingTransitions EmployeeOnboardingStateTransition[]
+  onboardingCorrections EmployeeOnboardingCorrection[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -10258,7 +10260,8 @@ model EmployeeOnboardingSession {
   rejectedAt        DateTime?
   rejectionReason   String?
 
-  responses EmployeeOnboardingResponse[]
+  responses   EmployeeOnboardingResponse[]
+  corrections EmployeeOnboardingCorrection[]
 
   @@index([clubId])
   @@index([employeeId, state])
@@ -10356,6 +10359,27 @@ model EmployeeOnboardingResponse {
   @@unique([sessionId, questionId])
   @@index([clubId])
   @@index([sessionId])
+}
+
+// EmployeeOnboardingCorrection — HR-2B.2 (2026-08-18).
+// See prisma-postgres/schema.prisma for full documentation.
+model EmployeeOnboardingCorrection {
+  id                  String                    @id @default(cuid())
+  clubId              String
+  club                Club                      @relation(fields: [clubId], references: [id])
+  sessionId           String
+  session             EmployeeOnboardingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  employeeId          String
+  employee            Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  field               String
+  employeeStatedValue String
+  note                String?
+  resolvedAt          DateTime?
+  resolvedByUserId    String?
+  createdAt           DateTime                  @default(now())
+
+  @@index([clubId, sessionId])
+  @@index([clubId, employeeId])
 }
 
 // ---------------------------------------------------------------------------
