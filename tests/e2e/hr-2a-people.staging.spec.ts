@@ -278,12 +278,21 @@ test.describe("HR-2A.1 · People module staging acceptance", () => {
     await page.goto(`${avail.baseURL}/app/admin/members`, { waitUntil: "networkidle" });
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(OUT, "I1-members-list.png"), fullPage: false });
-    // Click the first member row (if any).
-    const firstMemberLink = page.locator('table tbody tr a[href*="/app/admin/members/"]').first();
+    // HR-2A.4 — locate any link to a cuid Member profile. The Phase 20
+    // recovered Members list uses a different table structure than the
+    // pre-Phase-20 version, so match on href-shape rather than table
+    // ancestry.
+    const firstMemberLink = page.locator('a[href^="/app/admin/members/c"]').first();
     if (await firstMemberLink.count()) {
-      await firstMemberLink.click();
-      await page.waitForLoadState("networkidle").catch(() => {});
-      await page.waitForTimeout(400);
+      const href = await firstMemberLink.getAttribute("href");
+      if (href) {
+        // Direct-navigate rather than click — Phase 20's list may use
+        // multiple co-located links per row (avatar + name); the click
+        // race sometimes captured the list frame rather than the
+        // profile. Direct goto with waitUntil is deterministic.
+        await page.goto(`${avail.baseURL}${href}`, { waitUntil: "networkidle" });
+      }
+      await page.waitForTimeout(600);
       await page.screenshot({ path: path.join(OUT, "I2-member-profile.png"), fullPage: true });
       const memberText = (await page.locator("body").textContent()) ?? "";
       const hasReciprocal = /Club Employee/i.test(memberText);
