@@ -59,6 +59,24 @@ interface ConceptDefinition {
   cueStrength: number;
   /** Human-readable label for diagnostics. */
   label: string;
+  /**
+   * Corroborated-cue pairs (v206 SaaS-recall repair, 2026-08-15).
+   *
+   * A pair contributes ONLY when BOTH regexes match the same line-item
+   * description. Neither regex alone commits the concept — corroboration
+   * is required. Used to admit evidence classes that any single generic
+   * phrase (e.g. "1 year commitment") would false-positive on other
+   * families (telecom, maintenance, membership, equipment lease, managed
+   * service). Requiring corroboration keeps the classifier vendor-agnostic
+   * and brand-agnostic while recognising legitimate SaaS-plan-billing
+   * shapes that use only brand + plan-tier + commitment language.
+   */
+  corroboratedCues?: Array<{
+    a: RegExp;
+    b: RegExp;
+    strength: number;
+    label: string;
+  }>;
 }
 
 // Exported for cue-coverage tests only. The classifier and its
@@ -129,6 +147,54 @@ export const CANONICAL_PURPOSE_CONCEPTS: ConceptDefinition[] = [
       /\b(online\s*backup|cloud\s*backup|offsite\s*backup|backup\s*storage|backup\s*service|cloud\s*storage|data\s*storage|data\s*backup|hosted\s*storage)\b/i,
     ],
     cueStrength: 78,
+    // v206 SaaS-recall repair (2026-08-15) — brand/plan-dominant SaaS
+    // billing (Microsoft 365, Google Workspace, Adobe Creative Cloud,
+    // Slack, Salesforce, Zoom, etc.) uses line-item text that is only
+    // brand + plan-tier + commitment cadence. None of the base cues
+    // above match a phrase like "Microsoft 365 Business Standard -
+    // 1Year Commit Paid Monthly". The classifier previously failed
+    // to commit SOFTWARE_SUBSCRIPTION for a whole class of SaaS
+    // invoices as a result (see docs/phase-4r-cs221178-vs-cs200824-
+    // paired-diagnostic.md §11).
+    //
+    // The corroborated pairs below fix that recall gap WITHOUT letting
+    // commitment cadence alone commit SOFTWARE_SUBSCRIPTION. Each pair
+    // requires TWO signals in the same line-item description:
+    //   Pair 1 — a two-word SaaS plan-tier (Business Standard,
+    //            Business Premium, Enterprise Plus, etc.) AND a
+    //            commitment-cadence phrase (1 year commit, monthly
+    //            commit, annual commitment).
+    //   Pair 2 — a plan-number/edition-number token (Plan 2, Edition 3,
+    //            Tier 1) AND a commitment-cadence phrase.
+    //   Pair 3 — a per-user/per-seat token AND a commitment cadence.
+    //
+    // Negative-control coverage: none of these pairs match "Internet
+    // service — 1 year commitment, paid monthly", "Annual maintenance
+    // agreement — 1 year commitment", "Annual membership commitment",
+    // "36-month commitment / monthly payment", or "Managed support
+    // service — annual commitment", because those phrases contain the
+    // commitment cadence but do NOT contain the corroborating
+    // plan-tier / plan-number / per-unit token.
+    corroboratedCues: [
+      {
+        a: /\b(?:business|enterprise|team|frontline)\s+(?:basic|standard|premium|plus|essentials?|starter|pro|professional|advanced|e\d)\b/i,
+        b: /\b(?:\d+[-\s]?year|multi[-\s]?year|monthly|annually?|yearly)\s+commit(?:ment)?\b/i,
+        strength: 78,
+        label: "SaaS plan-tier + commitment-cadence corroborated",
+      },
+      {
+        a: /\b(?:plan|edition|tier|package|level)\s*\d+\b/i,
+        b: /\b(?:\d+[-\s]?year|multi[-\s]?year|monthly|annually?|yearly)\s+commit(?:ment)?\b/i,
+        strength: 78,
+        label: "SaaS plan-number + commitment-cadence corroborated",
+      },
+      {
+        a: /\b(?:per[-\s]?user|per[-\s]?seat|per[-\s]?licen[cs]e)\b/i,
+        b: /\b(?:\d+[-\s]?year|multi[-\s]?year|monthly|annually?|yearly)\s+commit(?:ment)?\b/i,
+        strength: 78,
+        label: "SaaS per-unit + commitment-cadence corroborated",
+      },
+    ],
   },
   {
     // Sprint 3 · 221178 IT-taxonomy slice (2026-08-10) — cybersecurity
@@ -487,6 +553,28 @@ export class DeterministicTaxonomyProvider implements EconomicPurposeProvider {
                 authorityTier: 1,
                 sourceType: "line_item_primary_purchase",
               }, true);
+            }
+          }
+        }
+        // v206 SaaS-recall repair (2026-08-15) — corroborated cues.
+        // Contributes ONLY when BOTH regexes match the same line
+        // description. Neither regex alone commits the concept. See
+        // the docblock on ConceptDefinition.corroboratedCues for the
+        // guarding rationale (§7 negative controls: telecom,
+        // maintenance, membership, equipment lease, managed service
+        // must NOT false-positive on commitment cadence alone).
+        if (def.corroboratedCues) {
+          for (const pair of def.corroboratedCues) {
+            if (pair.a.test(desc) && pair.b.test(desc)) {
+              record(def.concept, pair.strength, {
+                lineItemIndex: originalIndex,
+                lineItemDescription: desc.slice(0, 80),
+                cue: `${pair.a.source} & ${pair.b.source}`,
+                strength: "strong",
+                reason: `corroborated cue (${pair.label})`,
+                authorityTier: 1,
+                sourceType: "line_item_primary_purchase",
+              }, false);
             }
           }
         }

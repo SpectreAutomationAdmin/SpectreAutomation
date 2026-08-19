@@ -54,6 +54,17 @@ export const profileSchema = z.object({
   state: optionalNullableString(100),
   postalCode: optionalNullableString(20),
   country: optionalNullableString(100),
+  // Phase 20 (Member Database) — extended demographic fields on the
+  // primary Member. All optional; blank strings coerce to null so
+  // the admin edit form can clear a value without a special "unset".
+  firstName: optionalNullableString(100),
+  middleName: optionalNullableString(100),
+  lastName: optionalNullableString(100),
+  nickname: optionalNullableString(100),
+  salutation: optionalNullableString(40),
+  gender: optionalNullableString(40),
+  homePhone: optionalNullableString(40),
+  profileImageUrl: optionalNullableString(500),
 });
 
 export async function updateProfile(principal: Principal, memberId: string, raw: unknown) {
@@ -74,6 +85,14 @@ export async function updateProfile(principal: Principal, memberId: string, raw:
     state?: string | null;
     postalCode?: string | null;
     country?: string | null;
+    firstName?: string;
+    middleName?: string | null;
+    lastName?: string;
+    nickname?: string | null;
+    salutation?: string | null;
+    gender?: string | null;
+    homePhone?: string | null;
+    profileImageUrl?: string | null;
   } = {};
   if (parsed.data.phone !== undefined) data.phone = parsed.data.phone;
   if (parsed.data.email) data.email = parsed.data.email.toLowerCase();
@@ -84,6 +103,18 @@ export async function updateProfile(principal: Principal, memberId: string, raw:
   if (parsed.data.state !== undefined) data.state = parsed.data.state;
   if (parsed.data.postalCode !== undefined) data.postalCode = parsed.data.postalCode;
   if (parsed.data.country !== undefined) data.country = parsed.data.country;
+  // Phase 20 (Member Database) — firstName/lastName may be cleared
+  // only via a validation-guarded pathway upstream; the schema treats
+  // blank strings as null which would break Member's NOT NULL name
+  // columns, so we drop the null on the write when it appears.
+  if (parsed.data.firstName) data.firstName = parsed.data.firstName;
+  if (parsed.data.lastName) data.lastName = parsed.data.lastName;
+  if (parsed.data.middleName !== undefined) data.middleName = parsed.data.middleName;
+  if (parsed.data.nickname !== undefined) data.nickname = parsed.data.nickname;
+  if (parsed.data.salutation !== undefined) data.salutation = parsed.data.salutation;
+  if (parsed.data.gender !== undefined) data.gender = parsed.data.gender;
+  if (parsed.data.homePhone !== undefined) data.homePhone = parsed.data.homePhone;
+  if (parsed.data.profileImageUrl !== undefined) data.profileImageUrl = parsed.data.profileImageUrl;
   const updated = await prisma.member.update({ where: { id: memberId }, data });
   await audit(principal, {
     action: "member.profile.update",

@@ -112,6 +112,16 @@ export const IconAlertCircle = (p: IconProps) => (
 export const IconLoader = (p: IconProps) => (
   <Icon {...p}><path d="M12 3v3" /><path d="M12 18v3" /><path d="M5.5 5.5l2.1 2.1" /><path d="M16.4 16.4l2.1 2.1" /><path d="M3 12h3" /><path d="M18 12h3" /><path d="M5.5 18.5l2.1-2.1" /><path d="M16.4 7.6l2.1-2.1" /></Icon>
 );
+// Phase 4R rev-6 (2026-08-15) — canonical refresh glyph. Circular
+// arrow (Feather-style) so a spin animation reads as "reloading"
+// rather than "loading". Consumed by FeedSyncedStatusPill inside
+// the Mission Control header.
+export const IconRefresh = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+    <path d="M20 4v5h-5" />
+  </Icon>
+);
 export const IconArrowUpDown = (p: IconProps) => (
   <Icon {...p}><path d="M8 4v14" /><path d="M4 8l4-4 4 4" /><path d="M16 4v14" /><path d="M20 14l-4 4-4-4" /></Icon>
 );

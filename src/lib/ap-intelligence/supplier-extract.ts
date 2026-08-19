@@ -87,16 +87,48 @@ export interface SupplierExtraction {
 // address. We anchor at start-of-line + capture through the
 // suffix, then TOLERATE any trailing address / punctuation.
 //
-// Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — added REGION
-// tokens to the suffix alternation. Real professional-body / utility
-// / regulatory org names frequently take a REGION suffix instead of
-// a Corp/Inc/Ltd suffix (e.g. "CPA ALBERTA", "TELUS Canada",
-// "Shaw Communications", "Enmax Ontario"). Without this, the
-// extractor missed the actual issuer on the CPA Alberta member-
-// dues invoice and picked the addressee (a person-with-credential
-// line) instead.
+// Sprint 3 · Phase 4R Phase B supplier extraction repair (2026-08-15)
+// §B2 — corp-suffix semantics split.
+//
+// Legal-entity suffixes anchor the supplier-name candidate. Real
+// company names end in one of a small closed set of jurisdiction-
+// specific entity forms: Corporation / Corp / Inc / Ltd / LLC / GmbH /
+// AG / SA / etc.
+//
+// Prior to 2026-08-15 this alternation ALSO contained region qualifiers
+// (Canada, USA, Alberta, Ontario, ...) intended to catch names like
+// "TELUS Canada" / "CPA Alberta". That decision was empirically wrong:
+// it also matched bare recipient-address lines like
+// "Calgary AB T2T 0Z7 Canada" (the terminal `Canada` token satisfied
+// the alternation while the postal code was mid-line and slipped past
+// the address rejection). See docs/phase-4r-microsoft-canada-forensic-
+// checkpoint.md.
+//
+// After 2026-08-15: only STRONG legal-entity suffixes score corp_suffix.
+// Region-qualified names ("TELUS Canada") remain valid candidates
+// via the other positive signals (adjacent_tax_id, remittance,
+// issuer_language) — they just don't score corp_suffix on the region
+// alone.
 const CORP_SUFFIX_RE =
-  /^\s*([A-Z][A-Za-z0-9&.,'\-\s/]{2,60}?(?:\s+(?:Corporation|Corp|Company|Co|Inc|Incorporated|Ltd|Limited|LLC|LLP|LP|ULC|PLC|GmbH|AG|SA|BV|NV|Pty|Association|Society|Foundation|Institute|Group|Holdings|Alberta|Ontario|BC|British\s+Columbia|Quebec|Manitoba|Saskatchewan|Nova\s+Scotia|New\s+Brunswick|PEI|Newfoundland|Yukon|Nunavut|NWT|Canada|America|USA|International|Global|Worldwide|National|Regional)\.?))(?:\b|,|\s|$)/i;
+  /^\s*([A-Z][A-Za-z0-9&.,'\-\s/]{2,60}?(?:\s+(?:Corporation|Corp|Company|Co|Inc|Incorporated|Ltd|Limited|LLC|LLP|LP|ULC|PLC|GmbH|AG|SA|BV|NV|Pty|Association|Society|Foundation|Institute|Group|Holdings)\.?))(?:\b|,|\s|$)/i;
+
+// Sprint 3 · Phase 4R Phase B (2026-08-15) §B1 + §B4 — whole-line
+// postal-code detector for the address-rejection guard. Captures
+// Canadian ANA NAN, US ZIP+4, and UK postcodes anywhere in the line
+// (not just line-start). Used together with STRONG_ENTITY_SUFFIX_TOKENS
+// so lines like "Microsoft Corporation, One Microsoft Way, Redmond,
+// WA 98052, United States" are NOT rejected (the corp suffix appears
+// before the postal code — legal-name-plus-address shape must survive).
+const POSTAL_ANYWHERE_RE =
+  /\b(?:[A-Z]\d[A-Z]\s?\d[A-Z]\d|\d{5}(?:-\d{4})?|[A-Z]{1,2}\d[A-Z\d]?\s+\d[A-Z]{2})\b/;
+
+// Sprint 3 · Phase 4R Phase B (2026-08-15) §B4 — quick presence check
+// for a strong entity suffix ANYWHERE in the line (position-agnostic).
+// Used only by the pure-address rejection to distinguish
+// "Corporation, One Way, Redmond WA 98052" (keep) from
+// "Calgary AB T2T 0Z7 Canada" (reject).
+const STRONG_ENTITY_SUFFIX_ANYWHERE_RE =
+  /\b(?:Corporation|Corp|Company|Co|Inc|Incorporated|Ltd|Limited|LLC|LLP|LP|ULC|PLC|GmbH|AG|SA|BV|NV|Pty|Association|Society|Foundation|Institute|Group|Holdings)\b\.?/i;
 
 // Sprint 3 · Checkpoint 15Q (revised 2026-07-28) — person-with-
 // professional-credential shape. Real invoices frequently address
@@ -214,6 +246,21 @@ export function extractSupplier(
     // They may still be USEFUL as an adjacent_address signal for
     // another candidate — never as a supplier candidate themselves.
     if (ADDRESS_LINE_RE.test(line)) continue;
+    // Sprint 3 · Phase 4R Phase B (2026-08-15) §B1 + §B4 — pure-address
+    // rejection covering mid-line postal codes. A line that contains a
+    // Canadian ANA NAN / US ZIP / UK postcode ANYWHERE but has NO
+    // strong legal-entity suffix (Corp / Inc / Ltd / ...) is a
+    // recipient-address fragment (e.g. "Calgary AB T2T 0Z7 Canada" —
+    // where the postal code slipped past the line-start ADDRESS_LINE_RE).
+    // If BOTH postal and strong suffix are present in the same line
+    // ("Microsoft Corporation, One Microsoft Way, Redmond, WA 98052,
+    // United States"), the line is a legal-name-plus-address shape
+    // and survives — the corp_suffix capture still extracts the legal
+    // name prefix cleanly.
+    if (POSTAL_ANYWHERE_RE.test(line) && !STRONG_ENTITY_SUFFIX_ANYWHERE_RE.test(line)) {
+      negative.push({ kind: "recipient_context", detail: "postal_without_entity_suffix" });
+      continue;
+    }
     // Label lines ("Customer PO Number:") are form-fields, not names.
     // Pure-form header phrases ("Order Details", "Billing Summary")
     // are section chrome, not suppliers. Reject both categorically.

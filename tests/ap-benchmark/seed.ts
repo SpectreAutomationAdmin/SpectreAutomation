@@ -123,6 +123,11 @@ export async function seedBenchmarkTenant(
     { accountNumber: "6064", name: "Membership & Dues — Professional", type: "EXPENSE", normalBalance: "DEBIT", fundApplicability: "OPERATING" },
     { accountNumber: "6065", name: "Professional Services", type: "EXPENSE", normalBalance: "DEBIT", fundApplicability: "OPERATING" },
     { accountNumber: "6072", name: "Telephone & Internet", type: "EXPENSE", normalBalance: "DEBIT", fundApplicability: "OPERATING" },
+    // v206 SaaS-recall repair (2026-08-15) — dedicated operating
+    // Subscriptions account needed for the new SaaS-brand-dominant
+    // fixture. Modelled on Coulee Ridge staging COA where 6071
+    // Subscriptions is the operating home for recurring SaaS billing.
+    { accountNumber: "6067", name: "Software Subscriptions", type: "EXPENSE", normalBalance: "DEBIT", fundApplicability: "OPERATING" },
 
     // Inactive / archived — must not be recommended.
     { accountNumber: "9999", name: "Legacy Discontinued Account", type: "EXPENSE", normalBalance: "DEBIT", isActive: false },

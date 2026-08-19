@@ -273,6 +273,27 @@ export async function resetDb() {
     c.timeClockEvent.deleteMany(),
     c.payrollPeriod.deleteMany(),
     c.labourBudget.deleteMany(),
+    // HR-1 (2026-08-16) — child tables of Employee (+ session
+    // grandchildren). FK-correct deletion order — everything below
+    // must delete BEFORE `employee`.
+    c.employeeOnboardingResponse.deleteMany(),
+    c.employeeOnboardingStateTransition.deleteMany(),
+    c.employeeOnboardingSession.deleteMany(),
+    c.employeeOnboardingInvitation.deleteMany(),
+    c.employeeOnboardingQuestion.deleteMany(),
+    c.employeeEmergencyContact.deleteMany(),
+    c.employeeCredential.deleteMany(),
+    // EmployeeDocument BEFORE Employee — Employee references it via
+    // profilePhotoDocumentId / resumeDocumentId.
+    c.employeeDocument.deleteMany(),
+    c.employeeTaxProfile.deleteMany(),
+    c.employeeBankAccount.deleteMany(),
+    c.employeeSensitiveIdentity.deleteMany(),
+    c.payrollDeduction.deleteMany(),
+    c.payrollBenefit.deleteMany(),
+    c.payrollProfile.deleteMany(),
+    c.employeeCompensation.deleteMany(),
+    c.employmentPeriod.deleteMany(),
     c.employee.deleteMany(),
     c.employeePosition.deleteMany(),
     c.lessonPayable.deleteMany(),

@@ -181,6 +181,53 @@ export const PERMISSIONS = {
 
   "search:read":       { name: "Use global search",                  category: "SETTINGS" },
 
+  // HR — canonical people, employment, compensation, payroll profile,
+  // sensitive identity (SIN), banking, tax, documents, credentials,
+  // emergency contacts, onboarding (invitation / session / question /
+  // response). Capability-based: read / reveal / write / approve are
+  // separate grants so PII plaintext access can be walled off from
+  // ordinary HR reads. Reveal-tier writes MUST go through
+  // `assertSensitiveActionAllowed()` in the service layer, NOT
+  // `assertPostingAllowed()`.
+  "hr:directory:view":            { name: "View HR directory / list",              category: "HR" },
+  "hr:employee:read":             { name: "Read employee profile",                 category: "HR" },
+  "hr:employee:write":            { name: "Create / edit employee profile",        category: "HR" },
+  "hr:employee:terminate":        { name: "Terminate an employee",                 category: "HR" },
+  "hr:employment:read":           { name: "Read employment history",               category: "HR" },
+  "hr:employment:write":          { name: "Write employment periods",              category: "HR" },
+  "hr:compensation:read":         { name: "Read compensation history",             category: "HR" },
+  "hr:compensation:write":        { name: "Write compensation changes (draft)",    category: "HR" },
+  "hr:compensation:approve":      { name: "Approve compensation changes",          category: "HR" },
+  "hr:payroll_profile:read":      { name: "Read payroll profile",                  category: "HR" },
+  "hr:payroll_profile:write":     { name: "Edit payroll profile draft",            category: "HR" },
+  "hr:payroll_profile:activate":  { name: "Activate payroll profile for payroll",  category: "HR" },
+  "hr:sin:read":                  { name: "Read SIN (masked / last-three only)",   category: "HR" },
+  "hr:sin:reveal":                { name: "Reveal SIN plaintext (audited)",        category: "HR" },
+  "hr:sin:write":                 { name: "Write / update SIN on file",            category: "HR" },
+  "hr:banking:read":              { name: "Read banking (masked / last-four only)", category: "HR" },
+  "hr:banking:reveal":            { name: "Reveal banking plaintext (audited)",    category: "HR" },
+  "hr:banking:write":             { name: "Write / update banking details",        category: "HR" },
+  "hr:banking:approve":           { name: "Approve / activate banking",            category: "HR" },
+  "hr:tax:read":                  { name: "Read tax profile (non-secret metadata)", category: "HR" },
+  "hr:tax:reveal":                { name: "Reveal tax profile secrets (audited)",  category: "HR" },
+  "hr:tax:write":                 { name: "Write / update tax profile",            category: "HR" },
+  "hr:documents:read":            { name: "Read employee documents (STANDARD)",    category: "HR" },
+  "hr:documents:write":           { name: "Upload / edit employee documents",      category: "HR" },
+  "hr:sensitive:read":            { name: "Read RESTRICTED-sensitivity documents", category: "HR" },
+  "hr:credentials:read":          { name: "Read employee credentials",             category: "HR" },
+  "hr:credentials:write":         { name: "Write employee credentials",            category: "HR" },
+  "hr:emergency:read":            { name: "Read emergency contacts",               category: "HR" },
+  "hr:emergency:write":           { name: "Write emergency contacts",              category: "HR" },
+  "hr:onboarding:read":           { name: "Read onboarding sessions / responses",  category: "HR" },
+  "hr:onboarding:invite":         { name: "Issue onboarding invitations",          category: "HR" },
+  "hr:onboarding:approve":        { name: "Approve completed onboarding",          category: "HR" },
+  "hr:onboarding:revoke":         { name: "Revoke onboarding invitations / sessions", category: "HR" },
+  "hr:onboarding_questions:read": { name: "Read onboarding question catalogue",    category: "HR" },
+  // NOTE: club-scoped question writes are granted below; the
+  // service layer additionally requires `system:super_admin` for any
+  // write against a global (clubId=null) question row.
+  "hr:onboarding_questions:write": { name: "Write onboarding question catalogue",  category: "HR" },
+
   // Member portal (granted to MEMBER role)
   "self:account:read": { name: "View own member account", category: "MEMBER_PORTAL" },
   "self:profile:write": { name: "Edit own profile/household/preferences", category: "MEMBER_PORTAL" },
@@ -278,6 +325,24 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "insights:read", "insights:write",
     "settings:read", "settings:write",
     "search:read",
+    // HR-1 — CLUB_ADMIN gets the full HR catalogue EXCEPT reveal-of-
+    // plaintext (SIN / banking / tax). Reveal grants sit with the
+    // finance-side role (PAYROLL_ADMIN). The service-layer gate on
+    // global (clubId=null) onboarding questions still fires for
+    // `hr:onboarding_questions:write` writes.
+    "hr:directory:view",
+    "hr:employee:read", "hr:employee:write", "hr:employee:terminate",
+    "hr:employment:read", "hr:employment:write",
+    "hr:compensation:read", "hr:compensation:write", "hr:compensation:approve",
+    "hr:payroll_profile:read", "hr:payroll_profile:write", "hr:payroll_profile:activate",
+    "hr:sin:read", "hr:sin:write",
+    "hr:banking:read", "hr:banking:write", "hr:banking:approve",
+    "hr:tax:read", "hr:tax:write",
+    "hr:documents:read", "hr:documents:write", "hr:sensitive:read",
+    "hr:credentials:read", "hr:credentials:write",
+    "hr:emergency:read", "hr:emergency:write",
+    "hr:onboarding:read", "hr:onboarding:invite", "hr:onboarding:approve", "hr:onboarding:revoke",
+    "hr:onboarding_questions:read", "hr:onboarding_questions:write",
   ],
 
   GENERAL_MANAGER: [
@@ -316,6 +381,18 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "insights:read", "insights:write",
     "settings:read", "settings:write",
     "search:read",
+    // HR-1 — GM sees the directory + employment context + onboarding
+    // review, but never compensation-write, payroll-profile-write,
+    // banking, SIN, or tax. Onboarding approve is granted so GM can
+    // close out completed self-onboarding sessions.
+    "hr:directory:view",
+    "hr:employee:read",
+    "hr:employment:read",
+    "hr:compensation:read",
+    "hr:documents:read",
+    "hr:credentials:read",
+    "hr:emergency:read",
+    "hr:onboarding:read", "hr:onboarding:approve",
   ],
 
   CONTROLLER: [
@@ -360,6 +437,15 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "insights:read", "insights:write",
     "settings:read", "settings:write",
     "search:read",
+    // HR-1 — CONTROLLER sees the finance-relevant HR context
+    // (compensation for cost analysis, documents for T4 review) but
+    // explicitly NOT SIN reveal, banking reveal, or tax reveal —
+    // those live with PAYROLL_ADMIN. No HR write grants.
+    "hr:directory:view",
+    "hr:employee:read",
+    "hr:compensation:read",
+    "hr:documents:read",
+    "hr:onboarding:read", "hr:onboarding:approve",
   ],
 
   FINANCE_ADMIN: [
@@ -442,6 +528,20 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:employees:manage", "payroll:timesheets:read",
     "payroll:timesheets:approve", "payroll:run", "payroll:approve",
     "reports:operating",
+    // HR-1 — PAYROLL_ADMIN is the reveal-tier role: SIN reveal,
+    // banking reveal, tax reveal all live here (audited via
+    // assertSensitiveActionAllowed). Full write access to
+    // compensation / payroll profile / banking / tax so payroll
+    // configuration is one role's responsibility.
+    "hr:directory:view",
+    "hr:employee:read",
+    "hr:employment:read",
+    "hr:compensation:read", "hr:compensation:write", "hr:compensation:approve",
+    "hr:payroll_profile:read", "hr:payroll_profile:write", "hr:payroll_profile:activate",
+    "hr:sin:read", "hr:sin:reveal", "hr:sin:write",
+    "hr:banking:read", "hr:banking:reveal", "hr:banking:write", "hr:banking:approve",
+    "hr:tax:read", "hr:tax:reveal", "hr:tax:write",
+    "hr:documents:read", "hr:sensitive:read",
   ],
 
   MEMBER: [
@@ -476,6 +576,22 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "auditor:respond",
     "documents:read",
     "search:read",
+    // HR-1 — external auditor gets every HR read but zero reveal /
+    // write / approve. Sensitivity=RESTRICTED documents (T4, etc.)
+    // are visible via `hr:sensitive:read` for statutory audit.
+    "hr:directory:view",
+    "hr:employee:read",
+    "hr:employment:read",
+    "hr:compensation:read",
+    "hr:payroll_profile:read",
+    "hr:sin:read",
+    "hr:banking:read",
+    "hr:tax:read",
+    "hr:documents:read", "hr:sensitive:read",
+    "hr:credentials:read",
+    "hr:emergency:read",
+    "hr:onboarding:read",
+    "hr:onboarding_questions:read",
   ],
 
   BOARD_READ_ONLY: [

@@ -7,6 +7,7 @@ import { Toast } from "@/components/Toast";
 import { AdminShell } from "@/components/admin/AdminShell";
 import { SpectreSidebar } from "@/components/spectre/SpectreSidebar";
 import { SpectreTopBar } from "@/components/spectre/SpectreTopBar";
+import { BreadcrumbLabelsProvider } from "@/components/spectre/breadcrumb-labels";
 import { buildSpectreClubAccentStyle } from "@/lib/design/tokens";
 import { prisma } from "@/lib/prisma";
 import { getActiveBranding } from "@/lib/branding";
@@ -69,50 +70,61 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     </div>
   ) : null;
 
-  // Slice 1 v1.0 — Spectre Design System chrome. `AdminShell` only
-  // uses these props when the current route is in its
-  // `SPECTRE_MODE_EXACT_PATHS` list. Every OTHER route continues to
-  // render through the LEGACY `sidebar` + `topbar` slots unchanged.
-  // The club-accent style reads the real `Club.primaryColor` — no
-  // hardcoded Silver Springs value.
+  // Phase 4R rev-4 (2026-08-15) — Spectre chrome is the DEFAULT admin
+  // shell. AdminShell renders `spectreSidebar` + `spectreTopbar` for
+  // every /app/admin/* route unless the route opts out (POS mode,
+  // Reporting mode). The legacy `sidebar` + `topbar` slots remain
+  // wired only as an emergency fallback. The club-accent style reads
+  // the real `Club.primaryColor` — no hardcoded Silver Springs value.
   const spectreClubAccentStyle = buildSpectreClubAccentStyle(branding.primaryColor);
 
   return (
-    <AdminShell
-      sidebar={
-        <Sidebar
-          kind="admin"
-          clubName={clubName}
-          permissions={Array.from(permSet)}
-          isSuperAdmin={isSuperAdmin}
-        />
-      }
-      topbar={
-        <TopBar
-          userName={user.name}
-          userRole={user.role}
-          settingsHref="/app/admin/settings"
-        />
-      }
-      spectreSidebar={
-        <SpectreSidebar
-          clubName={clubName}
-          permissions={Array.from(permSet)}
-          isSuperAdmin={isSuperAdmin}
-        />
-      }
-      spectreTopbar={
-        <SpectreTopBar
-          userName={user.name}
-          userRole={user.role}
-          settingsHref="/app/admin/settings"
-        />
-      }
-      spectreClubAccentStyle={spectreClubAccentStyle}
-      supportBanner={supportBanner}
-      toast={<Suspense fallback={null}><Toast /></Suspense>}
-    >
-      {children}
-    </AdminShell>
+    // Phase 4R rev-5 (2026-08-15) — the breadcrumb-label provider
+    // wraps the ENTIRE AdminShell so both the topbar (passed as
+    // the `spectreTopbar` prop) and the page tree (`children`)
+    // subscribe to the same React context. A page like the
+    // vendor timeline registers its display name via
+    // <RegisterBreadcrumbLabel/> and the shell's HeaderContextRail
+    // reads it here — no stale-cache risk (registrations are
+    // scoped to the mount lifecycle of the injecting page).
+    <BreadcrumbLabelsProvider>
+      <AdminShell
+        sidebar={
+          <Sidebar
+            kind="admin"
+            clubName={clubName}
+            permissions={Array.from(permSet)}
+            isSuperAdmin={isSuperAdmin}
+          />
+        }
+        topbar={
+          <TopBar
+            userName={user.name}
+            userRole={user.role}
+            settingsHref="/app/admin/settings"
+          />
+        }
+        spectreSidebar={
+          <SpectreSidebar
+            clubName={clubName}
+            permissions={Array.from(permSet)}
+            isSuperAdmin={isSuperAdmin}
+          />
+        }
+        spectreTopbar={
+          <SpectreTopBar
+            userName={user.name}
+            userRole={user.role}
+            settingsHref="/app/admin/settings"
+            tenantName={clubName}
+          />
+        }
+        spectreClubAccentStyle={spectreClubAccentStyle}
+        supportBanner={supportBanner}
+        toast={<Suspense fallback={null}><Toast /></Suspense>}
+      >
+        {children}
+      </AdminShell>
+    </BreadcrumbLabelsProvider>
   );
 }

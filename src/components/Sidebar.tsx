@@ -194,11 +194,30 @@ export function Sidebar({
   return (
     <aside className="w-64 shrink-0 border-r border-stone-200 bg-white min-h-screen">
       <div className="px-6 py-6 border-b border-stone-200">
-        {/* The "Spectre" wordmark is internal — club staff (admin) can
-            see who powers the platform, but members should be shielded
-            from the engine and just see their own club's identity. */}
-        <div className="text-xs uppercase tracking-widest text-stone-400">Spectre</div>
-        <div className="mt-1 font-serif text-lg leading-tight text-club-ink">{clubName}</div>
+        {/* Phase 4R UI-refinement rev-2 (2026-08-15) — persistent
+            sidebar identifies the PRODUCT. Both words share the
+            approved eyebrow treatment (uppercase, small, tracked,
+            muted) and stack on two lines. Tenant identity lives in
+            the application header rail — see
+            src/components/spectre/HeaderContextRail.tsx. Legacy
+            admin routes currently render this classic sidebar; the
+            treatment matches the Spectre-chrome sidebar so the
+            product identity stays consistent as the founder
+            navigates between routes. */}
+        <div data-testid="admin-sidebar-product-name">
+          <div
+            className="text-[10px] uppercase tracking-[0.14em] font-semibold text-stone-400 leading-[1.2]"
+            data-testid="admin-sidebar-product-name-line-1"
+          >
+            SPECTRE
+          </div>
+          <div
+            className="text-[10px] uppercase tracking-[0.14em] font-semibold text-stone-400 leading-[1.2]"
+            data-testid="admin-sidebar-product-name-line-2"
+          >
+            AUTOMATION
+          </div>
+        </div>
         <div className="mt-2 text-xs text-stone-500">Administration</div>
       </div>
       <nav className="px-3 py-4 space-y-0.5">

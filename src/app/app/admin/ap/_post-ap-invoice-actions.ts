@@ -632,6 +632,46 @@ export async function postApInvoiceAction(
     };
     try {
       const { emitWorkCompletionEvent } = await import("@/lib/work-intake/completion");
+      // Phase 4R Completed-State Immutability (2026-08-15) §A3 —
+      // capture the founder-facing card facts from the AUTHORITATIVE
+      // posted transaction (APInvoice + Vendor + expense Account),
+      // not from an earlier proposal. All values below come from
+      // rows we just wrote inside the atomic tx.
+      const { COMPLETION_CARD_SNAPSHOT_VERSION } = await import("@/lib/work-intake/completion-snapshot");
+      const postedCardSnapshot = {
+        snapshotVersion: COMPLETION_CARD_SNAPSHOT_VERSION,
+        analysisVersion: null,
+        supplierDisplayName: vendor.legalName,
+        vendorId: vendor.id,
+        vendorDisplayName: vendor.legalName,
+        vendorMatchState: "MATCHED",
+        invoiceNumber: input.coding.invoiceNumber,
+        invoiceDate: invoiceDate.toISOString(),
+        dueDate: due.dueDate.toISOString(),
+        subtotal: Number(subtotalD.toFixed(2)),
+        taxTotal: Number(taxD.toFixed(2)),
+        total: Number(grossD.toFixed(2)),
+        currency: input.coding.currency,
+        purchaseOrder: null,
+        categoryLabel: expenseAccount.name,
+        glAccountNumber: expenseAccount.accountNumber,
+        glAccountName: expenseAccount.name,
+        allocations: [{
+          accountNumber: expenseAccount.accountNumber,
+          accountName: expenseAccount.name,
+          amount: Number(subtotalD.toFixed(2)),
+          taxTreatment: treatment.kind,
+          taxAmount: Number(taxD.toFixed(2)),
+          confidence: null,
+          requiresReview: false,
+        }],
+        confidenceLabel: null,
+        workflowState: "READY_FOR_APPROVAL",
+        recommendationSummary: "Posted via Mission Control",
+        completionType: "POSTED_AND_CLEARED" as const,
+        completedByUserId: principal.id,
+        completedAt: new Date().toISOString(),
+      };
       const evt = await emitWorkCompletionEvent({
         workIntakeItemId: wi.id,
         clubId,
@@ -643,6 +683,7 @@ export async function postApInvoiceAction(
           journalEntryId: result.journalEntryId,
           journalEntryNumber: result.journalEntryNumber,
         },
+        cardSnapshot: postedCardSnapshot,
       });
       if (evt.archiveJobsEnqueued > 0) {
         archive = { status: "QUEUED", jobId: `event:${evt.eventId}` };

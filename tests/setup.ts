@@ -1,14 +1,18 @@
-// Vitest setup.
+// Vitest setupFiles: runs per-test-file, BEFORE each file's imports resolve.
 //
-// We use an isolated SQLite database for tests. CRITICAL: env mutations must
-// happen at module top-level, *before* any test file imports resolve. Once
-// src/lib/env.ts has validated and src/lib/prisma.ts has constructed its
-// PrismaClient, DATABASE_URL changes are no longer respected.
+// CRITICAL: env mutations must happen at module top-level, before any test
+// file imports resolve. Once src/lib/env.ts has validated and
+// src/lib/prisma.ts has constructed its PrismaClient, DATABASE_URL changes
+// are no longer respected.
+//
+// DB schema lifecycle (schema reset before all tests, cleanup after) lives
+// in tests/global-setup.ts. Vitest 4's module evaluator loads setupFiles
+// in a context where the runner isn't yet registered, so top-level
+// `beforeAll`/`afterAll` calls throw "Vitest failed to find the runner".
+// globalSetup owns those hooks. Per-test data cleanup still runs from
+// tests/util/db.ts::resetDb().
 
-import { execSync } from "node:child_process";
-import { rmSync, existsSync } from "node:fs";
 import path from "node:path";
-import { beforeAll, afterAll } from "vitest";
 
 const TEST_DB_PATH = path.resolve(process.cwd(), "prisma/test.db");
 
@@ -18,7 +22,6 @@ const TEST_DB_PATH = path.resolve(process.cwd(), "prisma/test.db");
 // applied migrations already.
 const IS_POSTGRES_TEST = (process.env.DATABASE_URL ?? "").startsWith("postgres");
 
-// ----- Top-level (pre-import) env setup ------------------------------------
 Object.assign(process.env, {
   NODE_ENV: "test",
   DATABASE_URL: IS_POSTGRES_TEST
@@ -34,48 +37,4 @@ Object.assign(process.env, {
   // mocked round-trip tests. Real Microsoft is never called; every
   // test injects MockMicrosoftDelegatedProvider.
   MAILBOX_INTEGRATION_ENABLED: process.env.MAILBOX_INTEGRATION_ENABLED ?? "true",
-});
-
-beforeAll(() => {
-  if (IS_POSTGRES_TEST) {
-    // The pg-validate harness has already applied migrations to a
-    // fresh Postgres database. Nothing to do here.
-    return;
-  }
-  // Fresh SQLite schema. `prisma db push --force-reset` is idempotent.
-  if (existsSync(TEST_DB_PATH)) rmSync(TEST_DB_PATH);
-  execSync("npx prisma db push --skip-generate --accept-data-loss --force-reset", {
-    stdio: "ignore",
-    env: { ...process.env },
-  });
-});
-
-afterAll(() => {
-  if (IS_POSTGRES_TEST) return;
-  // Best-effort SQLite cleanup. If a process still holds the file
-  // (Windows), leave it.
-  try { if (existsSync(TEST_DB_PATH)) rmSync(TEST_DB_PATH); } catch { /* noop */ }
-});
-
-// ---------------------------------------------------------------------------
-// Per-file timing instrumentation.
-//
-// The Vitest default reporter prints per-file durations in its summary
-// at end-of-run. The custom line below adds a stderr signal *as each
-// file finishes* so the slowest suites are obvious during a long
-// `test:db:serial` run even if stdout is buffered / truncated.
-//
-//   [test-timing] file finished in 75.2s
-//
-// The reporter line immediately above identifies which file just
-// completed; pairing the two gives an obvious slow-file scan signal
-// without depending on Vitest internal APIs to resolve the test path.
-//
-// Set DISABLE_TEST_TIMING=1 to silence (e.g. for CI snapshot diffs).
-// ---------------------------------------------------------------------------
-const fileStartedAt = Date.now();
-afterAll(() => {
-  if (process.env.DISABLE_TEST_TIMING === "1") return;
-  const elapsedS = ((Date.now() - fileStartedAt) / 1000).toFixed(1);
-  process.stderr.write(`[test-timing] file finished in ${elapsedS}s\n`);
 });

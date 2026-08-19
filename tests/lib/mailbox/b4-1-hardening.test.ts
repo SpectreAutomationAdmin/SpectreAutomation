@@ -95,20 +95,44 @@ describe("B4.1 — Durable sync-run persistence (§5)", () => {
     expect(run?.triggerKind).toBe("RECONCILIATION");
   });
 
-  it("run counts break out actionable vs informational vs suppressed", async () => {
+  it("run counts break out actionable vs informational vs suppressed (Sprint 3 · Checkpoint 16H policy)", async () => {
+    // Stabilization (2026-08-19). Founder-approved policy in
+    // classifier.ts:
+    //
+    //   * `has_attachment_pending_analysis` (rejection #4, 2026-08-06)
+    //     — an attachment-bearing email is CREATE_ACTIONABLE with an
+    //     INFORMATIONAL label pending document analysis. It counts
+    //     as ACTIONABLE, not INFORMATIONAL, in the sync-run stats.
+    //
+    //   * `list_mail_or_marketing` (rejection #2, 2026-08-06) — list
+    //     mail is INFORMATIONAL, NOT SUPPRESS. SUPPRESS is reserved
+    //     for narrow technical exclusions (junk / deleted-folder /
+    //     tombstone / user-suppression) applied BEFORE the classifier
+    //     ever sees the message.
+    //
+    //   * `informational_default` — the fallback for messages with
+    //     no actionable signal and no attachment.
+    //
+    // So for a fixture of {invoice-with-attachment, digest, list-mail-newsletter}:
+    //   Invoice     → CREATE_ACTIONABLE       → actionable +=1
+    //   Digest      → CREATE_INFORMATIONAL    → informational +=1
+    //   Newsletter  → CREATE_INFORMATIONAL    → informational +=1
+    //   (nothing produces SUPPRESS in-classifier)
+    //
+    // Expected stats: actionable=1, informational=2, suppressed=0.
     provider.setFixtureMessages([
-      // Actionable — invoice
+      // Actionable — invoice (attachment triggers has_attachment_pending_analysis)
       makeMsg({ subject: "Invoice #999 attached", hasAttachments: true, from: { emailAddress: { address: "billing@pepsi.com", name: "Pepsi" } } }),
-      // Informational — no signals
+      // Informational — no signals (falls to informational_default)
       makeMsg({ subject: "Weekly digest", from: { emailAddress: { address: "hi@friend.test", name: "Friend" } } }),
-      // Suppressed — list mail
+      // Informational (per 16H policy) — list mail (List-Unsubscribe header)
       makeMsg({ subject: "Newsletter", internetMessageHeaders: [{ name: "List-Unsubscribe", value: "<mailto:u@lists.example>" }] }),
     ]);
     const result = await runInitialSyncForConnection({ mailboxConnectionId, triggerKind: "SYNC_NOW" });
     const run = await prisma.mailboxSyncRun.findUnique({ where: { id: result.syncRunId! } });
     expect(run?.intakeCreatedActionable).toBe(1);
-    expect(run?.intakeCreatedInformational).toBe(1);
-    expect(run?.messagesSuppressed).toBe(1);
+    expect(run?.intakeCreatedInformational).toBe(2);
+    expect(run?.messagesSuppressed).toBe(0);
   });
 
   it("no email subjects, senders, or attachment names leak into sync-run rows", async () => {

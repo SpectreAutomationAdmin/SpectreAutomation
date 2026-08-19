@@ -21,7 +21,13 @@ import { getActiveIntegration, readConfig, readSecrets } from "./config";
 
 // Modes a caller can ask about so it can shape UI/audit copy honestly. The
 // dev adapter is "console" — receipts get DEV_LOGGED rather than SENT.
-export type EmailMode = "console" | "smtp" | "ses" | "microsoft365";
+//
+// HR-2B.3 tail (2026-08-18) — "microsoft365_delegated" is the NEW
+// Priority-1 mode: the Club's explicitly-designated Work Intake
+// MailboxConnection sends via `POST /me/sendMail`. It is DISTINCT
+// from "microsoft365" (client-credentials app-only), which remains
+// available at Priority 2 via per-Club IntegrationSetting.
+export type EmailMode = "console" | "smtp" | "ses" | "microsoft365" | "microsoft365_delegated";
 
 export const devEmailAdapter: NotificationDeliveryAdapter = {
   async send({ channel, to, subject, body }) {
@@ -157,8 +163,15 @@ function settingIsPlaceholder(setting: { provider: string }): boolean {
 
 // Returns the mode the club's email is delivered through right now, so
 // callers (POS receipts UI, history page) can describe delivery honestly.
-// Mirrors selectEmailAdapter's resolution order.
+// Mirrors selectEmailAdapter's resolution order — Priority 1 (Work
+// Intake delegated) → Priority 2 (per-Club IntegrationSetting) →
+// Priority 3 (env) → Priority 4 (console).
 export async function getEmailMode(clubId: string): Promise<EmailMode> {
+  // Priority 1 — Club-designated Work Intake mailbox with Mail.Send.
+  const { resolveDesignatedOutboundMailbox } = await import("./email-via-mailbox-connection");
+  const designated = await resolveDesignatedOutboundMailbox(clubId);
+  if (designated) return "microsoft365_delegated";
+
   const setting = await getActiveIntegration(clubId, "EMAIL");
   if (setting && !settingIsPlaceholder(setting)) {
     if (setting.provider === "ses") return "ses";
@@ -178,7 +191,7 @@ export async function getEmailMode(clubId: string): Promise<EmailMode> {
 // "SMTP" badge alone is misleading when running Maildev.
 export type EmailDeliveryDescriptor = {
   mode: EmailMode;
-  source: "club-override" | "env" | "default";
+  source: "club-override" | "env" | "default" | "designated-mailbox";
   // Only set when mode === "smtp".
   smtpHost?: string;
   smtpPort?: number;
@@ -188,6 +201,12 @@ export type EmailDeliveryDescriptor = {
   // tenant secret leaking into the server-rendered HTML.
   microsoftTenantId?: string;
   microsoftFromMailbox?: string;
+  // HR-2B.3 tail (2026-08-18) — only set when mode === "microsoft365_delegated".
+  // Populated from the designated MailboxConnection so the Club-side
+  // People UI can render "Invitation will be sent from <email>"
+  // before the operator clicks Invite. Never exposes tokens or scopes.
+  designatedMailboxConnectionId?: string;
+  designatedConnectedEmail?: string;
 };
 
 const LOCAL_SMTP_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"]);
@@ -197,6 +216,18 @@ function classifySmtpHost(host: string): "local" | "external" {
 }
 
 export async function getEmailDeliveryDescriptor(clubId: string): Promise<EmailDeliveryDescriptor> {
+  // Priority 1 — Club-designated Work Intake mailbox.
+  const { resolveDesignatedOutboundMailbox } = await import("./email-via-mailbox-connection");
+  const designated = await resolveDesignatedOutboundMailbox(clubId);
+  if (designated) {
+    return {
+      mode: "microsoft365_delegated",
+      source: "designated-mailbox",
+      designatedMailboxConnectionId: designated.mailboxConnectionId,
+      designatedConnectedEmail: designated.connectedEmail,
+      microsoftTenantId: designated.microsoftTenantId,
+    };
+  }
   const setting = await getActiveIntegration(clubId, "EMAIL");
   if (setting && !settingIsPlaceholder(setting)) {
     if (setting.provider === "ses") {
@@ -246,7 +277,40 @@ export async function getEmailDeliveryDescriptor(clubId: string): Promise<EmailD
   return { mode: "console", source: "default" };
 }
 
-export async function selectEmailAdapter(clubId: string): Promise<NotificationDeliveryAdapter> {
+// HR-2B.3 tail (2026-08-18) — extended arguments for the invitation
+// route to pass the acting user id through to the delegated adapter's
+// token-refresh path. Backwards-compatible: callers that pass only
+// clubId (the historical shape) get null callerUserId.
+export interface SelectEmailAdapterArgs {
+  clubId: string;
+  callerUserId?: string | null;
+}
+
+export async function selectEmailAdapter(
+  clubIdOrArgs: string | SelectEmailAdapterArgs,
+): Promise<NotificationDeliveryAdapter> {
+  const clubId = typeof clubIdOrArgs === "string" ? clubIdOrArgs : clubIdOrArgs.clubId;
+  const callerUserId = typeof clubIdOrArgs === "string" ? null : (clubIdOrArgs.callerUserId ?? null);
+
+  // Priority 1 — Club-designated Work Intake mailbox with Mail.Send.
+  // If the designated mailbox exists AND meets every eligibility
+  // check, use it. If ANY check fails, we fall THROUGH to Priority 2
+  // per the founder brief §3 — "do not silently choose some other
+  // connected mailbox." resolveDesignatedOutboundMailbox already
+  // encodes that ruleset and returns null on any failure.
+  const {
+    mailboxConnectionEmailAdapter,
+    resolveDesignatedOutboundMailbox,
+  } = await import("./email-via-mailbox-connection");
+  const designated = await resolveDesignatedOutboundMailbox(clubId);
+  if (designated) {
+    return mailboxConnectionEmailAdapter({
+      mailboxConnectionId: designated.mailboxConnectionId,
+      callerClubId: clubId,
+      callerUserId,
+    });
+  }
+
   const setting = await getActiveIntegration(clubId, "EMAIL");
   if (setting && !settingIsPlaceholder(setting)) {
     const config = readConfig<{

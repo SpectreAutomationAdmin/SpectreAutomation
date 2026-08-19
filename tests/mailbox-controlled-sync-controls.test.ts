@@ -199,8 +199,16 @@ describe("Attachment bypass (Step 13A)", () => {
   });
 
   it("hasAttachments is still persisted on the EmailMessage row", () => {
-    // Regardless of skip flag, the emailData object still stores hasAttachments.
-    expect(SYNC_TS).toMatch(/hasAttachments:\s*norm\.hasAttachments/);
+    // Stabilization (2026-08-19): rev-13 introduced the tri-state
+    // isRead / hasAttachments write path — on create, the value is
+    // `typeof norm.hasAttachments === "boolean" ? norm.hasAttachments : false`;
+    // on update, the field is only written when the Graph payload
+    // included it. Both shapes preserve the invariant: the sync path
+    // does not silently drop `hasAttachments` from the row.
+    expect(SYNC_TS).toMatch(/hasAttachments:\s*typeof norm\.hasAttachments === "boolean" \? norm\.hasAttachments : false/);
+    // The update path writes hasAttachments only when the source
+    // included it (guards the tri-state semantic).
+    expect(SYNC_TS).toMatch(/if \(typeof norm\.hasAttachments === "boolean"\) updateData\.hasAttachments = norm\.hasAttachments;/);
   });
 
   it("default (no controlled mode) preserves existing attachment metadata fetch", () => {

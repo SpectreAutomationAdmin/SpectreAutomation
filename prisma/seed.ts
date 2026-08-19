@@ -219,6 +219,28 @@ async function main() {
   await prisma.timeClockEvent.deleteMany();
   await prisma.payrollPeriod.deleteMany();
   await prisma.labourBudget.deleteMany();
+  // HR-1 (2026-08-16) — child tables of Employee (+ session children
+  // of session). FK-correct deletion order: grandchildren → children
+  // → parents. Everything below must delete BEFORE `employee` so the
+  // ON DELETE CASCADE / RESTRICT chain has nothing to trip on.
+  await prisma.employeeOnboardingResponse.deleteMany();      // FK → session + question
+  await prisma.employeeOnboardingStateTransition.deleteMany(); // FK → employee (+ optional session)
+  await prisma.employeeOnboardingSession.deleteMany();       // FK → employee
+  await prisma.employeeOnboardingInvitation.deleteMany();    // FK → employee
+  await prisma.employeeOnboardingQuestion.deleteMany();      // FK → club (nullable)
+  await prisma.employeeEmergencyContact.deleteMany();
+  await prisma.employeeCredential.deleteMany();
+  // EmployeeDocument BEFORE Employee — Employee has FKs
+  // profilePhotoDocumentId / resumeDocumentId pointing INTO it.
+  await prisma.employeeDocument.deleteMany();
+  await prisma.employeeTaxProfile.deleteMany();
+  await prisma.employeeBankAccount.deleteMany();
+  await prisma.employeeSensitiveIdentity.deleteMany();
+  await prisma.payrollDeduction.deleteMany();
+  await prisma.payrollBenefit.deleteMany();
+  await prisma.payrollProfile.deleteMany();
+  await prisma.employeeCompensation.deleteMany();
+  await prisma.employmentPeriod.deleteMany();
   await prisma.employee.deleteMany();
   await prisma.employeePosition.deleteMany();
   await prisma.lessonPayable.deleteMany();
@@ -766,6 +788,147 @@ async function main() {
   await seedActivity(memberC);
   await seedActivity(memberD);
   await seedActivity(memberE);
+
+  // -------------------------------------------------------------------
+  // Phase 20 (Member Database, 2026-08-15) — enrich the primary demo
+  // memberships with the shapes the founder-facing admin Member Profile
+  // needs: extended demographics, a portrait, associated household
+  // people, group assignments, and custom-field values. Fully
+  // fictional data — no PII from the reference screenshot is used.
+  // -------------------------------------------------------------------
+
+  // Groups (per-club vocabulary). Six representative segments.
+  const groupSeeds = [
+    { name: "Sailing Approved", sortOrder: 10 },
+    { name: "Tennis",           sortOrder: 20 },
+    { name: "Young Members",    sortOrder: 30 },
+    { name: "Movie Club",       sortOrder: 40 },
+    { name: "Golf",             sortOrder: 50 },
+    { name: "Wednesday Night Racing", sortOrder: 60 },
+  ];
+  const groups = await Promise.all(groupSeeds.map((g) =>
+    prisma.memberGroup.upsert({
+      where: { clubId_name: { clubId: club.id, name: g.name } },
+      create: { clubId: club.id, name: g.name, sortOrder: g.sortOrder },
+      update: { sortOrder: g.sortOrder },
+    })
+  ));
+  const groupByName = new Map(groups.map((g) => [g.name, g] as const));
+
+  // Custom fields (per-club catalog). Two representative fields the
+  // Member Profile "Additional Information" section renders.
+  const customFieldSeeds = [
+    { key: "resignation", label: "Resignation", kind: "TEXT" as const, sortOrder: 10 },
+    { key: "interested_rc", label: "Are you interested in RC?", kind: "TEXT" as const, sortOrder: 20 },
+  ];
+  const customFields = await Promise.all(customFieldSeeds.map((c) =>
+    prisma.memberCustomFieldDefinition.upsert({
+      where: { clubId_key: { clubId: club.id, key: c.key } },
+      create: { clubId: club.id, key: c.key, label: c.label, kind: c.kind, sortOrder: c.sortOrder },
+      update: { label: c.label, kind: c.kind, sortOrder: c.sortOrder },
+    })
+  ));
+  void customFields;
+
+  // Portrait URLs — deterministic public-domain SVG avatars. Fictional
+  // names below; the URLs come from the well-known Dicebear
+  // "avataaars" generator and never reference real people.
+  const portrait = (seed: string) =>
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed)}&backgroundColor=b6e3f4`;
+
+  // (A) Family membership — James Whitfield + spouse + two dependants.
+  await prisma.member.update({
+    where: { id: memberA.id },
+    data: {
+      middleName: "Andrew",
+      nickname: "Jim",
+      salutation: "Mr.",
+      gender: "male",
+      homePhone: "403-555-0101",
+      phone: "403-555-0114",
+      dateOfBirth: new Date("1968-04-12"),
+      profileImageUrl: portrait("james-whitfield"),
+      addressLine1: "1204 Ridgeview Terrace",
+      city: "Calgary", state: "AB", postalCode: "T3B 2W9", country: "Canada",
+    },
+  });
+  await prisma.memberHouseholdMember.createMany({
+    data: [
+      { clubId: club.id, memberId: memberA.id, firstName: "Grace", lastName: "Whitfield",
+        relationship: "SPOUSE", email: "grace.whitfield@example.com", phone: "403-555-0119",
+        dateOfBirth: new Date("1971-11-30"), salutation: "Mrs.", gender: "female",
+        profileImageUrl: portrait("grace-whitfield") },
+      { clubId: club.id, memberId: memberA.id, firstName: "Ethan", lastName: "Whitfield",
+        relationship: "CHILD", email: null, phone: null,
+        dateOfBirth: new Date("2005-06-18"), gender: "male",
+        profileImageUrl: portrait("ethan-whitfield") },
+      { clubId: club.id, memberId: memberA.id, firstName: "Ava", lastName: "Whitfield",
+        relationship: "CHILD", email: null, phone: null,
+        dateOfBirth: new Date("2009-02-04"), gender: "female",
+        profileImageUrl: portrait("ava-whitfield") },
+    ],
+  });
+  await prisma.memberGroupAssignment.createMany({
+    data: [
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Sailing Approved")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Tennis")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Golf")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Movie Club")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Wednesday Night Racing")!.id },
+    ],
+  });
+  const [defResign, defRc] = customFields;
+  await prisma.memberCustomFieldValue.create({
+    data: { clubId: club.id, memberId: memberA.id, definitionId: defResign.id, valueText: "Not planning to resign." },
+  });
+  await prisma.memberCustomFieldValue.create({
+    data: { clubId: club.id, memberId: memberA.id, definitionId: defRc.id, valueText: "Yes — please contact re: race committee." },
+  });
+
+  // (B) Single-member membership — Aisha Khan, minimal demographics
+  // so "Not provided" fallbacks are exercised.
+  await prisma.member.update({
+    where: { id: memberB.id },
+    data: {
+      salutation: "Ms.",
+      gender: "female",
+      dateOfBirth: new Date("1994-09-14"),
+      profileImageUrl: portrait("aisha-khan"),
+      phone: "403-555-0173",
+    },
+  });
+  await prisma.memberGroupAssignment.create({
+    data: { clubId: club.id, memberId: memberB.id, groupId: groupByName.get("Young Members")!.id },
+  });
+
+  // (C) Couple membership — Robert Tanner + partner. No dependants.
+  await prisma.member.update({
+    where: { id: memberC.id },
+    data: {
+      middleName: "Isaac",
+      salutation: "Mr.",
+      gender: "male",
+      homePhone: "403-555-0202",
+      phone: "403-555-0207",
+      dateOfBirth: new Date("1955-01-23"),
+      profileImageUrl: portrait("robert-tanner"),
+      addressLine1: "77 Riverside Lane", city: "Calgary", state: "AB",
+      postalCode: "T2P 0X8", country: "Canada",
+    },
+  });
+  await prisma.memberHouseholdMember.create({
+    data: { clubId: club.id, memberId: memberC.id,
+      firstName: "Priya", lastName: "Tanner", relationship: "PARTNER",
+      email: "priya.tanner@example.com", phone: "403-555-0209",
+      dateOfBirth: new Date("1958-05-17"), salutation: "Mrs.", gender: "female",
+      profileImageUrl: portrait("priya-tanner") },
+  });
+  await prisma.memberGroupAssignment.createMany({
+    data: [
+      { clubId: club.id, memberId: memberC.id, groupId: groupByName.get("Golf")!.id },
+      { clubId: club.id, memberId: memberC.id, groupId: groupByName.get("Movie Club")!.id },
+    ],
+  });
 
   // Notices
   await prisma.collectionNotice.create({ data: { clubId: club.id, memberId: memberC.id, noticeType: "OVER_60", message: defaultNotice("OVER_60", "Robert Tanner"), status: "SENT", sentAt: addDays(today, -3) } });
@@ -1810,6 +1973,278 @@ async function seedPhase5(
     hireDate: "2018-01-15",
   });
 
+  // HR-1 (2026-08-16) — sensitive-slice fixtures. Employee B has a
+  // complete HR record (SIN + banking + tax); Employee D is
+  // mid-onboarding (invitation issued, no sensitive data captured
+  // yet). Every ciphertext blob is written through the KMS scope="HR"
+  // path so scope-key rotation reaches these rows too. The
+  // sinLastThree / accountLastFour columns carry only the safe
+  // suffix — matching what the masked-read helpers surface.
+  const {
+    upsertSin: seedUpsertSin,
+  } = await import("../src/lib/hr/sensitive-identity");
+  const {
+    upsertBankAccount: seedUpsertBank,
+    activateBankAccount: seedActivateBank,
+  } = await import("../src/lib/hr/bank-account");
+  const {
+    upsertTaxProfile: seedUpsertTax,
+  } = await import("../src/lib/hr/tax-profile");
+  const {
+    issueInvitation: seedIssueInvitation,
+  } = await import("../src/lib/hr/invitations");
+
+  const employeeB = await payrollService.createEmployee(principal, clubId, {
+    firstName: "Bethany", lastName: "Nakamura", email: "bethany.n@silversprings.club",
+    departmentCode: "FB", positionCode: posServer.code,
+    compensationType: "HOURLY", payRate: 22,
+    hireDate: "2024-05-20",
+  });
+  await seedUpsertSin(principal, employeeB.id, "123456789");
+  await seedUpsertBank(principal, employeeB.id, {
+    institutionNumber: "003",
+    transitNumber: "12345",
+    accountNumber: "9876543210",
+    holderName: "Bethany Nakamura",
+  });
+  await seedActivateBank(principal, employeeB.id);
+  await seedUpsertTax(principal, employeeB.id, {
+    province: "ON",
+    td1FormVersion: "2026-01",
+    effectiveFrom: new Date("2026-01-01"),
+    federalClaim: "15705.00",
+    provincialClaim: "12399.00",
+    additionalDeductions: "50.00",
+  });
+
+  const employeeD = await payrollService.createEmployee(principal, clubId, {
+    firstName: "Devon", lastName: "Okafor", email: "devon.o@silversprings.club",
+    departmentCode: "COURSE", positionCode: posCourse.code,
+    compensationType: "HOURLY", payRate: 21,
+    hireDate: "2026-08-01",
+  });
+  await seedIssueInvitation(principal, employeeD.id, { ttlHours: 24 * 7 });
+
+  // HR-1 admin-workflows slice (2026-08-16) — Employee A + Employee C
+  // fixtures. These exercise the canonical employee CRUD, EmployeeDocument
+  // profile-photo + resume back-pointers, EmploymentPeriod effective
+  // dating, and onboarding-session APPROVED state without touching
+  // SIN / bank / tax (Employee A) or the Member link (Employee C — a
+  // family relationship exists out-of-band with a Member row, but the
+  // Employee row's memberId MUST stay NULL).
+  const {
+    createEmployee: seedCreateEmployee,
+  } = await import("../src/lib/hr/employees");
+  const {
+    openEmploymentPeriod: seedOpenPeriod,
+  } = await import("../src/lib/hr/employment-periods");
+  const {
+    uploadEmployeeDocument: seedUploadDoc,
+  } = await import("../src/lib/hr/documents");
+  const {
+    createSession: seedCreateSession,
+    transitionSession: seedTransitionSession,
+  } = await import("../src/lib/hr/onboarding-sessions");
+
+  // --- Employee A — Alexandra Reyes. Not a Member. Full onboarding
+  //     completed (APPROVED); profile photo + resume as
+  //     EmployeeDocument rows; open employment period from hire date.
+  const employeeA = await seedCreateEmployee(principal, clubId, {
+    firstName: "Alexandra", lastName: "Reyes",
+    email: "alexandra.r@silversprings.club",
+    departmentId: adminDept?.id ?? null,
+    positionId: posAdmin.id,
+    compensationType: "SALARY", payRate: 65000,
+    hireDate: "2024-03-15",
+    employmentType: "FULL_TIME",
+    employeeLifecycle: "ACTIVE",
+  });
+  const alexandraPhoto = await seedUploadDoc(principal, employeeA.id, {
+    category: "profile_photo",
+    storageKey: "s3://spectre-hr/seed/alexandra-photo.jpg",
+    contentSha256: "a".repeat(64),
+    sizeBytes: 87_400,
+    mimeType: "image/jpeg",
+    displayName: "Alexandra Reyes — profile photo",
+  });
+  const alexandraResume = await seedUploadDoc(principal, employeeA.id, {
+    category: "resume",
+    storageKey: "s3://spectre-hr/seed/alexandra-resume.pdf",
+    contentSha256: "b".repeat(64),
+    sizeBytes: 152_300,
+    mimeType: "application/pdf",
+    displayName: "Alexandra Reyes — resume",
+  });
+  await prisma.employee.update({
+    where: { id: employeeA.id },
+    data: {
+      profilePhotoDocumentId: alexandraPhoto.id,
+      resumeDocumentId: alexandraResume.id,
+    },
+  });
+  await seedOpenPeriod(principal, employeeA.id, {
+    effectiveFrom: new Date("2024-03-15"),
+    employmentType: "FULL_TIME",
+    reason: "HIRE",
+    departmentId: adminDept?.id ?? null,
+    positionId: posAdmin.id,
+  });
+  // Onboarding — DRAFT -> INVITED -> IN_PROGRESS -> SUBMITTED -> APPROVED.
+  const sessionA = await seedCreateSession(principal, employeeA.id);
+  await seedTransitionSession(principal, sessionA.id, "INVITED");
+  await seedTransitionSession(principal, sessionA.id, "IN_PROGRESS", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeA.id,
+  });
+  await seedTransitionSession(principal, sessionA.id, "SUBMITTED", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeA.id,
+  });
+  await seedTransitionSession(principal, sessionA.id, "APPROVED");
+
+  // --- Employee C — Carmen Sato. Child-of-Member (family relationship
+  //     is out-of-band with an existing Member; the Employee row's
+  //     memberId MUST stay NULL — do NOT link. F&B server, open
+  //     employment period, onboarding APPROVED.
+  const employeeC = await seedCreateEmployee(principal, clubId, {
+    firstName: "Carmen", lastName: "Sato",
+    email: "carmen.s@silversprings.club",
+    departmentId: fbDept?.id ?? null,
+    positionId: posServer.id,
+    compensationType: "HOURLY", payRate: 18,
+    hireDate: "2025-06-01",
+    employmentType: "PART_TIME",
+    employeeLifecycle: "ACTIVE",
+  });
+  // Explicitly assert the invariant: Employee C is NOT linked to a
+  // Member, even though a Sato family Member exists in the club.
+  if (employeeC.memberId !== null) {
+    throw new Error("Employee C fixture must have memberId=null (child-of-Member is out-of-band)");
+  }
+  await seedOpenPeriod(principal, employeeC.id, {
+    effectiveFrom: new Date("2025-06-01"),
+    employmentType: "PART_TIME",
+    reason: "HIRE",
+    departmentId: fbDept?.id ?? null,
+    positionId: posServer.id,
+  });
+  const sessionC = await seedCreateSession(principal, employeeC.id);
+  await seedTransitionSession(principal, sessionC.id, "INVITED");
+  await seedTransitionSession(principal, sessionC.id, "IN_PROGRESS", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeC.id,
+  });
+  await seedTransitionSession(principal, sessionC.id, "SUBMITTED", {
+    actorSource: "EMPLOYEE", actorEmployeeId: employeeC.id,
+  });
+  await seedTransitionSession(principal, sessionC.id, "APPROVED");
+
+  // HR-1 financial-systems slice (2026-08-16) — canonical
+  // EmployeeCompensation rows + PayrollProfile foundation.
+  //
+  // Every seeded Employee gets ONE current EmployeeCompensation row
+  // via the compensation service so the shadow-write invariant on
+  // `Employee.payRate` is exercised end-to-end (both columns hold
+  // the fixture rate). Employees A, B, C also get ACTIVE
+  // PayrollProfiles — this exercises the full activation-precondition
+  // path (current compensation + SIN + VERIFIED bank). Employee A and
+  // C had no SIN / bank on file from the admin-workflows fixtures;
+  // we seed the trio here so activation succeeds. Employee D stays
+  // DRAFT because it is intentionally mid-onboarding (no SIN / bank
+  // captured yet).
+  //
+  // These calls go through the service — never a raw
+  // `prisma.employeeCompensation.create` and never a raw
+  // `prisma.payrollProfile.update({ activatedAt })`. Doing so would
+  // bypass the exclusive-writer invariant on `Employee.payRate` and
+  // the activation-precondition guard.
+  const {
+    changeCompensation: seedChangeCompensation,
+  } = await import("../src/lib/hr/compensation");
+  const {
+    upsertPayrollProfile: seedUpsertPayrollProfile,
+    activatePayrollProfile: seedActivatePayrollProfile,
+  } = await import("../src/lib/hr/payroll-profile");
+
+  // Employee B — already has SIN + VERIFIED bank + tax from the
+  // security-compliance block above. Seed compensation matching the
+  // fixture rate on Employee.payRate, then activate PayrollProfile.
+  await seedChangeCompensation(principal, employeeB.id, {
+    effectiveFrom: new Date("2024-05-20"),
+    amount: 22,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertPayrollProfile(principal, employeeB.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeB.id);
+
+  // Employee D — invited but not yet onboarded. Seed compensation so
+  // Employee.payRate stays in step with the canonical column, but
+  // leave PayrollProfile DRAFT (no activation) — SIN / bank are
+  // intentionally not on file.
+  await seedChangeCompensation(principal, employeeD.id, {
+    effectiveFrom: new Date("2026-08-01"),
+    amount: 21,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertPayrollProfile(principal, employeeD.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+  });
+
+  // Employee A — ACTIVE full-time salary. Seed the activation trio
+  // (compensation + SIN + VERIFIED bank) then activate PayrollProfile.
+  await seedChangeCompensation(principal, employeeA.id, {
+    effectiveFrom: new Date("2024-03-15"),
+    amount: 65000,
+    cadence: "SALARY",
+    currency: "CAD",
+  });
+  await seedUpsertSin(principal, employeeA.id, "234567891");
+  await seedUpsertBank(principal, employeeA.id, {
+    institutionNumber: "004",
+    transitNumber: "23456",
+    accountNumber: "1122334455",
+    holderName: "Alexandra Reyes",
+  });
+  await seedActivateBank(principal, employeeA.id);
+  await seedUpsertPayrollProfile(principal, employeeA.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "MONTHLY_SALARY",
+    payFrequency: "MONTHLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeA.id);
+
+  // Employee C — ACTIVE part-time hourly. Same activation trio, then
+  // activate. Employee C.memberId stays NULL (the admin-workflows
+  // fixture asserts the child-of-Member invariant).
+  await seedChangeCompensation(principal, employeeC.id, {
+    effectiveFrom: new Date("2025-06-01"),
+    amount: 18,
+    cadence: "HOURLY",
+    currency: "CAD",
+  });
+  await seedUpsertSin(principal, employeeC.id, "345678912");
+  await seedUpsertBank(principal, employeeC.id, {
+    institutionNumber: "010",
+    transitNumber: "34567",
+    accountNumber: "2233445566",
+    holderName: "Carmen Sato",
+  });
+  await seedActivateBank(principal, employeeC.id);
+  await seedUpsertPayrollProfile(principal, employeeC.id, {
+    jurisdiction: "CA-ON",
+    payGroup: "BIWEEKLY_HOURLY",
+    payFrequency: "BIWEEKLY",
+    directDepositActive: true,
+  });
+  await seedActivatePayrollProfile(principal, employeeC.id);
+
   // --- Asset categories, locations, demo asset
   const buildingsCat = await prisma.assetCategory.create({
     data: {
@@ -1890,7 +2325,7 @@ async function seedPhase5(
     await budgetService.activateBudget(principal, budget.id);
   }
 
-  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 3 employees, 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
+  console.log(`Phase 5 demo: 5 inventory items, 1 private event, 2 instructors, 7 employees (3 baseline + Employee B full HR + Employee D onboarding + Employee A onboarded + Employee C onboarded), 2 assets, ${fy ? "1 active budget" : "0 budgets"}.`);
 }
 
 // Founder rule 2026-07-01 v14.9 — tag every seeded JournalEntry as

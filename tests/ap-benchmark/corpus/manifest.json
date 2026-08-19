@@ -38,7 +38,8 @@
       "corpus/dev/multi-alloc-membership-plus-penalty.case.json",
       "corpus/dev/multi-alloc-goods-freight-tax.case.json",
       "corpus/dev/multi-alloc-goods-plus-service.case.json",
-      "corpus/dev/image-only-narrative-service.case.json"
+      "corpus/dev/image-only-narrative-service.case.json",
+      "corpus/dev/saas-brand-recurring-subscription.case.json"
     ],
     "validation": [
       "corpus/validation/mixed-tax-invoice.case.json",

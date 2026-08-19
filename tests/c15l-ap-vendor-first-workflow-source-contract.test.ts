@@ -183,21 +183,13 @@ describe("15L + 15P-5 — primary action + modal wiring (single derivation)", ()
   });
 });
 
-describe("15L — hover-fill removal", () => {
-  it("the .spectre-mc-item-surface:hover rule sets background: transparent (no grey wash)", () => {
-    expect(GLOBALS_CSS).toMatch(/\.spectre-mc-item-surface:hover\s*\{\s*background: transparent;\s*\}/);
-  });
-  it("the pre-15L color-mix hover rule is gone", () => {
-    // Extract just the surface:hover block (bounded by the closing
-    // brace) so a later color-mix elsewhere in globals.css can't
-    // false-trip this guard.
-    const idx = GLOBALS_CSS.indexOf(".spectre-mc-item-surface:hover");
-    expect(idx).toBeGreaterThan(-1);
-    const block = GLOBALS_CSS.slice(idx, idx + 200);
-    expect(block).not.toMatch(/color-mix/);
-  });
-  it("focus-visible outline stays intact for keyboard users", () => {
-    expect(GLOBALS_CSS).toMatch(/\.spectre-mc-item-surface:focus-visible\s*\{\s*outline: 2px solid/);
+describe("15L — hover-fill removal (Phase 4R rev-7 · 2026-08-15 supersede)", () => {
+  // Rev-7 retires the .spectre-mc-item-surface primary click surface
+  // entirely (every Work Intake card is now tab-driven — no
+  // click-to-expand accordion). The 15L "no grey wash on hover"
+  // rule is therefore moot: there is no surface hover to wash.
+  it("Rev-7: .spectre-mc-item-surface is retired from CSS", () => {
+    expect(GLOBALS_CSS).not.toMatch(/\.spectre-mc-item-surface\b/);
   });
 });
 

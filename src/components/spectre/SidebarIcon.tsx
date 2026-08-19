@@ -22,6 +22,7 @@ export type NavigationIconKey =
   | "mission-control"
   | "search"
   | "membership"
+  | "people"
   | "finance"
   | "accounts-payable"
   | "operations"
@@ -86,6 +87,19 @@ export default function SidebarIcon({ name, size = 15, className, style }: Props
         <svg {...common}>
           <circle cx="12" cy="8" r="4" />
           <path d="M4 20c1.5-4 5-6 8-6s6.5 2 8 6" />
+        </svg>
+      );
+    // People (HR staff) — two-figure silhouette. Distinct from
+    // Membership (single person + arc) so the sidebar keeps the two
+    // domains visually separate: Membership is the private-club
+    // roster; People is the club's own employees.
+    case "people":
+      return (
+        <svg {...common}>
+          <circle cx="9" cy="8" r="3.2" />
+          <path d="M3 20c1-3.4 3.6-5 6-5s5 1.6 6 5" />
+          <circle cx="16.5" cy="9.5" r="2.6" />
+          <path d="M16 15c2.4 0 4.4 1.4 5 5" />
         </svg>
       );
     // Variant D exact — ascending bar chart.

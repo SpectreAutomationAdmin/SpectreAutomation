@@ -1,0 +1,39 @@
+{
+  "id": "saas-brand-recurring-subscription",
+  "split": "dev",
+  "label": "Brand/plan-dominant recurring SaaS subscription — corroborated cue path (v206 SaaS-recall repair 2026-08-15)",
+  "category": "OPERATING_INVOICE",
+  "tags": ["software", "subscription", "saas", "brand-dominant", "corroborated-cue", "v206-recall-repair"],
+  "source": {
+    "kind": "TEXT_OVERRIDE",
+    "text": "Cloud Reseller Partners Inc.\n555 Enterprise Way · Toronto ON M5V 3B2\nGST# 800800800 RT0001\n\nINVOICE\nInvoice CRP-A26-9977\nDate: 2026-04-28\nDue Date: 2026-04-28\n\nBILL TO:\nCoulee Ridge Golf & Country Club\n\nDESCRIPTION                                                                                   QTY   UNIT   AMOUNT\nBusiness Standard - 1 Year Commit Paid Monthly.                                                 26  17.85   464.10\nBusiness Basic - 1 Year Commit Paid Monthly.                                                     5   8.51    42.55\nBusiness Premium - Monthly Commit.                                                               5  35.76   178.80\nVisio Plan 2 - 1 Year Commit Paid Monthly.                                                       2  21.42    42.84\nEnterprise Plan P2 - 1 Year Commit Paid Monthly.                                                 1  12.81    12.81\nBilling Cycle: April, 2026.                                                                                      —\n\n                                                                             Subtotal:   741.10\n                                                                             GST (5%):    37.06\n                                                                             Total:     778.16 CAD\n\nRecurring SaaS billing. No purchase order. No physical shipment.\n",
+    "email": {
+      "senderAddress": "billing@cloudresellerpartners.example",
+      "subject": "CRP-A26-9977"
+    }
+  },
+  "expected": {
+    "documentClass": "INVOICE",
+    "supplier": {
+      "name": "Cloud Reseller Partners Inc.",
+      "acceptableAliases": ["Cloud Reseller Partners", "Cloud Reseller"]
+    },
+    "invoiceNumber": { "value": "CRP-A26-9977" },
+    "invoiceDate": "2026-04-28",
+    "dueDate": "2026-04-28",
+    "currency": "CAD",
+    "subtotal": 741.10,
+    "taxTotal": 37.06,
+    "taxRate": 0.05,
+    "total": 778.16,
+    "economicPurpose": "SOFTWARE_SUBSCRIPTION",
+    "vendorMatchExpectation": "NOT_FOUND",
+    "acceptableGlAccounts": ["6067", "6072"],
+    "acceptableGlConcepts": ["software_subscription", "saas_subscription", "cloud_service"],
+    "forbiddenGlAccounts": ["1100", "1200", "1300", "2100", "3100", "1710", "1720", "1730", "1513", "1514", "1515", "4100", "4200", "9999", "1610"],
+    "forbiddenGlConcepts": ["cash", "bank", "ar_control", "ap_control", "equity", "revenue", "contra_asset", "intangible_asset"],
+    "expectedWorkflowType": "REVIEW_REQUIRED",
+    "expectedAllocationCount": 1,
+    "notes": "SaaS-brand-dominant recurring subscription. Line items use only plan-tier (Business Standard/Basic/Premium) + commitment cadence (1 Year Commit Paid Monthly / Monthly Commit). No word 'software', no word 'SaaS', no word 'subscription', no word 'license' appears on the line items — pre-repair v206 SOFTWARE_SUBSCRIPTION classifier missed this entire class. Corroborated-cue mechanism (plan-tier + commit-cadence) recognises this shape. Acceptable outcomes: 6067 Software Subscriptions (preferred; recurring SaaS) or 6072 Telephone & Internet (legacy catchall for cloud services in older private-club COAs). FORBIDDEN: 1610 Software & Intangibles (this is RECURRING billing, not a capitalised software purchase — the 'software-intangible' case covers that). All structural non-postables (cash/bank/AR/AP-control/equity/revenue/contra-asset) forbidden. Invoice-number 'CRP-A26-9977' contains no vendor identity; supplier 'Cloud Reseller Partners' is generic (not Microsoft/Google/Adobe/etc.) so the fixture proves the class-of-invoice fix without any vendor-specific runtime rule."
+  }
+}

@@ -96,6 +96,10 @@ const schema = z.object({
   OUTLOOK_CALENDAR_READ_ENABLED: z.enum(["true", "false"]).default("false"),
   OUTLOOK_REPLY_ENABLED: z.enum(["true", "false"]).default("false"),
   OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED: z.enum(["true", "false"]).default("false"),
+  // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read on
+  // Work Intake interaction. Defaults ON (only literal "false"
+  // opts out) — see isEmailMarkReadOnInteractionEnabled().
+  OUTLOOK_MARK_READ_ON_INTERACTION_ENABLED: z.enum(["true", "false"]).default("true"),
 
   // Canonical public base URL for THIS deployment — used to construct
   // OAuth callback + Graph webhook + Graph lifecycle URLs. Never
@@ -286,6 +290,19 @@ export function isOutlookReplyEnabled(): boolean {
 }
 export function isOutlookArchiveOnCompletionEnabled(): boolean {
   return isMailboxIntegrationEnabled() && env.OUTLOOK_ARCHIVE_ON_COMPLETION_ENABLED === "true";
+}
+// Phase 4R rev-10 (2026-08-15) — Outlook read propagation on
+// first meaningful Work Intake card interaction. Enabled by
+// default when the mailbox integration is enabled; the env
+// variable exists as an emergency kill switch (set explicitly to
+// "false" to opt out without a rollback). The gate composes with
+// isMailboxIntegrationEnabled() so a global mailbox-off toggle
+// also disables the write path.
+export function isEmailMarkReadOnInteractionEnabled(): boolean {
+  if (!isMailboxIntegrationEnabled()) return false;
+  const raw = env.OUTLOOK_MARK_READ_ON_INTERACTION_ENABLED;
+  // Default ON. Only the literal string "false" opts out.
+  return raw !== "false";
 }
 
 // Sprint 2 Step 13A (2026-07-21) — controlled-sync-mode invariants.

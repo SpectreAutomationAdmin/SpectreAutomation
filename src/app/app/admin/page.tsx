@@ -28,9 +28,12 @@ import EmailIntakeCard, { type EmailFeedCardData } from "@/components/mission-co
 import IntelligenceReviewCard from "@/components/mission-control/IntelligenceReviewCard";
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
+import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
+import { WorkFeedActiveProvider } from "@/components/mission-control/WorkFeedActiveContext";
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
+import { greetingWordForInstant } from "@/lib/mission-control/local-time";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +65,14 @@ export default async function MissionControlPage({
   const feedSyncedStatus = await loadFeedSyncedStatus(clubId, principal.id);
 
   const firstName = user.name?.split(" ")[0] ?? "there";
-  const greetingWord = greetingForHour(snapshot.syncedAt);
+  // Phase 4R rev-3 (2026-08-15) — greeting derives from the club's
+  // IANA timezone (snapshot.clubTimezone.ianaZone), not from the
+  // server's local hour. Prior bug: `greetingForHour(new Date())`
+  // read the Fly container's local hour (UTC), so 15:00 in Alberta
+  // rendered "Good evening" (21:00 UTC). Now uses the shared
+  // greeting utility so every consumer of "what time is it for
+  // this tenant?" reads from one source of truth.
+  const greetingWord = greetingWordForInstant(snapshot.syncedAt, snapshot.clubTimezone.ianaZone);
 
   // Sprint 3 · Checkpoint 16G Stage A — use the club's configured
   // IANA timezone (snapshot.clubTimezone), never a hardcoded fallback.
@@ -87,21 +97,36 @@ export default async function MissionControlPage({
 
   return (
     <div>
-      {/* Header line — greeting + date/sync ---------------------- */}
-      <div className="spectre-mc-header">
-        <h1 className="spectre-mc-greeting">
-          {greetingWord}, {firstName}.
-          {clubName ? <span className="club">{clubName}</span> : null}
-        </h1>
-        <div className="spectre-mc-header-meta">
-          <span className="date">{dateLabel} · {timeLabel}</span>
-          <FeedSyncedStatusPill status={feedSyncedStatus} />
-          <MissionControlLiveRefresh
-            initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
-            initialSyncedAt={snapshot.syncedAt.toISOString()}
-          />
+      {/* Phase 4R UI-refinement rev-2 (2026-08-15) — tenant identity
+          now lives in the application-header rail
+          (src/components/spectre/HeaderContextRail.tsx), BEFORE the
+          breadcrumb chain. The page content itself opens with the
+          greeting only. The greeting reads "Good {tod}, {firstName}."
+          Nothing appended. Do NOT reintroduce a standalone tenant
+          context row above the greeting — the tenant is established
+          by the header rail. */}
+      {/* Header line — greeting + date/sync ----------------------
+          Phase 4R rev-6 (2026-08-15) — the auto-poll + manual refresh
+          state now share ONE source of truth via <LiveRefreshProvider>.
+          The provider wraps the header meta row so both the Feed
+          Synced pill (which owns the visible refresh icon + label
+          swap) and the New Items banner (headless bg-refresh
+          responder) subscribe to the same context. */}
+      <LiveRefreshProvider
+        initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
+        initialSyncedAt={snapshot.syncedAt.toISOString()}
+      >
+        <div className="spectre-mc-header">
+          <h1 className="spectre-mc-greeting">
+            {greetingWord}, {firstName}.
+          </h1>
+          <div className="spectre-mc-header-meta">
+            <span className="date">{dateLabel} · {timeLabel}</span>
+            <FeedSyncedStatusPill status={feedSyncedStatus} />
+            <MissionControlLiveRefresh />
+          </div>
         </div>
-      </div>
+      </LiveRefreshProvider>
 
       {/* State line — one-sentence orientation ------------------- */}
       {/* Sprint 3 · Checkpoint 16G Stage A — the overnight sentence
@@ -198,6 +223,12 @@ export default async function MissionControlPage({
               <p className="spectre-mc-work">Nothing requires your judgment or approval at the moment.</p>
             </div>
           ) : (
+            /* Phase 4R rev-14 (2026-08-16) — the feed wraps every
+               Work Intake card in a shared active-card context so
+               that switching between cards visually collapses the
+               previous card back to AI Summary. See
+               src/components/mission-control/WorkFeedActiveContext.tsx. */
+            <WorkFeedActiveProvider>{(
             (() => {
               // Sprint 3 · Checkpoint 16H rejection (2026-08-06) —
               // Completed History timeline separators (§16). Only
@@ -234,6 +265,7 @@ export default async function MissionControlPage({
                 );
               });
             })()
+          )}</WorkFeedActiveProvider>
           )}
         </section>
 
@@ -296,12 +328,11 @@ export default async function MissionControlPage({
 // Small stateless renderers
 // ---------------------------------------------------------------------------
 
-function greetingForHour(d: Date): string {
-  const h = d.getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
-}
+// Phase 4R rev-3 (2026-08-15) — the previous local `greetingForHour`
+// helper read `d.getHours()`, which resolves in the SERVER's local
+// timezone (Fly Docker container = UTC). It has been replaced by
+// `greetingWordForInstant` in `src/lib/mission-control/local-time.ts`
+// which resolves against the club's IANA timezone.
 
 // Sprint 2 Checkpoint 14C — pack a WorkItem into the props shape the
 // EmailIntakeCard client component consumes. Only called when

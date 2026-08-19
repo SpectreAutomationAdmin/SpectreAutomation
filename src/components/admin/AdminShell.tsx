@@ -33,58 +33,39 @@ const POS_MODE_PREFIXES = ["/app/admin/ops/pos/lounge"];
 // this implements.
 const REPORTING_MODE_PREFIXES = ["/app/admin/reporting"];
 
-// Founder rule 2026-07-14 (Phase 1 UI Architecture) — Spectre Design
-// Language opt-in.
+// Phase 4R rev-4 (2026-08-15) — canonical shell.
 //
-// PREFIX match: only routes under `/app/admin/design-system` enter
-// the new Spectre application shell. The Admin Dashboard (`/app/admin`)
-// is explicitly out of scope during Phase 1 per the founder's brief
-// and is now back on the legacy shell (this list previously carried
-// `/app/admin` under Slice 1a; that entry was removed when the
-// dashboard flagship migration was reverted).
+// Prior state (Phase 1 opt-in): only `/app/admin`, `/app/admin/coa`,
+// `/app/admin/settings`, `/app/admin/design-system[/…]` rendered the
+// Spectre chrome; every other admin route used the LEGACY sidebar +
+// topbar. The founder identified this as the root cause of an
+// inconsistent left navigation between Mission Control and every
+// deeper admin route (vendors, members, AP invoices, etc.).
 //
-// Every OTHER route continues to render UNCHANGED:
-//   • /app/admin                                → legacy shell (dashboard is out of scope)
-//   • /app/admin/reporting/**                   → reporting-mode (untouched)
-//   • /app/admin/governance/monthly-package[/…] → default legacy shell (pixel-identical)
-//   • /app/admin/governance/packages[/…]        → default legacy shell
-//   • /app/admin/ops/pos/lounge[/…]             → POS-mode (untouched)
-//   • every other /app/admin/* route            → default legacy shell
-const SPECTRE_MODE_PREFIXES: ReadonlyArray<string> = [
-  "/app/admin/design-system",
-  // Phase 2 — Settings workspace proof. The sub-routes
-  // (`/app/admin/settings/domains`, `/app/admin/settings/pos-printers`)
-  // are OUT OF SCOPE for Phase 2 and must continue to render through
-  // the legacy chrome; the AdminShell prefix match therefore uses an
-  // EXACT-URL test for this entry, not a substring prefix. See
-  // `isSpectreModePath` below for the matching rule.
-  "/app/admin/settings",
-  // Foundation v1.0 (2026-07-18) — Mission Control. Founder-approved
-  // Professional Instrument design lives at exactly `/app/admin`. Every
-  // sub-route (`/app/admin/members`, `/app/admin/coa`, `/app/admin/ap/*`,
-  // etc.) MUST continue to render on the legacy chrome, so this entry
-  // is EXACT-URL matched — see `SPECTRE_MODE_EXACT_URLS` below.
-  "/app/admin",
-  // Data Workspace Foundation v1.0 (2026-07-18) — Chart of Accounts.
-  // Founder-approved concept lives at `public/design-concepts/data-workspace/`.
-  // The production integration renders on the Spectre chrome; child
-  // routes under `/app/admin/coa/**` (like the legacy `/coa/new`
-  // full-page form) remain on legacy chrome. Exact-URL matched.
-  "/app/admin/coa",
-];
-
-/** URLs in `SPECTRE_MODE_PREFIXES` that should EXACT-match (i.e. not
- *  cascade to sub-routes). Phase 2 needs this for
- *  `/app/admin/settings` so `/app/admin/settings/domains` and
- *  `/app/admin/settings/pos-printers` continue to render on the
- *  legacy chrome. Foundation v1.0 needs the same for `/app/admin` so
- *  Mission Control is scoped to the exact route and every existing
- *  admin sub-page keeps its current chrome untouched. */
-const SPECTRE_MODE_EXACT_URLS: ReadonlyArray<string> = [
-  "/app/admin/settings",
-  "/app/admin",
-  "/app/admin/coa",
-];
+// Rev-4 (2026-08-15) — Spectre chrome is the DEFAULT for every admin
+// route. Only surfaces with a compelling product reason for a
+// genuinely different shell opt out:
+//
+//   • `/app/admin/ops/pos/lounge[/…]` — POS mode (edge-to-edge
+//     touch workflow behind a bar); stripped-chrome layout.
+//   • `/app/admin/reporting[/…]` — Monthly Board Reporting Package
+//     surfaces have a founder-approved standalone "boardroom
+//     document" chrome (chapter rail + back-to-admin link) that
+//     replaces the general application shell. See
+//     `REPORTING_MODE_PREFIXES` above.
+//
+// Everything else — Members, People (HR), AP Vendors, Vendor Timeline,
+// AP Invoices, Capture Inbox, Approvals, Governance, Analytics,
+// Employee Directory, Onboarding, etc. — renders on the same
+// `SpectreShell` as Mission Control, so sidebar identity, navigation,
+// and chrome remain stable while page content changes.
+//
+// HR-2A.2 / HR-2A.4 / HR-2B modules automatically inherit the
+// canonical Spectre shell because they are `/app/admin/*` routes and
+// no opt-out is declared for them.
+//
+// If a future genuine exception is needed, add it as a
+// `LEGACY_CHROME_PREFIXES` opt-OUT list here with a documented reason.
 
 function isPOSPath(pathname: string): boolean {
   return POS_MODE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
@@ -92,22 +73,6 @@ function isPOSPath(pathname: string): boolean {
 
 function isReportingPath(pathname: string): boolean {
   return REPORTING_MODE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
-}
-
-function isSpectreModePath(pathname: string): boolean {
-  // Two-tier match:
-  //   1. Entries listed in SPECTRE_MODE_EXACT_URLS match ONLY the
-  //      exact URL; sub-routes fall through to the legacy chrome.
-  //   2. Every other entry in SPECTRE_MODE_PREFIXES uses a substring
-  //      prefix match, matching the entry itself + any nested route.
-  for (const p of SPECTRE_MODE_PREFIXES) {
-    if (SPECTRE_MODE_EXACT_URLS.includes(p)) {
-      if (pathname === p) return true;
-      continue;
-    }
-    if (pathname === p || pathname.startsWith(p + "/")) return true;
-  }
-  return false;
 }
 
 export function AdminShell({
@@ -124,11 +89,11 @@ export function AdminShell({
   topbar: ReactNode;
   supportBanner?: ReactNode | null;
   toast?: ReactNode;
-  // Slice 1 additions. All three are optional — an admin layout that
-  // omits them still gets the legacy shell for every route. When
-  // provided, the SpectreShell branch only fires for routes in
-  // SPECTRE_MODE_EXACT_PATHS, so passing them does NOT change the
-  // rendering of any un-migrated route.
+  // Rev-4 (2026-08-15): all three are optional in the type but the
+  // admin layout always supplies them. When present, the Spectre
+  // shell renders by default for every /app/admin/* route (except
+  // the two opt-outs above). The legacy sidebar/topbar remain
+  // wired as an emergency fallback only.
   spectreSidebar?: ReactNode;
   spectreTopbar?: ReactNode;
   spectreClubAccentStyle?: CSSProperties;
@@ -137,10 +102,12 @@ export function AdminShell({
   const pathname = usePathname() ?? "";
   const pos = isPOSPath(pathname);
   const reporting = isReportingPath(pathname);
+  // Phase 4R rev-4 (2026-08-15) — Spectre chrome is the default for
+  // every non-POS, non-reporting admin route. The legacy chrome is
+  // only used as a fallback if the layout omitted the Spectre slots.
   const spectre =
     !pos &&
     !reporting &&
-    isSpectreModePath(pathname) &&
     !!spectreSidebar &&
     !!spectreTopbar;
 

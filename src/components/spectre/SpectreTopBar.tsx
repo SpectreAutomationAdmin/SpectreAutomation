@@ -2,60 +2,49 @@
 
 // Spectre Design Language — top bar (Phase 1).
 //
-// 64 px height. Left: breadcrumbs. Right (in order): global search
-// entry (compact), notifications button, theme toggle, user menu.
-// Club selector is a placeholder slot for Phase 2 — its DOM position
-// is reserved on the right rail between breadcrumbs and search.
+// 64 px height. Left: tenant + breadcrumbs (via HeaderContextRail).
+// Right (in order): global search entry (compact), notifications
+// button, theme toggle, user menu. Club selector is a placeholder
+// slot for Phase 2 — its DOM position is reserved on the right rail
+// between the header rail and search.
+//
+// Phase 4R UI-refinement rev-2 (2026-08-15) — breadcrumb derivation
+// moved to the shared `src/lib/chrome/breadcrumb.ts` module. Tenant
+// identity + breadcrumb render together via `HeaderContextRail` so
+// any future admin-chrome consumer reads from ONE source of truth.
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
   IconBell,
-  IconChevronRight,
   IconChevronDown,
   IconMoon,
   IconMonitor,
-  IconSearch,
   IconSun,
 } from "./icons";
 import { useSpectreTheme } from "./ThemeProvider";
-
-type Crumb = { label: string; href?: string };
+import { HeaderContextRail } from "./HeaderContextRail";
+import { GlobalSearch } from "./GlobalSearch";
+import type { Crumb } from "@/lib/chrome/breadcrumb";
 
 type Props = {
   userName: string;
   userRole: string;
   settingsHref?: string;
   breadcrumbs?: Crumb[];
+  /** Active tenant/club name — rendered before the breadcrumb chain
+   *  in the header rail so the user first establishes WHICH tenant
+   *  they are operating within, then WHERE they are inside it. */
+  tenantName?: string | null;
 };
 
-// Auto-derive crumbs from the current pathname when the caller does
-// not supply them. Segments in the pathname map to titlecase words;
-// `/app/admin/design-system/foo` → Home · Admin · Design System · Foo.
-function deriveCrumbsFromPath(pathname: string): Crumb[] {
-  const parts = pathname.split("/").filter(Boolean);
-  const seen: string[] = [];
-  return parts.map((part, i) => {
-    seen.push(part);
-    const isLast = i === parts.length - 1;
-    return {
-      label: prettify(part),
-      href: isLast ? undefined : "/" + seen.join("/"),
-    };
-  });
-}
-function prettify(seg: string): string {
-  return seg
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-export function SpectreTopBar({ userName, userRole, settingsHref, breadcrumbs }: Props) {
-  const pathname = usePathname() ?? "";
-  const derivedCrumbs = useMemo(() => deriveCrumbsFromPath(pathname), [pathname]);
-  const crumbs = breadcrumbs ?? derivedCrumbs;
-
+export function SpectreTopBar({
+  userName,
+  userRole,
+  settingsHref,
+  breadcrumbs,
+  tenantName,
+}: Props) {
   const friendlyRole = userRole.replace(/_/g, " ").toLowerCase();
   const initials = userName.split(" ").filter(Boolean).slice(0, 2).map((s) => s[0]?.toUpperCase() ?? "").join("") || "?";
 
@@ -105,29 +94,16 @@ export function SpectreTopBar({ userName, userRole, settingsHref, breadcrumbs }:
       data-testid="spectre-topbar"
       className="spectre-topbar"
     >
-      {/* Left — breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="spectre-crumbs min-w-0 flex-1">
-        {crumbs.map((c, i) => (
-          <span key={`${c.label}-${i}`} className="flex items-center gap-1.5 truncate">
-            {c.href ? (
-              <Link href={c.href}>{c.label}</Link>
-            ) : (
-              <span aria-current={i === crumbs.length - 1 ? "page" : undefined}>{c.label}</span>
-            )}
-            {i < crumbs.length - 1 && <span className="sep"><IconChevronRight size={12} /></span>}
-          </span>
-        ))}
-      </nav>
+      {/* Left — tenant + breadcrumb (shared rail) */}
+      <HeaderContextRail tenantName={tenantName} breadcrumbs={breadcrumbs} />
 
       {/* Right — controls */}
       <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          aria-label="Search (⌘K)"
-          className="spectre-btn spectre-btn--ghost spectre-btn--icon"
-        >
-          <IconSearch size={16} />
-        </button>
+        {/* Phase 4R rev-4 (2026-08-15) — canonical global-search entry
+            point. Collapsed = icon, expanded = inline input +
+            predictive grouped dropdown. Replaces the previous dummy
+            IconSearch button AND the redundant sidebar search field. */}
+        <GlobalSearch />
         <button
           type="button"
           aria-label="Notifications"

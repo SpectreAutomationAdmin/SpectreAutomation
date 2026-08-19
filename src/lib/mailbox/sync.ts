@@ -505,7 +505,14 @@ export async function ingestOneMessage(args: {
       },
     },
   });
-  const emailData = {
+  // Phase 4R rev-13 (2026-08-16) — TRI-STATE isRead + hasAttachments.
+  // The base data object omits both flags. They are added ONLY
+  // when the normalized value is a real boolean; a normalized
+  // `undefined` means Graph did not assert the field on this
+  // delta record and the existing DB column must be preserved.
+  // See docs/phase-4r-rev12-critical-defect-diagnostic.md §10 for
+  // the corruption channel this closes.
+  const baseEmailData = {
     clubId: args.clubId,
     mailboxConnectionId: args.mailboxConnectionId,
     graphMessageId: graphId,
@@ -522,18 +529,30 @@ export async function ingestOneMessage(args: {
     bodyHtmlSanitized: norm.bodyHtmlSanitized,
     bodyTextExtract: norm.bodyTextExtract,
     importance: norm.importance,
-    isRead: norm.isRead,
-    hasAttachments: norm.hasAttachments,
     webLink: norm.webLink,
     lastSyncedAt: new Date(),
+  };
+  // UPDATE path — only include tri-state fields when Graph
+  // asserted a boolean; otherwise leave the DB column untouched.
+  const updateData: typeof baseEmailData & { isRead?: boolean; hasAttachments?: boolean } = { ...baseEmailData };
+  if (typeof norm.isRead === "boolean") updateData.isRead = norm.isRead;
+  if (typeof norm.hasAttachments === "boolean") updateData.hasAttachments = norm.hasAttachments;
+  // CREATE path — new rows need concrete defaults (Prisma column
+  // has @default(false) but we set explicitly for clarity). If
+  // Graph didn't assert on a first-seen record, false is a safe
+  // seed until the next delta.
+  const createData: typeof baseEmailData & { isRead: boolean; hasAttachments: boolean } = {
+    ...baseEmailData,
+    isRead: typeof norm.isRead === "boolean" ? norm.isRead : false,
+    hasAttachments: typeof norm.hasAttachments === "boolean" ? norm.hasAttachments : false,
   };
   const email = existing
     ? await prisma.emailMessage.update({
         where: { id: existing.id },
-        data: emailData,
+        data: updateData,
       })
     : await prisma.emailMessage.create({
-        data: emailData,
+        data: createData,
       });
 
   // Attachment metadata.

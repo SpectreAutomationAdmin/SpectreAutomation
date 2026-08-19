@@ -15,6 +15,7 @@
 import { prisma } from "@/lib/prisma";
 import { workIntakeReadableByPrincipal } from "@/lib/work-intake/tenant";
 import type { Principal } from "@/lib/rbac";
+import type { CompletionCardSnapshot } from "./completion-snapshot";
 
 interface ActionCtx {
   principal: Principal;
@@ -50,7 +51,23 @@ export class WorkIntakeActionError extends Error {
   }
 }
 
-export async function resolveIntake(ctx: ActionCtx, note?: string, opts?: { completionType?: "RESOLVED" | "REPLIED_AND_CLOSED" | "OTHER" }): Promise<void> {
+export async function resolveIntake(
+  ctx: ActionCtx,
+  note?: string,
+  opts?: {
+    completionType?: "RESOLVED" | "REPLIED_AND_CLOSED" | "OTHER";
+    /** Phase 4R Completed-State Immutability (2026-08-15) — the
+     *  founder-facing card facts as rendered at the moment the user
+     *  clicked the terminal-transition button. Persisted on
+     *  WorkCompletionEvent.metadataJson.cardSnapshot so Completed
+     *  History renders the approved historical facts, not whatever
+     *  the analyser reports today. Optional: legacy callers that do
+     *  not have a projection to pass (e.g. informational Resolve of
+     *  a non-AP item) may omit; the reader falls back to live
+     *  projection with a "legacy" source marker. */
+    cardSnapshot?: CompletionCardSnapshot | null;
+  },
+): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
   await prisma.$transaction([
     prisma.workIntakeItem.update({
@@ -83,6 +100,7 @@ export async function resolveIntake(ctx: ActionCtx, note?: string, opts?: { comp
       clubId: it.clubId,
       completedByUserId: ctx.principal.id,
       completionType: opts?.completionType ?? "RESOLVED",
+      cardSnapshot: opts?.cardSnapshot ?? null,
     });
   } catch {
     // Never block resolve on event emission.
@@ -250,6 +268,15 @@ export async function assignToSelf(ctx: ActionCtx): Promise<void> {
  *
  * Tenant guard applies via loadAuthorisedIntake — a user can only
  * mark-read intakes they can already see.
+ *
+ * Phase 4R rev-10 (2026-08-15) — after the local upsert, propagate
+ * the read state to Outlook for every linked PRIMARY email whose
+ * current local mirror still reports isRead=false. The Graph PATCH
+ * is enqueued so a slow or offline mailbox cannot block the UI
+ * click. Idempotency is guarded by the OutlookMarkReadMutation
+ * unique constraint on (mailboxConnectionId, emailMessageId) — a
+ * second click cannot enqueue a duplicate PATCH. Non-email items
+ * (no linked email) skip the enqueue entirely.
  */
 export async function markWorkIntakeRead(ctx: ActionCtx): Promise<void> {
   const it = await loadAuthorisedIntake(ctx);
@@ -266,4 +293,146 @@ export async function markWorkIntakeRead(ctx: ActionCtx): Promise<void> {
       userId: ctx.principal.id,
     },
   });
+  await enqueueOutlookMarkReadForLinkedEmails({
+    workIntakeItemId: it.id,
+    triggeredByUserId: ctx.principal.id,
+  });
+}
+
+/**
+ * Phase 4R rev-10 helper — enqueue a MAILBOX_MARK_READ job for
+ * each PRIMARY-role linked email whose local mirror still reports
+ * `isRead === false`. Non-email items produce zero jobs.
+ *
+ * We only touch PRIMARY origins (never EVIDENCE) so an unrelated
+ * evidence email attached to a card is not mutated in Outlook.
+ * `EMAIL_MARK_READ_ON_INTERACTION_ENABLED` gates the whole feature
+ * so the write path can be flipped off in an emergency without a
+ * rollback.
+ */
+async function enqueueOutlookMarkReadForLinkedEmails(args: {
+  workIntakeItemId: string;
+  triggeredByUserId: string;
+}): Promise<void> {
+  const { isEmailMarkReadOnInteractionEnabled } = await import("@/lib/env");
+  if (!isEmailMarkReadOnInteractionEnabled()) return;
+
+  // Find PRIMARY linked emails whose local mirror still reports unread.
+  // Non-email items produce an empty list and skip the enqueue.
+  const origins = await prisma.emailWorkIntakeOrigin.findMany({
+    where: {
+      workIntakeItemId: args.workIntakeItemId,
+      role: "PRIMARY",
+    },
+    select: {
+      emailMessageId: true,
+      emailMessage: {
+        select: {
+          id: true,
+          clubId: true,
+          isRead: true,
+          softDeletedAt: true,
+          graphMessageId: true,
+          mailboxConnectionId: true,
+          updatedAt: true,
+        },
+      },
+    },
+  });
+  if (origins.length === 0) return; // non-email item or evidence-only card
+
+  const { enqueue } = await import("@/lib/queue");
+  const { logger } = await import("@/lib/observability/logger");
+  // Rev-13 (2026-08-16) — status values that indicate a mark-read
+  // intent is CURRENTLY active. Historical statuses (SUCCEEDED,
+  // FAILED_TERMINAL, NOT_REQUIRED, SUPERSEDED) do NOT block a new
+  // generation — that was the rev-10 permanent-latch bug.
+  const ACTIVE_STATUSES = ["PENDING", "RUNNING", "RETRYABLE"] as const;
+  for (const origin of origins) {
+    const email = origin.emailMessage;
+    if (!email) continue;
+    // Rev-13 — the stale-mirror short-circuit is preserved as an
+    // optimisation (if we already know the email is read, don't
+    // enqueue a PATCH that would be a no-op). The rev-12 bug was
+    // NOT this check; it was the permanent SUCCEEDED latch on the
+    // mutation row. After Fix A ships, the manual Feed Sync path
+    // guarantees the local mirror is fresh before the founder
+    // clicks the card, so this check will not lag reality.
+    if (email.isRead) continue;
+    if (email.softDeletedAt) continue;
+    try {
+      // Rev-13 active-intent dedupe (Fix B). If there is already an
+      // active mutation row for THIS (mailboxConnection, email) —
+      // status IN ('PENDING','RUNNING','RETRYABLE') — a duplicate
+      // click during that window must NOT create a second row or a
+      // second Graph PATCH. Historical rows are ignored.
+      const existingActive = await prisma.outlookMarkReadMutation.findFirst({
+        where: {
+          mailboxConnectionId: email.mailboxConnectionId,
+          emailMessageId: email.id,
+          status: { in: [...ACTIVE_STATUSES] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, status: true, createdAt: true },
+      });
+      if (existingActive) {
+        logger.info("work-intake.mark-read.active-intent-dedupe", {
+          workIntakeItemIdTail: args.workIntakeItemId.slice(-6),
+          emailMessageIdTail: email.id.slice(-6),
+          activeMutationIdTail: existingActive.id.slice(-6),
+          activeStatus: existingActive.status,
+        });
+        continue;
+      }
+
+      // Rev-13 (Fix B) — CREATE a new mutation row for this
+      // generation. `generationCursor` records the email's
+      // updatedAt at enqueue time; the worker loads the row by
+      // id and closes it through its own lifecycle (SUCCEEDED /
+      // FAILED_TERMINAL / SUPERSEDED / NOT_REQUIRED). Historical
+      // rows for prior generations remain as immutable audit.
+      const mutation = await prisma.outlookMarkReadMutation.create({
+        data: {
+          clubId: email.clubId,
+          workIntakeItemId: args.workIntakeItemId,
+          emailMessageId: email.id,
+          graphMessageId: email.graphMessageId,
+          mailboxConnectionId: email.mailboxConnectionId,
+          triggeredByUserId: args.triggeredByUserId,
+          generationCursor: email.updatedAt.toISOString(),
+          status: "PENDING",
+          attemptCount: 0,
+        },
+        select: { id: true },
+      });
+
+      await enqueue({
+        kind: "MAILBOX_MARK_READ",
+        clubId: email.clubId,
+        payload: {
+          workIntakeItemId: args.workIntakeItemId,
+          emailMessageId: email.id,
+          graphMessageId: email.graphMessageId,
+          mailboxConnectionId: email.mailboxConnectionId,
+          triggeredByUserId: args.triggeredByUserId,
+          markReadMutationId: mutation.id,
+        },
+        // Rev-13 — idempotencyKey includes the mutation ID so each
+        // generation has its own key. The queue layer's dedupe still
+        // collapses truly concurrent enqueues of the same key (rare
+        // if the active-intent guard above is honoured). Historical
+        // COMPLETED queue rows do not block, per queue semantics.
+        idempotencyKey: `mailbox-mark-read:${email.mailboxConnectionId}:${email.id}:${mutation.id}`,
+      });
+    } catch (e) {
+      // Failure to enqueue must NOT roll back the local
+      // WorkIntakeItemRead upsert — the founder still gets a
+      // responsive local read. Log and continue.
+      logger.warn("work-intake.mark-read.enqueue-failed", {
+        workIntakeItemIdTail: args.workIntakeItemId.slice(-6),
+        emailMessageIdTail: email.id.slice(-6),
+        error: (e as Error).message,
+      });
+    }
+  }
 }

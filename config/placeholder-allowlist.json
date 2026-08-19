@@ -39,6 +39,14 @@
       "pattern": "GCP KMS implementation is structurally identical",
       "paths": ["src/lib/kms/index.ts"],
       "reason": "Phase 12A noted GCP provider is a known fallback to local; documented in README + remediation backlog."
+    },
+    {
+      "pattern": "XXX",
+      "paths": [
+        "src/lib/masking.ts",
+        "src/lib/hr/sensitive-identity.ts"
+      ],
+      "reason": "HR-1 SIN mask literal — 'XXX XXX 123' is the canonical rendered form of a masked SIN, referenced in docs, code, and tests. Not scaffolding."
     }
   ]
 }

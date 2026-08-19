@@ -14,6 +14,7 @@ import { isAppError } from "@/lib/errors";
 import { Badge } from "@/components/Badge";
 import { fmtMoney } from "@/lib/accounting/format";
 import { formatDate } from "@/lib/finance";
+import { RegisterBreadcrumbLabel } from "@/components/spectre/breadcrumb-labels";
 
 function bounce(id: string, err: unknown): never {
   if (isAppError(err)) redirect(`/app/admin/ap/vendors/${id}?error=${encodeURIComponent(err.safeMessage)}`);
@@ -133,8 +134,12 @@ export default async function VendorDetailPage({ params, searchParams }: { param
     ? Object.entries(deleteDeps).filter(([, n]) => n > 0).map(([k, n]) => ({ label: k, count: n as number }))
     : [];
 
+  const vendorDisplayName = vendor.operatingName ?? vendor.legalName;
   return (
     <div>
+      {/* Phase 4R rev-5 (2026-08-15) — register the vendor display
+          name so the shell breadcrumb replaces the raw cuid. */}
+      <RegisterBreadcrumbLabel id={vendor.id} label={vendorDisplayName} />
       <Link href="/app/admin/ap/vendors" className="text-sm text-stone-500 hover:text-club-ink">← Vendors</Link>
       <div className="mt-3 flex items-end justify-between gap-4 flex-wrap">
         <div>
