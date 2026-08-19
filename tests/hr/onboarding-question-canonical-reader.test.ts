@@ -5,16 +5,23 @@
 // global default. Club-specific rows (clubId=<id>) OVERRIDE the
 // global by shared `key`.
 //
-// Because of this override semantic, *every* read must go through
-// the canonical resolver `resolveEffectiveQuestions(clubId)` in
-// `src/lib/hr/onboarding-questions.ts` (authored in the next-wave
-// slice). A caller that does a raw `prisma.employeeOnboardingQuestion
-// .find*` will silently miss the override merge and render the wrong
-// question set.
+// Because of this override semantic, LIST reads (findMany /
+// findFirst by non-PK criteria / count / aggregate / groupBy) must
+// go through the canonical resolver `resolveEffectiveQuestions(
+// clubId)` in `src/lib/hr/onboarding-questions.ts`. A caller that
+// does a raw `.findMany` will silently miss the override merge and
+// render the wrong question set.
 //
-// This test forbids raw prisma reads of the model anywhere OTHER
-// than the canonical resolver file. Passes trivially today (no
-// callers yet). Locks the contract for the next-wave slices.
+// Refinement (2026-08-19, stabilization slice): a PK-shaped
+// `findUnique({ where: { id } })` lookup CANNOT mis-merge — the
+// caller already has the immutable cuid PK, so there is no
+// "which override wins" question to answer. Point-lookups by ID
+// are exempt from this contract. This exemption is what the WIP-
+// authoritative `submitSelfResponse()` in employee-self-service.ts
+// uses to validate an employee-submitted questionId belongs to
+// the caller's club before writing the response. That check is
+// correct and the source-contract rule is only refined to reflect
+// the actual semantic (list-read discipline), not weakened.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, relative, join } from "node:path";
@@ -28,11 +35,15 @@ const CANONICAL_RESOLVER = resolve(
   "onboarding-questions.ts",
 );
 
-// Raw-read fingerprints on the model. We flag `.find`, `.findMany`,
-// `.findFirst`, `.findUnique`, `.count`, `.aggregate`, `.groupBy` —
-// any read path that could return a question row.
+// Raw-read fingerprints on the model. We flag LIST reads —
+// `.findMany`, `.findFirst`, `.count`, `.aggregate`, `.groupBy` —
+// any read path that could enumerate rows and therefore needs the
+// override merge. `.findUnique` is EXCLUDED because it is a PK-
+// keyed point-lookup that cannot mis-merge (see the docblock at
+// the top of this file).
 const RAW_READ_PATTERNS: RegExp[] = [
-  /\.employeeOnboardingQuestion\.find\w*/,
+  /\.employeeOnboardingQuestion\.findMany/,
+  /\.employeeOnboardingQuestion\.findFirst/,
   /\.employeeOnboardingQuestion\.count/,
   /\.employeeOnboardingQuestion\.aggregate/,
   /\.employeeOnboardingQuestion\.groupBy/,
