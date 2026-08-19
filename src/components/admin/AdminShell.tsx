@@ -89,11 +89,11 @@ export function AdminShell({
   topbar: ReactNode;
   supportBanner?: ReactNode | null;
   toast?: ReactNode;
-  // Slice 1 additions. All three are optional — an admin layout that
-  // omits them still gets the legacy shell for every route. When
-  // provided, the SpectreShell branch only fires for routes in
-  // SPECTRE_MODE_EXACT_PATHS, so passing them does NOT change the
-  // rendering of any un-migrated route.
+  // Rev-4 (2026-08-15): all three are optional in the type but the
+  // admin layout always supplies them. When present, the Spectre
+  // shell renders by default for every /app/admin/* route (except
+  // the two opt-outs above). The legacy sidebar/topbar remain
+  // wired as an emergency fallback only.
   spectreSidebar?: ReactNode;
   spectreTopbar?: ReactNode;
   spectreClubAccentStyle?: CSSProperties;
