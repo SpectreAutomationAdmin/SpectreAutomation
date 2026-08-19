@@ -386,6 +386,28 @@ export async function resetDb() {
     c.rolePermission.deleteMany(),
     c.permission.deleteMany(),
     c.role.deleteMany(),
+    // Stabilization (2026-08-19) — Phase 4R rev-10+ mailbox tables
+    // FK into User (MailboxAccess.userId, MailboxOAuthTransaction.userId,
+    // and email/sync-run subordinates). They must be torn down before
+    // `c.user.deleteMany()` runs, otherwise a batch execution of the
+    // HR suite fails with a FK violation when a prior file leaves
+    // mailbox rows behind. Individual HR files were already doing this
+    // in their own beforeEach; centralising it here makes every HR
+    // test-file's `resetDb()` call self-sufficient.
+    c.workIntakeActivity.deleteMany(),
+    c.workIntakeItemRead.deleteMany(),
+    c.workIntakeFinding.deleteMany(),
+    c.workIntakeOrigin.deleteMany(),
+    c.emailWorkIntakeOrigin.deleteMany(),
+    c.workIntakeItem.deleteMany(),
+    c.apIntakeSource.deleteMany(),
+    c.emailAttachment.deleteMany(),
+    c.emailMessage.deleteMany(),
+    c.mailboxSyncRun.deleteMany(),
+    c.graphSubscription.deleteMany(),
+    c.mailboxAccess.deleteMany(),
+    c.mailboxOAuthTransaction.deleteMany(),
+    c.mailboxConnection.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),
