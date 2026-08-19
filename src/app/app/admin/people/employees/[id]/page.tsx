@@ -17,7 +17,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
-import { getEmployee } from "@/lib/hr/employees";
+import { getDeleteEligibility, getEmployee } from "@/lib/hr/employees";
 import { listEmploymentPeriods } from "@/lib/hr/employment-periods";
 import { listEmployeeDocuments } from "@/lib/hr/documents";
 import { listSessions, listTransitions } from "@/lib/hr/onboarding-sessions";
@@ -26,6 +26,7 @@ import { getBankAccountMasked } from "@/lib/hr/bank-account";
 import { getTaxProfileMasked } from "@/lib/hr/tax-profile";
 import { isAppError } from "@/lib/errors";
 import EmployeeProfileView from "@/components/hr/EmployeeProfileView";
+import EmployeeLifecycleControls from "@/components/hr/EmployeeLifecycleControls";
 
 export default async function EmployeeProfilePage({
   params,
@@ -120,6 +121,14 @@ export default async function EmployeeProfilePage({
     hasPermission(principal, profile.clubId, "hr:onboarding:invite") &&
     currentSession?.state === "DRAFT";
   const canWritePhoto = hasPermission(principal, profile.clubId, "hr:employee:write");
+
+  // HR-2B.3.6 (2026-08-19) — Lifecycle controls: Delete vs Archive.
+  // Only surface controls to operators with hr:employee:write; the API
+  // route re-checks so the button never becomes an authority.
+  const canLifecycle = hasPermission(principal, profile.clubId, "hr:employee:write");
+  const deleteEligibility = canLifecycle
+    ? await getDeleteEligibility(principal, profile.id)
+    : null;
 
   // HR-2B.3.1 (2026-08-18) §5 — Resend invitation. The Invite button
   // covers the DRAFT case (never sent yet). Resend covers the "already
@@ -250,6 +259,16 @@ export default async function EmployeeProfilePage({
           acknowledgedAt: a.acknowledgedAt.toISOString(),
         })),
       }}
+      lifecycleControls={
+        canLifecycle && deleteEligibility ? (
+          <EmployeeLifecycleControls
+            employeeId={profile.id}
+            employeeName={`${profile.firstName} ${profile.lastName}`}
+            eligibility={deleteEligibility}
+            currentLifecycle={profile.employeeLifecycle}
+          />
+        ) : null
+      }
     />
   );
 }

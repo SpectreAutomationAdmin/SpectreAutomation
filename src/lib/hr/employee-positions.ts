@@ -35,11 +35,17 @@ const POSITION_ENTITY = "EmployeePosition";
 export async function listEmployeePositions(
   principal: Principal,
   clubId: string,
-  opts: { includeInactive?: boolean } = {},
+  opts: { includeInactive?: boolean; departmentId?: string | null } = {},
 ) {
   requirePermission(principal, clubId, "hr:directory:view");
   const where: Record<string, unknown> = { clubId };
   if (!opts.includeInactive) where.isActive = true;
+  // HR-2B.3.6 (2026-08-19) — When a departmentId is supplied, filter to
+  // positions belonging to that Department. The relation is enforced
+  // server-side; the browser can't override it via query param spoofing
+  // — the resolver still requires `hr:directory:view` on the actual
+  // clubId, and the department filter is a WHERE clause, not an alias.
+  if (opts.departmentId !== undefined) where.departmentId = opts.departmentId;
   return prisma.employeePosition.findMany({
     where,
     orderBy: { name: "asc" },
@@ -47,6 +53,7 @@ export async function listEmployeePositions(
       id: true,
       code: true,
       name: true,
+      departmentId: true,
       defaultPayRate: true,
       isExempt: true,
       isActive: true,
@@ -61,6 +68,11 @@ export async function listEmployeePositions(
 export interface CreateEmployeePositionInput {
   name: string;
   code?: string;
+  // HR-2B.3.6 (2026-08-19) — Department is REQUIRED for new positions.
+  // Every Position in Spectre belongs to a Department; inline creation
+  // during Add Employee automatically binds the currently-selected
+  // Department. Passing null / omitting throws ValidationError.
+  departmentId: string;
   defaultPayRate?: number;
   isExempt?: boolean;
 }
@@ -125,6 +137,20 @@ export async function createEmployeePosition(
   if (name.length > 80) {
     throw new ValidationError([{ path: "name", message: "must be 80 chars or fewer" }]);
   }
+
+  // HR-2B.3.6 — Department is required and must belong to the same club.
+  const departmentId = (input.departmentId ?? "").trim();
+  if (!departmentId) {
+    throw new ValidationError([{ path: "departmentId", message: "required" }]);
+  }
+  const department = await prisma.department.findFirst({
+    where: { id: departmentId, clubId },
+    select: { id: true },
+  });
+  if (!department) {
+    throw new ValidationError([{ path: "departmentId", message: "not a valid department for this club" }]);
+  }
+
   const rawCode = (input.code ?? "").trim().toUpperCase();
   const baseCode = rawCode ? rawCode.replace(/[^A-Z0-9_]/g, "_").slice(0, 32) : deriveCode(name);
   if (!baseCode) {
@@ -142,6 +168,7 @@ export async function createEmployeePosition(
       clubId,
       code,
       name,
+      departmentId,
       defaultPayRate,
       isExempt: input.isExempt ?? false,
       isActive: true,
@@ -157,6 +184,7 @@ export async function createEmployeePosition(
       id: created.id,
       code: created.code,
       name: created.name,
+      departmentId: created.departmentId,
       defaultPayRate: created.defaultPayRate.toString(),
       isExempt: created.isExempt,
       isActive: created.isActive,

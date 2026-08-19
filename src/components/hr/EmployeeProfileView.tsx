@@ -126,6 +126,11 @@ interface Props {
     taxAccessible: boolean;
     td1Attestations: Array<{ kind: string; acknowledgedAt: string }>;
   };
+  /** HR-2B.3.6 (2026-08-19) — Optional lifecycle controls slot (Delete /
+   *  Archive). Rendered inside the profile's admin actions area on the
+   *  Overview tab. The parent page decides whether to render — this
+   *  component is presentation-only. */
+  lifecycleControls?: React.ReactNode;
 }
 
 const TABS = [
@@ -157,7 +162,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, lifecycleControls } = props;
   const [tab, setTab] = useState<TabKey>("overview");
 
   const displayName = employee.preferredName?.trim().length
@@ -351,6 +356,9 @@ export default function EmployeeProfileView(props: Props) {
               </div>
             </div>
           </div>
+
+          {/* HR-2B.3.6 — Delete / Archive controls, parent-supplied. */}
+          {lifecycleControls}
         </section>
       )}
 

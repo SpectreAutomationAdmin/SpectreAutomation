@@ -112,19 +112,25 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
               // sub-stages; done reflects the CANONICAL state, mirroring
               // Payroll's rail shape. The parent is `current` whenever
               // the employee is anywhere inside /hr/onboarding/about-you/*.
+              //
+              // HR-2B.3.6 — hrefs on completed sub-stages so the
+              // employee can navigate back to correct a completed
+              // answer. `href` is set ONLY when canonical state says
+              // the step was completed. Future / incomplete steps have
+              // no href.
               {
                 key: "about-you",
                 label: "About you",
                 done: aboutYouDone,
                 current: !aboutYouDone,
                 subStages: [
-                  { key: "name", label: "Name", done: nameDone },
-                  { key: "contact", label: "Contact", done: contactDone },
-                  { key: "employment", label: "Employment", done: employmentDone },
-                  { key: "photo", label: "Photo", done: photoDone },
+                  { key: "name", label: "Name", done: nameDone, href: nameDone ? "/hr/onboarding/about-you/name" : undefined },
+                  { key: "contact", label: "Contact", done: contactDone, href: contactDone ? "/hr/onboarding/about-you/contact" : undefined },
+                  { key: "employment", label: "Employment", done: employmentDone, href: employmentDone ? "/hr/onboarding/about-you/employment" : undefined },
+                  { key: "photo", label: "Photo", done: photoDone, href: photoDone ? "/hr/onboarding/about-you/photo" : undefined },
                 ],
               },
-              { key: "payroll", label: "Payroll", done: false, current: aboutYouDone, future: !aboutYouDone },
+              { key: "payroll", label: "Payroll", done: false, current: aboutYouDone, future: !aboutYouDone, href: aboutYouDone ? "/hr/onboarding/payroll" : undefined },
               { key: "emergency", label: "Emergency", done: false, current: false, future: true },
               { key: "documents", label: "Documents", done: false, current: false, future: true },
               { key: "review", label: "Review", done: false, current: false, future: true },

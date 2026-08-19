@@ -20,12 +20,19 @@
 //     upload flow can attach it after the fact. When present, PDF /
 //     DOC / DOCX only.
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import SegmentedDateInput from "@/components/hr/SegmentedDateInput";
 
 export interface AddEmployeeSelectOption {
   id: string;
   label: string;
+}
+
+export interface AddEmployeePositionOption {
+  id: string;
+  label: string;
+  departmentId: string | null;
 }
 
 export interface AddEmployeeManagerOption {
@@ -43,7 +50,12 @@ export interface MemberCandidate {
 
 interface Props {
   departments: AddEmployeeSelectOption[];
-  positions: AddEmployeeSelectOption[];
+  /** HR-2B.3.6 — positions carry `departmentId` so the client-side
+   *  cascade knows which options belong to the selected Department.
+   *  Backwards-compatible: existing loader passes `departmentId: null`
+   *  for unclassified positions; those never surface once a Department
+   *  is chosen. */
+  positions: AddEmployeePositionOption[];
   managers: AddEmployeeManagerOption[];
   /** True when the operator holds `hr:employee:write` and can therefore
    *  create a new EmployeePosition inline via POST /api/hr/positions. */
@@ -69,10 +81,15 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
 
-  // HR-2B.3.1 §4 — position catalogue lives in local state so the
-  // inline "+ Add position" affordance can append a freshly-created
-  // position and select it without a full page reload.
-  const [positions, setPositions] = useState<AddEmployeeSelectOption[]>(initialPositions);
+  // HR-2B.3.6 (2026-08-19) — Position depends on Department.
+  //
+  // The full catalogue is kept in `positions` (loader-supplied +
+  // inline-created); the visible dropdown is `filteredPositions`,
+  // computed from `selectedDepartmentId`. Changing Department clears
+  // the current Position selection so a stale cross-department
+  // position never survives.
+  const [positions, setPositions] = useState<AddEmployeePositionOption[]>(initialPositions);
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [selectedPositionId, setSelectedPositionId] = useState<string>("");
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [newPositionName, setNewPositionName] = useState("");
@@ -80,10 +97,37 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
   const [addingPosition, setAddingPosition] = useState(false);
   const [positionError, setPositionError] = useState<string | null>(null);
 
+  const filteredPositions = selectedDepartmentId
+    ? positions.filter((p) => p.departmentId === selectedDepartmentId)
+    : [];
+
+  useEffect(() => {
+    // If Department changes and the current Position no longer belongs
+    // to it, clear the Position selection. This is the "changing
+    // Department clears Position" invariant from the founder brief.
+    if (!selectedDepartmentId) {
+      if (selectedPositionId) setSelectedPositionId("");
+      return;
+    }
+    if (
+      selectedPositionId &&
+      !positions.some((p) => p.id === selectedPositionId && p.departmentId === selectedDepartmentId)
+    ) {
+      setSelectedPositionId("");
+    }
+  }, [selectedDepartmentId, positions, selectedPositionId]);
+
   async function submitNewPosition() {
     const name = newPositionName.trim();
     if (!name) {
       setPositionError("Please give the position a name.");
+      return;
+    }
+    if (!selectedDepartmentId) {
+      // Should not happen — the affordance is disabled without a
+      // Department — but be explicit so a race doesn't silently
+      // create a department-less position.
+      setPositionError("Please select a Department first.");
       return;
     }
     setPositionError(null);
@@ -95,6 +139,7 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
+          departmentId: selectedDepartmentId,
           defaultPayRate: rate.length ? Number(rate) : 0,
         }),
       });
@@ -103,10 +148,15 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         setPositionError(typeof data.error === "string" ? data.error : "Could not create position.");
         return;
       }
-      const created = data.position as { id: string; name: string; code: string };
+      const created = data.position as { id: string; name: string; code: string; departmentId: string | null };
       // HR-2B.3.2 §4 — name-only label; the system code stays internal.
       const label = created.name;
-      setPositions((prev) => [...prev, { id: created.id, label }].sort((a, b) => a.label.localeCompare(b.label)));
+      setPositions((prev) =>
+        [
+          ...prev,
+          { id: created.id, label, departmentId: created.departmentId ?? selectedDepartmentId },
+        ].sort((a, b) => a.label.localeCompare(b.label)),
+      );
       setSelectedPositionId(created.id);
       setShowAddPosition(false);
       setNewPositionName("");
@@ -237,7 +287,14 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="label" htmlFor="departmentId">Department</label>
-            <select id="departmentId" name="departmentId" className="select" defaultValue="">
+            <select
+              id="departmentId"
+              name="departmentId"
+              className="select"
+              value={selectedDepartmentId}
+              onChange={(e) => setSelectedDepartmentId(e.target.value)}
+              data-testid="department-select"
+            >
               <option value="">— Select —</option>
               {departments.map((d) => (
                 <option key={d.id} value={d.id}>{d.label}</option>
@@ -247,7 +304,8 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
           <div>
             <div className="flex items-baseline justify-between gap-3">
               <label className="label" htmlFor="positionId">Position</label>
-              {canCreatePosition && positions.length > 0 && !showAddPosition && (
+              {/* HR-2B.3.6 — Add-Position affordance is gated on Department: */}
+              {canCreatePosition && selectedDepartmentId && !showAddPosition && (
                 <button
                   type="button"
                   data-testid="add-position-inline-button"
@@ -261,7 +319,25 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
                 </button>
               )}
             </div>
-            {positions.length > 0 ? (
+            {!selectedDepartmentId ? (
+              // HR-2B.3.6 — Position disabled before Department. Neutral,
+              // non-clickable placeholder matching the "select-a-department-
+              // first" spec in the founder brief.
+              <>
+                <select
+                  id="positionId"
+                  name="positionId"
+                  className="select"
+                  disabled
+                  value=""
+                  onChange={() => { /* disabled — never fires */ }}
+                  data-testid="position-select"
+                >
+                  <option value="">Select a department first</option>
+                </select>
+                <input type="hidden" name="positionId" value="" />
+              </>
+            ) : filteredPositions.length > 0 ? (
               <select
                 id="positionId"
                 name="positionId"
@@ -271,7 +347,7 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
                 data-testid="position-select"
               >
                 <option value="">— Select —</option>
-                {positions.map((p) => (
+                {filteredPositions.map((p) => (
                   <option key={p.id} value={p.id}>{p.label}</option>
                 ))}
               </select>
@@ -280,7 +356,7 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
                 className="rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-3 text-sm text-stone-700"
                 data-testid="position-empty-state"
               >
-                No employee positions have been set up for this Club yet.
+                No positions in this Department yet.
                 {canCreatePosition ? (
                   <>
                     {" "}
@@ -293,13 +369,12 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
                         setShowAddPosition(true);
                       }}
                     >
-                      + Add position
+                      + Add one
                     </button>
                   </>
                 ) : (
                   <span className="text-xs text-stone-500 block mt-1">Ask a Club administrator to add employee positions.</span>
                 )}
-                {/* Keep the field submittable — empty positionId is valid */}
                 <input type="hidden" name="positionId" value="" />
               </div>
             )}
@@ -377,13 +452,16 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
           </div>
           <div>
             <label className="label" htmlFor="expectedStartDate">Expected start date</label>
-            <input
+            <SegmentedDateInput
               id="expectedStartDate"
               name="expectedStartDate"
-              type="date"
-              className="input"
               required
+              testIdPrefix="expected-start-date"
             />
+            <p className="mt-1 text-xs text-stone-500">
+              Type <span className="font-mono">YYYYMMDD</span> to move
+              between segments automatically.
+            </p>
           </div>
           <div className="md:col-span-2">
             <label className="label" htmlFor="managerEmployeeId">Reports to</label>

@@ -30,7 +30,9 @@ export default async function AddEmployeePage() {
     }),
     prisma.employeePosition.findMany({
       where: { clubId, isActive: true },
-      select: { id: true, name: true, code: true },
+      // HR-2B.3.6 — expose departmentId so the client-side cascade
+      // (AddEmployeeForm) knows which Department each position belongs to.
+      select: { id: true, name: true, code: true, departmentId: true },
       orderBy: { name: "asc" },
     }),
     prisma.employee.findMany({
@@ -67,7 +69,7 @@ export default async function AddEmployeePage() {
         // code remains the persistence key (id), never rendered in the
         // ordinary admin UI.
         departments={departments.map((d) => ({ id: d.id, label: d.name }))}
-        positions={positions.map((p) => ({ id: p.id, label: p.name }))}
+        positions={positions.map((p) => ({ id: p.id, label: p.name, departmentId: p.departmentId }))}
         managers={managers.map((m) => {
           const displayName = m.preferredName?.trim().length
             ? `${m.preferredName} ${m.lastName}`

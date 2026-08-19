@@ -26,6 +26,14 @@ import { createEmployee } from "@/lib/hr/employees";
 import { resetDb, seedRbac } from "../../util/db";
 import { makeAdminHrFixture } from "../admin-workflows/_helpers";
 
+async function mkDept(clubId: string, name = "General") {
+  const dept = await prisma.department.create({
+    data: { clubId, name, code: name.toUpperCase().replace(/[^A-Z0-9]/g, "_") + "_" + Math.random().toString(36).slice(2, 6).toUpperCase(), isActive: true },
+  });
+  return dept.id;
+}
+
+
 describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
   beforeAll(async () => {
     await resetDb();
@@ -38,11 +46,14 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("listEmployeePositions returns only same-Club active positions", async () => {
     const fx = await makeAdminHrFixture("Positions-Same");
-    await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Head Server" });
-    await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server Assistant" });
+    const dept = await mkDept(fx.club.id);
+    const foreignDept = await mkDept(fx.foreignClub.id);
+    await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Head Server", departmentId: dept });
+    await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server Assistant", departmentId: dept });
     // A row in the foreign club — MUST NOT appear in the list.
     await createEmployeePosition(fx.foreignClubAdmin, fx.foreignClub.id, {
       name: "Foreign Server",
+      departmentId: foreignDept,
     });
 
     const rows = await listEmployeePositions(fx.clubAdmin, fx.club.id);
@@ -55,8 +66,9 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("inactive positions filtered by default; visible with includeInactive:true", async () => {
     const fx = await makeAdminHrFixture("Positions-Inactive");
-    const active = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Active One" });
-    const inactive = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Retired One" });
+    const dept = await mkDept(fx.club.id);
+    const active = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Active One", departmentId: dept });
+    const inactive = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Retired One", departmentId: dept });
     await prisma.employeePosition.update({
       where: { id: inactive.id },
       data: { isActive: false },
@@ -74,8 +86,10 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("createEmployeePosition auto-derives a code from the name", async () => {
     const fx = await makeAdminHrFixture("Positions-CodeDerive");
+    const dept = await mkDept(fx.club.id);
     const created = await createEmployeePosition(fx.clubAdmin, fx.club.id, {
       name: "Head Bartender",
+      departmentId: dept,
     });
     expect(created.name).toBe("Head Bartender");
     expect(created.code).toBe("HEAD_BARTENDER");
@@ -83,8 +97,9 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("creating a second position with a colliding derived code auto-suffixes", async () => {
     const fx = await makeAdminHrFixture("Positions-Collide");
-    const first = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server" });
-    const second = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server" });
+    const dept = await mkDept(fx.club.id);
+    const first = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server", departmentId: dept });
+    const second = await createEmployeePosition(fx.clubAdmin, fx.club.id, { name: "Server", departmentId: dept });
     expect(first.code).toBe("SERVER");
     expect(second.code).not.toBe("SERVER");
     expect(second.code.startsWith("SERVER")).toBe(true);
@@ -92,8 +107,9 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("AUDITOR_READ_ONLY without hr:employee:write cannot create", async () => {
     const fx = await makeAdminHrFixture("Positions-Auditor");
+    const dept = await mkDept(fx.club.id);
     await expect(
-      createEmployeePosition(fx.auditor, fx.club.id, { name: "Barista" }),
+      createEmployeePosition(fx.auditor, fx.club.id, { name: "Barista", departmentId: dept }),
     ).rejects.toThrow();
     const rows = await listEmployeePositions(fx.clubAdmin, fx.club.id);
     expect(rows.length).toBe(0);
@@ -101,10 +117,11 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("cross-Club admin cannot create against a foreign Club", async () => {
     const fx = await makeAdminHrFixture("Positions-CrossClub");
+    const dept = await mkDept(fx.club.id);
     // foreignClubAdmin is a CLUB_ADMIN at foreignClub — has
     // hr:employee:write at THEIR club, but not against fx.club.id.
     await expect(
-      createEmployeePosition(fx.foreignClubAdmin, fx.club.id, { name: "X" }),
+      createEmployeePosition(fx.foreignClubAdmin, fx.club.id, { name: "X", departmentId: dept }),
     ).rejects.toThrow();
     const rows = await listEmployeePositions(fx.clubAdmin, fx.club.id);
     expect(rows.length).toBe(0);
@@ -118,13 +135,15 @@ describe("HR-2B.3.1 §4 · EmployeePosition service", () => {
 
   it("newly-created position immediately appears in the next Add-Employee load and can be persisted on an Employee", async () => {
     const fx = await makeAdminHrFixture("Positions-EndToEnd");
+    const dept = await mkDept(fx.club.id);
     // Before: no positions.
     let rows = await listEmployeePositions(fx.clubAdmin, fx.club.id);
     expect(rows).toEqual([]);
-
+    
     const created = await createEmployeePosition(fx.clubAdmin, fx.club.id, {
       name: "Membership Coordinator",
       defaultPayRate: 24.5,
+      departmentId: dept,
     });
 
     rows = await listEmployeePositions(fx.clubAdmin, fx.club.id);

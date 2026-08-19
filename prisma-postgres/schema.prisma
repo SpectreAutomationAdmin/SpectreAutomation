@@ -1690,6 +1690,7 @@ model Department {
   // Phase 5
   invLocations       InventoryLocation[] @relation("InvLocationDepartment")
   employees          Employee[]          @relation("EmployeeDepartment")
+  positions          EmployeePosition[]  @relation("PositionDepartment")
   timesheetEntries   TimesheetEntry[]    @relation("TimesheetEntryDepartment")
   payrollLines       PayrollLine[]       @relation("PayrollLineDepartment")
   labourBudgets      LabourBudget[]      @relation("LabourBudgetDepartment")
@@ -3154,6 +3155,12 @@ model EmployeePosition {
   club           Club     @relation(fields: [clubId], references: [id])
   code           String
   name           String
+  // HR-2B.3.6 (2026-08-19) — Position now belongs to a Department.
+  // Nullable during backfill; the admin Add Employee form requires it
+  // (Department must be picked BEFORE Position). Reconciled for the
+  // Coulee Ridge staging fixture via a one-shot post-deploy script.
+  departmentId   String?
+  department     Department? @relation("PositionDepartment", fields: [departmentId], references: [id])
   defaultPayRate Decimal  @default(0)
   isExempt       Boolean  @default(false)
   isActive       Boolean  @default(true)
@@ -3162,6 +3169,7 @@ model EmployeePosition {
   employees Employee[]
 
   @@unique([clubId, code])
+  @@index([clubId, departmentId, isActive])
 }
 
 // status: ACTIVE | LEAVE | TERMINATED

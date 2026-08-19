@@ -22,18 +22,28 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   const principal = await getCurrentPrincipal();
   if (!principal) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   const clubId = await getActiveClubId({ clubId: principal.activeClubId ?? null, role: "" });
 
+  // HR-2B.3.6 (2026-08-19) — Optional ?departmentId= filter used by the
+  // Add Employee form's cascade. Server enforces same-club constraint
+  // via the service layer; a browser can't leak positions from another
+  // department by omitting the filter (it just gets more results), and
+  // it can't leak from another club because the outer `clubId` comes
+  // from the authenticated session's active club, not from the query.
+  const departmentId = req.nextUrl.searchParams.get("departmentId");
+  const listOpts = departmentId ? { departmentId } : {};
+
   try {
-    const rows = await listEmployeePositions(principal, clubId);
+    const rows = await listEmployeePositions(principal, clubId, listOpts);
     return NextResponse.json({
       positions: rows.map((p) => ({
         id: p.id,
         code: p.code,
         name: p.name,
+        departmentId: p.departmentId,
         defaultPayRate: p.defaultPayRate.toString(),
         isExempt: p.isExempt,
         isActive: p.isActive,
@@ -55,6 +65,7 @@ export async function POST(req: NextRequest) {
   let body: {
     name?: string;
     code?: string;
+    departmentId?: string;
     defaultPayRate?: number | string;
     isExempt?: boolean;
   };
@@ -75,6 +86,7 @@ export async function POST(req: NextRequest) {
     const created = await createEmployeePosition(principal, clubId, {
       name: body.name ?? "",
       code: body.code,
+      departmentId: body.departmentId ?? "",
       defaultPayRate: defaultPayRateNum,
       isExempt: body.isExempt ?? false,
     });
@@ -84,6 +96,7 @@ export async function POST(req: NextRequest) {
           id: created.id,
           code: created.code,
           name: created.name,
+          departmentId: created.departmentId,
           defaultPayRate: created.defaultPayRate.toString(),
           isExempt: created.isExempt,
           isActive: created.isActive,

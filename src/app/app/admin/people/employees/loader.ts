@@ -34,11 +34,25 @@ export interface EmployeeDirectoryRow {
   profilePhotoDocumentId: string | null;
 }
 
-export async function loadEmployeeDirectory(clubId: string): Promise<EmployeeDirectoryRow[]> {
+export type EmployeeDirectoryScope = "active" | "archived" | "all";
+
+export async function loadEmployeeDirectory(
+  clubId: string,
+  scope: EmployeeDirectoryScope = "active",
+): Promise<EmployeeDirectoryRow[]> {
+  // HR-2B.3.6 (2026-08-19) — Default view excludes ARCHIVED and
+  // TERMINATED. The founder-facing directory filter (?scope=archived
+  // / ?scope=all) flips this without ever destroying history.
+  const lifecycleWhere =
+    scope === "active"
+      ? { in: ["PRE_HIRE", "ACTIVE", "LEAVE"] as string[] }
+      : scope === "archived"
+        ? { in: ["ARCHIVED", "TERMINATED"] as string[] }
+        : undefined;
   const rows = await prisma.employee.findMany({
     where: {
       clubId,
-      employeeLifecycle: { in: ["PRE_HIRE", "ACTIVE", "LEAVE"] },
+      ...(lifecycleWhere ? { employeeLifecycle: lifecycleWhere } : {}),
     },
     select: {
       id: true,

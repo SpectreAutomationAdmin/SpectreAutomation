@@ -109,16 +109,23 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
               // HR-2B.3.3 — parent "About you" row + sub-stages mirroring
               // the About You layout's rail. Done reflects the SAME
               // canonical state — no independent inference.
+              //
+              // HR-2B.3.6 — hrefs on completed sub-stages so the
+              // employee can revisit and correct a completed answer.
               {
                 key: "about-you",
                 label: "About you",
                 done: aboutYouDone,
                 current: !aboutYouDone,
+                // The About-you parent is navigable back to /about-you
+                // (which lands the employee on the "hub" that redirects
+                // to whichever step is current/next).
+                href: "/hr/onboarding/about-you",
                 subStages: [
-                  { key: "name", label: "Name", done: nameDone },
-                  { key: "contact", label: "Contact", done: contactDone },
-                  { key: "employment", label: "Employment", done: employmentDone },
-                  { key: "photo", label: "Photo", done: photoDone },
+                  { key: "name", label: "Name", done: nameDone, href: nameDone ? "/hr/onboarding/about-you/name" : undefined },
+                  { key: "contact", label: "Contact", done: contactDone, href: contactDone ? "/hr/onboarding/about-you/contact" : undefined },
+                  { key: "employment", label: "Employment", done: employmentDone, href: employmentDone ? "/hr/onboarding/about-you/employment" : undefined },
+                  { key: "photo", label: "Photo", done: photoDone, href: photoDone ? "/hr/onboarding/about-you/photo" : undefined },
                 ],
               },
               {
@@ -126,18 +133,21 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
                 label: "Payroll",
                 done: completion.complete,
                 current: aboutYouDone && !completion.complete,
+                href: "/hr/onboarding/payroll",
                 subStages: [
-                  { key: "sin", label: "SIN", done: completion.sin },
-                  { key: "direct-deposit", label: "Direct deposit", done: completion.banking },
+                  { key: "sin", label: "SIN", done: completion.sin, href: completion.sin ? "/hr/onboarding/payroll/sin" : undefined },
+                  { key: "direct-deposit", label: "Direct deposit", done: completion.banking, href: completion.banking ? "/hr/onboarding/payroll/direct-deposit" : undefined },
                   {
                     key: "td1-federal",
                     label: "Federal TD1",
                     done: completion.taxProfile && completion.federalAttestation,
+                    href: completion.taxProfile && completion.federalAttestation ? "/hr/onboarding/payroll/td1-federal" : undefined,
                   },
                   {
                     key: "td1-provincial",
                     label: "Provincial TD1",
                     done: completion.taxProfile && completion.provincialAttestation,
+                    href: completion.taxProfile && completion.provincialAttestation ? "/hr/onboarding/payroll/td1-provincial" : undefined,
                   },
                 ],
               },

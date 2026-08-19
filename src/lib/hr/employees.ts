@@ -34,8 +34,21 @@ import { getTaxProfileMasked } from "./tax-profile";
 const EMPLOYEE_ENTITY = "Employee";
 
 const EMPLOYMENT_TYPES = ["FULL_TIME", "PART_TIME", "SEASONAL", "CONTRACT"] as const;
-const LIFECYCLES = ["PRE_HIRE", "ACTIVE", "LEAVE", "TERMINATED"] as const;
+// HR-2B.3.6 (2026-08-19) — ARCHIVED is a canonical lifecycle. Distinct
+// from TERMINATED (which implies formal employment termination); ARCHIVED
+// is the "removed from active directory, all history preserved" state
+// used when an admin archives an onboarding-completed employee who is
+// no longer active but for whom "terminated" is not the right label.
+const LIFECYCLES = ["PRE_HIRE", "ACTIVE", "LEAVE", "TERMINATED", "ARCHIVED"] as const;
 const COMPENSATION_TYPES = ["HOURLY", "SALARY", "COMMISSION", "PIECE_RATE"] as const;
+
+// HR-2B.3.6 — Terminal onboarding states. Once an employee-submitted
+// onboarding reaches one of these, hard delete from the directory is
+// refused; the admin must archive instead. The service also refuses
+// hard delete for anyone with financial history (payroll lines,
+// timesheet entries) even if onboarding was never completed — those
+// records anchor real accounting entries.
+const ONBOARDING_TERMINAL_STATES = new Set(["SUBMITTED", "APPROVED", "REJECTED"]);
 
 async function nextEmployeeNumber(clubId: string): Promise<string> {
   const count = await prisma.employee.count({ where: { clubId } });
@@ -295,6 +308,206 @@ export async function terminateEmployee(
   });
 
   return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Archive.
+// ---------------------------------------------------------------------------
+
+/**
+ * HR-2B.3.6 (2026-08-19) — Move the employee out of the active
+ * directory without destroying any history. Reversible in principle;
+ * a separate `unarchiveEmployee` is intentionally NOT part of this
+ * slice (founder brief §2.2: "Do not use archive as an irreversible
+ * delete" — reversibility can be added when the founder needs it).
+ *
+ * Preserves: EmploymentPeriod, PayrollLine, TimesheetEntry, audit log,
+ * EmployeeDocument, EmployeeSensitiveIdentity, EmployeeBankAccount,
+ * EmployeeTaxProfile, EmployeeOnboardingSession, and every other
+ * child row. Only `employeeLifecycle` flips to `ARCHIVED`.
+ */
+export async function archiveEmployee(
+  principal: Principal,
+  employeeId: string,
+  opts: { reason?: string } = {},
+) {
+  const employee = await loadEmployee(principal, employeeId);
+  requirePermission(principal, employee.clubId, "hr:employee:write");
+  await assertSensitiveActionAllowed(
+    principal,
+    employee.clubId,
+    "hr.employee.archive.update",
+    EMPLOYEE_ENTITY,
+    employeeId,
+  );
+
+  if (employee.employeeLifecycle === "ARCHIVED") return employee;
+
+  const updated = await prisma.employee.update({
+    where: { id: employeeId },
+    data: { employeeLifecycle: "ARCHIVED" },
+  });
+
+  await audit(principal, {
+    action: "hr.employee.archive.update",
+    entityType: EMPLOYEE_ENTITY,
+    entityId: employeeId,
+    clubId: employee.clubId,
+    before: { employeeLifecycle: employee.employeeLifecycle },
+    after: { employeeLifecycle: updated.employeeLifecycle },
+    meta: { reason: opts.reason ?? null },
+  });
+
+  return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Delete.
+// ---------------------------------------------------------------------------
+
+export interface DeleteEmployeeEligibility {
+  eligible: boolean;
+  /** When `eligible: false`, a machine-readable reason for the caller
+   *  (UI decides which copy to show). Admin sees an archive-instead CTA. */
+  reason?:
+    | "onboarding_completed"
+    | "has_payroll_lines"
+    | "has_timesheet_entries"
+    | "has_employment_period_activated";
+}
+
+/**
+ * Cheap pre-flight: is the employee eligible for a HARD delete right
+ * now? Reads the same signals `deleteEmployee` would enforce, without
+ * mutating anything. Used by the profile UI to pick between Delete
+ * and Archive.
+ */
+export async function getDeleteEligibility(
+  principal: Principal,
+  employeeId: string,
+): Promise<DeleteEmployeeEligibility> {
+  const employee = await loadEmployee(principal, employeeId);
+  if (ONBOARDING_TERMINAL_STATES.has(employee.onboardingState)) {
+    return { eligible: false, reason: "onboarding_completed" };
+  }
+  const [payrollCount, timesheetCount, activePeriodCount] = await Promise.all([
+    prisma.payrollLine.count({ where: { employeeId } }),
+    // TimesheetEntry.employeeId doesn't exist directly — the FK is on
+    // the parent Timesheet, so we count via the join.
+    prisma.timesheetEntry.count({ where: { timesheet: { employeeId } } }),
+    prisma.employmentPeriod.count({ where: { employeeId, effectiveTo: null } }),
+  ]);
+  if (payrollCount > 0) return { eligible: false, reason: "has_payroll_lines" };
+  if (timesheetCount > 0) return { eligible: false, reason: "has_timesheet_entries" };
+  if (activePeriodCount > 0 && employee.employeeLifecycle === "ACTIVE") {
+    return { eligible: false, reason: "has_employment_period_activated" };
+  }
+  return { eligible: true };
+}
+
+/**
+ * HR-2B.3.6 (2026-08-19) — Hard-delete an employee whose onboarding
+ * has NOT yet reached a terminal state and who has no financial /
+ * timekeeping history. Deletes the following child rows in FK-safe
+ * order inside a single transaction; refuses if the employee is
+ * ineligible.
+ *
+ * Deletes (canonical order):
+ *   1. EmployeeOnboardingCorrection
+ *   2. EmployeeOnboardingAcknowledgement
+ *   3. EmployeeOnboardingResponse
+ *   4. EmployeeOnboardingInvitation
+ *   5. EmployeeOnboardingSession
+ *   6. EmployeeSensitiveIdentity
+ *   7. EmployeeBankAccount
+ *   8. EmployeeTaxProfile
+ *   9. EmployeeEmergencyContact
+ *  10. EmployeeCredential
+ *  11. EmployeeDocument (PII-bearing rows — see `sensitivity`)
+ *  12. EmployeeCompensation (HR-1 canonical rate history)
+ *  13. EmploymentPeriod (only if no PayrollLine / TimesheetEntry — enforced above)
+ *  14. Employee itself.
+ *
+ * Explicitly NOT touched: PayrollLine, TimesheetEntry, JournalEntryLine,
+ * AuditLog. If any of these exist, the eligibility check refuses the
+ * delete BEFORE any mutation runs.
+ */
+export async function deleteEmployee(
+  principal: Principal,
+  employeeId: string,
+  opts: { reason?: string } = {},
+) {
+  const employee = await loadEmployee(principal, employeeId);
+  requirePermission(principal, employee.clubId, "hr:employee:write");
+  await assertSensitiveActionAllowed(
+    principal,
+    employee.clubId,
+    "hr.employee.delete.post",
+    EMPLOYEE_ENTITY,
+    employeeId,
+  );
+
+  const eligibility = await getDeleteEligibility(principal, employeeId);
+  if (!eligibility.eligible) {
+    throw new ConflictError(
+      `Employee ${employeeId} is not eligible for hard delete (${eligibility.reason ?? "unknown"}). Archive instead.`,
+    );
+  }
+
+  const before = {
+    employeeLifecycle: employee.employeeLifecycle,
+    onboardingState: employee.onboardingState,
+    firstName: employee.firstName,
+    lastName: employee.lastName,
+    employeeNumber: employee.employeeNumber,
+  };
+
+  await prisma.$transaction(async (tx) => {
+    // 1. Onboarding-related.
+    //
+    // EmployeeOnboardingResponse rows are keyed on sessionId, not
+    // employeeId — delete via a subquery on this employee's sessions.
+    await tx.employeeOnboardingCorrection.deleteMany({ where: { employeeId } });
+    await tx.employeeOnboardingAcknowledgement.deleteMany({ where: { employeeId } });
+    await tx.employeeOnboardingResponse.deleteMany({
+      where: { session: { employeeId } },
+    });
+    await tx.employeeOnboardingInvitation.deleteMany({ where: { employeeId } });
+    await tx.employeeOnboardingSession.deleteMany({ where: { employeeId } });
+    // 2. Sensitive HR rows.
+    await tx.employeeSensitiveIdentity.deleteMany({ where: { employeeId } });
+    await tx.employeeBankAccount.deleteMany({ where: { employeeId } });
+    await tx.employeeTaxProfile.deleteMany({ where: { employeeId } });
+    // 3. Directory adjuncts.
+    await tx.employeeEmergencyContact.deleteMany({ where: { employeeId } });
+    await tx.employeeCredential.deleteMany({ where: { employeeId } });
+    // 4. Documents (may include void cheques, resume, profile photo).
+    await tx.employeeDocument.deleteMany({ where: { employeeId } });
+    // 5. Compensation history (HR-1 canonical rate table). Table may
+    //    not exist in every older schema — guard the delete.
+    if ((tx as unknown as { employeeCompensation?: { deleteMany?: (arg: unknown) => Promise<unknown> } }).employeeCompensation?.deleteMany) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (tx as any).employeeCompensation.deleteMany({ where: { employeeId } });
+    }
+    // 6. Employment period. Eligibility check above already refused if
+    //    payroll/timesheet history exists.
+    await tx.employmentPeriod.deleteMany({ where: { employeeId } });
+    // 7. Unpin the profile-photo / resume pointers before deleting
+    //    the Employee row — the FK on Employee → EmployeeDocument
+    //    references the document, not the reverse.
+    // Already handled by step 4 (documents deleted before employee).
+    // 8. Employee itself.
+    await tx.employee.delete({ where: { id: employeeId } });
+  });
+
+  await audit(principal, {
+    action: "hr.employee.delete.post",
+    entityType: EMPLOYEE_ENTITY,
+    entityId: employeeId,
+    clubId: employee.clubId,
+    before,
+    meta: { reason: opts.reason ?? null },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +815,15 @@ export async function getEmployee(
 export async function listEmployees(
   principal: Principal,
   clubId: string,
-  opts: { lifecycle?: string; includeTerminated?: boolean } = {},
+  opts: {
+    lifecycle?: string;
+    includeTerminated?: boolean;
+    /** HR-2B.3.6 (2026-08-19) — Directory filter mode.
+     *   "active"   (default) — hide ARCHIVED and TERMINATED (pre-hire + active + leave).
+     *   "archived" — only ARCHIVED (and TERMINATED, historical continuity).
+     *   "all"      — every lifecycle. */
+    directoryScope?: "active" | "archived" | "all";
+  } = {},
 ) {
   requirePermission(principal, clubId, "hr:directory:view");
   if (!isSuperAdmin(principal)) {
@@ -611,9 +832,16 @@ export async function listEmployees(
     }
   }
   const where: Record<string, unknown> = { clubId };
-  if (opts.lifecycle) where.employeeLifecycle = opts.lifecycle;
-  if (!opts.includeTerminated) {
-    where.employeeLifecycle = where.employeeLifecycle ?? { not: "TERMINATED" };
+  if (opts.lifecycle) {
+    where.employeeLifecycle = opts.lifecycle;
+  } else {
+    const scope = opts.directoryScope ?? (opts.includeTerminated ? "all" : "active");
+    if (scope === "active") {
+      where.employeeLifecycle = { in: ["PRE_HIRE", "ACTIVE", "LEAVE"] };
+    } else if (scope === "archived") {
+      where.employeeLifecycle = { in: ["ARCHIVED", "TERMINATED"] };
+    }
+    // "all" → no lifecycle filter.
   }
   return prisma.employee.findMany({
     where,

@@ -26,9 +26,19 @@ import { hasPermission } from "@/lib/rbac";
 import { Badge } from "@/components/Badge";
 import EmployeeAvatar from "@/components/hr/EmployeeAvatar";
 import { formatDate } from "@/lib/finance";
-import { loadEmployeeDirectory } from "./loader";
+import { loadEmployeeDirectory, type EmployeeDirectoryScope } from "./loader";
 
-export default async function EmployeeDirectoryPage() {
+function coerceScope(raw: string | string[] | undefined): EmployeeDirectoryScope {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v === "archived" || v === "all") return v;
+  return "active";
+}
+
+export default async function EmployeeDirectoryPage({
+  searchParams,
+}: {
+  searchParams?: { scope?: string | string[] };
+}) {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
   const clubId = await getActiveClubId({ clubId: principal.activeClubId ?? null, role: "" });
@@ -36,7 +46,8 @@ export default async function EmployeeDirectoryPage() {
     redirect("/app/admin");
   }
 
-  const employees = await loadEmployeeDirectory(clubId);
+  const scope = coerceScope(searchParams?.scope);
+  const employees = await loadEmployeeDirectory(clubId, scope);
 
   return (
     <div>
@@ -52,6 +63,34 @@ export default async function EmployeeDirectoryPage() {
           + Add Employee
         </Link>
       </div>
+
+      {/* HR-2B.3.6 — restrained scope filter. Default view hides
+          ARCHIVED and TERMINATED. */}
+      <nav
+        aria-label="Employee directory filter"
+        data-testid="directory-scope-filter"
+        className="mt-4 flex items-center gap-1 text-xs"
+      >
+        {(["active", "archived", "all"] as EmployeeDirectoryScope[]).map((s) => {
+          const label = s === "active" ? "Active" : s === "archived" ? "Archived" : "All";
+          const isCurrent = scope === s;
+          return (
+            <Link
+              key={s}
+              href={s === "active" ? "/app/admin/people/employees" : `/app/admin/people/employees?scope=${s}`}
+              className={`rounded-md px-2.5 py-1 ${
+                isCurrent
+                  ? "bg-stone-900 text-white"
+                  : "text-stone-600 hover:bg-stone-100 hover:text-stone-900"
+              }`}
+              data-testid={`directory-scope-${s}`}
+              aria-current={isCurrent ? "page" : undefined}
+            >
+              {label}
+            </Link>
+          );
+        })}
+      </nav>
 
       {employees.length === 0 ? (
         // HR-2A.1 (2026-08-17) — proper hero empty state instead of a
