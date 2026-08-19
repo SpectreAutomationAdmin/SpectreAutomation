@@ -15,7 +15,9 @@ import {
   requireEmployeeOnboardingActor,
 } from "@/lib/hr/employee-actor";
 import {
+  acknowledgeSelfContactStep,
   acknowledgeSelfEmployment,
+  acknowledgeSelfNameStep,
   CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS,
   flagEmploymentFieldForCorrection,
   transitionSelfSessionToInProgress,
@@ -77,6 +79,11 @@ export async function saveNameAction(formData: FormData) {
   }
   try {
     await updateSelfIdentity(actor, patch);
+    // HR-2B.3.3 (2026-08-18) — durable ack that the employee posted
+    // this step. Replaces the prior "inferred from preferredName"
+    // signal which was the source of the /complete → Continue-to-
+    // payroll backward-navigation regression.
+    await acknowledgeSelfNameStep(actor);
     await markInProgress(actor);
   } catch (err) {
     if (isAppError(err)) {
@@ -105,6 +112,9 @@ export async function saveContactAction(formData: FormData) {
   }
   try {
     await updateSelfIdentity(actor, patch);
+    // HR-2B.3.3 (2026-08-18) — same rationale as Name; ack captures
+    // the fact of the step, not the presence of any specific field.
+    await acknowledgeSelfContactStep(actor);
     await markInProgress(actor);
   } catch (err) {
     if (isAppError(err)) {

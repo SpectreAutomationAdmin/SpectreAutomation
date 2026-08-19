@@ -52,16 +52,39 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
   // forbids cookie writes in server-component renders). Errors now
   // flow via `?err=<msg>` search param + a client component.
 
-  // About-you stages: all considered done by the time the employee is
-  // inside /hr/onboarding/payroll (About-you hub redirects here only
-  // after About-you completion). We still read persisted facts to keep
-  // the rail honest if the employee somehow revisits mid-flow.
-  const nameDone = Boolean(employee.preferredName?.trim() || employee.firstName?.trim());
-  const contactDone = Boolean(employee.personalEmail?.trim() || employee.mobilePhone?.trim());
+  // HR-2B.3.3 (2026-08-18) — About-you completion signals come from
+  // the SAME persisted-event sources the canonical resolver reads.
+  // The employee is inside /hr/onboarding/payroll iff About-you is
+  // complete (the payroll hub delegates to `resolveOnboardingContinuation`);
+  // this parallel read keeps the rail honest for direct-URL navigation
+  // and matches the resolver's determination byte-for-byte.
+  const [nameAck, contactAck, employmentAck, corrections] = await Promise.all([
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, clubId: actor.clubId, kind: "about_you_name_confirmation" },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, clubId: actor.clubId, kind: "about_you_contact_confirmation" },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: { sessionId: actor.sessionId, clubId: actor.clubId, kind: "employment_confirmation" },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingCorrection.findMany({
+      where: {
+        sessionId: actor.sessionId,
+        clubId: actor.clubId,
+        field: { in: ["positionId", "departmentId", "expectedStartDate", "employmentType"] },
+      },
+      select: { field: true },
+    }),
+  ]);
+  const nameDone = Boolean(nameAck);
+  const contactDone = Boolean(contactAck);
+  const employmentDone = Boolean(employmentAck) || corrections.length > 0;
   const photoDone = Boolean(employee.profilePhotoDocumentId);
-  // Employment ack was required before the About You complete gate;
-  // trust the About-you completion when inside /payroll.
-  const employmentDone = true;
+  const aboutYouDone = nameDone && contactDone && employmentDone && photoDone;
 
   return (
     <main className="mx-auto max-w-5xl px-4 pt-8 pb-16 md:pt-12 md:pb-24">
@@ -83,15 +106,26 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
         <aside className="md:sticky md:top-8 md:self-start">
           <OnboardingProgressRail
             stages={[
-              { key: "name", label: "About you", done: nameDone, current: false },
-              { key: "contact", label: "Contact", done: contactDone, current: false },
-              { key: "employment", label: "Employment", done: employmentDone, current: false },
-              { key: "photo", label: "Photo", done: photoDone, current: false },
+              // HR-2B.3.3 — parent "About you" row + sub-stages mirroring
+              // the About You layout's rail. Done reflects the SAME
+              // canonical state — no independent inference.
+              {
+                key: "about-you",
+                label: "About you",
+                done: aboutYouDone,
+                current: !aboutYouDone,
+                subStages: [
+                  { key: "name", label: "Name", done: nameDone },
+                  { key: "contact", label: "Contact", done: contactDone },
+                  { key: "employment", label: "Employment", done: employmentDone },
+                  { key: "photo", label: "Photo", done: photoDone },
+                ],
+              },
               {
                 key: "payroll",
                 label: "Payroll",
                 done: completion.complete,
-                current: true,
+                current: aboutYouDone && !completion.complete,
                 subStages: [
                   { key: "sin", label: "SIN", done: completion.sin },
                   { key: "direct-deposit", label: "Direct deposit", done: completion.banking },

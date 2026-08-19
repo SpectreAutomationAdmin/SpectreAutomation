@@ -15,13 +15,15 @@ import { prisma } from "@/lib/prisma";
 import { createSession, transitionSession } from "@/lib/hr/onboarding-sessions";
 import { acquireInvitationContext } from "@/lib/hr/invitations";
 import {
+  acknowledgeSelfContactStep,
+  acknowledgeSelfEmployment,
+  acknowledgeSelfNameStep,
   attestSelfTd1,
   submitSelfBankAccount,
   submitSelfSin,
   submitSelfTaxProfile,
-  uploadSelfPhoto,
-  acknowledgeSelfEmployment,
   updateSelfIdentity,
+  uploadSelfPhoto,
 } from "@/lib/hr/employee-self-service";
 import type { EmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { resolveOnboardingContinuation, ONBOARDING_CONTINUATION_URLS } from "@/lib/hr/onboarding-continuation";
@@ -69,6 +71,43 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await seedRbac();
   });
 
+  // ==== HR-2B.3.3 direct regression for the founder failure ==============
+  //
+  // BEFORE the fix, the resolver did:
+  //   nameDone = Boolean(employee.preferredName?.trim())
+  // Employees who submitted the Name form without entering an
+  // optional preferredName looked "not done" — so the /about-you/
+  // complete → Continue-to-payroll CTA (which routes through the
+  // payroll hub → resolver) sent them BACKWARD to /about-you/name.
+  // AFTER the fix, name completeness is a durable ack row.
+
+  describe("§1 regression — preferredName is optional and does NOT gate Name completion", () => {
+    it("Name ack + Contact ack + employment ack + photo → resolver advances to Payroll / sin (preferredName can be null)", async () => {
+      const { actor, employee } = await actorForFixture("PreferredNameNull");
+      // Explicitly do NOT set preferredName. Employee just clicks
+      // through Name accepting whatever the Club recorded.
+      await acknowledgeSelfNameStep(actor);
+      await acknowledgeSelfContactStep(actor);
+      await acknowledgeSelfEmployment(actor);
+      await uploadSelfPhoto(actor, {
+        bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        mimeType: "image/png",
+      });
+      const row = await prisma.employee.findUnique({ where: { id: employee.id } });
+      expect(row!.preferredName).toBeNull();
+      expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.payrollSin);
+    });
+
+    it("preferredName present but Name ack absent → resolver returns Name (ack, not identity field, is the signal)", async () => {
+      const { actor } = await actorForFixture("PreferredNameNoAck");
+      // Employee has a preferredName value but never posted the Name
+      // form (e.g. Club pre-filled it at Add Employee time). Must
+      // still visit the Name step.
+      await updateSelfIdentity(actor, { preferredName: "Chris" });
+      expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouName);
+    });
+  });
+
   // ==== interruption points along the pipeline =========================
 
   it("brand-new session (nothing done) → About You / name", async () => {
@@ -79,20 +118,25 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("name saved (preferredName present) → About You / contact", async () => {
     const { actor } = await actorForFixture("PostName");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouContact);
   });
 
   it("name + contact saved → About You / employment", async () => {
     const { actor } = await actorForFixture("PostContact");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouEmployment);
   });
 
   it("employment acknowledgement present → About You / photo", async () => {
     const { actor } = await actorForFixture("PostEmployment");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouPhoto);
   });
@@ -100,7 +144,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("photo uploaded → Payroll / sin (About You is fully done)", async () => {
     const { actor } = await actorForFixture("PostPhoto");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -112,7 +158,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("SIN saved → Payroll / direct-deposit", async () => {
     const { actor } = await actorForFixture("PostSin");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -125,7 +173,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("banking saved → Payroll / td1-federal", async () => {
     const { actor } = await actorForFixture("PostBanking");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -144,7 +194,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("tax profile saved but no federal attestation → still Payroll / td1-federal", async () => {
     const { actor } = await actorForFixture("PostTaxNoFed");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -168,7 +220,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("federal attestation done → Payroll / td1-provincial", async () => {
     const { actor } = await actorForFixture("PostFedAtt");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -192,7 +246,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
   it("both attestations done → Payroll / review", async () => {
     const { actor } = await actorForFixture("PostAllAtt");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -266,7 +322,9 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     const { actor, clubAdmin } = await actorForFixture("Resend");
     // Advance to mid-flow: About You + SIN done, banking not.
     await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),

@@ -96,8 +96,22 @@ export async function resolveOnboardingContinuation(
   }
 
   // 2. Read every completion signal in parallel.
+  //
+  // HR-2B.3.3 (2026-08-18) — About You / Name + Contact are now
+  // driven by durable ack rows (kinds `about_you_name_confirmation`
+  // + `about_you_contact_confirmation`). The prior
+  // "inferred from optional identity field" logic
+  // (`Boolean(preferredName?.trim())` / `Boolean(personalEmail || mobilePhone)`)
+  // caused the /about-you/complete → Continue-to-payroll backward-
+  // navigation bug — an employee who submitted Name without a
+  // preferred name looked "not done" to the resolver even though
+  // the step action had advanced them past it. The ack row is now
+  // the SINGLE canonical signal and is written by saveNameAction /
+  // saveContactAction in the same transaction as the identity write.
   const [
     employee,
+    nameAck,
+    contactAck,
     employmentAck,
     correctionCount,
     sinRow,
@@ -109,11 +123,24 @@ export async function resolveOnboardingContinuation(
     prisma.employee.findFirst({
       where: { id: ctx.employeeId, clubId: ctx.clubId },
       select: {
-        preferredName: true,
-        personalEmail: true,
-        mobilePhone: true,
         profilePhotoDocumentId: true,
       },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: {
+        sessionId: ctx.sessionId,
+        clubId: ctx.clubId,
+        kind: "about_you_name_confirmation",
+      },
+      select: { id: true },
+    }),
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: {
+        sessionId: ctx.sessionId,
+        clubId: ctx.clubId,
+        kind: "about_you_contact_confirmation",
+      },
+      select: { id: true },
     }),
     prisma.employeeOnboardingAcknowledgement.findFirst({
       where: {
@@ -166,11 +193,9 @@ export async function resolveOnboardingContinuation(
 
   if (!employee) return URLS.expired;
 
-  // 3. About You cascade.
-  const nameDone = Boolean(employee.preferredName?.trim());
-  const contactDone = Boolean(
-    employee.personalEmail?.trim() || employee.mobilePhone?.trim(),
-  );
+  // 3. About You cascade — every predicate is now a persisted event.
+  const nameDone = Boolean(nameAck);
+  const contactDone = Boolean(contactAck);
   const employmentDone = Boolean(employmentAck) || correctionCount > 0;
   const photoDone = Boolean(employee.profilePhotoDocumentId);
 

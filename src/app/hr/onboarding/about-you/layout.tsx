@@ -21,57 +21,64 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
 
-  // Load the club name + the employee's photo pointer for the header /
-  // progress rail. Deliberately scoped by clubId AND id so a stale
-  // cookie cannot leak into another club.
-  const [club, employee] = await Promise.all([
-    prisma.club.findFirst({
-      where: { id: actor.clubId },
-      select: { name: true },
-    }),
-    prisma.employee.findFirst({
-      where: { id: actor.employeeId, clubId: actor.clubId },
-      select: {
-        firstName: true,
-        preferredName: true,
-        personalEmail: true,
-        mobilePhone: true,
-        profilePhotoDocumentId: true,
-      },
-    }),
-  ]);
+  // HR-2B.3.3 (2026-08-18) — Completion signals are read from the
+  // same persisted-event sources the canonical resolver reads (see
+  // `src/lib/hr/onboarding-continuation.ts`). The rail and the
+  // resolver are now guaranteed to agree on every step's done state.
+  const [club, employee, nameAck, contactAck, employmentAck, corrections] =
+    await Promise.all([
+      prisma.club.findFirst({
+        where: { id: actor.clubId },
+        select: { name: true },
+      }),
+      prisma.employee.findFirst({
+        where: { id: actor.employeeId, clubId: actor.clubId },
+        select: {
+          firstName: true,
+          preferredName: true,
+          profilePhotoDocumentId: true,
+        },
+      }),
+      prisma.employeeOnboardingAcknowledgement.findFirst({
+        where: {
+          sessionId: actor.sessionId,
+          clubId: actor.clubId,
+          kind: "about_you_name_confirmation",
+        },
+        select: { id: true },
+      }),
+      prisma.employeeOnboardingAcknowledgement.findFirst({
+        where: {
+          sessionId: actor.sessionId,
+          clubId: actor.clubId,
+          kind: "about_you_contact_confirmation",
+        },
+        select: { id: true },
+      }),
+      prisma.employeeOnboardingAcknowledgement.findFirst({
+        where: {
+          sessionId: actor.sessionId,
+          clubId: actor.clubId,
+          kind: "employment_confirmation",
+        },
+        select: { id: true },
+      }),
+      prisma.employeeOnboardingCorrection.findMany({
+        where: {
+          sessionId: actor.sessionId,
+          clubId: actor.clubId,
+          field: { in: ["positionId", "departmentId", "expectedStartDate", "employmentType"] },
+        },
+        select: { field: true },
+      }),
+    ]);
   if (!club || !employee) redirect("/hr/onboarding/expired");
 
-  // Determine step completion from PERSISTED facts, not adjacent
-  // progress inference:
-  //   • Name       : employee has saved their preferredName.
-  //   • Contact    : employee has saved either personalEmail or mobilePhone.
-  //   • Employment : the durable EmployeeOnboardingAcknowledgement row
-  //                  exists (kind=employment_confirmation) OR the employee
-  //                  has flagged at least one field-level correction.
-  //   • Photo      : Employee.profilePhotoDocumentId is set.
-  const [ack, corrections] = await Promise.all([
-    prisma.employeeOnboardingAcknowledgement.findFirst({
-      where: {
-        sessionId: actor.sessionId,
-        clubId: actor.clubId,
-        kind: "employment_confirmation",
-      },
-      select: { id: true },
-    }),
-    prisma.employeeOnboardingCorrection.findMany({
-      where: {
-        sessionId: actor.sessionId,
-        clubId: actor.clubId,
-        field: { in: ["positionId", "departmentId", "expectedStartDate", "employmentType"] },
-      },
-      select: { field: true },
-    }),
-  ]);
-  const nameDone = Boolean(employee.preferredName?.trim());
-  const contactDone = Boolean(employee.personalEmail?.trim() || employee.mobilePhone?.trim());
+  const nameDone = Boolean(nameAck);
+  const contactDone = Boolean(contactAck);
+  const employmentDone = Boolean(employmentAck) || corrections.length > 0;
   const photoDone = Boolean(employee.profilePhotoDocumentId);
-  const employmentDone = Boolean(ack) || corrections.length > 0;
+  const aboutYouDone = nameDone && contactDone && employmentDone && photoDone;
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
@@ -101,11 +108,23 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
         <aside className="md:sticky md:top-8 md:self-start">
           <OnboardingProgressRail
             stages={[
-              { key: "name", label: "About you", done: nameDone, current: false },
-              { key: "contact", label: "Contact", done: contactDone, current: false },
-              { key: "employment", label: "Employment", done: employmentDone, current: false },
-              { key: "photo", label: "Photo", done: photoDone, current: false },
-              { key: "payroll", label: "Payroll", done: false, current: false, future: true },
+              // HR-2B.3.3 — parent "About you" row aggregates the four
+              // sub-stages; done reflects the CANONICAL state, mirroring
+              // Payroll's rail shape. The parent is `current` whenever
+              // the employee is anywhere inside /hr/onboarding/about-you/*.
+              {
+                key: "about-you",
+                label: "About you",
+                done: aboutYouDone,
+                current: !aboutYouDone,
+                subStages: [
+                  { key: "name", label: "Name", done: nameDone },
+                  { key: "contact", label: "Contact", done: contactDone },
+                  { key: "employment", label: "Employment", done: employmentDone },
+                  { key: "photo", label: "Photo", done: photoDone },
+                ],
+              },
+              { key: "payroll", label: "Payroll", done: false, current: aboutYouDone, future: !aboutYouDone },
               { key: "emergency", label: "Emergency", done: false, current: false, future: true },
               { key: "documents", label: "Documents", done: false, current: false, future: true },
               { key: "review", label: "Review", done: false, current: false, future: true },

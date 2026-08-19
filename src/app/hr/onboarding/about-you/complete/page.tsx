@@ -48,7 +48,14 @@ export default async function AboutYouComplete() {
 
       <div className="mt-8 flex items-center justify-end border-t border-stone-100 pt-6">
         <Link
-          href="/hr/onboarding/payroll"
+          // HR-2B.3.3 (2026-08-18) — route through the SINGLE canonical
+          // entry point. `/hr/onboarding/session` calls
+          // `resolveOnboardingContinuation` and redirects to the next
+          // incomplete step. If About You isn't actually done (edge
+          // case), the resolver takes the employee back to the
+          // outstanding step rather than dropping them into /payroll
+          // where the payroll hub would then bounce them backward.
+          href="/hr/onboarding/session"
           data-testid="continue-to-payroll"
           className="rounded-md bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
         >

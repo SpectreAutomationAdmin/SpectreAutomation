@@ -72,8 +72,17 @@ export const CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS = [
 export type ClubAuthoritativeField = (typeof CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS)[number];
 
 /** Vocabulary for `EmployeeOnboardingAcknowledgement.kind`.
- *  HR-2B.3 adds the two TD1 attestations. */
+ *  HR-2B.3 adds the two TD1 attestations.
+ *  HR-2B.3.3 (2026-08-18) adds two About You step acknowledgements —
+ *  these replace the prior implicit inference from optional
+ *  identity fields (`preferredName`, `personalEmail`) which
+ *  previously caused the /about-you/complete → Continue-to-payroll
+ *  backward-nav bug: the resolver treated `preferredName=null` as
+ *  "Name step not done" even though the employee had explicitly
+ *  posted the Name form. The ack row is the SINGLE canonical signal. */
 export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = [
+  "about_you_name_confirmation",
+  "about_you_contact_confirmation",
   "employment_confirmation",
   "td1_federal_attestation",
   "td1_provincial_attestation",
@@ -345,6 +354,61 @@ export async function flagEmploymentFieldForCorrection(
  * session). The progress rail reads this row directly rather than
  * inferring "employment done" from adjacent progress.
  */
+// HR-2B.3.3 (2026-08-18) — Two About You step acknowledgements. Both
+// follow the same shape as `acknowledgeSelfEmployment`: idempotent
+// upsert on `(sessionId, kind)`, audit with EMPLOYEE actor
+// provenance. See the ack-kind vocabulary comment above for the
+// rationale — these replace the prior implicit inference from
+// optional identity fields (which was the source of the
+// /about-you/complete → Continue-to-payroll backward-navigation bug).
+
+/** The employee posted the About You / Name form. Written by
+ *  `saveNameAction` after `updateSelfIdentity` succeeds. */
+export async function acknowledgeSelfNameStep(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  await upsertAboutYouStepAck(actor, "about_you_name_confirmation");
+}
+
+/** The employee posted the About You / Contact form. Written by
+ *  `saveContactAction` after `updateSelfIdentity` succeeds. */
+export async function acknowledgeSelfContactStep(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  await upsertAboutYouStepAck(actor, "about_you_contact_confirmation");
+}
+
+async function upsertAboutYouStepAck(
+  actor: EmployeeOnboardingActor,
+  kind: "about_you_name_confirmation" | "about_you_contact_confirmation",
+): Promise<void> {
+  const now = new Date();
+  await prisma.employeeOnboardingAcknowledgement.upsert({
+    where: { sessionId_kind: { sessionId: actor.sessionId, kind } },
+    create: {
+      clubId: actor.clubId,
+      sessionId: actor.sessionId,
+      employeeId: actor.employeeId,
+      kind,
+      actorEmployeeId: actor.employeeId,
+      acknowledgedAt: now,
+    },
+    update: { acknowledgedAt: now, actorEmployeeId: actor.employeeId },
+  });
+  await audit(null, {
+    action: "hr.onboarding.acknowledgement.update",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: `${actor.sessionId}:${kind}`,
+    clubId: actor.clubId,
+    after: { kind, acknowledgedAt: now },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+}
+
 export async function acknowledgeSelfEmployment(
   actor: EmployeeOnboardingActor,
 ): Promise<void> {
