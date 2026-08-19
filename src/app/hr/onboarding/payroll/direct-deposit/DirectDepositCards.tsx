@@ -118,19 +118,46 @@ export default function DirectDepositCards({
       const res = await fetch("/api/hr/onboarding/self/banking-document/upload", {
         method: "POST",
         body,
+        // HR-2B.3.4 (2026-08-18) — explicit same-origin credential
+        // semantics. Browsers default to `same-origin` for fetch(),
+        // which is what we want here, but making it explicit removes
+        // any ambiguity if the client is ever reused from a context
+        // where the default differs.
+        credentials: "same-origin",
       });
       const contentType = res.headers.get("content-type") ?? "";
       const payload = contentType.includes("application/json") ? await res.json() : null;
       if (!res.ok) {
-        // Progressive-enhancement fallback: if the fetch failed for
-        // a reason the server-action would also have surfaced, hand
-        // off to the server action so the employee still gets a
-        // response (redirect-based, but at least visible).
-        const message =
-          (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string")
-            ? (payload as { error: string }).error
-            : "We couldn't upload that document. Please try again.";
-        setUploadError(message);
+        // HR-2B.3.4 (2026-08-18) — render category-appropriate copy
+        // from the server's structured `errorCode`, never the raw
+        // `error` prose. Historically the client rendered
+        // "Your onboarding session is no longer active" verbatim
+        // regardless of the true failure category — that was the §7
+        // error-UX defect.
+        const errorCode = (payload && typeof payload === "object" && "errorCode" in payload)
+          ? String((payload as { errorCode?: unknown }).errorCode ?? "")
+          : "";
+        const serverMessage = (payload && typeof payload === "object" && "error" in payload && typeof (payload as { error?: unknown }).error === "string")
+          ? (payload as { error: string }).error
+          : null;
+        const friendly =
+          errorCode === "SESSION_INVALID"
+            ? // Only render this specific message for a genuine
+              // auth failure. The employee's session is actually
+              // invalid — they need to reopen their invitation link.
+              "Your onboarding session is no longer active. Please reopen your invitation link."
+          : errorCode === "VALIDATION"
+            ? // The server provided a specific reason (wrong MIME,
+              // empty file, unknown category). Surface it verbatim.
+              (serverMessage ?? "That document isn't accepted. Please choose a PDF or image (JPG, PNG, or HEIC).")
+          : errorCode === "TOO_LARGE"
+            ? (serverMessage ?? "That file is too large. Please upload something smaller.")
+          : errorCode === "BAD_REQUEST"
+            ? "We couldn't upload that document. Your onboarding progress is safe. Please try again."
+          : // PERSISTENCE / unknown / no code — treat as a transient
+            // problem with the upload, NOT with the session.
+            "We couldn't upload that document. Your onboarding progress is safe. Please try again.";
+        setUploadError(friendly);
         setUploadStage("failed");
         return;
       }

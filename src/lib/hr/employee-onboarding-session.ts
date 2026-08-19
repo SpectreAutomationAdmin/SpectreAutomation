@@ -41,7 +41,31 @@ export const EMPLOYEE_ONBOARDING_SESSION_OPTIONS: SessionOptions = {
     httpOnly: true,
     sameSite: "lax",
     secure: env.NODE_ENV === "production",
-    path: "/hr",
+    // HR-2B.3.4 (2026-08-18) — path=`/` rather than `/hr`.
+    //
+    // Root cause of the founder's void-cheque upload failure: the
+    // employee-facing self-service API endpoints live under
+    // `/api/hr/onboarding/self/…`. A cookie scoped to `path: "/hr"`
+    // is NEVER sent by the browser to `/api/…` requests, so
+    // `resolveEmployeeOnboardingActor()` saw no cookie and refused
+    // the upload with "Your onboarding session is no longer active".
+    // The classic "Server Actions on /hr/* work, fetch to /api/hr/*
+    // does not" divergence.
+    //
+    // Security invariants preserved:
+    //   • httpOnly + Secure + SameSite=Lax + iron-session-encrypted
+    //     with SPECTRE_SESSION_SECRET.
+    //   • `path: "/hr"` was cosmetic defense-in-depth — it never
+    //     prevented an admin route from EXAMINING the cookie
+    //     (same-origin, same JS environment), it only limited which
+    //     paths the browser SENT it to.
+    //   • The actual security boundary is `resolveEmployeeOnboardingActor()`
+    //     which re-validates the {clubId, employeeId, sessionId,
+    //     invitationId} triangle against Prisma on every request.
+    //   • The employee-onboarding resolver is imported ONLY under
+    //     HR onboarding code — no admin path ever accidentally
+    //     consumes this session.
+    path: "/",
     // Match the default invitation TTL. Save-and-return works within
     // this window; after expiry, the employee needs a new invitation.
     maxAge: 60 * 60 * 24 * 7, // 7 days

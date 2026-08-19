@@ -73,16 +73,33 @@ function normaliseCategory(raw: string | null): SelfBankingDocumentCategory | nu
   return null;
 }
 
+// HR-2B.3.4 (2026-08-18) — Structured `errorCode` on every error
+// response so the client can render category-appropriate copy WITHOUT
+// parsing the `error` prose. Historically the client rendered the
+// server's `error` string verbatim, so the auth-failure message
+// ("Your onboarding session is no longer active") also surfaced for
+// upload/extraction problems whose real cause was different — that's
+// the §7 error-UX defect.
+//
+// Canonical vocabulary:
+//   SESSION_INVALID  — no valid EmployeeOnboardingActor (401)
+//   BAD_REQUEST      — malformed multipart body (400)
+//   VALIDATION       — bad category / mime / empty / cross-tenant (422)
+//   TOO_LARGE        — file exceeds cap (413)
+//   PERSISTENCE      — canonical adapter refused for reasons other
+//                      than validation (500 fallback)
+
+function err(status: number, code: string, message: string, extra?: Record<string, unknown>) {
+  return NextResponse.json({ errorCode: code, error: message, ...extra }, { status });
+}
+
 export async function POST(req: NextRequest) {
   // -- Auth ----------------------------------------------------------------
   let actor;
   try {
     actor = await requireEmployeeOnboardingActor();
   } catch {
-    return NextResponse.json(
-      { error: "Your onboarding session is no longer active" },
-      { status: 401 },
-    );
+    return err(401, "SESSION_INVALID", "Your onboarding session is no longer active");
   }
 
   // -- Body parse ----------------------------------------------------------
@@ -90,46 +107,28 @@ export async function POST(req: NextRequest) {
   try {
     fd = await req.formData();
   } catch {
-    return NextResponse.json(
-      { error: "Expected multipart/form-data body" },
-      { status: 400 },
-    );
+    return err(400, "BAD_REQUEST", "Expected multipart/form-data body");
   }
 
   const rawCategory = (fd.get("category") as string | null) ?? "void_cheque";
   const category = normaliseCategory(rawCategory);
   if (!category) {
-    return NextResponse.json(
-      { error: "Category must be void_cheque or direct_deposit_form" },
-      { status: 422 },
-    );
+    return err(422, "VALIDATION", "Category must be void_cheque or direct_deposit_form");
   }
 
   const entry = fd.get("document");
   if (!(entry instanceof File)) {
-    return NextResponse.json(
-      { error: "Please choose a file to upload." },
-      { status: 422 },
-    );
+    return err(422, "VALIDATION", "Please choose a file to upload.");
   }
   if (entry.size === 0) {
-    return NextResponse.json(
-      { error: "The uploaded file is empty." },
-      { status: 422 },
-    );
+    return err(422, "VALIDATION", "The uploaded file is empty.");
   }
   if (entry.size > MAX_BYTES) {
-    return NextResponse.json(
-      { error: `File exceeds ${MAX_BYTES / (1024 * 1024)} MB limit.` },
-      { status: 413 },
-    );
+    return err(413, "TOO_LARGE", `File exceeds ${MAX_BYTES / (1024 * 1024)} MB limit.`);
   }
   const mimeType = (entry.type || "").toLowerCase();
   if (!ACCEPTED_MIMES.has(mimeType)) {
-    return NextResponse.json(
-      { error: "Please upload a PDF or image (JPG, PNG, or HEIC)." },
-      { status: 422 },
-    );
+    return err(422, "VALIDATION", "Please upload a PDF or image (JPG, PNG, or HEIC).");
   }
 
   const bytes = Buffer.from(await entry.arrayBuffer());
@@ -146,17 +145,14 @@ export async function POST(req: NextRequest) {
       category,
       displayName: entry.name || null,
     });
-  } catch (err) {
-    if (err instanceof ValidationError) {
-      return NextResponse.json(
-        { error: err.issues[0]?.message ?? err.safeMessage, issues: err.issues },
-        { status: err.httpStatus },
-      );
+  } catch (e) {
+    if (e instanceof ValidationError) {
+      return err(e.httpStatus, "VALIDATION", e.issues[0]?.message ?? e.safeMessage, { issues: e.issues });
     }
-    if (isAppError(err)) {
-      return NextResponse.json({ error: err.safeMessage }, { status: err.httpStatus });
+    if (isAppError(e)) {
+      return err(e.httpStatus, "PERSISTENCE", e.safeMessage);
     }
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return err(500, "PERSISTENCE", "We couldn't save that document. Your onboarding progress is safe. Please try again.");
   }
 
   // -- Extract -------------------------------------------------------------
