@@ -311,19 +311,43 @@ test.describe.serial("HR-2B.3 · Payroll flow local acceptance", () => {
       ).toBeLessThanOrEqual(2);
       await page.screenshot({ path: path.join(OUT, "payroll-04-banking-masked-desktop.png") });
 
-      // ---------- Direct deposit — void-cheque upload ----------
+      // ---------- Direct deposit — void-cheque upload + extract + confirm ----------
+      // HR-2B.3.2 §1 (2026-08-18) — the upload flow is now fetch-based
+      // and no longer redirects. Clicking "Upload & read" streams the
+      // file to /api/hr/onboarding/self/banking-document/upload, the
+      // response comes back with extracted fields, and the page
+      // renders a pre-filled confirmation form. The employee then
+      // clicks "Confirm and save" to persist via `submitSelfBankAccount`.
       await page.locator('[data-testid="banking-choice-upload"]').click();
       await page.setInputFiles('[data-testid="void-cheque-input"]', {
         name: "void-cheque.pdf",
         mimeType: "application/pdf",
         buffer: VOID_CHEQUE_PDF,
       });
-      await Promise.all([
-        page.waitForURL(/\/hr\/onboarding\/payroll\/direct-deposit/, { timeout: 20_000 }),
-        page.locator('[data-testid="banking-upload-submit"]').click(),
-      ]);
-      await expect(page.locator('[data-testid="banking-document-summary"]')).toBeVisible();
+      // Click Upload & read and wait for the extraction confirmation
+      // form to appear. The processing spinner is transient — we
+      // wait on the confirmation form's testid instead.
+      await page.locator('[data-testid="banking-upload-submit"]').click();
+      await expect(page.locator('[data-testid="banking-extracted-form"]')).toBeVisible({ timeout: 20_000 });
       await page.screenshot({ path: path.join(OUT, "payroll-05-void-cheque-desktop.png") });
+
+      // Fields default to whatever the extractor produced (usually
+      // missing for the stub PDF). Fill the required fields and
+      // confirm.
+      await page.locator('[data-testid="banking-holder-name"]').fill(BANK_HOLDER);
+      await page.locator('[data-testid="banking-institution"]').fill(BANK_INSTITUTION);
+      await page.locator('[data-testid="banking-transit"]').fill(BANK_TRANSIT);
+      await page.locator('[data-testid="banking-account"]').fill(BANK_ACCOUNT_PRIMARY);
+      await Promise.all([
+        page.waitForURL(/\/hr\/onboarding\/payroll\/td1-federal/, { timeout: 20_000 }),
+        page.locator('[data-testid="banking-save"]').click(),
+      ]);
+
+      // Revisit the direct-deposit page so the server-rendered
+      // `banking-document-summary` shows (it's read from
+      // `getSelfBankingDocument` on page render).
+      await page.goto("http://localhost:3000/hr/onboarding/payroll/direct-deposit", { waitUntil: "domcontentloaded" });
+      await expect(page.locator('[data-testid="banking-document-summary"]')).toBeVisible();
 
       // ---------- Federal TD1 ----------
       await page.goto("http://localhost:3000/hr/onboarding/payroll/td1-federal", { waitUntil: "domcontentloaded" });
