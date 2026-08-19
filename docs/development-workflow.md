@@ -95,6 +95,49 @@ behaviour change.
   bar for the reconciliation step; destructive migrations happen
   in a separate reviewed slice, never inside the reconciliation.
 
+## Closeout gate — mandatory before declaring a phase CLOSED
+
+Before declaring a founder-approved phase CLOSED, Claude MUST prove:
+
+```bash
+npm run check:founder-baseline -- <founder-approved-sha>
+```
+
+exits `0` (i.e. `founder-approved SHA ∈ main`).
+
+If the script exits `1`, the phase is **NOT closed**, regardless of
+what the checkpoint prose says. Reconcile `main` first — either
+fast-forward, merge, or explicitly acknowledge (with founder
+authorization) that the work is intentionally staying off `main`.
+
+The 2026-08-18 Mission Control regression happened because we
+treated a phase as closed while the founder-approved work was
+stranded on `work-intake-state-outlook-archive-fix`. The next
+module (HR) branched off `main`, silently rewound Mission Control
+by ~36 commits, and the regression surfaced in founder review
+weeks later. This closeout gate is the mechanical bar that makes
+that class of failure impossible to repeat.
+
+## Canonical test gates
+
+Two commands must be green before ANY staging deploy:
+
+```bash
+npm run gate:mission-control    # Gate A: shell + Work Intake + AP + mailbox + Member
+npm run gate:hr                  # Gate B: full HR suite (batch, not solo)
+```
+
+Or run both plus typecheck:
+
+```bash
+npm run gate:all
+```
+
+Fail count on either gate MUST be `0`. "Passes solo" is not a
+passing gate — the batch itself must be green. If a test flakes
+under batch execution, fix the isolation (add serialization, own
+DB per suite, deterministic setup) — do NOT normalize retries.
+
 ## When staging fell behind main (this happens)
 
 If staging is running an image older than `main` because someone

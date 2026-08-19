@@ -397,10 +397,25 @@ describe("InlineConversationPanel — Checkpoint 14C", () => {
     expect(PANEL_TSX).toMatch(/const \[open, setOpen\] = useState\(openByDefault\)/);
   });
 
-  it("renders sanitized HTML via dangerouslySetInnerHTML, ONLY from msg.bodyHtmlSanitized", () => {
-    const matches = PANEL_TSX.match(/dangerouslySetInnerHTML=\{\{[^}]*\}\}/g) || [];
-    expect(matches.length).toBe(1);
-    expect(matches[0]).toMatch(/__html:\s*msg\.bodyHtmlSanitized/);
+  it("renders sanitized HTML from msg.bodyHtmlSanitized (only) via the sandboxed EmailBodyFrame", () => {
+    // Stabilization (2026-08-19): rev-14 refactored the inline HTML
+    // rendering into an <iframe srcdoc> sandbox (`EmailBodyFrame`) —
+    // stronger isolation than the prior dangerouslySetInnerHTML.
+    // The invariant is unchanged: HTML rendering must consume
+    // ONLY `msg.bodyHtmlSanitized`, never any other property.
+    expect(PANEL_TSX).toMatch(/EmailBodyFrame html=\{msg\.bodyHtmlSanitized\}/);
+    // No JSX attribute `dangerouslySetInnerHTML={...}` in the panel
+    // itself — the phrase appears only in doc-comments, so strip
+    // comments before asserting.
+    const withoutComments = PANEL_TSX
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\n)\s*\/\/[^\n]*/g, "");
+    expect(withoutComments).not.toMatch(/dangerouslySetInnerHTML=/);
+    // The panel MUST NOT ever pass a non-sanitized body field into
+    // the frame (bodyHtmlRaw, bodyHtml, subject, preview, etc.).
+    expect(PANEL_TSX).not.toMatch(/EmailBodyFrame[^>]*html=\{[^}]*bodyHtml[^S]/);
+    expect(PANEL_TSX).not.toMatch(/EmailBodyFrame[^>]*html=\{[^}]*bodyText/);
+    expect(PANEL_TSX).not.toMatch(/EmailBodyFrame[^>]*html=\{[^}]*subject/);
   });
 
   it("falls back to plain-text extract when sanitized HTML is null", () => {
@@ -454,8 +469,14 @@ describe("ReplyComposer — Checkpoint 14C consent + confirmation gate", () => {
   });
 
   it("displays a truthful post-send confirmation — 'Reply sent', not fabricated thread update", () => {
+    // Stabilization (2026-08-19): the truthful-copy language was
+    // updated at rev-12+ from "thread will update after the next
+    // mailbox synchronisation" to "Moved to Completed History and
+    // Outlook message archive requested." Same invariant: the
+    // confirmation is a truthful state statement, not a fabricated
+    // "your reply appears in the thread now" claim.
     expect(COMPOSER_TSX).toMatch(/Reply sent from/);
-    expect(COMPOSER_TSX).toMatch(/thread will update after the next mailbox synchronisation/);
+    expect(COMPOSER_TSX).toMatch(/Moved to Completed History|Outlook message archive requested|thread will update after the next mailbox synchronisation/);
     expect(COMPOSER_TSX).not.toMatch(/successfully sent/i);
     expect(COMPOSER_TSX).not.toMatch(/delivered/i);
   });
@@ -574,8 +595,17 @@ describe("POST /api/mission-control/work-intake/[id]/reply — Checkpoint 14C-B"
     expect(activityBlock).not.toMatch(/note:.*bodyText/);
   });
 
-  it("does not auto-resolve the Work Intake item", () => {
-    expect(REPLY_ROUTE).not.toMatch(/status:\s*"RESOLVED"/);
+  it("does not auto-resolve the Work Intake item when reply-only (andClose=false)", () => {
+    // Stabilization (2026-08-19): Sprint 3 · Checkpoint 16H added an
+    // explicit "Send reply & close" affordance. The RESOLVED write is
+    // now GATED on `if (andClose)`. Reply-only preserves the
+    // pre-16H invariant. Assert the gate exists AND that the
+    // RESOLVED write lives inside it.
+    expect(REPLY_ROUTE).toMatch(/if\s*\(andClose\)/);
+    const closeBlockStart = REPLY_ROUTE.indexOf("if (andClose)");
+    // Everything BEFORE the andClose gate must not contain a status:"RESOLVED" write.
+    const preCloseBlock = REPLY_ROUTE.slice(0, closeBlockStart);
+    expect(preCloseBlock).not.toMatch(/status:\s*"RESOLVED"/);
   });
 
   it("never fabricates a sent-message EmailMessage row", () => {
@@ -611,9 +641,16 @@ describe("Delegated provider — Mail.Send + replyToMessage — Checkpoint 14C-B
       .replace(/(^|\n)\s*\/\/[^\n]*/g, "");
     expect(arrayLiteral).toContain('"Mail.Read"');
     expect(arrayLiteral).toContain('"Mail.Send"');
-    // Mail.ReadWrite must not appear as an approved scope.
-    expect(arrayLiteral).not.toMatch(/Mail\.ReadWrite/);
+    // Stabilization (2026-08-19): rev-10+ Outlook mark-read / archive
+    // workflow requires `Mail.ReadWrite` (delegated) so the provider
+    // can POST /me/messages/{id}/move and PATCH /me/messages/{id}
+    // { isRead: true }. The bounded-scope invariants are:
+    //   • Mail.Send.Shared MUST NOT appear (would authorize
+    //     send-as-anyone in the tenant).
+    //   • no application-level (non-delegated) scope leaked in.
+    expect(arrayLiteral).toContain('"Mail.ReadWrite"');
     expect(arrayLiteral).not.toMatch(/Mail\.Send\.Shared/);
+    expect(arrayLiteral).not.toMatch(/Mail\.ReadWrite\.Shared/);
   });
 
   it("replyToMessage uses POST /me/messages/{id}/reply with { comment } — no client overrides", () => {

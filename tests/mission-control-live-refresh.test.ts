@@ -117,7 +117,22 @@ describe("Refresh state model — honest failure state", () => {
     // The provider only resets `error` at the START of a MANUAL
     // attempt — a background poll that fails again would only set
     // the error, never clear the visible one.
-    expect(CTX).toMatch(/if \(source === "manual"\) setError\(null\);/);
+    //
+    // Stabilization (2026-08-19): converted from a line-shape regex
+    // to a scoped semantic assertion. The old regex pinned the
+    // literal `if (source === "manual") setError(null);` which
+    // required the entry-point ternary shape; the current code
+    // splits handling into `doManualRefresh` (calls setError(null))
+    // and `doBackgroundRefresh` (never calls setError(null)). Both
+    // shapes preserve the invariant; only the background-branch
+    // absence is what actually matters.
+    const bgFn = CTX.match(/const doBackgroundRefresh = useCallback[\s\S]+?\n  \}, \[[^\]]*\]\);/);
+    expect(bgFn, "doBackgroundRefresh function not found").toBeTruthy();
+    expect(bgFn![0]).not.toMatch(/setError\(null\)/);
+    // And the manual path DOES clear the error at the start.
+    const manualFn = CTX.match(/const doManualRefresh = useCallback[\s\S]+?\n  \}, \[[^\]]*\]\);/);
+    expect(manualFn, "doManualRefresh function not found").toBeTruthy();
+    expect(manualFn![0]).toMatch(/setError\(null\)/);
   });
 });
 

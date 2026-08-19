@@ -161,13 +161,16 @@ describe("Successful callback → canonical redirect", () => {
 describe("MailboxFlowError → canonical error redirect", () => {
   afterEach(() => vi.clearAllMocks());
 
-  it("EXPIRED transaction → canonical /app/user/settings?mailbox=error&error=OAUTH_STATE_EXPIRED", async () => {
+  it("EXPIRED transaction → canonical /app/user/settings/connected-accounts?mailbox=error&error=OAUTH_STATE_EXPIRED", async () => {
     finaliseConnection.mockRejectedValue(new MailboxFlowError(MAILBOX_ERROR_CODE.OAUTH_STATE_EXPIRED));
     const res = await GET(makeReq(INTERNAL_URL));
     expect(res.status).toBe(302);
     const u = new URL(res.headers.get("location")!);
     expect(u.origin).toBe(CANONICAL_ORIGIN);
-    expect(u.pathname).toBe("/app/user/settings");
+    // Stabilization (2026-08-19): the canonical mailbox return path
+    // is the connected-accounts subpage (WIP-authoritative Phase 4R).
+    // The pre-Phase-4R stub landed on the settings root.
+    expect(u.pathname).toBe("/app/user/settings/connected-accounts");
     expect(u.searchParams.get("mailbox")).toBe("error");
     expect(u.searchParams.get("error")).toBe(MAILBOX_ERROR_CODE.OAUTH_STATE_EXPIRED);
   });
@@ -193,12 +196,15 @@ describe("MailboxFlowError → canonical error redirect", () => {
     expect(u.origin).toBe(CANONICAL_ORIGIN);
   });
 
-  it("Unknown non-MailboxFlowError → canonical fallback /app/user/settings?error=INTERNAL_ERROR", async () => {
+  it("Unknown non-MailboxFlowError → canonical fallback /app/user/settings/connected-accounts?error=INTERNAL_ERROR", async () => {
     finaliseConnection.mockRejectedValue(new Error("something totally unexpected"));
     const res = await GET(makeReq(INTERNAL_URL));
     const u = new URL(res.headers.get("location")!);
     expect(u.origin).toBe(CANONICAL_ORIGIN);
-    expect(u.pathname).toBe("/app/user/settings");
+    // Stabilization (2026-08-19): the canonical mailbox return path
+    // is the connected-accounts subpage (WIP-authoritative Phase 4R).
+    // The pre-Phase-4R stub landed on the settings root.
+    expect(u.pathname).toBe("/app/user/settings/connected-accounts");
     expect(u.searchParams.get("error")).toBe(MAILBOX_ERROR_CODE.INTERNAL_ERROR);
   });
 });

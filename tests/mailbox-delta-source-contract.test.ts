@@ -170,9 +170,13 @@ describe("runDeltaSyncForConnection — cursor lifecycle (Checkpoint 13G)", () =
   });
 
   it("never stores an intermediate nextLink as the deltaLink", () => {
-    // The persistence write for the success path uses newTerminalDeltaLink,
-    // which is only ever set from page.deltaLink (never from nextPageToken).
-    const successBlock = DELTA_TS.slice(DELTA_TS.indexOf("if (isTerminalSuccess)"));
+    // Stabilization (2026-08-19): the cursor-advance predicate is
+    // `shouldAdvanceCursor` in the WIP-authoritative rev-13
+    // implementation (was `isTerminalSuccess` in the pre-WIP branch).
+    // The invariant tested is unchanged: the persistence write for
+    // the cursor-advance path uses `newTerminalDeltaLink`, which is
+    // only ever set from `page.deltaLink` (never from nextPageToken).
+    const successBlock = DELTA_TS.slice(DELTA_TS.indexOf("if (shouldAdvanceCursor)"));
     expect(successBlock).toMatch(/deltaLink:\s*newTerminalDeltaLink/);
   });
 
@@ -184,28 +188,40 @@ describe("runDeltaSyncForConnection — cursor lifecycle (Checkpoint 13G)", () =
   });
 
   it("BOUNDED_PARTIAL persistence path does NOT touch deltaLink (preserves prior cursor)", () => {
-    const partialBlock = DELTA_TS.slice(DELTA_TS.indexOf("} else {"));
-    // Comment locks in the intent for future readers
-    expect(partialBlock).toMatch(/Do NOT touch deltaLink here/);
-    // And the update payload does not include deltaLink as a data-key:
-    // strip comments first, then confirm no `deltaLink:` assignment appears.
+    // Stabilization (2026-08-19): the "hit cap mid-page" branch is
+    // the else of `if (shouldAdvanceCursor)`. This assertion no
+    // longer requires a specific comment string; the invariant is
+    // that the else branch's mailboxConnection.update payload does
+    // NOT include a `deltaLink:` write.
+    const successIdx = DELTA_TS.indexOf("if (shouldAdvanceCursor)");
+    const elseIdx = DELTA_TS.indexOf("} else {", successIdx);
+    const outerCatchIdx = DELTA_TS.indexOf("} catch (err)", elseIdx);
+    const partialBlock = DELTA_TS.slice(elseIdx, outerCatchIdx);
     const updateStart = partialBlock.indexOf("data: {");
-    const updateEnd = partialBlock.indexOf("}", updateStart);
+    // The payload ends at the closing `}` at that indentation depth;
+    // for the current shape a simple sequential-brace scan is enough.
+    const updateEnd = partialBlock.indexOf("},", updateStart);
     const updateBody = partialBlock.slice(updateStart, updateEnd);
     const withoutComments = updateBody.replace(/\/\/[^\n]*/g, "");
     expect(withoutComments).not.toMatch(/deltaLink\s*:/);
   });
 
-  it("lastSuccessfulSyncAt is only set on isTerminalSuccess (not on BOUNDED_PARTIAL)", () => {
-    const successBlock = DELTA_TS.slice(DELTA_TS.indexOf("if (isTerminalSuccess)"), DELTA_TS.indexOf("} else {"));
+  it("lastSuccessfulSyncAt is only set on the cursor-advance branch (not on BOUNDED_PARTIAL)", () => {
+    // Stabilization (2026-08-19): renamed predicate from
+    // `isTerminalSuccess` → `shouldAdvanceCursor`. Same invariant.
+    const successIdx = DELTA_TS.indexOf("if (shouldAdvanceCursor)");
+    const elseIdx = DELTA_TS.indexOf("} else {", successIdx);
+    const successBlock = DELTA_TS.slice(successIdx, elseIdx);
     expect(successBlock).toMatch(/lastSuccessfulSyncAt:\s*new Date\(\)/);
   });
 
   it("does not transition to CONNECTED on BOUNDED_PARTIAL (status stays as-is)", () => {
-    // The status flip lives inside the isTerminalSuccess branch only
-    const successBlock = DELTA_TS.slice(DELTA_TS.indexOf("if (isTerminalSuccess)"), DELTA_TS.indexOf("} else {"));
+    const successIdx = DELTA_TS.indexOf("if (shouldAdvanceCursor)");
+    const elseIdx = DELTA_TS.indexOf("} else {", successIdx);
+    const outerCatchIdx = DELTA_TS.indexOf("} catch (err)", elseIdx);
+    const successBlock = DELTA_TS.slice(successIdx, elseIdx);
     expect(successBlock).toMatch(/status:/);
-    const partialBlock = DELTA_TS.slice(DELTA_TS.indexOf("} else {"), DELTA_TS.indexOf("} catch (err)"));
+    const partialBlock = DELTA_TS.slice(elseIdx, outerCatchIdx);
     expect(partialBlock).not.toMatch(/MAILBOX_STATUS\.CONNECTED/);
   });
 });
@@ -343,15 +359,25 @@ describe("runDeltaSyncForConnection — error handling (Checkpoint 13G)", () => 
   });
 
   it("retryable error preserves the existing cursor (no deltaLink write in error path)", () => {
-    const catchBlock = DELTA_TS.slice(
-      DELTA_TS.indexOf("} catch (err)"),
-      DELTA_TS.indexOf("return result;", DELTA_TS.indexOf("} catch (err)")),
-    );
-    // The catch block's mailboxConnection.update payload does not include deltaLink
+    // Stabilization (2026-08-19): the OUTER catch(err) block is the
+    // one that owns the error-path update. The first `} catch (err)`
+    // in the file is the INNER per-message-error catch (which
+    // legitimately does NOT touch the connection at all). Scope the
+    // slice to the outer catch by anchoring on the last `} catch (err)`
+    // before end-of-function.
+    const lastCatchIdx = DELTA_TS.lastIndexOf("} catch (err)");
+    // The outer catch's terminal `return result;` is the LAST one in
+    // the file (final `return result;` inside the error branch).
+    const returnIdx = DELTA_TS.indexOf("return result;", lastCatchIdx);
+    const catchBlock = DELTA_TS.slice(lastCatchIdx, returnIdx);
+    // Isolate ONLY the mailboxConnection.update payload — not the
+    // surrounding logger / audit / finaliseSyncRun calls.
     const updateIdx = catchBlock.indexOf("mailboxConnection.update");
     expect(updateIdx).toBeGreaterThan(-1);
-    const updateSection = catchBlock.slice(updateIdx, updateIdx + 500);
-    expect(updateSection).not.toMatch(/deltaLink/);
+    const updateBodyStart = catchBlock.indexOf("data: {", updateIdx);
+    const updateBodyEnd = catchBlock.indexOf("},", updateBodyStart);
+    const updateBody = catchBlock.slice(updateBodyStart, updateBodyEnd);
+    expect(updateBody).not.toMatch(/deltaLink/);
   });
 
   it("error path finalises the sync run with a non-COMPLETED status + failureCategory", () => {

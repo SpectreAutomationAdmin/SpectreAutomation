@@ -32,10 +32,26 @@ const src = readFileSync(MODULE_PATH, "utf8");
 // --------------------------------------------------------------------------
 
 describe("APPROVED_DELEGATED_SCOPES", () => {
-  it("contains all seven required delegated scopes (Mail.Send added in C14C-B)", () => {
+  it("contains the canonical delegated-scope set (adds Mail.ReadWrite + Calendars.Read per rev-10/12)", () => {
+    // Stabilization (2026-08-19): the canonical scope list expanded
+    // twice after C14C-B:
+    //   • rev-10 added `Mail.ReadWrite` for POST /me/messages/{id}/move
+    //     (Outlook archive on completion) and PATCH /me/messages/{id}
+    //     `{ isRead: true }` (Outlook read-state round-trip).
+    //   • Calendars.Read was added for the Today's Commitments read
+    //     path (commitments.ts pulls calendar events for the header
+    //     meta pane; delegated-only, read-only).
+    // The invariants we still pin here:
+    //   • offline_access MUST be present (refresh-token issuance).
+    //   • Mail.Send MUST be present (reply flow).
+    //   • no `.Shared` variants (guards against send-as-anyone /
+    //     tenant-wide read).
     expect([...APPROVED_DELEGATED_SCOPES].sort()).toEqual(
-      ["Mail.Read", "Mail.Send", "User.Read", "email", "offline_access", "openid", "profile"].sort(),
+      ["Calendars.Read", "Mail.Read", "Mail.ReadWrite", "Mail.Send", "User.Read", "email", "offline_access", "openid", "profile"].sort(),
     );
+    for (const s of APPROVED_DELEGATED_SCOPES) {
+      expect(s).not.toMatch(/\.Shared$/);
+    }
   });
 
   it("explicitly includes offline_access (required for refresh token issuance)", () => {
