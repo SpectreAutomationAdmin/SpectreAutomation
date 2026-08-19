@@ -231,6 +231,11 @@ model Club {
   insightAlerts                  InsightAlert[]
   clubSettings                   ClubSetting[]
   searchIndexEntries             SearchIndexEntry[]
+  // Phase 20 (Member Database) — segmentation + custom-field back-relations.
+  memberGroups                   MemberGroup[]
+  memberGroupAssignments         MemberGroupAssignment[]
+  memberCustomFieldDefinitions   MemberCustomFieldDefinition[]
+  memberCustomFieldValues        MemberCustomFieldValue[]
   // Phase 7 — integrations / POS / LLM
   integrationSettings            IntegrationSetting[]
   integrationChecks              IntegrationCheck[]
@@ -438,11 +443,6 @@ model Club {
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
   employeeOnboardingCorrections EmployeeOnboardingCorrection[]
   employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
-  // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
-  memberGroups                    MemberGroup[]
-  memberGroupAssignments          MemberGroupAssignment[]
-  memberCustomFieldDefinitions    MemberCustomFieldDefinition[]
-  memberCustomFieldValues         MemberCustomFieldValue[]
 }
 
 // ---------------------------------------------------------------------
@@ -1478,6 +1478,90 @@ model MemberHouseholdMember {
   updatedAt    DateTime  @updatedAt
 
   @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 20 — Member Database + Member Profile (2026-08-15)
+// ---------------------------------------------------------------------------
+// Segmentation groups (Sailing Approved, Tennis, Wednesday Night Racing…).
+// Per-club, unique by name inside a club. The many-to-many junction is
+// `MemberGroupAssignment` — kept as an explicit model rather than an
+// implicit `@relation` so we can carry auditing fields (assignedAt +
+// assignedByUserId) without another schema change later.
+model MemberGroup {
+  id              String                  @id @default(cuid())
+  clubId          String
+  club            Club                    @relation(fields: [clubId], references: [id])
+  name            String
+  sortOrder       Int                     @default(100)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  assignments     MemberGroupAssignment[]
+
+  @@unique([clubId, name])
+  @@index([clubId, sortOrder])
+}
+
+model MemberGroupAssignment {
+  id                String       @id @default(cuid())
+  clubId            String
+  club              Club         @relation(fields: [clubId], references: [id])
+  memberId          String
+  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId           String
+  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt        DateTime     @default(now())
+  assignedByUserId  String?
+
+  @@unique([memberId, groupId])
+  @@index([clubId, groupId])
+  @@index([memberId])
+}
+
+// Extensible custom-fields per club (Resignation, Interested in RC?, …).
+// Modelled as `Definition` + sparse `Value` — a single member row does
+// not carry a nullable column for every conceivable field, and adding a
+// new club-defined field is a data write rather than a migration.
+//
+// `kind` is a UI-hint discriminator: TEXT | LONG_TEXT | BOOLEAN | DATE |
+// NUMBER | SELECT. All values are stored as a single `valueText` string
+// so the schema stays portable across SQLite (staging + dev) and
+// Postgres (production); typed parsing is a client concern.
+model MemberCustomFieldDefinition {
+  id           String                      @id @default(cuid())
+  clubId       String
+  club         Club                        @relation(fields: [clubId], references: [id])
+  key          String                      // stable snake_case identifier
+  label        String                      // founder-facing label
+  kind         String                      @default("TEXT")
+  helpText     String?
+  optionsJson  String?                     // JSON list for SELECT
+  sortOrder    Int                         @default(100)
+  archivedAt   DateTime?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  values       MemberCustomFieldValue[]
+
+  @@unique([clubId, key])
+  @@index([clubId, sortOrder])
+}
+
+model MemberCustomFieldValue {
+  id             String                      @id @default(cuid())
+  clubId         String
+  club           Club                        @relation(fields: [clubId], references: [id])
+  memberId       String
+  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId   String
+  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText      String?
+  updatedAt      DateTime                    @updatedAt
+  updatedByUserId String?
+
+  @@unique([memberId, definitionId])
+  @@index([clubId, definitionId])
 }
 
 // Member-facing documents (statements, forms, signed agreements).
@@ -8922,6 +9006,34 @@ model OutlookArchiveMutation {
   @@index([workIntakeId])
 }
 
+// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
+// See prisma-postgres/schema.prisma for full docs; this is the
+// SQLite mirror for dev/test parity.
+model OutlookMarkReadMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeItemId      String
+  emailMessageId        String
+  graphMessageId        String
+  mailboxConnectionId   String
+  status                String    @default("PENDING")
+  attemptCount          Int       @default(0)
+  lastAttemptAt         DateTime?
+  completedAt           DateTime?
+  errorCode             String?
+  triggeredByUserId     String?
+  // Rev-13 audit-only cursor — see postgres schema for docs.
+  generationCursor      String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Rev-13 removes @@unique([mailboxConnectionId, emailMessageId]).
+  // See postgres schema for the full architectural note.
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
+}
+
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
 // Commitments proposals. Spectre-inferred deadlines derived from
 // genuine WorkIntake evidence (invoice due dates, payroll cutoffs,
@@ -10427,88 +10539,4 @@ model EmployeeOnboardingCorrection {
 
   @@index([clubId, sessionId])
   @@index([clubId, employeeId])
-}
-
-// ---------------------------------------------------------------------------
-// Phase 20 — Member Database + Member Profile (2026-08-15)
-// ---------------------------------------------------------------------------
-// Segmentation groups (Sailing Approved, Tennis, Wednesday Night Racing…).
-// Per-club, unique by name inside a club. The many-to-many junction is
-// `MemberGroupAssignment` — kept as an explicit model rather than an
-// implicit `@relation` so we can carry auditing fields (assignedAt +
-// assignedByUserId) without another schema change later.
-model MemberGroup {
-  id              String                  @id @default(cuid())
-  clubId          String
-  club            Club                    @relation(fields: [clubId], references: [id])
-  name            String
-  sortOrder       Int                     @default(100)
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-
-  assignments     MemberGroupAssignment[]
-
-  @@unique([clubId, name])
-  @@index([clubId, sortOrder])
-}
-
-model MemberGroupAssignment {
-  id                String       @id @default(cuid())
-  clubId            String
-  club              Club         @relation(fields: [clubId], references: [id])
-  memberId          String
-  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  groupId           String
-  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  assignedAt        DateTime     @default(now())
-  assignedByUserId  String?
-
-  @@unique([memberId, groupId])
-  @@index([clubId, groupId])
-  @@index([memberId])
-}
-
-// Extensible custom-fields per club (Resignation, Interested in RC?, …).
-// Modelled as `Definition` + sparse `Value` — a single member row does
-// not carry a nullable column for every conceivable field, and adding a
-// new club-defined field is a data write rather than a migration.
-//
-// `kind` is a UI-hint discriminator: TEXT | LONG_TEXT | BOOLEAN | DATE |
-// NUMBER | SELECT. All values are stored as a single `valueText` string
-// so the schema stays portable across SQLite (staging + dev) and
-// Postgres (production); typed parsing is a client concern.
-model MemberCustomFieldDefinition {
-  id           String                      @id @default(cuid())
-  clubId       String
-  club         Club                        @relation(fields: [clubId], references: [id])
-  key          String
-  label        String
-  kind         String                      @default("TEXT")
-  helpText     String?
-  optionsJson  String?
-  sortOrder    Int                         @default(100)
-  archivedAt   DateTime?
-  createdAt    DateTime                    @default(now())
-  updatedAt    DateTime                    @updatedAt
-
-  values       MemberCustomFieldValue[]
-
-  @@unique([clubId, key])
-  @@index([clubId, sortOrder])
-}
-
-model MemberCustomFieldValue {
-  id             String                      @id @default(cuid())
-  clubId         String
-  club           Club                        @relation(fields: [clubId], references: [id])
-  memberId       String
-  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  definitionId   String
-  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
-  valueText      String?
-  updatedAt      DateTime                    @updatedAt
-  updatedByUserId String?
-
-  @@unique([memberId, definitionId])
-  @@index([clubId, definitionId])
 }

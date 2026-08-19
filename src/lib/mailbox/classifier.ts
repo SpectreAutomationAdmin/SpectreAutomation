@@ -60,7 +60,11 @@ function hasPdfOrSpreadsheet(email: NormalizedEmail): boolean {
   // attachment metadata is stored, we rely on the presence-only
   // `hasAttachments` bit here and let the materialiser upgrade the
   // confidence when it sees a real PDF.
-  return email.hasAttachments;
+  // Rev-13 tri-state: `undefined` (Graph didn't assert) is treated
+  // as "no attachments known" from the classifier's perspective —
+  // same visible outcome as the old `?? false` coercion for this
+  // read-only classifier consumer.
+  return email.hasAttachments === true;
 }
 function isAutomatedSender(email: NormalizedEmail): boolean {
   const addr = email.senderAddress;
@@ -192,7 +196,8 @@ export const CLASSIFIER_RULES: ClassifierRule[] = [
     reason: "Attachment present — document analysis pending. Card will refresh when OCR + extraction complete.",
     confidence: 0.5,
     intakeAction: "CREATE_ACTIONABLE",
-    matches: (e) => e.hasAttachments,
+    // Rev-13 tri-state: treat only explicit `true` as attachments present.
+    matches: (e) => e.hasAttachments === true,
   },
   // Sprint 3 · Checkpoint 16H rejection #2 (2026-08-06) — bulk /
   // list / no-reply mail is INFORMATIONAL, never SUPPRESS. Founder

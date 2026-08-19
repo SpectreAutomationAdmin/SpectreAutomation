@@ -22,10 +22,9 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { listMemberGroups } from "@/lib/services/member-groups";
 import { getMemberFieldPayload } from "@/lib/services/member-custom-fields";
-// HR-2A.4 (2026-08-17): RegisterBreadcrumbLabel from the Phase 4R
-// breadcrumb-labels system is not carried across on this branch
-// (Work-Intake-scoped work). Breadcrumbs render the raw cuid until
-// that separate system is integrated. Not blocking for HR-2A.4.
+// Merge (2026-08-19): Phase 4R rev-5 breadcrumb-labels helper +
+// HR-2A Member↔Employee reciprocal link BOTH live here now.
+import { RegisterBreadcrumbLabel } from "@/components/spectre/breadcrumb-labels";
 import MemberProfileView from "@/components/members/MemberProfileView";
 import {
   editPrimaryDetailsAction,
@@ -84,6 +83,11 @@ export default async function MemberProfilePage({ params, searchParams }: PagePr
 
   return (
     <>
+      {/* Phase 4R rev-5 breadcrumb — the shell reads the display name
+          from the shared BreadcrumbLabelsProvider so the crumb reads
+          "App > Membership > Members > James Whitfield" instead of
+          leaking the cuid. */}
+      <RegisterBreadcrumbLabel id={member.id} label={displayName} />
       <MemberProfileView
         member={{
           id: member.id,

@@ -40,9 +40,25 @@ export async function POST(req: NextRequest) {
 
   try {
     switch (action) {
-      case "resolve":
-        await resolveIntake(ctx, typeof body?.note === "string" ? body.note : undefined);
+      case "resolve": {
+        // Phase 4R Completed-State Immutability (2026-08-15) §A4 —
+        // the client MAY pass a `cardSnapshot` object composed from
+        // the projection it was rendering when the founder clicked
+        // Resolve. If present + shape-valid, we freeze it on the
+        // WorkCompletionEvent so Completed History renders the
+        // approved historical facts instead of live re-analysis.
+        // If absent (legacy clients, or non-AP resolves), the
+        // completion still succeeds and Completed History falls
+        // through to the legacy live-projection path.
+        const { validateCardSnapshotFromClient } = await import("@/lib/work-intake/completion-snapshot-validate");
+        const cardSnapshot = validateCardSnapshotFromClient(body?.cardSnapshot);
+        await resolveIntake(
+          ctx,
+          typeof body?.note === "string" ? body.note : undefined,
+          cardSnapshot ? { cardSnapshot } : undefined,
+        );
         break;
+      }
       case "reopen":
         await reopenIntake(ctx);
         break;

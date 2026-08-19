@@ -173,13 +173,36 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
       transition: width var(--spectre-motion-slow) var(--spectre-ease);
       flex-shrink: 0;  }
   .spectre-sidebar[data-collapsed="true"] {    width: var(--spectre-sidebar-w-collapsed);  }
-  /* Sprint 3 · Checkpoint 15O — club identity wrap. */
-  .spectre-sidebar-club-name {
+  /* Sprint 3 · Checkpoint 15O — identity wrap. Phase 4R UI-refinement
+     (2026-08-15) — renamed from `.spectre-sidebar-club-name`. The
+     sidebar identity now renders the product name ("Spectre
+     Automation") rather than the tenant. The 2-line clamp behaviour
+     is retained so the product name may wrap naturally onto two
+     lines within the 288 px sidebar. */
+  .spectre-sidebar-product-name {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
     word-break: break-word;
+  }
+  /* Phase 4R rev-6 (2026-08-15) — sidebar identity block is pinned
+     to the same vertical height as the topbar so the divider beneath
+     the product name aligns with the topbar's bottom border. This
+     lets the first nav row + the main greeting share the same
+     horizontal band once the nav container adds the workspace-pad-y
+     offset below. */
+  .spectre-sidebar-identity {
+    min-height: var(--spectre-topbar-h);
+  }
+  /* Phase 4R rev-6 — nav container's top padding mirrors the
+     workspace's top padding so the FIRST nav item begins at the
+     same y-offset as the main-column content. Combined with the
+     nav-item's own 8 px top padding, the "Mission Control" row
+     baseline aligns with the greeting baseline at the founder's
+     desktop viewports. */
+  .spectre-sidebar-nav-scroll {
+    padding-top: calc(var(--spectre-workspace-pad-y) - 8px);
   }
   .spectre-topbar {    background-color: var(--spectre-topbar);
       border-bottom: 1px solid var(--spectre-border-hairline);
@@ -492,6 +515,79 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
       box-shadow: var(--spectre-shadow-floating);
       padding: var(--spectre-space-3);
       animation: spectre-pop-in var(--spectre-motion-base) var(--spectre-ease) both;  }
+
+  /* ---- Global search (Phase 4R rev-4 · 2026-08-15) --------------
+     Compact command-search pattern. Collapsed = icon button.
+     Expanded = inline input in the topbar left rail + a compact
+     grouped dropdown of predictive results. Restrained typography;
+     no neon; no oversized cards; no border-heavy chrome. */
+  .spectre-global-search { position: relative; display: inline-flex; align-items: center; }
+  .spectre-global-search-expanded {
+    display: inline-flex; align-items: center; gap: 8px;
+    width: 320px; height: 34px;
+    padding: 0 12px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-default);
+    border-radius: var(--spectre-radius-input, 6px);
+    color: var(--spectre-text-primary);
+    box-shadow: var(--spectre-shadow-focus-soft, none);
+    transition: border-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-global-search-expanded:focus-within {
+    border-color: var(--spectre-accent);
+  }
+  .spectre-global-search-expanded input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    font-size: 13px; color: var(--spectre-text-primary);
+  }
+  .spectre-global-search-expanded input::placeholder {
+    color: var(--spectre-text-muted);
+  }
+  .spectre-global-search-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0;
+    width: 460px; max-height: 460px; overflow-y: auto;
+    background: var(--spectre-surface-elevated);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    box-shadow: var(--spectre-shadow-floating);
+    padding: 6px;
+    z-index: 60;
+  }
+  .spectre-global-search-status {
+    padding: 12px 12px; font-size: 12px;
+    color: var(--spectre-text-muted);
+  }
+  .spectre-global-search-status--error { color: var(--spectre-status-warning, #b45309); }
+  .spectre-global-search-group + .spectre-global-search-group {
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-global-search-group-label {
+    padding: 6px 10px 4px;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 600;
+  }
+  .spectre-global-search-row {
+    display: block; width: 100%; text-align: left;
+    padding: 8px 10px;
+    background: transparent; border: none; border-radius: 4px;
+    cursor: pointer;
+    transition: background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-global-search-row:hover,
+  .spectre-global-search-row.is-active,
+  .spectre-global-search-row:focus-visible {
+    background: var(--spectre-surface-hover, rgba(0,0,0,0.04));
+    outline: none;
+  }
+  .spectre-global-search-row-primary {
+    font-size: 13px; color: var(--spectre-text-primary); font-weight: 500;
+  }
+  .spectre-global-search-row-secondary {
+    font-size: 11.5px; color: var(--spectre-text-muted); margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
   .spectre-tooltip {    background: var(--spectre-text-primary);
       color: var(--spectre-text-inverse);
       padding: 5px 8px;
@@ -523,6 +619,37 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-tab:focus-visible { outline: none;
    box-shadow: var(--spectre-shadow-focus);
    border-radius: 4px 4px 0 0; }
+  /* --- Header rail (tenant + breadcrumbs) -----------------------
+     Phase 4R UI-refinement rev-2 (2026-08-15) — the application
+     header now renders tenant identity BEFORE the breadcrumb chain
+     on the same layer. Tenant carries slightly more contextual
+     prominence than a breadcrumb crumb (primary ink, medium weight)
+     but stays restrained so it never competes with the page
+     greeting. A hairline vertical separator visually groups the
+     two without introducing badge/pill treatment. */
+  .spectre-header-rail {
+    display: flex; align-items: center; gap: 12px;
+    min-width: 0; flex: 1;
+  }
+  .spectre-header-rail-tenant {
+    /* Phase 4R rev-4 (2026-08-15) — tenant is now visually more
+       prominent than the breadcrumb per founder brief §14. Slightly
+       larger, stronger weight, and full primary ink; the breadcrumb
+       stays at its existing muted body-small tone so the hierarchy
+       reads immediately without introducing a badge/pill/box. */
+    font-size: 14px;
+    line-height: 18px;
+    color: var(--spectre-text-primary);
+    font-weight: 600;
+    letter-spacing: 0.002em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 44ch;
+  }
+  .spectre-header-rail-sep {
+    width: 1px; height: 16px;
+    background: var(--spectre-border-hairline);
+    flex-shrink: 0;
+  }
   /* --- Breadcrumbs --------------------------------------------- */
   .spectre-crumbs {    display: flex;
    align-items: center;
@@ -832,7 +959,15 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
  * ================================================================ */
 
 @layer components {
-  /* --- Header line (greeting + sync) ----------------------------- */
+  /* --- Header line (greeting + sync) -----------------------------
+     Phase 4R UI-refinement rev-2 (2026-08-15) — tenant identity was
+     briefly rendered as a `.spectre-mc-tenant-context` row above the
+     greeting; the founder relocated it into the application-header
+     rail (`.spectre-header-rail-tenant`) so the hierarchy reads
+     Tenant → Navigation → Page Content rather than
+     Navigation → Tenant → Page Content. `.spectre-mc-greeting .club`
+     stays hidden as a safety net for any legacy consumer that still
+     emits the club span. */
   .spectre-mc-header {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: var(--spectre-space-6); margin-bottom: var(--spectre-space-4);
@@ -841,10 +976,7 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     font-size: 22px; line-height: 28px; letter-spacing: -0.014em;
     font-weight: 600; color: var(--spectre-text-primary);
   }
-  .spectre-mc-greeting .club {
-    color: var(--spectre-text-secondary); font-weight: 500;
-    margin-left: var(--spectre-space-2);
-  }
+  .spectre-mc-greeting .club { display: none; }
   .spectre-mc-header-meta {
     display: flex; align-items: center; gap: var(--spectre-space-3);
     font-size: 12px; color: var(--spectre-text-muted);
@@ -984,15 +1116,34 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Feed item ---------------------------------------------- */
+  /* Phase 4R rev-11 (2026-08-15) — visual reconstruction back to
+     the founder-approved single-card treatment. The outer article
+     once again OWNS the visible chrome (background, border,
+     radius, shadow, left workflow accent, interior padding). The
+     inner `.spectre-mc-item-frame` reduces to a bare passthrough
+     wrapper — it still exists in the DOM because it carries the
+     ResizeObserver ref used by rev-9.2's per-card baseline logic
+     and the inline `min-height` style, but it draws no chrome.
+     Rev-10 Outlook sync + rev-9 baseline are preserved intact;
+     only the "protruding-tabs / partial-border document" visual
+     mechanics are retired. */
   .spectre-mc-item {
+    /* Phase 4R rev-12 (2026-08-16) — `--card-accent` is the state
+       colour used for the left-edge accent. Read/unread reuses THIS
+       same colour and only varies the thickness, so a scanner can
+       infer both the work TYPE (colour) and the READ state
+       (thickness) at a glance. Setting the accent via a CSS var
+       lets both the read border-left-color and the unread
+       inset-shadow reference one source of truth per state. */
+    --card-accent: var(--spectre-border-strong);
     background: var(--spectre-surface);
     border: 1px solid var(--spectre-border-hairline);
     border-radius: var(--spectre-radius-panel);
     box-shadow: var(--spectre-shadow-subtle);
     margin-bottom: var(--spectre-space-3);
-    padding: 16px 20px;
+    padding: 12px 20px 14px 20px;
     border-left-width: 3px;
-    border-left-color: var(--spectre-border-strong);
+    border-left-color: var(--card-accent);
     transition: border-color var(--spectre-motion-slow) var(--spectre-ease),
                 box-shadow  var(--spectre-motion-slow) var(--spectre-ease);
   }
@@ -1000,11 +1151,32 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     border-color: var(--spectre-border-strong);
     box-shadow: var(--spectre-shadow-elevated);
   }
-  .spectre-mc-item.judgment { border-left-color: var(--spectre-status-warning); }
-  .spectre-mc-item.approval { border-left-color: var(--spectre-status-success); }
-  .spectre-mc-item.comm     { border-left-color: var(--spectre-status-info); }
-  .spectre-mc-item.done     { border-left-color: var(--spectre-status-success); opacity: 0.86; padding: 12px 20px; }
-  .spectre-mc-item.info-item{ border-left-color: var(--spectre-border-strong); padding: 12px 20px; }
+  /* Semantic accent — one CSS variable per state; border-left-color
+     picks it up automatically via var(--card-accent). Rev-12
+     replaces the direct border-left-color declarations. */
+  .spectre-mc-item.judgment  { --card-accent: var(--spectre-status-warning); }
+  .spectre-mc-item.approval  { --card-accent: var(--spectre-status-success); }
+  .spectre-mc-item.comm      { --card-accent: var(--spectre-status-info); }
+  .spectre-mc-item.done      { --card-accent: var(--spectre-status-success); opacity: 0.86; padding: 10px 20px; }
+  .spectre-mc-item.info-item { --card-accent: var(--spectre-border-strong); padding: 10px 20px; }
+  /* Bare passthrough — rev-11 strips ALL chrome from the frame.
+     It stays in the DOM so the rev-9.2 ResizeObserver `frameRef`
+     continues to measure it and the inline `min-height` inline
+     style (see EmailIntakeCard.tsx) applied for baseline stability
+     still governs card height. No visible border, background,
+     shadow, or padding. */
+  .spectre-mc-item-frame {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    /* position:relative kept so the unread ::after dot can sit in
+       the top-right corner of the frame (which coincides with the
+       card interior top-right since the article and frame share
+       the same top edge minus the article's padding). */
+    position: relative;
+  }
 
   .spectre-mc-item-head {
     display: flex; align-items: center; gap: 10px;
@@ -1031,7 +1203,17 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-pill.info     { background: transparent; border-color: var(--spectre-border-default); color: var(--spectre-text-muted); }
   .spectre-mc-pill.info::before { background: transparent; border: 1px solid var(--spectre-text-subtle); box-sizing: border-box; }
 
+  /* Phase 4R UI-refinement (2026-08-15) — internal Work Intake
+     identifiers (`MAIL-XXXX`, `AR-XXXX`, `AP-XXXX`, `STMT-XXXX`)
+     are internal diagnostics, not user-facing labels. The element
+     is kept in the DOM so automated tests, support tooling, and
+     any future dev-mode diagnostics that read `.spectre-mc-id-tag`
+     textContent continue to work. It is visually hidden and
+     removed from the accessibility tree. Underlying identifiers
+     also remain available via `data-work-intake-item-id` on the
+     card root. */
   .spectre-mc-id-tag {
+    display: none;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 11px; color: var(--spectre-text-muted);
     letter-spacing: 0.02em; font-weight: 500;
@@ -1253,38 +1435,86 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Sprint 3 Checkpoint 15I — Variant D card interaction ---- */
-  /* The card is now click-to-expand. Its primary click surface is
-     a role="button" wrapper around everything above the actions
-     row. The actions row itself does NOT toggle expansion — its
-     buttons stopPropagation so Resolve / Snooze fire independently
-     of the outer surface click. */
-  .spectre-mc-item-surface {
+  /* Phase 4R rev-9 (2026-08-15) — tabbed-document geometry. The
+     tab group is INLINE-flex so it sizes to its labels (no
+     full-width bleed, no grey rail). Each tab is a small pill-
+     shaped protrusion above the frame; the active tab shares the
+     frame's surface background and overlaps the frame's top
+     border by 1px so it reads as one continuous surface with the
+     body below. Inactive tabs sit on the page background with a
+     hairline outline. */
+  .spectre-mc-item-body {
     display: block;
-    cursor: pointer;
-    outline: none;
   }
-  .spectre-mc-item-surface:focus-visible {
-    outline: 2px solid var(--spectre-status-success);
-    outline-offset: 2px;
+  /* Phase 4R rev-11 (2026-08-15) — tabs-inside-a-single-card, the
+     founder-approved treatment. The tab group sits at the top of
+     the card's interior (no negative margin, no bleed-to-edges, no
+     protrusion above the card border). Under the strip is a hairline
+     that separates the tabs from the body; the active tab overlaps
+     that hairline via `margin-bottom: -1px` so it visually attaches
+     to the body below (classic tabs-in-card pattern). Inactive tabs
+     read as understated text controls; active tab reads as a subtle
+     bordered box on the card's surface. Compact rev-7 proportions
+     retained. */
+  .spectre-mc-item-body {
+    display: block;
+  }
+  .spectre-mc-tabs--card {
+    display: flex;
+    gap: 2px;
+    margin: 0 0 12px 0;
+    padding: 0;
+    background: transparent;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    position: relative;
+  }
+  .spectre-mc-tabs--card .spectre-mc-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    /* Compact rev-7 proportions — labels only as wide as their
+       text; two-line vertical padding; small font. */
+    padding: 4px 10px 5px 10px;
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.002em;
+    color: var(--spectre-text-secondary);
+    cursor: pointer;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    position: relative;
+    /* Overlap the strip's border-bottom by 1 px so the active tab
+       can paint over it. Read here for the whole tab group — the
+       active-tab bottom border then simply matches the surface
+       colour to complete the merge. */
+    margin-bottom: -1px;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease),
+                background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-mc-tabs--card .spectre-mc-tab:hover {
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-tabs--card .spectre-mc-tab--active {
+    background: var(--spectre-surface);
+    color: var(--spectre-text-primary);
+    font-weight: 600;
+    border-color: var(--spectre-border-hairline);
+    border-bottom-color: var(--spectre-surface);
+  }
+  .spectre-mc-tabs--card .spectre-mc-tab:focus-visible {
+    outline: 2px solid var(--spectre-accent, var(--spectre-status-success));
+    outline-offset: -2px;
     border-radius: 4px;
   }
-  /* Sprint 3 · Checkpoint 15L — the surface hover MUST NOT wash the
-     card body in a grey fill. The founder-approved behaviour: the
-     card body colour is unchanged, only the edge shadow / left rail
-     may subtly strengthen (that treatment lives on `.spectre-mc-item`
-     itself). Keyboard focus visibility comes from the
-     `:focus-visible` outline above. */
-  .spectre-mc-item-surface:hover {
-    background: transparent;
-  }
-  .spectre-mc-item-expanded {
-    margin-top: var(--spectre-space-3);
-    padding-top: var(--spectre-space-3);
-    border-top: 1px solid var(--spectre-border-hairline, rgba(20, 18, 12, 0.09));
-  }
+  /* Rev-9 — no global 380px min-height. Per-card Summary baseline
+     is measured at runtime and applied via inline style to the
+     frame (see EmailIntakeCard). Attachments preserves that
+     baseline; Conversation may grow past it. */
   .spectre-mc-tab-body {
-    min-height: 140px;
-    padding: var(--spectre-space-2) 0 var(--spectre-space-1);
+    display: block;
+    padding: 0;
   }
   .spectre-mc-tab-actions {
     display: flex; gap: 6px; margin-top: var(--spectre-space-2);
@@ -1316,9 +1546,12 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   /* Density pass to match Ace Foods reference exactly. The
      reference card's outer padding is 16px 20px + a 3px left rail
      → 17px inner padding-left; interior spacing is tighter than
-     the pre-15I-2 defaults. */
+     the pre-15I-2 defaults. Phase 4R rev-11 (2026-08-15) — the
+     density-pass padding lives on the article again (rev-11
+     visual reconstruction reverts the rev-9 bare-wrapper split).
+     The frame is now a bare passthrough (see rule above). */
   .spectre-mc-item {
-    padding-top: 14px;
+    padding-top: 12px;
     padding-bottom: 14px;
   }
   .spectre-mc-item h3 {
@@ -1352,11 +1585,52 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   /* --- Sprint 2 Checkpoint 14B — Email intake accents ----------- */
-  /* Unread accent: 4px left border in muted green + subject
-     semi-bold (already the default weight for h3 inside item). */
+  /* Phase 4R rev-10 (2026-08-15) — the pre-rev-10 treatment set a
+     4 px muted-green left border on the (now invisible) outer
+     article — which (a) had no effect on rev-9 since the border
+     moved to the frame, and (b) would have COMPETED with the
+     orange workflow accent per founder brief §10. Rev-10 replaces
+     that with an inbox-style subtle treatment: bolder title,
+     slightly darker sender/context text, a subtle background
+     lift on the frame, and a small unread dot in the top-right
+     corner where it doesn't compete with the pill+id-tag+timestamp
+     row on the left. Once read, all four cues disappear together
+     and the card returns to its normal weight. Card dimensions +
+     structure are unchanged (founder brief §11). */
+  /* Phase 4R rev-12 (2026-08-16) — unread cue is the existing
+     work-type accent BECOMING THICKER, not a separate colour.
+     Founder brief §9 + §10 explicitly retire the green ::after
+     dot: it added a colour orthogonal to the semantic palette
+     (AP orange, informational, approval, etc.) and conflated
+     "unread" with a work-type. Rev-12 uses ONE signal: the
+     left-edge accent widens from 3 px → 6 px while unread. Same
+     semantic colour, stronger visual weight.
+
+     Layout preservation (founder brief §13): total content-area
+     left offset is `border-left + padding-left`. To thicken the
+     border-left without shifting content 3 px to the right, we
+     REDUCE `padding-left` by the same 3 px so the sum is
+     unchanged. Content position + width identical read ↔ unread. */
   .spectre-mc-item--unread {
-    border-left-width: 4px;
-    border-left-color: var(--spectre-status-success);
+    border-left-width: 6px;
+    padding-left: 17px; /* 20px read - 3px extra border = 17px */
+  }
+  /* Bolder title while unread — a secondary cue that reinforces
+     the thicker accent, per brief §12. */
+  .spectre-mc-item--unread h3 {
+    font-weight: 700;
+  }
+  .spectre-mc-item--unread .spectre-mc-context {
+    color: var(--spectre-text-primary);
+    font-weight: 500;
+  }
+  /* Also handle the .done and .info-item padding variants: their
+     read state uses padding: 10px 20px. When unread the same
+     3 px extra border-left needs the same 3 px padding-left
+     compensation to preserve content position. */
+  .spectre-mc-item.done.spectre-mc-item--unread,
+  .spectre-mc-item.info-item.spectre-mc-item--unread {
+    padding-left: 17px;
   }
   .spectre-mc-pill-unread {
     font-size: 10px; font-weight: 700; letter-spacing: 0.05em;
@@ -2499,7 +2773,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 
   /* Sprint 3 Checkpoint 15H Unified Remediation (2026-07-25) —
      Tab bar + document preview modal + attachment list. All tokens. */
-  .spectre-mc-tabs {
+  /* Phase 4R rev-9 (2026-08-15) — every property in the legacy
+     base rule is scoped to :not(.spectre-mc-tabs--card) so the
+     card modifier's inline-flex + margin + no-border-bottom
+     values win uncontested. Both rules have equal specificity
+     (0,1,0) so cascade order would otherwise let the later base
+     rule silently override the earlier card modifier (same bug
+     class as the rev-8 → rev-9 cascade collision on margin). */
+  .spectre-mc-tabs:not(.spectre-mc-tabs--card) {
     display: flex;
     gap: var(--spectre-space-1);
     flex-wrap: wrap;
@@ -2538,17 +2819,57 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     padding: 0;
     margin: 0;
   }
+  /* Phase 4R rev-9 (2026-08-15) — compact single-line row density
+     so a 4-6 attachment list fits within a typical Summary
+     baseline height. Row layout is: filename (grow) · meta (fixed)
+     · action buttons (fixed). Each row is ~32 px total. */
   .spectre-mc-attachment-list li {
-    padding: var(--spectre-space-2) var(--spectre-space-3);
+    display: flex;
+    align-items: center;
+    gap: var(--spectre-space-2);
+    padding: 4px 10px;
     border: 1px solid var(--spectre-border-hairline);
     border-radius: var(--spectre-radius-button);
-    margin-bottom: var(--spectre-space-2);
+    margin-bottom: 4px;
     background: var(--spectre-surface);
+    font-size: 12px;
+    line-height: 20px;
+    min-height: 0;
+  }
+  .spectre-mc-attachment-list li strong {
+    font-weight: 600;
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-attachment-list li .spectre-review-muted {
+    color: var(--spectre-text-muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  /* Phase 4R rev-14 (2026-08-16) — attachment actions moved next
+     to the filename cluster. Rev-9's `flex: 1 1 auto` on the
+     filename column pushed the action buttons to the far-right
+     edge of the card via implicit `justify-content: space-between`
+     behaviour, disconnecting the actions from the file they
+     belonged to. Rev-14 shrinks the filename column so it takes
+     only the width it needs; the row uses `gap` to space the
+     actions immediately after the filename cluster with an
+     intentional 12-px gap. `min-width: 0` + `overflow: hidden`
+     stay so long filenames still truncate before overflowing. */
+  .spectre-mc-attachment-list li > div:first-child {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 8px;
   }
   .spectre-mc-attachment-list li > div:last-child {
-    margin-top: var(--spectre-space-1);
+    margin-top: 0;
     display: flex;
-    gap: var(--spectre-space-1);
+    gap: 4px;
+    flex-shrink: 0;
+    /* No `margin-left: auto` — the row's `gap` handles spacing
+       and keeps actions attached to the filename. */
   }
 
   /* Document preview modal. Full-viewport backdrop; preview area
@@ -2677,6 +2998,421 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
   .spectre-feed-pill--none {
     color: var(--spectre-text-muted);
+  }
+  /* Phase 4R rev-6 (2026-08-15) — the pill hosts BOTH the feed-
+     status label (clickable link into connected-accounts settings)
+     AND the manual refresh icon button. Layout: label-link on the
+     left with its dot, refresh icon-button on the right, hairline
+     divider between them so the icon reads as a distinct control
+     without blowing up the pill footprint. */
+  .spectre-feed-pill__label-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: inherit; text-decoration: none;
+  }
+  .spectre-feed-pill__label-link:focus-visible {
+    outline: 1px solid currentColor; outline-offset: 2px; border-radius: 2px;
+  }
+  .spectre-feed-pill__refresh {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px;
+    margin-left: 6px; padding: 0;
+    background: transparent; border: none;
+    color: inherit; opacity: 0.75;
+    cursor: pointer; border-radius: 4px;
+    transition: opacity var(--spectre-motion-fast) var(--spectre-ease),
+                background-color var(--spectre-motion-fast) var(--spectre-ease);
+    border-left: 1px solid color-mix(in oklab, currentColor 22%, transparent);
+    /* border-left doubles as the divider; use margin+padding so the
+       divider line sits INSIDE the pill without adding extra height. */
+    padding-left: 6px;
+    box-sizing: content-box;
+  }
+  .spectre-feed-pill__refresh:hover:not(:disabled),
+  .spectre-feed-pill__refresh:focus-visible:not(:disabled) {
+    opacity: 1;
+    background: color-mix(in oklab, currentColor 10%, transparent);
+    outline: none;
+  }
+  .spectre-feed-pill__refresh:disabled { cursor: default; opacity: 0.6; }
+  .spectre-feed-pill__refresh.is-spinning svg {
+    animation: spectre-refresh-spin 900ms linear infinite;
+  }
+  @keyframes spectre-refresh-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* ================================================================
+   * Phase 20 (Member Database, 2026-08-15) — Member Database + Member
+   * Profile. Reference: private-club member record (Tucker Hersam
+   * screenshot). Dense, restrained, no floating cards.
+   * ================================================================ */
+
+  /* ---- Members Database list ------------------------------------ */
+  .spectre-members-db { max-width: 1400px; }
+  .spectre-members-db-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .spectre-members-db-title {
+    font-size: 22px; line-height: 28px; letter-spacing: -0.014em;
+    font-weight: 600; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-meta {
+    margin-top: 4px; font-size: 12px; color: var(--spectre-text-muted);
+  }
+  .spectre-members-db-filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 12px 0; margin-bottom: 12px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+  }
+  .spectre-members-db-search {
+    flex: 1 1 260px; min-width: 220px;
+    height: 32px; padding: 0 10px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px; background: var(--spectre-surface);
+    font-size: 13px; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-search:focus { outline: none; border-color: var(--spectre-accent); }
+  .spectre-members-db-select {
+    height: 32px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 6px; background: var(--spectre-surface);
+    font-size: 12px; color: var(--spectre-text-primary);
+  }
+  .spectre-members-db-clear {
+    font-size: 12px; color: var(--spectre-text-muted);
+    text-decoration: none;
+  }
+  .spectre-members-db-clear:hover { color: var(--spectre-text-primary); text-decoration: underline; }
+  .spectre-members-db-table-wrap { overflow-x: auto; }
+  .spectre-members-db-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px;
+  }
+  .spectre-members-db-table th {
+    text-align: left; padding: 8px 12px;
+    font-size: 10.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 600;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    white-space: nowrap;
+  }
+  .spectre-members-db-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    color: var(--spectre-text-primary); vertical-align: middle;
+  }
+  .spectre-members-db-row:hover td { background: var(--spectre-surface-hover, rgba(0,0,0,0.02)); }
+  .spectre-members-db-avatar-link { display: inline-flex; }
+  .spectre-members-db-avatar {
+    width: 28px; height: 28px; border-radius: 4px;
+    object-fit: cover; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--spectre-surface-hover, #e6e6e8);
+    color: var(--spectre-text-muted); font-size: 10px; font-weight: 600;
+  }
+  .spectre-members-db-avatar--placeholder { padding-top: 1px; letter-spacing: 0.02em; }
+  .spectre-members-db-name {
+    color: var(--spectre-text-primary); text-decoration: none; font-weight: 500;
+  }
+  .spectre-members-db-name:hover { color: var(--spectre-accent); text-decoration: underline; }
+  .spectre-members-db-link { color: var(--spectre-accent); text-decoration: none; }
+  .spectre-members-db-link:hover { text-decoration: underline; }
+  .spectre-members-db-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; color: var(--spectre-text-secondary); }
+  .spectre-members-db-empty { padding: 40px 12px; text-align: center; color: var(--spectre-text-muted); font-size: 13px; }
+  .spectre-members-db-table .col-avatar { width: 40px; }
+  .spectre-members-db-table .col-number { width: 100px; }
+  .spectre-members-db-table .col-category { width: 140px; }
+  .spectre-members-db-table .col-status { width: 100px; }
+  .spectre-members-db-table .col-phone { width: 140px; }
+  .spectre-members-db-table .col-join { width: 130px; }
+
+  /* ---- Member Profile ------------------------------------------- */
+  .spectre-member-profile { max-width: 1200px; }
+  .spectre-member-profile-flash {
+    padding: 8px 12px; border-radius: 6px; font-size: 12.5px;
+    margin-bottom: 12px;
+  }
+  .spectre-member-profile-flash--ok {
+    background: var(--spectre-status-success-bg);
+    color: var(--spectre-status-success);
+    border: 1px solid var(--spectre-status-success);
+  }
+  .spectre-member-profile-flash--err {
+    background: var(--spectre-status-error-bg, #fef2f2);
+    color: var(--spectre-status-error);
+    border: 1px solid var(--spectre-status-error);
+  }
+
+  /* Identity header — compact, matches the reference (Tucker
+     Hersam). Photo left, back arrow, name + secondary meta, ACTIVE
+     pill right. Not a hero title. */
+  .spectre-member-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0 16px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    margin-bottom: 8px;
+  }
+  .spectre-member-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; border-radius: 4px;
+    color: var(--spectre-text-muted); text-decoration: none;
+    transition: background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-member-back:hover { background: var(--spectre-surface-hover, rgba(0,0,0,0.05)); color: var(--spectre-text-primary); }
+  .spectre-member-header-photo {
+    width: 40px; height: 40px; border-radius: 4px;
+    background: var(--spectre-surface-hover, #e6e6e8);
+    overflow: hidden; display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .spectre-member-header-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .spectre-member-header-photo-placeholder {
+    font-size: 12px; font-weight: 600; color: var(--spectre-text-muted);
+    letter-spacing: 0.02em;
+  }
+  .spectre-member-header-body { flex: 1; min-width: 0; }
+  .spectre-member-header-name {
+    font-size: 18px; font-weight: 600; line-height: 22px;
+    color: var(--spectre-text-primary); letter-spacing: -0.01em;
+    margin: 0;
+  }
+  .spectre-member-header-meta {
+    margin-top: 2px; display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--spectre-text-muted); letter-spacing: 0.02em;
+  }
+  .uppercase-eyebrow { text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; }
+  .spectre-member-header-sep { color: var(--spectre-text-subtle); }
+  .spectre-member-header-number {
+    color: var(--spectre-accent); text-decoration: none;
+  }
+  .spectre-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* Status pill */
+  .spectre-member-status-pill {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;
+    border: 1px solid var(--spectre-status-success);
+    background: var(--spectre-status-success-bg);
+    color: var(--spectre-status-success);
+  }
+  .spectre-member-status-pill--onboarding {
+    border-color: var(--spectre-status-warning);
+    background: var(--spectre-status-warning-bg);
+    color: var(--spectre-status-warning);
+  }
+  .spectre-member-status-pill--inactive,
+  .spectre-member-status-pill--suspended,
+  .spectre-member-status-pill--resigned {
+    border-color: var(--spectre-border-default);
+    background: var(--spectre-surface);
+    color: var(--spectre-text-muted);
+  }
+
+  /* Primary tabs — subtle underline treatment. */
+  .spectre-member-tabs {
+    display: flex; align-items: center; gap: 4px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    margin-bottom: 24px;
+  }
+  .spectre-member-tab {
+    background: transparent; border: none; padding: 10px 14px;
+    font-size: 13px; color: var(--spectre-text-muted); font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease),
+                border-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-member-tab:hover { color: var(--spectre-text-primary); }
+  .spectre-member-tab.is-active {
+    color: var(--spectre-accent);
+    border-bottom-color: var(--spectre-accent);
+  }
+  .spectre-member-tab-overflow {
+    margin-left: auto; background: transparent; border: none;
+    padding: 10px 14px; color: var(--spectre-text-muted); cursor: default;
+    font-size: 16px; line-height: 1;
+  }
+  .spectre-member-tab-overflow:disabled { opacity: 0.5; }
+
+  /* Body */
+  .spectre-member-body { padding: 0; }
+  .spectre-member-section-title {
+    font-size: 15px; font-weight: 600; color: var(--spectre-text-primary);
+    margin: 0 0 12px;
+  }
+
+  /* Person switcher — reference: "Tucker Hersam    Grace Howie ×    + add member" */
+  .spectre-member-person-switcher {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
+    padding-bottom: 10px; margin-bottom: 24px;
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    font-size: 13px;
+  }
+  .spectre-member-person {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--spectre-text-muted); text-decoration: none;
+    padding-bottom: 4px; border-bottom: 2px solid transparent;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-member-person:hover { color: var(--spectre-text-primary); }
+  .spectre-member-person.is-active {
+    color: var(--spectre-accent);
+    border-bottom-color: var(--spectre-accent);
+    font-weight: 500;
+  }
+  .spectre-member-person-remove { display: inline-flex; }
+  .spectre-member-person-remove-btn {
+    background: transparent; border: none; padding: 0; color: currentColor;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+    opacity: 0.6;
+  }
+  .spectre-member-person-remove-btn:hover { opacity: 1; }
+  .spectre-member-person-add {
+    background: transparent; border: none; padding: 0;
+    color: var(--spectre-accent); font-size: 12.5px; cursor: pointer;
+  }
+  .spectre-member-person-add:hover { text-decoration: underline; }
+  .spectre-member-person-add-form { display: inline-flex; align-items: center; gap: 6px; }
+  .spectre-member-person-add-form input,
+  .spectre-member-person-add-form select {
+    height: 28px; padding: 0 8px; font-size: 12.5px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-primary);
+  }
+
+  /* Two-column body */
+  .spectre-member-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
+    gap: 40px;
+  }
+  @media (max-width: 899px) {
+    .spectre-member-columns { grid-template-columns: 1fr; gap: 24px; }
+  }
+
+  .spectre-member-section { margin-bottom: 28px; }
+  .spectre-member-section-head {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 8px;
+  }
+  .spectre-member-eyebrow {
+    font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--spectre-text-muted); font-weight: 600;
+    margin: 0;
+  }
+  .spectre-member-edit,
+  .spectre-member-inline-edit {
+    background: transparent; border: none; padding: 2px; margin: 0;
+    color: var(--spectre-text-muted); cursor: pointer; border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    opacity: 0.5;
+    transition: opacity var(--spectre-motion-fast) var(--spectre-ease),
+                background-color var(--spectre-motion-fast) var(--spectre-ease);
+  }
+  .spectre-member-edit:hover,
+  .spectre-member-inline-edit:hover {
+    opacity: 1;
+    background: var(--spectre-surface-hover, rgba(0,0,0,0.05));
+  }
+
+  /* Basic Details grid — dense two-column label/value */
+  .spectre-member-grid { display: block; }
+  .spectre-member-row {
+    display: grid; grid-template-columns: 200px 1fr;
+    padding: 4px 0; align-items: baseline;
+    font-size: 13px; line-height: 20px;
+  }
+  .spectre-member-row dt,
+  .spectre-member-row > label {
+    color: var(--spectre-text-muted); font-weight: 400;
+  }
+  .spectre-member-row dd { color: var(--spectre-text-primary); margin: 0; }
+  .spectre-member-not-provided { color: var(--spectre-text-muted); font-style: normal; }
+  .spectre-member-link { color: var(--spectre-accent); text-decoration: none; }
+  .spectre-member-link:hover { text-decoration: underline; }
+  .spectre-member-empty-note {
+    font-size: 12px; color: var(--spectre-text-muted); margin: 0;
+  }
+
+  /* Edit form (inline) */
+  .spectre-member-edit-form { display: block; }
+  .spectre-member-edit-input {
+    width: 100%; max-width: 320px;
+    height: 28px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-primary);
+    font-size: 13px;
+  }
+  .spectre-member-edit-form-actions {
+    display: flex; gap: 8px; margin-top: 12px;
+  }
+  .spectre-member-custom-form {
+    display: inline-flex; align-items: center; gap: 6px; width: 100%;
+  }
+  .spectre-member-custom-form input {
+    flex: 1; height: 28px; padding: 0 8px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); font-size: 13px;
+  }
+
+  /* Member Picture */
+  .spectre-member-picture-wrap {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  }
+  .spectre-member-picture {
+    width: 200px; height: 240px; object-fit: cover;
+    border-radius: 4px; background: var(--spectre-surface-hover, #e6e6e8);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .spectre-member-picture--placeholder {
+    color: var(--spectre-text-muted); font-size: 32px; font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .spectre-member-picture-hint {
+    font-size: 11px; color: var(--spectre-text-muted); margin: 0;
+  }
+
+  /* Groups */
+  .spectre-member-groups {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .spectre-member-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface); color: var(--spectre-text-secondary);
+    font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+    line-height: 14px;
+  }
+  .spectre-member-chip-remove {
+    background: transparent; border: none; padding: 0;
+    color: currentColor; cursor: pointer; opacity: 0.5;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .spectre-member-chip-remove:hover { opacity: 1; }
+  .spectre-member-chip--add {
+    background: transparent; color: var(--spectre-text-muted); cursor: pointer;
+    border-style: dashed;
+  }
+  .spectre-member-chip--add:hover { color: var(--spectre-text-primary); border-color: var(--spectre-text-primary); }
+  .spectre-member-group-add-form {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .spectre-member-group-add-form input {
+    height: 24px; padding: 0 8px; font-size: 11px;
+    border: 1px solid var(--spectre-border-default); border-radius: 4px;
+    background: var(--spectre-surface);
+  }
+
+  /* Placeholder tab body (Plan / Billing / etc.) */
+  .spectre-member-placeholder-tab {
+    padding: 40px 16px; text-align: center;
+    color: var(--spectre-text-muted); font-size: 13px;
+  }
+  .spectre-member-placeholder-tab h2 {
+    font-size: 15px; color: var(--spectre-text-primary); font-weight: 600;
+    margin: 0 0 8px;
   }
   /* Sprint 3 · Checkpoint 15M — inline icon on dark-green primary
      Work Intake actions (Approve & post, Create vendor & post, etc.).

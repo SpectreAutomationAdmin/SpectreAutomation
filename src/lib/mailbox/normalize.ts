@@ -24,8 +24,18 @@ export interface NormalizedEmail {
   bodyHtmlSanitized: string | null;
   bodyTextExtract: string | null;
   importance: "low" | "normal" | "high";
-  isRead: boolean;
-  hasAttachments: boolean;
+  // Phase 4R rev-13 (2026-08-16) — TRI-STATE. Microsoft Graph
+  // delta payloads can OMIT properties on partial-update records;
+  // omitted must mean "preserve existing value", NOT "field is
+  // false". The previous `?? false` coercion silently corrupted
+  // true → false on any partial delta record, causing founder-
+  // observed "Spectre shows unread even though Outlook says read".
+  // See docs/phase-4r-rev12-critical-defect-diagnostic.md §10.
+  //   true       → write true
+  //   false      → write false
+  //   undefined  → do NOT modify column
+  isRead: boolean | undefined;
+  hasAttachments: boolean | undefined;
   webLink: string | null;
   isRemoved: boolean;
   headers: Record<string, string>;
@@ -70,8 +80,10 @@ export function normalizeGraphMessage(raw: RawGraphMessage): NormalizedEmail {
     bodyHtmlSanitized,
     bodyTextExtract,
     importance: (raw.importance ?? "normal") as "low" | "normal" | "high",
-    isRead: raw.isRead ?? false,
-    hasAttachments: raw.hasAttachments ?? false,
+    // Rev-13 tri-state: preserve absent → undefined so the sync
+    // upsert can distinguish "not asserted" from an explicit false.
+    isRead: typeof raw.isRead === "boolean" ? raw.isRead : undefined,
+    hasAttachments: typeof raw.hasAttachments === "boolean" ? raw.hasAttachments : undefined,
     webLink: raw.webLink ?? null,
     isRemoved: !!raw.removed,
     headers,

@@ -16,6 +16,7 @@
 import { prisma } from "@/lib/prisma";
 import { fetchCalendarCommitmentsForToday, type CalendarCommitment, type CalendarFetchResult } from "@/lib/integrations/microsoft-graph-calendar";
 import { startOfLocalDayUtc, todayLocalDateString } from "./arrival";
+import { formatLocalTimeAmPm } from "./local-time";
 
 export type TodayCommitmentSource = "OUTLOOK_CALENDAR" | "SPECTRE_PROPOSED";
 
@@ -32,7 +33,7 @@ export type TodayCommitment = {
   startAt: Date | null;   // null for all-day / date-only proposals
   endAt?: Date | null;
   isAllDay: boolean;
-  timeLabel: string;      // "09:30" for timed, "All day" for all-day
+  timeLabel: string;      // "8:00 AM" / "1:30 PM" for timed, "All day" for all-day
   sourceLabel: string;    // "Outlook calendar" | "Spectre proposed"
   workIntakeItemId?: string;
   proposalStatus?: string;
@@ -117,7 +118,7 @@ export async function loadTodayCommitments(args: {
       startAt: e.startAt,
       endAt: e.endAt,
       isAllDay: e.isAllDay,
-      timeLabel: e.isAllDay ? "All day" : formatLocalTime(e.startAt, tz),
+      timeLabel: e.isAllDay ? "All day" : formatLocalTimeAmPm(e.startAt, tz),
       sourceLabel: "Outlook calendar",
       locationSummary: e.locationSummary,
       organiserName: e.organiserName,
@@ -131,7 +132,7 @@ export async function loadTodayCommitments(args: {
       title: p.title,
       startAt: p.dueAt,
       isAllDay: false,
-      timeLabel: formatLocalTime(p.dueAt, tz),
+      timeLabel: formatLocalTimeAmPm(p.dueAt, tz),
       sourceLabel: "Spectre proposed",
       workIntakeItemId: p.workIntakeItemId ?? undefined,
       proposalStatus: p.status,
@@ -186,15 +187,11 @@ export function deriveCommitmentState(input: {
   return "UPCOMING";
 }
 
-/** Format a UTC instant as HH:mm in the given IANA timezone. */
-function formatLocalTime(d: Date, tz: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(d);
-  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
-  const hh = g("hour") === "24" ? "00" : g("hour");
-  return `${hh.padStart(2, "0")}:${g("minute").padStart(2, "0")}`;
-}
+// Phase 4R rev-3 (2026-08-15) — the prior `formatLocalTime` (24h,
+// no AM/PM) has been retired. All time-of-day formatting now flows
+// through the shared `formatLocalTimeAmPm` in `./local-time.ts` so
+// the display convention lives in one place. See Phase 4R rev-3
+// checkpoint for the founder-approved format contract.
 
 /**
  * Add N days to a local calendar date string, preserving IANA-tz

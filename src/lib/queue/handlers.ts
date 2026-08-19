@@ -155,6 +155,25 @@ registerHandler<{
   return runMailboxArchiveMessage(payload);
 });
 
+// Phase 4R rev-10 (2026-08-15) — MAILBOX_MARK_READ.
+//
+// Spectre → Outlook `PATCH /me/messages/{id} { "isRead": true }`
+// triggered when the founder first meaningfully interacts with an
+// unread email-backed Work Intake card. Idempotent per
+// (mailboxConnectionId, emailMessageId) via the
+// OutlookMarkReadMutation row. Mail.ReadWrite scope already in
+// APPROVED_DELEGATED_SCOPES (no consent change needed).
+registerHandler<{
+  workIntakeItemId: string;
+  emailMessageId: string;
+  graphMessageId: string;
+  mailboxConnectionId: string;
+  triggeredByUserId?: string;
+}>("MAILBOX_MARK_READ", async ({ payload }) => {
+  const { runMailboxMarkRead } = await import("../mailbox/mark-read");
+  return runMailboxMarkRead(payload);
+});
+
 // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — reconcile a
 // Spectre-originated outbound reply against Outlook Sent Items. The
 // handler is invoked with a delay from persistCanonicalOutboundReply
@@ -258,6 +277,7 @@ registerHandler("PRODUCT_REFERENCE_RESEARCH", async ({ payload, jobId }) => {
  * by a future health endpoint to distinguish "reserved" from "live".
  * Sprint 2 Checkpoint 13G — MAILBOX_DELTA_SYNC promoted to IMPLEMENTED.
  * Sprint 3 Checkpoint 15D — MAILBOX_ATTACHMENT_FETCH promoted to IMPLEMENTED.
+ * Phase 4R rev-10 (2026-08-15) — MAILBOX_MARK_READ added as IMPLEMENTED.
  */
 export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_INITIAL_SYNC: "IMPLEMENTED",
@@ -265,4 +285,5 @@ export const MAILBOX_JOB_IMPLEMENTATION = {
   MAILBOX_RENEW_SUBSCRIPTION: "RESERVED_PHASE_C",
   MAILBOX_ATTACHMENT_FETCH: "IMPLEMENTED",
   MAILBOX_RECONCILIATION_HEARTBEAT: "RESERVED_PHASE_C",
+  MAILBOX_MARK_READ: "IMPLEMENTED",
 } as const;

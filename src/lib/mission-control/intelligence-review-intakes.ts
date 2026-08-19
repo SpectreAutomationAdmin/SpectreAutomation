@@ -944,10 +944,34 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     // Sprint 3 Checkpoint 15I-2 — projections run in parallel per
     // email intake. Each `summariseApIntake` is cached process-locally
     // to bound the PDF re-parse cost on repeat loads.
-    const [invoiceSummary, statementSummary] = await Promise.all([
+    const [invoiceSummaryLive, statementSummary] = await Promise.all([
       apIds.length > 0 ? summariseApIntake(args.clubId, apIds[0]) : Promise.resolve(undefined),
       stIds.length > 0 ? summariseStatementIntake(args.clubId, stIds[0]) : Promise.resolve(undefined),
     ]);
+
+    // Sprint 3 · Phase 4R Completed-State Immutability (2026-08-15) §A5 —
+    // if the parent email WI is completed AND a frozen cardSnapshot
+    // exists on its WorkCompletionEvent, OVERLAY the founder-facing
+    // fields from the snapshot onto the live projection. This ensures
+    // Completed History shows the approved historical facts; auxiliary
+    // fields (sender relationship, payment terms, PO variance, etc.)
+    // continue to come from live projection so the shape stays complete.
+    //
+    // Legacy fallback: when the WI is completed but no snapshot exists
+    // (predates Phase 4R Completed-State Immutability, or an API-route
+    // path did not compose one), invoiceSummary comes from live
+    // projection unchanged — same behaviour as before this slice.
+    let invoiceSummary = invoiceSummaryLive;
+    if (invoiceSummaryLive && apIds.length > 0) {
+      const { readCompletedCardFacts } = await import("@/lib/work-intake/read-completed-card-facts");
+      const frozen = await readCompletedCardFacts({
+        clubId: args.clubId,
+        workIntakeItemId: emailIntakeId,
+      });
+      if (frozen.source === "frozen") {
+        invoiceSummary = overlayCardSnapshotOnInvoiceSummary(invoiceSummaryLive, frozen.snapshot);
+      }
+    }
 
     const dominantFacet: LinkedIntelligenceForEmail["dominantFacet"] =
       invoiceAttCount > 0 && statementAttCount > 0 ? "invoice+statement"
@@ -1002,6 +1026,68 @@ export async function loadLinkedIntelligenceForEmailIntakes(args: {
     elapsedMs: Date.now() - projectionStart,
   });
   return map;
+}
+
+/**
+ * Sprint 3 · Phase 4R Completed-State Immutability (2026-08-15) §A5 —
+ * overlay the founder-facing frozen snapshot fields onto the live
+ * invoiceSummary projection. Founder-facing columns (supplier /
+ * invoice # / amount / GL / category / vendor match / workflow state /
+ * recommendation) come from the snapshot; auxiliary shape fields
+ * (sender relationship, payment terms, PO variance, GST verification,
+ * findings count, alternates) continue from live projection so the
+ * shape stays complete.
+ *
+ * Only fields that are explicitly present in the snapshot overwrite
+ * the live value — a null in the snapshot leaves the live value
+ * untouched (defence against a partial snapshot rendering blank).
+ */
+function overlayCardSnapshotOnInvoiceSummary(
+  live: NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]>,
+  snap: import("@/lib/work-intake/completion-snapshot").CompletionCardSnapshot,
+): NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]> {
+  return {
+    ...live,
+    extractedVendor: {
+      name: snap.supplierDisplayName ?? live.extractedVendor.name,
+    },
+    vendorMatch: {
+      ...live.vendorMatch,
+      state: (snap.vendorMatchState as typeof live.vendorMatch.state)
+        ?? live.vendorMatch.state,
+      matchedName: snap.vendorDisplayName ?? live.vendorMatch.matchedName,
+      matchedVendorId: snap.vendorId ?? live.vendorMatch.matchedVendorId,
+    },
+    invoiceNumber: snap.invoiceNumber ?? live.invoiceNumber,
+    gross: {
+      amount: snap.total != null ? snap.total.toFixed(2) : live.gross.amount,
+      currency: snap.currency ?? live.gross.currency,
+    },
+    purchaseOrder: {
+      ...live.purchaseOrder,
+      poNumber: snap.purchaseOrder ?? live.purchaseOrder.poNumber,
+    },
+    category: {
+      ...live.category,
+      label: snap.categoryLabel ?? live.category.label,
+      glAccountNumber: snap.glAccountNumber ?? live.category.glAccountNumber,
+      glAccountName: snap.glAccountName ?? live.category.glAccountName,
+    },
+    // Overlay workflow state ONLY when the snapshot captured one that
+    // matches a valid enum value in the projection shape. Guards
+    // against a future snapshot writer stamping an unknown pill.
+    workflowState: (() => {
+      const valid = new Set([
+        "READY_FOR_APPROVAL", "VENDOR_MATCH_REQUIRED", "MISSING_INFORMATION",
+        "NEEDS_JUDGMENT", "POSSIBLE_DUPLICATE", "CHART_OF_ACCOUNTS_REQUIRED",
+        "ANALYSIS_PENDING", "UNSUPPORTED",
+      ]);
+      return snap.workflowState && valid.has(snap.workflowState)
+        ? (snap.workflowState as typeof live.workflowState)
+        : live.workflowState;
+    })(),
+    workflowReason: snap.recommendationSummary ?? live.workflowReason,
+  };
 }
 
 async function summariseApIntake(clubId: string, intakeId: string): Promise<LinkedIntelligenceForEmail["invoiceSummary"]> {
@@ -1258,7 +1344,7 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
   }) : null;
   const workflowState = noCoa
     ? "CHART_OF_ACCOUNTS_REQUIRED" as const
-    : mapPhase3ToLegacyDisplayState(phase3Decision);
+    : mapPhase3ToLegacyDisplayState(phase3Decision, analysis);
   const workflowReason = noCoa
     ? "GL coding unavailable — no chart of accounts is loaded for this club. Import the club's chart of accounts before approving any AP posting."
     : composeWorkflowReasonFromDecision(phase3Decision, analysis);
@@ -1810,6 +1896,7 @@ async function resolvePaymentTerms(args: {
  *  "Ready for approval" (no automatic posting). */
 export function mapPhase3ToLegacyDisplayState(
   d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
+  analysis?: ApAnalyseResult | null,
 ): ApInvoiceCardIntelligence["workflowState"] {
   if (!d) return "NEEDS_JUDGMENT";
   // Duplicate is a special-case label that pre-dates Phase 3.
@@ -1824,20 +1911,60 @@ export function mapPhase3ToLegacyDisplayState(
     case "READY_FOR_APPROVAL":
       return "READY_FOR_APPROVAL";
     case "NEEDS_JUDGMENT": {
-      // Preserve the specific VENDOR_MATCH_REQUIRED label when the
-      // ONLY blocker is the vendor. Otherwise the general
-      // NEEDS_JUDGMENT pill is truthful.
       const codes = d.blockers.map((b) => b.code);
       const onlyVendor =
         codes.length > 0 && codes.every((c) => c === "VENDOR_UNRESOLVED");
       if (onlyVendor) return "VENDOR_MATCH_REQUIRED";
-      // Missing information label preserved when critical extraction
-      // facts are absent (supplier / payable reference / total).
-      const missingCore =
-        codes.includes("SUPPLIER_UNRESOLVED") ||
-        codes.includes("PAYABLE_REFERENCE_MISSING") ||
-        codes.includes("GROSS_TOTAL_UNRESOLVED");
-      if (missingCore) return "MISSING_INFORMATION";
+
+      // v206 Work Intake state correction (2026-08-15). Founder direction
+      // §2/§3: MISSING_INFORMATION is reserved for cases where required
+      // invoice facts are ACTUALLY ABSENT. A missing vendor RECORD (with
+      // supplier name + coding + invoice number + total all present) is a
+      // workflow/setup task ("Create vendor & post"), not an information
+      // deficiency. A low-confidence-numeric blocker on a value that IS
+      // present is a review issue, not a request-information trigger.
+      //
+      // Previous behaviour: any SUPPLIER_UNRESOLVED / PAYABLE_REFERENCE_MISSING
+      // / GROSS_TOTAL_UNRESOLVED blocker → MISSING_INFORMATION, regardless
+      // of whether the extracted value actually existed. That collapsed
+      // Club Support #220824 (supplier=Club Support Inc extracted, invoice
+      // number=220824 extracted, total=$778.16 extracted, GL=6071
+      // Subscriptions committed, only missing = Vendor row) into a
+      // "Request information" card that asked the founder to email the
+      // supplier for information Spectre already had.
+      const extraction = analysis?.extraction;
+      const gl = analysis?.gl;
+      const supplierNameKnown = !!extraction?.vendor?.guessedName?.trim();
+      const invoiceRefKnown = !!extraction?.invoiceNumber?.trim();
+      const grossTotalKnown = extraction?.total != null;
+      const glCodingKnown = !!gl?.accountNumber;
+
+      // A blocker only signals an actual info absence when the underlying
+      // extracted value is missing. If the value is present but confidence
+      // is below the numeric floor, it's a review/verification issue, not
+      // an information gap.
+      const actualInfoAbsent =
+        (codes.includes("SUPPLIER_UNRESOLVED") && !supplierNameKnown) ||
+        (codes.includes("PAYABLE_REFERENCE_MISSING") && !invoiceRefKnown) ||
+        (codes.includes("GROSS_TOTAL_UNRESOLVED") && !grossTotalKnown);
+      if (actualInfoAbsent) return "MISSING_INFORMATION";
+
+      // Missing-vendor + core-facts-and-GL-all-known → VENDOR_MATCH_REQUIRED
+      // (Create vendor & post). The vendor blocker becomes the primary
+      // remaining workflow step.
+      if (
+        codes.includes("VENDOR_UNRESOLVED")
+        && supplierNameKnown
+        && invoiceRefKnown
+        && grossTotalKnown
+        && glCodingKnown
+      ) {
+        return "VENDOR_MATCH_REQUIRED";
+      }
+
+      // Everything else with residual blockers (GL absent, allocation
+      // variance, tax unreconciled with vendor present, etc.) is a
+      // human-judgment condition on existing information.
       return "NEEDS_JUDGMENT";
     }
     default:
@@ -1850,7 +1977,7 @@ export function mapPhase3ToLegacyDisplayState(
  *  card's short-sentence style. */
 export function composeWorkflowReasonFromDecision(
   d: import("@/lib/ap-intelligence/workflow/decision").ApWorkflowDecision | null,
-  _analysis: ApAnalyseResult | null,
+  analysis: ApAnalyseResult | null,
 ): string {
   if (!d) return "Analysis unavailable — open review to inspect.";
   if (d.state === "EXTRACTION_PENDING") {
@@ -1862,7 +1989,26 @@ export function composeWorkflowReasonFromDecision(
   if (d.state === "READY_FOR_APPROVAL" || d.state === "AUTO_APPROVAL_ELIGIBLE") {
     return "All required dimensions cleared. Human sign-off remaining.";
   }
-  // NEEDS_JUDGMENT — surface the primary blocker.
+  // v206 Work Intake state correction (2026-08-15). When the display
+  // state is VENDOR_MATCH_REQUIRED, the primary blocker sentence
+  // ("supplier is not resolved" etc.) is not the founder-actionable
+  // reason — the workflow step is vendor creation. Surface that
+  // directly so the narrative aligns with the primary action button.
+  const codes = d.blockers.map((b) => b.code);
+  const supplierNameKnown = !!analysis?.extraction?.vendor?.guessedName?.trim();
+  const invoiceRefKnown = !!analysis?.extraction?.invoiceNumber?.trim();
+  const grossTotalKnown = analysis?.extraction?.total != null;
+  const glCodingKnown = !!analysis?.gl?.accountNumber;
+  const vendorMatchIsPrimary =
+    codes.includes("VENDOR_UNRESOLVED")
+    && supplierNameKnown && invoiceRefKnown && grossTotalKnown && glCodingKnown
+    && !(codes.includes("SUPPLIER_UNRESOLVED") && !supplierNameKnown)
+    && !(codes.includes("PAYABLE_REFERENCE_MISSING") && !invoiceRefKnown)
+    && !(codes.includes("GROSS_TOTAL_UNRESOLVED") && !grossTotalKnown);
+  if (vendorMatchIsPrimary) {
+    return "Supplier identified from invoice but no matching vendor record exists — create the vendor to complete posting.";
+  }
+  // NEEDS_JUDGMENT / MISSING_INFORMATION — surface the primary blocker.
   const primary = d.blockers[0];
   if (primary) return primary.message;
   return "Reviewer judgment required.";

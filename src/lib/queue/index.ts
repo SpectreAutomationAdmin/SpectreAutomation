@@ -47,6 +47,12 @@ export type JobKind =
   // check via the mailbox integration when it lands). See
   // src/lib/queue/handlers.ts for the handler.
   | "MAILBOX_ARCHIVE_MESSAGE"
+  // Phase 4R rev-10 (2026-08-15) — Spectre → Outlook mark-as-read.
+  // Enqueued when a founder first meaningfully interacts with an
+  // email-backed unread Work Intake card. Idempotent per
+  // (mailboxConnectionId, emailMessageId) via the
+  // OutlookMarkReadMutation row. See src/lib/mailbox/mark-read.ts.
+  | "MAILBOX_MARK_READ"
   // Sprint 3 · Checkpoint 16H rejection (2026-08-06) — reconcile a
   // Spectre-originated outbound reply with the corresponding message
   // in Outlook Sent Items. Idempotent per (conversationMessageId,

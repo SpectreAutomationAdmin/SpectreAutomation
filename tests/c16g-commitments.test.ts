@@ -72,10 +72,12 @@ describe("16G Stage E · loadTodayCommitments", () => {
     expect(s.spectreCommitmentCount).toBe(1);
     expect(s.items).toHaveLength(2);
     // Chronological — Outlook 15:30 UTC (09:30 MDT) before payroll 22:00 UTC (16:00 MDT).
+    // Phase 4R rev-3 (2026-08-15) — display format is 12-hour AM/PM
+    // via `formatLocalTimeAmPm` in src/lib/mission-control/local-time.ts.
     expect(s.items[0].source).toBe("OUTLOOK_CALENDAR");
-    expect(s.items[0].timeLabel).toBe("09:30");
+    expect(s.items[0].timeLabel).toBe("9:30 AM");
     expect(s.items[1].source).toBe("SPECTRE_PROPOSED");
-    expect(s.items[1].timeLabel).toBe("16:00");
+    expect(s.items[1].timeLabel).toBe("4:00 PM");
   });
 
   it("EXCLUDES dismissed / completed proposals (prisma.findMany filter)", async () => {

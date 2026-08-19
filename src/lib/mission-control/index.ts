@@ -543,12 +543,63 @@ async function projectViewerReadState(
     select: { workIntakeItemId: true },
   });
   const readSet = new Set(rows.map((r) => r.workIntakeItemId));
+  // Phase 4R rev-12 (2026-08-16) — Outlook is the CANONICAL read
+  // state for email-backed items. The rev-10 OR-latch formula
+  //   isRead = viewerHasRead || outlookIsRead
+  // caused a founder-reported defect (invoice #221007): once a
+  // Spectre user clicked a card, the per-user WorkIntakeItemRead
+  // row PERMANENTLY overrode any later Outlook `isRead=false`.
+  // Marking the email unread in Outlook did NOT bring the card
+  // back to unread in Spectre.
+  //
+  // Rev-12 splits the read-state model by item source:
+  //
+  //   Email-backed item (any PRIMARY EmailWorkIntakeOrigin)
+  //     canonical: EmailMessage.isRead of the newest PRIMARY email.
+  //     Bidirectional — Outlook can drive read → unread → read at
+  //     will; the per-user WorkIntakeItemRead row does NOT override.
+  //     Optimistic UI happens in the client component (readLocal)
+  //     but is reset when the server projection re-reports.
+  //
+  //   Non-email item (no PRIMARY EmailWorkIntakeOrigin)
+  //     canonical: presence/absence of WorkIntakeItemRead row.
+  //     Same as pre-rev-10 behaviour.
+  //
+  // `viewerHasRead` is still surfaced (some callers depend on it
+  // as a projection field), but no longer participates in the
+  // isUnread decision for email-backed items.
+  const primaryOrigins = await prisma.emailWorkIntakeOrigin.findMany({
+    where: {
+      workIntakeItemId: { in: intakeIds },
+      role: "PRIMARY",
+    },
+    select: {
+      workIntakeItemId: true,
+      emailMessage: { select: { isRead: true } },
+    },
+  });
+  // Per intake: (a) does any PRIMARY email exist? (email-backed?),
+  //            (b) is any PRIMARY email currently unread in Outlook?
+  const hasPrimaryEmail = new Set<string>();
+  const anyPrimaryUnread = new Set<string>();
+  for (const origin of primaryOrigins) {
+    hasPrimaryEmail.add(origin.workIntakeItemId);
+    if (origin.emailMessage && origin.emailMessage.isRead === false) {
+      anyPrimaryUnread.add(origin.workIntakeItemId);
+    }
+  }
   for (const item of workItems) {
     if (!item.workIntakeItemId) continue;
-    item.viewerHasRead = readSet.has(item.workIntakeItemId);
-    // The card's isUnread flag now reflects the per-user state.
-    // The prior EmailMessage.isRead-derived value is superseded.
-    item.isUnread = !item.viewerHasRead;
+    const viewerHasRead = readSet.has(item.workIntakeItemId);
+    item.viewerHasRead = viewerHasRead;
+    if (hasPrimaryEmail.has(item.workIntakeItemId)) {
+      // Email-backed: Outlook is authoritative. Do NOT OR with the
+      // per-user click history — that reintroduces the rev-10 latch.
+      item.isUnread = anyPrimaryUnread.has(item.workIntakeItemId);
+    } else {
+      // Non-email item: per-user click history is canonical.
+      item.isUnread = !viewerHasRead;
+    }
   }
 }
 

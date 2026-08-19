@@ -67,6 +67,7 @@ function installDelegatedProviderMock(): MicrosoftDelegatedProvider {
     async getAttachmentBytes() { return Buffer.alloc(0); },
     async moveMessage() { return { resultingGraphMessageId: "new", destinationFolderId: "archive", movedAt: new Date() }; },
     async lookupSentMessagesInConversation() { return { messages: [] }; },
+    async markMessageRead() { return { graphMessageId: "syn-mid", markedReadAt: new Date() }; },
   };
   setMicrosoftDelegatedProvider(mock);
   return mock;

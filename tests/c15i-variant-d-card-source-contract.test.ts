@@ -60,19 +60,30 @@ describe("Variant D card shell — both cards use the same class system", () => 
   });
 });
 
-describe("Click-to-expand + mark-read (Checkpoint 15I §3.2/§3.3)", () => {
-  it.each(CARDS)("%s primary surface is role='button' with aria-expanded", (name, src) => {
-    expect(src).toMatch(/role="button"/);
-    expect(src).toMatch(/aria-expanded=\{expanded\}/);
-    expect(src).toMatch(/spectre-mc-item-surface/);
+describe("Card interaction model (Phase 4R rev-7 · 2026-08-15 — supersedes 15I §3.2/§3.3)", () => {
+  // Rev-7 retires the click-to-expand accordion on the primary
+  // Work Intake card (`EmailIntakeCard`). Every EmailIntakeCard is
+  // now tab-driven: 3 tabs (Spectre Summary / Conversation /
+  // Attachments) sit at the top of the article, and switching a
+  // tab replaces the whole card body. Mark-read now fires on the
+  // first tab click instead of on Open.
+  //
+  // `IntelligenceReviewCard` (the AP_INVOICE_REVIEW /
+  // VENDOR_STATEMENT_REVIEW render path used only for orphaned
+  // review intakes without a parent email — the normal AP flow
+  // routes through EmailIntakeCard) is intentionally OUT of scope
+  // for the rev-7 refactor; it retains its Open/Collapse
+  // accordion. The retired-model assertions therefore scope to
+  // EmailIntakeCard only.
+  it("EmailIntakeCard does NOT ship the retired role='button' primary click surface", () => {
+    expect(EMAIL_CARD).not.toMatch(/role="button"/);
+    expect(EMAIL_CARD).not.toMatch(/aria-expanded=\{expanded\}/);
+    expect(EMAIL_CARD).not.toMatch(/spectre-mc-item-surface/);
   });
-  it.each(CARDS)("%s primary surface handles keyboard (Enter + Space)", (name, src) => {
-    expect(src).toMatch(/e\.key === "Enter" \|\| e\.key === " "/);
+  it("EmailIntakeCard does NOT retain Enter/Space keyboard on a retired primary surface", () => {
+    expect(EMAIL_CARD).not.toMatch(/e\.key === "Enter" \|\| e\.key === " "/);
   });
-  it.each(CARDS)("%s expanded region stops propagation so tabs/actions don't collapse the card", (name, src) => {
-    expect(src).toMatch(/onClick=\{\(e\) => e\.stopPropagation\(\)\}/);
-  });
-  it.each(CARDS)("%s calls the mark_read action on first expand", (name, src) => {
+  it.each(CARDS)("%s calls the mark_read action (EmailIntakeCard: on first tab click; IntelligenceReviewCard: on Open)", (name, src) => {
     expect(src).toMatch(/action:\s*"mark_read"/);
   });
 });
@@ -103,28 +114,47 @@ describe("Card-level Resolve action (Checkpoint 15I §4.2)", () => {
   });
 });
 
-describe("Contextual tabs (Checkpoint 15I §3.3 · preserves 15H)", () => {
-  it("EmailIntakeCard's tabsFor() gates invoice/statement/attachments tabs on the linked intelligence counts", () => {
+describe("Card tabs (Phase 4R rev-7 · 2026-08-15 — supersedes 15I §3.3)", () => {
+  // Rev-7 collapses the founder-facing tab set to exactly three
+  // (Spectre Summary / Conversation / Attachments); Invoice Review
+  // + Statement Review are retired (their content lives inside the
+  // Spectre Summary). Attachments only appears when the intake
+  // actually has an attachment.
+  it("EmailIntakeCard's tabsFor() always includes spectre-summary + conversation", () => {
     expect(EMAIL_CARD).toMatch(/function tabsFor\(/);
-    expect(EMAIL_CARD).toMatch(/linked\?\.invoiceAttachmentCount/);
-    expect(EMAIL_CARD).toMatch(/linked\?\.statementAttachmentCount/);
-    expect(EMAIL_CARD).toMatch(/linked\?\.attachmentCount/);
+    expect(EMAIL_CARD).toMatch(/tabs: Tab\[\]\s*=\s*\["spectre-summary", "conversation"\]/);
   });
-  it("EmailIntakeCard TabBar buttons stopPropagation so tab-clicks never collapse the card", () => {
-    const bar = EMAIL_CARD.slice(EMAIL_CARD.indexOf("function TabBar"));
+  it("EmailIntakeCard's tabsFor() gates attachments on linked.attachmentCount", () => {
+    expect(EMAIL_CARD).toMatch(/if \(\(linked\?\.attachmentCount \?\? 0\) > 0\) tabs\.push\("attachments"\);/);
+  });
+  it("EmailIntakeCard does NOT gate an invoice / statement / activity tab", () => {
+    // Retired tab identifiers must not appear as Tab-shaped call
+    // patterns. (The word "invoice" still appears legitimately in
+    // the Spectre narrative body.)
+    expect(EMAIL_CARD).not.toMatch(/tabs\.push\("invoice"\)/);
+    expect(EMAIL_CARD).not.toMatch(/tabs\.push\("statement"\)/);
+    expect(EMAIL_CARD).not.toMatch(/tabs\.push\("activity"\)/);
+  });
+  it("CardTabBar buttons stopPropagation so tab clicks never trigger a card-level handler", () => {
+    const bar = EMAIL_CARD.slice(EMAIL_CARD.indexOf("function CardTabBar"));
     expect(bar).toMatch(/e\.stopPropagation\(\)/);
   });
 });
 
 describe("Sender ≠ vendor (Checkpoint 15I §3.5 · preserves 15H)", () => {
   it("EmailIntakeCard sender-line shows contextLine (email `from`), not vendorGuess", () => {
-    // The sender line is fed by `data.contextLine`. The extracted
-    // vendor lives in the Invoice tab as `payload.extraction.vendor.guessedName`.
+    // The sender line is fed by `data.contextLine`. Rev-7 keeps
+    // that provenance rule: the sender-line renderer reads
+    // data.contextLine; the extracted vendor lives on the AP
+    // projection consumed in the Spectre Summary body.
     expect(EMAIL_CARD).toMatch(/className="spectre-mc-sender"[\s\S]{0,120}data\.contextLine/);
-    expect(EMAIL_CARD).toMatch(/vendor\.guessedName/);
   });
-  it("Invoice pane explicitly labels the sender as 'email sender — provenance only'", () => {
-    expect(EMAIL_CARD).toMatch(/email sender — provenance only/);
+  it("Rev-7: retired InvoiceFacetPane 'email sender — provenance only' label is gone with the pane", () => {
+    // The Invoice Review tab (and its InvoiceFacetPane) is retired.
+    // The provenance label the pane used to render disappears with
+    // the pane; the sender still renders via data.contextLine above.
+    expect(EMAIL_CARD).not.toMatch(/email sender — provenance only/);
+    expect(EMAIL_CARD).not.toMatch(/InvoiceFacetPane/);
   });
 });
 
@@ -199,13 +229,17 @@ describe("workIntakeStatus + WorkItem type", () => {
   });
 });
 
-describe("CSS — Variant D shell + expanded region + a11y", () => {
-  it("adds .spectre-mc-item-surface with focus-visible outline", () => {
-    expect(CSS).toMatch(/\.spectre-mc-item-surface/);
-    expect(CSS).toMatch(/\.spectre-mc-item-surface:focus-visible \{[\s\S]*?outline:/);
+describe("CSS — Variant D shell + rev-7 tab-driven card + a11y", () => {
+  it("Rev-7: .spectre-mc-item-surface + .spectre-mc-item-expanded are RETIRED", () => {
+    // The click-to-expand primary surface and the wrapping
+    // "expanded" region divider are both retired now that every
+    // card is tab-driven.
+    expect(CSS).not.toMatch(/\.spectre-mc-item-surface/);
+    expect(CSS).not.toMatch(/\.spectre-mc-item-expanded/);
   });
-  it("adds .spectre-mc-item-expanded region separator", () => {
-    expect(CSS).toMatch(/\.spectre-mc-item-expanded/);
+  it("Rev-7: adds .spectre-mc-item-body + .spectre-mc-tabs--card for the tab-driven card model", () => {
+    expect(CSS).toMatch(/\.spectre-mc-item-body/);
+    expect(CSS).toMatch(/\.spectre-mc-tabs--card/);
   });
   it("existing Variant D .spectre-mc-readout / .spectre-mc-rec still defined (contract for the shell)", () => {
     expect(CSS).toMatch(/\.spectre-mc-readout/);

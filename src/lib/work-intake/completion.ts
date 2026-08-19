@@ -29,6 +29,10 @@ import { prisma } from "@/lib/prisma";
 import { enqueue } from "@/lib/queue";
 import { isOutlookArchiveOnCompletionEnabled } from "@/lib/env";
 import { logger } from "@/lib/observability/logger";
+import type {
+  CompletionCardSnapshot,
+  CompletionEventMetadataEnvelope,
+} from "./completion-snapshot";
 
 export type CompletionType =
   | "RESOLVED"
@@ -49,7 +53,15 @@ export interface EmitCompletionEventArgs {
   clubId: string;
   completedByUserId: string;
   completionType: CompletionType;
-  metadata?: Record<string, unknown>;
+  /** Free-form metadata carried through to WorkCompletionEvent.metadataJson.
+   *  For AP work items, the caller should include a typed `cardSnapshot`
+   *  captured from the projection at the moment of the terminal-transition
+   *  click. See src/lib/work-intake/completion-snapshot.ts. */
+  metadata?: CompletionEventMetadataEnvelope;
+  /** Convenience — pass the typed snapshot separately and it will be
+   *  merged into metadata.cardSnapshot. If both are supplied, the
+   *  explicit cardSnapshot argument wins. */
+  cardSnapshot?: CompletionCardSnapshot | null;
 }
 
 export interface CompletionEventResult {
@@ -65,14 +77,26 @@ export interface CompletionEventResult {
  * Called from every terminal-state transition.
  */
 export async function emitWorkCompletionEvent(args: EmitCompletionEventArgs): Promise<CompletionEventResult> {
-  // 1. Write the event row.
+  // 1. Compose the metadata envelope. If a typed cardSnapshot was
+  //    supplied separately, merge it into metadata.cardSnapshot so
+  //    downstream readers have one canonical shape to check.
+  const envelope: CompletionEventMetadataEnvelope | undefined = (() => {
+    if (!args.metadata && !args.cardSnapshot) return undefined;
+    const base: CompletionEventMetadataEnvelope = args.metadata ? { ...args.metadata } : {};
+    if (args.cardSnapshot) {
+      base.cardSnapshot = args.cardSnapshot;
+    }
+    return base;
+  })();
+
+  // 2. Write the event row.
   const event = await prisma.workCompletionEvent.create({
     data: {
       clubId: args.clubId,
       workIntakeItemId: args.workIntakeItemId,
       completedByUserId: args.completedByUserId,
       completionType: args.completionType,
-      metadataJson: args.metadata ? JSON.stringify(args.metadata) : null,
+      metadataJson: envelope ? JSON.stringify(envelope) : null,
     },
     select: { id: true },
   });

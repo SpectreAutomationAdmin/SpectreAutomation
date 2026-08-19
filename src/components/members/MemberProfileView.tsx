@@ -81,11 +81,11 @@ interface Props {
     removeGroup: (formData: FormData) => Promise<void>;
     setCustomField: (formData: FormData) => Promise<void>;
   };
-  // HR-2A (2026-08-16) — reciprocal Employee indicator. Rendered
-  // as a subtle secondary line below the identity meta line when
-  // the member is also a club Employee. Link element only for
-  // viewers with `hr:directory:view` — non-HR viewers see the
-  // text without the link.
+  /** HR-2A (2026-08-16) — reciprocal Employee indicator. When the
+   *  member is also a club employee, the profile renders a subtle
+   *  "Also an Employee" affordance in the identity header.
+   *  `canNavigate` gates whether it's a link (`hr:directory:view`)
+   *  or plain text. Null when the member has no linked employee. */
   employeeLink?: {
     employeeId: string;
     employeeNumber: string;
@@ -151,59 +151,59 @@ export default function MemberProfileView(props: Props) {
   const availableGroups = allGroups.filter((g) => !assignedIds.has(g.id));
 
   return (
-    <div className="spectre-person-profile">
+    <div className="spectre-member-profile">
       {props.savedFlash ? (
-        <div className="spectre-person-profile-flash spectre-person-profile-flash--ok" role="status">
+        <div className="spectre-member-profile-flash spectre-member-profile-flash--ok" role="status">
           Saved.
         </div>
       ) : null}
       {props.errorFlash ? (
-        <div className="spectre-person-profile-flash spectre-person-profile-flash--err" role="alert">
+        <div className="spectre-member-profile-flash spectre-member-profile-flash--err" role="alert">
           {props.errorFlash}
         </div>
       ) : null}
 
       {/* ---------------- Identity header ---------------- */}
-      <header className="spectre-person-header">
-        <Link href="/app/admin/members" className="spectre-person-back" aria-label="Back to members">
+      <header className="spectre-member-header">
+        <Link href="/app/admin/members" className="spectre-member-back" aria-label="Back to members">
           <IconChevronLeft size={18} />
         </Link>
-        <div className="spectre-person-header-photo">
+        <div className="spectre-member-header-photo">
           {member.profileImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={member.profileImageUrl} alt="" />
           ) : (
-            <span className="spectre-person-header-photo-placeholder">{initials(member.firstName, member.lastName)}</span>
+            <span className="spectre-member-header-photo-placeholder">{initials(member.firstName, member.lastName)}</span>
           )}
         </div>
-        <div className="spectre-person-header-body">
-          <h1 className="spectre-person-header-name">{displayName || "Member"}</h1>
-          <div className="spectre-person-header-meta">
+        <div className="spectre-member-header-body">
+          <h1 className="spectre-member-header-name">{displayName || "Member"}</h1>
+          <div className="spectre-member-header-meta">
             <span className="uppercase-eyebrow">Member since {formatDate(member.joinDate)}</span>
-            <span aria-hidden="true" className="spectre-person-header-sep">|</span>
-            <span className="spectre-person-header-number spectre-mono">{member.memberNumber}</span>
+            <span aria-hidden="true" className="spectre-member-header-sep">|</span>
+            <span className="spectre-member-header-number spectre-mono">{member.memberNumber}</span>
+            {props.employeeLink && (
+              <>
+                <span aria-hidden="true" className="spectre-member-header-sep">|</span>
+                {props.employeeLink.canNavigate ? (
+                  <a
+                    href={`/app/admin/people/employees/${props.employeeLink.employeeId}`}
+                    className="uppercase-eyebrow"
+                    data-testid="member-employee-link"
+                  >
+                    Also an Employee · {props.employeeLink.employeeNumber}
+                  </a>
+                ) : (
+                  <span className="uppercase-eyebrow" data-testid="member-employee-indicator">
+                    Also an Employee
+                  </span>
+                )}
+              </>
+            )}
           </div>
-          {props.employeeLink ? (
-            <div className="spectre-person-header-cross-link">
-              {props.employeeLink.canNavigate ? (
-                <Link
-                  href={`/app/admin/people/employees/${props.employeeLink.employeeId}`}
-                  className="spectre-person-link"
-                  data-testid="member-header-employee-link"
-                  data-required-permission="hr:directory:view"
-                >
-                  Club Employee · #{props.employeeLink.employeeNumber}
-                </Link>
-              ) : (
-                <span data-testid="member-header-employee-text">
-                  Club Employee · #{props.employeeLink.employeeNumber}
-                </span>
-              )}
-            </div>
-          ) : null}
         </div>
         <span
-          className={`spectre-person-status-pill spectre-person-status-pill--${status.toLowerCase()}`}
+          className={`spectre-member-status-pill spectre-member-status-pill--${status.toLowerCase()}`}
           data-testid="member-status-pill"
         >
           {status}
@@ -211,14 +211,14 @@ export default function MemberProfileView(props: Props) {
       </header>
 
       {/* ---------------- Primary tabs ---------------- */}
-      <nav className="spectre-person-tabs" role="tablist" aria-label="Member sections">
+      <nav className="spectre-member-tabs" role="tablist" aria-label="Member sections">
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
             role="tab"
             aria-selected={tab === t.key}
-            className={`spectre-person-tab${tab === t.key ? " is-active" : ""}`}
+            className={`spectre-member-tab${tab === t.key ? " is-active" : ""}`}
             data-testid={`member-tab-${t.key}`}
             onClick={() => setTab(t.key)}
           >
@@ -227,7 +227,7 @@ export default function MemberProfileView(props: Props) {
         ))}
         <button
           type="button"
-          className="spectre-person-tab-overflow"
+          className="spectre-member-tab-overflow"
           aria-label="More sections"
           title="More sections — additional actions live in a future phase."
           disabled
@@ -238,11 +238,11 @@ export default function MemberProfileView(props: Props) {
 
       {/* ---------------- Tab body ---------------- */}
       {tab === "member" ? (
-        <section className="spectre-person-body" data-testid="member-tab-body">
-          <h2 className="spectre-person-section-title">Member info</h2>
+        <section className="spectre-member-body" data-testid="member-tab-body">
+          <h2 className="spectre-member-section-title">Member info</h2>
 
           {/* Person switcher */}
-          <div className="spectre-person-person-switcher" role="tablist" aria-label="People on this membership">
+          <div className="spectre-member-person-switcher" role="tablist" aria-label="People on this membership">
             {people.map((p) => (
               <Link
                 key={p.switcherKey}
@@ -250,14 +250,14 @@ export default function MemberProfileView(props: Props) {
                 scroll={false}
                 role="tab"
                 aria-selected={activeKey === p.switcherKey}
-                className={`spectre-person-person${activeKey === p.switcherKey ? " is-active" : ""}`}
+                className={`spectre-member-person${activeKey === p.switcherKey ? " is-active" : ""}`}
                 data-testid={`member-person-${p.switcherKey}`}
               >
                 {personLabel(p)}
                 {!p.isPrimary ? (
                   <form
                     action={actions.removeAssociatedPerson}
-                    className="spectre-person-person-remove"
+                    className="spectre-member-person-remove"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <input type="hidden" name="householdId" value={p.id ?? ""} />
@@ -265,7 +265,7 @@ export default function MemberProfileView(props: Props) {
                       type="submit"
                       aria-label={`Remove ${personLabel(p)}`}
                       title={`Remove ${personLabel(p)}`}
-                      className="spectre-person-person-remove-btn"
+                      className="spectre-member-person-remove-btn"
                     >
                       <IconClose size={12} />
                     </button>
@@ -276,7 +276,7 @@ export default function MemberProfileView(props: Props) {
             {addingPerson ? (
               <form
                 action={actions.addAssociatedPerson}
-                className="spectre-person-person-add-form"
+                className="spectre-member-person-add-form"
                 onSubmit={() => setAddingPerson(false)}
               >
                 <input name="firstName" placeholder="First name" required maxLength={100} />
@@ -293,7 +293,7 @@ export default function MemberProfileView(props: Props) {
             ) : (
               <button
                 type="button"
-                className="spectre-person-person-add"
+                className="spectre-member-person-add"
                 onClick={() => setAddingPerson(true)}
                 data-testid="member-add-person"
               >
@@ -304,16 +304,16 @@ export default function MemberProfileView(props: Props) {
 
           {/* Two-column body: LEFT = details + other + additional
               RIGHT = picture + groups. Follows the reference. */}
-          <div className="spectre-person-columns">
-            <div className="spectre-person-col-left">
+          <div className="spectre-member-columns">
+            <div className="spectre-member-col-left">
               {/* BASIC DETAILS */}
-              <div className="spectre-person-section" data-testid="member-basic-details">
-                <div className="spectre-person-section-head">
-                  <h3 className="spectre-person-eyebrow">Basic Details</h3>
+              <div className="spectre-member-section" data-testid="member-basic-details">
+                <div className="spectre-member-section-head">
+                  <h3 className="spectre-member-eyebrow">Basic Details</h3>
                   {activePerson.isPrimary ? (
                     <button
                       type="button"
-                      className="spectre-person-edit"
+                      className="spectre-member-edit"
                       aria-label="Edit basic details"
                       onClick={() => setEditingBasic((v) => !v)}
                       data-testid="member-edit-basic"
@@ -325,7 +325,7 @@ export default function MemberProfileView(props: Props) {
                 {activePerson.isPrimary && editingBasic ? (
                   <form
                     action={actions.editPrimaryDetails}
-                    className="spectre-person-edit-form"
+                    className="spectre-member-edit-form"
                     onSubmit={() => setEditingBasic(false)}
                   >
                     <BasicEditRow label="First Name"    name="firstName"  defaultValue={member.firstName ?? ""} />
@@ -338,13 +338,13 @@ export default function MemberProfileView(props: Props) {
                     <BasicEditRow label="Date of Birth" name="dateOfBirth" defaultValue={member.dateOfBirth?.slice(0, 10) ?? ""} type="date" />
                     <BasicEditRow label="Salutation"    name="salutation" defaultValue={member.salutation ?? ""} />
                     <BasicEditRow label="Nickname"      name="nickname"   defaultValue={member.nickname ?? ""} />
-                    <div className="spectre-person-edit-form-actions">
+                    <div className="spectre-member-edit-form-actions">
                       <button type="submit" className="spectre-btn spectre-btn--sm spectre-btn--primary">Save</button>
                       <button type="button" className="spectre-btn spectre-btn--sm spectre-btn--ghost" onClick={() => setEditingBasic(false)}>Cancel</button>
                     </div>
                   </form>
                 ) : (
-                  <dl className="spectre-person-grid">
+                  <dl className="spectre-member-grid">
                     <BasicRow label="First Name" value={activePerson.firstName} />
                     <BasicRow label="Middle Name" value={activePerson.middleName} />
                     <BasicRow label="Last Name" value={activePerson.lastName} />
@@ -361,33 +361,33 @@ export default function MemberProfileView(props: Props) {
               </div>
 
               {/* OTHER INFORMATION */}
-              <div className="spectre-person-section" data-testid="member-other-info">
-                <div className="spectre-person-section-head">
-                  <h3 className="spectre-person-eyebrow">Other Information</h3>
+              <div className="spectre-member-section" data-testid="member-other-info">
+                <div className="spectre-member-section-head">
+                  <h3 className="spectre-member-eyebrow">Other Information</h3>
                 </div>
-                <dl className="spectre-person-grid">
+                <dl className="spectre-member-grid">
                   <BasicRow label="Member Code" value={member.memberNumber} raw />
                   <BasicRow label="Category" value={member.membershipCategory} />
                 </dl>
               </div>
 
               {/* ADDITIONAL INFORMATION (custom fields) */}
-              <div className="spectre-person-section" data-testid="member-additional-info">
-                <div className="spectre-person-section-head">
-                  <h3 className="spectre-person-eyebrow">Additional Information</h3>
+              <div className="spectre-member-section" data-testid="member-additional-info">
+                <div className="spectre-member-section-head">
+                  <h3 className="spectre-member-eyebrow">Additional Information</h3>
                 </div>
                 {customFields.length === 0 ? (
-                  <p className="spectre-person-empty-note">No additional fields have been defined for this club yet.</p>
+                  <p className="spectre-member-empty-note">No additional fields have been defined for this club yet.</p>
                 ) : (
-                  <dl className="spectre-person-grid">
+                  <dl className="spectre-member-grid">
                     {customFields.map((f) => (
-                      <div key={f.id} className="spectre-person-row">
+                      <div key={f.id} className="spectre-member-row">
                         <dt>{f.label}</dt>
                         <dd>
                           {editingCustomKey === f.key ? (
                             <form
                               action={actions.setCustomField}
-                              className="spectre-person-custom-form"
+                              className="spectre-member-custom-form"
                               onSubmit={() => setEditingCustomKey(null)}
                             >
                               <input type="hidden" name="definitionId" value={f.id} />
@@ -397,10 +397,10 @@ export default function MemberProfileView(props: Props) {
                             </form>
                           ) : (
                             <>
-                              <span className={f.valueText ? "" : "spectre-person-not-provided"}>{formatValue(f.valueText)}</span>
+                              <span className={f.valueText ? "" : "spectre-member-not-provided"}>{formatValue(f.valueText)}</span>
                               <button
                                 type="button"
-                                className="spectre-person-inline-edit"
+                                className="spectre-member-inline-edit"
                                 aria-label={`Edit ${f.label}`}
                                 onClick={() => setEditingCustomKey(f.key)}
                               >
@@ -417,39 +417,39 @@ export default function MemberProfileView(props: Props) {
             </div>
 
             {/* Right column */}
-            <div className="spectre-person-col-right">
+            <div className="spectre-member-col-right">
               {/* MEMBER PICTURE */}
-              <div className="spectre-person-section" data-testid="member-picture">
-                <div className="spectre-person-section-head">
-                  <h3 className="spectre-person-eyebrow">Member Picture</h3>
+              <div className="spectre-member-section" data-testid="member-picture">
+                <div className="spectre-member-section-head">
+                  <h3 className="spectre-member-eyebrow">Member Picture</h3>
                 </div>
-                <div className="spectre-person-picture-wrap">
+                <div className="spectre-member-picture-wrap">
                   {activePerson.profileImageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={activePerson.profileImageUrl} alt="" className="spectre-person-picture" />
+                    <img src={activePerson.profileImageUrl} alt="" className="spectre-member-picture" />
                   ) : (
-                    <div className="spectre-person-picture spectre-person-picture--placeholder">
+                    <div className="spectre-member-picture spectre-member-picture--placeholder">
                       <span>{initials(activePerson.firstName, activePerson.lastName)}</span>
                     </div>
                   )}
-                  <p className="spectre-person-picture-hint">No member photo provided.</p>
+                  <p className="spectre-member-picture-hint">Photo upload lands in a follow-up phase.</p>
                 </div>
               </div>
 
               {/* GROUPS */}
-              <div className="spectre-person-section" data-testid="member-groups">
-                <div className="spectre-person-section-head">
-                  <h3 className="spectre-person-eyebrow">Groups</h3>
+              <div className="spectre-member-section" data-testid="member-groups">
+                <div className="spectre-member-section-head">
+                  <h3 className="spectre-member-eyebrow">Groups</h3>
                 </div>
-                <div className="spectre-person-groups">
+                <div className="spectre-member-groups">
                   {assignedGroups.length === 0 && !addingGroup ? (
-                    <p className="spectre-person-empty-note">No groups assigned.</p>
+                    <p className="spectre-member-empty-note">No groups assigned.</p>
                   ) : null}
                   {assignedGroups.map((g) => (
                     <form
                       key={g.groupId}
                       action={actions.removeGroup}
-                      className="spectre-person-chip"
+                      className="spectre-member-chip"
                       data-testid="member-group-chip"
                     >
                       <input type="hidden" name="groupId" value={g.groupId} />
@@ -458,7 +458,7 @@ export default function MemberProfileView(props: Props) {
                         type="submit"
                         aria-label={`Remove ${g.name}`}
                         title={`Remove ${g.name}`}
-                        className="spectre-person-chip-remove"
+                        className="spectre-member-chip-remove"
                       >
                         <IconClose size={11} />
                       </button>
@@ -467,18 +467,18 @@ export default function MemberProfileView(props: Props) {
                   {addingGroup ? (
                     <form
                       action={actions.addGroup}
-                      className="spectre-person-group-add-form"
+                      className="spectre-member-group-add-form"
                       onSubmit={() => setAddingGroup(false)}
                     >
                       <input
-                        list="spectre-person-group-options"
+                        list="spectre-member-group-options"
                         name="name"
                         placeholder="Group name"
                         maxLength={64}
                         required
                         autoFocus
                       />
-                      <datalist id="spectre-person-group-options">
+                      <datalist id="spectre-member-group-options">
                         {availableGroups.map((g) => <option key={g.id} value={g.name} />)}
                       </datalist>
                       <button type="submit" className="spectre-btn spectre-btn--sm spectre-btn--primary">Add</button>
@@ -487,7 +487,7 @@ export default function MemberProfileView(props: Props) {
                   ) : (
                     <button
                       type="button"
-                      className="spectre-person-chip spectre-person-chip--add"
+                      className="spectre-member-chip spectre-member-chip--add"
                       onClick={() => setAddingGroup(true)}
                       data-testid="member-add-group"
                     >
@@ -500,8 +500,8 @@ export default function MemberProfileView(props: Props) {
           </div>
         </section>
       ) : (
-        <section className="spectre-person-body">
-          <div className="spectre-person-placeholder-tab">
+        <section className="spectre-member-body">
+          <div className="spectre-member-placeholder-tab">
             <h2>{TABS.find((t) => t.key === tab)?.label ?? "Section"}</h2>
             <p>
               This section is scheduled for a subsequent phase.
@@ -530,15 +530,15 @@ function BasicRow({
   const display = raw ? (value ?? "—") : formatValue(value);
   const isMissing = !raw && !(value && value.trim().length);
   return (
-    <div className="spectre-person-row">
+    <div className="spectre-member-row">
       <dt>{label}</dt>
       <dd>
         {isMissing ? (
-          <span className="spectre-person-not-provided">Not provided</span>
+          <span className="spectre-member-not-provided">Not provided</span>
         ) : kind === "email" && value ? (
-          <a href={`mailto:${value}`} className="spectre-person-link">{value}</a>
+          <a href={`mailto:${value}`} className="spectre-member-link">{value}</a>
         ) : kind === "phone" && value ? (
-          <a href={`tel:${value}`} className="spectre-person-link">{value}</a>
+          <a href={`tel:${value}`} className="spectre-member-link">{value}</a>
         ) : (
           display
         )}
@@ -559,7 +559,7 @@ function BasicEditRow({
   type?: "text" | "email" | "date";
 }) {
   return (
-    <div className="spectre-person-row">
+    <div className="spectre-member-row">
       <label htmlFor={`me-${name}`}>{label}</label>
       <input
         id={`me-${name}`}
@@ -567,7 +567,7 @@ function BasicEditRow({
         type={type}
         defaultValue={defaultValue}
         maxLength={type === "email" ? 254 : 100}
-        className="spectre-person-edit-input"
+        className="spectre-member-edit-input"
       />
     </div>
   );

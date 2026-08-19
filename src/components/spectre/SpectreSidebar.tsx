@@ -26,8 +26,6 @@ import {
 } from "@/components/sidebar-nav-data";
 import {
   IconChevronRight,
-  IconChevronLeft,
-  IconSearch,
   IconHome,
   IconInbox,
   IconCog,
@@ -135,10 +133,17 @@ export function SpectreSidebar({
       data-testid="spectre-sidebar"
       data-collapsed={collapsed ? "true" : "false"}
     >
-      {/* Identity block */}
+      {/* Identity block.
+          Phase 4R rev-6 (2026-08-15) — pinned to the same vertical
+          height as the topbar via `.spectre-sidebar-identity` so
+          the divider beneath it aligns with the topbar's bottom
+          border. Combined with the nav's rev-6 padding-top token
+          (see `.spectre-sidebar-nav-scroll`), the first nav item
+          baseline lines up with the greeting baseline in the
+          workspace on the same horizontal band. */}
       <div
         className={cn(
-          "flex items-center gap-3 px-4 py-4 border-b border-[color:var(--spectre-border-hairline)]",
+          "spectre-sidebar-identity flex items-center gap-3 px-4 border-b border-[color:var(--spectre-border-hairline)]",
           collapsed && "justify-center px-2",
         )}
       >
@@ -154,63 +159,51 @@ export function SpectreSidebar({
         </div>
         {!collapsed && (
           <div className="min-w-0">
+            {/* Phase 4R UI-refinement rev-2 (2026-08-15) — the
+                persistent sidebar identifies the PRODUCT (Spectre
+                Automation), not the current tenant. Both words share
+                the previously-approved eyebrow treatment (uppercase,
+                small, letter-spaced, muted) and stack on two lines
+                so `AUTOMATION` sits directly beneath `SPECTRE`. This
+                intentionally preserves the pre-rev-2 eyebrow
+                elegance while stating the full product name. Tenant
+                identity now lives in the application header rail
+                (see src/components/spectre/HeaderContextRail.tsx).
+                No third line — never "SPECTRE Spectre Automation",
+                never a repeated wordmark. */}
             <div
-              className="text-[10px] uppercase tracking-[0.14em] font-semibold"
-              style={{ color: "var(--spectre-text-muted)" }}
+              className="spectre-sidebar-product-name"
+              data-testid="spectre-sidebar-product-name"
+              title="Spectre Automation"
             >
-              Spectre
-            </div>
-            {/* Sprint 3 · Checkpoint 15O — the club identity may wrap
-                to two lines so long names like "Coulee Ridge Golf &
-                Country Club" fit legibly on the widened 288px
-                sidebar. `truncate` was rejected because it silently
-                dropped "& Country Club". Line-clamp caps at two
-                lines so an unusually long identity still can't push
-                the search / nav below the fold. */}
-            <div
-              className="text-[13px] font-semibold leading-tight spectre-sidebar-club-name"
-              style={{ color: "var(--spectre-text-primary)" }}
-              data-testid="spectre-sidebar-club-name"
-              title={clubName}
-            >
-              {clubName}
+              <div
+                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
+                style={{ color: "var(--spectre-text-muted)" }}
+                data-testid="spectre-sidebar-product-name-line-1"
+              >
+                SPECTRE
+              </div>
+              <div
+                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
+                style={{ color: "var(--spectre-text-muted)" }}
+                data-testid="spectre-sidebar-product-name-line-2"
+              >
+                AUTOMATION
+              </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Search entry (⌘K) */}
-      <div className={cn("px-3 pt-3", collapsed && "px-2")}>
-        {collapsed ? (
-          <button
-            type="button"
-            aria-label="Search (⌘K)"
-            className="spectre-btn spectre-btn--ghost w-full h-9"
-          >
-            <IconSearch size={16} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            aria-label="Search (⌘K)"
-            className={cn(
-              "flex items-center gap-2 w-full px-3 h-9 rounded-spectre-input border transition-colors duration-spectre-fast ease-spectre",
-            )}
-            style={{
-              background: "var(--spectre-surface)",
-              borderColor: "var(--spectre-border-default)",
-              color: "var(--spectre-text-muted)",
-            }}
-          >
-            <IconSearch size={14} />
-            <span className="text-[13px]">Search</span>
-            <span className="spectre-kbd ml-auto">⌘K</span>
-          </button>
-        )}
-      </div>
+      {/* Phase 4R rev-4 (2026-08-15) — the sidebar-scoped search
+          field was retired here. The canonical global search now
+          lives in the top-right of `SpectreTopBar` via
+          `<GlobalSearch>` so there is ONE search entry point for
+          the whole application. The sidebar begins with the product
+          identity and dives straight into navigation. */}
 
       {/* Nav */}
-      <nav className="mt-3 flex-1 overflow-y-auto pb-3">
+      <nav className="spectre-sidebar-nav-scroll flex-1 overflow-y-auto pb-3">
         <div className="space-y-0.5">
           {visibleTopLevel.map((item) => {
             const active = item.href === activeHref;

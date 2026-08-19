@@ -307,6 +307,37 @@ export class MockMicrosoftDelegatedProvider implements MicrosoftDelegatedProvide
     };
   }
 
+  // Phase 4R rev-10 (2026-08-15) — markMessageRead mock.
+  //
+  // Same failure taxonomy as moveMessage since both are delegated
+  // writes gated by Mail.ReadWrite:
+  //   SUCCESS                       — happy path, returns markedReadAt.
+  //   RETRYABLE_THROTTLE            — 429, worker should back off + retry.
+  //   TERMINAL_MESSAGE_NOT_FOUND    — 404, message was deleted; do not retry.
+  //   TERMINAL_INSUFFICIENT_SCOPE   — 403, user must reconsent.
+  private markReadOutcome: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_MESSAGE_NOT_FOUND" | "TERMINAL_INSUFFICIENT_SCOPE" = "SUCCESS";
+  public capturedMarkReadCalls: Array<import("./microsoft-graph-delegated").MarkMessageReadArgs> = [];
+  setMarkReadOutcome(o: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_MESSAGE_NOT_FOUND" | "TERMINAL_INSUFFICIENT_SCOPE"): void {
+    this.markReadOutcome = o;
+  }
+  async markMessageRead(args: import("./microsoft-graph-delegated").MarkMessageReadArgs): Promise<import("./microsoft-graph-delegated").MarkMessageReadResult> {
+    this.capturedMarkReadCalls.push(args);
+    if (!args.graphMessageId) throw new Error("markMessageRead requires graphMessageId");
+    if (this.markReadOutcome === "RETRYABLE_THROTTLE") {
+      throw makeMsalError({ errorCode: "temporarily_unavailable", response: { status: 429 } });
+    }
+    if (this.markReadOutcome === "TERMINAL_MESSAGE_NOT_FOUND") {
+      throw makeMsalError({ errorCode: "MESSAGE_NOT_FOUND", response: { status: 404 } });
+    }
+    if (this.markReadOutcome === "TERMINAL_INSUFFICIENT_SCOPE") {
+      throw makeMsalError({ errorCode: "insufficient_scope", response: { status: 403 } });
+    }
+    return {
+      graphMessageId: args.graphMessageId,
+      markedReadAt: new Date(),
+    };
+  }
+
   // Sprint 3 Checkpoint 15D — attachment-bytes mock.
   private fixtureAttachmentBytes = new Map<string, Buffer>();
   private getAttachmentBytesOutcome: "SUCCESS" | "RETRYABLE_THROTTLE" | "TERMINAL_INVALID_GRANT" = "SUCCESS";

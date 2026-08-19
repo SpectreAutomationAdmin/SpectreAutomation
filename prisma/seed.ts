@@ -789,6 +789,147 @@ async function main() {
   await seedActivity(memberD);
   await seedActivity(memberE);
 
+  // -------------------------------------------------------------------
+  // Phase 20 (Member Database, 2026-08-15) — enrich the primary demo
+  // memberships with the shapes the founder-facing admin Member Profile
+  // needs: extended demographics, a portrait, associated household
+  // people, group assignments, and custom-field values. Fully
+  // fictional data — no PII from the reference screenshot is used.
+  // -------------------------------------------------------------------
+
+  // Groups (per-club vocabulary). Six representative segments.
+  const groupSeeds = [
+    { name: "Sailing Approved", sortOrder: 10 },
+    { name: "Tennis",           sortOrder: 20 },
+    { name: "Young Members",    sortOrder: 30 },
+    { name: "Movie Club",       sortOrder: 40 },
+    { name: "Golf",             sortOrder: 50 },
+    { name: "Wednesday Night Racing", sortOrder: 60 },
+  ];
+  const groups = await Promise.all(groupSeeds.map((g) =>
+    prisma.memberGroup.upsert({
+      where: { clubId_name: { clubId: club.id, name: g.name } },
+      create: { clubId: club.id, name: g.name, sortOrder: g.sortOrder },
+      update: { sortOrder: g.sortOrder },
+    })
+  ));
+  const groupByName = new Map(groups.map((g) => [g.name, g] as const));
+
+  // Custom fields (per-club catalog). Two representative fields the
+  // Member Profile "Additional Information" section renders.
+  const customFieldSeeds = [
+    { key: "resignation", label: "Resignation", kind: "TEXT" as const, sortOrder: 10 },
+    { key: "interested_rc", label: "Are you interested in RC?", kind: "TEXT" as const, sortOrder: 20 },
+  ];
+  const customFields = await Promise.all(customFieldSeeds.map((c) =>
+    prisma.memberCustomFieldDefinition.upsert({
+      where: { clubId_key: { clubId: club.id, key: c.key } },
+      create: { clubId: club.id, key: c.key, label: c.label, kind: c.kind, sortOrder: c.sortOrder },
+      update: { label: c.label, kind: c.kind, sortOrder: c.sortOrder },
+    })
+  ));
+  void customFields;
+
+  // Portrait URLs — deterministic public-domain SVG avatars. Fictional
+  // names below; the URLs come from the well-known Dicebear
+  // "avataaars" generator and never reference real people.
+  const portrait = (seed: string) =>
+    `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed)}&backgroundColor=b6e3f4`;
+
+  // (A) Family membership — James Whitfield + spouse + two dependants.
+  await prisma.member.update({
+    where: { id: memberA.id },
+    data: {
+      middleName: "Andrew",
+      nickname: "Jim",
+      salutation: "Mr.",
+      gender: "male",
+      homePhone: "403-555-0101",
+      phone: "403-555-0114",
+      dateOfBirth: new Date("1968-04-12"),
+      profileImageUrl: portrait("james-whitfield"),
+      addressLine1: "1204 Ridgeview Terrace",
+      city: "Calgary", state: "AB", postalCode: "T3B 2W9", country: "Canada",
+    },
+  });
+  await prisma.memberHouseholdMember.createMany({
+    data: [
+      { clubId: club.id, memberId: memberA.id, firstName: "Grace", lastName: "Whitfield",
+        relationship: "SPOUSE", email: "grace.whitfield@example.com", phone: "403-555-0119",
+        dateOfBirth: new Date("1971-11-30"), salutation: "Mrs.", gender: "female",
+        profileImageUrl: portrait("grace-whitfield") },
+      { clubId: club.id, memberId: memberA.id, firstName: "Ethan", lastName: "Whitfield",
+        relationship: "CHILD", email: null, phone: null,
+        dateOfBirth: new Date("2005-06-18"), gender: "male",
+        profileImageUrl: portrait("ethan-whitfield") },
+      { clubId: club.id, memberId: memberA.id, firstName: "Ava", lastName: "Whitfield",
+        relationship: "CHILD", email: null, phone: null,
+        dateOfBirth: new Date("2009-02-04"), gender: "female",
+        profileImageUrl: portrait("ava-whitfield") },
+    ],
+  });
+  await prisma.memberGroupAssignment.createMany({
+    data: [
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Sailing Approved")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Tennis")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Golf")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Movie Club")!.id },
+      { clubId: club.id, memberId: memberA.id, groupId: groupByName.get("Wednesday Night Racing")!.id },
+    ],
+  });
+  const [defResign, defRc] = customFields;
+  await prisma.memberCustomFieldValue.create({
+    data: { clubId: club.id, memberId: memberA.id, definitionId: defResign.id, valueText: "Not planning to resign." },
+  });
+  await prisma.memberCustomFieldValue.create({
+    data: { clubId: club.id, memberId: memberA.id, definitionId: defRc.id, valueText: "Yes — please contact re: race committee." },
+  });
+
+  // (B) Single-member membership — Aisha Khan, minimal demographics
+  // so "Not provided" fallbacks are exercised.
+  await prisma.member.update({
+    where: { id: memberB.id },
+    data: {
+      salutation: "Ms.",
+      gender: "female",
+      dateOfBirth: new Date("1994-09-14"),
+      profileImageUrl: portrait("aisha-khan"),
+      phone: "403-555-0173",
+    },
+  });
+  await prisma.memberGroupAssignment.create({
+    data: { clubId: club.id, memberId: memberB.id, groupId: groupByName.get("Young Members")!.id },
+  });
+
+  // (C) Couple membership — Robert Tanner + partner. No dependants.
+  await prisma.member.update({
+    where: { id: memberC.id },
+    data: {
+      middleName: "Isaac",
+      salutation: "Mr.",
+      gender: "male",
+      homePhone: "403-555-0202",
+      phone: "403-555-0207",
+      dateOfBirth: new Date("1955-01-23"),
+      profileImageUrl: portrait("robert-tanner"),
+      addressLine1: "77 Riverside Lane", city: "Calgary", state: "AB",
+      postalCode: "T2P 0X8", country: "Canada",
+    },
+  });
+  await prisma.memberHouseholdMember.create({
+    data: { clubId: club.id, memberId: memberC.id,
+      firstName: "Priya", lastName: "Tanner", relationship: "PARTNER",
+      email: "priya.tanner@example.com", phone: "403-555-0209",
+      dateOfBirth: new Date("1958-05-17"), salutation: "Mrs.", gender: "female",
+      profileImageUrl: portrait("priya-tanner") },
+  });
+  await prisma.memberGroupAssignment.createMany({
+    data: [
+      { clubId: club.id, memberId: memberC.id, groupId: groupByName.get("Golf")!.id },
+      { clubId: club.id, memberId: memberC.id, groupId: groupByName.get("Movie Club")!.id },
+    ],
+  });
+
   // Notices
   await prisma.collectionNotice.create({ data: { clubId: club.id, memberId: memberC.id, noticeType: "OVER_60", message: defaultNotice("OVER_60", "Robert Tanner"), status: "SENT", sentAt: addDays(today, -3) } });
   await prisma.collectionNotice.create({ data: { clubId: club.id, memberId: memberD.id, noticeType: "OVER_90", message: defaultNotice("OVER_90", "Margaret Holloway"), status: "SENT", sentAt: addDays(today, -6) } });

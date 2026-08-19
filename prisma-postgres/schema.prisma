@@ -227,6 +227,11 @@ model Club {
   insightAlerts                  InsightAlert[]
   clubSettings                   ClubSetting[]
   searchIndexEntries             SearchIndexEntry[]
+  // Phase 20 (Member Database) — segmentation + custom-field back-relations.
+  memberGroups                   MemberGroup[]
+  memberGroupAssignments         MemberGroupAssignment[]
+  memberCustomFieldDefinitions   MemberCustomFieldDefinition[]
+  memberCustomFieldValues        MemberCustomFieldValue[]
   // Phase 7 — integrations / POS / LLM
   integrationSettings            IntegrationSetting[]
   integrationChecks              IntegrationCheck[]
@@ -447,11 +452,6 @@ model Club {
   employeeOnboardingResponses   EmployeeOnboardingResponse[]
   employeeOnboardingCorrections EmployeeOnboardingCorrection[]
   employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
-  // Phase 20 (Member Database, 2026-08-15) — segmentation + custom-field back-relations.
-  memberGroups                    MemberGroup[]
-  memberGroupAssignments          MemberGroupAssignment[]
-  memberCustomFieldDefinitions    MemberCustomFieldDefinition[]
-  memberCustomFieldValues         MemberCustomFieldValue[]
 }
 
 // ---------------------------------------------------------------------
@@ -1487,6 +1487,78 @@ model MemberHouseholdMember {
   updatedAt    DateTime  @updatedAt
 
   @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 20 — Member Database (2026-08-15)
+// Segmentation groups + extensible per-club custom-field catalog.
+// Details in `prisma/schema.prisma` (sqlite dev twin).
+// ---------------------------------------------------------------------------
+model MemberGroup {
+  id              String                  @id @default(cuid())
+  clubId          String
+  club            Club                    @relation(fields: [clubId], references: [id])
+  name            String
+  sortOrder       Int                     @default(100)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  assignments     MemberGroupAssignment[]
+
+  @@unique([clubId, name])
+  @@index([clubId, sortOrder])
+}
+
+model MemberGroupAssignment {
+  id                String       @id @default(cuid())
+  clubId            String
+  club              Club         @relation(fields: [clubId], references: [id])
+  memberId          String
+  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId           String
+  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt        DateTime     @default(now())
+  assignedByUserId  String?
+
+  @@unique([memberId, groupId])
+  @@index([clubId, groupId])
+  @@index([memberId])
+}
+
+model MemberCustomFieldDefinition {
+  id           String                      @id @default(cuid())
+  clubId       String
+  club         Club                        @relation(fields: [clubId], references: [id])
+  key          String
+  label        String
+  kind         String                      @default("TEXT")
+  helpText     String?
+  optionsJson  String?
+  sortOrder    Int                         @default(100)
+  archivedAt   DateTime?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  values       MemberCustomFieldValue[]
+
+  @@unique([clubId, key])
+  @@index([clubId, sortOrder])
+}
+
+model MemberCustomFieldValue {
+  id             String                      @id @default(cuid())
+  clubId         String
+  club           Club                        @relation(fields: [clubId], references: [id])
+  memberId       String
+  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId   String
+  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText      String?
+  updatedAt      DateTime                    @updatedAt
+  updatedByUserId String?
+
+  @@unique([memberId, definitionId])
+  @@index([clubId, definitionId])
 }
 
 // Member-facing documents (statements, forms, signed agreements).
@@ -8927,6 +8999,59 @@ model OutlookArchiveMutation {
   @@index([workIntakeId])
 }
 
+// Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
+//
+// When a founder first meaningfully interacts with an unread
+// email-backed Work Intake card, Spectre PATCHes the source
+// message with `isRead: true` via Microsoft Graph. That call is
+// enqueued (never blocking the UI click) and this row is the
+// durable idempotency + audit record for one such call.
+//
+// Uniqueness on (mailboxConnectionId, emailMessageId) ensures a
+// second click cannot enqueue a duplicate Graph PATCH — the worker
+// finds the existing SUCCEEDED row and returns immediately.
+model OutlookMarkReadMutation {
+  id                    String    @id @default(cuid())
+  clubId                String
+  workIntakeItemId      String
+  emailMessageId        String
+  graphMessageId        String
+  mailboxConnectionId   String
+  // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED | SUPERSEDED
+  status                String    @default("PENDING")
+  attemptCount          Int       @default(0)
+  lastAttemptAt         DateTime?
+  completedAt           DateTime?
+  errorCode             String?
+  // The user who triggered the mark-read (for audit — the card
+  // interaction is per-user even though Outlook's isRead is shared).
+  triggeredByUserId     String?
+  // Phase 4R rev-13 (2026-08-16) — the read/unread cycle is
+  // reversible. Each Spectre-initiated mark-read intent is its
+  // own GENERATION with an immutable audit trail. Historical
+  // SUCCEEDED / FAILED_TERMINAL / SUPERSEDED rows must NEVER
+  // block a later legitimate intent (see rev-12 diagnostic
+  // Defect B). `generationCursor` records the EmailMessage's
+  // `updatedAt` timestamp (or `graphMessageId` fingerprint) at
+  // enqueue time so per-row provenance is auditable; it is not
+  // load-bearing at write time.
+  generationCursor      String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Rev-13: the @@unique([mailboxConnectionId, emailMessageId])
+  // is INTENTIONALLY REMOVED. Each new read-generation creates a
+  // new row; historical rows remain as immutable audit. Active-
+  // intent deduplication is enforced at the ENQUEUE site by
+  // querying for a currently-active row (status IN
+  // ['PENDING','RUNNING','RETRYABLE']) rather than at the DB
+  // constraint layer. See src/lib/work-intake/actions.ts +
+  // src/lib/mailbox/mark-read.ts.
+  @@index([clubId, status])
+  @@index([workIntakeItemId])
+  @@index([mailboxConnectionId, emailMessageId, status])
+}
+
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
 // Commitments proposals. Spectre-inferred deadlines derived from
 // genuine WorkIntake evidence. Kept separate from real Outlook
@@ -10499,76 +10624,4 @@ model EmployeeOnboardingCorrection {
 
   @@index([clubId, sessionId])
   @@index([clubId, employeeId])
-}
-
-// ---------------------------------------------------------------------------
-// Phase 20 — Member Database (2026-08-15)
-// Segmentation groups + extensible per-club custom-field catalog.
-// Details in `prisma/schema.prisma` (sqlite dev twin).
-// ---------------------------------------------------------------------------
-model MemberGroup {
-  id              String                  @id @default(cuid())
-  clubId          String
-  club            Club                    @relation(fields: [clubId], references: [id])
-  name            String
-  sortOrder       Int                     @default(100)
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-
-  assignments     MemberGroupAssignment[]
-
-  @@unique([clubId, name])
-  @@index([clubId, sortOrder])
-}
-
-model MemberGroupAssignment {
-  id                String       @id @default(cuid())
-  clubId            String
-  club              Club         @relation(fields: [clubId], references: [id])
-  memberId          String
-  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  groupId           String
-  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  assignedAt        DateTime     @default(now())
-  assignedByUserId  String?
-
-  @@unique([memberId, groupId])
-  @@index([clubId, groupId])
-  @@index([memberId])
-}
-
-model MemberCustomFieldDefinition {
-  id           String                      @id @default(cuid())
-  clubId       String
-  club         Club                        @relation(fields: [clubId], references: [id])
-  key          String
-  label        String
-  kind         String                      @default("TEXT")
-  helpText     String?
-  optionsJson  String?
-  sortOrder    Int                         @default(100)
-  archivedAt   DateTime?
-  createdAt    DateTime                    @default(now())
-  updatedAt    DateTime                    @updatedAt
-
-  values       MemberCustomFieldValue[]
-
-  @@unique([clubId, key])
-  @@index([clubId, sortOrder])
-}
-
-model MemberCustomFieldValue {
-  id             String                      @id @default(cuid())
-  clubId         String
-  club           Club                        @relation(fields: [clubId], references: [id])
-  memberId       String
-  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  definitionId   String
-  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
-  valueText      String?
-  updatedAt      DateTime                    @updatedAt
-  updatedByUserId String?
-
-  @@unique([memberId, definitionId])
-  @@index([clubId, definitionId])
 }

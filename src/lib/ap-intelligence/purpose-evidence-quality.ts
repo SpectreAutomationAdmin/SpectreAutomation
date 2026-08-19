@@ -29,7 +29,7 @@
 
 import type { CanonicalLineItem } from "./evidence/canonical-line-item";
 import type { EconomicPurposeDecision } from "./economic-purpose-authority";
-import type { EconomicPurposeConcept } from "./economic-purpose-taxonomy";
+import { CANONICAL_PURPOSE_CONCEPTS, type EconomicPurposeConcept } from "./economic-purpose-taxonomy";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -147,8 +147,28 @@ export function assessPurposeEvidenceQuality(
 
   const concept = decision.concept;
   const vocab = concept ? CONCEPT_ITEM_VOCABULARY[concept] ?? [] : [];
+  // v206 SaaS-recall repair (2026-08-15) — symmetric to
+  // economic-purpose-taxonomy.ts. The taxonomy admits SOFTWARE_SUBSCRIPTION
+  // (and future concepts) via corroborated cue pairs; the evidence-quality
+  // gate must recognise the same corroboration as a discriminative match
+  // on the primary line. If the classifier can commit a concept via a
+  // corroborated cue, the gate must accept the same signal — otherwise
+  // the classifier commits but the gate blocks the downstream ranker,
+  // and the invoice ends with no GL winner despite committed purpose.
+  // See §5 of the founder direction: "keep taxonomy and evidence-quality
+  // vocabulary symmetrical."
+  const corroboratedPairs = concept
+    ? (CANONICAL_PURPOSE_CONCEPTS.find((c) => c.concept === concept)?.corroboratedCues ?? [])
+    : [];
+  const hasCorroboratedMatch = concept != null
+    && primaryPurchaseLines.some((li) =>
+      corroboratedPairs.some((pair) => pair.a.test(li.description) && pair.b.test(li.description)),
+    );
   const hasDiscriminativeMatch = concept != null
-    && primaryPurchaseLines.some((li) => vocab.some((r) => r.test(li.description)));
+    && (
+      primaryPurchaseLines.some((li) => vocab.some((r) => r.test(li.description)))
+      || hasCorroboratedMatch
+    );
 
   let quality: PurposeEvidenceQuality;
   let reason: string;

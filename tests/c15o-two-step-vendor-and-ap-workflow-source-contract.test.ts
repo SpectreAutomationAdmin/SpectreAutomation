@@ -72,7 +72,11 @@ describe("15O — vendor name click behaviour on the AP card", () => {
     expect(CARD).not.toMatch(/\/app\/admin\/ap\/vendors\/provisional/);
   });
   it("onVendorClick opens the modal (setCvapModalOpen(true))", () => {
-    expect(CARD).toMatch(/renderApCollapsedBody\(data, ap, expanded, \(\) => setCvapModalOpen\(true\)\)/);
+    // Rev-7 (Phase 4R · 2026-08-15) — the card no longer has an
+    // `expanded` local; the AP collapsed-body renderer now receives
+    // `false` as its expanded arg (kept as a compat parameter). The
+    // onVendorClick wiring is otherwise unchanged.
+    expect(CARD).toMatch(/renderApCollapsedBody\(data, ap, false, \(\) => setCvapModalOpen\(true\)\)/);
   });
 });
 
@@ -324,7 +328,7 @@ describe("15O — vendor timeline has a hard lower bound at Vendor.createdAt", (
 // Sidebar width (Phase 11)
 // ---------------------------------------------------------------------------
 
-describe("15O — left sidebar widened + club name allowed to wrap", () => {
+describe("15O — left sidebar widened + product name allowed to wrap", () => {
   it("expanded sidebar width increased from 248 to 288 px", () => {
     expect(GLOBALS_CSS).toMatch(/--spectre-sidebar-w-expanded: 288px/);
     expect(GLOBALS_CSS).not.toMatch(/--spectre-sidebar-w-expanded: 248px/);
@@ -332,18 +336,22 @@ describe("15O — left sidebar widened + club name allowed to wrap", () => {
   it("collapsed sidebar width unchanged at 72 px", () => {
     expect(GLOBALS_CSS).toMatch(/--spectre-sidebar-w-collapsed: 72px/);
   });
-  it("club identity div drops `truncate` in favour of a two-line clamp", () => {
-    // The pre-15O `truncate` on the club name div is gone.
+  // Phase 4R UI-refinement rev-2 (2026-08-15) — sidebar identity
+  // is the PRODUCT (SPECTRE / AUTOMATION), rendered as a two-line
+  // eyebrow that preserves the pre-Phase-4R eyebrow styling
+  // (uppercase, small, letter-spaced, muted). Tenant identity
+  // lives in the application header rail (HeaderContextRail).
+  it("sidebar identity is the two-line SPECTRE / AUTOMATION eyebrow", () => {
     const idBlock = SIDEBAR.slice(SIDEBAR.indexOf("Identity block"), SIDEBAR.indexOf("Search entry"));
     expect(idBlock).not.toMatch(/leading-tight truncate/);
-    expect(idBlock).toMatch(/spectre-sidebar-club-name/);
-    expect(idBlock).toMatch(/data-testid="spectre-sidebar-club-name"/);
-    // Full name preserved as title attr for tooltip fallback.
-    expect(idBlock).toMatch(/title=\{clubName\}/);
-  });
-  it("CSS defines a 2-line clamp for the club name", () => {
-    const rule = GLOBALS_CSS.slice(GLOBALS_CSS.indexOf(".spectre-sidebar-club-name"));
-    expect(rule).toMatch(/-webkit-line-clamp: 2/);
-    expect(rule).toMatch(/word-break: break-word/);
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name"/);
+    // Both lines share the eyebrow treatment.
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name-line-1"/);
+    expect(idBlock).toMatch(/data-testid="spectre-sidebar-product-name-line-2"/);
+    expect(idBlock).toMatch(/>\s*SPECTRE\s*</);
+    expect(idBlock).toMatch(/>\s*AUTOMATION\s*</);
+    // Retired shapes MUST NOT re-appear.
+    expect(idBlock).not.toMatch(/data-testid="spectre-sidebar-club-name"/);
+    expect(idBlock).not.toMatch(/Coulee Ridge/);
   });
 });
