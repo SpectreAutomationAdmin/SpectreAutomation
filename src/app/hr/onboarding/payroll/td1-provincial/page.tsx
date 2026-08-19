@@ -1,8 +1,9 @@
 // HR-2B.3 (2026-08-19) — Payroll · Provincial TD1 step.
 //
-// Employee declares their provincial TD1 claim (using the province
-// stored at the federal step), an optional additional-tax-per-pay
-// deduction, and attests.
+// HR-2B.3.5 (2026-08-19) — Province is resolved from `Club.payrollProvince`,
+// not from the just-persisted federal row. This makes the two TD1
+// steps share a single source of truth and defends against direct
+// navigation to the provincial page before the federal step has run.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -11,31 +12,13 @@ import {
   getSelfTaxProfileMasked,
   getSelfTd1Attestation,
 } from "@/lib/hr/employee-self-service";
-import {
-  getProvincialTd1,
-  TD1_PROVINCIAL_ADDITIONAL_CLAIMS,
-} from "@/lib/hr/td1-forms";
+import { TD1_PROVINCIAL_ADDITIONAL_CLAIMS } from "@/lib/hr/td1-forms";
+import { resolveClubPayrollProvince } from "@/lib/hr/club-payroll-province";
 import { saveProvincialTd1Action } from "../_actions";
 import Td1ClaimFields from "../Td1ClaimFields";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const PROVINCE_NAMES: Record<string, string> = {
-  AB: "Alberta",
-  BC: "British Columbia",
-  MB: "Manitoba",
-  NB: "New Brunswick",
-  NL: "Newfoundland and Labrador",
-  NS: "Nova Scotia",
-  NT: "Northwest Territories",
-  NU: "Nunavut",
-  ON: "Ontario",
-  PE: "Prince Edward Island",
-  QC: "Quebec",
-  SK: "Saskatchewan",
-  YT: "Yukon",
-};
 
 function formatDate(d: Date): string {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
@@ -45,18 +28,30 @@ export default async function ProvincialTd1Step() {
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
 
+  // Province is a Club property, not a persisted-row property.
+  const clubPayroll = await resolveClubPayrollProvince(actor.clubId);
+  if (!clubPayroll.configured) {
+    // Send back to Federal step, which renders the "unconfigured Club"
+    // neutral copy.
+    redirect("/hr/onboarding/payroll/td1-federal");
+  }
+
+  // A tax-profile row is still required so the provincial upsert
+  // preserves the federal-step `effectiveFrom`. If missing, the
+  // employee hasn't done the federal step yet.
   const existing = await getSelfTaxProfileMasked(actor);
   if (!existing) redirect("/hr/onboarding/payroll/td1-federal");
 
-  const provincialSpec = getProvincialTd1(existing.province);
-  if (!provincialSpec) redirect("/hr/onboarding/payroll/td1-federal");
-
   const attestation = await getSelfTd1Attestation(actor, "provincial");
-  const provinceName = PROVINCE_NAMES[existing.province] ?? existing.province;
+  const provincialSpec = clubPayroll.provincialSpec;
+  const provinceName = clubPayroll.name;
 
   return (
     <article className="rounded-lg border border-stone-200 bg-white px-6 py-8 md:px-10 md:py-10">
-      <h2 className="font-serif text-2xl leading-tight text-stone-900">
+      <h2
+        data-testid="td1-provincial-heading"
+        className="font-serif text-2xl leading-tight text-stone-900"
+      >
         {provinceName} tax details.
       </h2>
       <p className="mt-2 text-sm text-stone-500 leading-relaxed">

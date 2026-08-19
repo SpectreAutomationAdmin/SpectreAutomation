@@ -46,6 +46,16 @@ model Club {
   address           String?
   region            String?
   salesTaxRegion    String?
+  // HR-2B.3.5 (2026-08-19) — canonical province of employment used
+  // by payroll for TD1 resolution. Set once when the Club is onboarded
+  // to Spectre HR. The employee-facing TD1 flow reads THIS value; a
+  // browser-supplied province is refused. Nullable during rollout so
+  // pre-HR clubs migrate cleanly; the resolver falls back to
+  // ClubProfile.provinceState (address province) as a temporary bridge
+  // and reports "unconfigured" when neither is present so no employee
+  // is asked to guess. Stored as a 2-letter Canadian province/territory
+  // code (AB, BC, ON, …). See src/lib/hr/club-payroll-province.ts.
+  payrollProvince   String?
   foundedYear       Int?
   createdAt         DateTime @default(now())
 

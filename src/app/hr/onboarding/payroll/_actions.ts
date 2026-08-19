@@ -24,11 +24,11 @@ import {
   uploadSelfBankingDocument,
 } from "@/lib/hr/employee-self-service";
 import {
-  getProvincialTd1,
   TD1_FEDERAL_ADDITIONAL_CLAIMS,
   TD1_FEDERAL_CURRENT,
   TD1_PROVINCIAL_ADDITIONAL_CLAIMS,
 } from "@/lib/hr/td1-forms";
+import { resolveClubPayrollProvince } from "@/lib/hr/club-payroll-province";
 import { isAppError } from "@/lib/errors";
 
 // Short-lived cookie carrying the just-entered TD1 federal claim total
@@ -203,11 +203,20 @@ function readAdditionalClaimsTotal(
 export async function saveFederalTd1Action(formData: FormData) {
   const actor = await beginActionOrRedirect();
 
-  const provinceRaw = ((formData.get("province") as string | null) ?? "").trim().toUpperCase();
-  const provincialSpec = getProvincialTd1(provinceRaw);
-  if (!provincialSpec) {
-    redirect(withErr("/hr/onboarding/payroll/td1-federal", "Please choose the province where you'll be working."));
+  // HR-2B.3.5 (2026-08-19) — Province of employment is a CLUB property.
+  // Any `province` field in the browser FormData is IGNORED — Spectre
+  // does not accept employee-supplied province because remote/multi-
+  // province private-club employment is not part of the current
+  // product model. If the Club is unconfigured we redirect back to
+  // the same step; the page renders a neutral "we need one Club
+  // payroll setting" message.
+  const clubPayroll = await resolveClubPayrollProvince(actor.clubId);
+  if (!clubPayroll.configured) {
+    // Neutral copy — internal reason (`no_field_set` vs
+    // `unsupported_value`) is not exposed to the employee.
+    redirect("/hr/onboarding/payroll/td1-federal");
   }
+  const provincialSpec = clubPayroll.provincialSpec;
 
   const basicFederal = Number(TD1_FEDERAL_CURRENT.basicPersonalAmount);
   const { total: extraFederal } = readAdditionalClaimsTotal(
@@ -226,8 +235,10 @@ export async function saveFederalTd1Action(formData: FormData) {
     // Provincial claim is populated with the province's basic amount
     // as a placeholder — the provincial step lets the employee refine
     // it. federalClaim = basic + any additional the employee checked.
+    // Province is the Club's payroll province — a browser-supplied
+    // value is never trusted here.
     await submitSelfTaxProfile(actor, {
-      province: provinceRaw,
+      province: clubPayroll.code,
       td1FormVersion: TD1_FEDERAL_CURRENT.version,
       effectiveFrom,
       federalClaim,
@@ -253,17 +264,25 @@ export async function saveFederalTd1Action(formData: FormData) {
 export async function saveProvincialTd1Action(formData: FormData) {
   const actor = await beginActionOrRedirect();
 
-  // Read the existing row to preserve federalClaim and effectiveFrom.
-  const existing = await getSelfTaxProfileMasked(actor);
-  if (!existing) {
-    // The federal step didn't run — send them back.
+  // HR-2B.3.5 (2026-08-19) — Province is derived from the Club at
+  // BOTH steps. Previously we read `existing.province` from the just-
+  // persisted federal row; that worked but relied on federal-step
+  // ordering. Resolving from the Club directly is single-source-of-
+  // truth and defends against a hand-forged POST that skips the
+  // federal step.
+  const clubPayroll = await resolveClubPayrollProvince(actor.clubId);
+  if (!clubPayroll.configured) {
     redirect("/hr/onboarding/payroll/td1-federal");
   }
+  const province = clubPayroll.code;
+  const provincialSpec = clubPayroll.provincialSpec;
 
-  const province = existing.province;
-  const provincialSpec = getProvincialTd1(province);
-  if (!provincialSpec) {
-    redirect(withErr("/hr/onboarding/payroll/td1-federal", "Please complete the federal step first — your province is not set."));
+  // We still need effectiveFrom to preserve the same-row upsert
+  // semantics. If no federal row exists, send the employee back
+  // through the federal step first.
+  const existing = await getSelfTaxProfileMasked(actor);
+  if (!existing) {
+    redirect("/hr/onboarding/payroll/td1-federal");
   }
 
   const basicProv = Number(provincialSpec.basicPersonalAmount);

@@ -55,6 +55,11 @@ model Club {
   address           String?
   region            String?
   salesTaxRegion    String?
+  // HR-2B.3.5 (2026-08-19) — canonical province of employment used
+  // by payroll for TD1 resolution. See prisma-postgres/schema.prisma
+  // for the full note; kept in sync here so SQLite dev mirrors the
+  // Postgres shape.
+  payrollProvince   String?
   foundedYear       Int?
   createdAt         DateTime @default(now())
 
