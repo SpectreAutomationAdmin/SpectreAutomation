@@ -1,24 +1,33 @@
 // HR-2B.2 (2026-08-18) — Photo upload input + client-side preview.
 // HR-2B.3.1 (2026-08-18) §3 — offer TWO explicit paths: "Take a selfie"
-// (mobile front camera via capture="user") and "Choose a photo" (native
-// picker). Both write to the SAME `name="photo"` form control so the
-// server action contract is unchanged. On desktop, capture="user" is a
-// no-op — the browser opens the file picker either way.
+// and "Choose a photo".
+// HR-2B.3.2 (2026-08-18) §3 — the selfie path now runs a real in-page
+// camera experience (permission → live preview → capture → accept)
+// instead of just triggering `<input capture="user">`. The captured
+// Blob is wired into a hidden `<input name="photo">` via the
+// DataTransfer API, then the outer form is submitted programmatically
+// so the server sees the SAME multipart contract as the picker path.
 //
-// Deliberately NO custom camera engine — native inputs only. The
-// employee sees a local preview from the selected File and can retake
-// or upload without touching the network.
+// Both paths share `name="photo"` on the underlying inputs; the server
+// action (`uploadPhotoAction`) picks the first non-empty File.
 
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import SelfieCaptureFlow from "./SelfieCaptureFlow";
 
 export default function PhotoUploadFields() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [helper, setHelper] = useState<string | null>(null);
-  const selfieRef = useRef<HTMLInputElement | null>(null);
+  // The hidden `<input>` that holds a captured-selfie File. We assign
+  // to it programmatically via a DataTransfer.
+  const selfieInputRef = useRef<HTMLInputElement | null>(null);
+  // The hidden `<input>` bound to the native picker.
   const chooseRef = useRef<HTMLInputElement | null>(null);
+  // Reference to the enclosing <form> so the selfie flow can trigger
+  // requestSubmit() after the capture is accepted.
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -26,8 +35,9 @@ export default function PhotoUploadFields() {
     };
   }, [previewUrl]);
 
-  function handleFileChange(file: File | null) {
+  function setFilePreview(file: File | null) {
     if (!file) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       setPreviewUrl(null);
       setSelectedName(null);
       return;
@@ -38,10 +48,8 @@ export default function PhotoUploadFields() {
     setHelper(null);
   }
 
-  /** Ensure only ONE of the two `name="photo"` inputs holds a file at
-   *  submit time. When the user picks in the selfie input we clear the
-   *  choose input, and vice-versa, so the server sees a single file
-   *  under `photo` instead of two. */
+  /** Ensure only ONE `name="photo"` input carries a file at submit
+   *  time. When one input receives a selection, blank the other. */
   function clearOther(target: HTMLInputElement | null) {
     if (target) target.value = "";
   }
@@ -50,27 +58,63 @@ export default function PhotoUploadFields() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setSelectedName(null);
-    if (selfieRef.current) selfieRef.current.value = "";
+    if (selfieInputRef.current) selfieInputRef.current.value = "";
     if (chooseRef.current) chooseRef.current.value = "";
   }
 
+  /** Assign the captured selfie File to the hidden selfie input via
+   *  the DataTransfer API, then submit the enclosing form. The server
+   *  sees the SAME `name="photo"` multipart entry it would from the
+   *  native picker path. */
+  function handleSelfieAccepted(file: File) {
+    const input = selfieInputRef.current;
+    if (!input) {
+      setHelper("Something went wrong wiring the captured photo. Please choose a photo instead.");
+      return;
+    }
+    // Clear the "other" path first — mutual exclusion.
+    clearOther(chooseRef.current);
+    // DataTransfer isn't supported in every environment; guard for it.
+    try {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+    } catch {
+      setHelper("Your browser blocked the automatic upload. Please try 'Choose a photo' instead.");
+      return;
+    }
+    setFilePreview(file);
+    // Find the enclosing form and submit programmatically so the
+    // existing server action runs unchanged.
+    const form = rootRef.current?.closest("form") ?? input.form;
+    if (form && typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else if (form) {
+      form.submit();
+    } else {
+      setHelper("Photo captured but the form couldn't be submitted automatically. Press the Upload button below.");
+    }
+  }
+
   return (
-    <div className="space-y-4">
-      {/* Two hidden native file inputs — one with capture="user" for the
-          selfie path, one without for the gallery/desktop path. Both
-          share name="photo" so the server action's multipart contract
-          is unchanged whichever input holds the selection. */}
+    <div ref={rootRef} className="space-y-4">
+      {/* Hidden native inputs — both share name="photo" so the server
+          action's multipart contract holds. The selfie input receives
+          its file via DataTransfer from the capture flow; the choose
+          input is populated by the native picker. */}
       <input
-        ref={selfieRef}
+        ref={selfieInputRef}
         type="file"
         name="photo"
         accept="image/*"
-        capture="user"
         data-testid="photo-selfie-input"
         hidden
+        // No onChange — this input is only written to via the
+        // DataTransfer API from the selfie flow. If a user hits it
+        // manually somehow, we still preview the file for parity.
         onChange={(e) => {
           const f = e.target.files?.[0] ?? null;
-          handleFileChange(f);
+          setFilePreview(f);
           if (f) clearOther(chooseRef.current);
         }}
       />
@@ -83,23 +127,13 @@ export default function PhotoUploadFields() {
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0] ?? null;
-          handleFileChange(f);
-          if (f) clearOther(selfieRef.current);
+          setFilePreview(f);
+          if (f) clearOther(selfieInputRef.current);
         }}
       />
 
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          data-testid="photo-selfie-button"
-          onClick={() => {
-            setHelper(null);
-            selfieRef.current?.click();
-          }}
-          className="rounded-md bg-stone-100 px-4 py-2 text-sm font-medium text-stone-800 hover:bg-stone-200 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-        >
-          Take a selfie
-        </button>
+        <SelfieCaptureFlow onAccept={handleSelfieAccepted} />
         <button
           type="button"
           data-testid="photo-choose-button"
@@ -113,8 +147,8 @@ export default function PhotoUploadFields() {
         </button>
       </div>
       <p className="text-xs text-stone-500">
-        Up to 10 MB. JPG, PNG, HEIC, or WEBP. On a phone, &ldquo;Take a selfie&rdquo;
-        opens your front camera.
+        Up to 10 MB. JPG, PNG, HEIC, or WEBP. &ldquo;Take a selfie&rdquo; opens
+        your camera in the browser — no separate app required.
       </p>
       {helper && (
         <p className="text-xs text-amber-700" role="alert">{helper}</p>
@@ -131,16 +165,6 @@ export default function PhotoUploadFields() {
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm text-stone-800">{selectedName}</p>
             <div className="mt-1 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  resetSelection();
-                  selfieRef.current?.click();
-                }}
-                className="text-xs text-stone-600 hover:text-stone-900 underline"
-              >
-                Retake
-              </button>
               <button
                 type="button"
                 onClick={resetSelection}

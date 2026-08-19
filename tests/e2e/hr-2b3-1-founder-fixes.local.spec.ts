@@ -178,9 +178,17 @@ test.describe.serial("HR-2B.3.1 · founder-fixes local acceptance", () => {
   });
 
   // ---------------------------------------------------------------------
-  // §11 · Selfie contract — mobile viewport renders BOTH buttons;
-  // hidden inputs have the correct capture attribute; both paths
-  // populate the preview.
+  // §11 · Selfie contract (post HR-2B.3.2 §3) — the "Take a selfie"
+  // button now opens the in-page camera flow (permission → live
+  // preview → capture → accept) instead of triggering
+  // `<input capture="user">`. This spec now covers only the
+  // structural contract that survived the change:
+  //   • Both buttons render at a mobile viewport.
+  //   • Both hidden inputs share name="photo" so the server action
+  //     multipart contract holds regardless of which path was used.
+  //   • The Choose-a-photo path still populates the preview + the
+  //     mutual-exclusion guard still clears the other input.
+  // Full camera-flow coverage lives in hr-2b3-2-camera.local.spec.ts.
   // ---------------------------------------------------------------------
   test("§11 · photo step offers Take a selfie + Choose a photo (mobile)", async ({ browser }) => {
     const fixture = primeFixture("hr-2b3-1-selfie-fixture@spectre.test");
@@ -203,46 +211,33 @@ test.describe.serial("HR-2B.3.1 · founder-fixes local acceptance", () => {
       await expect(chooseBtn).toBeVisible();
       await expect(chooseBtn).toHaveText(/Choose a photo/);
 
-      // Hidden inputs have the correct capture attributes.
+      // Both hidden inputs still share name="photo" so
+      // `uploadPhotoAction` sees the same multipart contract no matter
+      // which path was used.
       const selfieInput = page.locator('[data-testid="photo-selfie-input"]');
       const chooseInput = page.locator('[data-testid="photo-choose-input"]');
-      await expect(selfieInput).toHaveAttribute("capture", "user");
-      // Choose input has no capture attribute (null).
-      const chooseCapture = await chooseInput.getAttribute("capture");
-      expect(
-        chooseCapture,
-        "choose input must NOT carry a capture attribute so it opens the device picker",
-      ).toBeNull();
-      // Both share name="photo" so the server action's contract holds.
       await expect(selfieInput).toHaveAttribute("name", "photo");
       await expect(chooseInput).toHaveAttribute("name", "photo");
 
       await page.screenshot({ path: path.join(OUT, "photo-step-mobile.png"), fullPage: true });
 
-      // Exercise the CHOOSE path — the selfie path requires a device
-      // camera prompt which Playwright cannot simulate, but the choose
-      // path uses the standard file-picker.
+      // Exercise the CHOOSE path — full camera-flow coverage lives in
+      // the dedicated hr-2b3-2-camera spec.
       await page.setInputFiles(
         '[data-testid="photo-choose-input"]',
         { name: "me.png", mimeType: "image/png", buffer: TINY_PNG },
       );
       await expect(page.locator('img[alt="Selected photo preview"]')).toBeVisible();
 
-      // Now switch: reset + populate via the SELFIE input directly. The
-      // client component clears the "other" input when one is picked
-      // so the form always submits ONE file.
+      // "Choose a different photo" resets state and the preview
+      // disappears; then a fresh selection populates it again.
       await page.locator('button:has-text("Choose a different photo")').click();
+      await expect(page.locator('img[alt="Selected photo preview"]')).toHaveCount(0);
       await page.setInputFiles(
-        '[data-testid="photo-selfie-input"]',
+        '[data-testid="photo-choose-input"]',
         { name: "me2.png", mimeType: "image/png", buffer: TINY_PNG },
       );
       await expect(page.locator('img[alt="Selected photo preview"]')).toBeVisible();
-      // The choose-input's files array is now empty (mutual exclusion
-      // enforced by the client component).
-      const chooseFilesLength = await chooseInput.evaluate(
-        (el) => (el as HTMLInputElement).files?.length ?? 0,
-      );
-      expect(chooseFilesLength).toBe(0);
     } finally {
       await ctx.close();
     }
