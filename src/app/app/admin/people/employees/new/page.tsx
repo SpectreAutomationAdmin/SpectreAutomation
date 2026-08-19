@@ -63,8 +63,11 @@ export default async function AddEmployeePage() {
       </div>
 
       <AddEmployeeForm
-        departments={departments.map((d) => ({ id: d.id, label: `${d.name} (${d.code})` }))}
-        positions={positions.map((p) => ({ id: p.id, label: `${p.name} (${p.code})` }))}
+        // HR-2B.3.2 §4 — user-facing label is name-only. The system
+        // code remains the persistence key (id), never rendered in the
+        // ordinary admin UI.
+        departments={departments.map((d) => ({ id: d.id, label: d.name }))}
+        positions={positions.map((p) => ({ id: p.id, label: p.name }))}
         managers={managers.map((m) => {
           const displayName = m.preferredName?.trim().length
             ? `${m.preferredName} ${m.lastName}`

@@ -104,7 +104,8 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         return;
       }
       const created = data.position as { id: string; name: string; code: string };
-      const label = `${created.name} (${created.code})`;
+      // HR-2B.3.2 §4 — name-only label; the system code stays internal.
+      const label = created.name;
       setPositions((prev) => [...prev, { id: created.id, label }].sort((a, b) => a.label.localeCompare(b.label)));
       setSelectedPositionId(created.id);
       setShowAddPosition(false);
