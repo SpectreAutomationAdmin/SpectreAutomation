@@ -103,7 +103,11 @@ async function beginOnboardingAction(rawToken: string) {
     throw err;
   }
 
-  redirect(`/hr/onboarding/about-you`);
+  // HR-2B.3.2 §2 — send through the canonical /session entry point,
+  // which delegates to resolveOnboardingContinuation to pick the
+  // exact incomplete step. A returning employee whose About You is
+  // already saved never sees the "name" screen again.
+  redirect(`/hr/onboarding/session`);
 }
 
 export default async function HrOnboardingWelcomePage({

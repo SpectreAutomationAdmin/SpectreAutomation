@@ -1,13 +1,13 @@
 // HR-2B.3 (2026-08-19) — Payroll hub.
-//
-// Every entry into /hr/onboarding/payroll resolves to the FIRST
-// incomplete step. On fully-complete flows, redirects to the review
-// screen. Keeps the URL semantic — the employee never sees this route
-// render its own content.
+// HR-2B.3.2 §2 (2026-08-18) — Delegates to the canonical
+// `resolveOnboardingContinuation`. If About You is not yet complete
+// the resolver takes the employee BACK to the incomplete About You
+// step (an admin-generated deep link to /payroll no longer allows
+// the employee to skip identity confirmation).
 
 import { redirect } from "next/navigation";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
-import { getPayrollCompletion } from "@/lib/hr/employee-self-service";
+import { resolveOnboardingContinuation } from "@/lib/hr/onboarding-continuation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,12 +15,10 @@ export const dynamic = "force-dynamic";
 export default async function PayrollHub() {
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
-
-  const completion = await getPayrollCompletion(actor);
-  if (!completion.sin) redirect("/hr/onboarding/payroll/sin");
-  if (!completion.banking) redirect("/hr/onboarding/payroll/direct-deposit");
-  if (!completion.taxProfile) redirect("/hr/onboarding/payroll/td1-federal");
-  if (!completion.federalAttestation) redirect("/hr/onboarding/payroll/td1-federal");
-  if (!completion.provincialAttestation) redirect("/hr/onboarding/payroll/td1-provincial");
-  redirect("/hr/onboarding/payroll/review");
+  const target = await resolveOnboardingContinuation({
+    sessionId: actor.sessionId,
+    employeeId: actor.employeeId,
+    clubId: actor.clubId,
+  });
+  redirect(target);
 }

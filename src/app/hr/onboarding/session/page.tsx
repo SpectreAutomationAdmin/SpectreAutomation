@@ -1,15 +1,13 @@
 // HR-2B.1 (2026-08-18) — Employee onboarding session continuation.
 // HR-2B.2 (2026-08-18) — Redirects into the About You conversational flow.
-//
-// After a successful invitation redemption the welcome page routes
-// here. In HR-2B.1 this was a placeholder ("You're in!"); in HR-2B.2
-// it's a thin router that resolves the employee's actor and jumps
-// them into the first incomplete About You step. If the actor is
-// gone (session revoked, invitation expired, cookie cleared) they
-// land on the neutral expired page.
+// HR-2B.3.2 §2 (2026-08-18) — Routes to the CANONICAL next incomplete
+// step (may be anywhere in About You OR Payroll) rather than always
+// entering at /about-you. Founder-mandated: an invitation is a
+// continuation link, not a wizard entrance.
 
 import { redirect } from "next/navigation";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
+import { resolveOnboardingContinuation } from "@/lib/hr/onboarding-continuation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,5 +15,10 @@ export const dynamic = "force-dynamic";
 export default async function HrOnboardingSessionEntry() {
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
-  redirect("/hr/onboarding/about-you");
+  const target = await resolveOnboardingContinuation({
+    sessionId: actor.sessionId,
+    employeeId: actor.employeeId,
+    clubId: actor.clubId,
+  });
+  redirect(target);
 }
