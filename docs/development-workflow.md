@@ -120,23 +120,105 @@ that class of failure impossible to repeat.
 
 ## Canonical test gates
 
-Two commands must be green before ANY staging deploy:
+The validation ladder — pick the smallest gate the change requires:
 
 ```bash
-npm run gate:mission-control    # Gate A: shell + Work Intake + AP + mailbox + Member
-npm run gate:hr                  # Gate B: full HR suite (batch, not solo)
+npm run gate:hr:touched         # Gate 1: only tests covering the touched files
+npm run gate:hr:domain          # Gate 2: HR security + admin + cross-cutting + integration sentinel
+npm run gate:hr:full            # Gate 3: full HR regression
+npm run gate:mission-control    # MC: shell + Work Intake + AP + mailbox + Member
+npm run gate:all                # typecheck + MC + full HR
 ```
 
-Or run both plus typecheck:
+Measured runtimes on 12-CPU dev box (2026-08-20 benchmark):
 
-```bash
-npm run gate:all
-```
+| Gate | Files | Tests | Wall time |
+|---|---|---|---|
+| `gate:mission-control` | 21 | 216 | 2 min 34 s |
+| `gate:hr:touched` (narrow slice, no schema) | 10 | 180 | 4 min 34 s |
+| `gate:hr:domain` | 46 | 555 | 8 min 52 s |
+| `gate:hr:full` | 64 | 625 | 10 min 25 s |
 
-Fail count on either gate MUST be `0`. "Passes solo" is not a
+Baseline before the 2026-08-20 optimization: `gate:hr:full` was ~45
+minutes single-thread (pool: threads, fileParallelism: false, shared
+`prisma/test.db`). The 4.3× speedup came from per-worker SQLite
+isolation, not from cutting tests — every test that ran before still
+runs.
+
+The `gate:hr:touched` measurement above was against a mixed slice
+(HR-2B.4: schema + services + UI). When the slice includes a schema
+or migration change, the wrapper escalates to the full HR gate
+(preserves founder-mandated broad-blast invariant). For a narrow UI-
+only change, expect ~2-3 min.
+
+Fail count on any gate MUST be `0`. "Passes solo" is not a
 passing gate — the batch itself must be green. If a test flakes
-under batch execution, fix the isolation (add serialization, own
-DB per suite, deterministic setup) — do NOT normalize retries.
+under batch execution, fix the isolation (per-worker DB, own
+seed, deterministic setup) — do NOT normalize retries.
+
+### Which gate for what
+
+| Situation | Gate |
+|---|---|
+| Focused HR implementation, incremental feedback loop | `gate:hr:touched` |
+| Substantial HR slice, pre-staging deploy | `gate:hr:domain` + `gate:mission-control` |
+| Schema / security / authentication / canonical-service change | `gate:hr:full` |
+| Pre-merge to `main` | `gate:all` |
+| Pre-production deploy | `gate:all` |
+| Periodic confidence sweep | `gate:hr:full` |
+
+### Test-harness isolation model
+
+All gate configs use `pool: "forks"` + `fileParallelism: true` +
+`isolate: false`. Every vitest worker is a separate Node process
+identified by `VITEST_POOL_ID`; `tests/setup.ts` computes a per-worker
+SQLite path `prisma/test-workers/w<POOL_ID>.db` copied from the
+schema template `prisma/test-template.db` built by `tests/global-setup.ts`.
+
+This eliminates the cross-file SQLite lock contention that forced
+serial execution in earlier revisions of this repo. `resetDb()` in
+`tests/util/db.ts` still runs per test file, but it operates on the
+worker's private DB — no cross-worker interaction.
+
+`isolate: false` reuses the fork's module registry (and Prisma
+client) across test files within a fork, avoiding a ~5-10 s
+cold-start per file. Because each fork keeps its own worker DB and
+tables are wiped between tests, the shared cache is safe.
+
+Never turn `fileParallelism: false` back on in these configs. If a
+new test flakes under parallelism, the correct fix is either:
+- Add its outputs to `resetDb()` teardown (so data is properly
+  isolated between test files within a fork), OR
+- Move the flake-prone file into its own fork via `test.concurrent`
+  discipline — never a global serialization switch.
+
+### Touched-area mapping
+
+`scripts/resolve-touched-tests.ts` reads `git diff --name-only
+<base>...HEAD` (default base `main`) and maps changed source files
+to vitest globs. The mapping is intent-based — new files under a
+covered surface pick up their globs automatically via prefix rules.
+Schema changes trigger the FULL HR set (broad blast radius). Test
+files map to themselves. If a source file has no rule match, the
+resolver prints the integration sentinel only so nothing is
+silently skipped — but if you see that fallback for an intended
+change, add a rule.
+
+The `npm run gate:hr:touched` wrapper (`scripts/gate-hr-touched.mjs`)
+runs the resolver + passes the result to `vitest run --config
+vitest.gate-hr-full.config.ts <globs>`.
+
+### Staging deploy policy
+
+For normal HR incremental slices:
+1. `gate:hr:touched` green.
+2. Domain/security gate green when touched surface is broad.
+3. `typecheck` clean.
+4. Prisma validate if schema changed.
+
+`gate:hr:full` remains mandatory before merge to `main` and before
+production deploy. A 45-minute full sweep is NOT required before
+every staging iteration.
 
 ## When staging fell behind main (this happens)
 

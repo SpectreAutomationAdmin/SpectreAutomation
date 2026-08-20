@@ -1,32 +1,55 @@
-// Vitest setupFiles: runs per-test-file, BEFORE each file's imports resolve.
+// Vitest setupFiles: runs per-worker, BEFORE each file's imports resolve.
 //
 // CRITICAL: env mutations must happen at module top-level, before any test
 // file imports resolve. Once src/lib/env.ts has validated and
 // src/lib/prisma.ts has constructed its PrismaClient, DATABASE_URL changes
 // are no longer respected.
 //
-// DB schema lifecycle (schema reset before all tests, cleanup after) lives
-// in tests/global-setup.ts. Vitest 4's module evaluator loads setupFiles
-// in a context where the runner isn't yet registered, so top-level
-// `beforeAll`/`afterAll` calls throw "Vitest failed to find the runner".
-// globalSetup owns those hooks. Per-test data cleanup still runs from
-// tests/util/db.ts::resetDb().
+// 2026-08-20 · Test-workflow optimization
+// -----------------------------------------
+// Every vitest worker (identified by VITEST_POOL_ID) now uses its OWN
+// SQLite file at `prisma/test-workers/w<POOL_ID>.db`, copied from the
+// template that globalSetup wrote. This lets `fileParallelism: true`
+// run safely — files that share a worker still share a DB (each
+// worker's `resetDb()` wipes between test-files), but different
+// workers never touch each other's DB, so there's zero cross-file
+// contention and no more `SQLITE_BUSY` cascades.
+//
+// If VITEST_POOL_ID is absent (e.g. someone ran a plain `vitest` with a
+// pool that doesn't set it, or a single-file invocation), we fall back
+// to `w0` — same file for every invocation, functionally identical to
+// the legacy single-DB behaviour.
 
+import { copyFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
-const TEST_DB_PATH = path.resolve(process.cwd(), "prisma/test.db");
+const TEMPLATE_DB_PATH = path.resolve(process.cwd(), "prisma/test-template.db");
+const WORKER_DB_DIR = path.resolve(process.cwd(), "prisma/test-workers");
 
-// Sprint 2 B4.1 (2026-07-19) — respect a PostgreSQL DATABASE_URL when
-// the pg-validate harness (scripts/pg-validate.mjs) has set one. In
-// that mode we skip the SQLite `db push` and assume the harness has
-// applied migrations already.
 const IS_POSTGRES_TEST = (process.env.DATABASE_URL ?? "").startsWith("postgres");
+
+if (!IS_POSTGRES_TEST) {
+  const poolId = process.env.VITEST_POOL_ID ?? "0";
+  const workerDbPath = path.join(WORKER_DB_DIR, `w${poolId}.db`);
+  // Copy template → worker DB on first use. copyFileSync is atomic on
+  // Windows for these small files; a concurrent second setup call in
+  // the same worker is safe because setup.ts runs once per worker
+  // process/thread lifecycle.
+  if (!existsSync(workerDbPath)) {
+    if (!existsSync(TEMPLATE_DB_PATH)) {
+      // Ran outside globalSetup (e.g. a direct file invocation). Fall
+      // back to a legacy DB path so the test can still run.
+      throw new Error(
+        "test template DB missing — did globalSetup run? Try: rm -rf prisma/test-template.db prisma/test-workers && vitest run",
+      );
+    }
+    copyFileSync(TEMPLATE_DB_PATH, workerDbPath);
+  }
+  process.env.DATABASE_URL = `file:${workerDbPath.replace(/\\/g, "/")}`;
+}
 
 Object.assign(process.env, {
   NODE_ENV: "test",
-  DATABASE_URL: IS_POSTGRES_TEST
-    ? process.env.DATABASE_URL
-    : `file:${TEST_DB_PATH.replace(/\\/g, "/")}`,
   SPECTRE_SESSION_SECRET:
     process.env.SPECTRE_SESSION_SECRET ??
     "test-only-secret-thats-at-least-32-characters-long-xx",

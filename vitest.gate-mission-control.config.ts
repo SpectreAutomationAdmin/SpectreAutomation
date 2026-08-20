@@ -49,9 +49,16 @@ export default defineConfig({
     globalSetup: ["tests/global-setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
-    // Critical: HR + Mission Control tests share the SQLite dev.db
-    // and reset it between files; without this, files running
-    // concurrently produce SQLITE_BUSY / row-not-found flakes.
-    fileParallelism: false,
+    // 2026-08-20 · Test-workflow optimization: per-worker SQLite DB
+    // isolation (tests/setup.ts assigns a unique file per
+    // VITEST_POOL_ID) makes file parallelism safe. `pool: "forks"` is
+    // required because threads share process.env — the per-worker
+    // DATABASE_URL only isolates properly across processes.
+    // `isolate: false` reuses the fork's module registry (and Prisma
+    // client) across files, avoiding a ~10s cold-start per file.
+    // `resetDb()` (per-file) still wipes tables on the shared worker DB.
+    fileParallelism: true,
+    pool: "forks",
+    isolate: false,
   },
 });

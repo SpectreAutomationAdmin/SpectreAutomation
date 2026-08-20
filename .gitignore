@@ -24,6 +24,12 @@ prisma/test.db
 prisma/test.db-journal
 prisma/test.db-shm
 prisma/test.db-wal
+# 2026-08-20 · Test-workflow optimization: per-worker SQLite files.
+prisma/test-template.db
+prisma/test-template.db-journal
+prisma/test-template.db-shm
+prisma/test-template.db-wal
+prisma/test-workers/
 *.sqlite
 *.sqlite-journal
 
