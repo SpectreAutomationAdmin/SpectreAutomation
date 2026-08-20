@@ -68,6 +68,8 @@ export const ADMIN_SECTIONS: NavSection[] = [
       // HR-2B.4 (2026-08-19) — Club-configurable onboarding
       // requirements (Documents & Credentials).
       { href: "/app/admin/people/onboarding-requirements", label: "Onboarding Requirements", perm: "hr:employee:write" },
+      // HR-2C (2026-08-20) — Safety & Training compliance.
+      { href: "/app/admin/people/safety-training", label: "Safety & Training", perm: "hr:training:read" },
     ],
   },
   {
