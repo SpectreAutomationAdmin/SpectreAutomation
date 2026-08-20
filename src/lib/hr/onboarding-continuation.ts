@@ -62,10 +62,18 @@ const URLS = {
   // HR-2B.4 (2026-08-19) — post-payroll sections
   emergency: "/hr/onboarding/emergency",
   documents: "/hr/onboarding/documents",
-  // HR-2B.4 stopping boundary (HR-2B.5 will replace this with a real Review page).
+  // HR-2B.5 (2026-08-19) — portal-password + real Review + Submit.
+  //   `portalPassword` — the dedicated account-security step where the
+  //     employee creates their permanent Employee Portal password.
+  //   `review`         — the grouped Review page that replaces
+  //     `readyForReview` as the pre-Submit boundary.
+  portalPassword: "/hr/onboarding/portal-password",
+  review: "/hr/onboarding/review",
+  // HR-2B.4 stopping boundary — preserved for back-compat redirects
+  // from old links; the resolver no longer emits it.
   readyForReview: "/hr/onboarding/ready-for-review",
   // Terminal
-  submitted: "/hr/onboarding/payroll/complete",
+  submitted: "/hr/onboarding/complete",
   expired: "/hr/onboarding/expired",
 } as const;
 
@@ -126,6 +134,7 @@ export async function resolveOnboardingContinuation(
     taxRow,
     fedAtt,
     provAtt,
+    portalCredential,
   ] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: ctx.employeeId, clubId: ctx.clubId },
@@ -196,6 +205,14 @@ export async function resolveOnboardingContinuation(
       },
       select: { id: true },
     }),
+    // HR-2B.5 (2026-08-19) — portal credential is the authoritative
+    // signal for "portal password set". The ack row is written next
+    // to it but the credential row is what the login flow actually
+    // consults, so it's the source of truth here too.
+    prisma.employeePortalCredential.findFirst({
+      where: { employeeId: ctx.employeeId, clubId: ctx.clubId },
+      select: { id: true },
+    }),
   ]);
 
   if (!employee) return URLS.expired;
@@ -256,9 +273,16 @@ export async function resolveOnboardingContinuation(
   const documentsDone = await isDocumentsSectionComplete(actorForSection);
   if (!documentsDone) return URLS.documents;
 
-  // 6. HR-2B.4 boundary. HR-2B.5 will replace this stopping point
-  //    with a real /hr/onboarding/review page + Submit action.
-  return URLS.readyForReview;
+  // 6. HR-2B.5 §4 — Portal password. The employee must establish their
+  //    permanent Employee Portal credential before Review. This step
+  //    exists between Documents & Credentials and Review so the
+  //    employee sees their Employee Number and creates their password
+  //    while still inside the temporary onboarding session.
+  const portalCredentialDone = Boolean(portalCredential);
+  if (!portalCredentialDone) return URLS.portalPassword;
+
+  // 7. HR-2B.5 §20 — Real Review page + Submit.
+  return URLS.review;
 }
 
 /**

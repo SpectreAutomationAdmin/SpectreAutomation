@@ -428,31 +428,33 @@ model Club {
   outboundMailboxConnectionId String?
   outboundMailboxConnection   MailboxConnection? @relation("ClubOutboundMailbox", fields: [outboundMailboxConnectionId], references: [id], onDelete: SetNull)
   // Sprint 3 · Post-16H Phase 3.2 (2026-08-06).
-  apReviewOverrides        ApReviewOverride[]
+  apReviewOverrides           ApReviewOverride[]
 
   // HR-1 (2026-08-16) — canonical people / employment / payroll
   // infrastructure. Every tenant-scoped HR table FKs back to Club.
   // EmployeeOnboardingQuestion is intentionally excluded because it
   // is club-nullable (global-default question catalogue).
-  employmentPeriods             EmploymentPeriod[]
-  employeeCompensation          EmployeeCompensation[]
-  payrollProfiles               PayrollProfile[]
-  payrollBenefits               PayrollBenefit[]
-  payrollDeductions             PayrollDeduction[]
-  employeeSensitiveIdentities   EmployeeSensitiveIdentity[]
-  employeeBankAccounts          EmployeeBankAccount[]
-  employeeTaxProfiles           EmployeeTaxProfile[]
-  employeeDocuments             EmployeeDocument[]
-  employeeCredentials           EmployeeCredential[]
-  employeeEmergencyContacts     EmployeeEmergencyContact[]
-  employeeOnboardingInvitations EmployeeOnboardingInvitation[]
-  onboardingRequirements        OnboardingRequirement[]
-  employeeOnboardingSessions    EmployeeOnboardingSession[]
-  employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
-  employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
-  employeeOnboardingResponses   EmployeeOnboardingResponse[]
-  employeeOnboardingCorrections EmployeeOnboardingCorrection[]
+  employmentPeriods                  EmploymentPeriod[]
+  employeeCompensation               EmployeeCompensation[]
+  payrollProfiles                    PayrollProfile[]
+  payrollBenefits                    PayrollBenefit[]
+  payrollDeductions                  PayrollDeduction[]
+  employeeSensitiveIdentities        EmployeeSensitiveIdentity[]
+  employeeBankAccounts               EmployeeBankAccount[]
+  employeeTaxProfiles                EmployeeTaxProfile[]
+  employeeDocuments                  EmployeeDocument[]
+  employeeCredentials                EmployeeCredential[]
+  employeeEmergencyContacts          EmployeeEmergencyContact[]
+  employeeOnboardingInvitations      EmployeeOnboardingInvitation[]
+  onboardingRequirements             OnboardingRequirement[]
+  employeeOnboardingSessions         EmployeeOnboardingSession[]
+  employeeOnboardingTransitions      EmployeeOnboardingStateTransition[]
+  employeeOnboardingQuestions        EmployeeOnboardingQuestion[]
+  employeeOnboardingResponses        EmployeeOnboardingResponse[]
+  employeeOnboardingCorrections      EmployeeOnboardingCorrection[]
   employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
+  employeePortalCredentials          EmployeePortalCredential[]
+  employeePortalPasswordResets       EmployeePortalPasswordReset[]
 }
 
 // ---------------------------------------------------------------------
@@ -1464,17 +1466,17 @@ model ClubWidgetConfig {
 // because households evolve post-join).
 // relationship: SPOUSE | PARTNER | CHILD | OTHER
 model MemberHouseholdMember {
-  id           String    @id @default(cuid())
-  clubId       String
-  club         Club      @relation(fields: [clubId], references: [id])
-  memberId     String
-  member       Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  firstName    String
-  lastName     String
-  relationship String
-  email        String?
-  phone        String?
-  dateOfBirth  DateTime?
+  id              String    @id @default(cuid())
+  clubId          String
+  club            Club      @relation(fields: [clubId], references: [id])
+  memberId        String
+  member          Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  firstName       String
+  lastName        String
+  relationship    String
+  email           String?
+  phone           String?
+  dateOfBirth     DateTime?
   // Phase 20 (Member Database, 2026-08-15) — same optional demographic
   // fields as Member so the admin Member Profile person-switcher renders
   // one Basic Details grid for every person on the membership.
@@ -1484,8 +1486,8 @@ model MemberHouseholdMember {
   gender          String?
   homePhone       String?
   profileImageUrl String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([memberId])
 }
@@ -1496,30 +1498,30 @@ model MemberHouseholdMember {
 // Details in `prisma/schema.prisma` (sqlite dev twin).
 // ---------------------------------------------------------------------------
 model MemberGroup {
-  id              String                  @id @default(cuid())
-  clubId          String
-  club            Club                    @relation(fields: [clubId], references: [id])
-  name            String
-  sortOrder       Int                     @default(100)
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  id        String   @id @default(cuid())
+  clubId    String
+  club      Club     @relation(fields: [clubId], references: [id])
+  name      String
+  sortOrder Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  assignments     MemberGroupAssignment[]
+  assignments MemberGroupAssignment[]
 
   @@unique([clubId, name])
   @@index([clubId, sortOrder])
 }
 
 model MemberGroupAssignment {
-  id                String       @id @default(cuid())
-  clubId            String
-  club              Club         @relation(fields: [clubId], references: [id])
-  memberId          String
-  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  groupId           String
-  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  assignedAt        DateTime     @default(now())
-  assignedByUserId  String?
+  id               String      @id @default(cuid())
+  clubId           String
+  club             Club        @relation(fields: [clubId], references: [id])
+  memberId         String
+  member           Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId          String
+  group            MemberGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt       DateTime    @default(now())
+  assignedByUserId String?
 
   @@unique([memberId, groupId])
   @@index([clubId, groupId])
@@ -1527,35 +1529,35 @@ model MemberGroupAssignment {
 }
 
 model MemberCustomFieldDefinition {
-  id           String                      @id @default(cuid())
-  clubId       String
-  club         Club                        @relation(fields: [clubId], references: [id])
-  key          String
-  label        String
-  kind         String                      @default("TEXT")
-  helpText     String?
-  optionsJson  String?
-  sortOrder    Int                         @default(100)
-  archivedAt   DateTime?
-  createdAt    DateTime                    @default(now())
-  updatedAt    DateTime                    @updatedAt
+  id          String    @id @default(cuid())
+  clubId      String
+  club        Club      @relation(fields: [clubId], references: [id])
+  key         String
+  label       String
+  kind        String    @default("TEXT")
+  helpText    String?
+  optionsJson String?
+  sortOrder   Int       @default(100)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  values       MemberCustomFieldValue[]
+  values MemberCustomFieldValue[]
 
   @@unique([clubId, key])
   @@index([clubId, sortOrder])
 }
 
 model MemberCustomFieldValue {
-  id             String                      @id @default(cuid())
-  clubId         String
-  club           Club                        @relation(fields: [clubId], references: [id])
-  memberId       String
-  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  definitionId   String
-  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
-  valueText      String?
-  updatedAt      DateTime                    @updatedAt
+  id              String                      @id @default(cuid())
+  clubId          String
+  club            Club                        @relation(fields: [clubId], references: [id])
+  memberId        String
+  member          Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId    String
+  definition      MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText       String?
+  updatedAt       DateTime                    @updatedAt
   updatedByUserId String?
 
   @@unique([memberId, definitionId])
@@ -3223,9 +3225,9 @@ model LessonPayable {
 // 5D. Payroll + Timekeeper
 // -------------------------------------------------------------------------
 model EmployeePosition {
-  id             String   @id @default(cuid())
+  id             String      @id @default(cuid())
   clubId         String
-  club           Club     @relation(fields: [clubId], references: [id])
+  club           Club        @relation(fields: [clubId], references: [id])
   code           String
   name           String
   // HR-2B.3.6 (2026-08-19) — Position now belongs to a Department.
@@ -3234,10 +3236,10 @@ model EmployeePosition {
   // Coulee Ridge staging fixture via a one-shot post-deploy script.
   departmentId   String?
   department     Department? @relation("PositionDepartment", fields: [departmentId], references: [id])
-  defaultPayRate Decimal  @default(0)
-  isExempt       Boolean  @default(false)
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
+  defaultPayRate Decimal     @default(0)
+  isExempt       Boolean     @default(false)
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
 
   employees Employee[]
 
@@ -3317,20 +3319,24 @@ model Employee {
   payrollLines PayrollLine[]
 
   // HR-1 canonical relations.
-  employmentPeriods     EmploymentPeriod[]
-  compensationHistory   EmployeeCompensation[]
-  payrollProfile        PayrollProfile?
-  sensitiveIdentity     EmployeeSensitiveIdentity?
-  bankAccounts          EmployeeBankAccount[]
-  taxProfiles           EmployeeTaxProfile[]
-  documents             EmployeeDocument[]                  @relation("EmployeeDocuments")
-  credentials           EmployeeCredential[]
-  emergencyContacts     EmployeeEmergencyContact[]
-  onboardingInvitations EmployeeOnboardingInvitation[]
-  onboardingSessions    EmployeeOnboardingSession[]
-  onboardingTransitions EmployeeOnboardingStateTransition[]
-  onboardingCorrections EmployeeOnboardingCorrection[]
+  employmentPeriods          EmploymentPeriod[]
+  compensationHistory        EmployeeCompensation[]
+  payrollProfile             PayrollProfile?
+  sensitiveIdentity          EmployeeSensitiveIdentity?
+  bankAccounts               EmployeeBankAccount[]
+  taxProfiles                EmployeeTaxProfile[]
+  documents                  EmployeeDocument[]                  @relation("EmployeeDocuments")
+  credentials                EmployeeCredential[]
+  emergencyContacts          EmployeeEmergencyContact[]
+  onboardingInvitations      EmployeeOnboardingInvitation[]
+  onboardingSessions         EmployeeOnboardingSession[]
+  onboardingTransitions      EmployeeOnboardingStateTransition[]
+  onboardingCorrections      EmployeeOnboardingCorrection[]
   onboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
+  // HR-2B.5 — permanent portal credential + password-reset trail + tour completion.
+  portalCredential           EmployeePortalCredential?
+  portalPasswordResets       EmployeePortalPasswordReset[]
+  portalTourCompletedAt      DateTime?
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -9012,21 +9018,21 @@ model OutlookArchiveMutation {
 // second click cannot enqueue a duplicate Graph PATCH — the worker
 // finds the existing SUCCEEDED row and returns immediately.
 model OutlookMarkReadMutation {
-  id                    String    @id @default(cuid())
-  clubId                String
-  workIntakeItemId      String
-  emailMessageId        String
-  graphMessageId        String
-  mailboxConnectionId   String
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  emailMessageId      String
+  graphMessageId      String
+  mailboxConnectionId String
   // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED | SUPERSEDED
-  status                String    @default("PENDING")
-  attemptCount          Int       @default(0)
-  lastAttemptAt         DateTime?
-  completedAt           DateTime?
-  errorCode             String?
+  status              String    @default("PENDING")
+  attemptCount        Int       @default(0)
+  lastAttemptAt       DateTime?
+  completedAt         DateTime?
+  errorCode           String?
   // The user who triggered the mark-read (for audit — the card
   // interaction is per-user even though Outlook's isRead is shared).
-  triggeredByUserId     String?
+  triggeredByUserId   String?
   // Phase 4R rev-13 (2026-08-16) — the read/unread cycle is
   // reversible. Each Spectre-initiated mark-read intent is its
   // own GENERATION with an immutable audit trail. Historical
@@ -9036,9 +9042,9 @@ model OutlookMarkReadMutation {
   // `updatedAt` timestamp (or `graphMessageId` fingerprint) at
   // enqueue time so per-row provenance is auditable; it is not
   // load-bearing at write time.
-  generationCursor      String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  generationCursor    String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   // Rev-13: the @@unique([mailboxConnectionId, emailMessageId])
   // is INTENTIONALLY REMOVED. Each new read-generation creates a
@@ -10407,37 +10413,37 @@ model EmployeeEmergencyContact {
 // seeing it; existing satisfied rows are NEVER destroyed by the
 // deactivation.
 model OnboardingRequirement {
-  id                    String    @id @default(cuid())
-  clubId                String
-  club                  Club      @relation(fields: [clubId], references: [id])
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
   // Machine key — e.g. "PROSERVE" | "WORK_PERMIT" | "FOOD_SAFETY".
   // Never rendered to the employee. Uppercased snake_case.
-  code                  String
-  displayName           String
+  code                 String
+  displayName          String
   // One-sentence explanation shown to the employee ("Because your role
   // may involve serving alcohol, the Club needs a copy of your current
   // ProServe certificate.").
-  explanation           String?
+  explanation          String?
   // DOCUMENT_UPLOAD | CREDENTIAL_WITH_EXPIRY | CONFIRMATION_ONLY
-  kind                  String
+  kind                 String
   // When kind involves a document, which EMPLOYEE_DOCUMENT_CATEGORIES
   // entry the upload persists as. Ignored for CONFIRMATION_ONLY.
-  documentCategory      String?
+  documentCategory     String?
   // True → applies to every employee at this Club (bypasses the JSON
   // dept / position lists).
-  appliesToAll          Boolean   @default(false)
+  appliesToAll         Boolean  @default(false)
   // JSON string arrays. Empty / null means "no dept-specific rule".
-  appliesToDeptIds      String?
-  appliesToPositionIds  String?
-  required              Boolean   @default(true)
+  appliesToDeptIds     String?
+  appliesToPositionIds String?
+  required             Boolean  @default(true)
   // For CREDENTIAL_WITH_EXPIRY: does the requirement mandate the
   // expiry date field on the persisted EmployeeCredential row?
-  requireExpiry         Boolean   @default(false)
-  active                Boolean   @default(true)
-  displayOrder          Int       @default(0)
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  createdByUserId       String?
+  requireExpiry        Boolean  @default(false)
+  active               Boolean  @default(true)
+  displayOrder         Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdByUserId      String?
 
   @@unique([clubId, code])
   @@index([clubId, active])
@@ -10683,5 +10689,79 @@ model EmployeeOnboardingCorrection {
   createdAt           DateTime                  @default(now())
 
   @@index([clubId, sessionId])
+  @@index([clubId, employeeId])
+}
+
+// EmployeePortalCredential — HR-2B.5 (2026-08-19).
+//
+// The employee's PERMANENT authentication credential for the Employee
+// Portal. Created by the employee during the "portal-password"
+// onboarding step, then used for all future portal logins.
+//
+// Design notes:
+//
+// - One row per Employee (`employeeId @unique`). Rotating the password
+//   updates `passwordHash` + `passwordUpdatedAt` in place; we do not
+//   accumulate hash history here (an audit log entry captures the
+//   change with actor/time).
+// - `passwordHash` is a bcrypt hash produced by the canonical
+//   `hashPassword()` helper in `src/lib/services/auth.ts` (cost 12).
+//   Plaintext passwords MUST NEVER be stored, logged, audited,
+//   returned in JSON, or placed in URLs / cookies / storage /
+//   analytics.
+// - `failedAttemptCount` + `lockedUntil` mirror the AccountLock
+//   escalation the admin login flow already uses (5 fails → 15 min,
+//   10 fails → 60 min). Login handlers must consult `lockedUntil`
+//   before verifying and reset the counter on any successful login.
+// - Not a `User`. Employees do NOT gain admin-side authority by
+//   completing onboarding. See `EmployeePortalActor` for the
+//   principal type that reads this row.
+model EmployeePortalCredential {
+  id                 String    @id @default(cuid())
+  clubId             String
+  club               Club      @relation(fields: [clubId], references: [id])
+  employeeId         String    @unique
+  employee           Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  passwordHash       String
+  passwordUpdatedAt  DateTime  @default(now())
+  lastLoginAt        DateTime?
+  failedAttemptCount Int       @default(0)
+  lockedUntil        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([clubId])
+}
+
+// EmployeePortalPasswordReset — HR-2B.5 (2026-08-19).
+//
+// One row per issued password-reset token. Follows the same
+// randomBytes(32) + sha256 pattern the invitation / member-invite
+// flows use. The RAW token is emailed to the employee's personal
+// email through the Club's designated Microsoft mailbox; only the
+// sha256 hash is persisted.
+//
+// - `expiresAt` — typically 30 minutes from issuance.
+// - `consumedAt` — set when the token is redeemed. A consumed row
+//   cannot be re-redeemed (replay prevention).
+// - `tokenHash @unique` — indexed for fast lookup on redemption.
+// - Rate limiting on issuance uses the existing `password_reset`
+//   scope in `src/lib/security/rate-limit.ts`.
+//
+// HR-2B.5 lands the model + canonical service (`sendPortalPasswordResetEmail`
+// / `redeemPortalPasswordReset`) so the seam is real; the user-facing
+// "Forgot password?" UI may be finished in a follow-up if scope
+// warrants — this row is architecturally sufficient.
+model EmployeePortalPasswordReset {
+  id         String    @id @default(cuid())
+  clubId     String
+  club       Club      @relation(fields: [clubId], references: [id])
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
   @@index([clubId, employeeId])
 }

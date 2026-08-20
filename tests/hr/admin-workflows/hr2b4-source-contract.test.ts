@@ -105,27 +105,17 @@ describe("HR-2B.4 · Continuation resolver contract", () => {
     expect(resolver).toMatch(/if \(!documentsDone\) return URLS\.documents;/);
   });
 
-  it("stops at readyForReview boundary (no fake Submit path in HR-2B.4)", () => {
-    expect(resolver).toMatch(/return URLS\.readyForReview;/);
-  });
-});
-
-describe("HR-2B.4 · Ready-for-review boundary source-contract", () => {
-  const page = src("src/app/hr/onboarding/ready-for-review/page.tsx");
-
-  it("does NOT expose a Submit button", () => {
-    expect(page).not.toMatch(/>Submit</);
-    expect(page).not.toMatch(/type="submit"[\s\S]{0,50}Submit/);
+  // HR-2B.5 (2026-08-19) — Boundary moved from `ready-for-review` to
+  // real `review` (§20). The resolver now flows Documents → Portal
+  // Password → Review. `ready-for-review` remains on disk as a
+  // back-compat page that redirects forward; the resolver no longer
+  // emits it. See HR-2B.5 source-contract test for the new pins.
+  it("routes Documents-complete → PortalPassword when credential unset (HR-2B.5)", () => {
+    expect(resolver).toMatch(/if \(!portalCredentialDone\) return URLS\.portalPassword;/);
   });
 
-  it("uses truthful copy — 'final review is coming next' — not fabricated completion", () => {
-    expect(page).toMatch(/final review is coming next/i);
-    expect(page).toMatch(/Your final review is coming next\./);
-  });
-
-  it("does defensive redirect to the true next incomplete step if landed early", () => {
-    expect(page).toMatch(/resolveOnboardingContinuation/);
-    expect(page).toMatch(/redirect\(next\)/);
+  it("routes PortalPassword-complete → Review (HR-2B.5)", () => {
+    expect(resolver).toMatch(/return URLS\.review;/);
   });
 });
 

@@ -217,16 +217,25 @@ describe("Mission Control integration sentinel · HR module coexistence", () => 
     expect(() => readFileSync(resolve(process.cwd(), "src/app/hr/onboarding/ready-for-review/page.tsx"), "utf8")).not.toThrow();
   });
 
-  it("HR-2B.4: continuation resolver routes Payroll → Emergency → Documents → ready-for-review", () => {
+  it("HR-2B.5: continuation resolver routes Payroll → Emergency → Documents → PortalPassword → Review", () => {
     const resolver = src("src/lib/hr/onboarding-continuation.ts");
     expect(resolver).toMatch(/URLS\.emergency/);
     expect(resolver).toMatch(/URLS\.documents/);
-    expect(resolver).toMatch(/URLS\.readyForReview/);
+    // HR-2B.5 (2026-08-19) — Boundary moved from `readyForReview` to
+    // portalPassword → review. `readyForReview` remains as a
+    // back-compat URL but the resolver no longer emits it.
+    expect(resolver).toMatch(/URLS\.portalPassword/);
+    expect(resolver).toMatch(/URLS\.review/);
   });
 
-  it("HR-2B.4: no fake Submit button on the ready-for-review boundary", () => {
-    const page = src("src/app/hr/onboarding/ready-for-review/page.tsx");
-    expect(page).not.toMatch(/type="submit"[\s\S]{0,50}Submit/);
-    expect(page).not.toMatch(/>Submit</);
+  it("HR-2B.5: portal-password step exists, employee number surfaced, no plaintext password field beyond the create form", () => {
+    const page = src("src/app/hr/onboarding/portal-password/page.tsx");
+    const form = src("src/app/hr/onboarding/portal-password/PortalPasswordForm.tsx");
+    expect(page).toMatch(/data-testid="portal-employee-number"/);
+    expect(form).toMatch(/^"use client";/m);
+    expect(form).toMatch(/type=\{show \? "text" : "password"\}/);
+    // Password inputs must not appear anywhere else on the onboarding page.
+    expect(page).not.toMatch(/name="password"/);
+    expect(page).not.toMatch(/name="confirmPassword"/);
   });
 });

@@ -425,25 +425,27 @@ model Club {
   // infrastructure. Every tenant-scoped HR table FKs back to Club.
   // EmployeeOnboardingQuestion is intentionally excluded because it
   // is club-nullable (global-default question catalogue).
-  employmentPeriods             EmploymentPeriod[]
-  employeeCompensation          EmployeeCompensation[]
-  payrollProfiles               PayrollProfile[]
-  payrollBenefits               PayrollBenefit[]
-  payrollDeductions             PayrollDeduction[]
-  employeeSensitiveIdentities   EmployeeSensitiveIdentity[]
-  employeeBankAccounts          EmployeeBankAccount[]
-  employeeTaxProfiles           EmployeeTaxProfile[]
-  employeeDocuments             EmployeeDocument[]
-  employeeCredentials           EmployeeCredential[]
-  employeeEmergencyContacts     EmployeeEmergencyContact[]
-  employeeOnboardingInvitations EmployeeOnboardingInvitation[]
-  onboardingRequirements        OnboardingRequirement[]
-  employeeOnboardingSessions    EmployeeOnboardingSession[]
-  employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
-  employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
-  employeeOnboardingResponses   EmployeeOnboardingResponse[]
-  employeeOnboardingCorrections EmployeeOnboardingCorrection[]
+  employmentPeriods                  EmploymentPeriod[]
+  employeeCompensation               EmployeeCompensation[]
+  payrollProfiles                    PayrollProfile[]
+  payrollBenefits                    PayrollBenefit[]
+  payrollDeductions                  PayrollDeduction[]
+  employeeSensitiveIdentities        EmployeeSensitiveIdentity[]
+  employeeBankAccounts               EmployeeBankAccount[]
+  employeeTaxProfiles                EmployeeTaxProfile[]
+  employeeDocuments                  EmployeeDocument[]
+  employeeCredentials                EmployeeCredential[]
+  employeeEmergencyContacts          EmployeeEmergencyContact[]
+  employeeOnboardingInvitations      EmployeeOnboardingInvitation[]
+  onboardingRequirements             OnboardingRequirement[]
+  employeeOnboardingSessions         EmployeeOnboardingSession[]
+  employeeOnboardingTransitions      EmployeeOnboardingStateTransition[]
+  employeeOnboardingQuestions        EmployeeOnboardingQuestion[]
+  employeeOnboardingResponses        EmployeeOnboardingResponse[]
+  employeeOnboardingCorrections      EmployeeOnboardingCorrection[]
   employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
+  employeePortalCredentials          EmployeePortalCredential[]
+  employeePortalPasswordResets       EmployeePortalPasswordReset[]
 }
 
 // ---------------------------------------------------------------------
@@ -1455,17 +1457,17 @@ model ClubWidgetConfig {
 // because households evolve post-join).
 // relationship: SPOUSE | PARTNER | CHILD | OTHER
 model MemberHouseholdMember {
-  id           String    @id @default(cuid())
-  clubId       String
-  club         Club      @relation(fields: [clubId], references: [id])
-  memberId     String
-  member       Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  firstName    String
-  lastName     String
-  relationship String
-  email        String?
-  phone        String?
-  dateOfBirth  DateTime?
+  id              String    @id @default(cuid())
+  clubId          String
+  club            Club      @relation(fields: [clubId], references: [id])
+  memberId        String
+  member          Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  firstName       String
+  lastName        String
+  relationship    String
+  email           String?
+  phone           String?
+  dateOfBirth     DateTime?
   // Phase 20 (Member Database, 2026-08-15) — same optional demographic
   // fields as Member so the admin Member Profile person-switcher renders
   // one Basic Details grid for every person on the membership.
@@ -1475,8 +1477,8 @@ model MemberHouseholdMember {
   gender          String?
   homePhone       String?
   profileImageUrl String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([memberId])
 }
@@ -1490,30 +1492,30 @@ model MemberHouseholdMember {
 // implicit `@relation` so we can carry auditing fields (assignedAt +
 // assignedByUserId) without another schema change later.
 model MemberGroup {
-  id              String                  @id @default(cuid())
-  clubId          String
-  club            Club                    @relation(fields: [clubId], references: [id])
-  name            String
-  sortOrder       Int                     @default(100)
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  id        String   @id @default(cuid())
+  clubId    String
+  club      Club     @relation(fields: [clubId], references: [id])
+  name      String
+  sortOrder Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  assignments     MemberGroupAssignment[]
+  assignments MemberGroupAssignment[]
 
   @@unique([clubId, name])
   @@index([clubId, sortOrder])
 }
 
 model MemberGroupAssignment {
-  id                String       @id @default(cuid())
-  clubId            String
-  club              Club         @relation(fields: [clubId], references: [id])
-  memberId          String
-  member            Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  groupId           String
-  group             MemberGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  assignedAt        DateTime     @default(now())
-  assignedByUserId  String?
+  id               String      @id @default(cuid())
+  clubId           String
+  club             Club        @relation(fields: [clubId], references: [id])
+  memberId         String
+  member           Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupId          String
+  group            MemberGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  assignedAt       DateTime    @default(now())
+  assignedByUserId String?
 
   @@unique([memberId, groupId])
   @@index([clubId, groupId])
@@ -1530,35 +1532,35 @@ model MemberGroupAssignment {
 // so the schema stays portable across SQLite (staging + dev) and
 // Postgres (production); typed parsing is a client concern.
 model MemberCustomFieldDefinition {
-  id           String                      @id @default(cuid())
-  clubId       String
-  club         Club                        @relation(fields: [clubId], references: [id])
-  key          String                      // stable snake_case identifier
-  label        String                      // founder-facing label
-  kind         String                      @default("TEXT")
-  helpText     String?
-  optionsJson  String?                     // JSON list for SELECT
-  sortOrder    Int                         @default(100)
-  archivedAt   DateTime?
-  createdAt    DateTime                    @default(now())
-  updatedAt    DateTime                    @updatedAt
+  id          String    @id @default(cuid())
+  clubId      String
+  club        Club      @relation(fields: [clubId], references: [id])
+  key         String // stable snake_case identifier
+  label       String // founder-facing label
+  kind        String    @default("TEXT")
+  helpText    String?
+  optionsJson String? // JSON list for SELECT
+  sortOrder   Int       @default(100)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  values       MemberCustomFieldValue[]
+  values MemberCustomFieldValue[]
 
   @@unique([clubId, key])
   @@index([clubId, sortOrder])
 }
 
 model MemberCustomFieldValue {
-  id             String                      @id @default(cuid())
-  clubId         String
-  club           Club                        @relation(fields: [clubId], references: [id])
-  memberId       String
-  member         Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  definitionId   String
-  definition     MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
-  valueText      String?
-  updatedAt      DateTime                    @updatedAt
+  id              String                      @id @default(cuid())
+  clubId          String
+  club            Club                        @relation(fields: [clubId], references: [id])
+  memberId        String
+  member          Member                      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  definitionId    String
+  definition      MemberCustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  valueText       String?
+  updatedAt       DateTime                    @updatedAt
   updatedByUserId String?
 
   @@unique([memberId, definitionId])
@@ -3212,18 +3214,18 @@ model LessonPayable {
 // 5D. Payroll + Timekeeper
 // -------------------------------------------------------------------------
 model EmployeePosition {
-  id             String   @id @default(cuid())
+  id             String      @id @default(cuid())
   clubId         String
-  club           Club     @relation(fields: [clubId], references: [id])
+  club           Club        @relation(fields: [clubId], references: [id])
   code           String
   name           String
   // HR-2B.3.6 (2026-08-19) — Position now belongs to a Department.
   departmentId   String?
   department     Department? @relation("PositionDepartment", fields: [departmentId], references: [id])
-  defaultPayRate Decimal  @default(0)
-  isExempt       Boolean  @default(false)
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
+  defaultPayRate Decimal     @default(0)
+  isExempt       Boolean     @default(false)
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
 
   employees Employee[]
 
@@ -3303,20 +3305,23 @@ model Employee {
   payrollLines PayrollLine[]
 
   // HR-1 canonical relations.
-  employmentPeriods     EmploymentPeriod[]
-  compensationHistory   EmployeeCompensation[]
-  payrollProfile        PayrollProfile?
-  sensitiveIdentity     EmployeeSensitiveIdentity?
-  bankAccounts          EmployeeBankAccount[]
-  taxProfiles           EmployeeTaxProfile[]
-  documents             EmployeeDocument[]                  @relation("EmployeeDocuments")
-  credentials           EmployeeCredential[]
-  emergencyContacts     EmployeeEmergencyContact[]
-  onboardingInvitations EmployeeOnboardingInvitation[]
-  onboardingSessions    EmployeeOnboardingSession[]
-  onboardingTransitions EmployeeOnboardingStateTransition[]
-  onboardingCorrections EmployeeOnboardingCorrection[]
+  employmentPeriods          EmploymentPeriod[]
+  compensationHistory        EmployeeCompensation[]
+  payrollProfile             PayrollProfile?
+  sensitiveIdentity          EmployeeSensitiveIdentity?
+  bankAccounts               EmployeeBankAccount[]
+  taxProfiles                EmployeeTaxProfile[]
+  documents                  EmployeeDocument[]                  @relation("EmployeeDocuments")
+  credentials                EmployeeCredential[]
+  emergencyContacts          EmployeeEmergencyContact[]
+  onboardingInvitations      EmployeeOnboardingInvitation[]
+  onboardingSessions         EmployeeOnboardingSession[]
+  onboardingTransitions      EmployeeOnboardingStateTransition[]
+  onboardingCorrections      EmployeeOnboardingCorrection[]
   onboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
+  portalCredential           EmployeePortalCredential?
+  portalPasswordResets       EmployeePortalPasswordReset[]
+  portalTourCompletedAt      DateTime?
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -9011,22 +9016,22 @@ model OutlookArchiveMutation {
 // See prisma-postgres/schema.prisma for full docs; this is the
 // SQLite mirror for dev/test parity.
 model OutlookMarkReadMutation {
-  id                    String    @id @default(cuid())
-  clubId                String
-  workIntakeItemId      String
-  emailMessageId        String
-  graphMessageId        String
-  mailboxConnectionId   String
-  status                String    @default("PENDING")
-  attemptCount          Int       @default(0)
-  lastAttemptAt         DateTime?
-  completedAt           DateTime?
-  errorCode             String?
-  triggeredByUserId     String?
+  id                  String    @id @default(cuid())
+  clubId              String
+  workIntakeItemId    String
+  emailMessageId      String
+  graphMessageId      String
+  mailboxConnectionId String
+  status              String    @default("PENDING")
+  attemptCount        Int       @default(0)
+  lastAttemptAt       DateTime?
+  completedAt         DateTime?
+  errorCode           String?
+  triggeredByUserId   String?
   // Rev-13 audit-only cursor — see postgres schema for docs.
-  generationCursor      String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  generationCursor    String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   // Rev-13 removes @@unique([mailboxConnectionId, emailMessageId]).
   // See postgres schema for the full architectural note.
@@ -10349,24 +10354,24 @@ model EmployeeEmergencyContact {
 // HR-2B.4 (2026-08-19) — Club-configurable onboarding requirement.
 // See prisma-postgres/schema.prisma for the full architectural note.
 model OnboardingRequirement {
-  id                    String    @id @default(cuid())
-  clubId                String
-  club                  Club      @relation(fields: [clubId], references: [id])
-  code                  String
-  displayName           String
-  explanation           String?
-  kind                  String
-  documentCategory      String?
-  appliesToAll          Boolean   @default(false)
-  appliesToDeptIds      String?
-  appliesToPositionIds  String?
-  required              Boolean   @default(true)
-  requireExpiry         Boolean   @default(false)
-  active                Boolean   @default(true)
-  displayOrder          Int       @default(0)
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  createdByUserId       String?
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  code                 String
+  displayName          String
+  explanation          String?
+  kind                 String
+  documentCategory     String?
+  appliesToAll         Boolean  @default(false)
+  appliesToDeptIds     String?
+  appliesToPositionIds String?
+  required             Boolean  @default(true)
+  requireExpiry        Boolean  @default(false)
+  active               Boolean  @default(true)
+  displayOrder         Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdByUserId      String?
 
   @@unique([clubId, code])
   @@index([clubId, active])
@@ -10565,5 +10570,40 @@ model EmployeeOnboardingCorrection {
   createdAt           DateTime                  @default(now())
 
   @@index([clubId, sessionId])
+  @@index([clubId, employeeId])
+}
+
+// EmployeePortalCredential — HR-2B.5 (2026-08-19).
+// See prisma-postgres/schema.prisma for full documentation.
+model EmployeePortalCredential {
+  id                 String    @id @default(cuid())
+  clubId             String
+  club               Club      @relation(fields: [clubId], references: [id])
+  employeeId         String    @unique
+  employee           Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  passwordHash       String
+  passwordUpdatedAt  DateTime  @default(now())
+  lastLoginAt        DateTime?
+  failedAttemptCount Int       @default(0)
+  lockedUntil        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([clubId])
+}
+
+// EmployeePortalPasswordReset — HR-2B.5 (2026-08-19).
+// See prisma-postgres/schema.prisma for full documentation.
+model EmployeePortalPasswordReset {
+  id         String    @id @default(cuid())
+  clubId     String
+  club       Club      @relation(fields: [clubId], references: [id])
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
   @@index([clubId, employeeId])
 }

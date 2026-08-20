@@ -24,8 +24,17 @@ import { OnboardingStepErrorFromSearchParam } from "@/components/hr/OnboardingSt
 interface Props {
   actor: EmployeeOnboardingActor;
   /** Which post-payroll section this shell is wrapping. Drives the
-   *  `current` flag on the rail. */
-  currentSection: "emergency" | "documents" | "ready-for-review";
+   *  `current` flag on the rail. HR-2B.5 (2026-08-19) adds
+   *  `"portal-password"` and `"review"` — the two post-Documents
+   *  sections that finish the onboarding journey. */
+  currentSection:
+    | "emergency"
+    | "documents"
+    | "portal-password"
+    | "review"
+    // Kept for the legacy stopping page — the resolver no longer
+    // emits this, but a bookmarked URL still needs a rail state.
+    | "ready-for-review";
   headline: string;
   subhead: string;
   children: ReactNode;
@@ -34,7 +43,7 @@ interface Props {
 export default async function PostPayrollShell({
   actor, currentSection, headline, subhead, children,
 }: Props) {
-  const [club, employee, completion, nameAck, contactAck, employmentAck, corrections, emergencyDone, documentsDone] = await Promise.all([
+  const [club, employee, completion, nameAck, contactAck, employmentAck, corrections, emergencyDone, documentsDone, portalCredential] = await Promise.all([
     prisma.club.findFirst({ where: { id: actor.clubId }, select: { name: true } }),
     prisma.employee.findFirst({
       where: { id: actor.employeeId, clubId: actor.clubId },
@@ -62,6 +71,10 @@ export default async function PostPayrollShell({
     }),
     isEmergencySectionComplete(actor),
     isDocumentsSectionComplete(actor),
+    prisma.employeePortalCredential.findFirst({
+      where: { employeeId: actor.employeeId, clubId: actor.clubId },
+      select: { id: true },
+    }),
   ]);
   if (!club || !employee) {
     // Rare — actor resolved but employee/club vanished. Let the page
@@ -143,11 +156,22 @@ export default async function PostPayrollShell({
                 href: documentsDone ? "/hr/onboarding/documents" : (emergencyDone ? "/hr/onboarding/documents" : undefined),
               },
               {
+                key: "portal-password",
+                label: "Portal password",
+                done: Boolean(portalCredential),
+                current: currentSection === "portal-password",
+                href:
+                  Boolean(portalCredential)
+                    ? "/hr/onboarding/portal-password"
+                    : (documentsDone ? "/hr/onboarding/portal-password" : undefined),
+                future: !documentsDone,
+              },
+              {
                 key: "review",
                 label: "Review",
                 done: false,
-                current: currentSection === "ready-for-review",
-                future: !(emergencyDone && documentsDone),
+                current: currentSection === "review" || currentSection === "ready-for-review",
+                future: !(emergencyDone && documentsDone && Boolean(portalCredential)),
               },
             ]}
           />

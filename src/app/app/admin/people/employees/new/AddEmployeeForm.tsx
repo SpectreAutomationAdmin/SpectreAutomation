@@ -60,6 +60,10 @@ interface Props {
   /** True when the operator holds `hr:employee:write` and can therefore
    *  create a new EmployeePosition inline via POST /api/hr/positions. */
   canCreatePosition?: boolean;
+  /** HR-2B.5 §11 — the operator must hold `hr:compensation:write` to
+   *  set the employee's initial compensation. When absent, the compensation
+   *  section is not rendered and the server route skips changeCompensation. */
+  canSetCompensation?: boolean;
 }
 
 const EMPLOYMENT_TYPES = [
@@ -69,7 +73,15 @@ const EMPLOYMENT_TYPES = [
   { value: "CONTRACT", label: "Contract" },
 ];
 
-export default function AddEmployeeForm({ departments, positions: initialPositions, managers, canCreatePosition }: Props) {
+// HR-2B.5 §11-13. The employee-facing labels; the values map 1:1 to
+// EmployeeCompensation.cadence values validated in
+// `src/lib/hr/compensation.ts`.
+const COMPENSATION_CADENCES = [
+  { value: "HOURLY", label: "Hourly" },
+  { value: "SALARY", label: "Salary" },
+];
+
+export default function AddEmployeeForm({ departments, positions: initialPositions, managers, canCreatePosition, canSetCompensation }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +103,11 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
   const [positions, setPositions] = useState<AddEmployeePositionOption[]>(initialPositions);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [selectedPositionId, setSelectedPositionId] = useState<string>("");
+
+  // HR-2B.5 §11-13 — Cadence toggles the rate helper text (per-hour
+  // vs per-year) and the numeric formatting hint. Server always
+  // persists the raw decimal via changeCompensation.
+  const [compensationCadence, setCompensationCadence] = useState<"HOURLY" | "SALARY">("HOURLY");
   const [showAddPosition, setShowAddPosition] = useState(false);
   const [newPositionName, setNewPositionName] = useState("");
   const [newPositionRate, setNewPositionRate] = useState("");
@@ -474,6 +491,57 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
           </div>
         </div>
       </section>
+
+      {canSetCompensation && (
+        <section className="card card-body space-y-4" data-testid="compensation-section">
+          <div>
+            <h2 className="section-title text-lg">Compensation</h2>
+            <p className="mt-1 text-xs text-stone-500">
+              Sets the employee&rsquo;s initial pay rate. Effective on the expected start date
+              above. Future changes preserve history.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label" htmlFor="compensationCadence">Compensation type</label>
+              <select
+                id="compensationCadence"
+                name="compensationCadence"
+                className="select"
+                value={compensationCadence}
+                onChange={(e) => setCompensationCadence(e.target.value as "HOURLY" | "SALARY")}
+                data-testid="compensation-cadence"
+              >
+                {COMPENSATION_CADENCES.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="compensationAmount">
+                {compensationCadence === "HOURLY" ? "Hourly rate" : "Annual salary"}
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-stone-500">$</span>
+                <input
+                  id="compensationAmount"
+                  name="compensationAmount"
+                  type="number"
+                  step={compensationCadence === "HOURLY" ? "0.01" : "1"}
+                  min="0"
+                  className="input"
+                  placeholder={compensationCadence === "HOURLY" ? "22.50" : "72000"}
+                  required
+                  data-testid="compensation-amount"
+                />
+                <span className="text-xs text-stone-500 whitespace-nowrap">
+                  {compensationCadence === "HOURLY" ? "/ hour" : "/ year"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="card card-body space-y-4">
         <h2 className="section-title text-lg">Resume (optional)</h2>

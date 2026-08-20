@@ -30,6 +30,8 @@ import {
 } from "@/lib/hr/employees";
 import { openEmploymentPeriod } from "@/lib/hr/employment-periods";
 import { createSession } from "@/lib/hr/onboarding-sessions";
+import { changeCompensation } from "@/lib/hr/compensation";
+import { hasPermission } from "@/lib/rbac";
 import {
   uploadEmployeeDocument,
   UnknownDocumentCategoryError,
@@ -97,6 +99,37 @@ export async function POST(req: NextRequest) {
   const managerEmployeeId = readOptionalString(fd, "managerEmployeeId");
   const memberId = readOptionalString(fd, "memberId");
 
+  // HR-2B.5 §11-13 — Initial compensation. Presence of these fields
+  // means the operator has hr:compensation:write and the form rendered
+  // the compensation section; absence means either the permission is
+  // missing OR the form was submitted from a stale build. In either
+  // case the compensation call is skipped and the employee lands
+  // without a rate row — an admin with the permission can set it later
+  // via the compensation surface (deferred to HR-2B.6+).
+  const compensationCadence = readOptionalString(fd, "compensationCadence");
+  const compensationAmountRaw = readOptionalString(fd, "compensationAmount");
+  const wantsCompensation = compensationCadence !== null && compensationAmountRaw !== null;
+  if (wantsCompensation) {
+    if (compensationCadence !== "HOURLY" && compensationCadence !== "SALARY") {
+      return NextResponse.json(
+        { error: "compensationCadence must be HOURLY or SALARY" },
+        { status: 422 },
+      );
+    }
+    if (Number(compensationAmountRaw) <= 0 || Number.isNaN(Number(compensationAmountRaw))) {
+      return NextResponse.json(
+        { error: "compensationAmount must be a positive number" },
+        { status: 422 },
+      );
+    }
+    if (!hasPermission(principal, clubId, "hr:compensation:write")) {
+      return NextResponse.json(
+        { error: "You do not have permission to set compensation." },
+        { status: 403 },
+      );
+    }
+  }
+
   // Resume — optional. Rejected pre-upload if the MIME doesn't sit on
   // the allowlist; the storage layer never sees an unknown type.
   const resumeEntry = fd.get("resume");
@@ -151,6 +184,18 @@ export async function POST(req: NextRequest) {
       departmentId,
       managerEmployeeId,
     });
+
+    // 3.5. HR-2B.5 §11-15 — Initial compensation. Effective on the
+    // expected start date so payroll history begins at the hire date.
+    // Uses the canonical EmployeeCompensation writer, which shadow-
+    // writes legacy Employee.payRate in the same transaction.
+    if (wantsCompensation) {
+      await changeCompensation(principal, employee.id, {
+        effectiveFrom: expectedStartDate,
+        amount: compensationAmountRaw!,
+        cadence: compensationCadence!,
+      });
+    }
 
     // 4. DRAFT onboarding session. Invitation is issued later, from
     // the profile shell's "Invite to complete onboarding" action.

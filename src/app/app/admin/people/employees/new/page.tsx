@@ -78,6 +78,7 @@ export default async function AddEmployeePage() {
           return { id: m.id, label: `${displayName}${suffix}` };
         })}
         canCreatePosition={hasPermission(principal, clubId, "hr:employee:write")}
+        canSetCompensation={hasPermission(principal, clubId, "hr:compensation:write")}
       />
     </div>
   );

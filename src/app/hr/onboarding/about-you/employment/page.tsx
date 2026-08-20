@@ -1,11 +1,18 @@
 // HR-2B.2 final (2026-08-19) — About You · Employment confirmation.
+// HR-2B.5 §17-18 (2026-08-19) — Correction UI is now client-gated:
+//   • The correction section stays HIDDEN until the employee picks
+//     "Something needs correcting."
+//   • Individual correction text inputs stay HIDDEN until the
+//     employee checks their field's checkbox.
+// Presentation moved to `EmploymentConfirmationForm` (client);
+// server-side data loading + server action unchanged.
 //
 // The employee CONFIRMS the Club-authoritative employment fields
 // (position, department, employment type, expected start date).
 // They cannot overwrite the values themselves.
 //
 // Outcomes:
-//   • "Yes — that's right"                → writes a durable
+//   • "Yes, everything looks right"       → writes a durable
 //     EmployeeOnboardingAcknowledgement row (kind=employment_confirmation).
 //   • "Something needs correcting"        → for EACH checked field the
 //     employee flags, writes ONE EmployeeOnboardingCorrection row
@@ -13,10 +20,12 @@
 //     value. The Club-authoritative value is never mutated.
 
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { prisma } from "@/lib/prisma";
 import { confirmEmploymentAction } from "../_actions";
+import EmploymentConfirmationForm, {
+  type EmploymentField,
+} from "./EmploymentConfirmationForm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,6 +67,8 @@ export default async function EmploymentStep() {
     : null;
   const typeLabel = formatEmploymentType(employee.employmentType);
 
+  const fields = buildFields(positionLabel, departmentLabel, typeLabel, startLabel);
+
   return (
     <article className="rounded-lg border border-stone-200 bg-white px-6 py-8 md:px-10 md:py-10">
       <h2 className="font-serif text-2xl leading-tight text-stone-900">
@@ -92,109 +103,32 @@ export default async function EmploymentStep() {
         )}
       </dl>
 
-      <form action={confirmEmploymentAction} className="mt-6 space-y-5" noValidate>
-        <fieldset>
-          <legend className="text-sm text-stone-700">Is this correct?</legend>
-          <div className="mt-3 space-y-2.5">
-            <label className="flex items-start gap-3 rounded-md border border-stone-200 px-3 py-2.5 hover:border-stone-300 cursor-pointer">
-              <input
-                type="radio"
-                name="outcome"
-                value="correct"
-                defaultChecked={!hadCorrection}
-                data-testid="employment-outcome-correct"
-                className="mt-1 text-emerald-700 focus:ring-emerald-700"
-              />
-              <span className="text-sm text-stone-800">
-                Yes — that's right.
-              </span>
-            </label>
-            <label className="flex items-start gap-3 rounded-md border border-stone-200 px-3 py-2.5 hover:border-stone-300 cursor-pointer">
-              <input
-                type="radio"
-                name="outcome"
-                value="needs_correction"
-                defaultChecked={hadCorrection}
-                data-testid="employment-outcome-correction"
-                className="mt-1 text-emerald-700 focus:ring-emerald-700"
-              />
-              <span className="text-sm text-stone-800">
-                Something needs correcting.
-              </span>
-            </label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend className="text-sm text-stone-700">
-            Which item(s) need correcting?
-          </legend>
-          <p className="mt-1 text-xs text-stone-400">
-            Only fill this in if you chose "Something needs correcting" above.
-            For each item you check, tell us what it should be.
-          </p>
-
-          <div className="mt-3 space-y-3">
-            {(
-              [
-                { field: "positionId", label: "Position", clubValue: positionLabel, placeholder: "e.g. Golf Shop Attendant" },
-                { field: "departmentId", label: "Department", clubValue: departmentLabel, placeholder: "e.g. Food & Beverage" },
-                { field: "employmentType", label: "Employment type", clubValue: typeLabel ?? "not set", placeholder: "e.g. Part-time seasonal" },
-                { field: "expectedStartDate", label: "Expected start date", clubValue: startLabel ?? "not set", placeholder: "e.g. September 21, 2026" },
-              ] as const
-            ).map((f) => {
-              const prior = priorByField.get(f.field) ?? "";
-              return (
-                <div key={f.field} className="rounded-md border border-stone-200 px-3 py-2.5">
-                  <label className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      name={`correction:${f.field}:enabled`}
-                      value="1"
-                      defaultChecked={Boolean(prior)}
-                      data-testid={`correction-${f.field}-enabled`}
-                      className="text-emerald-700 focus:ring-emerald-700"
-                    />
-                    <span className="text-sm text-stone-800">
-                      {f.label}{" "}
-                      <span className="text-stone-400">— Club record: {f.clubValue}</span>
-                    </span>
-                  </label>
-                  <label className="mt-2 block">
-                    <span className="sr-only">Correct value for {f.label}</span>
-                    <input
-                      type="text"
-                      name={`correction:${f.field}:value`}
-                      defaultValue={prior}
-                      placeholder={f.placeholder}
-                      maxLength={500}
-                      data-testid={`correction-${f.field}-value`}
-                      className="mt-1 block w-full rounded-md border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-emerald-700 focus:ring-1 focus:ring-emerald-700"
-                    />
-                  </label>
-                </div>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        <div className="flex items-center justify-between pt-2">
-          <Link
-            href="/hr/onboarding/about-you/contact"
-            className="text-sm text-stone-500 hover:text-stone-800"
-          >
-            ← Back
-          </Link>
-          <button
-            type="submit"
-            className="rounded-md bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
-          >
-            Continue
-          </button>
-        </div>
-      </form>
+      <EmploymentConfirmationForm
+        action={confirmEmploymentAction}
+        fields={fields}
+        priorByField={Object.fromEntries(priorByField)}
+        hadCorrection={hadCorrection}
+        backHref="/hr/onboarding/about-you/contact"
+      />
     </article>
   );
+}
+
+// Extracted so the field metadata lives with the server-side data
+// fetch (labels come from the DB), while the toggle behaviour lives
+// in the client component.
+function buildFields(
+  positionLabel: string,
+  departmentLabel: string,
+  typeLabel: string | null,
+  startLabel: string | null,
+): EmploymentField[] {
+  return [
+    { field: "positionId", label: "Position", clubValue: positionLabel, placeholder: "e.g. Golf Shop Attendant" },
+    { field: "departmentId", label: "Department", clubValue: departmentLabel, placeholder: "e.g. Food & Beverage" },
+    { field: "employmentType", label: "Employment type", clubValue: typeLabel ?? "not set", placeholder: "e.g. Part-time seasonal" },
+    { field: "expectedStartDate", label: "Expected start date", clubValue: startLabel ?? "not set", placeholder: "e.g. September 21, 2026" },
+  ];
 }
 
 function formatDate(d: Date): string {

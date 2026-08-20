@@ -1,16 +1,16 @@
 // HR-2B.4 (2026-08-19) — Post-Documents boundary page.
+// HR-2B.5 (2026-08-19) — Boundary superseded by /hr/onboarding/review.
 //
-// HR-2B.5 will replace this with the real /hr/onboarding/review + Submit
-// action. For HR-2B.4 the boundary is a truthful "your final review is
-// coming next" copy — never a fake Submit button.
+// This page is now a pure forward-router: it defers to the canonical
+// continuation resolver and redirects to whatever step is actually
+// next (portal-password when the credential isn't set, review when it
+// is, complete when the session has been submitted). It never
+// renders its own final content — kept only so bookmarked or older
+// email links don't 404.
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
-import {
-  isDocumentsSectionComplete,
-  isEmergencySectionComplete,
-} from "@/lib/hr/onboarding-requirements";
 import { resolveOnboardingContinuation } from "@/lib/hr/onboarding-continuation";
 import PostPayrollShell from "../_post-payroll-shell";
 
@@ -21,22 +21,18 @@ export default async function ReadyForReviewStep() {
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
 
-  // Defensive: if the employee lands here early (via direct URL), route
-  // them to the actual next incomplete step. The canonical resolver
-  // does exactly this computation.
-  const [emergencyDone, documentsDone] = await Promise.all([
-    isEmergencySectionComplete(actor),
-    isDocumentsSectionComplete(actor),
-  ]);
-  if (!emergencyDone || !documentsDone) {
-    const next = await resolveOnboardingContinuation({
-      sessionId: actor.sessionId,
-      employeeId: actor.employeeId,
-      clubId: actor.clubId,
-    });
-    if (next !== "/hr/onboarding/ready-for-review") redirect(next);
-  }
+  // HR-2B.5 — unconditional forward-router. The canonical resolver
+  // decides the real destination; a legacy bookmark to this URL now
+  // resolves to portal-password / review / complete as appropriate.
+  const next = await resolveOnboardingContinuation({
+    sessionId: actor.sessionId,
+    employeeId: actor.employeeId,
+    clubId: actor.clubId,
+  });
+  if (next !== "/hr/onboarding/ready-for-review") redirect(next);
 
+  // Fall-through render — only reachable if the resolver itself
+  // pathologically returns this URL (which it no longer does).
   return (
     <PostPayrollShell
       actor={actor}

@@ -86,6 +86,18 @@ export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = [
   "employment_confirmation",
   "td1_federal_attestation",
   "td1_provincial_attestation",
+  // HR-2B.5 (2026-08-19).
+  //   `portal_password_established` — set when the employee finishes
+  //     the portal-password step (§4). The continuation resolver reads
+  //     it (in addition to `EmployeePortalCredential`) so a resumed
+  //     session lands the employee back on the review step, not back
+  //     on the credential step, even if the credential row was
+  //     rotated.
+  //   `final_submission_attestation` — set when the employee ticks the
+  //     final acknowledgement on the Review page (§27) and clicks
+  //     Submit. Required for `IN_PROGRESS → SUBMITTED`.
+  "portal_password_established",
+  "final_submission_attestation",
 ] as const;
 export type OnboardingAcknowledgementKind = (typeof ONBOARDING_ACKNOWLEDGEMENT_KINDS)[number];
 
@@ -409,6 +421,83 @@ async function upsertAboutYouStepAck(
   });
 }
 
+// HR-2B.5 (2026-08-19) — Portal-credential establishment ack.
+//
+// Written from `submitPortalPasswordAction` after `establishPortalPassword`
+// returns. The credential row itself is the authoritative signal, but
+// this ack row keeps the continuation-resolver path uniform with
+// every other completed step (single "did the employee finish?"
+// predicate + single sessionId scope).
+export async function acknowledgeSelfPortalPassword(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  const now = new Date();
+  await prisma.employeeOnboardingAcknowledgement.upsert({
+    where: {
+      sessionId_kind: { sessionId: actor.sessionId, kind: "portal_password_established" },
+    },
+    create: {
+      clubId: actor.clubId,
+      sessionId: actor.sessionId,
+      employeeId: actor.employeeId,
+      kind: "portal_password_established",
+      actorEmployeeId: actor.employeeId,
+      acknowledgedAt: now,
+    },
+    update: { acknowledgedAt: now, actorEmployeeId: actor.employeeId },
+  });
+  await audit(null, {
+    action: "hr.onboarding.acknowledgement.update",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: `${actor.sessionId}:portal_password_established`,
+    clubId: actor.clubId,
+    after: { kind: "portal_password_established", acknowledgedAt: now },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+}
+
+// HR-2B.5 (2026-08-19) — Final submission attestation.
+//
+// The employee ticks a single "the information I've provided is
+// accurate" checkbox on the Review page (§27) before Submit. This ack
+// is required by the readiness validator (§28) before transitioning
+// IN_PROGRESS → SUBMITTED.
+export async function acknowledgeSelfFinalSubmission(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  const now = new Date();
+  await prisma.employeeOnboardingAcknowledgement.upsert({
+    where: {
+      sessionId_kind: { sessionId: actor.sessionId, kind: "final_submission_attestation" },
+    },
+    create: {
+      clubId: actor.clubId,
+      sessionId: actor.sessionId,
+      employeeId: actor.employeeId,
+      kind: "final_submission_attestation",
+      actorEmployeeId: actor.employeeId,
+      acknowledgedAt: now,
+    },
+    update: { acknowledgedAt: now, actorEmployeeId: actor.employeeId },
+  });
+  await audit(null, {
+    action: "hr.onboarding.acknowledgement.update",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: `${actor.sessionId}:final_submission_attestation`,
+    clubId: actor.clubId,
+    after: { kind: "final_submission_attestation", acknowledgedAt: now },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+}
+
 export async function acknowledgeSelfEmployment(
   actor: EmployeeOnboardingActor,
 ): Promise<void> {
@@ -639,6 +728,96 @@ export async function transitionSelfSessionToInProgress(actor: EmployeeOnboardin
     clubId: actor.clubId,
     before: { state: "INVITED" },
     after: { state: "IN_PROGRESS", sessionId: actor.sessionId, transitionId: transition.id },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+    },
+  });
+  return updated;
+}
+
+/**
+ * HR-2B.5 (2026-08-19) §28-29 — Employee-driven IN_PROGRESS → SUBMITTED.
+ *
+ * Preconditions (readiness validation §28) are checked HERE, not by
+ * the calling route, so a client that bypasses the Review UI cannot
+ * short-circuit them. The action-side wrapper still verifies the
+ * attestation ack before calling this — this layer is the second
+ * defence.
+ *
+ * On success: writes session.state="SUBMITTED", session.submittedAt=now,
+ * Employee.onboardingState="SUBMITTED", one EmployeeOnboardingStateTransition
+ * row (actorSource=EMPLOYEE), and one audit row. Idempotent: a
+ * session already in SUBMITTED returns without a new transition.
+ *
+ * Explicitly does NOT set APPROVED — Club-side review is a separate
+ * admin decision (§29). This is the employee's half of the handshake.
+ */
+export async function transitionSelfSessionToSubmitted(actor: EmployeeOnboardingActor) {
+  const session = await prisma.employeeOnboardingSession.findFirst({
+    where: { id: actor.sessionId, employeeId: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, state: true },
+  });
+  if (!session) throw new NotFoundError(SESSION_ENTITY, actor.sessionId);
+  if (session.state === "SUBMITTED") return session;
+  if (session.state !== "IN_PROGRESS") {
+    throw new ConflictError(
+      `Cannot transition session from ${session.state} to SUBMITTED via employee actor`,
+    );
+  }
+
+  // §28 — canonical readiness check. The Review page renders the
+  // same predicates, but a client that POSTed directly must NOT be
+  // able to bypass them.
+  const attestationAck = await prisma.employeeOnboardingAcknowledgement.findFirst({
+    where: {
+      sessionId: actor.sessionId,
+      clubId: actor.clubId,
+      kind: "final_submission_attestation",
+    },
+    select: { id: true },
+  });
+  if (!attestationAck) {
+    throw new ConflictError("Final submission attestation is required before submit.");
+  }
+  const portalCredential = await prisma.employeePortalCredential.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId },
+    select: { id: true },
+  });
+  if (!portalCredential) {
+    throw new ConflictError("Portal password must be set before submit.");
+  }
+
+  const now = new Date();
+  const updated = await prisma.employeeOnboardingSession.update({
+    where: { id: session.id },
+    data: { state: "SUBMITTED", submittedAt: now },
+  });
+  await prisma.employee.update({
+    where: { id: actor.employeeId },
+    data: { onboardingState: "SUBMITTED" },
+  });
+  const transition = await prisma.employeeOnboardingStateTransition.create({
+    data: {
+      clubId: actor.clubId,
+      employeeId: actor.employeeId,
+      sessionId: actor.sessionId,
+      fromState: "IN_PROGRESS",
+      toState: "SUBMITTED",
+      actorSource: "EMPLOYEE",
+      actorEmployeeId: actor.employeeId,
+      actorUserId: null,
+      reason: null,
+      at: now,
+    },
+  });
+  await audit(null, {
+    action: "hr.onboarding.state.update",
+    entityType: TRANSITION_ENTITY,
+    entityId: transition.id,
+    clubId: actor.clubId,
+    before: { state: "IN_PROGRESS" },
+    after: { state: "SUBMITTED", sessionId: actor.sessionId, transitionId: transition.id },
     meta: {
       actorSource: "EMPLOYEE",
       actorEmployeeIdTail: actor.employeeId.slice(-8),
