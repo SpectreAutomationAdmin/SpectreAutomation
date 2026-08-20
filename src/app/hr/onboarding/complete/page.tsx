@@ -13,26 +13,35 @@
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
+import { getEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export default async function OnboardingCompletePage() {
-  const actor = await resolveEmployeeOnboardingActor();
-  if (!actor) redirect("/hr/onboarding/expired");
+  // HR-2B.5 §31 (2026-08-19) — This page must accept TERMINAL session
+  // states (SUBMITTED / APPROVED / REJECTED). The canonical
+  // `resolveEmployeeOnboardingActor()` intentionally rejects
+  // non-resumable states to lock down mutation surfaces (§46), so it
+  // is the wrong guard here. Read the cookie directly and validate
+  // the session's tenant triangle inline — the page is read-only and
+  // renders only public-safe identifiers.
+  const cookie = await getEmployeeOnboardingSession();
+  if (!cookie.sessionId || !cookie.employeeId || !cookie.clubId) {
+    redirect("/hr/onboarding/expired");
+  }
 
   const [employee, session, club] = await Promise.all([
     prisma.employee.findFirst({
-      where: { id: actor.employeeId, clubId: actor.clubId },
+      where: { id: cookie.employeeId!, clubId: cookie.clubId! },
       select: { firstName: true, preferredName: true, employeeNumber: true },
     }),
     prisma.employeeOnboardingSession.findFirst({
-      where: { id: actor.sessionId, employeeId: actor.employeeId, clubId: actor.clubId },
+      where: { id: cookie.sessionId!, employeeId: cookie.employeeId!, clubId: cookie.clubId! },
       select: { state: true, submittedAt: true },
     }),
-    prisma.club.findFirst({ where: { id: actor.clubId }, select: { name: true } }),
+    prisma.club.findFirst({ where: { id: cookie.clubId! }, select: { name: true } }),
   ]);
   if (!employee || !session || !club) redirect("/hr/onboarding/expired");
 

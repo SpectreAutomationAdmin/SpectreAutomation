@@ -26,7 +26,7 @@ import {
   establishEmployeePortalSession,
   destroyEmployeePortalSession,
 } from "@/lib/employee-portal-session";
-import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
+import { getEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
 import { getActiveBranding } from "@/lib/branding";
 
 function withErr(path: string, safeMessage: string): string {
@@ -120,33 +120,47 @@ export async function employeePortalLoginAction(formData: FormData): Promise<voi
 //     back to portal-password step).
 
 export async function handoffFromOnboardingAction(): Promise<void> {
-  const actor = await resolveEmployeeOnboardingActor();
-  if (!actor) redirect("/hr/onboarding/expired");
+  // HR-2B.5 §31 — Handoff runs AFTER Submit, so the onboarding session
+  // is in a terminal state. `resolveEmployeeOnboardingActor()` rejects
+  // non-resumable states (correct security invariant for mutation
+  // surfaces §46) so we read the cookie directly and validate the
+  // tenant triangle + terminal state inline.
+  const cookie = await getEmployeeOnboardingSession();
+  if (!cookie.sessionId || !cookie.employeeId || !cookie.clubId) {
+    redirect("/hr/onboarding/expired");
+  }
+  const employeeId = cookie.employeeId!;
+  const clubId = cookie.clubId!;
+  const sessionId = cookie.sessionId!;
 
-  const [session, credential] = await Promise.all([
+  const [session, credential, employee] = await Promise.all([
     prisma.employeeOnboardingSession.findFirst({
-      where: { id: actor.sessionId, employeeId: actor.employeeId, clubId: actor.clubId },
+      where: { id: sessionId, employeeId, clubId },
       select: { state: true },
     }),
     prisma.employeePortalCredential.findFirst({
-      where: { employeeId: actor.employeeId, clubId: actor.clubId },
+      where: { employeeId, clubId },
       select: { id: true },
     }),
+    prisma.employee.findFirst({
+      where: { id: employeeId, clubId },
+      select: { id: true, clubId: true },
+    }),
   ]);
-  if (!session) redirect("/hr/onboarding/expired");
+  // Tenant-triangle check.
+  if (!session || !employee || employee.clubId !== clubId) {
+    redirect("/hr/onboarding/expired");
+  }
   if (!credential) redirect("/hr/onboarding/portal-password");
   const terminal = session.state === "SUBMITTED" || session.state === "APPROVED" || session.state === "REJECTED";
   if (!terminal) redirect("/hr/onboarding/session");
 
-  await establishEmployeePortalSession({
-    employeeId: actor.employeeId,
-    clubId: actor.clubId,
-  });
+  await establishEmployeePortalSession({ employeeId, clubId });
   await audit(null, {
     action: "employee_portal.handoff_from_onboarding",
     entityType: "EmployeePortalCredential",
-    entityId: actor.employeeId,
-    clubId: actor.clubId,
+    entityId: employeeId,
+    clubId,
   });
   redirect("/employee");
 }

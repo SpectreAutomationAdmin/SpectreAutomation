@@ -99,8 +99,12 @@ describe("HR-2B.5 · Review page source-contract", () => {
   });
 
   it("submit action idempotence: re-hitting /review after submit routes to /complete", () => {
-    // The Review page's session-state gate.
-    expect(page).toMatch(/if \(session && session\.state !== "IN_PROGRESS"\)/);
+    // Two-layer session-state gate: the cookie-scoped priorSession
+    // check runs first (routes SUBMITTED / APPROVED / REJECTED to
+    // /complete before the actor resolver rejects the actor), and
+    // the actor-scoped session check runs after as defence-in-depth.
+    expect(page).toMatch(/priorSession\.state === "SUBMITTED"/);
+    expect(page).toMatch(/session\.state === "SUBMITTED"/);
     expect(page).toMatch(/redirect\("\/hr\/onboarding\/complete"\)/);
   });
 });

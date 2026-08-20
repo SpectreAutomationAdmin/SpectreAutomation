@@ -21,6 +21,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
+import { getEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
 import { prisma } from "@/lib/prisma";
 import {
   getSelfBankAccountMasked,
@@ -61,16 +62,45 @@ function formatMoney(n: number | string | { toString(): string } | null | undefi
 }
 
 export default async function ReviewStep() {
+  // HR-2B.5 §46 (2026-08-19) — Idempotence: a returning employee
+  // whose session already moved to a terminal state (SUBMITTED /
+  // APPROVED / REJECTED) must be routed to /complete, not /expired.
+  // Because `resolveEmployeeOnboardingActor()` (correctly) rejects
+  // non-resumable states as a mutation guard, we read the cookie
+  // directly to detect the terminal state BEFORE calling the
+  // actor resolver.
+  const cookie = await getEmployeeOnboardingSession();
+  if (cookie.sessionId && cookie.employeeId && cookie.clubId) {
+    const priorSession = await prisma.employeeOnboardingSession.findFirst({
+      where: { id: cookie.sessionId, employeeId: cookie.employeeId, clubId: cookie.clubId },
+      select: { state: true },
+    });
+    if (priorSession && (
+      priorSession.state === "SUBMITTED" ||
+      priorSession.state === "APPROVED" ||
+      priorSession.state === "REJECTED"
+    )) {
+      redirect("/hr/onboarding/complete");
+    }
+  }
+
   const actor = await resolveEmployeeOnboardingActor();
   if (!actor) redirect("/hr/onboarding/expired");
 
-  // Session-state gate: if already submitted, straight to the terminal
-  // handoff page. Never re-submit.
+  // Defence-in-depth: only TERMINAL states redirect to /complete;
+  // DRAFT / INVITED / IN_PROGRESS all render the Review page. (An
+  // INVITED session that reached Review is a legitimate state in
+  // some test fixture paths — the redemption INVITED→IN_PROGRESS
+  // transition may not have fired yet.)
   const session = await prisma.employeeOnboardingSession.findFirst({
     where: { id: actor.sessionId, employeeId: actor.employeeId, clubId: actor.clubId },
     select: { state: true },
   });
-  if (session && session.state !== "IN_PROGRESS") {
+  if (session && (
+    session.state === "SUBMITTED" ||
+    session.state === "APPROVED" ||
+    session.state === "REJECTED"
+  )) {
     redirect("/hr/onboarding/complete");
   }
 
