@@ -446,6 +446,7 @@ model Club {
   employeeCredentials           EmployeeCredential[]
   employeeEmergencyContacts     EmployeeEmergencyContact[]
   employeeOnboardingInvitations EmployeeOnboardingInvitation[]
+  onboardingRequirements        OnboardingRequirement[]
   employeeOnboardingSessions    EmployeeOnboardingSession[]
   employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
@@ -10381,6 +10382,65 @@ model EmployeeEmergencyContact {
 
   @@index([clubId])
   @@index([employeeId])
+}
+
+// HR-2B.4 (2026-08-19) — OnboardingRequirement: Club-configurable
+// document / credential / confirmation requirements presented to the
+// employee during onboarding's Documents & Credentials stage.
+//
+// Applicability resolution (fastest → coarsest):
+//   1. `appliesToAll = true`       → applies to every employee at this Club.
+//   2. positionId in `appliesToPositionIds` (JSON string array)  → applies.
+//   3. departmentId in `appliesToDeptIds` (JSON string array)    → applies.
+//   Otherwise → does NOT apply.
+//
+// Fulfillment is queried through EXISTING canonical rows keyed on
+// `code`. No new fulfillment table is introduced:
+//   * kind=DOCUMENT_UPLOAD          → EmployeeDocument where
+//                                     category == `documentCategory`.
+//   * kind=CREDENTIAL_WITH_EXPIRY   → EmployeeCredential where
+//                                     credentialCode == `code`.
+//   * kind=CONFIRMATION_ONLY        → EmployeeOnboardingAcknowledgement
+//                                     with kind == `requirement_confirmation:<code>`.
+//
+// Deactivating (active=false) a requirement stops new onboardings from
+// seeing it; existing satisfied rows are NEVER destroyed by the
+// deactivation.
+model OnboardingRequirement {
+  id                    String    @id @default(cuid())
+  clubId                String
+  club                  Club      @relation(fields: [clubId], references: [id])
+  // Machine key — e.g. "PROSERVE" | "WORK_PERMIT" | "FOOD_SAFETY".
+  // Never rendered to the employee. Uppercased snake_case.
+  code                  String
+  displayName           String
+  // One-sentence explanation shown to the employee ("Because your role
+  // may involve serving alcohol, the Club needs a copy of your current
+  // ProServe certificate.").
+  explanation           String?
+  // DOCUMENT_UPLOAD | CREDENTIAL_WITH_EXPIRY | CONFIRMATION_ONLY
+  kind                  String
+  // When kind involves a document, which EMPLOYEE_DOCUMENT_CATEGORIES
+  // entry the upload persists as. Ignored for CONFIRMATION_ONLY.
+  documentCategory      String?
+  // True → applies to every employee at this Club (bypasses the JSON
+  // dept / position lists).
+  appliesToAll          Boolean   @default(false)
+  // JSON string arrays. Empty / null means "no dept-specific rule".
+  appliesToDeptIds      String?
+  appliesToPositionIds  String?
+  required              Boolean   @default(true)
+  // For CREDENTIAL_WITH_EXPIRY: does the requirement mandate the
+  // expiry date field on the persisted EmployeeCredential row?
+  requireExpiry         Boolean   @default(false)
+  active                Boolean   @default(true)
+  displayOrder          Int       @default(0)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  createdByUserId       String?
+
+  @@unique([clubId, code])
+  @@index([clubId, active])
 }
 
 // EmployeeOnboardingInvitation — one-shot magic-link tokens issued

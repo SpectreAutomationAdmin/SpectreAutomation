@@ -243,7 +243,18 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.payrollTd1Provincial);
   });
 
-  it("both attestations done → Payroll / review", async () => {
+
+  it("both attestations done → HR-2B.4 Emergency (post-Payroll continuation)", async () => {
+    // HR-2B.4 (2026-08-19) — post-payroll routing now flows through the
+    // Emergency + Documents & Credentials stages before reaching the
+    // ready-for-review boundary. This test previously expected
+    // `payrollReview` because HR-2B.3 was the last stage the resolver
+    // knew about; that URL still exists in the URL table but the
+    // canonical resolver reaches Emergency FIRST (an emergency contact
+    // hasn't been added, so Emergency is incomplete → route there).
+    // Once Emergency + Documents complete, the same fixture would
+    // resolve to `readyForReview` — see the HR-2B.4 tests for that
+    // combined-completion path.
     const { actor } = await actorForFixture("PostAllAtt");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
     await acknowledgeSelfNameStep(actor);
@@ -267,7 +278,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     });
     await attestSelfTd1(actor, "federal", "TD1-2026");
     await attestSelfTd1(actor, "provincial", "TD1AB-2026");
-    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.payrollReview);
+    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.emergency);
   });
 
   // ==== terminal state routing ==========================================

@@ -65,6 +65,9 @@ export const ADMIN_SECTIONS: NavSection[] = [
     items: [
       { href: "/app/admin/people/employees", label: "Employee Directory", perm: "hr:directory:view" },
       { href: "/app/admin/people/onboarding", label: "Onboarding", perm: "hr:onboarding:read" },
+      // HR-2B.4 (2026-08-19) — Club-configurable onboarding
+      // requirements (Documents & Credentials).
+      { href: "/app/admin/people/onboarding-requirements", label: "Onboarding Requirements", perm: "hr:employee:write" },
     ],
   },
   {

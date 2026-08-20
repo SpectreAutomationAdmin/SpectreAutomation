@@ -437,6 +437,7 @@ model Club {
   employeeCredentials           EmployeeCredential[]
   employeeEmergencyContacts     EmployeeEmergencyContact[]
   employeeOnboardingInvitations EmployeeOnboardingInvitation[]
+  onboardingRequirements        OnboardingRequirement[]
   employeeOnboardingSessions    EmployeeOnboardingSession[]
   employeeOnboardingTransitions EmployeeOnboardingStateTransition[]
   employeeOnboardingQuestions   EmployeeOnboardingQuestion[]
@@ -10343,6 +10344,32 @@ model EmployeeEmergencyContact {
 
   @@index([clubId])
   @@index([employeeId])
+}
+
+// HR-2B.4 (2026-08-19) — Club-configurable onboarding requirement.
+// See prisma-postgres/schema.prisma for the full architectural note.
+model OnboardingRequirement {
+  id                    String    @id @default(cuid())
+  clubId                String
+  club                  Club      @relation(fields: [clubId], references: [id])
+  code                  String
+  displayName           String
+  explanation           String?
+  kind                  String
+  documentCategory      String?
+  appliesToAll          Boolean   @default(false)
+  appliesToDeptIds      String?
+  appliesToPositionIds  String?
+  required              Boolean   @default(true)
+  requireExpiry         Boolean   @default(false)
+  active                Boolean   @default(true)
+  displayOrder          Int       @default(0)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  createdByUserId       String?
+
+  @@unique([clubId, code])
+  @@index([clubId, active])
 }
 
 // EmployeeOnboardingInvitation — one-shot magic-link tokens issued

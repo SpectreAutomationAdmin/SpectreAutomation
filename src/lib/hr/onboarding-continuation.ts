@@ -33,6 +33,8 @@
 
 import { prisma } from "../prisma";
 import { RESUMABLE_ONBOARDING_STATES } from "./employee-onboarding-state";
+import { isDocumentsSectionComplete, isEmergencySectionComplete } from "./onboarding-requirements";
+import type { EmployeeOnboardingActor } from "./employee-actor";
 
 export interface ContinuationContext {
   sessionId: string;
@@ -57,6 +59,11 @@ const URLS = {
   payrollTd1Provincial: "/hr/onboarding/payroll/td1-provincial",
   payrollReview: "/hr/onboarding/payroll/review",
   payrollComplete: "/hr/onboarding/payroll/complete",
+  // HR-2B.4 (2026-08-19) — post-payroll sections
+  emergency: "/hr/onboarding/emergency",
+  documents: "/hr/onboarding/documents",
+  // HR-2B.4 stopping boundary (HR-2B.5 will replace this with a real Review page).
+  readyForReview: "/hr/onboarding/ready-for-review",
   // Terminal
   submitted: "/hr/onboarding/payroll/complete",
   expired: "/hr/onboarding/expired",
@@ -216,8 +223,42 @@ export async function resolveOnboardingContinuation(
   if (!taxRowExists || !federalAttestationDone) return URLS.payrollTd1Federal;
   if (!provincialAttestationDone) return URLS.payrollTd1Provincial;
 
-  // 5. Everything done → review, then completion.
-  return URLS.payrollReview;
+  // 5. HR-2B.4 (2026-08-19) — Emergency, then Documents & Credentials.
+  //
+  // Payroll is canonically complete at this point; continuation now
+  // moves to the post-payroll sections. Completion signals are the
+  // same "persisted server-side state only" pattern as everything
+  // above — no browser inference.
+  //
+  //   * Emergency  — a primary EmployeeEmergencyContact row exists
+  //                  with name+relation+phone all non-empty.
+  //   * Documents  — every REQUIRED applicable active OnboardingRequirement
+  //                  is satisfied via its canonical fulfillment row
+  //                  (EmployeeDocument / EmployeeCredential /
+  //                  EmployeeOnboardingAcknowledgement keyed on code).
+  //                  Optional requirements never block.
+  //
+  // When Documents is complete, HR-2B.4 has no further step to route
+  // to — HR-2B.5 will own the real Review page + Submit action. The
+  // canonical stopping boundary is /hr/onboarding/ready-for-review
+  // which renders a truthful "Your final review is coming next"
+  // message and does NOT expose a fake Submit button.
+  const actorForSection: EmployeeOnboardingActor = {
+    clubId: ctx.clubId,
+    employeeId: ctx.employeeId,
+    sessionId: ctx.sessionId,
+    invitationId: "",
+    sessionState: "IN_PROGRESS",
+    redeemedAt: new Date().toISOString(),
+  };
+  const emergencyDone = await isEmergencySectionComplete(actorForSection);
+  if (!emergencyDone) return URLS.emergency;
+  const documentsDone = await isDocumentsSectionComplete(actorForSection);
+  if (!documentsDone) return URLS.documents;
+
+  // 6. HR-2B.4 boundary. HR-2B.5 will replace this stopping point
+  //    with a real /hr/onboarding/review page + Submit action.
+  return URLS.readyForReview;
 }
 
 /**

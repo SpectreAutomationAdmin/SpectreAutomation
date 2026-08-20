@@ -209,4 +209,24 @@ describe("Mission Control integration sentinel · HR module coexistence", () => 
     expect(memberView).toMatch(/employeeLink\?:/);
     expect(memberView).toMatch(/data-testid="member-employee-(link|indicator)"/);
   });
+
+  it("HR-2B.4: OnboardingRequirement service + Emergency + Documents pages present", () => {
+    expect(() => readFileSync(resolve(process.cwd(), "src/lib/hr/onboarding-requirements.ts"), "utf8")).not.toThrow();
+    expect(() => readFileSync(resolve(process.cwd(), "src/app/hr/onboarding/emergency/page.tsx"), "utf8")).not.toThrow();
+    expect(() => readFileSync(resolve(process.cwd(), "src/app/hr/onboarding/documents/page.tsx"), "utf8")).not.toThrow();
+    expect(() => readFileSync(resolve(process.cwd(), "src/app/hr/onboarding/ready-for-review/page.tsx"), "utf8")).not.toThrow();
+  });
+
+  it("HR-2B.4: continuation resolver routes Payroll → Emergency → Documents → ready-for-review", () => {
+    const resolver = src("src/lib/hr/onboarding-continuation.ts");
+    expect(resolver).toMatch(/URLS\.emergency/);
+    expect(resolver).toMatch(/URLS\.documents/);
+    expect(resolver).toMatch(/URLS\.readyForReview/);
+  });
+
+  it("HR-2B.4: no fake Submit button on the ready-for-review boundary", () => {
+    const page = src("src/app/hr/onboarding/ready-for-review/page.tsx");
+    expect(page).not.toMatch(/type="submit"[\s\S]{0,50}Submit/);
+    expect(page).not.toMatch(/>Submit</);
+  });
 });

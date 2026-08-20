@@ -408,6 +408,9 @@ export async function resetDb() {
     c.mailboxAccess.deleteMany(),
     c.mailboxOAuthTransaction.deleteMany(),
     c.mailboxConnection.deleteMany(),
+    // HR-2B.4 (2026-08-19) — OnboardingRequirement FKs into Club;
+    // must be wiped before club.deleteMany().
+    c.onboardingRequirement.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),

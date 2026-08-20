@@ -1592,3 +1592,456 @@ export async function getPayrollCompletion(actor: EmployeeOnboardingActor): Prom
   const complete = sin && banking && taxProfile && federalAttestation && provincialAttestation;
   return { sin, banking, taxProfile, federalAttestation, provincialAttestation, bankingDocument, complete };
 }
+
+// ---------------------------------------------------------------------------
+// HR-2B.4 (2026-08-19) — Emergency contact + credentials/documents self-service.
+// ---------------------------------------------------------------------------
+//
+// Emergency contact
+//   * The employee always writes to their OWN primary emergency-contact
+//     row. Upsert semantics: the first save creates the row with
+//     isPrimary=true; subsequent saves update in-place. Additional
+//     non-primary contacts are supported by the canonical model but
+//     the HR-2B.4 employee-facing flow only asks for the primary.
+//
+// Requirement fulfilment
+//   * Uploading a document for a `kind=DOCUMENT_UPLOAD` requirement
+//     writes an EmployeeDocument with `category=requirement.documentCategory`.
+//   * Persisting credential details (with optional expiry + document) for
+//     a `kind=CREDENTIAL_WITH_EXPIRY` requirement writes an
+//     EmployeeCredential with `credentialCode=requirement.code`.
+//   * Confirming a `kind=CONFIRMATION_ONLY` requirement writes an
+//     EmployeeOnboardingAcknowledgement with
+//     `kind=requirement_confirmation:<code>`.
+//
+// Every mutation goes through the standard actor gate + tenant filter.
+// The requirement is loaded server-side by `id` and its clubId is
+// re-verified against the actor's clubId — a hostile client cannot
+// supply a foreign requirement id.
+
+const EMERGENCY_CONTACT_ENTITY = "EmployeeEmergencyContact";
+const CREDENTIAL_ENTITY = "EmployeeCredential";
+const REQUIREMENT_ENTITY = "OnboardingRequirement";
+
+const MAX_CREDENTIAL_DOC_BYTES = 15 * 1024 * 1024;
+const CREDENTIAL_DOC_ALLOWED_MIMES = new Set<string>([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/heif",
+]);
+
+export interface SelfEmergencyContactInput {
+  name: string;
+  relation: string;
+  phone: string;
+  email?: string | null;
+}
+
+/**
+ * Upsert the employee's PRIMARY emergency contact. First save creates
+ * the row (isPrimary=true); subsequent saves update in-place.
+ * Additional non-primary contacts are not created by this flow; HR-2B.4
+ * only asks the employee for the primary.
+ */
+export async function submitSelfEmergencyContact(
+  actor: EmployeeOnboardingActor,
+  input: SelfEmergencyContactInput,
+) {
+  const name = (input.name ?? "").trim();
+  const relation = (input.relation ?? "").trim();
+  const phone = (input.phone ?? "").trim();
+  const email = input.email == null ? null : String(input.email).trim() || null;
+  if (!name) throw new ValidationError([{ path: "name", message: "Please tell us who to contact." }]);
+  if (!relation) throw new ValidationError([{ path: "relation", message: "Please tell us how you know them." }]);
+  if (!phone) throw new ValidationError([{ path: "phone", message: "Please give us a phone number where they can be reached." }]);
+  // Structural phone check — at least 7 digits present.
+  const digits = phone.replace(/\D+/g, "");
+  if (digits.length < 7) {
+    throw new ValidationError([{ path: "phone", message: "That doesn't look like a phone number we can call." }]);
+  }
+  if (name.length > 200 || relation.length > 100) {
+    throw new ValidationError([{ path: "name", message: "Please shorten your response." }]);
+  }
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const existing = await prisma.employeeEmergencyContact.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, isPrimary: true },
+  });
+  let row;
+  if (existing) {
+    row = await prisma.employeeEmergencyContact.update({
+      where: { id: existing.id },
+      data: { name, relation, phone, email },
+    });
+    await audit(null, {
+      action: "hr.emergency.write.update",
+      entityType: EMERGENCY_CONTACT_ENTITY,
+      entityId: row.id,
+      clubId: actor.clubId,
+      before: { hadName: !!existing.name, hadPhone: !!existing.phone, hadEmail: !!existing.email },
+      after: { hadName: !!row.name, hadPhone: !!row.phone, hadEmail: !!row.email, isPrimary: row.isPrimary },
+      meta: {
+        actorSource: "EMPLOYEE",
+        actorEmployeeIdTail: actor.employeeId.slice(-8),
+        onboardingSessionIdTail: actor.sessionId.slice(-8),
+      },
+    });
+    return row;
+  }
+  // Demote any other primary just to keep the invariant clean.
+  await prisma.employeeEmergencyContact.updateMany({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, isPrimary: true },
+    data: { isPrimary: false },
+  });
+  row = await prisma.employeeEmergencyContact.create({
+    data: {
+      clubId: actor.clubId,
+      employeeId: actor.employeeId,
+      name, relation, phone, email,
+      isPrimary: true,
+    },
+  });
+  await audit(null, {
+    action: "hr.emergency.write.update",
+    entityType: EMERGENCY_CONTACT_ENTITY,
+    entityId: row.id,
+    clubId: actor.clubId,
+    after: { hadName: !!row.name, hadPhone: !!row.phone, hadEmail: !!row.email, isPrimary: true },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+    },
+  });
+  return row;
+}
+
+/**
+ * Read the employee's primary emergency contact — returns non-sensitive
+ * fields (name, relation, phone, email masked-safe). Callable during
+ * revisit so the page can show the persisted values.
+ */
+export async function getSelfEmergencyContact(actor: EmployeeOnboardingActor) {
+  const row = await prisma.employeeEmergencyContact.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, isPrimary: true },
+    select: { id: true, name: true, relation: true, phone: true, email: true, isPrimary: true, updatedAt: true },
+  });
+  return row;
+}
+
+// -- Requirement fulfilment --------------------------------------------------
+
+/**
+ * Load a requirement by id and verify it belongs to the actor's Club.
+ * Throws if the id is unknown or cross-tenant.
+ */
+async function loadRequirementForActor(
+  actor: EmployeeOnboardingActor, requirementId: string,
+) {
+  const req = await prisma.onboardingRequirement.findFirst({
+    where: { id: requirementId, clubId: actor.clubId, active: true },
+  });
+  if (!req) throw new NotFoundError(REQUIREMENT_ENTITY, requirementId);
+  return req;
+}
+
+export interface SelfRequirementDocumentInput {
+  requirementId: string;
+  bytes: Buffer | Uint8Array;
+  mimeType: string;
+  displayName?: string | null;
+}
+
+/**
+ * Upload a document to satisfy a DOCUMENT_UPLOAD or
+ * CREDENTIAL_WITH_EXPIRY requirement. Persists the file as an
+ * EmployeeDocument with `category = requirement.documentCategory`
+ * and sensitivity derived from the canonical
+ * `EMPLOYEE_DOCUMENT_SENSITIVE_CATEGORIES` set. Returns the persisted
+ * document row + the requirement + the linked EmployeeCredential row
+ * (if kind=CREDENTIAL_WITH_EXPIRY — upserts one if none exists yet
+ * with credentialCode=requirement.code, so the fulfilment resolver
+ * has a row to key on).
+ */
+export async function uploadSelfRequirementDocument(
+  actor: EmployeeOnboardingActor,
+  input: SelfRequirementDocumentInput,
+) {
+  const mimeType = (input.mimeType ?? "").trim().toLowerCase();
+  if (!CREDENTIAL_DOC_ALLOWED_MIMES.has(mimeType)) {
+    throw new ValidationError([{ path: "mimeType", message: "Please upload a PDF or image (JPG, PNG, or HEIC)." }]);
+  }
+  const bytes = Buffer.isBuffer(input.bytes) ? input.bytes : Buffer.from(input.bytes);
+  if (bytes.length === 0) {
+    throw new ValidationError([{ path: "bytes", message: "The uploaded file is empty." }]);
+  }
+  if (bytes.length > MAX_CREDENTIAL_DOC_BYTES) {
+    throw new ValidationError([{ path: "bytes", message: "File exceeds 15 MB limit." }]);
+  }
+
+  const req = await loadRequirementForActor(actor, input.requirementId);
+  if (req.kind !== "DOCUMENT_UPLOAD" && req.kind !== "CREDENTIAL_WITH_EXPIRY") {
+    throw new ValidationError([{ path: "requirementId", message: "This requirement does not accept an upload." }]);
+  }
+  if (!req.documentCategory) {
+    throw new ValidationError([{ path: "requirementId", message: "This requirement is not configured for a document upload (missing category)." }]);
+  }
+  const category = req.documentCategory;
+  if (!isKnownCategory(category)) {
+    throw new AppError("HR_CATEGORY_ENUM_DRIFT", `requirement.documentCategory=${category} not in canonical enum`, 500, "Server error");
+  }
+  const sensitivity = isSensitiveCategory(category) ? "RESTRICTED" : "STANDARD";
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const storage = await resolveDocumentStorage({ clubId: actor.clubId });
+  const storageKey = `hr/employees/${actor.employeeId}/${category}/${sha256}`;
+  await storage.put({ storageKey, body: bytes, mimeType });
+
+  const created = await prisma.employeeDocument.create({
+    data: {
+      clubId: actor.clubId,
+      employeeId: actor.employeeId,
+      storageKey,
+      contentSha256: sha256,
+      sizeBytes: bytes.length,
+      mimeType,
+      category,
+      sensitivity,
+      displayName: input.displayName ?? null,
+      uploadedByUserId: null,
+    },
+  });
+
+  let credential: { id: string } | null = null;
+  if (req.kind === "CREDENTIAL_WITH_EXPIRY") {
+    // Upsert an EmployeeCredential keyed on (employeeId, credentialCode)
+    // so the fulfilment resolver has something to find and the document
+    // is linked structurally, not just by shared category.
+    const existing = await prisma.employeeCredential.findFirst({
+      where: { employeeId: actor.employeeId, clubId: actor.clubId, credentialCode: req.code },
+    });
+    if (existing) {
+      const upd = await prisma.employeeCredential.update({
+        where: { id: existing.id },
+        data: { documentId: created.id, displayName: req.displayName },
+      });
+      credential = { id: upd.id };
+    } else {
+      const cr = await prisma.employeeCredential.create({
+        data: {
+          clubId: actor.clubId,
+          employeeId: actor.employeeId,
+          credentialCode: req.code,
+          displayName: req.displayName,
+          documentId: created.id,
+        },
+      });
+      credential = { id: cr.id };
+    }
+  }
+
+  await audit(null, {
+    action: "hr.document.upload.create",
+    entityType: DOCUMENT_ENTITY,
+    entityId: created.id,
+    clubId: actor.clubId,
+    after: {
+      id: created.id,
+      category: created.category,
+      sensitivity: created.sensitivity,
+      sizeBytes: created.sizeBytes,
+      contentSha256Prefix: sha256.slice(0, 12),
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+      requirementCode: req.code,
+    },
+  });
+
+  return { document: created, requirement: req, credentialId: credential?.id ?? null };
+}
+
+export interface SelfCredentialDetailsInput {
+  requirementId: string;
+  reference?: string | null;
+  issuedAt?: string | Date | null;
+  expiresAt?: string | Date | null;
+  documentId?: string | null;
+}
+
+/**
+ * Persist credential details (reference number, issued date, expiry
+ * date) for a CREDENTIAL_WITH_EXPIRY requirement. If `documentId` is
+ * given, links the credential to that document (which the employee
+ * previously uploaded via uploadSelfRequirementDocument).
+ */
+export async function submitSelfCredentialDetails(
+  actor: EmployeeOnboardingActor,
+  input: SelfCredentialDetailsInput,
+) {
+  const req = await loadRequirementForActor(actor, input.requirementId);
+  if (req.kind !== "CREDENTIAL_WITH_EXPIRY") {
+    throw new ValidationError([{ path: "requirementId", message: "This requirement does not accept credential details." }]);
+  }
+
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  function parseDate(v: string | Date | null | undefined, path: string): Date | null {
+    if (v == null || v === "") return null;
+    const d = v instanceof Date ? v : new Date(v);
+    if (Number.isNaN(d.getTime())) throw new ValidationError([{ path, message: "not a valid date" }]);
+    return d;
+  }
+  const issuedAt = parseDate(input.issuedAt, "issuedAt");
+  const expiresAt = parseDate(input.expiresAt, "expiresAt");
+  if (req.requireExpiry && !expiresAt) {
+    throw new ValidationError([{ path: "expiresAt", message: "Please provide the certificate's expiry date." }]);
+  }
+
+  // If documentId supplied, ensure it belongs to this employee.
+  if (input.documentId) {
+    const doc = await prisma.employeeDocument.findFirst({
+      where: { id: input.documentId, employeeId: actor.employeeId, clubId: actor.clubId },
+      select: { id: true },
+    });
+    if (!doc) throw new ValidationError([{ path: "documentId", message: "That document does not belong to you." }]);
+  }
+
+  const existing = await prisma.employeeCredential.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, credentialCode: req.code },
+  });
+  let row;
+  if (existing) {
+    row = await prisma.employeeCredential.update({
+      where: { id: existing.id },
+      data: {
+        reference: input.reference ?? existing.reference,
+        issuedAt: issuedAt ?? existing.issuedAt,
+        expiresAt: expiresAt ?? existing.expiresAt,
+        documentId: input.documentId ?? existing.documentId,
+        displayName: req.displayName,
+      },
+    });
+  } else {
+    row = await prisma.employeeCredential.create({
+      data: {
+        clubId: actor.clubId,
+        employeeId: actor.employeeId,
+        credentialCode: req.code,
+        displayName: req.displayName,
+        reference: input.reference ?? null,
+        issuedAt,
+        expiresAt,
+        documentId: input.documentId ?? null,
+      },
+    });
+  }
+
+  await audit(null, {
+    action: "hr.credential.write.update",
+    entityType: CREDENTIAL_ENTITY,
+    entityId: row.id,
+    clubId: actor.clubId,
+    after: {
+      id: row.id,
+      credentialCode: row.credentialCode,
+      hasExpiry: !!row.expiresAt,
+      hasDocument: !!row.documentId,
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+      requirementCode: req.code,
+    },
+  });
+  return row;
+}
+
+/**
+ * Record a CONFIRMATION_ONLY requirement's ack. Writes an
+ * EmployeeOnboardingAcknowledgement with kind
+ * `requirement_confirmation:<code>`. Idempotent — a second call
+ * updates the same row's acknowledgedAt to now (rather than
+ * creating a duplicate).
+ */
+export async function confirmSelfRequirement(
+  actor: EmployeeOnboardingActor,
+  requirementId: string,
+) {
+  const req = await loadRequirementForActor(actor, requirementId);
+  if (req.kind !== "CONFIRMATION_ONLY") {
+    throw new ValidationError([{ path: "requirementId", message: "This requirement is not a confirmation." }]);
+  }
+  const employee = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: { id: true, clubId: true },
+  });
+  if (!employee) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  assertActorTargetsSelf(actor, employee.id);
+  assertActorTargetsOwnClub(actor, employee.clubId);
+
+  const { confirmationAckKind } = await import("./onboarding-requirements");
+  const kind = confirmationAckKind(req.code);
+  const existing = await prisma.employeeOnboardingAcknowledgement.findFirst({
+    where: { sessionId: actor.sessionId, clubId: actor.clubId, kind },
+  });
+  const now = new Date();
+  let row;
+  if (existing) {
+    row = await prisma.employeeOnboardingAcknowledgement.update({
+      where: { id: existing.id },
+      data: { acknowledgedAt: now },
+    });
+  } else {
+    row = await prisma.employeeOnboardingAcknowledgement.create({
+      data: {
+        clubId: actor.clubId,
+        sessionId: actor.sessionId,
+        employeeId: actor.employeeId,
+        kind,
+        actorEmployeeId: actor.employeeId,
+        acknowledgedAt: now,
+      },
+    });
+  }
+  await audit(null, {
+    action: "hr.acknowledgement.create",
+    entityType: ACKNOWLEDGEMENT_ENTITY,
+    entityId: row.id,
+    clubId: actor.clubId,
+    after: { id: row.id, kind: row.kind },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+      requirementCode: req.code,
+    },
+  });
+  return row;
+}

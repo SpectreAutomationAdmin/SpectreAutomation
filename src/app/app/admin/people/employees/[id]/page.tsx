@@ -51,6 +51,9 @@ export default async function EmployeeProfilePage({
   const canReadSin = hasPermission(principal, profile.clubId, "hr:sin:read");
   const canReadBanking = hasPermission(principal, profile.clubId, "hr:banking:read");
   const canReadTax = hasPermission(principal, profile.clubId, "hr:tax:read");
+  // HR-2B.4 (2026-08-19)
+  const canReadEmergency = hasPermission(principal, profile.clubId, "hr:emergency:read");
+  const canReadCredentials = hasPermission(principal, profile.clubId, "hr:credentials:read");
 
   const [
     employmentPeriods,
@@ -103,6 +106,31 @@ export default async function EmployeeProfilePage({
             kind: { in: ["td1_federal_attestation", "td1_provincial_attestation"] },
           },
           select: { kind: true, acknowledgedAt: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  // HR-2B.4 (2026-08-19) — Emergency contact + Credentials rollup for
+  // the admin profile. Both are permission-gated. Emergency-contact
+  // phone/email is HR-sensitive, so we redact structured plaintext
+  // fields when the caller lacks `hr:emergency:read`.
+  const [emergencyContacts, credentials] = await Promise.all([
+    canReadEmergency
+      ? prisma.employeeEmergencyContact.findMany({
+          where: { employeeId: profile.id, clubId: profile.clubId },
+          orderBy: [{ isPrimary: "desc" }, { name: "asc" }],
+          select: { id: true, name: true, relation: true, phone: true, email: true, isPrimary: true, updatedAt: true },
+        })
+      : Promise.resolve([]),
+    canReadCredentials
+      ? prisma.employeeCredential.findMany({
+          where: { employeeId: profile.id, clubId: profile.clubId },
+          orderBy: [{ expiresAt: "asc" }, { credentialCode: "asc" }],
+          select: {
+            id: true, credentialCode: true, displayName: true,
+            issuer: true, reference: true, issuedAt: true, expiresAt: true,
+            documentId: true, updatedAt: true,
+          },
         })
       : Promise.resolve([]),
   ]);
@@ -259,6 +287,27 @@ export default async function EmployeeProfilePage({
           acknowledgedAt: a.acknowledgedAt.toISOString(),
         })),
       }}
+      emergencyContacts={
+        canReadEmergency
+          ? emergencyContacts.map((c) => ({
+              id: c.id, name: c.name, relation: c.relation,
+              phone: c.phone, email: c.email, isPrimary: c.isPrimary,
+              updatedAt: c.updatedAt.toISOString(),
+            }))
+          : null
+      }
+      credentials={
+        canReadCredentials
+          ? credentials.map((c) => ({
+              id: c.id, code: c.credentialCode, displayName: c.displayName,
+              issuer: c.issuer, reference: c.reference,
+              issuedAt: c.issuedAt ? c.issuedAt.toISOString() : null,
+              expiresAt: c.expiresAt ? c.expiresAt.toISOString() : null,
+              documentId: c.documentId,
+              updatedAt: c.updatedAt.toISOString(),
+            }))
+          : null
+      }
       lifecycleControls={
         canLifecycle && deleteEligibility ? (
           <EmployeeLifecycleControls

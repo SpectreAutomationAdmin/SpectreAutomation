@@ -126,6 +126,21 @@ interface Props {
     taxAccessible: boolean;
     td1Attestations: Array<{ kind: string; acknowledgedAt: string }>;
   };
+  /** HR-2B.4 (2026-08-19) — Emergency contact rollup. `null` when the
+   *  caller does not hold `hr:emergency:read`. */
+  emergencyContacts?: Array<{
+    id: string; name: string; relation: string;
+    phone: string; email: string | null; isPrimary: boolean;
+    updatedAt: string;
+  }> | null;
+  /** HR-2B.4 (2026-08-19) — Credentials rollup. `null` when the caller
+   *  does not hold `hr:credentials:read`. */
+  credentials?: Array<{
+    id: string; code: string; displayName: string;
+    issuer: string | null; reference: string | null;
+    issuedAt: string | null; expiresAt: string | null;
+    documentId: string | null; updatedAt: string;
+  }> | null;
   /** HR-2B.3.6 (2026-08-19) — Optional lifecycle controls slot (Delete /
    *  Archive). Rendered inside the profile's admin actions area on the
    *  Overview tab. The parent page decides whether to render — this
@@ -162,7 +177,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, lifecycleControls } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls } = props;
   const [tab, setTab] = useState<TabKey>("overview");
 
   const displayName = employee.preferredName?.trim().length
@@ -357,6 +372,38 @@ export default function EmployeeProfileView(props: Props) {
             </div>
           </div>
 
+          {/* HR-2B.4 (2026-08-19) — Emergency contact rollup. */}
+          {emergencyContacts !== undefined && (
+            <div
+              className="spectre-person-section mt-6"
+              data-testid="employee-emergency-contacts"
+            >
+              <div className="spectre-person-section-head">
+                <h3 className="spectre-person-eyebrow">Emergency contact</h3>
+              </div>
+              {emergencyContacts === null ? (
+                <p className="text-sm text-stone-500">
+                  You don&apos;t have permission to view emergency-contact details.
+                </p>
+              ) : emergencyContacts.length === 0 ? (
+                <p className="text-sm text-stone-500">
+                  No emergency contact on file yet.
+                </p>
+              ) : (
+                <dl className="spectre-person-grid">
+                  {emergencyContacts.filter((c) => c.isPrimary).slice(0, 1).map((c) => (
+                    <div key={c.id} className="contents">
+                      <PersonRow label="Name" value={c.name} />
+                      <PersonRow label="Relationship" value={c.relation} />
+                      <PersonRow label="Phone" value={c.phone} kind="phone" />
+                      <PersonRow label="Email" value={c.email ?? "—"} kind="email" />
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+          )}
+
           {/* HR-2B.3.6 — Delete / Archive controls, parent-supplied. */}
           {lifecycleControls}
         </section>
@@ -490,6 +537,51 @@ export default function EmployeeProfileView(props: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* HR-2B.4 (2026-08-19) — Credentials rollup. */}
+          {credentials !== undefined && (
+            <div
+              className="spectre-person-section mt-6"
+              data-testid="employee-credentials"
+            >
+              <div className="spectre-person-section-head">
+                <h3 className="spectre-person-eyebrow">Credentials</h3>
+              </div>
+              {credentials === null ? (
+                <p className="text-sm text-stone-500">
+                  You don&apos;t have permission to view credentials.
+                </p>
+              ) : credentials.length === 0 ? (
+                <p className="text-sm text-stone-500">No credentials on file yet.</p>
+              ) : (
+                <table className="table-base">
+                  <thead>
+                    <tr><th>Credential</th><th>Reference</th><th>Issued</th><th>Expires</th><th>Document</th></tr>
+                  </thead>
+                  <tbody>
+                    {credentials.map((c) => (
+                      <tr key={c.id} data-testid={`credential-row-${c.code}`}>
+                        <td>
+                          <div className="font-medium text-club-ink">{c.displayName}</div>
+                          <div className="text-xs text-stone-500 font-mono">{c.code}</div>
+                        </td>
+                        <td className="text-xs text-stone-600">{c.reference ?? "—"}</td>
+                        <td className="text-xs text-stone-600">{c.issuedAt ? formatDate(c.issuedAt) : "—"}</td>
+                        <td className="text-xs">
+                          {c.expiresAt ? (
+                            <span className="text-emerald-800">Expires {formatDate(c.expiresAt)}</span>
+                          ) : (
+                            <span className="text-stone-400">—</span>
+                          )}
+                        </td>
+                        <td className="text-xs text-stone-600">{c.documentId ? "Attached" : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </section>
       )}
 
