@@ -168,3 +168,14 @@ describe("HR-2B.5 · First-login tour (§39-40, §48)", () => {
     }
   });
 });
+
+describe("HR-2B.5 · Employee Portal brand shielding (feedback_member_brand_shielding)", () => {
+  const login = readFileSync(resolve(process.cwd(), "src/app/employee/login/page.tsx"), "utf8");
+  it("never emits the 'Spectre' wordmark on the login page", () => {
+    // The fallback path when running on the platform host must use a
+    // neutral label — never "Spectre".
+    expect(login).toMatch(/branding\.mode === "club" && branding\.wordmark/);
+    expect(login).toMatch(/\? branding\.wordmark[\s\S]{0,40}: "Your Club"/);
+    expect(login).not.toMatch(/= *"Spectre"/);
+  });
+});

@@ -26,7 +26,14 @@ export default async function EmployeePortalLogin({
 
   const { err } = await searchParams;
   const branding = await getActiveBranding();
-  const clubName = branding.wordmark ?? "Your Club";
+  // §7 + [[feedback_member_brand_shielding]]: the Employee Portal
+  // NEVER shows the "Spectre" wordmark. When the host resolves to
+  // the platform (e.g. staging.spectreautomation.com), fall back to
+  // a neutral label — real clubs deploy at their own domain where
+  // `branding.mode === "club"` and the Club name surfaces.
+  const clubName = branding.mode === "club" && branding.wordmark
+    ? branding.wordmark
+    : "Your Club";
 
   return (
     <main className="min-h-screen bg-stone-50 flex items-center justify-center px-4 py-8">
