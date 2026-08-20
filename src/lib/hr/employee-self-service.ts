@@ -428,6 +428,28 @@ async function upsertAboutYouStepAck(
 // this ack row keeps the continuation-resolver path uniform with
 // every other completed step (single "did the employee finish?"
 // predicate + single sessionId scope).
+// HR-2B.5 §16, §22 (2026-08-19) — Employee-facing read of their own
+// current compensation for the Review page.
+//
+// This is the employee looking at their OWN offer. Admin-facing reads
+// use `hr:compensation:read` (Principal-gated); this actor-scoped read
+// stays within the employee's tenant boundary. Returns the currently-
+// active EmployeeCompensation row or null when none has been set.
+export async function getSelfCurrentCompensation(
+  actor: EmployeeOnboardingActor,
+): Promise<
+  | { id: string; cadence: string; rate: string; currency: string | null; effectiveFrom: Date }
+  | null
+> {
+  const row = await prisma.employeeCompensation.findFirst({
+    where: { employeeId: actor.employeeId, clubId: actor.clubId, effectiveTo: null },
+    orderBy: { effectiveFrom: "desc" },
+    select: { id: true, cadence: true, rate: true, currency: true, effectiveFrom: true },
+  });
+  if (!row) return null;
+  return { ...row, rate: row.rate.toString() };
+}
+
 export async function acknowledgeSelfPortalPassword(
   actor: EmployeeOnboardingActor,
 ): Promise<void> {

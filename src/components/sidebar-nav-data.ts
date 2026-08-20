@@ -239,3 +239,18 @@ export const MEMBER_NAV: NavItem[] = [
   { href: "/app/member/events", label: "Events" },
   { href: "/app/member/tournaments", label: "Tournaments" },
 ];
+
+// ---------- Employee Portal nav (HR-2B.5 §32) ----------
+//
+// Permanent Employee Portal. Not administrative — an employee
+// cannot see admin, finance, mission-control, or configuration
+// surfaces from here. Route root is `/employee/**` and is guarded
+// by the spectre_employee_session cookie (see slice 6).
+export const EMPLOYEE_NAV: NavItem[] = [
+  { href: "/employee", label: "Home" },
+  { href: "/employee/pay", label: "Pay" },
+  { href: "/employee/schedule", label: "Schedule" },
+  { href: "/employee/availability", label: "Availability" },
+  { href: "/employee/documents", label: "Documents" },
+  { href: "/employee/profile", label: "Profile" },
+];

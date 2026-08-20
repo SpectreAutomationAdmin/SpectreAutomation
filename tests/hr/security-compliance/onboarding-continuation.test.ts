@@ -283,9 +283,14 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
 
   // ==== terminal state routing ==========================================
 
-  it("SUBMITTED session → Payroll / complete (bypass resume flow)", async () => {
+  // HR-2B.5 (2026-08-19) — terminal-state routing updated (§31).
+  //   SUBMITTED / APPROVED / REJECTED → /hr/onboarding/complete
+  //     (the new post-submit terminal + portal handoff page).
+  //   REVOKED → /hr/onboarding/expired (revoked sessions have no
+  //     further legitimate destination — the terminal page assumes a
+  //     completed onboarding).
+  it("SUBMITTED session → /hr/onboarding/complete (HR-2B.5 post-submit handoff)", async () => {
     const { actor, clubAdmin } = await actorForFixture("Submitted");
-    // Advance session to IN_PROGRESS then SUBMITTED via staff path.
     await prisma.employeeOnboardingSession.update({
       where: { id: actor.sessionId },
       data: { state: "IN_PROGRESS" },
@@ -294,13 +299,13 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
       actorSource: "EMPLOYEE",
       actorEmployeeId: actor.employeeId,
     });
-    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.payrollComplete);
+    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.submitted);
   });
 
-  it("REVOKED session → Payroll / complete (bypass — no resume for revoked)", async () => {
+  it("REVOKED session → expired (HR-2B.5 — revoked no longer routes to post-submit)", async () => {
     const { actor, clubAdmin } = await actorForFixture("Revoked");
     await transitionSession(clubAdmin, actor.sessionId, "REVOKED", { actorSource: "STAFF" });
-    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.payrollComplete);
+    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.expired);
   });
 
   it("nonexistent session (defence in depth) → expired", async () => {

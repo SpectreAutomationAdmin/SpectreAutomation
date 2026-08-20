@@ -106,8 +106,12 @@ export async function resolveOnboardingContinuation(
   });
   if (!session) return URLS.expired;
   if (!(RESUMABLE_ONBOARDING_STATES as readonly string[]).includes(session.state)) {
-    // SUBMITTED / APPROVED / REJECTED / REVOKED — bypass resume flow.
-    return URLS.payrollComplete;
+    // SUBMITTED / APPROVED / REJECTED — bypass resume flow, land the
+    // employee on the post-submit handoff (HR-2B.5 §31). REVOKED
+    // sessions can't do anything useful and are routed the same
+    // way — the terminal page detects state and redirects safely.
+    if (session.state === "REVOKED") return URLS.expired;
+    return URLS.submitted;
   }
 
   // 2. Read every completion signal in parallel.
