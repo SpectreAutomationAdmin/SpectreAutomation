@@ -25,11 +25,14 @@ describe("HR-2B.5 · Employee Portal shell + routes", () => {
   const documents = src("src/app/employee/(authed)/documents/page.tsx");
   const profile = src("src/app/employee/(authed)/profile/page.tsx");
 
-  it("EMPLOYEE_NAV covers Home / Pay / Schedule / Availability / Documents / Profile", () => {
-    for (const label of ["Home", "Pay", "Schedule", "Availability", "Documents", "Profile"]) {
+  it("EMPLOYEE_NAV covers Home / Pay / Schedule / Availability / Safety & Training / Documents / Profile", () => {
+    // HR-2C §5 added Safety & Training and refined ordering.
+    for (const label of ["Home", "Pay", "Schedule", "Availability", "Safety & Training", "Documents", "Profile"]) {
       expect(nav).toContain(`label: "${label}"`);
     }
-    expect(nav).toMatch(/EMPLOYEE_NAV: NavItem\[\]/);
+    // HR-2C widened the exported type to `Array<NavItem & { tourTarget?: string }>`
+    // to carry the stable coach-mark anchor slug.
+    expect(nav).toMatch(/EMPLOYEE_NAV: Array<NavItem & \{ tourTarget\?: string \}>/);
   });
 
   it("each portal route exists as a real page (no coming-soon copy)", () => {

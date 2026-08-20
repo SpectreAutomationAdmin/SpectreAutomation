@@ -1,70 +1,110 @@
 "use client";
 
 // HR-2B.5 §39-40 (2026-08-19) — First-login guided tour.
+// HR-2C §6-9, §45-46 (2026-08-20) — Rebuilt as anchored coach-marks.
 //
-// Restrained coach marks (not a blocking multi-step modal per §39).
-// Renders NULL when the employee has already dismissed / completed
-// the tour; otherwise walks them through Pay / Schedule / Availability
-// / Documents / Profile with Next / Back / Skip / Finish.
+// Each step now attaches to the actual UI element it describes (via
+// `data-tour-target` or an existing `data-testid`), instead of the
+// prior detached bottom-right modal. The Welcome step anchors to the
+// portal hero region so the header stays visible.
 //
-// Persistence: on Finish or Skip, POSTs to /api/employee/tour-completed
-// which sets Employee.portalTourCompletedAt so subsequent logins do
-// not replay the tour. Manual replay via /employee/help/tour is a
-// future affordance (§40).
+// New step: Safety & Training (§45).
+// Replay: honoured by the `openOnMount` prop — when true, the tour
+// re-launches regardless of the persisted `portalTourCompletedAt`
+// state. See `TourReplayButton` for the Help affordance.
+//
+// Persistence unchanged (§40): Finish / Skip POST to
+// /api/employee/tour-completed which sets Employee.portalTourCompletedAt.
+// Replay never resets that timestamp — it simply re-mounts the tour.
 
 import { useEffect, useState } from "react";
+import CoachMark, { type CoachMarkSide } from "./CoachMark";
 
-const STEPS: Array<{ title: string; body: string; targetTestId?: string }> = [
+interface Step {
+  title: string;
+  body: string;
+  /** CSS selector for the anchor. Preferred: `[data-tour-target="…"]`.
+   *  Falls back to the existing `[data-testid="portal-nav-…"]` on the
+   *  sidebar. */
+  targetSelector: string;
+  preferredSide?: CoachMarkSide;
+}
+
+const STEPS: Step[] = [
   {
     title: "Welcome to your employee portal.",
-    body: "Take a quick look at what lives here — you can skip anytime and come back to it later.",
-  },
-  {
-    title: "Pay",
-    body: "This is where you'll find your pay statements and payroll information.",
-    targetTestId: "portal-nav-pay",
+    body:
+      "Take a quick look at what lives here — you can skip anytime and come back to it later from the Help menu.",
+    targetSelector: '[data-testid="portal-hero"]',
+    preferredSide: "bottom",
   },
   {
     title: "Schedule",
-    body: "Your work schedule will appear here.",
-    targetTestId: "portal-nav-schedule",
+    body: "Your work schedule and upcoming shifts will appear here.",
+    targetSelector: '[data-tour-target="schedule"], [data-testid="portal-nav-schedule"]',
+    preferredSide: "right",
   },
   {
     title: "Availability",
     body: "Use Availability to let the Club know when you're available to work.",
-    targetTestId: "portal-nav-availability",
+    targetSelector: '[data-tour-target="availability"], [data-testid="portal-nav-availability"]',
+    preferredSide: "right",
+  },
+  {
+    title: "Pay",
+    body: "This is where you'll find your pay statements and payroll information.",
+    targetSelector: '[data-tour-target="pay"], [data-testid="portal-nav-pay"]',
+    preferredSide: "right",
+  },
+  {
+    title: "Safety & Training",
+    body:
+      "Complete the Club's required training and safety courses here.",
+    targetSelector: '[data-tour-target="training"], [data-testid="portal-nav-safety-&-training"]',
+    preferredSide: "right",
   },
   {
     title: "Documents",
     body: "Your employee documents and certifications live here.",
-    targetTestId: "portal-nav-documents",
+    targetSelector: '[data-tour-target="documents"], [data-testid="portal-nav-documents"]',
+    preferredSide: "right",
   },
   {
     title: "Profile",
-    body: "Review your employee information and keep your contact details current.",
-    targetTestId: "portal-nav-profile",
+    body:
+      "Review your employee information and keep your contact details current.",
+    targetSelector: '[data-tour-target="profile"], [data-testid="portal-nav-profile"]',
+    preferredSide: "right",
   },
 ];
 
 interface Props {
-  /** If true, the tour has already been completed / skipped — do not
-   *  render. The server has this info because Employee.portalTourCompletedAt
-   *  is set. */
+  /** True when Employee.portalTourCompletedAt is set (from the
+   *  server). Suppresses the initial launch unless `openOnMount` is
+   *  also true. */
   alreadyDone: boolean;
+  /** Force the tour to render immediately even when alreadyDone.
+   *  Used by the "Take the portal tour" replay affordance. Never
+   *  resets the timestamp — replay is just a re-mount. */
+  openOnMount?: boolean;
 }
 
-export default function EmployeeTourOnFirstLogin({ alreadyDone }: Props) {
+export default function EmployeeTourOnFirstLogin({
+  alreadyDone,
+  openOnMount = false,
+}: Props) {
   const [step, setStep] = useState(0);
-  const [dismissed, setDismissed] = useState(alreadyDone);
+  const [dismissed, setDismissed] = useState(alreadyDone && !openOnMount);
 
   useEffect(() => {
-    if (alreadyDone) setDismissed(true);
-  }, [alreadyDone]);
+    if (openOnMount) {
+      setDismissed(false);
+      setStep(0);
+    }
+  }, [openOnMount]);
 
   async function complete(finish: boolean) {
     setDismissed(true);
-    // Best-effort record. If the fetch fails, the worst-case is the
-    // tour replays on next login — no data corruption.
     try {
       await fetch("/api/employee/tour-completed", {
         method: "POST",
@@ -79,13 +119,20 @@ export default function EmployeeTourOnFirstLogin({ alreadyDone }: Props) {
   if (dismissed) return null;
   const s = STEPS[step]!;
   const isLast = step === STEPS.length - 1;
+  const isFirst = step === 0;
 
   return (
-    <div
-      role="dialog"
-      aria-label="Portal tour"
-      className="fixed bottom-6 right-6 z-40 w-[min(360px,90vw)] rounded-lg border border-stone-200 bg-white shadow-lg"
-      data-testid="portal-tour"
+    <CoachMark
+      targetSelector={s.targetSelector}
+      preferredSide={s.preferredSide ?? "right"}
+      testId="portal-tour"
+      onTargetMissing={() => {
+        // Anchor missing (e.g. Safety & Training on a viewport where
+        // the sidebar is collapsed). Advance to the next step so the
+        // tour keeps moving.
+        if (isLast) void complete(true);
+        else setStep((n) => n + 1);
+      }}
     >
       <div className="px-5 py-4 border-b border-stone-100">
         <div className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
@@ -96,7 +143,9 @@ export default function EmployeeTourOnFirstLogin({ alreadyDone }: Props) {
         </h2>
       </div>
       <div className="px-5 py-4">
-        <p className="text-sm text-stone-700 leading-relaxed">{s.body}</p>
+        <p className="text-sm text-stone-700 leading-relaxed" data-testid="portal-tour-body">
+          {s.body}
+        </p>
       </div>
       <div className="px-5 py-3 border-t border-stone-100 flex items-center justify-between">
         <button
@@ -111,7 +160,7 @@ export default function EmployeeTourOnFirstLogin({ alreadyDone }: Props) {
           <button
             type="button"
             onClick={() => setStep((n) => Math.max(0, n - 1))}
-            disabled={step === 0}
+            disabled={isFirst}
             className="rounded-md border border-stone-200 px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
             data-testid="portal-tour-back"
           >
@@ -138,6 +187,6 @@ export default function EmployeeTourOnFirstLogin({ alreadyDone }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </CoachMark>
   );
 }

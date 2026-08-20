@@ -1,11 +1,10 @@
 // HR-2B.5 §32 — Employee Portal top bar.
+// HR-2C §9 (2026-08-20) — adds the Help menu with "Take the portal tour" replay.
 //
-// Shows the employee's display name + employee number and a Sign Out
-// affordance (posts to /employee/logout, slice 6). Deliberately spare
-// — the portal is workflow-oriented; the top-right doesn't need
-// dropdowns for MFA/account switching etc.
+// Shows the employee's display name + employee number, a Help affordance
+// (single item today — restrained; §9 explicit), and a Sign Out button.
 
-import Link from "next/link";
+import EmployeePortalHelpMenu from "./EmployeePortalHelpMenu";
 
 export default function EmployeePortalTopBar({
   displayName,
@@ -24,6 +23,7 @@ export default function EmployeePortalTopBar({
             {employeeNumber}
           </div>
         </div>
+        <EmployeePortalHelpMenu />
         <form action="/employee/logout" method="post">
           <button
             type="submit"

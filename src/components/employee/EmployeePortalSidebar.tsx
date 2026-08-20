@@ -31,6 +31,7 @@ export default function EmployeePortalSidebar({ clubName }: { clubName: string }
           const active = item.href === "/employee"
             ? pathname === "/employee"
             : pathname === item.href || pathname.startsWith(item.href + "/");
+          const testid = `portal-nav-${item.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
           return (
             <Link
               key={item.href}
@@ -41,7 +42,11 @@ export default function EmployeePortalSidebar({ clubName }: { clubName: string }
                   ? "bg-club-green-50 text-club-green-800 font-medium"
                   : "text-stone-600 hover:bg-stone-50 hover:text-club-ink",
               )}
-              data-testid={`portal-nav-${item.label.toLowerCase()}`}
+              data-testid={testid}
+              // HR-2C §8 — Stable tour anchor. Prefer this over
+              // `data-testid` for CoachMark selectors so testid rewrites
+              // don't break the tour.
+              data-tour-target={item.tourTarget}
             >
               {item.label}
             </Link>
