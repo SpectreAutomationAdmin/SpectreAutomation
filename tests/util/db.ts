@@ -411,6 +411,8 @@ export async function resetDb() {
     // HR-2B.4 (2026-08-19) — OnboardingRequirement FKs into Club;
     // must be wiped before club.deleteMany().
     c.onboardingRequirement.deleteMany(),
+    // HR-2C (2026-08-20) — ClubMedia FKs into Club.
+    c.clubMedia.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),

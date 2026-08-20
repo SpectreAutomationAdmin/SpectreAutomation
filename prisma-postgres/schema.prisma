@@ -455,6 +455,7 @@ model Club {
   employeeOnboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
   employeePortalCredentials          EmployeePortalCredential[]
   employeePortalPasswordResets       EmployeePortalPasswordReset[]
+  media                              ClubMedia[]
 }
 
 // ---------------------------------------------------------------------
@@ -10764,4 +10765,40 @@ model EmployeePortalPasswordReset {
   createdAt  DateTime  @default(now())
 
   @@index([clubId, employeeId])
+}
+
+// ClubMedia — HR-2C (2026-08-20).
+//
+// Canonical per-Club media store for tenant-owned assets like the
+// Employee Portal hero photograph. One row per (clubId, category)
+// — replacing the row rotates the asset. Bytes live in the canonical
+// document-storage adapter (`resolveDocumentStorage({clubId})`) under
+// key `clubs/{clubId}/media/{sha256}` and are streamed back through
+// a same-origin proxy route (never a signed URL) so tenant isolation
+// stays end-to-end.
+//
+// Categories (validated in-service, not enum-constrained here):
+//   employee_portal_hero  — the Club-configurable photographic
+//                            header rendered on Employee Portal Home.
+//
+// Additive-only model — no back-fill required. Absence of a row is
+// treated as "no asset set" and the surface renders its own branded
+// fallback based on Club.primaryColor.
+model ClubMedia {
+  id               String   @id @default(cuid())
+  clubId           String
+  club             Club     @relation(fields: [clubId], references: [id])
+  // "employee_portal_hero" | future categories. Service-validated.
+  category         String
+  // Content-addressed storage key under clubs/{clubId}/media/{sha256}.
+  storageKey       String
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  displayName      String?
+  uploadedByUserId String?
+  uploadedAt       DateTime @default(now())
+
+  @@unique([clubId, category])
+  @@index([clubId])
 }

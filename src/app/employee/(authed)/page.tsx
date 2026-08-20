@@ -1,4 +1,10 @@
 // HR-2B.5 §33 (2026-08-19) — Employee Portal Home.
+// HR-2C §1-4 (2026-08-20) — Adds the Club-configurable photographic
+// hero header. When the Club has uploaded a ClubMedia row for
+// category=`employee_portal_hero` it renders through the same-origin
+// proxy route; otherwise a branded gradient fallback derived from
+// Club.primaryColor takes its place. Never emits the "Spectre"
+// wordmark [[feedback_member_brand_shielding]].
 //
 // Real, useful information that already exists. No fake widgets, no
 // developer-facing copy. Every value comes from a database read
@@ -8,6 +14,8 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstLogin";
+import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
+import { getClubMedia } from "@/lib/club/media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,19 +44,26 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const employee = await prisma.employee.findFirst({
-    where: { id: principal.employeeId, clubId: principal.clubId },
-    include: {
-      department: { select: { name: true } },
-      position: { select: { name: true } },
-      manager: { select: { firstName: true, lastName: true, preferredName: true } },
-      onboardingSessions: {
-        orderBy: { startedAt: "desc" },
-        take: 1,
-        select: { state: true, submittedAt: true },
+  const [employee, heroMedia, club] = await Promise.all([
+    prisma.employee.findFirst({
+      where: { id: principal.employeeId, clubId: principal.clubId },
+      include: {
+        department: { select: { name: true } },
+        position: { select: { name: true } },
+        manager: { select: { firstName: true, lastName: true, preferredName: true } },
+        onboardingSessions: {
+          orderBy: { startedAt: "desc" },
+          take: 1,
+          select: { state: true, submittedAt: true },
+        },
       },
-    },
-  });
+    }),
+    getClubMedia(principal.clubId, "employee_portal_hero"),
+    prisma.club.findFirst({
+      where: { id: principal.clubId },
+      select: { primaryColor: true },
+    }),
+  ]);
   if (!employee) redirect("/employee/login");
 
   const displayName = employee.preferredName?.trim().length
@@ -65,6 +80,15 @@ export default async function EmployeePortalHome() {
   return (
     <div className="space-y-8" data-testid="portal-home">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
+
+      <EmployeePortalHero
+        clubId={principal.clubId}
+        version={heroMedia?.sha256.slice(0, 12) ?? null}
+        hasImage={heroMedia !== null}
+        primaryColor={club?.primaryColor ?? null}
+        greetingName={displayName ?? "there"}
+        positionName={employee.position?.name ?? null}
+      />
 
       <header>
         <h1 className="font-serif text-3xl leading-tight text-club-ink">

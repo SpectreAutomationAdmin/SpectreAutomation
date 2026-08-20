@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { getActiveClubId } from "@/lib/active-club";
 import { ClubProfileForm, type SaveResult } from "./settings-client";
+import HeroImageUploader from "./HeroImageUploader";
+import { getClubMedia } from "@/lib/club/media";
 import { IconArrowRight } from "@/components/spectre/icons";
 
 // -----------------------------------------------------------------------------
@@ -71,7 +73,10 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
-  const club = await prisma.club.findUnique({ where: { id: clubId } });
+  const [club, heroMedia] = await Promise.all([
+    prisma.club.findUnique({ where: { id: clubId } }),
+    getClubMedia(clubId, "employee_portal_hero"),
+  ]);
   if (!club) redirect("/app/admin");
 
   return (
@@ -176,6 +181,30 @@ export default async function SettingsPage() {
             help="When enabled, the Spectre wordmark is hidden on this club's custom hostnames. Administrators still see it on the platform domain."
           />
         </ClubProfileForm>
+      </section>
+
+      {/* =========================================================
+          Section 2 — Employee Portal branding (HR-2C §1-4)
+          Photographic hero header rendered on Employee Portal Home.
+          Uploads through the canonical `/api/clubs/[id]/employee-portal-hero`
+          endpoint, which delegates to `setClubMedia` (permission-gated
+          + audited).
+         ========================================================= */}
+      <SectionHeader
+        eyebrow="Section 2"
+        title="Employee Portal branding"
+        subtitle="Photograph shown at the top of your team's Employee Portal Home. Choose an image that says 'your Club' at a glance — course, grounds, dining room, or exterior. When empty, a branded gradient is shown."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+      >
+        <HeroImageUploader
+          clubId={club.id}
+          initiallyHasImage={heroMedia !== null}
+          initialVersion={heroMedia?.sha256.slice(0, 12) ?? null}
+          primaryColor={club.primaryColor ?? "#2f5832"}
+        />
       </section>
 
       {/* =========================================================
