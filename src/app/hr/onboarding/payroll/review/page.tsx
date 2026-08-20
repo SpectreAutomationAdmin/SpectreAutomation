@@ -1,8 +1,12 @@
 // HR-2B.3 (2026-08-19) — Payroll · Review step.
+// HR-2B.5 blocker fix (2026-08-20) — the section-summary "Continue"
+// affordance now routes through /hr/onboarding/session (canonical
+// continuation), replacing the prior "Complete Payroll" → dead-end
+// hard-coded link.
 //
 // Read-only summary of the four payroll sub-sections. Renders masked
 // helpers ONLY (no plaintext reveal), a "Change" link per sub-section,
-// and a "Complete Payroll" button gated on the canonical completion
+// and a "Continue" button gated on the canonical completion
 // state. No new persistence — completion is derived from the row set.
 
 import { redirect } from "next/navigation";
@@ -188,12 +192,19 @@ export default async function PayrollReviewStep() {
           &larr; Back
         </Link>
         {completion.complete ? (
+          // HR-2B.5 blocker fix (2026-08-20) — route through the
+          // canonical continuation resolver (via /session) instead of
+          // hard-coding /payroll/complete, which is the obsolete
+          // HR-2B.3 phase-boundary dead-end that stranded the founder
+          // on staging. `/session` re-reads persistent state and
+          // returns the true next incomplete step (Emergency in the
+          // normal HR-2B.4+ flow).
           <Link
-            href="/hr/onboarding/payroll/complete"
+            href="/hr/onboarding/session"
             data-testid="payroll-complete"
             className="rounded-md bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-700 focus:ring-offset-2"
           >
-            Complete Payroll
+            Continue
           </Link>
         ) : (
           <button
@@ -202,7 +213,7 @@ export default async function PayrollReviewStep() {
             data-testid="payroll-complete"
             className="rounded-md bg-stone-200 px-5 py-2.5 text-sm font-medium text-stone-500 cursor-not-allowed"
           >
-            Complete Payroll
+            Continue
           </button>
         )}
       </div>

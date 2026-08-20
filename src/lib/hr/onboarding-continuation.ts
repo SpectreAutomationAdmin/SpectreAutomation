@@ -58,6 +58,10 @@ const URLS = {
   payrollTd1Federal: "/hr/onboarding/payroll/td1-federal",
   payrollTd1Provincial: "/hr/onboarding/payroll/td1-provincial",
   payrollReview: "/hr/onboarding/payroll/review",
+  // HR-2B.5 blocker fix (2026-08-20) — this route is now a pure
+  // forward-router (see /hr/onboarding/payroll/complete/page.tsx). The
+  // resolver NEVER emits this URL; kept only so a stale bookmark
+  // resolves through the session entrypoint.
   payrollComplete: "/hr/onboarding/payroll/complete",
   // HR-2B.4 (2026-08-19) — post-payroll sections
   emergency: "/hr/onboarding/emergency",
@@ -87,8 +91,11 @@ const URLS = {
  *   - `URLS.aboutYouComplete` when About You is done but payroll
  *     is not yet started (kept for continuity with the existing
  *     hand-off screen that has the "Continue to payroll" CTA)
- *   - `URLS.payrollComplete` when payroll is complete OR the
- *     session is in a terminal state (SUBMITTED/APPROVED/REJECTED)
+ *   - `URLS.submitted` (`/hr/onboarding/complete`) when the session
+ *     is in a terminal state (SUBMITTED/APPROVED/REJECTED). The old
+ *     HR-2B.3 `URLS.payrollComplete` boundary was RETIRED in the
+ *     HR-2B.5 blocker fix (2026-08-20) after it stranded the founder
+ *     on staging with a disabled "Continue (available soon)" button.
  *   - `URLS.expired` when the session row cannot be resolved
  *     (should not happen for a valid actor, but defensive)
  */

@@ -29,6 +29,7 @@ import {
   TD1_PROVINCIAL_ADDITIONAL_CLAIMS,
 } from "@/lib/hr/td1-forms";
 import { resolveClubPayrollProvince } from "@/lib/hr/club-payroll-province";
+import { resolveOnboardingContinuation } from "@/lib/hr/onboarding-continuation";
 import { isAppError } from "@/lib/errors";
 
 // Short-lived cookie carrying the just-entered TD1 federal claim total
@@ -336,5 +337,16 @@ export async function saveProvincialTd1Action(formData: FormData) {
     throw err;
   }
   revalidatePath("/hr/onboarding/payroll");
-  redirect("/hr/onboarding/payroll/review");
+  // HR-2B.5 blocker fix (2026-08-20) — route through the canonical
+  // continuation resolver instead of hard-coding /payroll/review.
+  // In the normal HR-2B.4+ flow, Payroll completion means the next
+  // stop is /emergency; keeping this as a hardcoded /payroll/review
+  // (which itself linked to the obsolete /payroll/complete dead-end)
+  // was what stranded the founder mid-onboarding on staging.
+  const next = await resolveOnboardingContinuation({
+    sessionId: actor.sessionId,
+    employeeId: actor.employeeId,
+    clubId: actor.clubId,
+  });
+  redirect(next);
 }
