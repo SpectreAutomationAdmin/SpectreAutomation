@@ -227,6 +227,18 @@ export const PERMISSIONS = {
   // service layer additionally requires `system:super_admin` for any
   // write against a global (clubId=null) question row.
   "hr:onboarding_questions:write": { name: "Write onboarding question catalogue",  category: "HR" },
+  // HR-2C (2026-08-20) — Safety & Training compliance. Admin surfaces
+  // consult `read`; DRAFT authoring uses `write`; version-freezing +
+  // retirement use `publish`; explicit per-employee assignments use
+  // `assign`. Compliance dashboard uses the read-side capability plus
+  // `compliance:read`. The Employee Portal actor is NOT a Principal
+  // and never consults these — its own service branch checks tenant
+  // + own-identity discipline directly.
+  "hr:training:read":              { name: "Read training courses (admin catalogue)", category: "HR" },
+  "hr:training:write":             { name: "Create / edit DRAFT training courses",   category: "HR" },
+  "hr:training:publish":           { name: "Publish / retire training course versions", category: "HR" },
+  "hr:training:assign":            { name: "Explicitly assign a training course to an employee", category: "HR" },
+  "hr:training:compliance:read":   { name: "Read employee training compliance status",  category: "HR" },
 
   // Member portal (granted to MEMBER role)
   "self:account:read": { name: "View own member account", category: "MEMBER_PORTAL" },
@@ -343,6 +355,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:emergency:read", "hr:emergency:write",
     "hr:onboarding:read", "hr:onboarding:invite", "hr:onboarding:approve", "hr:onboarding:revoke",
     "hr:onboarding_questions:read", "hr:onboarding_questions:write",
+    // HR-2C: full Safety & Training authority.
+    "hr:training:read", "hr:training:write", "hr:training:publish",
+    "hr:training:assign", "hr:training:compliance:read",
   ],
 
   GENERAL_MANAGER: [
@@ -393,6 +408,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:credentials:read",
     "hr:emergency:read",
     "hr:onboarding:read", "hr:onboarding:approve",
+    // HR-2C: GM can read the training catalogue + compliance status,
+    // and assign remedial courses to specific employees, but does
+    // not author or publish course content (that stays with the
+    // course-writing role, typically CLUB_ADMIN).
+    "hr:training:read", "hr:training:assign", "hr:training:compliance:read",
   ],
 
   CONTROLLER: [
@@ -592,6 +612,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:emergency:read",
     "hr:onboarding:read",
     "hr:onboarding_questions:read",
+    // HR-2C: read + compliance so auditors can verify training
+    // completion evidence. No write / publish / assign for auditors.
+    "hr:training:read", "hr:training:compliance:read",
   ],
 
   BOARD_READ_ONLY: [

@@ -413,6 +413,20 @@ export async function resetDb() {
     c.onboardingRequirement.deleteMany(),
     // HR-2C (2026-08-20) — ClubMedia FKs into Club.
     c.clubMedia.deleteMany(),
+    // HR-2C (2026-08-20) — Training tables. Order matters: leaf rows
+    // (completion / attempt-response / progress) before their parents
+    // (attempt / question), then course-version, then course. Every
+    // table FKs into Club (RESTRICT) so all must clear before
+    // c.club.deleteMany().
+    c.trainingCompletion.deleteMany(),
+    c.trainingQuestionResponse.deleteMany(),
+    c.trainingAttempt.deleteMany(),
+    c.trainingProgress.deleteMany(),
+    c.trainingAssignment.deleteMany(),
+    c.trainingAnswerOption.deleteMany(),
+    c.trainingQuestion.deleteMany(),
+    c.trainingCourseVersion.deleteMany(),
+    c.trainingCourse.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),

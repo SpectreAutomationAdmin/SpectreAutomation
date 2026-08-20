@@ -456,6 +456,11 @@ model Club {
   employeePortalCredentials          EmployeePortalCredential[]
   employeePortalPasswordResets       EmployeePortalPasswordReset[]
   media                              ClubMedia[]
+  trainingCourses                    TrainingCourse[]
+  trainingAssignments                TrainingAssignment[]
+  trainingProgress                   TrainingProgress[]
+  trainingAttempts                   TrainingAttempt[]
+  trainingCompletions                TrainingCompletion[]
 }
 
 // ---------------------------------------------------------------------
@@ -3338,6 +3343,11 @@ model Employee {
   portalCredential           EmployeePortalCredential?
   portalPasswordResets       EmployeePortalPasswordReset[]
   portalTourCompletedAt      DateTime?
+  // HR-2C — Safety & Training compliance.
+  trainingAssignments        TrainingAssignment[]
+  trainingProgress           TrainingProgress[]
+  trainingAttempts           TrainingAttempt[]
+  trainingCompletions        TrainingCompletion[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -10801,4 +10811,230 @@ model ClubMedia {
 
   @@unique([clubId, category])
   @@index([clubId])
+}
+
+// ============================================================
+// HR-2C — Safety & Training compliance (2026-08-20)
+// ============================================================
+//
+// Nine models. Every write goes through canonical services in
+// `src/lib/hr/training/**` — no direct Prisma writes from routes.
+//
+// Ownership: `clubId` on every table + tenantWhere / assertTenantOwned
+// discipline. Applicability filters (Department / Position / explicit
+// assignment) live on the version row so republishing a course can
+// change who it applies to without mutating history.
+//
+// Versioning: TrainingCourse is the catalogue entry; every material
+// change is a NEW TrainingCourseVersion row. A completion always
+// carries `courseVersionId` so historical proof survives republishes.
+
+// Top-level catalogue entry. `currentVersionId` points at the latest
+// PUBLISHED version (nullable while the course only has DRAFT versions).
+model TrainingCourse {
+  id               String    @id @default(cuid())
+  clubId           String
+  club             Club      @relation(fields: [clubId], references: [id])
+  code             String
+  title            String
+  category         String
+  description      String?
+  retiredAt        DateTime?
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  currentVersionId String?
+  versions         TrainingCourseVersion[]
+
+  assignments      TrainingAssignment[]
+  completions      TrainingCompletion[]
+
+  @@unique([clubId, code])
+  @@index([clubId])
+  @@index([clubId, category])
+}
+
+// Immutable content snapshot. Every material edit publishes a new
+// version rather than rewriting an existing one, so previously
+// certified employees remain certified against the exact content
+// they were tested on.
+model TrainingCourseVersion {
+  id                    String    @id @default(cuid())
+  courseId              String
+  course                TrainingCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  version               Int
+  state                 String    @default("DRAFT")
+  title                 String
+  description           String?
+  passingScore          Int       @default(80)
+  retakesAllowed        Boolean   @default(true)
+  requiresKnowledgeTest Boolean   @default(true)
+  videoStorageKey       String?
+  videoMimeType         String?
+  videoSizeBytes        Int?
+  videoSha256           String?
+  videoDurationSec      Int?
+  appliesToAll          Boolean   @default(false)
+  appliesToDeptIds      String?
+  appliesToPositionIds  String?
+  required              Boolean   @default(true)
+  publishedAt           DateTime?
+  publishedByUserId     String?
+  retiredAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  questions             TrainingQuestion[]
+  progress              TrainingProgress[]
+  attempts              TrainingAttempt[]
+  completions           TrainingCompletion[]
+
+  @@unique([courseId, version])
+  @@index([state])
+  @@index([courseId, state])
+}
+
+// Per-version multiple-choice question. Ordered by displayOrder;
+// active flag lets an author remove a question from a DRAFT before
+// publishing (published versions never mutate their question set).
+model TrainingQuestion {
+  id              String                 @id @default(cuid())
+  courseVersionId String
+  courseVersion   TrainingCourseVersion  @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  prompt          String
+  displayOrder    Int                    @default(0)
+  active          Boolean                @default(true)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  options         TrainingAnswerOption[]
+  responses       TrainingQuestionResponse[]
+
+  @@index([courseVersionId, displayOrder])
+}
+
+// Per-question answer choice. Exactly ONE row per question must have
+// `isCorrect = true` at publish time — enforced in the service layer
+// via publish validation. `isCorrect` is NEVER included in the
+// employee-facing course payload.
+model TrainingAnswerOption {
+  id              String            @id @default(cuid())
+  questionId      String
+  question        TrainingQuestion  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text            String
+  isCorrect       Boolean           @default(false)
+  displayOrder    Int               @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  responses       TrainingQuestionResponse[]
+
+  @@index([questionId, displayOrder])
+}
+
+// Explicit per-employee assignment layered on top of the version
+// dept/position applicability. Presence of an assignment makes the
+// course applicable regardless of dept/position match.
+model TrainingAssignment {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  courseId          String
+  course            TrainingCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  assignedByUserId  String?
+  assignedAt        DateTime @default(now())
+  note              String?
+
+  @@unique([clubId, employeeId, courseId])
+  @@index([clubId, employeeId])
+  @@index([clubId, courseId])
+}
+
+// Resumable video-progress record — one row per (employee, version).
+// Persists `secondsWatched` (monotonic — advances only) and the
+// derived `percentComplete`.
+model TrainingProgress {
+  id              String                @id @default(cuid())
+  clubId          String
+  club            Club                  @relation(fields: [clubId], references: [id])
+  employeeId      String
+  employee        Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  courseVersionId String
+  courseVersion   TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  secondsWatched  Int                   @default(0)
+  farthestSecond  Int                   @default(0)
+  percentComplete Int                   @default(0)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([employeeId, courseVersionId])
+  @@index([clubId, employeeId])
+}
+
+// One row per quiz attempt (submission). Never overwritten — failed
+// attempts remain historical and a retake produces a new row.
+model TrainingAttempt {
+  id              String                     @id @default(cuid())
+  clubId          String
+  club            Club                       @relation(fields: [clubId], references: [id])
+  employeeId      String
+  employee        Employee                   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  courseVersionId String
+  courseVersion   TrainingCourseVersion      @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  attemptNumber   Int
+  score           Int                        @default(0)
+  passed          Boolean                    @default(false)
+  startedAt       DateTime                   @default(now())
+  submittedAt     DateTime?
+
+  responses       TrainingQuestionResponse[]
+  completion      TrainingCompletion?
+
+  @@unique([employeeId, courseVersionId, attemptNumber])
+  @@index([clubId, employeeId])
+  @@index([courseVersionId, passed])
+}
+
+// Per-attempt per-question response. Server grades correctness by
+// joining against the canonical `TrainingAnswerOption.isCorrect`.
+// Browser only submits selectedOptionId.
+model TrainingQuestionResponse {
+  id                String                @id @default(cuid())
+  attemptId         String
+  attempt           TrainingAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId        String
+  question          TrainingQuestion      @relation(fields: [questionId], references: [id])
+  selectedOptionId  String
+  selectedOption    TrainingAnswerOption  @relation(fields: [selectedOptionId], references: [id])
+  wasCorrect        Boolean               @default(false)
+  createdAt         DateTime              @default(now())
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+}
+
+// Canonical proof of pass. Created by the server when an attempt
+// grades pass. Immutable historical evidence.
+model TrainingCompletion {
+  id              String                @id @default(cuid())
+  clubId          String
+  club            Club                  @relation(fields: [clubId], references: [id])
+  employeeId      String
+  employee        Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  courseId        String
+  course          TrainingCourse        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseVersionId String
+  courseVersion   TrainingCourseVersion @relation(fields: [courseVersionId], references: [id], onDelete: Cascade)
+  attemptId       String                @unique
+  attempt         TrainingAttempt       @relation(fields: [attemptId], references: [id])
+  score           Int
+  completedAt     DateTime              @default(now())
+
+  @@unique([employeeId, courseVersionId])
+  @@index([clubId, employeeId])
+  @@index([clubId, courseId])
+  @@index([employeeId, courseId])
 }
