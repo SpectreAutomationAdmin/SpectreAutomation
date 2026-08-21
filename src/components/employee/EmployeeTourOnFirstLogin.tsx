@@ -103,8 +103,25 @@ export default function EmployeeTourOnFirstLogin({
     }
   }, [openOnMount]);
 
+  // HR-2C B3.1 — On mobile the sidebar is hidden inside the drawer.
+  // The tour dispatches a custom event so EmployeePortalMobileNav
+  // opens its drawer, letting the coach-mark anchor on a real
+  // (visible) nav element. Ignored on ≥ md.
+  useEffect(() => {
+    if (dismissed) return;
+    if (typeof window === "undefined") return;
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      document.dispatchEvent(new CustomEvent("spectre:portal:mobile-nav:open"));
+    }
+  }, [dismissed]);
+
   async function complete(finish: boolean) {
     setDismissed(true);
+    if (typeof document !== "undefined") {
+      // Close the drawer on mobile so the employee returns to the
+      // page they started on.
+      document.dispatchEvent(new CustomEvent("spectre:portal:mobile-nav:close"));
+    }
     try {
       await fetch("/api/employee/tour-completed", {
         method: "POST",

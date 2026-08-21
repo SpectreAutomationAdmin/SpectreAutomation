@@ -14,12 +14,12 @@
 
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import { getActiveBranding } from "@/lib/branding";
 import EmployeePortalSidebar from "@/components/employee/EmployeePortalSidebar";
 import EmployeePortalTopBar from "@/components/employee/EmployeePortalTopBar";
+import EmployeePortalMobileNav from "@/components/employee/EmployeePortalMobileNav";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,13 +69,25 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
 
   return (
     <div className="min-h-screen bg-stone-50 flex">
+      {/* Desktop sidebar (has its own `hidden md:block` — hidden on mobile). */}
       <EmployeePortalSidebar clubName={clubName} />
+      {/* Mobile fixed top bar + drawer (has its own `md:hidden` — hidden on
+          desktop). HR-2C B3.1 mobile-nav correction. */}
+      <EmployeePortalMobileNav
+        clubName={clubName}
+        displayName={displayName}
+        employeeNumber={employee.employeeNumber}
+      />
       <div className="flex-1 flex flex-col min-w-0">
-        <EmployeePortalTopBar
-          displayName={displayName}
-          employeeNumber={employee.employeeNumber}
-        />
-        <main className="flex-1 px-6 md:px-10 py-8 md:py-10 max-w-6xl w-full">
+        {/* Desktop top bar — replaced by EmployeePortalMobileNav on < md. */}
+        <div className="hidden md:block">
+          <EmployeePortalTopBar
+            displayName={displayName}
+            employeeNumber={employee.employeeNumber}
+          />
+        </div>
+        {/* pt-14 on mobile leaves room for the fixed mobile top bar. */}
+        <main className="flex-1 pt-14 md:pt-0 px-4 md:px-10 py-4 md:py-10 max-w-6xl w-full">
           {children}
         </main>
       </div>

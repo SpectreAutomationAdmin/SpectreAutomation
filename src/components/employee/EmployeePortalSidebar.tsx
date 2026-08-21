@@ -16,7 +16,10 @@ export default function EmployeePortalSidebar({ clubName }: { clubName: string }
   const pathname = usePathname();
 
   return (
-    <aside className="w-60 shrink-0 border-r border-stone-200 bg-white min-h-screen">
+    <aside
+      className="hidden md:block w-60 shrink-0 border-r border-stone-200 bg-white min-h-screen"
+      data-testid="portal-sidebar"
+    >
       <div className="px-6 py-6 border-b border-stone-200">
         <div className="font-serif text-lg leading-tight text-club-ink" data-testid="portal-club-name">
           {clubName}
