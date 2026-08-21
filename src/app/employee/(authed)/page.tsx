@@ -11,11 +11,13 @@
 // scoped by the EmployeePortalPrincipal.
 
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstLogin";
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
 import { getClubMedia } from "@/lib/club/media";
+import { resolveEmployeeSchedulingEligibility } from "@/lib/hr/training/applicability";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +46,7 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, club] = await Promise.all([
+  const [employee, heroMedia, club, eligibility] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
       include: {
@@ -63,6 +65,9 @@ export default async function EmployeePortalHome() {
       where: { id: principal.clubId },
       select: { primaryColor: true },
     }),
+    // HR-2C B3 §17 — restrained Home summary; NON-gating (the actual
+    // scheduling/availability compliance gate arrives with B4).
+    resolveEmployeeSchedulingEligibility(principal.employeeId).catch(() => null),
   ]);
   if (!employee) redirect("/employee/login");
 
@@ -117,6 +122,33 @@ export default async function EmployeePortalHome() {
         <Item label="Start date">{formatDate(startDate)}</Item>
         {managerName && <Item label="Reports to">{managerName}</Item>}
       </section>
+
+      {eligibility && eligibility.outstandingTraining.length > 0 && (
+        <section
+          className="rounded-lg border border-amber-200 bg-amber-50/60 px-6 py-4 flex items-center justify-between gap-4"
+          data-testid="portal-home-training-summary"
+        >
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
+              Required training
+            </div>
+            <div className="mt-1 text-sm text-amber-900">
+              <strong data-testid="portal-home-training-count">
+                {eligibility.outstandingTraining.length}
+              </strong>{" "}
+              {eligibility.outstandingTraining.length === 1 ? "course" : "courses"} to
+              complete.
+            </div>
+          </div>
+          <Link
+            href="/employee/safety-training"
+            className="text-xs uppercase tracking-[0.16em] text-club-green-800 hover:text-club-green-900 underline underline-offset-4"
+            data-testid="portal-home-training-cta"
+          >
+            Open Safety &amp; Training
+          </Link>
+        </section>
+      )}
 
       {sessionState === "SUBMITTED" && (
         <section
