@@ -123,31 +123,61 @@ export default async function EmployeePortalHome() {
         {managerName && <Item label="Reports to">{managerName}</Item>}
       </section>
 
-      {eligibility && eligibility.outstandingTraining.length > 0 && (
-        <section
-          className="rounded-lg border border-amber-200 bg-amber-50/60 px-6 py-4 flex items-center justify-between gap-4"
-          data-testid="portal-home-training-summary"
-        >
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
+      {eligibility && eligibility.applicable.length > 0 && (
+        eligibility.outstandingTraining.length > 0 ? (
+          // HR-2C B4 (2026-08-23) — Actionable compliance banner.
+          // Upgraded from B3's soft summary because eligibility now
+          // gates real availability writes and future scheduling.
+          <section
+            className="rounded-lg border border-amber-200 bg-amber-50/70 px-6 py-5"
+            data-testid="portal-home-training-summary"
+            data-eligible="false"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.2em] text-amber-800">
+                  Action required
+                </div>
+                <p className="mt-2 text-sm text-amber-900">
+                  <strong data-testid="portal-home-training-count">
+                    {eligibility.outstandingTraining.length}
+                  </strong>{" "}
+                  required training{" "}
+                  {eligibility.outstandingTraining.length === 1 ? "course" : "courses"}{" "}
+                  must be completed before you can submit availability or be
+                  scheduled.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4">
+              <Link
+                href="/employee/safety-training"
+                className="btn btn-primary"
+                data-testid="portal-home-training-cta"
+              >
+                Go to Safety &amp; Training
+              </Link>
+            </div>
+          </section>
+        ) : (
+          // Compliance state visible even when up-to-date so the
+          // employee can see they're in good standing at a glance.
+          <section
+            className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-6 py-4"
+            data-testid="portal-home-training-summary"
+            data-eligible="true"
+          >
+            <div className="text-[11px] uppercase tracking-[0.2em] text-emerald-800">
               Required training
             </div>
-            <div className="mt-1 text-sm text-amber-900">
-              <strong data-testid="portal-home-training-count">
-                {eligibility.outstandingTraining.length}
-              </strong>{" "}
-              {eligibility.outstandingTraining.length === 1 ? "course" : "courses"} to
-              complete.
-            </div>
-          </div>
-          <Link
-            href="/employee/safety-training"
-            className="text-xs uppercase tracking-[0.16em] text-club-green-800 hover:text-club-green-900 underline underline-offset-4"
-            data-testid="portal-home-training-cta"
-          >
-            Open Safety &amp; Training
-          </Link>
-        </section>
+            <p
+              className="mt-1 text-sm text-emerald-900"
+              data-testid="portal-home-training-uptodate"
+            >
+              Up to date
+            </p>
+          </section>
+        )
       )}
 
       {sessionState === "SUBMITTED" && (

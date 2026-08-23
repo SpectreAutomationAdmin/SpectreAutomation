@@ -312,11 +312,15 @@ test.describe("HR-2C B3.1 · Employee Portal mobile navigation walk", () => {
     for (const optId of fx.correctOptionIds) {
       await page.locator(`[data-testid="portal-course-option-${optId}"]`).click();
     }
-    await Promise.all([
-      page.waitForSelector('[data-testid="portal-course-quiz-passed"]', { timeout: 15_000 }),
-      page.locator('[data-testid="portal-course-submit-attempt"]').click(),
-    ]);
-    await expect(page.locator('[data-testid="portal-course-quiz-passed"]')).toContainText(
+    // Submit and wait on the CompletedBanner (persistent — survives
+    // the router.refresh that fires on pass; the quiz-passed banner
+    // is transient and can vanish before Playwright sees it).
+    await page.locator('[data-testid="portal-course-submit-attempt"]').click();
+    await page.waitForSelector(
+      '[data-testid="portal-course-completed-banner"]',
+      { timeout: 15_000 },
+    );
+    await expect(page.locator('[data-testid="portal-course-completed-banner"]')).toContainText(
       /Training complete/i,
     );
     await page.screenshot({ path: path.join(OUT, "05-quiz-passed-mobile.png"), fullPage: true });

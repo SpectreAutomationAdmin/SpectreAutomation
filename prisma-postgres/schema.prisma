@@ -461,6 +461,8 @@ model Club {
   trainingProgress                   TrainingProgress[]
   trainingAttempts                   TrainingAttempt[]
   trainingCompletions                TrainingCompletion[]
+  // HR-2C B4 (2026-08-23) — availability persistence.
+  employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
 }
 
 // ---------------------------------------------------------------------
@@ -3348,11 +3350,45 @@ model Employee {
   trainingProgress           TrainingProgress[]
   trainingAttempts           TrainingAttempt[]
   trainingCompletions        TrainingCompletion[]
+  // HR-2C B4 (2026-08-23) — Employee weekly availability.
+  availabilityWeeks          EmployeeAvailabilityWeek[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
   @@index([clubId, employeeLifecycle])
   @@index([clubId, managerEmployeeId])
+}
+
+// HR-2C B4 (2026-08-23) — Employee weekly availability.
+//
+// Minimal persistence to give the training-compliance guard a real
+// write path. One row per employee per week; the seven booleans
+// express which weekdays the employee is generally available. Notes
+// carry free-text nuance (e.g. "afternoons only Wed"). The write
+// service (`src/lib/hr/availability.ts`) MUST call
+// `assertSchedulingEligibility` before every mutation — training
+// completeness is derived, not stored, so a stale UI cannot bypass
+// the gate.
+model EmployeeAvailabilityWeek {
+  id          String   @id @default(cuid())
+  clubId      String
+  club        Club     @relation(fields: [clubId], references: [id])
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  weekStart   DateTime
+  monday      Boolean  @default(false)
+  tuesday     Boolean  @default(false)
+  wednesday   Boolean  @default(false)
+  thursday    Boolean  @default(false)
+  friday      Boolean  @default(false)
+  saturday    Boolean  @default(false)
+  sunday      Boolean  @default(false)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([employeeId, weekStart])
+  @@index([clubId, weekStart])
 }
 
 // status: DRAFT | OPEN | LOCKED | POSTED
