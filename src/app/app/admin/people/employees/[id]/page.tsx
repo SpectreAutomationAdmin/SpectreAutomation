@@ -39,14 +39,21 @@ import { isAppError } from "@/lib/errors";
 import EmployeeProfileView from "@/components/hr/EmployeeProfileView";
 import EmployeeLifecycleControls from "@/components/hr/EmployeeLifecycleControls";
 import EmployeeEmploymentSection from "@/components/hr/EmployeeEmploymentSection";
+import EmployeeTrainingSection from "@/components/hr/EmployeeTrainingSection";
+import { getEmployeeTrainingRecord } from "@/lib/hr/training/compliance";
+import { listClubCourses } from "@/lib/hr/training/courses";
+import { assignTrainingCourseAction } from "./_training-actions";
 
 export default async function EmployeeProfilePage({
-  params,
+  params, searchParams,
 }: {
   params: { id: string };
+  searchParams?: Promise<{ tab?: string }>;
 }) {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
+  const sp = (await (searchParams ?? Promise.resolve({}))) as { tab?: string };
+  const defaultTab = sp.tab?.trim() || undefined;
 
   let profile: Awaited<ReturnType<typeof getEmployee>>;
   try {
@@ -78,6 +85,12 @@ export default async function EmployeeProfilePage({
   // HR-2B.4 (2026-08-19)
   const canReadEmergency = hasPermission(principal, profile.clubId, "hr:emergency:read");
   const canReadCredentials = hasPermission(principal, profile.clubId, "hr:credentials:read");
+  // HR-2C B5 (2026-08-28) — Training compliance visibility on the
+  // profile requires the same permission as the Compliance dashboard.
+  const canReadTrainingCompliance = hasPermission(
+    principal, profile.clubId, "hr:training:compliance:read",
+  );
+  const canAssignTraining = hasPermission(principal, profile.clubId, "hr:training:assign");
 
   const [
     employmentPeriods,
@@ -287,6 +300,19 @@ export default async function EmployeeProfilePage({
     employmentType: primaryAssignmentRow?.employmentType ?? profile.employmentType ?? null,
   };
 
+  // HR-2C B5 (2026-08-28) — Training record + publishable-course list
+  // for the Training tab. Loaded ONLY when the caller holds
+  // hr:training:compliance:read so the Prisma work is skipped
+  // completely for unauthorised profile viewers.
+  const trainingRecord = canReadTrainingCompliance
+    ? await getEmployeeTrainingRecord(principal, profile.id)
+    : null;
+  const publishableCourses = canReadTrainingCompliance
+    ? (await listClubCourses(principal, profile.clubId))
+        .filter((c) => c.currentVersion && !c.retiredAt)
+        .map((c) => ({ id: c.id, code: c.code, title: c.title }))
+    : [];
+
   return (
     <EmployeeProfileView
       employee={{
@@ -478,6 +504,18 @@ export default async function EmployeeProfilePage({
           />
         ) : null
       }
+      trainingSection={
+        canReadTrainingCompliance && trainingRecord ? (
+          <EmployeeTrainingSection
+            record={trainingRecord}
+            employeeId={profile.id}
+            canAssign={canAssignTraining}
+            publishableCourses={publishableCourses}
+            assignAction={assignTrainingCourseAction.bind(null, profile.id)}
+          />
+        ) : undefined
+      }
+      defaultTab={defaultTab}
     />
   );
 }

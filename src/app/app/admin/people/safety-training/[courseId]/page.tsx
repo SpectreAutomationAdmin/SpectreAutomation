@@ -12,6 +12,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { startNewDraftAction, retireCourseAction } from "../_actions";
+import { getCourseComplianceRoster } from "@/lib/hr/training/compliance";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +40,13 @@ export default async function CourseDetailPage({
   const { err } = await searchParams;
   const canAuthor = hasPermission(principal, clubId, "hr:training:write");
   const canPublish = hasPermission(principal, clubId, "hr:training:publish");
+  const canReadCompliance = hasPermission(principal, clubId, "hr:training:compliance:read");
   const currentPublished = course.versions.find((v) => v.state === "PUBLISHED") ?? null;
+  // Roster only when the caller can read compliance AND the course is
+  // currently published (no roster on draft-only courses).
+  const roster = canReadCompliance && currentPublished
+    ? (await getCourseComplianceRoster(principal, course.id)).roster
+    : [];
   const openDraft = course.versions.find((v) => v.state === "DRAFT") ?? null;
   const startNewDraft = startNewDraftAction.bind(null, course.id);
   const retireAction = retireCourseAction.bind(null, course.id);
@@ -153,6 +160,82 @@ export default async function CourseDetailPage({
           draft will retire the previous version. Historical completions
           remain valid against the version they were earned against.
         </p>
+      )}
+
+      {/* HR-2C B5 (2026-08-28) — Applicable employees roster. Only
+          rendered when the caller holds hr:training:compliance:read
+          and the course has a currently-published version. */}
+      {canReadCompliance && currentPublished && (
+        <section className="mt-10" data-testid="course-applicable-employees">
+          <h2 className="section-title text-lg mb-3">Applicable employees</h2>
+          {roster.length === 0 ? (
+            <div className="rounded-md border border-dashed border-stone-300 bg-white px-6 py-8 text-center">
+              <p className="text-sm text-stone-600">
+                No active employees are currently required to complete this course.
+              </p>
+            </div>
+          ) : (
+            <table className="table-base w-full">
+              <thead>
+                <tr>
+                  <th className="text-left">Employee</th>
+                  <th className="text-left">Status</th>
+                  <th className="text-right">Score</th>
+                  <th className="text-left">Completed</th>
+                  <th className="text-left">Applies via</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {roster.map((r) => {
+                  const displayName = r.preferredName?.trim()
+                    ? `${r.preferredName} ${r.lastName}`
+                    : `${r.firstName} ${r.lastName}`;
+                  const statusLabelMap: Record<typeof r.status, { label: string; tone: string }> = {
+                    completed: { label: "Completed", tone: "bg-emerald-50 text-emerald-800 border-emerald-200" },
+                    not_started: { label: "Not started", tone: "bg-amber-50 text-amber-800 border-amber-200" },
+                    in_progress: { label: "In progress", tone: "bg-stone-50 text-stone-700 border-stone-200" },
+                    attempted_failed: { label: "Attempted · not passed", tone: "bg-amber-50 text-amber-800 border-amber-200" },
+                  };
+                  const s = statusLabelMap[r.status];
+                  return (
+                    <tr key={r.employeeId} data-testid={`course-roster-row-${r.employeeNumber}`}>
+                      <td>
+                        <Link
+                          href={`/app/admin/people/employees/${r.employeeId}?tab=training`}
+                          className="text-club-ink hover:underline"
+                        >
+                          {displayName}
+                        </Link>
+                        <div className="text-xs text-stone-400 font-mono">{r.employeeNumber}</div>
+                      </td>
+                      <td>
+                        <span className={"inline-block rounded border px-2 py-0.5 text-[11px] " + s.tone}>
+                          {s.label}
+                        </span>
+                      </td>
+                      <td className="text-right text-xs">
+                        {typeof r.score === "number" ? `${r.score}%` : "—"}
+                      </td>
+                      <td className="text-xs text-stone-600">
+                        {r.completedAt ? r.completedAt.toLocaleDateString() : "—"}
+                      </td>
+                      <td className="text-xs text-stone-500">{r.sourceLabel}</td>
+                      <td className="text-right">
+                        <Link
+                          href={`/app/admin/people/employees/${r.employeeId}?tab=training`}
+                          className="text-xs text-emerald-800 hover:text-emerald-900 underline underline-offset-4"
+                        >
+                          Open
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
       )}
     </div>
   );

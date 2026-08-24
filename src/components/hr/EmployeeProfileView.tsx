@@ -152,12 +152,25 @@ interface Props {
    *  passes the fully-constructed section; this component just slots it
    *  in place so the tab rail + tab-switch chrome stays here. */
   employmentSection?: React.ReactNode;
+  /** HR-2C B5 (2026-08-28) — Optional Training tab slot. Rendered when
+   *  the caller holds `hr:training:compliance:read`. When omitted the
+   *  Training tab itself is hidden from the tab rail so an
+   *  unauthorised admin sees no dangling tab. */
+  trainingSection?: React.ReactNode;
+  /** HR-2C B5 (2026-08-28) — Initial tab, honoured on first render.
+   *  Enables the Compliance dashboard's drill-through link
+   *  (`?tab=training`) to land the profile directly on Training. */
+  defaultTab?: string;
 }
 
 const TABS = [
   { key: "overview",   label: "Overview" },
   { key: "employment", label: "Employment" },
   { key: "payroll",    label: "Payroll" },
+  // HR-2C B5 (2026-08-28) — Training placed between Payroll and
+  // Documents so the operational people-management tabs sit before
+  // the archival Documents / Activity tail.
+  { key: "training",   label: "Training" },
   { key: "documents",  label: "Documents" },
   { key: "activity",   label: "Activity" },
 ] as const;
@@ -183,8 +196,13 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, employmentSection } = props;
-  const [tab, setTab] = useState<TabKey>("overview");
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, employmentSection, trainingSection, defaultTab } = props;
+  const initialTab: TabKey =
+    (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
+    (defaultTab !== "training" || trainingSection !== undefined)
+      ? (defaultTab as TabKey)
+      : "overview";
+  const [tab, setTab] = useState<TabKey>(initialTab);
 
   const displayName = employee.preferredName?.trim().length
     ? `${employee.preferredName} ${employee.lastName}`
@@ -239,19 +257,25 @@ export default function EmployeeProfileView(props: Props) {
 
       {/* ---------------- Primary tabs ---------------- */}
       <nav className="spectre-person-tabs" role="tablist" aria-label="Employee sections">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`spectre-person-tab${tab === t.key ? " is-active" : ""}`}
-            data-testid={`employee-tab-${t.key}`}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          // Hide the Training tab entirely when the caller lacks
+          // compliance-read permission — the parent server page
+          // signals this by omitting the trainingSection prop.
+          if (t.key === "training" && trainingSection === undefined) return null;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              className={`spectre-person-tab${tab === t.key ? " is-active" : ""}`}
+              data-testid={`employee-tab-${t.key}`}
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          );
+        })}
       </nav>
 
       {/* ---------------- Tab body ---------------- */}
@@ -519,6 +543,12 @@ export default function EmployeeProfileView(props: Props) {
               </div>
             </div>
           </div>
+        </section>
+      )}
+
+      {tab === "training" && trainingSection !== undefined && (
+        <section className="spectre-person-body" data-testid="employee-tab-body-training">
+          {trainingSection}
         </section>
       )}
 

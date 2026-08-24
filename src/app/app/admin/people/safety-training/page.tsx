@@ -13,6 +13,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
 import { hasPermission } from "@/lib/rbac";
 import { listClubCourses } from "@/lib/hr/training/courses";
+import SafetyTrainingTabs from "./_SafetyTrainingTabs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,7 @@ export default async function SafetyTrainingCatalogue({
     redirect("/app/admin/people/employees");
   }
   const canAuthor = hasPermission(principal, clubId, "hr:training:write");
+  const canReadCompliance = hasPermission(principal, clubId, "hr:training:compliance:read");
   const { err } = await searchParams;
 
   const courses = await listClubCourses(principal, clubId);
@@ -58,6 +60,8 @@ export default async function SafetyTrainingCatalogue({
           </Link>
         )}
       </div>
+
+      <SafetyTrainingTabs canReadCompliance={canReadCompliance} />
 
       {err && (
         <div role="alert" className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
