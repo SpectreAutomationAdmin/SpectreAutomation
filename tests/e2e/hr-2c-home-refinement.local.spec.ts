@@ -256,16 +256,22 @@ test.describe("HR-2C Home refinement · desktop", () => {
     await expect(training).toHaveAttribute("data-widget-available", "true");
     await expect(training).toHaveAttribute("href", "/employee/safety-training");
 
-    // Unavailable widgets do not pretend to work.
+    // Non-navigational widgets (Time Off Requests + Forms) stay
+    // visually identical but do not masquerade as working links.
+    // They render as role="link" + aria-disabled="true" + no href +
+    // tabIndex=-1. They also carry NO status/explainer copy.
     const timeOff = page.locator('[data-testid="portal-home-widget-time-off-requests"]');
     await expect(timeOff).toHaveAttribute("data-widget-available", "false");
+    await expect(timeOff).toHaveAttribute("aria-disabled", "true");
     await expect(timeOff).not.toHaveAttribute("href", /.+/);
-    await expect(page.locator('[data-testid="portal-home-widget-unavailable-time-off-requests"]'))
-      .toBeVisible();
+    await expect(timeOff).not.toContainText(/Unavailable/i);
+    await expect(timeOff).not.toContainText(/coming soon/i);
 
     const forms = page.locator('[data-testid="portal-home-widget-forms"]');
     await expect(forms).toHaveAttribute("data-widget-available", "false");
+    await expect(forms).toHaveAttribute("aria-disabled", "true");
     await expect(forms).not.toHaveAttribute("href", /.+/);
+    await expect(forms).not.toContainText(/Unavailable/i);
 
     await page.screenshot({ path: path.join(OUT, "01-home-desktop-with-notification.png"), fullPage: true });
   });

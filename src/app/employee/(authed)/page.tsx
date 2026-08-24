@@ -45,7 +45,7 @@ export const dynamic = "force-dynamic";
 
 function IconCalendar() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.5" y="5" width="17" height="15" rx="2" />
       <line x1="3.5" y1="10" x2="20.5" y2="10" />
       <line x1="8" y1="3" x2="8" y2="7" />
@@ -57,7 +57,7 @@ function IconCalendar() {
 function IconPaystub() {
   // Receipt-like rectangle with two ledger lines.
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M6 3h10l3 3v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
       <path d="M16 3v3h3" />
       <line x1="8" y1="12" x2="16" y2="12" />
@@ -69,7 +69,7 @@ function IconPaystub() {
 function IconTimeOff() {
   // Simple sun over horizon — reads as "away from work".
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="4" />
       <line x1="12" y1="4" x2="12" y2="5.5" />
       <line x1="12" y1="18.5" x2="12" y2="20" />
@@ -86,7 +86,7 @@ function IconTimeOff() {
 function IconForms() {
   // Clipboard / form.
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="5" y="4" width="14" height="17" rx="2" />
       <path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z" />
       <line x1="8.5" y1="11" x2="15.5" y2="11" />
@@ -99,7 +99,7 @@ function IconTraining() {
   // Shield with tick — Safety-first tone consistent with the
   // Safety & Training surface.
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 3l7.5 3v6c0 4.5-3.2 8.4-7.5 9-4.3-.6-7.5-4.5-7.5-9V6L12 3z" />
       <polyline points="9 12 11.2 14.2 15 10.5" />
     </svg>
@@ -165,14 +165,12 @@ export default async function EmployeePortalHome() {
       label: "Time Off Requests",
       href: null,
       icon: <IconTimeOff />,
-      unavailableNote: "This surface will open when your Club enables time-off requests.",
     },
     {
       key: "forms",
       label: "Forms",
       href: null,
       icon: <IconForms />,
-      unavailableNote: "Forms will appear here as your Club adds them.",
     },
     {
       key: "training",

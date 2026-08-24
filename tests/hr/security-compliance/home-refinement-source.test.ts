@@ -125,19 +125,58 @@ describe("HR-2C Home refinement · source-contract", () => {
     expect(home).toMatch(/activeNotifications\.length > 0/);
   });
 
-  it("§6/§8 — widgets are compact tiles, no oversized cards, no emoji, no neon colours", () => {
+  it("§4/§6 — widgets are icon-centric launcher tiles: heading top, large icon, no status copy, no emoji, no neon", () => {
     // Grid uses restrained columns + gap.
     expect(widgets).toMatch(/grid-cols-2 md:grid-cols-3 lg:grid-cols-5/);
-    // Tile min-height stays compact (< 200 px).
-    expect(widgets).toMatch(/min-h-\[112px\]/);
-    // No emoji characters in the widget grid or the Home tsx.
-    // (Rudimentary check: reject non-ASCII except the standard curly
-    // punctuation we already use like en-dash, right-single-quote.)
+    // Tile height stays compact (< 200 px) and now houses a
+    // heading + large centered icon.
+    expect(widgets).toMatch(/min-h-\[132px\]/);
+    // Widgets must NOT contain implementation-status copy anywhere
+    // (no "UNAVAILABLE", no "coming soon", no explainer sentences).
+    for (const forbidden of [
+      /Unavailable/i,
+      /UNAVAILABLE/,
+      /coming soon/i,
+      /not yet active/i,
+      /unavailableNote/,
+    ]) {
+      expect(widgets).not.toMatch(forbidden);
+    }
+    // Widgets are icon-centric: icon container centred + JSX places
+    // the heading BEFORE the icon (heading first in reading order).
+    expect(widgets).toMatch(/items-center/);
+    expect(widgets).toMatch(/justify-center/);
+    const labelIdx = widgets.indexOf("portal-home-widget-label-");
+    const iconIdx = widgets.indexOf('aria-hidden="true"');
+    expect(labelIdx).toBeGreaterThan(-1);
+    expect(iconIdx).toBeGreaterThan(-1);
+    expect(labelIdx).toBeLessThan(iconIdx);
+    // No emoji characters.
     const suspect = /[\u{1F300}-\u{1FAFF}]|[\u{2600}-\u{27BF}]/u;
     expect(suspect.test(home)).toBe(false);
     expect(suspect.test(widgets)).toBe(false);
     // No bright neon colours (no #ff00...).
     expect(widgets).not.toMatch(/#(ff[0-9a-f]{4}|00ff[0-9a-f]{2}|[0-9a-f]{2}ff[0-9a-f]{2}|[0-9a-f]{4}ff)\b/i);
+  });
+
+  it("§5/§6 — non-navigational widgets stay visually identical but do NOT masquerade as working links", () => {
+    // Rendered as role="link" + aria-disabled + tabIndex=-1 (so
+    // assistive tech announces "link, unavailable" and keyboard
+    // focus skips them).
+    expect(widgets).toMatch(/role="link"/);
+    expect(widgets).toMatch(/aria-disabled="true"/);
+    expect(widgets).toMatch(/tabIndex=\{-1\}/);
+    // Home config for Time Off Requests + Forms carries no
+    // unavailableNote / no href.
+    expect(home).toMatch(/key: "time-off-requests"[\s\S]{0,80}href:\s*null,?[\s\S]{0,60}icon:/);
+    expect(home).toMatch(/key: "forms"[\s\S]{0,80}href:\s*null,?[\s\S]{0,60}icon:/);
+    expect(home).not.toMatch(/unavailableNote/);
+  });
+
+  it("§3 — icons are prominent (40px monoline glyphs in the Home page)", () => {
+    // All five widget icons declared at 40x40 in the Home file.
+    const matches = home.match(/width="40" height="40"/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(5);
   });
 
   it("§8 — no implementation terminology (Pay label was 'Pay' in sidebar; on Home it is now 'Paystubs')", () => {
