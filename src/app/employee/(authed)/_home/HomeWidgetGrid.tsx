@@ -24,6 +24,10 @@ export interface WidgetDef {
   label: string;
   href: string | null; // null → visually identical tile, non-navigational
   icon: ReactNode;
+  /** Stable identifier the anchored guided tour uses to attach to
+   *  this widget. Renders as `data-tour-target` on the tile so the
+   *  CoachMark selector survives testid rewrites. */
+  tourTarget?: string;
 }
 
 export default function HomeWidgetGrid({ widgets }: { widgets: WidgetDef[] }) {
@@ -79,6 +83,7 @@ function WidgetTile({ w }: { w: WidgetDef }) {
         className={cls}
         data-testid={`portal-home-widget-${w.key}`}
         data-widget-available="true"
+        data-tour-target={w.tourTarget}
         aria-label={w.label}
       >
         {body}
@@ -94,6 +99,7 @@ function WidgetTile({ w }: { w: WidgetDef }) {
       className={cls}
       data-testid={`portal-home-widget-${w.key}`}
       data-widget-available="false"
+      data-tour-target={w.tourTarget}
       role="link"
       aria-disabled="true"
       tabIndex={-1}

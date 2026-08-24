@@ -248,17 +248,15 @@ export const MEMBER_NAV: NavItem[] = [
 // cannot see admin, finance, mission-control, or configuration
 // surfaces from here. Route root is `/employee/**` and is guarded
 // by the spectre_employee_session cookie (see slice 6).
-// HR-2C §5 (2026-08-20) — Order refined for the guided-tour walkthrough:
-// Home, Schedule, Availability, Pay, Safety & Training, Documents, Profile.
-// The `tourTarget` slug is emitted on the rendered Link as
-// `data-tour-target` so the anchored CoachMark can attach reliably
-// regardless of testid changes (§8).
+// HR-2C Shell Refinement (2026-08-24) — Persistent portal navigation
+// is Home + Profile ONLY. Functional destinations (Schedule /
+// Availability / Pay / Safety & Training / Documents) are reached
+// from Home widgets and remain accessible by direct URL /
+// bookmark. This is intentional — the widgets are the primary
+// launchers now. Route removal is a NAV change only; the routes
+// themselves and their EmployeePortalPrincipal server-side gates
+// are unchanged.
 export const EMPLOYEE_NAV: Array<NavItem & { tourTarget?: string }> = [
   { href: "/employee", label: "Home" },
-  { href: "/employee/schedule", label: "Schedule", tourTarget: "schedule" },
-  { href: "/employee/availability", label: "Availability", tourTarget: "availability" },
-  { href: "/employee/pay", label: "Pay", tourTarget: "pay" },
-  { href: "/employee/safety-training", label: "Safety & Training", tourTarget: "training" },
-  { href: "/employee/documents", label: "Documents", tourTarget: "documents" },
   { href: "/employee/profile", label: "Profile", tourTarget: "profile" },
 ];

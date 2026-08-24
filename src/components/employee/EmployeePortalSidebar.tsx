@@ -1,18 +1,18 @@
 "use client";
 
-// HR-2B.5 §32 — Employee Portal sidebar.
+// HR-2B.5 §32 · HR-2C Shell Refinement (2026-08-24).
 //
-// Distinct from the admin Sidebar (`components/Sidebar.tsx`) — no
-// admin sections, no Mission Control, no Finance, no configuration.
-// Consumes EMPLOYEE_NAV from the shared nav data so nav additions
-// stay in one place.
+// The persistent left rail is now Home + Profile only. Club identity
+// lives in the top header, not here — the upper-left identity block
+// carries only the "EMPLOYEE PORTAL" eyebrow so the shell reads as a
+// pared-down member of the Spectre workspace family.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/ui";
 import { EMPLOYEE_NAV } from "@/components/sidebar-nav-data";
 
-export default function EmployeePortalSidebar({ clubName }: { clubName: string }) {
+export default function EmployeePortalSidebar() {
   const pathname = usePathname();
 
   return (
@@ -21,10 +21,10 @@ export default function EmployeePortalSidebar({ clubName }: { clubName: string }
       data-testid="portal-sidebar"
     >
       <div className="px-6 py-6 border-b border-stone-200">
-        <div className="font-serif text-lg leading-tight text-club-ink" data-testid="portal-club-name">
-          {clubName}
-        </div>
-        <div className="mt-2 text-[11px] uppercase tracking-[0.2em] text-stone-500">
+        <div
+          className="text-[11px] uppercase tracking-[0.2em] text-stone-500"
+          data-testid="portal-sidebar-eyebrow"
+        >
           Employee Portal
         </div>
       </div>
@@ -46,9 +46,6 @@ export default function EmployeePortalSidebar({ clubName }: { clubName: string }
                   : "text-stone-600 hover:bg-stone-50 hover:text-club-ink",
               )}
               data-testid={testid}
-              // HR-2C §8 — Stable tour anchor. Prefer this over
-              // `data-testid` for CoachMark selectors so testid rewrites
-              // don't break the tour.
               data-tour-target={item.tourTarget}
             >
               {item.label}

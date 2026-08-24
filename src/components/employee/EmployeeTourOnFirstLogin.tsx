@@ -30,6 +30,10 @@ interface Step {
   preferredSide?: CoachMarkSide;
 }
 
+// HR-2C Shell Refinement (2026-08-24) — Tour steps now anchor to
+// Home widgets (the actual product UI) instead of the removed
+// sidebar links. The persistent left rail is Home + Profile only;
+// functional destinations live in the Home widgets.
 const STEPS: Step[] = [
   {
     title: "Welcome to your employee portal.",
@@ -39,35 +43,34 @@ const STEPS: Step[] = [
     preferredSide: "bottom",
   },
   {
-    title: "Schedule",
-    body: "Your work schedule and upcoming shifts will appear here.",
-    targetSelector: '[data-tour-target="schedule"], [data-testid="portal-nav-schedule"]',
-    preferredSide: "right",
+    title: "Scheduling",
+    body: "Your upcoming shifts and work schedule appear here.",
+    targetSelector: '[data-tour-target="scheduling"]',
+    preferredSide: "bottom",
   },
   {
-    title: "Availability",
-    body: "Use Availability to let the Club know when you're available to work.",
-    targetSelector: '[data-tour-target="availability"], [data-testid="portal-nav-availability"]',
-    preferredSide: "right",
+    title: "Paystubs",
+    body: "Your pay statements and payroll history live here.",
+    targetSelector: '[data-tour-target="paystubs"]',
+    preferredSide: "bottom",
   },
   {
-    title: "Pay",
-    body: "This is where you'll find your pay statements and payroll information.",
-    targetSelector: '[data-tour-target="pay"], [data-testid="portal-nav-pay"]',
-    preferredSide: "right",
+    title: "Time Off Requests",
+    body: "Request time off and see the status of your requests.",
+    targetSelector: '[data-tour-target="time-off"]',
+    preferredSide: "bottom",
+  },
+  {
+    title: "Forms",
+    body: "Complete and view forms your Club sends your way.",
+    targetSelector: '[data-tour-target="forms"]',
+    preferredSide: "bottom",
   },
   {
     title: "Safety & Training",
-    body:
-      "Complete the Club's required training and safety courses here.",
-    targetSelector: '[data-tour-target="training"], [data-testid="portal-nav-safety-&-training"]',
-    preferredSide: "right",
-  },
-  {
-    title: "Documents",
-    body: "Your employee documents and certifications live here.",
-    targetSelector: '[data-tour-target="documents"], [data-testid="portal-nav-documents"]',
-    preferredSide: "right",
+    body: "Complete the Club's required training and safety courses.",
+    targetSelector: '[data-tour-target="training"]',
+    preferredSide: "bottom",
   },
   {
     title: "Profile",
@@ -103,17 +106,24 @@ export default function EmployeeTourOnFirstLogin({
     }
   }, [openOnMount]);
 
-  // HR-2C B3.1 — On mobile the sidebar is hidden inside the drawer.
-  // The tour dispatches a custom event so EmployeePortalMobileNav
-  // opens its drawer, letting the coach-mark anchor on a real
-  // (visible) nav element. Ignored on ≥ md.
+  // HR-2C Shell Refinement (2026-08-24) — Widget-anchored steps are
+  // visible on Home directly; only the Profile step still lives in
+  // the sidebar/drawer. On mobile, the drawer opens only when the
+  // current step's target is a sidebar nav item — otherwise the
+  // drawer would obscure the widget the step is trying to anchor to.
   useEffect(() => {
     if (dismissed) return;
     if (typeof window === "undefined") return;
-    if (window.matchMedia("(max-width: 767px)").matches) {
-      document.dispatchEvent(new CustomEvent("spectre:portal:mobile-nav:open"));
-    }
-  }, [dismissed]);
+    if (!window.matchMedia("(max-width: 767px)").matches) return;
+    const currentTarget = STEPS[step]?.targetSelector ?? "";
+    const isNavTarget = currentTarget.includes("portal-nav-") ||
+      currentTarget.includes('"profile"');
+    document.dispatchEvent(new CustomEvent(
+      isNavTarget
+        ? "spectre:portal:mobile-nav:open"
+        : "spectre:portal:mobile-nav:close",
+    ));
+  }, [dismissed, step]);
 
   async function complete(finish: boolean) {
     setDismissed(true);

@@ -39,6 +39,9 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
         employeeNumber: true,
         employeeLifecycle: true,
         status: true,
+        // HR-2C Shell Refinement (2026-08-24) — powers the top-right
+        // circular avatar in the workspace-style header.
+        profilePhotoDocumentId: true,
       },
     }),
     prisma.club.findFirst({
@@ -67,23 +70,34 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
     ? employee.preferredName
     : employee.firstName;
 
+  const hasPhoto = employee.profilePhotoDocumentId != null;
+  // Cache-buster on the photo URL keyed on the document id so a
+  // replaced photo re-fetches inside the browser without needing a
+  // full reload.
+  const photoVersion = employee.profilePhotoDocumentId ?? null;
+
   return (
     <div className="min-h-screen bg-stone-50 flex">
-      {/* Desktop sidebar (has its own `hidden md:block` — hidden on mobile). */}
-      <EmployeePortalSidebar clubName={clubName} />
+      {/* Desktop sidebar — Home + Profile only. Club identity now
+          lives in the top header per HR-2C Shell Refinement §3-4. */}
+      <EmployeePortalSidebar />
       {/* Mobile fixed top bar + drawer (has its own `md:hidden` — hidden on
-          desktop). HR-2C B3.1 mobile-nav correction. */}
+          desktop). Club name remains in the mobile compact top bar. */}
       <EmployeePortalMobileNav
         clubName={clubName}
         displayName={displayName}
         employeeNumber={employee.employeeNumber}
       />
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Desktop top bar — replaced by EmployeePortalMobileNav on < md. */}
+        {/* Desktop top header — Club name on the left, employee
+            avatar/name/# + Help + Sign out on the right. */}
         <div className="hidden md:block">
           <EmployeePortalTopBar
+            clubName={clubName}
             displayName={displayName}
             employeeNumber={employee.employeeNumber}
+            hasPhoto={hasPhoto}
+            photoVersion={photoVersion}
           />
         </div>
         {/* pt-14 on mobile leaves room for the fixed mobile top bar. */}
