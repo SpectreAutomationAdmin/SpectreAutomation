@@ -41,18 +41,22 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/ui";
 import { EMPLOYEE_NAV } from "@/components/sidebar-nav-data";
-import EmployeePortalHelpMenu from "./EmployeePortalHelpMenu";
+import EmployeePortalUserMenu from "./EmployeePortalUserMenu";
 
 interface Props {
   clubName: string;
   displayName: string;
   employeeNumber: string;
+  hasPhoto: boolean;
+  photoVersion: string | null;
 }
 
 export default function EmployeePortalMobileNav({
   clubName,
   displayName,
   employeeNumber,
+  hasPhoto,
+  photoVersion,
 }: Props) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
@@ -119,18 +123,17 @@ export default function EmployeePortalMobileNav({
         >
           {clubName}
         </div>
-        <div className="flex items-center gap-1">
-          <EmployeePortalHelpMenu />
-          <form action="/employee/logout" method="post">
-            <button
-              type="submit"
-              className="rounded-md border border-stone-200 px-2 py-1 text-[11px] text-stone-600 hover:bg-stone-50 hover:text-club-ink"
-              data-testid="portal-mobile-signout"
-              aria-label="Sign out"
-            >
-              Sign out
-            </button>
-          </form>
+        {/* HR-2C Portal Refinement (2026-08-24) — single account entry
+            point on mobile too: avatar + name dropdown (Profile /
+            Take portal tour / Sign out). Standalone Help + Sign out
+            buttons removed to match the workspace pattern. */}
+        <div className="flex items-center">
+          <EmployeePortalUserMenu
+            displayName={displayName}
+            employeeNumber={employeeNumber}
+            hasPhoto={hasPhoto}
+            photoVersion={photoVersion}
+          />
         </div>
       </header>
 

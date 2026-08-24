@@ -87,6 +87,8 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
         clubName={clubName}
         displayName={displayName}
         employeeNumber={employee.employeeNumber}
+        hasPhoto={hasPhoto}
+        photoVersion={photoVersion}
       />
       <div className="flex-1 flex flex-col min-w-0">
         {/* Desktop top header — Club name on the left, employee

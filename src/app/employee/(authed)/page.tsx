@@ -68,12 +68,20 @@ function IconPaystub() {
 }
 
 function IconTimeOff() {
-  // HR-2C Shell Refinement (2026-08-24) — Airplane taking off. Reads
-  // as "away". Monoline, matches the rest of the icon set.
+  // HR-2C Portal Refinement (2026-08-24) — Airplane taking off,
+  // side-profile silhouette to match the founder reference. Nose
+  // up-and-right, tail down-and-left, wings clearly visible,
+  // runway horizon beneath. Uses the same 1.7 stroke weight as
+  // the other four widget icons.
+  //
+  // Drawn as one polygonal fuselage with a wing dropping back from
+  // its underside; wingtip visible; short runway ground line.
   return (
     <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 19h18" />
-      <path d="M4.5 15.5l4.2-.6 3.4-4.7L7.2 3.2l2.6.2 8.6 8-4.2 4.1a2 2 0 0 1-1.6.6l-8.1-.6z" />
+      {/* Fuselage — cursive shape with nose at upper right and tail cutout at lower left. */}
+      <path d="M2.8 12.5 L4.2 11.9 L8.2 13.3 L11.1 10.5 L7.4 5.4 L9.1 4.9 L14.5 9.5 L20 8.4 A1.8 1.8 0 0 1 22 10.4 A1.8 1.8 0 0 1 20.4 12.1 L13.6 13.9 L9.6 17.9 L7.9 17.4 L9.1 14.3 L4.6 14.6 Z" />
+      {/* Runway / horizon line beneath the plane. */}
+      <line x1="3" y1="20.5" x2="21" y2="20.5" />
     </svg>
   );
 }
