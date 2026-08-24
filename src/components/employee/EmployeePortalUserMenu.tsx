@@ -1,26 +1,32 @@
 "use client";
 
-// HR-2C Portal Refinement (2026-08-24) — Employee Portal user menu.
+// HR-2C Portal Refinement (2026-08-24 / expanded 2026-08-28) — Employee
+// Portal user menu.
 //
 // Mirrors the workspace SpectreTopBar user-menu grammar: circular
 // avatar + display name + chevron; click opens a dropdown containing
-// the caller's account actions. The workspace component is admin-
-// coupled (theme toggle, global search, HeaderContextRail); this
-// component reuses the SAME visual grammar (avatar / name / menu /
-// item spacing / border / focus behavior) without dragging admin
-// dependencies into the portal.
+// employee-appropriate account actions. The workspace component itself
+// is admin-coupled (theme cycle, global search, HeaderContextRail,
+// admin User role text); this component reuses the SAME visual grammar
+// (avatar / name / menu / item spacing / border / focus behaviour)
+// without dragging admin dependencies into the portal.
 //
-// Dropdown contents (§3 explicit):
+// Dropdown contents (§3 explicit — Help + Sign out only, plus the
+// portal-tour replay which is real functional employee preference):
 //   - Display name + employee number header
-//   - Profile         → /employee/profile
-//   - Take portal tour → replays the guided tour (no timestamp reset)
-//   - Sign out        → /employee/logout (POST form)
+//   - Help              → opens the employee-facing help modal
+//   - Take portal tour  → replays the guided tour (portal-only,
+//                          appropriate for an employee)
+//   - Sign out          → /employee/logout (POST form)
+//
+// Profile is deliberately NOT in the dropdown — the left rail already
+// carries Profile as a top-level nav item, so exposing it in two
+// places is redundant.
 //
 // Admin-only surfaces (User Settings for the admin App, /app/**) are
 // NOT reachable from this menu. Employee session cannot enter the
-// admin layout regardless — this menu simply doesn't advertise it.
+// admin layout regardless — this menu simply does not advertise it.
 
-import Link from "next/link";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import EmployeeTourOnFirstLogin from "./EmployeeTourOnFirstLogin";
 
@@ -44,6 +50,7 @@ export default function EmployeePortalUserMenu({
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -66,6 +73,13 @@ export default function EmployeePortalUserMenu({
       document.removeEventListener("keydown", onKey);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") setHelpOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [helpOpen]);
 
   const onMenuKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>("[data-menu-item]") ?? []);
@@ -132,16 +146,16 @@ export default function EmployeePortalUserMenu({
             <div className="text-sm font-medium text-club-ink">{displayName}</div>
             <div className="text-xs text-stone-500 font-mono">{employeeNumber}</div>
           </div>
-          <Link
-            href="/employee/profile"
+          <button
+            type="button"
             role="menuitem"
             data-menu-item
-            data-testid="portal-user-menu-profile"
-            onClick={() => setMenuOpen(false)}
-            className="block px-3 py-2 text-sm text-club-ink rounded-md hover:bg-stone-50"
+            data-testid="portal-user-menu-help"
+            onClick={() => { setMenuOpen(false); setHelpOpen(true); }}
+            className="block w-full text-left px-3 py-2 text-sm text-club-ink rounded-md hover:bg-stone-50"
           >
-            Profile
-          </Link>
+            Help
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -175,6 +189,38 @@ export default function EmployeePortalUserMenu({
           openOnMount
           key={`replay-${Date.now()}`}
         />
+      )}
+      {helpOpen && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
+          data-testid="portal-help-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="portal-help-title"
+          onClick={(e) => { if (e.target === e.currentTarget) setHelpOpen(false); }}
+        >
+          <div className="w-full max-w-md rounded-lg bg-white shadow-xl p-6 space-y-3">
+            <h2 id="portal-help-title" className="font-serif text-xl text-club-ink">
+              Need help?
+            </h2>
+            <p className="text-sm text-stone-600">
+              Your Club administrator or manager is the fastest path for
+              questions about your schedule, pay, training, or personal
+              information. If something in the portal isn&rsquo;t working,
+              let them know and they can escalate on your behalf.
+            </p>
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setHelpOpen(false)}
+                className="btn btn-primary btn-sm"
+                data-testid="portal-help-modal-close"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

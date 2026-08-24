@@ -38,9 +38,26 @@ import { AppError } from "../errors";
 // ---------------------------------------------------------------------------
 // Types.
 // ---------------------------------------------------------------------------
-export interface EmployeeOnboardingActor {
-  readonly clubId: string;
+
+/**
+ * HR-2C Portal Refinement (2026-08-24) — the minimum shape any employee-
+ * self-service mutation needs. Both `EmployeeOnboardingActor` (the
+ * invitation-redemption actor) and `EmployeePortalPrincipal` (the
+ * established portal session) satisfy this interface structurally,
+ * allowing shared services like `submitSelfBankAccount` / address
+ * updates to be called from either flow without the portal reaching
+ * for onboarding-only concepts (sessionId, invitationId, sessionState).
+ *
+ * Every self-service function is expected to call the corresponding
+ * assert helper below on entry — the checks still refuse cross-employee
+ * and cross-tenant writes; they simply do so through the narrower type.
+ */
+export interface EmployeeSelfServiceActor {
   readonly employeeId: string;
+  readonly clubId: string;
+}
+
+export interface EmployeeOnboardingActor extends EmployeeSelfServiceActor {
   readonly sessionId: string;
   readonly invitationId: string;
   /** The current session state at resolve time. Callers may branch on
@@ -180,7 +197,7 @@ export async function requireEmployeeOnboardingActor(): Promise<EmployeeOnboardi
  * callers that accidentally pass a targetEmployeeId through.
  */
 export function assertActorTargetsSelf(
-  actor: EmployeeOnboardingActor,
+  actor: EmployeeSelfServiceActor,
   targetEmployeeId: string,
 ): void {
   if (targetEmployeeId !== actor.employeeId) {
@@ -196,7 +213,7 @@ export function assertActorTargetsSelf(
  * call this after loading its target row.
  */
 export function assertActorTargetsOwnClub(
-  actor: EmployeeOnboardingActor,
+  actor: EmployeeSelfServiceActor,
   targetClubId: string,
 ): void {
   if (targetClubId !== actor.clubId) {

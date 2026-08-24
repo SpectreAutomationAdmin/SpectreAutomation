@@ -1,4 +1,5 @@
-// HR-2C Portal Refinement (2026-08-24) — Employee Portal self-service.
+// HR-2C Portal Refinement (2026-08-24 / expanded 2026-08-28) — Employee
+// Portal self-service.
 //
 // Called from Employee Portal server actions. Every function:
 //   - accepts an EmployeePortalPrincipal (not an admin Principal);
@@ -6,13 +7,15 @@
 //   - tenants by clubId — cross-employee / cross-Club refused with
 //     the same-shape NotFoundError so a portal actor cannot
 //     enumerate other employees;
-//   - audits with actorSource "EMPLOYEE" so payroll / HR
-//     reviewers can filter self-service events from admin edits.
+//   - audits with actorSource "EMPLOYEE" so payroll / HR reviewers can
+//     filter self-service events from admin edits.
 //
-// Explicitly NOT here (deferred):
-//   - Address (needs schema decision — separate slice).
-//   - Banking replacement (sensitive; needs its own security review
-//     + PENDING_PENNY_TEST lifecycle work — separate slice).
+// Banking replacement composes the canonical HR-1H helpers in
+// `employee-self-service.ts` (`submitSelfBankAccount`,
+// `getSelfBankAccountMasked`). No duplicated write path — the portal
+// caller structurally satisfies `EmployeeSelfServiceActor`, so history
+// preservation (existing VERIFIED → INACTIVE, new → PENDING_PENNY_TEST)
+// is guaranteed to match onboarding behaviour.
 //
 // Employees never mutate:
 //   - Employee number / position / department / employment type;
@@ -25,6 +28,11 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { NotFoundError, ValidationError } from "../errors";
 import type { EmployeePortalPrincipal } from "../employee-portal-session";
+import {
+  submitSelfBankAccount as canonicalSubmitSelfBankAccount,
+  getSelfBankAccountMasked as canonicalGetSelfBankAccountMasked,
+  type SelfBankAccountInput,
+} from "./employee-self-service";
 
 // ---------------------------------------------------------------------------
 // Personal contact — email + mobile phone
@@ -51,8 +59,6 @@ function normalisePhone(v: string | null | undefined): string | null {
   const s = v.trim();
   if (s.length === 0) return null;
   if (s.length > 32) throw new ValidationError([{ path: "mobilePhone", message: "Phone must be 32 characters or fewer." }]);
-  // Accept +country, spaces, dashes, parens — the canonical field is
-  // free-form and payroll doesn't consume it for CRA identity.
   if (!/^[+()\-\s\d]{7,32}$/.test(s)) {
     throw new ValidationError([{ path: "mobilePhone", message: "Please enter a valid phone number." }]);
   }
@@ -86,14 +92,116 @@ export async function updateSelfPersonalContact(
 }
 
 // ---------------------------------------------------------------------------
+// Home / mailing address
+// ---------------------------------------------------------------------------
+
+export interface UpdateHomeAddressInput {
+  homeAddressLine1?: string | null;
+  homeAddressLine2?: string | null;
+  homeCity?: string | null;
+  homeProvince?: string | null;
+  homePostalCode?: string | null;
+  homeCountry?: string | null;
+}
+
+function trimOrNull(v: string | null | undefined, field: string, max: number): string | null {
+  if (v == null) return null;
+  const s = v.trim();
+  if (s.length === 0) return null;
+  if (s.length > max) throw new ValidationError([{ path: field, message: `${field} must be ${max} characters or fewer.` }]);
+  return s;
+}
+
+function normaliseProvince(v: string | null | undefined): string | null {
+  const s = trimOrNull(v, "homeProvince", 32);
+  if (s == null) return null;
+  return s.toUpperCase();
+}
+
+function normaliseCountry(v: string | null | undefined): string | null {
+  const s = trimOrNull(v, "homeCountry", 2);
+  if (s == null) return null;
+  if (!/^[A-Za-z]{2}$/.test(s)) {
+    throw new ValidationError([{ path: "homeCountry", message: "Country must be a 2-letter code (e.g. CA)." }]);
+  }
+  return s.toUpperCase();
+}
+
+function normalisePostalCode(v: string | null | undefined): string | null {
+  const s = trimOrNull(v, "homePostalCode", 16);
+  if (s == null) return null;
+  return s.toUpperCase();
+}
+
+export interface SelfHomeAddress {
+  homeAddressLine1: string | null;
+  homeAddressLine2: string | null;
+  homeCity: string | null;
+  homeProvince: string | null;
+  homePostalCode: string | null;
+  homeCountry: string | null;
+}
+
+export async function getSelfHomeAddress(
+  actor: EmployeePortalPrincipal,
+): Promise<SelfHomeAddress> {
+  const emp = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: {
+      homeAddressLine1: true, homeAddressLine2: true, homeCity: true,
+      homeProvince: true, homePostalCode: true, homeCountry: true,
+    },
+  });
+  if (!emp) throw new NotFoundError("Employee", actor.employeeId);
+  return emp;
+}
+
+export async function updateSelfHomeAddress(
+  actor: EmployeePortalPrincipal,
+  input: UpdateHomeAddressInput,
+): Promise<void> {
+  const emp = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: {
+      id: true, clubId: true,
+      homeAddressLine1: true, homeAddressLine2: true, homeCity: true,
+      homeProvince: true, homePostalCode: true, homeCountry: true,
+    },
+  });
+  if (!emp) throw new NotFoundError("Employee", actor.employeeId);
+
+  const data: Record<string, string | null> = {};
+  if (input.homeAddressLine1 !== undefined) data.homeAddressLine1 = trimOrNull(input.homeAddressLine1, "homeAddressLine1", 200);
+  if (input.homeAddressLine2 !== undefined) data.homeAddressLine2 = trimOrNull(input.homeAddressLine2, "homeAddressLine2", 200);
+  if (input.homeCity !== undefined) data.homeCity = trimOrNull(input.homeCity, "homeCity", 100);
+  if (input.homeProvince !== undefined) data.homeProvince = normaliseProvince(input.homeProvince);
+  if (input.homePostalCode !== undefined) data.homePostalCode = normalisePostalCode(input.homePostalCode);
+  if (input.homeCountry !== undefined) data.homeCountry = normaliseCountry(input.homeCountry);
+  if (Object.keys(data).length === 0) return;
+
+  await prisma.employee.update({ where: { id: emp.id }, data });
+  await audit(null, {
+    action: "hr.employee.self_service.home_address.update",
+    entityType: "Employee",
+    entityId: emp.id,
+    clubId: emp.clubId,
+    before: {
+      // Field NAMES only in before/after — the raw values are already
+      // on the row; not restating them in the audit payload avoids
+      // duplicating a person's address across the audit stream.
+      changedFields: Object.keys(data),
+    },
+    after: {
+      changedFields: Object.keys(data),
+      actorSource: "EMPLOYEE",
+      employeeIdTail: emp.id.slice(-8),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Emergency contact — primary only (portal MVP)
 // ---------------------------------------------------------------------------
-//
-// The admin service already supports multiple contacts. The portal
-// self-service surface exposes ONE primary contact so the employee
-// UI stays simple. If the employee has no primary contact yet, this
-// creates one (and marks it primary). If they have one, this updates
-// it in place.
 
 export interface UpdateSelfEmergencyContactInput {
   name: string;
@@ -163,9 +271,6 @@ export async function upsertSelfPrimaryEmergencyContact(
     clubId: emp.clubId,
     before: existingPrimary,
     after: {
-      // Only field NAMES in the after payload — phone/email were
-      // supplied by the employee themselves so they aren't leaked
-      // here beyond the row already recording them.
       changedFields: Object.keys(input),
       actorSource: "EMPLOYEE",
       employeeIdTail: emp.id.slice(-8),
@@ -182,4 +287,56 @@ export async function getSelfPrimaryEmergencyContact(
     select: { id: true, name: true, relation: true, phone: true, email: true },
   });
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Direct deposit — masked read + secure replacement.
+// ---------------------------------------------------------------------------
+//
+// Composes the CANONICAL HR-1H banking pipeline in
+// `employee-self-service.ts`. That module:
+//   - encrypts every secret through the KMS scope="HR" pipeline;
+//   - preserves history (VERIFIED → INACTIVE + new PENDING_PENNY_TEST);
+//   - refuses to fabricate status=VERIFIED (the DB partial-unique
+//     index enforces the invariant even if a caller drifted);
+//   - audits with masked values only — plaintext never enters the
+//     audit stream.
+//
+// The portal never touches EmployeeBankAccount directly. Every call
+// goes through the canonical service so admin + portal + onboarding
+// share ONE write path with ONE lifecycle.
+
+export interface SubmitSelfBankInput {
+  holderName: string;
+  institutionNumber: string;
+  transitNumber: string;
+  accountNumber: string;
+}
+
+export interface SelfBankMaskedView {
+  id: string;
+  accountMasked: string;
+  holderName: string;
+  status: string;
+}
+
+export async function getSelfBankMasked(
+  actor: EmployeePortalPrincipal,
+): Promise<SelfBankMaskedView | null> {
+  return canonicalGetSelfBankAccountMasked(actor);
+}
+
+export async function submitSelfBankReplacement(
+  actor: EmployeePortalPrincipal,
+  input: SubmitSelfBankInput,
+): Promise<SelfBankMaskedView> {
+  // Delegate to the canonical HR-1H writer. Structural typing lets us
+  // pass the portal principal directly — the canonical function reads
+  // only `.employeeId` and `.clubId`, and its own asserts refuse
+  // cross-employee / cross-tenant writes independently.
+  const result = await canonicalSubmitSelfBankAccount(
+    actor,
+    input satisfies SelfBankAccountInput,
+  );
+  return result;
 }

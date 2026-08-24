@@ -33,6 +33,19 @@ export interface WidgetDef {
 export default function HomeWidgetGrid({ widgets }: { widgets: WidgetDef[] }) {
   return (
     <section data-testid="portal-home-widgets" aria-label="Employee Portal shortcuts">
+      {/* HR-2C Portal Refinement (2026-08-28) — asymmetric 5+1 desktop
+          grid: five equal columns; a sixth widget wraps naturally to
+          row 2 column 1. Mobile is 2×3. Founder-approved geometry:
+          Clocking In / Out (widget six) sits directly beneath
+          Scheduling (widget one) with intentional whitespace to its
+          right. Do NOT balance to 3×2 or centre — the asymmetry is
+          the point.
+
+          Tile widths are enforced by `grid-cols-5` — no per-tile
+          span, no absolute positioning. Tailwind's `md`/`lg`
+          breakpoints: <768 mobile (2 cols), 768–1023 tablet
+          intermediate (3 cols — natural responsive), ≥1024 desktop
+          (5 cols with the sixth wrapping). */}
       <ul
         className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
         data-testid="portal-home-widgets-grid"

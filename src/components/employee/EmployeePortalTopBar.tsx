@@ -32,7 +32,7 @@ export default function EmployeePortalTopBar({
 }: Props) {
   return (
     <header
-      className="flex items-center justify-between border-b border-stone-200 bg-white px-6 py-3 gap-4"
+      className="h-16 flex items-center justify-between border-b border-stone-200 bg-white px-6 gap-4"
       data-testid="portal-header"
     >
       {/* Club identity — canonical current-Club name, above the hero. */}

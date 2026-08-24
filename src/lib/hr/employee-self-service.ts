@@ -33,6 +33,7 @@ import {
   assertActorTargetsOwnClub,
   assertActorTargetsSelf,
   type EmployeeOnboardingActor,
+  type EmployeeSelfServiceActor,
 } from "./employee-actor";
 import {
   isKnownCategory,
@@ -1187,7 +1188,7 @@ export interface SelfBankAccountInput {
  * the code drifted.
  */
 export async function submitSelfBankAccount(
-  actor: EmployeeOnboardingActor,
+  actor: EmployeeSelfServiceActor,
   input: SelfBankAccountInput,
 ): Promise<{ id: string; accountMasked: string; holderName: string; status: string }> {
   const employee = await prisma.employee.findFirst({
@@ -1317,7 +1318,7 @@ export async function submitSelfBankAccount(
   };
 }
 
-export async function getSelfBankAccountMasked(actor: EmployeeOnboardingActor): Promise<
+export async function getSelfBankAccountMasked(actor: EmployeeSelfServiceActor): Promise<
   | { id: string; accountMasked: string; holderName: string; status: string }
   | null
 > {

@@ -3276,6 +3276,16 @@ model Employee {
   personalEmail          String? // employee-owned; used for onboarding invitations
   phone                  String? // work phone (deprecated; superseded by mobilePhone)
   mobilePhone            String? // employee-owned mobile
+  // HR-2C Portal Refinement (2026-08-24) — home / mailing address.
+  // Employee-editable via the Employee Portal; club-side services also
+  // read these (payroll province seam, T4 mailing). All columns are
+  // nullable and additive — no backfill required.
+  homeAddressLine1       String?
+  homeAddressLine2       String?
+  homeCity               String?
+  homeProvince           String? // 2-char CA province / US state code
+  homePostalCode         String?
+  homeCountry            String? // ISO-3166-1 alpha-2; null = unspecified
   userId                 String?           @unique
   user                   User?             @relation(fields: [userId], references: [id])
   departmentId           String?

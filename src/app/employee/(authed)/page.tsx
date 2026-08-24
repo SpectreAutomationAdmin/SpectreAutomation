@@ -26,6 +26,9 @@
 //   Forms              → unavailable (no dedicated Forms surface;
 //                        Documents is a separate viewer, not Forms)
 //   Training           → /employee/safety-training     (real)
+//   Clocking In / Out  → unavailable (no route yet — TimeClockEvent
+//                        model exists but no consumer service or UI;
+//                        §9 explicitly forbids inventing one)
 
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
@@ -68,20 +71,32 @@ function IconPaystub() {
 }
 
 function IconTimeOff() {
-  // HR-2C Portal Refinement (2026-08-24) — Airplane taking off,
-  // side-profile silhouette to match the founder reference. Nose
-  // up-and-right, tail down-and-left, wings clearly visible,
-  // runway horizon beneath. Uses the same 1.7 stroke weight as
-  // the other four widget icons.
-  //
-  // Drawn as one polygonal fuselage with a wing dropping back from
-  // its underside; wingtip visible; short runway ground line.
+  // HR-2C Portal Refinement (2026-08-28) — Suitcase, per founder
+  // direction §6 (Time Off Requests). Simple recognisable outline
+  // suitcase / travel bag. No airplane, no beach umbrella, no sun.
   return (
     <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {/* Fuselage — cursive shape with nose at upper right and tail cutout at lower left. */}
-      <path d="M2.8 12.5 L4.2 11.9 L8.2 13.3 L11.1 10.5 L7.4 5.4 L9.1 4.9 L14.5 9.5 L20 8.4 A1.8 1.8 0 0 1 22 10.4 A1.8 1.8 0 0 1 20.4 12.1 L13.6 13.9 L9.6 17.9 L7.9 17.4 L9.1 14.3 L4.6 14.6 Z" />
-      {/* Runway / horizon line beneath the plane. */}
-      <line x1="3" y1="20.5" x2="21" y2="20.5" />
+      {/* Handle */}
+      <path d="M9 6V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V6" />
+      {/* Body of the case */}
+      <rect x="3.5" y="6" width="17" height="14" rx="2" />
+      {/* Divider running horizontally to read distinctly as a bag */}
+      <line x1="3.5" y1="12.5" x2="20.5" y2="12.5" />
+      {/* Vertical tick on the divider — clasp / centre latch */}
+      <line x1="12" y1="11.5" x2="12" y2="13.5" />
+    </svg>
+  );
+}
+
+function IconClock() {
+  // HR-2C Portal Refinement (2026-08-28) — Clock face, per founder
+  // direction §6 (Clocking In / Out). Distinct from the Scheduling
+  // calendar so the two widgets read as different concepts.
+  return (
+    <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" />
+      {/* Hour hand pointing up-and-right, minute hand pointing right */}
+      <polyline points="12 7.5 12 12 16 14" />
     </svg>
   );
 }
@@ -192,6 +207,16 @@ export default async function EmployeePortalHome() {
       href: "/employee/safety-training",
       icon: <IconTraining />,
       tourTarget: "training",
+    },
+    {
+      key: "clocking-in-out",
+      label: "Clocking In / Out",
+      // §9 — no existing employee-facing clock-in/out route or
+      // service. Render the tile visually consistently but non-
+      // navigational (§6 forbids inventing a workflow just so a
+      // widget can be clicked).
+      href: null,
+      icon: <IconClock />,
     },
   ];
 

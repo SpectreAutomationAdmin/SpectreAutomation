@@ -20,7 +20,10 @@ export default function EmployeePortalSidebar() {
       className="hidden md:block w-60 shrink-0 border-r border-stone-200 bg-white min-h-screen"
       data-testid="portal-sidebar"
     >
-      <div className="px-6 py-6 border-b border-stone-200">
+      {/* HR-2C Portal Refinement — height matched to the top header
+          (h-16) so the left-rail identity chrome and the right-side
+          Club-name chrome line up as one continuous horizontal band. */}
+      <div className="h-16 px-6 border-b border-stone-200 flex items-center">
         <div
           className="text-[11px] uppercase tracking-[0.2em] text-stone-500"
           data-testid="portal-sidebar-eyebrow"

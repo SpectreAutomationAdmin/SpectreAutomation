@@ -66,9 +66,18 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
   // host-driven) then to a neutral label. NEVER "Spectre".
   const clubName = club.name ?? branding.wordmark ?? "Employee Portal";
 
-  const displayName = employee.preferredName?.trim().length
-    ? employee.preferredName
+  // Full account identity for the top-right account control:
+  // "Chris Turcato", not just "Chris". Preferred-name preferences that
+  // exist elsewhere (Hero greeting) are unaffected — the account
+  // control identifies the employee at the full-name level so the
+  // shell matches the workspace user-menu grammar the founder called
+  // out.
+  const givenName = employee.preferredName?.trim().length
+    ? employee.preferredName.trim()
     : employee.firstName;
+  const displayName = employee.lastName?.trim().length
+    ? `${givenName} ${employee.lastName.trim()}`
+    : givenName;
 
   const hasPhoto = employee.profilePhotoDocumentId != null;
   // Cache-buster on the photo URL keyed on the document id so a

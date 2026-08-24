@@ -1,22 +1,31 @@
 // HR-2B.5 §38 (2026-08-19) — Employee Portal Profile.
-// HR-2C Portal Refinement (2026-08-24) — editable for employee-owned
-// fields (personal contact, emergency contact). Club-authoritative
-// employment / compensation / allowances / lifecycle remain read-
-// only here — those are Club-side data and the admin surface is the
-// only writer.
+// HR-2C Portal Refinement (2026-08-24 / expanded 2026-08-28) —
+// editable for employee-owned fields (personal contact, home address,
+// emergency contact, direct deposit via canonical HR-1H writer).
+// Club-authoritative employment / compensation / allowances /
+// lifecycle remain read-only here — those are Club-side data and the
+// admin surface is the only writer.
 
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import { getActiveAssignmentsAt } from "@/lib/hr/employment-assignments";
-import { getSelfPrimaryEmergencyContact } from "@/lib/hr/portal-self-service-profile";
+import {
+  getSelfPrimaryEmergencyContact,
+  getSelfHomeAddress,
+  getSelfBankMasked,
+} from "@/lib/hr/portal-self-service-profile";
 import {
   updatePersonalContactAction,
   upsertPrimaryEmergencyContactAction,
+  updateHomeAddressAction,
+  submitDirectDepositAction,
 } from "./_actions";
 import {
   PersonalContactSection,
+  AddressSection,
   EmergencyContactSection,
+  DirectDepositSection,
 } from "./ProfileEditForms";
 
 export const runtime = "nodejs";
@@ -42,6 +51,8 @@ export default async function EmployeePortalProfilePage() {
       personalEmail: true,
       mobilePhone: true,
       profilePhotoDocumentId: true,
+      hireDate: true,
+      activatedAt: true,
     },
   });
   if (!employee) redirect("/employee/login");
@@ -58,10 +69,12 @@ export default async function EmployeePortalProfilePage() {
     : [];
   const roleDeptIds = new Set(detailedAssignments.map((a) => a.departmentId).filter((v): v is string => !!v));
   const rolePosIds = new Set(detailedAssignments.map((a) => a.positionId).filter((v): v is string => !!v));
-  const [roleDepts, rolePositions, primaryEmergency] = await Promise.all([
+  const [roleDepts, rolePositions, primaryEmergency, address, bankingMasked] = await Promise.all([
     roleDeptIds.size ? prisma.department.findMany({ where: { id: { in: [...roleDeptIds] } }, select: { id: true, name: true } }) : [],
     rolePosIds.size ? prisma.employeePosition.findMany({ where: { id: { in: [...rolePosIds] } }, select: { id: true, name: true } }) : [],
     getSelfPrimaryEmergencyContact(principal),
+    getSelfHomeAddress(principal),
+    getSelfBankMasked(principal),
   ]);
   const deptMap = new Map(roleDepts.map((d) => [d.id, d.name]));
   const posMap = new Map(rolePositions.map((p) => [p.id, p.name]));
@@ -76,16 +89,18 @@ export default async function EmployeePortalProfilePage() {
     }));
 
   const legalName = [employee.firstName, employee.middleName, employee.lastName].filter(Boolean).join(" ");
+  const startDate = employee.activatedAt ?? employee.hireDate ?? null;
 
   return (
     <div className="space-y-6" data-testid="portal-profile">
       <header>
         <h1 className="font-serif text-3xl text-club-ink">Profile</h1>
         <p className="mt-2 text-sm text-stone-500">
-          Your Club record. You can update your contact and emergency contact
-          information here. Employment and pay information is Club-authoritative
-          — contact your manager or your Club&rsquo;s HR administrator to
-          request changes.
+          Your Club record. You can update your contact, address,
+          emergency contact and direct-deposit information here.
+          Employment and pay information is Club-authoritative — contact
+          your manager or your Club&rsquo;s HR administrator to request
+          changes.
         </p>
       </header>
 
@@ -119,11 +134,19 @@ export default async function EmployeePortalProfilePage() {
         action={updatePersonalContactAction}
       />
 
+      {/* Home / mailing address — editable */}
+      <AddressSection address={address} action={updateHomeAddressAction} />
+
       {/* Emergency contact — editable */}
       <EmergencyContactSection
         contact={primaryEmergency}
         action={upsertPrimaryEmergencyContactAction}
       />
+
+      {/* Direct deposit — masked read + secure replacement.
+          Composes the canonical HR-1H submitSelfBankAccount writer;
+          the portal never touches EmployeeBankAccount directly. */}
+      <DirectDepositSection masked={bankingMasked} action={submitDirectDepositAction} />
 
       {/* Your roles — read-only, canonical current primary + additional */}
       {rolesForDisplay.length > 0 ? (
@@ -151,6 +174,11 @@ export default async function EmployeePortalProfilePage() {
                 </div>
               </li>
             ))}
+            {startDate && (
+              <li className="text-xs text-stone-500 pt-1">
+                Start date: {startDate.toLocaleDateString()}
+              </li>
+            )}
           </ul>
         </section>
       ) : (
