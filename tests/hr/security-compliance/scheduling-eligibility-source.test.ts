@@ -133,15 +133,18 @@ describe("HR-2C B4 · source-contract", () => {
     expect(schedulePage).toMatch(/data-testid="portal-schedule-empty"/);
   });
 
-  it("Home compliance card upgraded to action-required + up-to-date branches (§8)", () => {
-    expect(homePage).toMatch(/data-testid="portal-home-training-summary"/);
-    expect(homePage).toMatch(/data-eligible="false"/);
-    expect(homePage).toMatch(/data-eligible="true"/);
-    expect(homePage).toMatch(/Action required/);
-    expect(homePage).toMatch(/Up to date/);
-    expect(homePage).toMatch(/data-testid="portal-home-training-cta"/);
-    // CTA links to safety-training.
-    expect(homePage).toMatch(/href="\/employee\/safety-training"/);
+  it("Home compliance reminder derives from the canonical resolver + links to Training (§8, updated for 2026-08-24 Home refinement)", () => {
+    // The B4 compliance-card DOM shape was replaced by the Home
+    // refinement (thin dismissible notification bars). The founder
+    // invariant carried over unchanged: Home consumes the canonical
+    // resolver and links to /employee/safety-training when action is
+    // required. The bar's message + tone are asserted in
+    // home-notifications.test.ts.
+    expect(homePage).toMatch(/buildHomeNotifications/);
+    // Training destination is one of the widget hrefs.
+    expect(homePage).toMatch(/href: "\/employee\/safety-training"/);
+    // Notification region rendered conditionally.
+    expect(homePage).toMatch(/data-testid="portal-home-notifications"/);
   });
 
   it("Migration is additive-only + creates one table with (employeeId, weekStart) unique key", () => {

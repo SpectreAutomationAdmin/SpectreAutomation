@@ -297,6 +297,9 @@ export async function resetDb() {
     // HR-2C B4 (2026-08-23) — Availability persistence. FKs into
     // Employee (RESTRICT); wipe BEFORE c.employee.deleteMany().
     c.employeeAvailabilityWeek.deleteMany(),
+    // HR-2C Home refinement (2026-08-24) — Home-notification dismissals.
+    // FKs into Employee (RESTRICT); wipe BEFORE c.employee.deleteMany().
+    c.employeeHomeNotificationDismissal.deleteMany(),
     c.employee.deleteMany(),
     c.employeePosition.deleteMany(),
     c.lessonPayable.deleteMany(),

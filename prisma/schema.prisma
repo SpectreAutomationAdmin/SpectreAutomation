@@ -454,6 +454,8 @@ model Club {
   trainingCompletions                TrainingCompletion[]
   // HR-2C B4 (2026-08-23) — availability persistence.
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
+  // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
+  employeeHomeNotificationDismissals EmployeeHomeNotificationDismissal[]
 }
 
 // ---------------------------------------------------------------------
@@ -3335,11 +3337,38 @@ model Employee {
   trainingAttempts           TrainingAttempt[]
   trainingCompletions        TrainingCompletion[]
   availabilityWeeks          EmployeeAvailabilityWeek[]
+  homeNotificationDismissals EmployeeHomeNotificationDismissal[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
   @@index([clubId, employeeLifecycle])
   @@index([clubId, managerEmployeeId])
+}
+
+// HR-2C Home refinement (2026-08-24) — Employee-scoped dismissal of
+// a Home notification bar. Dismissal identity is `notificationKey`
+// which encodes the underlying obligation state (e.g. a hash of the
+// outstanding required-training version ids). If the obligation set
+// changes, the key changes, and a fresh bar renders — dismissal is
+// tied to what was dismissed, not to a generic "training bar".
+//
+// This is NOT a general notification framework. There is no message
+// text stored here; the Home page derives message content from the
+// canonical resolver at render time and only asks this table
+// "has this key been dismissed?". Dismissal must never affect
+// eligibility, availability, or scheduling — it is purely a Home-
+// page visibility toggle.
+model EmployeeHomeNotificationDismissal {
+  id               String   @id @default(cuid())
+  clubId           String
+  club             Club     @relation(fields: [clubId], references: [id])
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  notificationKey  String
+  dismissedAt      DateTime @default(now())
+
+  @@unique([employeeId, notificationKey])
+  @@index([clubId, employeeId])
 }
 
 // HR-2C B4 (2026-08-23) — Employee weekly availability.

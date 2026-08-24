@@ -146,16 +146,17 @@ describe("HR-2C B3 · employee-portal training source-contract", () => {
     );
   });
 
-  it("Home summary is restrained + non-gating; count comes from canonical resolver (§17)", () => {
-    expect(homeRaw).toMatch(/resolveEmployeeSchedulingEligibility/);
-    // Renders count only if outstanding > 0.
-    expect(homeRaw).toMatch(/outstandingTraining\.length > 0/);
-    // Home does NOT gate any navigation or hide any surface — the
-    // scheduling/availability compliance gate is B4, not B3.
+  it("Home training reminder is derived from the canonical resolver, non-gating (§17)", () => {
+    // Home refinement (2026-08-24) — the compliance card was replaced
+    // by a thin dismissible notification bar. The DOM shape changed;
+    // the founder invariant did not: Home still derives from the
+    // canonical resolver and never gates navigation. `buildHomeNotifications`
+    // is the derivation site (verified elsewhere in home-notifications).
+    expect(homeRaw).toMatch(/buildHomeNotifications/);
+    // Home does NOT redirect off itself when ineligible.
     expect(home).not.toMatch(/redirect\([^)]*safety-training/);
-    // Testid so Playwright can prove the summary appears.
-    expect(homeRaw).toMatch(/data-testid="portal-home-training-summary"/);
-    expect(homeRaw).toMatch(/data-testid="portal-home-training-count"/);
+    // Notification region is rendered conditionally on the bars list.
+    expect(homeRaw).toMatch(/data-testid="portal-home-notifications"/);
   });
 
   it("sidebar tour anchor points at the real dashboard (§18)", () => {

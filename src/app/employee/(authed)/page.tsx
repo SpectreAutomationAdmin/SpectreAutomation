@@ -1,62 +1,130 @@
-// HR-2B.5 §33 (2026-08-19) — Employee Portal Home.
-// HR-2C §1-4 (2026-08-20) — Adds the Club-configurable photographic
-// hero header. When the Club has uploaded a ClubMedia row for
-// category=`employee_portal_hero` it renders through the same-origin
-// proxy route; otherwise a branded gradient fallback derived from
-// Club.primaryColor takes its place. Never emits the "Spectre"
-// wordmark [[feedback_member_brand_shielding]].
+// HR-2C Home refinement (2026-08-24) — Employee Portal Home.
 //
-// Real, useful information that already exists. No fake widgets, no
-// developer-facing copy. Every value comes from a database read
-// scoped by the EmployeePortalPrincipal.
+// Final hierarchy (§11):
+//   1. Club hero photograph        (unchanged — Club-configurable)
+//   2. Thin dismissible notification bars — rendered ONLY when there
+//      is something to show. When empty, the widgets rise naturally.
+//   3. Five navigation widgets: Scheduling / Paystubs / Time Off
+//      Requests / Forms / Training.
+//
+// Removed:
+//   - "Welcome to your employee portal, X." heading.
+//   - The employee-number / position / department / lifecycle summary
+//     panel. That information lives in Profile now.
+//
+// Preserved:
+//   - EmployeePortalHero (photo + greeting + position overlay).
+//   - EmployeeTourOnFirstLogin (Welcome step still anchors to
+//     `[data-testid="portal-hero"]`, no code change needed).
+//   - The B4 SUBMITTED-onboarding banner remains — an employee whose
+//     onboarding was just submitted deserves a Home confirmation.
+//
+// Widget destination truth:
+//   Scheduling         → /employee/schedule            (real)
+//   Paystubs           → /employee/pay                 (real; page currently truthful-empty)
+//   Time Off Requests  → unavailable (no route yet)
+//   Forms              → unavailable (no dedicated Forms surface;
+//                        Documents is a separate viewer, not Forms)
+//   Training           → /employee/safety-training     (real)
 
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstLogin";
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
 import { getClubMedia } from "@/lib/club/media";
-import { resolveEmployeeSchedulingEligibility } from "@/lib/hr/training/applicability";
+import { buildHomeNotifications } from "@/lib/hr/home-notifications";
+import HomeNotificationBar from "./_home/HomeNotificationBar";
+import HomeWidgetGrid, { type WidgetDef } from "./_home/HomeWidgetGrid";
+import { dismissHomeNotificationAction } from "./_home/_actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function formatDate(d: Date | null | undefined): string {
-  if (!d) return "—";
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+// --- Widget icon set (monoline, currentColor, restrained) ------------------
+
+function IconCalendar() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <line x1="3.5" y1="10" x2="20.5" y2="10" />
+      <line x1="8" y1="3" x2="8" y2="7" />
+      <line x1="16" y1="3" x2="16" y2="7" />
+    </svg>
+  );
 }
 
-function formatEmploymentType(t: string | null): string {
-  if (!t) return "—";
-  return { FULL_TIME: "Full-time", PART_TIME: "Part-time", SEASONAL: "Seasonal", CONTRACT: "Contract" }[t] ?? t;
+function IconPaystub() {
+  // Receipt-like rectangle with two ledger lines.
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3h10l3 3v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M16 3v3h3" />
+      <line x1="8" y1="12" x2="16" y2="12" />
+      <line x1="8" y1="16" x2="13" y2="16" />
+    </svg>
+  );
 }
 
-function formatLifecycle(l: string, submittedState: string | null): string {
-  if (submittedState === "APPROVED") return "Active";
-  if (submittedState === "SUBMITTED") return "Awaiting Club review";
-  if (l === "PRE_HIRE") return "Pre-hire";
-  if (l === "ACTIVE") return "Active";
-  if (l === "LEAVE") return "On leave";
-  if (l === "TERMINATED") return "Terminated";
-  return l;
+function IconTimeOff() {
+  // Simple sun over horizon — reads as "away from work".
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <line x1="12" y1="4" x2="12" y2="5.5" />
+      <line x1="12" y1="18.5" x2="12" y2="20" />
+      <line x1="4" y1="12" x2="5.5" y2="12" />
+      <line x1="18.5" y1="12" x2="20" y2="12" />
+      <line x1="6" y1="6" x2="7" y2="7" />
+      <line x1="17" y1="17" x2="18" y2="18" />
+      <line x1="6" y1="18" x2="7" y2="17" />
+      <line x1="17" y1="7" x2="18" y2="6" />
+    </svg>
+  );
 }
+
+function IconForms() {
+  // Clipboard / form.
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5" y="4" width="14" height="17" rx="2" />
+      <path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z" />
+      <line x1="8.5" y1="11" x2="15.5" y2="11" />
+      <line x1="8.5" y1="15" x2="15.5" y2="15" />
+    </svg>
+  );
+}
+
+function IconTraining() {
+  // Shield with tick — Safety-first tone consistent with the
+  // Safety & Training surface.
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3l7.5 3v6c0 4.5-3.2 8.4-7.5 9-4.3-.6-7.5-4.5-7.5-9V6L12 3z" />
+      <polyline points="9 12 11.2 14.2 15 10.5" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, club, eligibility] = await Promise.all([
+  const [employee, heroMedia, club, notifications] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
-      include: {
-        department: { select: { name: true } },
+      select: {
+        id: true,
+        firstName: true,
+        preferredName: true,
         position: { select: { name: true } },
-        manager: { select: { firstName: true, lastName: true, preferredName: true } },
+        portalTourCompletedAt: true,
         onboardingSessions: {
           orderBy: { startedAt: "desc" },
           take: 1,
-          select: { state: true, submittedAt: true },
+          select: { state: true },
         },
       },
     }),
@@ -65,25 +133,57 @@ export default async function EmployeePortalHome() {
       where: { id: principal.clubId },
       select: { primaryColor: true },
     }),
-    // HR-2C B3 §17 — restrained Home summary; NON-gating (the actual
-    // scheduling/availability compliance gate arrives with B4).
-    resolveEmployeeSchedulingEligibility(principal.employeeId).catch(() => null),
+    buildHomeNotifications(principal),
   ]);
   if (!employee) redirect("/employee/login");
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
     : employee.firstName;
-  const managerName = employee.manager
-    ? (employee.manager.preferredName ?? employee.manager.firstName) + " " + employee.manager.lastName
-    : null;
-  const sessionState = employee.onboardingSessions[0]?.state ?? null;
-  const startDate = employee.hireDate ?? employee.expectedStartDate;
-
   const tourAlreadyDone = employee.portalTourCompletedAt !== null;
+  const sessionState = employee.onboardingSessions[0]?.state ?? null;
+
+  // Show only notifications the employee has not dismissed for the
+  // current underlying obligation state.
+  const activeNotifications = notifications.filter((n) => !n.dismissed);
+
+  const widgets: WidgetDef[] = [
+    {
+      key: "scheduling",
+      label: "Scheduling",
+      href: "/employee/schedule",
+      icon: <IconCalendar />,
+    },
+    {
+      key: "paystubs",
+      label: "Paystubs",
+      href: "/employee/pay",
+      icon: <IconPaystub />,
+    },
+    {
+      key: "time-off-requests",
+      label: "Time Off Requests",
+      href: null,
+      icon: <IconTimeOff />,
+      unavailableNote: "This surface will open when your Club enables time-off requests.",
+    },
+    {
+      key: "forms",
+      label: "Forms",
+      href: null,
+      icon: <IconForms />,
+      unavailableNote: "Forms will appear here as your Club adds them.",
+    },
+    {
+      key: "training",
+      label: "Training",
+      href: "/employee/safety-training",
+      icon: <IconTraining />,
+    },
+  ];
 
   return (
-    <div className="space-y-8" data-testid="portal-home">
+    <div className="space-y-4" data-testid="portal-home">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
 
       <EmployeePortalHero
@@ -95,115 +195,42 @@ export default async function EmployeePortalHome() {
         positionName={employee.position?.name ?? null}
       />
 
-      <header>
-        <h1 className="font-serif text-3xl leading-tight text-club-ink">
-          Welcome to your employee portal, {displayName}.
-        </h1>
-        <p className="mt-2 text-sm text-stone-500">
-          Everything you need to know about your role at the Club lives here.
-        </p>
-      </header>
-
-      <section
-        className="rounded-lg border border-stone-200 bg-white px-6 py-6 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4"
-        data-testid="portal-home-summary"
-      >
-        <Item label="Employee number">
-          <span className="font-mono">{employee.employeeNumber}</span>
-        </Item>
-        <Item label="Onboarding status">
-          {formatLifecycle(employee.employeeLifecycle, sessionState)}
-        </Item>
-        <Item label="Position">{employee.position?.name ?? "—"}</Item>
-        <Item label="Department">{employee.department?.name ?? "—"}</Item>
-        <Item label="Employment type">
-          {formatEmploymentType(employee.employmentType)}
-        </Item>
-        <Item label="Start date">{formatDate(startDate)}</Item>
-        {managerName && <Item label="Reports to">{managerName}</Item>}
-      </section>
-
-      {eligibility && eligibility.applicable.length > 0 && (
-        eligibility.outstandingTraining.length > 0 ? (
-          // HR-2C B4 (2026-08-23) — Actionable compliance banner.
-          // Upgraded from B3's soft summary because eligibility now
-          // gates real availability writes and future scheduling.
-          <section
-            className="rounded-lg border border-amber-200 bg-amber-50/70 px-6 py-5"
-            data-testid="portal-home-training-summary"
-            data-eligible="false"
-          >
-            <div className="flex items-baseline justify-between gap-4">
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.2em] text-amber-800">
-                  Action required
-                </div>
-                <p className="mt-2 text-sm text-amber-900">
-                  <strong data-testid="portal-home-training-count">
-                    {eligibility.outstandingTraining.length}
-                  </strong>{" "}
-                  required training{" "}
-                  {eligibility.outstandingTraining.length === 1 ? "course" : "courses"}{" "}
-                  must be completed before you can submit availability or be
-                  scheduled.
-                </p>
-              </div>
-            </div>
-            <div className="mt-4">
-              <Link
-                href="/employee/safety-training"
-                className="btn btn-primary"
-                data-testid="portal-home-training-cta"
-              >
-                Go to Safety &amp; Training
-              </Link>
-            </div>
-          </section>
-        ) : (
-          // Compliance state visible even when up-to-date so the
-          // employee can see they're in good standing at a glance.
-          <section
-            className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-6 py-4"
-            data-testid="portal-home-training-summary"
-            data-eligible="true"
-          >
-            <div className="text-[11px] uppercase tracking-[0.2em] text-emerald-800">
-              Required training
-            </div>
-            <p
-              className="mt-1 text-sm text-emerald-900"
-              data-testid="portal-home-training-uptodate"
-            >
-              Up to date
-            </p>
-          </section>
-        )
+      {activeNotifications.length > 0 && (
+        <section
+          className="space-y-2"
+          data-testid="portal-home-notifications"
+          aria-label="Notifications"
+        >
+          {activeNotifications.map((n) => (
+            <HomeNotificationBar
+              key={n.key}
+              notificationKey={n.key}
+              tone={n.tone}
+              message={n.message}
+              actionLabel={n.actionLabel}
+              actionHref={n.actionHref}
+              dismissAction={dismissHomeNotificationAction}
+            />
+          ))}
+        </section>
       )}
+
+      <div className="pt-2">
+        <HomeWidgetGrid widgets={widgets} />
+      </div>
 
       {sessionState === "SUBMITTED" && (
         <section
-          className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-5"
+          className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
           data-testid="portal-home-awaiting-review"
         >
-          <h2 className="font-serif text-lg text-stone-900">
-            Your Club is reviewing your onboarding.
-          </h2>
-          <p className="mt-2 text-sm text-stone-700 leading-relaxed">
-            You can use the portal in the meantime. Pay statements and
-            schedule details will appear once you&rsquo;ve been fully
-            activated.
+          <p className="text-sm text-emerald-900">
+            <strong>Your Club is reviewing your onboarding.</strong> You can use
+            the portal in the meantime — pay statements and schedule details
+            will appear once you&rsquo;ve been fully activated.
           </p>
         </section>
       )}
-    </div>
-  );
-}
-
-function Item({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="text-[11px] uppercase tracking-[0.2em] text-stone-500">{label}</div>
-      <div className="mt-1 text-sm text-club-ink">{children}</div>
     </div>
   );
 }

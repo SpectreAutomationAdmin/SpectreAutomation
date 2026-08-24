@@ -463,6 +463,8 @@ model Club {
   trainingCompletions                TrainingCompletion[]
   // HR-2C B4 (2026-08-23) — availability persistence.
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
+  // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
+  employeeHomeNotificationDismissals EmployeeHomeNotificationDismissal[]
 }
 
 // ---------------------------------------------------------------------
@@ -3352,6 +3354,8 @@ model Employee {
   trainingCompletions        TrainingCompletion[]
   // HR-2C B4 (2026-08-23) — Employee weekly availability.
   availabilityWeeks          EmployeeAvailabilityWeek[]
+  // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
+  homeNotificationDismissals EmployeeHomeNotificationDismissal[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -3389,6 +3393,24 @@ model EmployeeAvailabilityWeek {
 
   @@unique([employeeId, weekStart])
   @@index([clubId, weekStart])
+}
+
+// HR-2C Home refinement (2026-08-24) — Employee-scoped dismissal of
+// a Home notification bar. Dismissal identity is `notificationKey`
+// which encodes the underlying obligation state (a hash of the
+// outstanding required-training version ids). Never affects
+// eligibility or availability — purely a Home-page visibility toggle.
+model EmployeeHomeNotificationDismissal {
+  id               String   @id @default(cuid())
+  clubId           String
+  club             Club     @relation(fields: [clubId], references: [id])
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  notificationKey  String
+  dismissedAt      DateTime @default(now())
+
+  @@unique([employeeId, notificationKey])
+  @@index([clubId, employeeId])
 }
 
 // status: DRAFT | OPEN | LOCKED | POSTED
