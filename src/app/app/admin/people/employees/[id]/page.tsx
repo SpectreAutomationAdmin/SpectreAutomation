@@ -19,6 +19,16 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getDeleteEligibility, getEmployee } from "@/lib/hr/employees";
 import { listEmploymentPeriods } from "@/lib/hr/employment-periods";
+import { listAssignments } from "@/lib/hr/employment-assignments";
+import { listCompensationHistory } from "@/lib/hr/compensation";
+import { listAllowances } from "@/lib/hr/allowances";
+import {
+  addAssignmentAction,
+  endAssignmentAction,
+  changeCompensationAction,
+  addAllowanceAction,
+  endAllowanceAction,
+} from "./_employment-actions";
 import { listEmployeeDocuments } from "@/lib/hr/documents";
 import { listSessions, listTransitions } from "@/lib/hr/onboarding-sessions";
 import { getSinMasked } from "@/lib/hr/sensitive-identity";
@@ -27,6 +37,7 @@ import { getTaxProfileMasked } from "@/lib/hr/tax-profile";
 import { isAppError } from "@/lib/errors";
 import EmployeeProfileView from "@/components/hr/EmployeeProfileView";
 import EmployeeLifecycleControls from "@/components/hr/EmployeeLifecycleControls";
+import EmployeeEmploymentSection from "@/components/hr/EmployeeEmploymentSection";
 
 export default async function EmployeeProfilePage({
   params,
@@ -48,6 +59,11 @@ export default async function EmployeeProfilePage({
   const canReadDocuments = hasPermission(principal, profile.clubId, "hr:documents:read");
   const canReadOnboarding = hasPermission(principal, profile.clubId, "hr:onboarding:read");
   const canReadEmployment = hasPermission(principal, profile.clubId, "hr:employment:read");
+  const canWriteEmployment = hasPermission(principal, profile.clubId, "hr:employment:write");
+  const canReadCompensation = hasPermission(principal, profile.clubId, "hr:compensation:read");
+  const canWriteCompensation = hasPermission(principal, profile.clubId, "hr:compensation:write");
+  const canReadAllowance = hasPermission(principal, profile.clubId, "hr:allowance:read");
+  const canWriteAllowance = hasPermission(principal, profile.clubId, "hr:allowance:write");
   const canReadSin = hasPermission(principal, profile.clubId, "hr:sin:read");
   const canReadBanking = hasPermission(principal, profile.clubId, "hr:banking:read");
   const canReadTax = hasPermission(principal, profile.clubId, "hr:tax:read");
@@ -107,6 +123,39 @@ export default async function EmployeeProfilePage({
           },
           select: { kind: true, acknowledgedAt: true },
         })
+      : Promise.resolve([]),
+  ]);
+
+  // HR-2C Employment (2026-08-24) — Employment tab data.
+  const [assignments, compensationHistory, allowances, deptOptions, positionOptions, managerOptions] = await Promise.all([
+    canReadEmployment ? listAssignments(principal, profile.id) : Promise.resolve([]),
+    canReadCompensation ? listCompensationHistory(principal, profile.id) : Promise.resolve([]),
+    canReadAllowance ? listAllowances(principal, profile.id) : Promise.resolve([]),
+    canReadEmployment
+      ? prisma.department.findMany({
+          where: { clubId: profile.clubId },
+          select: { id: true, name: true, code: true },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
+    canReadEmployment
+      ? prisma.employeePosition.findMany({
+          where: { clubId: profile.clubId, isActive: true },
+          select: { id: true, name: true, code: true, departmentId: true },
+          orderBy: { name: "asc" },
+        })
+      : Promise.resolve([]),
+    canReadEmployment
+      ? prisma.employee
+          .findMany({
+            where: { clubId: profile.clubId, status: { not: "TERMINATED" }, id: { not: profile.id } },
+            select: { id: true, firstName: true, preferredName: true, lastName: true },
+            orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+            take: 200,
+          })
+          .then((rows) =>
+            rows.map((r) => ({ id: r.id, label: `${r.preferredName ?? r.firstName} ${r.lastName}` })),
+          )
       : Promise.resolve([]),
   ]);
 
@@ -315,6 +364,66 @@ export default async function EmployeeProfilePage({
             employeeName={`${profile.firstName} ${profile.lastName}`}
             eligibility={deleteEligibility}
             currentLifecycle={profile.employeeLifecycle}
+          />
+        ) : null
+      }
+      employmentSection={
+        canReadEmployment ? (
+          <EmployeeEmploymentSection
+            employeeId={profile.id}
+            assignments={assignments.map((a) => ({
+              id: a.id,
+              role: a.role,
+              departmentId: a.departmentId,
+              departmentName: a.departmentName,
+              positionId: a.positionId,
+              positionName: a.positionName,
+              managerEmployeeId: a.managerEmployeeId,
+              managerName: a.managerName,
+              employmentType: a.employmentType,
+              effectiveFrom: a.effectiveFrom.toISOString(),
+              effectiveTo: a.effectiveTo ? a.effectiveTo.toISOString() : null,
+              isCurrent: a.isCurrent,
+              notes: a.notes,
+            }))}
+            compensationHistory={compensationHistory.map((c) => ({
+              id: c.id,
+              cadence: c.cadence,
+              amount: c.rate.toString(),
+              currency: c.currency,
+              effectiveFrom: c.effectiveFrom.toISOString(),
+              effectiveTo: c.effectiveTo ? c.effectiveTo.toISOString() : null,
+              assignmentId: c.assignmentId ?? null,
+              notes: c.notes,
+            }))}
+            allowances={allowances.map((a) => ({
+              id: a.id,
+              allowanceType: a.allowanceType,
+              description: a.description,
+              amount: a.amount,
+              currency: a.currency,
+              frequency: a.frequency,
+              taxable: a.taxable,
+              effectiveFrom: a.effectiveFrom.toISOString(),
+              effectiveTo: a.effectiveTo ? a.effectiveTo.toISOString() : null,
+              isCurrent: a.isCurrent,
+              assignmentId: a.assignmentId,
+            }))}
+            departments={deptOptions}
+            positions={positionOptions}
+            managers={managerOptions}
+            canReadCompensation={canReadCompensation}
+            canWriteCompensation={canWriteCompensation}
+            canReadAllowance={canReadAllowance}
+            canWriteAllowance={canWriteAllowance}
+            canWriteEmployment={canWriteEmployment}
+            actions={{
+              addAssignment: addAssignmentAction,
+              endAssignment: endAssignmentAction,
+              changeCompensation: changeCompensationAction,
+              addAllowance: addAllowanceAction,
+              endAllowance: endAllowanceAction,
+            }}
           />
         ) : null
       }

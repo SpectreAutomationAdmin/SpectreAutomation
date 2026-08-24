@@ -465,6 +465,9 @@ model Club {
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
   // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
   employeeHomeNotificationDismissals EmployeeHomeNotificationDismissal[]
+  // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
+  employmentAssignments              EmployeeEmploymentAssignment[]
+  employeeAllowances                 EmployeeAllowance[]
 }
 
 // ---------------------------------------------------------------------
@@ -3356,6 +3359,9 @@ model Employee {
   availabilityWeeks          EmployeeAvailabilityWeek[]
   // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
   homeNotificationDismissals EmployeeHomeNotificationDismissal[]
+  // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
+  employmentAssignments      EmployeeEmploymentAssignment[]
+  allowances                 EmployeeAllowance[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -10195,10 +10201,69 @@ model EmployeeCompensation {
   notes         String?
   actorUserId   String?
   actor         User?     @relation("EmployeeCompensationActor", fields: [actorUserId], references: [id])
+  // HR-2C Employment (2026-08-24) — optional role-specific compensation.
+  assignmentId  String?
+  assignment    EmployeeEmploymentAssignment? @relation("AssignmentCompensations", fields: [assignmentId], references: [id])
   createdAt     DateTime  @default(now())
 
   @@index([clubId])
   @@index([employeeId, effectiveFrom])
+  @@index([assignmentId, effectiveFrom])
+}
+
+// HR-2C Employment (2026-08-24) — Multi-role assignment registry.
+// One PRIMARY active per employee; multiple ADDITIONAL allowed.
+// Effective-dated half-open interval [effectiveFrom, effectiveTo).
+model EmployeeEmploymentAssignment {
+  id                String    @id @default(cuid())
+  clubId            String
+  club              Club      @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee  @relation(fields: [employeeId], references: [id])
+  role              String
+  departmentId      String?
+  positionId        String?
+  managerEmployeeId String?
+  employmentType    String
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  compensations     EmployeeCompensation[]  @relation("AssignmentCompensations")
+  allowances        EmployeeAllowance[]
+
+  @@index([clubId, employeeId, effectiveFrom])
+  @@index([employeeId, role])
+}
+
+// HR-2C Employment (2026-08-24) — Recurring employee allowance.
+// Effective-dated. Optional per-assignment scope. `taxable` is admin-
+// controlled classification for Payroll consumption.
+model EmployeeAllowance {
+  id              String    @id @default(cuid())
+  clubId          String
+  club            Club      @relation(fields: [clubId], references: [id])
+  employeeId      String
+  employee        Employee  @relation(fields: [employeeId], references: [id])
+  assignmentId    String?
+  assignment      EmployeeEmploymentAssignment? @relation(fields: [assignmentId], references: [id])
+  allowanceType   String
+  description     String?
+  amount          Decimal
+  currency        String?
+  frequency       String
+  taxable         Boolean   @default(true)
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
 }
 
 // One-per-Employee payroll profile. Foundational configuration for

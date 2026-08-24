@@ -300,6 +300,13 @@ export async function resetDb() {
     // HR-2C Home refinement (2026-08-24) — Home-notification dismissals.
     // FKs into Employee (RESTRICT); wipe BEFORE c.employee.deleteMany().
     c.employeeHomeNotificationDismissal.deleteMany(),
+    // HR-2C Employment (2026-08-24) — Allowances FK into Assignment;
+    // Assignment FKs into Employee. Wipe leaf-first.
+    c.employeeAllowance.deleteMany(),
+    // Compensation may reference Assignment; wipe assignment FK
+    // out of compensation before deleting assignments.
+    c.employeeCompensation.updateMany({ data: { assignmentId: null } }),
+    c.employeeEmploymentAssignment.deleteMany(),
     c.employee.deleteMany(),
     c.employeePosition.deleteMany(),
     c.lessonPayable.deleteMany(),

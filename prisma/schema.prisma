@@ -456,6 +456,9 @@ model Club {
   employeeAvailabilityWeeks          EmployeeAvailabilityWeek[]
   // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
   employeeHomeNotificationDismissals EmployeeHomeNotificationDismissal[]
+  // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
+  employmentAssignments              EmployeeEmploymentAssignment[]
+  employeeAllowances                 EmployeeAllowance[]
 }
 
 // ---------------------------------------------------------------------
@@ -3338,11 +3341,106 @@ model Employee {
   trainingCompletions        TrainingCompletion[]
   availabilityWeeks          EmployeeAvailabilityWeek[]
   homeNotificationDismissals EmployeeHomeNotificationDismissal[]
+  // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
+  employmentAssignments      EmployeeEmploymentAssignment[]
+  allowances                 EmployeeAllowance[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
   @@index([clubId, employeeLifecycle])
   @@index([clubId, managerEmployeeId])
+}
+
+// HR-2C Employment (2026-08-24) — Effective-dated role assignment.
+//
+// Multi-role model. An employee may hold zero or one PRIMARY
+// assignment AND any number of ADDITIONAL assignments concurrently.
+// Ended assignments (effectiveTo <= now) remain as historical rows
+// and never mutate.
+//
+// EmploymentPeriod (existing) records lifecycle transitions (HIRE /
+// TRANSFER / PROMOTION / TERMINATION) at the Employee level and
+// remains authoritative for those. EmployeeEmploymentAssignment is
+// the ROLE registry — Payroll and future Scheduling reference an
+// assignment id when they need role-specific rate/department/manager.
+//
+// Invariants (service-enforced):
+//   - one active PRIMARY per (employeeId, active-window);
+//   - ADDITIONAL rows may overlap freely;
+//   - historical rows never mutate — a "change" closes the current
+//     row and opens a new one.
+model EmployeeEmploymentAssignment {
+  id                String    @id @default(cuid())
+  clubId            String
+  club              Club      @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee  @relation(fields: [employeeId], references: [id])
+  // PRIMARY | ADDITIONAL — service enforces the single-active-primary
+  // invariant. Additional roles may overlap.
+  role              String
+  departmentId      String?
+  positionId        String?
+  managerEmployeeId String?
+  // FULL_TIME | PART_TIME | SEASONAL | CONTRACT — per-assignment so
+  // a salaried primary + hourly seasonal secondary are both expressible.
+  employmentType    String
+  // Half-open interval [effectiveFrom, effectiveTo). NULL effectiveTo
+  // = still open. The row is CURRENT at time `t` when
+  //   effectiveFrom <= t AND (effectiveTo IS NULL OR effectiveTo > t).
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Role-specific compensation opts into this assignment via
+  // EmployeeCompensation.assignmentId. Cascade left to service so a
+  // deleted assignment does not silently orphan history.
+  compensations     EmployeeCompensation[]  @relation("AssignmentCompensations")
+  allowances        EmployeeAllowance[]
+
+  @@index([clubId, employeeId, effectiveFrom])
+  @@index([employeeId, role])
+}
+
+// HR-2C Employment (2026-08-24) — Recurring employee allowance.
+//
+// Effective-dated. Frequency PER_PAY_PERIOD | MONTHLY | ANNUAL.
+// `assignmentId` is optional — an allowance MAY be tied to a specific
+// role (e.g. Vehicle allowance only for the Grounds Superintendent
+// role) or MAY be employee-wide (e.g. Cell Phone allowance regardless
+// of which role they're working).
+//
+// `allowanceType` uses the canonical suggested catalogue
+// (CELL_PHONE / UNIFORM / VEHICLE / PROFESSIONAL_DUES / OTHER) but is
+// stored as a free-form string so a Club may extend it. `taxable`
+// is the payroll-consumption seam — the classification is admin-
+// controlled and stored, never inferred.
+model EmployeeAllowance {
+  id            String    @id @default(cuid())
+  clubId        String
+  club          Club      @relation(fields: [clubId], references: [id])
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  assignmentId  String?
+  assignment    EmployeeEmploymentAssignment? @relation(fields: [assignmentId], references: [id])
+  // CELL_PHONE | UNIFORM | VEHICLE | PROFESSIONAL_DUES | OTHER (or Club extension)
+  allowanceType String
+  description   String?
+  amount        Decimal
+  currency      String?
+  // PER_PAY_PERIOD | MONTHLY | ANNUAL
+  frequency     String
+  taxable       Boolean   @default(true)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
 }
 
 // HR-2C Home refinement (2026-08-24) — Employee-scoped dismissal of
@@ -10162,10 +10260,18 @@ model EmployeeCompensation {
   notes         String?
   actorUserId   String?
   actor         User?     @relation("EmployeeCompensationActor", fields: [actorUserId], references: [id])
+  // HR-2C Employment (2026-08-24) — optional role-specific compensation.
+  // When null, this row is employee-wide (legacy — backwards compatible
+  // with existing rows). When set, the rate applies only to hours
+  // worked / salary associated with the referenced assignment. Payroll
+  // consumers must handle both branches.
+  assignmentId  String?
+  assignment    EmployeeEmploymentAssignment? @relation("AssignmentCompensations", fields: [assignmentId], references: [id])
   createdAt     DateTime  @default(now())
 
   @@index([clubId])
   @@index([employeeId, effectiveFrom])
+  @@index([assignmentId, effectiveFrom])
 }
 
 // One-per-Employee payroll profile. Foundational configuration for

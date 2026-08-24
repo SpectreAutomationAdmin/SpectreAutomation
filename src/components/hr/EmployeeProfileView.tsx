@@ -146,6 +146,12 @@ interface Props {
    *  Overview tab. The parent page decides whether to render — this
    *  component is presentation-only. */
   lifecycleControls?: React.ReactNode;
+  /** HR-2C Employment (2026-08-24) — Optional Employment tab slot. When
+   *  provided, replaces the default legacy Employment-history view with
+   *  the multi-role + compensation + allowances section. The parent
+   *  passes the fully-constructed section; this component just slots it
+   *  in place so the tab rail + tab-switch chrome stays here. */
+  employmentSection?: React.ReactNode;
 }
 
 const TABS = [
@@ -177,7 +183,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, employmentSection } = props;
   const [tab, setTab] = useState<TabKey>("overview");
 
   const displayName = employee.preferredName?.trim().length
@@ -410,29 +416,31 @@ export default function EmployeeProfileView(props: Props) {
       )}
 
       {tab === "employment" && (
-        <section className="spectre-person-body">
-          <h2 className="spectre-person-section-title">Employment history</h2>
-          <div className="spectre-person-section">
-            <table className="table-base">
-              <thead>
-                <tr><th>From</th><th>To</th><th>Type</th><th>Reason</th></tr>
-              </thead>
-              <tbody>
-                {employmentPeriods.length === 0 && (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-stone-500">No employment history yet.</td></tr>
-                )}
-                {employmentPeriods.map((p) => (
-                  <tr key={p.id}>
-                    <td>{formatDate(p.effectiveFrom)}</td>
-                    <td>{p.effectiveTo ? formatDate(p.effectiveTo) : "current"}</td>
-                    <td className="text-stone-600 text-xs">{humanize(p.employmentType)}</td>
-                    <td className="text-stone-600 text-xs">{humanize(p.reason)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+        employmentSection ?? (
+          <section className="spectre-person-body">
+            <h2 className="spectre-person-section-title">Employment history</h2>
+            <div className="spectre-person-section">
+              <table className="table-base">
+                <thead>
+                  <tr><th>From</th><th>To</th><th>Type</th><th>Reason</th></tr>
+                </thead>
+                <tbody>
+                  {employmentPeriods.length === 0 && (
+                    <tr><td colSpan={4} className="px-4 py-8 text-center text-stone-500">No employment history yet.</td></tr>
+                  )}
+                  {employmentPeriods.map((p) => (
+                    <tr key={p.id}>
+                      <td>{formatDate(p.effectiveFrom)}</td>
+                      <td>{p.effectiveTo ? formatDate(p.effectiveTo) : "current"}</td>
+                      <td className="text-stone-600 text-xs">{humanize(p.employmentType)}</td>
+                      <td className="text-stone-600 text-xs">{humanize(p.reason)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )
       )}
 
       {tab === "payroll" && (

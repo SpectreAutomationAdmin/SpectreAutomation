@@ -98,6 +98,13 @@ export interface ChangeCompensationInput {
   cadence: string; // HOURLY | SALARY | COMMISSION | PIECE_RATE
   currency?: string | null;
   notes?: string | null;
+  // HR-2C Employment (2026-08-24) — optional role scope.
+  // When null (default) the compensation applies employee-wide (legacy
+  // discipline: at most one open employee-wide row). When set, the
+  // compensation applies to hours worked / salary associated with the
+  // referenced assignment; per-assignment invariant is "at most one
+  // open row PER assignmentId".
+  assignmentId?: string | null;
 }
 
 /**
@@ -143,11 +150,27 @@ export async function changeCompensation(
   const amount = normaliseAmount(input.amount, "amount");
   const currency = normaliseCurrency(input.currency ?? null);
 
-  // Load the currently-open row (if any) OUTSIDE the transaction to
-  // capture the `before` audit snapshot; re-check inside the tx to
-  // avoid a torn read.
+  // HR-2C Employment (2026-08-24) — role scope. When assignmentId is
+  // provided, verify it belongs to this employee's Club, then close
+  // only THIS assignment's open row. Employee-wide (assignmentId ==
+  // null) compensation still closes the employee-wide open row and
+  // leaves per-assignment rows alone.
+  const assignmentId = input.assignmentId ?? null;
+  if (assignmentId) {
+    const a = await prisma.employeeEmploymentAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { id: true, clubId: true, employeeId: true },
+    });
+    if (!a || a.clubId !== employee.clubId || a.employeeId !== employeeId) {
+      throw new ValidationError([{ path: "assignmentId", message: "Assignment not found for this employee." }]);
+    }
+  }
+
+  // Load the currently-open row (if any) FOR THE SAME SCOPE OUTSIDE
+  // the transaction to capture the `before` audit snapshot; re-check
+  // inside the tx to avoid a torn read.
   const priorOpen = await prisma.employeeCompensation.findFirst({
-    where: { employeeId, effectiveTo: null },
+    where: { employeeId, effectiveTo: null, assignmentId },
     orderBy: { effectiveFrom: "desc" },
   });
   if (priorOpen) {
@@ -164,12 +187,12 @@ export async function changeCompensation(
   }
 
   const created = await prisma.$transaction(async (tx) => {
-    // Step 1 — close whatever is currently open. `updateMany` is safe:
-    // if the prior read saw nothing but a concurrent writer landed a
-    // row after, this still closes it correctly. Guarantees the
-    // "at most one open row" invariant.
+    // Step 1 — close whatever is currently open FOR THIS SCOPE. When
+    // assignmentId is null, the employee-wide row closes. When
+    // assignmentId is set, only that assignment's open row closes.
+    // The "at most one open row per scope" invariant is preserved.
     await tx.employeeCompensation.updateMany({
-      where: { employeeId, effectiveTo: null },
+      where: { employeeId, effectiveTo: null, assignmentId },
       data: { effectiveTo: effectiveFrom },
     });
 
@@ -185,16 +208,21 @@ export async function changeCompensation(
         currency,
         notes: input.notes ?? null,
         actorUserId: principal.id,
+        assignmentId,
       },
     });
 
-    // Step 3 — legacy shadow-write. This is the ONLY writer of
-    // `Employee.payRate` in the codebase. See employees.ts's
-    // `updateEmployee` — it deliberately refuses a payRate arg.
-    await tx.employee.update({
-      where: { id: employeeId },
-      data: { payRate: amount },
-    });
+    // Step 3 — legacy shadow-write to Employee.payRate. Preserve the
+    // exclusive-writer invariant only for the EMPLOYEE-WIDE branch
+    // (assignmentId == null); role-specific compensation MUST NOT
+    // clobber the legacy field because Payroll consumers expect
+    // Employee.payRate to represent the employee-wide rate.
+    if (!assignmentId) {
+      await tx.employee.update({
+        where: { id: employeeId },
+        data: { payRate: amount },
+      });
+    }
 
     return row;
   });
@@ -220,10 +248,36 @@ export async function changeCompensation(
       effectiveFrom: created.effectiveFrom,
       effectiveTo: null,
       currency: created.currency,
+      assignmentId,
     },
   });
 
   return created;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-scope reads for Payroll / UI (HR-2C Employment)
+// ---------------------------------------------------------------------------
+
+/** Point-in-time reader that accepts either an assignment scope OR
+ *  the employee-wide scope. Returns null when nothing is active. */
+export async function getCompensationAtForScope(
+  principal: Principal,
+  employeeId: string,
+  scope: { assignmentId: string | null },
+  t: Date,
+) {
+  const employee = await loadEmployee(principal, employeeId);
+  requirePermission(principal, employee.clubId, "hr:compensation:read");
+  return prisma.employeeCompensation.findFirst({
+    where: {
+      employeeId,
+      assignmentId: scope.assignmentId,
+      effectiveFrom: { lte: t },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: t } }],
+    },
+    orderBy: { effectiveFrom: "desc" },
+  });
 }
 
 // ---------------------------------------------------------------------------

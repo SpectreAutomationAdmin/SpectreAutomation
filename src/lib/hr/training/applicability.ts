@@ -65,15 +65,58 @@ async function loadEmployee(employeeId: string): Promise<EmployeeContext> {
 }
 
 /**
+ * Collect the union of all (departmentId, positionId) pairs that
+ * apply to this employee right now. Sources (HR-2C Employment):
+ *   1. Every currently-active EmployeeEmploymentAssignment
+ *      (PRIMARY + ADDITIONAL).
+ *   2. The legacy Employee.departmentId / Employee.positionId — kept
+ *      for backwards compatibility with employees that have not yet
+ *      been migrated to the assignment model.
+ *
+ * §17: A cross-trained employee must receive training applicable to
+ * ANY of their active roles, not only their primary department.
+ */
+async function collectActiveRoleContext(emp: EmployeeContext): Promise<{
+  deptIds: Set<string>;
+  positionIds: Set<string>;
+}> {
+  const now = new Date();
+  const assignments = await prisma.employeeEmploymentAssignment.findMany({
+    where: {
+      employeeId: emp.id,
+      effectiveFrom: { lte: now },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+    },
+    select: { departmentId: true, positionId: true },
+  });
+  const deptIds = new Set<string>();
+  const positionIds = new Set<string>();
+  for (const a of assignments) {
+    if (a.departmentId) deptIds.add(a.departmentId);
+    if (a.positionId) positionIds.add(a.positionId);
+  }
+  // Legacy fallback — if the employee has no assignments yet, the
+  // legacy fields still apply.
+  if (emp.departmentId) deptIds.add(emp.departmentId);
+  if (emp.positionId) positionIds.add(emp.positionId);
+  return { deptIds, positionIds };
+}
+
+/**
  * Resolve every currently-published, non-retired training course
  * that applies to the employee. Deterministic ordering: assigned
  * first, then dept/position/all in insertion order.
+ *
+ * HR-2C Employment (2026-08-24) — applicability now considers the
+ * UNION of departments/positions across ALL active employment
+ * assignments (primary + additional), not only the legacy
+ * Employee.departmentId / positionId.
  */
 export async function resolveApplicableCourses(
   employeeId: string,
 ): Promise<ApplicableCourse[]> {
   const emp = await loadEmployee(employeeId);
-  const [publishedVersions, assignments] = await Promise.all([
+  const [publishedVersions, assignments, roleContext] = await Promise.all([
     prisma.trainingCourseVersion.findMany({
       where: {
         state: "PUBLISHED",
@@ -88,6 +131,7 @@ export async function resolveApplicableCourses(
       where: { clubId: emp.clubId, employeeId },
       select: { courseId: true },
     }),
+    collectActiveRoleContext(emp),
   ]);
   const assignedCourseIds = new Set(assignments.map((a) => a.courseId));
 
@@ -98,8 +142,8 @@ export async function resolveApplicableCourses(
     let reason: ApplicableCourse["reason"] | null = null;
     if (assignedCourseIds.has(v.course.id)) reason = "assigned";
     else if (v.appliesToAll) reason = "all";
-    else if (emp.departmentId && parseIds(v.appliesToDeptIds).includes(emp.departmentId)) reason = "department";
-    else if (emp.positionId && parseIds(v.appliesToPositionIds).includes(emp.positionId)) reason = "position";
+    else if (parseIds(v.appliesToDeptIds).some((id) => roleContext.deptIds.has(id))) reason = "department";
+    else if (parseIds(v.appliesToPositionIds).some((id) => roleContext.positionIds.has(id))) reason = "position";
     if (reason === null) continue;
     seenCourseIds.add(v.course.id);
     out.push({

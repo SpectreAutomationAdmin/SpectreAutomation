@@ -10,6 +10,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
+import { getActiveAssignmentsAt } from "@/lib/hr/employment-assignments";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,6 +42,35 @@ export default async function EmployeePortalProfilePage() {
   });
   if (!employee) redirect("/employee/login");
 
+  // HR-2C Employment (2026-08-24) — active role assignments, read-only.
+  const activeAssignments = await getActiveAssignmentsAt(principal.employeeId);
+  const detailedAssignments = activeAssignments.length > 0
+    ? await prisma.employeeEmploymentAssignment.findMany({
+        where: { id: { in: activeAssignments.map((a) => a.id) } },
+        select: {
+          id: true, role: true, employmentType: true,
+          departmentId: true, positionId: true, effectiveFrom: true,
+        },
+      })
+    : [];
+  const roleDeptIds = new Set(detailedAssignments.map((a) => a.departmentId).filter((v): v is string => !!v));
+  const rolePosIds = new Set(detailedAssignments.map((a) => a.positionId).filter((v): v is string => !!v));
+  const [roleDepts, rolePositions] = await Promise.all([
+    roleDeptIds.size ? prisma.department.findMany({ where: { id: { in: [...roleDeptIds] } }, select: { id: true, name: true } }) : [],
+    rolePosIds.size ? prisma.employeePosition.findMany({ where: { id: { in: [...rolePosIds] } }, select: { id: true, name: true } }) : [],
+  ]);
+  const deptMap = new Map(roleDepts.map((d) => [d.id, d.name]));
+  const posMap = new Map(rolePositions.map((p) => [p.id, p.name]));
+  const rolesForDisplay = detailedAssignments
+    .sort((a, b) => (a.role === "PRIMARY" ? -1 : b.role === "PRIMARY" ? 1 : 0))
+    .map((a) => ({
+      id: a.id,
+      role: a.role,
+      positionName: a.positionId ? posMap.get(a.positionId) ?? null : null,
+      departmentName: a.departmentId ? deptMap.get(a.departmentId) ?? null : null,
+      employmentType: a.employmentType,
+    }));
+
   const legalName = [employee.firstName, employee.middleName, employee.lastName].filter(Boolean).join(" ");
 
   return (
@@ -57,10 +87,47 @@ export default async function EmployeePortalProfilePage() {
         {employee.preferredName && <Item label="Preferred name">{employee.preferredName}</Item>}
         <Item label="Personal email">{employee.personalEmail ?? "—"}</Item>
         <Item label="Mobile phone">{employee.mobilePhone ?? "—"}</Item>
-        <Item label="Position">{employee.position?.name ?? "—"}</Item>
-        <Item label="Department">{employee.department?.name ?? "—"}</Item>
-        <Item label="Employment type">{formatEmploymentType(employee.employmentType)}</Item>
       </section>
+
+      {rolesForDisplay.length > 0 && (
+        <section
+          className="mt-6 rounded-lg border border-stone-200 bg-white px-6 py-6"
+          data-testid="portal-profile-roles"
+        >
+          <h2 className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Your roles</h2>
+          <ul className="mt-3 space-y-3">
+            {rolesForDisplay.map((r) => (
+              <li
+                key={r.id}
+                className="border-b border-stone-100 pb-3 last:border-b-0 last:pb-0"
+                data-testid={`portal-profile-role-${r.id}`}
+              >
+                <div className="text-[10px] uppercase tracking-[0.16em] text-stone-500">
+                  {r.role === "PRIMARY" ? "Primary" : "Additional role"}
+                </div>
+                <div className="mt-1 text-sm text-club-ink">
+                  {r.positionName ?? "—"}
+                  {r.departmentName && <span className="text-stone-500"> · {r.departmentName}</span>}
+                </div>
+                <div className="mt-0.5 text-xs text-stone-500">
+                  {formatEmploymentType(r.employmentType)}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {rolesForDisplay.length === 0 && (
+        <section className="mt-6 rounded-lg border border-stone-200 bg-white px-6 py-6">
+          <h2 className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Your roles</h2>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
+            <Item label="Position">{employee.position?.name ?? "—"}</Item>
+            <Item label="Department">{employee.department?.name ?? "—"}</Item>
+            <Item label="Employment type">{formatEmploymentType(employee.employmentType)}</Item>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
