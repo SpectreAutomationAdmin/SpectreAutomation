@@ -164,6 +164,83 @@ export async function listAssignments(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Canonical current-role display resolver (HR-2C Employment Corrections
+// Portal Parity, 2026-08-24)
+// ---------------------------------------------------------------------------
+//
+// The single canonical read for any surface that displays the
+// employee's CURRENT role name (Admin Overview subtitle, Employee
+// Portal hero subtitle, Portal Profile "Your roles"). Consumers must
+// not join `Employee.position` / `Employee.department` for display —
+// those legacy fields are cache-only and are not updated by the
+// assignment write path.
+//
+// Semantics:
+//   - PRIMARY current at time `t` is the one with role=PRIMARY,
+//     effectiveFrom <= t, and (effectiveTo IS NULL OR effectiveTo > t).
+//   - If none, returns nulls — caller may fall back to legacy fields
+//     for pre-provisioned employees (currently only expected for
+//     employees with no legacy data either).
+//   - Never accepts a Principal — this is a display resolver used
+//     across admin AND portal surfaces; tenant scope is enforced by
+//     the employeeId lookup upstream (portal principal already tenants
+//     by clubId; admin loader already permission-gates the page).
+export interface CurrentRoleDisplay {
+  assignmentId: string | null;
+  positionId: string | null;
+  positionName: string | null;
+  departmentId: string | null;
+  departmentName: string | null;
+  employmentType: string | null;
+  managerEmployeeId: string | null;
+  effectiveFrom: Date | null;
+}
+
+export async function getCurrentPrimaryRoleDisplay(
+  employeeId: string,
+  at: Date = new Date(),
+): Promise<CurrentRoleDisplay> {
+  const row = await prisma.employeeEmploymentAssignment.findFirst({
+    where: {
+      employeeId,
+      role: "PRIMARY",
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: { effectiveFrom: "desc" },
+    select: {
+      id: true, positionId: true, departmentId: true,
+      managerEmployeeId: true, employmentType: true, effectiveFrom: true,
+    },
+  });
+  if (!row) {
+    return {
+      assignmentId: null, positionId: null, positionName: null,
+      departmentId: null, departmentName: null,
+      employmentType: null, managerEmployeeId: null, effectiveFrom: null,
+    };
+  }
+  const [pos, dept] = await Promise.all([
+    row.positionId
+      ? prisma.employeePosition.findUnique({ where: { id: row.positionId }, select: { name: true } })
+      : Promise.resolve(null),
+    row.departmentId
+      ? prisma.department.findUnique({ where: { id: row.departmentId }, select: { name: true } })
+      : Promise.resolve(null),
+  ]);
+  return {
+    assignmentId: row.id,
+    positionId: row.positionId,
+    positionName: pos?.name ?? null,
+    departmentId: row.departmentId,
+    departmentName: dept?.name ?? null,
+    employmentType: row.employmentType,
+    managerEmployeeId: row.managerEmployeeId,
+    effectiveFrom: row.effectiveFrom,
+  };
+}
+
 /** Active assignments at a given instant. Used by training
  *  applicability + future scheduling. Not permission-guarded because
  *  applicability resolvers are read-only, tenant-scoped by

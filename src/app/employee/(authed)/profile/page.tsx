@@ -24,6 +24,10 @@ export default async function EmployeePortalProfilePage() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
+  // HR-2C Portal Parity (2026-08-24) — Employee identity + contact
+  // only. Current position/department/employmentType come from the
+  // canonical assignments, not the legacy Employee.position/department
+  // fields (those go stale on primary-role changes).
   const employee = await prisma.employee.findFirst({
     where: { id: principal.employeeId, clubId: principal.clubId },
     select: {
@@ -34,10 +38,7 @@ export default async function EmployeePortalProfilePage() {
       preferredName: true,
       personalEmail: true,
       mobilePhone: true,
-      employmentType: true,
       profilePhotoDocumentId: true,
-      department: { select: { name: true } },
-      position: { select: { name: true } },
     },
   });
   if (!employee) redirect("/employee/login");
@@ -121,11 +122,17 @@ export default async function EmployeePortalProfilePage() {
       {rolesForDisplay.length === 0 && (
         <section className="mt-6 rounded-lg border border-stone-200 bg-white px-6 py-6">
           <h2 className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Your roles</h2>
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
-            <Item label="Position">{employee.position?.name ?? "—"}</Item>
-            <Item label="Department">{employee.department?.name ?? "—"}</Item>
-            <Item label="Employment type">{formatEmploymentType(employee.employmentType)}</Item>
-          </div>
+          {/* HR-2C Portal Parity (2026-08-24) — no fallback to legacy
+              Employee.position/department/employmentType. Those columns
+              are cache-only and get stale whenever the admin changes
+              the canonical Primary Assignment. A truthful empty state
+              renders instead. */}
+          <p
+            className="mt-3 text-sm text-stone-500"
+            data-testid="portal-profile-roles-empty"
+          >
+            No role assigned yet. Your Club administrator will set your role.
+          </p>
         </section>
       )}
     </div>

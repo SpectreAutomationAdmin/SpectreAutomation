@@ -34,6 +34,7 @@ import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstL
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
 import { getClubMedia } from "@/lib/club/media";
 import { buildHomeNotifications } from "@/lib/hr/home-notifications";
+import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
 import HomeNotificationBar from "./_home/HomeNotificationBar";
 import HomeWidgetGrid, { type WidgetDef } from "./_home/HomeWidgetGrid";
 import { dismissHomeNotificationAction } from "./_home/_actions";
@@ -112,14 +113,13 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, club, notifications] = await Promise.all([
+  const [employee, heroMedia, club, notifications, primaryRole] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
       select: {
         id: true,
         firstName: true,
         preferredName: true,
-        position: { select: { name: true } },
         portalTourCompletedAt: true,
         onboardingSessions: {
           orderBy: { startedAt: "desc" },
@@ -134,6 +134,13 @@ export default async function EmployeePortalHome() {
       select: { primaryColor: true },
     }),
     buildHomeNotifications(principal),
+    // HR-2C Portal Parity (2026-08-24) — hero subtitle now derives
+    // from the canonical CURRENT primary assignment. Legacy
+    // Employee.position was the stale source; the assignment write
+    // path never updates that column, so a role change from
+    // Clubhouse Manager → Controller left the portal hero showing
+    // the prior title indefinitely.
+    getCurrentPrimaryRoleDisplay(principal.employeeId),
   ]);
   if (!employee) redirect("/employee/login");
 
@@ -190,7 +197,7 @@ export default async function EmployeePortalHome() {
         hasImage={heroMedia !== null}
         primaryColor={club?.primaryColor ?? null}
         greetingName={displayName ?? "there"}
-        positionName={employee.position?.name ?? null}
+        positionName={primaryRole.positionName}
       />
 
       {activeNotifications.length > 0 && (
