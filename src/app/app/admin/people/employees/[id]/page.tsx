@@ -19,7 +19,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getDeleteEligibility, getEmployee } from "@/lib/hr/employees";
 import { listEmploymentPeriods } from "@/lib/hr/employment-periods";
-import { listAssignments } from "@/lib/hr/employment-assignments";
+import { listAssignments, provisionInitialAssignmentIfMissing } from "@/lib/hr/employment-assignments";
 import { listCompensationHistory } from "@/lib/hr/compensation";
 import { listAllowances } from "@/lib/hr/allowances";
 import {
@@ -28,6 +28,7 @@ import {
   changeCompensationAction,
   addAllowanceAction,
   endAllowanceAction,
+  createEmployeePositionInlineAction,
 } from "./_employment-actions";
 import { listEmployeeDocuments } from "@/lib/hr/documents";
 import { listSessions, listTransitions } from "@/lib/hr/onboarding-sessions";
@@ -55,6 +56,13 @@ export default async function EmployeeProfilePage({
     if (isAppError(err) && err.httpStatus === 403) redirect("/app/admin");
     throw err;
   }
+
+  // HR-2C Employment Corrections (2026-08-24) — Ensure any legacy
+  // employee viewed through this page has a canonical PRIMARY
+  // assignment provisioned from their legacy Employee fields before
+  // Employment reads run. Idempotent — no-op when an assignment
+  // already exists.
+  await provisionInitialAssignmentIfMissing(profile.clubId, profile.id, principal.id);
 
   const canReadDocuments = hasPermission(principal, profile.clubId, "hr:documents:read");
   const canReadOnboarding = hasPermission(principal, profile.clubId, "hr:onboarding:read");
@@ -234,6 +242,51 @@ export default async function EmployeeProfilePage({
     : null;
   const canResendInvitation = hasInviteGrant && sessionResumable && mostRecentInvitation != null;
 
+  // HR-2C Employment Corrections (2026-08-24) — Overview canonical
+  // derivation. Prefer the current PRIMARY assignment's
+  // department/position/manager/employmentType. Fall back to legacy
+  // Employee fields only when no primary assignment exists (e.g.
+  // employees with zero legacy data too, where provisioning had
+  // nothing to backfill from).
+  const primaryAssignmentRow = assignments.find((a) => a.role === "PRIMARY" && a.isCurrent) ?? null;
+
+  const overviewDeptId = primaryAssignmentRow?.departmentId ?? profile.departmentId ?? null;
+  const overviewPositionId = primaryAssignmentRow?.positionId ?? profile.positionId ?? null;
+  const overviewManagerId = primaryAssignmentRow?.managerEmployeeId ?? profile.managerEmployeeId ?? null;
+
+  const canonicalDepartment = overviewDeptId
+    ? (deptOptions.find((d) => d.id === overviewDeptId) ?? department)
+    : null;
+  const canonicalPosition = overviewPositionId
+    ? (positionOptions.find((p) => p.id === overviewPositionId) ?? position)
+    : null;
+  const canonicalManager = overviewManagerId
+    ? (manager?.id === overviewManagerId
+        ? manager
+        : await prisma.employee.findFirst({
+            where: { id: overviewManagerId, clubId: profile.clubId },
+            select: { id: true, firstName: true, lastName: true, preferredName: true },
+          }))
+    : null;
+
+  const primaryOverview = {
+    department: canonicalDepartment
+      ? { id: canonicalDepartment.id, name: canonicalDepartment.name, code: canonicalDepartment.code }
+      : null,
+    position: canonicalPosition
+      ? { id: canonicalPosition.id, name: canonicalPosition.name, code: canonicalPosition.code }
+      : null,
+    manager: canonicalManager
+      ? {
+          id: canonicalManager.id,
+          firstName: canonicalManager.firstName,
+          lastName: canonicalManager.lastName,
+          preferredName: canonicalManager.preferredName ?? null,
+        }
+      : null,
+    employmentType: primaryAssignmentRow?.employmentType ?? profile.employmentType ?? null,
+  };
+
   return (
     <EmployeeProfileView
       employee={{
@@ -250,25 +303,21 @@ export default async function EmployeeProfilePage({
         mobilePhone: profile.mobilePhone ?? null,
         hireDate: profile.hireDate ? profile.hireDate.toISOString() : null,
         expectedStartDate: profile.expectedStartDate ? profile.expectedStartDate.toISOString() : null,
-        employmentType: profile.employmentType ?? null,
+        // HR-2C Employment Corrections (2026-08-24) — Overview
+        // derives from the canonical PRIMARY assignment when one
+        // exists; falls back to the legacy Employee.employmentType
+        // only when no assignment has been provisioned yet
+        // (e.g. an employee with zero legacy data too).
+        employmentType: primaryOverview.employmentType,
         employeeLifecycle: profile.employeeLifecycle,
         onboardingState: profile.onboardingState,
         payrollReadiness: profile.payrollReadiness,
         memberId: profile.memberId ?? null,
         profilePhotoDocumentId: profile.profilePhotoDocumentId ?? null,
       }}
-      department={department ? { id: department.id, name: department.name, code: department.code } : null}
-      position={position ? { id: position.id, name: position.name, code: position.code } : null}
-      manager={
-        manager
-          ? {
-              id: manager.id,
-              firstName: manager.firstName,
-              lastName: manager.lastName,
-              preferredName: manager.preferredName ?? null,
-            }
-          : null
-      }
+      department={primaryOverview.department}
+      position={primaryOverview.position}
+      manager={primaryOverview.manager}
       memberLink={
         memberLink
           ? {
@@ -371,6 +420,7 @@ export default async function EmployeeProfilePage({
         canReadEmployment ? (
           <EmployeeEmploymentSection
             employeeId={profile.id}
+            clubId={profile.clubId}
             assignments={assignments.map((a) => ({
               id: a.id,
               role: a.role,
@@ -423,6 +473,7 @@ export default async function EmployeeProfilePage({
               changeCompensation: changeCompensationAction,
               addAllowance: addAllowanceAction,
               endAllowance: endAllowanceAction,
+              createPosition: createEmployeePositionInlineAction,
             }}
           />
         ) : null

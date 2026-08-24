@@ -91,10 +91,15 @@ interface Actions {
     notes?: string | null;
   }) => Promise<ActionResult>;
   endAllowance: (employeeId: string, allowanceId: string, input: { effectiveTo: string; notes?: string | null }) => Promise<ActionResult>;
+  createPosition: (employeeId: string, clubId: string, input: { name: string; departmentId: string }) => Promise<
+    | { ok: true; id: string; name: string; code: string; departmentId: string }
+    | { ok: false; error: string }
+  >;
 }
 
 interface Props {
   employeeId: string;
+  clubId: string;
   assignments: AssignmentRow[];
   compensationHistory: CompensationRow[];
   allowances: AllowanceRow[];
@@ -149,6 +154,110 @@ function todayIso(): string {
 // Component
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Reusable Position picker with inline "+ Add position" affordance.
+// Used inside every role editor. The picker stays disabled until a
+// Department is selected. If the desired Position doesn't exist, the
+// admin taps "+ Add position", enters a name, and the new Position
+// is created in the currently-selected Department and immediately
+// auto-selected.
+// ---------------------------------------------------------------------------
+function PositionPicker({
+  employeeId, clubId, departmentId, value, positions, disabled, testId,
+  createPosition, onSelect, onCreated,
+}: {
+  employeeId: string;
+  clubId: string;
+  departmentId: string;
+  value: string;
+  positions: PositionOption[];
+  disabled?: boolean;
+  testId: string;
+  createPosition: Actions["createPosition"];
+  onSelect: (positionId: string) => void;
+  onCreated?: (created: { id: string; name: string; departmentId: string }) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const filtered = positions.filter((p) => !departmentId || p.departmentId === departmentId || p.departmentId === null);
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <select
+        className="input flex-1"
+        value={value}
+        onChange={(e) => onSelect(e.target.value)}
+        disabled={disabled || !departmentId || adding}
+        data-testid={testId}
+      >
+        <option value="">—</option>
+        {filtered.map((p) => (
+          <option key={p.id} value={p.id}>{p.name}</option>
+        ))}
+      </select>
+      {!adding ? (
+        <button
+          type="button"
+          className="text-xs text-stone-600 hover:text-stone-900 underline underline-offset-4 whitespace-nowrap"
+          onClick={() => { setAdding(true); setName(""); setError(null); }}
+          disabled={disabled || !departmentId}
+          title={departmentId ? "Add a new Position in the selected Department" : "Select a Department first"}
+          data-testid={`${testId}-add`}
+        >
+          + Add position
+        </button>
+      ) : (
+        <div className="flex items-center gap-1" data-testid={`${testId}-add-form`}>
+          <input
+            type="text"
+            className="input"
+            placeholder="Position name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+            data-testid={`${testId}-add-name`}
+          />
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={pending || !name.trim()}
+            onClick={() => {
+              startTransition(async () => {
+                setError(null);
+                const result = await createPosition(employeeId, clubId, {
+                  name: name.trim(), departmentId,
+                });
+                if (result.ok) {
+                  onCreated?.({ id: result.id, name: result.name, departmentId: result.departmentId });
+                  onSelect(result.id);
+                  setAdding(false);
+                  setName("");
+                } else {
+                  setError(result.error);
+                }
+              });
+            }}
+            data-testid={`${testId}-add-submit`}
+          >
+            {pending ? "…" : "Add"}
+          </button>
+          <button
+            type="button"
+            className="text-xs text-stone-500 underline"
+            onClick={() => { setAdding(false); setName(""); setError(null); }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-red-700 basis-full">{error}</p>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeeEmploymentSection(props: Props) {
   const primary = props.assignments.find((a) => a.role === "PRIMARY" && a.isCurrent) ?? null;
   const additional = props.assignments.filter((a) => a.role === "ADDITIONAL" && a.isCurrent);
@@ -169,6 +278,7 @@ export default function EmployeeEmploymentSection(props: Props) {
         {primary ? (
           <PrimaryRoleBlock
             employeeId={props.employeeId}
+            clubId={props.clubId}
             assignment={primary}
             currentComp={currentComp}
             canReadCompensation={props.canReadCompensation}
@@ -179,15 +289,18 @@ export default function EmployeeEmploymentSection(props: Props) {
             managers={props.managers}
             addAssignment={props.actions.addAssignment}
             changeCompensation={props.actions.changeCompensation}
+            createPosition={props.actions.createPosition}
           />
         ) : (
           <NoPrimaryBlock
             employeeId={props.employeeId}
+            clubId={props.clubId}
             departments={props.departments}
             positions={props.positions}
             managers={props.managers}
             canWriteEmployment={props.canWriteEmployment}
             addAssignment={props.actions.addAssignment}
+            createPosition={props.actions.createPosition}
           />
         )}
       </div>
@@ -218,10 +331,12 @@ export default function EmployeeEmploymentSection(props: Props) {
         {props.canWriteEmployment && (
           <AddAdditionalRoleForm
             employeeId={props.employeeId}
+            clubId={props.clubId}
             departments={props.departments}
             positions={props.positions}
             managers={props.managers}
             addAssignment={props.actions.addAssignment}
+            createPosition={props.actions.createPosition}
           />
         )}
       </div>
@@ -321,12 +436,13 @@ export default function EmployeeEmploymentSection(props: Props) {
 // ---------------------------------------------------------------------------
 
 function PrimaryRoleBlock({
-  employeeId, assignment, currentComp,
+  employeeId, clubId, assignment, currentComp,
   canReadCompensation, canWriteCompensation, canWriteEmployment,
   departments, positions, managers,
-  addAssignment, changeCompensation,
+  addAssignment, changeCompensation, createPosition,
 }: {
   employeeId: string;
+  clubId: string;
   assignment: AssignmentRow;
   currentComp: CompensationRow | null;
   canReadCompensation: boolean;
@@ -337,6 +453,7 @@ function PrimaryRoleBlock({
   managers: ManagerOption[];
   addAssignment: Actions["addAssignment"];
   changeCompensation: Actions["changeCompensation"];
+  createPosition: Actions["createPosition"];
 }) {
   const [showChangePrimary, setShowChangePrimary] = useState(false);
   const [showChangeComp, setShowChangeComp] = useState(false);
@@ -390,10 +507,12 @@ function PrimaryRoleBlock({
       {showChangePrimary && canWriteEmployment && (
         <ChangePrimaryRoleForm
           employeeId={employeeId}
+          clubId={clubId}
           departments={departments}
           positions={positions}
           managers={managers}
           addAssignment={addAssignment}
+          createPosition={createPosition}
           onDone={() => setShowChangePrimary(false)}
         />
       )}
@@ -410,14 +529,16 @@ function PrimaryRoleBlock({
 }
 
 function NoPrimaryBlock({
-  employeeId, departments, positions, managers, canWriteEmployment, addAssignment,
+  employeeId, clubId, departments, positions, managers, canWriteEmployment, addAssignment, createPosition,
 }: {
   employeeId: string;
+  clubId: string;
   departments: DepartmentOption[];
   positions: PositionOption[];
   managers: ManagerOption[];
   canWriteEmployment: boolean;
   addAssignment: Actions["addAssignment"];
+  createPosition: Actions["createPosition"];
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -430,10 +551,12 @@ function NoPrimaryBlock({
           {open ? (
             <ChangePrimaryRoleForm
               employeeId={employeeId}
+              clubId={clubId}
               departments={departments}
               positions={positions}
               managers={managers}
               addAssignment={addAssignment}
+              createPosition={createPosition}
               onDone={() => setOpen(false)}
             />
           ) : (
@@ -534,13 +657,15 @@ function AdditionalRoleRow({
 }
 
 function ChangePrimaryRoleForm({
-  employeeId, departments, positions, managers, addAssignment, onDone,
+  employeeId, clubId, departments, positions, managers, addAssignment, createPosition, onDone,
 }: {
   employeeId: string;
+  clubId: string;
   departments: DepartmentOption[];
   positions: PositionOption[];
   managers: ManagerOption[];
   addAssignment: Actions["addAssignment"];
+  createPosition: Actions["createPosition"];
   onDone: () => void;
 }) {
   const [departmentId, setDepartmentId] = useState<string>("");
@@ -551,7 +676,13 @@ function ChangePrimaryRoleForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
-  const filteredPositions = positions.filter((p) => !departmentId || p.departmentId === departmentId || p.departmentId === null);
+  const [localPositions, setLocalPositions] = useState(positions);
+  const onPositionCreated = (created: { id: string; name: string; departmentId: string }) => {
+    setLocalPositions((prev) => [
+      ...prev,
+      { id: created.id, name: created.name, code: created.name.slice(0, 8).toUpperCase(), departmentId: created.departmentId },
+    ]);
+  };
   return (
     <form
       className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-4 py-3 space-y-2"
@@ -584,12 +715,17 @@ function ChangePrimaryRoleForm({
         </label>
         <label className="text-xs text-stone-500">
           Position
-          <select className="input mt-1" value={positionId} onChange={(e) => setPositionId(e.target.value)} data-testid="primary-position-select">
-            <option value="">—</option>
-            {filteredPositions.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <PositionPicker
+            employeeId={employeeId}
+            clubId={clubId}
+            departmentId={departmentId}
+            value={positionId}
+            positions={localPositions}
+            testId="primary-position-select"
+            createPosition={createPosition}
+            onSelect={setPositionId}
+            onCreated={onPositionCreated}
+          />
         </label>
         <label className="text-xs text-stone-500">
           Employment type
@@ -625,13 +761,15 @@ function ChangePrimaryRoleForm({
 }
 
 function AddAdditionalRoleForm({
-  employeeId, departments, positions, managers, addAssignment,
+  employeeId, clubId, departments, positions, managers, addAssignment, createPosition,
 }: {
   employeeId: string;
+  clubId: string;
   departments: DepartmentOption[];
   positions: PositionOption[];
   managers: ManagerOption[];
   addAssignment: Actions["addAssignment"];
+  createPosition: Actions["createPosition"];
 }) {
   const [open, setOpen] = useState(false);
   const [departmentId, setDepartmentId] = useState<string>("");
@@ -642,7 +780,13 @@ function AddAdditionalRoleForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
-  const filteredPositions = positions.filter((p) => !departmentId || p.departmentId === departmentId || p.departmentId === null);
+  const [localPositions, setLocalPositions] = useState(positions);
+  const onPositionCreated = (created: { id: string; name: string; departmentId: string }) => {
+    setLocalPositions((prev) => [
+      ...prev,
+      { id: created.id, name: created.name, code: created.name.slice(0, 8).toUpperCase(), departmentId: created.departmentId },
+    ]);
+  };
   if (!open) {
     return (
       <div className="mt-3">
@@ -695,12 +839,17 @@ function AddAdditionalRoleForm({
         </label>
         <label className="text-xs text-stone-500">
           Position
-          <select className="input mt-1" value={positionId} onChange={(e) => setPositionId(e.target.value)} data-testid="additional-position-select">
-            <option value="">—</option>
-            {filteredPositions.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <PositionPicker
+            employeeId={employeeId}
+            clubId={clubId}
+            departmentId={departmentId}
+            value={positionId}
+            positions={localPositions}
+            testId="additional-position-select"
+            createPosition={createPosition}
+            onSelect={setPositionId}
+            onCreated={onPositionCreated}
+          />
         </label>
         <label className="text-xs text-stone-500">
           Employment type

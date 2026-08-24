@@ -27,6 +27,7 @@ import { hasPermission, isSuperAdmin, requirePermission, type Principal } from "
 import { assertTenantOwned } from "../services/tenant";
 import { ConflictError, NotFoundError, TenantViolationError, ValidationError } from "../errors";
 import { assertSensitiveActionAllowed } from "../posting-guard";
+import { provisionInitialAssignmentIfMissing } from "./employment-assignments";
 import { getSinMasked } from "./sensitive-identity";
 import { getBankAccountMasked } from "./bank-account";
 import { getTaxProfileMasked } from "./tax-profile";
@@ -165,6 +166,12 @@ export async function createEmployee(
     },
   });
 
+  // HR-2C Employment Corrections (2026-08-24) — new employees must
+  // carry a canonical PRIMARY assignment from day one so Overview
+  // and Employment never diverge. Idempotent — a subsequent read
+  // will find the assignment already exists and no-op.
+  await provisionInitialAssignmentIfMissing(clubId, created.id, principal.id);
+
   return created;
 }
 
@@ -204,6 +211,12 @@ export async function updateEmployee(
     EMPLOYEE_ENTITY,
     employeeId,
   );
+
+  // HR-2C Employment Corrections (2026-08-24) — just-in-time backfill.
+  // Any legacy employee opened for an edit gets a canonical PRIMARY
+  // assignment created from their legacy fields BEFORE the edit runs.
+  // Idempotent; safe on already-migrated employees.
+  await provisionInitialAssignmentIfMissing(employee.clubId, employeeId, principal.id);
 
   if (input.employmentType != null && !(EMPLOYMENT_TYPES as readonly string[]).includes(input.employmentType)) {
     throw new ValidationError([{ path: "employmentType", message: `must be one of ${EMPLOYMENT_TYPES.join(", ")}` }]);

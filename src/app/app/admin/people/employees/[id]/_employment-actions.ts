@@ -12,6 +12,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { addAssignment, endAssignment } from "@/lib/hr/employment-assignments";
 import { changeCompensation } from "@/lib/hr/compensation";
 import { addAllowance, endAllowance } from "@/lib/hr/allowances";
+import { createEmployeePosition } from "@/lib/hr/employee-positions";
 import { isAppError, ValidationError } from "@/lib/errors";
 
 interface Ok { ok: true }
@@ -161,5 +162,36 @@ export async function endAllowanceAction(
     });
     revalidateProfile(employeeId);
     return { ok: true };
+  } catch (e) { return toErr(e); }
+}
+
+// ---------------------------------------------------------------------------
+// Add Position (inline from role editors)
+// ---------------------------------------------------------------------------
+// HR-2C Employment Corrections (2026-08-24) — Founder-required inline
+// Position creation. Admin picks a Department in the role editor,
+// discovers the desired Position doesn't exist, taps "+ Add position",
+// and creates it without leaving the tab. Reuses the canonical
+// createEmployeePosition service (already gated on hr:employee:write +
+// same-Club enforcement).
+export async function createEmployeePositionInlineAction(
+  employeeId: string,
+  clubId: string,
+  input: { name: string; departmentId: string },
+): Promise<{ ok: true; id: string; name: string; code: string; departmentId: string } | Err> {
+  try {
+    const principal = await requireAdmin();
+    const created = await createEmployeePosition(principal, clubId, {
+      name: input.name,
+      departmentId: input.departmentId,
+    });
+    revalidateProfile(employeeId);
+    return {
+      ok: true,
+      id: created.id,
+      name: created.name,
+      code: created.code,
+      departmentId: created.departmentId ?? input.departmentId,
+    };
   } catch (e) { return toErr(e); }
 }

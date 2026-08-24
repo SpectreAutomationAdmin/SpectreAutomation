@@ -283,6 +283,118 @@ export async function addAssignment(
 // End an assignment (§24 — end a role without terminating the employee)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Backfill / provisioning — idempotent
+// ---------------------------------------------------------------------------
+//
+// HR-2C Employment Corrections (2026-08-24) — Fixes the founder-
+// surfaced defect where existing employees created before the
+// multi-role architecture (or by any code path that skipped the
+// Employment tab flow) had populated legacy Employee.departmentId /
+// positionId / employmentType / managerEmployeeId fields but ZERO
+// EmployeeEmploymentAssignment rows — so Overview showed a populated
+// role while Employment reported "No primary role assigned yet."
+//
+// This helper is IDEMPOTENT: it creates a PRIMARY assignment from
+// the legacy Employee fields only when the employee has no
+// assignments at all. If ANY assignment exists (PRIMARY or
+// ADDITIONAL, open or historical), it does nothing.
+//
+// Callable from:
+//   1. createEmployee — immediately after creation, so new employees
+//      never diverge.
+//   2. updateEmployee — at the top of the update path, so opening
+//      an old employee to edit provisions on-the-fly.
+//   3. The admin profile-page loader — so viewing an old employee
+//      triggers backfill even without an edit.
+//   4. A one-shot backfill script (scripts/hr-2c-employment-backfill.mjs)
+//      for staging + eventual production migration.
+//
+// The provision is a plain prisma insert (not addAssignment) so it
+// bypasses the posting-guard + audit + Principal permission gates —
+// the caller is trusted context (a service that just created the
+// employee, or a system script). System-provisioned rows are audited
+// distinctly so an auditor can tell them apart from admin-authored
+// role changes.
+export interface ProvisionResult {
+  provisioned: boolean;
+  assignmentId: string | null;
+  reason: "already_has_assignment" | "no_legacy_data" | "provisioned";
+}
+
+export async function provisionInitialAssignmentIfMissing(
+  clubId: string,
+  employeeId: string,
+  actorUserId: string | null = null,
+): Promise<ProvisionResult> {
+  const existing = await prisma.employeeEmploymentAssignment.findFirst({
+    where: { employeeId },
+    select: { id: true },
+  });
+  if (existing) {
+    return { provisioned: false, assignmentId: null, reason: "already_has_assignment" };
+  }
+  const emp = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: {
+      id: true, clubId: true,
+      departmentId: true, positionId: true, managerEmployeeId: true,
+      employmentType: true, hireDate: true, expectedStartDate: true,
+      createdAt: true,
+    },
+  });
+  if (!emp || emp.clubId !== clubId) {
+    return { provisioned: false, assignmentId: null, reason: "no_legacy_data" };
+  }
+  // If the employee has NO legacy dept/position/type at all, there is
+  // nothing meaningful to backfill. Do not fabricate a synthetic role.
+  const hasAnyLegacyData =
+    emp.departmentId != null ||
+    emp.positionId != null ||
+    (emp.employmentType != null && emp.employmentType.length > 0);
+  if (!hasAnyLegacyData) {
+    return { provisioned: false, assignmentId: null, reason: "no_legacy_data" };
+  }
+  const effectiveFrom = emp.hireDate ?? emp.expectedStartDate ?? emp.createdAt;
+  // Default employmentType when the legacy field is blank — FULL_TIME
+  // is the historically-most-common Spectre default. This matches
+  // what the founder screenshot shows for Chris Turcato.
+  const employmentType = emp.employmentType && (EMPLOYMENT_TYPES as readonly string[]).includes(emp.employmentType)
+    ? emp.employmentType
+    : "FULL_TIME";
+  const row = await prisma.employeeEmploymentAssignment.create({
+    data: {
+      clubId,
+      employeeId,
+      role: "PRIMARY",
+      departmentId: emp.departmentId,
+      positionId: emp.positionId,
+      managerEmployeeId: emp.managerEmployeeId,
+      employmentType,
+      effectiveFrom,
+      effectiveTo: null,
+      notes: "Backfilled from legacy Employee fields (HR-2C Employment Corrections).",
+      createdByUserId: actorUserId,
+    },
+  });
+  await audit(null, {
+    action: "hr.employment_assignment.provision_backfill",
+    entityType: ENTITY,
+    entityId: row.id,
+    clubId,
+    after: {
+      employeeIdTail: employeeId.slice(-8),
+      role: "PRIMARY",
+      departmentId: emp.departmentId,
+      positionId: emp.positionId,
+      employmentType,
+      effectiveFrom: effectiveFrom.toISOString(),
+      actorSource: actorUserId ? "SYSTEM_ON_BEHALF" : "SYSTEM",
+    },
+  });
+  return { provisioned: true, assignmentId: row.id, reason: "provisioned" };
+}
+
 export async function endAssignment(
   principal: Principal,
   assignmentId: string,
