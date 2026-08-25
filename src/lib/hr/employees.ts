@@ -313,6 +313,21 @@ export async function updateEmployee(
     },
   });
 
+  // HR mobile-hotfix (2026-08-30) §3 — if admin patched any home-address
+  // field, notify HR admins with employee:read. Skipped when the patch
+  // touched only non-address fields.
+  const addressTouched =
+    input.homeAddressLine1 !== undefined ||
+    input.homeAddressLine2 !== undefined ||
+    input.homeCity !== undefined ||
+    input.homeProvince !== undefined ||
+    input.homePostalCode !== undefined ||
+    input.homeCountry !== undefined;
+  if (addressTouched) {
+    const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+    await notifyHrChangeByEmployeeId(employee.clubId, employeeId, "home_address_updated", "STAFF");
+  }
+
   return updated;
 }
 

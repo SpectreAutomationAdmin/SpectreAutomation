@@ -90,6 +90,48 @@ export async function loadPrincipal(userId: string, activeClubId: string | null)
   };
 }
 
+// HR mobile-hotfix (2026-08-30) §3 — Recipient resolution by
+// capability, not role name. Used by HR-change notifications to
+// build the list of admin users at a Club who should be notified
+// when a sensitive field (SIN / banking / address) changes. Founder
+// rule: never branch on role names (roles change over time; the
+// capability is the durable identifier). This helper is the ONE
+// place that translates a permission grant into a user set.
+//
+// Returns { id, email, name } for every ACTIVE user who holds a
+// role at `clubId` that grants `permission`, PLUS every SUPER_ADMIN
+// (they always "hold" every permission at every club).
+export interface RecipientRow {
+  id: string;
+  email: string;
+  name: string;
+}
+export async function resolveRecipientsByPermission(
+  clubId: string,
+  permission: PermissionKey,
+): Promise<RecipientRow[]> {
+  const rolesGrantingPermission: RoleKey[] = (Object.keys(ROLE_PERMISSIONS) as RoleKey[])
+    .filter((role) => ROLE_PERMISSIONS[role].includes(permission));
+  if (rolesGrantingPermission.length === 0) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      status: "ACTIVE",
+      clubRoles: {
+        some: {
+          roleKey: { in: rolesGrantingPermission },
+          OR: [
+            { clubId },       // scoped grants at this Club
+            { clubId: null }, // global SUPER_ADMIN grants
+          ],
+        },
+      },
+    },
+    select: { id: true, email: true, name: true },
+  });
+  return users;
+}
+
 // Resolve the active club for the current request. Order:
 //   1. session.activeClubId, if the principal still has access.
 //   2. The user's first non-global membership.

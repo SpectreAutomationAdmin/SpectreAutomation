@@ -251,6 +251,12 @@ export async function upsertBankAccount(
     },
   });
 
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with
+  // banking:read that this record changed. Neutral copy (no digits /
+  // no fingerprint / no coordinates).
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(employee.clubId, employeeId, "banking_updated", "STAFF");
+
   return {
     id: updated.id,
     accountLastFour: updated.accountLastFour ?? accountLastFour,

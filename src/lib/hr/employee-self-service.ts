@@ -443,6 +443,10 @@ export async function updateOnboardingHomeAddress(
       invitationIdTail: actor.invitationId.slice(-8),
     },
   });
+
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with employee:read.
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(actor.clubId, actor.employeeId, "home_address_updated", "EMPLOYEE");
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,6 +1287,11 @@ export async function submitSelfSin(
       onboardingSessionIdTail: actor.sessionId.slice(-8),
     },
   });
+
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with sin:read.
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(actor.clubId, actor.employeeId, "sin_updated", "EMPLOYEE");
+
   return { sinMasked: maskSin(sinLastThree), sinLastThree };
 }
 
@@ -1524,6 +1533,10 @@ export async function submitSelfBankAccount(
       actorEmployeeIdTail: actor.employeeId.slice(-8),
     },
   });
+
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with banking:read.
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(actor.clubId, actor.employeeId, "banking_updated", "EMPLOYEE");
 
   return {
     id: updated.id,

@@ -197,6 +197,11 @@ export async function updateSelfHomeAddress(
       employeeIdTail: emp.id.slice(-8),
     },
   });
+
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with
+  // employee:read. Portal principal → actorSource EMPLOYEE.
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(emp.clubId, emp.id, "home_address_updated", "EMPLOYEE");
 }
 
 // ---------------------------------------------------------------------------

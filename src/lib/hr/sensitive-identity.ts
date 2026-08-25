@@ -144,6 +144,11 @@ export async function upsertSin(
     after: { sinLastThree: updated.sinLastThree },
   });
 
+  // HR mobile-hotfix (2026-08-30) §3 — notify HR admins with sin:read
+  // that this record changed. Copy is neutral (no digits / fingerprint).
+  const { notifyHrChangeByEmployeeId } = await import("./notify-hr-change");
+  await notifyHrChangeByEmployeeId(employee.clubId, employeeId, "sin_updated", "STAFF");
+
   return { sinLastThree };
 }
 
