@@ -98,6 +98,12 @@ export default function EmployeeTourOnFirstLogin({
 }: Props) {
   const [step, setStep] = useState(0);
   const [dismissed, setDismissed] = useState(alreadyDone && !openOnMount);
+  // HR mobile-hotfix (2026-08-30) — pause the popover render while
+  // the mobile drawer is manually open. The drawer covers the
+  // widget the popover is anchored to; when the drawer closes the
+  // popover reappears at the same step. Not a state reset — the
+  // tour's `step` + `dismissed` are preserved.
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     if (openOnMount) {
@@ -105,6 +111,18 @@ export default function EmployeeTourOnFirstLogin({
       setStep(0);
     }
   }, [openOnMount]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onOpen = () => setDrawerOpen(true);
+    const onClose = () => setDrawerOpen(false);
+    document.addEventListener("spectre:portal:mobile-drawer:opened", onOpen);
+    document.addEventListener("spectre:portal:mobile-drawer:closed", onClose);
+    return () => {
+      document.removeEventListener("spectre:portal:mobile-drawer:opened", onOpen);
+      document.removeEventListener("spectre:portal:mobile-drawer:closed", onClose);
+    };
+  }, []);
 
   // HR-2C Shell Refinement (2026-08-24) — Widget-anchored steps are
   // visible on Home directly; only the Profile step still lives in
@@ -144,6 +162,10 @@ export default function EmployeeTourOnFirstLogin({
   }
 
   if (dismissed) return null;
+  // While the mobile drawer is manually open, hide the popover so
+  // the founder-reported "tour appears to restart" artefact can't
+  // occur when the drawer closes and reveals the popover again.
+  if (drawerOpen) return null;
   const s = STEPS[step]!;
   const isLast = step === STEPS.length - 1;
   const isFirst = step === 0;

@@ -1,19 +1,13 @@
 // HR-2C §1-4 (2026-08-20) — Employee Portal photographic hero.
-//
-// Rendered at the top of Employee Portal Home. When the Club has
-// uploaded a `ClubMedia(category="employee_portal_hero")` asset the
-// image streams through the same-origin proxy route (never a signed
-// URL); when absent, an elegant branded gradient fallback derived
-// from Club.primaryColor takes its place.
-//
-// Restrained hospitality-photography sizing (§1) — h-40 mobile, h-56
-// tablet, h-72 desktop; never enormous. Full-bleed within the page's
-// content column; object-cover on desktop/tablet, focal-point-friendly
-// on mobile. Never emits the "Spectre" wordmark
-// [[feedback_member_brand_shielding]] — the overlay text uses the
-// Club's own name/wordmark passed in from the layout.
+// HR mobile-hotfix (2026-08-30) — greeting now derives from Club-local
+// time via the canonical `greetingWordForInstant` helper. Previously
+// the greeting used a server-local `getHours()` call, which meant the
+// Fly (UTC) container decided morning/afternoon/evening instead of
+// the Club's timezone — the founder observed "Good morning" at 20:00
+// Alberta time.
 
 import type { CSSProperties } from "react";
+import { greetingWordForInstant } from "@/lib/mission-control/local-time";
 
 interface Props {
   clubId: string;
@@ -32,16 +26,16 @@ interface Props {
   greetingName: string;
   /** Employee position — small subtitle under the greeting. */
   positionName?: string | null;
+  /** Club IANA timezone (e.g. `America/Edmonton`). Required so
+   *  morning/afternoon/evening resolve against the Club's local
+   *  time and not the server's UTC hour. When null (missing Club
+   *  config), falls back to the UTC hour with a boundary that
+   *  degrades gracefully — but the caller SHOULD always pass a
+   *  real timezone. */
+  clubTimezone: string | null;
 }
 
 const DEFAULT_PRIMARY = "#2f5832";
-
-function greetingFor(date = new Date()): string {
-  const h = date.getHours();
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  return "Good evening";
-}
 
 export default function EmployeePortalHero({
   clubId,
@@ -50,9 +44,24 @@ export default function EmployeePortalHero({
   primaryColor,
   greetingName,
   positionName,
+  clubTimezone,
 }: Props) {
   const brand = primaryColor?.trim() || DEFAULT_PRIMARY;
-  const greeting = greetingFor();
+  // Server-rendered greeting resolved against Club-local time.
+  // Renders once per request; if the founder wants a live-updating
+  // greeting the client side can hydrate it, but the SSR value must
+  // already be correct for the Club's timezone.
+  const greeting = clubTimezone
+    ? greetingWordForInstant(new Date(), clubTimezone)
+    : (() => {
+        // Fallback ONLY when the Club has no timezone configured —
+        // uses UTC. Callers should treat this as a configuration
+        // defect and set Club.timezone.
+        const h = new Date().getUTCHours();
+        if (h >= 17 || h < 5) return "Good evening";
+        if (h >= 12) return "Good afternoon";
+        return "Good morning";
+      })();
 
   // Fallback branded gradient — used when the Club has not uploaded
   // a hero photograph. Derives a two-stop gradient from the Club's

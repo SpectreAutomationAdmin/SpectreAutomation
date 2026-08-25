@@ -91,6 +91,20 @@ export default function EmployeePortalMobileNav({
     };
   }, [open]);
 
+  // HR mobile-hotfix (2026-08-30) — broadcast drawer state so the
+  // guided tour can temporarily hide its popover while the drawer
+  // covers the widget the popover is anchored to. When the drawer
+  // closes the tour resumes at the same step. Prevents the founder-
+  // reported illusion that the tour "restarts" when a popover
+  // reappears from behind the drawer.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.dispatchEvent(new CustomEvent(
+      open ? "spectre:portal:mobile-drawer:opened"
+           : "spectre:portal:mobile-drawer:closed",
+    ));
+  }, [open]);
+
   // Close drawer whenever the route changes so a nav-item tap doesn't
   // leave the panel covering the new page.
   useEffect(() => { setOpen(false); }, [pathname]);

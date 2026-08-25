@@ -149,7 +149,7 @@ export default async function EmployeePortalHome() {
     getClubMedia(principal.clubId, "employee_portal_hero"),
     prisma.club.findFirst({
       where: { id: principal.clubId },
-      select: { primaryColor: true },
+      select: { primaryColor: true, timezone: true },
     }),
     buildHomeNotifications(principal),
     // HR-2C Portal Parity (2026-08-24) — hero subtitle now derives
@@ -231,6 +231,7 @@ export default async function EmployeePortalHome() {
         primaryColor={club?.primaryColor ?? null}
         greetingName={displayName ?? "there"}
         positionName={primaryRole.positionName}
+        clubTimezone={club?.timezone ?? null}
       />
 
       {activeNotifications.length > 0 && (

@@ -62,8 +62,20 @@ export default function HomeWidgetGrid({ widgets }: { widgets: WidgetDef[] }) {
 
 function WidgetTile({ w }: { w: WidgetDef }) {
   const available = w.href !== null;
+  // HR mobile-hotfix (2026-08-30) — compact mobile treatment.
+  //
+  // Founder feedback: the widgets took up too much of the 390-px
+  // viewport. Mobile (<md) now uses a shorter min-height + tighter
+  // padding + smaller icon slot, while md+ keeps the accepted
+  // desktop dimensions unchanged (§6 explicitly: "Desktop widget
+  // dimensions are accepted and must remain unchanged. Only adjust
+  // MOBILE presentation.").
   const base =
-    "group h-full flex flex-col items-center justify-between rounded-lg border border-stone-200 bg-white px-3 pt-4 pb-5 min-h-[132px] transition-colors";
+    "group h-full flex flex-col items-center justify-between rounded-lg border border-stone-200 bg-white transition-colors " +
+    // Mobile-first: smaller box + tighter padding.
+    "px-2 pt-2.5 pb-3 min-h-[92px] " +
+    // md+ restores the accepted desktop treatment.
+    "md:px-3 md:pt-4 md:pb-5 md:min-h-[132px]";
   const interactive =
     "hover:border-stone-300 hover:bg-stone-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700";
   const inert =
@@ -75,13 +87,15 @@ function WidgetTile({ w }: { w: WidgetDef }) {
   const body = (
     <>
       <div
-        className="text-sm font-medium text-club-ink text-center"
+        className="text-xs md:text-sm font-medium text-club-ink text-center leading-tight"
         data-testid={`portal-home-widget-label-${w.key}`}
       >
         {w.label}
       </div>
+      {/* Mobile shrinks the icon slot; md+ retains the accepted
+          56 × 56 icon-centric treatment. */}
       <div
-        className="text-club-green-700 group-hover:text-club-green-800 flex items-center justify-center pt-3"
+        className="text-club-green-700 group-hover:text-club-green-800 flex items-center justify-center pt-1 md:pt-3 [&_svg]:h-9 [&_svg]:w-9 md:[&_svg]:h-14 md:[&_svg]:w-14"
         aria-hidden="true"
       >
         {w.icon}

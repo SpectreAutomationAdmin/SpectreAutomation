@@ -59,10 +59,30 @@ interface Props {
   className?: string;
 }
 
-const POPOVER_WIDTH_PX = 320;
+// HR mobile-hotfix (2026-08-30) — mobile-responsive popover width.
+// At 390 px viewport - 24 px viewport-margin the desktop 320-px
+// popover left only 46 px of slack (and often didn't fit at all,
+// which is exactly why the founder saw the popover cover the
+// widget it was supposed to point at). The width is now a
+// viewport-relative computation with a hard cap.
+const POPOVER_WIDTH_DESKTOP = 320;
+const POPOVER_WIDTH_MOBILE_MAX = 280;   // upper cap at ≥ mobile viewports
+const POPOVER_MOBILE_BREAKPOINT = 640;  // < 640 px is treated as mobile
 const VIEWPORT_MARGIN = 12;
-const DEFAULT_GAP = 12;
+const DEFAULT_GAP = 10;
 const DEFAULT_TIMEOUT_MS = 500;
+
+/** Resolve the popover width the caller should render at, given the
+ *  current viewport. On mobile we shrink the popover so it (a) fits
+ *  next to the target on 390-px screens and (b) doesn't blanket the
+ *  widget it's supposed to point at. */
+function resolvePopoverWidth(): number {
+  if (typeof window === "undefined") return POPOVER_WIDTH_DESKTOP;
+  const vw = window.innerWidth;
+  if (vw >= POPOVER_MOBILE_BREAKPOINT) return POPOVER_WIDTH_DESKTOP;
+  // Fit within viewport minus 2× margin, capped at MOBILE_MAX.
+  return Math.min(POPOVER_WIDTH_MOBILE_MAX, vw - VIEWPORT_MARGIN * 2);
+}
 
 interface Position {
   top: number;
@@ -125,9 +145,15 @@ export default function CoachMark({
   // Position the popover.
   useLayoutEffect(() => {
     if (!target || !mounted) return;
+    // On mobile the drawer / mobile-nav can shift layout AFTER the
+    // initial place() call. MutationObserver + rAF re-layout catches
+    // those late layout changes (§8 — "prove the rendered CoachMark
+    // geometry is actually relative to the target element"; a
+    // stale one-shot position would let the popover drift off the
+    // widget as the shell animates in).
     const place = () => {
       const r = target.getBoundingClientRect();
-      const popW = POPOVER_WIDTH_PX;
+      const popW = resolvePopoverWidth();
       const popH = popoverRef.current?.getBoundingClientRect().height ?? 160;
       const sides: CoachMarkSide[] =
         preferredSide === "right"
@@ -153,13 +179,32 @@ export default function CoachMark({
       });
     };
     place();
+    // A short RAF chain catches the target's post-animation resting
+    // rect (the mobile drawer slides in over ~150 ms).
+    let raf = 0;
+    let attempts = 0;
+    const settle = () => {
+      place();
+      if (attempts++ < 8) raf = window.requestAnimationFrame(settle);
+    };
+    raf = window.requestAnimationFrame(settle);
     const onScroll = () => place();
     const onResize = () => place();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onResize);
+    // MutationObserver on document.body catches DOM changes that
+    // shift the target's rect (drawer opens, notification bar
+    // appears / disappears, etc.) without our own event handlers.
+    const mo = new MutationObserver(() => place());
+    mo.observe(document.body, {
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ["class", "style"],
+    });
     return () => {
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onResize);
+      if (raf) window.cancelAnimationFrame(raf);
+      mo.disconnect();
     };
   }, [target, mounted, gap, preferredSide]);
 
@@ -169,7 +214,9 @@ export default function CoachMark({
     position: "fixed",
     top: pos.top,
     left: pos.left,
-    width: POPOVER_WIDTH_PX,
+    width: resolvePopoverWidth(),
+    // Hard-cap max-width so a stale render never overflows the viewport.
+    maxWidth: `calc(100vw - ${VIEWPORT_MARGIN * 2}px)`,
     zIndex: 1000,
   };
 
