@@ -28,9 +28,10 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { ConflictError, NotFoundError, ValidationError } from "../errors";
+import { AppError, ConflictError, NotFoundError, ValidationError } from "../errors";
 import { assertSensitiveActionAllowed } from "../posting-guard";
 import { encryptSecret, decryptSecret } from "../kms";
+import { bankFingerprint as computeBankFingerprint } from "../kms/keyed-fingerprint";
 import { maskBankAccount } from "../masking";
 
 const BANK_ENTITY = "EmployeeBankAccount";
@@ -121,6 +122,32 @@ export async function upsertBankAccount(
     throw new ValidationError([{ path: "holderName", message: "holderName must be at least 2 characters" }]);
   }
   const accountLastFour = account.slice(-4);
+  // HR mobile-hotfix (2026-08-30) — keyed fingerprint for duplicate
+  // detection. See src/lib/kms/keyed-fingerprint.ts.
+  const fp = computeBankFingerprint({ institution, transit, account });
+
+  // Duplicate check: refuse if ANOTHER employee in the same Club
+  // already has an ACTIVE (PENDING or VERIFIED) row with the same
+  // fingerprint. Same-employee history is allowed (an employee may
+  // legitimately re-enter their old account). Neutral error copy
+  // (§16). DB partial-unique index defends against races.
+  const activeCollision = await prisma.employeeBankAccount.findFirst({
+    where: {
+      clubId: employee.clubId,
+      bankFingerprint: fp,
+      status: { in: ["PENDING_PENNY_TEST", "VERIFIED"] },
+      NOT: { employeeId },
+    },
+    select: { id: true },
+  });
+  if (activeCollision) {
+    throw new AppError(
+      "HR_BANK_DUPLICATE",
+      "Duplicate active payroll bank account detected within the club",
+      409,
+      "We couldn't save these banking details. Please check the information or contact the Club office.",
+    );
+  }
 
   const before = await findCurrentBank(employeeId);
 
@@ -164,6 +191,7 @@ export async function upsertBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
           status: "PENDING_PENNY_TEST",
         },
       });
@@ -177,6 +205,7 @@ export async function upsertBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
         },
       });
     }
@@ -195,6 +224,7 @@ export async function upsertBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
           status: "PENDING_PENNY_TEST",
         },
       });

@@ -10387,12 +10387,19 @@ model EmployeeSensitiveIdentity {
   sinSecretRef   String
   // Masked helper — safe to render.
   sinLastThree   String?
+  // HR mobile-hotfix (2026-08-30) — HMAC-SHA256 keyed fingerprint of
+  // the normalised SIN. Used ONLY for deterministic equality lookup
+  // to enforce (clubId, sinFingerprint) uniqueness. Never returned
+  // to the browser, never logged in cleartext audit fields. See
+  // src/lib/kms/keyed-fingerprint.ts for the key-management model.
+  sinFingerprint String?
   // Optional country-of-issue hint (CA | US | ...).
   issuingCountry String?
   effectiveFrom  DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  @@unique([clubId, sinFingerprint])
   @@index([clubId])
 }
 
@@ -10414,6 +10421,14 @@ model EmployeeBankAccount {
   accountSecretRef     String
   accountLastFour      String?
   holderName           String
+  // HR mobile-hotfix (2026-08-30) — HMAC-SHA256 keyed fingerprint of
+  // the normalised (institution, transit, account) triple. Used to
+  // detect two DIFFERENT employees pointing at the same payroll
+  // destination. Historical rows for the SAME employee may share a
+  // fingerprint; the partial uniqueness constraint applies to the
+  // currently-active (non-terminal) row across employees within a
+  // Club. See src/lib/kms/keyed-fingerprint.ts.
+  bankFingerprint      String?
   status               String    @default("PENDING_PENNY_TEST")
   activatedAt          DateTime?
   createdAt            DateTime  @default(now())
@@ -10421,6 +10436,7 @@ model EmployeeBankAccount {
 
   @@index([clubId])
   @@index([employeeId, status])
+  @@index([clubId, bankFingerprint, status])
 }
 
 // EmployeeTaxProfile — CRA / provincial withholding elections.

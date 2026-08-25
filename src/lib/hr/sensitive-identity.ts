@@ -29,9 +29,10 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { NotFoundError, ValidationError } from "../errors";
+import { AppError, NotFoundError, ValidationError } from "../errors";
 import { assertSensitiveActionAllowed } from "../posting-guard";
 import { encryptSecret, decryptSecret } from "../kms";
+import { sinFingerprint as computeSinFingerprint } from "../kms/keyed-fingerprint";
 import { maskSin } from "../masking";
 
 const SIN_ENTITY = "EmployeeSensitiveIdentity";
@@ -83,6 +84,31 @@ export async function upsertSin(
 
   const normalised = normaliseSin(plaintextSin);
   const sinLastThree = normalised.slice(-3);
+  // HR mobile-hotfix (2026-08-30) — deterministic keyed fingerprint
+  // for duplicate detection. See src/lib/kms/keyed-fingerprint.ts.
+  const fp = computeSinFingerprint(normalised);
+
+  // Duplicate check: refuse if ANOTHER employee in the same Club
+  // already owns this SIN fingerprint. Same-employee update is
+  // fine (the DB unique key catches truly-conflicting writes as a
+  // second line of defence). Neutral error message on the wire —
+  // no PII, no linking to the other employee (§13).
+  const collision = await prisma.employeeSensitiveIdentity.findFirst({
+    where: {
+      clubId: employee.clubId,
+      sinFingerprint: fp,
+      NOT: { employeeId },
+    },
+    select: { id: true },
+  });
+  if (collision) {
+    throw new AppError(
+      "HR_SIN_DUPLICATE",
+      "Duplicate SIN detected within the club",
+      409,
+      "We couldn't save this SIN. Please check the number or contact the Club office.",
+    );
+  }
 
   const ciphertext = await encryptSecret({
     scope: "HR",
@@ -99,12 +125,13 @@ export async function upsertSin(
 
   const updated = await prisma.employeeSensitiveIdentity.upsert({
     where: { employeeId },
-    update: { sinSecretRef: ciphertext, sinLastThree },
+    update: { sinSecretRef: ciphertext, sinLastThree, sinFingerprint: fp },
     create: {
       clubId: employee.clubId,
       employeeId,
       sinSecretRef: ciphertext,
       sinLastThree,
+      sinFingerprint: fp,
     },
   });
 

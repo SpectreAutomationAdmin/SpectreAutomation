@@ -42,6 +42,10 @@ import {
 import { resolveDocumentStorage } from "../documents/storage";
 import { AppError, ConflictError, NotFoundError, ValidationError } from "../errors";
 import { encryptSecret } from "../kms";
+import {
+  sinFingerprint as computeSinFingerprint,
+  bankFingerprint as computeBankFingerprint,
+} from "../kms/keyed-fingerprint";
 import { maskBankAccount, maskSin } from "../masking";
 
 // ---------------------------------------------------------------------------
@@ -1053,6 +1057,27 @@ export async function submitSelfSin(
   assertActorTargetsSelf(actor, employee.id);
   assertActorTargetsOwnClub(actor, employee.clubId);
 
+  // HR mobile-hotfix (2026-08-30) — duplicate SIN detection with a
+  // deterministic keyed fingerprint. Neutral employee-facing error
+  // copy — never names the other employee (§13).
+  const fp = computeSinFingerprint(normalised);
+  const collision = await prisma.employeeSensitiveIdentity.findFirst({
+    where: {
+      clubId: actor.clubId,
+      sinFingerprint: fp,
+      NOT: { employeeId: actor.employeeId },
+    },
+    select: { id: true },
+  });
+  if (collision) {
+    throw new AppError(
+      "HR_SIN_DUPLICATE",
+      "Duplicate SIN detected within the club",
+      409,
+      "We couldn't save this SIN. Please check the number or contact the Club office.",
+    );
+  }
+
   const ciphertext = await encryptSecret({
     scope: "HR",
     secretReference: sinKmsRef(actor.employeeId),
@@ -1068,12 +1093,13 @@ export async function submitSelfSin(
 
   const updated = await prisma.employeeSensitiveIdentity.upsert({
     where: { employeeId: actor.employeeId },
-    update: { sinSecretRef: ciphertext, sinLastThree },
+    update: { sinSecretRef: ciphertext, sinLastThree, sinFingerprint: fp },
     create: {
       clubId: actor.clubId,
       employeeId: actor.employeeId,
       sinSecretRef: ciphertext,
       sinLastThree,
+      sinFingerprint: fp,
     },
   });
 
@@ -1210,6 +1236,25 @@ export async function submitSelfBankAccount(
     throw new ValidationError([{ path: "holderName", message: "holderName is too long" }]);
   }
   const accountLastFour = account.slice(-4);
+  // HR mobile-hotfix (2026-08-30) — duplicate active bank detection.
+  const fp = computeBankFingerprint({ institution, transit, account });
+  const activeCollision = await prisma.employeeBankAccount.findFirst({
+    where: {
+      clubId: actor.clubId,
+      bankFingerprint: fp,
+      status: { in: ["PENDING_PENNY_TEST", "VERIFIED"] },
+      NOT: { employeeId: actor.employeeId },
+    },
+    select: { id: true },
+  });
+  if (activeCollision) {
+    throw new AppError(
+      "HR_BANK_DUPLICATE",
+      "Duplicate active payroll bank account detected within the club",
+      409,
+      "We couldn't save these banking details. Please check the information or contact the Club office.",
+    );
+  }
 
   const before = await prisma.employeeBankAccount.findFirst({
     where: { employeeId: actor.employeeId, status: { in: [...BANKING_NON_TERMINAL_STATUSES] } },
@@ -1249,6 +1294,7 @@ export async function submitSelfBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
           status: "PENDING_PENNY_TEST",
         },
       });
@@ -1262,6 +1308,7 @@ export async function submitSelfBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
         },
       });
     }
@@ -1280,6 +1327,7 @@ export async function submitSelfBankAccount(
           accountSecretRef: accountCipher,
           accountLastFour,
           holderName,
+          bankFingerprint: fp,
           status: "PENDING_PENNY_TEST",
         },
       });
