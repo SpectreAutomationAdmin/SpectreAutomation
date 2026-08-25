@@ -146,6 +146,12 @@ interface Props {
    *  Overview tab. The parent page decides whether to render — this
    *  component is presentation-only. */
   lifecycleControls?: React.ReactNode;
+  /** HR mobile-hotfix (2026-08-30) — Optional Approve & Activate slot
+   *  (§4). Rendered above lifecycleControls when the operator holds
+   *  `hr:onboarding:read` so the readiness summary is visible to any
+   *  HR viewer, while the write action inside the slot is gated on
+   *  the caller's approve permission. */
+  approvalSection?: React.ReactNode;
   /** HR-2C Employment (2026-08-24) — Optional Employment tab slot. When
    *  provided, replaces the default legacy Employment-history view with
    *  the multi-role + compensation + allowances section. The parent
@@ -196,7 +202,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, employmentSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, employmentSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -433,6 +439,11 @@ export default function EmployeeProfileView(props: Props) {
               )}
             </div>
           )}
+
+          {/* HR mobile-hotfix (2026-08-30) — §4 Approve & Activate slot.
+             Renders above lifecycle controls so approval is the most
+             prominent action on a submitted onboarding. */}
+          {approvalSection}
 
           {/* HR-2B.3.6 — Delete / Archive controls, parent-supplied. */}
           {lifecycleControls}

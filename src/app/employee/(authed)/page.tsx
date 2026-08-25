@@ -139,6 +139,10 @@ export default async function EmployeePortalHome() {
         firstName: true,
         preferredName: true,
         portalTourCompletedAt: true,
+        // HR mobile-hotfix (2026-08-30) §4 — Home banner reads
+        // employeeLifecycle so the "reviewing" message vanishes the
+        // instant the admin runs Approve & Activate.
+        employeeLifecycle: true,
         onboardingSessions: {
           orderBy: { startedAt: "desc" },
           take: 1,
@@ -167,6 +171,15 @@ export default async function EmployeePortalHome() {
     : employee.firstName;
   const tourAlreadyDone = employee.portalTourCompletedAt !== null;
   const sessionState = employee.onboardingSessions[0]?.state ?? null;
+  // HR mobile-hotfix (2026-08-30) §4 — Once the admin runs
+  // approveAndActivateEmployee, the session moves to APPROVED AND the
+  // employee's lifecycle flips to ACTIVE. Either signal alone suppresses
+  // the "reviewing your onboarding" banner; requiring both would let a
+  // late-arriving session write (or a manual lifecycle flip) leave the
+  // banner stranded. `awaitingReview` is the single source of truth
+  // that both the banner and its guards read from.
+  const awaitingReview = sessionState === "SUBMITTED"
+    && employee.employeeLifecycle !== "ACTIVE";
 
   // Show only notifications the employee has not dismissed for the
   // current underlying obligation state.
@@ -262,7 +275,7 @@ export default async function EmployeePortalHome() {
         <HomeWidgetGrid widgets={widgets} />
       </div>
 
-      {sessionState === "SUBMITTED" && (
+      {awaitingReview && (
         <section
           className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
           data-testid="portal-home-awaiting-review"

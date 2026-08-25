@@ -43,6 +43,10 @@ import EmployeeTrainingSection from "@/components/hr/EmployeeTrainingSection";
 import { getEmployeeTrainingRecord } from "@/lib/hr/training/compliance";
 import { listClubCourses } from "@/lib/hr/training/courses";
 import { assignTrainingCourseAction } from "./_training-actions";
+// HR mobile-hotfix (2026-08-30) — §4 Approve & Activate.
+import ApproveActivateEmployee from "@/components/hr/ApproveActivateEmployee";
+import { getOnboardingApprovalReadiness } from "@/lib/hr/onboarding-approve-activate";
+import { approveAndActivateAction } from "./_approve-actions";
 
 export default async function EmployeeProfilePage({
   params, searchParams,
@@ -313,6 +317,14 @@ export default async function EmployeeProfilePage({
         .map((c) => ({ id: c.id, code: c.code, title: c.title }))
     : [];
 
+  // HR mobile-hotfix (2026-08-30) — §4 Approve & Activate readiness.
+  // The readiness projection is safe for any HR reader — only presence
+  // flags + banking status; no plaintext SIN, no bank digits, no
+  // fingerprints. The write action is gated inside the service.
+  const approvalReadiness = canReadOnboarding
+    ? await getOnboardingApprovalReadiness(principal, profile.id)
+    : null;
+
   return (
     <EmployeeProfileView
       employee={{
@@ -439,6 +451,14 @@ export default async function EmployeeProfilePage({
             employeeName={`${profile.firstName} ${profile.lastName}`}
             eligibility={deleteEligibility}
             currentLifecycle={profile.employeeLifecycle}
+          />
+        ) : null
+      }
+      approvalSection={
+        approvalReadiness ? (
+          <ApproveActivateEmployee
+            readiness={approvalReadiness}
+            action={approveAndActivateAction.bind(null, profile.id)}
           />
         ) : null
       }
