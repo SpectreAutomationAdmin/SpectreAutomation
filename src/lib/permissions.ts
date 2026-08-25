@@ -90,7 +90,8 @@ export const PERMISSIONS = {
   "ap:enter":                 { name: "(legacy) AP invoice entry",            category: "AP" },
   "ap:approve":               { name: "(legacy) AP invoice approval",         category: "AP" },
 
-  // Payroll
+  // Payroll (legacy Ops Phase-5 — retained; new Payroll-3A canonical
+  // separation lives below).
   "payroll:read":              { name: "Read payroll",                  category: "PAYROLL" },
   "payroll:write":             { name: "Process payroll",               category: "PAYROLL" },
   "payroll:employees:manage":  { name: "Manage employees",              category: "PAYROLL" },
@@ -98,6 +99,18 @@ export const PERMISSIONS = {
   "payroll:timesheets:approve":{ name: "Approve timesheets",            category: "PAYROLL" },
   "payroll:run":               { name: "Run / post payroll",            category: "PAYROLL" },
   "payroll:approve":           { name: "Approve payroll run",           category: "PAYROLL" },
+  // Payroll-3A (2026-08-28) — canonical payroll foundation §28.
+  // Preparation, approval, and posting are deliberately SEPARATE
+  // grants so no single role short-circuits Controller approval.
+  "payroll:prepare":           { name: "Prepare a payroll batch (draft inputs)", category: "PAYROLL" },
+  "payroll:edit":              { name: "Edit payroll batch inputs while DRAFT/PREPARED", category: "PAYROLL" },
+  "payroll:submit":            { name: "Submit a payroll batch to Controller for approval", category: "PAYROLL" },
+  "payroll:post":              { name: "Post an approved payroll batch (finalise + accounting)", category: "PAYROLL" },
+  "payroll:void":              { name: "Void a payroll batch (audited)",  category: "PAYROLL" },
+  "payroll:paygroup:read":     { name: "Read payroll pay groups + periods", category: "PAYROLL" },
+  "payroll:paygroup:write":    { name: "Create / update payroll pay groups + periods", category: "PAYROLL" },
+  "payroll:config:read":       { name: "Read Club payroll configuration", category: "PAYROLL" },
+  "payroll:config:write":      { name: "Update Club payroll configuration", category: "PAYROLL" },
 
   // Events / private events
   "events:read":               { name: "View events",                   category: "EVENTS" },
@@ -324,6 +337,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve",
+    // Payroll-3A — CLUB_ADMIN holds every canonical Payroll-3A key
+    // EXCEPT payroll:post (finalisation is Controller-only per §31).
+    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void",
+    "payroll:paygroup:read", "payroll:paygroup:write",
+    "payroll:config:read", "payroll:config:write",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -385,6 +403,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "inventory:read", "inventory:view",
     "lessons:view", "lessons:approve",
     "payroll:read", "payroll:approve",
+    // Payroll-3A — GM sees payroll operational context (pay groups
+    // + Club payroll configuration) but cannot prepare / edit /
+    // submit / post batches.
+    "payroll:paygroup:read", "payroll:config:read",
     "assets:read", "assets:dispose",
     "budget:read", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -445,6 +467,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve",
+    // Payroll-3A — Controller holds READ + APPROVE + POST only.
+    // Preparation / editing / submission are deliberately separate
+    // (Payroll admin owns those). Controller never gains SIN/banking
+    // reveal via payroll approval per §31.
+    "payroll:paygroup:read", "payroll:config:read",
+    "payroll:post",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -550,6 +578,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read",
     "payroll:timesheets:approve", "payroll:run", "payroll:approve",
+    // Payroll-3A — PAYROLL_ADMIN prepares + edits + submits payroll
+    // batches, owns pay-group + config administration. Does NOT
+    // approve or post — those are Controller-only (§28, §31).
+    "payroll:prepare", "payroll:edit", "payroll:submit",
+    "payroll:paygroup:read", "payroll:paygroup:write",
+    "payroll:config:read", "payroll:config:write",
     "reports:operating",
     // HR-1 — PAYROLL_ADMIN is the reveal-tier role: SIN reveal,
     // banking reveal, tax reveal all live here (audited via
@@ -594,6 +628,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "ap:report:view",
     "reports:financial", "reports:board",
     "system:audit:read",
+    // Payroll-3A — statutory audit read across payroll structural
+    // data (batches, pay groups, config). No prepare / approve /
+    // post / reveal.
+    "payroll:read", "payroll:paygroup:read", "payroll:config:read",
     // Phase 6
     "reports:read", "reports:export",
     "packages:read",
