@@ -49,6 +49,15 @@ const STEPS: Step[] = [
     preferredSide: "bottom",
   },
   {
+    // HR mobile-hotfix (2026-08-30) — Clock In / Out step slots
+    // between Scheduling and Paystubs so the walkthrough covers
+    // the timekeeping affordance.
+    title: "Clock In / Out",
+    body: "Punch in when your shift starts and out when it ends.",
+    targetSelector: '[data-tour-target="clocking-in-out"]',
+    preferredSide: "bottom",
+  },
+  {
     title: "Paystubs",
     body: "Your pay statements and payroll history live here.",
     targetSelector: '[data-tour-target="paystubs"]',

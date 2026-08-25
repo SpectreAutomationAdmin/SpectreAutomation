@@ -197,11 +197,12 @@ describe("HR-2B.5 · First-login tour (§39-40, §48)", () => {
     // Accepted titles at src/components/employee/EmployeeTourOnFirstLogin.tsx:
     //   Welcome / Scheduling / Paystubs / Time Off Requests / Forms /
     //   Safety & Training / Profile.
-    for (const label of ["Scheduling", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Profile"]) {
+    // HR mobile-hotfix (2026-08-30) — "Clock In / Out" step added.
+    for (const label of ["Scheduling", "Clock In / Out", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Profile"]) {
       expect(tour).toMatch(new RegExp(`title:\\s*"${label}"`));
     }
     // The tour attaches to Home widget targets (not sidebar-only anchors).
-    for (const target of ["scheduling", "paystubs", "time-off", "forms", "training"]) {
+    for (const target of ["scheduling", "clocking-in-out", "paystubs", "time-off", "forms", "training"]) {
       expect(tour).toMatch(new RegExp(`data-tour-target="${target}"|"${target}"`));
     }
   });

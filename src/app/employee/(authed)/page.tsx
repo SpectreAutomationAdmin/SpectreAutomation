@@ -203,20 +203,24 @@ export default async function EmployeePortalHome() {
     },
     {
       key: "training",
-      label: "Training",
+      // HR mobile-hotfix (2026-08-30) — founder terminology
+      // correction: widget label is "Safety & Training" (aligns
+      // with the admin catalogue + destination page title).
+      label: "Safety & Training",
       href: "/employee/safety-training",
       icon: <IconTraining />,
       tourTarget: "training",
     },
     {
       key: "clocking-in-out",
-      label: "Clocking In / Out",
-      // §9 — no existing employee-facing clock-in/out route or
-      // service. Render the tile visually consistently but non-
-      // navigational (§6 forbids inventing a workflow just so a
-      // widget can be clicked).
+      // HR mobile-hotfix (2026-08-30) — "Clock In / Out" per
+      // founder terminology.
+      label: "Clock In / Out",
       href: null,
       icon: <IconClock />,
+      // HR mobile-hotfix (2026-08-30) — widget participates in
+      // the guided tour so employees see the affordance.
+      tourTarget: "clocking-in-out",
     },
   ];
 

@@ -70,9 +70,11 @@ describe("HR-2C · Anchored guided tour + replay", () => {
     // Tour anchors moved from sidebar nav items to the Home widget
     // grid because the widgets ARE the primary launchers now.
     // Accepted ordering:
-    //   Welcome → Scheduling → Paystubs → Time Off Requests → Forms → Safety & Training → Profile
+    //   Welcome → Scheduling → Clock In / Out → Paystubs → Time Off Requests → Forms → Safety & Training → Profile
+    // (HR mobile-hotfix 2026-08-30 — Clock In / Out step added between
+    // Scheduling and Paystubs.)
     const stepsBlock = tour.slice(tour.indexOf("const STEPS"), tour.indexOf("interface Props"));
-    const labels = ["Welcome", "Scheduling", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Profile"];
+    const labels = ["Welcome", "Scheduling", "Clock In / Out", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Profile"];
     const positions = labels.map((label) => stepsBlock.indexOf(label));
     for (const [i, pos] of positions.entries()) {
       expect(pos, `tour step "${labels[i]}" missing`).toBeGreaterThan(-1);

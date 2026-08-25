@@ -131,7 +131,7 @@ test.describe("HR-2C Portal Refinement · desktop", () => {
     await expect(tiles).toHaveCount(6);
     const labels = await tiles.locator('[data-testid^="portal-home-widget-label-"]').allTextContents();
     expect(labels).toEqual([
-      "Scheduling", "Paystubs", "Time Off Requests", "Forms", "Training", "Clocking In / Out",
+      "Scheduling", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Clock In / Out",
     ]);
     // Suitcase has NO runway line (old airplane marker).
     const timeoff = grid.locator('[data-testid="portal-home-widget-time-off-requests"]');
