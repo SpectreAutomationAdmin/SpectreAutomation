@@ -102,7 +102,8 @@ describe("HR mobile-hotfix · §3 notification copy — neutral, no sensitive pl
       expect(blob).not.toMatch(/\d{9}/);          // no 9-digit SIN
       expect(blob).not.toMatch(/\d{7,}/);         // no long bank digit runs
       expect(blob).not.toMatch(/[a-f0-9]{32,}/i); // no fingerprint hex
-      expect(blob).toMatch(/SIN was updated/);
+      // Copy is admin-facing (§3 informational) — third person, no digits.
+      expect(blob).toMatch(/SIN updated for /);
     }
   });
 

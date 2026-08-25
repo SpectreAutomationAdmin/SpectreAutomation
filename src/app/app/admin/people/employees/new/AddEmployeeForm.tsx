@@ -299,6 +299,93 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         </div>
       </section>
 
+      {/* HR mobile-hotfix (2026-08-30) §1 — Optional home address.
+         Admin may prefill; if left blank, the employee provides it
+         during the onboarding Address step. No duplicate storage —
+         these are the canonical Employee.home* columns. */}
+      <section className="card card-body space-y-4" data-testid="add-employee-home-address">
+        <div className="flex items-baseline justify-between">
+          <h2 className="section-title text-lg">Home address</h2>
+          <span className="text-xs text-stone-500">Optional — employee can add during onboarding</span>
+        </div>
+        <div>
+          <label className="label" htmlFor="homeAddressLine1">Street address</label>
+          <input
+            id="homeAddressLine1"
+            name="homeAddressLine1"
+            className="input"
+            autoComplete="address-line1"
+            maxLength={200}
+            placeholder="123 Fairway Lane"
+            data-testid="new-emp-home-line1"
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="homeAddressLine2">Suite / apt</label>
+          <input
+            id="homeAddressLine2"
+            name="homeAddressLine2"
+            className="input"
+            autoComplete="address-line2"
+            maxLength={200}
+            data-testid="new-emp-home-line2"
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label" htmlFor="homeCity">City</label>
+            <input
+              id="homeCity"
+              name="homeCity"
+              className="input"
+              autoComplete="address-level2"
+              maxLength={100}
+              placeholder="Calgary"
+              data-testid="new-emp-home-city"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="homeProvince">Province / state</label>
+            <input
+              id="homeProvince"
+              name="homeProvince"
+              className="input uppercase"
+              autoComplete="address-level1"
+              maxLength={32}
+              placeholder="AB"
+              data-testid="new-emp-home-province"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="label" htmlFor="homePostalCode">Postal / ZIP code</label>
+            <input
+              id="homePostalCode"
+              name="homePostalCode"
+              className="input uppercase"
+              autoComplete="postal-code"
+              maxLength={16}
+              placeholder="T2P 3H7"
+              data-testid="new-emp-home-postal"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="homeCountry">Country</label>
+            <input
+              id="homeCountry"
+              name="homeCountry"
+              className="input uppercase"
+              autoComplete="country"
+              maxLength={2}
+              defaultValue="CA"
+              placeholder="CA"
+              data-testid="new-emp-home-country"
+            />
+          </div>
+        </div>
+      </section>
+
       <section className="card card-body space-y-4">
         <h2 className="section-title text-lg">Role &amp; team</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

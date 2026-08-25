@@ -98,6 +98,16 @@ export async function POST(req: NextRequest) {
   const positionId = readOptionalString(fd, "positionId");
   const managerEmployeeId = readOptionalString(fd, "managerEmployeeId");
   const memberId = readOptionalString(fd, "memberId");
+  // HR mobile-hotfix (2026-08-30) §1 — optional admin prefill of the
+  // new hire's home address. All six fields are optional; a blank
+  // submission means the employee will supply the address during the
+  // onboarding Address step.
+  const homeAddressLine1 = readOptionalString(fd, "homeAddressLine1");
+  const homeAddressLine2 = readOptionalString(fd, "homeAddressLine2");
+  const homeCity = readOptionalString(fd, "homeCity");
+  const homeProvince = readOptionalString(fd, "homeProvince");
+  const homePostalCode = readOptionalString(fd, "homePostalCode");
+  const homeCountry = readOptionalString(fd, "homeCountry");
 
   // HR-2B.5 §11-13 — Initial compensation. Presence of these fields
   // means the operator has hr:compensation:write and the form rendered
@@ -166,6 +176,16 @@ export async function POST(req: NextRequest) {
       positionId,
       expectedStartDate,
       employmentType,
+      // HR mobile-hotfix (2026-08-30) §1 — optional admin prefill.
+      // Any subset may be blank; the service persists whatever the
+      // admin provided. The onboarding Address step prefills from
+      // these fields when set, otherwise it prompts for input.
+      homeAddressLine1,
+      homeAddressLine2,
+      homeCity,
+      homeProvince,
+      homePostalCode,
+      homeCountry,
     });
     createdEmployeeId = employee.id;
 

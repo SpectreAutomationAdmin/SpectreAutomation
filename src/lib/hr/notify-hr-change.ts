@@ -20,10 +20,14 @@
 //   4. Failure to notify does NOT block the underlying write.
 //      A best-effort try/catch here so the write path is never
 //      hostage to an outbound email issue.
-//
-// Notifications are recorded as IN_APP entries so any admin can see
-// them in the notifications list; the enterprise adapter forwards
-// EMAIL separately when the club's email adapter is wired.
+//   5. HR mobile-hotfix continuation (2026-08-30): the EMPLOYEE
+//      themselves also receives a confirmation notification. Two
+//      audiences (employee-confirmation + admin-informational) with
+//      distinct copy — see `copyForEmployee` vs `copyForAdmin`.
+//      Employee delivery uses the linked User row's IN_APP inbox
+//      when available; falls back to their `personalEmail` via the
+//      canonical EMAIL adapter. Neither audience receives sensitive
+//      values.
 
 import { prisma } from "../prisma";
 import { notify } from "../enterprise/notifications";
@@ -58,10 +62,11 @@ const RECIPIENT_PERMISSION: Record<HrChangeKind, "hr:sin:read" | "hr:banking:rea
 };
 
 /**
- * Human-readable subject/body pairs. Deliberately terse — no
- * plaintext digits, no fingerprint hex, no coordinates.
+ * Admin-facing copy. Third-person; identifies the employee by name +
+ * routes reviewer to the profile surface. Never contains sensitive
+ * values.
  */
-function copyFor(kind: HrChangeKind, employeeDisplayName: string, actorSource: HrChangeActorSource): { subject: string; body: string } {
+function copyForAdmin(kind: HrChangeKind, employeeDisplayName: string, actorSource: HrChangeActorSource): { subject: string; body: string } {
   const who = actorSource === "STAFF"
     ? "the Club office"
     : actorSource === "EMPLOYEE"
@@ -71,55 +76,141 @@ function copyFor(kind: HrChangeKind, employeeDisplayName: string, actorSource: H
     case "sin_updated":
       return {
         subject: `SIN updated for ${employeeDisplayName}`,
-        body: `${employeeDisplayName}'s SIN was updated by ${who}. Please review the record in Employee Profile → Payroll.`,
+        body: `${employeeDisplayName}'s Social Insurance Number information was changed by ${who}. Please review the record in Employee Profile → Payroll.`,
       };
     case "banking_updated":
       return {
         subject: `Direct deposit updated for ${employeeDisplayName}`,
-        body: `${employeeDisplayName}'s direct-deposit banking was updated by ${who}. Please review the record in Employee Profile → Payroll.`,
+        body: `${employeeDisplayName} submitted new direct deposit information (updated by ${who}). Please review the record in Employee Profile → Payroll.`,
       };
     case "home_address_updated":
       return {
         subject: `Home address updated for ${employeeDisplayName}`,
-        body: `${employeeDisplayName}'s home address was updated by ${who}. The new address is visible in Employee Profile → Overview.`,
+        body: `${employeeDisplayName} updated her/his address (updated by ${who}). The new address is visible in Employee Profile → Overview.`,
       };
   }
 }
 
 /**
+ * Employee-facing confirmation copy. Second-person; confirms the
+ * change without exposing sensitive detail. This is the audit trail
+ * the employee sees so an unauthorized change would be visible to
+ * them immediately.
+ */
+function copyForEmployee(kind: HrChangeKind): { subject: string; body: string } {
+  switch (kind) {
+    case "sin_updated":
+      return {
+        subject: `Your Social Insurance Number information was updated`,
+        body: `Your Social Insurance Number information was updated. If you did not make this change, please contact your Club office immediately.`,
+      };
+    case "banking_updated":
+      return {
+        subject: `Your direct deposit information was updated`,
+        body: `Your direct deposit information was updated and is pending verification. If you did not make this change, please contact your Club office immediately.`,
+      };
+    case "home_address_updated":
+      return {
+        subject: `Your address was updated`,
+        body: `Your address on file was updated. If you did not make this change, please contact your Club office.`,
+      };
+  }
+}
+
+/**
+ * Look up the employee's most likely notification targets:
+ *   - linked User id (for IN_APP inbox on the admin surface or portal)
+ *   - personalEmail (for EMAIL fallback)
+ * Both may be null; caller MUST guard.
+ */
+async function loadEmployeeContactRoutes(
+  clubId: string,
+  employeeId: string,
+): Promise<{ userId: string | null; personalEmail: string | null }> {
+  const row = await prisma.employee.findFirst({
+    where: { id: employeeId, clubId },
+    select: { userId: true, personalEmail: true },
+  });
+  return {
+    userId: row?.userId ?? null,
+    personalEmail: row?.personalEmail ?? null,
+  };
+}
+
+/**
  * Fire an HR-change notification. Best-effort — never rejects.
+ *
+ * Fans out to TWO audiences:
+ *   * Admin recipients — resolved by permission (RECIPIENT_PERMISSION).
+ *     Delivered IN_APP to each admin's User.notifications inbox.
+ *   * Employee themselves — delivered IN_APP to their linked User
+ *     (when present) and/or EMAIL to their personalEmail. Distinct
+ *     copy that confirms the change without naming the field's value.
  */
 export async function notifyHrChange(input: NotifyHrChangeInput): Promise<void> {
   try {
-    const recipients = await resolveRecipientsByPermission(
-      input.clubId, RECIPIENT_PERMISSION[input.kind],
-    );
-    if (recipients.length === 0) return;
+    const [adminRecipients, employeeRoutes] = await Promise.all([
+      resolveRecipientsByPermission(input.clubId, RECIPIENT_PERMISSION[input.kind]),
+      loadEmployeeContactRoutes(input.clubId, input.employeeId),
+    ]);
 
-    const { subject, body } = copyFor(input.kind, input.employeeDisplayName, input.actorSource);
+    const adminCopy = copyForAdmin(input.kind, input.employeeDisplayName, input.actorSource);
+    const employeeCopy = copyForEmployee(input.kind);
 
-    // Fan out one IN_APP notification per recipient user. `notify` is
-    // called as a system event (principal=null) so it bypasses the
-    // notifications:send permission check — this is service-authored,
-    // not user-authored.
-    for (const r of recipients) {
+    const commonMeta = {
+      kind: input.kind,
+      actorSource: input.actorSource,
+      employeeIdTail: input.employeeId.slice(-8),
+      employeeNumber: input.employeeNumber ?? null,
+    } as const;
+
+    // Admin fan-out. Skip the employee's linked User id if they happen
+    // to hold the read permission themselves — the employee gets a
+    // dedicated employee-facing message just below.
+    for (const r of adminRecipients) {
+      if (employeeRoutes.userId && r.id === employeeRoutes.userId) continue;
       await notify(null, input.clubId, {
         channel: "IN_APP",
         toUserId: r.id,
-        subject,
-        body,
+        subject: adminCopy.subject,
+        body: adminCopy.body,
         priority: "NORMAL",
-        topic: `hr.change.${input.kind}`,
+        topic: `hr.change.${input.kind}.admin`,
         triggeredEntityType: "Employee",
         triggeredEntityId: input.employeeId,
-        meta: {
-          kind: input.kind,
-          actorSource: input.actorSource,
-          employeeIdTail: input.employeeId.slice(-8),
-          // Employee number is safe (it is not a secret); helpful for
-          // an admin scanning their notifications list.
-          employeeNumber: input.employeeNumber ?? null,
-        },
+        meta: { ...commonMeta, audience: "ADMIN" },
+      });
+    }
+
+    // Employee confirmation. Deliver via IN_APP to their linked User
+    // if one exists (Employee.userId is populated when the employee
+    // holds a Club-scoped account); ALSO fire an EMAIL to their
+    // personalEmail so the confirmation reaches them even without
+    // a User row.
+    if (employeeRoutes.userId) {
+      await notify(null, input.clubId, {
+        channel: "IN_APP",
+        toUserId: employeeRoutes.userId,
+        subject: employeeCopy.subject,
+        body: employeeCopy.body,
+        priority: "NORMAL",
+        topic: `hr.change.${input.kind}.employee`,
+        triggeredEntityType: "Employee",
+        triggeredEntityId: input.employeeId,
+        meta: { ...commonMeta, audience: "EMPLOYEE" },
+      });
+    }
+    if (employeeRoutes.personalEmail) {
+      await notify(null, input.clubId, {
+        channel: "EMAIL",
+        toEmail: employeeRoutes.personalEmail,
+        subject: employeeCopy.subject,
+        body: employeeCopy.body,
+        priority: "NORMAL",
+        topic: `hr.change.${input.kind}.employee`,
+        triggeredEntityType: "Employee",
+        triggeredEntityId: input.employeeId,
+        meta: { ...commonMeta, audience: "EMPLOYEE" },
       });
     }
   } catch (err) {
