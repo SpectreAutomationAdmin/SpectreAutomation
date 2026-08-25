@@ -55,7 +55,7 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
     expect(actual).not.toContain("hr:tax:reveal");
   });
 
-  it("GENERAL_MANAGER holds only the read-plus-onboarding-approve subset", () => {
+  it("GENERAL_MANAGER holds only the read-plus-onboarding-approve subset (+ HR-2C training read/assign/compliance)", () => {
     const expected = [
       "hr:compensation:read",
       "hr:credentials:read",
@@ -66,17 +66,27 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
       "hr:employment:read",
       "hr:onboarding:approve",
       "hr:onboarding:read",
+      // HR-2C — GM can read the training catalogue + compliance, and
+      // assign remedial courses; never authors or publishes course
+      // content (that stays with CLUB_ADMIN).
+      "hr:training:read",
+      "hr:training:assign",
+      "hr:training:compliance:read",
     ].sort();
     const actual = hrKeysOfRole("GENERAL_MANAGER");
     expect(actual).toEqual(expected);
   });
 
-  it("PAYROLL_ADMIN holds the reveal-tier + compensation/payroll_profile write bundle", () => {
+  it("PAYROLL_ADMIN holds the reveal-tier + compensation/payroll_profile write bundle (+ HR-2C allowance read/write)", () => {
     // Reveal-tier: sin/banking/tax reveal. Full write for
     // compensation, payroll_profile, banking. Read + sensitive
     // documents. Directory/employee/employment read (no employee
     // write — HR write of employee records is CLUB_ADMIN's).
+    // HR-2C — allowance read/write is a payroll-configuration seam
+    // (recurring taxable allowances feed gross pay).
     const expected = [
+      "hr:allowance:read",
+      "hr:allowance:write",
       "hr:banking:approve",
       "hr:banking:read",
       "hr:banking:reveal",

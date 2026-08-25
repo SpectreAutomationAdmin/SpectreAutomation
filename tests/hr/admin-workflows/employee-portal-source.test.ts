@@ -25,10 +25,26 @@ describe("HR-2B.5 · Employee Portal shell + routes", () => {
   const documents = src("src/app/employee/(authed)/documents/page.tsx");
   const profile = src("src/app/employee/(authed)/profile/page.tsx");
 
-  it("EMPLOYEE_NAV covers Home / Pay / Schedule / Availability / Safety & Training / Documents / Profile", () => {
-    // HR-2C §5 added Safety & Training and refined ordering.
-    for (const label of ["Home", "Pay", "Schedule", "Availability", "Safety & Training", "Documents", "Profile"]) {
-      expect(nav).toContain(`label: "${label}"`);
+  it("EMPLOYEE_NAV covers Home + Profile (HR-2C Shell Refinement — operational surfaces became Home widgets)", () => {
+    // HR-2C Shell Refinement (2026-08-24, founder-accepted): the
+    // persistent portal navigation is Home + Profile ONLY.
+    // Functional destinations (Schedule / Availability / Pay /
+    // Safety & Training / Documents / Clocking In & Out) are reached
+    // from the Home widget grid and remain accessible by direct URL /
+    // bookmark. The widgets ARE the launcher surface now.
+    //
+    // Scope guards to the EMPLOYEE_NAV block only — the same file
+    // legitimately declares Schedule / Documents / Pay labels for
+    // ADMIN sections elsewhere.
+    const start = nav.indexOf("export const EMPLOYEE_NAV");
+    expect(start).toBeGreaterThan(-1);
+    const end = nav.indexOf("];", start);
+    const employeeNavBlock = nav.slice(start, end + 2);
+    for (const label of ["Home", "Profile"]) {
+      expect(employeeNavBlock).toContain(`label: "${label}"`);
+    }
+    for (const label of ["Schedule", "Availability", "Pay", "Safety & Training", "Documents"]) {
+      expect(employeeNavBlock).not.toContain(`label: "${label}"`);
     }
     // HR-2C widened the exported type to `Array<NavItem & { tourTarget?: string }>`
     // to carry the stable coach-mark anchor slug.
@@ -72,11 +88,21 @@ describe("HR-2B.5 · Employee Portal shell + routes", () => {
     expect(layout).toMatch(/clubName = club\.name/);
   });
 
-  it("§33: home shows employee number + position + department + start date", () => {
-    expect(home).toMatch(/employeeNumber/);
-    expect(home).toMatch(/position/);
-    expect(home).toMatch(/department/);
-    expect(home).toMatch(/expectedStartDate|hireDate/);
+  it("HR-2C Home Refinement — the summary panel (employee number + position + department + start date) is REMOVED from Home", () => {
+    // HR-2C Home Refinement (2026-08-24, founder-accepted): Home is
+    // now Club hero + notifications + widget grid ONLY. The employee-
+    // identity summary panel that used to live on Home moved to
+    // Employee Profile. Guard against its accidental re-introduction.
+    const stripped = home
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    // The Home page must NOT render a summary panel with these
+    // employee-identity fields (they live on Profile now).
+    expect(stripped).not.toMatch(/data-testid=["']portal-home-summary["']/);
+    expect(stripped).not.toMatch(/portal-home-employee-number/);
+    expect(stripped).not.toMatch(/portal-home-position/);
+    expect(stripped).not.toMatch(/portal-home-department/);
+    expect(stripped).not.toMatch(/portal-home-start-date/);
   });
 });
 
@@ -165,9 +191,18 @@ describe("HR-2B.5 · First-login tour (§39-40, §48)", () => {
     expect(tour).toMatch(/\/api\/employee\/tour-completed/);
   });
 
-  it("tour covers Pay / Schedule / Availability / Documents / Profile (§39)", () => {
-    for (const label of ["Pay", "Schedule", "Availability", "Documents", "Profile"]) {
+  it("HR-2C Home Refinement tour covers the current widget-anchored steps + Profile", () => {
+    // HR-2C Home + Portal Refinement (2026-08-24, founder-accepted):
+    // Tour was re-anchored from sidebar nav items to Home widgets.
+    // Accepted titles at src/components/employee/EmployeeTourOnFirstLogin.tsx:
+    //   Welcome / Scheduling / Paystubs / Time Off Requests / Forms /
+    //   Safety & Training / Profile.
+    for (const label of ["Scheduling", "Paystubs", "Time Off Requests", "Forms", "Safety & Training", "Profile"]) {
       expect(tour).toMatch(new RegExp(`title:\\s*"${label}"`));
+    }
+    // The tour attaches to Home widget targets (not sidebar-only anchors).
+    for (const target of ["scheduling", "paystubs", "time-off", "forms", "training"]) {
+      expect(tour).toMatch(new RegExp(`data-tour-target="${target}"|"${target}"`));
     }
   });
 });

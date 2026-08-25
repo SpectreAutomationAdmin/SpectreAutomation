@@ -173,10 +173,17 @@ describe("HR-2C Home refinement · source-contract", () => {
     expect(home).not.toMatch(/unavailableNote/);
   });
 
-  it("§3 — icons are prominent (40px monoline glyphs in the Home page)", () => {
-    // All five widget icons declared at 40x40 in the Home file.
-    const matches = home.match(/width="40" height="40"/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(5);
+  it("§3 — icons are prominent (56px monoline glyphs in the Home page — HR-2C Portal Refinement)", () => {
+    // HR-2C Portal Refinement (2026-08-24, founder-accepted): widget
+    // icons were enlarged from 40 px to 56 px as part of the icon-
+    // centric launcher tile treatment. All six widgets (§ HR-2C
+    // Portal Refinement — Scheduling / Paystubs / Time Off Requests
+    // (suitcase) / Forms / Training (grad cap) / Clocking In / Out
+    // (clock)) declare 56 × 56.
+    const matches = home.match(/width="56" height="56"/g) ?? [];
+    expect(matches.length).toBeGreaterThanOrEqual(6);
+    // The older 40 × 40 shape must not linger.
+    expect(home).not.toMatch(/width="40" height="40"/);
   });
 
   it("§8 — no implementation terminology (Pay label was 'Pay' in sidebar; on Home it is now 'Paystubs')", () => {

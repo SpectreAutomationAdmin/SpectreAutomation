@@ -223,7 +223,7 @@ describe("HR-1 cross-cutting · half-open boundary — every effective-dated rea
 // boundary contract.
 // -----------------------------------------------------------------------------
 describe("HR-1 cross-cutting · effective-dated reader completeness", () => {
-  it("every reader named `get<Something>At` in src/lib/hr/** is registered above", () => {
+  it("every SINGLE-ROW reader named `get<Something>At` in src/lib/hr/** is registered above", () => {
     const HR_ROOT = resolve(__dirname, "..", "..", "..", "src", "lib", "hr");
     const files = readdirSync(HR_ROOT).filter((f) => f.endsWith(".ts"));
     const AT_READER = /export\s+(?:async\s+)?function\s+(get[A-Z][A-Za-z0-9]*At)\s*\(/g;
@@ -234,13 +234,30 @@ describe("HR-1 cross-cutting · effective-dated reader completeness", () => {
         found.add(m[1]);
       }
     }
+    // Exemptions: readers that follow the `get<Something>At` naming
+    // convention but do NOT match the single-row half-open shape
+    // this boundary test protects. Each entry MUST document why the
+    // reader belongs to a different pattern.
+    const NON_HALF_OPEN_EXEMPT: string[] = [
+      // HR-2C Employment (2026-08-24) — returns MULTIPLE
+      // EmployeeEmploymentAssignment rows active at t (PRIMARY +
+      // every ADDITIONAL), not a single half-open row. The multi-
+      // role model deliberately allows concurrent assignments, so
+      // the "single-row-at-t" invariant does not apply. Each
+      // assignment row is independently effective-dated and reads
+      // that need a single-row answer (e.g. current PRIMARY) filter
+      // the multi-row result rather than using a different reader.
+      "getActiveAssignmentsAt",
+    ];
     const registered = new Set(READERS.map((r) => r.name));
-    const missing = Array.from(found).filter((name) => !registered.has(name));
+    const missing = Array.from(found).filter(
+      (name) => !registered.has(name) && !NON_HALF_OPEN_EXEMPT.includes(name),
+    );
     expect(
       missing,
-      `New effective-dated reader(s) detected in src/lib/hr/** but not registered in the boundary drift check:\n  - ${missing.join(
+      `New single-row effective-dated reader(s) detected in src/lib/hr/** but not registered in the boundary drift check:\n  - ${missing.join(
         "\n  - ",
-      )}\nAdd each to the READERS array in this test file so the half-open contract is enforced.`,
+      )}\nAdd each to the READERS array in this test file so the half-open contract is enforced, OR — if the reader is deliberately multi-row / not effective-dated in the half-open sense — add it to NON_HALF_OPEN_EXEMPT with a one-line rationale.`,
     ).toEqual([]);
   });
 });

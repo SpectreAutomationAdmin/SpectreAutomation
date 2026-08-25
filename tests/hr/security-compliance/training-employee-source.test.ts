@@ -159,13 +159,15 @@ describe("HR-2C B3 · employee-portal training source-contract", () => {
     expect(homeRaw).toMatch(/data-testid="portal-home-notifications"/);
   });
 
-  it("sidebar tour anchor points at the real dashboard (§18)", () => {
-    const nav = src("src/components/sidebar-nav-data.ts");
-    // The Safety & Training entry sits in EMPLOYEE_NAV with the tour
-    // target 'training'.
-    expect(nav).toMatch(/href: "\/employee\/safety-training"[\s\S]{0,120}tourTarget: "training"/);
-    // The dashboard file still owns the testid the sidebar link
-    // effectively hands off to.
+  it("Home widget grid + Training widget point at the real dashboard (HR-2C Shell Refinement — tour anchors moved from sidebar to Home widgets)", () => {
+    // HR-2C Shell Refinement (2026-08-24, founder-accepted): the
+    // Safety & Training entry is no longer in the EMPLOYEE_NAV
+    // sidebar. It's now surfaced as the Training widget on Home
+    // (data-tour-target="training") whose href goes to the real
+    // dashboard. The dashboard file still owns the testid.
+    // Guarantee: (a) Home has a training widget with the correct
+    // tour-target slug + real href; (b) dashboard testid is present.
+    expect(homeRaw).toMatch(/href:\s*"\/employee\/safety-training"[\s\S]{0,120}tourTarget:\s*"training"/);
     expect(dashboardRaw).toMatch(/data-testid="portal-safety-training"/);
   });
 });

@@ -18,6 +18,20 @@ const HR_ROOT = resolve(__dirname, "..", "..", "src", "lib", "hr");
 // Verbs recognised as writes by the posting-guard / support-readonly
 // substring gate. Keep in lock-step with WRITE_INDICATORS in
 // src/lib/posting-guard.ts and src/lib/support-readonly.ts.
+//
+// HR-2C B6.1 — extended with the canonical HR-2C training + home-
+// notification verbs used by founder-accepted action strings:
+//   record   — TrainingCompletion.record (canonical completion write
+//              path, called only from a passing TrainingAttempt).
+//   publish  — TrainingCourseVersion.publish (state transition).
+//   draft    — TrainingCourseVersion.draft (state transition).
+//   retire   — TrainingCourse.retire (state transition).
+//   reorder  — TrainingQuestion.reorder (draft-only mutation).
+//   upload   — TrainingVideo.upload (bytes + metadata write).
+//   dismiss  — EmployeeHomeNotificationDismissal.dismiss (user
+//              preference write against the dismissal row).
+// Each is a genuine mutation the posting-guard also recognises
+// (substring match).
 const WRITE_INDICATORS = [
   "create", "update", "delete", "post",
   "approve", "void", "issue", "send",
@@ -28,6 +42,17 @@ const WRITE_INDICATORS = [
   // HR-specific writes/state transitions.
   "activate", "suspend", "terminate", "invite", "revoke", "redeem",
   "submit", "reject",
+  // HR-2C training + home-notification action verbs.
+  "record", "publish", "draft", "retire", "reorder", "upload",
+  "dismiss",
+  // HR-2C Employment + Availability action verbs.
+  //   add / end       — EmployeeAllowance + EmployeeEmploymentAssignment
+  //                     lifecycle transitions.
+  //   upsert          — EmployeeAvailabilityWeek weekly upsert.
+  //   provision_backfill — one-shot HR-2C legacy → assignment
+  //                     provisioning for employees created before the
+  //                     multi-role model landed.
+  "add", "end", "upsert", "provision",
 ] as const;
 
 const ACTION_STRING = /action\s*:\s*["'](hr\.[a-z0-9_.]+)["']/g;

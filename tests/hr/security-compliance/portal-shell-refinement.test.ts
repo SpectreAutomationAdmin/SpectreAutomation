@@ -71,19 +71,28 @@ describe("HR-2C Shell Refinement · source-contract", () => {
     expect(sidebar).not.toMatch(/portal-club-name/);
   });
 
-  it("§3 — top header renders Club name + circular avatar + name + employee #", () => {
+  it("§3 — top header renders Club name + user-menu (avatar + name + employee #) via EmployeePortalUserMenu", () => {
+    // HR-2C Portal Refinement (2026-08-24, founder-accepted): the
+    // top header composes EmployeePortalUserMenu on the right side.
+    // The avatar / name / employee-number testids live on the user
+    // menu now (portal-user-menu-*), not directly on the header
+    // (portal-header-avatar-*).
+    const userMenu = src("src/components/employee/EmployeePortalUserMenu.tsx");
+    // Header hosts the Club name + delegates to the UserMenu.
     expect(header).toMatch(/data-testid="portal-header-club-name"/);
-    expect(header).toMatch(/data-testid="portal-topbar-name"/);
-    expect(header).toMatch(/data-testid="portal-topbar-employee-number"/);
-    // Photo OR initials — both branches emit testids.
-    expect(header).toMatch(/data-testid="portal-header-avatar-photo"/);
-    expect(header).toMatch(/data-testid="portal-header-avatar-initials"/);
+    expect(header).toMatch(/import EmployeePortalUserMenu/);
+    expect(header).toMatch(/<EmployeePortalUserMenu/);
+    // UserMenu carries avatar (photo OR initials) + name + employee #.
+    expect(userMenu).toMatch(/data-testid="portal-user-menu-photo"/);
+    expect(userMenu).toMatch(/data-testid="portal-user-menu-initials"/);
+    expect(userMenu).toMatch(/data-testid="portal-topbar-name"/);
+    expect(userMenu).toMatch(/data-testid="portal-topbar-employee-number"/);
     // Photo source is the canonical portal self-photo route.
-    expect(header).toMatch(/\/api\/employee\/self\/profile-photo/);
+    expect(userMenu).toMatch(/\/api\/employee\/self\/profile-photo/);
     // Round + object-cover.
-    expect(header).toMatch(/rounded-full/);
-    expect(header).toMatch(/object-cover/);
-    // Layout carries clubName + photoVersion into the header.
+    expect(userMenu).toMatch(/rounded-full/);
+    expect(userMenu).toMatch(/object-cover/);
+    // Layout carries clubName + photoVersion into the header + user menu.
     expect(layout).toMatch(/clubName=\{clubName\}/);
     expect(layout).toMatch(/photoVersion=\{photoVersion\}/);
   });
