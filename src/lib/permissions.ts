@@ -607,6 +607,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:employee:read",
     "hr:employment:read",
     "hr:compensation:read",
+    // HR-2C — allowance:read is a statutory-audit read (recurring
+    // taxable allowances feed payroll). Added here in B6.1 to
+    // satisfy the "AUDITOR holds every hr:*:read" invariant already
+    // pinned in tests/hr/cross-cutting/rbac-role-catalogue-snapshot.
+    "hr:allowance:read",
     "hr:payroll_profile:read",
     "hr:sin:read",
     "hr:banking:read",
