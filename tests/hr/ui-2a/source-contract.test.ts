@@ -48,11 +48,33 @@ const MEMBER_PROFILE = join(REPO_ROOT, "src", "app", "app", "admin", "members", 
 describe("HR-2A · source-contract pins", () => {
   it("no role-based branch (principal.role / .roleKey ===) in People pages or APIs", () => {
     const files = [...walk(PEOPLE_PAGES_DIR), ...walk(PEOPLE_API_DIR)];
-    const banned = [/principal\.role\b/, /\.role\s*===/, /\.roleKey\s*===/, /roleKey\s*===\s*["']/];
+    // HR-2C B6.1 — the bare `/\.role\s*===/` pattern also matches
+    // legitimate DOMAIN role comparisons introduced by the multi-role
+    // employment architecture (EmployeeEmploymentAssignment.role ===
+    // "PRIMARY"). The banned set now catches only Principal-facing
+    // role branches; the widened DOMAIN_ROLE_RE + allowlist below
+    // still refuses any UNKNOWN `.role === "..."` comparison, so a
+    // new `principal.role === "..."` would still fail.
+    const banned = [/principal\.role\b/, /\.roleKey\s*===/, /roleKey\s*===\s*["']/];
+    const DOMAIN_ROLE_RE = /\.role\s*===\s*"([^"]+)"/g;
+    const DOMAIN_ROLE_ALLOWED_STRINGS: string[] = [
+      // src/app/app/admin/people/employees/[id]/page.tsx line ~264 —
+      // HR-2C Employment overview picks the current PRIMARY
+      // assignment; assignment.role is a domain field on the
+      // EmployeeEmploymentAssignment row, NOT a Principal role.
+      '.role === "PRIMARY"',
+      '.role === "ADDITIONAL"',
+    ];
     const violations: string[] = [];
     for (const [file, src] of readAllFiles(files).entries()) {
       for (const pat of banned) {
         if (pat.test(src)) violations.push(`${file} matches ${pat}`);
+      }
+      for (const match of src.matchAll(DOMAIN_ROLE_RE)) {
+        const literal = `.role === "${match[1]}"`;
+        if (!DOMAIN_ROLE_ALLOWED_STRINGS.includes(literal)) {
+          violations.push(`${file} matches undocumented ${literal} (if this is a domain field, add to DOMAIN_ROLE_ALLOWED_STRINGS; if it is a Principal role check, replace with a hr:* permission gate)`);
+        }
       }
     }
     expect(violations, violations.join("\n")).toEqual([]);
