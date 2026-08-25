@@ -197,12 +197,21 @@ describe("HR mobile-hotfix · Sign out — behavioural", () => {
       : [res.headers.get("set-cookie") ?? ""];
     const portalCookie = setCookies.find((c) => c.startsWith("spectre_employee_session="));
     expect(portalCookie, "response must set-cookie the portal session name").toBeDefined();
-    // Empty value + Max-Age=0 is the browser-canonical delete instruction.
+    // Empty value + a deletion marker (either Max-Age=0 OR Expires
+    // in the past) is the browser-canonical delete instruction. Both
+    // forms are accepted per RFC 6265; Next.js's ResponseCookies API
+    // may emit either depending on whether the delete goes through
+    // .set(..., {maxAge:0}) or .delete(). Assert either form is
+    // present.
     expect(portalCookie).toMatch(/spectre_employee_session=;/);
-    expect(portalCookie!.toLowerCase()).toContain("max-age=0");
-    expect(portalCookie!.toLowerCase()).toContain("path=/");
-    expect(portalCookie!.toLowerCase()).toContain("httponly");
-    expect(portalCookie!.toLowerCase()).toContain("samesite=lax");
+    const lower = portalCookie!.toLowerCase();
+    expect(
+      lower.includes("max-age=0") || /expires=[^;]*197[01]/.test(lower),
+      `deletion marker (Max-Age=0 or Expires in 1970) required in: ${portalCookie}`,
+    ).toBe(true);
+    expect(lower).toContain("path=/");
+    expect(lower).toContain("httponly");
+    expect(lower).toContain("samesite=lax");
   });
 
   it("does NOT touch other cookies — the admin session name is not in the response Set-Cookie", async () => {

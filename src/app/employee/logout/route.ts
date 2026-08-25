@@ -57,8 +57,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   //    deterministic regardless of whether Next.js merges next/headers
   //    cookie mutations into a redirect Response. Same cookie shape
   //    as SESSION_OPTIONS in src/lib/employee-portal-session.ts.
+  //
+  //    Deletion is expressed with BOTH `maxAge: 0` and
+  //    `expires: <past>` so the browser deletes regardless of which
+  //    attribute it prefers to parse (Next.js's serialisation dropped
+  //    Max-Age in one staging shape; keeping Expires as a belt makes
+  //    the deletion resilient to that class of quirk). HttpOnly +
+  //    SameSite carry through so the deletion cookie matches the
+  //    original SESSION_OPTIONS shape.
   res.cookies.set(PORTAL_COOKIE, "", {
     maxAge: 0,
+    expires: new Date(0),
     path: "/",
     httpOnly: true,
     sameSite: "lax",
