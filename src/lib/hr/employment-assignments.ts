@@ -201,7 +201,8 @@ export async function getCurrentPrimaryRoleDisplay(
   employeeId: string,
   at: Date = new Date(),
 ): Promise<CurrentRoleDisplay> {
-  const row = await prisma.employeeEmploymentAssignment.findFirst({
+  // First try the CURRENTLY-effective PRIMARY row.
+  let row = await prisma.employeeEmploymentAssignment.findFirst({
     where: {
       employeeId,
       role: "PRIMARY",
@@ -214,6 +215,27 @@ export async function getCurrentPrimaryRoleDisplay(
       managerEmployeeId: true, employmentType: true, effectiveFrom: true,
     },
   });
+  // HR mobile-hotfix (2026-08-30) — display fallback for pre-hire
+  // onboarding: if no currently-effective PRIMARY exists, fall back
+  // to the SOONEST UPCOMING PRIMARY assignment. Payroll continues
+  // to use its own effective-at-pay-period reader
+  // (getActiveAssignmentsAt) so this fallback affects DISPLAY only.
+  // Fixes founder-reported "No role assigned yet" for a freshly-
+  // onboarded employee whose start date is a few days out.
+  if (!row) {
+    row = await prisma.employeeEmploymentAssignment.findFirst({
+      where: {
+        employeeId,
+        role: "PRIMARY",
+        effectiveFrom: { gt: at },
+      },
+      orderBy: { effectiveFrom: "asc" },
+      select: {
+        id: true, positionId: true, departmentId: true,
+        managerEmployeeId: true, employmentType: true, effectiveFrom: true,
+      },
+    });
+  }
   if (!row) {
     return {
       assignmentId: null, positionId: null, positionName: null,
@@ -403,6 +425,7 @@ export async function provisionInitialAssignmentIfMissing(
   clubId: string,
   employeeId: string,
   actorUserId: string | null = null,
+  opts: { alwaysCreate?: boolean } = {},
 ): Promise<ProvisionResult> {
   const existing = await prisma.employeeEmploymentAssignment.findFirst({
     where: { employeeId },
@@ -423,13 +446,23 @@ export async function provisionInitialAssignmentIfMissing(
   if (!emp || emp.clubId !== clubId) {
     return { provisioned: false, assignmentId: null, reason: "no_legacy_data" };
   }
-  // If the employee has NO legacy dept/position/type at all, there is
-  // nothing meaningful to backfill. Do not fabricate a synthetic role.
+  // If the employee has NO legacy dept/position/type at all AND the
+  // caller is not explicitly requiring creation, do not fabricate a
+  // synthetic role. HR mobile-hotfix (2026-08-30): the founder
+  // observed a freshly-onboarded employee with position + department
+  // populated but PRIMARY missing, because if either the just-in-
+  // time backfill or the create-time provisioning had raced / failed
+  // silently, the employee shipped without a canonical PRIMARY. The
+  // fix is defence-in-depth: `createEmployee` passes
+  // `alwaysCreate: true` so a PRIMARY row always exists after
+  // creation, even if the admin form submitted only a subset of the
+  // three role fields. Just-in-time backfill callers keep the
+  // legacy `alwaysCreate: false` default.
   const hasAnyLegacyData =
     emp.departmentId != null ||
     emp.positionId != null ||
     (emp.employmentType != null && emp.employmentType.length > 0);
-  if (!hasAnyLegacyData) {
+  if (!hasAnyLegacyData && !opts.alwaysCreate) {
     return { provisioned: false, assignmentId: null, reason: "no_legacy_data" };
   }
   const effectiveFrom = emp.hireDate ?? emp.expectedStartDate ?? emp.createdAt;

@@ -170,7 +170,14 @@ export async function createEmployee(
   // carry a canonical PRIMARY assignment from day one so Overview
   // and Employment never diverge. Idempotent — a subsequent read
   // will find the assignment already exists and no-op.
-  await provisionInitialAssignmentIfMissing(clubId, created.id, principal.id);
+  // HR mobile-hotfix (2026-08-30) — `alwaysCreate: true` so the
+  // PRIMARY row lands even when the admin form submitted a subset
+  // of dept/position/employmentType. The founder observed Lise
+  // Montsion without a PRIMARY after admin creation; this closes
+  // that gap regardless of which field was missing.
+  await provisionInitialAssignmentIfMissing(
+    clubId, created.id, principal.id, { alwaysCreate: true },
+  );
 
   return created;
 }
