@@ -560,6 +560,28 @@ export async function deleteEmployee(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (tx as any).employeeCompensation.deleteMany({ where: { employeeId } });
     }
+    // 5a. HR mobile-hotfix (2026-08-30) — HR-2C canonical child tables.
+    //     Commit B (`4a89e1f`) made every new employee carry a canonical
+    //     PRIMARY assignment; without cleaning those + their sibling
+    //     tables the final `Employee.delete` fails with a FK constraint
+    //     violation. These are guarded with the same shape as the
+    //     compensation guard above so older environments where the
+    //     table has not yet migrated stay operable.
+    for (const child of [
+      "employeeEmploymentAssignment",
+      "employeeAllowance",
+      "employeePortalPasswordReset",
+      "employeePortalCredential",
+      "employeeHomeNotificationDismissal",
+      "employeeAvailabilityWeek",
+    ] as const) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const child_ = (tx as any)[child];
+      if (child_?.deleteMany) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (child_ as any).deleteMany({ where: { employeeId } });
+      }
+    }
     // 6. Employment period. Eligibility check above already refused if
     //    payroll/timesheet history exists.
     await tx.employmentPeriod.deleteMany({ where: { employeeId } });

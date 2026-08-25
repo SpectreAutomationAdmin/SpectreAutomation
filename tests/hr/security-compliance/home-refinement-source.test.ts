@@ -58,8 +58,14 @@ describe("HR-2C Home refinement · source-contract", () => {
     expect(homeCode).not.toMatch(/Reports to/);
   });
 
-  it("§5/§8 — five widgets present with founder-facing labels", () => {
-    const labels = ["Scheduling", "Paystubs", "Time Off Requests", "Forms", "Training"];
+  it("§5/§8 — five widgets present with founder-facing labels (post-mobile-hotfix terminology)", () => {
+    // HR mobile-hotfix Commit E (2026-08-30) — founder renamed
+    // "Training" → "Safety & Training" and "Clocking In / Out" →
+    // "Clock In / Out". The canonical assertion is the terminology
+    // pinning in portal-terminology-source.test.ts; this suite
+    // only pins the founder-facing labels for the FIVE core
+    // widgets whose names were NOT changed by the hotfix.
+    const labels = ["Scheduling", "Paystubs", "Time Off Requests", "Forms", "Safety & Training"];
     for (const label of labels) {
       expect(home).toContain(`label: "${label}"`);
     }
