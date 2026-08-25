@@ -15,12 +15,14 @@ import {
   requireEmployeeOnboardingActor,
 } from "@/lib/hr/employee-actor";
 import {
+  acknowledgeSelfAddressStep,
   acknowledgeSelfContactStep,
   acknowledgeSelfEmployment,
   acknowledgeSelfNameStep,
   CLUB_AUTHORITATIVE_EMPLOYMENT_FIELDS,
   flagEmploymentFieldForCorrection,
   transitionSelfSessionToInProgress,
+  updateOnboardingHomeAddress,
   updateSelfIdentity,
   uploadSelfPhoto,
   type ClubAuthoritativeField,
@@ -122,6 +124,42 @@ export async function saveContactAction(formData: FormData) {
         ? (err as unknown as { issues: Array<{ message: string }> }).issues[0]?.message
         : null;
       redirect(withErr("/hr/onboarding/about-you/contact", first ?? err.safeMessage));
+    }
+    throw err;
+  }
+  revalidatePath("/hr/onboarding/about-you");
+  // HR mobile-hotfix (2026-08-30) §1 — Contact now flows to the new
+  // Address step, not directly to Employment.
+  redirect("/hr/onboarding/about-you/address");
+}
+
+// ---------------------------------------------------------------------------
+// HR mobile-hotfix (2026-08-30) §1 — Address step.
+//
+// Employee confirms the address the admin optionally pre-filled, or
+// enters their own. Requires street + city (see `updateOnboardingHomeAddress`);
+// the durable ack row is what the continuation resolver reads.
+// ---------------------------------------------------------------------------
+export async function saveAddressAction(formData: FormData) {
+  const actor = await beginActionOrRedirect();
+  const patch = {
+    homeAddressLine1: (formData.get("homeAddressLine1") as string | null) ?? undefined,
+    homeAddressLine2: (formData.get("homeAddressLine2") as string | null) ?? undefined,
+    homeCity:         (formData.get("homeCity") as string | null) ?? undefined,
+    homeProvince:     (formData.get("homeProvince") as string | null) ?? undefined,
+    homePostalCode:   (formData.get("homePostalCode") as string | null) ?? undefined,
+    homeCountry:      (formData.get("homeCountry") as string | null) ?? undefined,
+  };
+  try {
+    await updateOnboardingHomeAddress(actor, patch);
+    await acknowledgeSelfAddressStep(actor);
+    await markInProgress(actor);
+  } catch (err) {
+    if (isAppError(err)) {
+      const first = ("issues" in err && Array.isArray((err as unknown as { issues: Array<{ message: string }> }).issues))
+        ? (err as unknown as { issues: Array<{ message: string }> }).issues[0]?.message
+        : null;
+      redirect(withErr("/hr/onboarding/about-you/address", first ?? err.safeMessage));
     }
     throw err;
   }

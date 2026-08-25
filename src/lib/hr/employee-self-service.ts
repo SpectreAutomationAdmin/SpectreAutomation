@@ -88,6 +88,13 @@ export type ClubAuthoritativeField = (typeof CLUB_AUTHORITATIVE_EMPLOYMENT_FIELD
 export const ONBOARDING_ACKNOWLEDGEMENT_KINDS = [
   "about_you_name_confirmation",
   "about_you_contact_confirmation",
+  // HR mobile-hotfix (2026-08-30) §1 — home / mailing address step
+  // between Contact and Employment. The employee confirms the address
+  // the admin optionally pre-filled at creation, or enters their own.
+  // Captured as an ack so the resolver treats "employee posted the
+  // address form" as durable — the same pattern as the other About
+  // You step acks.
+  "about_you_address_confirmation",
   "employment_confirmation",
   "td1_federal_attestation",
   "td1_provincial_attestation",
@@ -291,6 +298,154 @@ function pickBefore(row: Awaited<ReturnType<typeof getSelfEmployee>>, keys: stri
 }
 
 // ---------------------------------------------------------------------------
+// HR mobile-hotfix (2026-08-30) §1 — Home / mailing address (onboarding).
+//
+// The Employee Portal already exposes `updateSelfHomeAddress` (via
+// portal-self-service-profile.ts) for a signed-in employee editing their
+// profile. During onboarding the actor is an EmployeeOnboardingActor,
+// NOT an EmployeePortalPrincipal, so we mirror the same shape here so the
+// onboarding step can write without cross-actor plumbing.
+//
+// The validators live here so both onboarding + admin-prefill paths use
+// the same normalisation. Whitespace-trim, empty→null, cap length,
+// province uppercased (loose — no province-code enum), 2-char country
+// code required when set.
+// ---------------------------------------------------------------------------
+
+export interface OnboardingHomeAddressInput {
+  homeAddressLine1?: string | null;
+  homeAddressLine2?: string | null;
+  homeCity?: string | null;
+  homeProvince?: string | null;
+  homePostalCode?: string | null;
+  homeCountry?: string | null;
+}
+
+export interface OnboardingHomeAddress {
+  homeAddressLine1: string | null;
+  homeAddressLine2: string | null;
+  homeCity: string | null;
+  homeProvince: string | null;
+  homePostalCode: string | null;
+  homeCountry: string | null;
+}
+
+function trimOrNullBounded(v: string | null | undefined, field: string, max: number): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (s.length === 0) return null;
+  if (s.length > max) {
+    throw new ValidationError([{ path: field, message: `${field} must be under ${max} characters` }]);
+  }
+  return s;
+}
+
+function normaliseProvinceLoose(v: string | null | undefined): string | null {
+  const s = trimOrNullBounded(v, "homeProvince", 32);
+  return s == null ? null : s.toUpperCase();
+}
+
+function normaliseCountryLoose(v: string | null | undefined): string | null {
+  const s = trimOrNullBounded(v, "homeCountry", 2);
+  if (s == null) return null;
+  if (!/^[A-Za-z]{2}$/.test(s)) {
+    throw new ValidationError([{ path: "homeCountry", message: "Country must be a 2-letter code (e.g. CA)." }]);
+  }
+  return s.toUpperCase();
+}
+
+/**
+ * Get the current home-address fields for the onboarding actor so the
+ * step can prefill from either (a) an admin-created row where the admin
+ * captured the address at hire, or (b) an in-progress step where the
+ * employee already saved once and is resuming.
+ */
+export async function getOnboardingHomeAddress(
+  actor: EmployeeOnboardingActor,
+): Promise<OnboardingHomeAddress> {
+  const row = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: {
+      homeAddressLine1: true, homeAddressLine2: true, homeCity: true,
+      homeProvince: true, homePostalCode: true, homeCountry: true,
+    },
+  });
+  if (!row) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+  return row;
+}
+
+/**
+ * Write the home address for the onboarding actor. Requires
+ * `homeAddressLine1` + `homeCity` at minimum — an empty submission is
+ * refused so an accidental Continue click can't advance the step
+ * without a real address on file.
+ */
+export async function updateOnboardingHomeAddress(
+  actor: EmployeeOnboardingActor,
+  input: OnboardingHomeAddressInput,
+): Promise<void> {
+  const before = await prisma.employee.findFirst({
+    where: { id: actor.employeeId, clubId: actor.clubId },
+    select: {
+      homeAddressLine1: true, homeAddressLine2: true, homeCity: true,
+      homeProvince: true, homePostalCode: true, homeCountry: true,
+    },
+  });
+  if (!before) throw new NotFoundError(EMPLOYEE_ENTITY, actor.employeeId);
+
+  const data: Record<string, string | null> = {};
+  if (input.homeAddressLine1 !== undefined) data.homeAddressLine1 = trimOrNullBounded(input.homeAddressLine1, "homeAddressLine1", 200);
+  if (input.homeAddressLine2 !== undefined) data.homeAddressLine2 = trimOrNullBounded(input.homeAddressLine2, "homeAddressLine2", 200);
+  if (input.homeCity !== undefined) data.homeCity = trimOrNullBounded(input.homeCity, "homeCity", 100);
+  if (input.homeProvince !== undefined) data.homeProvince = normaliseProvinceLoose(input.homeProvince);
+  if (input.homePostalCode !== undefined) data.homePostalCode = trimOrNullBounded(input.homePostalCode, "homePostalCode", 16);
+  if (input.homeCountry !== undefined) data.homeCountry = normaliseCountryLoose(input.homeCountry);
+
+  // Require street + city so an empty submission cannot advance the step.
+  const line1After = "homeAddressLine1" in data ? data.homeAddressLine1 : before.homeAddressLine1;
+  const cityAfter  = "homeCity"         in data ? data.homeCity         : before.homeCity;
+  if (!line1After || !cityAfter) {
+    throw new ValidationError([{
+      path: line1After ? "homeCity" : "homeAddressLine1",
+      message: line1After
+        ? "City is required."
+        : "Please enter your street address.",
+    }]);
+  }
+
+  await prisma.employee.update({
+    where: { id: actor.employeeId },
+    data,
+  });
+
+  await audit(null, {
+    action: "hr.employee.self_service.home_address.update",
+    entityType: EMPLOYEE_ENTITY,
+    entityId: actor.employeeId,
+    clubId: actor.clubId,
+    // Keep the audit payload compact — presence flags + city/province
+    // are enough for reviewer context without duplicating the full
+    // street address across the audit stream.
+    before: {
+      hadLine1: Boolean(before.homeAddressLine1),
+      hadCity: Boolean(before.homeCity),
+      homeProvince: before.homeProvince,
+    },
+    after: {
+      hadLine1: Boolean(line1After),
+      hadCity: Boolean(cityAfter),
+      homeProvince: "homeProvince" in data ? data.homeProvince : before.homeProvince,
+    },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+      invitationIdTail: actor.invitationId.slice(-8),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Employment-field correction request.
 // ---------------------------------------------------------------------------
 export interface EmploymentCorrectionRequest {
@@ -395,9 +550,21 @@ export async function acknowledgeSelfContactStep(
   await upsertAboutYouStepAck(actor, "about_you_contact_confirmation");
 }
 
+/** HR mobile-hotfix (2026-08-30) §1 — The employee posted the About You
+ *  / Address form. Written by `saveAddressAction` after
+ *  `updateOnboardingHomeAddress` succeeds. */
+export async function acknowledgeSelfAddressStep(
+  actor: EmployeeOnboardingActor,
+): Promise<void> {
+  await upsertAboutYouStepAck(actor, "about_you_address_confirmation");
+}
+
 async function upsertAboutYouStepAck(
   actor: EmployeeOnboardingActor,
-  kind: "about_you_name_confirmation" | "about_you_contact_confirmation",
+  kind:
+    | "about_you_name_confirmation"
+    | "about_you_contact_confirmation"
+    | "about_you_address_confirmation",
 ): Promise<void> {
   const now = new Date();
   await prisma.employeeOnboardingAcknowledgement.upsert({

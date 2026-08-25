@@ -84,6 +84,15 @@ export interface CreateEmployeeInput {
   payRate?: number;
   employeeLifecycle?: string;
   employeeNumber?: string;
+  // HR mobile-hotfix (2026-08-30) §1 — admin optional prefill of the
+  // new hire's home address. Falls straight through to the Employee
+  // row so the onboarding Address step sees prefilled values.
+  homeAddressLine1?: string | null;
+  homeAddressLine2?: string | null;
+  homeCity?: string | null;
+  homeProvince?: string | null;
+  homePostalCode?: string | null;
+  homeCountry?: string | null;
 }
 
 function toOptionalDate(v: Date | string | null | undefined, field: string): Date | null {
@@ -147,6 +156,15 @@ export async function createEmployee(
       employeeLifecycle: lifecycle,
       compensationType: compType,
       payRate: input.payRate ?? 0,
+      // HR mobile-hotfix (2026-08-30) §1 — pass-through home address
+      // fields from the admin AddEmployeeForm. All optional; null
+      // stays null so the onboarding Address step sees blank inputs.
+      homeAddressLine1: input.homeAddressLine1 ?? null,
+      homeAddressLine2: input.homeAddressLine2 ?? null,
+      homeCity: input.homeCity ?? null,
+      homeProvince: input.homeProvince ? input.homeProvince.toUpperCase() : null,
+      homePostalCode: input.homePostalCode ?? null,
+      homeCountry: input.homeCountry ? input.homeCountry.toUpperCase() : null,
       createdByUserId: principal.id,
     },
   });
@@ -202,6 +220,17 @@ export interface UpdateEmployeeInput {
   employeeLifecycle?: string;
   compensationType?: string;
   payrollIdExternal?: string | null;
+  // HR mobile-hotfix (2026-08-30) §1 — admin-side home address writes.
+  // Admin optionally captures address at hire so the employee sees a
+  // prefilled Address step in onboarding. Employee still owns the
+  // acknowledgement — the admin writing these fields does NOT mark
+  // the step complete.
+  homeAddressLine1?: string | null;
+  homeAddressLine2?: string | null;
+  homeCity?: string | null;
+  homeProvince?: string | null;
+  homePostalCode?: string | null;
+  homeCountry?: string | null;
 }
 
 export async function updateEmployee(
@@ -252,6 +281,13 @@ export async function updateEmployee(
   if (input.employeeLifecycle !== undefined) data.employeeLifecycle = input.employeeLifecycle;
   if (input.compensationType !== undefined) data.compensationType = input.compensationType;
   if (input.payrollIdExternal !== undefined) data.payrollIdExternal = input.payrollIdExternal;
+  // HR mobile-hotfix (2026-08-30) §1 — admin home-address writes.
+  if (input.homeAddressLine1 !== undefined) data.homeAddressLine1 = input.homeAddressLine1;
+  if (input.homeAddressLine2 !== undefined) data.homeAddressLine2 = input.homeAddressLine2;
+  if (input.homeCity !== undefined) data.homeCity = input.homeCity;
+  if (input.homeProvince !== undefined) data.homeProvince = input.homeProvince ? input.homeProvince.toUpperCase() : input.homeProvince;
+  if (input.homePostalCode !== undefined) data.homePostalCode = input.homePostalCode;
+  if (input.homeCountry !== undefined) data.homeCountry = input.homeCountry ? input.homeCountry.toUpperCase() : input.homeCountry;
 
   const updated = await prisma.employee.update({
     where: { id: employeeId },

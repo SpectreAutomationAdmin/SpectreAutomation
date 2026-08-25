@@ -15,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 import { createSession, transitionSession } from "@/lib/hr/onboarding-sessions";
 import { acquireInvitationContext } from "@/lib/hr/invitations";
 import {
+  acknowledgeSelfAddressStep,
   acknowledgeSelfContactStep,
   acknowledgeSelfEmployment,
   acknowledgeSelfNameStep,
@@ -88,6 +89,10 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
       // through Name accepting whatever the Club recorded.
       await acknowledgeSelfNameStep(actor);
       await acknowledgeSelfContactStep(actor);
+      // HR mobile-hotfix (2026-08-30) §1 — address step ack inserted
+      // between contact and employment. Ack only (no address write)
+      // is enough for the resolver to advance past it.
+      await acknowledgeSelfAddressStep(actor);
       await acknowledgeSelfEmployment(actor);
       await uploadSelfPhoto(actor, {
         bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -122,12 +127,24 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouContact);
   });
 
-  it("name + contact saved → About You / employment", async () => {
+  // HR mobile-hotfix (2026-08-30) §1 — after Contact the resolver now
+  // routes to the new Address step before Employment.
+  it("name + contact saved → About You / address (new step, §1)", async () => {
     const { actor } = await actorForFixture("PostContact");
     await updateSelfIdentity(actor, { preferredName: "Chris" });
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouAddress);
+  });
+
+  it("name + contact + address saved → About You / employment", async () => {
+    const { actor } = await actorForFixture("PostAddress");
+    await updateSelfIdentity(actor, { preferredName: "Chris" });
+    await acknowledgeSelfNameStep(actor);
+    await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
+    await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouEmployment);
   });
 
@@ -137,6 +154,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     expect(await resolveFor(actor)).toBe(ONBOARDING_CONTINUATION_URLS.aboutYouPhoto);
   });
@@ -147,6 +165,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -161,6 +180,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -176,6 +196,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -197,6 +218,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -223,6 +245,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -260,6 +283,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -341,6 +365,7 @@ describe("HR-2B.3.2 §2 · onboarding continuation resolver", () => {
     await acknowledgeSelfNameStep(actor);
     await updateSelfIdentity(actor, { personalEmail: "test@example.test" });
     await acknowledgeSelfContactStep(actor);
+    await acknowledgeSelfAddressStep(actor);
     await acknowledgeSelfEmployment(actor);
     await uploadSelfPhoto(actor, {
       bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),

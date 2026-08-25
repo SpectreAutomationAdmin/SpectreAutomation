@@ -49,6 +49,9 @@ const URLS = {
   // About You
   aboutYouName: "/hr/onboarding/about-you/name",
   aboutYouContact: "/hr/onboarding/about-you/contact",
+  // HR mobile-hotfix (2026-08-30) §1 — address step between contact
+  // and employment.
+  aboutYouAddress: "/hr/onboarding/about-you/address",
   aboutYouEmployment: "/hr/onboarding/about-you/employment",
   aboutYouPhoto: "/hr/onboarding/about-you/photo",
   aboutYouComplete: "/hr/onboarding/about-you/complete",
@@ -138,6 +141,7 @@ export async function resolveOnboardingContinuation(
     employee,
     nameAck,
     contactAck,
+    addressAck,
     employmentAck,
     correctionCount,
     sinRow,
@@ -166,6 +170,16 @@ export async function resolveOnboardingContinuation(
         sessionId: ctx.sessionId,
         clubId: ctx.clubId,
         kind: "about_you_contact_confirmation",
+      },
+      select: { id: true },
+    }),
+    // HR mobile-hotfix (2026-08-30) §1 — address ack lives between
+    // contact and employment.
+    prisma.employeeOnboardingAcknowledgement.findFirst({
+      where: {
+        sessionId: ctx.sessionId,
+        clubId: ctx.clubId,
+        kind: "about_you_address_confirmation",
       },
       select: { id: true },
     }),
@@ -231,11 +245,15 @@ export async function resolveOnboardingContinuation(
   // 3. About You cascade — every predicate is now a persisted event.
   const nameDone = Boolean(nameAck);
   const contactDone = Boolean(contactAck);
+  // HR mobile-hotfix (2026-08-30) §1 — address step between contact +
+  // employment. Uses the same durable-ack shape as name / contact.
+  const addressDone = Boolean(addressAck);
   const employmentDone = Boolean(employmentAck) || correctionCount > 0;
   const photoDone = Boolean(employee.profilePhotoDocumentId);
 
   if (!nameDone) return URLS.aboutYouName;
   if (!contactDone) return URLS.aboutYouContact;
+  if (!addressDone) return URLS.aboutYouAddress;
   if (!employmentDone) return URLS.aboutYouEmployment;
   if (!photoDone) return URLS.aboutYouPhoto;
 
