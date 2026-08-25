@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Employee Portal Hero Redesign — Concept (2026-08-30)</title>
+<style>
+:root {
+  --ink:#111827;
+  --ink-2:#4b5563;
+  --ink-3:#9ca3af;
+  --paper:#f9f8f4;
+  --card:#ffffff;
+  --edge:#e5e7eb;
+  --edge-2:#f0efe9;
+  --emerald:#065f46;
+  --emerald-lg:#e6f4ee;
+  --shell-w:1180px;
+  --rail-w:220px;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; padding:32px;
+  background:var(--paper); color:var(--ink);
+  font-family: ui-sans-serif, system-ui, "SF Pro Text", -apple-system, "Segoe UI", Roboto;
+  line-height:1.55;
+}
+h1 { font-family: "Iowan Old Style", Georgia, serif; font-size:32px; letter-spacing:-.01em; margin:0 0 4px; }
+h2 { font-family: "Iowan Old Style", Georgia, serif; font-size:22px; margin:32px 0 12px; letter-spacing:-.005em; }
+p  { color:var(--ink-2); font-size:14.5px; max-width:65ch; margin:8px 0; }
+small { color:var(--ink-3); font-size:12px; }
+
+/* -------- Comparison grid -------- */
+.wrap { max-width:var(--shell-w); margin:0 auto; }
+.pair {
+  display:grid; grid-template-columns:1fr; gap:24px;
+  margin-top:20px;
+}
+@media (min-width:1024px) { .pair { grid-template-columns:1fr 1fr; } }
+.frame {
+  background:var(--card);
+  border:1px solid var(--edge);
+  border-radius:14px;
+  padding:16px 16px 20px;
+  box-shadow:0 1px 2px rgba(0,0,0,.03);
+}
+.frame > .label {
+  display:flex; align-items:center; justify-content:space-between;
+  margin:-4px 0 10px;
+  font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-3);
+}
+
+/* -------- Mock portal shells -------- */
+.mock {
+  background:var(--paper);
+  border:1px solid var(--edge-2);
+  border-radius:10px;
+  overflow:hidden;
+  aspect-ratio: 390 / 300;
+  position:relative;
+}
+
+/* Desktop viewport variant. */
+.mock.desktop {
+  aspect-ratio: 1180 / 720;
+}
+
+/* --- Current shell (top chrome + sidebar + hero card) --- */
+.chrome-top {
+  height:44px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 14px;
+  background:var(--card);
+  border-bottom:1px solid var(--edge);
+}
+.chrome-brand { font-weight:600; font-size:13px; }
+.chrome-user { font-size:12px; color:var(--ink-2); }
+
+.shell {
+  display:grid; grid-template-columns:var(--rail-w) 1fr; height:calc(100% - 44px);
+}
+.shell.no-chrome { grid-template-columns:var(--rail-w) 1fr; height:100%; }
+.rail {
+  background:var(--card);
+  border-right:1px solid var(--edge);
+  padding:16px 10px;
+  font-size:12px;
+}
+.rail .r-brand { font-weight:600; margin-bottom:14px; font-size:12.5px; color:var(--ink); }
+.rail .r-item { display:flex; align-items:center; gap:8px; padding:8px 6px; border-radius:6px; color:var(--ink-2); }
+.rail .r-item.active { background:var(--emerald-lg); color:var(--emerald); font-weight:600; }
+.rail .r-dot { width:6px; height:6px; border-radius:999px; background:currentColor; opacity:.7; }
+
+.canvas { background:var(--paper); padding:14px; }
+
+/* Current hero card (compressed) */
+.hero-card {
+  background:linear-gradient(135deg,#f2ede3,#eae2cf);
+  border:1px solid #dbcda0;
+  border-radius:10px;
+  padding:12px 14px;
+  color:#3a3320;
+}
+.hero-card .greet { font-size:13px; opacity:.85; }
+.hero-card .role  { font-size:11px; margin-top:2px; opacity:.75; }
+
+/* Widgets stub */
+.wgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+.wgrid .w {
+  aspect-ratio:1/.85;
+  background:var(--card);
+  border:1px solid var(--edge-2);
+  border-radius:8px;
+  display:grid; place-items:center;
+  font-size:10px; color:var(--ink-3);
+}
+
+/* --- Proposed hero: full-bleed at top, no top chrome --- */
+.hero-full {
+  height:180px;
+  background:linear-gradient(135deg,#f5efdf 0%,#e8dcc0 55%,#d9c894 100%);
+  color:#3a3320;
+  padding:16px 18px;
+  display:grid;
+  grid-template-columns:1fr auto;
+  grid-template-rows:auto 1fr auto;
+  gap:6px;
+}
+.hero-full .club-name {
+  grid-column:1; grid-row:1;
+  font-family:"Iowan Old Style", Georgia, serif;
+  font-size:16px; font-weight:600; letter-spacing:.02em;
+}
+.hero-full .id-right {
+  grid-column:2; grid-row:1 / span 3;
+  display:flex; align-items:flex-start; gap:12px;
+}
+.hero-full .id-right .photo {
+  width:56px; height:56px; border-radius:999px;
+  background:#a08862; border:2px solid #fff;
+  display:grid; place-items:center;
+  font-weight:600; color:#fff; font-size:16px;
+}
+.hero-full .id-right .who {
+  text-align:right; font-size:12px; color:#3a3320;
+}
+.hero-full .id-right .who .n { font-weight:600; font-size:13px; }
+.hero-full .id-right .who .num { color:#6b5f3d; }
+.hero-full .greeting {
+  grid-column:1; grid-row:3;
+  font-family:"Iowan Old Style", Georgia, serif;
+  font-size:24px; letter-spacing:-.01em; align-self:end;
+}
+.hero-full .role-line {
+  grid-column:1; grid-row:3;
+  font-size:11px; opacity:.7;
+  align-self:end;
+  translate: 0 22px;
+}
+
+/* Portal underneath the new hero — same widget grid as today */
+.after-hero {
+  padding:14px;
+}
+
+/* -------- Legend + spec table -------- */
+.spec {
+  margin-top:32px;
+  display:grid; grid-template-columns:1fr; gap:16px;
+}
+@media (min-width:840px) { .spec { grid-template-columns:1fr 1fr; } }
+.spec .card {
+  background:var(--card); border:1px solid var(--edge);
+  border-radius:12px; padding:16px 18px;
+}
+.spec h3 { margin:0 0 8px; font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-2); }
+.spec ul { margin:6px 0 0; padding-left:18px; color:var(--ink-2); font-size:13.5px; }
+.spec li { margin-bottom:4px; }
+
+/* -------- Meta banner -------- */
+.meta {
+  border-left:4px solid var(--emerald);
+  padding:10px 14px;
+  background:var(--emerald-lg);
+  color:var(--emerald);
+  border-radius:0 8px 8px 0;
+  font-size:13px;
+}
+.meta strong { color:#03372a; }
+
+/* -------- Mobile mock overrides -------- */
+.mobile.mock { aspect-ratio: 390 / 720; max-width:280px; }
+.mobile .rail { display:none; }
+.mobile .shell { grid-template-columns:1fr; }
+.mobile.mock .chrome-top { height:36px; }
+.mobile .hero-full { height:220px; }
+.mobile .hero-full .greeting { font-size:22px; }
+.mobile .id-right { flex-direction:column; align-items:flex-end; gap:6px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <h1>Employee Portal — Hero Redesign Concept</h1>
+  <p><small>Design-only mock — 2026-08-30. Presented for founder review. <strong>Not implemented</strong> in the live Employee Portal shell. Compare the current top-chrome + boxed hero (left) with the proposed full-bleed hero that carries identity + greeting inside the hero surface itself (right).</small></p>
+
+  <div class="meta">
+    <strong>Do NOT implement</strong> without founder approval. The current shell (top chrome + boxed hero card) remains in production. This artifact exists purely to illustrate a directional change so the founder can approve or redirect before a code slice is scoped.
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- DESKTOP COMPARISON                                            -->
+  <!-- ============================================================ -->
+  <h2>Desktop · 1180 × 720</h2>
+
+  <div class="pair">
+    <!-- CURRENT -->
+    <div class="frame">
+      <div class="label"><span>Current</span><span>top chrome + boxed hero</span></div>
+      <div class="mock desktop">
+        <div class="chrome-top">
+          <div class="chrome-brand">Nightingale Country Club</div>
+          <div class="chrome-user">Lise Montsion · #E-0129</div>
+        </div>
+        <div class="shell">
+          <aside class="rail">
+            <div class="r-brand">Employee Portal</div>
+            <div class="r-item active"><span class="r-dot"></span> Home</div>
+            <div class="r-item"><span class="r-dot"></span> Profile</div>
+          </aside>
+          <main class="canvas">
+            <div class="hero-card">
+              <div class="greet">Good evening, Lise</div>
+              <div class="role">Executive Chef</div>
+            </div>
+            <div class="wgrid">
+              <div class="w">Scheduling</div>
+              <div class="w">Clock In / Out</div>
+              <div class="w">Paystubs</div>
+              <div class="w">Time Off</div>
+              <div class="w">Forms</div>
+              <div class="w">Safety &amp; Training</div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROPOSED -->
+    <div class="frame">
+      <div class="label"><span>Proposed</span><span>full-bleed hero, no top chrome</span></div>
+      <div class="mock desktop">
+        <div class="shell no-chrome">
+          <aside class="rail">
+            <div class="r-brand">Employee Portal</div>
+            <div class="r-item active"><span class="r-dot"></span> Home</div>
+            <div class="r-item"><span class="r-dot"></span> Profile</div>
+          </aside>
+          <main>
+            <div class="hero-full">
+              <div class="club-name">Nightingale Country Club</div>
+              <div class="id-right">
+                <div class="who">
+                  <div class="n">Lise Montsion</div>
+                  <div class="num">#E-0129</div>
+                </div>
+                <div class="photo">LM</div>
+              </div>
+              <div class="greeting">Good evening, Lise</div>
+              <div class="role-line">Executive Chef</div>
+            </div>
+            <div class="after-hero">
+              <div class="wgrid">
+                <div class="w">Scheduling</div>
+                <div class="w">Clock In / Out</div>
+                <div class="w">Paystubs</div>
+                <div class="w">Time Off</div>
+                <div class="w">Forms</div>
+                <div class="w">Safety &amp; Training</div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MOBILE COMPARISON                                             -->
+  <!-- ============================================================ -->
+  <h2>Mobile · 390 × 720</h2>
+
+  <div class="pair">
+    <div class="frame">
+      <div class="label"><span>Current mobile</span><span>iPhone 14</span></div>
+      <div class="mock mobile">
+        <div class="chrome-top">
+          <div class="chrome-brand">Nightingale</div>
+          <div class="chrome-user">#E-0129</div>
+        </div>
+        <div class="shell">
+          <main class="canvas">
+            <div class="hero-card">
+              <div class="greet">Good evening, Lise</div>
+              <div class="role">Executive Chef</div>
+            </div>
+            <div class="wgrid">
+              <div class="w">Sched</div>
+              <div class="w">Clock</div>
+              <div class="w">Pay</div>
+              <div class="w">Time Off</div>
+              <div class="w">Forms</div>
+              <div class="w">Safety</div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <div class="frame">
+      <div class="label"><span>Proposed mobile</span><span>identity inside hero</span></div>
+      <div class="mock mobile">
+        <div class="shell no-chrome">
+          <main>
+            <div class="hero-full">
+              <div class="club-name">Nightingale</div>
+              <div class="id-right">
+                <div class="who">
+                  <div class="n">Lise Montsion</div>
+                  <div class="num">#E-0129</div>
+                </div>
+                <div class="photo">LM</div>
+              </div>
+              <div class="greeting">Good evening, Lise</div>
+              <div class="role-line">Executive Chef</div>
+            </div>
+            <div class="after-hero">
+              <div class="wgrid">
+                <div class="w">Sched</div>
+                <div class="w">Clock</div>
+                <div class="w">Pay</div>
+                <div class="w">Time Off</div>
+                <div class="w">Forms</div>
+                <div class="w">Safety</div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- SPEC                                                          -->
+  <!-- ============================================================ -->
+  <h2>What the proposed hero encodes</h2>
+  <div class="spec">
+    <div class="card">
+      <h3>Structure</h3>
+      <ul>
+        <li>Hero begins at the top of the content column — no top chrome bar.</li>
+        <li>Club name upper-left inside the hero (serif, not the current SaaS-style brand bar).</li>
+        <li>Employee photo + full name + employee number upper-right, inside the hero.</li>
+        <li>Greeting (time-of-day) lower-left, serif, dominant.</li>
+        <li>Current position sits beneath the greeting as a subtle second line.</li>
+        <li>Left rail remains: <strong>Employee Portal → Home → Profile</strong>.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>What stays out</h3>
+      <ul>
+        <li>No brand chrome at the very top of the viewport.</li>
+        <li>No Spectre wordmark anywhere — the club is the brand.</li>
+        <li>No decorative badges, chips, or verdict pills in the hero.</li>
+        <li>Widget grid below the hero is unchanged from today.</li>
+        <li>Tour anchoring stays keyed to widget tour targets (drawer↔tour isolation from Commit A is preserved).</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Why it works</h3>
+      <ul>
+        <li>Removes a redundant identity strip — the top chrome and the hero card were saying the same thing twice.</li>
+        <li>Puts the greeting where the eye lands first on any device — hero owns the fold.</li>
+        <li>Signals "your Club, not Spectre" via the serif Club name in the hero corner.</li>
+        <li>Keeps the current mobile widget compaction from Commit A intact.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Open questions for the founder</h3>
+      <ul>
+        <li>Photo shape: circular (as drawn) or squared-off with a subtle radius?</li>
+        <li>Employee number display: prefix-with-# (as drawn) or spelled as "Employee 0129"?</li>
+        <li>Notifications bell: outside the hero, inside the hero corner, or on the Home canvas?</li>
+        <li>Hero background: solid cream, subtle gradient (as drawn), or per-Club branded image (opens the branding story)?</li>
+      </ul>
+    </div>
+  </div>
+
+  <p style="margin-top:24px;"><small>Artifact path: <code>docs/design/employee-portal-hero-redesign-concept.html</code>. Reload in the browser after any edit. This file lives under <code>docs/</code> so it will never accidentally ship as a route.</small></p>
+</div>
+
+</body>
+</html>
