@@ -300,6 +300,25 @@ export async function resetDb() {
     // HR-2C Home refinement (2026-08-24) — Home-notification dismissals.
     // FKs into Employee (RESTRICT); wipe BEFORE c.employee.deleteMany().
     c.employeeHomeNotificationDismissal.deleteMany(),
+    // Payroll-3A (2026-08-29) — leaf-first cleanup: earnings and
+    // deductions and allowance snapshots + approved-time-entries
+    // FK into Employee / EmploymentAssignment / EmployeeAllowance;
+    // then BatchEmployee (FK Employee); then Batch (FK
+    // PayGroup / PayPeriod); then PayGroupMember (FK PayGroup +
+    // Employee); then PayPeriod (FK PayGroup); then PayGroup (FK
+    // Club); then PayrollClubConfig (FK Club). All must precede
+    // c.employee.deleteMany() and c.employeeEmploymentAssignment
+    // .deleteMany() below.
+    c.payrollBatchAllowanceSnapshot.deleteMany(),
+    c.payrollBatchEarning.deleteMany(),
+    c.payrollBatchDeduction.deleteMany(),
+    c.payrollApprovedTimeEntry.deleteMany(),
+    c.payrollBatchEmployee.deleteMany(),
+    c.payrollBatch.deleteMany(),
+    c.payrollPayGroupMember.deleteMany(),
+    c.payrollPayPeriod.deleteMany(),
+    c.payrollPayGroup.deleteMany(),
+    c.payrollClubConfig.deleteMany(),
     // HR-2C Employment (2026-08-24) — Allowances FK into Assignment;
     // Assignment FKs into Employee. Wipe leaf-first.
     c.employeeAllowance.deleteMany(),

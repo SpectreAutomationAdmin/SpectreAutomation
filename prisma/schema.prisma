@@ -459,6 +459,17 @@ model Club {
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
   employmentAssignments              EmployeeEmploymentAssignment[]
   employeeAllowances                 EmployeeAllowance[]
+  // Payroll-3A (2026-08-28) — canonical payroll foundation.
+  payrollClubConfig                  PayrollClubConfig?
+  payrollPayGroups                   PayrollPayGroup[]
+  payrollPayGroupMembers             PayrollPayGroupMember[]
+  payrollPayPeriods                  PayrollPayPeriod[]
+  payrollBatches                     PayrollBatch[]
+  payrollBatchEmployees              PayrollBatchEmployee[]
+  payrollBatchEarnings               PayrollBatchEarning[]
+  payrollBatchDeductions             PayrollBatchDeduction[]
+  payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
+  payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
 }
 
 // ---------------------------------------------------------------------
@@ -3354,6 +3365,13 @@ model Employee {
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
   employmentAssignments      EmployeeEmploymentAssignment[]
   allowances                 EmployeeAllowance[]
+  // Payroll-3A (2026-08-28) — canonical payroll foundation.
+  payrollBatchEmployees      PayrollBatchEmployee[]
+  payrollBatchEarnings       PayrollBatchEarning[]
+  payrollBatchDeductions     PayrollBatchDeduction[]
+  payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
+  payrollPayGroupMemberships PayrollPayGroupMember[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -3409,6 +3427,11 @@ model EmployeeEmploymentAssignment {
   // deleted assignment does not silently orphan history.
   compensations     EmployeeCompensation[]  @relation("AssignmentCompensations")
   allowances        EmployeeAllowance[]
+  // Payroll-3A (2026-08-28) — role-specific earnings + time entries
+  // preserve assignment context so multi-role compensation resolves
+  // correctly when payroll runs. See §14 of the Payroll-3A brief.
+  payrollBatchEarnings PayrollBatchEarning[]
+  payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
 
   @@index([clubId, employeeId, effectiveFrom])
   @@index([employeeId, role])
@@ -3449,6 +3472,10 @@ model EmployeeAllowance {
   createdByUserId String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  // Payroll-3A (2026-08-28) — snapshot at run prep records the
+  // effective allowance rows applied to a specific PayrollBatch.
+  payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
 
   @@index([clubId, employeeId, effectiveFrom])
 }
@@ -11056,4 +11083,365 @@ model TrainingCompletion {
   @@index([clubId, employeeId])
   @@index([clubId, courseId])
   @@index([employeeId, courseId])
+}
+
+// ===========================================================================
+// Payroll-3A (2026-08-28) — Canonical payroll foundation.
+//
+// STRUCTURAL ONLY. No gross-to-net calculation logic lives at this layer.
+// No CRA tables, no CPP/EI, no vacation-pay math. Payroll-3A establishes:
+//   * Club-level payroll configuration.
+//   * PayGroup + pay-period lifecycle.
+//   * PayrollBatch (canonical processing cycle) + lifecycle transitions.
+//   * Per-employee inclusion rows with role context preserved.
+//   * Typed earning/deduction/allowance input categories.
+//   * Approved-time-entry seam for future timekeeping integration.
+//
+// Naming note (surfaced in the checkpoint): the founder brief named the
+// canonical run PayrollRun. The Phase-5 Ops PayrollRun model already
+// exists (legacy 22 percent withholding stub). To keep 3A.1 additive
+// per section 38, canonical Payroll-3A uses the industry-standard
+// name PayrollBatch for the processing cycle. A follow-up cleanup
+// slice may rename the legacy Ops model to LegacyOpsPayrollRun and
+// rename PayrollBatch to PayrollRun per the founder's original
+// naming preference.
+//
+// Every model is:
+//   * tenant-scoped by clubId;
+//   * additive to prior HR migrations (does not modify accepted rows);
+//   * effective-dated using the repo's half-open [from, to) convention
+//     where lifecycle timelines apply;
+//   * indexed on the (clubId, primary-lookup-key) pattern used
+//     throughout HR-2C.
+// ===========================================================================
+
+// One-row-per-Club payroll configuration. Country + provinceOfEmployment
+// establish the jurisdiction seam later calculation phases will consume;
+// they are NOT calculation policy themselves. Province of employment
+// derives from the Club/payroll establishment (section 3), never from
+// employee home address.
+model PayrollClubConfig {
+  id                     String   @id @default(cuid())
+  clubId                 String   @unique
+  club                   Club     @relation(fields: [clubId], references: [id])
+  enabled                Boolean  @default(false)
+  country                String   @default("CA") // ISO 3166-1 alpha-2
+  provinceOfEmployment   String?  // 2-char CA province (AB / BC / ON / etc.)
+  defaultPayFrequency    String   @default("BIWEEKLY") // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
+  defaultPaymentMethod   String   @default("DIRECT_DEPOSIT") // DIRECT_DEPOSIT | CHEQUE | OTHER
+  payrollAdminUserId     String?  // designated primary Payroll admin (optional)
+  controllerUserId       String?  // designated Controller for approval routing (optional)
+  glAccountingProfileId  String?  // future GL integration seam (not resolved in 3A)
+  paystubNumberPrefix    String?  // optional prefix for future paystub numbering
+  paystubNumberSequence  Int      @default(0) // reserved for future paystub numbering
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId])
+}
+
+// A pay group is the scheduling + membership boundary for payroll
+// processing. Multiple pay groups per Club are supported (e.g. Hourly-
+// Biweekly + Salaried-Semi-Monthly).
+model PayrollPayGroup {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id])
+  code          String   // stable slug (e.g. HOURLY_BW)
+  name          String   // human-readable (e.g. "Hourly Employees - Biweekly")
+  payFrequency  String   // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
+  active        Boolean  @default(true)
+  // Payment-timing metadata (days after period end that pay is issued).
+  // Kept as a hint only - actual pay dates live on PayrollPayPeriod.
+  payDateOffsetDays Int  @default(5)
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  members       PayrollPayGroupMember[]
+  periods       PayrollPayPeriod[]
+  batches       PayrollBatch[]
+
+  @@unique([clubId, code])
+  @@index([clubId, active])
+}
+
+// Effective-dated employee membership in a pay group (section 7).
+// Employees may move between pay groups without rewriting history.
+// Half-open [effectiveFrom, effectiveTo).
+model PayrollPayGroupMember {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id])
+  payGroupId    String
+  payGroup      PayrollPayGroup @relation(fields: [payGroupId], references: [id])
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([clubId, payGroupId, effectiveFrom])
+  @@index([clubId, employeeId, effectiveFrom])
+}
+
+// A pay period is a canonical time window belonging to a pay group.
+// Uses half-open [periodStart, periodEnd) semantics - work performed
+// on periodEnd falls in the NEXT period. status doc-string:
+// FUTURE | OPEN | CLOSED (advisory; PayrollBatch owns the run
+// lifecycle).
+model PayrollPayPeriod {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id])
+  payGroupId    String
+  payGroup      PayrollPayGroup @relation(fields: [payGroupId], references: [id])
+  sequenceInYear Int     // 1-based ordinal within the tax year
+  taxYear       Int
+  periodStart   DateTime // half-open interval start (inclusive)
+  periodEnd     DateTime // half-open interval end (EXCLUSIVE)
+  payDate       DateTime // scheduled pay date
+  status        String   @default("FUTURE") // FUTURE | OPEN | CLOSED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  batches       PayrollBatch[]
+
+  @@unique([clubId, payGroupId, taxYear, sequenceInYear])
+  @@unique([clubId, payGroupId, periodStart])
+  @@index([clubId, payGroupId, periodStart])
+}
+
+// PayrollBatch - the canonical "payroll run" processing cycle. Named
+// Batch to avoid collision with the legacy Ops PayrollRun (see naming
+// note above). Lifecycle transitions are audited.
+model PayrollBatch {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id])
+  payGroupId    String
+  payGroup      PayrollPayGroup @relation(fields: [payGroupId], references: [id])
+  payPeriodId   String
+  payPeriod     PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
+  // DRAFT | PREPARED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
+  status        String   @default("DRAFT")
+  // Sequence within (payGroup, taxYear) - one authoritative batch per
+  // period unless a future revision/versioning slice adds sequencing.
+  sequence      Int      @default(1)
+  preparedAt    DateTime?
+  preparedByUserId String?
+  submittedAt   DateTime?
+  submittedByUserId String?
+  approvedAt    DateTime?
+  approvedByUserId String?
+  postedAt      DateTime?
+  postedByUserId String?
+  voidedAt      DateTime?
+  voidedByUserId String?
+  voidReason    String?
+  // Work Intake handoff (sections 29-30). Set at submit; single item
+  // routed to the Controller's inbox with workDomain = "PAYROLL".
+  workIntakeItemId String? @unique
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  employees             PayrollBatchEmployee[]
+  earnings              PayrollBatchEarning[]
+  deductions            PayrollBatchDeduction[]
+  allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+
+  @@unique([clubId, payGroupId, payPeriodId, sequence])
+  @@index([clubId, status])
+  @@index([clubId, payPeriodId])
+}
+
+// Per-employee inclusion row in a specific batch (section 12).
+// Snapshots the minimum HR context needed for audit / historical
+// reproducibility. Sensitive HR details (SIN, banking) are NOT copied
+// here - the batch resolves them via the canonical HR readers at
+// preparation time; only readiness indicators are stored.
+model PayrollBatchEmployee {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id])
+  batchId           String
+  batch             PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id])
+  payGroupMemberId  String?
+  // Snapshot metadata for historical reproducibility.
+  jurisdictionCountry     String // "CA"
+  jurisdictionProvince    String? // 2-char province
+  employeeLifecycleAtPrep String // PRE_HIRE | ACTIVE | LEAVE | TERMINATED | ARCHIVED
+  // Readiness indicators (sections 23-24). No plaintext SIN / banking.
+  bankingReady            Boolean @default(false)
+  bankingStatus           String? // VERIFIED | PENDING_PENNY_TEST | REJECTED | INACTIVE | null
+  sinReady                Boolean @default(false)
+  federalTd1Ready         Boolean @default(false)
+  provincialTd1Ready      Boolean @default(false)
+  compensationReady       Boolean @default(false)
+  // PENDING | INCLUDED | EXCLUDED | ERRORED. Structural only.
+  status                  String  @default("PENDING")
+  // Deferred fields reserved for the calculation phase - kept NULL
+  // in 3A. Presence here is a seam declaration, not a computation
+  // contract.
+  grossPay                Decimal?
+  netPay                  Decimal?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  earnings           PayrollBatchEarning[]
+  deductions         PayrollBatchDeduction[]
+  allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+
+  @@unique([batchId, employeeId])
+  @@index([clubId, batchId])
+  @@index([clubId, employeeId])
+}
+
+// Typed earning input line (sections 14-16). Each earning MUST
+// reference the employment assignment it belongs to so role-specific
+// compensation resolves correctly for multi-role employees. Rate is
+// captured for historical reproducibility; calculation is a later
+// phase.
+model PayrollBatchEarning {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  batchId                String
+  batch                  PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId        String
+  batchEmployee          PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  employmentAssignmentId String?  // NULL for salary-only or non-role earnings
+  employmentAssignment   EmployeeEmploymentAssignment? @relation(fields: [employmentAssignmentId], references: [id])
+  // REGULAR | OVERTIME | SALARY | BONUS | VACATION | STAT_HOLIDAY | COMMISSION | OTHER
+  earningType            String
+  // Free-form label for admin display (e.g. "Q3 sales bonus").
+  description            String?
+  // Quantity: hours for hourly earnings, count for units/pieces.
+  quantity               Decimal  @default(0)
+  // Rate captured at preparation time - historically reproducible.
+  rate                   Decimal  @default(0)
+  currency               String   @default("CAD")
+  // Source metadata for audit:
+  //   MANUAL | TIME_ENTRY | ALLOWANCE_SNAPSHOT | SALARY_PROJECTION | IMPORT
+  rateSource             String   @default("MANUAL")
+  // Optional link to the approved time entry that produced this line.
+  approvedTimeEntryId    String?
+  approvedTimeEntry      PayrollApprovedTimeEntry? @relation(fields: [approvedTimeEntryId], references: [id])
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId, batchId])
+  @@index([clubId, employeeId, earningType])
+  @@index([batchEmployeeId, earningType])
+}
+
+// Typed deduction/adjustment input line (section 18). EXPLICITLY not
+// for statutory deductions (CPP/EI/tax) - those are the later
+// calculation phase's output. This models employer-side inputs like
+// charge-account deductions, benefit contributions, garnishments,
+// manual corrections.
+model PayrollBatchDeduction {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  batchId                String
+  batch                  PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId        String
+  batchEmployee          PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  // BENEFIT | CHARGE_ACCOUNT | GARNISHMENT | MANUAL | OTHER
+  deductionType          String
+  description            String?
+  amount                 Decimal
+  currency               String   @default("CAD")
+  // MANUAL | RECURRING_TEMPLATE | IMPORT
+  source                 String   @default("MANUAL")
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId, batchId])
+  @@index([clubId, employeeId, deductionType])
+  @@index([batchEmployeeId, deductionType])
+}
+
+// Snapshot of a canonical EmployeeAllowance row applied to a batch
+// (section 17). The source EmployeeAllowance remains authoritative;
+// this row captures the effective values at prep time for
+// reproducibility.
+model PayrollBatchAllowanceSnapshot {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  batchId                String
+  batch                  PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId        String
+  batchEmployee          PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  sourceAllowanceId      String
+  sourceAllowance        EmployeeAllowance @relation(fields: [sourceAllowanceId], references: [id])
+  allowanceType          String
+  description            String?
+  amount                 Decimal
+  currency               String   @default("CAD")
+  // PER_PAY_PERIOD | MONTHLY | ANNUAL - preserved from the source row.
+  frequency              String
+  taxable                Boolean
+  // Effective window of the SOURCE allowance at snapshot time.
+  sourceEffectiveFrom    DateTime
+  sourceEffectiveTo      DateTime?
+  createdAt              DateTime @default(now())
+
+  @@unique([batchEmployeeId, sourceAllowanceId])
+  @@index([clubId, batchId])
+}
+
+// Approved-time-entry seam (sections 19-20). This is the canonical
+// interface future timekeeping data (Clock In/Out, manager-approved
+// timecards) must satisfy before payroll consumes it. Payroll-3A
+// does NOT fabricate rows; the model is written by the future
+// timekeeping approval flow and read by run preparation.
+model PayrollApprovedTimeEntry {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  employmentAssignmentId String?
+  employmentAssignment   EmployeeEmploymentAssignment? @relation(fields: [employmentAssignmentId], references: [id])
+  workDate               DateTime // UTC midnight aligning to the employee's local work day
+  hours                  Decimal
+  // REGULAR | OVERTIME | STAT_HOLIDAY | VACATION | OTHER - matches the
+  // earning-type catalogue subset that time entries can produce.
+  earningClassification  String   @default("REGULAR")
+  // DRAFT | APPROVED | POSTED. Payroll consumes APPROVED only.
+  approvalState          String   @default("DRAFT")
+  approvedAt             DateTime?
+  approvedByUserId       String?
+  // Link once a batch consumes this entry - a single entry maps to
+  // at most one earning line, guarding against double-counting.
+  consumedByBatchId      String?
+  consumedByBatchEmployeeId String?
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  batchEarnings PayrollBatchEarning[]
+
+  @@index([clubId, employeeId, workDate])
+  @@index([clubId, approvalState, workDate])
+  @@index([employmentAssignmentId, workDate])
 }
