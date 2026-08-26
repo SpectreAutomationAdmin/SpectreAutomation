@@ -41,6 +41,11 @@ import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
 import HomeNotificationBar from "./_home/HomeNotificationBar";
 import HomeWidgetGrid, { type WidgetDef } from "./_home/HomeWidgetGrid";
 import { dismissHomeNotificationAction } from "./_home/_actions";
+// HR mobile-hotfix (2026-08-27) — accepted mobile reference components.
+// Rendered under <md only; desktop presentation is unchanged.
+import MobileWelcomeBanner from "@/components/employee/mobile/MobileWelcomeBanner";
+import MobileWidgetGrid, { type MobileWidget } from "@/components/employee/mobile/MobileWidgetGrid";
+import MobileQuickLinks from "@/components/employee/mobile/MobileQuickLinks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -237,8 +242,28 @@ export default async function EmployeePortalHome() {
     },
   ];
 
+  // HR mobile-hotfix (2026-08-27) — accepted mobile reference card
+  // labels + descriptions. Note "Time Off" (not "Time Off Requests")
+  // on mobile per the reference. Routes are the same as the desktop
+  // widget grid; unavailable destinations render as non-nav cards.
+  const mobileWidgets: MobileWidget[] = [
+    { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
+    { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
+    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconClock />, tourTarget: "time-off" },
+    { key: "forms", title: "Forms", description: "Complete and manage forms", href: null, icon: <IconForms />, tourTarget: "forms" },
+    { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
+  ];
+
+  // Club-name for the mobile welcome banner. Uses the same resolved
+  // Club row the hero uses — never hard-coded to Coulee Ridge.
+  const clubName = await prisma.club.findFirst({
+    where: { id: principal.clubId },
+    select: { name: true },
+  }).then((c) => c?.name ?? "your Club");
+
   return (
-    <div className="space-y-4" data-testid="portal-home">
+    <div data-testid="portal-home" className="md:space-y-4">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
 
       <EmployeePortalHero
@@ -251,9 +276,14 @@ export default async function EmployeePortalHome() {
         clubTimezone={club?.timezone ?? null}
       />
 
+      {/* Mobile-only welcome banner directly under the hero. */}
+      <div className="md:hidden px-4 pt-4">
+        <MobileWelcomeBanner clubName={clubName} />
+      </div>
+
       {activeNotifications.length > 0 && (
         <section
-          className="space-y-2"
+          className="space-y-2 md:space-y-2 px-4 md:px-0 pt-3 md:pt-0"
           data-testid="portal-home-notifications"
           aria-label="Notifications"
         >
@@ -271,13 +301,20 @@ export default async function EmployeePortalHome() {
         </section>
       )}
 
-      <div className="pt-2">
+      {/* Mobile widget grid — reference-matched card treatment. */}
+      <div className="md:hidden px-4 pt-3 space-y-3">
+        <MobileWidgetGrid widgets={mobileWidgets} />
+        <MobileQuickLinks />
+      </div>
+
+      {/* Desktop widget grid — unchanged. */}
+      <div className="hidden md:block pt-2">
         <HomeWidgetGrid widgets={widgets} />
       </div>
 
       {awaitingReview && (
         <section
-          className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
+          className="mx-4 md:mx-0 mt-3 md:mt-0 rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 md:px-6 py-3 md:py-4"
           data-testid="portal-home-awaiting-review"
         >
           <p className="text-sm text-emerald-900">
@@ -288,5 +325,24 @@ export default async function EmployeePortalHome() {
         </section>
       )}
     </div>
+  );
+}
+
+// HR mobile-hotfix (2026-08-27) — Clock In / Out icon used by the
+// mobile widget grid. The desktop grid keeps its own version of this
+// icon (defined above) because they use different stroke weights /
+// sizes — the mobile card renders a compact icon at ~28px while the
+// desktop icon-centric tile uses 56px.
+function IconClockInOut() {
+  return (
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {/* Directional / timekeeping — signpost style, matches the
+         reference's mobile Clock In / Out card. */}
+      <path d="M4 5h12l3 2.5L16 10H4z" />
+      <path d="M4 14h14l3 2.5L18 19H4z" />
+      <line x1="8" y1="10" x2="8" y2="14" />
+      <line x1="8" y1="19" x2="8" y2="21" />
+      <line x1="8" y1="3" x2="8" y2="5" />
+    </svg>
   );
 }

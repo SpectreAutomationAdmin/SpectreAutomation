@@ -71,50 +71,113 @@ export default function EmployeePortalHero({
     background: `linear-gradient(135deg, ${brand} 0%, ${darken(brand, 22)} 100%)`,
   };
 
+  const imgSrc = hasImage
+    ? `/api/clubs/${clubId}/employee-portal-hero${version ? `?v=${encodeURIComponent(version)}` : ""}`
+    : null;
+
   return (
-    <section
-      className="relative overflow-hidden rounded-lg border border-stone-200"
-      data-testid="portal-hero"
-      data-has-image={hasImage ? "true" : "false"}
-    >
-      <div className="relative h-40 md:h-56 lg:h-72 w-full" style={hasImage ? undefined : fallbackStyle}>
-        {hasImage && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={`/api/clubs/${clubId}/employee-portal-hero${version ? `?v=${encodeURIComponent(version)}` : ""}`}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover"
-            data-testid="portal-hero-image"
-          />
-        )}
-        {/* Subtle gradient overlay so light imagery keeps the greeting
-            legible. Uses the Club's own brand color at low opacity so
-            it never introduces a foreign accent. */}
-        <div
-          className="absolute inset-0"
-          style={{
-            background: hasImage
-              ? `linear-gradient(180deg, transparent 40%, rgba(15, 20, 15, 0.55) 100%)`
-              : `linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)`,
-          }}
-        />
-        {/* Greeting overlay — restrained, bottom-left. Never obscures
-            top half so a photo's focal subject stays visible. */}
-        <div className="absolute inset-x-0 bottom-0 px-6 md:px-8 pb-4 md:pb-6">
-          <p
-            className="font-serif text-2xl md:text-3xl leading-tight text-white drop-shadow-sm"
-            data-testid="portal-hero-greeting"
-          >
-            {greeting}, {greetingName}
-          </p>
-          {positionName && (
-            <p className="mt-1 text-sm md:text-base text-white/85 drop-shadow-sm">
-              {positionName}
-            </p>
+    <>
+      {/* -------------------- MOBILE HERO (< md) -------------------- */}
+      {/* Rebuilt for the accepted mobile reference (2026-08-27): no
+         border/radius, full-bleed under the fixed dark-green top
+         bar, serif greeting centred over the hero photograph, an
+         EMPLOYEE PORTAL label with decorative side rules, and a
+         translucent weather pill at the lower-right. Weather text is
+         a static presentation-only affordance — no live weather
+         integration exists in the product today; the pill is styled
+         to match the reference and is documented in the closeout. */}
+      <section
+        className="md:hidden relative overflow-hidden"
+        data-testid="portal-hero"
+        data-has-image={hasImage ? "true" : "false"}
+      >
+        <div className="relative h-52 w-full" style={hasImage ? undefined : fallbackStyle}>
+          {imgSrc && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imgSrc}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+              data-testid="portal-hero-image"
+            />
           )}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: hasImage
+                ? "linear-gradient(180deg, rgba(15,20,15,0.25) 0%, transparent 40%, rgba(15,20,15,0.45) 100%)"
+                : "linear-gradient(180deg, transparent 40%, rgba(0,0,0,0.25) 100%)",
+            }}
+          />
+          <div className="absolute inset-0 flex flex-col justify-end px-5 pb-5">
+            <p
+              className="font-serif text-[30px] leading-[1.05] text-white drop-shadow-sm"
+              data-testid="portal-hero-greeting"
+            >
+              {greeting}, {greetingName}
+            </p>
+            <div className="mt-2 flex items-center gap-2 text-white/95">
+              <span aria-hidden="true" className="h-px w-6 bg-white/70" />
+              <span className="text-[10px] tracking-[0.32em]">EMPLOYEE PORTAL</span>
+              <span aria-hidden="true" className="h-px w-6 bg-white/70" />
+            </div>
+          </div>
+          {/* Weather pill — presentation-only. Static value on this
+              first mobile ship; a live source would slot into
+              WeatherPillProps and replace the innerText. */}
+          <div className="absolute bottom-3 right-3 pointer-events-none">
+            <div
+              className="inline-flex items-center gap-1.5 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-3 py-1.5 text-[11px] font-medium ring-1 ring-white/15"
+              data-testid="portal-hero-weather"
+              aria-label="Local weather (approximate)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="8" cy="12" r="3.2" />
+                <path d="M14 14a4 4 0 1 0 3-6.6" />
+              </svg>
+              <span className="tabular-nums">22°</span>
+              <span className="text-white/80">Calgary</span>
+            </div>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      {/* -------------------- DESKTOP HERO (>= md) — unchanged -------------------- */}
+      <section
+        className="hidden md:block relative overflow-hidden rounded-lg border border-stone-200"
+        data-testid="portal-hero-desktop"
+        data-has-image={hasImage ? "true" : "false"}
+      >
+        <div className="relative h-56 lg:h-72 w-full" style={hasImage ? undefined : fallbackStyle}>
+          {imgSrc && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imgSrc}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          )}
+          <div
+            className="absolute inset-0"
+            style={{
+              background: hasImage
+                ? "linear-gradient(180deg, transparent 40%, rgba(15, 20, 15, 0.55) 100%)"
+                : "linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)",
+            }}
+          />
+          <div className="absolute inset-x-0 bottom-0 px-8 pb-6">
+            <p className="font-serif text-3xl leading-tight text-white drop-shadow-sm">
+              {greeting}, {greetingName}
+            </p>
+            {positionName && (
+              <p className="mt-1 text-base text-white/85 drop-shadow-sm">
+                {positionName}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+    </>
   );
 }
 

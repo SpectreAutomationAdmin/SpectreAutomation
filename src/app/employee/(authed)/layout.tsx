@@ -20,6 +20,7 @@ import { getActiveBranding } from "@/lib/branding";
 import EmployeePortalSidebar from "@/components/employee/EmployeePortalSidebar";
 import EmployeePortalTopBar from "@/components/employee/EmployeePortalTopBar";
 import EmployeePortalMobileNav from "@/components/employee/EmployeePortalMobileNav";
+import MobileBottomNav from "@/components/employee/mobile/MobileBottomNav";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,11 +112,20 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
             photoVersion={photoVersion}
           />
         </div>
-        {/* pt-14 on mobile leaves room for the fixed mobile top bar. */}
-        <main className="flex-1 pt-14 md:pt-0 px-4 md:px-10 py-4 md:py-10 max-w-6xl w-full">
+        {/* pt-16 on mobile leaves room for the fixed dark-green mobile
+            top bar (accepted reference 2026-08-27). pb-20 leaves room
+            for the fixed mobile bottom navigation + iOS safe-area. On
+            md+ the desktop chrome takes over; those paddings collapse. */}
+        <main
+          className="flex-1 pt-16 md:pt-0 pb-20 md:pb-0 px-0 md:px-10 py-0 md:py-10 max-w-6xl w-full"
+          style={{ paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 5rem)` }}
+        >
           {children}
         </main>
       </div>
+      {/* Mobile bottom navigation — fixed at the bottom on <md.
+          Absent on desktop where the sidebar carries navigation. */}
+      <MobileBottomNav />
     </div>
   );
 }

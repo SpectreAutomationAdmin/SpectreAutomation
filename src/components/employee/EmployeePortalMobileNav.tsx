@@ -51,6 +51,24 @@ interface Props {
   photoVersion: string | null;
 }
 
+/** Break a club name into two lines the way the reference does —
+ *  first word (or the first two if it's a two-word club) on line 1,
+ *  the rest on line 2. Falls back to a single line for very short
+ *  names ("The Club"). */
+function formatClubNameTwoLines(name: string): React.ReactNode {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length <= 2) return name;
+  // "Coulee Ridge Golf & Country Club" → "Coulee Ridge" / "Golf & Country Club"
+  const head = parts.slice(0, 2).join(" ");
+  const tail = parts.slice(2).join(" ");
+  return (
+    <>
+      <div className="truncate">{head}</div>
+      <div className="truncate">{tail}</div>
+    </>
+  );
+}
+
 export default function EmployeePortalMobileNav({
   clubName,
   displayName,
@@ -111,37 +129,51 @@ export default function EmployeePortalMobileNav({
 
   return (
     <>
-      {/* Fixed mobile top bar — visible only < md. Adds pt-14 on the
-          main content via the layout so this bar doesn't sit atop it. */}
+      {/* Fixed mobile top bar — dark forest green, per the founder-
+          accepted mobile reference (2026-08-27). Composition:
+             hamburger · SPECTRE/AUTOMATION wordmark · | · Club name
+             (two lines) · avatar chevron
+          Height ~64 px; the layout compensates with pt-16 on <md.
+          The wordmark IS shown on the Employee Portal (employees are
+          Club staff, not external members — the Spectre brand
+          shielding memory applies to member-facing surfaces only). */}
       <header
-        className="md:hidden fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-stone-200 bg-white px-3 py-2"
+        className="md:hidden fixed inset-x-0 top-0 z-40 flex items-stretch bg-club-green-800 text-white shadow-sm"
         data-testid="portal-mobile-topbar"
+        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="rounded-md p-2 text-stone-600 hover:bg-stone-50 hover:text-club-ink"
+          className="flex items-center justify-center px-3 text-white/85 hover:text-white active:bg-club-green-900/40"
           aria-label="Open navigation menu"
           data-testid="portal-mobile-menu-open"
           data-tour-target="mobile-menu"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
             <line x1="4" y1="6" x2="20" y2="6" />
             <line x1="4" y1="12" x2="20" y2="12" />
             <line x1="4" y1="18" x2="20" y2="18" />
           </svg>
         </button>
-        <div
-          className="min-w-0 flex-1 mx-2 truncate text-center font-serif text-sm leading-tight text-club-ink"
-          data-testid="portal-mobile-club-name"
-        >
-          {clubName}
+        <div className="flex items-center min-w-0 flex-1 py-2">
+          <div className="flex flex-col leading-tight px-1" data-testid="portal-mobile-brand-wordmark">
+            <span className="font-serif text-[15px] font-semibold tracking-[0.18em]">SPECTRE</span>
+            <span className="font-sans text-[9px] tracking-[0.28em] text-white/75">AUTOMATION</span>
+          </div>
+          <div aria-hidden="true" className="mx-3 h-8 w-px bg-white/25" />
+          <div
+            className="min-w-0 flex-1 font-serif text-[13px] leading-[1.15] text-white/95"
+            data-testid="portal-mobile-club-name"
+          >
+            {formatClubNameTwoLines(clubName)}
+          </div>
         </div>
-        {/* HR-2C Portal Refinement (2026-08-24) — single account entry
-            point on mobile too: avatar + name dropdown (Profile /
-            Take portal tour / Sign out). Standalone Help + Sign out
-            buttons removed to match the workspace pattern. */}
-        <div className="flex items-center">
+        {/* Account menu — trigger button lives inside the header, but the
+            EmployeePortalUserMenu component styles it as a circular
+            avatar. Wrap it in a slot with a gold ring so the trigger
+            matches the reference framing. */}
+        <div className="flex items-center pr-3 [&_[data-testid='portal-user-menu-trigger']]:!ring-2 [&_[data-testid='portal-user-menu-trigger']]:!ring-club-gold/60 [&_[data-testid='portal-user-menu-trigger']]:rounded-full [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85 [&_[data-testid='portal-topbar-name']]:hidden [&_[data-testid='portal-topbar-employee-number']]:hidden">
           <EmployeePortalUserMenu
             displayName={displayName}
             employeeNumber={employeeNumber}
