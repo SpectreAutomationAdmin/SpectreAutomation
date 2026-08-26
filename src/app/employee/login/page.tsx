@@ -19,12 +19,12 @@ export const dynamic = "force-dynamic";
 export default async function EmployeePortalLogin({
   searchParams,
 }: {
-  searchParams: Promise<{ err?: string; next?: string }>;
+  searchParams: Promise<{ err?: string; next?: string; reset?: string }>;
 }) {
   const already = await getEmployeePortalPrincipal();
   if (already) redirect("/employee");
 
-  const { err } = await searchParams;
+  const { err, reset } = await searchParams;
   const branding = await getActiveBranding();
   // §7 + [[feedback_member_brand_shielding]]: the Employee Portal
   // NEVER shows the "Spectre" wordmark. When the host resolves to
@@ -50,6 +50,16 @@ export default async function EmployeePortalLogin({
           </p>
         </header>
 
+        {reset && !err && (
+          <div
+            role="status"
+            className="mt-6 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
+            data-testid="employee-login-password-reset-success"
+          >
+            Your password has been updated. Sign in with your email address and
+            your new password.
+          </div>
+        )}
         {err && (
           <div
             role="alert"

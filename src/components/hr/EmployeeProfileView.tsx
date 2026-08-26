@@ -152,6 +152,11 @@ interface Props {
    *  HR viewer, while the write action inside the slot is gated on
    *  the caller's approve permission. */
   approvalSection?: React.ReactNode;
+  /** HR mobile-hotfix (2026-08-26) — Optional admin action to email
+   *  the employee a password-reset link. The parent gates on
+   *  hr:employee:write; the service re-checks. Never renders the
+   *  reset URL or the employee's password. */
+  credentialActions?: React.ReactNode;
   /** HR-2C Employment (2026-08-24) — Optional Employment tab slot. When
    *  provided, replaces the default legacy Employment-history view with
    *  the multi-role + compensation + allowances section. The parent
@@ -202,7 +207,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, employmentSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -444,6 +449,21 @@ export default function EmployeeProfileView(props: Props) {
              Renders above lifecycle controls so approval is the most
              prominent action on a submitted onboarding. */}
           {approvalSection}
+
+          {/* HR mobile-hotfix (2026-08-26) — Send password reset. */}
+          {credentialActions && (
+            <section className="spectre-person-section mt-6" data-testid="portal-reset-admin-section">
+              <div className="spectre-person-section-head">
+                <h3 className="spectre-person-eyebrow">Portal password</h3>
+              </div>
+              <p className="text-xs text-stone-500 mt-1">
+                Admins cannot view or set the employee&rsquo;s password. Sending a
+                reset emails a one-time link to the employee&rsquo;s canonical
+                email address; the employee chooses their new password.
+              </p>
+              <div className="mt-3">{credentialActions}</div>
+            </section>
+          )}
 
           {/* HR-2B.3.6 — Delete / Archive controls, parent-supplied. */}
           {lifecycleControls}

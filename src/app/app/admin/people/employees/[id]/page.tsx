@@ -47,6 +47,9 @@ import { assignTrainingCourseAction } from "./_training-actions";
 import ApproveActivateEmployee from "@/components/hr/ApproveActivateEmployee";
 import { getOnboardingApprovalReadiness } from "@/lib/hr/onboarding-approve-activate";
 import { approveAndActivateAction } from "./_approve-actions";
+// HR mobile-hotfix (2026-08-26) — admin-initiated portal password reset.
+import SendPasswordResetButton from "@/components/hr/SendPasswordResetButton";
+import { sendPortalPasswordResetAction } from "./_password-reset-actions";
 
 export default async function EmployeeProfilePage({
   params, searchParams,
@@ -459,6 +462,18 @@ export default async function EmployeeProfilePage({
           <ApproveActivateEmployee
             readiness={approvalReadiness}
             action={approveAndActivateAction.bind(null, profile.id)}
+          />
+        ) : null
+      }
+      credentialActions={
+        canLifecycle ? (
+          <SendPasswordResetButton
+            employeeId={profile.id}
+            employeeDisplayName={profile.preferredName?.trim()
+              ? `${profile.preferredName} ${profile.lastName}`
+              : `${profile.firstName} ${profile.lastName}`}
+            hasPersonalEmail={Boolean(profile.personalEmail)}
+            action={sendPortalPasswordResetAction.bind(null, profile.id)}
           />
         ) : null
       }

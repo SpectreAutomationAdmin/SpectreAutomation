@@ -146,8 +146,20 @@ async function loadEmployeeContactRoutes(
  *   * Employee themselves — delivered IN_APP to their linked User
  *     (when present) and/or EMAIL to their personalEmail. Distinct
  *     copy that confirms the change without naming the field's value.
+ *
+ * Staging-only sanitization escape hatch: when the process env has
+ * SPECTRE_SUPPRESS_HR_NOTIFICATIONS=1 the notifier short-circuits
+ * before any delivery. This is used by the one-shot Chris/Lise
+ * sanitization script so replacing test data with synthetic values
+ * does not spam the founder with a stream of "your SIN was updated"
+ * / "your direct deposit was updated" emails. The env var is NOT set
+ * in production Fly secrets; it must be provided explicitly at
+ * process launch, making it impossible to accidentally invoke.
  */
 export async function notifyHrChange(input: NotifyHrChangeInput): Promise<void> {
+  if (process.env.SPECTRE_SUPPRESS_HR_NOTIFICATIONS === "1") {
+    return;
+  }
   try {
     const [adminRecipients, employeeRoutes] = await Promise.all([
       resolveRecipientsByPermission(input.clubId, RECIPIENT_PERMISSION[input.kind]),
