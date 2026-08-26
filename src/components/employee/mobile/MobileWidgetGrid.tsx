@@ -50,7 +50,7 @@ function Card({ w }: { w: MobileWidget }) {
         <div className="font-serif text-[14px] leading-[1.15] text-club-ink break-words">
           {w.title}
         </div>
-        <div className="text-[11px] text-stone-500 leading-snug mt-0.5 line-clamp-2">
+        <div className="text-[11px] text-stone-500 leading-snug mt-0.5">
           {w.description}
         </div>
       </div>
