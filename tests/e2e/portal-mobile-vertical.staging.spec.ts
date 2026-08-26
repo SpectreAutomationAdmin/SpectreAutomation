@@ -76,15 +76,21 @@ test.describe("Mobile portal — vertical geometry gate", () => {
       await page.waitForTimeout(1500);
 
       const s: Sample = await page.evaluate((label) => {
-        function rectOf(sel: string): DOMRect | null {
-          const el = document.querySelector(sel) as HTMLElement | null;
+        // All selectors are scoped to the mobile shell — the layout
+        // renders both mobile and desktop shells side-by-side, with
+        // desktop hidden via display:none on <md widths. Without the
+        // scope, querySelector picks the display:none copy (rect
+        // 0×0), producing bogus geometry measurements.
+        const shell = document.querySelector('[data-testid="portal-mobile-shell"]');
+        function rectIn(sel: string): DOMRect | null {
+          const el = (shell ?? document).querySelector(sel) as HTMLElement | null;
           return el ? el.getBoundingClientRect() : null;
         }
-        const hero = rectOf('[data-testid="portal-hero"]');
-        const welcome = rectOf('[data-testid="portal-mobile-welcome-banner"]');
-        const gridRegion = rectOf('[data-testid="portal-mobile-widgets-region"]');
-        const quickLinks = rectOf('[data-testid="portal-mobile-quick-links"]');
-        const bottomNav = rectOf('[data-testid="portal-mobile-bottom-nav"]');
+        const hero = rectIn('[data-testid="portal-hero"]');
+        const welcome = rectIn('[data-testid="portal-mobile-welcome-banner"]');
+        const gridRegion = rectIn('[data-testid="portal-mobile-widgets-region"]');
+        const quickLinks = rectIn('[data-testid="portal-mobile-quick-links"]');
+        const bottomNav = rectIn('[data-testid="portal-mobile-bottom-nav"]');
         return {
           label,
           width: window.innerWidth,
