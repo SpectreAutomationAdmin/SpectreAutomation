@@ -320,8 +320,12 @@ export default async function EmployeePortalHome() {
            on minmax(0,1fr) consistently. */}
         {activeNotifications.length === 0 && <div aria-hidden="true" />}
         {/* Row 4 — widget grid, FLEXIBLE. Distributes any remaining
-           vertical space across 3 rows of 2 cards. */}
-        <div className="px-4 pt-3 min-h-0" data-testid="portal-mobile-widgets-region">
+           vertical space across 3 rows of 2 cards. `h-full` on this
+           wrapper is essential: without it the widget grid would
+           collapse to intrinsic content height and the extra vertical
+           space (large phones, dvh > 932) piles up between Quick
+           Links and the bottom nav. */}
+        <div className="px-4 pt-3 min-h-0 h-full" data-testid="portal-mobile-widgets-region">
           <MobileWidgetGrid widgets={mobileWidgets} />
         </div>
         {/* Row 5 — Quick Links (auto). */}
