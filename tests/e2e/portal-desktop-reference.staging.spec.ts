@@ -65,6 +65,9 @@ test.describe("Portal desktop — accepted reference reconstruction", () => {
         await expect(shell.locator(`[data-testid="portal-nav-${key}"]`)).toBeVisible();
       }
       await expect(shell.locator('[data-testid="portal-sidebar-help"]')).toBeVisible();
+      // Fidelity pass — welcome banner MUST be present on desktop, sits
+      // between hero and widget grid.
+      await expect(home.locator('[data-testid="portal-desktop-welcome-banner"]')).toBeVisible();
       const grid = home.locator('[data-testid="portal-desktop-widgets-grid"]');
       await expect(grid).toBeVisible();
       for (const k of ["scheduling", "paystubs", "time-off", "forms", "training", "clocking-in-out"]) {
