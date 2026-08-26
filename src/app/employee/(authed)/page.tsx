@@ -263,43 +263,41 @@ export default async function EmployeePortalHome() {
   }).then((c) => c?.name ?? "your Club");
 
   return (
-    <div data-testid="portal-home" className="h-full">
+    <div data-testid="portal-home" className="flex-1 min-h-0 flex flex-col md:block md:flex-none md:min-h-full">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
 
       {/* ==================== MOBILE PRESENTATION (<md) ====================
-         HR mobile-hotfix (2026-08-28) — vertical app-shell architecture.
-         The parent layout supplies the outer grid (topbar / main /
-         bottom-nav). Inside <main>, the home page arranges its own
-         vertical grid so the widget grid gets `minmax(0, 1fr)` and
-         consumes exactly the height remaining between the hero (top)
-         and Quick Links (bottom). Notifications + awaiting-review
-         banners sit above the widget grid when present; they don't
-         shrink the flexible middle row (they simply reduce it). */}
+         HR mobile-hotfix (2026-08-28) — flex-column vertical shell.
+         The parent layout supplies a flex-column shell (topbar +
+         main + bottom-nav). Inside main (which is also flex-col
+         min-h-0), this column claims flex-1 with its own flex-col so
+         the widget-region row can be `flex-1 min-h-0` and consume
+         the remaining vertical space between hero/banner and Quick
+         Links. */}
       <div
-        className="md:hidden grid h-full"
-        style={{
-          gridTemplateRows: "auto auto auto minmax(0, 1fr) auto auto",
-        }}
+        className="md:hidden flex flex-col flex-1 min-h-0"
         data-testid="portal-mobile-column"
       >
-        {/* Row 1 — hero (self-clamps to a dvh range). */}
-        <EmployeePortalHero
-          clubId={principal.clubId}
-          version={heroMedia?.sha256.slice(0, 12) ?? null}
-          hasImage={heroMedia !== null}
-          primaryColor={club?.primaryColor ?? null}
-          greetingName={displayName ?? "there"}
-          positionName={primaryRole.positionName}
-          clubTimezone={club?.timezone ?? null}
-        />
-        {/* Row 2 — welcome banner (auto). */}
-        <div className="px-4 pt-3">
+        {/* Hero (auto). */}
+        <div className="flex-none">
+          <EmployeePortalHero
+            clubId={principal.clubId}
+            version={heroMedia?.sha256.slice(0, 12) ?? null}
+            hasImage={heroMedia !== null}
+            primaryColor={club?.primaryColor ?? null}
+            greetingName={displayName ?? "there"}
+            positionName={primaryRole.positionName}
+            clubTimezone={club?.timezone ?? null}
+          />
+        </div>
+        {/* Welcome banner (auto). */}
+        <div className="flex-none px-4 pt-3">
           <MobileWelcomeBanner clubName={clubName} />
         </div>
-        {/* Row 3 — notifications when present (auto). */}
+        {/* Notifications when present (auto). */}
         {activeNotifications.length > 0 && (
           <section
-            className="space-y-2 px-4 pt-2"
+            className="flex-none space-y-2 px-4 pt-2"
             data-testid="portal-home-notifications"
             aria-label="Notifications"
           >
@@ -316,27 +314,22 @@ export default async function EmployeePortalHome() {
             ))}
           </section>
         )}
-        {/* Empty div for row 3 when no notifications so row 4 lands
-           on minmax(0,1fr) consistently. */}
-        {activeNotifications.length === 0 && <div aria-hidden="true" />}
-        {/* Row 4 — widget grid, FLEXIBLE. Distributes any remaining
-           vertical space across 3 rows of 2 cards. `h-full` on this
-           wrapper is essential: without it the widget grid would
-           collapse to intrinsic content height and the extra vertical
-           space (large phones, dvh > 932) piles up between Quick
-           Links and the bottom nav. */}
-        <div className="px-4 pt-3 min-h-0 h-full" data-testid="portal-mobile-widgets-region">
+        {/* Widget region — FLEXIBLE. Claims the remaining height
+           between the top stack (hero/banner/notif) and the bottom
+           stack (quick-links/awaiting). `flex-1 min-h-0` is the
+           canonical flex-column pattern that lets its own child
+           (MobileWidgetGrid.section) fill via `h-full`. */}
+        <div className="flex-1 min-h-0 px-4 pt-3" data-testid="portal-mobile-widgets-region">
           <MobileWidgetGrid widgets={mobileWidgets} />
         </div>
-        {/* Row 5 — Quick Links (auto). */}
-        <div className="px-4 pt-3">
+        {/* Quick Links (auto). */}
+        <div className="flex-none px-4 pt-3">
           <MobileQuickLinks />
         </div>
-        {/* Row 6 — bottom padding + optional awaiting-review banner.
-           The banner is rare (SUBMITTED-not-ACTIVE only). When present
-           it wraps under Quick Links with restrained bottom spacing so
-           it never pushes into the bottom-nav territory. */}
-        <div className="px-4 pt-3 pb-3">
+        {/* Optional awaiting-review banner. Rare (SUBMITTED-not-
+           ACTIVE only). Restrained bottom padding so it never
+           collides with the bottom nav. */}
+        <div className="flex-none px-4 pt-3 pb-3">
           {awaitingReview && (
             <section
               className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3"

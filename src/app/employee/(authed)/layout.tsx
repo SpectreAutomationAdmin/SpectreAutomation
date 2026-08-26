@@ -144,37 +144,35 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
           the shell correctly.
           ============================================================ */}
       <div
-        className="md:hidden bg-stone-50 grid"
-        style={{
-          height: "100dvh",
-          minHeight: "100svh",
-          gridTemplateRows: "auto minmax(0, 1fr) auto",
-        }}
+        className="md:hidden bg-stone-50 flex flex-col"
+        style={{ height: "100dvh", minHeight: "100svh" }}
         data-testid="portal-mobile-shell"
       >
-        <EmployeePortalMobileNav
-          clubName={clubName}
-          displayName={displayName}
-          employeeNumber={employee.employeeNumber}
-          hasPhoto={hasPhoto}
-          photoVersion={photoVersion}
-        />
+        <div className="flex-none">
+          <EmployeePortalMobileNav
+            clubName={clubName}
+            displayName={displayName}
+            employeeNumber={employee.employeeNumber}
+            hasPhoto={hasPhoto}
+            photoVersion={photoVersion}
+          />
+        </div>
         <main
-          // HR mobile-hotfix (2026-08-28) — main is itself a grid so
-          // that a single-child (portal-home) can take a 1fr row and
-          // `h-full` propagates correctly. Without display:grid, a
-          // `h-full` child inside an overflow-y-auto container does
-          // NOT stretch to the container's grid-track height — the
-          // widget region collapses to intrinsic content and the
-          // remaining space piles up as unused whitespace above the
-          // bottom nav (measured at 430×932 as a 869 px gap).
-          className="min-h-0 overflow-y-auto overflow-x-hidden grid"
-          style={{ minHeight: 0, gridTemplateRows: "1fr" }}
+          // HR mobile-hotfix (2026-08-28) — flexbox is more
+          // predictable than grid+h-full for a viewport-bound shell.
+          // `flex-1` claims the remaining vertical space between the
+          // top bar and the bottom nav. `min-h-0` lets the child
+          // flex-column shrink correctly (otherwise the intrinsic
+          // content height dominates). `overflow-y-auto` scrolls
+          // WITHIN this area on very short accessibility viewports.
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col"
           data-testid="portal-mobile-main"
         >
           {children}
         </main>
-        <MobileBottomNav />
+        <div className="flex-none">
+          <MobileBottomNav />
+        </div>
       </div>
 
       {/* HR mobile-hotfix (2026-08-27) — real-device viewport
