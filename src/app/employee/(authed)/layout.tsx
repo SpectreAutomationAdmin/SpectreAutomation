@@ -69,15 +69,15 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
   // host-driven) then to a neutral label. NEVER "Spectre".
   const clubName = club.name ?? branding.wordmark ?? "Employee Portal";
 
-  // Full account identity for the top-right account control:
-  // "Chris Turcato", not just "Chris". Preferred-name preferences that
-  // exist elsewhere (Hero greeting) are unaffected — the account
-  // control identifies the employee at the full-name level so the
-  // shell matches the workspace user-menu grammar the founder called
-  // out.
-  const givenName = employee.preferredName?.trim().length
-    ? employee.preferredName.trim()
-    : employee.firstName;
+  // HR mobile-hotfix fidelity pass (2026-08-26) — the accepted
+  // desktop reference shows the employee's FORMAL first name in the
+  // top-right chrome (e.g. "Christopher", not "Chris"). Prefer the
+  // canonical `firstName` field over `preferredName`. If a Club still
+  // wants a short form to appear elsewhere, the preferred value
+  // remains available downstream — but the shell identity is formal.
+  const givenName = employee.firstName?.trim().length
+    ? employee.firstName.trim()
+    : (employee.preferredName?.trim() ?? "");
   const displayName = employee.lastName?.trim().length
     ? `${givenName} ${employee.lastName.trim()}`
     : givenName;

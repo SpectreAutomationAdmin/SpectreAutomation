@@ -31,7 +31,7 @@ interface NavItem {
 // bounding size + stroke weight change.
 function IconHome() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 11l9-7 9 7" />
       <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
     </svg>
@@ -39,7 +39,7 @@ function IconHome() {
 }
 function IconSchedule() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.5" y="5" width="17" height="15" rx="2" />
       <line x1="3.5" y1="10" x2="20.5" y2="10" />
       <line x1="8" y1="3" x2="8" y2="7" />
@@ -49,7 +49,7 @@ function IconSchedule() {
 }
 function IconPay() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="6" width="18" height="12" rx="2" />
       <line x1="3" y1="10" x2="21" y2="10" />
     </svg>
@@ -57,7 +57,7 @@ function IconPay() {
 }
 function IconTimeOff() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="8.5" />
       <polyline points="12 7.5 12 12 16 14" />
     </svg>
@@ -65,7 +65,7 @@ function IconTimeOff() {
 }
 function IconForms() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="5" y="4" width="14" height="17" rx="2" />
       <path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z" />
       <line x1="8.5" y1="11" x2="15.5" y2="11" />
@@ -75,7 +75,7 @@ function IconForms() {
 }
 function IconTraining() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z" />
       <path d="M6.5 11.5v4c0 1 2.5 2.5 5.5 2.5s5.5-1.5 5.5-2.5v-4" />
       <line x1="21.5" y1="9.5" x2="21.5" y2="14" />
@@ -84,7 +84,7 @@ function IconTraining() {
 }
 function IconClockInOut() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 5h12l3 2.5L16 10H4z" />
       <path d="M4 14h14l3 2.5L18 19H4z" />
       <line x1="8" y1="10" x2="8" y2="14" />
@@ -93,7 +93,7 @@ function IconClockInOut() {
 }
 function IconMore() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="5" cy="12" r="1.3" />
       <circle cx="12" cy="12" r="1.3" />
       <circle cx="19" cy="12" r="1.3" />
@@ -102,7 +102,7 @@ function IconMore() {
 }
 function IconHeadset() {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 13v-1a8 8 0 0 1 16 0v1" />
       <rect x="3" y="13" width="4" height="7" rx="1" />
       <rect x="17" y="13" width="4" height="7" rx="1" />
@@ -147,16 +147,15 @@ export default function EmployeePortalSidebar() {
       style={{ height: "100vh" }}
       data-testid="portal-sidebar"
     >
-      {/* Header height on the sidebar matches the top-header height so
-         the dark chrome reads as one continuous band. Scaled up per
-         accepted reference. */}
-      <div className="h-20 px-6 flex items-center border-b border-white/10 shrink-0">
+      {/* Header height on the sidebar matches the top-header height
+         (h-24) so the dark chrome reads as one continuous band. */}
+      <div className="h-24 px-6 flex items-center border-b border-white/10 shrink-0">
         <div className="flex flex-col leading-tight" data-testid="portal-sidebar-wordmark">
-          <span className="font-serif text-[22px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
-          <span className="font-sans text-[11px] tracking-[0.34em] text-white/75 mt-0.5">AUTOMATION</span>
+          <span className="font-serif text-[26px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
+          <span className="font-sans text-[12px] tracking-[0.36em] text-white/75 mt-1">AUTOMATION</span>
         </div>
       </div>
-      <nav className="flex-1 min-h-0 px-3 py-5 space-y-5 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">
+      <nav className="flex-1 min-h-0 px-3 py-6 space-y-5 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">
         {NAV_GROUPS.map((group, gi) => (
           <div key={gi} className="space-y-1">
             {group.items.map((item) => {
@@ -165,12 +164,12 @@ export default function EmployeePortalSidebar() {
                 : false;
               // Active state per accepted reference: substantial rounded
               // rectangle with translucent green overlay + subtle brass
-              // left rail. Non-active rows carry only the hover treatment.
+              // ring. Non-active rows carry only the hover treatment.
               const cls = active
                 ? "bg-white/[0.14] text-white font-medium ring-1 ring-club-gold/25"
                 : "text-white/85 hover:bg-white/[0.06] hover:text-white";
               const inner = (
-                <span className="flex items-center gap-3.5 px-4 py-2.5 rounded-lg text-[15px]">
+                <span className="flex items-center gap-4 px-4 py-3 rounded-lg text-[16px]">
                   <span className={active ? "text-white" : "text-white/80"} aria-hidden="true">{item.icon}</span>
                   <span className="truncate">{item.label}</span>
                 </span>

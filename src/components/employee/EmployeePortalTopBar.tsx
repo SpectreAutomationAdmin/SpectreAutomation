@@ -47,17 +47,19 @@ export default function EmployeePortalTopBar({
 }: Props) {
   const badge = unreadNotificationCount != null && unreadNotificationCount > 0;
   return (
-    // Fidelity pass (2026-08-26) — header height scaled to h-20 to
-    // match the accepted reference "premium brand chrome" register.
+    // Fidelity pass (2026-08-26 final) — header height h-24 to give
+    // the SPECTRE/AUTOMATION wordmark (rendered in the sidebar band)
+    // and the tenant identity room to breathe. Reference reads as
+    // premium brand chrome, not a utility strip.
     <header
-      className="h-20 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
+      className="h-24 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
       data-testid="portal-header"
     >
       {/* Tenant identity — canonical current-Club name in two lines,
          scaled up per the accepted reference. */}
       <div className="flex items-center min-w-0 flex-1">
         <div
-          className="font-serif text-[17px] leading-[1.15] text-white/95 min-w-0"
+          className="font-serif text-[19.5px] leading-[1.15] text-white/95 min-w-0"
           data-testid="portal-header-club-name"
           title={clubName}
         >
@@ -66,14 +68,14 @@ export default function EmployeePortalTopBar({
       </div>
 
       {/* Right-side controls — notification bell + account menu. */}
-      <div className="flex items-center gap-5">
+      <div className="flex items-center gap-6">
         <button
           type="button"
-          className="relative flex items-center justify-center h-11 w-11 rounded-full text-white/85 hover:text-white hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold"
+          className="relative flex items-center justify-center h-12 w-12 rounded-full text-white/85 hover:text-white hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold"
           aria-label={badge ? `${unreadNotificationCount} unread notifications` : "Notifications"}
           data-testid="portal-header-notifications"
         >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M6 8a6 6 0 1 1 12 0v5l2 3H4l2-3V8z" />
             <path d="M10 20a2 2 0 0 0 4 0" />
           </svg>
@@ -104,15 +106,15 @@ export default function EmployeePortalTopBar({
             [&_[data-testid='portal-user-menu-trigger']]:!py-1
             [&_[data-testid='portal-user-menu-trigger']]:!px-1
             [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85
-            [&_[data-testid='portal-user-menu-photo']]:!h-11
-            [&_[data-testid='portal-user-menu-photo']]:!w-11
-            [&_[data-testid='portal-user-menu-initials']]:!h-11
-            [&_[data-testid='portal-user-menu-initials']]:!w-11
-            [&_[data-testid='portal-user-menu-initials']]:!text-sm
+            [&_[data-testid='portal-user-menu-photo']]:!h-12
+            [&_[data-testid='portal-user-menu-photo']]:!w-12
+            [&_[data-testid='portal-user-menu-initials']]:!h-12
+            [&_[data-testid='portal-user-menu-initials']]:!w-12
+            [&_[data-testid='portal-user-menu-initials']]:!text-base
             [&_[data-testid='portal-user-menu-photo']]:!border-white/25
             [&_[data-testid='portal-user-menu-initials']]:!border-white/25
             [&_[data-testid='portal-topbar-name']]:!text-white
-            [&_[data-testid='portal-topbar-name']]:!text-[15px]
+            [&_[data-testid='portal-topbar-name']]:!text-[16px]
             [&_[data-testid='portal-topbar-employee-number']]:hidden
           "
         >

@@ -43,10 +43,30 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
         <h2 className="font-serif text-[19px] text-club-ink">Announcements</h2>
       </header>
       {items.length === 0 ? (
-        <div className="flex-1 flex items-center" data-testid="portal-desktop-announcements-empty">
-          <p className="text-[13px] text-stone-500 leading-relaxed">
-            No announcements right now. When your Club posts new updates
-            they&rsquo;ll appear here.
+        // Final fidelity pass (2026-08-26) — the empty state is now
+        // intentionally composed rather than a bare paragraph floating
+        // inside a large panel. Subtle brass-outlined icon centred at
+        // top, then the neutral copy, then a thin muted rule so the
+        // panel reads as "designed for the moment when no announcements
+        // exist" instead of "unfinished".
+        <div
+          className="flex-1 flex flex-col items-center justify-center text-center px-4 py-6"
+          data-testid="portal-desktop-announcements-empty"
+        >
+          <div
+            className="flex items-center justify-center h-11 w-11 rounded-full bg-club-gold/10 border border-club-gold/30 text-club-green-700"
+            aria-hidden="true"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 10v4a1 1 0 0 0 1 1h3l7 4V5L8 9H5a1 1 0 0 0-1 1z" />
+              <path d="M17 7.5a4.5 4.5 0 0 1 0 9" />
+            </svg>
+          </div>
+          <p className="text-[13px] text-stone-600 leading-relaxed mt-3 max-w-[220px]">
+            No announcements right now.
+          </p>
+          <p className="text-[12px] text-stone-500 leading-relaxed mt-1 max-w-[240px]">
+            When your Club posts new updates they&rsquo;ll appear here.
           </p>
         </div>
       ) : (

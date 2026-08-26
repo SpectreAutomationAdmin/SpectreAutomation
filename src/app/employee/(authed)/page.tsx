@@ -382,14 +382,15 @@ export default async function EmployeePortalHome() {
           positionName={primaryRole.positionName}
           clubTimezone={club?.timezone ?? null}
         />
-        {/* Fidelity pass (2026-08-26) — outer padding scaled up so
-           the dashboard reads as intentionally framed rather than
-           edge-to-edge; column ratio nudged to give the right rail
-           more visual presence (~76 / 24 ≈ 3.2fr / 1fr); larger row
-           gap between banner, grid, and awaiting-review. */}
+        {/* Final fidelity pass (2026-08-26) — main padding tightened
+           on the left/right (`px-8`) so the welcome banner + widget
+           grid begin closer to the sidebar boundary and the right
+           rail no longer feels squeezed. Column ratio widened toward
+           the right rail (3fr/1fr ≈ 75/25 per the accepted reference
+           visual target). Vertical row-gap held generous. */}
         <div
-          className="px-12 py-10 grid gap-8 min-w-0"
-          style={{ gridTemplateColumns: "minmax(0, 3.2fr) minmax(0, 1fr)" }}
+          className="px-8 py-10 grid gap-8 min-w-0"
+          style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}
         >
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
           <div className="min-w-0 space-y-6">
