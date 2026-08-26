@@ -13,7 +13,7 @@ export default function DesktopFooter({ clubName, year, versionLabel = "Employee
   const y = year ?? 2026;
   return (
     <footer
-      className="border-t border-stone-200/60 bg-transparent px-10 py-4 text-[11px] text-stone-500 flex items-center justify-between"
+      className="border-t border-stone-200/60 bg-transparent px-12 py-5 text-[12px] text-stone-500 flex items-center justify-between"
       data-testid="portal-desktop-footer"
     >
       <div>© {y} {clubName} · All rights reserved</div>

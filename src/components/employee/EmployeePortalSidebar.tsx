@@ -26,9 +26,12 @@ interface NavItem {
   matchExact?: boolean;
 }
 
+// Sidebar icons — scaled to 22 px per the accepted desktop reference
+// fidelity pass (2026-08-26). Preserve the same glyphs; only the
+// bounding size + stroke weight change.
 function IconHome() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M3 11l9-7 9 7" />
       <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
     </svg>
@@ -36,7 +39,7 @@ function IconHome() {
 }
 function IconSchedule() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.5" y="5" width="17" height="15" rx="2" />
       <line x1="3.5" y1="10" x2="20.5" y2="10" />
       <line x1="8" y1="3" x2="8" y2="7" />
@@ -46,7 +49,7 @@ function IconSchedule() {
 }
 function IconPay() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3" y="6" width="18" height="12" rx="2" />
       <line x1="3" y1="10" x2="21" y2="10" />
     </svg>
@@ -54,7 +57,7 @@ function IconPay() {
 }
 function IconTimeOff() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="8.5" />
       <polyline points="12 7.5 12 12 16 14" />
     </svg>
@@ -62,7 +65,7 @@ function IconTimeOff() {
 }
 function IconForms() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="5" y="4" width="14" height="17" rx="2" />
       <path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z" />
       <line x1="8.5" y1="11" x2="15.5" y2="11" />
@@ -72,7 +75,7 @@ function IconForms() {
 }
 function IconTraining() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z" />
       <path d="M6.5 11.5v4c0 1 2.5 2.5 5.5 2.5s5.5-1.5 5.5-2.5v-4" />
       <line x1="21.5" y1="9.5" x2="21.5" y2="14" />
@@ -81,7 +84,7 @@ function IconTraining() {
 }
 function IconClockInOut() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 5h12l3 2.5L16 10H4z" />
       <path d="M4 14h14l3 2.5L18 19H4z" />
       <line x1="8" y1="10" x2="8" y2="14" />
@@ -90,7 +93,7 @@ function IconClockInOut() {
 }
 function IconMore() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="5" cy="12" r="1.3" />
       <circle cx="12" cy="12" r="1.3" />
       <circle cx="19" cy="12" r="1.3" />
@@ -99,7 +102,7 @@ function IconMore() {
 }
 function IconHeadset() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 13v-1a8 8 0 0 1 16 0v1" />
       <rect x="3" y="13" width="4" height="7" rx="1" />
       <rect x="17" y="13" width="4" height="7" rx="1" />
@@ -135,30 +138,39 @@ export default function EmployeePortalSidebar() {
   const pathname = usePathname();
 
   return (
+    // Fidelity pass (2026-08-26) — sidebar is a full-viewport-height
+    // sticky rail; it uses its own overflow-y so the Help panel is
+    // always pinned to the bottom and NEVER clipped by the browser
+    // edge, even at 720-px-tall viewports.
     <aside
-      className="hidden md:flex md:flex-col w-60 shrink-0 bg-club-green-800 text-white min-h-screen"
+      className="hidden md:flex md:flex-col w-64 shrink-0 bg-club-green-800 text-white sticky top-0 self-start"
+      style={{ height: "100vh" }}
       data-testid="portal-sidebar"
     >
       {/* Header height on the sidebar matches the top-header height so
-         the dark chrome reads as one continuous band. */}
-      <div className="h-16 px-5 flex items-center border-b border-white/10">
+         the dark chrome reads as one continuous band. Scaled up per
+         accepted reference. */}
+      <div className="h-20 px-6 flex items-center border-b border-white/10 shrink-0">
         <div className="flex flex-col leading-tight" data-testid="portal-sidebar-wordmark">
-          <span className="font-serif text-[18px] font-semibold tracking-[0.14em] text-white">SPECTRE</span>
-          <span className="font-sans text-[10px] tracking-[0.28em] text-white/70">AUTOMATION</span>
+          <span className="font-serif text-[22px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
+          <span className="font-sans text-[11px] tracking-[0.34em] text-white/75 mt-0.5">AUTOMATION</span>
         </div>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-4 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">
+      <nav className="flex-1 min-h-0 px-3 py-5 space-y-5 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">
         {NAV_GROUPS.map((group, gi) => (
-          <div key={gi} className="space-y-0.5">
+          <div key={gi} className="space-y-1">
             {group.items.map((item) => {
               const active = item.href
                 ? (item.matchExact ? pathname === item.href : pathname === item.href || pathname.startsWith(item.href + "/"))
                 : false;
+              // Active state per accepted reference: substantial rounded
+              // rectangle with translucent green overlay + subtle brass
+              // left rail. Non-active rows carry only the hover treatment.
               const cls = active
-                ? "bg-white/12 text-white font-medium"
-                : "text-white/85 hover:bg-white/5 hover:text-white";
+                ? "bg-white/[0.14] text-white font-medium ring-1 ring-club-gold/25"
+                : "text-white/85 hover:bg-white/[0.06] hover:text-white";
               const inner = (
-                <span className="flex items-center gap-3 px-3 py-2 rounded-md text-[13.5px]">
+                <span className="flex items-center gap-3.5 px-4 py-2.5 rounded-lg text-[15px]">
                   <span className={active ? "text-white" : "text-white/80"} aria-hidden="true">{item.icon}</span>
                   <span className="truncate">{item.label}</span>
                 </span>
@@ -190,20 +202,23 @@ export default function EmployeePortalSidebar() {
                 </div>
               );
             })}
-            {gi < NAV_GROUPS.length - 1 && <div aria-hidden="true" className="h-px bg-white/10 mx-2 mt-3" />}
+            {gi < NAV_GROUPS.length - 1 && <div aria-hidden="true" className="h-px bg-white/10 mx-3 mt-4" />}
           </div>
         ))}
       </nav>
-      {/* Help / Support panel — pinned to the bottom of the sidebar. */}
-      <div className="p-3">
+      {/* Help / Support panel — pinned to the bottom of the sidebar
+         via `shrink-0` on this container plus `flex-1` on the nav
+         above, so the panel is ALWAYS visible above the browser edge
+         at every desktop viewport height. */}
+      <div className="p-4 shrink-0">
         <div
-          className="rounded-lg bg-white/8 border border-white/12 px-3 py-3 flex items-center gap-3"
+          className="rounded-xl bg-white/[0.10] border border-white/[0.14] px-4 py-4 flex items-center gap-3.5"
           data-testid="portal-sidebar-help"
         >
-          <div className="text-white/95" aria-hidden="true"><IconHeadset /></div>
+          <div className="text-white/95 shrink-0" aria-hidden="true"><IconHeadset /></div>
           <div className="min-w-0">
-            <div className="font-serif text-[13px] leading-tight text-white">Need Help?</div>
-            <div className="text-[11px] text-white/70 truncate">Contact HR Support</div>
+            <div className="font-serif text-[15px] leading-tight text-white">Need Help?</div>
+            <div className="text-[12px] text-white/75 truncate mt-0.5">Contact HR Support</div>
           </div>
         </div>
       </div>

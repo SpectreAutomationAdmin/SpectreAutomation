@@ -53,6 +53,7 @@ import DesktopWidgetGrid, { type DesktopWidget } from "@/components/employee/des
 import DesktopAnnouncementsCard from "@/components/employee/desktop/DesktopAnnouncementsCard";
 import DesktopQuickLinksCard from "@/components/employee/desktop/DesktopQuickLinksCard";
 import DesktopFooter from "@/components/employee/desktop/DesktopFooter";
+import DesktopWelcomeBanner from "@/components/employee/desktop/DesktopWelcomeBanner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -381,11 +382,19 @@ export default async function EmployeePortalHome() {
           positionName={primaryRole.positionName}
           clubTimezone={club?.timezone ?? null}
         />
-        <div className="px-10 py-8 grid gap-6 min-w-0" style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}>
+        {/* Fidelity pass (2026-08-26) — outer padding scaled up so
+           the dashboard reads as intentionally framed rather than
+           edge-to-edge; column ratio nudged to give the right rail
+           more visual presence (~76 / 24 ≈ 3.2fr / 1fr); larger row
+           gap between banner, grid, and awaiting-review. */}
+        <div
+          className="px-12 py-10 grid gap-8 min-w-0"
+          style={{ gridTemplateColumns: "minmax(0, 3.2fr) minmax(0, 1fr)" }}
+        >
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
-          <div className="min-w-0 space-y-4">
+          <div className="min-w-0 space-y-6">
             <div data-testid="portal-desktop-welcome-banner-slot">
-              <MobileWelcomeBanner clubName={clubName} />
+              <DesktopWelcomeBanner clubName={clubName} />
             </div>
             {activeNotifications.length > 0 && (
               <section
@@ -420,8 +429,9 @@ export default async function EmployeePortalHome() {
               </section>
             )}
           </div>
-          {/* RIGHT RAIL — announcements + quick links */}
-          <div className="min-w-0 space-y-4">
+          {/* RIGHT RAIL — announcements + quick links. Larger row-gap
+             so the two panels breathe. */}
+          <div className="min-w-0 space-y-6">
             <DesktopAnnouncementsCard
               items={[]}
             />

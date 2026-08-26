@@ -23,25 +23,32 @@ interface Props {
 
 export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: Props) {
   return (
+    // Fidelity pass (2026-08-26) — panel is scaled to feel like a
+    // proper dashboard module: larger outer padding, larger icon +
+    // heading, and a min-height so the panel keeps its accepted
+    // footprint even in the empty state (prevents Quick Links from
+    // floating upward when there are no announcements to render).
     <section
-      className="rounded-xl bg-club-cream border border-stone-200/60 p-4"
+      className="rounded-2xl bg-club-cream border border-stone-200/60 p-6 min-h-[240px] flex flex-col"
       data-testid="portal-desktop-announcements"
       aria-label="Announcements"
     >
-      <header className="flex items-center gap-2 pb-3">
+      <header className="flex items-center gap-3 pb-4">
         <span className="text-club-green-700" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 10v4a1 1 0 0 0 1 1h3l7 4V5L8 9H5a1 1 0 0 0-1 1z" />
             <path d="M17 7.5a4.5 4.5 0 0 1 0 9" />
           </svg>
         </span>
-        <h2 className="font-serif text-[16px] text-club-ink">Announcements</h2>
+        <h2 className="font-serif text-[19px] text-club-ink">Announcements</h2>
       </header>
       {items.length === 0 ? (
-        <p className="text-[12px] text-stone-500 pb-2" data-testid="portal-desktop-announcements-empty">
-          No announcements right now. When your Club posts new updates
-          they&rsquo;ll appear here.
-        </p>
+        <div className="flex-1 flex items-center" data-testid="portal-desktop-announcements-empty">
+          <p className="text-[13px] text-stone-500 leading-relaxed">
+            No announcements right now. When your Club posts new updates
+            they&rsquo;ll appear here.
+          </p>
+        </div>
       ) : (
         <ul className="rounded-lg bg-white border border-stone-200/70 divide-y divide-stone-200/70">
           {items.map((it) => {

@@ -167,9 +167,15 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
+        {/* Fidelity pass (2026-08-26): hero is shallower than the
+           previous 240–340 clamp — the accepted reference is cinematic
+           but not tall. Crop is nudged toward the horizon (object-
+           position 50% 42%) so the panoramic broadloom + golden sky
+           dominate and the greeting sits comfortably in the lower-
+           left quadrant. */}
         <div className="relative w-full" style={{
           ...(hasImage ? {} : fallbackStyle),
-          height: "clamp(240px, 30vh, 340px)",
+          height: "clamp(220px, 26vh, 300px)",
         }}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -177,33 +183,34 @@ export default function EmployeePortalHero({
               src={imgSrc}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
+              style={{ objectPosition: "50% 42%" }}
             />
           )}
           <div
             className="absolute inset-0"
             style={{
               background: hasImage
-                ? "linear-gradient(180deg, rgba(15,20,15,0.15) 0%, transparent 45%, rgba(15,20,15,0.4) 100%)"
+                ? "linear-gradient(180deg, rgba(15,20,15,0.10) 0%, transparent 42%, rgba(15,20,15,0.50) 100%)"
                 : "linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)",
             }}
           />
-          <div className="absolute inset-0 flex flex-col justify-end px-10 pb-8">
-            <p className="font-serif text-4xl leading-[1.05] text-white drop-shadow-sm">
+          <div className="absolute inset-0 flex flex-col justify-end px-12 pb-9">
+            <p className="font-serif text-[54px] leading-[1.02] text-white drop-shadow-sm">
               {greeting}, {greetingName}
             </p>
-            <div className="mt-3 flex items-center gap-3 text-white/95">
-              <span aria-hidden="true" className="h-px w-8 bg-white/75" />
-              <span className="text-[11px] tracking-[0.32em]">EMPLOYEE PORTAL</span>
-              <span aria-hidden="true" className="h-px w-8 bg-white/75" />
+            <div className="mt-4 flex items-center gap-3 text-white/95">
+              <span aria-hidden="true" className="h-px w-10 bg-white/75" />
+              <span className="text-[12px] tracking-[0.36em]">EMPLOYEE PORTAL</span>
+              <span aria-hidden="true" className="h-px w-10 bg-white/75" />
             </div>
           </div>
-          <div className="absolute bottom-5 right-5 pointer-events-none">
+          <div className="absolute bottom-6 right-6 pointer-events-none">
             <div
-              className="inline-flex items-center gap-2 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-3.5 py-1.5 text-[12px] font-medium ring-1 ring-white/15"
+              className="inline-flex items-center gap-2 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-4 py-2 text-[13px] font-medium ring-1 ring-white/15"
               data-testid="portal-hero-weather-desktop"
               aria-label="Local weather (approximate)"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="17" cy="8" r="3.2" />
                 <path d="M14.7 10.5a4.5 4.5 0 0 0-8.7 1.5" />
                 <path d="M6 12a4 4 0 1 0 0 8h10a3.5 3.5 0 0 0 0-7" />
