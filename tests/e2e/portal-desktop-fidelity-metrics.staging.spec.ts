@@ -12,7 +12,9 @@ const PASSWORD = process.env.SPECTRE_PLAYWRIGHT_FIXTURE_PASSWORD
   ?? "playwright-fixture-2026-test";
 
 const VIEWPORTS = [
+  { label: "1366x768",  w: 1366, h: 768 },
   { label: "1440x900",  w: 1440, h: 900 },
+  { label: "1536x1024", w: 1536, h: 1024 },
   { label: "1920x1080", w: 1920, h: 1080 },
 ];
 
