@@ -371,7 +371,7 @@ export default async function EmployeePortalHome() {
          dashboard (main + right rail) + subtle footer. Old
          icon-centric grid replaced with the 3×2 card layout that
          mirrors the accepted mobile card language. */}
-      <div className="hidden md:block">
+      <div className="hidden md:block" data-testid="portal-desktop-home">
         <EmployeePortalHero
           clubId={principal.clubId}
           version={heroMedia?.sha256.slice(0, 12) ?? null}

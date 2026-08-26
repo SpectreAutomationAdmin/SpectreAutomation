@@ -46,30 +46,33 @@ test.describe("Portal desktop — accepted reference reconstruction", () => {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);
 
-      // Scope everything to the desktop shell — the mobile shell also
-      // renders {children} (Next.js can't do server-side viewport
-      // gating), so bare selectors match both trees.
+      // The layout renders BOTH the desktop shell and the mobile shell
+      // wrappers (Next.js can't gate them server-side by viewport), and
+      // each wraps {children} — so page.tsx renders TWICE. Its own
+      // desktop branch carries data-testid="portal-desktop-home", which
+      // is the unique root we scope the reference assertions from.
       const shell = page.locator('[data-testid="portal-desktop-shell"]');
+      const home = shell.locator('[data-testid="portal-desktop-home"]').first();
       await expect(shell).toBeVisible();
       await expect(shell.locator('[data-testid="portal-sidebar"]')).toBeVisible();
       await expect(shell.locator('[data-testid="portal-sidebar-wordmark"]')).toContainText("SPECTRE");
       await expect(shell.locator('[data-testid="portal-header"]')).toBeVisible();
       await expect(shell.locator('[data-testid="portal-header-club-name"]')).toContainText(/Coulee Ridge/i);
       await expect(shell.locator('[data-testid="portal-header-notifications"]')).toBeVisible();
-      await expect(shell.locator('[data-testid="portal-hero-desktop"]')).toBeVisible();
-      await expect(shell.locator('[data-testid="portal-hero-weather-desktop"]')).toBeVisible();
+      await expect(home.locator('[data-testid="portal-hero-desktop"]')).toBeVisible();
+      await expect(home.locator('[data-testid="portal-hero-weather-desktop"]')).toBeVisible();
       for (const key of ["home", "schedule", "pay", "time-off", "forms", "training", "clock", "more"]) {
         await expect(shell.locator(`[data-testid="portal-nav-${key}"]`)).toBeVisible();
       }
       await expect(shell.locator('[data-testid="portal-sidebar-help"]')).toBeVisible();
-      const grid = shell.locator('[data-testid="portal-desktop-widgets-grid"]');
+      const grid = home.locator('[data-testid="portal-desktop-widgets-grid"]');
       await expect(grid).toBeVisible();
       for (const k of ["scheduling", "paystubs", "time-off", "forms", "training", "clocking-in-out"]) {
         await expect(grid.locator(`[data-testid="portal-desktop-widget-${k}"]`)).toBeVisible();
       }
-      await expect(shell.locator('[data-testid="portal-desktop-announcements"]')).toBeVisible();
-      await expect(shell.locator('[data-testid="portal-desktop-quick-links"]')).toBeVisible();
-      await expect(shell.locator('[data-testid="portal-desktop-footer"]')).toContainText(/All rights reserved/);
+      await expect(home.locator('[data-testid="portal-desktop-announcements"]')).toBeVisible();
+      await expect(home.locator('[data-testid="portal-desktop-quick-links"]')).toBeVisible();
+      await expect(home.locator('[data-testid="portal-desktop-footer"]')).toContainText(/All rights reserved/);
       // No horizontal overflow.
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBeLessThanOrEqual(1);
