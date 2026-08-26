@@ -160,8 +160,16 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
           photoVersion={photoVersion}
         />
         <main
-          className="min-h-0 overflow-y-auto overflow-x-hidden"
-          style={{ minHeight: 0 }}
+          // HR mobile-hotfix (2026-08-28) — main is itself a grid so
+          // that a single-child (portal-home) can take a 1fr row and
+          // `h-full` propagates correctly. Without display:grid, a
+          // `h-full` child inside an overflow-y-auto container does
+          // NOT stretch to the container's grid-track height — the
+          // widget region collapses to intrinsic content and the
+          // remaining space piles up as unused whitespace above the
+          // bottom nav (measured at 430×932 as a 869 px gap).
+          className="min-h-0 overflow-y-auto overflow-x-hidden grid"
+          style={{ minHeight: 0, gridTemplateRows: "1fr" }}
           data-testid="portal-mobile-main"
         >
           {children}
