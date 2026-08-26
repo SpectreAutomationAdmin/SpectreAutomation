@@ -132,10 +132,37 @@
     --spectre-shadow-focus: 0 0 0 3px var(--spectre-accent-ring);}
 html, body {  background: var(--color-bg);
     color: var(--color-ink);
-    min-height: 100%;}
+    min-height: 100%;
+    /* HR mobile-hotfix (2026-08-27) — pin text-size adjustment so
+       iOS Safari never inflates body text on rotate / narrow-view
+       heuristics. 100% keeps user pinch-zoom accessibility intact
+       while preventing the browser from silently scaling text up. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Explicit width containment. Even without a rogue element, some
+       Safari builds honour the visual viewport differently when the
+       layout root has no width contract. */
+    width: 100%;
+    max-width: 100%;
+    margin: 0;}
 body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;}
+/* HR mobile-hotfix (2026-08-27) — iOS Safari zooms the entire
+   viewport when a text input receives focus if its computed
+   font-size is < 16px. That zoom then persists after navigation,
+   which is what made the founder's post-login /employee/** pages
+   render at a visibly enlarged scale. The shared `.input` class
+   above uses text-sm (14px). Bump every input/select/textarea to
+   at least 16px on the smallest phones so the focus-zoom never
+   fires. Desktop `md:` breakpoint scales back to text-sm for
+   density. Applies globally so a future input can't accidentally
+   reintroduce the same failure. */
+@media (max-width: 767px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
 /* Executive Reporting Theme â€” editorial serif scope. * * Source Serif 4 (Adobe's editorial display family) is loaded globally * by next/font in src/app/layout.tsx and exposed via the * --font-source-serif-4 CSS variable. We resolve `font-serif` to that * variable ONLY within the report-theme scope, so: *   - reporting surfaces (/app/admin/reporting/**) inherit the *     premium editorial serif on every chapter title, KPI value, *     framing lead, and ornament caption *   - everything else in the project (POS, member portal, *     operational admin) keeps the Georgia fallback unchanged * * This closes the typography gap identified in the Saguaro * comparison audit (test-results/cmp-*.png) without risking visual * regression on the 69 non-reporting files that consume `font-serif`. */
 [data-report-theme="executive"] .font-serif {  font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;}
 @layer components {  .card {    @apply rounded-xl border border-stone-200 bg-white shadow-card;  }

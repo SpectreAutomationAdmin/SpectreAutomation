@@ -66,6 +66,19 @@ export const viewport: Viewport = {
   themeColor: "#2f5832",
   width: "device-width",
   initialScale: 1,
+  // HR mobile-hotfix (2026-08-27) — Root cause of "content appears
+  // cropped and horizontally pannable" on real iPhone: the deployed
+  // viewport meta was missing `viewport-fit=cover`, so iOS did not
+  // grant the app access to the safe-area insets. The mobile top bar
+  // + bottom nav that use `env(safe-area-inset-top/bottom)` reserved
+  // 0 px, so their fixed elements rendered outside the visible
+  // viewport (behind the notch / home-indicator). Setting
+  // viewport-fit=cover here declares that the app opts into the full
+  // display and knows how to handle the insets itself. Both fixed
+  // shells + the main content wrapper already use env() insets, so
+  // this flip alone is correct behaviour without further layout
+  // change.
+  viewportFit: "cover",
 };
 
 // No-FOUC theme bootstrap. Reads the user's saved Spectre theme

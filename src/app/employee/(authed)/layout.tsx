@@ -13,6 +13,7 @@
 // per club.
 
 import type { ReactNode } from "react";
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
@@ -21,6 +22,7 @@ import EmployeePortalSidebar from "@/components/employee/EmployeePortalSidebar";
 import EmployeePortalTopBar from "@/components/employee/EmployeePortalTopBar";
 import EmployeePortalMobileNav from "@/components/employee/EmployeePortalMobileNav";
 import MobileBottomNav from "@/components/employee/mobile/MobileBottomNav";
+import ViewportDebugOverlay from "@/components/employee/ViewportDebugOverlay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -126,6 +128,22 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
       {/* Mobile bottom navigation — fixed at the bottom on <md.
           Absent on desktop where the sidebar carries navigation. */}
       <MobileBottomNav />
+      {/* HR mobile-hotfix (2026-08-27) — real-device viewport
+          diagnostic. Renders ONLY when the URL carries
+          `?viewportDebug=1`. Founder opens the staging portal with
+          the flag on iPhone; the overlay shows live viewport metrics
+          + a build marker so the screenshot is dated. Nothing
+          renders in normal traffic. */}
+      <Suspense fallback={null}>
+        <ViewportDebugOverlay
+          releaseMarker={
+            process.env.SPECTRE_RELEASE_MARKER
+              ?? process.env.FLY_MACHINE_VERSION
+              ?? process.env.FLY_IMAGE_REF
+              ?? "unknown"
+          }
+        />
+      </Suspense>
     </div>
   );
 }
