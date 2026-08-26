@@ -88,7 +88,11 @@ export default function MobileBottomNav() {
 
   return (
     <nav
-      className="md:hidden fixed inset-x-0 bottom-0 z-40 bg-white border-t border-stone-200"
+      // HR mobile-hotfix (2026-08-28) — no longer fixed-positioned.
+      // Rendered as the final grid row of the mobile app shell (see
+      // (authed)/layout.tsx). Safe-area-inset-bottom is honoured via
+      // paddingBottom so the home-indicator area is respected.
+      className="md:hidden bg-white border-t border-stone-200 w-full"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
       data-testid="portal-mobile-bottom-nav"
       aria-label="Employee Portal navigation"

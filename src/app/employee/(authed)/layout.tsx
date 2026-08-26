@@ -88,24 +88,22 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
   // full reload.
   const photoVersion = employee.profilePhotoDocumentId ?? null;
 
+  const releaseMarker =
+    process.env.SPECTRE_RELEASE_MARKER
+      ?? process.env.FLY_MACHINE_VERSION
+      ?? process.env.FLY_IMAGE_REF
+      ?? "unknown";
+
   return (
-    <div className="min-h-screen bg-stone-50 flex">
-      {/* Desktop sidebar — Home + Profile only. Club identity now
-          lives in the top header per HR-2C Shell Refinement §3-4. */}
-      <EmployeePortalSidebar />
-      {/* Mobile fixed top bar + drawer (has its own `md:hidden` — hidden on
-          desktop). Club name remains in the mobile compact top bar. */}
-      <EmployeePortalMobileNav
-        clubName={clubName}
-        displayName={displayName}
-        employeeNumber={employee.employeeNumber}
-        hasPhoto={hasPhoto}
-        photoVersion={photoVersion}
-      />
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Desktop top header — Club name on the left, employee
-            avatar/name/# + Help + Sign out on the right. */}
-        <div className="hidden md:block">
+    <>
+      {/* ============================================================
+          DESKTOP SHELL (md+ only) — UNCHANGED from the pre-hotfix
+          layout. Sidebar + main content column with the workspace
+          top bar. Renders normal document flow.
+          ============================================================ */}
+      <div className="hidden md:flex min-h-screen bg-stone-50">
+        <EmployeePortalSidebar />
+        <div className="flex-1 flex flex-col min-w-0">
           <EmployeePortalTopBar
             clubName={clubName}
             displayName={displayName}
@@ -113,37 +111,71 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
             hasPhoto={hasPhoto}
             photoVersion={photoVersion}
           />
+          <main className="flex-1 px-10 py-10 max-w-6xl w-full">
+            {children}
+          </main>
         </div>
-        {/* pt-16 on mobile leaves room for the fixed dark-green mobile
-            top bar (accepted reference 2026-08-27). pb-20 leaves room
-            for the fixed mobile bottom navigation + iOS safe-area. On
-            md+ the desktop chrome takes over; those paddings collapse. */}
+      </div>
+
+      {/* ============================================================
+          MOBILE APP SHELL (<md only) — HR mobile-hotfix (2026-08-28).
+          Full-viewport CSS grid: [ topbar ] · [ scrollable middle ]
+          · [ bottom nav ]. The topbar + bottom nav are NORMAL grid
+          rows, NOT fixed-position, so they always sit exactly at the
+          top and bottom of the visual viewport with no reserved-
+          space padding tricks.
+
+          Height contract:
+            height:    100dvh   (dynamic viewport — shrinks with
+                                 Safari's URL bar so the shell never
+                                 overflows off-screen)
+            min-height:100svh   (small viewport fallback for engines
+                                 that don't ship dvh; also stabilises
+                                 the shell if Safari's URL bar collapses)
+
+          Middle row is minmax(0,1fr) with overflow:auto so that when
+          the content genuinely can't fit at a very short accessibility
+          viewport (~570 dvh px) the middle scrolls WITHIN the shell —
+          the topbar and bottom nav stay put and Quick Links never
+          gets hidden behind the bottom nav.
+
+          The mobile drawer (opened from the topbar hamburger) still
+          renders itself as position:fixed inset-0 z-50 so it covers
+          the shell correctly.
+          ============================================================ */}
+      <div
+        className="md:hidden bg-stone-50 grid"
+        style={{
+          height: "100dvh",
+          minHeight: "100svh",
+          gridTemplateRows: "auto minmax(0, 1fr) auto",
+        }}
+        data-testid="portal-mobile-shell"
+      >
+        <EmployeePortalMobileNav
+          clubName={clubName}
+          displayName={displayName}
+          employeeNumber={employee.employeeNumber}
+          hasPhoto={hasPhoto}
+          photoVersion={photoVersion}
+        />
         <main
-          className="flex-1 pt-16 md:pt-0 pb-20 md:pb-0 px-0 md:px-10 py-0 md:py-10 max-w-6xl w-full"
-          style={{ paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 5rem)` }}
+          className="min-h-0 overflow-y-auto overflow-x-hidden"
+          style={{ minHeight: 0 }}
+          data-testid="portal-mobile-main"
         >
           {children}
         </main>
+        <MobileBottomNav />
       </div>
-      {/* Mobile bottom navigation — fixed at the bottom on <md.
-          Absent on desktop where the sidebar carries navigation. */}
-      <MobileBottomNav />
+
       {/* HR mobile-hotfix (2026-08-27) — real-device viewport
-          diagnostic. Renders ONLY when the URL carries
-          `?viewportDebug=1`. Founder opens the staging portal with
-          the flag on iPhone; the overlay shows live viewport metrics
-          + a build marker so the screenshot is dated. Nothing
-          renders in normal traffic. */}
+          diagnostic. Renders ONLY when ?viewportDebug=1. Placed at
+          the top level so it can attach fixed positioning outside
+          either shell. */}
       <Suspense fallback={null}>
-        <ViewportDebugOverlay
-          releaseMarker={
-            process.env.SPECTRE_RELEASE_MARKER
-              ?? process.env.FLY_MACHINE_VERSION
-              ?? process.env.FLY_IMAGE_REF
-              ?? "unknown"
-          }
-        />
+        <ViewportDebugOverlay releaseMarker={releaseMarker} />
       </Suspense>
-    </div>
+    </>
   );
 }

@@ -22,10 +22,24 @@ export interface MobileWidget {
 
 export default function MobileWidgetGrid({ widgets }: { widgets: MobileWidget[] }) {
   return (
-    <section className="md:hidden" data-testid="portal-mobile-widgets">
-      <ul className="grid grid-cols-2 gap-3" data-testid="portal-mobile-widgets-grid">
+    <section
+      className="md:hidden min-h-0 h-full"
+      data-testid="portal-mobile-widgets"
+    >
+      {/* HR mobile-hotfix (2026-08-28) — grid distributes 3 rows
+         evenly across the widget region's available height. Each row
+         is minmax(0, 1fr) so a card can shrink on short phones and
+         grow on tall phones. Row gap 8-10 px, tighter than before. */}
+      <ul
+        className="grid grid-cols-2 gap-2.5 h-full"
+        style={{
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gridTemplateRows: "repeat(3, minmax(0, 1fr))",
+        }}
+        data-testid="portal-mobile-widgets-grid"
+      >
         {widgets.map((w) => (
-          <li key={w.key}>
+          <li key={w.key} className="min-h-0 min-w-0">
             <Card w={w} />
           </li>
         ))}
@@ -61,8 +75,11 @@ function Card({ w }: { w: MobileWidget }) {
       </div>
     </div>
   );
+  // HR mobile-hotfix (2026-08-28) — h-full lets the card fill its
+  // grid row cell so all 3 rows are visually equal-height. No fixed
+  // min-height — vertical rhythm derives from the parent flex row.
   const cls =
-    "block rounded-xl border border-stone-200 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
+    "block h-full rounded-xl border border-stone-200 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
     (available
       ? "hover:border-stone-300 active:bg-stone-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700"
       : "cursor-default");

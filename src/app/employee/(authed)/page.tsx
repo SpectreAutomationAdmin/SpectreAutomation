@@ -263,67 +263,137 @@ export default async function EmployeePortalHome() {
   }).then((c) => c?.name ?? "your Club");
 
   return (
-    <div data-testid="portal-home" className="md:space-y-4">
+    <div data-testid="portal-home" className="h-full">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
 
-      <EmployeePortalHero
-        clubId={principal.clubId}
-        version={heroMedia?.sha256.slice(0, 12) ?? null}
-        hasImage={heroMedia !== null}
-        primaryColor={club?.primaryColor ?? null}
-        greetingName={displayName ?? "there"}
-        positionName={primaryRole.positionName}
-        clubTimezone={club?.timezone ?? null}
-      />
-
-      {/* Mobile-only welcome banner directly under the hero. */}
-      <div className="md:hidden px-4 pt-4">
-        <MobileWelcomeBanner clubName={clubName} />
+      {/* ==================== MOBILE PRESENTATION (<md) ====================
+         HR mobile-hotfix (2026-08-28) — vertical app-shell architecture.
+         The parent layout supplies the outer grid (topbar / main /
+         bottom-nav). Inside <main>, the home page arranges its own
+         vertical grid so the widget grid gets `minmax(0, 1fr)` and
+         consumes exactly the height remaining between the hero (top)
+         and Quick Links (bottom). Notifications + awaiting-review
+         banners sit above the widget grid when present; they don't
+         shrink the flexible middle row (they simply reduce it). */}
+      <div
+        className="md:hidden grid h-full"
+        style={{
+          gridTemplateRows: "auto auto auto minmax(0, 1fr) auto auto",
+        }}
+        data-testid="portal-mobile-column"
+      >
+        {/* Row 1 — hero (self-clamps to a dvh range). */}
+        <EmployeePortalHero
+          clubId={principal.clubId}
+          version={heroMedia?.sha256.slice(0, 12) ?? null}
+          hasImage={heroMedia !== null}
+          primaryColor={club?.primaryColor ?? null}
+          greetingName={displayName ?? "there"}
+          positionName={primaryRole.positionName}
+          clubTimezone={club?.timezone ?? null}
+        />
+        {/* Row 2 — welcome banner (auto). */}
+        <div className="px-4 pt-3">
+          <MobileWelcomeBanner clubName={clubName} />
+        </div>
+        {/* Row 3 — notifications when present (auto). */}
+        {activeNotifications.length > 0 && (
+          <section
+            className="space-y-2 px-4 pt-2"
+            data-testid="portal-home-notifications"
+            aria-label="Notifications"
+          >
+            {activeNotifications.map((n) => (
+              <HomeNotificationBar
+                key={n.key}
+                notificationKey={n.key}
+                tone={n.tone}
+                message={n.message}
+                actionLabel={n.actionLabel}
+                actionHref={n.actionHref}
+                dismissAction={dismissHomeNotificationAction}
+              />
+            ))}
+          </section>
+        )}
+        {/* Empty div for row 3 when no notifications so row 4 lands
+           on minmax(0,1fr) consistently. */}
+        {activeNotifications.length === 0 && <div aria-hidden="true" />}
+        {/* Row 4 — widget grid, FLEXIBLE. Distributes any remaining
+           vertical space across 3 rows of 2 cards. */}
+        <div className="px-4 pt-3 min-h-0" data-testid="portal-mobile-widgets-region">
+          <MobileWidgetGrid widgets={mobileWidgets} />
+        </div>
+        {/* Row 5 — Quick Links (auto). */}
+        <div className="px-4 pt-3">
+          <MobileQuickLinks />
+        </div>
+        {/* Row 6 — bottom padding + optional awaiting-review banner.
+           The banner is rare (SUBMITTED-not-ACTIVE only). When present
+           it wraps under Quick Links with restrained bottom spacing so
+           it never pushes into the bottom-nav territory. */}
+        <div className="px-4 pt-3 pb-3">
+          {awaitingReview && (
+            <section
+              className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3"
+              data-testid="portal-home-awaiting-review"
+            >
+              <p className="text-sm text-emerald-900">
+                <strong>Your Club is reviewing your onboarding.</strong> You can use
+                the portal in the meantime — pay statements and schedule details
+                will appear once you&rsquo;ve been fully activated.
+              </p>
+            </section>
+          )}
+        </div>
       </div>
 
-      {activeNotifications.length > 0 && (
-        <section
-          className="space-y-2 md:space-y-2 px-4 md:px-0 pt-3 md:pt-0"
-          data-testid="portal-home-notifications"
-          aria-label="Notifications"
-        >
-          {activeNotifications.map((n) => (
-            <HomeNotificationBar
-              key={n.key}
-              notificationKey={n.key}
-              tone={n.tone}
-              message={n.message}
-              actionLabel={n.actionLabel}
-              actionHref={n.actionHref}
-              dismissAction={dismissHomeNotificationAction}
-            />
-          ))}
-        </section>
-      )}
-
-      {/* Mobile widget grid — reference-matched card treatment. */}
-      <div className="md:hidden px-4 pt-3 space-y-3">
-        <MobileWidgetGrid widgets={mobileWidgets} />
-        <MobileQuickLinks />
+      {/* ==================== DESKTOP PRESENTATION (md+) — UNCHANGED ==================== */}
+      <div className="hidden md:block space-y-4">
+        <EmployeePortalHero
+          clubId={principal.clubId}
+          version={heroMedia?.sha256.slice(0, 12) ?? null}
+          hasImage={heroMedia !== null}
+          primaryColor={club?.primaryColor ?? null}
+          greetingName={displayName ?? "there"}
+          positionName={primaryRole.positionName}
+          clubTimezone={club?.timezone ?? null}
+        />
+        {activeNotifications.length > 0 && (
+          <section
+            className="space-y-2"
+            data-testid="portal-home-notifications-desktop"
+            aria-label="Notifications"
+          >
+            {activeNotifications.map((n) => (
+              <HomeNotificationBar
+                key={n.key}
+                notificationKey={n.key}
+                tone={n.tone}
+                message={n.message}
+                actionLabel={n.actionLabel}
+                actionHref={n.actionHref}
+                dismissAction={dismissHomeNotificationAction}
+              />
+            ))}
+          </section>
+        )}
+        <div className="pt-2">
+          <HomeWidgetGrid widgets={widgets} />
+        </div>
+        {awaitingReview && (
+          <section
+            className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
+            data-testid="portal-home-awaiting-review-desktop"
+          >
+            <p className="text-sm text-emerald-900">
+              <strong>Your Club is reviewing your onboarding.</strong> You can use
+              the portal in the meantime — pay statements and schedule details
+              will appear once you&rsquo;ve been fully activated.
+            </p>
+          </section>
+        )}
       </div>
-
-      {/* Desktop widget grid — unchanged. */}
-      <div className="hidden md:block pt-2">
-        <HomeWidgetGrid widgets={widgets} />
-      </div>
-
-      {awaitingReview && (
-        <section
-          className="mx-4 md:mx-0 mt-3 md:mt-0 rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 md:px-6 py-3 md:py-4"
-          data-testid="portal-home-awaiting-review"
-        >
-          <p className="text-sm text-emerald-900">
-            <strong>Your Club is reviewing your onboarding.</strong> You can use
-            the portal in the meantime — pay statements and schedule details
-            will appear once you&rsquo;ve been fully activated.
-          </p>
-        </section>
-      )}
     </div>
   );
 }

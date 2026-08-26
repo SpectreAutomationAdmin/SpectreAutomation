@@ -129,16 +129,15 @@ export default function EmployeePortalMobileNav({
 
   return (
     <>
-      {/* Fixed mobile top bar — dark forest green, per the founder-
-          accepted mobile reference (2026-08-27). Composition:
-             hamburger · SPECTRE/AUTOMATION wordmark · | · Club name
-             (two lines) · avatar chevron
-          Height ~64 px; the layout compensates with pt-16 on <md.
-          The wordmark IS shown on the Employee Portal (employees are
-          Club staff, not external members — the Spectre brand
-          shielding memory applies to member-facing surfaces only). */}
+      {/* Mobile top bar — dark forest green, per the founder-accepted
+          mobile reference (2026-08-27). HR mobile-hotfix (2026-08-28):
+          NO LONGER fixed-positioned. Rendered as a normal grid row
+          inside the mobile app shell (see (authed)/layout.tsx); the
+          shell's CSS grid guarantees the bar sits at the top edge of
+          100dvh. Safe-area-inset-top is honoured via paddingTop so
+          the notch never overlaps the content. */}
       <header
-        className="md:hidden fixed inset-x-0 top-0 z-40 flex items-stretch bg-club-green-800 text-white shadow-sm"
+        className="md:hidden flex items-stretch bg-club-green-800 text-white shadow-sm w-full"
         data-testid="portal-mobile-topbar"
         style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
       >

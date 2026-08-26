@@ -91,7 +91,18 @@ export default function EmployeePortalHero({
         data-testid="portal-hero"
         data-has-image={hasImage ? "true" : "false"}
       >
-        <div className="relative h-52 w-full" style={hasImage ? undefined : fallbackStyle}>
+        {/* HR mobile-hotfix (2026-08-28) — hero height responds to
+           the available viewport height. On a 667 dvh short phone
+           the hero compresses to ~150 px, giving the dashboard the
+           room it needs; on a 932 dvh tall phone the hero grows to
+           ~215 px, matching the accepted reference. */}
+        <div
+          className="relative w-full"
+          style={{
+            ...(hasImage ? {} : fallbackStyle),
+            height: "clamp(150px, 22dvh, 215px)",
+          }}
+        >
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
