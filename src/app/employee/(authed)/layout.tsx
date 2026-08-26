@@ -106,7 +106,7 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
           proportions. `min-w-0` on the flex column so children can
           shrink correctly at narrower tablet widths.
           ============================================================ */}
-      <div className="hidden md:flex min-h-screen bg-club-cream">
+      <div className="hidden md:flex min-h-screen bg-club-cream" data-testid="portal-desktop-shell">
         <EmployeePortalSidebar />
         <div className="flex-1 flex flex-col min-w-0">
           <EmployeePortalTopBar
