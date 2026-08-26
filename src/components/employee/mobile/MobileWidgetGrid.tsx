@@ -36,29 +36,33 @@ export default function MobileWidgetGrid({ widgets }: { widgets: MobileWidget[] 
 
 function Card({ w }: { w: MobileWidget }) {
   const available = w.href !== null;
+  // HR mobile-hotfix (2026-08-27) — no ellipsis on card titles or
+  // descriptions. Titles wrap naturally ("Safety &" / "Training";
+  // "Clock In /" / "Out"). Descriptions wrap to 2 lines max via
+  // line-clamp-2 which is a soft cap — natural break is preferred.
   const body = (
     <div className="flex items-stretch h-full" data-widget-available={available ? "true" : "false"}>
-      <div className="flex items-center justify-center px-3 text-club-green-700 [&_svg]:h-7 [&_svg]:w-7" aria-hidden="true">
+      <div className="flex items-center justify-center pl-2.5 pr-2 text-club-green-700 [&_svg]:h-6 [&_svg]:w-6 shrink-0" aria-hidden="true">
         {w.icon}
       </div>
-      <div aria-hidden="true" className="my-3 w-px bg-club-gold/50" />
-      <div className="flex-1 min-w-0 flex flex-col justify-center px-3 py-3">
-        <div className="font-serif text-[15px] leading-tight text-club-ink truncate">
+      <div aria-hidden="true" className="my-2.5 w-px bg-club-gold/50 shrink-0" />
+      <div className="flex-1 min-w-0 flex flex-col justify-center pl-2.5 pr-1 py-2.5">
+        <div className="font-serif text-[14px] leading-[1.15] text-club-ink break-words">
           {w.title}
         </div>
-        <div className="text-[11px] text-stone-500 leading-snug line-clamp-2 mt-0.5">
+        <div className="text-[11px] text-stone-500 leading-snug mt-0.5 line-clamp-2">
           {w.description}
         </div>
       </div>
-      <div className="flex items-center pr-2 text-stone-400" aria-hidden="true">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <div className="flex items-center pr-1.5 text-stone-400 shrink-0" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 6 15 12 9 18" />
         </svg>
       </div>
     </div>
   );
   const cls =
-    "block rounded-xl border border-stone-200 bg-white min-h-[92px] shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
+    "block rounded-xl border border-stone-200 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
     (available
       ? "hover:border-stone-300 active:bg-stone-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700"
       : "cursor-default");

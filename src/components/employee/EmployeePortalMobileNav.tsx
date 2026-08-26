@@ -171,9 +171,12 @@ export default function EmployeePortalMobileNav({
         </div>
         {/* Account menu — trigger button lives inside the header, but the
             EmployeePortalUserMenu component styles it as a circular
-            avatar. Wrap it in a slot with a gold ring so the trigger
-            matches the reference framing. */}
-        <div className="flex items-center pr-3 [&_[data-testid='portal-user-menu-trigger']]:!ring-2 [&_[data-testid='portal-user-menu-trigger']]:!ring-club-gold/60 [&_[data-testid='portal-user-menu-trigger']]:rounded-full [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85 [&_[data-testid='portal-topbar-name']]:hidden [&_[data-testid='portal-topbar-employee-number']]:hidden">
+            avatar. Restrained gold ring (ring-1 at 40% opacity) so the
+            avatar reads as a subtle framed photo, not a gold pill.
+            The user-menu component's own text (display name +
+            employee number) is hidden on mobile — only the circular
+            photo + chevron remain. */}
+        <div className="flex items-center pr-2 [&_[data-testid='portal-user-menu-trigger']]:!ring-1 [&_[data-testid='portal-user-menu-trigger']]:!ring-club-gold/40 [&_[data-testid='portal-user-menu-trigger']]:rounded-full [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85 [&_[data-testid='portal-topbar-name']]:hidden [&_[data-testid='portal-topbar-employee-number']]:hidden [&_[data-testid='portal-user-menu-photo']]:!h-8 [&_[data-testid='portal-user-menu-photo']]:!w-8 [&_[data-testid='portal-user-menu-initials']]:!h-8 [&_[data-testid='portal-user-menu-initials']]:!w-8">
           <EmployeePortalUserMenu
             displayName={displayName}
             employeeNumber={employeeNumber}

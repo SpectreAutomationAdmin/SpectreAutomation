@@ -131,9 +131,11 @@ export default function EmployeePortalHero({
               data-testid="portal-hero-weather"
               aria-label="Local weather (approximate)"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="8" cy="12" r="3.2" />
-                <path d="M14 14a4 4 0 1 0 3-6.6" />
+              {/* Sun-behind-cloud — matches the accepted reference. */}
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="17" cy="8" r="3.2" />
+                <path d="M14.7 10.5a4.5 4.5 0 0 0-8.7 1.5" />
+                <path d="M6 12a4 4 0 1 0 0 8h10a3.5 3.5 0 0 0 0-7" />
               </svg>
               <span className="tabular-nums">22°</span>
               <span className="text-white/80">Calgary</span>
