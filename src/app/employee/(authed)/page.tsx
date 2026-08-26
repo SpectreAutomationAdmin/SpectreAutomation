@@ -46,6 +46,13 @@ import { dismissHomeNotificationAction } from "./_home/_actions";
 import MobileWelcomeBanner from "@/components/employee/mobile/MobileWelcomeBanner";
 import MobileWidgetGrid, { type MobileWidget } from "@/components/employee/mobile/MobileWidgetGrid";
 import MobileQuickLinks from "@/components/employee/mobile/MobileQuickLinks";
+// HR mobile-hotfix continuation (2026-08-28) — accepted desktop
+// reference components. Rendered under md+ only; the mobile shell
+// takes over at <md.
+import DesktopWidgetGrid, { type DesktopWidget } from "@/components/employee/desktop/DesktopWidgetGrid";
+import DesktopAnnouncementsCard from "@/components/employee/desktop/DesktopAnnouncementsCard";
+import DesktopQuickLinksCard from "@/components/employee/desktop/DesktopQuickLinksCard";
+import DesktopFooter from "@/components/employee/desktop/DesktopFooter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -255,6 +262,19 @@ export default async function EmployeePortalHome() {
     { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
   ];
 
+  // HR mobile-hotfix continuation (2026-08-28) — desktop 3×2 grid.
+  // Order per the accepted desktop reference: row 1 (Scheduling /
+  // Paystubs / Time Off), row 2 (Forms / Safety & Training /
+  // Clock In / Out). Same routes + labels as mobile.
+  const desktopWidgets: DesktopWidget[] = [
+    { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
+    { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
+    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconClock />, tourTarget: "time-off" },
+    { key: "forms", title: "Forms", description: "Complete and manage forms", href: null, icon: <IconForms />, tourTarget: "forms" },
+    { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
+  ];
+
   // Club-name for the mobile welcome banner. Uses the same resolved
   // Club row the hero uses — never hard-coded to Coulee Ridge.
   const clubName = await prisma.club.findFirst({
@@ -345,8 +365,13 @@ export default async function EmployeePortalHome() {
         </div>
       </div>
 
-      {/* ==================== DESKTOP PRESENTATION (md+) — UNCHANGED ==================== */}
-      <div className="hidden md:block space-y-4">
+      {/* ==================== DESKTOP PRESENTATION (md+) ====================
+         HR mobile-hotfix continuation (2026-08-28) — rebuilt to the
+         accepted desktop reference. Full-bleed hero + two-column
+         dashboard (main + right rail) + subtle footer. Old
+         icon-centric grid replaced with the 3×2 card layout that
+         mirrors the accepted mobile card language. */}
+      <div className="hidden md:block">
         <EmployeePortalHero
           clubId={principal.clubId}
           version={heroMedia?.sha256.slice(0, 12) ?? null}
@@ -356,40 +381,54 @@ export default async function EmployeePortalHome() {
           positionName={primaryRole.positionName}
           clubTimezone={club?.timezone ?? null}
         />
-        {activeNotifications.length > 0 && (
-          <section
-            className="space-y-2"
-            data-testid="portal-home-notifications-desktop"
-            aria-label="Notifications"
-          >
-            {activeNotifications.map((n) => (
-              <HomeNotificationBar
-                key={n.key}
-                notificationKey={n.key}
-                tone={n.tone}
-                message={n.message}
-                actionLabel={n.actionLabel}
-                actionHref={n.actionHref}
-                dismissAction={dismissHomeNotificationAction}
-              />
-            ))}
-          </section>
-        )}
-        <div className="pt-2">
-          <HomeWidgetGrid widgets={widgets} />
+        <div className="px-10 py-8 grid gap-6 min-w-0" style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}>
+          {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
+          <div className="min-w-0 space-y-4">
+            <div data-testid="portal-desktop-welcome-banner-slot">
+              <MobileWelcomeBanner clubName={clubName} />
+            </div>
+            {activeNotifications.length > 0 && (
+              <section
+                className="space-y-2"
+                data-testid="portal-home-notifications-desktop"
+                aria-label="Notifications"
+              >
+                {activeNotifications.map((n) => (
+                  <HomeNotificationBar
+                    key={n.key}
+                    notificationKey={n.key}
+                    tone={n.tone}
+                    message={n.message}
+                    actionLabel={n.actionLabel}
+                    actionHref={n.actionHref}
+                    dismissAction={dismissHomeNotificationAction}
+                  />
+                ))}
+              </section>
+            )}
+            <DesktopWidgetGrid widgets={desktopWidgets} />
+            {awaitingReview && (
+              <section
+                className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
+                data-testid="portal-home-awaiting-review-desktop"
+              >
+                <p className="text-sm text-emerald-900">
+                  <strong>Your Club is reviewing your onboarding.</strong> You can use
+                  the portal in the meantime — pay statements and schedule details
+                  will appear once you&rsquo;ve been fully activated.
+                </p>
+              </section>
+            )}
+          </div>
+          {/* RIGHT RAIL — announcements + quick links */}
+          <div className="min-w-0 space-y-4">
+            <DesktopAnnouncementsCard
+              items={[]}
+            />
+            <DesktopQuickLinksCard />
+          </div>
         </div>
-        {awaitingReview && (
-          <section
-            className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-6 py-4"
-            data-testid="portal-home-awaiting-review-desktop"
-          >
-            <p className="text-sm text-emerald-900">
-              <strong>Your Club is reviewing your onboarding.</strong> You can use
-              the portal in the meantime — pay statements and schedule details
-              will appear once you&rsquo;ve been fully activated.
-            </p>
-          </section>
-        )}
+        <DesktopFooter clubName={clubName} year={2026} />
       </div>
     </div>
   );

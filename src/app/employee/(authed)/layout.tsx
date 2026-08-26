@@ -97,21 +97,27 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
   return (
     <>
       {/* ============================================================
-          DESKTOP SHELL (md+ only) — UNCHANGED from the pre-hotfix
-          layout. Sidebar + main content column with the workspace
-          top bar. Renders normal document flow.
+          DESKTOP SHELL (md+ only) — HR mobile-hotfix continuation
+          (2026-08-28) rebuilt to the accepted desktop reference:
+          dark green Spectre chrome (sidebar + top header form one
+          continuous band), full-bleed hero + main content region
+          against a warm-cream background. No max-width cap — the
+          page.tsx desktop branch supplies its own content-column
+          proportions. `min-w-0` on the flex column so children can
+          shrink correctly at narrower tablet widths.
           ============================================================ */}
-      <div className="hidden md:flex min-h-screen bg-stone-50">
+      <div className="hidden md:flex min-h-screen bg-club-cream">
         <EmployeePortalSidebar />
         <div className="flex-1 flex flex-col min-w-0">
           <EmployeePortalTopBar
             clubName={clubName}
             displayName={displayName}
+            givenName={givenName}
             employeeNumber={employee.employeeNumber}
             hasPhoto={hasPhoto}
             photoVersion={photoVersion}
           />
-          <main className="flex-1 px-10 py-10 max-w-6xl w-full">
+          <main className="flex-1 min-w-0">
             {children}
           </main>
         </div>

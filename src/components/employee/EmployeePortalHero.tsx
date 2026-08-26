@@ -155,13 +155,22 @@ export default function EmployeePortalHero({
         </div>
       </section>
 
-      {/* -------------------- DESKTOP HERO (>= md) — unchanged -------------------- */}
+      {/* -------------------- DESKTOP HERO (>= md) --------------------
+         HR mobile-hotfix continuation (2026-08-28) — rebuilt to the
+         accepted desktop reference. Full-bleed image spanning from
+         the sidebar edge to the right viewport edge, no card border/
+         radius, EMPLOYEE PORTAL rule under the greeting, sun-behind-
+         cloud weather pill lower-right. Position label ("Controller"
+         etc.) intentionally removed per the accepted spec. */}
       <section
-        className="hidden md:block relative overflow-hidden rounded-lg border border-stone-200"
+        className="hidden md:block relative overflow-hidden"
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        <div className="relative h-56 lg:h-72 w-full" style={hasImage ? undefined : fallbackStyle}>
+        <div className="relative w-full" style={{
+          ...(hasImage ? {} : fallbackStyle),
+          height: "clamp(240px, 30vh, 340px)",
+        }}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -174,19 +183,34 @@ export default function EmployeePortalHero({
             className="absolute inset-0"
             style={{
               background: hasImage
-                ? "linear-gradient(180deg, transparent 40%, rgba(15, 20, 15, 0.55) 100%)"
+                ? "linear-gradient(180deg, rgba(15,20,15,0.15) 0%, transparent 45%, rgba(15,20,15,0.4) 100%)"
                 : "linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)",
             }}
           />
-          <div className="absolute inset-x-0 bottom-0 px-8 pb-6">
-            <p className="font-serif text-3xl leading-tight text-white drop-shadow-sm">
+          <div className="absolute inset-0 flex flex-col justify-end px-10 pb-8">
+            <p className="font-serif text-4xl leading-[1.05] text-white drop-shadow-sm">
               {greeting}, {greetingName}
             </p>
-            {positionName && (
-              <p className="mt-1 text-base text-white/85 drop-shadow-sm">
-                {positionName}
-              </p>
-            )}
+            <div className="mt-3 flex items-center gap-3 text-white/95">
+              <span aria-hidden="true" className="h-px w-8 bg-white/75" />
+              <span className="text-[11px] tracking-[0.32em]">EMPLOYEE PORTAL</span>
+              <span aria-hidden="true" className="h-px w-8 bg-white/75" />
+            </div>
+          </div>
+          <div className="absolute bottom-5 right-5 pointer-events-none">
+            <div
+              className="inline-flex items-center gap-2 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-3.5 py-1.5 text-[12px] font-medium ring-1 ring-white/15"
+              data-testid="portal-hero-weather-desktop"
+              aria-label="Local weather (approximate)"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="17" cy="8" r="3.2" />
+                <path d="M14.7 10.5a4.5 4.5 0 0 0-8.7 1.5" />
+                <path d="M6 12a4 4 0 1 0 0 8h10a3.5 3.5 0 0 0 0-7" />
+              </svg>
+              <span className="tabular-nums">22°</span>
+              <span className="text-white/80">Calgary</span>
+            </div>
           </div>
         </div>
       </section>
