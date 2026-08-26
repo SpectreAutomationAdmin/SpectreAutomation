@@ -1,6 +1,9 @@
 "use client";
 
 // HR-2B.5 §7-9 — Employee Portal login form.
+// HR mobile-hotfix (2026-08-25) — username changed from Employee
+// number to email address per founder decision. Password field is
+// unchanged; existing bcrypt credentials remain valid.
 
 import { useState } from "react";
 
@@ -14,17 +17,18 @@ export default function EmployeeLoginForm({
   return (
     <form action={action} className="space-y-4" noValidate>
       <div>
-        <label className="label" htmlFor="employeeNumber">Employee number</label>
+        <label className="label" htmlFor="email">Email address</label>
         <input
-          id="employeeNumber"
-          name="employeeNumber"
-          type="text"
-          className="input font-mono"
+          id="email"
+          name="email"
+          type="email"
+          className="input"
           autoComplete="username"
+          inputMode="email"
           required
-          maxLength={40}
-          placeholder="E-00142"
-          data-testid="employee-login-number"
+          maxLength={254}
+          placeholder="you@example.com"
+          data-testid="employee-login-email"
         />
       </div>
       <div>

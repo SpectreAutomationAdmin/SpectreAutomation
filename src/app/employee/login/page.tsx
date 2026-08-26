@@ -46,7 +46,7 @@ export default async function EmployeePortalLogin({
             Employee Portal
           </h1>
           <p className="mt-1 text-sm text-stone-500">
-            Sign in with your employee number.
+            Sign in with your email address.
           </p>
         </header>
 

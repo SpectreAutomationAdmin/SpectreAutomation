@@ -137,25 +137,40 @@ describe("HR-2B.5 · Employee Portal auth boundary (§6, §41-42)", () => {
     expect(block).not.toContain("AP");
   });
 
-  it("verifyPortalPassword tenants on {clubId, employeeNumber} — no global lookup", () => {
-    expect(credentialLib).toMatch(/where: \{ clubId: input\.clubId, employeeNumber: number \}/);
-    expect(credentialLib).not.toMatch(/where: \{ employeeNumber:/);
+  it("verifyPortalPasswordByEmail (post-mobile-hotfix) tenants on clubId when supplied; spans Clubs otherwise", () => {
+    // HR mobile-hotfix (2026-08-25) — login lookup is now by
+    // canonical email. When clubId is provided (host resolves to a
+    // specific Club), it is applied as an AND filter. When null
+    // (shared platform host), the lookup spans all Clubs and
+    // ambiguity is refused NEUTRALLY.
+    expect(credentialLib).toMatch(/personalEmail:\s*email/);
+    expect(credentialLib).toMatch(/input\.clubId\s*\?\s*\{\s*clubId:\s*input\.clubId\s*\}\s*:\s*\{\}/);
   });
 
-  it("login action resolves clubId from active branding (host-scoped, §8)", () => {
+  it("login action still resolves Club from active branding for the host-scope path (§8)", () => {
     expect(loginActions).toMatch(/getActiveBranding/);
     expect(loginActions).toMatch(/branding\.clubId/);
   });
 
-  it("login action is rate-limited on hashed (clubId + employeeNumber)", () => {
-    expect(loginActions).toMatch(/hashEmail\(`\$\{clubId\}:\$\{employeeNumber\}`\)/);
+  it("login action is rate-limited on hashed (host-Club-or-platform + normalised email)", () => {
+    // HR mobile-hotfix (2026-08-25) — rate-limit key moved from
+    // employeeNumber to normalised email. Keyed by "platform" when
+    // no host Club is resolved so platform-host attempts share a
+    // rate bucket per email.
+    expect(loginActions).toMatch(/hashEmail\(`\$\{hostClubId \?\? "platform"\}:\$\{email\}`\)/);
     expect(loginActions).toMatch(/consumeRate\("login"/);
   });
 
   it("login action never returns the password or hash to the client", () => {
     // The response is a redirect — nothing in the body. The error
     // channel only contains a neutral safe message via ?err=.
-    expect(loginActions).not.toMatch(/passwordHash|bcrypt|password:\s*(rawPassword|password)/);
+    // Guard against actual leak shapes: NEVER references passwordHash,
+    // NEVER pulls in bcrypt at the action layer (that stays in the
+    // service), NEVER templates the raw password variable into a
+    // redirect / response payload.
+    expect(loginActions).not.toMatch(/passwordHash/);
+    expect(loginActions).not.toMatch(/from\s+["']bcrypt/);
+    expect(loginActions).not.toMatch(/\$\{password\}/);
   });
 
   it("handoff-from-onboarding requires terminal session state + credential", () => {

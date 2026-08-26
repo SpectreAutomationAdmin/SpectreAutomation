@@ -240,7 +240,11 @@ export async function updateSelfIdentity(
       }
       normalised[key] = value;
     } else if (key === "personalEmail") {
-      const emailValue = value === "" ? null : value;
+      // HR mobile-hotfix (2026-08-25) — canonical email is the portal
+      // login identifier, so normalise to lowercase at every write
+      // path. Storing lowercase makes the case-sensitive login lookup
+      // portable across Postgres + SQLite.
+      const emailValue = value == null || value === "" ? null : value.toLowerCase();
       if (emailValue !== null) {
         if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(emailValue)) {
           throw new ValidationError([{ path: key, message: "personalEmail must be a valid email address" }]);

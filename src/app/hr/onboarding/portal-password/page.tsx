@@ -33,6 +33,7 @@ export default async function PortalPasswordStep() {
       employeeNumber: true,
       firstName: true,
       preferredName: true,
+      personalEmail: true,
     },
   });
   if (!employee) redirect("/hr/onboarding/expired");
@@ -51,18 +52,44 @@ export default async function PortalPasswordStep() {
       subhead="Create the password you'll use to sign into your employee portal after onboarding is complete."
     >
       <article className="rounded-lg border border-stone-200 bg-white px-6 py-8 md:px-10 md:py-10">
-        <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-4 py-4">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Employee number</p>
-          <p
-            className="mt-1 font-mono text-2xl text-stone-900"
-            data-testid="portal-employee-number"
-          >
-            {employee.employeeNumber}
-          </p>
-          <p className="mt-2 text-sm text-stone-500">
-            This is your permanent username for the employee portal. You&rsquo;ll use it
-            with the password you create below to sign in.
-          </p>
+        {/* HR mobile-hotfix (2026-08-25) — Employee number is still
+           displayed for reference (payroll, timekeeping, admin
+           search) but it is NOT the portal username. Sign-in
+           identifier is the employee's email address. */}
+        <div className="mb-6 rounded-md border border-stone-200 bg-stone-50 px-4 py-4 space-y-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Employee number</p>
+            <p
+              className="mt-1 font-mono text-2xl text-stone-900"
+              data-testid="portal-employee-number"
+            >
+              {employee.employeeNumber}
+            </p>
+            <p className="mt-1 text-xs text-stone-500">
+              For payroll and Club records. This is not your portal sign-in.
+            </p>
+          </div>
+          {employee.personalEmail && (
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Portal sign-in</p>
+              <p
+                className="mt-1 text-lg text-stone-900"
+                data-testid="portal-sign-in-email"
+              >
+                {employee.personalEmail}
+              </p>
+              <p className="mt-1 text-sm text-stone-500">
+                You will sign in to the Employee Portal using your email address
+                and the password you create below.
+              </p>
+            </div>
+          )}
+          {!employee.personalEmail && (
+            <p className="text-sm text-stone-500">
+              You will sign in to the Employee Portal using your email address
+              and the password you create below.
+            </p>
+          )}
         </div>
 
         {hasExisting && (

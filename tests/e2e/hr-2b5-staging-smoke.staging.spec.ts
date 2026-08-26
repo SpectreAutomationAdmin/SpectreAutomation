@@ -23,13 +23,15 @@ test.describe("HR-2B.5 · Staging smoke", () => {
   test("Employee Portal login page renders with Club branding (no Spectre wordmark)", async ({ page, baseURL }) => {
     // Unauthenticated — portal login is a public page.
     await page.goto("/employee/login", { waitUntil: "domcontentloaded" });
-    // The form renders.
-    await expect(page.locator('[data-testid="employee-login-number"]')).toBeVisible({ timeout: 20_000 });
+    // The form renders. HR mobile-hotfix (2026-08-25) — login
+    // identifier is email, not employee number.
+    await expect(page.locator('[data-testid="employee-login-email"]')).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-testid="employee-login-password"]')).toBeVisible();
     await expect(page.locator('[data-testid="employee-login-submit"]')).toBeVisible();
-    // Employee number placeholder shows the E-xxxxx format.
-    const placeholder = await page.locator('[data-testid="employee-login-number"]').getAttribute("placeholder");
-    expect(placeholder).toMatch(/^E-/);
+    // Email placeholder + input type=email.
+    const emailInput = page.locator('[data-testid="employee-login-email"]');
+    expect(await emailInput.getAttribute("type")).toBe("email");
+    expect(await emailInput.getAttribute("placeholder")).toMatch(/@/);
     await page.screenshot({ path: path.join(OUT, "staging-01-employee-login.png"), fullPage: true });
   });
 
@@ -45,7 +47,8 @@ test.describe("HR-2B.5 · Staging smoke", () => {
 
   test("Wrong-credentials login returns a neutral error (§9 no enumeration)", async ({ page }) => {
     await page.goto("/employee/login");
-    await page.locator('[data-testid="employee-login-number"]').fill("E-99999");
+    // HR mobile-hotfix (2026-08-25) — login by email.
+    await page.locator('[data-testid="employee-login-email"]').fill("nobody-here@example.com");
     await page.locator('[data-testid="employee-login-password"]').fill("obviously-wrong-password");
     // Do NOT wait for a specific URL — the login action redirects
     // BACK to /employee/login with ?err=... which is still /login.

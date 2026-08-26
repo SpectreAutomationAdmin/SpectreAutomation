@@ -96,7 +96,8 @@ test.describe("HR mobile-hotfix · staging authenticated regression", () => {
     });
     const page = await context.newPage();
     await page.goto("/employee/login");
-    await expect(page.locator("[data-testid=\"employee-login-number\"]")).toBeVisible({ timeout: 20_000 });
+    // HR mobile-hotfix (2026-08-25) — email replaces employee number as login identifier.
+    await expect(page.locator("[data-testid=\"employee-login-email\"]")).toBeVisible({ timeout: 20_000 });
     const overflow = await page.evaluate(() =>
       document.documentElement.scrollWidth - window.innerWidth,
     );

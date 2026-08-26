@@ -1,31 +1,43 @@
 // HR-2B.5 §7-9, §31 (2026-08-19) — Employee Portal login actions.
 //
+// HR mobile-hotfix (2026-08-25) — the founder-accepted username has
+// changed from `employeeNumber` to canonical `personalEmail`. Login
+// action is now email-driven; existing bcrypt passwords are preserved
+// (`verifyPortalPasswordByEmail` reuses the same credential row).
+//
 // Two server actions:
 //   - employeePortalLoginAction: form-driven sign-in from /employee/login.
 //   - handoffFromOnboardingAction: consumed by /employee/login/handoff-from-onboarding
 //     to stamp the permanent employee cookie right after the employee's
 //     Submit on the onboarding Review page (§31).
 //
-// Club is resolved from the current request host (`getActiveBranding()`
-// →  `resolveClubByHost`) so cross-club logins with the same employee
-// number can't succeed (§8). The verifyPortalPassword service is the
-// second defence — it always tenants by clubId + employeeNumber.
+// Club resolution: the host is inspected first (via getActiveBranding
+// → resolveClubByHost). When the host maps to a specific Club, the
+// login lookup is Club-scoped. When the host is the shared PLATFORM
+// host (staging.spectreautomation.com, or any host serving multiple
+// Clubs), the lookup spans all Clubs — the normalised email itself
+// identifies the employee. A same-email match spanning multiple Clubs
+// is refused NEUTRALLY (kind=ambiguous_across_clubs); the service
+// never silently picks a winner.
 
 "use server";
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { audit } from "@/lib/audit";
 import { hashEmail } from "@/lib/security/auth-guard";
 import { consumeRate } from "@/lib/security/rate-limit";
 import { RateLimitError } from "@/lib/errors";
 import { getRequestContext } from "@/lib/request-context";
-import { verifyPortalPassword } from "@/lib/hr/employee-portal-credential";
+import {
+  verifyPortalPasswordByEmail,
+  normaliseLoginEmail,
+} from "@/lib/hr/employee-portal-credential";
 import {
   establishEmployeePortalSession,
   destroyEmployeePortalSession,
 } from "@/lib/employee-portal-session";
+import { prisma } from "@/lib/prisma";
 import { getEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
 import { getActiveBranding } from "@/lib/branding";
 
@@ -34,36 +46,40 @@ function withErr(path: string, safeMessage: string): string {
   return `${path}${sep}err=${encodeURIComponent(safeMessage)}`;
 }
 
+/** Returns the host-resolved Club id, or null when the current host
+ *  is the shared platform host (a valid multi-Club login origin). */
 async function resolveClubForRequest(): Promise<string | null> {
   const branding = await getActiveBranding();
   return branding.clubId ?? null;
 }
 
+// Neutral message used for BOTH "unknown email/password" and
+// "ambiguous across Clubs". Same string keeps the failure branches
+// indistinguishable to the caller.
+const NEUTRAL_LOGIN_FAILURE =
+  "That email and password combination isn't recognised.";
+
 // ---------------------------------------------------------------------------
-// Primary login
+// Primary login (email + password)
 // ---------------------------------------------------------------------------
 
 export async function employeePortalLoginAction(formData: FormData): Promise<void> {
-  const employeeNumberRaw = (formData.get("employeeNumber") as string | null) ?? "";
+  const emailRaw = (formData.get("email") as string | null) ?? "";
   const password = (formData.get("password") as string | null) ?? "";
-  const employeeNumber = employeeNumberRaw.trim().toUpperCase();
+  const email = normaliseLoginEmail(emailRaw);
 
-  const clubId = await resolveClubForRequest();
-  if (!clubId) {
-    // Host doesn't map to a club — refuse without revealing whether
-    // any club exists here.
-    redirect(withErr("/employee/login", "Sign in is not available at this address."));
+  // Club scope from host (null when the platform host is the origin).
+  const hostClubId = await resolveClubForRequest();
+
+  if (!email || !password) {
+    redirect(withErr("/employee/login", "Please enter your email address and password."));
   }
 
-  if (!employeeNumber || !password) {
-    redirect(withErr("/employee/login", "Please enter your employee number and password."));
-  }
-
-  // Rate-limit per (clubId + employeeNumber) — one composite key,
-  // hashed so log dumps don't leak the raw pair.
-  const key = hashEmail(`${clubId}:${employeeNumber}`);
+  // Rate-limit per (host-Club-or-platform + normalised email). Hashed
+  // so log dumps don't leak the raw pair.
+  const rateKey = hashEmail(`${hostClubId ?? "platform"}:${email}`);
   try {
-    await consumeRate("login", key);
+    await consumeRate("login", rateKey);
   } catch (err) {
     if (err instanceof RateLimitError) {
       redirect(withErr("/employee/login", "Too many attempts. Please try again shortly."));
@@ -71,19 +87,35 @@ export async function employeePortalLoginAction(formData: FormData): Promise<voi
     throw err;
   }
 
-  const result = await verifyPortalPassword({ clubId: clubId!, employeeNumber, password });
+  const result = await verifyPortalPasswordByEmail({
+    clubId: hostClubId,
+    email,
+    password,
+  });
   const ctx = await getRequestContext();
 
-  if (!result) {
-    // Neutral message — no enumeration signal (§9).
+  if (result.kind === "not_recognised" || result.kind === "ambiguous_across_clubs") {
+    // Same audit shape + neutral message for BOTH failure modes so
+    // no enumeration signal leaks between "no such email" vs
+    // "email matched more than one Club" vs "wrong password". The
+    // audit entry uses a hash of the email so a compromised log
+    // stream cannot enumerate valid emails.
     await audit(null, {
       action: "employee_portal.login.failure",
       entityType: "EmployeePortalCredential",
-      entityId: `${clubId}:${employeeNumber}`,
-      clubId: clubId!,
-      meta: { ip: ctx?.ip, userAgent: ctx?.userAgent },
+      // Entity-id carries only the emailHash — no raw email + no
+      // discrimination between the two failure modes.
+      entityId: `hash:${hashEmail(email)}`,
+      clubId: hostClubId ?? "platform",
+      meta: {
+        ip: ctx?.ip, userAgent: ctx?.userAgent,
+        // The failure kind IS logged so operators debugging genuine
+        // Club-ambiguity can see it in the audit stream, but never
+        // reaches the browser response.
+        failureKind: result.kind,
+      },
     });
-    redirect(withErr("/employee/login", "That employee number and password combination isn't recognised."));
+    redirect(withErr("/employee/login", NEUTRAL_LOGIN_FAILURE));
   }
 
   await establishEmployeePortalSession({

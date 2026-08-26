@@ -71,10 +71,13 @@ export default async function OnboardingCompletePage() {
           anything else here.
         </p>
         <p className="mt-3 text-base text-stone-700 leading-relaxed">
-          Your employee portal is ready. Sign in any time using your
-          employee number and the password you just created.
+          Your employee portal is ready. Sign in any time using your email
+          address and the password you just created.
         </p>
 
+        {/* HR mobile-hotfix (2026-08-25) — Employee number is shown
+           for reference (payroll, Club records) but is NOT the
+           portal username. */}
         <div className="mt-6 rounded-md border border-stone-200 bg-stone-50 px-4 py-4">
           <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Employee number</p>
           <p
@@ -82,6 +85,9 @@ export default async function OnboardingCompletePage() {
             data-testid="complete-employee-number"
           >
             {employee.employeeNumber}
+          </p>
+          <p className="mt-1 text-xs text-stone-500">
+            For payroll and Club records — not your portal sign-in.
           </p>
         </div>
 

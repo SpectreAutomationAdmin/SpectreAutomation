@@ -145,7 +145,10 @@ export async function createEmployee(
       middleName: input.middleName ?? null,
       preferredName: input.preferredName ?? null,
       email: input.email ?? null,
-      personalEmail: input.personalEmail ?? null,
+      // HR mobile-hotfix (2026-08-25) — canonical email is the portal
+      // login identifier. Lowercased at every write path for portable
+      // case-insensitive lookup.
+      personalEmail: input.personalEmail ? input.personalEmail.trim().toLowerCase() : null,
       phone: input.phone ?? null,
       mobilePhone: input.mobilePhone ?? null,
       departmentId: input.departmentId ?? null,
@@ -270,7 +273,13 @@ export async function updateEmployee(
   if (input.middleName !== undefined) data.middleName = input.middleName;
   if (input.preferredName !== undefined) data.preferredName = input.preferredName;
   if (input.email !== undefined) data.email = input.email;
-  if (input.personalEmail !== undefined) data.personalEmail = input.personalEmail;
+  // HR mobile-hotfix (2026-08-25) — canonical email is the portal
+  // login identifier. Normalise trim+lowercase at admin edit too.
+  if (input.personalEmail !== undefined) {
+    data.personalEmail = input.personalEmail == null
+      ? null
+      : input.personalEmail.trim().toLowerCase();
+  }
   if (input.phone !== undefined) data.phone = input.phone;
   if (input.mobilePhone !== undefined) data.mobilePhone = input.mobilePhone;
   if (input.departmentId !== undefined) data.departmentId = input.departmentId;

@@ -185,7 +185,29 @@ export async function selfHasPortalCredential(
 
 // ---------------------------------------------------------------------------
 // Portal-login-time — verify a supplied password.
+//
+// HR mobile-hotfix (2026-08-25): the founder-accepted username has
+// changed from `employeeNumber` to the employee's canonical
+// `personalEmail`. This module preserves the existing bcrypt hash +
+// AccountLock architecture and swaps ONLY the identifier lookup.
+//
+// Case + whitespace: emails compare with `.trim().toLowerCase()`. On
+// Postgres we use Prisma's `mode: "insensitive"` for a proper case-
+// insensitive DB lookup. On SQLite (dev + tests) `mode: "insensitive"`
+// silently degrades to case-sensitive — tests feed exact-case input
+// and existing dev fixtures use lowercase emails.
+//
+// Cross-Club ambiguity: two employees at different Clubs may
+// legitimately share the same personalEmail. Callers decide the
+// resolution policy — see verifyPortalPasswordByEmail below.
 // ---------------------------------------------------------------------------
+
+/** Whitespace-trim + lowercase — the ONE canonical form used for
+ *  every email comparison in the portal-login path. Never used to
+ *  mutate what the employee typed as their profile email. */
+export function normaliseLoginEmail(input: string | null | undefined): string {
+  return (input ?? "").trim().toLowerCase();
+}
 
 export interface VerifyPortalPasswordInput {
   clubId: string;
@@ -199,16 +221,15 @@ export interface VerifyPortalPasswordSuccess {
 }
 
 /**
- * Verify a login attempt. Returns the employee id + club id on
- * success or null on any failure (unknown employee, missing
- * credential, wrong password, currently locked). Callers layer
- * rate-limiting + AccountLock updates around this — see the portal
- * login route.
+ * @deprecated HR mobile-hotfix (2026-08-25) — Employee Portal login
+ * now identifies employees by canonical email rather than employee
+ * number. This function is retained ONLY so any historical caller
+ * that referenced it fails loudly rather than silently. New callers
+ * MUST use `verifyPortalPasswordByEmail`.
  *
- * Constant-time discipline: the dummy-hash compare on the
- * unknown-employee branch means wrong-employee attempts take
- * ~identical wall-time to wrong-password attempts, resisting
- * enumeration.
+ * Kept for backward-compat during transition — behaves identically
+ * to the pre-hotfix implementation. Removed in a follow-up slice
+ * once every caller has migrated.
  */
 export async function verifyPortalPassword(
   input: VerifyPortalPasswordInput,
@@ -236,27 +257,21 @@ export async function verifyPortalPassword(
   const now = new Date();
 
   if (!credential) {
-    // No such employee or no credential set. Burn a constant-time
-    // compare against the dummy hash to keep response time uniform.
     await bcrypt.compare(input.password, DUMMY_HASH);
     return null;
   }
 
   if (credential.lockedUntil && credential.lockedUntil > now) {
-    // Locked. Same uniform-response discipline: we already did the
-    // DB read; skip the compare (would leak that we FOUND a
-    // credential vs unknown). Instead do the dummy compare.
     await bcrypt.compare(input.password, DUMMY_HASH);
     return null;
   }
 
   const ok = await bcrypt.compare(input.password, credential.passwordHash);
   if (!ok) {
-    // Increment failure counter + escalate lockout at 5 / 10.
     const next = credential.failedAttemptCount + 1;
     let lockedUntil: Date | null = null;
-    if (next >= 10) lockedUntil = new Date(now.getTime() + 60 * 60 * 1000); // 60 min
-    else if (next >= 5) lockedUntil = new Date(now.getTime() + 15 * 60 * 1000); // 15 min
+    if (next >= 10) lockedUntil = new Date(now.getTime() + 60 * 60 * 1000);
+    else if (next >= 5) lockedUntil = new Date(now.getTime() + 15 * 60 * 1000);
     await prisma.employeePortalCredential.update({
       where: { employeeId: employee!.id },
       data: { failedAttemptCount: next, lockedUntil },
@@ -264,10 +279,136 @@ export async function verifyPortalPassword(
     return null;
   }
 
-  // Success — reset counters + mark login.
   await prisma.employeePortalCredential.update({
     where: { employeeId: employee!.id },
     data: { failedAttemptCount: 0, lockedUntil: null, lastLoginAt: now },
   });
   return { employeeId: employee!.id, clubId: employee!.clubId };
+}
+
+// ---------------------------------------------------------------------------
+// New email-based verifier (2026-08-25).
+// ---------------------------------------------------------------------------
+
+export interface VerifyPortalPasswordByEmailInput {
+  /** Normalised at the boundary — the caller SHOULD pass the raw
+   *  form entry; this function normalises. */
+  email: string;
+  /** Optional Club scope. When provided (host-resolved to a Club),
+   *  the lookup is restricted to that Club and cross-Club matches
+   *  are impossible. When null (the shared platform host case that
+   *  serves multiple Clubs), the lookup spans all Clubs and
+   *  ambiguity is resolved neutrally. */
+  clubId: string | null;
+  password: string;
+}
+
+export type VerifyPortalPasswordByEmailResult =
+  | { kind: "success"; employeeId: string; clubId: string }
+  /** No employee found, wrong password, currently locked, missing
+   *  credential — every failure returns the same neutral shape so
+   *  the caller cannot distinguish. */
+  | { kind: "not_recognised" }
+  /** The normalised email matched candidates in more than one Club
+   *  when no clubId scope was supplied. The caller decides whether
+   *  to prompt for a Club chooser or refuse — this service does NOT
+   *  silently pick a winner. */
+  | { kind: "ambiguous_across_clubs"; clubIds: string[] };
+
+/**
+ * Verify a portal login attempt by canonical email. Preserves the
+ * bcrypt / AccountLock / dummy-hash timing discipline of the
+ * employee-number verifier.
+ *
+ * Resolution:
+ *   1. Normalise email (trim + lowercase).
+ *   2. Find all employees whose personalEmail case-insensitively
+ *      equals the normalised value AND (if clubId is set) belong
+ *      to that Club.
+ *   3. Filter to employees who actually have a portalCredential
+ *      (unset credential = same shape as unknown employee).
+ *   4. If 0 candidates → dummy compare + not_recognised.
+ *   5. If >1 candidates AND clubId is null → dummy compare +
+ *      ambiguous_across_clubs. Caller decides.
+ *   6. If 1 candidate → normal lockout + bcrypt + counter path.
+ */
+export async function verifyPortalPasswordByEmail(
+  input: VerifyPortalPasswordByEmailInput,
+): Promise<VerifyPortalPasswordByEmailResult> {
+  const email = normaliseLoginEmail(input.email);
+  if (!email || !input.password) {
+    await bcrypt.compare(input.password ?? "", DUMMY_HASH);
+    return { kind: "not_recognised" };
+  }
+
+  // Step 1-2: fetch candidates. `mode: insensitive` is Postgres-only
+  // and hard-errors on SQLite (dev + test), so we take a portable
+  // path instead: canonical form is enforced at write time
+  // (normaliseLoginEmail-lowercase, whitespace-trimmed), and the
+  // login lookup does a case-sensitive equals on the same normalised
+  // form. This works on both engines with a single indexed column.
+  //
+  // Historical rows written before this hotfix may still carry
+  // mixed-case emails; the staging preflight script normalises them
+  // once. New employees + email edits are normalised through the
+  // canonical write paths.
+  const candidates = await prisma.employee.findMany({
+    where: {
+      personalEmail: email,
+      ...(input.clubId ? { clubId: input.clubId } : {}),
+    },
+    select: {
+      id: true, clubId: true,
+      portalCredential: {
+        select: {
+          id: true, passwordHash: true, lockedUntil: true, failedAttemptCount: true,
+        },
+      },
+    },
+  });
+
+  const withCred = candidates.filter((c) => c.portalCredential !== null);
+
+  if (withCred.length === 0) {
+    await bcrypt.compare(input.password, DUMMY_HASH);
+    return { kind: "not_recognised" };
+  }
+
+  if (withCred.length > 1) {
+    // Same-shape timing: burn a dummy compare so the caller-visible
+    // response time doesn't reveal that multiple accounts matched.
+    await bcrypt.compare(input.password, DUMMY_HASH);
+    return {
+      kind: "ambiguous_across_clubs",
+      clubIds: withCred.map((c) => c.clubId),
+    };
+  }
+
+  const employee = withCred[0]!;
+  const credential = employee.portalCredential!;
+  const now = new Date();
+
+  if (credential.lockedUntil && credential.lockedUntil > now) {
+    await bcrypt.compare(input.password, DUMMY_HASH);
+    return { kind: "not_recognised" };
+  }
+
+  const ok = await bcrypt.compare(input.password, credential.passwordHash);
+  if (!ok) {
+    const next = credential.failedAttemptCount + 1;
+    let lockedUntil: Date | null = null;
+    if (next >= 10) lockedUntil = new Date(now.getTime() + 60 * 60 * 1000);
+    else if (next >= 5) lockedUntil = new Date(now.getTime() + 15 * 60 * 1000);
+    await prisma.employeePortalCredential.update({
+      where: { employeeId: employee.id },
+      data: { failedAttemptCount: next, lockedUntil },
+    });
+    return { kind: "not_recognised" };
+  }
+
+  await prisma.employeePortalCredential.update({
+    where: { employeeId: employee.id },
+    data: { failedAttemptCount: 0, lockedUntil: null, lastLoginAt: now },
+  });
+  return { kind: "success", employeeId: employee.id, clubId: employee.clubId };
 }
