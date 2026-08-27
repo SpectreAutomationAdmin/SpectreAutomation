@@ -186,17 +186,18 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Hero restore pass (2026-08-26) — the founder-supplied
-           previous-staging screenshot is now the canonical hero
-           reference. Height clamp restored to 220–300 px and
-           `object-position: 50% 36%` restored so the visible course
-           crop, horizon and foreground reproduce the approved
-           reference. Any vertical space needed for the one-screen
-           target is recovered from the dashboard rows below — the
-           hero is now frozen at these values. */}
+        {/* Hero historical restore (2026-08-26) — reproduce the
+           earliest-approved staging hero from commit 46cc6ad
+           (the founder's canonical reference screenshot):
+             height:          clamp(240px, 30vh, 340px)
+             object-position: default (50% 50%, centered)
+           This is the value that produced the "golf-hole green
+           centred in the composition" crop the founder approved.
+           No further speculative object-position tuning — this is
+           the historical CSS restored verbatim. */}
         <div className="relative w-full" style={{
           ...(hasImage ? {} : fallbackStyle),
-          height: "clamp(220px, 26vh, 300px)",
+          height: "clamp(240px, 30vh, 340px)",
         }}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -204,7 +205,6 @@ export default function EmployeePortalHero({
               src={imgSrc}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              style={{ objectPosition: "50% 36%" }}
             />
           )}
           <div

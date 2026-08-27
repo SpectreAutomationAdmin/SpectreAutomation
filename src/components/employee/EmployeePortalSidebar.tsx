@@ -122,7 +122,10 @@ const NAV_GROUPS: Array<{ items: NavItem[] }> = [
   },
   {
     items: [
-      { key: "forms", label: "Forms", href: null, icon: <IconForms />, tourTarget: "forms" },
+      // Uniform-terminology pass (2026-08-26) — user-facing label
+      // renamed Forms → Documents to match the widget grid. The
+      // `key`/testid remains stable for existing selectors.
+      { key: "forms", label: "Documents", href: null, icon: <IconForms />, tourTarget: "documents" },
       { key: "training", label: "Safety & Training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
       { key: "clock", label: "Clock In / Out", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
     ],

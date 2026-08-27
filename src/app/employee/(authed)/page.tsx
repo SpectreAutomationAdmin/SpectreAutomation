@@ -322,11 +322,11 @@ export default async function EmployeePortalHome() {
   // Order per the accepted desktop reference: row 1 (Scheduling /
   // Paystubs / Time Off), row 2 (Forms / Safety & Training /
   // Clock In / Out). Same routes + labels as mobile.
-  // Desktop 3-column grid, 7 destinations in display order (row 1 →
-  // 2 → 3). Year-end Tax Forms sits on its own row and spans all
-  // three columns so it reads as an intentional final row rather
-  // than an accidental orphan — `spanCols: 3` is passed through by
-  // `DesktopWidgetGrid`.
+  // Uniform-cards pass (2026-08-26) — Year-end Tax Forms is the
+  // same 1-column card as the other six. It sits in the first cell
+  // of row 3; the remaining two grid tracks stay empty — uniformity
+  // wins over "fill every cell". No `spanCols` — the widget grid
+  // uses a single card component for all seven destinations.
   const desktopWidgets: DesktopWidget[] = [
     { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
     { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
@@ -334,7 +334,7 @@ export default async function EmployeePortalHome() {
     { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
     { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
-    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms", spanCols: 3 },
+    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms" },
   ];
 
   // Club-name for the mobile welcome banner. Uses the same resolved
@@ -434,7 +434,10 @@ export default async function EmployeePortalHome() {
          dashboard (main + right rail) + subtle footer. Old
          icon-centric grid replaced with the 3×2 card layout that
          mirrors the accepted mobile card language. */}
-      <div className="hidden md:block" data-testid="portal-desktop-home">
+      {/* Footer-anchor pass (2026-08-26) — desktop shell is a flex
+         column so the footer (with `mt-auto`) rests at the viewport
+         bottom when content is shorter than the screen. */}
+      <div className="hidden md:flex md:flex-col md:flex-1 md:min-h-full" data-testid="portal-desktop-home">
         <EmployeePortalHero
           clubId={principal.clubId}
           version={heroMedia?.sha256.slice(0, 12) ?? null}

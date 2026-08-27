@@ -117,7 +117,11 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
             hasPhoto={hasPhoto}
             photoVersion={photoVersion}
           />
-          <main className="flex-1 min-w-0">
+          {/* Footer-anchor pass (2026-08-26) — main is a flex column
+             so the desktop `portal-desktop-home` wrapper can push
+             the footer to the bottom of the viewport via `mt-auto`
+             on the footer itself. Mobile shell is untouched. */}
+          <main className="flex-1 min-w-0 flex flex-col">
             {children}
           </main>
         </div>
