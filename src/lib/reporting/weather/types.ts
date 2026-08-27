@@ -104,6 +104,53 @@ export type WeatherProvenance = {
   queriedLongitude?: number;
 };
 
+/**
+ * Canonical current-conditions vocabulary. Every provider maps its
+ * source-specific weather code into ONE of these values so
+ * consumers (Employee Portal hero, member widget, future reporting
+ * "current" tiles) never branch on provider identity. Day / night
+ * variants are collapsed to a single symbol; `isDay` on
+ * `CurrentWeatherObservation` carries the day / night bit
+ * separately for icon rendering.
+ */
+export type CurrentWeatherCondition =
+  | "clear"
+  | "partly-cloudy"
+  | "cloudy"
+  | "fog"
+  | "drizzle"
+  | "rain"
+  | "showers"
+  | "snow"
+  | "thunderstorm"
+  | "unknown";
+
+/**
+ * Live current-conditions observation for a location. Independent
+ * of any reporting period — represents "now" as of `observedAt`.
+ * Consumers render the pre-picked `condition` symbol + `temperature`
+ * in the tenant's preferred unit; they never inspect provider-
+ * specific codes.
+ */
+export type CurrentWeatherObservation = {
+  /** Reading timestamp reported by the provider (ISO). */
+  observedAt: string;
+  /** Numeric temperature already converted to the tenant's unit. */
+  temperature: number;
+  /** Unit for `temperature` — mirrors `WeatherLocation.temperatureUnit`. */
+  temperatureUnit: "C" | "F";
+  /** Provider-agnostic condition symbol. */
+  condition: CurrentWeatherCondition;
+  /** True when the observation is a daytime reading. */
+  isDay: boolean;
+  /** Wind speed in mph. Null when the provider didn't return it. */
+  windMph: number | null;
+  /** Location label to render alongside the pill (e.g. "Calgary"). */
+  locationLabel: string;
+  /** Provenance — same shape as the monthly observation. */
+  provenance: WeatherProvenance;
+};
+
 /** The minimum contract every weather data source must satisfy. */
 export interface WeatherProvider {
   /** Stable identifier, e.g. "seed", "open-meteo". */
@@ -123,4 +170,17 @@ export interface WeatherProvider {
     location: WeatherLocation;
     period: { year: number; month: number; monthShort: string };
   }): Promise<MonthlyWeatherObservation | null>;
+
+  /**
+   * Fetch current conditions for the given location. Same coordinate
+   * preference as `fetchMonthly` — providers MUST return `null` when
+   * they cannot resolve the location. The high-level helper falls
+   * back to the seed provider when the primary returns null.
+   *
+   * Consumers: Employee Portal hero (desktop + mobile), Member portal
+   * weather widget, any future "current-conditions" reporting tile.
+   */
+  fetchCurrent(input: {
+    location: WeatherLocation;
+  }): Promise<CurrentWeatherObservation | null>;
 }

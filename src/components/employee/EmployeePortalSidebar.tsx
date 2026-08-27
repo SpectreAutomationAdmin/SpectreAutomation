@@ -151,8 +151,8 @@ export default function EmployeePortalSidebar() {
          (h-24) so the dark chrome reads as one continuous band. */}
       <div className="h-24 px-6 flex items-center border-b border-white/10 shrink-0">
         <div className="flex flex-col leading-tight" data-testid="portal-sidebar-wordmark">
-          <span className="font-serif text-[26px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
-          <span className="font-sans text-[12px] tracking-[0.36em] text-white/75 mt-1">AUTOMATION</span>
+          <span className="font-serif text-[30px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
+          <span className="font-sans text-[13px] tracking-[0.36em] text-white/75 mt-1">AUTOMATION</span>
         </div>
       </div>
       <nav className="flex-1 min-h-0 px-3 py-6 space-y-5 overflow-y-auto" data-testid="portal-nav" aria-label="Employee Portal navigation">

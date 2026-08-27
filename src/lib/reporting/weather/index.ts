@@ -14,6 +14,7 @@
 // effective source.
 
 import type {
+  CurrentWeatherObservation,
   MonthlyWeatherObservation,
   WeatherLocation,
   WeatherProvider,
@@ -23,6 +24,8 @@ import { createOpenMeteoProvider } from "./open-meteo-provider";
 import { resolveClubLocation, type ClubLike } from "./club-location";
 
 export type {
+  CurrentWeatherCondition,
+  CurrentWeatherObservation,
   MonthlyWeatherObservation,
   WeatherLocation,
   WeatherProvider,
@@ -75,4 +78,85 @@ export async function fetchObservation(input: {
     throw new Error("seed weather provider returned null — unreachable for any supported month");
   }
   return { location, observation: fallback };
+}
+
+// ---------------------------------------------------------------------------
+// Current conditions — Employee Portal hero + Member portal weather widget.
+//
+// Server-side TTL cache: keyed by rounded lat/lng so multiple clubs at the
+// same coordinates share a single upstream call. TTL is 15 minutes — the
+// hero pill doesn't need minute-by-minute freshness and Open-Meteo's free
+// tier appreciates the courtesy. Cache is per-Node-process; a rolling deploy
+// warms every replica on its first request.
+// ---------------------------------------------------------------------------
+
+const CURRENT_CACHE_TTL_MS = 15 * 60 * 1000;
+
+type CachedCurrent = {
+  observation: CurrentWeatherObservation;
+  location: WeatherLocation;
+  expiresAt: number;
+};
+
+const currentCache = new Map<string, CachedCurrent>();
+
+function currentCacheKey(location: WeatherLocation): string {
+  const lat = location.latitude?.toFixed(3) ?? "null";
+  const lng = location.longitude?.toFixed(3) ?? "null";
+  return `${lat},${lng},${location.temperatureUnit}`;
+}
+
+/**
+ * Canonical live current-conditions entry point used by the
+ * Employee Portal hero (desktop + mobile), the Member portal weather
+ * widget, and any future "current-conditions" reporting tile.
+ *
+ * The flow is the same as `fetchObservation`:
+ *   coordinates → primary provider → seed fallback → cached result.
+ *
+ * On uncached miss + primary failure the seed provider produces a
+ * deterministic observation so the portal is never empty. Callers
+ * receive `null` only when the location cannot be resolved AT ALL
+ * (which is unreachable today because `resolveClubLocation` always
+ * returns a location object; it may however carry null coordinates,
+ * in which case Open-Meteo is skipped and the seed provider fires).
+ */
+export async function getCurrentWeather(input: {
+  club: ClubLike;
+  providerId?: WeatherProviderId;
+  /** Test seam — bypasses the factory. */
+  provider?: WeatherProvider;
+  /** Test seam — bypasses the process cache. */
+  bypassCache?: boolean;
+}): Promise<{ location: WeatherLocation; observation: CurrentWeatherObservation } | null> {
+  const location = resolveClubLocation(input.club);
+  const key = currentCacheKey(location);
+  if (!input.bypassCache) {
+    const cached = currentCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { location: cached.location, observation: cached.observation };
+    }
+  }
+  const primary = input.provider ?? getWeatherProvider({ providerId: input.providerId });
+  let observation: CurrentWeatherObservation | null = null;
+  try {
+    observation = await primary.fetchCurrent({ location });
+  } catch {
+    observation = null;
+  }
+  if (!observation) {
+    observation = await seedWeatherProvider.fetchCurrent({ location });
+  }
+  if (!observation) return null;
+  currentCache.set(key, {
+    observation,
+    location,
+    expiresAt: Date.now() + CURRENT_CACHE_TTL_MS,
+  });
+  return { location, observation };
+}
+
+/** Test seam — drops the process-local current-weather cache. */
+export function _clearCurrentWeatherCacheForTests(): void {
+  currentCache.clear();
 }

@@ -8,6 +8,8 @@
 // returns so the panel never sees the data source.
 
 import type {
+  CurrentWeatherCondition,
+  CurrentWeatherObservation,
   MonthlyWeatherObservation,
   NormalisedWeatherEvent,
   WeatherLocation,
@@ -164,9 +166,60 @@ function buildSeedObservation(input: {
   };
 }
 
+/**
+ * Deterministic seed for `fetchCurrent`. Chooses a plausible
+ * condition + temperature for the current server month so the
+ * portal weather pill is never empty when the primary provider
+ * is unreachable. Callers see the same shape as the live provider.
+ */
+function buildSeedCurrent(location: WeatherLocation): CurrentWeatherObservation {
+  const now = new Date();
+  const month = now.getUTCMonth() + 1;
+  const climate = NW_CALGARY_BY_MONTH[month] ?? NW_CALGARY_BY_MONTH[5];
+  // Prefer the tenant's presentation unit. Climate seeds are in °F;
+  // convert to °C when the club is metric so consumers don't have
+  // to branch.
+  const temperatureF = climate.avgHighTempF;
+  const temperature =
+    location.temperatureUnit === "C"
+      ? Math.round(((temperatureF - 32) * 5) / 9)
+      : temperatureF;
+  const hour = now.getUTCHours();
+  const isDay = hour >= 12 && hour < 26; // Loose UTC-based day/night for the seed
+  // Pick a plausible condition proportional to the month's day counts.
+  const total = climate.daysSunny + climate.daysPartlyCloudy + climate.daysRain + climate.daysHighWind;
+  const dayOfMonth = now.getUTCDate();
+  const pick = ((dayOfMonth * 7) % total) + 1;
+  let condition: CurrentWeatherCondition;
+  if (pick <= climate.daysSunny) condition = "clear";
+  else if (pick <= climate.daysSunny + climate.daysPartlyCloudy) condition = "partly-cloudy";
+  else if (pick <= climate.daysSunny + climate.daysPartlyCloudy + climate.daysRain) condition = "rain";
+  else condition = "cloudy";
+  return {
+    observedAt: now.toISOString(),
+    temperature,
+    temperatureUnit: location.temperatureUnit,
+    condition,
+    isDay,
+    windMph: climate.avgWindMph,
+    locationLabel: location.city,
+    provenance: {
+      source: "seed-current",
+      precision: "seed",
+      attribution:
+        "Seeded current conditions — used when the live Open-Meteo provider is unreachable.",
+      queriedLatitude: location.latitude ?? undefined,
+      queriedLongitude: location.longitude ?? undefined,
+    },
+  };
+}
+
 export const seedWeatherProvider: WeatherProvider = {
   id: "seed",
   async fetchMonthly(input) {
     return buildSeedObservation(input);
+  },
+  async fetchCurrent(input) {
+    return buildSeedCurrent(input.location);
   },
 };

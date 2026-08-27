@@ -8,6 +8,8 @@
 
 import type { CSSProperties } from "react";
 import { greetingWordForInstant } from "@/lib/mission-control/local-time";
+import type { CurrentWeatherObservation } from "@/lib/reporting/weather";
+import WeatherIcon from "./WeatherIcon";
 
 interface Props {
   clubId: string;
@@ -33,6 +35,16 @@ interface Props {
    *  degrades gracefully — but the caller SHOULD always pass a
    *  real timezone. */
   clubTimezone: string | null;
+  /** Current weather observation for the tenant's coordinates. The
+   *  page.tsx server component resolves this through the canonical
+   *  `getCurrentWeather` helper (src/lib/reporting/weather) — the
+   *  same service that powers the monthly reporting package. Both
+   *  the mobile and desktop hero variants render from THIS one
+   *  observation, so the two surfaces always show the same live
+   *  temperature/condition. When null (never expected in practice —
+   *  the helper degrades to the seed provider before it returns
+   *  null), the pill renders a subtle neutral fallback. */
+  weather: CurrentWeatherObservation | null;
 }
 
 const DEFAULT_PRIMARY = "#2f5832";
@@ -45,7 +57,16 @@ export default function EmployeePortalHero({
   greetingName,
   positionName,
   clubTimezone,
+  weather,
 }: Props) {
+  // Rendered by both hero variants so a single provider truth reaches
+  // both the mobile pill and the desktop pill. Falls back to a neutral
+  // pill when weather is null (never expected — the shared helper
+  // degrades to the seed provider before returning null).
+  const weatherTemp = weather ? `${weather.temperature}°` : "—";
+  const weatherLabel = weather?.locationLabel ?? "";
+  const weatherCondition = weather?.condition ?? "unknown";
+  const weatherIsDay = weather?.isDay ?? true;
   const brand = primaryColor?.trim() || DEFAULT_PRIMARY;
   // Server-rendered greeting resolved against Club-local time.
   // Renders once per request; if the founder wants a live-updating
@@ -133,23 +154,21 @@ export default function EmployeePortalHero({
               <span aria-hidden="true" className="h-px w-6 bg-white/70" />
             </div>
           </div>
-          {/* Weather pill — presentation-only. Static value on this
-              first mobile ship; a live source would slot into
-              WeatherPillProps and replace the innerText. */}
+          {/* Weather pill — consumes the canonical live observation
+             the page.tsx server component resolves through
+             `getCurrentWeather` (same source as the monthly reporting
+             package). Icon + temperature + location label all flow
+             from the shared observation; no hardcoded literals. */}
           <div className="absolute bottom-3 right-3 pointer-events-none">
             <div
               className="inline-flex items-center gap-1.5 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-3 py-1.5 text-[11px] font-medium ring-1 ring-white/15"
               data-testid="portal-hero-weather"
-              aria-label="Local weather (approximate)"
+              aria-label={weather ? `Current weather in ${weatherLabel}: ${weatherTemp}` : "Weather unavailable"}
+              data-weather-source={weather?.provenance.source ?? "unavailable"}
             >
-              {/* Sun-behind-cloud — matches the accepted reference. */}
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="17" cy="8" r="3.2" />
-                <path d="M14.7 10.5a4.5 4.5 0 0 0-8.7 1.5" />
-                <path d="M6 12a4 4 0 1 0 0 8h10a3.5 3.5 0 0 0 0-7" />
-              </svg>
-              <span className="tabular-nums">22°</span>
-              <span className="text-white/80">Calgary</span>
+              <WeatherIcon condition={weatherCondition} isDay={weatherIsDay} size={15} />
+              <span className="tabular-nums">{weatherTemp}</span>
+              {weatherLabel && <span className="text-white/80">{weatherLabel}</span>}
             </div>
           </div>
         </div>
@@ -194,29 +213,29 @@ export default function EmployeePortalHero({
                 : "linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)",
             }}
           />
-          <div className="absolute inset-0 flex flex-col justify-end px-12 pb-8">
-            <p className="font-serif text-[46px] leading-[1.02] text-white drop-shadow-sm">
+          <div className="absolute inset-0 flex flex-col justify-end px-12 pb-9">
+            {/* Final scale-up pass (2026-08-26) — greeting 46 → 52 px
+               per direct reference comparison at 1536 × 1024. */}
+            <p className="font-serif text-[52px] leading-[1.02] text-white drop-shadow-sm">
               {greeting}, {greetingName}
             </p>
             <div className="mt-3 flex items-center gap-3 text-white/95">
-              <span aria-hidden="true" className="h-px w-12 bg-white/75" />
-              <span className="text-[12.5px] tracking-[0.38em]">EMPLOYEE PORTAL</span>
-              <span aria-hidden="true" className="h-px w-12 bg-white/75" />
+              <span aria-hidden="true" className="h-px w-14 bg-white/75" />
+              <span className="text-[13px] tracking-[0.4em]">EMPLOYEE PORTAL</span>
+              <span aria-hidden="true" className="h-px w-14 bg-white/75" />
             </div>
           </div>
           <div className="absolute bottom-6 right-6 pointer-events-none">
             <div
-              className="inline-flex items-center gap-2.5 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-4 py-2 text-[14px] font-medium ring-1 ring-white/15"
+              className="inline-flex items-center gap-2.5 rounded-full bg-black/45 text-white/95 backdrop-blur-sm px-4.5 py-2.5 text-[15px] font-medium ring-1 ring-white/15"
               data-testid="portal-hero-weather-desktop"
-              aria-label="Local weather (approximate)"
+              aria-label={weather ? `Current weather in ${weatherLabel}: ${weatherTemp}` : "Weather unavailable"}
+              data-weather-source={weather?.provenance.source ?? "unavailable"}
+              style={{ paddingLeft: "18px", paddingRight: "18px" }}
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="17" cy="8" r="3.2" />
-                <path d="M14.7 10.5a4.5 4.5 0 0 0-8.7 1.5" />
-                <path d="M6 12a4 4 0 1 0 0 8h10a3.5 3.5 0 0 0 0-7" />
-              </svg>
-              <span className="tabular-nums">22°</span>
-              <span className="text-white/80">Calgary</span>
+              <WeatherIcon condition={weatherCondition} isDay={weatherIsDay} size={22} />
+              <span className="tabular-nums">{weatherTemp}</span>
+              {weatherLabel && <span className="text-white/80">{weatherLabel}</span>}
             </div>
           </div>
         </div>

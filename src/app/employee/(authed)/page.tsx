@@ -35,6 +35,7 @@ import { prisma } from "@/lib/prisma";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstLogin";
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
+import { getCurrentWeather } from "@/lib/reporting/weather";
 import { getClubMedia } from "@/lib/club/media";
 import { buildHomeNotifications } from "@/lib/hr/home-notifications";
 import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
@@ -166,7 +167,17 @@ export default async function EmployeePortalHome() {
     getClubMedia(principal.clubId, "employee_portal_hero"),
     prisma.club.findFirst({
       where: { id: principal.clubId },
-      select: { primaryColor: true, timezone: true },
+      // HR mobile-hotfix (2026-08-26) — added name / slug / address /
+      // region so `getCurrentWeather` can resolve tenant coordinates
+      // through the canonical `resolveClubLocation` helper.
+      select: {
+        name: true,
+        slug: true,
+        address: true,
+        region: true,
+        primaryColor: true,
+        timezone: true,
+      },
     }),
     buildHomeNotifications(principal),
     // HR-2C Portal Parity (2026-08-24) — hero subtitle now derives
@@ -178,6 +189,22 @@ export default async function EmployeePortalHome() {
     getCurrentPrimaryRoleDisplay(principal.employeeId),
   ]);
   if (!employee) redirect("/employee/login");
+
+  // Resolve the tenant's current weather through the canonical shared
+  // weather service (src/lib/reporting/weather) — the same source the
+  // Monthly Reporting Package consumes. Falls back to the seed provider
+  // when Open-Meteo is unreachable, so this never blocks portal render.
+  const weatherResult = club
+    ? await getCurrentWeather({
+        club: {
+          name: club.name,
+          slug: club.slug,
+          address: club.address,
+          region: club.region,
+        },
+      }).catch(() => null)
+    : null;
+  const weather = weatherResult?.observation ?? null;
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
@@ -309,6 +336,7 @@ export default async function EmployeePortalHome() {
             greetingName={displayName ?? "there"}
             positionName={primaryRole.positionName}
             clubTimezone={club?.timezone ?? null}
+            weather={weather}
           />
         </div>
         {/* Welcome banner (auto). */}
@@ -381,6 +409,7 @@ export default async function EmployeePortalHome() {
           greetingName={displayName ?? "there"}
           positionName={primaryRole.positionName}
           clubTimezone={club?.timezone ?? null}
+            weather={weather}
         />
         {/* Final fidelity pass (2026-08-26) — main padding tightened
            on the left/right (`px-8`) so the welcome banner + widget

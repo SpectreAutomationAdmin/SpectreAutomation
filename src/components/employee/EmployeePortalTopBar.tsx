@@ -59,7 +59,7 @@ export default function EmployeePortalTopBar({
          scaled up per the accepted reference. */}
       <div className="flex items-center min-w-0 flex-1">
         <div
-          className="font-serif text-[19.5px] leading-[1.15] text-white/95 min-w-0"
+          className="font-serif text-[22px] leading-[1.15] text-white/95 min-w-0"
           data-testid="portal-header-club-name"
           title={clubName}
         >
@@ -106,15 +106,15 @@ export default function EmployeePortalTopBar({
             [&_[data-testid='portal-user-menu-trigger']]:!py-1
             [&_[data-testid='portal-user-menu-trigger']]:!px-1
             [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85
-            [&_[data-testid='portal-user-menu-photo']]:!h-12
-            [&_[data-testid='portal-user-menu-photo']]:!w-12
-            [&_[data-testid='portal-user-menu-initials']]:!h-12
-            [&_[data-testid='portal-user-menu-initials']]:!w-12
+            [&_[data-testid='portal-user-menu-photo']]:!h-[52px]
+            [&_[data-testid='portal-user-menu-photo']]:!w-[52px]
+            [&_[data-testid='portal-user-menu-initials']]:!h-[52px]
+            [&_[data-testid='portal-user-menu-initials']]:!w-[52px]
             [&_[data-testid='portal-user-menu-initials']]:!text-base
             [&_[data-testid='portal-user-menu-photo']]:!border-white/25
             [&_[data-testid='portal-user-menu-initials']]:!border-white/25
             [&_[data-testid='portal-topbar-name']]:!text-white
-            [&_[data-testid='portal-topbar-name']]:!text-[16px]
+            [&_[data-testid='portal-topbar-name']]:!text-[17px]
             [&_[data-testid='portal-topbar-employee-number']]:hidden
           "
         >

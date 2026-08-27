@@ -9,6 +9,8 @@ import {
   createOpenMeteoProvider,
   resolveClubLocation,
   fetchObservation,
+  getCurrentWeather,
+  _clearCurrentWeatherCacheForTests,
   temperatureUnitForRegion,
   type ClubLike,
   type WeatherLocation,
@@ -222,6 +224,7 @@ describe("fetchObservation — high-level entry point with seed fallback", () =>
         notableEvents: [],
         provenance: { source: "stub-primary", precision: "coordinate" as const },
       }),
+      fetchCurrent: vi.fn().mockResolvedValue(null),
     };
     const { location, observation } = await fetchObservation({
       club: SILVER_SPRINGS_CLUB,
@@ -241,6 +244,7 @@ describe("fetchObservation — high-level entry point with seed fallback", () =>
     const primary = {
       id: "stub-primary",
       fetchMonthly: vi.fn().mockResolvedValue(null),
+      fetchCurrent: vi.fn().mockResolvedValue(null),
     };
     const { observation } = await fetchObservation({
       club: SILVER_SPRINGS_CLUB,
@@ -251,5 +255,160 @@ describe("fetchObservation — high-level entry point with seed fallback", () =>
     // Seed provider supplied the answer.
     expect(observation.provenance.source).toBe("seed-nw-calgary");
     expect(observation.daysSunny).toBe(17);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Current conditions — Employee Portal + Member portal weather widget entry
+// point. Same coordinate-preference contract as `fetchMonthly`. Seed fallback
+// keeps the portal weather pill non-empty when Open-Meteo is unreachable.
+// ---------------------------------------------------------------------------
+describe("getCurrentWeather — canonical shared current-conditions entry point", () => {
+  it("uses the tenant's coordinates and the primary provider result when available", async () => {
+    _clearCurrentWeatherCacheForTests();
+    const primary = {
+      id: "stub-primary",
+      fetchMonthly: vi.fn().mockResolvedValue(null),
+      fetchCurrent: vi.fn().mockResolvedValue({
+        observedAt: "2026-08-26T13:00:00Z",
+        temperature: 22,
+        temperatureUnit: "C" as const,
+        condition: "partly-cloudy" as const,
+        isDay: true,
+        windMph: 8,
+        locationLabel: "Calgary",
+        provenance: {
+          source: "stub-primary-current",
+          precision: "coordinate" as const,
+          queriedLatitude: 51.1078,
+          queriedLongitude: -114.1815,
+        },
+      }),
+    };
+    const result = await getCurrentWeather({
+      club: SILVER_SPRINGS_CLUB,
+      provider: primary,
+      bypassCache: true,
+    });
+    expect(primary.fetchCurrent).toHaveBeenCalledTimes(1);
+    expect(result?.observation.condition).toBe("partly-cloudy");
+    expect(result?.observation.temperature).toBe(22);
+    expect(result?.observation.locationLabel).toBe("Calgary");
+    // Coordinates flow from `resolveClubLocation` — never hardcoded.
+    expect(result?.location.latitude).toBeCloseTo(51.1078, 2);
+  });
+
+  it("falls back to the seed current provider when the primary returns null", async () => {
+    _clearCurrentWeatherCacheForTests();
+    const primary = {
+      id: "stub-primary",
+      fetchMonthly: vi.fn().mockResolvedValue(null),
+      fetchCurrent: vi.fn().mockResolvedValue(null),
+    };
+    const result = await getCurrentWeather({
+      club: SILVER_SPRINGS_CLUB,
+      provider: primary,
+      bypassCache: true,
+    });
+    expect(primary.fetchCurrent).toHaveBeenCalledTimes(1);
+    expect(result?.observation.provenance.source).toBe("seed-current");
+    // Silver Springs is metric.
+    expect(result?.observation.temperatureUnit).toBe("C");
+    expect(result?.observation.locationLabel).toBe("Calgary");
+  });
+
+  it("does not throw when the primary provider raises — portal must render", async () => {
+    _clearCurrentWeatherCacheForTests();
+    const primary = {
+      id: "stub-primary",
+      fetchMonthly: vi.fn().mockResolvedValue(null),
+      fetchCurrent: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    };
+    const result = await getCurrentWeather({
+      club: SILVER_SPRINGS_CLUB,
+      provider: primary,
+      bypassCache: true,
+    });
+    expect(result?.observation.provenance.source).toBe("seed-current");
+  });
+
+  it("caches the observation and does not re-hit the provider within the TTL window", async () => {
+    _clearCurrentWeatherCacheForTests();
+    const primary = {
+      id: "stub-primary",
+      fetchMonthly: vi.fn().mockResolvedValue(null),
+      fetchCurrent: vi.fn().mockResolvedValue({
+        observedAt: "2026-08-26T13:00:00Z",
+        temperature: 15,
+        temperatureUnit: "C" as const,
+        condition: "clear" as const,
+        isDay: true,
+        windMph: 5,
+        locationLabel: "Calgary",
+        provenance: { source: "stub-primary-current", precision: "coordinate" as const },
+      }),
+    };
+    await getCurrentWeather({ club: SILVER_SPRINGS_CLUB, provider: primary });
+    await getCurrentWeather({ club: SILVER_SPRINGS_CLUB, provider: primary });
+    await getCurrentWeather({ club: SILVER_SPRINGS_CLUB, provider: primary });
+    expect(primary.fetchCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it("open-meteo current — sends coordinates + returns a normalised observation", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        current: {
+          time: "2026-08-26T13:00",
+          temperature_2m: 21.7,
+          weather_code: 2,   // partly cloudy
+          wind_speed_10m: 8.4,
+          is_day: 1,
+        },
+      }),
+    });
+    const provider = createOpenMeteoProvider({ fetchFn: fetchSpy as unknown as typeof fetch });
+    const obs = await provider.fetchCurrent({
+      location: resolveClubLocation(SILVER_SPRINGS_CLUB),
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const url = String(fetchSpy.mock.calls[0]![0]);
+    expect(url).toContain("latitude=51.1078");
+    expect(url).toContain("longitude=-114.1815");
+    expect(url).toContain("current=temperature_2m");
+    expect(url).toContain("temperature_unit=celsius");
+    expect(obs?.condition).toBe("partly-cloudy");
+    expect(obs?.temperature).toBe(22);
+    expect(obs?.temperatureUnit).toBe("C");
+    expect(obs?.isDay).toBe(true);
+    expect(obs?.locationLabel).toBe("Calgary");
+    expect(obs?.provenance.source).toBe("open-meteo-forecast");
+  });
+
+  it("open-meteo current — returns null when the fetch throws", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const provider = createOpenMeteoProvider({ fetchFn: fetchSpy as unknown as typeof fetch });
+    const obs = await provider.fetchCurrent({
+      location: resolveClubLocation(SILVER_SPRINGS_CLUB),
+    });
+    expect(obs).toBeNull();
+  });
+
+  it("open-meteo current — returns null when the location has no coordinates", async () => {
+    const fetchSpy = vi.fn();
+    const provider = createOpenMeteoProvider({ fetchFn: fetchSpy as unknown as typeof fetch });
+    const obs = await provider.fetchCurrent({
+      location: {
+        latitude: null,
+        longitude: null,
+        city: "—",
+        region: "—",
+        label: "Unknown Club",
+        street: null,
+        temperatureUnit: "F",
+      },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(obs).toBeNull();
   });
 });

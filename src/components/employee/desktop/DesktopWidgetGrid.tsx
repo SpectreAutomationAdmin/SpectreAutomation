@@ -38,7 +38,7 @@ export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[
         // browser's remaining vertical space. Each card uses a fixed
         // `min-h-[160px]` so it holds the accepted proportion whether
         // the viewport is 768 px or 1080 px tall.
-        className="grid grid-cols-3 gap-5"
+        className="grid grid-cols-3 gap-6"
         style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
         data-testid="portal-desktop-widgets-grid"
       >
@@ -56,27 +56,27 @@ function Card({ w }: { w: DesktopWidget }) {
   const available = w.href !== null;
   const body = (
     <div className="flex items-stretch h-full" data-widget-available={available ? "true" : "false"}>
-      <div className="flex items-center justify-center pl-6 pr-5 text-club-green-700 [&_svg]:h-9 [&_svg]:w-9 shrink-0" aria-hidden="true">
+      <div className="flex items-center justify-center pl-7 pr-5 text-club-green-700 [&_svg]:h-10 [&_svg]:w-10 shrink-0" aria-hidden="true">
         {w.icon}
       </div>
-      <div aria-hidden="true" className="my-5 w-px bg-club-gold/65 shrink-0" />
-      <div className="flex-1 min-w-0 px-6 py-7">
-        <div className="font-serif text-[21px] leading-tight text-club-ink break-words">{w.title}</div>
-        <div className="text-[14px] text-stone-500 leading-snug mt-2 break-words">{w.description}</div>
+      <div aria-hidden="true" className="my-6 w-px bg-club-gold/65 shrink-0" />
+      <div className="flex-1 min-w-0 px-6 py-8">
+        <div className="font-serif text-[22px] leading-tight text-club-ink break-words">{w.title}</div>
+        <div className="text-[14.5px] text-stone-500 leading-snug mt-2 break-words">{w.description}</div>
       </div>
       <div className="flex items-center pr-6 text-stone-400 shrink-0" aria-hidden="true">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 6 15 12 9 18" />
         </svg>
       </div>
     </div>
   );
   const cls =
-    // Final fidelity pass — fixed 160-px card height so the six cards
-    // uniformly read as substantial self-service destinations,
-    // independent of viewport height. Subtle warm border + restrained
-    // shadow retained from the accepted reference.
-    "block min-h-[160px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
+    // Final scale-up pass (2026-08-26) — 180 px fixed card height per
+    // the accepted reference at 1536 × 1024. Uniform, viewport-
+    // independent; taller cards read as substantial self-service
+    // destinations rather than admin buttons.
+    "block min-h-[180px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
     (available
       ? "hover:border-stone-300 hover:shadow-[0_3px_8px_rgba(15,20,15,0.07)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700"
       : "cursor-default");
