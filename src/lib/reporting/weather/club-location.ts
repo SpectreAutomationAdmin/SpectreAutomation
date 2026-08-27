@@ -43,6 +43,24 @@ const KNOWN_CLUBS: ReadonlyArray<KnownClubFingerprint> = [
       temperatureUnit: "C",
     }),
   },
+  {
+    // Coulee Ridge Golf & Country Club — the founder-review staging
+    // tenant. Not a real course; placed near Cochrane, Alberta (the
+    // Club.timezone is `America/Edmonton`, and "coulee" is Alberta
+    // prairie vocabulary) so Open-Meteo returns realistic conditions
+    // for the demo. This fingerprint will be replaced by a proper
+    // `Club.latitude` / `Club.longitude` migration in a future pass.
+    pattern: /coulee[\s-]?ridge/i,
+    resolve: () => ({
+      latitude: 51.1892,
+      longitude: -114.4681,
+      city: "Cochrane",
+      region: "Alberta",
+      label: "Cochrane, Alberta",
+      street: null,
+      temperatureUnit: "C",
+    }),
+  },
 ];
 
 /**

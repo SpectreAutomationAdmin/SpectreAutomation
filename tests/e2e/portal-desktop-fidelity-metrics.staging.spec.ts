@@ -65,6 +65,11 @@ test.describe("Portal desktop — fidelity metrics", () => {
         const footer = scoped(shell, '[data-testid="portal-desktop-footer"]');
         const firstCard = document.querySelector(`${shell} [data-testid="portal-desktop-widget-scheduling"]`) as HTMLElement | null;
         const cardRect = firstCard ? firstCard.getBoundingClientRect() : null;
+        // Live weather proof — capture provenance + rendered text.
+        const weatherEl = document.querySelector(`${shell} [data-testid="portal-hero-weather-desktop"]`) as HTMLElement | null;
+        const weatherRect = weatherEl?.getBoundingClientRect() ?? null;
+        const weatherText = weatherEl?.textContent?.trim() ?? null;
+        const weatherSource = weatherEl?.getAttribute("data-weather-source") ?? null;
         return {
           headerHeight: header?.height ?? null,
           sidebarWidth: sidebar?.width ?? null,
@@ -84,6 +89,10 @@ test.describe("Portal desktop — fidelity metrics", () => {
           footerVisible: footer !== null,
           firstCardHeight: cardRect?.height ?? null,
           firstCardWidth: cardRect?.width ?? null,
+          weatherHeight: weatherRect?.height ?? null,
+          weatherWidth: weatherRect?.width ?? null,
+          weatherText,
+          weatherSource,
           viewportH: window.innerHeight,
           viewportW: window.innerWidth,
           docScrollW: document.documentElement.scrollWidth,
