@@ -10844,6 +10844,22 @@ model ClubMedia {
   uploadedByUserId String?
   uploadedAt       DateTime @default(now())
 
+  // HR portal hero framing (2026-08-26) — normalized focal point +
+  // zoom persisted per asset so tenant admins can position the hero
+  // photograph without a code change. Null = fall back to the
+  // Spectre default centered `object-position: 50% 50%` + zoom 1.0,
+  // which preserves current visual behavior for every existing row.
+  // Desktop and mobile are independent because the two surfaces
+  // have different aspect ratios.
+  desktopFocalX    Float?
+  desktopFocalY    Float?
+  desktopZoom      Float?
+  mobileFocalX     Float?
+  mobileFocalY     Float?
+  mobileZoom       Float?
+  framingUpdatedAt DateTime?
+  framingUpdatedBy String?
+
   @@unique([clubId, category])
   @@index([clubId])
 }

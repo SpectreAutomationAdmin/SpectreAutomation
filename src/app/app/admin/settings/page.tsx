@@ -6,7 +6,9 @@ import { getCurrentUser } from "@/lib/session";
 import { getActiveClubId } from "@/lib/active-club";
 import { ClubProfileForm, type SaveResult } from "./settings-client";
 import HeroImageUploader from "./HeroImageUploader";
-import { getClubMedia } from "@/lib/club/media";
+import HeroFramingEditor from "./HeroFramingEditor";
+import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
+import { DEFAULT_EMPLOYEE_PORTAL_HERO_FRAMING } from "@/lib/employee-portal/hero-framing";
 import { IconArrowRight } from "@/components/spectre/icons";
 
 // -----------------------------------------------------------------------------
@@ -73,9 +75,10 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
-  const [club, heroMedia] = await Promise.all([
+  const [club, heroMedia, heroFraming] = await Promise.all([
     prisma.club.findUnique({ where: { id: clubId } }),
     getClubMedia(clubId, "employee_portal_hero"),
+    getClubMediaFraming(clubId, "employee_portal_hero"),
   ]);
   if (!club) redirect("/app/admin");
 
@@ -205,6 +208,25 @@ export default async function SettingsPage() {
           initialVersion={heroMedia?.sha256.slice(0, 12) ?? null}
           primaryColor={club.primaryColor ?? "#2f5832"}
         />
+        {heroMedia !== null && (
+          // HR portal hero framing editor (2026-08-26) — appears only
+          // when an image exists so the admin has something to
+          // reposition. Shared renderer with the live portal via
+          // `heroImageStyle()` in `src/lib/employee-portal/hero-framing`.
+          <div className="mt-spectre-6 pt-spectre-6 border-t" style={{ borderColor: "var(--spectre-border-hairline)" }}>
+            <h3 className="font-serif text-lg mb-2 text-club-ink">Framing</h3>
+            <p className="text-sm text-stone-600 mb-4">
+              Drag the image to reposition it and use the zoom slider to
+              adjust. Desktop and Mobile framing are saved independently
+              — changes take effect immediately in the Employee Portal.
+            </p>
+            <HeroFramingEditor
+              clubId={club.id}
+              imageUrl={`/api/clubs/${club.id}/employee-portal-hero${heroMedia.sha256 ? `?v=${encodeURIComponent(heroMedia.sha256.slice(0, 12))}` : ""}`}
+              initialFraming={heroFraming ?? DEFAULT_EMPLOYEE_PORTAL_HERO_FRAMING}
+            />
+          </div>
+        )}
       </section>
 
       {/* =========================================================

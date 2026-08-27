@@ -36,7 +36,7 @@ import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstLogin";
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
 import { getCurrentWeather } from "@/lib/reporting/weather";
-import { getClubMedia } from "@/lib/club/media";
+import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import { buildHomeNotifications } from "@/lib/hr/home-notifications";
 import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
 import HomeNotificationBar from "./_home/HomeNotificationBar";
@@ -163,7 +163,7 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, club, notifications, primaryRole] = await Promise.all([
+  const [employee, heroMedia, heroFraming, club, notifications, primaryRole] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
       select: {
@@ -183,6 +183,7 @@ export default async function EmployeePortalHome() {
       },
     }),
     getClubMedia(principal.clubId, "employee_portal_hero"),
+    getClubMediaFraming(principal.clubId, "employee_portal_hero"),
     prisma.club.findFirst({
       where: { id: principal.clubId },
       // HR mobile-hotfix (2026-08-26) — added name / slug / address /
@@ -371,6 +372,7 @@ export default async function EmployeePortalHome() {
             positionName={primaryRole.positionName}
             clubTimezone={club?.timezone ?? null}
             weather={weather}
+            framing={heroFraming}
           />
         </div>
         {/* Welcome banner (auto). */}
@@ -447,6 +449,7 @@ export default async function EmployeePortalHome() {
           positionName={primaryRole.positionName}
           clubTimezone={club?.timezone ?? null}
             weather={weather}
+            framing={heroFraming}
         />
         {/* Density rebalance (2026-08-26) — outer padding tightened
            (`px-8 py-5`) with a compact-height reduction on ≤ 820 px

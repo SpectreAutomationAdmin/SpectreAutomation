@@ -9,6 +9,8 @@
 import type { CSSProperties } from "react";
 import { greetingWordForInstant } from "@/lib/mission-control/local-time";
 import type { CurrentWeatherObservation } from "@/lib/reporting/weather";
+import type { EmployeePortalHeroFraming } from "@/lib/employee-portal/hero-framing";
+import { DEFAULT_EMPLOYEE_PORTAL_HERO_FRAMING, heroImageStyle } from "@/lib/employee-portal/hero-framing";
 import WeatherIcon from "./WeatherIcon";
 
 interface Props {
@@ -45,6 +47,11 @@ interface Props {
    *  the helper degrades to the seed provider before it returns
    *  null), the pill renders a subtle neutral fallback. */
   weather: CurrentWeatherObservation | null;
+  /** Tenant-admin-controlled hero framing (desktop + mobile).
+   *  Optional — omit to use the Spectre default centered crop.
+   *  Loaded from the ClubMedia framing columns via
+   *  resolveStoredHeroFraming() in page.tsx. */
+  framing?: EmployeePortalHeroFraming | null;
 }
 
 const DEFAULT_PRIMARY = "#2f5832";
@@ -58,7 +65,11 @@ export default function EmployeePortalHero({
   positionName,
   clubTimezone,
   weather,
+  framing,
 }: Props) {
+  const heroFraming = framing ?? DEFAULT_EMPLOYEE_PORTAL_HERO_FRAMING;
+  const desktopImgStyle = heroImageStyle(heroFraming.desktop);
+  const mobileImgStyle = heroImageStyle(heroFraming.mobile);
   // Rendered by both hero variants so a single provider truth reaches
   // both the mobile pill and the desktop pill. Falls back to a neutral
   // pill when weather is null (never expected — the shared helper
@@ -129,8 +140,12 @@ export default function EmployeePortalHero({
             <img
               src={imgSrc}
               alt=""
-              className="absolute inset-0 h-full w-full object-cover"
+              className="absolute inset-0 h-full w-full"
+              style={mobileImgStyle as CSSProperties}
               data-testid="portal-hero-image"
+              data-framing-focal-x={heroFraming.mobile.focalX}
+              data-framing-focal-y={heroFraming.mobile.focalY}
+              data-framing-zoom={heroFraming.mobile.zoom}
             />
           )}
           <div
@@ -198,16 +213,11 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Reduce-height pass (2026-08-26) — the founder approved the
-           current hero's photographic framing (green centred, right
-           tree, bunkers). This pass ONLY shortens the container so
-           the full dashboard fits within a 1536 × 864 viewport.
-           `object-fit: cover` + default `object-position: 50% 50%`
-           are preserved, so the horizontal composition is unchanged
-           and only equal amounts of top + bottom are trimmed from
-           the visible image. Height uses a viewport-relative clamp
-           so 1366/1440/1536/1920 all render a proportionally
-           consistent hero without swinging the aspect. */}
+        {/* Framing-driven pass (2026-08-26) — height is stable via
+           the viewport-relative clamp; object-fit + object-position
+           now come from the shared heroImageStyle() helper so the
+           tenant admin controls the visible crop directly, not this
+           component. */}
         <div
           className="relative w-full"
           style={{
@@ -220,7 +230,12 @@ export default function EmployeePortalHero({
             <img
               src={imgSrc}
               alt=""
-              className="absolute inset-0 h-full w-full object-cover"
+              className="absolute inset-0 h-full w-full"
+              style={desktopImgStyle as CSSProperties}
+              data-testid="portal-hero-image-desktop"
+              data-framing-focal-x={heroFraming.desktop.focalX}
+              data-framing-focal-y={heroFraming.desktop.focalY}
+              data-framing-zoom={heroFraming.desktop.zoom}
             />
           )}
           <div
