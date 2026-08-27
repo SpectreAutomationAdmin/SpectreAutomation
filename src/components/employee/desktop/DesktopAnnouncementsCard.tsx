@@ -38,13 +38,21 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
          "Announcements" is rendered as the same serif heading used
          elsewhere in the right rail so accessibility, alignment, and
          the accepted card grammar are preserved. */}
-      <header className="flex items-center gap-2.5 pb-2.5">
+      {/* Centered `[Fore! logo] Announcements` group (2026-08-27
+         header refinement). `justify-center` on the flex row so the
+         mark + heading behave as one horizontally-centred unit above
+         the empty-state / announcement list. `overflow-visible` on
+         the img guards against any browser sub-pixel clipping of the
+         logo's F flourish or exclamation mark, even though the SVG
+         viewBox itself now carries generous padding around both. */}
+      <header className="flex items-center justify-center gap-3 pb-2.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/brand/fore.svg"
           alt=""
           aria-hidden="true"
           className="h-9 w-auto block"
+          style={{ overflow: "visible" }}
           data-testid="portal-desktop-announcements-fore-logo"
         />
         <h2 className="font-serif text-[19px] text-club-ink leading-none">Announcements</h2>
