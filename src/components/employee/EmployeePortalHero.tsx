@@ -198,15 +198,23 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Aspect-matched hero pass — the pre-redesign screenshot's
-           hero rendered at approximately 3.5:1 aspect (~1400 × 400
-           at the founder's ~1917-wide viewport). At the current
-           dark-sidebar shell the content area is narrower, so a
-           straight `h-72` (288 px) crops the same source photo into
-           a wider slice that pushes the green off-centre. Locking
-           the container to `aspect-[7/2]` (3.5:1) reproduces the
-           earlier composition regardless of viewport width. */}
-        <div className="relative w-full aspect-[7/2]" style={hasImage ? undefined : fallbackStyle}>
+        {/* Reduce-height pass (2026-08-26) — the founder approved the
+           current hero's photographic framing (green centred, right
+           tree, bunkers). This pass ONLY shortens the container so
+           the full dashboard fits within a 1536 × 864 viewport.
+           `object-fit: cover` + default `object-position: 50% 50%`
+           are preserved, so the horizontal composition is unchanged
+           and only equal amounts of top + bottom are trimmed from
+           the visible image. Height uses a viewport-relative clamp
+           so 1366/1440/1536/1920 all render a proportionally
+           consistent hero without swinging the aspect. */}
+        <div
+          className="relative w-full"
+          style={{
+            ...(hasImage ? {} : fallbackStyle),
+            height: "clamp(200px, 24vh, 280px)",
+          }}
+        >
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
