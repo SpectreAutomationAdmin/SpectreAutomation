@@ -213,18 +213,17 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Framing-driven pass (2026-08-26) — height is stable via
-           the viewport-relative clamp; object-fit + object-position
-           now come from the shared heroImageStyle() helper so the
-           tenant admin controls the visible crop directly, not this
-           component. */}
-        <div
-          className="relative w-full"
-          style={{
-            ...(hasImage ? {} : fallbackStyle),
-            height: "clamp(170px, 21vh, 260px)",
-          }}
-        >
+        {/* b17309f surgical restore (2026-08-26) — the founder-
+           approved desktop hero uses `aspect-[7/2]` (3.5:1) so the
+           same source photo produces the accepted composition (green
+           centred, right tree, bunkers) at every viewport width.
+           Vertical scrolling at shorter viewports is now accepted;
+           do NOT replace this with a viewport-relative clamp again.
+           Image `object-cover` + default `object-position: 50% 50%`
+           (via heroImageStyle(DEFAULT_HERO_FRAMING)) is byte-
+           equivalent to the b17309f rendering; admin-saved framing
+           can still override for a specific tenant. */}
+        <div className="relative w-full aspect-[7/2]" style={hasImage ? undefined : fallbackStyle}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
