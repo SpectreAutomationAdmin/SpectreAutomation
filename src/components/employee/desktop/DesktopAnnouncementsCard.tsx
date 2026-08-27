@@ -32,19 +32,22 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
       data-testid="portal-desktop-announcements"
       aria-label="Announcements"
     >
-      {/* Fore! Employee Announcements branding (2026-08-27). The
-         retro-script Fore! logo replaces the generic megaphone +
-         "Announcements" heading; the accessible name is preserved
-         via the SVG's `aria-labelledby` title so screen readers
-         still announce the panel purpose. */}
-      <header className="pb-2.5">
+      {/* Fore! Announcements header refinement (2026-08-27).
+         Compact right-rail header pattern: [Fore! logo] Announcements.
+         The Fore! wordmark replaces the megaphone icon; the word
+         "Announcements" is rendered as the same serif heading used
+         elsewhere in the right rail so accessibility, alignment, and
+         the accepted card grammar are preserved. */}
+      <header className="flex items-center gap-2.5 pb-2.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/brand/fore-employee-announcements.svg"
-          alt="Fore! Employee Announcements"
-          className="block w-full max-w-[220px] h-auto"
+          src="/brand/fore.svg"
+          alt=""
+          aria-hidden="true"
+          className="h-7 w-auto block"
           data-testid="portal-desktop-announcements-fore-logo"
         />
+        <h2 className="font-serif text-[18px] text-club-ink leading-none">Announcements</h2>
       </header>
       {items.length === 0 ? (
         // Density rebalance — empty state remains intentionally
