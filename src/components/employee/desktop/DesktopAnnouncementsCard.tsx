@@ -51,7 +51,7 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
           src="/brand/fore.svg"
           alt=""
           aria-hidden="true"
-          className="h-9 w-auto block"
+          className="h-12 w-auto block"
           style={{ overflow: "visible" }}
           data-testid="portal-desktop-announcements-fore-logo"
         />
