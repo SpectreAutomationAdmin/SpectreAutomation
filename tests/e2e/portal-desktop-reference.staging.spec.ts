@@ -76,9 +76,11 @@ test.describe("Portal desktop — accepted reference reconstruction", () => {
       for (const k of ["scheduling", "paystubs", "time-off", "documents", "training", "clocking-in-out", "year-end-tax-forms"]) {
         await expect(grid.locator(`[data-testid="portal-desktop-widget-${k}"]`)).toBeVisible();
       }
-      // Documents label must have replaced Forms — no legacy label.
+      // Documents label must have replaced Forms — no legacy widget.
       await expect(grid.locator('[data-testid="portal-desktop-widget-documents"]')).toContainText("Documents");
-      await expect(grid.locator('text=Forms')).toHaveCount(0);
+      await expect(grid.locator('[data-testid="portal-desktop-widget-forms"]')).toHaveCount(0);
+      // And the new Year-end Tax Forms row is present.
+      await expect(grid.locator('[data-testid="portal-desktop-widget-year-end-tax-forms"]')).toContainText("Year-end Tax Forms");
       await expect(home.locator('[data-testid="portal-desktop-announcements"]')).toBeVisible();
       await expect(home.locator('[data-testid="portal-desktop-quick-links"]')).toBeVisible();
       await expect(home.locator('[data-testid="portal-desktop-footer"]')).toContainText(/All rights reserved/);
