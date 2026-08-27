@@ -411,18 +411,18 @@ export default async function EmployeePortalHome() {
           clubTimezone={club?.timezone ?? null}
             weather={weather}
         />
-        {/* Final fidelity pass (2026-08-26) — main padding tightened
-           on the left/right (`px-8`) so the welcome banner + widget
-           grid begin closer to the sidebar boundary and the right
-           rail no longer feels squeezed. Column ratio widened toward
-           the right rail (3fr/1fr ≈ 75/25 per the accepted reference
-           visual target). Vertical row-gap held generous. */}
+        {/* Density rebalance (2026-08-26) — outer padding trimmed
+           (`px-8 py-5`) and inter-block row-gap tightened (`space-y-4`
+           / `gap-6`) so the welcome banner + notifications + 3×2 grid
+           column fits vertically alongside the right rail in the
+           one-screen-fit target (1536×864). Column ratio held at
+           3fr/1fr (~75/25). */}
         <div
-          className="px-8 py-10 grid gap-8 min-w-0"
+          className="px-8 py-5 grid gap-6 min-w-0"
           style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}
         >
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
-          <div className="min-w-0 space-y-6">
+          <div className="min-w-0 space-y-4">
             <div data-testid="portal-desktop-welcome-banner-slot">
               <DesktopWelcomeBanner clubName={clubName} />
             </div>
@@ -459,9 +459,10 @@ export default async function EmployeePortalHome() {
               </section>
             )}
           </div>
-          {/* RIGHT RAIL — announcements + quick links. Larger row-gap
-             so the two panels breathe. */}
-          <div className="min-w-0 space-y-6">
+          {/* RIGHT RAIL — announcements + quick links. Row-gap
+             tightened for density rebalance; panels themselves keep
+             their compact-desktop treatment. */}
+          <div className="min-w-0 space-y-4">
             <DesktopAnnouncementsCard
               items={[]}
             />

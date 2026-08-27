@@ -186,15 +186,16 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Final fidelity pass (2026-08-26): hero height held near the
-           accepted reference; crop pushed further toward the horizon
-           (object-position 50% 36%) so the panoramic broadloom + sky
-           dominate and less of the near-foreground fills the frame.
-           Greeting reduced from 54 → 46 px (approx −15%) per the
-           direct reference comparison. */}
+        {/* Density rebalance (2026-08-26) — hero remains the desktop
+           statement piece. Crop pushed even higher (`object-position
+           50% 28%`) so more of the panorama, horizon and sky read
+           through. Height clamp trimmed at the ceiling so a shorter
+           1536×864 viewport can host both widget rows below without
+           scrolling, while wider viewports still get a cinematic
+           hero. */}
         <div className="relative w-full" style={{
           ...(hasImage ? {} : fallbackStyle),
-          height: "clamp(220px, 26vh, 300px)",
+          height: "clamp(200px, 24vh, 260px)",
         }}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -202,7 +203,7 @@ export default function EmployeePortalHero({
               src={imgSrc}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              style={{ objectPosition: "50% 36%" }}
+              style={{ objectPosition: "50% 28%" }}
             />
           )}
           <div
@@ -213,16 +214,16 @@ export default function EmployeePortalHero({
                 : "linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.25) 100%)",
             }}
           />
-          <div className="absolute inset-0 flex flex-col justify-end px-12 pb-9">
-            {/* Final scale-up pass (2026-08-26) — greeting 46 → 52 px
-               per direct reference comparison at 1536 × 1024. */}
-            <p className="font-serif text-[52px] leading-[1.02] text-white drop-shadow-sm">
+          <div className="absolute inset-0 flex flex-col justify-end px-12 pb-8">
+            {/* Density rebalance — greeting nudged 52 → 46 px so it
+               sits comfortably above the compacted dashboard. */}
+            <p className="font-serif text-[46px] leading-[1.02] text-white drop-shadow-sm">
               {greeting}, {greetingName}
             </p>
             <div className="mt-3 flex items-center gap-3 text-white/95">
-              <span aria-hidden="true" className="h-px w-14 bg-white/75" />
-              <span className="text-[13px] tracking-[0.4em]">EMPLOYEE PORTAL</span>
-              <span aria-hidden="true" className="h-px w-14 bg-white/75" />
+              <span aria-hidden="true" className="h-px w-12 bg-white/75" />
+              <span className="text-[12px] tracking-[0.38em]">EMPLOYEE PORTAL</span>
+              <span aria-hidden="true" className="h-px w-12 bg-white/75" />
             </div>
           </div>
           <div className="absolute bottom-6 right-6 pointer-events-none">

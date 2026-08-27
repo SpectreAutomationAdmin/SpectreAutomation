@@ -47,12 +47,11 @@ export default function EmployeePortalTopBar({
 }: Props) {
   const badge = unreadNotificationCount != null && unreadNotificationCount > 0;
   return (
-    // Fidelity pass (2026-08-26 final) — header height h-24 to give
-    // the SPECTRE/AUTOMATION wordmark (rendered in the sidebar band)
-    // and the tenant identity room to breathe. Reference reads as
-    // premium brand chrome, not a utility strip.
+    // Density rebalance (2026-08-26) — header trimmed h-24 → h-20 to
+    // recover vertical space for the one-screen-fit target. Branding
+    // sizes retained; only the vertical padding is smaller.
     <header
-      className="h-24 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
+      className="h-20 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
       data-testid="portal-header"
     >
       {/* Tenant identity — canonical current-Club name in two lines,
@@ -106,10 +105,10 @@ export default function EmployeePortalTopBar({
             [&_[data-testid='portal-user-menu-trigger']]:!py-1
             [&_[data-testid='portal-user-menu-trigger']]:!px-1
             [&_[data-testid='portal-user-menu-trigger']_svg]:text-white/85
-            [&_[data-testid='portal-user-menu-photo']]:!h-[52px]
-            [&_[data-testid='portal-user-menu-photo']]:!w-[52px]
-            [&_[data-testid='portal-user-menu-initials']]:!h-[52px]
-            [&_[data-testid='portal-user-menu-initials']]:!w-[52px]
+            [&_[data-testid='portal-user-menu-photo']]:!h-[46px]
+            [&_[data-testid='portal-user-menu-photo']]:!w-[46px]
+            [&_[data-testid='portal-user-menu-initials']]:!h-[46px]
+            [&_[data-testid='portal-user-menu-initials']]:!w-[46px]
             [&_[data-testid='portal-user-menu-initials']]:!text-base
             [&_[data-testid='portal-user-menu-photo']]:!border-white/25
             [&_[data-testid='portal-user-menu-initials']]:!border-white/25

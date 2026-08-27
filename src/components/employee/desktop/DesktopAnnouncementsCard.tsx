@@ -23,49 +23,46 @@ interface Props {
 
 export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: Props) {
   return (
-    // Fidelity pass (2026-08-26) — panel is scaled to feel like a
-    // proper dashboard module: larger outer padding, larger icon +
-    // heading, and a min-height so the panel keeps its accepted
-    // footprint even in the empty state (prevents Quick Links from
-    // floating upward when there are no announcements to render).
+    // Density rebalance (2026-08-26) — panel trimmed for the
+    // one-screen-fit target: p-6 → p-4, min-h 240 → 160. Still holds
+    // a substantial footprint so Quick Links doesn't float, but no
+    // longer reserves space equivalent to a two-item populated card.
     <section
-      className="rounded-2xl bg-club-cream border border-stone-200/60 p-6 min-h-[240px] flex flex-col"
+      className="rounded-2xl bg-club-cream border border-stone-200/60 p-4 min-h-[160px] flex flex-col"
       data-testid="portal-desktop-announcements"
       aria-label="Announcements"
     >
-      <header className="flex items-center gap-3 pb-4">
+      <header className="flex items-center gap-2.5 pb-2.5">
         <span className="text-club-green-700" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 10v4a1 1 0 0 0 1 1h3l7 4V5L8 9H5a1 1 0 0 0-1 1z" />
             <path d="M17 7.5a4.5 4.5 0 0 1 0 9" />
           </svg>
         </span>
-        <h2 className="font-serif text-[19px] text-club-ink">Announcements</h2>
+        <h2 className="font-serif text-[16px] text-club-ink">Announcements</h2>
       </header>
       {items.length === 0 ? (
-        // Final fidelity pass (2026-08-26) — the empty state is now
-        // intentionally composed rather than a bare paragraph floating
-        // inside a large panel. Subtle brass-outlined icon centred at
-        // top, then the neutral copy, then a thin muted rule so the
-        // panel reads as "designed for the moment when no announcements
-        // exist" instead of "unfinished".
+        // Density rebalance — empty state remains intentionally
+        // composed (medallion + copy) but is more compact so the
+        // panel doesn't consume more vertical space than a populated
+        // 1–2 row card would.
         <div
-          className="flex-1 flex flex-col items-center justify-center text-center px-4 py-6"
+          className="flex-1 flex flex-col items-center justify-center text-center px-2 py-2"
           data-testid="portal-desktop-announcements-empty"
         >
           <div
-            className="flex items-center justify-center h-11 w-11 rounded-full bg-club-gold/10 border border-club-gold/30 text-club-green-700"
+            className="flex items-center justify-center h-9 w-9 rounded-full bg-club-gold/10 border border-club-gold/30 text-club-green-700"
             aria-hidden="true"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
               <path d="M4 10v4a1 1 0 0 0 1 1h3l7 4V5L8 9H5a1 1 0 0 0-1 1z" />
               <path d="M17 7.5a4.5 4.5 0 0 1 0 9" />
             </svg>
           </div>
-          <p className="text-[13px] text-stone-600 leading-relaxed mt-3 max-w-[220px]">
+          <p className="text-[12.5px] text-stone-600 leading-snug mt-2 max-w-[220px]">
             No announcements right now.
           </p>
-          <p className="text-[12px] text-stone-500 leading-relaxed mt-1 max-w-[240px]">
+          <p className="text-[11.5px] text-stone-500 leading-snug mt-0.5 max-w-[240px]">
             When your Club posts new updates they&rsquo;ll appear here.
           </p>
         </div>

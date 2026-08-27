@@ -45,18 +45,19 @@ const KNOWN_CLUBS: ReadonlyArray<KnownClubFingerprint> = [
   },
   {
     // Coulee Ridge Golf & Country Club — the founder-review staging
-    // tenant. Not a real course; placed near Cochrane, Alberta (the
-    // Club.timezone is `America/Edmonton`, and "coulee" is Alberta
-    // prairie vocabulary) so Open-Meteo returns realistic conditions
-    // for the demo. This fingerprint will be replaced by a proper
-    // `Club.latitude` / `Club.longitude` migration in a future pass.
+    // tenant. Fictional course, canonically located in Drumheller,
+    // Alberta (Canadian badlands — coulees are the region's defining
+    // landscape feature). Coordinates below are central Drumheller,
+    // AB. Only tenant data lives here; this fingerprint pattern will
+    // be replaced by a proper `Club.latitude` / `Club.longitude`
+    // migration in a future pass.
     pattern: /coulee[\s-]?ridge/i,
     resolve: () => ({
-      latitude: 51.1892,
-      longitude: -114.4681,
-      city: "Cochrane",
+      latitude: 51.4636,
+      longitude: -112.7208,
+      city: "Drumheller",
       region: "Alberta",
-      label: "Cochrane, Alberta",
+      label: "Drumheller, Alberta",
       street: null,
       temperatureUnit: "C",
     }),
