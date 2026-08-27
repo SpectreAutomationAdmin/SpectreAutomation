@@ -44,10 +44,10 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
           src="/brand/fore.svg"
           alt=""
           aria-hidden="true"
-          className="h-7 w-auto block"
+          className="h-9 w-auto block"
           data-testid="portal-desktop-announcements-fore-logo"
         />
-        <h2 className="font-serif text-[18px] text-club-ink leading-none">Announcements</h2>
+        <h2 className="font-serif text-[19px] text-club-ink leading-none">Announcements</h2>
       </header>
       {items.length === 0 ? (
         // Density rebalance — empty state remains intentionally
