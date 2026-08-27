@@ -70,9 +70,15 @@ test.describe("Portal desktop — accepted reference reconstruction", () => {
       await expect(home.locator('[data-testid="portal-desktop-welcome-banner"]')).toBeVisible();
       const grid = home.locator('[data-testid="portal-desktop-widgets-grid"]');
       await expect(grid).toBeVisible();
-      for (const k of ["scheduling", "paystubs", "time-off", "forms", "training", "clocking-in-out"]) {
+      // HR portal fidelity pass (2026-08-27) — seven employee
+      // destinations, `forms` renamed to `documents`, seventh
+      // `year-end-tax-forms` card spans the row.
+      for (const k of ["scheduling", "paystubs", "time-off", "documents", "training", "clocking-in-out", "year-end-tax-forms"]) {
         await expect(grid.locator(`[data-testid="portal-desktop-widget-${k}"]`)).toBeVisible();
       }
+      // Documents label must have replaced Forms — no legacy label.
+      await expect(grid.locator('[data-testid="portal-desktop-widget-documents"]')).toContainText("Documents");
+      await expect(grid.locator('text=Forms')).toHaveCount(0);
       await expect(home.locator('[data-testid="portal-desktop-announcements"]')).toBeVisible();
       await expect(home.locator('[data-testid="portal-desktop-quick-links"]')).toBeVisible();
       await expect(home.locator('[data-testid="portal-desktop-footer"]')).toContainText(/All rights reserved/);

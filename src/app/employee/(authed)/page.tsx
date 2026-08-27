@@ -73,13 +73,31 @@ function IconCalendar() {
 }
 
 function IconPaystub() {
-  // Receipt-like rectangle with two ledger lines.
+  // HR portal fidelity pass (2026-08-27) — dollar symbol inside a
+  // circle. Reads clearly as "pay / money / payroll" independent of
+  // language. Outlined to match the rest of the Employee Portal
+  // icon family.
   return (
     <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M6 3h10l3 3v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
-      <path d="M16 3v3h3" />
-      <line x1="8" y1="12" x2="16" y2="12" />
-      <line x1="8" y1="16" x2="13" y2="16" />
+      <circle cx="12" cy="12" r="9" />
+      <path d="M15 8.5H10.5a2 2 0 0 0 0 4h3a2 2 0 0 1 0 4H9" />
+      <line x1="12" y1="6" x2="12" y2="8.5" />
+      <line x1="12" y1="16.5" x2="12" y2="19" />
+    </svg>
+  );
+}
+
+function IconTaxForm() {
+  // Financial / tax document — a document sheet with a dollar mark,
+  // visually distinguishable from the plain document icon used by
+  // the renamed Documents destination.
+  return (
+    <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M14 3v4h4" />
+      <path d="M13.5 11.5H10.5a1.4 1.4 0 0 0 0 2.8h2a1.4 1.4 0 0 1 0 2.8H9.5" />
+      <line x1="11.5" y1="10" x2="11.5" y2="11.5" />
+      <line x1="11.5" y1="17.1" x2="11.5" y2="18.6" />
     </svg>
   );
 }
@@ -281,26 +299,42 @@ export default async function EmployeePortalHome() {
   // labels + descriptions. Note "Time Off" (not "Time Off Requests")
   // on mobile per the reference. Routes are the same as the desktop
   // widget grid; unavailable destinations render as non-nav cards.
+  // HR portal fidelity pass (2026-08-27):
+  //   • Forms → Documents (user-facing label + description; route
+  //     preserved at /employee/forms for backwards compatibility)
+  //   • Time Off icon swapped to the suitcase
+  //   • Clock In / Out icon swapped to a clock face
+  //   • Paystubs icon swapped to dollar-in-circle
+  //   • Seventh destination "Year-end Tax Forms" added — no backend
+  //     yet, so it renders as an aria-disabled card (same treatment
+  //     as Time Off / Documents / Clock In / Out)
   const mobileWidgets: MobileWidget[] = [
     { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
     { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
-    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconClock />, tourTarget: "time-off" },
-    { key: "forms", title: "Forms", description: "Complete and manage forms", href: null, icon: <IconForms />, tourTarget: "forms" },
+    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
+    { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
+    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms", spanCols: 2 },
   ];
 
   // HR mobile-hotfix continuation (2026-08-28) — desktop 3×2 grid.
   // Order per the accepted desktop reference: row 1 (Scheduling /
   // Paystubs / Time Off), row 2 (Forms / Safety & Training /
   // Clock In / Out). Same routes + labels as mobile.
+  // Desktop 3-column grid, 7 destinations in display order (row 1 →
+  // 2 → 3). Year-end Tax Forms sits on its own row and spans all
+  // three columns so it reads as an intentional final row rather
+  // than an accidental orphan — `spanCols: 3` is passed through by
+  // `DesktopWidgetGrid`.
   const desktopWidgets: DesktopWidget[] = [
     { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
     { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
-    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconClock />, tourTarget: "time-off" },
-    { key: "forms", title: "Forms", description: "Complete and manage forms", href: null, icon: <IconForms />, tourTarget: "forms" },
+    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
+    { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
+    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms", spanCols: 3 },
   ];
 
   // Club-name for the mobile welcome banner. Uses the same resolved

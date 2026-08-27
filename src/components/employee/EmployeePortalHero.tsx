@@ -186,16 +186,17 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Density rebalance (2026-08-26) — hero remains the desktop
-           statement piece. Crop pushed even higher (`object-position
-           50% 28%`) so more of the panorama, horizon and sky read
-           through. Height clamp trimmed at the ceiling so a shorter
-           1536×864 viewport can host both widget rows below without
-           scrolling, while wider viewports still get a cinematic
-           hero. */}
+        {/* Hero restore pass (2026-08-26) — the founder-supplied
+           previous-staging screenshot is now the canonical hero
+           reference. Height clamp restored to 220–300 px and
+           `object-position: 50% 36%` restored so the visible course
+           crop, horizon and foreground reproduce the approved
+           reference. Any vertical space needed for the one-screen
+           target is recovered from the dashboard rows below — the
+           hero is now frozen at these values. */}
         <div className="relative w-full" style={{
           ...(hasImage ? {} : fallbackStyle),
-          height: "clamp(200px, 24vh, 260px)",
+          height: "clamp(220px, 26vh, 300px)",
         }}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -203,7 +204,7 @@ export default function EmployeePortalHero({
               src={imgSrc}
               alt=""
               className="absolute inset-0 h-full w-full object-cover"
-              style={{ objectPosition: "50% 28%" }}
+              style={{ objectPosition: "50% 36%" }}
             />
           )}
           <div

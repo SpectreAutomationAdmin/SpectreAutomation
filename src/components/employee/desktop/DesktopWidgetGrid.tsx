@@ -21,6 +21,12 @@ export interface DesktopWidget {
   href: string | null;
   icon: ReactNode;
   tourTarget?: string;
+  /**
+   * Optional column span, 1–3. Used to give the seventh Year-end
+   * Tax Forms card its own intentional full-row footprint rather
+   * than reading as an accidental orphan. Defaults to 1.
+   */
+  spanCols?: 1 | 2 | 3;
 }
 
 export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[] }) {
@@ -42,11 +48,15 @@ export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[
         style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
         data-testid="portal-desktop-widgets-grid"
       >
-        {widgets.map((w) => (
-          <li key={w.key} className="min-w-0">
-            <Card w={w} />
-          </li>
-        ))}
+        {widgets.map((w) => {
+          const span = w.spanCols ?? 1;
+          const spanClass = span === 3 ? "col-span-3" : span === 2 ? "col-span-2" : "";
+          return (
+            <li key={w.key} className={`min-w-0 ${spanClass}`}>
+              <Card w={w} />
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -55,30 +65,35 @@ export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[
 function Card({ w }: { w: DesktopWidget }) {
   const available = w.href !== null;
   const body = (
+    // Fill-the-card pass (2026-08-27) — internal presentation scaled
+    // up so icon + title + description occupy the card area properly
+    // instead of clustering in the middle with excessive white
+    // space. Icon 32 → 38 px, title 18 → 20 px, description 13 →
+    // 14 px, divider taller (my-3), padding widened. Card geometry
+    // (min-h) is UNCHANGED — the fill comes from the content, not
+    // from stretching the card.
     <div className="flex items-stretch h-full" data-widget-available={available ? "true" : "false"}>
-      <div className="flex items-center justify-center pl-5 pr-4 text-club-green-700 [&_svg]:h-8 [&_svg]:w-8 shrink-0" aria-hidden="true">
+      <div className="flex items-center justify-center pl-6 pr-5 text-club-green-700 [&_svg]:h-[38px] [&_svg]:w-[38px] shrink-0" aria-hidden="true">
         {w.icon}
       </div>
-      <div aria-hidden="true" className="my-4 w-px bg-club-gold/65 shrink-0" />
-      <div className="flex-1 min-w-0 px-4 py-4">
-        <div className="font-serif text-[18px] leading-tight text-club-ink break-words">{w.title}</div>
-        <div className="text-[13px] text-stone-500 leading-snug mt-1 break-words">{w.description}</div>
+      <div aria-hidden="true" className="my-3 w-px bg-club-gold/65 shrink-0" />
+      <div className="flex-1 min-w-0 px-5 py-4 flex flex-col justify-center">
+        <div className="font-serif text-[20px] leading-tight text-club-ink break-words">{w.title}</div>
+        <div className="text-[14px] text-stone-500 leading-snug mt-1 break-words">{w.description}</div>
       </div>
-      <div className="flex items-center pr-4 text-stone-400 shrink-0" aria-hidden="true">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <div className="flex items-center pr-5 text-stone-400 shrink-0" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="9 6 15 12 9 18" />
         </svg>
       </div>
     </div>
   );
   const cls =
-    // Density rebalance (2026-08-26) — cards trimmed to a compact
-    // desktop-dashboard scale: fixed 108 px min-height so the two
-    // widget rows + right rail + welcome banner + hero all fit
-    // vertically within the 864-px primary target without content
-    // scroll. Cards remain premium (rounded-2xl, restrained shadow,
-    // brass divider); they no longer read as oversized touch tiles.
-    "block min-h-[108px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
+    // Fill-the-card pass — card min-height preserved at 116 px (was
+    // 108) so the row still fits within the one-screen target while
+    // giving the enlarged internal content room to breathe. Cards
+    // remain premium (rounded-2xl, restrained shadow, brass divider).
+    "block min-h-[116px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
     (available
       ? "hover:border-stone-300 hover:shadow-[0_3px_8px_rgba(15,20,15,0.07)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700"
       : "cursor-default");

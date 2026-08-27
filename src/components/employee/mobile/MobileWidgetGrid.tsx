@@ -18,28 +18,41 @@ export interface MobileWidget {
   href: string | null;
   icon: ReactNode;
   tourTarget?: string;
+  /**
+   * Optional column span (1 or 2). Used to give the seventh
+   * Year-end Tax Forms card a full-width bottom row so the mobile
+   * grid doesn't leave an orphan cell — the founder explicitly
+   * approves this treatment for a seven-destination portal.
+   * Defaults to 1.
+   */
+  spanCols?: 1 | 2;
 }
 
 export default function MobileWidgetGrid({ widgets }: { widgets: MobileWidget[] }) {
+  // Derive row count from the widget list — for six single-column
+  // cards this stays at 3, for a 6+1 layout with a spanning seventh
+  // card the grid grows to 4 rows automatically.
+  const rowUnits = widgets.reduce((n, w) => n + (w.spanCols === 2 ? 2 : 1), 0);
+  const rowCount = Math.ceil(rowUnits / 2);
   return (
     <section
       className="md:hidden min-h-0 h-full"
       data-testid="portal-mobile-widgets"
     >
-      {/* HR mobile-hotfix (2026-08-28) — grid distributes 3 rows
-         evenly across the widget region's available height. Each row
-         is minmax(0, 1fr) so a card can shrink on short phones and
-         grow on tall phones. Row gap 8-10 px, tighter than before. */}
+      {/* HR mobile-hotfix (2026-08-28) + fill-the-card pass —
+         grid distributes rows evenly across the widget region's
+         available height. Each row is minmax(0, 1fr) so a card
+         can shrink on short phones and grow on tall phones. */}
       <ul
         className="grid grid-cols-2 gap-2.5 h-full"
         style={{
           gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gridTemplateRows: "repeat(3, minmax(0, 1fr))",
+          gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))`,
         }}
         data-testid="portal-mobile-widgets-grid"
       >
         {widgets.map((w) => (
-          <li key={w.key} className="min-h-0 min-w-0">
+          <li key={w.key} className={`min-h-0 min-w-0 ${w.spanCols === 2 ? "col-span-2" : ""}`}>
             <Card w={w} />
           </li>
         ))}
