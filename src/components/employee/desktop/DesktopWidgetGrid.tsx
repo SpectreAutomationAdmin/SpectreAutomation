@@ -42,7 +42,14 @@ export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[
         // sits in the first cell of row 3; the remaining two grid
         // tracks stay empty (uniformity wins over "fill every cell").
         className="grid grid-cols-3 gap-4 [@media(max-height:900px)]:gap-3"
-        style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+        style={{
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          // Uniform-cards enforcement: every row matches the tallest
+          // card in the grid, so descriptions that wrap at narrower
+          // viewport widths don't produce visually mismatched
+          // heights across the seven cards.
+          gridAutoRows: "1fr",
+        }}
         data-testid="portal-desktop-widgets-grid"
       >
         {widgets.map((w) => (
@@ -87,11 +94,12 @@ function Card({ w }: { w: DesktopWidget }) {
     </div>
   );
   const cls =
-    // All seven cards share the same 116 px min-height — Year-end
-    // Tax Forms is no longer a compact promo banner. The 7th card's
-    // uniformity is enforced here; the founder brief explicitly
-    // rejects any special-casing by widget key.
-    "block min-h-[116px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
+    // All seven cards share the same 116 px min-height + `h-full`
+    // so they fill their grid cell (which is itself `1fr`, meaning
+    // uniform per-row height). Year-end Tax Forms is no longer a
+    // compact promo banner — the founder brief explicitly rejects
+    // special-casing by widget key.
+    "block h-full min-h-[116px] rounded-2xl border border-stone-200/80 bg-white shadow-[0_1px_2px_rgba(15,20,15,0.04)] " +
     (available
       ? "hover:border-stone-300 hover:shadow-[0_3px_8px_rgba(15,20,15,0.07)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-green-700"
       : "cursor-default");

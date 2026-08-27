@@ -5,6 +5,21 @@
 // measurement per viewport into stdout for the closeout.
 
 import { test } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+
+const SCREENSHOT_DIR = path.resolve("test-results/portal-desktop-fidelity");
+fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+
+const WIDGET_KEYS = [
+  "scheduling",
+  "paystubs",
+  "time-off",
+  "documents",
+  "training",
+  "clocking-in-out",
+  "year-end-tax-forms",
+] as const;
 
 const EMAIL = process.env.SPECTRE_PLAYWRIGHT_FIXTURE_EMAIL
   ?? "playwright-fixture@spectreautomation.internal";
@@ -40,7 +55,7 @@ test.describe("Portal desktop — fidelity metrics", () => {
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.waitForTimeout(1500);
 
-      const m = await page.evaluate(() => {
+      const m = await page.evaluate((keys: readonly string[]) => {
         const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
         const box = (sel: string) => {
           const el = q(sel);
@@ -66,6 +81,21 @@ test.describe("Portal desktop — fidelity metrics", () => {
         const footer = scoped(shell, '[data-testid="portal-desktop-footer"]');
         const firstCard = document.querySelector(`${shell} [data-testid="portal-desktop-widget-scheduling"]`) as HTMLElement | null;
         const cardRect = firstCard ? firstCard.getBoundingClientRect() : null;
+        // Per-widget bounding boxes + icon SVG bounding boxes.
+        const perWidget = keys.map((k) => {
+          const card = document.querySelector(`${shell} [data-testid="portal-desktop-widget-${k}"]`) as HTMLElement | null;
+          const iconWrap = document.querySelector(`${shell} [data-testid="portal-desktop-widget-icon-${k}"]`) as HTMLElement | null;
+          const iconSvg = iconWrap?.querySelector("svg") as SVGElement | null;
+          const cardR = card?.getBoundingClientRect();
+          const iconR = iconSvg?.getBoundingClientRect();
+          return {
+            key: k,
+            cardW: cardR ? Math.round(cardR.width * 10) / 10 : null,
+            cardH: cardR ? Math.round(cardR.height * 10) / 10 : null,
+            iconW: iconR ? Math.round(iconR.width * 10) / 10 : null,
+            iconH: iconR ? Math.round(iconR.height * 10) / 10 : null,
+          };
+        });
         // Live weather proof — capture provenance + rendered text.
         const weatherEl = document.querySelector(`${shell} [data-testid="portal-hero-weather-desktop"]`) as HTMLElement | null;
         const weatherRect = weatherEl?.getBoundingClientRect() ?? null;
@@ -101,13 +131,28 @@ test.describe("Portal desktop — fidelity metrics", () => {
           docClientH: document.documentElement.clientHeight,
           fitsOneScreen:
             document.documentElement.scrollHeight <= document.documentElement.clientHeight + 2,
+          // Footer-anchor proof: at one-screen fit, footer.bottom
+          // should sit within a few px of the viewport height.
+          footerBottom: footer?.bottom ?? null,
+          footerTop: footer?.top ?? null,
+          gridBottom: grid?.bottom ?? null,
+          footerAtViewportBottom:
+            footer != null && Math.abs((footer.bottom ?? 0) - window.innerHeight) <= 4,
+          perWidget,
         };
-      });
+      }, WIDGET_KEYS);
       console.log(`\n[${vp.label}] METRICS`);
       for (const [k, v] of Object.entries(m)) {
+        if (k === "perWidget") continue;
         const rounded = typeof v === "number" ? Math.round(v * 10) / 10 : v;
-        console.log(`  ${k.padEnd(20)} ${rounded}`);
+        console.log(`  ${k.padEnd(24)} ${rounded}`);
       }
+      console.log(`  perWidget cards + icons:`);
+      for (const w of m.perWidget) {
+        console.log(`    ${w.key.padEnd(22)} card ${w.cardW}×${w.cardH}  icon ${w.iconW}×${w.iconH}`);
+      }
+      // Full-page screenshot for visual acceptance.
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, `${vp.label}.png`), fullPage: false });
       await context.close();
     });
   }
