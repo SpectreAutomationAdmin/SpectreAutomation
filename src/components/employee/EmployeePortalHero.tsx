@@ -212,7 +212,7 @@ export default function EmployeePortalHero({
           className="relative w-full"
           style={{
             ...(hasImage ? {} : fallbackStyle),
-            height: "clamp(200px, 24vh, 280px)",
+            height: "clamp(170px, 21vh, 260px)",
           }}
         >
           {imgSrc && (
