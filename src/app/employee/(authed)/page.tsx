@@ -411,14 +411,15 @@ export default async function EmployeePortalHome() {
           clubTimezone={club?.timezone ?? null}
             weather={weather}
         />
-        {/* Density rebalance (2026-08-26) — outer padding trimmed
-           (`px-8 py-5`) and inter-block row-gap tightened (`space-y-4`
-           / `gap-6`) so the welcome banner + notifications + 3×2 grid
-           column fits vertically alongside the right rail in the
-           one-screen-fit target (1536×864). Column ratio held at
-           3fr/1fr (~75/25). */}
+        {/* Density rebalance (2026-08-26) — outer padding tightened
+           (`px-8 py-5`) with a compact-height reduction on ≤ 820 px
+           viewports so 1366 × 768 (23 px overflow otherwise) also
+           satisfies the one-screen-fit contract without shrinking
+           the wider-screen layout. Inter-block row-gap tightened
+           (`space-y-4` / `gap-6`). Column ratio held at 3fr/1fr
+           (~75/25). */}
         <div
-          className="px-8 py-5 grid gap-6 min-w-0"
+          className="px-8 py-5 [@media(max-height:820px)]:py-3 grid gap-6 min-w-0"
           style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}
         >
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}

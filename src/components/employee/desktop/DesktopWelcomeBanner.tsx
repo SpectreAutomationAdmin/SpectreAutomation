@@ -31,7 +31,7 @@ export default function DesktopWelcomeBanner({ clubName, href }: Props) {
       // substantial dashboard element rather than an alert bar: taller
       // padding, larger megaphone, headline / supporting copy nudged
       // up per the accepted reference.
-      className="hidden md:flex items-stretch gap-5 rounded-2xl bg-club-green-800 text-white px-6 py-4 shadow-[0_1px_2px_rgba(15,20,15,0.06)]"
+      className="hidden md:flex items-stretch gap-5 rounded-2xl bg-club-green-800 text-white px-6 py-4 [@media(max-height:820px)]:py-3 shadow-[0_1px_2px_rgba(15,20,15,0.06)]"
       data-testid="portal-desktop-welcome-banner"
     >
       <div className="flex items-center justify-center h-12 w-12 shrink-0 text-white/95" aria-hidden="true">

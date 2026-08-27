@@ -14,6 +14,7 @@ const PASSWORD = process.env.SPECTRE_PLAYWRIGHT_FIXTURE_PASSWORD
 const VIEWPORTS = [
   { label: "1366x768",  w: 1366, h: 768 },
   { label: "1440x900",  w: 1440, h: 900 },
+  { label: "1536x864",  w: 1536, h: 864 },
   { label: "1536x1024", w: 1536, h: 1024 },
   { label: "1920x1080", w: 1920, h: 1080 },
 ];
@@ -96,6 +97,10 @@ test.describe("Portal desktop — fidelity metrics", () => {
           viewportH: window.innerHeight,
           viewportW: window.innerWidth,
           docScrollW: document.documentElement.scrollWidth,
+          docScrollH: document.documentElement.scrollHeight,
+          docClientH: document.documentElement.clientHeight,
+          fitsOneScreen:
+            document.documentElement.scrollHeight <= document.documentElement.clientHeight + 2,
         };
       });
       console.log(`\n[${vp.label}] METRICS`);
