@@ -182,23 +182,23 @@ export default function EmployeePortalHero({
          cloud weather pill lower-right. Position label ("Controller"
          etc.) intentionally removed per the accepted spec. */}
       <section
-        className="hidden md:block relative overflow-hidden"
+        // Pre-redesign hero historical restore (2026-08-26) — the
+        // founder-supplied canonical screenshot shows the OLD hero
+        // treatment from commit 6988006 (before the desktop shell
+        // rebuild): rounded card with a subtle border, sitting
+        // inside the content column with left/right/top margin
+        // (NOT full-bleed), `h-72` on desktop (288 px), object-cover
+        // with default centered focal point. Only the CSS applies to
+        // md+; the mobile hero is untouched.
+        //
+        // The `mx-8 mt-6` matches the accepted dashboard's `px-8`
+        // gutter so the hero left/right edges align cleanly with
+        // the widget grid below.
+        className="hidden md:block relative overflow-hidden rounded-lg border border-stone-200 mx-8 mt-6"
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* Hero historical restore (2026-08-26) — reproduce the
-           earliest-approved staging hero from commit 46cc6ad
-           (the founder's canonical reference screenshot):
-             height:          clamp(240px, 30vh, 340px)
-             object-position: default (50% 50%, centered)
-           This is the value that produced the "golf-hole green
-           centred in the composition" crop the founder approved.
-           No further speculative object-position tuning — this is
-           the historical CSS restored verbatim. */}
-        <div className="relative w-full" style={{
-          ...(hasImage ? {} : fallbackStyle),
-          height: "clamp(240px, 30vh, 340px)",
-        }}>
+        <div className="relative w-full h-72" style={hasImage ? undefined : fallbackStyle}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
