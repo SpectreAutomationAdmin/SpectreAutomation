@@ -44,7 +44,7 @@ export default function DesktopWidgetGrid({ widgets }: { widgets: DesktopWidget[
         // browser's remaining vertical space. Each card uses a fixed
         // `min-h-[160px]` so it holds the accepted proportion whether
         // the viewport is 768 px or 1080 px tall.
-        className="grid grid-cols-3 gap-4 [@media(max-height:820px)]:gap-3"
+        className="grid grid-cols-3 gap-4 [@media(max-height:900px)]:gap-3"
         style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
         data-testid="portal-desktop-widgets-grid"
       >
