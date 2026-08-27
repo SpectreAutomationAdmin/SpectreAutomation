@@ -1,24 +1,20 @@
-// HR mobile-hotfix continuation (2026-08-28) — Quick Links panel
-// on the desktop portal right rail. Different composition from the
-// mobile Quick Links (which uses inline pipes) — the desktop
-// version lists each destination on its own row with an external-
-// link glyph, per the accepted reference.
+// Employee Portal Quick Links (2026-08-27) — desktop right-rail
+// panel. Fully data-driven from `EmployeePortalQuickLink` rows via
+// `listQuickLinks(clubId, { activeOnly: true })`. When zero links
+// are configured the parent hides the card entirely per §17.
 
-interface Item {
+export interface QuickLinkItem {
+  id: string;
   label: string;
-  href: string | null;
+  href: string;
+  external: boolean;
 }
 
 interface Props {
-  items?: Item[];
+  items: QuickLinkItem[];
 }
 
 export default function DesktopQuickLinksCard({ items }: Props) {
-  const list: Item[] = items ?? [
-    { label: "Club Website", href: null },
-    { label: "HR Policies", href: null },
-    { label: "Contact HR", href: null },
-  ];
   return (
     <section
       className="rounded-2xl bg-club-cream border border-stone-200/60 p-4"
@@ -35,27 +31,26 @@ export default function DesktopQuickLinksCard({ items }: Props) {
         <h2 className="font-serif text-[16px] text-club-ink">Quick Links</h2>
       </header>
       <ul className="rounded-xl bg-white border border-stone-200/70 divide-y divide-stone-200/70">
-        {list.map((it) => {
-          const inner = (
-            <div className="flex items-center px-3.5 py-2.5">
-              <span className={`flex-1 text-[13.5px] ${it.href ? "text-club-ink" : "text-stone-500"}`}>{it.label}</span>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-stone-400 shrink-0 ml-3">
-                <path d="M14 3h7v7" />
-                <path d="M10 14 21 3" />
-                <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
-              </svg>
-            </div>
-          );
-          return (
-            <li key={it.label}>
-              {it.href ? (
-                <a href={it.href} className="block hover:bg-stone-50">{inner}</a>
-              ) : (
-                <div className="block cursor-default" aria-disabled="true">{inner}</div>
-              )}
-            </li>
-          );
-        })}
+        {items.map((it) => (
+          <li key={it.id}>
+            <a
+              href={it.href}
+              className="block hover:bg-stone-50"
+              target={it.external ? "_blank" : undefined}
+              rel={it.external ? "noopener noreferrer" : undefined}
+              data-testid={`portal-desktop-quick-link-${it.id}`}
+            >
+              <div className="flex items-center px-3.5 py-2.5">
+                <span className="flex-1 text-[13.5px] text-club-ink">{it.label}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-stone-400 shrink-0 ml-3">
+                  <path d="M14 3h7v7" />
+                  <path d="M10 14 21 3" />
+                  <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+                </svg>
+              </div>
+            </a>
+          </li>
+        ))}
       </ul>
     </section>
   );

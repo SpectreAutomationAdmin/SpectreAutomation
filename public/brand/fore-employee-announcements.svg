@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 340" role="img" aria-labelledby="fore-title fore-desc">
+  <title id="fore-title">Fore! Employee Announcements</title>
+  <desc id="fore-desc">Retro-script Fore! wordmark with a sweeping underline and the subtitle EMPLOYEE ANNOUNCEMENTS below.</desc>
+  <style>
+    /* Retro script for the Fore! wordmark. Georgia is present on
+       every consumer device; the italic weight with an emphasized
+       display size gives the hand-lettered feel without depending
+       on a downloaded font (the Artifact CSP would refuse an
+       external stylesheet anyway). */
+    .fore-word { font-family: Georgia, "Times New Roman", serif; font-style: italic; font-weight: 700; font-size: 220px; fill: #204d2a; letter-spacing: 2px; }
+    .fore-sub  { font-family: 'Helvetica Neue', Arial, sans-serif; font-weight: 600; font-size: 34px; letter-spacing: 12px; fill: #204d2a; }
+  </style>
+  <g>
+    <text x="120" y="200" class="fore-word">Fore!</text>
+    <!-- Sweeping underline: quadratic bezier curve that scoops
+         under the wordmark, matching the retro logo composition. -->
+    <path d="M 110 230 Q 400 300, 700 220" fill="none" stroke="#204d2a" stroke-width="8" stroke-linecap="round" />
+    <text x="400" y="300" text-anchor="middle" class="fore-sub">EMPLOYEE ANNOUNCEMENTS</text>
+  </g>
+</svg>

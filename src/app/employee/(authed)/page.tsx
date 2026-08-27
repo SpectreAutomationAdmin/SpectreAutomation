@@ -37,6 +37,8 @@ import EmployeeTourOnFirstLogin from "@/components/employee/EmployeeTourOnFirstL
 import EmployeePortalHero from "@/components/employee/EmployeePortalHero";
 import { getCurrentWeather } from "@/lib/reporting/weather";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
+import { listQuickLinks, type QuickLinkView } from "@/lib/employee-portal/quick-links";
+import type { QuickLinkItem } from "@/components/employee/desktop/DesktopQuickLinksCard";
 import { buildHomeNotifications } from "@/lib/hr/home-notifications";
 import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
 import HomeNotificationBar from "./_home/HomeNotificationBar";
@@ -163,7 +165,7 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, heroFraming, club, notifications, primaryRole] = await Promise.all([
+  const [employee, heroMedia, heroFraming, quickLinkRows, club, notifications, primaryRole] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
       select: {
@@ -184,6 +186,7 @@ export default async function EmployeePortalHome() {
     }),
     getClubMedia(principal.clubId, "employee_portal_hero"),
     getClubMediaFraming(principal.clubId, "employee_portal_hero"),
+    listQuickLinks(principal.clubId, { activeOnly: true }),
     prisma.club.findFirst({
       where: { id: principal.clubId },
       // HR mobile-hotfix (2026-08-26) — added name / slug / address /
@@ -345,6 +348,27 @@ export default async function EmployeePortalHome() {
     select: { name: true },
   }).then((c) => c?.name ?? "your Club");
 
+  // Project Quick Links from the tenant-configured rows into the
+  // display shape both the desktop card and the mobile strip
+  // consume. File-typed links resolve to the secure stream route.
+  const quickLinkItems: QuickLinkItem[] = (quickLinkRows as QuickLinkView[])
+    .filter((r) => (r.destinationType === "url" ? !!r.url : r.hasFile))
+    .map((r) => {
+      const isFile = r.destinationType === "file";
+      const href = isFile
+        ? `/api/clubs/${principal.clubId}/employee-portal-quick-links/${r.id}`
+        : r.url!;
+      return {
+        id: r.id,
+        label: r.label,
+        href,
+        // Files stream through the same origin — always same-tab
+        // download/inline preview; external URLs open in a new tab
+        // with noopener/noreferrer.
+        external: !isFile && !href.startsWith("/"),
+      };
+    });
+
   return (
     <div data-testid="portal-home" className="flex-1 min-h-0 flex flex-col md:block md:flex-none md:min-h-full">
       <EmployeeTourOnFirstLogin alreadyDone={tourAlreadyDone} />
@@ -409,7 +433,7 @@ export default async function EmployeePortalHome() {
         </div>
         {/* Quick Links (auto). */}
         <div className="flex-none px-4 pt-3">
-          <MobileQuickLinks />
+          {quickLinkItems.length > 0 && <MobileQuickLinks items={quickLinkItems} />}
         </div>
         {/* Optional awaiting-review banner. Rare (SUBMITTED-not-
            ACTIVE only). Restrained bottom padding so it never
@@ -507,7 +531,7 @@ export default async function EmployeePortalHome() {
             <DesktopAnnouncementsCard
               items={[]}
             />
-            <DesktopQuickLinksCard />
+            {quickLinkItems.length > 0 && <DesktopQuickLinksCard items={quickLinkItems} />}
           </div>
         </div>
         <DesktopFooter clubName={clubName} year={2026} />

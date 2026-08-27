@@ -7,8 +7,10 @@ import { getActiveClubId } from "@/lib/active-club";
 import { ClubProfileForm, type SaveResult } from "./settings-client";
 import HeroImageUploader from "./HeroImageUploader";
 import HeroFramingEditor from "./HeroFramingEditor";
+import QuickLinksEditor from "./QuickLinksEditor";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import { DEFAULT_EMPLOYEE_PORTAL_HERO_FRAMING } from "@/lib/employee-portal/hero-framing";
+import { listQuickLinks } from "@/lib/employee-portal/quick-links";
 import { IconArrowRight } from "@/components/spectre/icons";
 
 // -----------------------------------------------------------------------------
@@ -75,10 +77,11 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
-  const [club, heroMedia, heroFraming] = await Promise.all([
+  const [club, heroMedia, heroFraming, quickLinks] = await Promise.all([
     prisma.club.findUnique({ where: { id: clubId } }),
     getClubMedia(clubId, "employee_portal_hero"),
     getClubMediaFraming(clubId, "employee_portal_hero"),
+    listQuickLinks(clubId),
   ]);
   if (!club) redirect("/app/admin");
 
@@ -227,6 +230,23 @@ export default async function SettingsPage() {
             />
           </div>
         )}
+      </section>
+
+      {/* =========================================================
+          Employee Portal Quick Links — admin-configurable per tenant.
+          Sits between the branding section and Custom Domains so
+          the two Employee-Portal-facing controls are adjacent.
+         ========================================================= */}
+      <SectionHeader
+        eyebrow="Section 2b"
+        title="Employee Portal Quick Links"
+        subtitle="Add, rename, reorder, and remove the destinations that appear in the Employee Portal right rail (desktop) and Quick Links strip (mobile). Each link can point to an external URL or an uploaded PDF."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+      >
+        <QuickLinksEditor clubId={club.id} initialLinks={quickLinks} />
       </section>
 
       {/* =========================================================

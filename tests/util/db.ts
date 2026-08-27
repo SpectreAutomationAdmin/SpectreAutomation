@@ -440,6 +440,7 @@ export async function resetDb() {
     c.trainingQuestion.deleteMany(),
     c.trainingCourseVersion.deleteMany(),
     c.trainingCourse.deleteMany(),
+    c.employeePortalQuickLink.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),
