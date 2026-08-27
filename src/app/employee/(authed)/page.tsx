@@ -456,11 +456,11 @@ export default async function EmployeePortalHome() {
            (`space-y-4` / `gap-6`). Column ratio held at 3fr/1fr
            (~75/25). */}
         <div
-          className="px-8 py-5 [@media(max-height:900px)]:py-3 grid gap-6 min-w-0"
+          className="px-8 py-5 [@media(max-height:900px)]:py-2 grid gap-6 [@media(max-height:900px)]:gap-4 min-w-0"
           style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}
         >
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
-          <div className="min-w-0 space-y-4">
+          <div className="min-w-0 space-y-4 [@media(max-height:900px)]:space-y-2">
             <div data-testid="portal-desktop-welcome-banner-slot">
               <DesktopWelcomeBanner clubName={clubName} />
             </div>
@@ -500,7 +500,7 @@ export default async function EmployeePortalHome() {
           {/* RIGHT RAIL — announcements + quick links. Row-gap
              tightened for density rebalance; panels themselves keep
              their compact-desktop treatment. */}
-          <div className="min-w-0 space-y-4">
+          <div className="min-w-0 space-y-4 [@media(max-height:900px)]:space-y-2">
             <DesktopAnnouncementsCard
               items={[]}
             />
