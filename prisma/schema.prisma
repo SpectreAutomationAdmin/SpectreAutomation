@@ -1603,19 +1603,42 @@ model MemberDocument {
 
 // Club-wide announcements visible in the member hub.
 // audience: ALL_MEMBERS | ACTIVE_ONLY | SPECIFIC_CATEGORY (Phase 3+)
+// HR-2C Fore! Announcements (2026-08-27) — extended for tenant-
+// authored announcements shown on the Employee Portal Fore! card.
+// Also usable by a future Member Portal surface (audience MEMBER
+// or BOTH) — this is the canonical announcement model; no
+// parallel EmployeeAnnouncement architecture.
+//
+// Every write goes through `src/lib/announcements.ts` (permission
+// + posting-guard + audit). Read paths filter on: `isPublished`
+// + `publishedAt <= now` + (`expiresAt IS NULL OR expiresAt > now`)
+// + audience.
 model ClubAnnouncement {
-  id          String    @id @default(cuid())
-  clubId      String
-  club        Club      @relation(fields: [clubId], references: [id])
-  title       String
-  body        String
-  audience    String    @default("ALL_MEMBERS")
-  publishedAt DateTime?
-  expiresAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  clubId          String
+  club            Club      @relation(fields: [clubId], references: [id])
+  title           String
+  body            String
+  // "EMPLOYEE" | "MEMBER" | "BOTH". Legacy default "ALL_MEMBERS"
+  // preserved so any historical rows survive the migration; the
+  // service normalises unknown values to "EMPLOYEE".
+  audience        String    @default("EMPLOYEE")
+  // Draft/published lifecycle. `isPublished=false` = draft (admin-
+  // only). `publishedAt` gates when a published row becomes visible.
+  isPublished     Boolean   @default(false)
+  publishedAt     DateTime?
+  expiresAt       DateTime?
+  isPinned        Boolean   @default(false)
+  sortOrder       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdByUserId String?
+  updatedByUserId String?
 
   @@index([clubId, publishedAt])
+  @@index([clubId, isPublished])
+  @@index([clubId, audience])
+  @@index([clubId, expiresAt])
 }
 
 // -------------------------------------------------------------------

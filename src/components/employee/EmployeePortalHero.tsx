@@ -213,17 +213,19 @@ export default function EmployeePortalHero({
         data-testid="portal-hero-desktop"
         data-has-image={hasImage ? "true" : "false"}
       >
-        {/* b17309f surgical restore (2026-08-26) — the founder-
-           approved desktop hero uses `aspect-[7/2]` (3.5:1) so the
-           same source photo produces the accepted composition (green
-           centred, right tree, bunkers) at every viewport width.
-           Vertical scrolling at shorter viewports is now accepted;
-           do NOT replace this with a viewport-relative clamp again.
-           Image `object-cover` + default `object-position: 50% 50%`
-           (via heroImageStyle(DEFAULT_HERO_FRAMING)) is byte-
-           equivalent to the b17309f rendering; admin-saved framing
-           can still override for a specific tenant. */}
-        <div className="relative w-full aspect-[7/2]" style={hasImage ? undefined : fallbackStyle}>
+        {/* Proportional-reduction pass (2026-08-27). Container aspect
+           moves from 7/2 (3.5:1, ~351 px tall at 1230 wide) to
+           92/20 (4.6:1, ~267 px tall at 1230 wide) — recovers ~85 px
+           of vertical space for the dashboard below. The tenant-
+           supplied `object-position` (persisted through the framing
+           editor) is preserved so each Club's chosen focal point
+           still anchors the composition; only the frame shortens.
+           `object-cover` retained — for the current Coulee Ridge
+           4032×3024 source, this fits width and continues to show
+           the founder-approved focal region (green centred, right
+           tree, bunkers, hillside). Landmark visibility validated
+           via Playwright at 1366 / 1440 / 1536 / 1920. */}
+        <div className="relative w-full aspect-[92/20]" style={hasImage ? undefined : fallbackStyle}>
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img

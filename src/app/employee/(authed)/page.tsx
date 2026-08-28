@@ -39,6 +39,8 @@ import { getCurrentWeather } from "@/lib/reporting/weather";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import { listQuickLinks, type QuickLinkView } from "@/lib/employee-portal/quick-links";
 import type { QuickLinkItem } from "@/components/employee/desktop/DesktopQuickLinksCard";
+import { listVisibleAnnouncements, announcementPreview } from "@/lib/announcements";
+import type { AnnouncementItem } from "@/components/employee/desktop/DesktopAnnouncementsCard";
 import { buildHomeNotifications } from "@/lib/hr/home-notifications";
 import { getCurrentPrimaryRoleDisplay } from "@/lib/hr/employment-assignments";
 import HomeNotificationBar from "./_home/HomeNotificationBar";
@@ -165,7 +167,7 @@ export default async function EmployeePortalHome() {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
 
-  const [employee, heroMedia, heroFraming, quickLinkRows, club, notifications, primaryRole] = await Promise.all([
+  const [employee, heroMedia, heroFraming, quickLinkRows, club, notifications, primaryRole, announcementRows] = await Promise.all([
     prisma.employee.findFirst({
       where: { id: principal.employeeId, clubId: principal.clubId },
       select: {
@@ -209,6 +211,12 @@ export default async function EmployeePortalHome() {
     // Clubhouse Manager → Controller left the portal hero showing
     // the prior title indefinitely.
     getCurrentPrimaryRoleDisplay(principal.employeeId),
+    // HR-2C Fore! Announcements (2026-08-27) — canonical publication-
+    // rule read. Only rows that are: published, publishedAt <= now,
+    // not expired, audience includes EMPLOYEE (either EMPLOYEE or
+    // BOTH). Ordered pinned-first, then newest published. Capped at
+    // 3 so a long list can't push the home dashboard.
+    listVisibleAnnouncements(principal.clubId, "EMPLOYEE", { limit: 3 }),
   ]);
   if (!employee) redirect("/employee/login");
 
@@ -529,7 +537,7 @@ export default async function EmployeePortalHome() {
              their compact-desktop treatment. */}
           <div className="min-w-0 space-y-4 [@media(max-height:900px)]:space-y-2">
             <DesktopAnnouncementsCard
-              items={[]}
+              items={buildAnnouncementItems(announcementRows)}
             />
             {quickLinkItems.length > 0 && <DesktopQuickLinksCard items={quickLinkItems} />}
           </div>
@@ -538,6 +546,32 @@ export default async function EmployeePortalHome() {
       </div>
     </div>
   );
+}
+
+// HR-2C Fore! Announcements (2026-08-27) — projects the canonical
+// AnnouncementView rows into the shape DesktopAnnouncementsCard
+// expects. dateLabel uses the effective publishedAt (falls back to
+// createdAt when a row is published without an explicit date). body
+// is the title + a clamped preview so the right-rail card stays
+// compact; a future detail surface can show the full body.
+function buildAnnouncementItems(rows: Awaited<ReturnType<typeof listVisibleAnnouncements>>): AnnouncementItem[] {
+  return rows.map((a) => {
+    const effective = a.publishedAt ?? a.createdAt;
+    const dateLabel = new Date(effective).toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+    });
+    return {
+      id: a.id,
+      dateLabel,
+      body: (
+        <div>
+          <div className="font-medium text-club-ink">{a.title}</div>
+          <div className="text-stone-600 mt-0.5">{announcementPreview(a.body)}</div>
+        </div>
+      ),
+      href: null,
+    };
+  });
 }
 
 // HR mobile-hotfix (2026-08-27) — Clock In / Out icon used by the
