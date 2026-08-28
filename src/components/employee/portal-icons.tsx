@@ -134,6 +134,19 @@ export function IconMore({ size = 22, strokeWidth = 1.8, title }: IconProps = {}
   );
 }
 
+/** Profile — user silhouette. Used in the simplified desktop
+ *  sidebar's second nav item; matches the outlined line-icon
+ *  system the rest of the portal already uses. */
+export function IconProfile({ size = 22, strokeWidth = 1.7, title }: IconProps = {}) {
+  return (
+    <svg {...base(size, strokeWidth, title)}>
+      {title && <title>{title}</title>}
+      <circle cx="12" cy="8.5" r="4" />
+      <path d="M4.5 20.5c1.6-3.5 5-5.5 7.5-5.5s5.9 2 7.5 5.5" />
+    </svg>
+  );
+}
+
 /** Anonymous Feedback — speech bubble. Replaces the Need Help
  *  headset icon in the sidebar's bottom card. */
 export function IconFeedback({ size = 22, strokeWidth = 1.7, title }: IconProps = {}) {

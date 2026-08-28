@@ -19,17 +19,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import {
-  IconHome,
-  IconSchedule,
-  IconPaystubs,
-  IconTimeOff,
-  IconDocuments,
-  IconTraining,
-  IconClock,
-  IconMore,
-  IconFeedback,
-} from "./portal-icons";
+import { IconHome, IconProfile, IconFeedback } from "./portal-icons";
 
 interface NavItem {
   key: string;
@@ -40,28 +30,17 @@ interface NavItem {
   matchExact?: boolean;
 }
 
+// HR-2C sidebar simplification (2026-08-27). The dashboard widgets
+// on Home are the primary operational navigation; the sidebar no
+// longer duplicates every destination. Desktop sidebar contains
+// only Home + Profile plus the anonymous-feedback card at the
+// bottom. Mobile still uses its own drawer / More affordance and
+// is unaffected by this simplification.
 const NAV_GROUPS: Array<{ items: NavItem[] }> = [
   {
     items: [
       { key: "home", label: "Home", href: "/employee", icon: <IconHome />, tourTarget: "home", matchExact: true },
-      { key: "schedule", label: "Schedule", href: "/employee/schedule", icon: <IconSchedule />, tourTarget: "scheduling" },
-      { key: "pay", label: "Pay", href: "/employee/pay", icon: <IconPaystubs />, tourTarget: "paystubs" },
-      { key: "time-off", label: "Time Off", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
-    ],
-  },
-  {
-    items: [
-      // Uniform-terminology pass — user-facing label renamed
-      // Forms → Documents to match the widget grid. Test-id key
-      // remains "forms" for backwards-compatible selectors.
-      { key: "forms", label: "Documents", href: null, icon: <IconDocuments />, tourTarget: "documents" },
-      { key: "training", label: "Safety & Training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-      { key: "clock", label: "Clock In / Out", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
-    ],
-  },
-  {
-    items: [
-      { key: "more", label: "More", href: "/employee/profile", icon: <IconMore /> },
+      { key: "profile", label: "Profile", href: "/employee/profile", icon: <IconProfile /> },
     ],
   },
 ];
@@ -138,6 +117,12 @@ export default function EmployeePortalSidebar() {
          Club. The record persists `clubId` (derived server-side)
          but never any employee identity. */}
       <div className="p-3 shrink-0">
+        {/* Copy refinement (2026-08-27) — heading changed to
+           "Say what's on your mind" per founder direction. Slight
+           font-size drop to 13.5 px so the longer heading fits the
+           same card footprint without wrapping to two lines on
+           the fixed 256 px sidebar; subtitle stays at 11.5 px.
+           Card height unchanged. */}
         <Link
           href="/employee/feedback"
           className="rounded-xl bg-white/[0.10] border border-white/[0.14] px-3.5 py-3 flex items-center gap-3 hover:bg-white/[0.14] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold"
@@ -146,7 +131,7 @@ export default function EmployeePortalSidebar() {
         >
           <div className="text-white/95 shrink-0" aria-hidden="true"><IconFeedback /></div>
           <div className="min-w-0">
-            <div className="font-serif text-[14px] leading-tight text-white">Share Feedback</div>
+            <div className="font-serif text-[13.5px] leading-tight text-white truncate">Say what&rsquo;s on your mind</div>
             <div className="text-[11.5px] text-white/75 truncate mt-0.5">Send anonymous feedback</div>
           </div>
         </Link>

@@ -51,26 +51,27 @@ export default function EmployeePortalTopBar({
     // recover vertical space for the one-screen-fit target. Branding
     // sizes retained; only the vertical padding is smaller.
     <header
-      className="h-20 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
+      className="relative h-20 flex items-stretch bg-club-green-800 text-white pl-0 pr-8 gap-8 sticky top-0 z-20"
       data-testid="portal-header"
     >
-      {/* Gold vertical separator — sits at the topbar's left edge
-         (which visually joins the sidebar's right edge) so the
-         `SPECTRE / AUTOMATION` wordmark and the tenant name read as
-         a paired identity across a subtle brass divider, per the
-         accepted reference. Not full header height; leaves comfortable
-         top/bottom space (`my-4` ≈ 16 px inset). Uses the same
-         `club-gold` token the widget-card dividers use, at 55%
-         opacity so it remains a supporting detail rather than an
-         accent. */}
+      {/* Gold vertical separator — now anchored to the topbar's
+         LEFT EDGE (x=0 inside the header, which visually joins the
+         sidebar's right edge at the 256 px sidebar/main-area
+         boundary). The line reinforces the structural boundary
+         between the left nav column and the main content region.
+         Not full header height; ~40 px tall inset. Uses the same
+         `club-gold` token at 55 % opacity so it remains a
+         supporting detail rather than an accent. */}
       <div
         aria-hidden="true"
-        className="self-center w-px h-10 bg-club-gold/55"
+        className="absolute left-0 top-1/2 -translate-y-1/2 w-px h-10 bg-club-gold/55"
         data-testid="portal-header-separator"
       />
-      {/* Tenant identity — canonical current-Club name in two lines,
-         scaled up per the accepted reference. */}
-      <div className="flex items-center min-w-0 flex-1">
+      {/* Tenant identity — canonical current-Club name in two
+         lines, scaled up per the accepted reference. `pl-8` gives
+         the tenant name the same 32 px indent from the separator
+         that the previous `px-8 + gap-8` layout produced. */}
+      <div className="flex items-center min-w-0 flex-1 pl-8">
         <div
           className="font-serif text-[22px] leading-[1.15] text-white/95 min-w-0"
           data-testid="portal-header-club-name"

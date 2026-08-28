@@ -38,22 +38,29 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
          "Announcements" is rendered as the same serif heading used
          elsewhere in the right rail so accessibility, alignment, and
          the accepted card grammar are preserved. */}
-      {/* Centered `[Fore! logo] Announcements` group. The Fore! SVG
-         renders as a compact brand mark (~32 px) beside the serif
-         heading. The source file at /brand/fore.svg carries the
-         complete Fore! wordmark (F + ore + ! + underline) with
-         SHA-256 7496507b… and its native viewBox already provides
-         the necessary padding — no CSS overflow tricks required. */}
-      <header className="flex items-center justify-center gap-3 pb-2.5">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/brand/fore.svg"
-          alt=""
-          aria-hidden="true"
-          className="h-8 w-auto block"
-          data-testid="portal-desktop-announcements-fore-logo"
-        />
-        <h2 className="font-serif text-[19px] text-club-ink leading-none">Announcements</h2>
+      {/* Centered-`Announcements`-with-Fore!-mark-to-its-left
+         (2026-08-27). The founder direction is that the word
+         "Announcements" itself owns the card's horizontal centre;
+         the Fore! brand mark is a supporting glyph that sits
+         immediately to its left. Implemented by placing the h2
+         inside a small `relative` box (which is the flex-centred
+         child, so the h2 sits on the card centreline) and
+         absolutely positioning the Fore! logo to the left of the
+         h2 via `right-full` + `mr-2`. Approach avoids any
+         hard-coded logo width and stays responsive across
+         viewports. */}
+      <header className="flex items-center justify-center pb-2.5">
+        <div className="relative" data-testid="portal-desktop-announcements-heading-group">
+          <h2 className="font-serif text-[19px] text-club-ink leading-none">Announcements</h2>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/fore.svg"
+            alt=""
+            aria-hidden="true"
+            className="absolute right-full top-1/2 -translate-y-1/2 mr-2 h-8 w-auto block"
+            data-testid="portal-desktop-announcements-fore-logo"
+          />
+        </div>
       </header>
       {items.length === 0 ? (
         // Density rebalance — empty state remains intentionally
