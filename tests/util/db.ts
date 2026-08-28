@@ -309,6 +309,7 @@ export async function resetDb() {
     // Club); then PayrollClubConfig (FK Club). All must precede
     // c.employee.deleteMany() and c.employeeEmploymentAssignment
     // .deleteMany() below.
+    c.payrollDepartmentTimeApproval.deleteMany(),
     c.payrollBatchAllowanceSnapshot.deleteMany(),
     c.payrollBatchEarning.deleteMany(),
     c.payrollBatchDeduction.deleteMany(),

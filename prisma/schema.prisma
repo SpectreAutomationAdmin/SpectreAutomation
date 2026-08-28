@@ -472,6 +472,7 @@ model Club {
   payrollBatchDeductions             PayrollBatchDeduction[]
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
+  payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
 }
 
 // ---------------------------------------------------------------------
@@ -1818,6 +1819,7 @@ model Department {
   invLocations       InventoryLocation[] @relation("InvLocationDepartment")
   employees          Employee[]          @relation("EmployeeDepartment")
   positions          EmployeePosition[]  @relation("PositionDepartment")
+  payrollTimeApprovals PayrollDepartmentTimeApproval[] @relation("DepartmentPayrollTimeApprovals")
   timesheetEntries   TimesheetEntry[]    @relation("TimesheetEntryDepartment")
   payrollLines       PayrollLine[]       @relation("PayrollLineDepartment")
   labourBudgets      LabourBudget[]      @relation("LabourBudgetDepartment")
@@ -11347,6 +11349,7 @@ model PayrollPayPeriod {
   updatedAt     DateTime @updatedAt
 
   batches       PayrollBatch[]
+  departmentTimeApprovals PayrollDepartmentTimeApproval[]
 
   @@unique([clubId, payGroupId, taxYear, sequenceInYear])
   @@unique([clubId, payGroupId, periodStart])
@@ -11551,6 +11554,47 @@ model PayrollBatchAllowanceSnapshot {
 // timecards) must satisfy before payroll consumes it. Payroll-3A
 // does NOT fabricate rows; the model is written by the future
 // timekeeping approval flow and read by run preparation.
+// Payroll-3B-3 (2026-08-28) — canonical department-level approval
+// record for a Pay Period. One row per (Club, PayPeriod, Department).
+// Represents "Department X has approved its time for Pay Period Y";
+// the underlying PayrollApprovedTimeEntry rows carry their own
+// approval fields, but this row is the audit anchor + Work Intake
+// linkage for the department-scoped approval workflow.
+//
+// Lifecycle: PENDING (implicit — no row) → APPROVED → REOPENED.
+// If time changes after approval, the service transitions the row to
+// REOPENED and reactivates the associated Work Intake card so the
+// department head sees the correction is required.
+model PayrollDepartmentTimeApproval {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  payPeriodId          String
+  payPeriod            PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
+  departmentId         String
+  department           Department @relation("DepartmentPayrollTimeApprovals", fields: [departmentId], references: [id])
+  // APPROVED | REOPENED — the row exists only after a manager first
+  // approves the department for this period.
+  state                String   @default("APPROVED")
+  approvedAt           DateTime
+  approvedByUserId     String
+  reopenedAt           DateTime?
+  reopenedByUserId     String?
+  reopenReason         String?
+  // Optional linkage to the source Work Intake card that resolved
+  // into this approval. The Work Intake orchestrator writes this
+  // pointer so audit + reopen can find and reactivate the same card.
+  workIntakeItemId     String?
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([clubId, payPeriodId, departmentId])
+  @@index([clubId, payPeriodId])
+  @@index([clubId, departmentId])
+  @@index([workIntakeItemId])
+}
+
 model PayrollApprovedTimeEntry {
   id                     String   @id @default(cuid())
   clubId                 String

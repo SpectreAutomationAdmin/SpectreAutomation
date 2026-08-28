@@ -481,6 +481,7 @@ model Club {
   payrollBatchDeductions             PayrollBatchDeduction[]
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
+  payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
 }
 
 // ---------------------------------------------------------------------
@@ -1802,6 +1803,7 @@ model Department {
   invLocations       InventoryLocation[] @relation("InvLocationDepartment")
   employees          Employee[]          @relation("EmployeeDepartment")
   positions          EmployeePosition[]  @relation("PositionDepartment")
+  payrollTimeApprovals PayrollDepartmentTimeApproval[] @relation("DepartmentPayrollTimeApprovals")
   timesheetEntries   TimesheetEntry[]    @relation("TimesheetEntryDepartment")
   payrollLines       PayrollLine[]       @relation("PayrollLineDepartment")
   labourBudgets      LabourBudget[]      @relation("LabourBudgetDepartment")
@@ -11403,6 +11405,7 @@ model PayrollPayPeriod {
   updatedAt     DateTime @updatedAt
 
   batches       PayrollBatch[]
+  departmentTimeApprovals PayrollDepartmentTimeApproval[]
 
   @@unique([clubId, payGroupId, taxYear, sequenceInYear])
   @@unique([clubId, payGroupId, periodStart])
@@ -11600,6 +11603,33 @@ model PayrollBatchAllowanceSnapshot {
 
   @@unique([batchEmployeeId, sourceAllowanceId])
   @@index([clubId, batchId])
+}
+
+// Payroll-3B-3 (2026-08-28) — canonical department-level approval
+// of a Pay Period. See prisma/schema.prisma for the full doc block.
+model PayrollDepartmentTimeApproval {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  payPeriodId          String
+  payPeriod            PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
+  departmentId         String
+  department           Department @relation("DepartmentPayrollTimeApprovals", fields: [departmentId], references: [id])
+  state                String   @default("APPROVED")
+  approvedAt           DateTime
+  approvedByUserId     String
+  reopenedAt           DateTime?
+  reopenedByUserId     String?
+  reopenReason         String?
+  workIntakeItemId     String?
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([clubId, payPeriodId, departmentId])
+  @@index([clubId, payPeriodId])
+  @@index([clubId, departmentId])
+  @@index([workIntakeItemId])
 }
 
 // Approved-time-entry seam (sections 19-20). This is the canonical
