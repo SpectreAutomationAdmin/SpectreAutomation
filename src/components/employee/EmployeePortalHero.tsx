@@ -224,8 +224,13 @@ export default function EmployeePortalHero({
            4032×3024 source, this fits width and continues to show
            the founder-approved focal region (green centred, right
            tree, bunkers, hillside). Landmark visibility validated
-           via Playwright at 1366 / 1440 / 1536 / 1920. */}
-        <div className="relative w-full aspect-[92/20]" style={hasImage ? undefined : fallbackStyle}>
+           via Playwright at 1366 / 1440 / 1536 / 1920.
+           Aspect ratio applied via inline style so it doesn't
+           depend on Tailwind JIT arbitrary-value pickup at build. */}
+        <div
+          className="relative w-full"
+          style={{ aspectRatio: "92 / 20", ...(hasImage ? {} : fallbackStyle) }}
+        >
           {imgSrc && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
