@@ -473,6 +473,7 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  payrollBatchExceptions             PayrollBatchException[]
 }
 
 // ---------------------------------------------------------------------
@@ -3399,6 +3400,7 @@ model Employee {
   payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
+  payrollBatchExceptions     PayrollBatchException[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11386,6 +11388,10 @@ model PayrollBatch {
   // Work Intake handoff (sections 29-30). Set at submit; single item
   // routed to the Controller's inbox with workDomain = "PAYROLL".
   workIntakeItemId String? @unique
+  // Payroll-3B-4 (2026-08-29) — timestamp of the source snapshot
+  // that produced this batch. Frozen at preparation time; a source-
+  // fact change after this timestamp does NOT mutate the batch.
+  sourceSnapshotAt DateTime?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11395,10 +11401,42 @@ model PayrollBatch {
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+  exceptions            PayrollBatchException[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
+}
+
+// Payroll-3B-4 (2026-08-29) — structural readiness / preparation
+// exception. Emitted per (batch, batchEmployee?) during
+// `preparePayrollBatch`. Two severity levels:
+//   BLOCKER — Batch cannot safely proceed to calculation (missing
+//     compensation, invalid assignment, ambiguous pay-group
+//     membership). Preparation refuses to leave DRAFT.
+//   WARNING — Batch can prepare/calculate but requires resolution
+//     downstream (banking not verified before payment submission).
+model PayrollBatchException {
+  id               String        @id @default(cuid())
+  clubId           String
+  club             Club          @relation(fields: [clubId], references: [id])
+  batchId          String
+  batch            PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId  String?
+  batchEmployee    PayrollBatchEmployee? @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId       String?
+  employee         Employee?     @relation(fields: [employeeId], references: [id])
+  severity         String        // BLOCKER | WARNING | INFO
+  code             String        // machine-readable, e.g. MISSING_COMPENSATION
+  message          String        // human-readable
+  recommendedAction String?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime      @default(now())
+
+  @@index([clubId, batchId])
+  @@index([batchId, severity])
+  @@index([batchEmployeeId, severity])
 }
 
 // Per-employee inclusion row in a specific batch (section 12).
@@ -11433,12 +11471,39 @@ model PayrollBatchEmployee {
   // contract.
   grossPay                Decimal?
   netPay                  Decimal?
+  // Payroll-3B-4 (2026-08-29) — structural snapshot fields for the
+  // deterministic input assembly. NONE of these are computed
+  // dollar amounts. They freeze the source facts a future
+  // calculator will consume.
+  //   salaried             — structural flag: employee compensation
+  //                          is salary-based (no hourly earnings
+  //                          derived from PayrollApprovedTimeEntry).
+  //   employmentStartInPeriod / employmentEndInPeriod — set only
+  //                          when the employee hires or terminates
+  //                          within the pay period; NULL when the
+  //                          employee is active for the whole period.
+  //   approvedHoursSnapshot — sum of attached approved-time hours
+  //                          (Decimal, 4 dp). Zero for salaried-only
+  //                          employees with no time entries.
+  //   sourceFactsJson      — machine-readable JSON blob capturing
+  //                          the relevant assignment ids + windows,
+  //                          compensation record ids + effective
+  //                          windows, and other source references
+  //                          the future calculator needs. Never
+  //                          contains sensitive HR values (SIN,
+  //                          bank account numbers, TD1 amounts).
+  salaried                Boolean  @default(false)
+  employmentStartInPeriod DateTime?
+  employmentEndInPeriod   DateTime?
+  approvedHoursSnapshot   Decimal?
+  sourceFactsJson         String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
   allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  exceptions         PayrollBatchException[]
 
   @@unique([batchId, employeeId])
   @@index([clubId, batchId])

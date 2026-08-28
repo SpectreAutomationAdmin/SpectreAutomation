@@ -482,6 +482,7 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  payrollBatchExceptions             PayrollBatchException[]
 }
 
 // ---------------------------------------------------------------------
@@ -3404,6 +3405,7 @@ model Employee {
   payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
+  payrollBatchExceptions     PayrollBatchException[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11442,6 +11444,7 @@ model PayrollBatch {
   // Work Intake handoff (sections 29-30). Set at submit; single item
   // routed to the Controller's inbox with workDomain = "PAYROLL".
   workIntakeItemId String? @unique
+  sourceSnapshotAt DateTime?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11451,10 +11454,36 @@ model PayrollBatch {
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+  exceptions            PayrollBatchException[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
+}
+
+// Payroll-3B-4 (2026-08-29) — structural readiness / preparation
+// exception. See prisma/schema.prisma for the full doc block.
+model PayrollBatchException {
+  id               String        @id @default(cuid())
+  clubId           String
+  club             Club          @relation(fields: [clubId], references: [id])
+  batchId          String
+  batch            PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId  String?
+  batchEmployee    PayrollBatchEmployee? @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId       String?
+  employee         Employee?     @relation(fields: [employeeId], references: [id])
+  severity         String
+  code             String
+  message          String
+  recommendedAction String?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime      @default(now())
+
+  @@index([clubId, batchId])
+  @@index([batchId, severity])
+  @@index([batchEmployeeId, severity])
 }
 
 // Per-employee inclusion row in a specific batch (section 12).
@@ -11489,12 +11518,18 @@ model PayrollBatchEmployee {
   // contract.
   grossPay                Decimal?
   netPay                  Decimal?
+  salaried                Boolean  @default(false)
+  employmentStartInPeriod DateTime?
+  employmentEndInPeriod   DateTime?
+  approvedHoursSnapshot   Decimal?
+  sourceFactsJson         String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
   allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  exceptions         PayrollBatchException[]
 
   @@unique([batchId, employeeId])
   @@index([clubId, batchId])

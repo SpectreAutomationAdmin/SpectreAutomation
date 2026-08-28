@@ -308,6 +308,20 @@ export async function approveDepartmentTime(
   }
 
   const now = new Date();
+  // Payroll-3B-4 linkage fix — resolve the WI item deterministically
+  // via the canonical composite origin key on the SAME pass. This
+  // removes the previous "second orchestration required" dependency.
+  const linkedOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId,
+      kind: "PAYROLL_DEPARTMENT_APPROVAL",
+      referenceId: `${payPeriodId}:${departmentId}`,
+      role: "PRIMARY",
+    },
+    select: { workIntakeItemId: true },
+  });
+  const workIntakeItemId = linkedOrigin?.workIntakeItemId ?? null;
+
   const approval = await prisma.payrollDepartmentTimeApproval.upsert({
     where: {
       clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
@@ -319,6 +333,7 @@ export async function approveDepartmentTime(
       reopenedAt: null,
       reopenedByUserId: null,
       reopenReason: null,
+      workIntakeItemId,
     },
     create: {
       clubId,
@@ -327,6 +342,7 @@ export async function approveDepartmentTime(
       state: "APPROVED",
       approvedAt: now,
       approvedByUserId: principal.id,
+      workIntakeItemId,
     },
   });
   const approvedCount = await _bulkMarkApproved(clubId, tally.entryIds, principal.id);
@@ -425,15 +441,37 @@ export async function reopenDepartmentTime(
     },
   });
 
-  // Reactivate the WI card if present.
-  if (updated.workIntakeItemId) {
+  // Reactivate the WI card. Prefer the row's own workIntakeItemId
+  // when set (fast path); otherwise resolve via the canonical
+  // composite origin lookup (Payroll-3B-4 linkage fix). Guarantees
+  // reopen works after a single orchestrate+approve sequence.
+  let wiId = updated.workIntakeItemId;
+  if (!wiId) {
+    const linked = await prisma.workIntakeOrigin.findFirst({
+      where: {
+        clubId,
+        kind: "PAYROLL_DEPARTMENT_APPROVAL",
+        referenceId: `${payPeriodId}:${departmentId}`,
+        role: "PRIMARY",
+      },
+      select: { workIntakeItemId: true },
+    });
+    wiId = linked?.workIntakeItemId ?? null;
+    if (wiId) {
+      await prisma.payrollDepartmentTimeApproval.update({
+        where: { id: updated.id },
+        data: { workIntakeItemId: wiId },
+      });
+    }
+  }
+  if (wiId) {
     await prisma.workIntakeItem.update({
-      where: { id: updated.workIntakeItemId },
+      where: { id: wiId },
       data: { status: "OPEN", resolvedAt: null, resolvedByUserId: null },
     });
     await prisma.workIntakeActivity.create({
       data: {
-        workIntakeItemId: updated.workIntakeItemId,
+        workIntakeItemId: wiId,
         actorUserId: principal.id,
         action: "REOPENED",
         note: reason?.trim() || null,

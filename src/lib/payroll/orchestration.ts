@@ -35,6 +35,7 @@ import {
 
 const DEPT_ORIGIN_KIND = "PAYROLL_DEPARTMENT_APPROVAL";
 const ADMIN_ORIGIN_KIND = "PAYROLL_ADMIN_PROCESSING";
+const REVIEW_ORIGIN_KIND = "PAYROLL_REVIEW";
 
 export interface DepartmentOrchestrationTask {
   workIntakeItemId: string;
@@ -204,14 +205,18 @@ export async function orchestrateDepartmentApprovalTasks(
       unresolvable.push({ departmentId: t.departmentId, departmentCode: t.code, departmentName: t.name });
     }
 
-    // Prefer the approval row id when it already exists so completion
-    // + reopen have a stable origin reference. Otherwise use a
-    // composite so we can find the row on later runs.
+    // Payroll-3B-4 linkage fix: ALWAYS use the deterministic
+    // composite `${payPeriodId}:${departmentId}` as the origin
+    // reference. The approval row's own id is NOT used because
+    // the row does not exist until the first approve, which
+    // previously required a second orchestration pass to back-
+    // link. Using the composite from the start means the WI item
+    // can be resolved via WorkIntakeOrigin on the FIRST approve.
+    const referenceId = `${payPeriodId}:${t.departmentId}`;
     const approvalRow = await prisma.payrollDepartmentTimeApproval.findUnique({
       where: { clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId: t.departmentId } },
       select: { id: true },
     });
-    const referenceId = approvalRow?.id ?? `${payPeriodId}:${t.departmentId}`;
 
     const hours = formatHours(t.totalHoursCents);
     const subject = `Timesheets ready for approval — ${t.name}`;
@@ -393,4 +398,207 @@ export async function orchestratePayrollAdminHandoff(
     ownerDisplay: owner?.name || owner?.email || config.payrollAdminUserId,
     pendingDepartments: [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Payroll Review handoff (Payroll-3B-4)
+// ---------------------------------------------------------------------------
+
+export interface PayrollReviewHandoffResult {
+  status: "created" | "existing" | "no-admin-configured";
+  workIntakeItemId: string | null;
+  ownerUserId: string | null;
+  ownerDisplay: string;
+  batchId: string;
+}
+
+/**
+ * After preparePayrollBatch succeeds, resolve the outstanding
+ * PAYROLL_ADMIN_PROCESSING task for the Pay Period AND create the
+ * new PAYROLL_REVIEW task for the same Payroll Admin. Separate
+ * Work Intake items (per §27) — each represents a distinct unit
+ * of required work. Idempotent via
+ * WorkIntakeOrigin(PAYROLL_REVIEW, batchId).
+ */
+export async function orchestratePayrollReviewHandoff(
+  principal: Principal,
+  clubId: string,
+  payPeriodId: string,
+  batchId: string,
+): Promise<PayrollReviewHandoffResult> {
+  if (!hasPermission(principal, clubId, "payroll:run")) {
+    throw new Error("Not authorized");
+  }
+  const config = await prisma.payrollClubConfig.findUnique({ where: { clubId } });
+  if (!config?.payrollAdminUserId) {
+    return {
+      status: "no-admin-configured",
+      workIntakeItemId: null,
+      ownerUserId: null,
+      ownerDisplay: "Unassigned",
+      batchId,
+    };
+  }
+
+  const period = await prisma.payrollPayPeriod.findFirst({
+    where: { id: payPeriodId, clubId },
+    select: { periodStart: true, periodEnd: true, payDate: true },
+  });
+  const dateLabel = period
+    ? `${period.periodStart.toISOString().slice(0, 10)} → ${new Date(period.periodEnd.getTime() - 86_400_000).toISOString().slice(0, 10)}`
+    : payPeriodId;
+  const payDateLabel = period ? period.payDate.toISOString().slice(0, 10) : "unknown";
+
+  const summary = await prisma.payrollBatchEmployee.aggregate({
+    where: { clubId, batchId },
+    _count: { _all: true },
+    _sum: { approvedHoursSnapshot: true },
+  });
+  const blockerCount = await prisma.payrollBatchException.count({
+    where: { clubId, batchId, severity: "BLOCKER" },
+  });
+
+  const employeeCount = summary._count._all;
+  const totalHours = summary._sum.approvedHoursSnapshot?.toString() ?? "0";
+  const preview =
+    `${employeeCount} employees · ${totalHours} approved hours` +
+    (blockerCount > 0 ? ` · ${blockerCount} blocker${blockerCount === 1 ? "" : "s"}` : "") +
+    ` · pay ${payDateLabel}`;
+
+  // Resolve the existing ADMIN_PROCESSING task (best-effort — the
+  // orchestrator may have already resolved it via emitWorkCompletionEvent
+  // from a caller, but here we ensure the state transition).
+  const adminOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId,
+      kind: ADMIN_ORIGIN_KIND,
+      referenceId: payPeriodId,
+      role: "PRIMARY",
+    },
+    select: { workIntakeItemId: true },
+  });
+  if (adminOrigin) {
+    const now = new Date();
+    await prisma.workIntakeItem.updateMany({
+      where: { id: adminOrigin.workIntakeItemId, status: { not: "RESOLVED" } },
+      data: {
+        status: "RESOLVED",
+        resolvedAt: now,
+        resolvedByUserId: principal.id,
+      },
+    });
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: adminOrigin.workIntakeItemId,
+        actorUserId: principal.id,
+        action: "RESOLVED",
+        note: `Payroll prepared as batch ${batchId}. Review task created.`,
+      },
+    });
+  }
+
+  const { workIntakeItemId, created } = await ensureOriginBackedItem({
+    clubId,
+    originKind: REVIEW_ORIGIN_KIND,
+    originReferenceId: batchId,
+    workIntent: "REVIEW",
+    workSubtype: "PAYROLL_REVIEW",
+    ownerUserId: config.payrollAdminUserId,
+    subject: `Payroll prepared — review required · ${dateLabel}`,
+    preview,
+    linkReason: `Payroll orchestrator — batch ${batchId} prepared for period ${payPeriodId}.`,
+  });
+
+  // Back-link the WI item onto the batch (single canonical field).
+  await prisma.payrollBatch.update({
+    where: { id: batchId },
+    data: { workIntakeItemId },
+  });
+
+  const owner = await prisma.user.findUnique({
+    where: { id: config.payrollAdminUserId },
+    select: { name: true, email: true },
+  });
+
+  await audit(principal, {
+    action: "payroll.orchestration.review-handoff",
+    entityType: "WorkIntakeItem",
+    entityId: workIntakeItemId,
+    clubId,
+    after: {
+      payPeriodId,
+      batchId,
+      status: created ? "created" : "existing",
+      ownerUserId: config.payrollAdminUserId,
+      blockerCount,
+    },
+  });
+
+  return {
+    status: created ? "created" : "existing",
+    workIntakeItemId,
+    ownerUserId: config.payrollAdminUserId,
+    ownerDisplay: owner?.name || owner?.email || config.payrollAdminUserId,
+    batchId,
+  };
+}
+
+/** Called when a batch is voided pre-calculation. Resolves the
+ *  PAYROLL_REVIEW card (if any) so the Payroll Admin isn't left
+ *  staring at a stale card, and reopens the ADMIN_PROCESSING card
+ *  so the admin can re-prepare after correcting source facts. */
+export async function orchestratePayrollReviewVoid(
+  principal: Principal,
+  clubId: string,
+  payPeriodId: string,
+  batchId: string,
+): Promise<void> {
+  const now = new Date();
+  const reviewOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId,
+      kind: REVIEW_ORIGIN_KIND,
+      referenceId: batchId,
+      role: "PRIMARY",
+    },
+    select: { workIntakeItemId: true },
+  });
+  if (reviewOrigin) {
+    await prisma.workIntakeItem.update({
+      where: { id: reviewOrigin.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: now, resolvedByUserId: principal.id },
+    });
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: reviewOrigin.workIntakeItemId,
+        actorUserId: principal.id,
+        action: "RESOLVED",
+        note: `Batch ${batchId} voided; review no longer required.`,
+      },
+    });
+  }
+  // Reopen the ADMIN_PROCESSING card if it exists.
+  const adminOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId,
+      kind: ADMIN_ORIGIN_KIND,
+      referenceId: payPeriodId,
+      role: "PRIMARY",
+    },
+    select: { workIntakeItemId: true },
+  });
+  if (adminOrigin) {
+    await prisma.workIntakeItem.update({
+      where: { id: adminOrigin.workIntakeItemId },
+      data: { status: "OPEN", resolvedAt: null, resolvedByUserId: null },
+    });
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: adminOrigin.workIntakeItemId,
+        actorUserId: principal.id,
+        action: "REOPENED",
+        note: `Batch ${batchId} voided; re-preparation required.`,
+      },
+    });
+  }
 }

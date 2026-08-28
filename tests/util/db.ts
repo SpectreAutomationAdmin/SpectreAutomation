@@ -310,6 +310,7 @@ export async function resetDb() {
     // c.employee.deleteMany() and c.employeeEmploymentAssignment
     // .deleteMany() below.
     c.payrollDepartmentTimeApproval.deleteMany(),
+    c.payrollBatchException.deleteMany(),
     c.payrollBatchAllowanceSnapshot.deleteMany(),
     c.payrollBatchEarning.deleteMany(),
     c.payrollBatchDeduction.deleteMany(),
