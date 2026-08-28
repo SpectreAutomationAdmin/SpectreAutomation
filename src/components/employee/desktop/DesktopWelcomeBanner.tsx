@@ -58,25 +58,29 @@ export default function DesktopWelcomeBanner({ clubName, href, quickLinks = [] }
           Welcome to the {clubName} employee portal.
         </p>
         {/* Supporting-copy row with inline Quick Links (right-aligned
-           via `justify-between`). When zero links are configured the
-           `<nav>` is not rendered and the row collapses to just the
+           via `justify-between`). `flex-nowrap` keeps everything on
+           a single line at every desktop viewport so the banner
+           height does not grow when Quick Links are configured
+           (verified 72 px at 1366/1440/1536, 80 px at 1920 via
+           Playwright). When zero links are configured the `<nav>`
+           is not rendered and the row collapses to just the
            supporting copy — preserving the accepted no-links look. */}
-        <div className="mt-1 flex items-baseline justify-between gap-4 flex-wrap">
-          <p className="text-[13px] text-white/80 leading-snug break-words min-w-0">
+        <div className="mt-1 flex items-baseline justify-between gap-3 flex-nowrap min-w-0">
+          <p className="text-[13px] text-white/80 leading-snug min-w-0 truncate">
             Access your schedule, pay information and more.
           </p>
           {inlineLinks.length > 0 && (
             <nav
-              className="flex items-baseline gap-3 text-[13px] text-white/90 flex-wrap justify-end shrink-0"
+              className="flex items-baseline gap-2.5 text-[13px] text-white/90 flex-nowrap justify-end shrink-0"
               data-testid="portal-desktop-welcome-quick-links"
               aria-label="Quick Links"
             >
-              {/* Compact "Quick Links" label — semibold + slightly
-                 softened white so it reads as a section marker
-                 without competing with the main headline. No pill,
-                 no background, no oversized heading. */}
+              {/* Compact "Quick Links" label — small, semibold,
+                 slightly softened white so it reads as a section
+                 marker without competing with the main headline.
+                 No pill, no background, no oversized heading. */}
               <span
-                className="text-[12px] font-semibold uppercase tracking-[0.10em] text-white/70"
+                className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/70 whitespace-nowrap"
                 data-testid="portal-desktop-welcome-quick-links-label"
               >
                 Quick Links
@@ -87,7 +91,7 @@ export default function DesktopWelcomeBanner({ clubName, href, quickLinks = [] }
                   href={link.href}
                   target={link.external ? "_blank" : undefined}
                   rel={link.external ? "noopener noreferrer" : undefined}
-                  className="inline-flex items-baseline gap-1 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm"
+                  className="inline-flex items-baseline gap-1 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm whitespace-nowrap"
                   data-testid={`portal-desktop-welcome-quick-link-${link.id}`}
                 >
                   <span>{link.label}</span>
