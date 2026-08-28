@@ -60,9 +60,14 @@ test.describe("Employee Portal — proportional hero reduction", () => {
       await page.waitForTimeout(1500);
 
       const sample: HeroSample | null = await page.evaluate((label) => {
-        const shell = document.querySelector('[data-testid="portal-desktop-shell"]');
-        const hero = shell?.querySelector('[data-testid="portal-hero-desktop"]') as HTMLElement | null;
-        const img = shell?.querySelector('[data-testid="portal-hero-image-desktop"]') as HTMLImageElement | null;
+        // The layout wrapper renders page.tsx twice (mobile and
+        // desktop shells wrap the same children), so multiple hero
+        // elements exist in the DOM. Pick the one with non-zero
+        // dimensions — that's the one the viewer actually sees.
+        const allHeroes = Array.from(document.querySelectorAll('[data-testid="portal-hero-desktop"]')) as HTMLElement[];
+        const hero = allHeroes.find((h) => h.getBoundingClientRect().width > 0) ?? null;
+        const allImgs = Array.from(document.querySelectorAll('[data-testid="portal-hero-image-desktop"]')) as HTMLImageElement[];
+        const img = allImgs.find((i) => i.getBoundingClientRect().width > 0) ?? null;
         if (!hero || !img) return null;
         const heroRect = hero.getBoundingClientRect();
         const imgRect = img.getBoundingClientRect();
@@ -85,25 +90,14 @@ test.describe("Employee Portal — proportional hero reduction", () => {
       expect(sample).not.toBeNull();
       const s = sample!;
       console.log(`[${vp.label}] hero ${s.heroWidth.toFixed(0)}x${s.heroHeight.toFixed(0)} aspect=${s.heroAspect.toFixed(2)} image natural=${s.imageNaturalWidth}x${s.imageNaturalHeight}(${s.imageNaturalAspect.toFixed(2)}) objectFit=${s.objectFit} objectPosition=${s.objectPosition}`);
-
+      // Persist measurements + screenshots FIRST, before any
+      // assertion can short-circuit them.
+      fs.writeFileSync(path.join(OUT, `hero-${vp.label}.json`), JSON.stringify(s, null, 2));
+      await page.screenshot({ path: path.join(OUT, `full-${vp.label}.png`), fullPage: false });
       // Hero aspect must be at or wider than 4:1 — the founder's
       // guidance is 4.5–4.8:1 conceptual target. 4.0 is the floor:
       // anything less than 4:1 means the reduction wasn't material.
       expect(s.heroAspect).toBeGreaterThan(4.0);
-      // Height must be under 300 px on the primary target width
-      // (1536×864); at other widths the aspect ratio governs height,
-      // so we just require aspect ≥ 4.0 and rely on visual review
-      // for the exact px.
-      // (No hard px cap — the aspect ratio + `w-full` guarantees
-      // proportional behavior across viewports.)
-
-      // Screenshot both the full page (for context/dashboard visibility)
-      // and the hero card in isolation (for composition review).
-      await page.screenshot({ path: path.join(OUT, `full-${vp.label}.png`), fullPage: false });
-      const heroLocator = page.locator('[data-testid="portal-desktop-shell"] [data-testid="portal-hero-desktop"]').first();
-      await heroLocator.screenshot({ path: path.join(OUT, `hero-${vp.label}.png`) });
-
-      fs.writeFileSync(path.join(OUT, `hero-${vp.label}.json`), JSON.stringify(s, null, 2));
       await context.close();
     });
   }
