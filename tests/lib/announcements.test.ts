@@ -174,6 +174,34 @@ describe("announcements — publication rules", () => {
     })).rejects.toThrow();
   });
 
+  it("REGRESSION §15: a draft with the DEFAULT admin-created title never appears on the portal", async () => {
+    const { clubA, adminP } = await setup();
+    // Admin creates a fresh draft using the same title + body the
+    // AnonymousFeedback admin editor's `create()` seeds.
+    await createAnnouncement(adminP, clubA.id, {
+      audience: "EMPLOYEE",
+      title: "New announcement",
+      body: "Draft — update the title and body, then publish.",
+      isPublished: false,
+    });
+    // The portal read must return zero rows because the draft is
+    // not published.
+    const forEmp = await listVisibleAnnouncements(clubA.id, "EMPLOYEE");
+    expect(forEmp.length).toBe(0);
+    // Even if audience is BOTH, drafts stay hidden.
+    await createAnnouncement(adminP, clubA.id, {
+      audience: "BOTH",
+      title: "New announcement",
+      body: "Draft — update the title and body, then publish.",
+      isPublished: false,
+    });
+    const forEmp2 = await listVisibleAnnouncements(clubA.id, "EMPLOYEE");
+    expect(forEmp2.length).toBe(0);
+    // Same guarantee for the Member surface.
+    const forMem = await listVisibleAnnouncements(clubA.id, "MEMBER");
+    expect(forMem.length).toBe(0);
+  });
+
   it("input sensitivity: changing seeded row content changes the portal read output", async () => {
     const { clubA, adminP } = await setup();
     const row = await createAnnouncement(adminP, clubA.id, {

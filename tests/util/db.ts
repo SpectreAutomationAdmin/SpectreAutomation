@@ -442,6 +442,7 @@ export async function resetDb() {
     c.trainingCourse.deleteMany(),
     c.employeePortalQuickLink.deleteMany(),
     c.clubAnnouncement.deleteMany(),
+    c.anonymousFeedback.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),

@@ -457,6 +457,7 @@ model Club {
   employeePortalPasswordResets       EmployeePortalPasswordReset[]
   media                              ClubMedia[]
   employeePortalQuickLinks           EmployeePortalQuickLink[]
+  anonymousFeedback                  AnonymousFeedback[]
   trainingCourses                    TrainingCourse[]
   trainingAssignments                TrainingAssignment[]
   trainingProgress                   TrainingProgress[]
@@ -11003,6 +11004,23 @@ model EmployeePortalQuickLink {
 
   @@index([clubId, sortOrder])
   @@index([clubId, isActive])
+}
+
+// ============================================================
+// HR-2C — Anonymous Employee Feedback (2026-08-27)
+// ============================================================
+model AnonymousFeedback {
+  id         String   @id @default(cuid())
+  clubId     String
+  club       Club     @relation(fields: [clubId], references: [id])
+  category   String?
+  message    String
+  status     String   @default("NEW")
+  createdAt  DateTime @default(now())
+  reviewedAt DateTime?
+
+  @@index([clubId, createdAt])
+  @@index([clubId, status])
 }
 
 // ============================================================

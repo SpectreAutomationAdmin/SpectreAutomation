@@ -56,12 +56,23 @@ import MobileQuickLinks from "@/components/employee/mobile/MobileQuickLinks";
 // takes over at <md.
 import DesktopWidgetGrid, { type DesktopWidget } from "@/components/employee/desktop/DesktopWidgetGrid";
 import DesktopAnnouncementsCard from "@/components/employee/desktop/DesktopAnnouncementsCard";
-import DesktopQuickLinksCard from "@/components/employee/desktop/DesktopQuickLinksCard";
 import DesktopFooter from "@/components/employee/desktop/DesktopFooter";
 import DesktopWelcomeBanner from "@/components/employee/desktop/DesktopWelcomeBanner";
+import {
+  IconSchedule as IconScheduleShared,
+  IconPaystubs as IconPaystubsShared,
+  IconTimeOff as IconTimeOffShared,
+  IconDocuments as IconDocumentsShared,
+  IconTraining as IconTrainingShared,
+  IconClock as IconClockShared,
+} from "@/components/employee/portal-icons";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// HR-2C Fore! Announcements — accepted-design cap on Home. All
+// eligible rows still exist and are reachable via /employee/announcements.
+const HOME_ANNOUNCEMENT_LIMIT = 2;
 
 // --- Widget icon set (monoline, currentColor, restrained) ------------------
 
@@ -214,9 +225,10 @@ export default async function EmployeePortalHome() {
     // HR-2C Fore! Announcements (2026-08-27) — canonical publication-
     // rule read. Only rows that are: published, publishedAt <= now,
     // not expired, audience includes EMPLOYEE (either EMPLOYEE or
-    // BOTH). Ordered pinned-first, then newest published. Capped at
-    // 3 so a long list can't push the home dashboard.
-    listVisibleAnnouncements(principal.clubId, "EMPLOYEE", { limit: 3 }),
+    // BOTH). Ordered pinned-first, then newest published. Fetch one
+    // extra beyond the home cap so the page can detect whether a
+    // "View all announcements" affordance is warranted.
+    listVisibleAnnouncements(principal.clubId, "EMPLOYEE", { limit: HOME_ANNOUNCEMENT_LIMIT + 1 }),
   ]);
   if (!employee) redirect("/employee/login");
 
@@ -255,57 +267,8 @@ export default async function EmployeePortalHome() {
   // current underlying obligation state.
   const activeNotifications = notifications.filter((n) => !n.dismissed);
 
-  const widgets: WidgetDef[] = [
-    {
-      key: "scheduling",
-      label: "Scheduling",
-      href: "/employee/schedule",
-      icon: <IconCalendar />,
-      tourTarget: "scheduling",
-    },
-    {
-      key: "paystubs",
-      label: "Paystubs",
-      href: "/employee/pay",
-      icon: <IconPaystub />,
-      tourTarget: "paystubs",
-    },
-    {
-      key: "time-off-requests",
-      label: "Time Off Requests",
-      href: null,
-      icon: <IconTimeOff />,
-      tourTarget: "time-off",
-    },
-    {
-      key: "forms",
-      label: "Forms",
-      href: null,
-      icon: <IconForms />,
-      tourTarget: "forms",
-    },
-    {
-      key: "training",
-      // HR mobile-hotfix (2026-08-30) — founder terminology
-      // correction: widget label is "Safety & Training" (aligns
-      // with the admin catalogue + destination page title).
-      label: "Safety & Training",
-      href: "/employee/safety-training",
-      icon: <IconTraining />,
-      tourTarget: "training",
-    },
-    {
-      key: "clocking-in-out",
-      // HR mobile-hotfix (2026-08-30) — "Clock In / Out" per
-      // founder terminology.
-      label: "Clock In / Out",
-      href: null,
-      icon: <IconClock />,
-      // HR mobile-hotfix (2026-08-30) — widget participates in
-      // the guided tour so employees see the affordance.
-      tourTarget: "clocking-in-out",
-    },
-  ];
+  // (HR-2C refinement 2026-08-27) — legacy WidgetDef list removed.
+  // Home now renders MobileWidgetGrid + DesktopWidgetGrid only.
 
   // HR mobile-hotfix (2026-08-27) — accepted mobile reference card
   // labels + descriptions. Note "Time Off" (not "Time Off Requests")
@@ -327,26 +290,20 @@ export default async function EmployeePortalHome() {
     { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
     { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
-    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms", spanCols: 2 },
   ];
 
-  // HR mobile-hotfix continuation (2026-08-28) — desktop 3×2 grid.
-  // Order per the accepted desktop reference: row 1 (Scheduling /
-  // Paystubs / Time Off), row 2 (Forms / Safety & Training /
-  // Clock In / Out). Same routes + labels as mobile.
-  // Uniform-cards pass (2026-08-26) — Year-end Tax Forms is the
-  // same 1-column card as the other six. It sits in the first cell
-  // of row 3; the remaining two grid tracks stay empty — uniformity
-  // wins over "fill every cell". No `spanCols` — the widget grid
-  // uses a single card component for all seven destinations.
+  // HR-2C refinement (2026-08-27) — Year-end Tax Forms removed.
+  // Payroll-related annual documents will live within the Paystubs
+  // experience. Desktop returns cleanly to a 3×2 grid of six primary
+  // destinations. Icons come from the shared portal-icons module so
+  // they match the sidebar's nav glyphs.
   const desktopWidgets: DesktopWidget[] = [
-    { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconCalendar />, tourTarget: "scheduling" },
-    { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystub />, tourTarget: "paystubs" },
-    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
-    { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
-    { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
-    { key: "year-end-tax-forms", title: "Year-end Tax Forms", description: "Access your annual tax documents", href: null, icon: <IconTaxForm />, tourTarget: "year-end-tax-forms" },
+    { key: "scheduling", title: "Scheduling", description: "View your shifts and availability", href: "/employee/schedule", icon: <IconScheduleShared size={56} />, tourTarget: "scheduling" },
+    { key: "paystubs", title: "Paystubs", description: "Access your pay information", href: "/employee/pay", icon: <IconPaystubsShared size={56} />, tourTarget: "paystubs" },
+    { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOffShared size={56} />, tourTarget: "time-off" },
+    { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconDocumentsShared size={56} />, tourTarget: "documents" },
+    { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTrainingShared size={56} />, tourTarget: "training" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockShared size={56} />, tourTarget: "clocking-in-out" },
   ];
 
   // Club-name for the mobile welcome banner. Uses the same resolved
@@ -497,7 +454,12 @@ export default async function EmployeePortalHome() {
           {/* MAIN COLUMN — welcome banner + notifications + 3x2 grid + optional awaiting-review */}
           <div className="min-w-0 space-y-4 [@media(max-height:900px)]:space-y-2">
             <div data-testid="portal-desktop-welcome-banner-slot">
-              <DesktopWelcomeBanner clubName={clubName} />
+              {/* HR-2C refinement (2026-08-27) — Quick Links now
+                 render INLINE inside the Welcome banner rather than
+                 as a standalone right-rail card. Same tenant-admin-
+                 configured data source; the banner shows up to 3
+                 inline links + a "+N more" overflow when more exist. */}
+              <DesktopWelcomeBanner clubName={clubName} quickLinks={quickLinkItems} />
             </div>
             {activeNotifications.length > 0 && (
               <section
@@ -532,14 +494,17 @@ export default async function EmployeePortalHome() {
               </section>
             )}
           </div>
-          {/* RIGHT RAIL — announcements + quick links. Row-gap
-             tightened for density rebalance; panels themselves keep
-             their compact-desktop treatment. */}
+          {/* RIGHT RAIL — announcements only (2026-08-27 refinement).
+             The standalone Quick Links card was removed; the same
+             tenant-configured Quick Links now render inline on the
+             Welcome banner. The Fore! Announcements card owns this
+             column and shows at most 2 announcements + a "View all
+             announcements" link when more exist. */}
           <div className="min-w-0 space-y-4 [@media(max-height:900px)]:space-y-2">
             <DesktopAnnouncementsCard
-              items={buildAnnouncementItems(announcementRows)}
+              items={buildAnnouncementItems(announcementRows.slice(0, HOME_ANNOUNCEMENT_LIMIT))}
+              viewAllHref={announcementRows.length > HOME_ANNOUNCEMENT_LIMIT ? "/employee/announcements" : null}
             />
-            {quickLinkItems.length > 0 && <DesktopQuickLinksCard items={quickLinkItems} />}
           </div>
         </div>
         <DesktopFooter clubName={clubName} year={2026} />

@@ -1,114 +1,43 @@
 "use client";
 
-// HR mobile-hotfix continuation (2026-08-28) — desktop portal
-// sidebar rebuilt to the accepted desktop reference.
+// HR-2C Employee Portal desktop sidebar (2026-08-27 refinement).
 //
-// Dark forest-green rail from top of viewport to bottom, extending
-// the same visual language established on mobile. Full navigation
-// (Home / Schedule / Pay / Time Off · Forms / Safety & Training /
-// Clock In / Out · More) with icon + label per row. Active row uses
-// a lighter translucent overlay + brass accent. Bottom carries a
-// compact "Need Help?" support panel.
+// This pass consolidates several founder-mandated changes:
+//   • Icon set comes from the shared canonical module
+//     (`portal-icons.tsx`) so sidebar and widget-grid glyphs cannot
+//     drift again — same source, one edit.
+//   • SPECTRE / AUTOMATION wordmark is horizontally centred within
+//     its allotted branding column (was `px-5` left-aligned).
+//   • The bottom "Need Help? / Contact HR Support" card is
+//     replaced by an anonymous-feedback entry point that opens the
+//     new `/employee/feedback` submission surface.
 //
-// Preserves the tour anchor data-attributes so the coach-mark
-// system keeps working for desktop-anchored tour steps.
+// Preserves: sidebar width, sticky positioning, height, nav
+// grouping (Home/Schedule/Pay/Time Off · Documents/Safety &
+// Training/Clock · More), active state chrome, tour anchors.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import {
+  IconHome,
+  IconSchedule,
+  IconPaystubs,
+  IconTimeOff,
+  IconDocuments,
+  IconTraining,
+  IconClock,
+  IconMore,
+  IconFeedback,
+} from "./portal-icons";
 
 interface NavItem {
   key: string;
   label: string;
-  href: string | null;      // null → non-navigational (aria-disabled)
+  href: string | null;
   icon: ReactNode;
   tourTarget?: string;
   matchExact?: boolean;
-}
-
-// Sidebar icons — scaled to 22 px per the accepted desktop reference
-// fidelity pass (2026-08-26). Preserve the same glyphs; only the
-// bounding size + stroke weight change.
-function IconHome() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 11l9-7 9 7" />
-      <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
-    </svg>
-  );
-}
-function IconSchedule() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3.5" y="5" width="17" height="15" rx="2" />
-      <line x1="3.5" y1="10" x2="20.5" y2="10" />
-      <line x1="8" y1="3" x2="8" y2="7" />
-      <line x1="16" y1="3" x2="16" y2="7" />
-    </svg>
-  );
-}
-function IconPay() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="6" width="18" height="12" rx="2" />
-      <line x1="3" y1="10" x2="21" y2="10" />
-    </svg>
-  );
-}
-function IconTimeOff() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.5" />
-      <polyline points="12 7.5 12 12 16 14" />
-    </svg>
-  );
-}
-function IconForms() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="5" y="4" width="14" height="17" rx="2" />
-      <path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z" />
-      <line x1="8.5" y1="11" x2="15.5" y2="11" />
-      <line x1="8.5" y1="15" x2="15.5" y2="15" />
-    </svg>
-  );
-}
-function IconTraining() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M2.5 9.5 12 5l9.5 4.5L12 14 2.5 9.5z" />
-      <path d="M6.5 11.5v4c0 1 2.5 2.5 5.5 2.5s5.5-1.5 5.5-2.5v-4" />
-      <line x1="21.5" y1="9.5" x2="21.5" y2="14" />
-    </svg>
-  );
-}
-function IconClockInOut() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 5h12l3 2.5L16 10H4z" />
-      <path d="M4 14h14l3 2.5L18 19H4z" />
-      <line x1="8" y1="10" x2="8" y2="14" />
-    </svg>
-  );
-}
-function IconMore() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.3" />
-      <circle cx="12" cy="12" r="1.3" />
-      <circle cx="19" cy="12" r="1.3" />
-    </svg>
-  );
-}
-function IconHeadset() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 13v-1a8 8 0 0 1 16 0v1" />
-      <rect x="3" y="13" width="4" height="7" rx="1" />
-      <rect x="17" y="13" width="4" height="7" rx="1" />
-      <path d="M20 20a3 3 0 0 1-3 3h-2" />
-    </svg>
-  );
 }
 
 const NAV_GROUPS: Array<{ items: NavItem[] }> = [
@@ -116,18 +45,18 @@ const NAV_GROUPS: Array<{ items: NavItem[] }> = [
     items: [
       { key: "home", label: "Home", href: "/employee", icon: <IconHome />, tourTarget: "home", matchExact: true },
       { key: "schedule", label: "Schedule", href: "/employee/schedule", icon: <IconSchedule />, tourTarget: "scheduling" },
-      { key: "pay", label: "Pay", href: "/employee/pay", icon: <IconPay />, tourTarget: "paystubs" },
+      { key: "pay", label: "Pay", href: "/employee/pay", icon: <IconPaystubs />, tourTarget: "paystubs" },
       { key: "time-off", label: "Time Off", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
     ],
   },
   {
     items: [
-      // Uniform-terminology pass (2026-08-26) — user-facing label
-      // renamed Forms → Documents to match the widget grid. The
-      // `key`/testid remains stable for existing selectors.
-      { key: "forms", label: "Documents", href: null, icon: <IconForms />, tourTarget: "documents" },
+      // Uniform-terminology pass — user-facing label renamed
+      // Forms → Documents to match the widget grid. Test-id key
+      // remains "forms" for backwards-compatible selectors.
+      { key: "forms", label: "Documents", href: null, icon: <IconDocuments />, tourTarget: "documents" },
       { key: "training", label: "Safety & Training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-      { key: "clock", label: "Clock In / Out", href: null, icon: <IconClockInOut />, tourTarget: "clocking-in-out" },
+      { key: "clock", label: "Clock In / Out", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
     ],
   },
   {
@@ -141,20 +70,17 @@ export default function EmployeePortalSidebar() {
   const pathname = usePathname();
 
   return (
-    // Fidelity pass (2026-08-26) — sidebar is a full-viewport-height
-    // sticky rail; it uses its own overflow-y so the Help panel is
-    // always pinned to the bottom and NEVER clipped by the browser
-    // edge, even at 720-px-tall viewports.
     <aside
       className="hidden md:flex md:flex-col w-64 shrink-0 bg-club-green-800 text-white sticky top-0 self-start"
       style={{ height: "100vh" }}
       data-testid="portal-sidebar"
     >
-      {/* Density rebalance — sidebar header band matches the h-20
-         top header. Branding sizes preserved so it still reads as
-         premium brand chrome. */}
-      <div className="h-20 px-5 flex items-center border-b border-white/10 shrink-0">
-        <div className="flex flex-col leading-tight" data-testid="portal-sidebar-wordmark">
+      {/* Branding band — matches the h-20 top header height. The
+         wordmark is horizontally centred inside this column so the
+         letters sit visually balanced against the tenant identity
+         across the gold separator. */}
+      <div className="h-20 flex items-center justify-center border-b border-white/10 shrink-0">
+        <div className="flex flex-col leading-tight items-center text-center" data-testid="portal-sidebar-wordmark">
           <span className="font-serif text-[26px] font-semibold tracking-[0.16em] text-white">SPECTRE</span>
           <span className="font-sans text-[12px] tracking-[0.36em] text-white/75 mt-0.5">AUTOMATION</span>
         </div>
@@ -166,9 +92,6 @@ export default function EmployeePortalSidebar() {
               const active = item.href
                 ? (item.matchExact ? pathname === item.href : pathname === item.href || pathname.startsWith(item.href + "/"))
                 : false;
-              // Active state per accepted reference: substantial rounded
-              // rectangle with translucent green overlay + subtle brass
-              // ring. Non-active rows carry only the hover treatment.
               const cls = active
                 ? "bg-white/[0.14] text-white font-medium ring-1 ring-club-gold/25"
                 : "text-white/85 hover:bg-white/[0.06] hover:text-white";
@@ -209,21 +132,24 @@ export default function EmployeePortalSidebar() {
           </div>
         ))}
       </nav>
-      {/* Help / Support panel — pinned to the bottom of the sidebar
-         via `shrink-0` + `flex-1` on the nav above, so the panel is
-         ALWAYS visible above the browser edge at every viewport
-         height. Compacted for the one-screen-fit target. */}
+      {/* Anonymous Feedback entry — replaces the prior Need Help /
+         Contact HR Support card. Links to `/employee/feedback`
+         where the employee can submit anonymous feedback to the
+         Club. The record persists `clubId` (derived server-side)
+         but never any employee identity. */}
       <div className="p-3 shrink-0">
-        <div
-          className="rounded-xl bg-white/[0.10] border border-white/[0.14] px-3.5 py-3 flex items-center gap-3"
-          data-testid="portal-sidebar-help"
+        <Link
+          href="/employee/feedback"
+          className="rounded-xl bg-white/[0.10] border border-white/[0.14] px-3.5 py-3 flex items-center gap-3 hover:bg-white/[0.14] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold"
+          data-testid="portal-sidebar-feedback"
+          aria-label="Share anonymous feedback with the Club"
         >
-          <div className="text-white/95 shrink-0" aria-hidden="true"><IconHeadset /></div>
+          <div className="text-white/95 shrink-0" aria-hidden="true"><IconFeedback /></div>
           <div className="min-w-0">
-            <div className="font-serif text-[14px] leading-tight text-white">Need Help?</div>
-            <div className="text-[11.5px] text-white/75 truncate mt-0.5">Contact HR Support</div>
+            <div className="font-serif text-[14px] leading-tight text-white">Share Feedback</div>
+            <div className="text-[11.5px] text-white/75 truncate mt-0.5">Send anonymous feedback</div>
           </div>
-        </div>
+        </Link>
       </div>
     </aside>
   );

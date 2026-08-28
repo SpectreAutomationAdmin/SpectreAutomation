@@ -54,6 +54,20 @@ export default function EmployeePortalTopBar({
       className="h-20 flex items-stretch bg-club-green-800 text-white px-8 gap-8 sticky top-0 z-20"
       data-testid="portal-header"
     >
+      {/* Gold vertical separator — sits at the topbar's left edge
+         (which visually joins the sidebar's right edge) so the
+         `SPECTRE / AUTOMATION` wordmark and the tenant name read as
+         a paired identity across a subtle brass divider, per the
+         accepted reference. Not full header height; leaves comfortable
+         top/bottom space (`my-4` ≈ 16 px inset). Uses the same
+         `club-gold` token the widget-card dividers use, at 55%
+         opacity so it remains a supporting detail rather than an
+         accent. */}
+      <div
+        aria-hidden="true"
+        className="self-center w-px h-10 bg-club-gold/55"
+        data-testid="portal-header-separator"
+      />
       {/* Tenant identity — canonical current-Club name in two lines,
          scaled up per the accepted reference. */}
       <div className="flex items-center min-w-0 flex-1">

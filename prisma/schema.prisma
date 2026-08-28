@@ -448,6 +448,7 @@ model Club {
   employeePortalPasswordResets       EmployeePortalPasswordReset[]
   media                              ClubMedia[]
   employeePortalQuickLinks           EmployeePortalQuickLink[]
+  anonymousFeedback                  AnonymousFeedback[]
   trainingCourses                    TrainingCourse[]
   trainingAssignments                TrainingAssignment[]
   trainingProgress                   TrainingProgress[]
@@ -10918,6 +10919,44 @@ model EmployeePortalQuickLink {
 
   @@index([clubId, sortOrder])
   @@index([clubId, isActive])
+}
+
+// ============================================================
+// HR-2C — Anonymous Employee Feedback (2026-08-27)
+// ============================================================
+//
+// Employee-submitted feedback where the submitter is intentionally
+// NOT persisted at the application level. The Club must still know
+// which tenant the feedback belongs to, so `clubId` is derived
+// server-side from the authenticated employee session — but no
+// employeeId / userId / name / email / employee-number field
+// exists on the row itself.
+//
+// Never add an author field to this model. Never add a column that
+// could be joined to an employee row. Doing so violates the
+// founder-mandated anonymity contract enforced end-to-end.
+//
+// Discipline mirrors ClubAnnouncement: every write goes through
+// `src/lib/anonymous-feedback.ts`; audit rows are recorded WITHOUT
+// author metadata.
+model AnonymousFeedback {
+  id         String   @id @default(cuid())
+  clubId     String
+  club       Club     @relation(fields: [clubId], references: [id])
+  // Optional soft category. Free-form string; the UI shows a
+  // closed dropdown but the service accepts any string ≤ 40 chars
+  // so a future admin categorisation flow can grow the list
+  // without a schema change. Empty string / null = uncategorised.
+  category   String?
+  message    String
+  // Lightweight review lifecycle: NEW → REVIEWED → ARCHIVED.
+  // Admin-only; not exposed to employees.
+  status     String   @default("NEW")
+  createdAt  DateTime @default(now())
+  reviewedAt DateTime?
+
+  @@index([clubId, createdAt])
+  @@index([clubId, status])
 }
 
 // ============================================================
