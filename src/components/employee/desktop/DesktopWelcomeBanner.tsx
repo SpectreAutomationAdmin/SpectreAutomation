@@ -37,12 +37,20 @@ export default function DesktopWelcomeBanner({ clubName, href, quickLinks = [] }
       className="hidden md:flex items-stretch gap-5 rounded-2xl bg-club-green-800 text-white px-6 py-4 [@media(max-height:900px)]:py-3 shadow-[0_1px_2px_rgba(15,20,15,0.06)]"
       data-testid="portal-desktop-welcome-banner"
     >
-      <div className="flex items-center justify-center h-12 w-12 shrink-0 text-white/95" aria-hidden="true">
-        {/* Megaphone / announcement glyph */}
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 10v4a1 1 0 0 0 1 1h3l7 4V5L8 9H5a1 1 0 0 0-1 1z" />
-          <path d="M17 7.5a4.5 4.5 0 0 1 0 9" />
-        </svg>
+      {/* Founder-supplied white golf-flag SVG (2026-08-27). Sized by
+         height so it fits the existing 48 px icon slot without
+         growing the banner; width auto-scales to preserve the
+         supplied vector aspect ratio. Decorative — the adjacent
+         Welcome copy already conveys the message. */}
+      <div className="flex items-center justify-center h-12 w-12 shrink-0" aria-hidden="true">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/golf-flag-white.svg"
+          alt=""
+          aria-hidden="true"
+          className="h-9 w-auto object-contain block"
+          data-testid="portal-desktop-welcome-flag"
+        />
       </div>
       <div aria-hidden="true" className="w-px bg-club-gold/60 shrink-0" />
       <div className="min-w-0 flex-1 flex flex-col justify-center">
@@ -59,45 +67,48 @@ export default function DesktopWelcomeBanner({ clubName, href, quickLinks = [] }
           </p>
           {inlineLinks.length > 0 && (
             <nav
-              className="flex items-baseline gap-2 text-[13px] text-white/90 flex-wrap justify-end shrink-0"
+              className="flex items-baseline gap-3 text-[13px] text-white/90 flex-wrap justify-end shrink-0"
               data-testid="portal-desktop-welcome-quick-links"
               aria-label="Quick Links"
             >
-              {inlineLinks.map((link, i) => (
-                <span key={link.id} className="flex items-baseline gap-2">
-                  <a
-                    href={link.href}
-                    target={link.external ? "_blank" : undefined}
-                    rel={link.external ? "noopener noreferrer" : undefined}
-                    className="inline-flex items-baseline gap-1 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm"
-                    data-testid={`portal-desktop-welcome-quick-link-${link.id}`}
-                  >
-                    <span>{link.label}</span>
-                    {link.external && (
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="opacity-80">
-                        <path d="M14 3h7v7" />
-                        <path d="M10 14 21 3" />
-                        <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
-                      </svg>
-                    )}
-                  </a>
-                  {i < inlineLinks.length - 1 && (
-                    <span aria-hidden="true" className="text-white/40">·</span>
-                  )}
-                </span>
+              {/* Compact "Quick Links" label — semibold + slightly
+                 softened white so it reads as a section marker
+                 without competing with the main headline. No pill,
+                 no background, no oversized heading. */}
+              <span
+                className="text-[12px] font-semibold uppercase tracking-[0.10em] text-white/70"
+                data-testid="portal-desktop-welcome-quick-links-label"
+              >
+                Quick Links
+              </span>
+              {inlineLinks.map((link) => (
+                <a
+                  key={link.id}
+                  href={link.href}
+                  target={link.external ? "_blank" : undefined}
+                  rel={link.external ? "noopener noreferrer" : undefined}
+                  className="inline-flex items-baseline gap-1 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm"
+                  data-testid={`portal-desktop-welcome-quick-link-${link.id}`}
+                >
+                  <span>{link.label}</span>
+                  {/* Same open-link glyph for EVERY configured Quick
+                     Link, external or internal. Founder direction §7:
+                     both Club Website and Employee Handbook must
+                     read consistently. The glyph is decorative — the
+                     underlying `target="_blank"` / same-tab behaviour
+                     is unchanged from the previous ticket (§8). */}
+                  <ExternalLinkGlyph />
+                </a>
               ))}
               {overflowCount > 0 && (
-                <>
-                  <span aria-hidden="true" className="text-white/40">·</span>
-                  <a
-                    href="/employee/quick-links"
-                    className="text-white/85 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm"
-                    data-testid="portal-desktop-welcome-quick-links-overflow"
-                    aria-label={`See ${overflowCount} additional Quick Links`}
-                  >
-                    +{overflowCount} more
-                  </a>
-                </>
+                <a
+                  href="/employee/quick-links"
+                  className="text-white/85 hover:text-white underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-club-gold rounded-sm"
+                  data-testid="portal-desktop-welcome-quick-links-overflow"
+                  aria-label={`See ${overflowCount} additional Quick Links`}
+                >
+                  +{overflowCount} more
+                </a>
               )}
             </nav>
           )}
@@ -122,4 +133,29 @@ export default function DesktopWelcomeBanner({ clubName, href, quickLinks = [] }
     );
   }
   return inner;
+}
+
+/** Small open-link/external glyph used beside EVERY inline
+ *  Quick Link on the Welcome banner. Kept as a single component
+ *  so both Club Website and Employee Handbook (and any future
+ *  configured link) render with identical geometry + spacing. */
+function ExternalLinkGlyph() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="opacity-80"
+    >
+      <path d="M14 3h7v7" />
+      <path d="M10 14 21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
 }
