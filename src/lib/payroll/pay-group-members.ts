@@ -402,17 +402,16 @@ export async function transferMembership(
     ]);
   }
 
-  const [endedRow, startedRow] = await prisma.$transaction([
-    current
-      ? prisma.payrollPayGroupMember.update({
+  // Interactive transaction (Payroll-3B-2 cleanup): keeps the end +
+  // create atomic without the previous placeholder-findFirst trick.
+  const { endedRow, startedRow } = await prisma.$transaction(async (tx) => {
+    const ended = current
+      ? await tx.payrollPayGroupMember.update({
           where: { id: current.id },
           data: { effectiveTo: input.effectiveAt },
         })
-      : // no-op placeholder: fetch the row we already know is missing;
-        // Prisma requires a returning query, so we findFirst by an
-        // impossible id and treat null as "no ended".
-        prisma.payrollPayGroupMember.findFirst({ where: { id: "__none__" } }),
-    prisma.payrollPayGroupMember.create({
+      : null;
+    const started = await tx.payrollPayGroupMember.create({
       data: {
         clubId,
         payGroupId: input.toPayGroupId,
@@ -422,9 +421,10 @@ export async function transferMembership(
         notes: input.notes?.trim() || null,
         createdByUserId: principal.id,
       },
-    }),
-  ]);
-  const ended = endedRow ? projectRow(endedRow as MemberRow) : null;
+    });
+    return { endedRow: ended, startedRow: started };
+  });
+  const ended = endedRow ? projectRow(endedRow) : null;
   const started = projectRow(startedRow);
   await audit(principal, {
     action: "payroll.pay-group-member.transfer",

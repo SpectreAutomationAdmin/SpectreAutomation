@@ -35,6 +35,7 @@ export default function PayGroupsEditor({
   const [newName, setNewName] = useState("");
   const [newFreq, setNewFreq] = useState<PayFrequency>("BIWEEKLY");
   const [newOffset, setNewOffset] = useState(5);
+  const [newAnchor, setNewAnchor] = useState("");
 
   const api = useCallback((path: string) => `/api/clubs/${clubId}/payroll/pay-groups${path}`, [clubId]);
 
@@ -57,6 +58,7 @@ export default function PayGroupsEditor({
           name: newName,
           payFrequency: newFreq,
           payDateOffsetDays: newOffset,
+          calendarAnchorDate: newAnchor ? new Date(newAnchor).toISOString() : null,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -65,6 +67,7 @@ export default function PayGroupsEditor({
       setNewName("");
       setNewFreq("BIWEEKLY");
       setNewOffset(5);
+      setNewAnchor("");
       setCreating(false);
       setStatus({ tone: "ok", text: "Pay group created." });
     } catch (err) {
@@ -173,7 +176,7 @@ export default function PayGroupsEditor({
               </select>
             </label>
             <label className="block text-sm">
-              <span className="text-club-ink">Pay date offset (days after period end)</span>
+              <span className="text-club-ink">Pay date offset (calendar days after period end)</span>
               <input
                 type="number"
                 min={0}
@@ -183,7 +186,27 @@ export default function PayGroupsEditor({
                 className="spectre-input w-full mt-1"
                 data-testid="pay-groups-new-offset"
               />
+              <span className="text-[11px] text-stone-500">
+                Calendar days, not business days. Banking-holiday shifting will arrive in a later release.
+              </span>
             </label>
+            {(newFreq === "WEEKLY" || newFreq === "BIWEEKLY") && (
+              <label className="block text-sm md:col-span-2">
+                <span className="text-club-ink">First known period start (calendar anchor)</span>
+                <input
+                  type="date"
+                  value={newAnchor}
+                  onChange={(e) => setNewAnchor(e.target.value)}
+                  className="spectre-input w-full mt-1"
+                  data-testid="pay-groups-new-anchor"
+                />
+                <span className="text-[11px] text-stone-500">
+                  Weekly and biweekly cadences need a known period-start date so Spectre can
+                  establish the recurring schedule both forward and backward. Semi-monthly and
+                  monthly cadences don&rsquo;t need one.
+                </span>
+              </label>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

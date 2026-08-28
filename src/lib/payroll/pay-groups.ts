@@ -27,6 +27,7 @@ export interface PayGroupView {
   payFrequency: PayFrequency;
   active: boolean;
   payDateOffsetDays: number;
+  calendarAnchorDate: Date | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -41,6 +42,7 @@ interface PayGroupRow {
   payFrequency: string;
   active: boolean;
   payDateOffsetDays: number;
+  calendarAnchorDate: Date | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +60,7 @@ function projectRow(row: PayGroupRow, memberCount: number): PayGroupView {
     payFrequency: freq,
     active: row.active,
     payDateOffsetDays: row.payDateOffsetDays,
+    calendarAnchorDate: row.calendarAnchorDate,
     notes: row.notes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -179,6 +182,10 @@ export interface CreatePayGroupInput {
   name: string;
   payFrequency: PayFrequency;
   payDateOffsetDays?: number;
+  /** Optional at create time (WEEKLY/BIWEEKLY require it later, at
+   *  generation time). The service snaps the supplied Date to UTC
+   *  midnight so it represents a civil calendar day. */
+  calendarAnchorDate?: Date | null;
   notes?: string | null;
   active?: boolean;
 }
@@ -203,6 +210,14 @@ export async function createPayGroup(
     ]);
   }
 
+  const calendarAnchorDate = input.calendarAnchorDate
+    ? new Date(Date.UTC(
+        input.calendarAnchorDate.getUTCFullYear(),
+        input.calendarAnchorDate.getUTCMonth(),
+        input.calendarAnchorDate.getUTCDate(),
+      ))
+    : null;
+
   const row = await prisma.payrollPayGroup.create({
     data: {
       clubId,
@@ -210,6 +225,7 @@ export async function createPayGroup(
       name,
       payFrequency,
       payDateOffsetDays,
+      calendarAnchorDate,
       notes: input.notes?.trim() || null,
       active: input.active ?? true,
       createdByUserId: principal.id,
@@ -229,9 +245,19 @@ export interface UpdatePayGroupInput {
   name?: string;
   payFrequency?: PayFrequency;
   payDateOffsetDays?: number;
+  calendarAnchorDate?: Date | null;
   notes?: string | null;
   active?: boolean;
 }
+
+/** Fields whose value participates in generated Pay Period dates.
+ *  Payroll-3B-2 config-change safety refuses mutations to any of
+ *  these fields once generated periods exist. */
+const CALENDAR_AFFECTING_FIELDS: Array<keyof UpdatePayGroupInput> = [
+  "payFrequency",
+  "payDateOffsetDays",
+  "calendarAnchorDate",
+];
 
 /** Update a pay group. Note: `code` is intentionally NOT editable —
  *  changing a pay group's code silently invalidates downstream
@@ -250,16 +276,50 @@ export async function updatePayGroup(
   const row = await prisma.payrollPayGroup.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
 
+  // Payroll-3B-2 guard — if the caller is touching any field that
+  // participates in generated period dates, refuse the mutation
+  // when Pay Periods already exist for this group. Payroll evidence
+  // becomes historical the moment it exists; a controlled amendment
+  // workflow will arrive in a later slice.
+  const calendarChange = CALENDAR_AFFECTING_FIELDS.some((f) => input[f] !== undefined);
+  if (calendarChange) {
+    const existingPeriodCount = await prisma.payrollPayPeriod.count({
+      where: { clubId, payGroupId: id },
+    });
+    if (existingPeriodCount > 0) {
+      throw new ValidationError([
+        {
+          path: "calendar",
+          message:
+            `This Pay Group already has ${existingPeriodCount} generated pay period` +
+            `${existingPeriodCount === 1 ? "" : "s"}. Payroll calendar settings (frequency, ` +
+            `pay-date offset, calendar anchor) cannot be changed once pay periods exist. ` +
+            `Non-calendar edits (name, notes, active) remain available.`,
+        },
+      ]);
+    }
+  }
+
   const patch: {
     name?: string;
     payFrequency?: string;
     payDateOffsetDays?: number;
+    calendarAnchorDate?: Date | null;
     notes?: string | null;
     active?: boolean;
   } = {};
   if (input.name !== undefined) patch.name = validateName(input.name);
   if (input.payFrequency !== undefined) patch.payFrequency = validatePayFrequency(input.payFrequency);
   if (input.payDateOffsetDays !== undefined) patch.payDateOffsetDays = validatePayDateOffset(input.payDateOffsetDays);
+  if (input.calendarAnchorDate !== undefined) {
+    patch.calendarAnchorDate = input.calendarAnchorDate
+      ? new Date(Date.UTC(
+          input.calendarAnchorDate.getUTCFullYear(),
+          input.calendarAnchorDate.getUTCMonth(),
+          input.calendarAnchorDate.getUTCDate(),
+        ))
+      : null;
+  }
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
   if (input.active !== undefined) patch.active = input.active;
 

@@ -11279,8 +11279,18 @@ model PayrollPayGroup {
   payFrequency  String   // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
   active        Boolean  @default(true)
   // Payment-timing metadata (days after period end that pay is issued).
-  // Kept as a hint only - actual pay dates live on PayrollPayPeriod.
+  // Payroll-3B-2 canonical semantics: payDate = periodEnd + payDateOffsetDays
+  // measured in CALENDAR DAYS. Not business days. Banking-holiday shifting
+  // will arrive in a later Payroll slice; this offset is intentionally
+  // calendar-day-only for the MVP.
   payDateOffsetDays Int  @default(5)
+  // Payroll-3B-2 (2026-08-28) — canonical calendar anchor. A known
+  // period-start date that establishes the recurring WEEKLY or
+  // BIWEEKLY payroll cadence both backward and forward. Nullable so
+  // pre-3B-2 Pay Groups migrate cleanly; generation refuses when the
+  // frequency requires an anchor and none is set. SEMI_MONTHLY and
+  // MONTHLY are anchor-agnostic (calendar-rule driven).
+  calendarAnchorDate DateTime?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())

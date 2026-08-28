@@ -25,9 +25,11 @@ import {
 } from "@/lib/payroll/club-config";
 import { listPayGroups } from "@/lib/payroll/pay-groups";
 import { listMemberships } from "@/lib/payroll/pay-group-members";
+import { listPayPeriods } from "@/lib/payroll/pay-periods";
 import PayrollConfigForm from "./PayrollConfigForm";
 import PayGroupsEditor from "./PayGroupsEditor";
 import MembershipEditor from "./MembershipEditor";
+import PayrollCalendarSection from "./PayrollCalendarSection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +41,8 @@ export default async function PayrollSetupPage() {
   const principal = await getCurrentPrincipal();
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) redirect("/app/admin");
 
-  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees] =
+  const currentTaxYear = new Date().getUTCFullYear();
+  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods] =
     await Promise.all([
       getPayrollClubConfig(principal, clubId),
       checkPayrollActivationPreconditions(clubId),
@@ -71,7 +74,15 @@ export default async function PayrollSetupPage() {
         },
         orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
       }),
+      listPayPeriods(principal, clubId, { taxYear: currentTaxYear }),
     ]);
+    // Group periods by pay-group id for the calendar section.
+    const initialCalendarByGroup: Record<string, ReturnType<typeof serializePeriod>[]> = {};
+    for (const p of currentYearPeriods) {
+      const list = initialCalendarByGroup[p.payGroupId] ?? [];
+      list.push(serializePeriod(p));
+      initialCalendarByGroup[p.payGroupId] = list;
+    }
   if (!club) redirect("/app/admin");
 
   const canWrite = hasPermission(principal, clubId, "payroll:write");
@@ -165,8 +176,48 @@ export default async function PayrollSetupPage() {
           }))}
         />
       </section>
+
+      {/* Section 4 — Payroll Calendar */}
+      <SectionHeader
+        eyebrow="Section 4"
+        title="Payroll calendar"
+        subtitle="Generate the schedule of pay periods for each Pay Group. Payroll year is determined by the pay date — a period worked in December but paid in January belongs to the January year."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+      >
+        <PayrollCalendarSection
+          clubId={clubId}
+          canWrite={canWrite}
+          payGroups={payGroups}
+          initialByGroup={initialCalendarByGroup}
+          defaultTaxYear={currentTaxYear}
+        />
+      </section>
     </div>
   );
+}
+
+function serializePeriod(p: {
+  id: string;
+  sequenceInYear: number;
+  taxYear: number;
+  periodStart: Date;
+  periodEnd: Date;
+  payDate: Date;
+  status: string;
+  payGroupId: string;
+}) {
+  return {
+    id: p.id,
+    sequenceInYear: p.sequenceInYear,
+    taxYear: p.taxYear,
+    periodStart: p.periodStart.toISOString(),
+    periodEnd: p.periodEnd.toISOString(),
+    payDate: p.payDate.toISOString(),
+    status: p.status,
+  };
 }
 
 function SectionHeader({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
