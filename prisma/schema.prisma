@@ -476,6 +476,7 @@ model Club {
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
+  employeeCppDisabilities            EmployeeCppDisability[]
 }
 
 // ---------------------------------------------------------------------
@@ -3332,6 +3333,15 @@ model Employee {
   expectedStartDate      DateTime?
   activatedAt            DateTime?
   terminationDate        DateTime?
+  // Payroll-3B-5B-1 (2026-08-31) — canonical termination reason.
+  // Distinguishes ordinary employment ending from statutory events
+  // (DECEASED) that alter payroll calculation. Enum values validated
+  // in service layer (`src/lib/hr/employees.ts`):
+  //   RESIGNED | TERMINATED | LAYOFF | END_OF_SEASON | RETIRED | DECEASED | OTHER
+  // NULL for still-employed rows. When set, DECEASED alters CPP
+  // pensionable-month determination (contributions stop the last
+  // pay dated in the month of death).
+  terminationReason      String?
   status                 String            @default("ACTIVE")
   // HR-1 lifecycle enums (validated in service layer, not DB).
   //   employmentType   : FULL_TIME | PART_TIME | SEASONAL | CONTRACT
@@ -3413,6 +3423,7 @@ model Employee {
   payrollBatchExceptions     PayrollBatchException[]
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
+  cppDisabilities            EmployeeCppDisability[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11542,13 +11553,22 @@ model PayrollOpeningBalance {
   ytdTaxableEarnings      Decimal @default(0)  // income tax base
   ytdPensionableEarnings  Decimal @default(0)  // CPP base (T4 Box 26)
   ytdInsurableEarnings    Decimal @default(0)  // EI base (T4 Box 24)
-  ytdCppEE                Decimal @default(0)  // employee CPP base contributions (T4 Box 16)
-  ytdCpp2EE               Decimal @default(0)  // employee CPP2 (enhanced) contributions (T4 Box 16A)
+  // Payroll-3B-5B-1 (2026-08-31, §21) — CPP base and first-additional
+  // are preserved separately for statutory traceability. Historically
+  // T4 Box 16 combined them; CRA now separates them (Box 16A). YTD
+  // reads treat `ytdCppEE` as the OVERALL Box 16 total, and expose
+  // the split explicitly:
+  ytdCppEE_Base           Decimal @default(0)  // CPP base employee contribution (component of Box 16)
+  ytdCppEE_FirstAdd       Decimal @default(0)  // CPP first-additional employee contribution (component of Box 16)
+  ytdCppEE                Decimal @default(0)  // combined base + first-additional (Box 16 aggregate)
+  ytdCpp2EE               Decimal @default(0)  // CPP2 (second-additional) employee contribution (Box 16A)
   ytdEiEE                 Decimal @default(0)  // employee EI premiums (T4 Box 18)
   ytdFederalTax           Decimal @default(0)  // federal income tax withheld (T4 Box 22 fed portion)
   ytdProvincialTax        Decimal @default(0)  // provincial income tax withheld
-  ytdCppER                Decimal @default(0)  // employer CPP base
-  ytdCpp2ER               Decimal @default(0)  // employer CPP2 (enhanced)
+  ytdCppER_Base           Decimal @default(0)  // employer CPP base
+  ytdCppER_FirstAdd       Decimal @default(0)  // employer CPP first-additional
+  ytdCppER                Decimal @default(0)  // combined employer CPP (base + first-additional)
+  ytdCpp2ER               Decimal @default(0)  // employer CPP2 (second-additional)
   ytdEiER                 Decimal @default(0)  // employer EI premiums
   // ---- Provenance ----
   importBatchId          String?
@@ -11556,6 +11576,23 @@ model PayrollOpeningBalance {
   importedAt             DateTime?
   importedByUserId       String?
   notes                  String?
+  // Payroll-3B-5B-1 (§23) — prior-payroll provenance kind. Distinguishes:
+  //   PRIOR_SYSTEM_SAME_EMPLOYER — this Club's payroll ran on
+  //     another system earlier in the tax year (same Business
+  //     Number). YTD contributes to CPP/EI annual maximums.
+  //   PRIOR_EMPLOYER            — a different employer's payroll.
+  //     YTD is RECORDED for information / T4 continuity, but per
+  //     CRA rules each employer deducts CPP/EI independently; the
+  //     calculator MUST NOT reduce this employer's statutory
+  //     maximums by prior-employer contributions. Persisting the
+  //     kind on the row prevents silent misuse.
+  //   PRIOR_ADJUSTMENT          — an authoritative correction to
+  //     an already-imported balance (e.g. year-end reconciliation).
+  //     Same-employer semantics.
+  priorPayrollKind       String   @default("PRIOR_SYSTEM_SAME_EMPLOYER")
+  // Optional employer identifier (BN9 or full BN15) for the source
+  // of a PRIOR_EMPLOYER row. Never used as a lookup key.
+  priorEmployerId        String?
   // ---- Correction / versioning ----
   supersededAt           DateTime?
   supersededByUserId     String?
@@ -11630,26 +11667,42 @@ model PayrollBatchEmployee {
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
-  // Payroll-3B-5A (2026-08-31) — canonical Pay Group membership
-  // coverage window. `membershipEffectiveFrom` / `membershipEffectiveTo`
-  // are the raw PayrollPayGroupMember dates; `coverageStart` /
-  // `coverageEnd` are the intersection with the parent Pay Period.
-  // The future calculator uses coverageDays ÷ periodDays as the
-  // salary proration ratio — critical for mid-period Pay Group
-  // transfers so an Employee is never blindly paid a full
-  // per-period salary from each of two batches.
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?
   coverageEnd             DateTime?
-  // Payroll-3B-5B-1a (2026-08-31) — frozen Employee identity facts
-  // the future calculator needs to determine CPP age eligibility.
-  // Snapshotted at preparation; a later live-DOB correction does
-  // NOT mutate this. Nullable — a missing DOB produces a BLOCKER
-  // during preparation.
   dateOfBirthSnapshot     DateTime?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  // ---------------------------------------------------------------------
+  // Payroll-3B-5B-1 (2026-08-31, §20) — persisted calculation result
+  // contract. All fields nullable and left NULL by the 3B-4/5A
+  // preparation service; the 3B-5B calculator populates them at
+  // CALCULATED. Model separates:
+  //   • Earnings / statutory bases (grossPay = gross, plus taxable,
+  //     pensionable, insurable — grossPay already declared above as a
+  //     Payroll-3A seam)
+  //   • Employee deductions (CPP base + first-add, CPP2, EI, fed, prov)
+  //   • Employer amounts (CPP base + first-add, CPP2, EI)
+  //   • Payment (netPay already declared above)
+  // Every deduction is stored as Decimal — never Float. Zero
+  // arithmetic happens in this slice.
+  // ---------------------------------------------------------------------
+  earningsTaxable        Decimal? // Income-tax base
+  earningsPensionable    Decimal? // CPP base
+  earningsInsurable      Decimal? // EI base
+  // Payroll-3B-5B-1 (§21) — CPP components MUST be tracked
+  // separately for CRA T4 reporting + statutory maximums.
+  deductionCppEeBase       Decimal? // employee CPP base
+  deductionCppEeFirstAdd   Decimal? // employee CPP first-additional
+  deductionCpp2Ee          Decimal? // employee CPP2 (second-additional)
+  deductionEiEe            Decimal? // employee EI
+  deductionFederalTax      Decimal? // federal income tax
+  deductionProvincialTax   Decimal? // provincial income tax (Alberta MVP)
+  employerCppBase          Decimal? // employer CPP base
+  employerCppFirstAdd      Decimal? // employer CPP first-additional
+  employerCpp2             Decimal? // employer CPP2
+  employerEi               Decimal? // employer EI (typically 1.4 × employee EI, per statutory param)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
@@ -11683,22 +11736,91 @@ model EmployeeCppElection {
   employee          Employee @relation(fields: [employeeId], references: [id])
   // ELECTION_TO_STOP | REVOCATION_OF_ELECTION
   kind              String
-  // The date the employer received the CPT30 form (civil date).
+  // ---- Source facts (§3 — evidence-driven) --------------------------
+  // Pension type declared on the CPT30 (Part B): CPP | QPP
+  pensionType       String?
+  // Employee attests to receiving a CPP or QPP retirement pension
+  // (Part B). CRA rule: this is a prerequisite to a valid stop
+  // election. Frozen on the election row so historical elections
+  // remain reproducible when current pension status changes.
+  retirementPensionReceived Boolean @default(false)
+  // Date the employee signed the CPT30 (Part D).
+  employeeSignedOn  DateTime?
+  // ---- Effective-date facts (§4 — CRA derivation) --------------------
+  // The date Spectre / the employer received the completed form.
   receivedOn        DateTime
-  // The first pay period on/after which the election takes effect —
-  // per CRA "first day of the month after receipt".
+  // The statutory effective date derived from source facts per CRA
+  // CPT30 rules. Spectre's business contract (pending founder
+  // verification against the current CRA CPT30 publication):
+  //   Election-to-stop:  first day of the calendar month that is at
+  //     least the month AFTER `max(employeeSignedOn, receivedOn)`.
+  //   Revocation:        first day of the calendar month at least
+  //     the month AFTER `max(employeeSignedOn, receivedOn)`, and no
+  //     earlier than January 1 of the calendar year FOLLOWING the
+  //     year of the original stop election (§5 same-year rule).
+  // Never accepts an admin-typed date inconsistent with the source
+  // facts — service layer refuses (`src/lib/payroll/cpp-election.ts`).
   effectiveOn       DateTime
+  // Pointer to the ELECTION_TO_STOP a REVOCATION revokes. Required
+  // for kind = REVOCATION_OF_ELECTION; enforces the same-year rule.
+  revokesElectionId String?
+  revokesElection   EmployeeCppElection?  @relation("EmployeeCppElectionRevokes", fields: [revokesElectionId], references: [id])
+  revocations       EmployeeCppElection[] @relation("EmployeeCppElectionRevokes")
+  // ---- History ------------------------------------------------------
   status            String   @default("ACTIVE") // ACTIVE | SUPERSEDED
   supersededById    String?
   supersededBy      EmployeeCppElection?  @relation("EmployeeCppElectionSuperseded", fields: [supersededById], references: [id])
   supersedes        EmployeeCppElection[] @relation("EmployeeCppElectionSuperseded")
   notes             String?
+  // Optional pointer to an evidence document (a photo/scan of the
+  // signed form). Sensitive; not surfaced on Work Intake cards.
+  evidenceDocumentId String?
   createdByUserId   String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([clubId, employeeId, status])
   @@index([clubId, employeeId, effectiveOn])
+  @@index([revokesElectionId])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-1 (2026-08-31) — CPP disability status (§9).
+//
+// Effective-dated Payroll statutory fact. NOT a medical record —
+// Spectre stores ONLY what the calculator needs to stop or restart
+// CPP contributions. Diagnosis, treatment, and medical detail are
+// explicitly out of scope; adding any is a violation of §36.
+//
+// Statuses (validated in service layer):
+//   NOT_DISABLED     — default; no CPP effect.
+//   CPP_DISABLED     — receiving a CPP disability benefit; CPP
+//                      contributions stop per CRA rules.
+//   QPP_DISABLED     — receiving a QPP disability benefit; CPP
+//                      contributions stop per CRA rules.
+//
+// The effective-dated interval [effectiveFrom, effectiveTo) is the
+// source of truth the calculator uses to determine whether a given
+// pay date's employment is CPP-pensionable.
+// ---------------------------------------------------------------------------
+model EmployeeCppDisability {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  employeeId         String
+  employee           Employee @relation(fields: [employeeId], references: [id])
+  status             String   // NOT_DISABLED | CPP_DISABLED | QPP_DISABLED
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  // Basis of the record — evidence Spectre relied on. Free-text at
+  // the service layer, capped 500 chars. Not diagnostic; only what
+  // was received (e.g. "CPP disability approval letter dated ...").
+  sourceBasis        String?
+  recordedByUserId   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
 }
 
 // Typed earning input line (sections 14-16). Each earning MUST

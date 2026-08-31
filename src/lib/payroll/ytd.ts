@@ -30,17 +30,33 @@ export interface EmployeePayrollYtd {
   ytdTaxableEarnings: string;
   ytdPensionableEarnings: string;
   ytdInsurableEarnings: string;
+  // Payroll-3B-5B-1 (§21, §22) — CPP components preserved separately
+  // for statutory maximum tracking. `ytdCppEE` and `ytdCppER` are
+  // the combined totals for Box 16 reporting.
+  ytdCppEE_Base: string;
+  ytdCppEE_FirstAdd: string;
   ytdCppEE: string;
   ytdCpp2EE: string;
   ytdEiEE: string;
   ytdFederalTax: string;
   ytdProvincialTax: string;
+  ytdCppER_Base: string;
+  ytdCppER_FirstAdd: string;
   ytdCppER: string;
   ytdCpp2ER: string;
   ytdEiER: string;
-  /** Provenance — which sources contributed to this aggregate. */
+  /**
+   * Provenance — which sources contributed to this aggregate. The
+   * openingBalance provenance kind is exposed so a future
+   * calculator or reviewer can see whether opening YTD came from
+   * PRIOR_SYSTEM_SAME_EMPLOYER (contributes to this employer's
+   * CPP/EI annual maximums per §23) or from PRIOR_EMPLOYER
+   * (recorded for information only; each employer deducts CPP/EI
+   * independently).
+   */
   sources: {
     openingBalanceId: string | null;
+    openingBalancePriorPayrollKind: string | null;
     postedBatchIds: string[];
   };
 }
@@ -76,6 +92,16 @@ export async function getEmployeePayrollYtd(
 
   const opening = await getActiveOpeningBalance(clubId, employeeId, taxYear);
   const openingSourceId = opening?.id ?? null;
+  const openingKind = opening?.priorPayrollKind ?? null;
+
+  // §23: only PRIOR_SYSTEM_SAME_EMPLOYER and PRIOR_ADJUSTMENT rows
+  // contribute to CPP/EI YTD caps for this employer. A
+  // PRIOR_EMPLOYER opening balance is exposed on the row (visible
+  // to the future calculator) but its CPP/EI values MUST NOT be
+  // pre-applied to the accumulator here — the calculator decides.
+  const includeInStatutoryYtd =
+    opening !== null &&
+    (openingKind === "PRIOR_SYSTEM_SAME_EMPLOYER" || openingKind === "PRIOR_ADJUSTMENT");
 
   const acc: EmployeePayrollYtd = {
     clubId,
@@ -84,17 +110,25 @@ export async function getEmployeePayrollYtd(
     asOfPayDate,
     ytdGrossEarnings: opening?.values.ytdGrossEarnings ?? "0",
     ytdTaxableEarnings: opening?.values.ytdTaxableEarnings ?? "0",
-    ytdPensionableEarnings: opening?.values.ytdPensionableEarnings ?? "0",
-    ytdInsurableEarnings: opening?.values.ytdInsurableEarnings ?? "0",
-    ytdCppEE: opening?.values.ytdCppEE ?? "0",
-    ytdCpp2EE: opening?.values.ytdCpp2EE ?? "0",
-    ytdEiEE: opening?.values.ytdEiEE ?? "0",
+    ytdPensionableEarnings: includeInStatutoryYtd ? (opening?.values.ytdPensionableEarnings ?? "0") : "0",
+    ytdInsurableEarnings: includeInStatutoryYtd ? (opening?.values.ytdInsurableEarnings ?? "0") : "0",
+    ytdCppEE_Base: includeInStatutoryYtd ? (opening?.values.ytdCppEE_Base ?? "0") : "0",
+    ytdCppEE_FirstAdd: includeInStatutoryYtd ? (opening?.values.ytdCppEE_FirstAdd ?? "0") : "0",
+    ytdCppEE: includeInStatutoryYtd ? (opening?.values.ytdCppEE ?? "0") : "0",
+    ytdCpp2EE: includeInStatutoryYtd ? (opening?.values.ytdCpp2EE ?? "0") : "0",
+    ytdEiEE: includeInStatutoryYtd ? (opening?.values.ytdEiEE ?? "0") : "0",
     ytdFederalTax: opening?.values.ytdFederalTax ?? "0",
     ytdProvincialTax: opening?.values.ytdProvincialTax ?? "0",
-    ytdCppER: opening?.values.ytdCppER ?? "0",
-    ytdCpp2ER: opening?.values.ytdCpp2ER ?? "0",
-    ytdEiER: opening?.values.ytdEiER ?? "0",
-    sources: { openingBalanceId: openingSourceId, postedBatchIds: [] },
+    ytdCppER_Base: includeInStatutoryYtd ? (opening?.values.ytdCppER_Base ?? "0") : "0",
+    ytdCppER_FirstAdd: includeInStatutoryYtd ? (opening?.values.ytdCppER_FirstAdd ?? "0") : "0",
+    ytdCppER: includeInStatutoryYtd ? (opening?.values.ytdCppER ?? "0") : "0",
+    ytdCpp2ER: includeInStatutoryYtd ? (opening?.values.ytdCpp2ER ?? "0") : "0",
+    ytdEiER: includeInStatutoryYtd ? (opening?.values.ytdEiER ?? "0") : "0",
+    sources: {
+      openingBalanceId: openingSourceId,
+      openingBalancePriorPayrollKind: openingKind,
+      postedBatchIds: [],
+    },
   };
 
   // POSTED batches for this Employee whose payDate is strictly

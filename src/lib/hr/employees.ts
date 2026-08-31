@@ -42,6 +42,18 @@ const EMPLOYMENT_TYPES = ["FULL_TIME", "PART_TIME", "SEASONAL", "CONTRACT"] as c
 // no longer active but for whom "terminated" is not the right label.
 const LIFECYCLES = ["PRE_HIRE", "ACTIVE", "LEAVE", "TERMINATED", "ARCHIVED"] as const;
 const COMPENSATION_TYPES = ["HOURLY", "SALARY", "COMMISSION", "PIECE_RATE"] as const;
+// Payroll-3B-5B-1 (§10) — canonical termination reasons. DECEASED
+// alters CPP pensionable-month determination and must not be
+// silently inferred from `terminationDate`.
+export const TERMINATION_REASONS = [
+  "RESIGNED",
+  "TERMINATED",
+  "LAYOFF",
+  "END_OF_SEASON",
+  "RETIRED",
+  "DECEASED",
+  "OTHER",
+] as const;
 
 // HR-2B.3.6 — Terminal onboarding states. Once an employee-submitted
 // onboarding reaches one of these, hard delete from the directory is
@@ -84,6 +96,10 @@ export interface CreateEmployeeInput {
   // are rejected.
   dateOfBirth?: Date | string | null;
   expectedStartDate?: Date | string | null;
+  // Payroll-3B-5B-1 (§10) — RESIGNED | TERMINATED | LAYOFF |
+  // END_OF_SEASON | RETIRED | DECEASED | OTHER. NULL for still-
+  // employed rows.
+  terminationReason?: string | null;
   employmentType?: string | null;
   compensationType?: string;
   payRate?: number;
@@ -180,6 +196,11 @@ export async function createEmployee(
       positionId: input.positionId ?? null,
       hireDate: toOptionalDate(input.hireDate ?? null, "hireDate"),
       dateOfBirth: toOptionalDateOfBirth(input.dateOfBirth ?? null, "dateOfBirth"),
+      terminationReason: input.terminationReason
+        ? ((TERMINATION_REASONS as readonly string[]).includes(input.terminationReason)
+            ? input.terminationReason
+            : (() => { throw new ValidationError([{ path: "terminationReason", message: `must be one of ${TERMINATION_REASONS.join(", ")}` }]); })())
+        : null,
       expectedStartDate: toOptionalDate(input.expectedStartDate ?? null, "expectedStartDate"),
       employmentType,
       employeeLifecycle: lifecycle,
@@ -248,6 +269,8 @@ export interface UpdateEmployeeInput {
   // for existing employees who onboarded before DOB was collected,
   // or for post-onboarding corrections.
   dateOfBirth?: Date | string | null;
+  // Payroll-3B-5B-1 (§10) — canonical termination reason.
+  terminationReason?: string | null;
   expectedStartDate?: Date | string | null;
   employmentType?: string | null;
   employeeLifecycle?: string;
@@ -316,6 +339,15 @@ export async function updateEmployee(
   if (input.positionId !== undefined) data.positionId = input.positionId;
   if (input.hireDate !== undefined) data.hireDate = toOptionalDate(input.hireDate, "hireDate");
   if (input.dateOfBirth !== undefined) data.dateOfBirth = toOptionalDateOfBirth(input.dateOfBirth, "dateOfBirth");
+  if (input.terminationReason !== undefined) {
+    if (input.terminationReason === null) {
+      data.terminationReason = null;
+    } else if ((TERMINATION_REASONS as readonly string[]).includes(input.terminationReason)) {
+      data.terminationReason = input.terminationReason;
+    } else {
+      throw new ValidationError([{ path: "terminationReason", message: `must be one of ${TERMINATION_REASONS.join(", ")}` }]);
+    }
+  }
   if (input.expectedStartDate !== undefined) data.expectedStartDate = toOptionalDate(input.expectedStartDate, "expectedStartDate");
   if (input.employmentType !== undefined) data.employmentType = input.employmentType;
   if (input.employeeLifecycle !== undefined) data.employeeLifecycle = input.employeeLifecycle;

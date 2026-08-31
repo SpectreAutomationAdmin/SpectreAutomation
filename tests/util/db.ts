@@ -309,9 +309,12 @@ export async function resetDb() {
     // Club); then PayrollClubConfig (FK Club). All must precede
     // c.employee.deleteMany() and c.employeeEmploymentAssignment
     // .deleteMany() below.
-    // Payroll-3B-5B-1a — CPT30 elections: self-FK; null out before delete.
-    c.employeeCppElection.updateMany({ data: { supersededById: null } }),
+    // Payroll-3B-5B-1 — CPT30 elections have two self-FKs
+    // (supersededById + revokesElectionId); null both before delete.
+    // CPP disability rows have no self-FK.
+    c.employeeCppElection.updateMany({ data: { supersededById: null, revokesElectionId: null } }),
     c.employeeCppElection.deleteMany(),
+    c.employeeCppDisability.deleteMany(),
     c.payrollDepartmentTimeApproval.deleteMany(),
     c.payrollBatchException.deleteMany(),
     c.payrollBatchAllowanceSnapshot.deleteMany(),

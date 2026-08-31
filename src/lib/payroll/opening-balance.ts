@@ -32,15 +32,32 @@ export interface OpeningBalanceFields {
   ytdTaxableEarnings: string;
   ytdPensionableEarnings: string;
   ytdInsurableEarnings: string;
+  // Payroll-3B-5B-1 (§21) — CPP base + first-additional split.
+  // Legacy `ytdCppEE` remains the aggregate for T4 Box 16.
+  ytdCppEE_Base: string;
+  ytdCppEE_FirstAdd: string;
   ytdCppEE: string;
   ytdCpp2EE: string;
   ytdEiEE: string;
   ytdFederalTax: string;
   ytdProvincialTax: string;
+  ytdCppER_Base: string;
+  ytdCppER_FirstAdd: string;
   ytdCppER: string;
   ytdCpp2ER: string;
   ytdEiER: string;
 }
+
+/**
+ * Payroll-3B-5B-1 (§23) — provenance of a prior-payroll YTD row.
+ * The value is stored on the row and returned in the view so the
+ * calculator + reviewers can see whether the balance contributes
+ * to CPP/EI annual maximums for this employer.
+ */
+export type PriorPayrollKind =
+  | "PRIOR_SYSTEM_SAME_EMPLOYER" // this club's payroll on another system earlier this tax year — contributes to CPP/EI maxima
+  | "PRIOR_EMPLOYER"             // different employer/BN — recorded for information only; does NOT reduce this employer's caps
+  | "PRIOR_ADJUSTMENT";          // year-end / correction adjustment for this employer
 
 export interface OpeningBalanceView {
   id: string;
@@ -56,6 +73,9 @@ export interface OpeningBalanceView {
   supersededAt: Date | null;
   supersededById: string | null;
   activatedAt: Date | null;
+  // Payroll-3B-5B-1 (§23) — prior-payroll kind provenance.
+  priorPayrollKind: PriorPayrollKind;
+  priorEmployerId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -65,14 +85,24 @@ const NUMERIC_FIELDS: Array<keyof OpeningBalanceFields> = [
   "ytdTaxableEarnings",
   "ytdPensionableEarnings",
   "ytdInsurableEarnings",
+  "ytdCppEE_Base",
+  "ytdCppEE_FirstAdd",
   "ytdCppEE",
   "ytdCpp2EE",
   "ytdEiEE",
   "ytdFederalTax",
   "ytdProvincialTax",
+  "ytdCppER_Base",
+  "ytdCppER_FirstAdd",
   "ytdCppER",
   "ytdCpp2ER",
   "ytdEiER",
+];
+
+const PRIOR_PAYROLL_KINDS: readonly PriorPayrollKind[] = [
+  "PRIOR_SYSTEM_SAME_EMPLOYER",
+  "PRIOR_EMPLOYER",
+  "PRIOR_ADJUSTMENT",
 ];
 
 function toView(row: Awaited<ReturnType<typeof prisma.payrollOpeningBalance.findFirst>>): OpeningBalanceView {
@@ -88,11 +118,15 @@ function toView(row: Awaited<ReturnType<typeof prisma.payrollOpeningBalance.find
       ytdTaxableEarnings: row.ytdTaxableEarnings.toString(),
       ytdPensionableEarnings: row.ytdPensionableEarnings.toString(),
       ytdInsurableEarnings: row.ytdInsurableEarnings.toString(),
+      ytdCppEE_Base: row.ytdCppEE_Base.toString(),
+      ytdCppEE_FirstAdd: row.ytdCppEE_FirstAdd.toString(),
       ytdCppEE: row.ytdCppEE.toString(),
       ytdCpp2EE: row.ytdCpp2EE.toString(),
       ytdEiEE: row.ytdEiEE.toString(),
       ytdFederalTax: row.ytdFederalTax.toString(),
       ytdProvincialTax: row.ytdProvincialTax.toString(),
+      ytdCppER_Base: row.ytdCppER_Base.toString(),
+      ytdCppER_FirstAdd: row.ytdCppER_FirstAdd.toString(),
       ytdCppER: row.ytdCppER.toString(),
       ytdCpp2ER: row.ytdCpp2ER.toString(),
       ytdEiER: row.ytdEiER.toString(),
@@ -104,6 +138,8 @@ function toView(row: Awaited<ReturnType<typeof prisma.payrollOpeningBalance.find
     supersededAt: row.supersededAt,
     supersededById: row.supersededById,
     activatedAt: row.activatedAt,
+    priorPayrollKind: (row.priorPayrollKind as PriorPayrollKind) ?? "PRIOR_SYSTEM_SAME_EMPLOYER",
+    priorEmployerId: row.priorEmployerId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -125,9 +161,13 @@ function assertValidNumerics(values: OpeningBalanceFields): void {
         field === "ytdTaxableEarnings" ||
         field === "ytdPensionableEarnings" ||
         field === "ytdInsurableEarnings" ||
+        field === "ytdCppEE_Base" ||
+        field === "ytdCppEE_FirstAdd" ||
         field === "ytdCppEE" ||
         field === "ytdCpp2EE" ||
         field === "ytdEiEE" ||
+        field === "ytdCppER_Base" ||
+        field === "ytdCppER_FirstAdd" ||
         field === "ytdCppER" ||
         field === "ytdCpp2ER" ||
         field === "ytdEiER") &&
@@ -155,6 +195,9 @@ export interface CreateDraftOpeningBalanceInput {
   importSource?: string;
   importBatchId?: string | null;
   notes?: string;
+  /** Payroll-3B-5B-1 (§23) — default PRIOR_SYSTEM_SAME_EMPLOYER. */
+  priorPayrollKind?: PriorPayrollKind;
+  priorEmployerId?: string | null;
 }
 
 /**
@@ -176,6 +219,17 @@ export async function createDraftOpeningBalance(
   if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {
     throw new ValidationError([{ path: "taxYear", message: "Invalid tax year." }]);
   }
+  const priorPayrollKind: PriorPayrollKind = input.priorPayrollKind ?? "PRIOR_SYSTEM_SAME_EMPLOYER";
+  if (!PRIOR_PAYROLL_KINDS.includes(priorPayrollKind)) {
+    throw new ValidationError([
+      { path: "priorPayrollKind", message: `priorPayrollKind must be one of ${PRIOR_PAYROLL_KINDS.join(", ")}` },
+    ]);
+  }
+  if (priorPayrollKind === "PRIOR_EMPLOYER" && !input.priorEmployerId?.trim()) {
+    throw new ValidationError([
+      { path: "priorEmployerId", message: "priorEmployerId is required when priorPayrollKind is PRIOR_EMPLOYER." },
+    ]);
+  }
 
   const existing = await prisma.payrollOpeningBalance.findFirst({
     where: { clubId, employeeId: input.employeeId, taxYear: input.taxYear, status: "DRAFT" },
@@ -192,6 +246,8 @@ export async function createDraftOpeningBalance(
         importSource: input.importSource ?? existing.importSource,
         importBatchId: input.importBatchId ?? existing.importBatchId,
         notes: input.notes ?? existing.notes,
+        priorPayrollKind,
+        priorEmployerId: input.priorEmployerId ?? existing.priorEmployerId,
         importedByUserId: principal.id,
         importedAt: new Date(),
       },
@@ -216,6 +272,8 @@ export async function createDraftOpeningBalance(
       importSource: input.importSource ?? "MANUAL",
       importBatchId: input.importBatchId ?? null,
       notes: input.notes ?? null,
+      priorPayrollKind,
+      priorEmployerId: input.priorEmployerId ?? null,
       importedByUserId: principal.id,
       importedAt: new Date(),
     },
@@ -250,11 +308,15 @@ export async function validateOpeningBalance(
     ytdTaxableEarnings: row.ytdTaxableEarnings.toString(),
     ytdPensionableEarnings: row.ytdPensionableEarnings.toString(),
     ytdInsurableEarnings: row.ytdInsurableEarnings.toString(),
+    ytdCppEE_Base: row.ytdCppEE_Base.toString(),
+    ytdCppEE_FirstAdd: row.ytdCppEE_FirstAdd.toString(),
     ytdCppEE: row.ytdCppEE.toString(),
     ytdCpp2EE: row.ytdCpp2EE.toString(),
     ytdEiEE: row.ytdEiEE.toString(),
     ytdFederalTax: row.ytdFederalTax.toString(),
     ytdProvincialTax: row.ytdProvincialTax.toString(),
+    ytdCppER_Base: row.ytdCppER_Base.toString(),
+    ytdCppER_FirstAdd: row.ytdCppER_FirstAdd.toString(),
     ytdCppER: row.ytdCppER.toString(),
     ytdCpp2ER: row.ytdCpp2ER.toString(),
     ytdEiER: row.ytdEiER.toString(),

@@ -26,7 +26,6 @@ import { parseCsvRecords } from "../imports/csv-parse";
 import { ValidationError } from "../errors";
 import {
   createDraftOpeningBalance,
-  NUMERIC_FIELDS,
   type OpeningBalanceFields,
   type OpeningBalanceView,
 } from "./opening-balance";
@@ -34,11 +33,41 @@ import {
 const ENTITY = "PayrollOpeningBalance";
 const IMPORT_ORIGIN_KIND = "PAYROLL_OPENING_BALANCE_REVIEW";
 
+// Payroll-3B-5B-1 (§21) — the split CPP columns are OPTIONAL on
+// import; when absent the row's split fields default to 0 and the
+// aggregate `ytdCppEE`/`ytdCppER` remain the authoritative Box 16
+// totals. Callers loading full CRA-split T4 data supply all rows;
+// callers loading legacy aggregate-only data still succeed.
+const REQUIRED_NUMERIC_FIELDS = [
+  "ytdGrossEarnings",
+  "ytdTaxableEarnings",
+  "ytdPensionableEarnings",
+  "ytdInsurableEarnings",
+  "ytdCppEE",
+  "ytdCpp2EE",
+  "ytdEiEE",
+  "ytdFederalTax",
+  "ytdProvincialTax",
+  "ytdCppER",
+  "ytdCpp2ER",
+  "ytdEiER",
+] as const;
+
+const OPTIONAL_NUMERIC_FIELDS = [
+  "ytdCppEE_Base",
+  "ytdCppEE_FirstAdd",
+  "ytdCppER_Base",
+  "ytdCppER_FirstAdd",
+] as const;
+
 export const OPENING_BALANCE_CSV_HEADERS = [
   "employeeNumber",
   "taxYear",
-  ...NUMERIC_FIELDS,
+  ...REQUIRED_NUMERIC_FIELDS,
+  ...OPTIONAL_NUMERIC_FIELDS,
 ] as const;
+
+const REQUIRED_HEADERS = ["employeeNumber", "taxYear", ...REQUIRED_NUMERIC_FIELDS] as const;
 
 export interface OpeningBalanceImportRowError {
   rowNumber: number;
@@ -88,7 +117,7 @@ export async function importOpeningBalancesFromCsv(
     throw new ValidationError([{ path: "csvText", message: "CSV appears empty (no header + rows)." }]);
   }
   const header = records[0].map((c) => c.trim());
-  const missing = OPENING_BALANCE_CSV_HEADERS.filter((h) => !header.includes(h));
+  const missing = REQUIRED_HEADERS.filter((h) => !header.includes(h));
   if (missing.length > 0) {
     throw new ValidationError([
       { path: "csvText", message: `Missing required columns: ${missing.join(", ")}` },
@@ -143,11 +172,19 @@ export async function importOpeningBalancesFromCsv(
 
     const values: Partial<OpeningBalanceFields> = {};
     let rowInvalid = false;
-    for (const f of NUMERIC_FIELDS) {
+    // REQUIRED columns must exist (already header-validated) — read them.
+    for (const f of REQUIRED_NUMERIC_FIELDS) {
       const idx = colIndex.get(f);
       if (idx === undefined) { rowInvalid = true; break; }
       const raw = (row[idx] ?? "").trim();
-      values[f] = raw === "" ? "0" : raw;
+      values[f as keyof OpeningBalanceFields] = raw === "" ? "0" : raw;
+    }
+    // OPTIONAL split columns — default to "0" when absent.
+    for (const f of OPTIONAL_NUMERIC_FIELDS) {
+      const idx = colIndex.get(f);
+      if (idx === undefined) { values[f as keyof OpeningBalanceFields] = "0"; continue; }
+      const raw = (row[idx] ?? "").trim();
+      values[f as keyof OpeningBalanceFields] = raw === "" ? "0" : raw;
     }
     if (rowInvalid) {
       errors.push({ rowNumber, employeeNumber: empNum, code: "MISSING_NUMERIC_COLUMN", message: "One or more numeric columns absent." });

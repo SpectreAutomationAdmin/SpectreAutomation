@@ -19,8 +19,12 @@ const d = (y: number, m: number, day: number) => new Date(Date.UTC(y, m - 1, day
 
 const zeroValues: OpeningBalanceFields = {
   ytdGrossEarnings: "0", ytdTaxableEarnings: "0", ytdPensionableEarnings: "0",
-  ytdInsurableEarnings: "0", ytdCppEE: "0", ytdCpp2EE: "0", ytdEiEE: "0",
-  ytdFederalTax: "0", ytdProvincialTax: "0", ytdCppER: "0", ytdCpp2ER: "0", ytdEiER: "0",
+  ytdInsurableEarnings: "0",
+  ytdCppEE_Base: "0", ytdCppEE_FirstAdd: "0", ytdCppEE: "0",
+  ytdCpp2EE: "0", ytdEiEE: "0",
+  ytdFederalTax: "0", ytdProvincialTax: "0",
+  ytdCppER_Base: "0", ytdCppER_FirstAdd: "0", ytdCppER: "0",
+  ytdCpp2ER: "0", ytdEiER: "0",
 };
 
 const sampleValues: OpeningBalanceFields = {
@@ -28,11 +32,15 @@ const sampleValues: OpeningBalanceFields = {
   ytdTaxableEarnings: "41000",
   ytdPensionableEarnings: "40000",
   ytdInsurableEarnings: "40000",
+  ytdCppEE_Base: "2000.00",
+  ytdCppEE_FirstAdd: "372.60",
   ytdCppEE: "2372.60",
   ytdCpp2EE: "0",
   ytdEiEE: "656.00",
   ytdFederalTax: "5800.00",
   ytdProvincialTax: "3200.00",
+  ytdCppER_Base: "2000.00",
+  ytdCppER_FirstAdd: "372.60",
   ytdCppER: "2372.60",
   ytdCpp2ER: "0",
   ytdEiER: "918.40",

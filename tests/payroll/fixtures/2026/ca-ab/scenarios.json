@@ -1,0 +1,120 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "AWAITING_VERIFICATION",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/revenue-agency/services/e-services/e-services-businesses/payroll-deductions-online-calculator.html",
+  "sourceRetrievedAt": "0000-00-00",
+  "sourceRetrievedBy": "pdoc-transcribed",
+  "verificationNote": "Scenario skeletons only — expected numeric results MUST be populated from CRA PDOC or an official CRA worked example before 3B-5B-2 calculator implementation. Values marked AWAITING_VERIFICATION are structural placeholders, NOT statutory authority.",
+  "cases": [
+    {
+      "id": "hourly-basic-h1",
+      "description": "Basic hourly employee, biweekly, mid-year 2026 H1, no prior YTD.",
+      "inputs": {
+        "packageWindow": "2026-H1",
+        "province": "AB",
+        "payFrequency": "BIWEEKLY",
+        "grossEarnings": "AWAITING_INPUT",
+        "priorYtd": null
+      },
+      "expected": {
+        "cppEeBase": "AWAITING_VERIFICATION",
+        "cppEeFirstAdd": "AWAITING_VERIFICATION",
+        "cpp2Ee": "AWAITING_VERIFICATION",
+        "eiEe": "AWAITING_VERIFICATION",
+        "federalTax": "AWAITING_VERIFICATION",
+        "provincialTax": "AWAITING_VERIFICATION",
+        "netPay": "AWAITING_VERIFICATION"
+      }
+    },
+    {
+      "id": "salaried-basic-h2",
+      "description": "Basic salaried employee, semi-monthly, mid-year 2026 H2, no prior YTD.",
+      "inputs": {
+        "packageWindow": "2026-H2",
+        "province": "AB",
+        "payFrequency": "SEMI_MONTHLY",
+        "annualSalary": "AWAITING_INPUT"
+      },
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "prior-ytd-same-employer",
+      "description": "Employee with mid-year Spectre adoption. Prior YTD carried forward as PRIOR_SYSTEM_SAME_EMPLOYER. Verify CPP/EI YTD caps.",
+      "inputs": {
+        "packageWindow": "2026-H2",
+        "priorPayrollKind": "PRIOR_SYSTEM_SAME_EMPLOYER"
+      },
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "prior-employer-does-not-reduce-cap",
+      "description": "Employee with PRIOR_EMPLOYER opening balance (different BN). Confirms this employer's CPP/EI maxima are NOT reduced by prior-employer contributions (§23).",
+      "inputs": {
+        "packageWindow": "2026-H2",
+        "priorPayrollKind": "PRIOR_EMPLOYER"
+      },
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "cpp-near-annual-max",
+      "description": "Employee whose CPP contributions approach the annual maximum — final pay must cap at the max, not exceed it.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "cpp2-threshold-crossing",
+      "description": "Employee whose pensionable earnings cross the YMPE threshold within a single pay period — expect CPP base contribution to cap and CPP2 to begin.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "cpp2-near-annual-max",
+      "description": "Employee whose CPP2 contributions approach the CPP2 annual maximum.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "ei-near-annual-max",
+      "description": "Employee whose EI premiums approach the annual maximum insurable earnings cap.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "custom-federal-td1",
+      "description": "Employee with a non-BPA-only federal TD1 claim total.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "custom-alberta-td1",
+      "description": "Employee with a non-BPA-only Alberta provincial TD1 claim total.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "additional-tax-requested",
+      "description": "Employee who requested an additional per-pay tax amount on their TD1.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "turns-18-during-year",
+      "description": "Employee turns 18 mid-year. CPP begins first pay dated in the month after the 18th birthday. Annual CPP maximum prorated by pensionable months.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "turns-70-during-year",
+      "description": "Employee turns 70 mid-year. CPP continues through the birthday month and stops in the following month. Annual max prorated.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "age-65-to-69-no-cpt30",
+      "description": "Employee age 65-69 with no CPT30 election. CPP continues normally.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "cpt30-stop-mid-year",
+      "description": "Valid CPT30 stop election recorded mid-year. Pensionable months = months through election-effective month; CPP annual max prorated.",
+      "expected": "AWAITING_VERIFICATION"
+    },
+    {
+      "id": "cpt30-revocation-following-year",
+      "description": "Employee who elected to stop in 2026 files a revocation with effective date 2027-04-01 (following calendar year). Historical 2026 batches unaffected; 2027 batches resume contributions from April onward.",
+      "expected": "AWAITING_VERIFICATION"
+    }
+  ]
+}

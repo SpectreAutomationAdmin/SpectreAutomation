@@ -485,6 +485,7 @@ model Club {
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
+  employeeCppDisabilities            EmployeeCppDisability[]
 }
 
 // ---------------------------------------------------------------------
@@ -3328,6 +3329,10 @@ model Employee {
   expectedStartDate      DateTime?
   activatedAt            DateTime?
   terminationDate        DateTime?
+  // Payroll-3B-5B-1 (2026-08-31) — see prisma/schema.prisma for the
+  // full doc. RESIGNED | TERMINATED | LAYOFF | END_OF_SEASON |
+  // RETIRED | DECEASED | OTHER
+  terminationReason      String?
   status                 String            @default("ACTIVE")
   // HR-1 lifecycle enums (validated in service layer, not DB).
   //   employmentType   : FULL_TIME | PART_TIME | SEASONAL | CONTRACT
@@ -3413,6 +3418,7 @@ model Employee {
   payrollBatchExceptions     PayrollBatchException[]
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
+  cppDisabilities            EmployeeCppDisability[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11515,11 +11521,15 @@ model PayrollOpeningBalance {
   ytdTaxableEarnings      Decimal @default(0)
   ytdPensionableEarnings  Decimal @default(0)
   ytdInsurableEarnings    Decimal @default(0)
+  ytdCppEE_Base           Decimal @default(0)
+  ytdCppEE_FirstAdd       Decimal @default(0)
   ytdCppEE                Decimal @default(0)
   ytdCpp2EE               Decimal @default(0)
   ytdEiEE                 Decimal @default(0)
   ytdFederalTax           Decimal @default(0)
   ytdProvincialTax        Decimal @default(0)
+  ytdCppER_Base           Decimal @default(0)
+  ytdCppER_FirstAdd       Decimal @default(0)
   ytdCppER                Decimal @default(0)
   ytdCpp2ER               Decimal @default(0)
   ytdEiER                 Decimal @default(0)
@@ -11528,6 +11538,8 @@ model PayrollOpeningBalance {
   importedAt             DateTime?
   importedByUserId       String?
   notes                  String?
+  priorPayrollKind       String   @default("PRIOR_SYSTEM_SAME_EMPLOYER")
+  priorEmployerId        String?
   supersededAt           DateTime?
   supersededByUserId     String?
   supersededById         String?
@@ -11614,6 +11626,21 @@ model PayrollBatchEmployee {
   // Payroll-3B-5B-1a (2026-08-31) — frozen Employee DOB for CPP
   // age eligibility. See prisma/schema.prisma for full doc.
   dateOfBirthSnapshot     DateTime?
+  // Payroll-3B-5B-1 (§20) — persisted calc contract; NULL at
+  // PREPARED, populated at CALCULATED. See prisma/schema.prisma.
+  earningsTaxable        Decimal?
+  earningsPensionable    Decimal?
+  earningsInsurable      Decimal?
+  deductionCppEeBase       Decimal?
+  deductionCppEeFirstAdd   Decimal?
+  deductionCpp2Ee          Decimal?
+  deductionEiEe            Decimal?
+  deductionFederalTax      Decimal?
+  deductionProvincialTax   Decimal?
+  employerCppBase          Decimal?
+  employerCppFirstAdd      Decimal?
+  employerCpp2             Decimal?
+  employerEi               Decimal?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -11636,19 +11663,46 @@ model EmployeeCppElection {
   employeeId        String
   employee          Employee @relation(fields: [employeeId], references: [id])
   kind              String
+  pensionType       String?
+  retirementPensionReceived Boolean @default(false)
+  employeeSignedOn  DateTime?
   receivedOn        DateTime
   effectiveOn       DateTime
+  revokesElectionId String?
+  revokesElection   EmployeeCppElection?  @relation("EmployeeCppElectionRevokes", fields: [revokesElectionId], references: [id])
+  revocations       EmployeeCppElection[] @relation("EmployeeCppElectionRevokes")
   status            String   @default("ACTIVE")
   supersededById    String?
   supersededBy      EmployeeCppElection?  @relation("EmployeeCppElectionSuperseded", fields: [supersededById], references: [id])
   supersedes        EmployeeCppElection[] @relation("EmployeeCppElectionSuperseded")
   notes             String?
+  evidenceDocumentId String?
   createdByUserId   String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   @@index([clubId, employeeId, status])
   @@index([clubId, employeeId, effectiveOn])
+  @@index([revokesElectionId])
+}
+
+// Payroll-3B-5B-1 (2026-08-31) — CPP disability status. See
+// prisma/schema.prisma for full doc.
+model EmployeeCppDisability {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  employeeId         String
+  employee           Employee @relation(fields: [employeeId], references: [id])
+  status             String
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+  sourceBasis        String?
+  recordedByUserId   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
 }
 
 // Typed earning input line (sections 14-16). Each earning MUST

@@ -51,6 +51,8 @@ export type CppInapplicableReason =
   | "TURNED_18_AND_IN_BIRTHDAY_MONTH_OR_EARLIER"
   | "TURNED_70_AND_PAST_BIRTHDAY_MONTH"
   | "CPT30_ELECTION_STOP"
+  | "CPP_DISABILITY_ACTIVE"
+  | "PAST_DEATH_MONTH"
   | "MISSING_DOB";
 
 export interface CppEligibilityInput {
@@ -64,6 +66,25 @@ export interface CppEligibilityInput {
     /** First calendar day the election takes effect (per CRA rules). */
     effectiveOn: Date;
   } | null;
+  /**
+   * Optional ACTIVE CPP disability status covering the pay date.
+   * Payroll-3B-5B-1 (§9). CPP contributions stop while a CPP or
+   * QPP disability benefit is in payment. NOT_DISABLED is treated
+   * as if no row were present.
+   */
+  cppDisability?: {
+    status: "NOT_DISABLED" | "CPP_DISABLED" | "QPP_DISABLED";
+    effectiveFrom: Date;
+    effectiveTo: Date | null;
+  } | null;
+  /**
+   * Optional deceased date (civil, UTC midnight). Payroll-3B-5B-1
+   * (§10). Contributions apply up to and INCLUDING the last pay
+   * dated in the calendar month of death; pays dated after that
+   * month are not applicable and the pensionable-month tally caps
+   * at the death month.
+   */
+  deceasedOn?: Date | null;
 }
 
 export interface CppEligibilityResult {
@@ -130,7 +151,7 @@ function monthsInYearCovered(year: number, start: Date | null, end: Date | null)
 }
 
 export function resolveCppContributionEligibility(input: CppEligibilityInput): CppEligibilityResult {
-  const { dateOfBirth, payDate, cppElection } = input;
+  const { dateOfBirth, payDate, cppElection, cppDisability, deceasedOn } = input;
 
   const year = payDate.getUTCFullYear();
 
@@ -158,9 +179,18 @@ export function resolveCppContributionEligibility(input: CppEligibilityInput): C
     ? utcMidnight(year, 0, 1)
     : firstOfMonthAfter(birth18);
   // Age boundary — the latest pay date that ends contributing.
-  const contribEndForYear = birth70.getUTCFullYear() > year
+  let contribEndForYear = birth70.getUTCFullYear() > year
     ? utcMidnight(year, 11, 31)
     : lastOfMonthOf(birth70);
+  // Death caps the year-end boundary at the last day of the death
+  // month (§10) — the calculator's `contributoryMonthsInYear`
+  // proration then honours the shortened window.
+  if (deceasedOn && deceasedOn.getUTCFullYear() === year) {
+    const deathEnd = lastOfMonthOf(deceasedOn);
+    if (deathEnd.getTime() < contribEndForYear.getTime()) {
+      contribEndForYear = deathEnd;
+    }
+  }
 
   // If the pay date falls BEFORE the age-18 window opens in this year,
   // CPP is not applicable yet.
@@ -177,17 +207,44 @@ export function resolveCppContributionEligibility(input: CppEligibilityInput): C
       contributoryMonthsInYear: 0,
     };
   }
-  // If the pay date falls AFTER the age-70 window closes, CPP is done.
+  // If the pay date falls AFTER the closing boundary, CPP is done.
+  // Reason distinguishes death (§10) from age 70 to keep audit trails
+  // and downstream reporting accurate.
   if (payDate.getTime() > contribEndForYear.getTime()) {
+    const pastDeath =
+      deceasedOn !== null &&
+      deceasedOn !== undefined &&
+      deceasedOn.getUTCFullYear() === year &&
+      lastOfMonthOf(deceasedOn).getTime() === contribEndForYear.getTime() &&
+      lastOfMonthOf(birth70).getTime() !== contribEndForYear.getTime();
     return {
       cppApplicable: false,
-      reason: "TURNED_70_AND_PAST_BIRTHDAY_MONTH",
+      reason: pastDeath ? "PAST_DEATH_MONTH" : "TURNED_70_AND_PAST_BIRTHDAY_MONTH",
       turned18ThisYear,
       turned70ThisYear,
       contributionStartDate: contribStartForYear,
       contributionEndDate: contribEndForYear,
       contributoryMonthsInYear: monthsInYearCovered(year, contribStartForYear, contribEndForYear),
     };
+  }
+
+  // Disability gate (§9) — CPP contributions stop while a CPP/QPP
+  // disability benefit is in payment. Half-open interval; the
+  // resolver caller is responsible for selecting the ACTIVE row.
+  if (cppDisability && cppDisability.status !== "NOT_DISABLED") {
+    const disStart = cppDisability.effectiveFrom.getTime();
+    const disEndExclusive = cppDisability.effectiveTo?.getTime() ?? Infinity;
+    if (payDate.getTime() >= disStart && payDate.getTime() < disEndExclusive) {
+      return {
+        cppApplicable: false,
+        reason: "CPP_DISABILITY_ACTIVE",
+        turned18ThisYear,
+        turned70ThisYear,
+        contributionStartDate: contribStartForYear,
+        contributionEndDate: contribEndForYear,
+        contributoryMonthsInYear: monthsInYearCovered(year, contribStartForYear, contribEndForYear),
+      };
+    }
   }
 
   // Age is fine; consult CPT30 election if present. CPT30 rules apply
