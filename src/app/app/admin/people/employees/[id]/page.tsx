@@ -343,6 +343,7 @@ export default async function EmployeeProfilePage({
         phone: profile.phone ?? null,
         mobilePhone: profile.mobilePhone ?? null,
         hireDate: profile.hireDate ? profile.hireDate.toISOString() : null,
+        dateOfBirth: profile.dateOfBirth ? profile.dateOfBirth.toISOString() : null,
         expectedStartDate: profile.expectedStartDate ? profile.expectedStartDate.toISOString() : null,
         // HR-2C Employment Corrections (2026-08-24) — Overview
         // derives from the canonical PRIMARY assignment when one

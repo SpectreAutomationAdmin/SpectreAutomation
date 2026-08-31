@@ -158,6 +158,10 @@ export async function getSelfEmployee(actor: EmployeeOnboardingActor) {
       mobilePhone: true,
       expectedStartDate: true,
       employmentType: true,
+      // Payroll-3B-5B-1a — DOB + lifecycle needed by the self-service
+      // DOB gate (writable only during PRE_HIRE).
+      dateOfBirth: true,
+      employeeLifecycle: true,
       profilePhotoDocumentId: true,
       department: { select: { id: true, name: true } },
       position: { select: { id: true, name: true } },
@@ -299,6 +303,81 @@ function pickBefore(row: Awaited<ReturnType<typeof getSelfEmployee>>, keys: stri
   const out: Record<string, unknown> = {};
   for (const k of keys) out[k] = (row as unknown as Record<string, unknown>)[k];
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-1a (2026-08-31) — Date of birth (onboarding).
+//
+// DOB is collected during onboarding on the Name step. It's stored
+// as a civil date (UTC midnight) so age boundary logic downstream is
+// timezone-independent. After the Employee's lifecycle leaves
+// PRE_HIRE, the self-service write path REFUSES further DOB edits —
+// a change then requires an HR/Admin correction via `updateEmployee`
+// (audited, sensitive-action gated). This prevents silent DOB shifts
+// that would retroactively alter statutory treatment.
+//
+// The employee input is an ISO date-only string ("YYYY-MM-DD"). The
+// service refuses:
+//   • malformed strings
+//   • dates strictly greater than today (UTC midnight)
+//   • DOB writes after PRE_HIRE (returns a structured "post-hire" error)
+// ---------------------------------------------------------------------------
+
+function parseCivilDateOfBirth(raw: string): Date {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new ValidationError([{ path: "dateOfBirth", message: "Please enter a date as YYYY-MM-DD." }]);
+  }
+  const [ys, ms, ds] = raw.split("-");
+  const y = Number(ys), m = Number(ms), d = Number(ds);
+  const iv = new Date(Date.UTC(y, m - 1, d));
+  if (
+    Number.isNaN(iv.getTime()) ||
+    iv.getUTCFullYear() !== y ||
+    iv.getUTCMonth() !== m - 1 ||
+    iv.getUTCDate() !== d
+  ) {
+    throw new ValidationError([{ path: "dateOfBirth", message: "That is not a valid date." }]);
+  }
+  const now = new Date();
+  const nowMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  if (iv.getTime() > nowMidnight.getTime()) {
+    throw new ValidationError([{ path: "dateOfBirth", message: "Date of birth cannot be in the future." }]);
+  }
+  return iv;
+}
+
+export async function updateSelfDateOfBirth(
+  actor: EmployeeOnboardingActor,
+  input: { dateOfBirth: string },
+): Promise<void> {
+  const parsed = parseCivilDateOfBirth(input.dateOfBirth);
+  const before = await getSelfEmployee(actor);
+  if (before.employeeLifecycle !== "PRE_HIRE") {
+    throw new ValidationError([
+      { path: "dateOfBirth", message: "Date of birth can only be set through HR after your employment has been activated." },
+    ]);
+  }
+  await prisma.employee.update({
+    where: { id: actor.employeeId },
+    data: { dateOfBirth: parsed },
+  });
+  await audit(null, {
+    action: "hr.employee.write.update",
+    entityType: EMPLOYEE_ENTITY,
+    entityId: actor.employeeId,
+    clubId: actor.clubId,
+    // Audit records the fact of a change; the DOB itself is treated as
+    // personal information — record only that the field was touched
+    // and by whom, not the birth date value.
+    before: { dateOfBirth: before.dateOfBirth ? "SET" : "NULL" },
+    after: { dateOfBirth: "SET" },
+    meta: {
+      actorSource: "EMPLOYEE",
+      actorEmployeeIdTail: actor.employeeId.slice(-8),
+      onboardingSessionIdTail: actor.sessionId.slice(-8),
+      invitationIdTail: actor.invitationId.slice(-8),
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------

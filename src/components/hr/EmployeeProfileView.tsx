@@ -60,6 +60,10 @@ interface Props {
     phone: string | null;
     mobilePhone: string | null;
     hireDate: string | null;
+    // Payroll-3B-5B-1a — DOB (civil date ISO string). Optional; a
+    // missing DOB surfaces as a MISSING_DATE_OF_BIRTH BLOCKER on the
+    // Payroll batch, not here. Editable via the dedicated dob action.
+    dateOfBirth: string | null;
     expectedStartDate: string | null;
     employmentType: string | null;
     employeeLifecycle: string;

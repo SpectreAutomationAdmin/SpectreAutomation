@@ -55,7 +55,7 @@ async function scenario() {
   const groundsMgrEmp = await db().employee.create({
     data: {
       clubId: clubA.id, firstName: "Grounds", lastName: "Manager",
-      email: groundsMgrUser.email, hireDate: utc(2026, 1, 1), status: "ACTIVE",
+      email: groundsMgrUser.email, hireDate: utc(2026, 1, 1), dateOfBirth: utc(1990, 5, 12), status: "ACTIVE",
       employeeNumber: "E-MGR-G", userId: groundsMgrUser.id,
     },
   });
@@ -64,7 +64,7 @@ async function scenario() {
   const hourlyEmp = await db().employee.create({
     data: {
       clubId: clubA.id, firstName: "Alex", lastName: "Grounds",
-      email: "alex@a.test", hireDate: utc(2026, 1, 1), status: "ACTIVE",
+      email: "alex@a.test", hireDate: utc(2026, 1, 1), dateOfBirth: utc(1990, 5, 12), status: "ACTIVE",
       employeeNumber: "E-1001",
     },
   });
@@ -97,7 +97,7 @@ async function scenario() {
   const salariedEmp = await db().employee.create({
     data: {
       clubId: clubA.id, firstName: "Sam", lastName: "Salary",
-      email: "sam@a.test", hireDate: utc(2026, 1, 1), status: "ACTIVE",
+      email: "sam@a.test", hireDate: utc(2026, 1, 1), dateOfBirth: utc(1990, 5, 12), status: "ACTIVE",
       employeeNumber: "E-1002",
     },
   });
@@ -225,7 +225,7 @@ describe("Payroll-3B-4 — batch preparation", () => {
     const otherEmp = await db().employee.create({
       data: {
         clubId: s.clubA.id, firstName: "Other", lastName: "Group",
-        email: "other@a.test", hireDate: utc(2026, 1, 1), status: "ACTIVE",
+        email: "other@a.test", hireDate: utc(2026, 1, 1), dateOfBirth: utc(1990, 5, 12), status: "ACTIVE",
         employeeNumber: "E-9999",
       },
     });
@@ -311,7 +311,7 @@ describe("Payroll-3B-4 — batch preparation", () => {
     const empNoComp = await db().employee.create({
       data: {
         clubId: s.clubA.id, firstName: "NoComp", lastName: "Employee",
-        email: "nc@a.test", hireDate: utc(2026, 1, 1), status: "ACTIVE",
+        email: "nc@a.test", hireDate: utc(2026, 1, 1), dateOfBirth: utc(1990, 5, 12), status: "ACTIVE",
         employeeNumber: "E-2000",
       },
     });

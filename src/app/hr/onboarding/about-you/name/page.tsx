@@ -20,9 +20,21 @@ export default async function NameStep() {
       middleName: true,
       lastName: true,
       preferredName: true,
+      // Payroll-3B-5B-1a — DOB is collected here alongside legal name.
+      dateOfBirth: true,
     },
   });
   if (!employee) redirect("/hr/onboarding/expired");
+
+  const dobDefault = employee.dateOfBirth
+    ? employee.dateOfBirth.toISOString().slice(0, 10)
+    : "";
+  // Reasonable UX bounds — you can be born any time up to today, and
+  // as far back as 120 years ago. Not a legal check, just an input
+  // sanity limit; the server also refuses future dates.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const minDobIso = new Date(Date.UTC(new Date().getUTCFullYear() - 120, 0, 1))
+    .toISOString().slice(0, 10);
 
   return (
     <article className="rounded-lg border border-stone-200 bg-white px-6 py-8 md:px-10 md:py-10">
@@ -83,6 +95,23 @@ export default async function NameStep() {
             placeholder={employee.firstName ?? ""}
             className="mt-1 block w-full rounded-md border border-stone-300 px-3 py-2 text-base text-stone-900 focus:border-emerald-700 focus:ring-1 focus:ring-emerald-700"
           />
+        </label>
+        <label className="block">
+          <span className="block text-sm text-stone-700">Date of birth</span>
+          <input
+            type="date"
+            name="dateOfBirth"
+            required
+            autoComplete="bday"
+            min={minDobIso}
+            max={todayIso}
+            defaultValue={dobDefault}
+            className="mt-1 block w-full rounded-md border border-stone-300 px-3 py-2 text-base text-stone-900 focus:border-emerald-700 focus:ring-1 focus:ring-emerald-700"
+          />
+          <span className="mt-1 block text-xs text-stone-500">
+            Used to set your payroll tax treatment. Not shown to anyone
+            outside your Club's HR team.
+          </span>
         </label>
 
         <div className="flex items-center justify-between pt-2">

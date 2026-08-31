@@ -78,6 +78,11 @@ export interface CreateEmployeeInput {
   departmentId?: string | null;
   positionId?: string | null;
   hireDate?: Date | string | null;
+  // Payroll-3B-5B-1a — canonical Employee date of birth (civil date).
+  // Optional at create time; a missing DOB downstream produces a
+  // BLOCKER in payroll batch preparation, not here. Future dates
+  // are rejected.
+  dateOfBirth?: Date | string | null;
   expectedStartDate?: Date | string | null;
   employmentType?: string | null;
   compensationType?: string;
@@ -102,6 +107,26 @@ function toOptionalDate(v: Date | string | null | undefined, field: string): Dat
     throw new ValidationError([{ path: field, message: `${field} is not a valid date` }]);
   }
   return d;
+}
+
+/**
+ * Payroll-3B-5B-1a — normalise a civil-date input to UTC midnight and
+ * reject impossible future dates. Delegates parsing failure to
+ * `toOptionalDate`; also rejects DOBs strictly greater than today
+ * (UTC-midnight comparison so the boundary is timezone-independent).
+ */
+function toOptionalDateOfBirth(v: Date | string | null | undefined, field: string): Date | null {
+  const parsed = toOptionalDate(v, field);
+  if (parsed === null) return null;
+  const y = parsed.getUTCFullYear();
+  const m = parsed.getUTCMonth();
+  const d = parsed.getUTCDate();
+  const civilMidnight = new Date(Date.UTC(y, m, d));
+  const nowMidnight = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+  if (civilMidnight.getTime() > nowMidnight.getTime()) {
+    throw new ValidationError([{ path: field, message: `${field} cannot be in the future` }]);
+  }
+  return civilMidnight;
 }
 
 export async function createEmployee(
@@ -154,6 +179,7 @@ export async function createEmployee(
       departmentId: input.departmentId ?? null,
       positionId: input.positionId ?? null,
       hireDate: toOptionalDate(input.hireDate ?? null, "hireDate"),
+      dateOfBirth: toOptionalDateOfBirth(input.dateOfBirth ?? null, "dateOfBirth"),
       expectedStartDate: toOptionalDate(input.expectedStartDate ?? null, "expectedStartDate"),
       employmentType,
       employeeLifecycle: lifecycle,
@@ -218,6 +244,10 @@ export interface UpdateEmployeeInput {
   departmentId?: string | null;
   positionId?: string | null;
   hireDate?: Date | string | null;
+  // Payroll-3B-5B-1a — canonical DOB. HR/Admin correction path
+  // for existing employees who onboarded before DOB was collected,
+  // or for post-onboarding corrections.
+  dateOfBirth?: Date | string | null;
   expectedStartDate?: Date | string | null;
   employmentType?: string | null;
   employeeLifecycle?: string;
@@ -285,6 +315,7 @@ export async function updateEmployee(
   if (input.departmentId !== undefined) data.departmentId = input.departmentId;
   if (input.positionId !== undefined) data.positionId = input.positionId;
   if (input.hireDate !== undefined) data.hireDate = toOptionalDate(input.hireDate, "hireDate");
+  if (input.dateOfBirth !== undefined) data.dateOfBirth = toOptionalDateOfBirth(input.dateOfBirth, "dateOfBirth");
   if (input.expectedStartDate !== undefined) data.expectedStartDate = toOptionalDate(input.expectedStartDate, "expectedStartDate");
   if (input.employmentType !== undefined) data.employmentType = input.employmentType;
   if (input.employeeLifecycle !== undefined) data.employeeLifecycle = input.employeeLifecycle;
@@ -884,6 +915,10 @@ export async function getEmployee(
     departmentId: employee.departmentId,
     positionId: employee.positionId,
     hireDate: employee.hireDate,
+    // Payroll-3B-5B-1a — DOB exposed as part of the standard
+    // Employee profile projection. Same read-permission tier as the
+    // rest of the identity block; no separate reveal grant.
+    dateOfBirth: employee.dateOfBirth,
     expectedStartDate: employee.expectedStartDate,
     activatedAt: employee.activatedAt,
     terminationDate: employee.terminationDate,

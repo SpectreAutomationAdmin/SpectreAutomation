@@ -96,9 +96,24 @@ export const SourceFactsCoverageV1 = z.object({
 });
 export type SourceFactsCoverageV1 = z.infer<typeof SourceFactsCoverageV1>;
 
+/**
+ * Payroll-3B-5B-1a (2026-08-31) — frozen Employee identity facts
+ * the future calculator needs beyond the coverage window. DOB is
+ * required for CPP age eligibility (see
+ * `src/lib/payroll/statutory/cpp-eligibility.ts`). `dateOfBirth`
+ * is nullable to accommodate legacy Employees imported before DOB
+ * was collected — a null triggers a MISSING_DATE_OF_BIRTH BLOCKER
+ * during preparation.
+ */
+export const SourceFactsIdentityV1 = z.object({
+  dateOfBirth: IsoDate.nullable(),
+});
+export type SourceFactsIdentityV1 = z.infer<typeof SourceFactsIdentityV1>;
+
 export const PayrollBatchSourceFactsV1 = z.object({
   schemaVersion: z.literal(1),
   coverage: SourceFactsCoverageV1,
+  identity: SourceFactsIdentityV1,
   assignments: z.array(SourceFactsAssignmentV1),
   compensations: z.array(SourceFactsCompensationV1),
   allowances: z.array(SourceFactsAllowanceV1),

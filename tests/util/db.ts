@@ -309,6 +309,9 @@ export async function resetDb() {
     // Club); then PayrollClubConfig (FK Club). All must precede
     // c.employee.deleteMany() and c.employeeEmploymentAssignment
     // .deleteMany() below.
+    // Payroll-3B-5B-1a — CPT30 elections: self-FK; null out before delete.
+    c.employeeCppElection.updateMany({ data: { supersededById: null } }),
+    c.employeeCppElection.deleteMany(),
     c.payrollDepartmentTimeApproval.deleteMany(),
     c.payrollBatchException.deleteMany(),
     c.payrollBatchAllowanceSnapshot.deleteMany(),

@@ -78,6 +78,8 @@ export interface PreparedBatchEmployeeView {
   membershipEffectiveTo: Date | null;
   coverageStart: Date | null;
   coverageEnd: Date | null;
+  // Payroll-3B-5B-1a (2026-08-31) — frozen DOB for CPP eligibility.
+  dateOfBirthSnapshot: Date | null;
   sourceFacts: PayrollBatchSourceFactsV1 | null;
 }
 
@@ -228,6 +230,8 @@ async function resolvePopulation(clubId: string, payGroupId: string, periodStart
           employeeLifecycle: true,
           hireDate: true,
           terminationDate: true,
+          // Payroll-3B-5B-1a — DOB is required for CPP age eligibility.
+          dateOfBirth: true,
           userId: true,
         },
       },
@@ -301,6 +305,11 @@ interface EmployeeSnapshot {
   membershipEffectiveTo: Date | null;
   coverageStart: Date;
   coverageEnd: Date;
+  // Payroll-3B-5B-1a — frozen Employee DOB (civil date) for CPP age
+  // eligibility. NULL when the Employee has no DOB on file — the
+  // snapshot writer emits a MISSING_DATE_OF_BIRTH BLOCKER in that
+  // case.
+  dateOfBirthSnapshot: Date | null;
   bankingReady: boolean;
   bankingStatus: string | null;
   sinReady: boolean;
@@ -475,9 +484,25 @@ async function snapshotEmployee(
     periodEnd,
   );
 
+  // Payroll-3B-5B-1a — freeze identity facts. DOB is required for
+  // CPP age eligibility; missing DOB is a BLOCKER (the future
+  // calculator refuses to guess age from any other field).
+  const dateOfBirthSnapshot: Date | null = member.employee.dateOfBirth ?? null;
+  if (!dateOfBirthSnapshot) {
+    exceptions.push({
+      severity: "BLOCKER",
+      code: "MISSING_DATE_OF_BIRTH",
+      message: "Date of birth is required to determine CPP deductions.",
+      recommendedAction: "Set the employee's date of birth on their profile before preparing payroll.",
+    });
+  }
+
   const sourceFacts: PayrollBatchSourceFactsV1 = {
     schemaVersion: 1,
     coverage,
+    identity: {
+      dateOfBirth: dateOfBirthSnapshot ? dateOfBirthSnapshot.toISOString() : null,
+    },
     assignments: assignments.map((a) => ({
       id: a.id,
       role: a.role,
@@ -530,6 +555,7 @@ async function snapshotEmployee(
     membershipEffectiveTo: member.effectiveTo ?? null,
     coverageStart: new Date(coverage.coverageStart),
     coverageEnd: new Date(coverage.coverageEnd),
+    dateOfBirthSnapshot,
     bankingReady,
     bankingStatus,
     sinReady,
@@ -658,6 +684,7 @@ export async function preparePayrollBatch(
           membershipEffectiveTo: s.membershipEffectiveTo,
           coverageStart: s.coverageStart,
           coverageEnd: s.coverageEnd,
+          dateOfBirthSnapshot: s.dateOfBirthSnapshot,
           bankingReady: s.bankingReady,
           bankingStatus: s.bankingStatus,
           sinReady: s.sinReady,
@@ -882,6 +909,7 @@ export async function getPreparedBatch(
         membershipEffectiveTo: e.membershipEffectiveTo,
         coverageStart: e.coverageStart,
         coverageEnd: e.coverageEnd,
+        dateOfBirthSnapshot: e.dateOfBirthSnapshot,
         sourceFacts: facts,
       };
     }),

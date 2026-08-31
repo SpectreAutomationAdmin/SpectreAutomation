@@ -19,6 +19,9 @@ const validFacts: PayrollBatchSourceFactsV1 = {
     periodDays: 14,
     isFullPeriod: true,
   },
+  identity: {
+    dateOfBirth: "1990-05-12T00:00:00.000Z",
+  },
   assignments: [
     {
       id: "a1",

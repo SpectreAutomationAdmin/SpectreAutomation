@@ -108,6 +108,10 @@ export async function POST(req: NextRequest) {
   const homeProvince = readOptionalString(fd, "homeProvince");
   const homePostalCode = readOptionalString(fd, "homePostalCode");
   const homeCountry = readOptionalString(fd, "homeCountry");
+  // Payroll-3B-5B-1a — optional DOB at admin creation. If omitted,
+  // the employee will complete it during onboarding; payroll will
+  // block on MISSING_DATE_OF_BIRTH until it is set.
+  const dateOfBirth = readOptionalString(fd, "dateOfBirth");
 
   // HR-2B.5 §11-13 — Initial compensation. Presence of these fields
   // means the operator has hr:compensation:write and the form rendered
@@ -175,6 +179,7 @@ export async function POST(req: NextRequest) {
       departmentId,
       positionId,
       expectedStartDate,
+      dateOfBirth,
       employmentType,
       // HR mobile-hotfix (2026-08-30) §1 — optional admin prefill.
       // Any subset may be blank; the service persists whatever the

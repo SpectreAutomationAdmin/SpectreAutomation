@@ -34,7 +34,7 @@ async function makeSalariedEmp(clubId: string, dept: string, num: string, hireDa
   const emp = await db().employee.create({
     data: {
       clubId, firstName: "Sam", lastName: "Salary" + num,
-      email: `sam${num}@a.test`, hireDate, status: "ACTIVE",
+      email: `sam${num}@a.test`, hireDate, dateOfBirth: d(1990, 5, 12), status: "ACTIVE",
       employeeNumber: num,
     },
   });
@@ -151,7 +151,7 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const emp = await db().employee.create({
       data: {
         clubId: s.club.id, firstName: "Trans", lastName: "Fer",
-        email: "tf@a.test", hireDate: d(2026, 1, 1), status: "ACTIVE",
+        email: "tf@a.test", hireDate: d(2026, 1, 1), dateOfBirth: d(1990, 5, 12), status: "ACTIVE",
         employeeNumber: "E-TX-1",
       },
     });
@@ -243,7 +243,7 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const emp = await db().employee.create({
       data: {
         clubId: s.club.id, firstName: "Xfer", lastName: "Hourly",
-        email: "xh@a.test", hireDate: d(2026, 1, 1), status: "ACTIVE",
+        email: "xh@a.test", hireDate: d(2026, 1, 1), dateOfBirth: d(1990, 5, 12), status: "ACTIVE",
         employeeNumber: "E-TX-H",
       },
     });

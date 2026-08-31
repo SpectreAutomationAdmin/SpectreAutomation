@@ -484,6 +484,7 @@ model Club {
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
+  employeeCppElections               EmployeeCppElection[]
 }
 
 // ---------------------------------------------------------------------
@@ -3320,6 +3321,9 @@ model Employee {
   positionId             String?
   position               EmployeePosition? @relation(fields: [positionId], references: [id])
   hireDate               DateTime?
+  // Payroll-3B-5B-1a (2026-08-31) — canonical Employee date of birth.
+  // See prisma/schema.prisma for full doc.
+  dateOfBirth            DateTime?
   // HR-1 — pre-hire lifecycle.
   expectedStartDate      DateTime?
   activatedAt            DateTime?
@@ -3408,6 +3412,7 @@ model Employee {
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
   payrollOpeningBalances     PayrollOpeningBalance[]
+  cppElections               EmployeeCppElection[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11606,6 +11611,9 @@ model PayrollBatchEmployee {
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?
   coverageEnd             DateTime?
+  // Payroll-3B-5B-1a (2026-08-31) — frozen Employee DOB for CPP
+  // age eligibility. See prisma/schema.prisma for full doc.
+  dateOfBirthSnapshot     DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -11617,6 +11625,30 @@ model PayrollBatchEmployee {
   @@unique([batchId, employeeId])
   @@index([clubId, batchId])
   @@index([clubId, employeeId])
+}
+
+// Payroll-3B-5B-1a (2026-08-31) — CPT30 election foundation.
+// See prisma/schema.prisma for full doc.
+model EmployeeCppElection {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id])
+  kind              String
+  receivedOn        DateTime
+  effectiveOn       DateTime
+  status            String   @default("ACTIVE")
+  supersededById    String?
+  supersededBy      EmployeeCppElection?  @relation("EmployeeCppElectionSuperseded", fields: [supersededById], references: [id])
+  supersedes        EmployeeCppElection[] @relation("EmployeeCppElectionSuperseded")
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([clubId, employeeId, status])
+  @@index([clubId, employeeId, effectiveOn])
 }
 
 // Typed earning input line (sections 14-16). Each earning MUST

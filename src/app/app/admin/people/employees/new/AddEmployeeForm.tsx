@@ -268,6 +268,25 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
             <label className="label" htmlFor="preferredName">Preferred name (optional)</label>
             <input id="preferredName" name="preferredName" className="input" maxLength={80} />
           </div>
+          {/* Payroll-3B-5B-1a — DOB. Optional at admin creation
+              (the employee will complete it during onboarding), but
+              required before payroll can be prepared. Missing DOB
+              surfaces as a MISSING_DATE_OF_BIRTH blocker on the
+              payroll batch. */}
+          <div>
+            <label className="label" htmlFor="dateOfBirth">Date of birth (optional)</label>
+            <input
+              id="dateOfBirth"
+              name="dateOfBirth"
+              type="date"
+              className="input"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+            <p className="text-xs text-stone-500 mt-1">
+              If left blank, the employee will enter it during onboarding.
+              Required before payroll can be prepared.
+            </p>
+          </div>
         </div>
       </section>
 

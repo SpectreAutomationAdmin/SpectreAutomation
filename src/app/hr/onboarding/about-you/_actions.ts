@@ -23,6 +23,7 @@ import {
   flagEmploymentFieldForCorrection,
   transitionSelfSessionToInProgress,
   updateOnboardingHomeAddress,
+  updateSelfDateOfBirth,
   updateSelfIdentity,
   uploadSelfPhoto,
   type ClubAuthoritativeField,
@@ -79,8 +80,16 @@ export async function saveNameAction(formData: FormData) {
   for (const k of Object.keys(patch) as (keyof SelfIdentityPatch)[]) {
     if (patch[k] === undefined) delete patch[k];
   }
+  const dobRaw = (formData.get("dateOfBirth") as string | null)?.trim() ?? "";
   try {
     await updateSelfIdentity(actor, patch);
+    // Payroll-3B-5B-1a — DOB is collected alongside legal name.
+    // Required — a missing DOB would just surface as a payroll
+    // BLOCKER later; catch it here where the employee can fix it.
+    if (dobRaw.length === 0) {
+      redirect(withErr("/hr/onboarding/about-you/name", "Please enter your date of birth."));
+    }
+    await updateSelfDateOfBirth(actor, { dateOfBirth: dobRaw });
     // HR-2B.3.3 (2026-08-18) — durable ack that the employee posted
     // this step. Replaces the prior "inferred from preferredName"
     // signal which was the source of the /complete → Continue-to-

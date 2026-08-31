@@ -475,6 +475,7 @@ model Club {
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
+  employeeCppElections               EmployeeCppElection[]
 }
 
 // ---------------------------------------------------------------------
@@ -3319,6 +3320,14 @@ model Employee {
   positionId             String?
   position               EmployeePosition? @relation(fields: [positionId], references: [id])
   hireDate               DateTime?
+  // Payroll-3B-5B-1a (2026-08-31) — canonical Employee date of birth.
+  // Civil date; stored as UTC midnight per the Payroll civil-date
+  // convention (see src/lib/payroll/intervals.ts). NEVER an
+  // instant-in-time birth timestamp. Required for CPP age eligibility
+  // — a missing DOB on a payable Employee produces a BLOCKER during
+  // batch preparation. Age is never stored — always derived from
+  // (dateOfBirth, payDate).
+  dateOfBirth            DateTime?
   // HR-1 — pre-hire lifecycle.
   expectedStartDate      DateTime?
   activatedAt            DateTime?
@@ -3403,6 +3412,7 @@ model Employee {
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
   payrollOpeningBalances     PayrollOpeningBalance[]
+  cppElections               EmployeeCppElection[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11632,6 +11642,12 @@ model PayrollBatchEmployee {
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?
   coverageEnd             DateTime?
+  // Payroll-3B-5B-1a (2026-08-31) — frozen Employee identity facts
+  // the future calculator needs to determine CPP age eligibility.
+  // Snapshotted at preparation; a later live-DOB correction does
+  // NOT mutate this. Nullable — a missing DOB produces a BLOCKER
+  // during preparation.
+  dateOfBirthSnapshot     DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
@@ -11643,6 +11659,46 @@ model PayrollBatchEmployee {
   @@unique([batchId, employeeId])
   @@index([clubId, batchId])
   @@index([clubId, employeeId])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-1a (2026-08-31) — CPT30 election foundation.
+//
+// Age 65–69 employees receiving a CPP/QPP retirement pension may
+// file Form CPT30 with their employer to STOP CPP contributions,
+// and may later REVOKE that election. The election takes effect the
+// first day of the month after Spectre receives the form; a
+// revocation likewise takes effect the following month.
+//
+// This model is the minimum foundation so the 3B-5B calculator
+// never treats all age 65–69 employees identically. UI/upload flow
+// is deferred — 3B-5A ships the schema only; the calculator reads
+// the ACTIVE row via `resolveCppContributionEligibility`.
+// ---------------------------------------------------------------------------
+model EmployeeCppElection {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id])
+  // ELECTION_TO_STOP | REVOCATION_OF_ELECTION
+  kind              String
+  // The date the employer received the CPT30 form (civil date).
+  receivedOn        DateTime
+  // The first pay period on/after which the election takes effect —
+  // per CRA "first day of the month after receipt".
+  effectiveOn       DateTime
+  status            String   @default("ACTIVE") // ACTIVE | SUPERSEDED
+  supersededById    String?
+  supersededBy      EmployeeCppElection?  @relation("EmployeeCppElectionSuperseded", fields: [supersededById], references: [id])
+  supersedes        EmployeeCppElection[] @relation("EmployeeCppElectionSuperseded")
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([clubId, employeeId, status])
+  @@index([clubId, employeeId, effectiveOn])
 }
 
 // Typed earning input line (sections 14-16). Each earning MUST
