@@ -26,6 +26,13 @@ import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertPostingAllowed } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
+import { intersect, coverageDays as intervalCoverageDays } from "./intervals";
+import {
+  assertValidSourceFactsV1,
+  parseSourceFactsV1,
+  type PayrollBatchSourceFactsV1,
+  type SourceFactsCoverageV1,
+} from "./source-facts-schema";
 
 const ENTITY = "PayrollBatch";
 
@@ -66,7 +73,12 @@ export interface PreparedBatchEmployeeView {
   federalTd1Ready: boolean;
   provincialTd1Ready: boolean;
   compensationReady: boolean;
-  sourceFacts: SourceFacts | null;
+  // Payroll-3B-5A (2026-08-31) — coverage window (§2, §5).
+  membershipEffectiveFrom: Date | null;
+  membershipEffectiveTo: Date | null;
+  coverageStart: Date | null;
+  coverageEnd: Date | null;
+  sourceFacts: PayrollBatchSourceFactsV1 | null;
 }
 
 export interface ExceptionView {
@@ -80,39 +92,10 @@ export interface ExceptionView {
   resolvedAt: Date | null;
 }
 
-/** JSON blob shape written into PayrollBatchEmployee.sourceFactsJson.
- *  Machine-readable; the future calculator reads this to know
- *  which compensation records / assignments applied. */
-interface SourceFacts {
-  assignments: Array<{
-    id: string;
-    role: string;
-    departmentId: string | null;
-    positionId: string | null;
-    employmentType: string;
-    effectiveFrom: string;      // ISO
-    effectiveTo: string | null; // ISO
-  }>;
-  compensations: Array<{
-    id: string;
-    assignmentId: string | null;
-    payType: string;
-    hourlyRate: string | null;
-    annualSalary: string | null;
-    effectiveFrom: string;
-    effectiveTo: string | null;
-  }>;
-  allowances: Array<{
-    id: string;
-    assignmentId: string | null;
-    allowanceType: string;
-    amount: string;
-    frequency: string;
-    taxable: boolean;
-    effectiveFrom: string;
-    effectiveTo: string | null;
-  }>;
-}
+// Payroll-3B-5A (2026-08-31) — the source-facts blob shape lives
+// in src/lib/payroll/source-facts-schema.ts as
+// `PayrollBatchSourceFactsV1`. This file consumes / produces that
+// exact shape; both write and read paths validate it.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -207,15 +190,25 @@ async function assertPreconditions(clubId: string, payPeriodId: string): Promise
 // ---------------------------------------------------------------------------
 
 /**
- * Population rule (documented per §7): "member if the employee's
- * effective PayGroupMember row COVERS ANY DAY of the pay period"
- * — i.e. the membership's [effectiveFrom, effectiveTo) window
- * intersects the period's [periodStart, periodEnd) window.
+ * Population rule — one PayrollBatchEmployee per MEMBERSHIP ROW
+ * intersecting the Pay Period (not per Employee).
  *
- * This handles: full-period membership, hire mid-period, termination
- * mid-period, pay-group transfer at a boundary. Overlap-prevention
- * from Payroll-3B-1 guarantees at most one covering membership per
- * employee at any instant.
+ * Payroll-3B-5A (2026-08-31, §1): the 3B-4 assumption that overlap
+ * prevention implies "one batch per employee per period" is not
+ * generally true. An Employee whose membership in Group A ended on
+ * Aug 15 and whose membership in Group B started on Aug 15 has
+ * TWO non-overlapping memberships within a broad Aug 1–31 period.
+ * Each Group runs its own batch; the Aug 1–31 broad range is not a
+ * single Pay Period but two separate ones (one per Group).
+ *
+ * The narrower question for THIS batch is: which memberships in
+ * THIS Pay Group intersect THIS Pay Period? Overlap prevention
+ * from 3B-1 still guarantees at most one covering membership per
+ * (Employee, PayGroup) instant — so within a single Pay Group's
+ * batch, an Employee still appears at most once. But the coverage
+ * window may not span the entire Pay Period; the future calculator
+ * must consume `coverageStart` / `coverageEnd` to prorate salary
+ * correctly and prevent duplicate pay across a transfer boundary.
  */
 async function resolvePopulation(clubId: string, payGroupId: string, periodStart: Date, periodEnd: Date) {
   const members = await prisma.payrollPayGroupMember.findMany({
@@ -245,12 +238,56 @@ async function resolvePopulation(clubId: string, payGroupId: string, periodStart
   return members;
 }
 
+/**
+ * Compute coverage for a membership row within a Pay Period.
+ * Uses the canonical interval-intersection utility so a future
+ * consumer never has to redo the half-open boundary math.
+ */
+function coverageForMembership(
+  membershipEffectiveFrom: Date,
+  membershipEffectiveTo: Date | null,
+  periodStart: Date,
+  periodEnd: Date,
+): SourceFactsCoverageV1 {
+  const period = { start: periodStart, end: periodEnd };
+  const membership = { start: membershipEffectiveFrom, end: membershipEffectiveTo };
+  const isected = intersect(period, membership);
+  if (!isected) {
+    // Should be unreachable — populated members already passed the
+    // half-open overlap filter. Defensive: emit a zero-day window.
+    return {
+      membershipEffectiveFrom: membershipEffectiveFrom.toISOString(),
+      membershipEffectiveTo: membershipEffectiveTo?.toISOString() ?? null,
+      coverageStart: periodStart.toISOString(),
+      coverageEnd: periodStart.toISOString(),
+      coverageDays: 0,
+      periodDays: intervalCoverageDays({ start: periodStart, end: periodEnd }),
+      isFullPeriod: false,
+    };
+  }
+  const cs = isected.start;
+  // The intersection with the bounded period is itself bounded.
+  const ce = isected.end ?? periodEnd;
+  const cDays = intervalCoverageDays({ start: cs, end: ce });
+  const pDays = intervalCoverageDays({ start: periodStart, end: periodEnd });
+  return {
+    membershipEffectiveFrom: membershipEffectiveFrom.toISOString(),
+    membershipEffectiveTo: membershipEffectiveTo?.toISOString() ?? null,
+    coverageStart: cs.toISOString(),
+    coverageEnd: ce.toISOString(),
+    coverageDays: cDays,
+    periodDays: pDays,
+    isFullPeriod: cDays === pDays,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot per employee
 // ---------------------------------------------------------------------------
 
 interface EmployeeSnapshot {
   employeeId: string;
+  payGroupMemberId: string;
   employeeLifecycleAtPrep: string;
   jurisdictionCountry: string;
   jurisdictionProvince: string | null;
@@ -259,7 +296,11 @@ interface EmployeeSnapshot {
   salaried: boolean;
   approvedHours: Decimal | null;
   approvedTimeEntryIds: string[];
-  sourceFacts: SourceFacts;
+  sourceFacts: PayrollBatchSourceFactsV1;
+  membershipEffectiveFrom: Date;
+  membershipEffectiveTo: Date | null;
+  coverageStart: Date;
+  coverageEnd: Date;
   bankingReady: boolean;
   bankingStatus: string | null;
   sinReady: boolean;
@@ -427,7 +468,16 @@ async function snapshotEmployee(
     });
   }
 
-  const sourceFacts: SourceFacts = {
+  const coverage = coverageForMembership(
+    member.effectiveFrom,
+    member.effectiveTo ?? null,
+    periodStart,
+    periodEnd,
+  );
+
+  const sourceFacts: PayrollBatchSourceFactsV1 = {
+    schemaVersion: 1,
+    coverage,
     assignments: assignments.map((a) => ({
       id: a.id,
       role: a.role,
@@ -461,8 +511,12 @@ async function snapshotEmployee(
     })),
   };
 
+  // Fail loud if a future refactor produces an invalid shape.
+  assertValidSourceFactsV1(sourceFacts);
+
   return {
     employeeId,
+    payGroupMemberId: member.id,
     employeeLifecycleAtPrep: member.employee.employeeLifecycle,
     jurisdictionCountry: "CA",
     jurisdictionProvince: province,
@@ -472,6 +526,10 @@ async function snapshotEmployee(
     approvedHours,
     approvedTimeEntryIds,
     sourceFacts,
+    membershipEffectiveFrom: member.effectiveFrom,
+    membershipEffectiveTo: member.effectiveTo ?? null,
+    coverageStart: new Date(coverage.coverageStart),
+    coverageEnd: new Date(coverage.coverageEnd),
     bankingReady,
     bankingStatus,
     sinReady,
@@ -587,6 +645,7 @@ export async function preparePayrollBatch(
           clubId,
           batchId: batch.id,
           employeeId: s.employeeId,
+          payGroupMemberId: s.payGroupMemberId,
           jurisdictionCountry: s.jurisdictionCountry,
           jurisdictionProvince: s.jurisdictionProvince,
           employeeLifecycleAtPrep: s.employeeLifecycleAtPrep,
@@ -595,6 +654,10 @@ export async function preparePayrollBatch(
           employmentEndInPeriod: s.employmentEndInPeriod,
           approvedHoursSnapshot: s.approvedHours?.toString() ?? null,
           sourceFactsJson: JSON.stringify(s.sourceFacts),
+          membershipEffectiveFrom: s.membershipEffectiveFrom,
+          membershipEffectiveTo: s.membershipEffectiveTo,
+          coverageStart: s.coverageStart,
+          coverageEnd: s.coverageEnd,
           bankingReady: s.bankingReady,
           bankingStatus: s.bankingStatus,
           sinReady: s.sinReady,
@@ -793,14 +856,11 @@ export async function getPreparedBatch(
     voidReason: batch.voidReason,
     workIntakeItemId: batch.workIntakeItemId,
     employees: batch.employees.map((e) => {
-      let facts: SourceFacts | null = null;
-      if (e.sourceFactsJson) {
-        try {
-          facts = JSON.parse(e.sourceFactsJson) as SourceFacts;
-        } catch {
-          facts = null;
-        }
-      }
+      // Strict Zod parse — the calculator never sees an
+      // unvalidated blob. A future evolution to v2 will surface
+      // here as an `InvalidSourceFactsError`, forcing a schema
+      // migration rather than a silent drift.
+      const facts = parseSourceFactsV1(e.sourceFactsJson);
       return {
         id: e.id,
         employeeId: e.employeeId,
@@ -818,6 +878,10 @@ export async function getPreparedBatch(
         federalTd1Ready: e.federalTd1Ready,
         provincialTd1Ready: e.provincialTd1Ready,
         compensationReady: e.compensationReady,
+        membershipEffectiveFrom: e.membershipEffectiveFrom,
+        membershipEffectiveTo: e.membershipEffectiveTo,
+        coverageStart: e.coverageStart,
+        coverageEnd: e.coverageEnd,
         sourceFacts: facts,
       };
     }),

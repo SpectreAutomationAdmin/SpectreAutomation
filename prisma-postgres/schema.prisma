@@ -483,6 +483,7 @@ model Club {
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
   payrollBatchExceptions             PayrollBatchException[]
+  payrollOpeningBalances             PayrollOpeningBalance[]
 }
 
 // ---------------------------------------------------------------------
@@ -3406,6 +3407,7 @@ model Employee {
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
+  payrollOpeningBalances     PayrollOpeningBalance[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11445,6 +11447,10 @@ model PayrollBatch {
   // routed to the Controller's inbox with workDomain = "PAYROLL".
   workIntakeItemId String? @unique
   sourceSnapshotAt DateTime?
+  // Payroll-3B-5A (2026-08-31) — pinned statutory package (see
+  // prisma/schema.prisma for full doc block).
+  statutoryPackageId String?
+  statutoryPackage   PayrollStatutoryPackage? @relation(fields: [statutoryPackageId], references: [id])
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11459,6 +11465,77 @@ model PayrollBatch {
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
+  @@index([statutoryPackageId])
+}
+
+// Payroll-3B-5A (2026-08-31) — effective-dated Spectre-owned
+// statutory calculation packages. See prisma/schema.prisma for
+// full doc.
+model PayrollStatutoryPackage {
+  id                     String   @id @default(cuid())
+  jurisdictionCountry    String
+  jurisdictionProvince   String?
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  packageVersion         String
+  algorithmVersion       String   @default("v1")
+  sourcePublication      String
+  sourceEdition          String?
+  sourcePublicationDate  DateTime?
+  sourceUrl              String?
+  checksum               String
+  paramsJson             String
+  publishedAt            DateTime @default(now())
+  publishedByUserId      String?
+  supersededAt           DateTime?
+  createdAt              DateTime @default(now())
+
+  batches                PayrollBatch[]
+
+  @@unique([jurisdictionCountry, jurisdictionProvince, effectiveFrom])
+  @@index([jurisdictionCountry, jurisdictionProvince, effectiveFrom])
+}
+
+// Payroll-3B-5A (2026-08-31) — mid-year opening balances.
+// See prisma/schema.prisma for full doc.
+model PayrollOpeningBalance {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  taxYear                Int
+  status                 String   @default("DRAFT")
+  ytdGrossEarnings        Decimal @default(0)
+  ytdTaxableEarnings      Decimal @default(0)
+  ytdPensionableEarnings  Decimal @default(0)
+  ytdInsurableEarnings    Decimal @default(0)
+  ytdCppEE                Decimal @default(0)
+  ytdCpp2EE               Decimal @default(0)
+  ytdEiEE                 Decimal @default(0)
+  ytdFederalTax           Decimal @default(0)
+  ytdProvincialTax        Decimal @default(0)
+  ytdCppER                Decimal @default(0)
+  ytdCpp2ER               Decimal @default(0)
+  ytdEiER                 Decimal @default(0)
+  importBatchId          String?
+  importSource           String?
+  importedAt             DateTime?
+  importedByUserId       String?
+  notes                  String?
+  supersededAt           DateTime?
+  supersededByUserId     String?
+  supersededById         String?
+  supersededBy           PayrollOpeningBalance?  @relation("PayrollOpeningBalanceSuperseded", fields: [supersededById], references: [id])
+  supersedes             PayrollOpeningBalance[] @relation("PayrollOpeningBalanceSuperseded")
+  activatedAt            DateTime?
+  activatedByUserId      String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId, employeeId, taxYear, status])
+  @@index([clubId, taxYear, status])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation
@@ -11523,6 +11600,12 @@ model PayrollBatchEmployee {
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
+  // Payroll-3B-5A (2026-08-31) — Pay Group membership coverage
+  // window. See prisma/schema.prisma for full doc block.
+  membershipEffectiveFrom DateTime?
+  membershipEffectiveTo   DateTime?
+  coverageStart           DateTime?
+  coverageEnd             DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

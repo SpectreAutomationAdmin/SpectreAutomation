@@ -474,6 +474,7 @@ model Club {
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
   payrollBatchExceptions             PayrollBatchException[]
+  payrollOpeningBalances             PayrollOpeningBalance[]
 }
 
 // ---------------------------------------------------------------------
@@ -3401,6 +3402,7 @@ model Employee {
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
+  payrollOpeningBalances     PayrollOpeningBalance[]
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -11392,6 +11394,13 @@ model PayrollBatch {
   // that produced this batch. Frozen at preparation time; a source-
   // fact change after this timestamp does NOT mutate the batch.
   sourceSnapshotAt DateTime?
+  // Payroll-3B-5A (2026-08-31) — statutory package pinned when the
+  // calculator runs. NULL at PREPARED — the calculator resolves the
+  // package via `resolveStatutoryPackage({country, province, payDate})`
+  // and pins it at CALCULATED. Once pinned, recalculation of the
+  // same frozen batch reuses this exact package for reproducibility.
+  statutoryPackageId String?
+  statutoryPackage   PayrollStatutoryPackage? @relation(fields: [statutoryPackageId], references: [id])
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11406,6 +11415,7 @@ model PayrollBatch {
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
+  @@index([statutoryPackageId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation
@@ -11437,6 +11447,119 @@ model PayrollBatchException {
   @@index([clubId, batchId])
   @@index([batchId, severity])
   @@index([batchEmployeeId, severity])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5A (2026-08-31) — statutory calculation packages.
+//
+// Effective-dated, Spectre-owned rule packages. NEVER tenant-writable.
+// CRA can (and did in 2026) publish two formula editions within one
+// calendar year (Jan 1 + Jul 1), so keying by `taxYear` alone is
+// unsafe — this model keys by `[effectiveFrom, effectiveTo)` on the
+// payroll pay date and pins the resolved package to
+// `PayrollBatch.statutoryPackageId` for reproducibility.
+//
+// paramsJson is validated against a strict Zod schema
+// (`CanadianPayrollStatutoryParamsV1` in
+// src/lib/payroll/statutory-package.ts) at install and read time.
+// ---------------------------------------------------------------------------
+model PayrollStatutoryPackage {
+  id                     String   @id @default(cuid())
+  // "CA" only in the 3B MVP; jurisdiction-scoped for future expansion.
+  jurisdictionCountry    String   // ISO 3166-1 alpha-2
+  jurisdictionProvince   String?  // 2-char province; NULL = federal-only package
+  // Half-open effective interval [effectiveFrom, effectiveTo) on
+  // PayrollPayPeriod.payDate. `effectiveTo` may be NULL for the
+  // "current" package.
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  // Human-readable version tag ("CRA-T4127-123rd-2026-07-01").
+  packageVersion         String
+  // Algorithm code version ("v1"); the calculator refuses to run
+  // against a params package whose algorithm version it does not
+  // implement.
+  algorithmVersion       String   @default("v1")
+  // Canonical source citation.
+  sourcePublication      String   // e.g. "T4127 Payroll Deductions Formulas"
+  sourceEdition          String?  // e.g. "123rd Edition"
+  sourcePublicationDate  DateTime?
+  sourceUrl              String?
+  // Content-addressed checksum of paramsJson for tamper detection.
+  checksum               String
+  // Structured statutory params. Validated by
+  // CanadianPayrollStatutoryParamsV1 at both write and read time.
+  paramsJson             String
+  // Provenance.
+  publishedAt            DateTime @default(now())
+  publishedByUserId      String?  // NULL when installed via internal seed
+  supersededAt           DateTime?
+  createdAt              DateTime @default(now())
+
+  batches                PayrollBatch[]
+
+  @@unique([jurisdictionCountry, jurisdictionProvince, effectiveFrom])
+  @@index([jurisdictionCountry, jurisdictionProvince, effectiveFrom])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5A (2026-08-31) — mid-year opening balances.
+//
+// When a Club adopts Spectre Payroll mid-calendar-year, prior-system
+// payroll history is authoritative for CPP/EI YTD caps and tax
+// bracketing. Opening balances are per (Club, Employee, taxYear).
+//
+// Corrections do NOT mutate history — the ACTIVE row's status flips
+// to SUPERSEDED and a new row (linked via `supersededById`) becomes
+// ACTIVE. YTD aggregation always reads the ACTIVE row for a given
+// (Club, Employee, taxYear).
+//
+// Sensitive plaintext values (SIN, bank account numbers, TD1 amounts)
+// are NEVER stored here — this is a YTD-numerics row only.
+// ---------------------------------------------------------------------------
+model PayrollOpeningBalance {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  taxYear                Int
+  // DRAFT | VALIDATED | ACTIVE | SUPERSEDED
+  status                 String   @default("DRAFT")
+  // ---- YTD numerics (CAD, Decimal). Every field documented so a
+  // future contributor cannot add one accidentally without stating
+  // its downstream calculation dependency. ----
+  ytdGrossEarnings        Decimal @default(0)  // T4 Box 14 aggregate
+  ytdTaxableEarnings      Decimal @default(0)  // income tax base
+  ytdPensionableEarnings  Decimal @default(0)  // CPP base (T4 Box 26)
+  ytdInsurableEarnings    Decimal @default(0)  // EI base (T4 Box 24)
+  ytdCppEE                Decimal @default(0)  // employee CPP base contributions (T4 Box 16)
+  ytdCpp2EE               Decimal @default(0)  // employee CPP2 (enhanced) contributions (T4 Box 16A)
+  ytdEiEE                 Decimal @default(0)  // employee EI premiums (T4 Box 18)
+  ytdFederalTax           Decimal @default(0)  // federal income tax withheld (T4 Box 22 fed portion)
+  ytdProvincialTax        Decimal @default(0)  // provincial income tax withheld
+  ytdCppER                Decimal @default(0)  // employer CPP base
+  ytdCpp2ER               Decimal @default(0)  // employer CPP2 (enhanced)
+  ytdEiER                 Decimal @default(0)  // employer EI premiums
+  // ---- Provenance ----
+  importBatchId          String?
+  importSource           String?  // "CSV" | "MANUAL" | "MIGRATION"
+  importedAt             DateTime?
+  importedByUserId       String?
+  notes                  String?
+  // ---- Correction / versioning ----
+  supersededAt           DateTime?
+  supersededByUserId     String?
+  supersededById         String?
+  supersededBy           PayrollOpeningBalance?  @relation("PayrollOpeningBalanceSuperseded", fields: [supersededById], references: [id])
+  supersedes             PayrollOpeningBalance[] @relation("PayrollOpeningBalanceSuperseded")
+  activatedAt            DateTime?
+  activatedByUserId      String?
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([clubId, employeeId, taxYear, status])
+  @@index([clubId, taxYear, status])
 }
 
 // Per-employee inclusion row in a specific batch (section 12).
@@ -11497,6 +11620,18 @@ model PayrollBatchEmployee {
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
+  // Payroll-3B-5A (2026-08-31) — canonical Pay Group membership
+  // coverage window. `membershipEffectiveFrom` / `membershipEffectiveTo`
+  // are the raw PayrollPayGroupMember dates; `coverageStart` /
+  // `coverageEnd` are the intersection with the parent Pay Period.
+  // The future calculator uses coverageDays ÷ periodDays as the
+  // salary proration ratio — critical for mid-period Pay Group
+  // transfers so an Employee is never blindly paid a full
+  // per-period salary from each of two batches.
+  membershipEffectiveFrom DateTime?
+  membershipEffectiveTo   DateTime?
+  coverageStart           DateTime?
+  coverageEnd             DateTime?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

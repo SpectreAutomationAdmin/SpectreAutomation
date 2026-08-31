@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CRA fixture provenance envelope",
+  "type": "object",
+  "required": ["sourceAuthority", "sourceEffectiveDate", "sourceUrl", "sourceRetrievedAt", "sourceRetrievedBy", "cases"],
+  "additionalProperties": false,
+  "properties": {
+    "sourceAuthority": { "type": "string" },
+    "sourceEffectiveDate": { "type": "string", "format": "date" },
+    "sourceUrl": { "type": "string", "format": "uri" },
+    "sourceRetrievedAt": { "type": "string", "format": "date" },
+    "sourceRetrievedBy": { "type": "string", "enum": ["human-verified", "pdoc-transcribed"] },
+    "verificationNote": { "type": "string" },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "inputs", "expected"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "inputs": { "type": "object" },
+          "expected": { "type": "object" }
+        }
+      }
+    }
+  }
+}

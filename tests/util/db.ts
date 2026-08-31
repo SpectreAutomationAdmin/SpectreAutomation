@@ -317,6 +317,11 @@ export async function resetDb() {
     c.payrollApprovedTimeEntry.deleteMany(),
     c.payrollBatchEmployee.deleteMany(),
     c.payrollBatch.deleteMany(),
+    // Payroll-3B-5A (2026-08-31) — opening balances have a self-FK
+    // (supersededById); null it out before deleting.
+    c.payrollOpeningBalance.updateMany({ data: { supersededById: null } }),
+    c.payrollOpeningBalance.deleteMany(),
+    c.payrollStatutoryPackage.deleteMany(),
     c.payrollPayGroupMember.deleteMany(),
     c.payrollPayPeriod.deleteMany(),
     c.payrollPayGroup.deleteMany(),
