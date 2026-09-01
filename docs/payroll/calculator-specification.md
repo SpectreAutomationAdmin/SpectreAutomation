@@ -201,26 +201,32 @@ T3Prov  = (V × A) − KP − K1P − K2P − K2AP − K3P − K4P − K5P
 T4Prov  = max(0, round(T3Prov / P) + additionalProvincialTaxAmount)
 ```
 
-### 10a. Alberta K5P specification (§H)
+### 10a. Alberta K5P specification (Payroll-3B-5B-1d §1-2, CORRECTED)
 
-`Package.provincial.k5p` is a required field on the pinned Alberta package — never absent. Structure:
-
-| Field | Meaning |
-|-|-|
-| `enabled: Boolean` | `true` → the calculator applies K5P per the formula below. `false` → K5P is explicitly documented as not applying this year (never a silent default). |
-| `triggerBase: Decimal` | Annualised Alberta tax base above which K5P applies. 2026 draft: `4800`. |
-| `rate: Decimal` | Differential rate applied to the excess above `triggerBase`. 2026 draft: `0.02` (the "2%-over-8%" structure — 2 percentage points over Alberta's first-bracket rate of 8%). |
-| `sourceCitation: String` | Verbatim CRA citation for auditor visibility. |
-
-**Formula (when `enabled === true`):**
+**PRIOR WRONG FORMULA (3B-5B-1c, removed):**
 ```
 K5P = k5p.rate × max(0, T_prov_base − k5p.triggerBase)
 ```
-where `T_prov_base` is the annualised Alberta tax before K5P.
+This was incorrect. K5P does NOT depend on `T_prov_base` (annualised Alberta taxable income) — it depends on the Alberta tax-credit factors `K1P` and `K2P`.
 
-If `enabled === false`, `K5P = 0` — but that zero is a deliberate, documented package decision, never a missing-field inference.
+**VERIFIED CRA FORMULA (T4127 122nd / 123rd Editions, §Alberta):**
+```
+K5P = max(0, ((K1P + K2P) − threshold) × (supplementalRate / baseRate))
+```
 
-**Pending final line-verification against T4127 122nd/123rd Editions before dollar calculation ships.** The founder-supplied structure ($4,800 trigger, 2%-over-8% differential) is encoded; the exact CRA algebraic form must be confirmed line-by-line.
+`Package.provincial.k5p` is a required field on the pinned Alberta package — never absent. Corrected structure:
+
+| Field | 2026 Value | Meaning |
+|-|-|-|
+| `enabled: Boolean` | `true` | `true` → apply K5P per the formula. `false` → deliberate non-application (documented, never silent). |
+| `threshold: Decimal` | `"4800"` | CRA-published dollar threshold applied to (K1P + K2P). |
+| `supplementalRate: Decimal` | `"0.02"` | Numerator of the "2%-over-8%" differential. |
+| `baseRate: Decimal` | `"0.08"` | Alberta first-bracket rate — denominator of the differential. Kept explicit rather than baked into a precomputed coefficient so a future Alberta rate change stays auditable. |
+| `sourceCitation: String` | *see seeder* | Verbatim CRA citation. |
+
+If `enabled === false`, `K5P = 0` as a deliberate, documented package decision.
+
+**No opaque coefficients.** The formula's `supplementalRate / baseRate = 0.02 / 0.08 = 0.25` could be precomputed, but the package stores the two rates separately so an auditor / future rate change sees the underlying statutory relationship.
 
 ## 11. TD1 source facts — verified contract (§16-17)
 
@@ -354,6 +360,46 @@ Once pinned, recalculating the same frozen batch reuses the exact package. Void-
 `PAYROLL_REVIEW` stays OPEN. No `PAYROLL_FINAL_APPROVAL` in 3B-5B-1x. The 3B-5B-2 calculator transitions REVIEW → RESOLVED on successful calculation and materialises FINAL_APPROVAL for the Controller.
 
 ---
+
+## 19. Final credit-factor matrix (Payroll-3B-5B-1d §7)
+
+Definitive contract for every K/KP factor the calculator must handle. No "we'll figure it out during calculation" entries.
+
+### 19a. Federal factors
+
+| Factor | Represents | Formula / source | Employee facts required | Payroll-calculated facts required | Statutory-package parameters | MVP status |
+|-|-|-|-|-|-|-|
+| `K1` | Federal BPA + TD1F non-refundable credit | `federal.lowestRate × BPAF` (BPAF from Bill C-30 phase-out) plus federal.lowestRate × EmployeeTaxProfile.federalClaimSecretRef (decrypted TCP over-and-above BPA) | TD1F claim (decrypted) | Annualised income `A` for BPAF tier | `federal.bpaMax / bpaMin / phaseOutStart / phaseOutEnd / lowestRate` | ✅ supported |
+| `K2` | Federal CPP employee credit | `federal.lowestRate × (0.0495 / 0.0595) × (C + CPP2)` where C is combined Factor C, CPP2 is second-additional | none additional | `deductionCppEeBase + deductionCppEeFirstAdd` (or C) and `deductionCpp2Ee` | `federal.lowestRate`, `cpp.baseRateEE`, `cpp.combinedRateEE` | ✅ supported |
+| `K2A` | Federal EI employee credit | `federal.lowestRate × annualisedEmployeeEIPremiums` | none additional | `deductionEiEe` | `federal.lowestRate` | ✅ supported |
+| `K3` | Federal CPP2 additional deduction from taxable income | `federal.cpp2DeductionRate × annualised CPP2 EE contribution` | none additional | `deductionCpp2Ee` | `federal.cpp2DeductionRate` | ✅ supported |
+| `K4` | Canada Employment Amount credit | `federal.lowestRate × min(annualisedEmploymentIncome, canadaEmploymentAmountMax)` | none additional | Annualised employment income | `federal.lowestRate`, `federal.canadaEmploymentAmountMax` (2026: `1499`, subject to line-verification) | ✅ supported |
+
+### 19b. Alberta factors
+
+| Factor | Represents | Formula / source | Employee facts required | Payroll-calculated facts required | Statutory-package parameters | MVP status |
+|-|-|-|-|-|-|-|
+| `K1P` | Alberta BPA + TD1AB non-refundable credit | `provincial.lowestRate × (provincial.bpa + TCP)` | TD1AB claim (decrypted) | none | `provincial.bpa`, `provincial.lowestRate` | ✅ supported |
+| `K2P` | Alberta CPP employee credit | `provincial.lowestRate × (0.0495 / 0.0595) × (C + CPP2)` — same structural form as K2, provincial rate | none additional | `deductionCppEeBase + deductionCppEeFirstAdd`, `deductionCpp2Ee` | `provincial.lowestRate`, CPP rates | ✅ supported |
+| `K2AP` | Alberta EI employee credit | `provincial.lowestRate × annualisedEmployeeEIPremiums` | none additional | `deductionEiEe` | `provincial.lowestRate` | ✅ supported |
+| `K3P` | Alberta CPP2 additional deduction | Alberta's provincial equivalent of K3 (T4127 §Alberta). For 2026 Alberta uses the same rate structure. | none additional | `deductionCpp2Ee` | Alberta-specific rate | ✅ supported |
+| `K4P` | Alberta employment credit | **Not applicable at the Alberta payroll withholding stage.** Alberta's provincial withholding formula per T4127 §Alberta does NOT carry a K4P employment credit; the Canada Employment Amount is a federal credit only (K4). Alberta payroll withholding chain is `T3Prov = (V×A) − KP − K1P − K2P − K2AP − K3P − K5P`. | — | — | — | ⛔ **Not applicable — documented, not silent zero.** If a future Alberta budget introduces a K4P, add a `provincial.canadaEmploymentAmountMax` field and re-run this matrix. |
+| `K5P` | Alberta supplemental credit | See §10a. `K5P = max(0, ((K1P + K2P) − threshold) × (supplementalRate / baseRate))` | none additional | Computed K1P, K2P | `provincial.k5p.threshold / supplementalRate / baseRate` | ✅ supported |
+
+### 19c. Unsupported tax inputs → explicit blockers (§8)
+
+The following T4127 source facts EXIST in the full CRA formula but are NOT modelled in the MVP. Any Employee for whom these apply causes the calculator to raise a `PayrollBatchException` BLOCKER — the calculator NEVER silently substitutes zero.
+
+| Input | Formula impact | MVP handling |
+|-|-|-|
+| `F` — RPP contributions per pay period | Reduces annualised net taxable income `A` | Not represented on EmployeeCompensation or a canonical deduction row. Calculator BLOCKER `UNSUPPORTED_RPP_DEDUCTION` if any earning has an RPP flag or if `PayrollProfile.rppContribution` is set. |
+| `F1` — Alimony / maintenance per pay period | Same | Not represented. Calculator BLOCKER `UNSUPPORTED_ALIMONY_DEDUCTION`. |
+| `HD` — Annual deductions from income | Reduces `A` | Not represented. Calculator BLOCKER `UNSUPPORTED_ANNUAL_DEDUCTION`. |
+| `F2` — Annualised alimony / maintenance | Same | Not represented. Same blocker as F1. |
+| `U1` — Annualised union dues | Reduces `A` | Not represented on any canonical Payroll model. Calculator BLOCKER `UNSUPPORTED_UNION_DUES` if the founder's Club has unionised staff. |
+| Prescribed-zone deductions | Federal deduction on TD1F line 10 | Not represented. Calculator BLOCKER `UNSUPPORTED_PRESCRIBED_ZONE`. |
+
+Adding any of these is a deliberate future slice — never a silent zero in the calculator. The BLOCKER surfaces on batch preparation so the Payroll Admin sees exactly which employee is not calculable and why.
 
 ## Verification gate before 3B-5B-2 implementation
 

@@ -47,6 +47,14 @@
         "phaseOutEnd": "246752",
         "notes": "BPA phase-out is linear between phaseOutStart and phaseOutEnd — CRA T4127 §K1 (BPAF)."
       }
+    },
+    {
+      "id": "federal-canada-employment-amount-2026",
+      "description": "Payroll-3B-5B-1d §4 — 2026 Canada Employment Amount (CEA) maximum. Consumed by T4127 K4: K4 = federal.lowestRate × min(annualisedEmploymentIncome, canadaEmploymentAmountMax).",
+      "expected": {
+        "canadaEmploymentAmountMax": "1499",
+        "notes": "2024 CRA CEA = $1,433 (published). 2026 amount indexed per T4127 §K4 — seeded value subject to LINE-VERIFICATION against T4127 122nd/123rd Editions before dollar calculation ships."
+      }
     }
   ]
 }

@@ -118,17 +118,59 @@ describe("Payroll-3B-5B-1c — Alberta Table 8.1 matches CRA 2026", () => {
   });
 });
 
-describe("Payroll-3B-5B-1c — Alberta K5P explicit", () => {
-  it("H1 carries a K5P block with enabled + triggerBase + rate + sourceCitation", () => {
+describe("Payroll-3B-5B-1d — Alberta K5P CORRECTED (§B)", () => {
+  it("H1 K5P uses corrected shape: threshold + supplementalRate + baseRate", () => {
     const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
     expect(k5p).toBeDefined();
     expect(k5p.enabled).toBe(true);
-    expect(k5p.triggerBase).toBe("4800");
-    expect(k5p.rate).toBe("0.02");
+    expect(k5p.threshold).toBe("4800");
+    expect(k5p.supplementalRate).toBe("0.02");
+    expect(k5p.baseRate).toBe("0.08");
     expect(k5p.sourceCitation).toMatch(/T4127/);
+    expect(k5p.sourceCitation).toMatch(/K1P/);
+  });
+  it("H1 K5P source citation encodes the CORRECT formula (references K1P + K2P)", () => {
+    const cite = CA_AB_2026_PARAMS_H1.provincial!.k5p.sourceCitation;
+    expect(cite).toMatch(/K1P/);
+    expect(cite).toMatch(/K2P/);
+    expect(cite).toMatch(/max\(0/);
+  });
+  it("H1 K5P does NOT carry the old T_prov_base / triggerBase / rate shape", () => {
+    const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p as unknown as Record<string, unknown>;
+    expect(k5p.triggerBase).toBeUndefined();
+    expect(k5p.rate).toBeUndefined();
+    expect(k5p.sourceCitation).not.toMatch(/T_prov_base/i);
   });
   it("H2 K5P is present and matches H1 (unchanged mid-year for 2026)", () => {
     expect(CA_AB_2026_PARAMS_H2.provincial!.k5p).toEqual(CA_AB_2026_PARAMS_H1.provincial!.k5p);
+  });
+  it("K5P formula reference-implementation: (K1P + K2P) ≤ threshold → K5P = 0", () => {
+    // Reference computation of the CORRECTED formula. The calculator
+    // implementation in 3B-5B-2 must produce the same result.
+    const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
+    const K1P = 1000, K2P = 3000;                                       // sum = 4000 ≤ 4800
+    const above = Math.max(0, K1P + K2P - Number(k5p.threshold));
+    const result = above * (Number(k5p.supplementalRate) / Number(k5p.baseRate));
+    expect(result).toBe(0);
+  });
+  it("K5P formula reference-implementation: (K1P + K2P) > threshold → applies", () => {
+    const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
+    const K1P = 3000, K2P = 3000;                                       // sum = 6000 > 4800
+    const above = Math.max(0, K1P + K2P - Number(k5p.threshold));       // 1200
+    const result = above * (Number(k5p.supplementalRate) / Number(k5p.baseRate));
+    // 1200 × (0.02 / 0.08) = 1200 × 0.25 = 300.
+    expect(result).toBe(300);
+  });
+});
+
+describe("Payroll-3B-5B-1d — Canada Employment Amount (§4, §C)", () => {
+  it("H1 federal package carries canadaEmploymentAmountMax", () => {
+    expect(CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax).toBe("1499");
+  });
+  it("H2 federal package carries the same canadaEmploymentAmountMax as H1", () => {
+    expect(CA_AB_2026_PARAMS_H2.federal.canadaEmploymentAmountMax).toBe(
+      CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax,
+    );
   });
 });
 
@@ -249,13 +291,42 @@ describe("Payroll-3B-5B-1c — golden fixture files present", () => {
     const j = JSON.parse(raw);
     expect(j.sourceAuthority).toMatch(/PDOC/);
     expect(j.sourceUrl).toMatch(/cra-arc\.gc\.ca/);
-    expect(j.cases.length).toBeGreaterThanOrEqual(1);
-    // Each case declares inputs + expected; expected fields are
-    // explicitly marked SOURCE_PENDING_PDOC_TRANSCRIPTION until a
-    // human runs the scenario through PDOC.
+    expect(j.cases.length).toBe(4);
     for (const c of j.cases) {
       expect(c.inputs).toBeDefined();
       expect(c.expected).toBeDefined();
     }
+  });
+
+  // Payroll-3B-5B-1d §13 — enforce zero pending markers in the
+  // PDOC fixture ONCE the human operator has transcribed values.
+  // Marked `.todo` today because the development environment
+  // cannot reach CRA PDOC (§11); the operator worksheet at
+  // docs/payroll/pdoc-operator-worksheet-2026.md contains the
+  // exact scenarios. When transcription is committed, remove
+  // `.todo` in the same commit so this test enforces the invariant
+  // for every subsequent slice.
+  it.todo("pdoc fixture contains no SOURCE_PENDING_PDOC_TRANSCRIPTION or AWAITING_VERIFICATION markers");
+});
+
+describe("Payroll-3B-5B-1d — H1/H2 resolver boundary (§O)", () => {
+  beforeEach(async () => {
+    await resetDb();
+    await seedRbac();
+  });
+
+  it("June 30 pay date resolves H1; July 1 pay date resolves H2", async () => {
+    const sup = await superAdminP();
+    const { h1, h2 } = await seedCanadaAlbertaPackages2026(sup);
+    // Direct DB check — the resolver test lives in
+    // statutory-package.test.ts. Here we just prove the pinned
+    // package IDs differ across the boundary.
+    const { resolveStatutoryPackage } = await import("@/lib/payroll/statutory-package");
+    const jun = await resolveStatutoryPackage({ country: "CA", province: "AB", payDate: d(2026, 6, 30) });
+    const jul = await resolveStatutoryPackage({ country: "CA", province: "AB", payDate: d(2026, 7, 1) });
+    expect(jun.id).toBe(h1.id);
+    expect(jul.id).toBe(h2.id);
+    expect(jun.packageVersion).toBe("CRA-T4127-122E-CA-AB-2026-H1");
+    expect(jul.packageVersion).toBe("CRA-T4127-123E-CA-AB-2026-H2");
   });
 });

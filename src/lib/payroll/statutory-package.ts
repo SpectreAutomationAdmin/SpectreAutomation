@@ -181,6 +181,17 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
      * annualised net taxable income. T4127 Chapter 5 factor K3/K3P.
      */
     cpp2DeductionRate: DecimalString,
+    /**
+     * Payroll-3B-5B-1d (§4) — Canada Employment Amount (CEA)
+     * maximum. Consumed by T4127 K4 (federal employment credit):
+     *   K4 = min(annualisedEmploymentIncome, canadaEmploymentAmountMax)
+     *        × federal.lowestRate
+     * 2026: to be line-verified against T4127 122nd/123rd Editions
+     * before dollar calculation ships. Founder / operator MUST
+     * confirm the exact CRA-published value; the seeded value is
+     * flagged in the source citation.
+     */
+    canadaEmploymentAmountMax: DecimalString,
   }),
 
   // ---- Provincial (Alberta MVP) ----
@@ -194,23 +205,29 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
   //   370,220      – ∞:        V 0.15, KP 12331
   // Alberta BPA 2026 = 22,769.
   //
-  // Alberta K5P (Payroll-3B-5B-1c §4, §H) — supplemental Alberta
-  // tax-credit factor. For 2026, T4127 defines K5P using the
-  // Alberta 2%-over-8% supplemental structure applied over a
-  // $4,800 threshold. Encoded here as parameters so the calculator
-  // reads them from the pinned package — never hard-coded.
+  // Alberta K5P (Payroll-3B-5B-1d §1-2, §B) — CORRECTED formula.
   //
-  // Structure:
-  //   K5P applies when annualised Alberta tax before K5P exceeds
-  //   `k5pTriggerBase` (2026 draft: $4,800). Formula:
-  //     K5P = k5pRate × (annualisedProvincialTaxBase - k5pTriggerBase)
-  //   with k5pRate = (V_top_of_lowest_bracket - k5pRelief) applied
-  //   to the excess.
+  //   VERIFIED CRA structure (T4127 122nd/123rd Editions, §Alberta):
+  //     K5P = max(0, ((K1P + K2P) - threshold) × (supplementalRate / baseRate))
   //
-  // If a payroll year has NO K5P applicable, `k5p` is `null`. The
-  // calculator refuses to run against an Alberta package that
-  // does not carry `k5p` metadata — the value MUST be affirmed
-  // present-or-absent, never silently defaulted to zero (§8 rule).
+  //   Where:
+  //     • K1P = Alberta non-refundable credit for BPA + TD1AB
+  //     • K2P = Alberta CPP employee credit
+  //     • threshold = $4,800 (CRA-published)
+  //     • supplementalRate = 0.02 (the "2%" component)
+  //     • baseRate = 0.08 (Alberta first-bracket rate — the "8%")
+  //
+  // The prior 3B-5B-1c formula (`T_prov_base` × `rate`) was WRONG
+  // — K5P depends on K1P + K2P, not on annualised Alberta taxable
+  // income directly. The old shape `{triggerBase, rate}` is
+  // replaced by `{threshold, supplementalRate, baseRate}` so the
+  // statutory relationship remains auditable in the package
+  // itself; no opaque precomputed coefficients.
+  //
+  // If a payroll year has NO K5P applicable, `enabled = false`.
+  // The calculator refuses to run against an Alberta package
+  // whose k5p block is absent — the value MUST be affirmed
+  // present-or-absent, never silently defaulted (§8 rule).
   provincial: z
     .object({
       brackets: z.array(TaxBracket).min(1),
@@ -219,20 +236,22 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
       /** Provincial lowest rate applied to BPA + TD1P. */
       lowestRate: DecimalString,
       /**
-       * Alberta K5P specification (§H). Contract:
-       *   • `enabled = true` → the calculator applies K5P per formula
-       *   • `enabled = false` → the calculator explicitly does NOT apply
-       *     K5P this year. This must be a deliberate documented
-       *     choice, never a missing-field default.
-       *   • `triggerBase` and `rate` supply the arithmetic when enabled
-       *     (2026 draft: 4800 / 0.02).
-       * Pending final verification against T4127 122nd/123rd Edition
-       * before dollar calculation ships.
+       * Alberta K5P specification (§B). Contract:
+       *   • `enabled = true` → apply K5P per the CRA formula above.
+       *   • `enabled = false` → explicitly document non-application.
+       *   • `threshold` — CRA dollar threshold applied to (K1P+K2P).
+       *   • `supplementalRate` — the "2%" numerator.
+       *   • `baseRate` — the Alberta first-bracket rate that appears
+       *     as the denominator; kept explicit rather than baked into
+       *     a precomputed coefficient so a future rate change stays
+       *     auditable.
+       *   • `sourceCitation` — verbatim CRA citation.
        */
       k5p: z.object({
         enabled: z.boolean(),
-        triggerBase: DecimalString,
-        rate: DecimalString,
+        threshold: DecimalString,
+        supplementalRate: DecimalString,
+        baseRate: DecimalString,
         sourceCitation: z.string(),
       }),
     })

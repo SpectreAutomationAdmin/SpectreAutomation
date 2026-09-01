@@ -75,6 +75,7 @@ function baseParams(): CanadianPayrollStatutoryParamsV1 {
       bpaPhaseOutEnd: "246752",
       lowestRate: "0.15",
       cpp2DeductionRate: "0.15",
+      canadaEmploymentAmountMax: "1499",
     },
     provincial: {
       brackets: [
@@ -84,8 +85,9 @@ function baseParams(): CanadianPayrollStatutoryParamsV1 {
       lowestRate: "0.10",
       k5p: {
         enabled: false,
-        triggerBase: "0",
-        rate: "0",
+        threshold: "0",
+        supplementalRate: "0",
+        baseRate: "0.10",
         sourceCitation: "test-only baseline; K5P disabled for the resolver-mechanics tests.",
       },
     },

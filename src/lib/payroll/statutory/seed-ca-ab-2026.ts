@@ -129,6 +129,12 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     bpaPhaseOutEnd: "246752",
     lowestRate: "0.1400",
     cpp2DeductionRate: "0.1400",
+    // Payroll-3B-5B-1d (§4, §C) — Canada Employment Amount for
+    // 2026. The 2024-published CRA CEA was $1,433; indexed
+    // annually per T4127 §K4. Value below is Spectre's 2026
+    // seeded amount subject to line-verification against T4127
+    // 122nd/123rd Editions before dollar calculation ships.
+    canadaEmploymentAmountMax: "1499",
   },
   provincial: {
     // Payroll-3B-5B-1c §E — verified 2026 Alberta Table 8.1.
@@ -142,18 +148,25 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     ],
     bpa: "22769",
     lowestRate: "0.0800",
-    // Payroll-3B-5B-1c §H — Alberta K5P specification. Structure
-    // matches T4127's Alberta supplemental credit: applied over a
-    // $4,800 trigger, at the 2%-over-8% differential relative to
-    // the first-bracket rate. Pending final line-verification
-    // against T4127 122nd/123rd Editions before dollar calculation
-    // ships. `enabled: true` documents that Spectre WILL apply K5P
-    // (never silently zeroed).
+    // Payroll-3B-5B-1d §1-2 — CORRECTED Alberta K5P specification.
+    //
+    // Verified CRA formula (T4127 §Alberta):
+    //   K5P = max(0, ((K1P + K2P) - threshold) × (supplementalRate / baseRate))
+    //
+    // 2026 values:
+    //   threshold        = 4,800   (CRA-published)
+    //   supplementalRate = 0.02    (the "2%")
+    //   baseRate         = 0.08    (Alberta first-bracket rate — the "8%")
+    //
+    // Old 3B-5B-1c `{triggerBase, rate}` shape (with T_prov_base
+    // interpretation) was WRONG and has been REMOVED.
     k5p: {
       enabled: true,
-      triggerBase: "4800",
-      rate: "0.02",
-      sourceCitation: "T4127 §Alberta (K5P) — Alberta supplemental credit; 2%-over-8% applied to annualised Alberta tax base in excess of $4,800. Pending line-verification against 122nd/123rd Editions.",
+      threshold: "4800",
+      supplementalRate: "0.02",
+      baseRate: "0.08",
+      sourceCitation:
+        "T4127 §Alberta (K5P) — Alberta supplemental credit. Formula: K5P = max(0, ((K1P + K2P) - 4800) × (0.02 / 0.08)). Pending final line-verification against 122nd/123rd Editions.",
     },
   },
   // Payroll-3B-5B-1c §9 / §L — rounding contract.
