@@ -110,6 +110,52 @@ export const SourceFactsIdentityV1 = z.object({
 });
 export type SourceFactsIdentityV1 = z.infer<typeof SourceFactsIdentityV1>;
 
+/**
+ * Payroll-3B-5B-2c (2026-09-02) — frozen TD1 / tax source facts.
+ *
+ * Every value here is captured from `EmployeeTaxProfile` at
+ * preparation time and NEVER refreshed. A later live-TD1 mutation
+ * cannot alter an existing prepared batch — the operational
+ * correction is `VOID → correct source → PREPARE replacement`.
+ *
+ * The block is OPTIONAL at the Zod level for backward compatibility
+ * with V1 blobs written before 2c landed (there are none in
+ * production, but the calculator degrades to defaults if any exists).
+ * Batch preparation ALWAYS emits it from 2c onward.
+ *
+ * SIN and banking information are never captured here — those live
+ * on the operational HR models and are read only when a downstream
+ * slice actually needs to emit them (payment file, T4, etc.).
+ */
+export const SourceFactsTaxV1 = z.object({
+  /** Federal TD1 total claim amount, cents-precise Decimal string. */
+  federalClaim:                DecimalString,
+  /** Alberta TD1 total claim amount. */
+  provincialClaim:             DecimalString,
+  /** TD1 "more than one employer / payer" election — federal side. */
+  claimZeroFederal:            z.boolean(),
+  /** Alberta TD1 equivalent. */
+  claimZeroProvincial:         z.boolean(),
+  /** TD1 "no tax withheld" attestation — total income less than total claim. */
+  totalIncomeLessThanClaim:    z.boolean(),
+  /** Additional federal tax the employee has requested per pay period. */
+  additionalFederalTaxAmount:  DecimalString,
+  /** Additional Alberta tax the employee has requested per pay period. */
+  additionalProvincialTaxAmount: DecimalString,
+});
+export type SourceFactsTaxV1 = z.infer<typeof SourceFactsTaxV1>;
+
+/** Sensible default when no `EmployeeTaxProfile` was on file at prep. */
+export const DEFAULT_TAX_FACTS_V1: SourceFactsTaxV1 = {
+  federalClaim:                  "0",
+  provincialClaim:               "0",
+  claimZeroFederal:              false,
+  claimZeroProvincial:           false,
+  totalIncomeLessThanClaim:      false,
+  additionalFederalTaxAmount:    "0",
+  additionalProvincialTaxAmount: "0",
+};
+
 export const PayrollBatchSourceFactsV1 = z.object({
   schemaVersion: z.literal(1),
   coverage: SourceFactsCoverageV1,
@@ -117,6 +163,12 @@ export const PayrollBatchSourceFactsV1 = z.object({
   assignments: z.array(SourceFactsAssignmentV1),
   compensations: z.array(SourceFactsCompensationV1),
   allowances: z.array(SourceFactsAllowanceV1),
+  /**
+   * Payroll-3B-5B-2c — optional for backward compatibility with any
+   * pre-2c V1 blob; parser fills with DEFAULT_TAX_FACTS_V1. Batch
+   * preparation always emits an explicit tax block from 2c onward.
+   */
+  tax: SourceFactsTaxV1.optional(),
 });
 export type PayrollBatchSourceFactsV1 = z.infer<typeof PayrollBatchSourceFactsV1>;
 

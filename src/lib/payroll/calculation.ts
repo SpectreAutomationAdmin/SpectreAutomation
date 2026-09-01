@@ -159,11 +159,12 @@ export async function prepareCalculationInput(
 
   const exceptions: ReadinessException[] = [];
 
-  // §6 (2) — verify calculable lifecycle. PREPARED is the only
-  // state the readiness service accepts. DRAFT is pre-preparation;
-  // CALCULATED / SUBMITTED / APPROVED / POSTED / VOIDED cannot enter
-  // the readiness pipeline again from this service.
-  if (batch.status !== "PREPARED") {
+  // §6 (2) — verify calculable lifecycle. PREPARED and CALCULATED
+  // are both acceptable (CALCULATED enters via the recalculation
+  // path from `calculatePayrollBatch` before POSTED). DRAFT is
+  // pre-preparation; SUBMITTED / APPROVED / POSTED / VOIDED cannot
+  // enter the readiness pipeline.
+  if (batch.status !== "PREPARED" && batch.status !== "CALCULATED") {
     exceptions.push({
       employeeId: null,
       severity: "BLOCKER",

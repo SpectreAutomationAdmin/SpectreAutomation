@@ -108,6 +108,20 @@ function iso(d: Date | null | undefined): string | null {
   return d.toISOString();
 }
 
+/**
+ * Payroll-3B-5B-2c — parse an EmployeeTaxProfile claim-secret ref
+ * as a plain decimal TD1 claim amount. Returns the numeric string
+ * if the ref happens to be a plain decimal (MVP operational
+ * compromise while a future slice adds real KMS decrypt). Falls
+ * back to the applicable BPA default when the ref is a genuine
+ * KMS envelope, null, or otherwise non-numeric.
+ */
+function parseClaimSecretOrBpa(secretRef: string | null | undefined, defaultBpa: string): string {
+  if (!secretRef) return defaultBpa;
+  if (/^-?\d+(\.\d+)?$/.test(secretRef)) return secretRef;
+  return defaultBpa;
+}
+
 async function loadPayPeriod(clubId: string, payPeriodId: string) {
   const p = await prisma.payrollPayPeriod.findFirst({
     where: { id: payPeriodId, clubId },
@@ -433,7 +447,15 @@ async function snapshotEmployee(
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: periodStart } }],
     },
     orderBy: [{ effectiveFrom: "desc" }],
-    select: { federalClaimSecretRef: true, provincialClaimSecretRef: true },
+    // Payroll-3B-5B-2c — include plain-column TD1 facts required by
+    // the tax calculator (claimZero flags, additional-tax amounts).
+    // Claim amounts themselves live behind KMS envelope refs.
+    select: {
+      federalClaimSecretRef: true, provincialClaimSecretRef: true,
+      claimZeroFederal: true, claimZeroProvincial: true,
+      totalIncomeLessThanClaim: true,
+      additionalFederalTaxAmount: true, additionalProvincialTaxAmount: true,
+    },
   });
   const federalTd1Ready = !!taxProfile && !!taxProfile.federalClaimSecretRef;
   const provincialTd1Ready = !!taxProfile && !!taxProfile.provincialClaimSecretRef;
@@ -534,6 +556,31 @@ async function snapshotEmployee(
       effectiveFrom: al.effectiveFrom.toISOString(),
       effectiveTo: iso(al.effectiveTo),
     })),
+    // Payroll-3B-5B-2c (2026-09-02) — freeze TD1 tax facts.
+    //
+    // Claim-amount columns on EmployeeTaxProfile carry KMS envelope
+    // refs today (`federalClaimSecretRef` / `provincialClaimSecretRef`).
+    // For MVP we accept the operational compromise: when the ref
+    // parses as a plain decimal string, use it directly; otherwise
+    // default to the applicable BPA (documented so the calculator
+    // remains reproducible). A future slice threads a real KMS
+    // decrypt through preparation.
+    //
+    // Non-secret plain columns (claimZero flags, additional-tax
+    // amounts) are captured verbatim.
+    tax: {
+      federalClaim:                parseClaimSecretOrBpa(
+        taxProfile?.federalClaimSecretRef, "16452",   // package.federal.bpaMax fallback (2026)
+      ),
+      provincialClaim:             parseClaimSecretOrBpa(
+        taxProfile?.provincialClaimSecretRef, "22769",  // package.provincial.bpa fallback (2026)
+      ),
+      claimZeroFederal:            taxProfile?.claimZeroFederal ?? false,
+      claimZeroProvincial:         taxProfile?.claimZeroProvincial ?? false,
+      totalIncomeLessThanClaim:    taxProfile?.totalIncomeLessThanClaim ?? false,
+      additionalFederalTaxAmount:  (taxProfile?.additionalFederalTaxAmount    ?? "0").toString(),
+      additionalProvincialTaxAmount: (taxProfile?.additionalProvincialTaxAmount ?? "0").toString(),
+    },
   };
 
   // Fail loud if a future refactor produces an invalid shape.

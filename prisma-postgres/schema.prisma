@@ -11670,6 +11670,8 @@ model PayrollBatchEmployee {
   additionalProvincialTax  Decimal?
   totalEmployeeDeductions  Decimal?
   ytdSnapshotJson          String?
+  // Payroll-3B-5B-2c — versioned calculation explanation snapshot.
+  calculationExplanationJson String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

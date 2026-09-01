@@ -11794,6 +11794,15 @@ model PayrollBatchEmployee {
   additionalProvincialTax  Decimal?
   totalEmployeeDeductions  Decimal?
   ytdSnapshotJson          String?
+  // Payroll-3B-5B-2c (2026-09-02) — versioned per-employee
+  // calculation explanation snapshot. Captures every intermediate
+  // T4127 factor (A, A*, F5A, BPAF, K1, K2, K3, K4, K1P, K2P,
+  // K3P, K5P, T, T3, T4, TP, T3P, T4P, plus package identity)
+  // so a future auditor can answer "why $X federal tax?" without
+  // recalculating from today's code. NEVER contains SIN or bank
+  // account numbers. Frozen TD1 amounts are captured — they are
+  // Payroll-sensitive and must stay inside the Payroll domain.
+  calculationExplanationJson String?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
