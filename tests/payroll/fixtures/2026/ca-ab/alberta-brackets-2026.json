@@ -42,7 +42,7 @@
       "expected": {
         "bpa": "22769",
         "lowestRate": "0.0800",
-        "notes": "Alberta BPA + first-bracket rate used across the K1P/K2P/K2AP/K3P credit chain."
+        "notes": "Alberta BPA + first-bracket rate used across the K1P and K2P (BASE CPP + EI) credit factors. K3P = 0 for the MVP. K4P is statutorily not applicable. K2AP is NOT a T4127 factor (Spectre-internal helper only)."
       }
     },
     {

@@ -177,8 +177,14 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
     /** Non-refundable credit rate applied to BPA + TD1F claim. */
     lowestRate: DecimalString,
     /**
-     * CPP2 first-additional deduction rate applied when computing
-     * annualised net taxable income. T4127 Chapter 5 factor K3/K3P.
+     * DEPRECATED Spectre-internal helper — retained for schema and
+     * checksum compatibility only. Prior drafts described this as
+     * the "K3 / K3P" CPP2 deduction rate; that description is WRONG.
+     * Per the Final CPP Additional-Contribution Correction
+     * (2026-08-31), T4127 places CPP2 in the F5 / F5A deduction
+     * path (reducing annual taxable income `A`), NOT in K3 / K3P.
+     * The calculator MUST NOT consume this field for CPP2 tax
+     * treatment. Slated for removal in a future schema migration.
      */
     cpp2DeductionRate: DecimalString,
     /**

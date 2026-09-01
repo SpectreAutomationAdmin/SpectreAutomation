@@ -196,6 +196,118 @@ describe("Payroll-3B-5B-1d CORRECTION — Canada Employment Amount (§B)", () =>
   });
 });
 
+// ------------------------------------------------------------
+// Final CPP Additional-Contribution Correction (2026-08-31)
+// ------------------------------------------------------------
+// K2 / K2P are the T4127 non-refundable tax credits for BASE CPP
+// + EI only. CPP first-additional and CPP2 flow through the
+// F5 / F5A income-deduction path (reducing annual taxable income
+// `A`), NOT through K2 / K2P and NOT through K3 / K3P.
+// These tests are specification-level assertions on the pinned
+// package + the calculator spec doc — no dollar arithmetic.
+// ------------------------------------------------------------
+describe("Final CPP Additional-Contribution Correction — K2 / K2P scope + F5A treatment", () => {
+  const specPath = join(process.cwd(), "docs/payroll/calculator-specification.md");
+  const spec = readFileSync(specPath, "utf8");
+
+  it("spec §9b K2 row: describes K2 as BASE CPP + EI ONLY (not first-additional, not CPP2)", () => {
+    // Locate the K2 row in §9b and confirm the correct scope wording.
+    expect(spec).toMatch(/\| `K2` \| \*\*Federal non-refundable tax credit for BASE CPP contributions and EI premiums\.\*\*/);
+    expect(spec).toMatch(/Does NOT credit CPP first-additional\. Does NOT credit CPP2\./);
+  });
+  it("spec §9b K2 formula: base-share applied to Factor C (no `(C + C2)` bundling)", () => {
+    expect(spec).toMatch(/federal\.lowestRate × \[ P × C × \(0\.0495 \/ 0\.0595\) \+ P × EI \]/);
+  });
+  it("spec §10a K2P row: BASE CPP + EI ONLY, same rule as federal K2", () => {
+    expect(spec).toMatch(/\| `K2P` \| \*\*Alberta non-refundable tax credit for BASE CPP contributions and EI premiums\.\*\*/);
+    expect(spec).toMatch(/provincial\.lowestRate × \[ P × C × \(0\.0495 \/ 0\.0595\) \+ P × EI \]/);
+  });
+  it("spec §9b K3 row: NOT the CPP2 deduction, NOT any CPP deduction (letter authority only)", () => {
+    expect(spec).toMatch(/`K3` \| \*\*Other federal tax credits authorised by a tax services office or a Canada Revenue Agency tax centre\.\*\*/);
+    expect(spec).toMatch(/NOT the CPP2 deduction\. NOT the CPP first-additional deduction/);
+  });
+  it("spec §10a K3P row: same rule for Alberta", () => {
+    expect(spec).toMatch(/`K3P` \| \*\*Other Alberta tax credits authorised by a tax services office or a Canada Revenue Agency tax centre\.\*\*/);
+    expect(spec).toMatch(/NOT the Alberta CPP2 deduction\. NOT the Alberta CPP first-additional deduction/);
+  });
+  it("spec §9a formula table: F5, F5A, F5B rows are present as T4127 variables", () => {
+    expect(spec).toMatch(/\| `F5` \| Deductions for CPP additional contributions/);
+    expect(spec).toMatch(/\| `F5A` \| \*\*CPP\/QPP additional contributions deducted from PERIODIC income/);
+    expect(spec).toMatch(/\| `F5B` \| CPP\/QPP additional contributions deducted from NON-PERIODIC income/);
+  });
+  it("spec §9a A formula: F5A subtracted from I before annualising by P", () => {
+    expect(spec).toMatch(/A = P × \(I − F − F1 − F5A\) \+ HD − F2 − U1 − F5B/);
+  });
+  it("spec §9e: CPP first-additional + CPP2 map into F5A (not K2, not K3)", () => {
+    expect(spec).toMatch(/F5A_thisPay\s*=\s*C_firstAdd_thisPay \+ C2_thisPay/);
+    expect(spec).toMatch(/CPP first-additional MUST NOT appear in `K2` \(or `K2P`\) as a tax credit/);
+    expect(spec).toMatch(/CPP2 MUST NOT appear in `K2` \/ `K2P` \/ `K3` \/ `K3P`/);
+  });
+  it("spec §9f: Factor-C-to-F5A-and-K2 mapping table pins the exact contract", () => {
+    expect(spec).toMatch(/### 9f\. Factor C \/ C2 → F5A → K2 mapping/);
+    expect(spec).toMatch(/`baseCppForTaxCredit`/i);
+    // §9f uses the short form (C2) in the mapping table row.
+    expect(spec).toMatch(/`F5A_thisPay` \| `deductionCppEeFirstAdd \+ C2`/);
+  });
+  it("spec §19a factor matrix: K2 row says BASE CPP + EI only", () => {
+    expect(spec).toMatch(/### 19a\. Federal factors[\s\S]*?\| `K2` \| \*\*Federal non-refundable tax credit for BASE CPP contributions and EI premiums\.\*\*/);
+  });
+  it("spec §19a factor matrix: F5, F5A, F5B rows exist alongside K1-K4", () => {
+    // The federal matrix must enumerate the F5 subvariables so the
+    // MVP calculator contract is unambiguous.
+    const fedMatrixSection = spec.split("### 19b. Alberta")[0].split("### 19a. Federal")[1];
+    expect(fedMatrixSection).toMatch(/\| `F5` \|/);
+    expect(fedMatrixSection).toMatch(/\| `F5A` \|/);
+    expect(fedMatrixSection).toMatch(/\| `F5B` \|/);
+  });
+  it("spec §19b Alberta matrix: K2P row says BASE CPP + EI only; K3P not CPP", () => {
+    const albertaMatrixSection = spec.split("### 19c.")[0].split("### 19b. Alberta")[1];
+    expect(albertaMatrixSection).toMatch(/\| `K2P` \| \*\*Alberta non-refundable tax credit for BASE CPP contributions and EI premiums\.\*\*/);
+    expect(albertaMatrixSection).toMatch(/`K3P` \|[^\n]*NOT any CPP deduction/);
+  });
+  it("spec: no remaining `P × (0.0495 / 0.0595) × (C + C2)` incorrect-bundling formula ANYWHERE except explicit callouts", () => {
+    // The wrong-bundling formula may appear ONLY in explicit
+    // callouts labelled as WRONG (removed) or that document the
+    // prior spec text. It must NOT appear as an active formula.
+    const wrongFormula = /federal\.lowestRate × \[ P × \(0\.0495 \/ 0\.0595\) × \(C \+ C2\)/;
+    expect(spec).not.toMatch(wrongFormula);
+    const wrongFormulaProv = /provincial\.lowestRate × \[ P × \(0\.0495 \/ 0\.0595\) × \(C \+ C2\)/;
+    expect(spec).not.toMatch(wrongFormulaProv);
+  });
+  it("spec: Spectre-internal helpers (K2A, K2AP, cpp2DeductionRate) explicitly labelled INTERNAL / DEPRECATED", () => {
+    expect(spec).toMatch(/### 19c\. Spectre-internal helpers/);
+    expect(spec).toMatch(/\*\*T4127 defines no `K2A`\.\*\*/);
+    expect(spec).toMatch(/\*\*T4127 defines no `K2AP`\.\*\*/);
+    // cpp2DeductionRate must be described as routed through F5/F5A, not through K2 or K3.
+    expect(spec).toMatch(/T4127 actually routes CPP2 through the F5\/F5A income-deduction path/);
+  });
+  it("Zod schema doc-comment: cpp2DeductionRate labelled DEPRECATED and NOT-K3-per-T4127", () => {
+    const zodPath = join(process.cwd(), "src/lib/payroll/statutory-package.ts");
+    const zod = readFileSync(zodPath, "utf8");
+    // Anchor near the cpp2DeductionRate declaration.
+    const idx = zod.indexOf("cpp2DeductionRate: DecimalString");
+    expect(idx).toBeGreaterThan(0);
+    const window = zod.slice(Math.max(0, idx - 600), idx);
+    expect(window).toMatch(/DEPRECATED/);
+    expect(window).toMatch(/NOT in K3 \/ K3P/);
+    expect(window).toMatch(/F5 \/ F5A/);
+  });
+  it("Statutory-package field cpp2DeductionRate persists on H1/H2 (checksum stability) but description states it is unused", () => {
+    // Field remains for schema/checksum stability. Presence alone is
+    // fine; the semantic guard is the doc-comment above and the
+    // spec §19c note — both asserted separately.
+    expect(CA_AB_2026_PARAMS_H1.federal.cpp2DeductionRate).toBeDefined();
+    expect(CA_AB_2026_PARAMS_H2.federal.cpp2DeductionRate).toBeDefined();
+  });
+  it("CEA remains 1501; K5P threshold remains 4896 × 0.25 (prior corrections not regressed)", () => {
+    expect(CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax).toBe("1501");
+    expect(CA_AB_2026_PARAMS_H2.federal.canadaEmploymentAmountMax).toBe("1501");
+    expect(CA_AB_2026_PARAMS_H1.provincial!.k5p.threshold).toBe("4896");
+    expect(Number(CA_AB_2026_PARAMS_H1.provincial!.k5p.supplementalRate) /
+           Number(CA_AB_2026_PARAMS_H1.provincial!.k5p.baseRate)).toBe(0.25);
+  });
+});
+
 describe("Payroll-3B-5B-1c — H1 vs H2 comparison", () => {
   it("packageVersion identity differs across H1 vs H2 (deterministic pinning)", () => {
     // The params are equal by content for 2026; the seeder installs

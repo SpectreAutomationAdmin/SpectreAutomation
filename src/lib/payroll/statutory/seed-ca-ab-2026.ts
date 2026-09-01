@@ -58,9 +58,13 @@ import type { Principal } from "../../rbac";
  *     employee annual max = 1123.07
  *     employer annual max = 1572.30
  *
- *   Federal — T4127 §K1 + Bill C-30:
+ *   Federal — T4127 §K1 + Bill C-30 (2026 verified values):
  *     bpaMax = 16452, bpaMin = 14829, phase-out over the top bracket
- *     lowestRate = 0.15, cpp2DeductionRate = 0.15
+ *     lowestRate = 0.14 (first-bracket rate applied to K1, K2, K4)
+ *     canadaEmploymentAmountMax = 1501 (T4127 123rd Table 8.2 — K4)
+ *     cpp2DeductionRate — DEPRECATED Spectre-internal helper; CPP2
+ *       flows through T4127 F5/F5A (income deduction), NOT K3.
+ *       Retained on schema for checksum compatibility only.
  *
  *   Alberta — T4032-AB 2026:
  *     brackets:
@@ -119,7 +123,9 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     // Payroll-3B-5B-1c §D — verified 2026 federal Table 8.1 (T4127
     // 122nd Edition, effective January 1, 2026). Five-bracket table
     // + `K` constants. Federal `lowestRate` = 0.14 (first bracket
-    // rate) is used across the K1/K2/K2A/K3/K4 credit formulas.
+    // rate) is applied to the T4127 K1, K2, and K4 credit formulas
+    // (BASE CPP + EI for K2 — CPP first-additional + CPP2 flow
+    // through the F5/F5A deduction path, not through any K-factor).
     brackets: [
       { from:      "0",   to:  "58523", rate: "0.1400", constantK:     "0" },
       { from:  "58523",   to: "117045", rate: "0.2050", constantK:  "3804" },
@@ -132,6 +138,14 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     bpaPhaseOutStart: "173205",
     bpaPhaseOutEnd: "246752",
     lowestRate: "0.1400",
+    // DEPRECATED Spectre-internal helper (kept for schema/checksum
+    // compatibility only). Prior drafts described this as the "K3"
+    // CPP2 deduction rate — that description was wrong. T4127 routes
+    // CPP2 through the F5/F5A deduction path (reducing annual
+    // taxable income A), NOT through K3. Calculator MUST NOT consume
+    // this field for any CPP2 tax treatment. Slated for removal in a
+    // future schema migration; kept now to preserve the pinned
+    // package checksum.
     cpp2DeductionRate: "0.1400",
     // Payroll-3B-5B-1d CORRECTION (§B) — Canada Employment Amount
     // for 2026: $1,501.00. Officially verified against CRA T4127
