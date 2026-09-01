@@ -36,14 +36,16 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) — heap
 # ceilings must be split per RUN because they compete for the same
 # 4 GB container budget on Fly's shared-cpu-2x builder:
-#   * prisma generate: modest heap; 2 GB is generous. Setting it
-#     too high (3840) had V8 pre-reserve enough address space that
-#     the OS OOM-killed the compile step for the prisma engine.
+#   * prisma generate: modest heap; smaller is safer. Setting it
+#     too high (2560, 3840) had V8 pre-reserve enough address space
+#     that the OS OOM-killed the compile step for the prisma
+#     engine once the schema grew past ~11k lines (Payroll-3B-5B-3A,
+#     2026-09-01). 2048 keeps the resident set below cgroup limit.
 #   * next build: memory-heavy "Collecting page data" phase. 3840
 #     is safe once tsc/eslint are disabled (see next.config.js).
 # NODE_OPTIONS at the ENV level would apply to BOTH steps and one
 # of them always loses, so we inline it per RUN.
-RUN NODE_OPTIONS="--max-old-space-size=2560" \
+RUN NODE_OPTIONS="--max-old-space-size=2048" \
     npx prisma generate --schema prisma-postgres/schema.prisma
 # Build-only placeholders. Next.js 14's "Collecting page data" phase
 # evaluates every route module, which transitively imports src/lib/env.ts
