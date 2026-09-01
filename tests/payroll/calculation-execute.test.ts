@@ -435,3 +435,278 @@ describe("Payroll-3B-5B-2c — Controller-config gap (§40)", () => {
     expect(gapAudit).not.toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-2c CORRECTION — encrypted TD1 successful resolution
+// (§12) via the canonical HR KMS envelope service.
+// ---------------------------------------------------------------------------
+describe("Payroll-3B-5B-2c CORRECTION — encrypted TD1 successfully resolves through the canonical HR KMS service (§12)", () => {
+  beforeEach(async () => { await resetDb(); await seedRbac(); });
+
+  it("federal TD1 claim stored as a real KMS envelope → PREPARED freezes decrypted 20000; Scenario-2-equivalent fed tax = 144.12", async () => {
+    const { encryptSecret, setKmsProvider, localKmsProvider } = await import("@/lib/kms");
+    setKmsProvider(localKmsProvider);
+    // Prepare Scenario-2 shape but with the federal claim held
+    // inside a real encrypted envelope (not the plain-decimal
+    // transitional path). Provincial stays plain.
+    const s = await pdocScenario(utc(2026, 9, 12), {
+      federalClaim:    "PLACEHOLDER-WILL-BE-REPLACED",
+      provincialClaim: "26000",
+    });
+    // Overwrite the federalClaimSecretRef with a real ciphertext AFTER
+    // pdocScenario finished creating the profile (Scenario-2 anchor
+    // requires federal claim = 20000).
+    const cipher = await encryptSecret({
+      scope: "HR", secretReference: `td1-fed:${s.emp.id}`, plaintext: "20000.00",
+    });
+    await db().employeeTaxProfile.updateMany({
+      where: { clubId: s.club.id, employeeId: s.emp.id },
+      data:  { federalClaimSecretRef: cipher },
+    });
+    // Re-prepare so the source facts freeze the decrypted value.
+    await db().payrollBatch.delete({ where: { id: s.prepared.batchId } });
+    const prepared = await preparePayrollBatch(s.adminP, s.club.id, s.pp.id);
+    await orchestratePayrollReviewHandoff(s.adminP, s.club.id, s.pp.id, prepared.batchId);
+    // Attach the SALARY earning again (pdocScenario did it against
+    // the discarded batch above).
+    const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: prepared.batchId } });
+    await db().payrollBatchEarning.create({
+      data: {
+        clubId: s.club.id, batchId: prepared.batchId, batchEmployeeId: be.id,
+        employeeId: s.emp.id, earningType: "SALARY",
+        quantity: "1", rate: "2000.00", rateSource: "MANUAL",
+      },
+    });
+
+    // Prove the frozen source facts contain the DECRYPTED value.
+    const beAfter = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: prepared.batchId } });
+    const facts = JSON.parse(beAfter.sourceFactsJson ?? "{}");
+    expect(facts.tax.federalClaim).toBe("20000.00");
+    expect(facts.tax.provincialClaim).toBe("26000");
+
+    const r = await calculatePayrollBatch(s.paP, s.club.id, prepared.batchId);
+    expect(r.persisted).toBe(true);
+    expect(r.lifecycleStatus).toBe("CALCULATED");
+    const beFinal = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: r.batchId } });
+    // Scenario-2 result: fed = 144.12 / AB = 68.51.
+    expect(Number(beFinal.deductionFederalTax)).toBe(144.12);
+    expect(Number(beFinal.deductionProvincialTax)).toBe(68.51);
+    // Prove no package-BPA substitution happened — the decrypted claim
+    // was actually used (BPA-only would have produced fed = 163.23).
+    expect(Number(beFinal.deductionFederalTax)).not.toBe(163.23);
+
+    // Sensitive-data leak checks: plaintext + ciphertext must NOT appear
+    // in any Work Intake payload OR generic audit metadata for this batch.
+    if (r.finalApprovalWorkIntakeItemId) {
+      const wi = await db().workIntakeItem.findUniqueOrThrow({ where: { id: r.finalApprovalWorkIntakeItemId } });
+      expect(wi.displayPreview ?? "").not.toContain("20000");
+      expect(wi.displayPreview ?? "").not.toContain(cipher);
+      expect(wi.displaySubject).not.toContain("20000");
+    }
+    const audits = await db().auditLog.findMany({
+      where: { entityId: r.batchId, action: { in: ["payroll.batch.calculate", "payroll.batch.execute-2b", "payroll.batch.assess-readiness"] } },
+      select: { afterJson: true },
+    });
+    for (const a of audits) {
+      const blob = JSON.stringify(a.afterJson ?? {});
+      expect(blob).not.toContain("20000");
+      expect(blob).not.toContain(cipher);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-2c CORRECTION — decrypt-failure BLOCKER (§13).
+// ---------------------------------------------------------------------------
+describe("Payroll-3B-5B-2c CORRECTION — TD1 decrypt failure BLOCKS Payroll (§13)", () => {
+  beforeEach(async () => { await resetDb(); await seedRbac(); });
+
+  it("malformed enc: envelope → TD1_CLAIM_RESOLUTION_FAILED BLOCKER; no CALCULATED, no Controller task, no BPA substitution", async () => {
+    const { setKmsProvider, localKmsProvider } = await import("@/lib/kms");
+    setKmsProvider(localKmsProvider);
+    const s = await pdocScenario(utc(2026, 3, 14));
+    // Corrupt the tax profile with a syntactically-valid but
+    // undecryptable envelope.
+    await db().employeeTaxProfile.updateMany({
+      where: { clubId: s.club.id, employeeId: s.emp.id },
+      data:  { federalClaimSecretRef: "enc:local:local-dev-v1:AAAAAAAAAAAAAAAAAAAAAAAA" },
+    });
+    // Re-prepare so the resolver runs on the corrupted value.
+    await db().payrollBatch.delete({ where: { id: s.prepared.batchId } });
+    const prepared = await preparePayrollBatch(s.adminP, s.club.id, s.pp.id);
+
+    // Preparation BLOCKER was emitted.
+    const blockers = await db().payrollBatchException.findMany({
+      where: { batchId: prepared.batchId, severity: "BLOCKER" },
+      select: { code: true, message: true },
+    });
+    const codes = blockers.map((b) => b.code);
+    expect(codes).toContain("TD1_CLAIM_RESOLUTION_FAILED");
+    // Employee-facing message never mentions cryptographic details.
+    const td1Blocker = blockers.find((b) => b.code === "TD1_CLAIM_RESOLUTION_FAILED");
+    expect(td1Blocker?.message ?? "").not.toMatch(/enc:|ciphertext|envelope|AES|decrypt/i);
+
+    // Calculation refuses. Because the preparation BLOCKER kept the
+    // batch in DRAFT (existing 3B-4 contract — BLOCKERs prevent the
+    // PREPARED transition), readiness rejects with
+    // INVALID_BATCH_LIFECYCLE. Either way, calculation MUST NOT
+    // succeed and Payroll MUST NOT progress.
+    const r = await calculatePayrollBatch(s.paP, s.club.id, prepared.batchId);
+    expect(r.persisted).toBe(false);
+    expect(r.finalApprovalWorkIntakeItemId).toBeNull();
+    const batch = await db().payrollBatch.findUniqueOrThrow({ where: { id: prepared.batchId } });
+    // Batch is still in a pre-CALCULATED state — DRAFT (preparation
+    // BLOCKER prevented the PREPARED transition) or PREPARED (if a
+    // future harmless-BLOCKER classification changes). Either is
+    // acceptable; CALCULATED / POSTED are not.
+    expect(["DRAFT", "PREPARED"]).toContain(batch.status);
+    expect(batch.calculatedAt).toBeNull();
+
+    // Frozen tax block MUST NOT claim the package BPA (16452).
+    const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: prepared.batchId } });
+    const facts = JSON.parse(be.sourceFactsJson ?? "{}");
+    expect(facts.tax.federalClaim).not.toBe("16452");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-2c CORRECTION — multi-employee negative-net atomicity
+// (§16, §17). Uses a legitimate supported input path (large
+// additional-tax withholding) to force gross < deductions.
+// ---------------------------------------------------------------------------
+describe("Payroll-3B-5B-2c CORRECTION — negative net BLOCKS the whole batch atomically (§16, §17)", () => {
+  beforeEach(async () => { await resetDb(); await seedRbac(); });
+
+  it("two-employee batch: valid employee A + negative-net employee B → NEITHER commits; batch stays PREPARED; no Controller task", async () => {
+    const sup = await superAdminP();
+    await seedCanadaAlbertaPackages2026(sup);
+
+    const club = await makeClub("Club Neg");
+    const admin      = await makeUser({ email: "admin.neg@a.test", role: "CLUB_ADMIN", clubId: club.id });
+    const pa         = await makeUser({ email: "pa.neg@a.test",    role: "PAYROLL_ADMIN", clubId: club.id });
+    const controller = await makeUser({ email: "ctl.neg@a.test",   role: "CONTROLLER", clubId: club.id });
+    const adminP = await principalFor(admin.email);
+    const paP    = await principalFor(pa.email);
+    await upsertPayrollClubConfig(adminP, club.id, {
+      provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: controller.id,
+    });
+
+    async function makeSalariedEmp(number: string, additionalFederalTax: string) {
+      const emp = await db().employee.create({
+        data: {
+          clubId: club.id, firstName: `Emp${number}`, lastName: "X",
+          email: `${number}@neg.test`, hireDate: utc(2026, 1, 1),
+          dateOfBirth: utc(1990, 5, 12), status: "ACTIVE", employeeNumber: number,
+        },
+      });
+      const assn = await db().employeeEmploymentAssignment.create({
+        data: {
+          clubId: club.id, employeeId: emp.id, role: "PRIMARY",
+          employmentType: "FULL_TIME", effectiveFrom: utc(2026, 1, 1),
+        },
+      });
+      await db().employeeCompensation.create({
+        data: {
+          clubId: club.id, employeeId: emp.id, assignmentId: assn.id,
+          cadence: "SALARY", rate: "52000", currency: "CAD",
+          effectiveFrom: utc(2026, 1, 1),
+        },
+      });
+      await db().employeeBankAccount.create({
+        data: {
+          clubId: club.id, employeeId: emp.id,
+          institutionSecretRef: "kms:test", transitSecretRef: "kms:test",
+          accountSecretRef: "kms:test", holderName: `Emp${number}`,
+          bankFingerprint: `fp-${number}`, status: "VERIFIED", activatedAt: utc(2026, 1, 1),
+        },
+      });
+      await db().employeeTaxProfile.create({
+        data: {
+          clubId: club.id, employeeId: emp.id,
+          province: "AB", td1FormVersion: "2026-01",
+          effectiveFrom: utc(2026, 1, 1),
+          federalClaimSecretRef:    "16452",  // plain-decimal path
+          provincialClaimSecretRef: "22769",
+          claimZeroFederal: false, claimZeroProvincial: false,
+          totalIncomeLessThanClaim: false,
+          additionalFederalTaxAmount:   additionalFederalTax,
+          additionalProvincialTaxAmount: "0",
+        },
+      });
+      return emp;
+    }
+    const empA = await makeSalariedEmp("E-A", "0");         // valid Payroll
+    const empB = await makeSalariedEmp("E-B", "9999.00");   // additional tax > gross ⇒ negative net
+
+    const pg = await db().payrollPayGroup.create({
+      data: {
+        clubId: club.id, code: "PG-NEG", name: "PG-NEG",
+        payFrequency: "BIWEEKLY", payDateOffsetDays: 0,
+        calendarAnchorDate: utc(2026, 1, 4),
+      },
+    });
+    // Full biweekly calendar so P=26.
+    const yearStart = utc(2026, 1, 4);
+    let pp: { id: string } | null = null;
+    for (let seq = 1; seq <= 26; seq++) {
+      const start = new Date(yearStart.getTime() + (seq - 1) * 14 * 86400_000);
+      const end   = new Date(start.getTime() + 13 * 86400_000);
+      const row = await db().payrollPayPeriod.create({
+        data: {
+          clubId: club.id, payGroupId: pg.id,
+          sequenceInYear: seq, taxYear: 2026,
+          periodStart: start, periodEnd: end, payDate: end,
+        },
+      });
+      if (seq === 5) pp = row;
+    }
+    if (!pp) throw new Error("no pay period seeded");
+    for (const emp of [empA, empB]) {
+      await db().payrollPayGroupMember.create({
+        data: { clubId: club.id, payGroupId: pg.id, employeeId: emp.id, effectiveFrom: utc(2026, 1, 1) },
+      });
+    }
+
+    const prepared = await preparePayrollBatch(adminP, club.id, pp.id);
+    await orchestratePayrollReviewHandoff(adminP, club.id, pp.id, prepared.batchId);
+    // Attach a SALARY earning to BOTH employees.
+    const bes = await db().payrollBatchEmployee.findMany({ where: { batchId: prepared.batchId } });
+    for (const be of bes) {
+      await db().payrollBatchEarning.create({
+        data: {
+          clubId: club.id, batchId: prepared.batchId, batchEmployeeId: be.id,
+          employeeId: be.employeeId, earningType: "SALARY",
+          quantity: "1", rate: "2000.00", rateSource: "MANUAL",
+        },
+      });
+    }
+
+    const r = await calculatePayrollBatch(paP, club.id, prepared.batchId);
+    // Batch refuses to commit because one employee is negative-net.
+    expect(r.persisted).toBe(false);
+    expect(r.lifecycleStatus).toBe("PREPARED");
+    expect(r.blockers.map((b) => b.code)).toContain("NEGATIVE_NET_PAY");
+    // NEITHER employee's result was persisted — atomic rollback proven.
+    const besAfter = await db().payrollBatchEmployee.findMany({ where: { batchId: prepared.batchId } });
+    for (const be of besAfter) {
+      expect(be.grossPay).toBeNull();
+      expect(be.deductionFederalTax).toBeNull();
+      expect(be.netPay).toBeNull();
+    }
+    const batch = await db().payrollBatch.findUniqueOrThrow({ where: { id: prepared.batchId } });
+    expect(batch.status).toBe("PREPARED");
+    expect(batch.calculatedAt).toBeNull();
+    expect(batch.calculationVersion).toBe(0);
+    // No Controller final-approval task was materialised.
+    const controllerTaskCount = await db().workIntakeItem.count({
+      where: { clubId: club.id, workSubtype: "PAYROLL_FINAL_APPROVAL" },
+    });
+    expect(controllerTaskCount).toBe(0);
+    // PAYROLL_REVIEW remains available for the Payroll Admin.
+    const reviewOrigin = await db().workIntakeOrigin.findFirstOrThrow({
+      where: { clubId: club.id, kind: "PAYROLL_REVIEW", referenceId: prepared.batchId },
+    });
+    const reviewItem = await db().workIntakeItem.findUniqueOrThrow({ where: { id: reviewOrigin.workIntakeItemId } });
+    expect(reviewItem.status).not.toBe("RESOLVED");
+  });
+});

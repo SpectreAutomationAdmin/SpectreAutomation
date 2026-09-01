@@ -129,7 +129,10 @@ async function scenario(opts?: {
       clubId: clubA.id, employeeId: hourlyEmp.id,
       province: "AB", td1FormVersion: "2026-01",
       effectiveFrom: utc(2026, 1, 1),
-      federalClaimSecretRef: "kms:test", provincialClaimSecretRef: "kms:test",
+      // Payroll-3B-5B-2c CORRECTION — plain-decimal transitional path
+      // (recognised by the fail-closed resolver). "kms:test" would now
+      // BLOCK with TD1_CLAIM_RESOLUTION_FAILED.
+      federalClaimSecretRef: "16452", provincialClaimSecretRef: "22769",
     },
   });
 
@@ -172,7 +175,10 @@ async function scenario(opts?: {
       clubId: clubA.id, employeeId: salariedEmp.id,
       province: "AB", td1FormVersion: "2026-01",
       effectiveFrom: salaryHireDate,
-      federalClaimSecretRef: "kms:test", provincialClaimSecretRef: "kms:test",
+      // Payroll-3B-5B-2c CORRECTION — plain-decimal transitional path
+      // (recognised by the fail-closed resolver). "kms:test" would now
+      // BLOCK with TD1_CLAIM_RESOLUTION_FAILED.
+      federalClaimSecretRef: "16452", provincialClaimSecretRef: "22769",
     },
   });
 

@@ -161,8 +161,12 @@ describe("Payroll-3B-5B-1b — TD1 source facts on EmployeeTaxProfile", () => {
         province: "AB",
         td1FormVersion: "2026",
         effectiveFrom: d(2026, 1, 1),
-        federalClaimSecretRef: "kms:test-f",
-        provincialClaimSecretRef: "kms:test-p",
+        // Payroll-3B-5B-2c CORRECTION — federal side is claimZero
+        // (semantic override — value ignored). Provincial side uses
+        // the plain-decimal transitional path so the fail-closed
+        // resolver produces a valid frozen amount.
+        federalClaimSecretRef: "0",
+        provincialClaimSecretRef: "22769",
         additionalFederalTaxAmount: "25.00",
         additionalProvincialTaxAmount: "10.00",
         claimZeroFederal: true,

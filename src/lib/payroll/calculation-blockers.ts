@@ -34,6 +34,20 @@ export const UNSUPPORTED_PRESCRIBED_ZONE     = "UNSUPPORTED_PRESCRIBED_ZONE";
 export const STATUTORY_PACKAGE_UNRESOLVED    = "STATUTORY_PACKAGE_UNRESOLVED";
 
 /**
+ * A protected TD1 claim value could not be securely resolved at
+ * batch preparation. Payroll refuses to proceed for the affected
+ * employee — never silently substitutes the package BPA, zero, or
+ * any other guessed value. Distinct from MISSING_FEDERAL_TD1 (no
+ * tax profile at all is a WARNING; a genuine decrypt / malformed-
+ * envelope / unknown-format failure on an existing profile is a
+ * BLOCKER).
+ */
+export const TD1_CLAIM_RESOLUTION_FAILED     = "TD1_CLAIM_RESOLUTION_FAILED";
+
+/** Employee deductions exceed gross for the pay period. */
+export const NEGATIVE_NET_PAY                = "NEGATIVE_NET_PAY";
+
+/**
  * Batch is not in a state the calculator can consume. Typical cases:
  *   - DRAFT (must be PREPARED first)
  *   - POSTED (immutable — never recalculable)
@@ -109,6 +123,8 @@ export const CALCULATION_BLOCKER_CODES = [
   MISSING_ALLOWANCE_CLASSIFICATION,
   UNSUPPORTED_EARNING_TYPE,
   DRAFT_TIME_ENTRIES_PRESENT,
+  TD1_CLAIM_RESOLUTION_FAILED,
+  NEGATIVE_NET_PAY,
 ] as const;
 
 export type CalculationBlockerCode = (typeof CALCULATION_BLOCKER_CODES)[number];

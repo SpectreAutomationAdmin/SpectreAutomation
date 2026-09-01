@@ -33,6 +33,8 @@ import {
   type PayrollBatchSourceFactsV1,
   type SourceFactsCoverageV1,
 } from "./source-facts-schema";
+import { resolveTd1ClaimAtPreparation, isResolvedTd1, isTd1ResolutionFailure } from "./td1-claim-resolver";
+import { TD1_CLAIM_RESOLUTION_FAILED } from "./calculation-blockers";
 
 const ENTITY = "PayrollBatch";
 
@@ -106,20 +108,6 @@ export interface ExceptionView {
 function iso(d: Date | null | undefined): string | null {
   if (!d) return null;
   return d.toISOString();
-}
-
-/**
- * Payroll-3B-5B-2c — parse an EmployeeTaxProfile claim-secret ref
- * as a plain decimal TD1 claim amount. Returns the numeric string
- * if the ref happens to be a plain decimal (MVP operational
- * compromise while a future slice adds real KMS decrypt). Falls
- * back to the applicable BPA default when the ref is a genuine
- * KMS envelope, null, or otherwise non-numeric.
- */
-function parseClaimSecretOrBpa(secretRef: string | null | undefined, defaultBpa: string): string {
-  if (!secretRef) return defaultBpa;
-  if (/^-?\d+(\.\d+)?$/.test(secretRef)) return secretRef;
-  return defaultBpa;
 }
 
 async function loadPayPeriod(clubId: string, payPeriodId: string) {
@@ -499,6 +487,50 @@ async function snapshotEmployee(
     });
   }
 
+  // Payroll-3B-5B-2c CORRECTION — resolve TD1 claim values through
+  // the fail-closed resolver. NEVER substitute the package BPA for
+  // a genuine decrypt failure. Missing tax profile (no ref at all)
+  // falls back to BPA — that's the pre-2c documented WARNING path
+  // already handled above.
+  const fedResolve = await resolveTd1ClaimAtPreparation({
+    secretReference: `td1-fed:${employeeId}`,
+    ciphertext:      taxProfile?.federalClaimSecretRef ?? null,
+    claimZero:       taxProfile?.claimZeroFederal ?? false,
+  });
+  const provResolve = await resolveTd1ClaimAtPreparation({
+    secretReference: `td1-prov:${employeeId}`,
+    ciphertext:      taxProfile?.provincialClaimSecretRef ?? null,
+    claimZero:       taxProfile?.claimZeroProvincial ?? false,
+  });
+  if (isTd1ResolutionFailure(fedResolve)) {
+    exceptions.push({
+      severity: "BLOCKER",
+      code: TD1_CLAIM_RESOLUTION_FAILED,
+      message: "Federal TD1 claim could not be securely resolved. Payroll cannot proceed for this employee until the tax profile is corrected.",
+      recommendedAction: "Re-enter the federal TD1 claim on the employee's tax profile; the encrypted value on file cannot be read by Payroll.",
+    });
+  }
+  if (isTd1ResolutionFailure(provResolve)) {
+    exceptions.push({
+      severity: "BLOCKER",
+      code: TD1_CLAIM_RESOLUTION_FAILED,
+      message: "Provincial TD1 claim could not be securely resolved. Payroll cannot proceed for this employee until the tax profile is corrected.",
+      recommendedAction: "Re-enter the Alberta TD1 claim on the employee's tax profile; the encrypted value on file cannot be read by Payroll.",
+    });
+  }
+  // Frozen numeric string for `sourceFactsJson.tax`. On resolution
+  // failure we still populate SOMETHING so the Zod shape is valid,
+  // but the BLOCKER above prevents the calculator from ever running.
+  // We use "0" (not the BPA) so a bug that ignored the BLOCKER
+  // would produce a large tax deduction rather than a plausibly-
+  // correct-looking one.
+  const frozenFederalClaim = isResolvedTd1(fedResolve)
+    ? fedResolve.value
+    : (federalTd1Ready ? "0" : "16452");   // package.federal.bpaMax default only when no profile at all
+  const frozenProvincialClaim = isResolvedTd1(provResolve)
+    ? provResolve.value
+    : (provincialTd1Ready ? "0" : "22769"); // package.provincial.bpa default only when no profile at all
+
   const coverage = coverageForMembership(
     member.effectiveFrom,
     member.effectiveTo ?? null,
@@ -556,29 +588,19 @@ async function snapshotEmployee(
       effectiveFrom: al.effectiveFrom.toISOString(),
       effectiveTo: iso(al.effectiveTo),
     })),
-    // Payroll-3B-5B-2c (2026-09-02) — freeze TD1 tax facts.
-    //
-    // Claim-amount columns on EmployeeTaxProfile carry KMS envelope
-    // refs today (`federalClaimSecretRef` / `provincialClaimSecretRef`).
-    // For MVP we accept the operational compromise: when the ref
-    // parses as a plain decimal string, use it directly; otherwise
-    // default to the applicable BPA (documented so the calculator
-    // remains reproducible). A future slice threads a real KMS
-    // decrypt through preparation.
-    //
-    // Non-secret plain columns (claimZero flags, additional-tax
-    // amounts) are captured verbatim.
+    // Payroll-3B-5B-2c CORRECTION (2026-09-01) — freeze RESOLVED
+    // TD1 tax facts. Values come from the fail-closed resolver
+    // above: encrypted `enc:` envelopes are decrypted via the
+    // canonical HR KMS service; plain-decimal test/legacy values
+    // are parsed; anything else raises TD1_CLAIM_RESOLUTION_FAILED
+    // and never silently substitutes the package BPA.
     tax: {
-      federalClaim:                parseClaimSecretOrBpa(
-        taxProfile?.federalClaimSecretRef, "16452",   // package.federal.bpaMax fallback (2026)
-      ),
-      provincialClaim:             parseClaimSecretOrBpa(
-        taxProfile?.provincialClaimSecretRef, "22769",  // package.provincial.bpa fallback (2026)
-      ),
-      claimZeroFederal:            taxProfile?.claimZeroFederal ?? false,
-      claimZeroProvincial:         taxProfile?.claimZeroProvincial ?? false,
-      totalIncomeLessThanClaim:    taxProfile?.totalIncomeLessThanClaim ?? false,
-      additionalFederalTaxAmount:  (taxProfile?.additionalFederalTaxAmount    ?? "0").toString(),
+      federalClaim:                  frozenFederalClaim,
+      provincialClaim:               frozenProvincialClaim,
+      claimZeroFederal:              taxProfile?.claimZeroFederal ?? false,
+      claimZeroProvincial:           taxProfile?.claimZeroProvincial ?? false,
+      totalIncomeLessThanClaim:      taxProfile?.totalIncomeLessThanClaim ?? false,
+      additionalFederalTaxAmount:    (taxProfile?.additionalFederalTaxAmount    ?? "0").toString(),
       additionalProvincialTaxAmount: (taxProfile?.additionalProvincialTaxAmount ?? "0").toString(),
     },
   };
