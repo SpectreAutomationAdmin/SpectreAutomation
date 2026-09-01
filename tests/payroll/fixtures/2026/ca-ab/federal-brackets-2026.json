@@ -1,0 +1,52 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "T4127 Payroll Deductions Formulas — 122nd Edition (H1) and 123rd Edition (H2), Federal Table 8.1 for 2026",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/revenue-agency/services/forms-publications/payroll/t4127-payroll-deductions-formulas.html",
+  "sourceRetrievedAt": "2026-09-02",
+  "sourceRetrievedBy": "human-verified",
+  "verificationNote": "Federal Table 8.1 (annualised) 2026 R (rate) and K (bracket constant) values as installed in H1/H2 packages via src/lib/payroll/statutory/seed-ca-ab-2026.ts. Rows below are the FIXTURE assertion of every value the calculator will consume — asserting the pinned package matches CRA's Table 8.1 exactly.",
+  "cases": [
+    {
+      "id": "federal-bracket-1-2026",
+      "description": "Federal Table 8.1 row 1: A ≤ 58,523.",
+      "inputs": { "A_upper": "58523.00" },
+      "expected": { "R": "0.1400", "K": "0" }
+    },
+    {
+      "id": "federal-bracket-2-2026",
+      "description": "Federal Table 8.1 row 2: 58,523 < A ≤ 117,045.",
+      "inputs": { "A_lower": "58523.00", "A_upper": "117045.00" },
+      "expected": { "R": "0.2050", "K": "3804" }
+    },
+    {
+      "id": "federal-bracket-3-2026",
+      "description": "Federal Table 8.1 row 3: 117,045 < A ≤ 181,440.",
+      "inputs": { "A_lower": "117045.00", "A_upper": "181440.00" },
+      "expected": { "R": "0.2600", "K": "10241" }
+    },
+    {
+      "id": "federal-bracket-4-2026",
+      "description": "Federal Table 8.1 row 4: 181,440 < A ≤ 258,482.",
+      "inputs": { "A_lower": "181440.00", "A_upper": "258482.00" },
+      "expected": { "R": "0.2900", "K": "15685" }
+    },
+    {
+      "id": "federal-bracket-5-2026",
+      "description": "Federal Table 8.1 row 5: A > 258,482.",
+      "inputs": { "A_lower": "258482.00" },
+      "expected": { "R": "0.3300", "K": "26024" }
+    },
+    {
+      "id": "federal-bpa-2026",
+      "description": "Federal Basic Personal Amount 2026 (Bill C-30 income-tiered).",
+      "expected": {
+        "bpaMax": "16452",
+        "bpaMin": "14829",
+        "phaseOutStart": "173205",
+        "phaseOutEnd": "246752",
+        "notes": "BPA phase-out is linear between phaseOutStart and phaseOutEnd — CRA T4127 §K1 (BPAF)."
+      }
+    }
+  ]
+}

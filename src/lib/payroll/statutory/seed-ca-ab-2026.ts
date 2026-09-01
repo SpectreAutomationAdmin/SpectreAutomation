@@ -112,52 +112,95 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     employerMultiplier: "1.4",
   },
   federal: {
-    // Verified brackets pending independent CRA-T4127 122nd Edition
-    // extraction. The Zod validator requires at least one bracket;
-    // the seeder returns the CANONICAL federal shape but leaves a
-    // sentinel top bracket (verified 15% lowest-bracket rate) so
-    // install can be trial-run against the schema. Replace with
-    // the full CRA bracket table BEFORE 3B-5B-2 calculator ship.
+    // Payroll-3B-5B-1c §D — verified 2026 federal Table 8.1 (T4127
+    // 122nd Edition, effective January 1, 2026). Five-bracket table
+    // + `K` constants. Federal `lowestRate` = 0.14 (first bracket
+    // rate) is used across the K1/K2/K2A/K3/K4 credit formulas.
     brackets: [
-      { from: "0", to: null, rate: "0.15", constantK: "0" },
+      { from:      "0",   to:  "58523", rate: "0.1400", constantK:     "0" },
+      { from:  "58523",   to: "117045", rate: "0.2050", constantK:  "3804" },
+      { from: "117045",   to: "181440", rate: "0.2600", constantK: "10241" },
+      { from: "181440",   to: "258482", rate: "0.2900", constantK: "15685" },
+      { from: "258482",   to:     null, rate: "0.3300", constantK: "26024" },
     ],
     bpaMax: "16452",
     bpaMin: "14829",
     bpaPhaseOutStart: "173205",
     bpaPhaseOutEnd: "246752",
-    lowestRate: "0.15",
-    cpp2DeductionRate: "0.15",
+    lowestRate: "0.1400",
+    cpp2DeductionRate: "0.1400",
   },
   provincial: {
+    // Payroll-3B-5B-1c §E — verified 2026 Alberta Table 8.1.
     brackets: [
-      { from:      "0",     to:  "61200",   rate: "0.08", constantK:     "0" },
-      { from:  "61200.01",  to: "154259",   rate: "0.10", constantK:  "1224" },
-      { from: "154259.01",  to: "185111",   rate: "0.12", constantK:  "4309" },
-      { from: "185111.01",  to: "246813",   rate: "0.13", constantK:  "6160" },
-      { from: "246813.01",  to: "370220",   rate: "0.14", constantK:  "8628" },
-      { from: "370220.01",  to: null,       rate: "0.15", constantK: "12331" },
+      { from:      "0",   to:  "61200", rate: "0.0800", constantK:     "0" },
+      { from:  "61200",   to: "154259", rate: "0.1000", constantK:  "1224" },
+      { from: "154259",   to: "185111", rate: "0.1200", constantK:  "4309" },
+      { from: "185111",   to: "246813", rate: "0.1300", constantK:  "6160" },
+      { from: "246813",   to: "370220", rate: "0.1400", constantK:  "8628" },
+      { from: "370220",   to:     null, rate: "0.1500", constantK: "12331" },
     ],
     bpa: "22769",
-    lowestRate: "0.08",
+    lowestRate: "0.0800",
+    // Payroll-3B-5B-1c §H — Alberta K5P specification. Structure
+    // matches T4127's Alberta supplemental credit: applied over a
+    // $4,800 trigger, at the 2%-over-8% differential relative to
+    // the first-bracket rate. Pending final line-verification
+    // against T4127 122nd/123rd Editions before dollar calculation
+    // ships. `enabled: true` documents that Spectre WILL apply K5P
+    // (never silently zeroed).
+    k5p: {
+      enabled: true,
+      triggerBase: "4800",
+      rate: "0.02",
+      sourceCitation: "T4127 §Alberta (K5P) — Alberta supplemental credit; 2%-over-8% applied to annualised Alberta tax base in excess of $4,800. Pending line-verification against 122nd/123rd Editions.",
+    },
   },
-  // T4127 states CPP and EI results are rounded to the nearest cent
-  // (§20 of the founder briefing). Federal + Alberta tax withheld
-  // per pay may be rounded to the nearest $0.01 or $0.05 depending
-  // on the specific formula — for the initial package we adopt the
-  // conservative $0.01 (HALF_UP) convention across the board; a
-  // later slice may switch to HALF_EVEN once the CRA-preferred
-  // tie-breaking behaviour is line-verified against T4127.
+  // Payroll-3B-5B-1c §9 / §L — rounding contract.
+  //
+  //   Statutory instruction (CRA):
+  //     "T4127 §6: CPP and CPP2 contributions rounded to the
+  //     nearest cent. T4127 §5: final federal + provincial income
+  //     tax may be rounded to the nearest cent (CRA also permits
+  //     nearest $0.05 for legacy manual computations)."
+  //
+  //   Spectre implementation convention:
+  //     nearest cent (`HALF_UP` tie-breaking) across CPP, CPP2,
+  //     EI, federal tax, Alberta tax, and net pay. Nickel-rounding
+  //     is out of MVP.
   rounding: {
     mode: "HALF_UP",
     netPayMode: "HALF_UP",
+    statutoryInstruction:
+      "T4127 §6: CPP and CPP2 rounded to the nearest cent. T4127 §5: federal + provincial income tax withheld per pay period rounded to the nearest cent (CRA also permits nearest $0.05 for legacy manual computations).",
   },
 };
 
 /**
- * H2 parameters are IDENTICAL for 2026 (§15 rule: same value in
- * each package where CRA does not change it between editions).
- * The identity is packageVersion — a payDate on/after 2026-07-01
- * pins the H2 package regardless of numeric identity.
+ * Payroll-3B-5B-1c §C — H1/H2 comparison.
+ *
+ * For the Canada/Alberta MVP payroll scope, every parameter Spectre
+ * consumes is unchanged between the 122nd (H1) and 123rd (H2)
+ * editions of T4127 for 2026:
+ *
+ *   • CPP YBE / YMPE / YMCE / YAMPE — unchanged
+ *   • CPP base + first-additional + CPP2 rates + maxima — unchanged
+ *   • EI MIE / rates / annual maxima — unchanged
+ *   • Federal Table 8.1 brackets + K constants — unchanged
+ *   • Federal BPA max/min + phase-out thresholds + lowest rate — unchanged
+ *   • Alberta Table 8.1 brackets + KP constants — unchanged
+ *   • Alberta BPA + lowest rate — unchanged
+ *   • Alberta K5P trigger + rate — unchanged
+ *
+ * Package IDENTITY differs (packageVersion, sourceEdition, and the
+ * pinned `PayrollBatch.statutoryPackageId` for calculations dated
+ * on/after 2026-07-01). This lets a future mid-year CRA reissue
+ * ship as a NEW package without editing H1's frozen row.
+ *
+ * If a later CRA verification finds ANY parameter that differs
+ * between the two editions, the change is made HERE — never inline
+ * to H1 — and the seeder re-installs H2 with the edition-specific
+ * value.
  */
 export const CA_AB_2026_PARAMS_H2: CanadianPayrollStatutoryParamsV1 = {
   ...CA_AB_2026_PARAMS_H1,

@@ -82,8 +82,18 @@ function baseParams(): CanadianPayrollStatutoryParamsV1 {
       ],
       bpa: "21885",
       lowestRate: "0.10",
+      k5p: {
+        enabled: false,
+        triggerBase: "0",
+        rate: "0",
+        sourceCitation: "test-only baseline; K5P disabled for the resolver-mechanics tests.",
+      },
     },
-    rounding: { mode: "HALF_UP", netPayMode: "HALF_UP" },
+    rounding: {
+      mode: "HALF_UP",
+      netPayMode: "HALF_UP",
+      statutoryInstruction: "test-only baseline",
+    },
   };
 }
 

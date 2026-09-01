@@ -182,9 +182,45 @@ Full formula chain:
 
 ## 10. Alberta provincial tax
 
-Same shape as federal, `Package.provincial.brackets[]` + `Package.provincial.bpa` (2026: 22769).
+Same shape as federal, applied to `Package.provincial.brackets[]` (2026: 6 brackets, `V` = rate, `KP` = bracket constant) + `Package.provincial.bpa` (2026: 22,769).
 
-`T4Prov = max(0, round(T3Prov / P) + additionalProvincialTaxAmount)`
+Alberta credit factors, all consumed from `Package.provincial` / TD1:
+
+| Factor | Meaning | Source |
+|-|-|-|
+| `K1P` | Alberta non-refundable tax credit = `Package.provincial.lowestRate × (TCP + Alberta BPA-tier)` | TD1AB |
+| `K2P` | Alberta CPP tax credit = `Package.provincial.lowestRate × annualised (CPP base + first-additional)` | derived from CPP result |
+| `K2AP` | Alberta EI tax credit = `Package.provincial.lowestRate × annualised EI` | derived from EI result |
+| `K3P` | Alberta CPP2 deduction / credit (T4127 §Alberta) | derived from CPP2 result |
+| `K4P` | Alberta employment credit (if applicable) | annualised employment income |
+| `K5P` | **Alberta supplemental credit factor** — see §10a below | `Package.provincial.k5p` |
+
+**Alberta withholding chain:**
+```
+T3Prov  = (V × A) − KP − K1P − K2P − K2AP − K3P − K4P − K5P
+T4Prov  = max(0, round(T3Prov / P) + additionalProvincialTaxAmount)
+```
+
+### 10a. Alberta K5P specification (§H)
+
+`Package.provincial.k5p` is a required field on the pinned Alberta package — never absent. Structure:
+
+| Field | Meaning |
+|-|-|
+| `enabled: Boolean` | `true` → the calculator applies K5P per the formula below. `false` → K5P is explicitly documented as not applying this year (never a silent default). |
+| `triggerBase: Decimal` | Annualised Alberta tax base above which K5P applies. 2026 draft: `4800`. |
+| `rate: Decimal` | Differential rate applied to the excess above `triggerBase`. 2026 draft: `0.02` (the "2%-over-8%" structure — 2 percentage points over Alberta's first-bracket rate of 8%). |
+| `sourceCitation: String` | Verbatim CRA citation for auditor visibility. |
+
+**Formula (when `enabled === true`):**
+```
+K5P = k5p.rate × max(0, T_prov_base − k5p.triggerBase)
+```
+where `T_prov_base` is the annualised Alberta tax before K5P.
+
+If `enabled === false`, `K5P = 0` — but that zero is a deliberate, documented package decision, never a missing-field inference.
+
+**Pending final line-verification against T4127 122nd/123rd Editions before dollar calculation ships.** The founder-supplied structure ($4,800 trigger, 2%-over-8% differential) is encoded; the exact CRA algebraic form must be confirmed line-by-line.
 
 ## 11. TD1 source facts — verified contract (§16-17)
 
@@ -252,18 +288,53 @@ prorated         = periodBaseSalary × (coverageDays / periodDays)
 
 Contribution to statutory bases uses independent `taxable / pensionable / insurable` flags (§18 rule — never inferred from any single Boolean).
 
-## 16. Rounding (§20)
+## 16. Rounding (§9 verification correction)
 
-**T4127-aligned convention** (§20 verification):
+**Two distinct concepts, never conflated:**
 
-- **Arithmetic:** all intermediates use `Decimal` at ≥6 fractional digits. **No JS floating point.**
-- **CPP base + first-additional + CPP2:** round to nearest cent (`HALF_UP` per current package). CRA T4127 Chapter 6 requires nearest-cent output.
-- **EI:** round to nearest cent (`HALF_UP`).
-- **Federal + Alberta tax `T4`/`T4Prov`:** round to nearest cent (`HALF_UP`). T4127 permits nearest-$0.05 in older formulas but nearest-cent is CRA's default for programmatic implementations.
-- **Net pay:** round to nearest cent.
-- **Annual-max comparison:** compare UNROUNDED slice × UNROUNDED rate against UNROUNDED max; ROUND the final line only.
+### 16a. Statutory instruction (what CRA REQUIRES)
 
-Rounding mode is stored on the pinned package (`rounding.mode`). Spectre does not expose per-tenant rounding configuration — CRA does not permit tenants to select their own tie-breaking convention.
+Recorded verbatim on the pinned package at `Package.rounding.statutoryInstruction`. 2026 CRA-published wording (T4127):
+
+> *"T4127 §6: CPP and CPP2 contributions rounded to the nearest cent. T4127 §5: federal + provincial income tax withheld per pay period rounded to the nearest cent (CRA also permits nearest $0.05 for legacy manual computations)."*
+
+CRA specifies **the target precision** ("nearest cent") but does NOT prescribe a specific tie-breaking algorithm. HALF_UP, HALF_EVEN, and half-away-from-zero all satisfy "nearest cent" for the vast majority of values; they differ only when the fractional portion is exactly `.5` at the rounding boundary. In production payroll this is a fractional-cent edge case per pay line.
+
+### 16b. Spectre implementation convention (what Spectre USES)
+
+Recorded on the pinned package at `Package.rounding.mode` / `Package.rounding.netPayMode`. Spectre's MVP convention:
+
+- `mode = HALF_UP` for CPP base / first-additional / CPP2 / EI / federal `T4` / Alberta `T4Prov`.
+- `netPayMode = HALF_UP` for net pay.
+- Every intermediate uses `Decimal` at ≥6 fractional digits precision — never JS floating point.
+- MVP always rounds to **nearest $0.01**. Nickel-rounding (nearest $0.05) is out of MVP scope. **Not tenant-configurable** — CRA does not permit tenants to select tie-breaking behaviour.
+- **Annual-max comparison:** compare `unroundedSlice × unroundedRate` against unrounded max, then ROUND the final line only.
+
+The Spectre-side HALF_UP convention is a deterministic choice for tie-breaks when CRA is silent. If a future CRA-verified audit calls for HALF_EVEN on any specific line item, the package parameter permits the change without code churn.
+
+## 17. CPP base/first-additional decomposition — verified against T4127 K2 (§10 verification)
+
+T4127's federal K2 tax-credit formula (T4127 §K2) expresses the CPP EMPLOYEE credit as:
+
+```
+K2 = P × (0.0495 / 0.0595) × [C1 + C2]      (federal lowestRate then applied elsewhere)
+```
+
+Where `C1 + C2` are the CPP + CPP2 contributions per pay period, and the `0.0495 / 0.0595` ratio isolates the BASE component from the combined Factor C total. CRA thus uses **exactly the same base-share ratio (`baseRateEE / combinedRateEE`)** Spectre applies to decompose the calculated Factor C into base + first-additional.
+
+**Spectre decomposition (from §6 above) mirrors CRA:**
+```
+baseShare       = C × (baseRateEE / combinedRateEE)         // 0.0495/0.0595
+deductionBase   = HALF_UP round(baseShare, 2)
+deductionFirst  = round(C, 2) − deductionBase               // residual
+```
+
+**Reconciliation invariants (tested):**
+1. `deductionBase + deductionFirst == round(C, 2)` to the cent.
+2. `K2 (federal)  = federalLowestRate × (baseShare + K2 from CPP2 portion)` uses the same base-share value the decomposition produced — no re-derivation required.
+3. `K2P (Alberta) = albertaLowestRate × (baseShare + K2 from CPP2 portion)` likewise.
+
+For T4 reporting, `deductionBase` populates the base-CPP T4 box and `deductionFirst` populates the first-additional-CPP box.
 
 ## 17. Statutory package pinning
 

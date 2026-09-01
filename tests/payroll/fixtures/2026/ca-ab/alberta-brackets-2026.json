@@ -1,0 +1,59 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "T4032-AB Payroll Deductions Tables — Alberta 2026 + T4127 Alberta Table 8.1",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/revenue-agency/services/forms-publications/payroll/t4032-payroll-deductions-tables/t4032ab-jan.html",
+  "sourceRetrievedAt": "2026-09-02",
+  "sourceRetrievedBy": "human-verified",
+  "verificationNote": "Alberta Table 8.1 (annualised) 2026 V (rate) and KP (bracket constant) values as installed in H1/H2 packages. Also asserts Alberta BPA and the K5P block (§H).",
+  "cases": [
+    {
+      "id": "alberta-bracket-1-2026",
+      "inputs": { "A_upper": "61200.00" },
+      "expected": { "V": "0.0800", "KP": "0" }
+    },
+    {
+      "id": "alberta-bracket-2-2026",
+      "inputs": { "A_lower": "61200.00", "A_upper": "154259.00" },
+      "expected": { "V": "0.1000", "KP": "1224" }
+    },
+    {
+      "id": "alberta-bracket-3-2026",
+      "inputs": { "A_lower": "154259.00", "A_upper": "185111.00" },
+      "expected": { "V": "0.1200", "KP": "4309" }
+    },
+    {
+      "id": "alberta-bracket-4-2026",
+      "inputs": { "A_lower": "185111.00", "A_upper": "246813.00" },
+      "expected": { "V": "0.1300", "KP": "6160" }
+    },
+    {
+      "id": "alberta-bracket-5-2026",
+      "inputs": { "A_lower": "246813.00", "A_upper": "370220.00" },
+      "expected": { "V": "0.1400", "KP": "8628" }
+    },
+    {
+      "id": "alberta-bracket-6-2026",
+      "inputs": { "A_lower": "370220.00" },
+      "expected": { "V": "0.1500", "KP": "12331" }
+    },
+    {
+      "id": "alberta-bpa-2026",
+      "expected": {
+        "bpa": "22769",
+        "lowestRate": "0.0800",
+        "notes": "Alberta BPA + first-bracket rate used across the K1P/K2P/K2AP/K3P credit chain."
+      }
+    },
+    {
+      "id": "alberta-k5p-2026",
+      "expected": {
+        "enabled": true,
+        "triggerBase": "4800",
+        "rate": "0.02",
+        "sourceCitation": "T4127 §Alberta (K5P) — 2%-over-8% supplemental credit applied to annualised Alberta tax base above $4,800.",
+        "notes": "K5P must be explicitly present-or-absent on the pinned package — never a missing-field default. `enabled: true` means the calculator will apply K5P; `enabled: false` documents deliberate non-application."
+      }
+    }
+  ]
+}

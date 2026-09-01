@@ -185,14 +185,32 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
 
   // ---- Provincial (Alberta MVP) ----
   //
-  // Alberta 2026 verified brackets:
-  //   0            – 61,200:   8%, KP 0
-  //   61,200.01    – 154,259: 10%, KP  1224
-  //   154,259.01   – 185,111: 12%, KP  4309
-  //   185,111.01   – 246,813: 13%, KP  6160
-  //   246,813.01   – 370,220: 14%, KP  8628
-  //   370,220.01   – ∞:       15%, KP 12331
-  // Alberta BPA 2026 = 22769.
+  // Alberta 2026 verified brackets (T4032-AB Table 8.1):
+  //   0            – 61,200:   V 0.08, KP     0
+  //   61,200       – 154,259:  V 0.10, KP  1224
+  //   154,259      – 185,111:  V 0.12, KP  4309
+  //   185,111      – 246,813:  V 0.13, KP  6160
+  //   246,813      – 370,220:  V 0.14, KP  8628
+  //   370,220      – ∞:        V 0.15, KP 12331
+  // Alberta BPA 2026 = 22,769.
+  //
+  // Alberta K5P (Payroll-3B-5B-1c §4, §H) — supplemental Alberta
+  // tax-credit factor. For 2026, T4127 defines K5P using the
+  // Alberta 2%-over-8% supplemental structure applied over a
+  // $4,800 threshold. Encoded here as parameters so the calculator
+  // reads them from the pinned package — never hard-coded.
+  //
+  // Structure:
+  //   K5P applies when annualised Alberta tax before K5P exceeds
+  //   `k5pTriggerBase` (2026 draft: $4,800). Formula:
+  //     K5P = k5pRate × (annualisedProvincialTaxBase - k5pTriggerBase)
+  //   with k5pRate = (V_top_of_lowest_bracket - k5pRelief) applied
+  //   to the excess.
+  //
+  // If a payroll year has NO K5P applicable, `k5p` is `null`. The
+  // calculator refuses to run against an Alberta package that
+  // does not carry `k5p` metadata — the value MUST be affirmed
+  // present-or-absent, never silently defaulted to zero (§8 rule).
   provincial: z
     .object({
       brackets: z.array(TaxBracket).min(1),
@@ -200,15 +218,54 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
       bpa: DecimalString,
       /** Provincial lowest rate applied to BPA + TD1P. */
       lowestRate: DecimalString,
+      /**
+       * Alberta K5P specification (§H). Contract:
+       *   • `enabled = true` → the calculator applies K5P per formula
+       *   • `enabled = false` → the calculator explicitly does NOT apply
+       *     K5P this year. This must be a deliberate documented
+       *     choice, never a missing-field default.
+       *   • `triggerBase` and `rate` supply the arithmetic when enabled
+       *     (2026 draft: 4800 / 0.02).
+       * Pending final verification against T4127 122nd/123rd Edition
+       * before dollar calculation ships.
+       */
+      k5p: z.object({
+        enabled: z.boolean(),
+        triggerBase: DecimalString,
+        rate: DecimalString,
+        sourceCitation: z.string(),
+      }),
     })
     .nullable(),
 
   // ---- Rounding rules ----
+  //
+  // Payroll-3B-5B-1c §9 — separate CRA STATUTORY INSTRUCTION from
+  // Spectre IMPLEMENTATION CONVENTION.
+  //
+  //   Statutory instruction (`statutoryInstruction`): the literal
+  //     CRA-published wording (e.g. "nearest cent", "nearest $0.05
+  //     or $0.01 for tax"). Recorded for auditor visibility.
+  //   Implementation convention (`mode`): Spectre's deterministic
+  //     Decimal tie-breaking mode when CRA does not specify one
+  //     (Java-style HALF_UP by default).
+  //
+  // MVP Payroll always rounds to nearest $0.01; nickel-rounding
+  // support is out of MVP. Not tenant-configurable — CRA does not
+  // permit tenants to select tie-breaking behaviour.
   rounding: z.object({
-    /** Rounding mode for CPP / EI / tax withholding cents. */
+    /** Deterministic tie-breaking mode Spectre uses when CRA is silent. */
     mode: z.enum(["HALF_UP", "HALF_EVEN", "TRUNCATE"]),
     /** Rounding for total net pay cents. */
     netPayMode: z.enum(["HALF_UP", "HALF_EVEN", "TRUNCATE"]),
+    /**
+     * Literal CRA-published rounding wording, recorded verbatim for
+     * auditor visibility. Never used to select a tie-breaking mode —
+     * that comes from `mode` / `netPayMode` above.
+     * Example: "T4127 §6: CPP contributions rounded to the nearest
+     * cent; nearest $0.05 or $0.01 permitted for final tax."
+     */
+    statutoryInstruction: z.string(),
   }),
 });
 export type CanadianPayrollStatutoryParamsV1 = z.infer<typeof CanadianPayrollStatutoryParamsV1>;

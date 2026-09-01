@@ -1,0 +1,138 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "CRA Payroll Deductions Online Calculator (PDOC)",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://apps.cra-arc.gc.ca/ebci/rhpd/beta/entry",
+  "sourceRetrievedAt": null,
+  "sourceRetrievedBy": null,
+  "verificationNote": "REQUIRED_HUMAN_STEP — this fixture holds ONE complete Alberta ordinary-Employee PDOC gross-to-net example that becomes the primary red test for 3B-5B-2. Founder / a Payroll operator must run each scenario through PDOC (or reference an explicit T4127/T4032 worked example) and paste the expected results below. Never derive expected values from Spectre code — that would be circular per §13. The `cases[]` include the FULL input shape and the expected result shape; expected numeric fields are marked SOURCE_PENDING_PDOC_TRANSCRIPTION until PDOC output is captured.",
+  "howToTranscribe": [
+    "1. Open PDOC at the URL above.",
+    "2. Select the pay-period date from the case's `inputs.payDate` (H1 → any Jan 1 – Jun 30 2026 date; H2 → any Jul 1 – Dec 31 2026 date).",
+    "3. Select 'Alberta' as province of employment.",
+    "4. Select the pay frequency from `inputs.payFrequency`.",
+    "5. Enter gross earnings from `inputs.grossEarnings`.",
+    "6. Enter TD1 federal claim from `inputs.tdCredits.federalClaim` and TD1AB from `inputs.tdCredits.provincialClaim`.",
+    "7. Enter YTD figures if the case supplies `inputs.priorYtd`.",
+    "8. Read PDOC's calculated CPP, CPP2, EI, federal tax, Alberta tax, net pay values.",
+    "9. Paste them into the case's `expected.*` fields verbatim.",
+    "10. Update `sourceRetrievedAt` (YYYY-MM-DD) and `sourceRetrievedBy` (\"pdoc-transcribed\")."
+  ],
+  "cases": [
+    {
+      "id": "pdoc-basic-hourly-biweekly-alberta-h1",
+      "description": "Basic ordinary Alberta hourly Employee, biweekly, mid-year 2026 H1, no prior YTD, default TD1 (federal BPA + Alberta BPA only), no additional tax.",
+      "inputs": {
+        "packageWindow": "2026-H1",
+        "province": "AB",
+        "payFrequency": "BIWEEKLY",
+        "payDate": "2026-03-13",
+        "grossEarnings": "2000.00",
+        "insurableEarnings": "2000.00",
+        "pensionableEarnings": "2000.00",
+        "tdCredits": {
+          "federalClaim": "16452.00",
+          "provincialClaim": "22769.00",
+          "additionalFederalTaxAmount": "0",
+          "additionalProvincialTaxAmount": "0",
+          "claimZeroFederal": false,
+          "claimZeroProvincial": false,
+          "totalIncomeLessThanClaim": false
+        },
+        "priorYtd": null
+      },
+      "expected": {
+        "cppEeBase": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "cppEeFirstAdd": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "cppEeCombined": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "cpp2Ee": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "eiEe": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "netPay": "SOURCE_PENDING_PDOC_TRANSCRIPTION"
+      }
+    },
+    {
+      "id": "pdoc-custom-td1-alberta-h2",
+      "description": "Alberta Employee with a NON-BPA-only TD1 claim (higher federal TCP + higher Alberta TCP).",
+      "inputs": {
+        "packageWindow": "2026-H2",
+        "province": "AB",
+        "payFrequency": "BIWEEKLY",
+        "payDate": "2026-09-11",
+        "grossEarnings": "2000.00",
+        "insurableEarnings": "2000.00",
+        "pensionableEarnings": "2000.00",
+        "tdCredits": {
+          "federalClaim": "20000.00",
+          "provincialClaim": "26000.00",
+          "additionalFederalTaxAmount": "0",
+          "additionalProvincialTaxAmount": "0",
+          "claimZeroFederal": false,
+          "claimZeroProvincial": false,
+          "totalIncomeLessThanClaim": false
+        },
+        "priorYtd": null
+      },
+      "expected": {
+        "cppEeBase": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "cppEeFirstAdd": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "cpp2Ee": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "eiEe": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "netPay": "SOURCE_PENDING_PDOC_TRANSCRIPTION"
+      }
+    },
+    {
+      "id": "pdoc-additional-tax-alberta",
+      "description": "Alberta Employee with `additionalFederalTaxAmount = 50.00` and `additionalProvincialTaxAmount = 25.00`. Proves the additional-tax amounts are added AFTER `T4` / `T4Prov`, never modifying the formula base.",
+      "inputs": {
+        "packageWindow": "2026-H1",
+        "province": "AB",
+        "payFrequency": "BIWEEKLY",
+        "payDate": "2026-04-24",
+        "grossEarnings": "2000.00",
+        "tdCredits": {
+          "federalClaim": "16452.00",
+          "provincialClaim": "22769.00",
+          "additionalFederalTaxAmount": "50.00",
+          "additionalProvincialTaxAmount": "25.00",
+          "claimZeroFederal": false,
+          "claimZeroProvincial": false,
+          "totalIncomeLessThanClaim": false
+        }
+      },
+      "expected": {
+        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "notes": "Additional-tax amounts must appear as a delta over the corresponding baseline scenario `pdoc-basic-hourly-biweekly-alberta-h1` — proof of the 'added after formula' contract."
+      }
+    },
+    {
+      "id": "pdoc-zero-claim-more-than-one-employer",
+      "description": "Alberta Employee with `claimZeroFederal = true` (i.e. more-than-one-employer TD1 checkbox). Federal claim = 0 → no BPA credit.",
+      "inputs": {
+        "packageWindow": "2026-H1",
+        "province": "AB",
+        "payFrequency": "BIWEEKLY",
+        "payDate": "2026-05-08",
+        "grossEarnings": "2000.00",
+        "tdCredits": {
+          "federalClaim": "0",
+          "provincialClaim": "22769.00",
+          "additionalFederalTaxAmount": "0",
+          "additionalProvincialTaxAmount": "0",
+          "claimZeroFederal": true,
+          "claimZeroProvincial": false,
+          "totalIncomeLessThanClaim": false
+        }
+      },
+      "expected": {
+        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
+        "notes": "Federal withholding should be materially higher than the baseline (no BPA credit applied)."
+      }
+    }
+  ]
+}
