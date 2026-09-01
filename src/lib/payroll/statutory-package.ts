@@ -140,21 +140,28 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
 
   // ---- Employment Insurance ----
   //
-  // Store the CRA-published employer maximum explicitly (§13 rule);
-  // do not derive `1.4 × employee` — record the multiplier as
-  // documented metadata only.
+  // Payroll-3B-5B-2b CORRECTION (2026-09-02) — the CRA operational
+  // contract for the standard (non-reduced) employer is:
+  //   employerEi = HALF_UP round(actualEmployeeEiWithheld × employerMultiplier, 2)
+  // subject to the employer's own annual maximum (safety invariant).
+  // The nominal `rateER` (2.282%) exists so the annual employer max
+  // can be recomputed / validated, but MUST NOT be independently
+  // multiplied against current-period insurable earnings after the
+  // employee premium has been calculated. The EI Premium Reduction
+  // Program assigns per-employer multipliers OTHER than 1.4 to
+  // qualifying employers; per-club overrides land in a future slice.
   ei: z.object({
     /** Maximum Insurable Earnings (MIE), CAD. */
     mie: DecimalString,
     /** Employee EI premium rate (decimal). Quebec has a separate rate. */
     rateEE: DecimalString,
-    /** Employer EI premium rate (decimal). Published by CRA. */
+    /** Nominal employer EI rate. RETAINED for validation / annual reconciliation; the calculator does NOT independently multiply this against per-period insurable earnings (see doc block above). */
     rateER: DecimalString,
     /** Employee annual maximum premium, from CRA. */
     maxAnnualPremiumEE: DecimalString,
-    /** Employer annual maximum premium, from CRA. */
+    /** Employer annual maximum premium, from CRA. Standard = maxAnnualPremiumEE × employerMultiplier ≈ 1123.07 × 1.4 = 1572.298 → 1572.30. */
     maxAnnualPremiumER: DecimalString,
-    /** Employer/employee multiplier documentation (typically 1.4). Metadata only — not used in maximum lookups. */
+    /** Standard employer/employee multiple — 1.4 for the ordinary non-reduced employer. THE OPERATIVE calculator input for employer EI. Per-employer reductions require a future slice. */
     employerMultiplier: DecimalString,
   }),
 

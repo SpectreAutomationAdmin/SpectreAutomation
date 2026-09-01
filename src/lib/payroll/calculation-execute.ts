@@ -184,6 +184,7 @@ export async function executeEarningsAndStatutory(
         rateER:             eiParams.rateER,
         maxAnnualPremiumEE: eiParams.maxAnnualPremiumEE,
         maxAnnualPremiumER: eiParams.maxAnnualPremiumER,
+        employerMultiplier: eiParams.employerMultiplier,
       },
     });
 

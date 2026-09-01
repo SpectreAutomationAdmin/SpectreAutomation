@@ -115,7 +115,7 @@ async function pdocScenario(payDate: Date) {
   // would be 1 and CPP would incorrectly zero out (YBE/1 exceeds PI).
   const taxYear = payDate.getUTCFullYear();
   const yearStart = utc(taxYear, 1, 4); // anchor Sunday for biweekly cadence
-  let pp: Awaited<ReturnType<typeof db>["payrollPayPeriod"]["create"]> | null = null;
+  let pp: { id: string } | null = null;
   for (let seq = 1; seq <= 26; seq++) {
     const start = new Date(yearStart.getTime() + (seq - 1) * 14 * 86400_000);
     const end   = new Date(start.getTime() + 13 * 86400_000);
