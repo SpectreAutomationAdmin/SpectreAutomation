@@ -213,15 +213,27 @@ async function main() {
   const paId = await ensureUser("fixture.pa@spectre.test", "Fixture Payroll Admin", "PAYROLL_ADMIN", clubId);
   const ctlId = await ensureUser("fixture.controller@spectre.test", "Fixture Controller", "CONTROLLER", clubId);
 
-  // Resolve a SUPER_ADMIN principal to run authorized service calls.
-  const superAdmin = await prisma.user.findFirst({
+  // Resolve an authorized principal to run the fixture. Prefer a
+  // SUPER_ADMIN (platform-scoped); otherwise fall back to a
+  // CLUB_ADMIN on the target club (CLUB_ADMIN holds payroll:run +
+  // payroll:config:write which are the two permissions we need).
+  let authUser = await prisma.user.findFirst({
     where: { role: "SUPER_ADMIN" }, include: { clubRoles: true },
   });
-  if (!superAdmin) throw new Error("no SUPER_ADMIN user available; seed one before running this fixture");
+  if (!authUser) {
+    const clubAdminLink = await prisma.userClubRole.findFirst({
+      where: { clubId, roleKey: "CLUB_ADMIN" },
+      include: { user: { include: { clubRoles: true } } },
+    });
+    if (!clubAdminLink) {
+      throw new Error(`no SUPER_ADMIN and no CLUB_ADMIN on club ${clubId}; cannot run fixture`);
+    }
+    authUser = clubAdminLink.user;
+  }
   const principal: Principal = {
-    id: superAdmin.id, name: superAdmin.name, email: superAdmin.email,
-    status: superAdmin.status,
-    memberships: superAdmin.clubRoles.map((r) => ({ clubId: r.clubId, roleKey: r.roleKey as RoleKey })),
+    id: authUser.id, name: authUser.name, email: authUser.email,
+    status: authUser.status,
+    memberships: authUser.clubRoles.map((r) => ({ clubId: r.clubId, roleKey: r.roleKey as RoleKey })),
     activeClubId: null, memberId: null,
   };
 
