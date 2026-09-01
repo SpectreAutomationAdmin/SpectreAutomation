@@ -419,9 +419,19 @@ The Spectre-side HALF_UP convention is a deterministic choice for tie-breaks whe
 Spectre's decomposition of Factor C into base + first-additional serves TWO downstream consumers:
 
 ```
-baseShare       = C × (baseRateEE / combinedRateEE)         // 0.0495/0.0595 — unrounded
-deductionBase   = HALF_UP round(baseShare, 2)               // persists on PayrollBatchEmployee
-deductionFirst  = round(C, 2) − deductionBase               // residual, persists
+// Payroll-3B-5B-2b (2026-09-01) — CORRECTION: independent-rate rounding.
+// Prior text rounded baseShare first and made firstAdd the residual.
+// PDOC Scenario 1 diagnostic exposes that CRA's "CPP additional-
+// contribution deduction" is the first-additional component rounded
+// AT ITS OWN RATE (0.0100), not derived from the ratio. Under the
+// old rule Spectre produced 18.66; PDOC published 18.65. The
+// corrected order matches PDOC exactly.
+pensionableAbove = max(0, PI - ybe/P)                        // subject to prorated combined cap
+combined_raw     = 0.0595 × pensionableAbove                 // subject to prorated combined cap
+firstAdd_raw     = 0.0100 × pensionableAbove                 // subject to prorated combined cap (proportional under cap)
+deductionCombined   = HALF_UP round(combined_raw, 2)
+deductionFirstAdd   = HALF_UP round(firstAdd_raw, 2)
+deductionBase       = deductionCombined − deductionFirstAdd  // residual — preserves invariant
 ```
 
 | Consumer | Uses |
