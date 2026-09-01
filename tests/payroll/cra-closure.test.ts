@@ -431,16 +431,120 @@ describe("Payroll-3B-5B-1c — golden fixture files present", () => {
       expect(c.expected).toBeDefined();
     }
   });
+});
 
-  // Payroll-3B-5B-1d §13 — enforce zero pending markers in the
-  // PDOC fixture ONCE the human operator has transcribed values.
-  // Marked `.todo` today because the development environment
-  // cannot reach CRA PDOC (§11); the operator worksheet at
-  // docs/payroll/pdoc-operator-worksheet-2026.md contains the
-  // exact scenarios. When transcription is committed, remove
-  // `.todo` in the same commit so this test enforces the invariant
-  // for every subsequent slice.
-  it.todo("pdoc fixture contains no SOURCE_PENDING_PDOC_TRANSCRIPTION or AWAITING_VERIFICATION markers");
+// ------------------------------------------------------------
+// Payroll-3B-5B-2 Pre-Calc Gate — PDOC fixture integrity
+// (was `it.todo` in 3B-5B-1d; now active. Founder ran the four
+// scenarios through CRA PDOC on 2026-08-31 and transcribed the
+// official CRA-produced expected values into the fixture.)
+// ------------------------------------------------------------
+describe("pdoc-fixture-integrity", () => {
+  const fixturesDir = join(process.cwd(), "tests/payroll/fixtures/2026/ca-ab");
+  const fixture = JSON.parse(readFileSync(join(fixturesDir, "pdoc-gross-to-net-2026.json"), "utf8"));
+
+  // Required for EVERY scenario. These are the "seven golden fields"
+  // the brief specifies (plus the two mandatory diagnostics).
+  const REQUIRED_GOLDEN_FIELDS = [
+    "cppEeCombined",
+    "cpp2Ee",
+    "eiEe",
+    "federalTax",
+    "provincialTax",
+    "totalDeductions",
+    "netPay",
+  ] as const;
+  const REQUIRED_DIAGNOSTICS = [
+    "cppAdditionalContributionDeduction",
+    "payPeriodTaxableIncome",
+  ] as const;
+
+  it("fixture provenance names CRA PDOC as the source authority and carries a founder-run 2026-08-31 retrieval date", () => {
+    expect(fixture.sourceAuthority).toMatch(/CRA Payroll Deductions Online Calculator/);
+    expect(fixture.sourceAuthority).toMatch(/PDOC/);
+    expect(fixture.sourceRetrievedAt).toBe("2026-08-31");
+    expect(fixture.sourceRetrievedBy).toMatch(/founder-run-pdoc-independent/);
+    // Provenance MUST state the values are NOT Spectre-generated.
+    expect(fixture.verificationNote).toMatch(/NOT derived from Spectre code/);
+    expect(fixture.verificationNote).toMatch(/NOT derived from the future Spectre gross-to-net calculator/);
+    // Provenance MUST state the CRA PDFs contained blank Employee /
+    // Employer names (no PII stored).
+    expect(fixture.verificationNote).toMatch(/BLANK Employee-name and Employer-name fields/);
+  });
+  it("fixture carries an immutability contract forbidding calculator-driven rewrites", () => {
+    expect(fixture.immutabilityContract).toMatch(/IMMUTABLE test truth/);
+    expect(fixture.immutabilityContract).toMatch(/MUST NEVER rewrite, regenerate, or 'correct'/);
+    expect(fixture.immutabilityContract).toMatch(/Adjusting the fixture to make the calculator pass is prohibited/);
+  });
+  it("fixture contains ZERO SOURCE_PENDING_PDOC_TRANSCRIPTION or AWAITING_VERIFICATION markers", () => {
+    const raw = readFileSync(join(fixturesDir, "pdoc-gross-to-net-2026.json"), "utf8");
+    expect(raw).not.toContain("SOURCE_PENDING_PDOC_TRANSCRIPTION");
+    expect(raw).not.toContain("AWAITING_VERIFICATION");
+  });
+  it("fixture holds exactly the four founder-authorised scenarios by id", () => {
+    const ids = fixture.cases.map((c: { id: string }) => c.id).sort();
+    expect(ids).toEqual([
+      "pdoc-additional-tax-alberta",
+      "pdoc-basic-hourly-biweekly-alberta-h1",
+      "pdoc-custom-td1-alberta-h2",
+      "pdoc-zero-claim-more-than-one-employer",
+    ]);
+  });
+  it.each(REQUIRED_GOLDEN_FIELDS)("every scenario supplies golden field `%s` as an exact decimal-currency string", (field) => {
+    for (const c of fixture.cases) {
+      const value = c.expected[field];
+      expect(value, `scenario ${c.id} missing golden field ${field}`).toBeDefined();
+      // Exact decimal currency, two decimal places (e.g. "163.23" or "0.00").
+      expect(value, `scenario ${c.id}.${field} not exact decimal currency`).toMatch(/^\d+\.\d{2}$/);
+    }
+  });
+  it.each(REQUIRED_DIAGNOSTICS)("every scenario supplies diagnostic `%s` as an exact decimal-currency string", (field) => {
+    for (const c of fixture.cases) {
+      const value = c.expected[field];
+      expect(value, `scenario ${c.id} missing diagnostic ${field}`).toBeDefined();
+      expect(value, `scenario ${c.id}.${field} not exact decimal currency`).toMatch(/^\d+\.\d{2}$/);
+    }
+  });
+  it("scenario 3 (additional-tax) preserves the base federal/Alberta tax equal to scenario 1 and reports 75.00 additional-tax separately", () => {
+    const s1 = fixture.cases.find((c: { id: string }) => c.id === "pdoc-basic-hourly-biweekly-alberta-h1");
+    const s3 = fixture.cases.find((c: { id: string }) => c.id === "pdoc-additional-tax-alberta");
+    expect(s3.expected.federalTax).toBe(s1.expected.federalTax);
+    expect(s3.expected.provincialTax).toBe(s1.expected.provincialTax);
+    expect(s3.expected.additionalTaxTotal).toBe("75.00");
+    // totalIncomeTaxDeductions = federalTax + provincialTax + additionalTaxTotal.
+    const sum = (Number(s3.expected.federalTax) + Number(s3.expected.provincialTax) + Number(s3.expected.additionalTaxTotal)).toFixed(2);
+    expect(s3.expected.totalIncomeTaxDeductions).toBe(sum);
+  });
+  it("scenario 4 (more-than-one-employer) preserves the semantic claimZeroFederal input and shows a materially higher federal withholding", () => {
+    const s1 = fixture.cases.find((c: { id: string }) => c.id === "pdoc-basic-hourly-biweekly-alberta-h1");
+    const s4 = fixture.cases.find((c: { id: string }) => c.id === "pdoc-zero-claim-more-than-one-employer");
+    // Semantic condition is preserved (not reduced to a numeric zero on federal TD1 alone).
+    expect(s4.inputs.tdCredits.claimZeroFederal).toBe(true);
+    // Federal is materially higher because no BPA credit is applied.
+    expect(Number(s4.expected.federalTax)).toBeGreaterThan(Number(s1.expected.federalTax));
+    // Alberta unchanged from scenario 1 (Alberta TD1 remains at BPA).
+    expect(s4.expected.provincialTax).toBe(s1.expected.provincialTax);
+  });
+  it("every scenario carries the semantic input contract Payroll-3B-5B-2 will consume (packageWindow + province + payDate + tdCredits shape)", () => {
+    for (const c of fixture.cases) {
+      expect(c.inputs.packageWindow).toMatch(/^2026-H[12]$/);
+      expect(c.inputs.province).toBe("AB");
+      expect(c.inputs.payDate).toMatch(/^2026-\d{2}-\d{2}$/);
+      expect(c.inputs.payFrequency).toBe("BIWEEKLY");
+      expect(c.inputs.grossEarnings).toBe("2000.00");
+      expect(c.inputs.tdCredits).toBeDefined();
+      expect(typeof c.inputs.tdCredits.claimZeroFederal).toBe("boolean");
+      expect(typeof c.inputs.tdCredits.claimZeroProvincial).toBe("boolean");
+      expect(typeof c.inputs.tdCredits.totalIncomeLessThanClaim).toBe("boolean");
+    }
+  });
+  it("fixture DOES NOT persist founder / employee / employer / account identifying metadata", () => {
+    const raw = readFileSync(join(fixturesDir, "pdoc-gross-to-net-2026.json"), "utf8");
+    // Sensitive PII placeholders that MUST NOT appear:
+    for (const forbidden of ["sin", "socialInsuranceNumber", "employeeName", "employerName", "employerAccount", "bnNumber", "businessNumber"]) {
+      expect(raw.toLowerCase()).not.toContain(forbidden.toLowerCase());
+    }
+  });
 });
 
 describe("Payroll-3B-5B-1d — H1/H2 resolver boundary (§O)", () => {

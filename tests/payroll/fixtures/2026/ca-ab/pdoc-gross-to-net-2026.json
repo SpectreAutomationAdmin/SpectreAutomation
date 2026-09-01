@@ -1,22 +1,22 @@
 {
   "$schema": "./_provenance-schema.json",
-  "sourceAuthority": "CRA Payroll Deductions Online Calculator (PDOC)",
+  "sourceAuthority": "CRA Payroll Deductions Online Calculator (PDOC) — official government calculator",
   "sourceEffectiveDate": "2026-01-01",
   "sourceUrl": "https://apps.cra-arc.gc.ca/ebci/rhpd/beta/entry",
-  "sourceRetrievedAt": null,
-  "sourceRetrievedBy": null,
-  "verificationNote": "REQUIRED_HUMAN_STEP — this fixture holds ONE complete Alberta ordinary-Employee PDOC gross-to-net example that becomes the primary red test for 3B-5B-2. Founder / a Payroll operator must run each scenario through PDOC (or reference an explicit T4127/T4032 worked example) and paste the expected results below. Never derive expected values from Spectre code — that would be circular per §13. The `cases[]` include the FULL input shape and the expected result shape; expected numeric fields are marked SOURCE_PENDING_PDOC_TRANSCRIPTION until PDOC output is captured.",
-  "howToTranscribe": [
+  "sourceRetrievedAt": "2026-08-31",
+  "sourceRetrievedBy": "founder-run-pdoc-independent",
+  "verificationNote": "GOLDEN FIXTURE — INDEPENDENTLY GENERATED. The `expected` numeric values below were produced by the CRA Payroll Deductions Online Calculator (PDOC), the Government of Canada's official reference calculator. The founder ran each of the four scenarios through PDOC on 2026-08-31 and manually transcribed the resulting `CPP`, `CPP2`, `EI`, `federal tax`, `Alberta tax`, `total deductions`, `net pay`, `CPP additional-contribution deduction`, and `taxable income for pay period` values from the CRA-produced result PDFs into this file. These values are NOT derived from Spectre code, are NOT derived from the future Spectre gross-to-net calculator, and MUST NOT be regenerated from Spectre output. The Spectre calculator is measured AGAINST these numbers — the fixture is the source of truth for correctness. Any future slice that adjusts these expected values must (a) re-run the scenario through PDOC, (b) attach the fresh PDOC PDF as evidence, and (c) update `sourceRetrievedAt` accordingly. The CRA PDFs contained BLANK Employee-name and Employer-name fields — no founder / employee / employer / account identifier is stored in this fixture.",
+  "immutabilityContract": "These golden expected values are IMMUTABLE test truth. The future gross-to-net calculator (3B-5B-2) MUST be compared against these numbers and MUST NEVER rewrite, regenerate, or 'correct' them. A calculator run that disagrees with a PDOC-verified expected value is a defect in the CALCULATOR, not in the fixture. Adjusting the fixture to make the calculator pass is prohibited.",
+  "howToVerify": [
     "1. Open PDOC at the URL above.",
-    "2. Select the pay-period date from the case's `inputs.payDate` (H1 → any Jan 1 – Jun 30 2026 date; H2 → any Jul 1 – Dec 31 2026 date).",
-    "3. Select 'Alberta' as province of employment.",
+    "2. Select 'Alberta' as province of employment.",
+    "3. Select the pay-period date from the case's `inputs.payDate`.",
     "4. Select the pay frequency from `inputs.payFrequency`.",
     "5. Enter gross earnings from `inputs.grossEarnings`.",
     "6. Enter TD1 federal claim from `inputs.tdCredits.federalClaim` and TD1AB from `inputs.tdCredits.provincialClaim`.",
-    "7. Enter YTD figures if the case supplies `inputs.priorYtd`.",
-    "8. Read PDOC's calculated CPP, CPP2, EI, federal tax, Alberta tax, net pay values.",
-    "9. Paste them into the case's `expected.*` fields verbatim.",
-    "10. Update `sourceRetrievedAt` (YYYY-MM-DD) and `sourceRetrievedBy` (\"pdoc-transcribed\")."
+    "7. For scenario `pdoc-zero-claim-more-than-one-employer`, tick the 'This employee has more than one employer or payer at the same time' box which forces federal claim to $0 with no BPA credit.",
+    "8. For scenario `pdoc-additional-tax-alberta`, enter Additional Federal Tax = 50.00 and Additional Provincial Tax = 25.00.",
+    "9. Confirm PDOC's calculated CPP, CPP2, EI, federal tax, Alberta tax, total-deductions, net-pay, CPP additional-contribution deduction, and pay-period taxable income match the `expected` block below."
   ],
   "cases": [
     {
@@ -42,19 +42,20 @@
         "priorYtd": null
       },
       "expected": {
-        "cppEeBase": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "cppEeFirstAdd": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "cppEeCombined": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "cpp2Ee": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "eiEe": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "netPay": "SOURCE_PENDING_PDOC_TRANSCRIPTION"
+        "cppEeCombined": "110.99",
+        "cpp2Ee": "0.00",
+        "eiEe": "32.60",
+        "federalTax": "163.23",
+        "provincialTax": "78.45",
+        "totalDeductions": "385.27",
+        "netPay": "1614.73",
+        "cppAdditionalContributionDeduction": "18.65",
+        "payPeriodTaxableIncome": "1981.35"
       }
     },
     {
       "id": "pdoc-custom-td1-alberta-h2",
-      "description": "Alberta Employee with a NON-BPA-only TD1 claim (higher federal TCP + higher Alberta TCP).",
+      "description": "Alberta Employee with a NON-BPA-only TD1 claim (higher federal TCP + higher Alberta TCP), biweekly, 2026 H2 (post-July 1).",
       "inputs": {
         "packageWindow": "2026-H2",
         "province": "AB",
@@ -75,24 +76,28 @@
         "priorYtd": null
       },
       "expected": {
-        "cppEeBase": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "cppEeFirstAdd": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "cpp2Ee": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "eiEe": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "netPay": "SOURCE_PENDING_PDOC_TRANSCRIPTION"
+        "cppEeCombined": "110.99",
+        "cpp2Ee": "0.00",
+        "eiEe": "32.60",
+        "federalTax": "144.12",
+        "provincialTax": "68.51",
+        "totalDeductions": "356.22",
+        "netPay": "1643.78",
+        "cppAdditionalContributionDeduction": "18.65",
+        "payPeriodTaxableIncome": "1981.35"
       }
     },
     {
       "id": "pdoc-additional-tax-alberta",
-      "description": "Alberta Employee with `additionalFederalTaxAmount = 50.00` and `additionalProvincialTaxAmount = 25.00`. Proves the additional-tax amounts are added AFTER `T4` / `T4Prov`, never modifying the formula base.",
+      "description": "Alberta Employee with `additionalFederalTaxAmount = 50.00` and `additionalProvincialTaxAmount = 25.00`. Proves the additional-tax amounts are added AFTER `T4` / `T4Prov`, never modifying the formula base. Independent CRA result preserves the base federal + Alberta tax at 163.23 / 78.45 (identical to scenario 1) and separately reports the additional-tax total of 75.00.",
       "inputs": {
         "packageWindow": "2026-H1",
         "province": "AB",
         "payFrequency": "BIWEEKLY",
         "payDate": "2026-04-24",
         "grossEarnings": "2000.00",
+        "insurableEarnings": "2000.00",
+        "pensionableEarnings": "2000.00",
         "tdCredits": {
           "federalClaim": "16452.00",
           "provincialClaim": "22769.00",
@@ -101,37 +106,57 @@
           "claimZeroFederal": false,
           "claimZeroProvincial": false,
           "totalIncomeLessThanClaim": false
-        }
+        },
+        "priorYtd": null
       },
       "expected": {
-        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "notes": "Additional-tax amounts must appear as a delta over the corresponding baseline scenario `pdoc-basic-hourly-biweekly-alberta-h1` — proof of the 'added after formula' contract."
+        "cppEeCombined": "110.99",
+        "cpp2Ee": "0.00",
+        "eiEe": "32.60",
+        "federalTax": "163.23",
+        "provincialTax": "78.45",
+        "additionalTaxTotal": "75.00",
+        "totalIncomeTaxDeductions": "316.68",
+        "totalDeductions": "460.27",
+        "netPay": "1539.73",
+        "cppAdditionalContributionDeduction": "18.65",
+        "payPeriodTaxableIncome": "1981.35",
+        "notes": "Do NOT combine the additional 75.00 into the base federalTax / provincialTax fields. The independent CRA result preserves federalTax = 163.23 (identical to scenario 1), provincialTax = 78.45 (identical to scenario 1), and reports additionalTaxTotal = 75.00 separately. totalIncomeTaxDeductions = federalTax + provincialTax + additionalTaxTotal = 316.68."
       }
     },
     {
       "id": "pdoc-zero-claim-more-than-one-employer",
-      "description": "Alberta Employee with `claimZeroFederal = true` (i.e. more-than-one-employer TD1 checkbox). Federal claim = 0 → no BPA credit.",
+      "description": "Alberta Employee with `claimZeroFederal = true` — the more-than-one-employer / payer TD1 checkbox that forces federal claim to $0 with no federal BPA credit. Alberta TD1 remains at BPA. This is NOT merely `federal TD1 = 0`: it is the semantic 'employee has claimed federal amounts elsewhere so this employer must not apply the BPA credit'.",
       "inputs": {
         "packageWindow": "2026-H1",
         "province": "AB",
         "payFrequency": "BIWEEKLY",
         "payDate": "2026-05-08",
         "grossEarnings": "2000.00",
+        "insurableEarnings": "2000.00",
+        "pensionableEarnings": "2000.00",
         "tdCredits": {
-          "federalClaim": "0",
+          "federalClaim": "0.00",
           "provincialClaim": "22769.00",
           "additionalFederalTaxAmount": "0",
           "additionalProvincialTaxAmount": "0",
           "claimZeroFederal": true,
           "claimZeroProvincial": false,
           "totalIncomeLessThanClaim": false
-        }
+        },
+        "priorYtd": null
       },
       "expected": {
-        "federalTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "provincialTax": "SOURCE_PENDING_PDOC_TRANSCRIPTION",
-        "notes": "Federal withholding should be materially higher than the baseline (no BPA credit applied)."
+        "cppEeCombined": "110.99",
+        "cpp2Ee": "0.00",
+        "eiEe": "32.60",
+        "federalTax": "251.82",
+        "provincialTax": "78.45",
+        "totalDeductions": "473.86",
+        "netPay": "1526.14",
+        "cppAdditionalContributionDeduction": "18.65",
+        "payPeriodTaxableIncome": "1981.35",
+        "notes": "Federal withholding is materially higher than scenario 1 (251.82 vs 163.23 — a +88.59 delta) because no federal BPA credit is applied. Alberta withholding is unchanged from scenario 1 because Alberta TD1 remains at BPA. The semantic fixture condition MUST be preserved: this represents the employee's more-than-one-employer/payer claim-zero election, not merely a numeric TD1 of zero."
       }
     }
   ]

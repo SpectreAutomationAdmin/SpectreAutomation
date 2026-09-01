@@ -103,6 +103,15 @@ export async function importOpeningBalancesFromCsv(
   input: {
     csvText: string;
     taxYear: number;
+    /**
+     * Payroll-3B-5B-2 pre-calc gate (§15) — REQUIRED cutover boundary
+     * for the whole import. The cutover date is supplied ONCE at the
+     * import-operation level (rather than repeated on every employee
+     * row) — the entire batch represents a single "prior payroll
+     * system ran through this date" event. Applied to every drafted
+     * row. The date MUST live in the same tax year as `taxYear`.
+     */
+    throughPayDate: Date;
     sourceFilename?: string;
   },
 ): Promise<OpeningBalanceImportResult> {
@@ -111,6 +120,19 @@ export async function importOpeningBalancesFromCsv(
 
   if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {
     throw new ValidationError([{ path: "taxYear", message: "Invalid tax year." }]);
+  }
+  if (!(input.throughPayDate instanceof Date) || Number.isNaN(input.throughPayDate.getTime())) {
+    throw new ValidationError([
+      { path: "throughPayDate", message: "throughPayDate is required for opening-balance imports." },
+    ]);
+  }
+  if (input.throughPayDate.getUTCFullYear() !== input.taxYear) {
+    throw new ValidationError([
+      {
+        path: "throughPayDate",
+        message: `throughPayDate (${input.throughPayDate.toISOString().slice(0, 10)}) must be in tax year ${input.taxYear}.`,
+      },
+    ]);
   }
 
   const records = parseCsvRecords(input.csvText);
@@ -196,6 +218,7 @@ export async function importOpeningBalancesFromCsv(
       const view = await createDraftOpeningBalance(principal, clubId, {
         employeeId,
         taxYear: input.taxYear,
+        throughPayDate: input.throughPayDate,
         values: values as OpeningBalanceFields,
         importSource: "CSV",
         notes: input.sourceFilename ? `Imported from ${input.sourceFilename}` : undefined,

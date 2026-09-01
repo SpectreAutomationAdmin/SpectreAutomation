@@ -17,6 +17,11 @@ import { getEmployeePayrollYtd } from "@/lib/payroll/ytd";
 
 const d = (y: number, m: number, day: number) => new Date(Date.UTC(y, m - 1, day));
 
+// Payroll-3B-5B-2 pre-calc gate — every opening balance MUST carry an
+// explicit throughPayDate. Existing tests use start-of-year as the default
+// so any post-Jan-1 POSTED batch qualifies (preserves prior semantics).
+const DEFAULT_CUTOVER = d(2026, 1, 1);
+
 const zeroValues: OpeningBalanceFields = {
   ytdGrossEarnings: "0", ytdTaxableEarnings: "0", ytdPensionableEarnings: "0",
   ytdInsurableEarnings: "0",
@@ -90,7 +95,7 @@ describe("Payroll-3B-5A — opening balances", () => {
   it("createDraft → validate → activate; getActiveOpeningBalance returns the row", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues, importSource: "CSV",
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues, importSource: "CSV",
     });
     expect(draft.status).toBe("DRAFT");
     const validated = await validateOpeningBalance(s.paP, s.clubA.id, draft.id);
@@ -105,11 +110,11 @@ describe("Payroll-3B-5A — opening balances", () => {
   it("activating a new row supersedes the prior ACTIVE row for the same (Club, Employee, taxYear)", async () => {
     const s = await scenario();
     const first = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: zeroValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: zeroValues,
     });
     await activateOpeningBalance(s.paP, s.clubA.id, first.id);
     const second = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     // The second create must not touch the ACTIVE row.
     expect(second.id).not.toBe(first.id);
@@ -139,6 +144,7 @@ describe("Payroll-3B-5A — opening balances", () => {
       createDraftOpeningBalance(s.paP, s.clubA.id, {
         employeeId: s.empA1.id,
         taxYear: 2026,
+        throughPayDate: DEFAULT_CUTOVER,
         values: { ...sampleValues, ytdGrossEarnings: "-1" },
       }),
     ).rejects.toBeInstanceOf(ValidationError);
@@ -146,6 +152,7 @@ describe("Payroll-3B-5A — opening balances", () => {
       createDraftOpeningBalance(s.paP, s.clubA.id, {
         employeeId: s.empA1.id,
         taxYear: 2026,
+        throughPayDate: DEFAULT_CUTOVER,
         values: { ...sampleValues, ytdCppEE: "abc" },
       }),
     ).rejects.toBeInstanceOf(ValidationError);
@@ -155,7 +162,7 @@ describe("Payroll-3B-5A — opening balances", () => {
     const s = await scenario();
     await expect(
       createDraftOpeningBalance(s.paP, s.clubA.id, {
-        employeeId: s.empA1.id, taxYear: 1900, values: zeroValues,
+        employeeId: s.empA1.id, taxYear: 1900, throughPayDate: new Date(Date.UTC(1900, 0, 1)), values: zeroValues,
       }),
     ).rejects.toBeInstanceOf(ValidationError);
   });
@@ -163,10 +170,10 @@ describe("Payroll-3B-5A — opening balances", () => {
   it("draft-refresh on the same tuple updates in-place (idempotent)", async () => {
     const s = await scenario();
     const first = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: zeroValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: zeroValues,
     });
     const refreshed = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     expect(refreshed.id).toBe(first.id);
     expect(Number(refreshed.values.ytdCppEE)).toBe(2372.60);
@@ -178,7 +185,7 @@ describe("Payroll-3B-5A — opening balances", () => {
     const staffP = await principalFor(staff.email);
     await expect(
       createDraftOpeningBalance(staffP, s.clubA.id, {
-        employeeId: s.empA1.id, taxYear: 2026, values: zeroValues,
+        employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: zeroValues,
       }),
     ).rejects.toThrow();
   });
@@ -186,7 +193,7 @@ describe("Payroll-3B-5A — opening balances", () => {
   it("audit — opening-balance events are emitted for create/validate/activate", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     await validateOpeningBalance(s.paP, s.clubA.id, draft.id);
     await activateOpeningBalance(s.paP, s.clubA.id, draft.id);
@@ -205,7 +212,7 @@ describe("Payroll-3B-5A — opening balances", () => {
   it("listOpeningBalances is tenant-scoped", async () => {
     const s = await scenario();
     await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     const rows = await listOpeningBalances(s.paP, s.clubA.id, 2026);
     expect(rows.length).toBe(1);
@@ -227,7 +234,7 @@ describe("Payroll-3B-5A — opening-balance CSV import", () => {
       "E-1002,2026,50000,49000,48000,48000,2820,0,787.20,7100,3900,2820,0,1102.08",
       "E-DOES-NOT-EXIST,2026,1,1,1,1,1,1,1,1,1,1,1,1",
     ].join("\n");
-    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026 });
+    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER });
     expect(r.processed).toBe(3);
     expect(r.createdOrRefreshed).toBe(2);
     expect(r.errors.length).toBe(1);
@@ -246,7 +253,7 @@ describe("Payroll-3B-5A — opening-balance CSV import", () => {
       "employeeNumber,taxYear,ytdGrossEarnings,ytdTaxableEarnings,ytdPensionableEarnings,ytdInsurableEarnings,ytdCppEE,ytdCpp2EE,ytdEiEE,ytdFederalTax,ytdProvincialTax,ytdCppER,ytdCpp2ER,ytdEiER",
       "E-1001,2025,42000,41000,40000,40000,2372.60,0,656.00,5800.00,3200.00,2372.60,0,918.40",
     ].join("\n");
-    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026 });
+    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER });
     expect(r.errors[0].code).toBe("TAX_YEAR_MISMATCH");
     expect(r.createdOrRefreshed).toBe(0);
   });
@@ -255,7 +262,7 @@ describe("Payroll-3B-5A — opening-balance CSV import", () => {
     const s = await scenario();
     const csv = ["employeeNumber,taxYear", "E-1001,2026"].join("\n");
     await expect(
-      importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026 }),
+      importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER }),
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
@@ -266,7 +273,7 @@ describe("Payroll-3B-5A — opening-balance CSV import", () => {
       "E-1001,2026,42000,41000,40000,40000,2372.60,0,656.00,5800.00,3200.00,2372.60,0,918.40",
       "E-BAD,2026,1,1,1,1,1,1,1,1,1,1,1,1",
     ].join("\n");
-    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026 });
+    const r = await importOpeningBalancesFromCsv(s.paP, s.clubA.id, { csvText: csv, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER });
     expect(r.workIntakeItemId).not.toBeNull();
     // Activate the good row.
     await activateOpeningBalance(s.paP, s.clubA.id, r.drafts[0].id);
@@ -286,7 +293,7 @@ describe("Payroll-3B-5A — YTD aggregation contract", () => {
   it("returns opening balance when no batches exist", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     await activateOpeningBalance(s.paP, s.clubA.id, draft.id);
     const ytd = await getEmployeePayrollYtd(s.clubA.id, s.empA1.id, d(2026, 9, 1));
@@ -300,7 +307,7 @@ describe("Payroll-3B-5A — YTD aggregation contract", () => {
   it("excludes DRAFT / PREPARED / CALCULATED / VOIDED batches, and future POSTED", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     await activateOpeningBalance(s.paP, s.clubA.id, draft.id);
 
@@ -353,7 +360,7 @@ describe("Payroll-3B-5A — YTD aggregation contract", () => {
   it("different-tax-year POSTED batches are excluded even when payDate < asOf", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
-      employeeId: s.empA1.id, taxYear: 2026, values: sampleValues,
+      employeeId: s.empA1.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: sampleValues,
     });
     await activateOpeningBalance(s.paP, s.clubA.id, draft.id);
     const pg = await db().payrollPayGroup.create({

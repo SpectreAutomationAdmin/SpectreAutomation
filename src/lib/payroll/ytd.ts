@@ -1,24 +1,29 @@
 // Payroll-3B-5A (2026-08-31) — canonical YTD aggregation service (§20).
+// Payroll-3B-5B-2 pre-calc gate (2026-08-31) — cutover-boundary correction.
 //
 // The exclusion contract is deliberately strict:
-//   ACTIVE PayrollOpeningBalance          — included
-//   POSTED PayrollBatch (payDate < asOf)  — included
-//   PREPARED / CALCULATED / VOIDED / DRAFT batches — EXCLUDED
-//   ANY batch whose payDate.taxYear ≠ target taxYear — EXCLUDED
-//   ANY batch with payDate ≥ asOf         — EXCLUDED
+//   ACTIVE PayrollOpeningBalance                                     — included
+//   POSTED PayrollBatch (opening.throughPayDate < payDate < asOf)    — included (with ACTIVE OB)
+//   POSTED PayrollBatch (payDate < asOf)                             — included (no OB)
+//   PREPARED / CALCULATED / VOIDED / DRAFT batches                   — EXCLUDED
+//   ANY batch whose payDate.taxYear ≠ target taxYear                 — EXCLUDED
+//   ANY batch with payDate ≥ asOf                                    — EXCLUDED
+//   ANY batch with payDate ≤ opening.throughPayDate (if ACTIVE OB)   — EXCLUDED (already in OB)
+//   PRIOR_EMPLOYER opening balance                                   — contributes ZERO
+//
+// If an ACTIVE opening balance has NULL throughPayDate (legacy row),
+// the aggregator throws a hard error. Silent fallbacks to
+// (Dec 31, createdAt, importedAt, taxYear alone) are prohibited per
+// the 3B-5B-2 pre-calc gate rules.
 //
 // Tax year follows PayrollPayPeriod.payDate (per 3B-2 §21). December
 // work paid in January belongs to the January payroll tax year.
-//
-// 3B-5A does not yet implement the POSTED lifecycle — 3B-5B will
-// wire that. The service is nevertheless written to consume it so
-// that the moment posting arrives, YTD reconciles correctly. Until
-// then, the service returns just the ACTIVE opening balance.
 //
 // Zero calculation. Just deterministic aggregation.
 
 import type { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../prisma";
+import { ValidationError } from "../errors";
 import { getActiveOpeningBalance } from "./opening-balance";
 
 export interface EmployeePayrollYtd {
@@ -74,14 +79,20 @@ function addDec(a: string, b: string | Decimal | null | undefined): string {
 
 /**
  * Aggregate an Employee's payroll YTD for a given tax year as-of a
- * pay date. Includes the ACTIVE opening balance + every POSTED
- * PayrollBatch whose payDate < asOf AND whose payDate falls in the
- * same tax year.
+ * pay date.
  *
- * When the batch calculation lands in 3B-5B, this service will pull
- * per-employee POSTED batch totals via `PayrollBatchEmployee` fields
- * that don't exist yet. Until then, the loop is defensive: if the
- * fields are null, they contribute nothing.
+ * Semantics (Payroll-3B-5B-2 pre-calc gate, §5-13):
+ *
+ *   YTD  =  ACTIVE opening balance (if any + kind contributes)
+ *        +  Σ POSTED Spectre PayrollBatch for this employee where:
+ *              payDate > opening.throughPayDate  (if ACTIVE OB exists)
+ *              payDate < asOfPayDate             (current pay never in its own YTD)
+ *              taxYear === current taxYear
+ *              batch.status === "POSTED"         (non-POSTED excluded)
+ *
+ * Refuses (throws ValidationError) when an ACTIVE opening balance
+ * is present but its throughPayDate is null — silent fallbacks to
+ * Dec 31 / createdAt / importedAt / taxYear alone are prohibited.
  */
 export async function getEmployeePayrollYtd(
   clubId: string,
@@ -93,6 +104,24 @@ export async function getEmployeePayrollYtd(
   const opening = await getActiveOpeningBalance(clubId, employeeId, taxYear);
   const openingSourceId = opening?.id ?? null;
   const openingKind = opening?.priorPayrollKind ?? null;
+
+  // Payroll-3B-5B-2 pre-calc gate (§6, §11-13) — ACTIVE opening
+  // balance MUST carry an explicit throughPayDate. If not, refuse
+  // rather than silently defaulting; the alternative is
+  // silently-corrupt YTD (either a boundary of Dec 31 that lets
+  // pre-cutover Spectre batches slip in, or a boundary of Jan 1
+  // that lets every Spectre batch double-count).
+  if (opening !== null && opening.throughPayDate == null) {
+    throw new ValidationError([
+      {
+        path: "openingBalance.throughPayDate",
+        message:
+          `ACTIVE opening balance ${opening.id} (Club ${clubId}, Employee ${employeeId}, taxYear ${taxYear}) ` +
+          "has no throughPayDate. YTD cannot be aggregated. Re-import or manually edit the opening balance with " +
+          "an explicit cutover date before running Payroll.",
+      },
+    ]);
+  }
 
   // Payroll-3B-5B-1b (§9-10): a PRIOR_EMPLOYER opening balance
   // must contribute ZERO to EVERY employer-YTD category — including
@@ -139,16 +168,22 @@ export async function getEmployeePayrollYtd(
     },
   };
 
-  // POSTED batches for this Employee whose payDate is strictly
-  // before asOf AND whose taxYear matches. The `.taxYear` field on
-  // PayrollPayPeriod is authoritative (3B-2 § 21).
+  // POSTED batches for this Employee whose payDate is:
+  //   strictly BEFORE asOf (current pay never in its own YTD)
+  //   strictly AFTER opening.throughPayDate (when ACTIVE OB exists)
+  //   in the same taxYear.
+  // Status filter is POSTED — every non-POSTED lifecycle state
+  // (DRAFT / PREPARED / CALCULATED / VOIDED / etc.) is excluded.
+  const cutover = opening?.throughPayDate ?? null;
   const posted = await prisma.payrollBatch.findMany({
     where: {
       clubId,
       status: "POSTED",
       payPeriod: {
         taxYear,
-        payDate: { lt: asOfPayDate },
+        payDate: cutover
+          ? { lt: asOfPayDate, gt: cutover }   // strict > throughPayDate, strict < asOf
+          : { lt: asOfPayDate },
       },
       employees: { some: { employeeId } },
     },
@@ -160,7 +195,7 @@ export async function getEmployeePayrollYtd(
           id: true,
           grossPay: true,
           netPay: true,
-          // Reserved for 3B-5B — these fields do not exist yet on
+          // Reserved for 3B-5B-2 — these fields do not exist yet on
           // PayrollBatchEmployee; when they land, uncomment and
           // aggregate them here. Explicit list so the future
           // contributor cannot forget one:
@@ -176,7 +211,7 @@ export async function getEmployeePayrollYtd(
     acc.sources.postedBatchIds.push(b.id);
     for (const e of b.employees) {
       acc.ytdGrossEarnings = addDec(acc.ytdGrossEarnings, e.grossPay ?? null);
-      // Remaining YTD fields will accumulate in 3B-5B once
+      // Remaining YTD fields will accumulate in 3B-5B-2 once
       // PayrollBatchEmployee carries them. See comment above.
     }
   }

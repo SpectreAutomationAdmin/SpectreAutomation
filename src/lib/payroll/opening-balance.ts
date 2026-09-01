@@ -66,6 +66,15 @@ export interface OpeningBalanceView {
   taxYear: number;
   status: OpeningBalanceStatus;
   values: OpeningBalanceFields;
+  /**
+   * Payroll-3B-5B-2 pre-calc gate (§6) — cutover boundary.
+   * "This opening balance includes all same-employer payroll
+   * results with pay date <= throughPayDate." The YTD aggregator
+   * refuses to consume an ACTIVE row whose throughPayDate is null.
+   * DB layer allows null for additive-migration compatibility;
+   * application layer REQUIRES it for every new draft.
+   */
+  throughPayDate: Date | null;
   importSource: string | null;
   importedAt: Date | null;
   importedByUserId: string | null;
@@ -135,6 +144,7 @@ function toView(row: Awaited<ReturnType<typeof prisma.payrollOpeningBalance.find
     importedAt: row.importedAt,
     importedByUserId: row.importedByUserId,
     notes: row.notes,
+    throughPayDate: row.throughPayDate,
     supersededAt: row.supersededAt,
     supersededById: row.supersededById,
     activatedAt: row.activatedAt,
@@ -192,6 +202,14 @@ export interface CreateDraftOpeningBalanceInput {
   employeeId: string;
   taxYear: number;
   values: OpeningBalanceFields;
+  /**
+   * Payroll-3B-5B-2 pre-calc gate — REQUIRED cutover boundary.
+   * The date on/before which the opening balance is cumulative.
+   * The YTD aggregator will include Spectre POSTED batches with
+   * strict `payDate > throughPayDate` (and same taxYear). The
+   * date MUST be in the same tax year as `taxYear`.
+   */
+  throughPayDate: Date;
   importSource?: string;
   importBatchId?: string | null;
   notes?: string;
@@ -219,6 +237,25 @@ export async function createDraftOpeningBalance(
   if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {
     throw new ValidationError([{ path: "taxYear", message: "Invalid tax year." }]);
   }
+
+  // Payroll-3B-5B-2 pre-calc gate (§6) — cutover boundary is required
+  // and must live in the same tax year as the balance itself. Refuse
+  // silently absent / cross-year / non-Date values loudly here so a
+  // malformed importer or UI cannot bypass the invariant.
+  if (!(input.throughPayDate instanceof Date) || Number.isNaN(input.throughPayDate.getTime())) {
+    throw new ValidationError([
+      { path: "throughPayDate", message: "throughPayDate is required — the cutover date on/before which this opening balance is cumulative." },
+    ]);
+  }
+  if (input.throughPayDate.getUTCFullYear() !== input.taxYear) {
+    throw new ValidationError([
+      {
+        path: "throughPayDate",
+        message: `throughPayDate (${input.throughPayDate.toISOString().slice(0, 10)}) must be in the same tax year as taxYear (${input.taxYear}).`,
+      },
+    ]);
+  }
+
   const priorPayrollKind: PriorPayrollKind = input.priorPayrollKind ?? "PRIOR_SYSTEM_SAME_EMPLOYER";
   if (!PRIOR_PAYROLL_KINDS.includes(priorPayrollKind)) {
     throw new ValidationError([
@@ -243,6 +280,7 @@ export async function createDraftOpeningBalance(
       where: { id: existing.id },
       data: {
         ...decimalData,
+        throughPayDate: input.throughPayDate,
         importSource: input.importSource ?? existing.importSource,
         importBatchId: input.importBatchId ?? existing.importBatchId,
         notes: input.notes ?? existing.notes,
@@ -257,7 +295,12 @@ export async function createDraftOpeningBalance(
       entityType: ENTITY,
       entityId: updated.id,
       clubId,
-      after: { taxYear: input.taxYear, employeeId: input.employeeId, importSource: input.importSource },
+      after: {
+        taxYear: input.taxYear,
+        employeeId: input.employeeId,
+        importSource: input.importSource,
+        throughPayDate: input.throughPayDate.toISOString().slice(0, 10),
+      },
     });
     return toView(updated);
   }
@@ -269,6 +312,7 @@ export async function createDraftOpeningBalance(
       taxYear: input.taxYear,
       status: "DRAFT",
       ...decimalData,
+      throughPayDate: input.throughPayDate,
       importSource: input.importSource ?? "MANUAL",
       importBatchId: input.importBatchId ?? null,
       notes: input.notes ?? null,

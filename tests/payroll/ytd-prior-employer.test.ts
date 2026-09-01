@@ -15,6 +15,12 @@ import { ValidationError } from "@/lib/errors";
 
 const d = (y: number, m: number, day: number) => new Date(Date.UTC(y, m - 1, day));
 
+// Payroll-3B-5B-2 pre-calc gate — opening balances require an
+// explicit cutover boundary. Prior-employer tests don't care about
+// the boundary itself (they assert kind-based inclusion/exclusion),
+// so start-of-year is a safe default.
+const DEFAULT_CUTOVER = d(2026, 1, 1);
+
 function values(overrides?: Partial<OpeningBalanceFields>): OpeningBalanceFields {
   return {
     ytdGrossEarnings: "40000",
@@ -65,7 +71,7 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
   it("PRIOR_SYSTEM_SAME_EMPLOYER opening balance contributes to CPP/EI YTD", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.club.id, {
-      employeeId: s.emp.id, taxYear: 2026, values: values(),
+      employeeId: s.emp.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: values(),
       priorPayrollKind: "PRIOR_SYSTEM_SAME_EMPLOYER",
     });
     await activateOpeningBalance(s.paP, s.club.id, draft.id);
@@ -79,7 +85,7 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
   it("PRIOR_EMPLOYER contributes ZERO to every employer-YTD category (§9-10)", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.club.id, {
-      employeeId: s.emp.id, taxYear: 2026, values: values(),
+      employeeId: s.emp.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: values(),
       priorPayrollKind: "PRIOR_EMPLOYER",
       priorEmployerId: "BN9-123456789",
     });
@@ -112,7 +118,7 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
     const s = await scenario();
     await expect(
       createDraftOpeningBalance(s.paP, s.club.id, {
-        employeeId: s.emp.id, taxYear: 2026, values: values(),
+        employeeId: s.emp.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: values(),
         priorPayrollKind: "PRIOR_EMPLOYER",
         // no priorEmployerId → refused
       }),
@@ -122,7 +128,7 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
   it("PRIOR_ADJUSTMENT contributes to CPP/EI YTD (same-employer correction)", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.club.id, {
-      employeeId: s.emp.id, taxYear: 2026, values: values(),
+      employeeId: s.emp.id, taxYear: 2026, throughPayDate: DEFAULT_CUTOVER, values: values(),
       priorPayrollKind: "PRIOR_ADJUSTMENT",
     });
     await activateOpeningBalance(s.paP, s.club.id, draft.id);

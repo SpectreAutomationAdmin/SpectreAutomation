@@ -11527,6 +11527,11 @@ model PayrollOpeningBalance {
   employee               Employee @relation(fields: [employeeId], references: [id])
   taxYear                Int
   status                 String   @default("DRAFT")
+  // Payroll-3B-5B-2 pre-calc gate (2026-08-31) — cutover boundary.
+  // See prisma/schema.prisma for the full doc block. Nullable at
+  // the DB layer for additive forward-only migration; REQUIRED at
+  // the application layer for every new draft/validated/active row.
+  throughPayDate         DateTime?
   ytdGrossEarnings        Decimal @default(0)
   ytdTaxableEarnings      Decimal @default(0)
   ytdPensionableEarnings  Decimal @default(0)

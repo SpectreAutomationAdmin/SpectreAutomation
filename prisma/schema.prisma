@@ -11582,6 +11582,17 @@ model PayrollOpeningBalance {
   taxYear                Int
   // DRAFT | VALIDATED | ACTIVE | SUPERSEDED
   status                 String   @default("DRAFT")
+  // Payroll-3B-5B-2 pre-calc gate (2026-08-31) — Cutover boundary.
+  // Required semantic: "this opening balance includes all
+  // same-employer payroll results with pay date <= throughPayDate".
+  // The YTD aggregator uses this to filter Spectre POSTED batches
+  // with `payDate > throughPayDate` when an ACTIVE opening balance
+  // exists, preventing double-counting of any pre-cutover Spectre
+  // batches. Nullable at the DB layer for additive forward-only
+  // migration; REQUIRED at the application layer for every new
+  // draft/validated/active row. YTD refuses to aggregate an ACTIVE
+  // opening balance with a null throughPayDate.
+  throughPayDate         DateTime?
   // ---- YTD numerics (CAD, Decimal). Every field documented so a
   // future contributor cannot add one accidentally without stating
   // its downstream calculation dependency. ----
