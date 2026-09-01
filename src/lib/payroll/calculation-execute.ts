@@ -438,10 +438,15 @@ export async function calculatePayrollBatch(
       : priorBatch.payPeriodId;
 
     // Executive-summary preview per §41 — NO SIN / bank / TD1 / individual employee data.
+    // Payroll-3B-5B-3A closeout — also carries the canonical review
+    // deep-link URL so a mission-control card without a dedicated
+    // CTA still lets the Controller reach the review workspace.
+    const reviewUrl = `/app/admin/payroll/batches/${batchId}`;
     const preview =
       `${payloads.length} employees · pay ${payDateLabel} · ` +
       `gross $${money(totals.gross)} · deductions $${money(totals.deducted)} · ` +
-      `net $${money(totals.net)} · employer contributions $${money(totals.employer)}`;
+      `net $${money(totals.net)} · employer contributions $${money(totals.employer)} · ` +
+      `Review payroll → ${reviewUrl}`;
     const subject = `Payroll ready for final approval · ${dateLabel}`;
 
     finalApprovalItemId = await materialiseFinalApprovalItem({
