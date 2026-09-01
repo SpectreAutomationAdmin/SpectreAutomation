@@ -11428,7 +11428,13 @@ model PayrollBatch {
   payGroup      PayrollPayGroup @relation(fields: [payGroupId], references: [id])
   payPeriodId   String
   payPeriod     PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
-  // DRAFT | PREPARED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
+  // DRAFT | PREPARED | CALCULATED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
+  //
+  // Payroll-3B-5B-2a (2026-08-31) — CALCULATED added between PREPARED
+  // and SUBMITTED_FOR_APPROVAL. The 3B-5B-2b/2c calculator writes
+  // per-employee statutory results and flips the batch to CALCULATED.
+  // The Controller final-approval task materialises OFF the CALCULATED
+  // state, never off PREPARED (per §23 of the pre-calc gate).
   status        String   @default("DRAFT")
   // Sequence within (payGroup, taxYear) - one authoritative batch per
   // period unless a future revision/versioning slice adds sequencing.
@@ -11458,6 +11464,16 @@ model PayrollBatch {
   // same frozen batch reuses this exact package for reproducibility.
   statutoryPackageId String?
   statutoryPackage   PayrollStatutoryPackage? @relation(fields: [statutoryPackageId], references: [id])
+  // Payroll-3B-5B-2a (2026-08-31) — calculation provenance. Set at
+  // CALCULATED by the 3B-5B-2b/2c calculator. Denormalised copies of
+  // the resolved package's `checksum` + `algorithmVersion` are kept
+  // so the result stays fully auditable even if the pinned package
+  // row is later superseded. `calculationVersion` starts at 0 and
+  // increments on each recalculate (before POSTED).
+  calculatedAt          DateTime?
+  calculationVersion    Int       @default(0)
+  algorithmVersion      String?
+  packageChecksum       String?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11748,6 +11764,36 @@ model PayrollBatchEmployee {
   employerCppFirstAdd      Decimal? // employer CPP first-additional
   employerCpp2             Decimal? // employer CPP2
   employerEi               Decimal? // employer EI (typically 1.4 × employee EI, per statutory param)
+  // Payroll-3B-5B-2a (2026-08-31) — additional persisted result fields
+  // added for the Gross-to-Net calculator foundation. All nullable
+  // until the calculator writes them at CALCULATED. Zero arithmetic
+  // happens in 3B-5B-2a; the earnings + statutory calculation ships
+  // in 3B-5B-2b and 3B-5B-2c.
+  //
+  //   deductionCppEeCombined  — persisted convenience column = base
+  //                             + first-additional. Enforces the
+  //                             invariant `base + firstAdd == combined`
+  //                             at read time so downstream YTD /
+  //                             T4 code cannot recompute drift.
+  //   employerCppCombined     — same for the employer side.
+  //   additionalFederalTax    — TD1 additional withholding, kept
+  //                             SEPARATE from `deductionFederalTax`
+  //                             (base statutory tax) per T4127. PDOC
+  //                             Scenario 3 proves this shape.
+  //   additionalProvincialTax — Alberta equivalent, same rule.
+  //   totalEmployeeDeductions — persisted convenience for the paystub
+  //                             + net-pay reconciliation contract.
+  //   ytdSnapshotJson         — per-employee YTD state as it was at
+  //                             the moment the calculator ran. Frozen
+  //                             so the result stays explainable even
+  //                             after later opening-balance edits or
+  //                             POSTED-batch corrections.
+  deductionCppEeCombined   Decimal?
+  employerCppCombined      Decimal?
+  additionalFederalTax     Decimal?
+  additionalProvincialTax  Decimal?
+  totalEmployeeDeductions  Decimal?
+  ytdSnapshotJson          String?
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 

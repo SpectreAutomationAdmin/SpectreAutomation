@@ -11448,7 +11448,8 @@ model PayrollBatch {
   payGroup      PayrollPayGroup @relation(fields: [payGroupId], references: [id])
   payPeriodId   String
   payPeriod     PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
-  // DRAFT | PREPARED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
+  // DRAFT | PREPARED | CALCULATED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
+  // Payroll-3B-5B-2a — see prisma/schema.prisma for CALCULATED rationale.
   status        String   @default("DRAFT")
   // Sequence within (payGroup, taxYear) - one authoritative batch per
   // period unless a future revision/versioning slice adds sequencing.
@@ -11472,6 +11473,11 @@ model PayrollBatch {
   // prisma/schema.prisma for full doc block).
   statutoryPackageId String?
   statutoryPackage   PayrollStatutoryPackage? @relation(fields: [statutoryPackageId], references: [id])
+  // Payroll-3B-5B-2a — calculation provenance. See prisma/schema.prisma.
+  calculatedAt          DateTime?
+  calculationVersion    Int       @default(0)
+  algorithmVersion      String?
+  packageChecksum       String?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11656,6 +11662,14 @@ model PayrollBatchEmployee {
   employerCppFirstAdd      Decimal?
   employerCpp2             Decimal?
   employerEi               Decimal?
+  // Payroll-3B-5B-2a — additional persisted result fields for the
+  // Gross-to-Net calculator. See prisma/schema.prisma for full doc.
+  deductionCppEeCombined   Decimal?
+  employerCppCombined      Decimal?
+  additionalFederalTax     Decimal?
+  additionalProvincialTax  Decimal?
+  totalEmployeeDeductions  Decimal?
+  ytdSnapshotJson          String?
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 

@@ -191,17 +191,29 @@ export async function getEmployeePayrollYtd(
       id: true,
       employees: {
         where: { employeeId },
+        // Payroll-3B-5B-2a (2026-08-31) — full YTD vector now
+        // materialised. Fields land on `PayrollBatchEmployee` in
+        // this slice; the calculator (3B-5B-2b/2c) populates them
+        // when it flips a batch to CALCULATED and, later, POSTED.
         select: {
           id: true,
           grossPay: true,
           netPay: true,
-          // Reserved for 3B-5B-2 — these fields do not exist yet on
-          // PayrollBatchEmployee; when they land, uncomment and
-          // aggregate them here. Explicit list so the future
-          // contributor cannot forget one:
-          //   pensionableEarnings, insurableEarnings, taxableEarnings,
-          //   cppEE, cpp2EE, eiEE, federalTax, provincialTax,
-          //   cppER, cpp2ER, eiER.
+          earningsTaxable: true,
+          earningsPensionable: true,
+          earningsInsurable: true,
+          deductionCppEeBase: true,
+          deductionCppEeFirstAdd: true,
+          deductionCppEeCombined: true,
+          deductionCpp2Ee: true,
+          deductionEiEe: true,
+          deductionFederalTax: true,
+          deductionProvincialTax: true,
+          employerCppBase: true,
+          employerCppFirstAdd: true,
+          employerCppCombined: true,
+          employerCpp2: true,
+          employerEi: true,
         },
       },
     },
@@ -210,9 +222,27 @@ export async function getEmployeePayrollYtd(
   for (const b of posted) {
     acc.sources.postedBatchIds.push(b.id);
     for (const e of b.employees) {
-      acc.ytdGrossEarnings = addDec(acc.ytdGrossEarnings, e.grossPay ?? null);
-      // Remaining YTD fields will accumulate in 3B-5B-2 once
-      // PayrollBatchEmployee carries them. See comment above.
+      // Earnings bases.
+      acc.ytdGrossEarnings       = addDec(acc.ytdGrossEarnings,       e.grossPay              ?? null);
+      acc.ytdTaxableEarnings     = addDec(acc.ytdTaxableEarnings,     e.earningsTaxable       ?? null);
+      acc.ytdPensionableEarnings = addDec(acc.ytdPensionableEarnings, e.earningsPensionable   ?? null);
+      acc.ytdInsurableEarnings   = addDec(acc.ytdInsurableEarnings,   e.earningsInsurable     ?? null);
+      // Employee statutory. CPP base + first-add + combined all
+      // accumulate independently — the calculator persists all
+      // three to preserve the CRA-required T4 Box 16 split.
+      acc.ytdCppEE_Base          = addDec(acc.ytdCppEE_Base,          e.deductionCppEeBase    ?? null);
+      acc.ytdCppEE_FirstAdd      = addDec(acc.ytdCppEE_FirstAdd,      e.deductionCppEeFirstAdd?? null);
+      acc.ytdCppEE               = addDec(acc.ytdCppEE,               e.deductionCppEeCombined?? null);
+      acc.ytdCpp2EE              = addDec(acc.ytdCpp2EE,              e.deductionCpp2Ee       ?? null);
+      acc.ytdEiEE                = addDec(acc.ytdEiEE,                e.deductionEiEe         ?? null);
+      acc.ytdFederalTax          = addDec(acc.ytdFederalTax,          e.deductionFederalTax   ?? null);
+      acc.ytdProvincialTax       = addDec(acc.ytdProvincialTax,       e.deductionProvincialTax?? null);
+      // Employer.
+      acc.ytdCppER_Base          = addDec(acc.ytdCppER_Base,          e.employerCppBase       ?? null);
+      acc.ytdCppER_FirstAdd      = addDec(acc.ytdCppER_FirstAdd,      e.employerCppFirstAdd   ?? null);
+      acc.ytdCppER               = addDec(acc.ytdCppER,               e.employerCppCombined   ?? null);
+      acc.ytdCpp2ER              = addDec(acc.ytdCpp2ER,              e.employerCpp2          ?? null);
+      acc.ytdEiER                = addDec(acc.ytdEiER,                e.employerEi            ?? null);
     }
   }
 
