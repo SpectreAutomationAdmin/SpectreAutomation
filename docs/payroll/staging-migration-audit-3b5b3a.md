@@ -17,7 +17,7 @@ alphanumerically, which matches the intended timeline).
 | 7 | `20260901_payroll3b5b1a_employee_dob_cpp_eligibility` | Payroll-3B-5B-1a | ✅ | Adds `Employee.dateOfBirth`, `EmployeeCppElection`, `EmployeeCppDisabilityStatus`. |
 | 8 | `20260901_payroll3b5b1_statutory_completion` | Payroll-3B-5B-1 | ✅ | Adds YTD split columns on `PayrollOpeningBalance` + `PayrollBatch.statutoryPackageId`. |
 | 9 | `20260901_payroll3b5b1b_cra_verification` | Payroll-3B-5B-1b | ✅ | Adds classification-decoupled `pensionable` / `insurable` columns on `EmployeeAllowance` and `PayrollBatchAllowanceSnapshot`; adds TD1 supplementary columns on `EmployeeTaxProfile`. |
-| 10 | `20260831_payroll3b5b2_opening_balance_cutover` | Payroll-3B-5B-2 pre-calc gate | ✅ | Adds `PayrollOpeningBalance.throughPayDate` (nullable). |
+| 10 | `20260901aa_payroll3b5b2_opening_balance_cutover` | Payroll-3B-5B-2 pre-calc gate | ✅ | Adds `PayrollOpeningBalance.throughPayDate` (nullable). **Renamed from `20260831_…` on 2026-09-01 to fix Prisma migration ordering — the original date sorted before `20260901_payroll3b5a_statutory_ytd_foundation` (which creates the `PayrollOpeningBalance` table), causing `ALTER TABLE … relation does not exist` on the first staging deploy attempt. Rename is safe because the migration had never been recorded on any deployed database.** |
 | 11 | `20260901_payroll3b5b2a_calculation_foundation` | Payroll-3B-5B-2a | ✅ | Adds `PayrollBatch.calculatedAt/calculationVersion/algorithmVersion/packageChecksum` + 5 new statutory result columns on `PayrollBatchEmployee` + `ytdSnapshotJson`. |
 | 12 | `20260902_payroll3b5b2c_calculation_completion` | Payroll-3B-5B-2c | ✅ | Adds `PayrollBatchEmployee.calculationExplanationJson`. |
 
