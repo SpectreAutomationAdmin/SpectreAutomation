@@ -53,6 +53,43 @@ export default async function PayrollProcessPage({
     ? await getDepartmentApprovalStatus(principal, clubId, initialPeriodId)
     : [];
 
+  // Payroll-3B-5B-3A closeout — Controller approval queue. Every
+  // OPEN PAYROLL_FINAL_APPROVAL Work Intake card for this club,
+  // rendered with a real clickable "Review payroll" link that
+  // navigates to /app/admin/payroll/batches/<batchId>. The batchId
+  // is resolved server-side from WorkIntakeOrigin.referenceId —
+  // never parsed from display text, never hard-coded. Executive-
+  // summary preview only; the sanitized payload from the Payroll
+  // orchestrator is used verbatim (no SIN / bank / TD1 amount
+  // exposure per §41 of the earlier slice).
+  const controllerQueueRows = await prisma.workIntakeOrigin.findMany({
+    where: {
+      clubId,
+      kind: "PAYROLL_FINAL_APPROVAL",
+      role: "PRIMARY",
+      workIntakeItem: { status: "OPEN" },
+    },
+    select: {
+      referenceId: true,
+      workIntakeItem: {
+        select: {
+          id: true, displaySubject: true, displayPreview: true, displayReceivedAt: true,
+          workDomain: true, workIntent: true, workSubtype: true,
+        },
+      },
+    },
+    orderBy: { workIntakeItem: { displayReceivedAt: "desc" } },
+    take: 20,
+  });
+  const controllerQueue = controllerQueueRows.map((r) => ({
+    workIntakeItemId: r.workIntakeItem.id,
+    batchId:          r.referenceId,
+    subject:          r.workIntakeItem.displaySubject,
+    preview:          r.workIntakeItem.displayPreview,
+    receivedAtIso:    r.workIntakeItem.displayReceivedAt.toISOString(),
+    reviewHref:       `/app/admin/payroll/batches/${encodeURIComponent(r.referenceId)}`,
+  }));
+
   return (
     <div className="max-w-[1120px]" data-testid="payroll-process-page">
       <header className="mb-spectre-6">
@@ -71,6 +108,45 @@ export default async function PayrollProcessPage({
           arrives in a later release.
         </p>
       </header>
+
+      {controllerQueue.length > 0 && (
+        <section
+          className="mb-spectre-6 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4"
+          data-testid="payroll-controller-queue"
+        >
+          <div
+            className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+            style={{ color: "var(--spectre-text-muted)" }}
+          >
+            Controller · Final approval queue
+          </div>
+          <ul className="mt-3 space-y-3">
+            {controllerQueue.map((c) => (
+              <li
+                key={c.workIntakeItemId}
+                className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-stone-200 bg-white p-3"
+                data-testid={`controller-queue-card:${c.batchId}`}
+              >
+                <div className="flex-1 min-w-[280px]">
+                  <div className="text-sm font-medium" style={{ color: "var(--spectre-text-primary)" }}>
+                    {c.subject}
+                  </div>
+                  <div className="mt-1 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
+                    {c.preview}
+                  </div>
+                </div>
+                <a
+                  href={c.reviewHref}
+                  className="btn btn-primary btn-sm whitespace-nowrap"
+                  data-testid={`controller-queue-review:${c.batchId}`}
+                >
+                  Review payroll
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <PayrollProcessWorkspace
         clubId={clubId}
