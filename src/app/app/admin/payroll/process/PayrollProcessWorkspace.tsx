@@ -230,12 +230,21 @@ export default function PayrollProcessWorkspace({
               </ul>
             </div>
           )}
+          {(batch.status === "PREPARED" || batch.status === "CALCULATED") && (
+            <a
+              href={`/app/admin/payroll/batches/${batch.id}`}
+              className="inline-block text-sm text-emerald-800 hover:underline"
+              data-testid="process-open-review"
+            >
+              Open batch review →
+            </a>
+          )}
           {canRun && batch.status !== "VOIDED" && (
             <button
               type="button"
               onClick={voidBatch}
               disabled={busy}
-              className="text-sm text-red-700 hover:underline"
+              className="text-sm text-red-700 hover:underline ml-4"
               data-testid="process-void"
             >
               Void this batch
