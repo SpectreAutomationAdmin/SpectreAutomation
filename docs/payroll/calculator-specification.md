@@ -150,56 +150,120 @@ EI_EE = min(
 
 `EI_ER` uses `Package.ei.rateER` (2026: 0.02282) and `Package.ei.maxAnnualPremiumER` (2026: 1572.30). The employer multiplier (1.4) is documentation metadata only.
 
-## 9. Federal income tax (T4127 §Federal)
+## 9. Federal income tax (T4127 §Federal) — CORRECTED per Payroll-3B-5B-1d CORRECTION
 
-Full formula chain:
+**Reconciled against T4127's actual K-factor vocabulary.** Prior 3B-5B-1c/1d drafts described `K3` as *"federal CPP2 deduction from taxable income"* — that description is WRONG and is removed here. The CRA T4127 vocabulary is preserved verbatim.
 
-| Variable | Meaning |
-|-|-|
-| `P` | Pay periods per year (§2) |
-| `I` | Gross remuneration this period |
-| `F` | Employee RPP contribution this period |
-| `F1` | Alimony / maintenance this period |
-| `A` | `P × (I − F − F1) + HD − F2 − U1` |
-| `HD` | Annualised deductions from income (as declared) |
-| `F2` | Annualised alimony / maintenance |
-| `U1` | Annualised union dues |
-| `R` | Federal bracket rate for `A` |
-| `K` | Bracket constant K |
-| `K1` | `Package.federal.lowestRate × BPAF` |
-| `BPAF` | Federal BPA (income-tiered per §K1 rule below) |
-| `K2` | `Package.federal.lowestRate × annualised (CPP base + first-additional employee contributions)` |
-| `K2A` | `Package.federal.lowestRate × annualised EI premiums` |
-| `K3` | `Package.federal.cpp2DeductionRate × annualised CPP2` |
-| `K4` | `Package.federal.lowestRate × min(annualised employment income, CEA_MAX)` |
-| `T3` | `(R × A − K) − K1 − K2 − K2A − K3 − K4` |
-| `T4` | `max(0, round(T3 / P) + additionalFederalTaxAmount)` |
+### 9a. Formula variables (T4127 §Federal)
 
-**BPAF tier (Bill C-30 phase-out):**
+| Variable | Meaning | Source in T4127 |
+|-|-|-|
+| `P` | Number of pay periods per year (§2 — actual calendar count) | T4127 §Definitions |
+| `I` | Gross remuneration for the pay period (including taxable benefits and allowances) | T4127 §Definitions |
+| `F` | Employee RPP contribution this pay period (MVP: BLOCKER — see §19c) | T4127 §Definitions |
+| `F1` | Alimony / maintenance deducted this pay period (MVP: BLOCKER) | T4127 §Definitions |
+| `HD` | Annualised deductions from income (union dues, other) (MVP: BLOCKER) | T4127 §Definitions |
+| `F2` | Annualised alimony / maintenance (MVP: BLOCKER) | T4127 §Definitions |
+| `U1` | Annualised union dues (MVP: BLOCKER) | T4127 §Definitions |
+| `A*` | **Annual gross income from office or employment BEFORE any deductions.** Used ONLY for the K4 (Canada Employment Amount) test. Distinct from `A` — see §9c. | T4127 §K4 |
+| `A` | **Projected annual taxable income** = `P × (I − F − F1) + HD − F2 − U1`. Used for the rate/K lookup in §9b and for BPAF phase-out. | T4127 §Formula |
+| `R` | Federal bracket RATE for `A` | T4127 Table 8.1 |
+| `K` | Federal bracket CONSTANT for `A` | T4127 Table 8.1 |
+| `T` | Federal basic tax = `R × A − K` (before non-refundable credits) | T4127 §Formula |
+| `T3` | Federal income tax on annualised income after non-refundable credits — `T − K1 − K2 − K3 − K4` | T4127 §Formula |
+| `T4` | Federal income tax withheld per pay period — `max(0, round(T3 / P) + additionalFederalTaxAmount)` | T4127 §Formula |
+
+### 9b. K-factor glossary (verbatim T4127 §K1-K4 — NO invented sub-factors)
+
+| Factor | T4127 verbatim meaning | Formula (CRA) | Employee facts required |
+|-|-|-|-|
+| `K1` | Federal non-refundable personal tax credit for the year (Basic Personal Amount + TD1F Total Claim Amount, income-tiered per Bill C-30). | `federal.lowestRate × BPAF + federal.lowestRate × TCF_over_BPA` where `BPAF` is the income-tiered federal BPA (see §9d) and `TCF_over_BPA` is the portion of the TD1F Total Claim Amount above BPA. | Decrypted TD1F total claim, `A` (for BPAF tier). |
+| `K2` | Federal Canada Pension Plan and Employment Insurance non-refundable tax credit for the year. **T4127 §K2 bundles BOTH CPP AND EI into a single K2 formula** — CPP portion uses the base-share ratio `(baseRateEE / combinedRateEE) = (0.0495 / 0.0595)` applied to combined Factor C, plus EI premiums at full rate. **CPP2 (second additional) is included in K2's CPP-annualisation term per T4127 §K2 (not in K3).** | `federal.lowestRate × [ P × (0.0495 / 0.0595) × (C + C2) + P × EI ]` where C is combined per-period Factor C (base + first-additional), C2 is per-period Factor C2 (second-additional), and EI is the per-period EI premium. | Payroll-calculated C, C2, EI. |
+| `K3` | **Other federal tax credits authorised by a tax services office or a Canada Revenue Agency tax centre.** — T4127 §K3 verbatim. NOT the CPP2 deduction. In the MVP no such letter authority exists on any Employee, so `K3 = 0` for every calculation. | `0` for MVP. Future slice: read `EmployeeTaxProfile.federalOtherAuthorizedCredits`. | Authorisation letter reference (not modelled in MVP). |
+| `K4` | Canada Employment Amount (CEA) credit. Applies to income from office or employment only. | `federal.lowestRate × min(A*, canadaEmploymentAmountMax)`. **`A*` is the ANNUAL GROSS EMPLOYMENT INCOME (before deductions), not `A`.** For 2026: `canadaEmploymentAmountMax = 1501` (T4127 123rd Edition Table 8.2, officially verified per Payroll-3B-5B-1d CORRECTION §B). | Annual gross employment income for the year. |
+
+**Spectre-internal helpers (NOT T4127 factors) — DO NOT confuse with CRA vocabulary:**
+
+- `K2A` (Spectre-only) — Spectre may internally break out the EI-only portion of K2 as an accounting helper. **T4127 does NOT define a `K2A` factor.** If the implementation exposes this decomposition, it must be labelled `spectreEiPortionOfK2` (or equivalent), not `K2A`, and it must not appear in any user-facing artifact (T4 reporting, board packages, statutory citations). CRA sees ONE `K2`.
+- No `K3A`, no `K3B`, no other sub-letters. The MVP tracks the actual CRA factors only.
+
+### 9c. K4 employment-income distinction (T4127 §K4 — CORRECTION §K4)
+
+T4127 uses TWO distinct income concepts within the federal formula and Spectre's implementation MUST preserve the distinction:
+
+- **`A` = projected annual TAXABLE income** — used for the rate/K bracket lookup and BPAF phase-out. Reduced by `F`, `F1`, `HD`, `F2`, `U1`. This is the value that flows through `T = R × A − K`.
+- **`A*` = annual GROSS EMPLOYMENT income** (income from office or employment before any deductions). Used ONLY inside `K4 = federal.lowestRate × min(A*, canadaEmploymentAmountMax)`.
+
+In the MVP where `F/F1/HD/F2/U1 = 0` (all six are BLOCKERs), `A` and `A*` happen to coincide numerically. **The calculator MUST still expose the two as distinct named quantities** so that when RPP / union dues / alimony support lands in a future slice, `A` shrinks but `A*` does not — matching T4127 behaviour.
+
+### 9d. BPAF tier (Bill C-30 phase-out)
+
 - `A ≤ Package.federal.bpaPhaseOutStart` → `BPAF = bpaMax` (2026: 16452)
 - `A ≥ Package.federal.bpaPhaseOutEnd` → `BPAF = bpaMin` (2026: 14829)
 - Between → linear interpolation per T4127 §K1
 
-## 10. Alberta provincial tax
+### 9e. CPP2 tax treatment — T4127 §K2, NOT §K3 (CORRECTION §CPP2)
+
+Prior spec text stated that CPP2 flowed through `K3` at a separate `federal.cpp2DeductionRate`. **That was wrong.** T4127's actual treatment of the second additional CPP contribution:
+
+- The per-period CPP2 amount (Factor C2) is aggregated with the base + first-additional Factor C **inside K2's CPP-annualisation term**, using the same `(baseRateEE / combinedRateEE) = (0.0495 / 0.0595)` base-share ratio for the CPP portion.
+- There is no separate federal K3 factor for CPP2. The prior `federal.cpp2DeductionRate` package field is therefore Spectre-internal helper data and is NOT a T4127 variable. If retained, it must be labelled as such and the calculator MUST NOT emit it as a distinct "K3-style" line item.
+- On the taxable-income line of T4 reporting, CPP2 is captured through the K2 tax credit; the T4127 formula does NOT deduct CPP2 from `A` separately.
+
+**Concrete implication:** the 3B-5B-2 calculator implementation must include `C2` inside the K2 annualisation term, NOT allocate CPP2 to a separate K3 line. Any calculation that produces a nonzero K3 for a founder-Club employee (no letter authority on file) is a defect.
+
+## 10. Alberta provincial tax — CORRECTED per Payroll-3B-5B-1d CORRECTION
 
 Same shape as federal, applied to `Package.provincial.brackets[]` (2026: 6 brackets, `V` = rate, `KP` = bracket constant) + `Package.provincial.bpa` (2026: 22,769).
 
-Alberta credit factors, all consumed from `Package.provincial` / TD1:
+### 10a. Alberta K-factor glossary (verbatim T4127 §Alberta — NO invented sub-factors)
 
-| Factor | Meaning | Source |
+| Factor | T4127 verbatim meaning | Formula (CRA) | MVP status |
+|-|-|-|-|
+| `K1P` | Alberta non-refundable personal tax credit for the year. | `provincial.lowestRate × (Alberta BPA + TCP_over_BPA)` where `TCP_over_BPA` is TD1AB Total Claim above BPA. | ✅ supported |
+| `K2P` | Alberta Canada Pension Plan and Employment Insurance non-refundable tax credit. **Same T4127 K2P bundling rule** — CPP + CPP2 both flow through K2P's CPP-annualisation term using base-share `(0.0495 / 0.0595)`; EI at full rate. | `provincial.lowestRate × [ P × (0.0495 / 0.0595) × (C + C2) + P × EI ]` | ✅ supported |
+| `K3P` | **Other Alberta tax credits authorised by a tax services office or a Canada Revenue Agency tax centre.** — T4127 §K3P verbatim. NOT the Alberta CPP2 deduction. `K3P = 0` in the MVP. | `0` for MVP. | ✅ supported (structural zero) |
+| `K4P` | Canada Employment Amount — provincial equivalent. **NOT DEFINED in T4127 §Alberta.** Alberta's provincial withholding formula does NOT carry a K4P factor. This is a **statutory non-applicability** (not an MVP exclusion): CEA is a federal-only credit. | *n/a* | ⛔ **STATUTORILY NOT APPLICABLE** — documented, not silent zero. If a future Alberta budget introduces a K4P analogue, add `provincial.canadaEmploymentAmountMax` + a package migration; re-run this matrix. |
+| `K5P` | Alberta supplemental credit — see §10c. | `max(0, ((K1P + K2P) − threshold) × (supplementalRate / baseRate))` | ✅ supported |
+
+**Spectre-internal helpers (NOT T4127 factors):**
+
+- `K2AP` (Spectre-only) — Spectre may internally break out the Alberta EI-only portion of K2P as an accounting helper. **T4127 does NOT define a `K2AP` factor.** Same rule as `K2A`: if exposed internally, label it `spectreEiPortionOfK2P`. CRA sees ONE `K2P`.
+
+### 10b. Alberta withholding chain (CORRECTED)
+
+```
+TP    = V × A − KP                     // Alberta basic tax before credits
+T3P   = TP − K1P − K2P − K3P − K5P     // K4P statutorily n/a; K3P = 0 in MVP
+T4P   = max(0, round(T3P / P) + additionalProvincialTaxAmount)
+```
+
+Prior draft `T3Prov = (V × A) − KP − K1P − K2P − K2AP − K3P − K4P − K5P` is superseded — `K2AP` and `K4P` are NOT T4127 subtractors.
+
+### 10c. Alberta K5P specification (Payroll-3B-5B-1d CORRECTION §C)
+
+**VERIFIED CRA FORMULA (T4127 122nd Edition §Alberta; inherited by 123rd — CORRECTION §D):**
+```
+K5P = max(0, ((K1P + K2P) − 4896.00) × 0.25)
+```
+
+`Package.provincial.k5p` is a required field on the pinned Alberta package — never absent. Structure:
+
+| Field | 2026 Value | Meaning |
 |-|-|-|
-| `K1P` | Alberta non-refundable tax credit = `Package.provincial.lowestRate × (TCP + Alberta BPA-tier)` | TD1AB |
-| `K2P` | Alberta CPP tax credit = `Package.provincial.lowestRate × annualised (CPP base + first-additional)` | derived from CPP result |
-| `K2AP` | Alberta EI tax credit = `Package.provincial.lowestRate × annualised EI` | derived from EI result |
-| `K3P` | Alberta CPP2 deduction / credit (T4127 §Alberta) | derived from CPP2 result |
-| `K4P` | Alberta employment credit (if applicable) | annualised employment income |
-| `K5P` | **Alberta supplemental credit factor** — see §10a below | `Package.provincial.k5p` |
+| `enabled: Boolean` | `true` | `true` → apply K5P per the formula. `false` → deliberate non-application (documented, never silent). |
+| `threshold: Decimal` | `"4896"` | CRA-published dollar threshold applied to (K1P + K2P). **Verified $4,896.00** — corrects the earlier $4,800 draft. |
+| `supplementalRate: Decimal` | `"0.02"` | Numerator of the "2%-over-8%" differential. |
+| `baseRate: Decimal` | `"0.08"` | Alberta first-bracket rate — denominator of the differential. Kept explicit rather than baked into a precomputed coefficient so a future Alberta rate change stays auditable. `0.02 / 0.08 = 0.25` is mathematically equivalent to CRA's published `× 0.25` multiplier. |
+| `sourceCitation: String` | *see seeder* | Verbatim CRA citation. T4127 122nd Edition §Alberta; H2 (123rd) reproduces only sections changed effective July 1 — Alberta K5P was NOT identified as changed and therefore inherits from the 122nd Edition. |
 
-**Alberta withholding chain:**
-```
-T3Prov  = (V × A) − KP − K1P − K2P − K2AP − K3P − K4P − K5P
-T4Prov  = max(0, round(T3Prov / P) + additionalProvincialTaxAmount)
-```
+If `enabled === false`, `K5P = 0` as a deliberate, documented package decision.
+
+**No opaque coefficients.** The formula's `supplementalRate / baseRate = 0.02 / 0.08 = 0.25` could be precomputed, but the package stores the two rates separately so an auditor / future rate change sees the underlying statutory relationship.
+
+### 10d. CPP2 tax treatment in Alberta — inside K2P, not K3P
+
+Same rule as §9e federally: T4127 places the CPP2 credit inside K2P via the base-share ratio, not in K3P. Any calculation that produces a nonzero K3P for a founder-Club employee (no letter authority on file) is a defect.
 
 ### 10a. Alberta K5P specification (Payroll-3B-5B-1d §1-2, CORRECTED)
 
@@ -361,32 +425,40 @@ Once pinned, recalculating the same frozen batch reuses the exact package. Void-
 
 ---
 
-## 19. Final credit-factor matrix (Payroll-3B-5B-1d §7)
+## 19. Final credit-factor matrix (Payroll-3B-5B-1d CORRECTION §Factor Matrix)
 
-Definitive contract for every K/KP factor the calculator must handle. No "we'll figure it out during calculation" entries.
+Definitive contract for every K/KP factor the calculator must handle, **rebuilt from CRA T4127 vocabulary rather than the prior draft matrix**. Only actual T4127 factors appear as rows. Spectre-internal helpers (`K2A`, `K2AP`, `cpp2DeductionRate`) are explicitly identified in the notes below the matrix and MUST NOT be represented as CRA factors.
 
-### 19a. Federal factors
+### 19a. Federal factors (T4127 §Federal K1–K4)
 
-| Factor | Represents | Formula / source | Employee facts required | Payroll-calculated facts required | Statutory-package parameters | MVP status |
-|-|-|-|-|-|-|-|
-| `K1` | Federal BPA + TD1F non-refundable credit | `federal.lowestRate × BPAF` (BPAF from Bill C-30 phase-out) plus federal.lowestRate × EmployeeTaxProfile.federalClaimSecretRef (decrypted TCP over-and-above BPA) | TD1F claim (decrypted) | Annualised income `A` for BPAF tier | `federal.bpaMax / bpaMin / phaseOutStart / phaseOutEnd / lowestRate` | ✅ supported |
-| `K2` | Federal CPP employee credit | `federal.lowestRate × (0.0495 / 0.0595) × (C + CPP2)` where C is combined Factor C, CPP2 is second-additional | none additional | `deductionCppEeBase + deductionCppEeFirstAdd` (or C) and `deductionCpp2Ee` | `federal.lowestRate`, `cpp.baseRateEE`, `cpp.combinedRateEE` | ✅ supported |
-| `K2A` | Federal EI employee credit | `federal.lowestRate × annualisedEmployeeEIPremiums` | none additional | `deductionEiEe` | `federal.lowestRate` | ✅ supported |
-| `K3` | Federal CPP2 additional deduction from taxable income | `federal.cpp2DeductionRate × annualised CPP2 EE contribution` | none additional | `deductionCpp2Ee` | `federal.cpp2DeductionRate` | ✅ supported |
-| `K4` | Canada Employment Amount credit | `federal.lowestRate × min(annualisedEmploymentIncome, canadaEmploymentAmountMax)` | none additional | Annualised employment income | `federal.lowestRate`, `federal.canadaEmploymentAmountMax` (2026: `1499`, subject to line-verification) | ✅ supported |
+| Factor | T4127 vocabulary | Formula (CRA verbatim) | Statutory-package parameters | MVP status |
+|-|-|-|-|-|
+| `K1` | Federal non-refundable personal tax credit (BPA + TD1F Total Claim, income-tiered per Bill C-30). | `federal.lowestRate × BPAF + federal.lowestRate × TCF_over_BPA` | `federal.bpaMax / bpaMin / phaseOutStart / phaseOutEnd / lowestRate` | ✅ supported |
+| `K2` | Federal Canada Pension Plan AND Employment Insurance non-refundable tax credit for the year. **Bundles CPP (base + first-additional + second-additional) and EI into ONE formula.** | `federal.lowestRate × [ P × (0.0495 / 0.0595) × (C + C2) + P × EI ]` | `federal.lowestRate`, `cpp.baseRateEE`, `cpp.combinedRateEE` | ✅ supported |
+| `K3` | Other federal tax credits authorised by a tax services office or a CRA tax centre. **NOT the CPP2 deduction.** | `0` for MVP (no letter authority modelled). | *none* | ✅ supported (structural zero) |
+| `K4` | Canada Employment Amount credit. Applies to income from office or employment. | `federal.lowestRate × min(A*, canadaEmploymentAmountMax)` where **`A*` = annual GROSS employment income** (not `A`). | `federal.lowestRate`, `federal.canadaEmploymentAmountMax` (2026: `"1501"` — T4127 123rd Edition Table 8.2, officially verified). | ✅ supported |
 
-### 19b. Alberta factors
+### 19b. Alberta factors (T4127 §Alberta K1P–K5P)
 
-| Factor | Represents | Formula / source | Employee facts required | Payroll-calculated facts required | Statutory-package parameters | MVP status |
-|-|-|-|-|-|-|-|
-| `K1P` | Alberta BPA + TD1AB non-refundable credit | `provincial.lowestRate × (provincial.bpa + TCP)` | TD1AB claim (decrypted) | none | `provincial.bpa`, `provincial.lowestRate` | ✅ supported |
-| `K2P` | Alberta CPP employee credit | `provincial.lowestRate × (0.0495 / 0.0595) × (C + CPP2)` — same structural form as K2, provincial rate | none additional | `deductionCppEeBase + deductionCppEeFirstAdd`, `deductionCpp2Ee` | `provincial.lowestRate`, CPP rates | ✅ supported |
-| `K2AP` | Alberta EI employee credit | `provincial.lowestRate × annualisedEmployeeEIPremiums` | none additional | `deductionEiEe` | `provincial.lowestRate` | ✅ supported |
-| `K3P` | Alberta CPP2 additional deduction | Alberta's provincial equivalent of K3 (T4127 §Alberta). For 2026 Alberta uses the same rate structure. | none additional | `deductionCpp2Ee` | Alberta-specific rate | ✅ supported |
-| `K4P` | Alberta employment credit | **Not applicable at the Alberta payroll withholding stage.** Alberta's provincial withholding formula per T4127 §Alberta does NOT carry a K4P employment credit; the Canada Employment Amount is a federal credit only (K4). Alberta payroll withholding chain is `T3Prov = (V×A) − KP − K1P − K2P − K2AP − K3P − K5P`. | — | — | — | ⛔ **Not applicable — documented, not silent zero.** If a future Alberta budget introduces a K4P, add a `provincial.canadaEmploymentAmountMax` field and re-run this matrix. |
-| `K5P` | Alberta supplemental credit | See §10a. `K5P = max(0, ((K1P + K2P) − threshold) × (supplementalRate / baseRate))` | none additional | Computed K1P, K2P | `provincial.k5p.threshold / supplementalRate / baseRate` | ✅ supported |
+| Factor | T4127 vocabulary | Formula (CRA verbatim) | Statutory-package parameters | MVP status |
+|-|-|-|-|-|
+| `K1P` | Alberta non-refundable personal tax credit (BPA + TD1AB Total Claim). | `provincial.lowestRate × (provincial.bpa + TCP_over_BPA)` | `provincial.bpa`, `provincial.lowestRate` | ✅ supported |
+| `K2P` | Alberta CPP + EI non-refundable tax credit. Same T4127 bundling rule as K2 (CPP + CPP2 through base-share; EI at full rate). | `provincial.lowestRate × [ P × (0.0495 / 0.0595) × (C + C2) + P × EI ]` | `provincial.lowestRate`, CPP rates | ✅ supported |
+| `K3P` | Other Alberta tax credits authorised by a tax services office or a CRA tax centre. **NOT the Alberta CPP2 deduction.** | `0` for MVP. | *none* | ✅ supported (structural zero) |
+| `K4P` | *(No K4P factor exists in T4127 §Alberta.)* | *n/a* | *n/a* | ⛔ **STATUTORY NON-APPLICABILITY** — the Canada Employment Amount is a federal-only credit; Alberta's withholding formula does NOT carry a K4P analogue. This is NOT an MVP exclusion — a future Alberta K4P would require a CRA T4127 change, at which point add `provincial.canadaEmploymentAmountMax` and re-run this matrix. |
+| `K5P` | Alberta supplemental credit factor. | `max(0, ((K1P + K2P) − 4896.00) × 0.25)` — package encoding: `max(0, ((K1P + K2P) − threshold) × (supplementalRate / baseRate))` with `threshold=4896, supplementalRate=0.02, baseRate=0.08`. Mathematically equivalent to CRA's `× 0.25`. | `provincial.k5p.threshold / supplementalRate / baseRate` | ✅ supported |
 
-### 19c. Unsupported tax inputs → explicit blockers (§8)
+### 19c. Spectre-internal helpers (NOT T4127 factors) — explicit disclosure
+
+The following names appeared in earlier drafts and could be mistaken for CRA vocabulary. They are **Spectre-internal decompositions**, not T4127 factors, and MUST NOT be surfaced as if they were CRA-defined:
+
+| Spectre helper name | Actual T4127 role | Correct handling |
+|-|-|-|
+| `K2A` | Spectre's internal breakout of the EI portion of K2. **T4127 defines no `K2A`.** | Rename any internal accessor to `spectreEiPortionOfK2` (or similar). Never emit as a separate line item on T4 reports, board packages, or the withholding chain. CRA sees ONE `K2`. |
+| `K2AP` | Spectre's internal breakout of the EI portion of K2P. **T4127 defines no `K2AP`.** | Rename to `spectreEiPortionOfK2P`. Same rule — CRA sees ONE `K2P`. |
+| `federal.cpp2DeductionRate` | Historical field on the statutory package that assumed CPP2 had its own K3-style deduction. **T4127 places CPP2 inside K2's CPP-annualisation term, not K3.** | Package field is unused by the corrected calculator; retained for schema-compatibility only and slated for deprecation. Do NOT emit a "K3 CPP2" line item. |
+
+### 19d. Unsupported tax inputs → explicit blockers
 
 The following T4127 source facts EXIST in the full CRA formula but are NOT modelled in the MVP. Any Employee for whom these apply causes the calculator to raise a `PayrollBatchException` BLOCKER — the calculator NEVER silently substitutes zero.
 

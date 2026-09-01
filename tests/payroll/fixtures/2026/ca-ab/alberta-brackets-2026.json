@@ -49,11 +49,13 @@
       "id": "alberta-k5p-2026",
       "expected": {
         "enabled": true,
-        "threshold": "4800",
+        "threshold": "4896",
         "supplementalRate": "0.02",
         "baseRate": "0.08",
-        "formula": "K5P = max(0, ((K1P + K2P) - 4800) × (0.02 / 0.08))",
-        "notes": "Payroll-3B-5B-1d CORRECTION: K5P depends on Alberta credit factors K1P + K2P — NOT on annualised Alberta taxable income. The prior 3B-5B-1c formula `rate × (T_prov_base − triggerBase)` was wrong and has been removed. Package stores threshold + supplementalRate + baseRate separately so the CRA relationship stays auditable — no opaque precomputed coefficient."
+        "formula": "K5P = max(0, ((K1P + K2P) - 4896.00) × 0.25)",
+        "packageEquivalent": "K5P = max(0, ((K1P + K2P) - threshold) × (supplementalRate / baseRate)) where 0.02 / 0.08 = 0.25",
+        "sourceCitation": "T4127 122nd Edition (§Alberta, K5P). H2 (123rd Edition) inherits — Alberta K5P is NOT identified as changed effective July 1, 2026.",
+        "notes": "Payroll-3B-5B-1d CORRECTION: threshold is $4,896.00 (verified against T4127 122nd Edition), NOT the earlier $4,800 draft. Package stores threshold + supplementalRate + baseRate separately so the CRA relationship stays auditable — no opaque precomputed coefficient."
       }
     }
   ]

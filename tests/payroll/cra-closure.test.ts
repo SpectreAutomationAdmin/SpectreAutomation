@@ -118,12 +118,12 @@ describe("Payroll-3B-5B-1c — Alberta Table 8.1 matches CRA 2026", () => {
   });
 });
 
-describe("Payroll-3B-5B-1d — Alberta K5P CORRECTED (§B)", () => {
+describe("Payroll-3B-5B-1d CORRECTION — Alberta K5P threshold (§C)", () => {
   it("H1 K5P uses corrected shape: threshold + supplementalRate + baseRate", () => {
     const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
     expect(k5p).toBeDefined();
     expect(k5p.enabled).toBe(true);
-    expect(k5p.threshold).toBe("4800");
+    expect(k5p.threshold).toBe("4896");
     expect(k5p.supplementalRate).toBe("0.02");
     expect(k5p.baseRate).toBe("0.08");
     expect(k5p.sourceCitation).toMatch(/T4127/);
@@ -134,43 +134,65 @@ describe("Payroll-3B-5B-1d — Alberta K5P CORRECTED (§B)", () => {
     expect(cite).toMatch(/K1P/);
     expect(cite).toMatch(/K2P/);
     expect(cite).toMatch(/max\(0/);
+    // CORRECTION-specific: the official formula uses ×0.25, threshold 4896.
+    expect(cite).toMatch(/4896/);
+    expect(cite).toMatch(/0\.25/);
+    expect(cite).not.toMatch(/4800/);
   });
-  it("H1 K5P does NOT carry the old T_prov_base / triggerBase / rate shape", () => {
+  it("H1 K5P does NOT carry the old T_prov_base / triggerBase / rate / 4800 shape", () => {
     const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p as unknown as Record<string, unknown>;
     expect(k5p.triggerBase).toBeUndefined();
     expect(k5p.rate).toBeUndefined();
     expect(k5p.sourceCitation).not.toMatch(/T_prov_base/i);
+    expect(k5p.threshold).not.toBe("4800");
   });
-  it("H2 K5P is present and matches H1 (unchanged mid-year for 2026)", () => {
+  it("H2 K5P inherits from H1 122nd Edition (no change in 123rd) — §D", () => {
     expect(CA_AB_2026_PARAMS_H2.provincial!.k5p).toEqual(CA_AB_2026_PARAMS_H1.provincial!.k5p);
   });
-  it("K5P formula reference-implementation: (K1P + K2P) ≤ threshold → K5P = 0", () => {
-    // Reference computation of the CORRECTED formula. The calculator
-    // implementation in 3B-5B-2 must produce the same result.
+  it("K5P boundary: (K1P + K2P) == 4896 → K5P = 0", () => {
     const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
-    const K1P = 1000, K2P = 3000;                                       // sum = 4000 ≤ 4800
+    const K1P = 2000, K2P = 2896;                                       // sum = 4896 (at threshold)
     const above = Math.max(0, K1P + K2P - Number(k5p.threshold));
     const result = above * (Number(k5p.supplementalRate) / Number(k5p.baseRate));
     expect(result).toBe(0);
   });
-  it("K5P formula reference-implementation: (K1P + K2P) > threshold → applies", () => {
+  it("K5P formula reference-implementation: (K1P + K2P) < threshold → K5P = 0", () => {
     const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
-    const K1P = 3000, K2P = 3000;                                       // sum = 6000 > 4800
-    const above = Math.max(0, K1P + K2P - Number(k5p.threshold));       // 1200
+    const K1P = 1000, K2P = 3000;                                       // sum = 4000 < 4896
+    const above = Math.max(0, K1P + K2P - Number(k5p.threshold));
     const result = above * (Number(k5p.supplementalRate) / Number(k5p.baseRate));
-    // 1200 × (0.02 / 0.08) = 1200 × 0.25 = 300.
-    expect(result).toBe(300);
+    expect(result).toBe(0);
+  });
+  it("K5P formula reference-implementation: (K1P + K2P) > threshold → ×0.25 supplemental", () => {
+    const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
+    const K1P = 3000, K2P = 3000;                                       // sum = 6000 > 4896
+    const above = Math.max(0, K1P + K2P - Number(k5p.threshold));       // 1104
+    const result = above * (Number(k5p.supplementalRate) / Number(k5p.baseRate));
+    // 1104 × (0.02 / 0.08) = 1104 × 0.25 = 276.
+    expect(result).toBe(276);
+  });
+  it("supplementalRate / baseRate reduces to CRA's ×0.25 multiplier", () => {
+    const k5p = CA_AB_2026_PARAMS_H1.provincial!.k5p;
+    expect(Number(k5p.supplementalRate) / Number(k5p.baseRate)).toBe(0.25);
   });
 });
 
-describe("Payroll-3B-5B-1d — Canada Employment Amount (§4, §C)", () => {
-  it("H1 federal package carries canadaEmploymentAmountMax", () => {
-    expect(CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax).toBe("1499");
+describe("Payroll-3B-5B-1d CORRECTION — Canada Employment Amount (§B)", () => {
+  it("H1 federal package carries canadaEmploymentAmountMax = 1501 (T4127 123rd Edition Table 8.2)", () => {
+    expect(CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax).toBe("1501");
   });
   it("H2 federal package carries the same canadaEmploymentAmountMax as H1", () => {
     expect(CA_AB_2026_PARAMS_H2.federal.canadaEmploymentAmountMax).toBe(
       CA_AB_2026_PARAMS_H1.federal.canadaEmploymentAmountMax,
     );
+  });
+  it("The old $1,499 estimate does not appear in the 2026 statutory data", () => {
+    const both = JSON.stringify(CA_AB_2026_PARAMS_H1) + JSON.stringify(CA_AB_2026_PARAMS_H2);
+    expect(both).not.toMatch(/1499/);
+  });
+  it("The old $4,800 K5P threshold does not appear anywhere in the 2026 statutory data", () => {
+    const both = JSON.stringify(CA_AB_2026_PARAMS_H1) + JSON.stringify(CA_AB_2026_PARAMS_H2);
+    expect(both).not.toMatch(/4800/);
   });
 });
 

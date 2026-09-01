@@ -50,10 +50,12 @@
     },
     {
       "id": "federal-canada-employment-amount-2026",
-      "description": "Payroll-3B-5B-1d §4 — 2026 Canada Employment Amount (CEA) maximum. Consumed by T4127 K4: K4 = federal.lowestRate × min(annualisedEmploymentIncome, canadaEmploymentAmountMax).",
+      "description": "Payroll-3B-5B-1d CORRECTION (§B) — 2026 Canada Employment Amount (CEA) maximum, officially verified against CRA T4127 123rd Edition Table 8.2.",
       "expected": {
-        "canadaEmploymentAmountMax": "1499",
-        "notes": "2024 CRA CEA = $1,433 (published). 2026 amount indexed per T4127 §K4 — seeded value subject to LINE-VERIFICATION against T4127 122nd/123rd Editions before dollar calculation ships."
+        "canadaEmploymentAmountMax": "1501",
+        "sourceCitation": "T4127 123rd Edition Table 8.2 — Canada Employment Amount for 2026.",
+        "k4Formula": "K4 = federal.lowestRate × min(A*, canadaEmploymentAmountMax) where A* = annual gross income from office or employment before deductions. Do NOT use the projected annual taxable income `A` — K4 uses annual GROSS employment income.",
+        "notes": "OFFICIALLY VERIFIED. Removes prior 3B-5B-1d $1,499 estimate / indexed-from-2024 language / pending-verification wording."
       }
     }
   ]

@@ -14,10 +14,14 @@
 //     • T4127 Payroll Deductions Formulas — 123rd Edition
 //     • Other publications unchanged for 2026 unless CRA reissues.
 //
-// EVERY value below is drawn from the founder-supplied verified
-// 2026 CRA reference set (Payroll-3B-5B-1b §12-14). Do not edit
-// numeric values without updating the source citation in the same
-// change.
+// EVERY value below is drawn from the OFFICIAL CRA-published 2026
+// T4127 122nd/123rd Edition + Government of Canada 2026 CPP/EI/TD1
+// announcements. Do not edit numeric values without updating the
+// source citation in the same change.
+//
+// Payroll-3B-5B-1d CORRECTION reconciles Canada Employment Amount
+// = $1,501 (T4127 123rd Edition Table 8.2) and Alberta K5P
+// threshold = $4,896.00 (T4127 122nd Edition, §Alberta).
 //
 // The installer is `installStatutoryPackage` (SUPER_ADMIN-gated).
 // This file is a data + orchestration module; it does NOT call
@@ -129,12 +133,11 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     bpaPhaseOutEnd: "246752",
     lowestRate: "0.1400",
     cpp2DeductionRate: "0.1400",
-    // Payroll-3B-5B-1d (§4, §C) — Canada Employment Amount for
-    // 2026. The 2024-published CRA CEA was $1,433; indexed
-    // annually per T4127 §K4. Value below is Spectre's 2026
-    // seeded amount subject to line-verification against T4127
-    // 122nd/123rd Editions before dollar calculation ships.
-    canadaEmploymentAmountMax: "1499",
+    // Payroll-3B-5B-1d CORRECTION (§B) — Canada Employment Amount
+    // for 2026: $1,501.00. Officially verified against CRA T4127
+    // 123rd Edition Table 8.2. Consumed by K4 as the lesser of
+    // 0.14 × A* (annual gross employment income) or 0.14 × CEA.
+    canadaEmploymentAmountMax: "1501",
   },
   provincial: {
     // Payroll-3B-5B-1c §E — verified 2026 Alberta Table 8.1.
@@ -148,25 +151,28 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
     ],
     bpa: "22769",
     lowestRate: "0.0800",
-    // Payroll-3B-5B-1d §1-2 — CORRECTED Alberta K5P specification.
+    // Payroll-3B-5B-1d CORRECTION (§C) — verified Alberta K5P.
     //
-    // Verified CRA formula (T4127 §Alberta):
+    // Official CRA formula (T4127 122nd Edition, §Alberta):
+    //   K5P = max(0, ((K1P + K2P) - 4896.00) × 0.25)
+    //
+    // Mathematically equivalent representation in the package:
     //   K5P = max(0, ((K1P + K2P) - threshold) × (supplementalRate / baseRate))
+    //   where supplementalRate / baseRate = 0.02 / 0.08 = 0.25.
+    // The two rates are kept explicit rather than as a precomputed
+    // coefficient so a future Alberta rate change stays auditable.
     //
-    // 2026 values:
-    //   threshold        = 4,800   (CRA-published)
-    //   supplementalRate = 0.02    (the "2%")
-    //   baseRate         = 0.08    (Alberta first-bracket rate — the "8%")
-    //
-    // Old 3B-5B-1c `{triggerBase, rate}` shape (with T_prov_base
-    // interpretation) was WRONG and has been REMOVED.
+    // 2026 verified values (T4127 122nd Edition Alberta, unchanged in 123rd):
+    //   threshold        = 4896   (CRA-published)
+    //   supplementalRate = 0.02
+    //   baseRate         = 0.08
     k5p: {
       enabled: true,
-      threshold: "4800",
+      threshold: "4896",
       supplementalRate: "0.02",
       baseRate: "0.08",
       sourceCitation:
-        "T4127 §Alberta (K5P) — Alberta supplemental credit. Formula: K5P = max(0, ((K1P + K2P) - 4800) × (0.02 / 0.08)). Pending final line-verification against 122nd/123rd Editions.",
+        "T4127 122nd Edition (§Alberta, K5P) — Alberta supplemental credit. Official formula: K5P = max(0, ((K1P + K2P) - 4896.00) × 0.25). Package encodes the equivalent max(0, ((K1P + K2P) - threshold) × (supplementalRate / baseRate)) with threshold=4896, supplementalRate=0.02, baseRate=0.08.",
     },
   },
   // Payroll-3B-5B-1c §9 / §L — rounding contract.
@@ -201,9 +207,14 @@ export const CA_AB_2026_PARAMS_H1: CanadianPayrollStatutoryParamsV1 = {
  *   • EI MIE / rates / annual maxima — unchanged
  *   • Federal Table 8.1 brackets + K constants — unchanged
  *   • Federal BPA max/min + phase-out thresholds + lowest rate — unchanged
+ *   • Federal canadaEmploymentAmountMax — unchanged (1501)
  *   • Alberta Table 8.1 brackets + KP constants — unchanged
  *   • Alberta BPA + lowest rate — unchanged
- *   • Alberta K5P trigger + rate — unchanged
+ *   • Alberta K5P (threshold, supplementalRate, baseRate) —
+ *     unchanged (§D). The T4127 123rd Edition reproduces only
+ *     sections changed effective July 1; Alberta K5P is NOT
+ *     identified as changed, so H2 inherits the applicable
+ *     Alberta K5P rule from the 122nd Edition (threshold 4896).
  *
  * Package IDENTITY differs (packageVersion, sourceEdition, and the
  * pinned `PayrollBatch.statutoryPackageId` for calculations dated
