@@ -72,53 +72,127 @@ export const CanadianPayrollStatutoryParamsV1 = z.object({
   /** Null for a federal-only package; ISO 2-char code otherwise. */
   jurisdictionProvince: z.enum(["AB"]).nullable(),
 
-  // ---- Canada Pension Plan ----
+  // ---- Canada Pension Plan (T4127 Chapter 6) ----
+  //
+  // 3B-5B-1b (2026-09-01) — components preserved so the calculator's
+  // combined Factor C result can decompose to CRA-reported base +
+  // first-additional components exactly (§C decomposition rule).
+  //
+  // For 2026 the founder-verified values are:
+  //   ybe = 3500.00, ympe = 74600.00, ymce = 71100.00, yampe = 85000.00
+  //   base:            rate 0.0495, max EE 3519.45, max ER 3519.45
+  //   first additional: rate 0.0100, max EE 711.00,  max ER 711.00
+  //   combined (C):    rate 0.0595, max EE 4230.45, max ER 4230.45
+  //   CPP2:            rate 0.0400, max EE 416.00,  max ER 416.00
   cpp: z.object({
-    /** Year's Maximum Pensionable Earnings (YMPE), CAD. */
-    ympe: DecimalString,
-    /** Year's Additional Maximum Pensionable Earnings (YAMPE), CAD. */
-    yampe: DecimalString,
-    /** Year's Basic Exemption (YBE), CAD. */
+    /** Year's Basic Exemption. */
     ybe: DecimalString,
+    /** Year's Maximum Pensionable Earnings — CPP base cap. */
+    ympe: DecimalString,
+    /**
+     * Year's Maximum Contributory Earnings — pensionable band ceiling
+     * used in CRA's "maximum contributory earnings" published figure
+     * (`ympe − ybe`). Kept explicit to prevent re-deriving.
+     */
+    ymce: DecimalString,
+    /** Year's Additional Maximum Pensionable Earnings — CPP2 cap. */
+    yampe: DecimalString,
+
     /** Base CPP employee contribution rate (decimal). */
     baseRateEE: DecimalString,
-    /** Enhanced CPP2 employee contribution rate (decimal). */
-    cpp2RateEE: DecimalString,
-    /** Employer CPP rate — equals employee CPP by statute. */
+    /** Base CPP employer contribution rate (equal to EE by statute). */
     baseRateER: DecimalString,
+    /** Base annual maximum contribution — employee side (CAD). */
+    baseMaxEE: DecimalString,
+    /** Base annual maximum contribution — employer side. */
+    baseMaxER: DecimalString,
+
+    /** First-additional CPP employee contribution rate. */
+    firstAdditionalRateEE: DecimalString,
+    /** First-additional employer rate. */
+    firstAdditionalRateER: DecimalString,
+    /** First-additional annual maximum — employee. */
+    firstAdditionalMaxEE: DecimalString,
+    /** First-additional annual maximum — employer. */
+    firstAdditionalMaxER: DecimalString,
+
+    /**
+     * Combined Factor C rate = base + first-additional. The calculator
+     * uses this as the working rate; the base/first-additional split
+     * is derived per §C. Storing the combined rate explicitly (rather
+     * than adding at read time) avoids per-read float drift.
+     */
+    combinedRateEE: DecimalString,
+    combinedRateER: DecimalString,
+    /** Combined annual maximum — employee (CRA Factor C max). */
+    combinedMaxEE: DecimalString,
+    combinedMaxER: DecimalString,
+
+    /** CPP2 (second-additional) rate — employee. */
+    cpp2RateEE: DecimalString,
+    /** CPP2 rate — employer (equal to EE by statute). */
     cpp2RateER: DecimalString,
+    /** CPP2 annual maximum contribution — employee (CAD). */
+    cpp2MaxEE: DecimalString,
+    /** CPP2 annual maximum contribution — employer. */
+    cpp2MaxER: DecimalString,
   }),
 
   // ---- Employment Insurance ----
+  //
+  // Store the CRA-published employer maximum explicitly (§13 rule);
+  // do not derive `1.4 × employee` — record the multiplier as
+  // documented metadata only.
   ei: z.object({
     /** Maximum Insurable Earnings (MIE), CAD. */
     mie: DecimalString,
     /** Employee EI premium rate (decimal). Quebec has a separate rate. */
     rateEE: DecimalString,
-    /** Employer EI multiplier applied to employee premium (typically 1.4). */
+    /** Employer EI premium rate (decimal). Published by CRA. */
+    rateER: DecimalString,
+    /** Employee annual maximum premium, from CRA. */
+    maxAnnualPremiumEE: DecimalString,
+    /** Employer annual maximum premium, from CRA. */
+    maxAnnualPremiumER: DecimalString,
+    /** Employer/employee multiplier documentation (typically 1.4). Metadata only — not used in maximum lookups. */
     employerMultiplier: DecimalString,
   }),
 
-  // ---- Federal income tax (T4127 §5) ----
+  // ---- Federal income tax (T4127 Chapter 5) ----
   federal: z.object({
     brackets: z.array(TaxBracket).min(1),
     /**
-     * Federal Basic Personal Amount (BPA). Under Bill C-30 the BPA
-     * is tiered by income; a future evolution may split into
-     * (bpaLow, bpaHigh, incomeThreshold). For v1 we keep the two
-     * BPA values + threshold explicit.
+     * Federal BPA is income-tiered (Bill C-30):
+     *   • bpaMax applies when annualised income ≤ bpaPhaseOutStart
+     *   • bpaMin applies when annualised income ≥ bpaPhaseOutEnd
+     *   • Linear phase-out in between per T4127 §K1 (BPAF factor).
+     * 2026 verified values: max 16452, min 14829.
      */
-    bpaLow: DecimalString,
-    bpaHigh: DecimalString,
+    bpaMax: DecimalString,
+    bpaMin: DecimalString,
+    /** Income threshold below which the maximum BPA applies. */
     bpaPhaseOutStart: DecimalString,
+    /** Income threshold above which the minimum BPA applies. */
     bpaPhaseOutEnd: DecimalString,
     /** Non-refundable credit rate applied to BPA + TD1F claim. */
     lowestRate: DecimalString,
-    /** CPP2 deduction rate applied to CPP2 EE contributions when computing taxable income. */
+    /**
+     * CPP2 first-additional deduction rate applied when computing
+     * annualised net taxable income. T4127 Chapter 5 factor K3/K3P.
+     */
     cpp2DeductionRate: DecimalString,
   }),
 
   // ---- Provincial (Alberta MVP) ----
+  //
+  // Alberta 2026 verified brackets:
+  //   0            – 61,200:   8%, KP 0
+  //   61,200.01    – 154,259: 10%, KP  1224
+  //   154,259.01   – 185,111: 12%, KP  4309
+  //   185,111.01   – 246,813: 13%, KP  6160
+  //   246,813.01   – 370,220: 14%, KP  8628
+  //   370,220.01   – ∞:       15%, KP 12331
+  // Alberta BPA 2026 = 22769.
   provincial: z
     .object({
       brackets: z.array(TaxBracket).min(1),

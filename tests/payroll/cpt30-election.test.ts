@@ -168,10 +168,10 @@ describe("Payroll-3B-5B-1 — CPT30 admin service", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it("following-year revocation accepted; effective floored to Jan 1 when derived date is earlier", async () => {
+  it("following-year revocation accepted; effective = firstDayOfMonthAfter(receivedOn)", async () => {
     const s = await scenario();
-    // Use a historic scenario (stop 2024, revocation 2025) so all
-    // form dates land in the past relative to today's clock.
+    // Historic scenario (stop 2024, revocation 2025) so form dates
+    // land in the past relative to today's clock.
     const emp = await makeEmp(s.club.id, 1958, 6, 15, "E-REV-NEXT");
     const election = await recordCppStopElection(s.paP, s.club.id, {
       employeeId: emp.id,
@@ -180,7 +180,7 @@ describe("Payroll-3B-5B-1 — CPT30 admin service", () => {
       employeeSignedOn: d(2024, 5, 4),
       receivedOn: d(2024, 5, 20),
     });
-    // Revocation filed early 2025 — derived date is Feb 1 2025.
+    // Revocation received Jan 15 2025 → firstDayOfMonthAfter → Feb 1 2025.
     const rev = await recordCppRevocation(s.paP, s.club.id, {
       employeeId: emp.id,
       revokesElectionId: election.id,

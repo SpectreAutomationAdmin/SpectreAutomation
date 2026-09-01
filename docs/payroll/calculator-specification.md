@@ -1,10 +1,10 @@
 # Spectre Payroll — Canada / Alberta Gross-to-Net Calculator Specification
 
-**Slice:** Payroll-3B-5B-1 (foundation) — implementation lands in 3B-5B-2.
+**Slice:** Payroll-3B-5B-1b (verification + corrections) — implementation lands in 3B-5B-2.
 **Status:** SPECIFICATION ONLY. Zero dollar arithmetic in this slice.
-**Jurisdiction:** Canada federal + Alberta MVP. Quebec is out of scope; the resolver refuses non-`AB` provinces loudly at calculation time.
+**Jurisdiction:** Canada federal + Alberta MVP. Quebec out of scope; the resolver refuses non-`AB` provinces loudly at calculation time.
 
-This document is the CRA-grounded contract the 3B-5B calculator will implement. Every value referenced here — YMPE, YAMPE, rates, brackets, K-factors, BPA amounts, MIE — comes from the pinned `PayrollStatutoryPackage.paramsJson` for the pay date. **No numeric CRA parameter is embedded here.** The founder must independently verify every value against the current CRA publications before those packages are seeded.
+Every numeric CRA parameter (rate, maximum, YMPE, YAMPE, YBE, MIE, bracket threshold, K-factor, BPA) comes from the pinned `PayrollStatutoryPackage.paramsJson` for the pay date — never embedded in code. H1 (T4127 122nd Edition) and H2 (T4127 123rd Edition) 2026 packages are seeded via `src/lib/payroll/statutory/seed-ca-ab-2026.ts` with full CRA provenance.
 
 ---
 
@@ -14,200 +14,258 @@ This document is the CRA-grounded contract the 3B-5B calculator will implement. 
 calculatePayrollBatch(inputs: {
   batch: PreparedBatchView,                       // 3B-4 / 3B-5A frozen snapshot
   statutoryPackage: ResolvedStatutoryPackage,     // pinned via resolveStatutoryPackage(payDate)
-  ytdByEmployee: Map<employeeId, EmployeePayrollYtd>,   // 3B-5A + 3B-5B-1 aggregate
+  ytdByEmployee: Map<employeeId, EmployeePayrollYtd>,   // this-employer YTD only (§9-10)
   cppElectionsByEmployee?: Map<employeeId, CppElectionView[]>,
   cppDisabilitiesByEmployee?: Map<employeeId, CppDisabilityView[]>,
+  taxProfilesByEmployee: Map<employeeId, EmployeeTaxProfileWithTd1>,
+  periodsPerYearByPayGroup: Map<payGroupId, number>,    // P — see §2
 }): CalculatedPayrollResult
 ```
 
-Pure function of its inputs. Same inputs → byte-identical outputs. Reproducible replays produce the same PayrollBatchEmployee result columns. The calculator writes result columns (see [prisma/schema.prisma → PayrollBatchEmployee](../../prisma/schema.prisma)) and NEVER mutates the frozen snapshot.
+Pure function. Same inputs → byte-identical outputs. The calculator writes result columns on `PayrollBatchEmployee` and NEVER mutates the frozen snapshot.
 
-## 2. Earnings / statutory bases
+## 2. P — actual pay-period count (§5)
 
-For each `PayrollBatchEmployee`:
+`P` is the actual number of pay periods this Pay Group runs in the calendar tax year — NEVER a hard-coded 52 / 26 / 24 / 12.
 
-**Gross earnings (`grossPay`)** = Σ regular earnings + overtime + allowances + one-time payments, per the batch snapshot. The 3B-5B-2 earnings-decomposition step converts each `sourceFacts.compensations[]` × approved-time / coverage window into typed earning lines *before* summing.
+- Weekly may be 52 OR **53**.
+- Biweekly may be 26 OR **27**.
+- Semi-monthly is ordinarily 24.
+- Monthly is 12.
 
-**Taxable earnings (`earningsTaxable`)** = gross + taxable-benefit allowances − CPP2 deduction (per T4127 §Federal formula variable K3) − union dues − RPP contributions. The CPP2 offset applies only in the federal tax formula's `T3` intermediate variable, not to the gross itself.
+Source: `resolvePeriodsPerYearFromCalendar({clubId, payGroupId, taxYear})` at `src/lib/payroll/statutory/periods-per-year.ts` counts `PayrollPayPeriod` rows whose `taxYear === year(payDate)`. The 3B-2 calendar generation guarantees deterministic period assignment; the calculator MUST NOT assume a canonical count.
 
-**Pensionable earnings (`earningsPensionable`)** = gross earnings subject to CPP (excludes non-pensionable classes: severance, retiring allowances, statutory holidays for casuals, etc. — the MVP treats every earning as pensionable unless the earning row carries a `pensionable: false` flag; non-pensionable earnings are out of scope for MVP per §11 and produce a BLOCKER).
+The CPP basic exemption `PPBE = ybe / P` uses this actual count. A biweekly-27 year and a biweekly-26 year produce different PPBEs — this is the intended CRA-correct behaviour.
 
-**Insurable earnings (`earningsInsurable`)** = gross earnings subject to EI (excludes retiring allowances, most pension income). Same MVP simplification.
+## 3. PM — pensionable months (§6, §8)
 
-## 3. CPP base + first-additional (§21)
+`PM` = the number of calendar months in the tax year for which the employment is CPP-pensionable. Computed by [`cppPensionableMonths(...)`](../../src/lib/payroll/statutory/cpp-pensionable-months.ts), which consumes:
 
-Both components MUST be computed and persisted separately for statutory traceability (T4 reporting, YTD annual-maximum tracking, employer matching).
+- Employee DOB (age-18 and age-70 boundaries)
+- ACTIVE CPT30 election history (stop / revocation)
+- ACTIVE CPP disability intervals
+- `deceasedOn` (from `Employee.terminationReason === "DECEASED"` + `terminationDate`)
 
-**Pay-period basic exemption (PPBE)** =
-`Package.cpp.ybe / periodsPerYear` (unrounded, CRA T4127 §CPP variable `PE`).
+`PM ∈ [0, 12]`. Never a tenure or hire-fraction ratio — always CRA pensionable months.
 
-**Pensionable-earnings slice for this pay** =
-`max(0, min(earningsPensionable, packagePensionableMaxForPeriod) − PPBE)`
-where `packagePensionableMaxForPeriod` = `Package.cpp.ympe / periodsPerYear`, rounded per CRA formula.
+## 4. Earnings / statutory bases
 
-**CPP base employee contribution (`deductionCppEeBase`)** =
-`slice × Package.cpp.baseRateEE`
-capped at `max(0, annualBaseMax − ytdCppEE_Base)` where
-`annualBaseMax = (Package.cpp.ympe − Package.cpp.ybe) × Package.cpp.baseRateEE × (pensionableMonthCount / 12)`.
+Per `PayrollBatchEmployee`:
 
-The proration factor `pensionableMonthCount / 12` comes from [`cppPensionableMonths(...)`](../../src/lib/payroll/statutory/cpp-pensionable-months.ts) — the resolver that consumes DOB, CPT30 election history, disability intervals, and death date.
+**`grossPay`** = Σ regular earnings + overtime + allowances + one-time payments per the batch snapshot.
 
-**CPP first-additional employee contribution (`deductionCppEeFirstAdd`)** =
-`slice × Package.cpp.firstAdditionalRateEE` (a separate parameter added to `CanadianPayrollStatutoryParamsV1` in 3B-5B-1 continuation), capped at the pro-rated annual max in the same shape.
+**`earningsTaxable`** = gross + taxable-benefit allowances − CPP2 deduction (via `K3` in T4127 §Federal) − union dues − RPP contributions.
 
-**Employer amounts** (`employerCppBase`, `employerCppFirstAdd`) = mirror of employee amounts using employer rates (per statute typically equal to employee rates).
+**`earningsPensionable`** = gross earnings subject to CPP per each earning row's `pensionable` flag (§18: NOT inferred from `taxable`).
 
-## 4. CPP2
+**`earningsInsurable`** = gross earnings subject to EI per each earning row's `insurable` flag (also decoupled).
 
-**Pensionable-earnings slice for CPP2** =
-`max(0, min(earningsPensionable, packageYampeForPeriod) − packageYmpeForPeriod)`.
+Per §18: allowance / earning classification uses THREE independent flags (`taxable`, `pensionable`, `insurable`) on `EmployeeAllowance` and the earning-line contract. The calculator MUST honour each independently.
 
-**Employee CPP2 (`deductionCpp2Ee`)** =
-`slice × Package.cpp.cpp2RateEE`
-capped at `max(0, annualCpp2Max − ytdCpp2EE)` where
-`annualCpp2Max = (Package.cpp.yampe − Package.cpp.ympe) × Package.cpp.cpp2RateEE × (pensionableMonthCount / 12)`.
+## 5. CPP base + first-additional — Factor C (T4127 Chapter 6)
 
-**Employer CPP2 (`employerCpp2`)** = mirror using `Package.cpp.cpp2RateER`.
+**CORRECTED** per Payroll-3B-5B-1b §2. The prior spec incorrectly proposed a `min(earningsPensionable, YMPE / P)` per-period ceiling — that is NOT the CRA formula and is not implemented.
 
-## 5. EI
+**T4127 Factor C** (combined base + first-additional CPP contribution for a pay period):
 
-**Insurable earnings slice** = `min(earningsInsurable, Package.ei.mie − ytdInsurableEarnings)`.
+```
+C = min(
+      (combinedMaxEE × PM / 12) − D,              // remaining prorated annual max
+      combinedRateEE × max(0, PI − ybe/P)          // current-period contribution
+    )
+```
 
-The CRA formula does NOT use a per-period MIE slice — the annual MIE is the sole cap, applied cumulatively. Callers MUST NOT invent a per-period MIE proration.
+Where:
+- `combinedMaxEE` = `Package.cpp.combinedMaxEE` (2026: 4230.45)
+- `combinedRateEE` = `Package.cpp.combinedRateEE` (2026: 0.0595)
+- `ybe` = `Package.cpp.ybe` (2026: 3500.00)
+- `P` = pay periods per year (§2 — actual calendar count)
+- `PM` = pensionable months (§3)
+- `PI` = pensionable income for this pay period
+- `D` = YTD Factor C contribution (this employer only — §9-10)
 
-**Employee EI (`deductionEiEe`)** =
-`insurableSlice × Package.ei.rateEE`
-capped at `max(0, Package.ei.maxAnnualPremiumEE − ytdEiEE)`.
-The published `maxAnnualPremiumEE` value from CRA is authoritative — the calculator MUST NOT recompute it from `mie × rate` and substitute (§17 rule).
+If `C < 0`, set to 0.
 
-**Employer EI (`employerEi`)** = `deductionEiEe × Package.ei.employerMultiplier` (typically 1.4).
+## 6. CPP base + first-additional decomposition (§C)
 
-Quebec (`QPIP`) is out of MVP.
+CRA reports Factor C as ONE combined amount but T4 reporting requires separate base + first-additional components. Spectre's decomposition rule preserves the CRA invariant:
 
-## 6. Federal income tax (T4127 §Federal formula)
+**Invariant: `deductionCppEeBase + deductionCppEeFirstAdd == C` to the cent.**
 
-The full CRA formula chain — not a bracket multiplication.
+Decomposition algorithm (single unrounded division, then rounded halves that reconcile):
+
+```
+1. Compute C via §5 (do not round yet — keep 6-dp Decimal).
+2. Compute baseShare        = C × (baseRateEE / combinedRateEE)              // unrounded
+3. deductionCppEeBase       = HALF_UP round(baseShare, 2)
+4. deductionCppEeFirstAdd   = round(C, 2) − deductionCppEeBase
+5. Assert: deductionCppEeBase + deductionCppEeFirstAdd == round(C, 2).       // to the cent
+```
+
+This "compute-combined, then split with residual to first-additional" order guarantees zero rounding drift between the CRA-reported combined amount and the T4-reported components.
+
+Employer amounts mirror employee amounts using employer rates (identical to employee rates by statute for 2026).
+
+**YTD caps enforced separately** on `ytdCppEE_Base ≤ prorated baseMaxEE` and `ytdCppEE_FirstAdd ≤ prorated firstAdditionalMaxEE`. The combined-cap check in §5 dominates; the split caps are structural safeguards against future rate divergence.
+
+## 7. CPP2 — Factor C2 (T4127 Chapter 6)
+
+**CORRECTED** per Payroll-3B-5B-1b §4. The prior spec proposed `YMPE / P` as a per-period CPP2 threshold — that is NOT the CRA formula.
+
+**T4127 Factor C2:**
+
+```
+W = max(prior YTD pensionable, YMPE × PM / 12)
+
+C2 = min(
+       (cpp2MaxEE × PM / 12) − D2,                // remaining prorated CPP2 annual max
+       cpp2RateEE × max(0, PI_YTD + PI − W)        // amount above W
+     )
+```
+
+Where:
+- `cpp2MaxEE` = `Package.cpp.cpp2MaxEE` (2026: 416.00)
+- `cpp2RateEE` = `Package.cpp.cpp2RateEE` (2026: 0.0400)
+- `YMPE` = `Package.cpp.ympe` (2026: 74600.00)
+- `YAMPE` = `Package.cpp.yampe` (2026: 85000.00 — implicit YAMPE cap via `cpp2MaxEE` prorated tally)
+- `PM` = pensionable months (§3)
+- `PI` = pensionable income this pay
+- `PI_YTD` = pensionable YTD before this pay (this employer only)
+- `D2` = YTD CPP2 contribution (this employer only)
+
+If `C2 < 0`, set to 0.
+
+Employer CPP2 mirrors with `cpp2RateER` (equal to EE for 2026).
+
+## 8. EI — annual max cap (T4127 Chapter 7)
+
+```
+EI_EE = min(
+          Package.ei.maxAnnualPremiumEE − ytdEiEE,
+          Package.ei.rateEE × min(PI_ei, Package.ei.mie − ytdInsurableEarnings)
+        )
+```
+
+**Never a per-period MIE slice.** The published `maxAnnualPremiumEE` (2026: 1123.07) is authoritative — do NOT recompute it from `mie × rate` (§13 rule).
+
+`EI_ER` uses `Package.ei.rateER` (2026: 0.02282) and `Package.ei.maxAnnualPremiumER` (2026: 1572.30). The employer multiplier (1.4) is documentation metadata only.
+
+## 9. Federal income tax (T4127 §Federal)
+
+Full formula chain:
 
 | Variable | Meaning |
 |-|-|
-| `P` | Periods-per-year for the pay-frequency |
-| `I` | Gross remuneration for this pay period |
-| `F` | Employee's contribution to a RPP for this pay |
-| `F1` | Alimony / maintenance for this pay |
-| `A` | Annualised net taxable income = `P × (I − F − F1) + HD − F2 − U1` |
-| `HD` | Annual deductions from income (as declared) |
-| `F2` | Alimony / maintenance annualised |
-| `U1` | Union dues annualised |
-| `R` | Federal tax rate for the bracket A falls into |
-| `K` | Bracket constant K (the CRA T4127 "constant") |
-| `K1` | Federal non-refundable tax credit = `Package.federal.lowestRate × (TC + TD1F-BPA-tier)` |
-| `K2` | Federal CPP tax credit = `Package.federal.lowestRate × (annualised CPP employee contribution + first-additional)` |
-| `K2A` | Federal EI tax credit = `Package.federal.lowestRate × (annualised EI premiums)` |
-| `K3` | Federal CPP2 deduction = `Package.federal.cpp2DeductionRate × (annualised CPP2 contribution)` |
-| `K4` | Canada employment credit = `Package.federal.lowestRate × min(annualised employment income, CEA_MAX)` |
-| `T3` | Annual federal tax = `(R × A − K) − K1 − K2 − K2A − K3 − K4` |
-| `T4` | Federal tax withheld this pay = `max(0, round(T3 / P) + additionalTaxRequested)` |
+| `P` | Pay periods per year (§2) |
+| `I` | Gross remuneration this period |
+| `F` | Employee RPP contribution this period |
+| `F1` | Alimony / maintenance this period |
+| `A` | `P × (I − F − F1) + HD − F2 − U1` |
+| `HD` | Annualised deductions from income (as declared) |
+| `F2` | Annualised alimony / maintenance |
+| `U1` | Annualised union dues |
+| `R` | Federal bracket rate for `A` |
+| `K` | Bracket constant K |
+| `K1` | `Package.federal.lowestRate × BPAF` |
+| `BPAF` | Federal BPA (income-tiered per §K1 rule below) |
+| `K2` | `Package.federal.lowestRate × annualised (CPP base + first-additional employee contributions)` |
+| `K2A` | `Package.federal.lowestRate × annualised EI premiums` |
+| `K3` | `Package.federal.cpp2DeductionRate × annualised CPP2` |
+| `K4` | `Package.federal.lowestRate × min(annualised employment income, CEA_MAX)` |
+| `T3` | `(R × A − K) − K1 − K2 − K2A − K3 − K4` |
+| `T4` | `max(0, round(T3 / P) + additionalFederalTaxAmount)` |
 
-**BPA (Basic Personal Amount) tier** — Bill C-30 phases the federal BPA between `Package.federal.bpaLow` and `Package.federal.bpaHigh` based on annualised income (`Package.federal.bpaPhaseOutStart` → `Package.federal.bpaPhaseOutEnd`). Linear phase-out formula per CRA T4127 §BPA.
+**BPAF tier (Bill C-30 phase-out):**
+- `A ≤ Package.federal.bpaPhaseOutStart` → `BPAF = bpaMax` (2026: 16452)
+- `A ≥ Package.federal.bpaPhaseOutEnd` → `BPAF = bpaMin` (2026: 14829)
+- Between → linear interpolation per T4127 §K1
 
-**No TD1F on file (§L, §19):** the calculator uses the federal BPA only (no additional claim credits). CRA's stated employer default when TD1 is missing.
+## 10. Alberta provincial tax
 
-## 7. Alberta provincial income tax
+Same shape as federal, `Package.provincial.brackets[]` + `Package.provincial.bpa` (2026: 22769).
 
-Same shape as federal, applied to `Package.provincial.brackets[]` + `Package.provincial.bpa`. `T4Prov = max(0, round(T3Prov / P) + additionalProvincialTaxRequested)`.
+`T4Prov = max(0, round(T3Prov / P) + additionalProvincialTaxAmount)`
 
-## 8. Net pay
+## 11. TD1 source facts — verified contract (§16-17)
+
+TD1 fields on `EmployeeTaxProfile`:
+
+| Field | Behaviour |
+|-|-|
+| `federalClaimSecretRef` | KMS-wrapped TD1F claim amount. When decrypted total = 0 or `claimZeroFederal = true` → BPA only NOT applied. |
+| `provincialClaimSecretRef` | Alberta TD1 total. Same behaviour. |
+| `additionalFederalTaxAmount` | ADDED to `T4` AFTER formula. Never modifies `T3`. |
+| `additionalProvincialTaxAmount` | ADDED to `T4Prov`. |
+| `claimZeroFederal` | TD1 "more than one employer/payer" flag. When true → federal claim = 0 (no BPA). |
+| `claimZeroProvincial` | Alberta TD1 equivalent. |
+| `totalIncomeLessThanClaim` | TD1 "total income less than total claim amount — no tax withheld" flag. When true → `T4 = additionalFederalTaxAmount` (i.e. WITHHOLD NOTHING from the formula, plus any voluntary additional tax). Same for provincial. |
+
+**No federal / Alberta TD1 on file** → federal BPA + Alberta BPA respectively, no additional claim credits (per CRA guidance to employers when TD1 is not received).
+
+## 12. Net pay
 
 ```
 netPay = grossPay
-       − deductionCppEeBase
-       − deductionCppEeFirstAdd
+       − deductionCppEeBase − deductionCppEeFirstAdd
        − deductionCpp2Ee
        − deductionEiEe
        − deductionFederalTax
        − deductionProvincialTax
-       − Σ other post-tax deductions (union dues, garnishments, etc. — MVP: zero)
+       − Σ other post-tax deductions (MVP: zero)
 ```
 
-Rounded per `Package.rounding.netPayMode`.
+## 13. YTD (§9-10)
 
-## 9. YTD maximums (annual max cap enforcement)
+YTD includes ONLY:
 
-Every contribution field is capped at the annual maximum from the pinned package **for this employer** (per §23 — a `PRIOR_EMPLOYER` opening balance is NOT deducted from this employer's max):
+- ACTIVE `PayrollOpeningBalance` where `priorPayrollKind ∈ {PRIOR_SYSTEM_SAME_EMPLOYER, PRIOR_ADJUSTMENT}`.
+- POSTED `PayrollBatch` for this employer (payDate < asOf, taxYear match).
 
-- `deductionCppEeBase ≤ annualCppBaseMax × (pensionableMonthCount/12) − ytdCppEE_Base`
-- `deductionCppEeFirstAdd ≤ annualCppFirstAddMax × (pensionableMonthCount/12) − ytdCppEE_FirstAdd`
-- `deductionCpp2Ee ≤ annualCpp2Max × (pensionableMonthCount/12) − ytdCpp2EE`
-- `deductionEiEe ≤ Package.ei.maxAnnualPremiumEE − ytdEiEE`
+`PRIOR_EMPLOYER` opening balances contribute **ZERO** to every YTD category — gross, taxable, pensionable, insurable, CPP, CPP2, EI, federal tax, provincial tax, all employer contributions. Different employers/BNs calculate CPP + EI + tax independently per CRA; the employee may recover overcontributions on their personal return.
 
-The calculator never fabricates a cap from `ympe × baseRate`; it uses the pinned package's authoritative published value where CRA supplies one.
+`getEmployeePayrollYtd` enforces this. The row remains recorded (for HR reference) but its values are hidden from THIS employer's YTD aggregate.
 
-## 10. Multiple assignments
+## 14. Salary proration — Spectre business policy (§19)
 
-Earnings are computed per assignment (from `sourceFacts.compensations[].assignmentId`) then summed for statutory deductions. YTD accumulates at the Employee level (`PayrollBatchEmployee`) — the split across assignments is only for earnings-line traceability.
-
-## 11. Mid-period Pay Group transfer
-
-Each batch's `sourceFacts.coverage.coverageDays / periodDays` ratio is applied to salaried earnings BEFORE any statutory calculation. This prevents duplicate full-period salary across the two batches for a transferred employee (Payroll-3B-5A §32 invariant).
-
-## 12. Salary proration policy (§28)
-
-Spectre MVP policy: **calendar-day proration**.
-
-For a salaried employee whose `coverage.coverageDays < coverage.periodDays`:
+Spectre calendar-day proration:
 
 ```
-periodBaseSalary = annualSalary / periodsPerYear
+periodBaseSalary = annualSalary / P
 prorated         = periodBaseSalary × (coverageDays / periodDays)
 ```
 
-Applies to:
-- ordinary full period → `coverageDays == periodDays` → factor is 1.
-- hire mid-period → factor < 1.
-- termination mid-period → factor < 1.
-- Pay Group transfer → each batch carries its own factor.
+**This is Spectre compensation policy, NOT a CPP statutory formula.** Statutory deductions operate on the resulting remuneration; they do NOT prorate based on coverageDays themselves. `PM` (pensionable months) handles CPP proration separately.
 
-**Not tenant-configurable in MVP.** A future slice may add `PayrollClubConfig.salaryProrationPolicy` (`CALENDAR_DAYS | BUSINESS_DAYS | WORKING_DAYS`) if a Club needs it.
+## 15. Allowance conversion (§18)
 
-**Proof of no-double-pay:** for any transfer where employee moves Group A → Group B on day `T`:
-`coverageA.coverageDays + coverageB.coverageDays = periodDays` (asserted by [`membership-coverage.test.ts`](../../tests/payroll/membership-coverage.test.ts)), and the calculator computes `periodBaseSalary × coverageA/periodDays + periodBaseSalary × coverageB/periodDays = periodBaseSalary × 1.0`. Sum equals a full period salary — never more.
+`EmployeeAllowance.frequency` → per-period amount:
 
-## 13. Allowance conversion policy (§29)
-
-`EmployeeAllowance.frequency` values today:
-
-| Frequency | Conversion to per-period amount |
+| Frequency | Formula |
 |-|-|
 | `PER_PAY_PERIOD` | 1 × amount |
-| `MONTHLY` | `amount × 12 / periodsPerYear` |
-| `BIWEEKLY` | `amount × 26 / periodsPerYear` |
-| `WEEKLY` | `amount × 52 / periodsPerYear` |
-| `ANNUAL` | `amount / periodsPerYear` |
-| `ONE_TIME` | Applied once in the coverage window matching the effective date |
+| `MONTHLY` | `amount × 12 / P` |
+| `BIWEEKLY` | `amount × 26 / P` (**note:** normalised by ACTUAL P) |
+| `WEEKLY` | `amount × 52 / P` |
+| `ANNUAL` | `amount / P` |
+| `ONE_TIME` | Applied once at effective date |
+| Other | BLOCKER `UNSUPPORTED_ALLOWANCE_FREQUENCY` |
 
-Any other frequency → BLOCKER `UNSUPPORTED_ALLOWANCE_FREQUENCY`.
+Contribution to statutory bases uses independent `taxable / pensionable / insurable` flags (§18 rule — never inferred from any single Boolean).
 
-Taxable allowances contribute to `earningsGross` + `earningsTaxable` + `earningsPensionable` + `earningsInsurable` per the allowance's `taxable` flag and CRA guidance. Non-cash / non-taxable allowances contribute to `earningsGross` only when statute requires.
+## 16. Rounding (§20)
 
-## 14. Rounding (§30)
+**T4127-aligned convention** (§20 verification):
 
-**Arithmetic:** all intermediate calculations use `Decimal` (Prisma `Decimal` / `decimal.js`) at minimum 6 fractional digits precision. **No JS floating point.**
+- **Arithmetic:** all intermediates use `Decimal` at ≥6 fractional digits. **No JS floating point.**
+- **CPP base + first-additional + CPP2:** round to nearest cent (`HALF_UP` per current package). CRA T4127 Chapter 6 requires nearest-cent output.
+- **EI:** round to nearest cent (`HALF_UP`).
+- **Federal + Alberta tax `T4`/`T4Prov`:** round to nearest cent (`HALF_UP`). T4127 permits nearest-$0.05 in older formulas but nearest-cent is CRA's default for programmatic implementations.
+- **Net pay:** round to nearest cent.
+- **Annual-max comparison:** compare UNROUNDED slice × UNROUNDED rate against UNROUNDED max; ROUND the final line only.
 
-**Per-line rounding:**
-| Value | Mode | Precision |
-|-|-|-|
-| Pay-period basic exemption (PPBE) | HALF_EVEN | 2 dp |
-| CPP base contribution | `Package.rounding.mode` (default HALF_UP) | 2 dp |
-| CPP first-additional | `Package.rounding.mode` | 2 dp |
-| CPP2 contribution | `Package.rounding.mode` | 2 dp |
-| EI premium | `Package.rounding.mode` | 2 dp |
-| Federal tax `T4` | `Package.rounding.mode` | 2 dp |
-| Provincial tax `T4Prov` | `Package.rounding.mode` | 2 dp |
-| Net pay | `Package.rounding.netPayMode` | 2 dp |
+Rounding mode is stored on the pinned package (`rounding.mode`). Spectre does not expose per-tenant rounding configuration — CRA does not permit tenants to select their own tie-breaking convention.
 
-**Annual maximum comparison:** compare unrounded slice against unrounded (unrounded rate × unrounded pensionable slice) before rounding the final contribution, so a taxable slice that would trigger a $0.005 cap breach doesn't sneak through rounding.
-
-## 15. Statutory package pinning (§31)
+## 17. Statutory package pinning
 
 ```
 PREPARED
@@ -218,18 +276,18 @@ PREPARED
  → transition PREPARED → CALCULATED
 ```
 
-Once pinned, recalculating the same frozen batch reuses the exact same package. A later package publish never silently alters a historical batch. Void-and-recalculate is the only path to change a POSTED batch's statutory package, and it produces a NEW batch sequence.
+Once pinned, recalculating the same frozen batch reuses the exact package. Void-and-recalculate is the only path to change a POSTED batch's statutory package.
 
-## 16. Work Intake state (§32)
+## 18. Work Intake (§25)
 
-No `PAYROLL_FINAL_APPROVAL` card is created in 3B-5B-1. The existing `PAYROLL_REVIEW` card stays OPEN. 3B-5B-2 transitions REVIEW → RESOLVED on successful calculation and materialises FINAL_APPROVAL for the Controller.
+`PAYROLL_REVIEW` stays OPEN. No `PAYROLL_FINAL_APPROVAL` in 3B-5B-1x. The 3B-5B-2 calculator transitions REVIEW → RESOLVED on successful calculation and materialises FINAL_APPROVAL for the Controller.
 
 ---
 
 ## Verification gate before 3B-5B-2 implementation
 
-1. Every parameter in §3–§9 must reference a Zod-validated field on `CanadianPayrollStatutoryParamsV1`. Missing fields (e.g. `firstAdditionalRateEE`, `maxAnnualPremiumEE`) must be added to the schema in 3B-5B-2's first step.
-2. H1 (`[2026-01-01, 2026-07-01)`) and H2 (`[2026-07-01, ...)`) statutory packages must be installed with values extracted from official CRA publications (T4127 122nd + 123rd editions, T4032-AB, EI Premium Rate/Maximum announcements).
-3. Every scenario in [tests/payroll/fixtures/2026/ca-ab/](../../tests/payroll/fixtures/2026/ca-ab/) must carry an expected result derived independently from CRA PDOC or official CRA worked examples — never from the Spectre calculator itself (§24 no-circular-testing rule).
-4. `tests/payroll/statutory-package.test.ts` must confirm every required numeric field is present and validated on install.
-5. TD1 behaviour (§19) must be re-verified against current CRA guidance before withholding formulas ship.
+1. H1 + H2 packages installed via `seedCanadaAlbertaPackages2026`. Federal-tax `brackets[]` MUST be replaced with the CRA-T4127 122nd/123rd Edition federal-tax bracket table.
+2. Every scenario in `tests/payroll/fixtures/2026/ca-ab/scenarios.json` must carry an `expected` value derived independently from CRA T4127 worked examples OR CRA PDOC — never from Spectre's own calculator.
+3. `resolvePeriodsPerYearFromCalendar` must be called by the calculator; never a hard-coded literal.
+4. TD1 behaviour re-verified against the current CRA guidance for missing / zero / additional-tax combinations.
+5. Allowance statutory-classification decouple applied through the earning-line + snapshot chain.

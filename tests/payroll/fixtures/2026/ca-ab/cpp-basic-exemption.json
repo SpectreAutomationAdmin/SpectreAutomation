@@ -1,0 +1,49 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "T4127 Payroll Deductions Formulas — Chapter 6 (CPP), Government of Canada 2026 YBE announcement",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/revenue-agency/services/forms-publications/payroll/t4127-payroll-deductions-formulas.html",
+  "sourceRetrievedAt": "2026-09-01",
+  "sourceRetrievedBy": "human-verified",
+  "verificationNote": "Expected pay-period basic exemption values derive directly from CRA formula PPBE = ybe / P using the CRA-authoritative YBE ($3,500.00) and the ACTUAL calendar-period count P (§5 rule — 52/53, 26/27, 24, or 12). These are CRA-formula derivations, not Spectre-calculator outputs.",
+  "cases": [
+    {
+      "id": "ppbe-weekly-52",
+      "description": "Weekly Pay Group with 52 pay dates in the tax year.",
+      "inputs": { "P": 52, "ybe": "3500.00" },
+      "expected": { "PPBE": "67.30769230..." },
+      "notes": "3500 / 52 = 67.30769230769... Kept unrounded in the intermediate; the deduction line rounds to nearest cent."
+    },
+    {
+      "id": "ppbe-weekly-53",
+      "description": "Weekly Pay Group with 53 pay dates in the tax year (a leap-week year).",
+      "inputs": { "P": 53, "ybe": "3500.00" },
+      "expected": { "PPBE": "66.03773584..." },
+      "notes": "3500 / 53 = 66.03773584905... — a 53-week year produces a different PPBE than a 52-week year. Hard-coding 52 would be WRONG."
+    },
+    {
+      "id": "ppbe-biweekly-26",
+      "description": "Biweekly Pay Group with 26 pay dates.",
+      "inputs": { "P": 26, "ybe": "3500.00" },
+      "expected": { "PPBE": "134.61538461..." }
+    },
+    {
+      "id": "ppbe-biweekly-27",
+      "description": "Biweekly Pay Group with 27 pay dates (occasional leap-year period).",
+      "inputs": { "P": 27, "ybe": "3500.00" },
+      "expected": { "PPBE": "129.62962962..." }
+    },
+    {
+      "id": "ppbe-semi-monthly-24",
+      "description": "Semi-monthly Pay Group (ordinarily 24).",
+      "inputs": { "P": 24, "ybe": "3500.00" },
+      "expected": { "PPBE": "145.83333333..." }
+    },
+    {
+      "id": "ppbe-monthly-12",
+      "description": "Monthly Pay Group.",
+      "inputs": { "P": 12, "ybe": "3500.00" },
+      "expected": { "PPBE": "291.66666666..." }
+    }
+  ]
+}

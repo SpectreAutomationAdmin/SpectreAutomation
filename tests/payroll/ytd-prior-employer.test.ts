@@ -76,7 +76,7 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
     expect(ytd.sources.openingBalancePriorPayrollKind).toBe("PRIOR_SYSTEM_SAME_EMPLOYER");
   });
 
-  it("PRIOR_EMPLOYER opening balance recorded but CPP/EI YTD is zero for this employer", async () => {
+  it("PRIOR_EMPLOYER contributes ZERO to every employer-YTD category (§9-10)", async () => {
     const s = await scenario();
     const draft = await createDraftOpeningBalance(s.paP, s.club.id, {
       employeeId: s.emp.id, taxYear: 2026, values: values(),
@@ -85,18 +85,27 @@ describe("Payroll-3B-5B-1 — prior-payroll YTD distinction", () => {
     });
     await activateOpeningBalance(s.paP, s.club.id, draft.id);
     const ytd = await getEmployeePayrollYtd(s.club.id, s.emp.id, d(2026, 9, 1));
-    // Gross + taxable + fed/prov tax carry forward for T4 continuity.
-    expect(Number(ytd.ytdGrossEarnings)).toBe(40000);
-    expect(Number(ytd.ytdFederalTax)).toBe(5000);
-    // But CPP/EI YTD are ZERO — the new employer's annual maxes
-    // are NOT reduced by prior-employer contributions.
+    // §9-10: another employer's history contributes ZERO to THIS
+    // employer's Payroll YTD in every category — earnings, statutory
+    // bases, deductions, and tax withholdings alike. Each employer
+    // reports its own T4 independently.
+    expect(Number(ytd.ytdGrossEarnings)).toBe(0);
+    expect(Number(ytd.ytdTaxableEarnings)).toBe(0);
     expect(Number(ytd.ytdPensionableEarnings)).toBe(0);
     expect(Number(ytd.ytdInsurableEarnings)).toBe(0);
     expect(Number(ytd.ytdCppEE)).toBe(0);
     expect(Number(ytd.ytdCppEE_Base)).toBe(0);
     expect(Number(ytd.ytdCppEE_FirstAdd)).toBe(0);
+    expect(Number(ytd.ytdCpp2EE)).toBe(0);
     expect(Number(ytd.ytdEiEE)).toBe(0);
+    expect(Number(ytd.ytdFederalTax)).toBe(0);
+    expect(Number(ytd.ytdProvincialTax)).toBe(0);
+    expect(Number(ytd.ytdCppER)).toBe(0);
+    expect(Number(ytd.ytdCpp2ER)).toBe(0);
+    expect(Number(ytd.ytdEiER)).toBe(0);
+    // Provenance is still exposed so a reviewer can see the row exists.
     expect(ytd.sources.openingBalancePriorPayrollKind).toBe("PRIOR_EMPLOYER");
+    expect(ytd.sources.openingBalanceId).toBe(draft.id);
   });
 
   it("PRIOR_EMPLOYER requires priorEmployerId — refused when missing", async () => {

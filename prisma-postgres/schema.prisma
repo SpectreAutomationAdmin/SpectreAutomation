@@ -10316,6 +10316,9 @@ model EmployeeAllowance {
   currency        String?
   frequency       String
   taxable         Boolean   @default(true)
+  // Payroll-3B-5B-1b (§18) — decoupled statutory classifications.
+  pensionable     Boolean?
+  insurable       Boolean?
   effectiveFrom   DateTime
   effectiveTo     DateTime?
   notes           String?
@@ -10501,6 +10504,13 @@ model EmployeeTaxProfile {
   federalClaimSecretRef        String
   provincialClaimSecretRef     String
   additionalDeductionSecretRef String?
+  // Payroll-3B-5B-1b (2026-09-01) — TD1 source facts required by
+  // T4127. See prisma/schema.prisma for full doc.
+  additionalFederalTaxAmount   Decimal   @default(0)
+  additionalProvincialTaxAmount Decimal  @default(0)
+  claimZeroFederal             Boolean   @default(false)
+  claimZeroProvincial          Boolean   @default(false)
+  totalIncomeLessThanClaim     Boolean   @default(false)
   notes                        String?
   createdAt                    DateTime  @default(now())
   updatedAt                    DateTime  @updatedAt
@@ -11800,6 +11810,10 @@ model PayrollBatchAllowanceSnapshot {
   // PER_PAY_PERIOD | MONTHLY | ANNUAL - preserved from the source row.
   frequency              String
   taxable                Boolean
+  // Payroll-3B-5B-1b (§18) — decoupled classification frozen at
+  // snapshot time.
+  pensionable            Boolean?
+  insurable              Boolean?
   // Effective window of the SOURCE allowance at snapshot time.
   sourceEffectiveFrom    DateTime
   sourceEffectiveTo      DateTime?

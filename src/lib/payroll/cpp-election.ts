@@ -94,15 +94,23 @@ function yearsBetween(anchor: Date, from: Date): number {
   return years;
 }
 
-/** Effective date for a stop or revocation — derived from source facts. */
+/**
+ * Effective date for a stop or revocation — derived per CRA rule
+ * (Payroll-3B-5B-1b §7).
+ *
+ * CRA CPT30: "the election becomes effective on the first day of
+ * the month AFTER the employer receives the completed and signed
+ * form." The employer-received date is therefore the sole anchor —
+ * `employeeSignedOn` cannot independently delay the effective date
+ * beyond `receivedOn` (Spectre already refuses forms with
+ * `employeeSignedOn > receivedOn`, so `receivedOn >= employeeSignedOn`
+ * is invariant at this call site).
+ */
 function deriveElectionEffectiveDate(input: {
   employeeSignedOn: Date | null;
   receivedOn: Date;
 }): Date {
-  const anchors = [utcMidnight(input.receivedOn)];
-  if (input.employeeSignedOn) anchors.push(utcMidnight(input.employeeSignedOn));
-  const latest = anchors.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b));
-  return firstOfMonthAfter(latest);
+  return firstOfMonthAfter(utcMidnight(input.receivedOn));
 }
 
 async function loadEmployee(clubId: string, employeeId: string) {
@@ -263,31 +271,29 @@ export async function recordCppRevocation(
   }
   if (issues.length > 0) throw new ValidationError(issues);
 
-  // Derive effective date per CRA rule, then apply the same-year floor.
+  // Derive effective date per CRA rule (Payroll-3B-5B-1b §7):
+  // firstDayOfMonthAfter(receivedOn). Then enforce the CRA same-year
+  // revocation rule (§8): a revocation whose derived effective date
+  // would fall in the SAME calendar year as the original election is
+  // refused LOUDLY. Spectre never silently shifts an invalid form
+  // into January 1 of the following year — the admin must record a
+  // valid form with a proper later-year receipt date.
   const derived = deriveElectionEffectiveDate({
     employeeSignedOn: input.employeeSignedOn,
     receivedOn: input.receivedOn,
   });
   const electionYear = target.effectiveOn.getUTCFullYear();
-  const followingYearStart = new Date(Date.UTC(electionYear + 1, 0, 1));
-  const effectiveOn = derived.getTime() < followingYearStart.getTime()
-    ? followingYearStart
-    : derived;
-
-  // Same-year rule (§5): if the DERIVED date is in the election's
-  // calendar year, refuse loudly. The founder wants the workflow to
-  // block admins from recording an impossible revocation, not silently
-  // shift the effective date forward.
   if (derived.getUTCFullYear() === electionYear) {
     throw new ValidationError([
       {
         path: "receivedOn",
         message:
           `CRA does not permit a CPT30 election to be revoked in the same calendar year (${electionYear}). ` +
-          `The earliest permissible revocation would take effect January 1, ${electionYear + 1}.`,
+          `The revocation form must be received on a date whose statutory effective date falls in ${electionYear + 1} or later.`,
       },
     ]);
   }
+  const effectiveOn = derived;
 
   const row = await prisma.employeeCppElection.create({
     data: {

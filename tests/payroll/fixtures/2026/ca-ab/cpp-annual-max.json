@@ -1,0 +1,88 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "Government of Canada 2026 CPP contribution rates and maximums announcement + T4127 122nd/123rd Editions",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/revenue-agency/services/tax/businesses/topics/payroll/payroll-deductions-contributions/canada-pension-plan-cpp.html",
+  "sourceRetrievedAt": "2026-09-01",
+  "sourceRetrievedBy": "human-verified",
+  "verificationNote": "Expected values are the CRA-PUBLISHED annual maxima themselves (not derived from a calculator). An Employee whose annualised pensionable earnings exceed the CPP contributory band is capped at these exact CRA-authoritative amounts.",
+  "cases": [
+    {
+      "id": "cpp-base-annual-max-ee-2026",
+      "description": "Employee with pensionable earnings >> (YMPE − YBE): CPP base employee contribution caps at the CRA-published base maximum for 2026.",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "province": "AB",
+        "pensionableEarnings": "200000.00",
+        "PM": 12
+      },
+      "expected": {
+        "deductionCppEeBase": "3519.45"
+      }
+    },
+    {
+      "id": "cpp-firstadd-annual-max-ee-2026",
+      "description": "Same employee's first-additional CPP caps at the CRA-published first-additional maximum.",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "province": "AB",
+        "pensionableEarnings": "200000.00",
+        "PM": 12
+      },
+      "expected": {
+        "deductionCppEeFirstAdd": "711.00"
+      }
+    },
+    {
+      "id": "cpp-combined-factor-c-annual-max-ee-2026",
+      "description": "Combined Factor C caps at the CRA-published combined maximum. Invariant: base + first-additional == combined.",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "province": "AB",
+        "pensionableEarnings": "200000.00",
+        "PM": 12
+      },
+      "expected": {
+        "deductionCppEeBase_plus_deductionCppEeFirstAdd": "4230.45",
+        "combinedFactorC": "4230.45"
+      }
+    },
+    {
+      "id": "cpp2-annual-max-ee-2026",
+      "description": "Employee whose pensionable earnings ≥ YAMPE: CPP2 caps at the CRA-published CPP2 annual maximum.",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "province": "AB",
+        "pensionableEarnings": "200000.00",
+        "PM": 12
+      },
+      "expected": {
+        "deductionCpp2Ee": "416.00"
+      }
+    },
+    {
+      "id": "cpp-full-year-employer-mirror-2026",
+      "description": "Employer CPP mirrors employee CPP for full-year employment.",
+      "expected": {
+        "employerCppBase": "3519.45",
+        "employerCppFirstAdd": "711.00",
+        "employerCpp2": "416.00"
+      }
+    },
+    {
+      "id": "cpp-prorated-pm-6-months",
+      "description": "Prorated CPP annual max at PM = 6 (e.g. turns 18 mid-year in July). Expected = CRA-published max × (6/12).",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "PM": 6
+      },
+      "expected": {
+        "deductionCppEeBase_annualCap": "1759.73",
+        "deductionCppEeFirstAdd_annualCap": "355.50",
+        "combinedFactorC_annualCap": "2115.23",
+        "deductionCpp2Ee_annualCap": "208.00"
+      },
+      "notes": "CRA prorates the annual maximum by (PM/12). 3519.45 × 6/12 = 1759.725 → 1759.73 (HALF_UP). 711.00 × 6/12 = 355.50. 4230.45 × 6/12 = 2115.225 → 2115.23. 416.00 × 6/12 = 208.00."
+    }
+  ]
+}

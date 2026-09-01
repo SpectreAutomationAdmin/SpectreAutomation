@@ -3517,7 +3517,23 @@ model EmployeeAllowance {
   currency      String?
   // PER_PAY_PERIOD | MONTHLY | ANNUAL
   frequency     String
+  // Payroll-3B-5B-1b (2026-09-01, §18) — income-tax treatment,
+  // CPP pensionability, and EI insurability are RELATED BUT NOT
+  // SYNONYMOUS. The prior single `taxable` flag conflated all three.
+  //
+  // `taxable` remains for backward compatibility (it now maps to
+  // income-tax treatment). `pensionable` and `insurable` decouple
+  // the statutory classifications so a source that is taxable but
+  // NOT pensionable (e.g. certain retiring allowances) is
+  // represented honestly.
+  //
+  // Migration behaviour: existing rows have `taxable` set; the
+  // service layer defaults `pensionable = taxable` and
+  // `insurable = taxable` when NULL, preserving 3A/3B-4/5A prep
+  // behaviour. New rows should set all three explicitly.
   taxable       Boolean   @default(true)
+  pensionable   Boolean?
+  insurable     Boolean?
   effectiveFrom DateTime
   effectiveTo   DateTime?
   notes         String?
@@ -10538,6 +10554,26 @@ model EmployeeTaxProfile {
   federalClaimSecretRef        String
   provincialClaimSecretRef     String
   additionalDeductionSecretRef String?
+  // Payroll-3B-5B-1b (2026-09-01) — TD1 source facts required by
+  // the T4127 withholding formulas. Sensitive per HR policy but
+  // NOT KMS-wrapped here (they're integer/decimal amounts, not
+  // opaque secrets like SIN):
+  //   • additionalFederalTaxAmount: TD1 "additional tax to be
+  //     deducted" field. Added AFTER the formula's T4 result;
+  //     never modifies the base T3.
+  //   • additionalProvincialTaxAmount: Alberta TD1 equivalent.
+  //   • claimZeroFederal: TD1 "more than one employer / payer"
+  //     checkbox on federal TD1. When true, calculator applies
+  //     zero claim for federal — no BPA.
+  //   • claimZeroProvincial: Alberta TD1 equivalent.
+  //   • totalIncomeLessThanClaim: TD1 "no tax withheld" attestation
+  //     — when true, calculator withholds zero income tax overall
+  //     regardless of gross earnings.
+  additionalFederalTaxAmount   Decimal   @default(0)
+  additionalProvincialTaxAmount Decimal  @default(0)
+  claimZeroFederal             Boolean   @default(false)
+  claimZeroProvincial          Boolean   @default(false)
+  totalIncomeLessThanClaim     Boolean   @default(false)
   notes                        String?
   createdAt                    DateTime  @default(now())
   updatedAt                    DateTime  @updatedAt
@@ -11918,6 +11954,11 @@ model PayrollBatchAllowanceSnapshot {
   // PER_PAY_PERIOD | MONTHLY | ANNUAL - preserved from the source row.
   frequency              String
   taxable                Boolean
+  // Payroll-3B-5B-1b (§18) — decoupled classification frozen at
+  // snapshot time. `pensionable` / `insurable` fallback to `taxable`
+  // for legacy rows.
+  pensionable            Boolean?
+  insurable              Boolean?
   // Effective window of the SOURCE allowance at snapshot time.
   sourceEffectiveFrom    DateTime
   sourceEffectiveTo      DateTime?

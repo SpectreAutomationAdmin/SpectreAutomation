@@ -1,0 +1,40 @@
+{
+  "$schema": "./_provenance-schema.json",
+  "sourceAuthority": "Government of Canada / CEIC 2026 EI premium rate and maximum insurable earnings announcement",
+  "sourceEffectiveDate": "2026-01-01",
+  "sourceUrl": "https://www.canada.ca/en/employment-social-development/programs/ei/ei-list/reports/premium/rates2026.html",
+  "sourceRetrievedAt": "2026-09-01",
+  "sourceRetrievedBy": "human-verified",
+  "verificationNote": "Expected values are the CRA-PUBLISHED annual EI maxima (outside Quebec). An employee whose insurable earnings exceed MIE ($68,900.00) is capped at these authoritative amounts.",
+  "cases": [
+    {
+      "id": "ei-employee-annual-max-2026",
+      "description": "Employee earning above MIE: EI employee premium caps at CRA-published maximum.",
+      "inputs": {
+        "packageWindow": "2026-H1-or-H2",
+        "province": "AB",
+        "insurableEarnings": "200000.00"
+      },
+      "expected": {
+        "deductionEiEe": "1123.07"
+      },
+      "notes": "MIE × rate = 68,900 × 0.0163 = 1,123.07 (matches the CRA-published max exactly)."
+    },
+    {
+      "id": "ei-employer-annual-max-2026",
+      "description": "Employer EI caps at CRA-published employer maximum.",
+      "expected": {
+        "employerEi": "1572.30"
+      },
+      "notes": "MIE × employer rate = 68,900 × 0.02282 = 1,572.298 → CRA rounds to 1,572.30 (the published authoritative value)."
+    },
+    {
+      "id": "ei-employer-multiplier-is-metadata-not-derivation",
+      "description": "Per §13 rule: employer EI is looked up from the CRA-published employer rate and maximum — never derived as 1.4 × employee at max.",
+      "expected": {
+        "invariant": "employerEi.max == Package.ei.maxAnnualPremiumER (CRA-published)"
+      },
+      "notes": "1.4 × 1,123.07 = 1,572.298 → 1,572.30. The 1.4 multiplier is metadata; the AUTHORITATIVE value is what CRA publishes."
+    }
+  ]
+}

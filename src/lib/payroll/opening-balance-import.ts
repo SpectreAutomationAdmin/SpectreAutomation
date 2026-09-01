@@ -1,22 +1,23 @@
 // Payroll-3B-5A (2026-08-31) — opening-balance CSV import (§17).
+// Payroll-3B-5B-1b (2026-09-01, §11) — "same employer" clarification
+// added to admin-facing help copy.
 //
-// A minimum-viable import service that stays out of the mainline
-// ImportBatch machinery (adding a PAYROLL_OPENING_BALANCE domain
-// there would touch every dispatcher and mapping table — deferred
-// to a follow-up slice). This file:
+// SCOPE OF "OPENING BALANCES"
+// ----------------------------
+// Opening balances are payroll amounts YOUR CLUB (this employer,
+// same Business Number) previously processed on another payroll
+// system before adopting Spectre. They are NOT another employer's
+// T4 amounts. If a seasonal employee also works for Employer B,
+// Employer B's payroll history is IRRELEVANT to this Club's Spectre
+// payroll — CRA requires each employer to deduct CPP + EI + income
+// tax independently.
 //
-//   • parses CSV text with the canonical `parseCsvRecords` reader
-//   • resolves each row to an Employee via employeeNumber match
-//     (email/name matching deferred — ambiguity here would be a
-//     production-critical foot-gun and is explicitly required to
-//     surface as an exception rather than silently pick)
-//   • validates every numeric field via the canonical service
-//   • writes DRAFT rows via `createDraftOpeningBalance`
-//   • emits row-level errors when a match/parse fails
-//   • hands a `PAYROLL_OPENING_BALANCE_REVIEW` Work Intake card to
-//     the payroll admin when any rows require attention
+// This CSV import only accepts THIS CLUB's prior payroll history.
+// PRIOR_EMPLOYER rows can be recorded via the manual-entry service
+// for HR reference but the YTD aggregator zeroes them for payroll
+// calculation (§9-10).
 //
-// SIN matching is explicitly prohibited (§18).
+// SIN matching is explicitly prohibited (§18 of 3B-5A briefing).
 
 import { prisma } from "../prisma";
 import { audit } from "../audit";

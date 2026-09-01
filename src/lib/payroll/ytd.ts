@@ -94,36 +94,44 @@ export async function getEmployeePayrollYtd(
   const openingSourceId = opening?.id ?? null;
   const openingKind = opening?.priorPayrollKind ?? null;
 
-  // §23: only PRIOR_SYSTEM_SAME_EMPLOYER and PRIOR_ADJUSTMENT rows
-  // contribute to CPP/EI YTD caps for this employer. A
-  // PRIOR_EMPLOYER opening balance is exposed on the row (visible
-  // to the future calculator) but its CPP/EI values MUST NOT be
-  // pre-applied to the accumulator here — the calculator decides.
-  const includeInStatutoryYtd =
+  // Payroll-3B-5B-1b (§9-10): a PRIOR_EMPLOYER opening balance
+  // must contribute ZERO to EVERY employer-YTD category — including
+  // gross, taxable, pensionable, insurable, CPP, CPP2, EI, federal
+  // tax, provincial tax, and employer contributions. Per CRA,
+  // different employers/business numbers calculate CPP + EI + tax
+  // independently; carrying another employer's YTD into this
+  // employer's ledger would corrupt T4 reporting + statutory
+  // maximum enforcement.
+  //
+  // Only PRIOR_SYSTEM_SAME_EMPLOYER and PRIOR_ADJUSTMENT rows
+  // contribute — these represent this employer's own historical
+  // payroll (prior payroll system or a valid correction).
+  const includeInThisEmployerYtd =
     opening !== null &&
     (openingKind === "PRIOR_SYSTEM_SAME_EMPLOYER" || openingKind === "PRIOR_ADJUSTMENT");
+  const src = includeInThisEmployerYtd ? opening : null;
 
   const acc: EmployeePayrollYtd = {
     clubId,
     employeeId,
     taxYear,
     asOfPayDate,
-    ytdGrossEarnings: opening?.values.ytdGrossEarnings ?? "0",
-    ytdTaxableEarnings: opening?.values.ytdTaxableEarnings ?? "0",
-    ytdPensionableEarnings: includeInStatutoryYtd ? (opening?.values.ytdPensionableEarnings ?? "0") : "0",
-    ytdInsurableEarnings: includeInStatutoryYtd ? (opening?.values.ytdInsurableEarnings ?? "0") : "0",
-    ytdCppEE_Base: includeInStatutoryYtd ? (opening?.values.ytdCppEE_Base ?? "0") : "0",
-    ytdCppEE_FirstAdd: includeInStatutoryYtd ? (opening?.values.ytdCppEE_FirstAdd ?? "0") : "0",
-    ytdCppEE: includeInStatutoryYtd ? (opening?.values.ytdCppEE ?? "0") : "0",
-    ytdCpp2EE: includeInStatutoryYtd ? (opening?.values.ytdCpp2EE ?? "0") : "0",
-    ytdEiEE: includeInStatutoryYtd ? (opening?.values.ytdEiEE ?? "0") : "0",
-    ytdFederalTax: opening?.values.ytdFederalTax ?? "0",
-    ytdProvincialTax: opening?.values.ytdProvincialTax ?? "0",
-    ytdCppER_Base: includeInStatutoryYtd ? (opening?.values.ytdCppER_Base ?? "0") : "0",
-    ytdCppER_FirstAdd: includeInStatutoryYtd ? (opening?.values.ytdCppER_FirstAdd ?? "0") : "0",
-    ytdCppER: includeInStatutoryYtd ? (opening?.values.ytdCppER ?? "0") : "0",
-    ytdCpp2ER: includeInStatutoryYtd ? (opening?.values.ytdCpp2ER ?? "0") : "0",
-    ytdEiER: includeInStatutoryYtd ? (opening?.values.ytdEiER ?? "0") : "0",
+    ytdGrossEarnings: src?.values.ytdGrossEarnings ?? "0",
+    ytdTaxableEarnings: src?.values.ytdTaxableEarnings ?? "0",
+    ytdPensionableEarnings: src?.values.ytdPensionableEarnings ?? "0",
+    ytdInsurableEarnings: src?.values.ytdInsurableEarnings ?? "0",
+    ytdCppEE_Base: src?.values.ytdCppEE_Base ?? "0",
+    ytdCppEE_FirstAdd: src?.values.ytdCppEE_FirstAdd ?? "0",
+    ytdCppEE: src?.values.ytdCppEE ?? "0",
+    ytdCpp2EE: src?.values.ytdCpp2EE ?? "0",
+    ytdEiEE: src?.values.ytdEiEE ?? "0",
+    ytdFederalTax: src?.values.ytdFederalTax ?? "0",
+    ytdProvincialTax: src?.values.ytdProvincialTax ?? "0",
+    ytdCppER_Base: src?.values.ytdCppER_Base ?? "0",
+    ytdCppER_FirstAdd: src?.values.ytdCppER_FirstAdd ?? "0",
+    ytdCppER: src?.values.ytdCppER ?? "0",
+    ytdCpp2ER: src?.values.ytdCpp2ER ?? "0",
+    ytdEiER: src?.values.ytdEiER ?? "0",
     sources: {
       openingBalanceId: openingSourceId,
       openingBalancePriorPayrollKind: openingKind,
