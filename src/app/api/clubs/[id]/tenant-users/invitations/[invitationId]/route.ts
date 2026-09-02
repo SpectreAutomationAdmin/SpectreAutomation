@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentPrincipal } from "@/lib/services/principal";
-import { isSuperAdmin } from "@/lib/rbac";
 import { ForbiddenError, NotFoundError, ValidationError, ConflictError } from "@/lib/errors";
 import { resendAdminInvitation, revokeAdminInvitation } from "@/lib/tenant-admin/invitations";
 import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
@@ -39,9 +38,10 @@ export async function POST(
     }
     const url = new URL(req.url);
     const result = await resendAdminInvitation(principal, params.invitationId);
+    // Test-only escape hatch — see parent route.ts §gate.
     const gateOn = process.env.SPECTRE_ALLOW_ACTIVATION_URL === "true";
     const requested = url.searchParams.get("includeActivationUrl") === "true";
-    const allowActivationUrl = gateOn && requested && isSuperAdmin(principal);
+    const allowActivationUrl = gateOn && requested;
 
     const body_: Record<string, unknown> = {
       invitation: {

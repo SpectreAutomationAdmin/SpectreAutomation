@@ -26,7 +26,6 @@ import {
 } from "@/lib/tenant-admin/invitations";
 import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/profile";
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
-import { isSuperAdmin } from "@/lib/rbac";
 import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
 
 const UNAUTHORIZED = NextResponse.json({ error: "Not authorised" }, { status: 403 });
@@ -118,12 +117,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const payload = { ...body, clubId };
     const created = await createAdminInvitation(principal, payload);
 
-    // Test-only gate. Production Fly config MUST NOT set
-    // SPECTRE_ALLOW_ACTIVATION_URL. Staging sets it so Playwright can
-    // drive activation without needing an email inbox scrape.
+    // Test-only escape hatch. Multi-gated:
+    //   (a) process env SPECTRE_ALLOW_ACTIVATION_URL=true — set ONLY
+    //       on staging; production Fly config never sets this
+    //   (b) explicit request opt-in ?includeActivationUrl=true
+    //   (c) caller already passed assertTenantUsersWrite above so
+    //       is a SUPER_ADMIN, CLUB_ADMIN, or TENANT_ADMINISTRATION
+    //       holder at this club
+    // All three must hold; production is closed by (a).
     const gateOn = process.env.SPECTRE_ALLOW_ACTIVATION_URL === "true";
     const requested = url.searchParams.get("includeActivationUrl") === "true";
-    const allowActivationUrl = gateOn && requested && isSuperAdmin(principal);
+    const allowActivationUrl = gateOn && requested;
 
     const responseBody: Record<string, unknown> = {
       invitation: {
