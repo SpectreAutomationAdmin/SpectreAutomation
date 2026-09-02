@@ -63,6 +63,7 @@ service-account*.json
 .claude/local/
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+scratchpad/
 
 # --- Generated / build caches -------------------------------------------
 tsconfig.tsbuildinfo
