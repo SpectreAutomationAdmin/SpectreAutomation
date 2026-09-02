@@ -765,7 +765,18 @@ export async function preparePayrollBatch(
       });
 
       // Allowance snapshots — one row per applicable allowance.
+      // Payroll-3B-5B-3A closeout — carry the split classification
+      // through. Source EmployeeAllowance.pensionable / .insurable
+      // may be null on legacy rows; fall back to `taxable` per the
+      // documented legacy-safe rule (schema comment). Explicitly-set
+      // false values are preserved.
       for (const al of s.sourceFacts.allowances) {
+        const src = await tx.employeeAllowance.findUnique({
+          where: { id: al.id },
+          select: { pensionable: true, insurable: true },
+        });
+        const pensionable = src?.pensionable ?? al.taxable;
+        const insurable   = src?.insurable   ?? al.taxable;
         await tx.payrollBatchAllowanceSnapshot.create({
           data: {
             clubId,
@@ -778,6 +789,8 @@ export async function preparePayrollBatch(
             currency: "CAD",
             frequency: al.frequency,
             taxable: al.taxable,
+            pensionable,
+            insurable,
             sourceEffectiveFrom: new Date(al.effectiveFrom),
             sourceEffectiveTo: al.effectiveTo ? new Date(al.effectiveTo) : null,
           },
