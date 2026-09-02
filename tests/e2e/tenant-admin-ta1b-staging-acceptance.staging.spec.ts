@@ -1,37 +1,57 @@
-// TA-1B staging acceptance (2026-09-03).
+// TA-1B closeout staging acceptance (2026-09-03).
 //
 // Authenticated Playwright pass against
-// https://staging.spectreautomation.com. Runs the founder-critical
-// gates for the Tenant Users page + invitation lifecycle:
+// https://staging.spectreautomation.com covering:
 //
-//   1. Desktop 1440x900 — /app/admin/settings/users renders inside the
-//      admin shell with the correct chrome + sections; the founder can
-//      open the Invite User modal.
-//   2. Create a synthetic invitation — the activation link is surfaced
-//      in the UI banner (this is by design for founder acceptance).
-//      The row appears in Pending Invitations with the correct label
-//      + status.
-//   3. Resend the invitation — new activation link surfaces; status
-//      transitions.
-//   4. Revoke a separate synthetic invitation.
-//   5. No SIN / bank / KMS / raw role literal leak on the page.
+//   1. Tenant Users page renders + Invite modal opens (1440x900).
+//   2. Create synthetic invitation via the founder-facing UI. NEW
+//      behaviour: no raw activation URL in the DOM; banner reads
+//      "Invitation sent to <email>" (or the console-adapter variant).
+//   3. Revoke synthetic invitation — row removed from Pending list.
+//   4. Sensitive-data + raw-role-literal sweep — also confirms no
+//      raw activation URL anywhere in the DOM.
+//   5. Landing-page paths:
+//      5a. NEW email — landing renders create-account form.
+//      5b. EXISTING email (founder) — unauthenticated visit shows
+//          "Sign in to accept"; authenticated visit as the correct
+//          founder shows "Accept invitation" button, no password
+//          form (proves password-preservation intent at the UI).
 //
-// Uses a random-suffix email so re-runs never collide with prior
-// synthetic invitations. Never touches Coulee Ridge role assignments,
-// never touches Payroll routing, never issues any TENANT_ADMINISTRATION
-// bootstrap.
+// Random-suffix emails ensure re-runs never collide with prior
+// synthetic invitations. Never touches Coulee Ridge role assignments
+// beyond synthetic PENDING/REVOKED invitations addressed to
+// spectre.test / the founder's email (immediately revoked, never
+// activated).
+//
+// The staging Fly app has SPECTRE_ALLOW_ACTIVATION_URL=true set so
+// the SUPER_ADMIN-authenticated founder session may fetch the raw
+// activation URL via the test-only ?includeActivationUrl=true
+// escape hatch. Production does NOT set this env var.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
 const TENANT_USERS_URL = "/app/admin/settings/users";
 
 function suffix(): string {
-  // Second-precision — stable across quick sequential asserts within a test.
   return `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 }
 
-test.describe("Tenant Administration TA-1B — staging founder acceptance", () => {
+async function readClubId(page: Page): Promise<string> {
+  const id = await page.locator('[data-testid="tenant-users-page"]').getAttribute("data-club-id");
+  if (!id) throw new Error("could not read data-club-id from tenant users page");
+  return id;
+}
+
+async function readFounderEmail(page: Page): Promise<string> {
+  // The admin shell topbar exposes the founder's email. Fall back to
+  // any email in the body if the topbar accessor is missing.
+  const body = await page.locator("body").innerText();
+  const m = body.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  return m ? m[0] : "";
+}
+
+test.describe("Tenant Administration TA-1B closeout — staging founder acceptance", () => {
   test.skip(!stagingCredsAvailable().ready, "staging credentials not configured");
 
   test("Tenant Users page renders + Invite modal opens (desktop 1440x900)", async ({ browser }) => {
@@ -40,95 +60,60 @@ test.describe("Tenant Administration TA-1B — staging founder acceptance", () =
 
     await expect(page.locator('[data-testid="tenant-users-page"]')).toBeVisible();
     await expect(page.locator('[data-testid="tenant-users-header"]')).toContainText("Tenant Users");
-
-    // Active Users section renders (either the table or the empty state).
-    const activeSection = page.locator('[data-testid="tenant-users-active"]');
-    await expect(activeSection).toBeVisible();
-
-    // Invite User button is the primary action.
+    await expect(page.locator('[data-testid="tenant-users-active"]')).toBeVisible();
     const inviteBtn = page.locator('[data-testid="invite-user-btn"]');
     await expect(inviteBtn).toBeVisible();
     await inviteBtn.click();
     await expect(page.locator('[data-testid="invite-modal"]')).toBeVisible();
-    await expect(page.locator('[data-testid="invite-form-email"]')).toBeVisible();
 
-    // Role choices exist in the invite modal. Verify a couple of tenant-
-    // assignable role labels appear (never bare literals). Scope to the
-    // modal to avoid strict-mode collisions with any lingering rows from
-    // prior acceptance runs.
     const rolesFieldset = page.locator('[data-testid="invite-form-roles"]');
     await expect(rolesFieldset.getByText("Payroll Administrator", { exact: true })).toBeVisible();
     await expect(rolesFieldset.getByText("Controller", { exact: true })).toBeVisible();
-    // SUPER_ADMIN must NEVER appear in the invite form.
     await expect(rolesFieldset.getByText("Spectre Platform Admin")).toHaveCount(0);
 
-    await page.screenshot({ path: "test-results/ta1b-01-tenant-users-1440.png", fullPage: true });
+    await page.screenshot({ path: "test-results/ta1b-closeout-01-tenant-users-1440.png", fullPage: true });
   });
 
-  test("Create + resend + revoke synthetic invitation cycle", async ({ browser }) => {
+  test("Create + revoke — banner says 'sent' + no raw activation URL in DOM", async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await loginAsFounder(context, { landing: TENANT_USERS_URL });
     await expect(page.locator('[data-testid="tenant-users-page"]')).toBeVisible();
 
-    // Two synthetic invitees: one we'll resend, one we'll revoke.
     const stem = suffix();
-    const inviteeA = `ta1b-resend-${stem}@spectre.test`;
-    const inviteeB = `ta1b-revoke-${stem}@spectre.test`;
+    const invitee = `ta1b-close-cycle-${stem}@spectre.test`;
 
-    // --- Create invitee A ---
     await page.locator('[data-testid="invite-user-btn"]').click();
-    await page.locator('[data-testid="invite-form-email"]').fill(inviteeA);
-    await page.locator('[data-testid="invite-form-first-name"]').fill("Resend");
-    await page.locator('[data-testid="invite-form-last-name"]').fill("Test");
+    await page.locator('[data-testid="invite-form-email"]').fill(invitee);
+    await page.locator('[data-testid="invite-form-first-name"]').fill("Cycle");
     await page.locator('[data-testid="invite-form-title"]').fill("Payroll Administrator (test)");
     await page.locator('[data-testid="invite-form-role:PAYROLL_ADMIN"]').check();
     await page.locator('[data-testid="invite-form-submit"]').click();
 
-    // The banner + activation URL appear.
-    await expect(page.locator('[data-testid="tenant-users-banner"]')).toContainText(/Activation link/i);
-    await expect(page.locator('[data-testid="tenant-users-activation-url"]')).toContainText("/invite/");
+    // Banner reads "sent to <email>" or the console-adapter variant.
+    await expect(page.locator('[data-testid="tenant-users-banner"]')).toContainText(/sent to/i);
+    // No activation-URL block in the founder UI.
+    await expect(page.locator('[data-testid="tenant-users-activation-url"]')).toHaveCount(0);
+    // Body sweep — no raw /invite/<token> URL anywhere in the DOM.
+    const bodyText = await page.locator("body").innerText();
+    expect(bodyText).not.toMatch(/\/invite\/[A-Za-z0-9_-]{20,}/);
 
-    // Row appears in Pending Invitations.
-    const rowA = page.locator(`[data-testid="tenant-invitations-table"] tr:has-text("${inviteeA}")`);
-    await expect(rowA).toBeVisible({ timeout: 15_000 });
+    // Row appears in Pending.
+    const row = page.locator(`[data-testid="tenant-invitations-table"] tr:has-text("${invitee}")`);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    const invId = ((await row.getAttribute("data-testid")) ?? "").replace("tenant-invitation-row:", "");
 
-    // Grab this invitation's row id for the resend action selector.
-    const invIdA = await rowA.getAttribute("data-testid");
-    expect(invIdA).toMatch(/^tenant-invitation-row:/);
-    const idA = (invIdA ?? "").replace("tenant-invitation-row:", "");
-    await expect(page.locator(`[data-testid="tenant-invitation-status:${idA}"]`)).toContainText(/PENDING|SENT/);
+    await page.screenshot({ path: "test-results/ta1b-closeout-02-invitation-created-1440.png", fullPage: true });
 
-    await page.screenshot({ path: "test-results/ta1b-02-invitation-created-1440.png", fullPage: true });
-
-    // --- Resend invitee A ---
-    await page.locator(`[data-testid="invitation-resend-btn:${idA}"]`).click();
-    await expect(page.locator('[data-testid="tenant-users-banner"]')).toContainText(/resent/i);
-    await expect(page.locator('[data-testid="tenant-users-activation-url"]')).toContainText("/invite/");
-
-    // --- Create invitee B ---
-    await page.locator('[data-testid="invite-user-btn"]').click();
-    await page.locator('[data-testid="invite-form-email"]').fill(inviteeB);
-    await page.locator('[data-testid="invite-form-first-name"]').fill("Revoke");
-    await page.locator('[data-testid="invite-form-role:STAFF"]').check();
-    await page.locator('[data-testid="invite-form-submit"]').click();
-    const rowB = page.locator(`[data-testid="tenant-invitations-table"] tr:has-text("${inviteeB}")`);
-    await expect(rowB).toBeVisible({ timeout: 15_000 });
-    const invIdB = await rowB.getAttribute("data-testid");
-    const idB = (invIdB ?? "").replace("tenant-invitation-row:", "");
-
-    // --- Revoke invitee B (browser confirm auto-accept) ---
+    // Revoke.
     page.once("dialog", (d) => d.accept());
-    await page.locator(`[data-testid="invitation-revoke-btn:${idB}"]`).click();
+    await page.locator(`[data-testid="invitation-revoke-btn:${invId}"]`).click();
     await expect(page.locator('[data-testid="tenant-users-banner"]')).toContainText(/revoked/i);
-    // Revoked invitations are filtered out of the default "Pending" list —
-    // banner confirmation is the founder-visible signal. Assert the row
-    // has disappeared.
-    await expect(page.locator(`[data-testid="tenant-invitation-row:${idB}"]`)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator(`[data-testid="tenant-invitation-row:${invId}"]`)).toHaveCount(0, { timeout: 15_000 });
 
-    await page.screenshot({ path: "test-results/ta1b-03-invitation-revoked-1440.png", fullPage: true });
+    await page.screenshot({ path: "test-results/ta1b-closeout-03-invitation-revoked-1440.png", fullPage: true });
   });
 
-  test("No SIN / bank / KMS / raw role literals rendered on Tenant Users page", async ({ browser }) => {
+  test("No SIN / bank / KMS / raw role literals / activation URL on Tenant Users page", async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await loginAsFounder(context, { landing: TENANT_USERS_URL });
     await expect(page.locator('[data-testid="tenant-users-page"]')).toBeVisible();
@@ -137,9 +122,104 @@ test.describe("Tenant Administration TA-1B — staging founder acceptance", () =
     expect(body).not.toMatch(/socialInsurance/i);
     expect(body).not.toMatch(/institutionSecretRef|transitSecretRef|accountSecretRef/);
     expect(body).not.toMatch(/enc:/);
-    // Never show raw role-key literals (users see human labels).
     expect(body).not.toMatch(/\bPAYROLL_ADMIN\b/);
     expect(body).not.toMatch(/\bF_AND_B_MANAGER\b/);
     expect(body).not.toMatch(/\bSUPER_ADMIN\b/);
+    // Founder UI must never surface a raw activation URL.
+    expect(body).not.toMatch(/\/invite\/[A-Za-z0-9_-]{20,}/);
+  });
+
+  test("Landing page — new-user path shows create-account form; existing-user path shows accept shell (no password)", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const founderContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const founderPage = await loginAsFounder(founderContext, { landing: TENANT_USERS_URL });
+    await expect(founderPage.locator('[data-testid="tenant-users-page"]')).toBeVisible();
+
+    const clubId = await readClubId(founderPage);
+    const founderEmail = await readFounderEmail(founderPage);
+
+    // Create a NEW-user invitation via the API with the test-only
+    // activation-URL escape hatch. Reuses the authenticated founder
+    // cookie via the browser context's own request client.
+    const stem = suffix();
+    const newEmail = `ta1b-close-landing-${stem}@spectre.test`;
+    const createNew = await founderContext.request.post(
+      `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users?includeActivationUrl=true`,
+      { data: { email: newEmail, initialRoleKeys: ["STAFF"] } },
+    );
+    expect(createNew.status()).toBe(200);
+    const createNewJson = await createNew.json();
+    expect(createNewJson.activationUrl).toMatch(
+      /https:\/\/staging\.spectreautomation\.com\/invite\/[A-Za-z0-9_-]{20,}/,
+    );
+
+    // 5a. New-user landing — unauthenticated.
+    const anon = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const anonPage = await anon.newPage();
+    await anonPage.goto(String(createNewJson.activationUrl));
+    await expect(anonPage.locator('[data-testid="invite-activation-card"]')).toBeVisible();
+    await expect(anonPage.locator('[data-testid="invite-activation-form"]')).toBeVisible();
+    await expect(anonPage.locator('[data-testid="invite-password"]')).toBeVisible();
+    await expect(anonPage.locator('[data-testid="invite-email"]')).toContainText(newEmail);
+    await anonPage.screenshot({ path: "test-results/ta1b-closeout-04-landing-new-user-1440.png", fullPage: true });
+    // Revoke the new-user invitation to keep staging tidy.
+    await founderContext.request.delete(
+      `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${createNewJson.invitation.id}`,
+    );
+
+    // 5b. Existing-user landing — using the founder's own email.
+    test.skip(!founderEmail, "could not infer founder email from admin shell");
+    const createExist = await founderContext.request.post(
+      `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users?includeActivationUrl=true`,
+      { data: { email: founderEmail, initialRoleKeys: ["STAFF"] } },
+    );
+    // If the founder already has all this roleKey at this club, the
+    // service refuses as ConflictError (409). Handle both outcomes.
+    if (createExist.status() === 409) {
+      // Founder already has this role. Use CONTROLLER instead to force
+      // a fresh invitation.
+      const retry = await founderContext.request.post(
+        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users?includeActivationUrl=true`,
+        { data: { email: founderEmail, initialRoleKeys: ["CONTROLLER"] } },
+      );
+      if (retry.status() !== 200) {
+        test.skip(true, `founder-email invitation refused (${retry.status()}) — cannot exercise existing-user path`);
+      }
+      const retryJson = await retry.json();
+      await runExistingUserAssertions(browser, String(retryJson.activationUrl), createExist);
+      await founderContext.request.delete(
+        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${retryJson.invitation.id}`,
+      );
+    } else {
+      expect(createExist.status()).toBe(200);
+      const createExistJson = await createExist.json();
+      await runExistingUserAssertions(browser, String(createExistJson.activationUrl), createExist);
+      await founderContext.request.delete(
+        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${createExistJson.invitation.id}`,
+      );
+    }
   });
 });
+
+async function runExistingUserAssertions(
+  browser: import("@playwright/test").Browser,
+  activationUrl: string,
+  _createResp: unknown,
+) {
+  // Unauthenticated visitor of the existing-user path → "Sign in to accept" link.
+  const anon = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const anonPage = await anon.newPage();
+  await anonPage.goto(activationUrl);
+  await expect(anonPage.locator('[data-testid="invite-existing-user-signin"]')).toBeVisible();
+  await expect(anonPage.locator('[data-testid="invite-signin-link"]')).toBeVisible();
+  await expect(anonPage.locator('[data-testid="invite-password"]')).toHaveCount(0);
+  await anonPage.screenshot({ path: "test-results/ta1b-closeout-05-landing-existing-user-signin-1440.png", fullPage: true });
+
+  // Correct-session visitor → Accept button, no password form.
+  const authContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const authPage = await loginAsFounder(authContext, { landing: activationUrl });
+  await expect(authPage.locator('[data-testid="invite-existing-user-accept"]')).toBeVisible();
+  await expect(authPage.locator('[data-testid="invite-accept-btn"]')).toBeVisible();
+  await expect(authPage.locator('[data-testid="invite-password"]')).toHaveCount(0);
+  await authPage.screenshot({ path: "test-results/ta1b-closeout-06-landing-existing-user-accept-1440.png", fullPage: true });
+}

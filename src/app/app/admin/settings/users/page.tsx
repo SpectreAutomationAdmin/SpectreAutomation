@@ -53,6 +53,7 @@ export default async function TenantUsersPage() {
     <main
       className="mx-auto max-w-6xl px-6 py-8"
       data-testid="tenant-users-page"
+      data-club-id={clubId}
     >
       <header className="mb-6" data-testid="tenant-users-header">
         <div
