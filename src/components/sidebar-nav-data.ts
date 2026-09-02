@@ -192,6 +192,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
     icon: "configuration",
     items: [
       { href: "/app/admin/settings", label: "Settings", perm: "settings:read" },
+      { href: "/app/admin/settings/users", label: "Tenant Users", perm: "users:invite" },
       { href: "/app/admin/feedback", label: "Anonymous Feedback", perm: "settings:read" },
       { href: "/app/admin/club-settings", label: "Club Settings", perm: "settings:read" },
       { href: "/app/admin/settings/domains", label: "Club domains", perm: "settings:write" },
