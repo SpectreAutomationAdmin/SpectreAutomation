@@ -479,6 +479,7 @@ export async function resetDb() {
     c.adminInvitation.deleteMany(),
     c.responsibilityAssignment.deleteMany(),
     c.userClubProfile.deleteMany(),
+    c.organizationalPosition.deleteMany(), // TA-1C
     c.responsibility.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),

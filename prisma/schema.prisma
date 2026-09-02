@@ -482,6 +482,9 @@ model Club {
   userClubProfiles                   UserClubProfile[]
   responsibilityAssignments          ResponsibilityAssignment[]
   adminInvitations                   AdminInvitation[]
+
+  // TA-1C — Organizational positions.
+  organizationalPositions            OrganizationalPosition[]
 }
 
 // ---------------------------------------------------------------------
@@ -676,6 +679,7 @@ model User {
   sentAdminInvitations        AdminInvitation[]                   @relation("AdminInvitationInvitedBy")
   revokedAdminInvitations     AdminInvitation[]                   @relation("AdminInvitationRevokedBy")
   activatedAdminInvitations   AdminInvitation[]                   @relation("AdminInvitationActivatedUser")
+  createdOrganizationalPositions OrganizationalPosition[]         @relation("OrganizationalPositionCreatedBy")
 }
 
 // -------------------------------------------------------------------
@@ -773,6 +777,23 @@ model UserClubProfile {
   employeeId     String?     @unique
   employee       Employee?   @relation("UserClubProfileEmployee", fields: [employeeId], references: [id])
 
+  // TA-1C (2026-09-04) — organizational structure.
+  //   positionId          — FK to OrganizationalPosition (Club-defined
+  //                          administrative title, distinct from
+  //                          HR EmployeePosition which carries payroll
+  //                          fields). Optional; UserClubProfile.displayTitle
+  //                          may still express a personal override.
+  //   reportsToProfileId  — FK to another UserClubProfile at the SAME
+  //                          Club. Reporting is a tenant-specific fact —
+  //                          a person may report to different people
+  //                          at different Clubs. Same-club invariant
+  //                          + cycle detection enforced service-side.
+  positionId         String?
+  position           OrganizationalPosition? @relation("UserClubProfilePosition", fields: [positionId], references: [id])
+  reportsToProfileId String?
+  reportsToProfile   UserClubProfile?        @relation("UserClubProfileReports", fields: [reportsToProfileId], references: [id])
+  directReports      UserClubProfile[]       @relation("UserClubProfileReports")
+
   // Tenant-side membership lifecycle. Distinct from User.status (auth)
   // and AdminInvitation.status (invite).
   //   ACTIVE | SUSPENDED | REVOKED
@@ -790,6 +811,39 @@ model UserClubProfile {
   @@unique([clubId, userId])
   @@index([clubId, status])
   @@index([userId])
+  @@index([departmentId])
+  @@index([positionId])
+  @@index([clubId, reportsToProfileId])
+}
+
+// TA-1C — Organizational Position (Club-defined administrative title).
+//
+// Distinct from HR EmployeePosition which carries defaultPayRate +
+// isExempt and drives payroll math on Employee. Organizational titles
+// apply to admin Users who may or may not also be Employees; they are
+// Club-defined free-form names (no product enum) so different Clubs
+// can use their own vocabulary (Controller / CFO / Director of
+// Finance; Head Professional / Director of Golf / Golf Operations
+// Manager).
+model OrganizationalPosition {
+  id           String      @id @default(cuid())
+  clubId       String
+  club         Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  name         String
+  departmentId String?
+  department   Department? @relation("OrganizationalPositionDepartment", fields: [departmentId], references: [id])
+  description  String?
+  sortOrder    Int         @default(0)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  createdByUserId String?
+  createdBy       User?    @relation("OrganizationalPositionCreatedBy", fields: [createdByUserId], references: [id])
+
+  profiles     UserClubProfile[] @relation("UserClubProfilePosition")
+
+  @@unique([clubId, name])
+  @@index([clubId, isActive, sortOrder])
   @@index([departmentId])
 }
 
@@ -1998,6 +2052,9 @@ model Department {
   // TA-1B — Tenant Administration.
   userClubProfiles   UserClubProfile[]   @relation("UserClubProfileDepartment")
   adminInvitations   AdminInvitation[]   @relation("AdminInvitationDepartment")
+
+  // TA-1C — Organizational positions.
+  organizationalPositions OrganizationalPosition[] @relation("OrganizationalPositionDepartment")
 
   @@unique([clubId, code])
   @@index([clubId, isActive])
