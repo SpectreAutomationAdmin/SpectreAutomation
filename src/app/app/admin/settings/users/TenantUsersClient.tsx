@@ -33,6 +33,17 @@ type TenantUserRow = {
   roleLabels: string[];
   lastLoginAt: string | null;
   isTenantAdmin: boolean;
+  hasEmployeeLink: boolean;
+};
+
+type EmployeeOption = {
+  id: string;
+  employeeNumber: string;
+  name: string;
+  email: string | null;
+  lifecycle: string;
+  departmentName: string | null;
+  alreadyLinked: boolean;
 };
 
 type InvitationRow = {
@@ -69,6 +80,7 @@ export function TenantUsersClient({
   departments,
   initialPositions,
   initialOrgTree,
+  initialEmployees,
 }: {
   clubId: string;
   initialUsers: TenantUserRow[];
@@ -76,11 +88,13 @@ export function TenantUsersClient({
   departments: DepartmentOption[];
   initialPositions: PositionOption[];
   initialOrgTree: OrgNode[];
+  initialEmployees: EmployeeOption[];
 }) {
   const [users, setUsers] = useState<TenantUserRow[]>(initialUsers);
   const [invitations, setInvitations] = useState<InvitationRow[]>(initialInvitations);
   const [positions, setPositions] = useState<PositionOption[]>(initialPositions);
   const [orgTree, setOrgTree] = useState<OrgNode[]>(initialOrgTree);
+  const [employees, setEmployees] = useState<EmployeeOption[]>(initialEmployees);
   const [tab, setTab] = useState<Tab>("people");
   const [showInvite, setShowInvite] = useState(false);
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -95,11 +109,13 @@ export function TenantUsersClient({
       invitations: InvitationRow[];
       positions: PositionOption[];
       orgTree: OrgNode[];
+      employees: EmployeeOption[];
     };
     setUsers(j.users);
     setInvitations(j.invitations);
     setPositions(j.positions);
     setOrgTree(j.orgTree);
+    setEmployees(j.employees);
   }
 
   async function handleResend(invitationId: string) {
@@ -227,6 +243,7 @@ export function TenantUsersClient({
           clubId={clubId}
           departments={departments}
           positions={positions.filter((p) => p.isActive)}
+          employees={employees.filter((e) => !e.alreadyLinked)}
           onClose={() => setShowInvite(false)}
           onSuccess={(email, delivery, existingUser) => {
             setShowInvite(false);
@@ -356,6 +373,25 @@ function PersonRow({
                 Tenant Admin · Primary
               </span>
             ) : null}
+            {user.hasEmployeeLink ? (
+              <span
+                className="rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                style={{ borderColor: "#0f766e", color: "#0f766e" }}
+                data-testid={`employee-badge:${user.userId}`}
+                title="This administrative User is linked to an Employee record."
+              >
+                Employee
+              </span>
+            ) : (
+              <span
+                className="rounded-full border px-2 py-0.5 text-[11px]"
+                style={{ borderColor: "#a8a29e", color: "#78716c" }}
+                data-testid={`external-badge:${user.userId}`}
+                title="External (non-employee) Spectre User."
+              >
+                External
+              </span>
+            )}
           </div>
           {editing ? (
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -635,11 +671,12 @@ function TreeNode({ node, byParent, depth }: { node: OrgNode; byParent: Map<stri
 // Invite modal (unchanged from TA-1B closeout — copied inline)
 // ---------------------------------------------------------------------
 function InviteModal({
-  clubId, departments, positions, onClose, onSuccess,
+  clubId, departments, positions, employees, onClose, onSuccess,
 }: {
   clubId: string;
   departments: DepartmentOption[];
   positions: PositionOption[];
+  employees: EmployeeOption[];
   onClose: () => void;
   onSuccess: (
     email: string,
@@ -653,6 +690,8 @@ function InviteModal({
   const [displayTitle, setDisplayTitle] = useState("");
   const [departmentId, setDepartmentId] = useState<string>("");
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [employmentRelationship, setEmploymentRelationship] = useState<"EMPLOYEE" | "EXTERNAL">("EMPLOYEE");
+  const [employeeId, setEmployeeId] = useState<string>(""); // empty = create new pre-hire Employee
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const roleOptions = useMemo(() => TENANT_ASSIGNABLE_ROLES.map((r) => ({ key: r, label: ROLE_LABELS[r] })), []);
@@ -660,6 +699,11 @@ function InviteModal({
     () => positions.filter((p) => !departmentId || p.departmentId === departmentId).map((p) => p.name),
     [positions, departmentId],
   );
+  const emailSuggestion = useMemo(() => {
+    const e = email.trim().toLowerCase();
+    if (!e) return null;
+    return employees.find((emp) => emp.email?.toLowerCase() === e) ?? null;
+  }, [email, employees]);
 
   function toggleRole(role: string) {
     setSelectedRoles((prev) => (prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]));
@@ -678,6 +722,8 @@ function InviteModal({
           lastName: lastName.trim() || undefined,
           displayTitle: displayTitle.trim() || undefined,
           departmentId: departmentId || undefined,
+          employmentRelationship,
+          employeeId: employmentRelationship === "EMPLOYEE" && employeeId ? employeeId : undefined,
           initialRoleKeys: selectedRoles,
         }),
       });
@@ -725,6 +771,69 @@ function InviteModal({
               <option value="">— None —</option>
               {departments.map((d) => (<option key={d.id} value={d.id}>{d.name}</option>))}
             </select>
+          </FormField>
+          <FormField label="Employment relationship" required>
+            <div className="space-y-1 rounded border p-3" style={{ borderColor: "#d0c9bd" }} data-testid="invite-form-employment">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="employmentRelationship"
+                  value="EMPLOYEE"
+                  checked={employmentRelationship === "EMPLOYEE"}
+                  onChange={() => setEmploymentRelationship("EMPLOYEE")}
+                  data-testid="invite-employment-employee"
+                />
+                <span>Employee of this Club</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="employmentRelationship"
+                  value="EXTERNAL"
+                  checked={employmentRelationship === "EXTERNAL"}
+                  onChange={() => { setEmploymentRelationship("EXTERNAL"); setEmployeeId(""); }}
+                  data-testid="invite-employment-external"
+                />
+                <span>External Spectre User (accountant, auditor, board, consultant)</span>
+              </label>
+            </div>
+            {employmentRelationship === "EMPLOYEE" ? (
+              <div className="mt-2">
+                <label className="mb-1 block text-xs font-semibold" style={{ color: "#4a453d" }}>
+                  Link an existing Employee record (optional — otherwise a pre-hire record is created)
+                </label>
+                <select
+                  value={employeeId}
+                  onChange={(e) => setEmployeeId(e.target.value)}
+                  className="w-full rounded border px-3 py-2 text-sm"
+                  style={{ borderColor: "#d0c9bd" }}
+                  data-testid="invite-form-employee-picker"
+                >
+                  <option value="">— Create new pre-hire Employee record —</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name} · #{emp.employeeNumber}
+                      {emp.departmentName ? ` · ${emp.departmentName}` : ""}
+                      {" "}[{emp.lifecycle}]
+                    </option>
+                  ))}
+                </select>
+                {emailSuggestion ? (
+                  <div
+                    className="mt-2 rounded border px-3 py-2 text-xs"
+                    style={{ borderColor: "#c8b46e", background: "#fdf6d8", color: "#3f2f00" }}
+                    data-testid="invite-form-employee-suggestion"
+                  >
+                    <strong>Possible match:</strong> {emailSuggestion.name} (#{emailSuggestion.employeeNumber})
+                    already has an Employee record with this email. Select them from the list above to link — do not click if these are different people.
+                  </div>
+                ) : null}
+                <div className="mt-1 text-[11px]" style={{ color: "#6b6357" }}>
+                  A new pre-hire Employee record captures name / email / department only.
+                  Payroll rate, SIN, banking, and TD1 are collected later through HR onboarding.
+                </div>
+              </div>
+            ) : null}
           </FormField>
           <FormField label="Access" required>
             <div className="space-y-1 rounded border p-3" style={{ borderColor: "#d0c9bd" }} data-testid="invite-form-roles">

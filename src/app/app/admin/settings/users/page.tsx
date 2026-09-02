@@ -37,7 +37,7 @@ export default async function TenantUsersPage() {
     redirect("/app/admin");
   }
 
-  const [users, invitations, tenantAdmins, departments, positions, orgTree] = await Promise.all([
+  const [users, invitations, tenantAdmins, departments, positions, orgTree, employees, linkedProfiles] = await Promise.all([
     listActiveProfiles(clubId),
     listAdminInvitations(principal, clubId),
     listActiveAssignments(clubId, "TENANT_ADMINISTRATION"),
@@ -48,9 +48,24 @@ export default async function TenantUsersPage() {
     }),
     listPositions(clubId),
     loadOrgTree(clubId),
+    prisma.employee.findMany({
+      where: { clubId, employeeLifecycle: { in: ["PRE_HIRE", "ACTIVE", "LEAVE"] } },
+      select: {
+        id: true, employeeNumber: true,
+        firstName: true, lastName: true, preferredName: true,
+        personalEmail: true, email: true, employeeLifecycle: true,
+        department: { select: { id: true, name: true } },
+      },
+      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+    }),
+    prisma.userClubProfile.findMany({
+      where: { clubId, NOT: { employeeId: null } },
+      select: { employeeId: true },
+    }),
   ]);
 
   const tenantAdminUserIds = new Set(tenantAdmins.map((a) => a.userId));
+  const linkedEmployeeIds = new Set(linkedProfiles.map((p) => p.employeeId).filter((id): id is string => id !== null));
   // Fold each user's profileId + position + reportsTo hint into their row.
   const orgByUserId = new Map(orgTree.map((n) => [n.userId, n]));
 
@@ -104,6 +119,7 @@ export default async function TenantUsersPage() {
             roleLabels: u.user.clubRoles.map((r) => ROLE_LABELS[r.roleKey as keyof typeof ROLE_LABELS] ?? r.roleKey),
             lastLoginAt: u.user.lastLoginAt?.toISOString() ?? null,
             isTenantAdmin: tenantAdminUserIds.has(u.userId),
+            hasEmployeeLink: orgNode?.hasEmployeeLink ?? false,
           };
         })}
         initialInvitations={invitations.map((inv) => ({
@@ -129,6 +145,15 @@ export default async function TenantUsersPage() {
           isActive: p.isActive,
         }))}
         initialOrgTree={orgTree}
+        initialEmployees={employees.map((e) => ({
+          id: e.id,
+          employeeNumber: e.employeeNumber,
+          name: `${e.preferredName ?? e.firstName} ${e.lastName}`.trim(),
+          email: e.personalEmail ?? e.email ?? null,
+          lifecycle: e.employeeLifecycle,
+          departmentName: e.department?.name ?? null,
+          alreadyLinked: linkedEmployeeIds.has(e.id),
+        }))}
       />
     </main>
   );

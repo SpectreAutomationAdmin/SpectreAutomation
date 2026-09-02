@@ -63,7 +63,21 @@ export const createAdminInvitationSchema = z.object({
   displayName: z.string().max(160).optional(),
   displayTitle: z.string().max(120).optional(),
   departmentId: z.string().optional().nullable(),
+  // employmentRelationship — TA-1C iteration:
+  //   "EMPLOYEE"  → an existing or new Coulee-Ridge Employee record
+  //                 is linked/created. UserClubProfile.employeeId is
+  //                 populated on activation.
+  //   "EXTERNAL"  → non-employee (accountant, auditor, board member,
+  //                 consultant). No Employee record; no HR onboarding.
+  //   omitted     → back-compat with TA-1B callers (treated as EXTERNAL
+  //                 unless a non-null employeeId is supplied, which
+  //                 upgrades to EMPLOYEE + link).
+  employmentRelationship: z.enum(["EMPLOYEE", "EXTERNAL"]).optional(),
+  // Link to an existing Coulee-Ridge Employee row (must match clubId).
   employeeId: z.string().optional().nullable(),
+  // Phone/mobile carried through to the pre-hire Employee record.
+  phone: z.string().max(40).optional().nullable(),
+  mobilePhone: z.string().max(40).optional().nullable(),
   initialRoleKeys: z.array(z.string().min(1)).min(1),
   ttlDays: z.number().int().min(MIN_INVITATION_TTL_DAYS).max(MAX_INVITATION_TTL_DAYS).optional(),
   bootstrap: z.boolean().optional(),
@@ -126,6 +140,55 @@ export async function createAdminInvitation(
     }
   }
 
+  // TA-1C iteration — normalise the employment relationship + resolve
+  // the linked Employee. Three end-states out of this block:
+  //   - resolvedEmployeeId is a real Employee.id at this Club (existing
+  //     link, or a fresh pre-hire we just created); UserClubProfile
+  //     will link it at activation.
+  //   - resolvedEmployeeId stays null (external / non-employee User).
+  // Never leaves partial state — an unexpected error inside
+  // ensurePreHireEmployee bubbles up before any invitation row is
+  // written.
+  const employmentRelationship: "EMPLOYEE" | "EXTERNAL" =
+    input.employmentRelationship ??
+    (input.employeeId ? "EMPLOYEE" : "EXTERNAL");
+  let resolvedEmployeeId: string | null = input.employeeId ?? null;
+  let createdEmployee = false;
+
+  if (employmentRelationship === "EMPLOYEE" && !resolvedEmployeeId) {
+    // Create a pre-hire Employee via the canonical HR service. Do NOT
+    // duplicate creation logic — reuse hr/employees.ts so nextEmployeeNumber,
+    // initial PRIMARY assignment, and audit are all consistent with
+    // Employee Directory writes. Uses the invitation's contact info as
+    // the starting Employee record; SIN/banking/TD1/compensation are
+    // never set here — those come later through HR onboarding.
+    const { createEmployee } = await import("../hr/employees");
+    const composedName = [input.firstName, input.lastName].filter(Boolean).join(" ").trim();
+    const inferredFirst = input.firstName ?? (composedName ? composedName.split(/\s+/)[0] : email.split("@")[0]);
+    const inferredLast = input.lastName ?? (composedName && composedName.includes(" ")
+      ? composedName.split(/\s+/).slice(1).join(" ")
+      : "Employee");
+    const emp = await createEmployee(principal, input.clubId, {
+      firstName: inferredFirst,
+      lastName: inferredLast,
+      personalEmail: email,
+      phone: input.phone ?? null,
+      mobilePhone: input.mobilePhone ?? null,
+      departmentId: input.departmentId ?? null,
+      // Do NOT set positionId — EmployeePosition is HR/payroll-anchored
+      // (defaultPayRate, isExempt). Setting it from an admin invitation
+      // would silently push a payroll rate onto the new Employee.
+      // OrganizationalPosition.name is captured separately via
+      // AdminInvitation.displayTitle and applied to UserClubProfile
+      // during activation. HR later completes the payroll-anchored
+      // EmployeePosition through the HR onboarding flow.
+      employeeLifecycle: "PRE_HIRE",
+      // Compensation defaulted (0) — HR completes during onboarding.
+    });
+    resolvedEmployeeId = emp.id;
+    createdEmployee = true;
+  }
+
   // Refuse duplicate live invitations to the same email at the same club.
   const existingLive = await prisma.adminInvitation.findFirst({
     where: { clubId: input.clubId, email, status: { in: LIVE_INVITATION_STATUSES } },
@@ -163,7 +226,7 @@ export async function createAdminInvitation(
       displayName: input.displayName ?? null,
       displayTitle: input.displayTitle ?? null,
       departmentId: input.departmentId ?? null,
-      employeeId: input.employeeId ?? null,
+      employeeId: resolvedEmployeeId,
       initialRoleKeys: uniqueRoles.join(","),
       bootstrap: Boolean(input.bootstrap),
       tokenHash: sha256(rawToken),
@@ -182,9 +245,33 @@ export async function createAdminInvitation(
       initialRoleKeys: uniqueRoles,
       bootstrap: Boolean(input.bootstrap),
       hasDepartment: Boolean(input.departmentId),
-      hasEmployee: Boolean(input.employeeId),
+      hasEmployee: resolvedEmployeeId !== null,
+      employmentRelationship,
+      createdEmployee,
     },
   });
+  // If a pre-hire Employee was just created for this invitation,
+  // emit a distinct audit so the org+HR narrative is legible
+  // (the underlying hr.employee.write.update event fired inside
+  // createEmployee already covers the HR side).
+  if (createdEmployee && resolvedEmployeeId) {
+    await audit(principal, {
+      clubId: input.clubId,
+      action: "tenant.user.employee.created",
+      entityType: "Employee",
+      entityId: resolvedEmployeeId,
+      after: { invitationId: invitation.id, email },
+    });
+  }
+  if (!createdEmployee && resolvedEmployeeId) {
+    await audit(principal, {
+      clubId: input.clubId,
+      action: "tenant.user.employee.linked",
+      entityType: "Employee",
+      entityId: resolvedEmployeeId,
+      after: { invitationId: invitation.id, email },
+    });
+  }
 
   // Deliver — reuses Spectre's canonical multi-provider email stack.
   const delivery = await deliverInvitationEmail({

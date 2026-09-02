@@ -225,7 +225,9 @@ async function main() {
 
   const profileByPosition = new Map<string, string>();
 
-  // First pass — Users + roles + profiles (skip reportsTo).
+  // First pass — Users + roles + Employee (pre-hire, if new) +
+  // profiles (skip reportsTo). Idempotent per-person: existing
+  // Employees identified by (clubId, personalEmail) are reused.
   for (const person of PEOPLE) {
     const email = `${person.first.toLowerCase()}.${person.last.toLowerCase()}@preview.spectre.test`;
     const name = `${person.first} ${person.last}`;
@@ -240,13 +242,48 @@ async function main() {
     const positionId = posIds.get(person.position)!;
     const dept = POSITIONS.find((p) => p.name === person.position)!.dept;
     const departmentId = deptIds.get(dept)!;
+
+    // Employee link — every preview person is a Club employee.
+    // Reuse if already present (personalEmail is our stable key);
+    // otherwise create a pre-hire Employee directly via prisma.
+    // We bypass createEmployee() here because it hits an
+    // assertSensitiveActionAllowed() guard that requires a live
+    // request context, and this script runs outside one.
+    let employee = await prisma.employee.findFirst({
+      where: { clubId: club.id, personalEmail: email },
+    });
+    if (!employee) {
+      // Synthetic employee number namespace so we never collide with
+      // a real Employee at Coulee Ridge. Deterministic per-person so
+      // re-runs stay idempotent.
+      const employeeNumber = `TA1C-${person.first.toUpperCase().slice(0, 4)}`;
+      employee = await prisma.employee.create({
+        data: {
+          clubId: club.id,
+          employeeNumber,
+          firstName: person.first,
+          lastName: person.last,
+          personalEmail: email,
+          departmentId,
+          // positionId (HR/payroll EmployeePosition) intentionally
+          // left null — HR completes during onboarding. Payroll rate
+          // must never be inferred from the organizational title.
+          employeeLifecycle: "PRE_HIRE",
+          compensationType: "HOURLY",
+          payRate: 0,
+          createdByUserId: user.id,
+        },
+      });
+    }
+
     const profile = await prisma.userClubProfile.upsert({
       where: { clubId_userId: { clubId: club.id, userId: user.id } },
-      update: { positionId, departmentId },
+      update: { positionId, departmentId, employeeId: employee.id },
       create: {
         clubId: club.id, userId: user.id,
         displayTitle: null,
         positionId, departmentId,
+        employeeId: employee.id,
         status: "ACTIVE",
       },
     });

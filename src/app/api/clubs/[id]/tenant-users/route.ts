@@ -28,6 +28,7 @@ import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/p
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
 import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
 import { listPositions, loadOrgTree } from "@/lib/tenant-admin/org-structure";
+import { prisma } from "@/lib/prisma";
 
 const UNAUTHORIZED = NextResponse.json({ error: "Not authorised" }, { status: 403 });
 
@@ -57,13 +58,35 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     await assertTenantUsersWrite(principal, clubId);
     const url = new URL(req.url);
     const includeTerminal = url.searchParams.get("includeTerminal") === "true";
-    const [users, invitations, tenantAdmins, positions, orgTree] = await Promise.all([
+    const [users, invitations, tenantAdmins, positions, orgTree, employees, linkedProfiles] = await Promise.all([
       listActiveProfiles(clubId),
       listAdminInvitations(principal, clubId, { includeTerminal }),
       listActiveAssignments(clubId, "TENANT_ADMINISTRATION"),
       listPositions(clubId),
       loadOrgTree(clubId),
+      // Only display-safe Employee fields — the modal needs enough to
+      // let a Tenant Admin recognise an existing Employee and link
+      // them to a new invitation. NEVER SIN / bank / TD1 / comp.
+      prisma.employee.findMany({
+        where: { clubId, employeeLifecycle: { in: ["PRE_HIRE", "ACTIVE", "LEAVE"] } },
+        select: {
+          id: true, employeeNumber: true,
+          firstName: true, lastName: true, preferredName: true,
+          personalEmail: true, email: true, employeeLifecycle: true,
+          department: { select: { id: true, name: true } },
+          position: { select: { id: true, name: true } },
+        },
+        orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+      }),
+      // Which Employee ids already have a UserClubProfile at this club?
+      // The picker uses this to grey-out already-linked employees so a
+      // Tenant Admin cannot accidentally double-link.
+      prisma.userClubProfile.findMany({
+        where: { clubId, NOT: { employeeId: null } },
+        select: { employeeId: true },
+      }),
     ]);
+    const linkedEmployeeIds = new Set(linkedProfiles.map((p) => p.employeeId).filter((id): id is string => id !== null));
     return NextResponse.json({
       users: users.map((u) => ({
         id: u.id,
@@ -111,6 +134,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         description: p.description, sortOrder: p.sortOrder, isActive: p.isActive,
       })),
       orgTree,
+      employees: employees.map((e) => ({
+        id: e.id,
+        employeeNumber: e.employeeNumber,
+        name: `${e.preferredName ?? e.firstName} ${e.lastName}`.trim(),
+        email: e.personalEmail ?? e.email ?? null,
+        lifecycle: e.employeeLifecycle,
+        departmentName: e.department?.name ?? null,
+        positionName: e.position?.name ?? null,
+        alreadyLinked: linkedEmployeeIds.has(e.id),
+      })),
     });
   } catch (err) {
     return handleErr(err);

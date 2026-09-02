@@ -29,6 +29,33 @@ seed Club (`Silver Springs Golf & Country Club` per
 carries the tenant. The ID stays stable — every foreign key keeps
 resolving.
 
+### Why `prisma/seed.ts` still names the club "Silver Springs"
+
+Renaming the canonical seed Club directly in `prisma/seed.ts` was
+evaluated during the TA-1C iteration and **deferred**. `prisma/seed.ts`
+also seeds:
+
+- `silver-springs.localtest.me` / `members.silver-springs.localtest.me` /
+  `admin.silver-springs.localtest.me` `ClubDomain` rows used by the
+  host-based tenant resolver for local dev,
+- a `Club.wordmark = "Silver Springs"` and matching `ClubProfile`
+  legal name / operating name referenced by monthly-reporting-package
+  fixture tests.
+
+Force-renaming those breaks unrelated dev workflows + reporting-fixture
+snapshots. The founder-preview fixture rename in `ta1c-founder-preview-fixture.ts`
+is the safely-bounded normalisation — it updates only the seed Club's
+`name` + `slug`, leaves every other seeded row (including `ClubDomain`
+hostnames) intact so `silver-springs.localtest.me` still resolves for
+developers who use that URL. If we later re-run `prisma/seed.ts` (via
+`npm run db:reset`), the fixture rename runs again on the next
+`ta1c-founder-preview-fixture.ts` execution — idempotent normalisation.
+
+A dedicated slice can rename the seed Club + host-map + wordmark
+together, migrate the reporting fixtures, and delete the fixture-time
+rename. That is bounded but non-trivial — deferred until it becomes
+actively painful.
+
 
 Development for Spectre follows three clearly-separated environments.
 Which environment applies to a given change is determined by the
