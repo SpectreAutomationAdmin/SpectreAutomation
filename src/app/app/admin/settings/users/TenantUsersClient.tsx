@@ -52,7 +52,6 @@ export function TenantUsersClient({
   const [users, setUsers] = useState<TenantUserRow[]>(initialUsers);
   const [invitations, setInvitations] = useState<InvitationRow[]>(initialInvitations);
   const [showInvite, setShowInvite] = useState(false);
-  const [lastActivationUrl, setLastActivationUrl] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -72,13 +71,13 @@ export function TenantUsersClient({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "resend" }),
     });
-    const j = (await res.json().catch(() => ({}))) as { activationUrl?: string; error?: string };
+    const j = (await res.json().catch(() => ({}))) as { invitation?: { email?: string }; delivery?: { status?: string; externalSendConfirmed?: boolean; operatorAlert?: boolean; failureReason?: string | null }; error?: string };
     if (!res.ok) {
       setBanner({ tone: "error", text: j.error ?? `Resend failed (HTTP ${res.status})` });
       return;
     }
-    setLastActivationUrl(j.activationUrl ?? null);
-    setBanner({ tone: "success", text: "Invitation resent. New activation link shown below." });
+    const email = j.invitation?.email ?? "the invitee";
+    setBanner(deliveryBanner(email, j.delivery, /* verb */ "resent"));
     startTransition(() => { void refresh(); router.refresh(); });
   }
 
@@ -110,23 +109,6 @@ export function TenantUsersClient({
           data-testid="tenant-users-banner"
         >
           {banner.text}
-        </div>
-      ) : null}
-
-      {lastActivationUrl ? (
-        <div
-          className="rounded-md border px-4 py-3 text-sm"
-          style={{ borderColor: "#c8b46e", background: "#fdf6d8", color: "#3f2f00" }}
-          data-testid="tenant-users-activation-url"
-        >
-          <div className="font-semibold">Activation link</div>
-          <p className="mt-1 text-xs">
-            This link is shown once. Copy it to your email — in production, an email is dispatched
-            automatically; during founder acceptance we surface the raw link so you can test end-to-end.
-          </p>
-          <code className="mt-2 block break-all rounded bg-white px-2 py-1 text-xs">
-            {lastActivationUrl}
-          </code>
         </div>
       ) : null}
 
@@ -306,16 +288,39 @@ export function TenantUsersClient({
           clubId={clubId}
           departments={departments}
           onClose={() => setShowInvite(false)}
-          onSuccess={(activationUrl) => {
+          onSuccess={(email, delivery, existingUser) => {
             setShowInvite(false);
-            setLastActivationUrl(activationUrl);
-            setBanner({ tone: "success", text: "Invitation created. Activation link shown below." });
+            setBanner(deliveryBanner(email, delivery, "sent", existingUser));
             startTransition(() => { void refresh(); router.refresh(); });
           }}
         />
       ) : null}
     </div>
   );
+}
+
+function deliveryBanner(
+  email: string,
+  delivery: { status?: string; externalSendConfirmed?: boolean; operatorAlert?: boolean; failureReason?: string | null } | undefined,
+  verb: "sent" | "resent",
+  existingUser?: boolean,
+): { tone: "success" | "error"; text: string } {
+  const suffix = existingUser
+    ? " They already have a Spectre account and will be prompted to sign in."
+    : "";
+  if (!delivery) return { tone: "success", text: `Invitation ${verb} to ${email}.${suffix}` };
+  switch (delivery.status) {
+    case "DELIVERED":
+      return { tone: "success", text: `Invitation ${verb} to ${email}.${suffix}` };
+    case "DEV_LOGGED":
+      return { tone: "success", text: `Invitation ${verb} to ${email} (console adapter — no real email dispatched).${suffix}` };
+    case "FAILED":
+      return { tone: "error", text: `We couldn't send the invitation to ${email}. ${delivery.failureReason ?? "Try again."}` };
+    case "NOT_ATTEMPTED":
+      return { tone: "error", text: `We couldn't send the invitation to ${email}. ${delivery.failureReason ?? "Delivery was skipped."}` };
+    default:
+      return { tone: "success", text: `Invitation ${verb} to ${email}.${suffix}` };
+  }
 }
 
 function statusColor(status: string): string {
@@ -358,7 +363,11 @@ function InviteModal({
   clubId: string;
   departments: DepartmentOption[];
   onClose: () => void;
-  onSuccess: (activationUrl: string) => void;
+  onSuccess: (
+    email: string,
+    delivery: { status?: string; externalSendConfirmed?: boolean; operatorAlert?: boolean; failureReason?: string | null } | undefined,
+    existingUser: boolean,
+  ) => void;
 }) {
   const [email, setEmail] = useState("");
   const [firstName, setFirstName] = useState("");
@@ -399,13 +408,18 @@ function InviteModal({
           initialRoleKeys: selectedRoles,
         }),
       });
-      const j = (await res.json().catch(() => ({}))) as { activationUrl?: string; error?: string };
+      const j = (await res.json().catch(() => ({}))) as {
+        invitation?: { email?: string };
+        delivery?: { status?: string; externalSendConfirmed?: boolean; operatorAlert?: boolean; failureReason?: string | null };
+        existingUser?: boolean;
+        error?: string;
+      };
       if (!res.ok) {
         setError(j.error ?? `Invitation failed (HTTP ${res.status})`);
         setSubmitting(false);
         return;
       }
-      onSuccess(j.activationUrl ?? "");
+      onSuccess(j.invitation?.email ?? email.trim(), j.delivery, Boolean(j.existingUser));
     } catch (err) {
       setError((err as Error).message);
       setSubmitting(false);

@@ -22,6 +22,7 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import {
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   ValidationError,
 } from "../errors";
@@ -35,6 +36,11 @@ import {
 } from "./constants";
 import { assertTenantUsersWrite, upsertProfile } from "./profile";
 import { ensureTenantAdministrationBootstrap } from "./responsibilities";
+import {
+  sendAdminInvitationEmail,
+  resolvePublicHost,
+  type AdminInvitationDeliveryResult,
+} from "./invitation-email";
 
 function sha256(s: string): string {
   return createHash("sha256").update(s, "utf8").digest("hex");
@@ -64,10 +70,24 @@ export const createAdminInvitationSchema = z.object({
 });
 export type CreateAdminInvitationInput = z.infer<typeof createAdminInvitationSchema>;
 
+export type CreateAdminInvitationResult = {
+  invitation: Awaited<ReturnType<typeof prisma.adminInvitation.create>>;
+  delivery: AdminInvitationDeliveryResult;
+  // Whether the invitation email matched an EXISTING Spectre User at
+  // create time. Used by the UI copy ("They already have a Spectre
+  // account — they will be prompted to sign in.").
+  existingUser: boolean;
+  // Callers must NOT expose this to product UI. Returned so tests +
+  // controlled operator flows can build an activation URL without a
+  // second DB read. The API route filters it based on
+  // SPECTRE_ALLOW_ACTIVATION_URL + SUPER_ADMIN caller.
+  rawToken: string;
+};
+
 export async function createAdminInvitation(
   principal: Principal,
   raw: unknown,
-): Promise<{ invitation: Awaited<ReturnType<typeof prisma.adminInvitation.create>>; token: string }> {
+): Promise<CreateAdminInvitationResult> {
   // Pre-normalise email so `.email()` validation accepts padded / mixed-case input.
   if (raw && typeof raw === "object" && "email" in raw && typeof (raw as { email: unknown }).email === "string") {
     (raw as { email: string }).email = normaliseEmail((raw as { email: string }).email);
@@ -165,7 +185,69 @@ export async function createAdminInvitation(
       hasEmployee: Boolean(input.employeeId),
     },
   });
-  return { invitation, token: rawToken };
+
+  // Deliver — reuses Spectre's canonical multi-provider email stack.
+  const delivery = await deliverInvitationEmail({
+    invitation,
+    principal,
+    rawToken,
+    existingUser: existingUser !== null,
+  });
+
+  // Re-read to pick up the persistInvitationDelivery-updated status.
+  const refreshed = await prisma.adminInvitation.findUniqueOrThrow({ where: { id: invitation.id } });
+  return { invitation: refreshed, delivery, existingUser: existingUser !== null, rawToken };
+}
+
+async function deliverInvitationEmail(args: {
+  invitation: Awaited<ReturnType<typeof prisma.adminInvitation.create>>;
+  principal: Principal;
+  rawToken: string;
+  existingUser: boolean;
+}): Promise<AdminInvitationDeliveryResult> {
+  const { invitation, principal, rawToken, existingUser } = args;
+  const [club, inviter] = await Promise.all([
+    prisma.club.findUnique({ where: { id: invitation.clubId }, select: { name: true } }),
+    prisma.user.findUnique({ where: { id: principal.id }, select: { name: true, email: true } }),
+  ]);
+  const clubName = club?.name ?? "your Club";
+  const inviterName = inviter?.name || inviter?.email || "A Club administrator";
+  const composedName = [invitation.firstName, invitation.lastName].filter(Boolean).join(" ").trim();
+  const displayName = invitation.displayName ?? composedName ?? invitation.email.split("@")[0];
+
+  let publicHost: string;
+  try {
+    publicHost = resolvePublicHost();
+  } catch {
+    // APP_URL not configured. Persist a NOT_ATTEMPTED-style row so
+    // status accurately reflects reality; do not silently mark SENT.
+    await prisma.adminInvitation.update({
+      where: { id: invitation.id },
+      data: {
+        status: "FAILED",
+        failedAt: new Date(),
+        lastError: "APP_URL not configured",
+      },
+    });
+    return {
+      status: "FAILED", provider: null, providerMessageId: null,
+      failureReason: "APP_URL not configured", externalSendConfirmed: false, operatorAlert: true,
+    };
+  }
+
+  return sendAdminInvitationEmail({
+    clubId: invitation.clubId,
+    invitationId: invitation.id,
+    toEmail: invitation.email,
+    clubName,
+    inviterName,
+    displayName,
+    isExistingUser: existingUser,
+    rawToken,
+    publicHost,
+    expiresAt: invitation.expiresAt,
+    callerUserId: principal.id,
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -204,17 +286,29 @@ export async function markInvitationOpened(token: string): Promise<void> {
 // ---------------------------------------------------------------------
 // Resend
 // ---------------------------------------------------------------------
+export type ResendAdminInvitationResult = {
+  invitation: Awaited<ReturnType<typeof prisma.adminInvitation.create>>;
+  delivery: AdminInvitationDeliveryResult;
+  rawToken: string;
+};
+
 export async function resendAdminInvitation(
   principal: Principal,
   invitationId: string,
-): Promise<{ invitation: Awaited<ReturnType<typeof prisma.adminInvitation.create>>; token: string }> {
+): Promise<ResendAdminInvitationResult> {
   const existing = await prisma.adminInvitation.findUnique({ where: { id: invitationId } });
   if (!existing) throw new NotFoundError("AdminInvitation", invitationId);
   await assertTenantUsersWrite(principal, existing.clubId);
   if (existing.status === "ACTIVATED") throw new ConflictError("Invitation is already activated.");
   if (existing.status === "REVOKED") throw new ConflictError("Invitation is revoked and cannot be resent.");
 
-  // Invalidate the prior token by rotating hash + resetting lifecycle.
+  // Simple abuse protection: refuse resend within 60s of the prior
+  // attempt. Deliberately lightweight; a full rate-limit surface is
+  // out of scope for TA-1B closeout. See §37.
+  if (existing.sentAt && Date.now() - existing.sentAt.getTime() < 60_000) {
+    throw new ConflictError("Please wait at least one minute between invitation resends.");
+  }
+
   const rawToken = generateRawToken();
   const now = new Date();
   const ttlMs = Math.max(existing.expiresAt.getTime() - existing.createdAt.getTime(),
@@ -239,7 +333,13 @@ export async function resendAdminInvitation(
     entityId: existing.id,
     after: { previousStatus: existing.status },
   });
-  return { invitation, token: rawToken };
+
+  const existingUser = await prisma.user.findUnique({ where: { email: invitation.email }, select: { id: true } });
+  const delivery = await deliverInvitationEmail({
+    invitation, principal, rawToken, existingUser: existingUser !== null,
+  });
+  const refreshed = await prisma.adminInvitation.findUniqueOrThrow({ where: { id: invitation.id } });
+  return { invitation: refreshed, delivery, rawToken };
 }
 
 // ---------------------------------------------------------------------
@@ -297,15 +397,23 @@ export async function listAdminInvitations(
 }
 
 // ---------------------------------------------------------------------
-// Activation (conventional path — password-set)
+// Activation — TWO EXPLICIT PATHS (TA-1B closeout §3-§7).
+//
+// Path A: activateAdminInvitationAsNewUser
+//   Invitation email does NOT match an existing User. Creates the
+//   Spectre account, hashes password, wires memberships + profile.
+//
+// Path B: acceptAdminInvitationAsExistingUser
+//   Invitation email matches an existing User. Caller MUST be
+//   authenticated as that User (verified by service). Adds the new
+//   Club membership + profile. PASSWORD HASH IS NEVER TOUCHED.
+//
+// The public activation endpoint dispatches to the right path based on
+// whether the invitation email matches an existing User AND on the
+// authenticated principal's identity. Callers cannot bypass the split
+// by passing a password to path B — that arg simply isn't part of B's
+// signature.
 // ---------------------------------------------------------------------
-export const activateAdminInvitationSchema = z.object({
-  token: z.string().min(10),
-  password: z.string().min(10).max(200),
-  confirmPassword: z.string().min(10).max(200),
-  fullName: z.string().min(1).max(160).optional(),
-});
-export type ActivateAdminInvitationInput = z.infer<typeof activateAdminInvitationSchema>;
 
 export type ActivationResult = {
   invitationId: string;
@@ -317,40 +425,12 @@ export type ActivationResult = {
 };
 
 /**
- * Activate an invitation via the conventional password-set path.
- *
- * Transactional writes (all-or-nothing):
- *   1. User: create OR update password (existing user is attached).
- *   2. UserClubRole rows: one per requested roleKey (idempotent upsert).
- *   3. UserClubProfile: created/updated with displayTitle + department + employee link.
- *   4. If invitation.bootstrap: assign TENANT_ADMINISTRATION PRIMARY (idempotent).
- *   5. AdminInvitation.status → ACTIVATED.
- *
- * Never returns the token, never re-emits sensitive data. Audit rows
- * are written OUTSIDE the transaction so an audit failure does not
- * roll back a legitimate activation.
+ * Look up an invitation and enforce the shared lifecycle preconditions
+ * (not activated, not revoked, not expired). Never throws token or
+ * plaintext into any error message. Returns the invitation row.
  */
-export async function activateAdminInvitation(
-  raw: unknown,
-  args?: { ip?: string; userAgent?: string },
-): Promise<ActivationResult> {
-  const parsed = activateAdminInvitationSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new ValidationError(
-      parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
-    );
-  }
-  const input = parsed.data;
-  if (input.password !== input.confirmPassword) {
-    throw new ValidationError([{ path: "confirmPassword", message: "Passwords do not match." }]);
-  }
-  if (!/[A-Z]/.test(input.password) || !/[a-z]/.test(input.password) || !/\d/.test(input.password)) {
-    throw new ValidationError([
-      { path: "password", message: "Password must include upper case, lower case, and a digit." },
-    ]);
-  }
-
-  const tokenHash = sha256(input.token);
+async function loadActivatableInvitation(rawToken: string) {
+  const tokenHash = sha256(rawToken);
   const invitation = await prisma.adminInvitation.findUnique({ where: { tokenHash } });
   if (!invitation) throw new NotFoundError("AdminInvitation", "token");
   if (invitation.status === "ACTIVATED") throw new ConflictError("Invitation is already activated.");
@@ -361,63 +441,99 @@ export async function activateAdminInvitation(
     }
     throw new ConflictError("Invitation has expired.");
   }
+  return invitation;
+}
+
+function validateAndTightenPassword(password: string, confirmPassword: string) {
+  if (password !== confirmPassword) {
+    throw new ValidationError([{ path: "confirmPassword", message: "Passwords do not match." }]);
+  }
+  if (password.length < 10 || password.length > 200) {
+    throw new ValidationError([{ path: "password", message: "Password must be 10–200 characters." }]);
+  }
+  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) {
+    throw new ValidationError([
+      { path: "password", message: "Password must include upper case, lower case, and a digit." },
+    ]);
+  }
+}
+
+function normaliseRoleKeys(csv: string): string[] {
+  const keys = csv.split(",").map((r) => r.trim()).filter(Boolean).filter(isTenantAssignableRole);
+  if (keys.length === 0) {
+    throw new ConflictError("Invitation has no tenant-assignable roles.");
+  }
+  return keys;
+}
+
+function invitationDisplayName(invitation: {
+  displayName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  email: string;
+}): string {
+  if (invitation.displayName) return invitation.displayName;
+  const composed = [invitation.firstName, invitation.lastName].filter(Boolean).join(" ").trim();
+  return composed || invitation.email.split("@")[0];
+}
+
+/**
+ * PATH A — brand-new Spectre account.
+ *
+ * Refuses if the invitation email already matches a User (that caller
+ * must use acceptAdminInvitationAsExistingUser). This prevents any
+ * caller from silently overwriting an existing password via this path.
+ */
+export const activateAsNewUserSchema = z.object({
+  token: z.string().min(10),
+  password: z.string().min(10).max(200),
+  confirmPassword: z.string().min(10).max(200),
+  fullName: z.string().min(1).max(160).optional(),
+});
+export type ActivateAsNewUserInput = z.infer<typeof activateAsNewUserSchema>;
+
+export async function activateAdminInvitationAsNewUser(
+  raw: unknown,
+  args?: { ip?: string; userAgent?: string },
+): Promise<ActivationResult> {
+  const parsed = activateAsNewUserSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new ValidationError(
+      parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    );
+  }
+  const input = parsed.data;
+  validateAndTightenPassword(input.password, input.confirmPassword);
+
+  const invitation = await loadActivatableInvitation(input.token);
+
+  const existingUser = await prisma.user.findUnique({ where: { email: invitation.email } });
+  if (existingUser) {
+    throw new ConflictError(
+      "This email is already a Spectre account. Sign in to accept your invitation instead of creating a new account.",
+    );
+  }
 
   const bcrypt = await import("bcryptjs");
   const passwordHash = await bcrypt.hash(input.password, 10);
-  const roleKeys = invitation.initialRoleKeys
-    .split(",")
-    .map((r) => r.trim())
-    .filter(Boolean)
-    .filter(isTenantAssignableRole);
-  if (roleKeys.length === 0) {
-    throw new ConflictError("Invitation has no tenant-assignable roles.");
-  }
-
-  const composedName = [invitation.firstName, invitation.lastName]
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  const displayName =
-    invitation.displayName ??
-    (composedName || input.fullName || invitation.email.split("@")[0]);
+  const roleKeys = normaliseRoleKeys(invitation.initialRoleKeys);
+  const displayName = invitation.displayName ?? input.fullName ?? invitationDisplayName(invitation);
 
   const result = await prisma.$transaction(async (tx) => {
-    // 1. User — create or attach.
-    let user = await tx.user.findUnique({ where: { email: invitation.email } });
-    let createdUser = false;
-    if (user) {
-      user = await tx.user.update({
-        where: { id: user.id },
-        data: {
-          passwordHash,
-          status: "ACTIVE",
-          name: user.name || displayName,
-        },
-      });
-    } else {
-      user = await tx.user.create({
-        data: {
-          email: invitation.email,
-          name: displayName,
-          role: roleKeys[0], // deprecated scalar; keep in sync
-          passwordHash,
-          status: "ACTIVE",
-          clubId: invitation.clubId, // deprecated scalar; kept for legacy readers
-        },
-      });
-      createdUser = true;
-    }
+    const user = await tx.user.create({
+      data: {
+        email: invitation.email,
+        name: displayName,
+        role: roleKeys[0], // deprecated scalar; kept for legacy readers
+        passwordHash,
+        status: "ACTIVE",
+        clubId: invitation.clubId, // deprecated scalar; kept for legacy readers
+      },
+    });
 
-    // 2. UserClubRole rows.
     for (const roleKey of roleKeys) {
-      await tx.userClubRole.upsert({
-        where: { userId_clubId_roleKey: { userId: user.id, clubId: invitation.clubId, roleKey } },
-        update: {},
-        create: { userId: user.id, clubId: invitation.clubId, roleKey },
-      });
+      await tx.userClubRole.create({ data: { userId: user.id, clubId: invitation.clubId, roleKey } });
     }
-
-    // 3. UserClubProfile.
     await upsertProfile({
       clubId: invitation.clubId,
       userId: user.id,
@@ -428,7 +544,6 @@ export async function activateAdminInvitation(
       tx,
     });
 
-    // 4. Bootstrap TENANT_ADMINISTRATION if this is the club's first admin.
     let bootstrapPrimaryAssigned = false;
     if (invitation.bootstrap) {
       const existingPrimary = await tx.responsibilityAssignment.findFirst({
@@ -441,16 +556,12 @@ export async function activateAdminInvitation(
       });
       if (!existingPrimary) {
         await ensureTenantAdministrationBootstrap({
-          clubId: invitation.clubId,
-          userId: user.id,
-          actor: { id: user.id },
-          tx,
+          clubId: invitation.clubId, userId: user.id, actor: { id: user.id }, tx,
         });
         bootstrapPrimaryAssigned = true;
       }
     }
 
-    // 5. Flip invitation status.
     await tx.adminInvitation.update({
       where: { id: invitation.id },
       data: {
@@ -460,8 +571,7 @@ export async function activateAdminInvitation(
         activatedUserId: user.id,
       },
     });
-
-    return { userId: user.id, createdUser, bootstrapPrimaryAssigned };
+    return { userId: user.id, bootstrapPrimaryAssigned };
   }, { timeout: 20_000 });
 
   await audit({ id: result.userId }, {
@@ -470,21 +580,172 @@ export async function activateAdminInvitation(
     entityType: "AdminInvitation",
     entityId: invitation.id,
     after: {
-      userId: result.userId,
-      createdUser: result.createdUser,
+      userId: result.userId, createdUser: true,
       bootstrapPrimaryAssigned: result.bootstrapPrimaryAssigned,
-      roleKeys,
-      ip: args?.ip ?? null,
+      roleKeys, path: "new-user", ip: args?.ip ?? null,
     },
   });
 
   return {
-    invitationId: invitation.id,
-    userId: result.userId,
-    clubId: invitation.clubId,
-    bootstrapPrimaryAssigned: result.bootstrapPrimaryAssigned,
-    createdUser: result.createdUser,
+    invitationId: invitation.id, userId: result.userId, clubId: invitation.clubId,
+    bootstrapPrimaryAssigned: result.bootstrapPrimaryAssigned, createdUser: true,
     redirectPath: "/app/admin",
+  };
+}
+
+/**
+ * PATH B — existing Spectre account accepting a new tenant membership.
+ *
+ * Caller MUST be authenticated as the User whose email matches the
+ * invitation. The caller's Principal.id is compared to the User row
+ * matched by invitation.email (case-insensitive, already normalised).
+ * On mismatch → ForbiddenError (§32 wrong-session refusal).
+ *
+ * Never touches the User's passwordHash, name, or global auth state.
+ * Only writes:
+ *   - UserClubRole rows for this club
+ *   - UserClubProfile (this club only)
+ *   - Optional TENANT_ADMINISTRATION bootstrap
+ *   - Invitation status → ACTIVATED
+ */
+export async function acceptAdminInvitationAsExistingUser(
+  args: { token: string; principal: Principal; ip?: string; userAgent?: string },
+): Promise<ActivationResult> {
+  const invitation = await loadActivatableInvitation(args.token);
+
+  const targetUser = await prisma.user.findUnique({ where: { email: invitation.email } });
+  if (!targetUser) {
+    throw new ConflictError(
+      "This invitation is for a new Spectre account. Complete the account-creation flow instead.",
+    );
+  }
+
+  if (targetUser.id !== args.principal.id) {
+    // Wrong-session refusal — never silently sign the caller out and
+    // proceed. Do not mutate anything.
+    throw new ForbiddenError(
+      "This invitation belongs to a different Spectre account. Sign in as that account to accept it.",
+    );
+  }
+  if (targetUser.status !== "ACTIVE") {
+    throw new ConflictError(`This Spectre account is ${targetUser.status.toLowerCase()}; contact support before accepting.`);
+  }
+
+  const roleKeys = normaliseRoleKeys(invitation.initialRoleKeys);
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Wire memberships — idempotent.
+    for (const roleKey of roleKeys) {
+      await tx.userClubRole.upsert({
+        where: { userId_clubId_roleKey: { userId: targetUser.id, clubId: invitation.clubId, roleKey } },
+        update: {},
+        create: { userId: targetUser.id, clubId: invitation.clubId, roleKey },
+      });
+    }
+    await upsertProfile({
+      clubId: invitation.clubId,
+      userId: targetUser.id,
+      actor: { id: targetUser.id },
+      displayTitle: invitation.displayTitle,
+      departmentId: invitation.departmentId,
+      employeeId: invitation.employeeId,
+      tx,
+    });
+
+    let bootstrapPrimaryAssigned = false;
+    if (invitation.bootstrap) {
+      const existingPrimary = await tx.responsibilityAssignment.findFirst({
+        where: {
+          clubId: invitation.clubId,
+          responsibilityKey: "TENANT_ADMINISTRATION",
+          role: "PRIMARY",
+          effectiveTo: null,
+        },
+      });
+      if (!existingPrimary) {
+        await ensureTenantAdministrationBootstrap({
+          clubId: invitation.clubId, userId: targetUser.id, actor: { id: targetUser.id }, tx,
+        });
+        bootstrapPrimaryAssigned = true;
+      }
+    }
+
+    await tx.adminInvitation.update({
+      where: { id: invitation.id },
+      data: {
+        status: "ACTIVATED",
+        activatedAt: new Date(),
+        openedAt: invitation.openedAt ?? new Date(),
+        activatedUserId: targetUser.id,
+      },
+    });
+    return { userId: targetUser.id, bootstrapPrimaryAssigned };
+  }, { timeout: 20_000 });
+
+  await audit({ id: result.userId }, {
+    clubId: invitation.clubId,
+    action: "admin.invitation.activated",
+    entityType: "AdminInvitation",
+    entityId: invitation.id,
+    after: {
+      userId: result.userId, createdUser: false,
+      bootstrapPrimaryAssigned: result.bootstrapPrimaryAssigned,
+      roleKeys, path: "existing-user", ip: args.ip ?? null,
+    },
+  });
+
+  return {
+    invitationId: invitation.id, userId: result.userId, clubId: invitation.clubId,
+    bootstrapPrimaryAssigned: result.bootstrapPrimaryAssigned, createdUser: false,
+    redirectPath: "/app/admin",
+  };
+}
+
+/**
+ * Introspect an invitation without mutating it. Used by the landing
+ * page + the /accept endpoint to decide which path to render.
+ * Returns a public-safe subset — no token, no hash, no role keys.
+ */
+export async function describeInvitationForLanding(rawToken: string): Promise<{
+  invitationId: string;
+  clubId: string;
+  clubName: string;
+  email: string;
+  displayName: string;
+  displayTitle: string | null;
+  expiresAt: Date;
+  status: string;
+  bootstrap: boolean;
+  requiresExistingUserSignIn: boolean;
+  existingUserId: string | null;
+  inviterName: string | null;
+}> {
+  const tokenHash = sha256(rawToken);
+  const invitation = await prisma.adminInvitation.findUnique({
+    where: { tokenHash },
+    include: {
+      club: { select: { id: true, name: true } },
+      invitedBy: { select: { name: true, email: true } },
+    },
+  });
+  if (!invitation) throw new NotFoundError("AdminInvitation", "token");
+  const existingUser = await prisma.user.findUnique({
+    where: { email: invitation.email },
+    select: { id: true },
+  });
+  return {
+    invitationId: invitation.id,
+    clubId: invitation.clubId,
+    clubName: invitation.club.name,
+    email: invitation.email,
+    displayName: invitationDisplayName(invitation),
+    displayTitle: invitation.displayTitle,
+    expiresAt: invitation.expiresAt,
+    status: invitation.status,
+    bootstrap: invitation.bootstrap,
+    requiresExistingUserSignIn: existingUser !== null,
+    existingUserId: existingUser?.id ?? null,
+    inviterName: invitation.invitedBy?.name ?? invitation.invitedBy?.email ?? null,
   };
 }
 

@@ -322,6 +322,109 @@ export async function endAssignment(args: {
 }
 
 /**
+ * Explicit governance action: transfer Primary Tenant Administrator
+ * from the current holder to a named target User (TA-1B closeout §20-25).
+ *
+ * Distinct from the generic assignPrimary helper because the founder
+ * requirement is that ownership changes are intent-expressed at the
+ * public API boundary — assignPrimary silently closing an existing
+ * primary was too easy to invoke by accident.
+ *
+ * Rules enforced here:
+ *   - Refuse if no current Primary exists (this is bootstrap territory —
+ *     use ensureTenantAdministrationBootstrap).
+ *   - Refuse if target is the current Primary (no-op / self-transfer).
+ *   - Refuse if target is not ACTIVE.
+ *   - Refuse if target is not a member of the Club.
+ *   - Refuse if the target profile is not ACTIVE at the Club (SUSPENDED /
+ *     REVOKED profiles cannot become Primary).
+ *   - Atomic within one transaction — no zero-Primary window.
+ *   - Former Primary is NOT auto-assigned as BACKUP (§23).
+ *   - Emits distinct audit event `tenant.administrator.transferred`.
+ */
+export async function transferPrimaryTenantAdministrator(args: {
+  clubId: string;
+  targetUserId: string;
+  actor: Principal | { id: string } | null;
+  notes?: string;
+}) {
+  const { clubId, targetUserId, actor, notes } = args;
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.responsibilityAssignment.findFirst({
+      where: {
+        clubId, responsibilityKey: "TENANT_ADMINISTRATION",
+        role: "PRIMARY", effectiveTo: null,
+      },
+    });
+    if (!current) {
+      throw new ConflictError(
+        "No current Primary Tenant Administrator to transfer from. Bootstrap the first Primary via the invitation flow instead.",
+      );
+    }
+    if (current.userId === targetUserId) {
+      throw new ConflictError("Target is already the Primary Tenant Administrator.");
+    }
+
+    const target = await tx.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true, status: true },
+    });
+    if (!target) throw new NotFoundError("User", targetUserId);
+    if (target.status !== "ACTIVE") {
+      throw new ValidationError([
+        { path: "targetUserId", message: `Target User is ${target.status}; only ACTIVE users may hold Primary.` },
+      ]);
+    }
+    const membership = await tx.userClubRole.count({ where: { userId: targetUserId, clubId } });
+    if (membership === 0) {
+      throw new ForbiddenError("Target User is not a member of this club.");
+    }
+    const targetProfile = await tx.userClubProfile.findUnique({
+      where: { clubId_userId: { clubId, userId: targetUserId } },
+      select: { status: true },
+    });
+    if (targetProfile && targetProfile.status !== "ACTIVE") {
+      throw new ForbiddenError(
+        `Target profile is ${targetProfile.status}; only ACTIVE profiles may hold Primary.`,
+      );
+    }
+
+    const now = new Date();
+    await tx.responsibilityAssignment.update({
+      where: { id: current.id },
+      data: {
+        effectiveTo: now,
+        endedByUserId: actor?.id ?? null,
+        endReason: "TRANSFERRED",
+      },
+    });
+    const created = await tx.responsibilityAssignment.create({
+      data: {
+        clubId, userId: targetUserId,
+        responsibilityKey: "TENANT_ADMINISTRATION",
+        role: "PRIMARY",
+        effectiveFrom: now,
+        assignedByUserId: actor?.id ?? null,
+        notes: notes ?? null,
+      },
+    });
+    return { previousPrimaryUserId: current.userId, newPrimary: created, previousAssignmentId: current.id };
+  }, { timeout: 15_000 }).then(async (result) => {
+    // Audit AFTER the tx commits so audit-write contention with the
+    // outer transaction cannot swallow the row on SQLite/WAL.
+    await audit(actor, {
+      clubId,
+      action: "tenant.administrator.transferred",
+      entityType: "ResponsibilityAssignment",
+      entityId: result.newPrimary.id,
+      before: { previousPrimaryUserId: result.previousPrimaryUserId, previousAssignmentId: result.previousAssignmentId },
+      after: { newPrimaryUserId: targetUserId, newAssignmentId: result.newPrimary.id, formerPrimaryBackup: false },
+    });
+    return { previousPrimaryUserId: result.previousPrimaryUserId, newPrimary: result.newPrimary };
+  });
+}
+
+/**
  * Bootstrap the first Tenant Administrator for a Club. Idempotent:
  *   - if the Club already has an active TENANT_ADMINISTRATION PRIMARY,
  *     no-op (returns the existing row).

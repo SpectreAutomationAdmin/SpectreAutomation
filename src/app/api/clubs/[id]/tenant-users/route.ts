@@ -1,14 +1,21 @@
-// TA-1B (2026-09-03) — Tenant Users API (invitations list + create).
+// TA-1B closeout (2026-09-03) — Tenant Users API.
 //
 // GET  /api/clubs/[id]/tenant-users
-//   Returns current active administrative users + pending invitations
-//   for the founder-facing Tenant Users page.
+//   Returns active administrative users + pending invitations for the
+//   founder-facing Tenant Users page.
 //
 // POST /api/clubs/[id]/tenant-users
-//   Creates an admin invitation. Returns the invitation row + raw token
-//   ONCE (the caller is expected to hand off to email delivery — TA-1B
-//   surfaces the raw activation URL in the UI response so the founder
-//   can copy it during acceptance testing).
+//   Creates an admin invitation AND dispatches the email through
+//   Spectre's canonical multi-provider email stack. Returns delivery
+//   status + a public-safe subset of the invitation row. NEVER
+//   returns the raw activation URL in the normal response.
+//
+// Test-only escape hatch: when the deployed process has
+//   SPECTRE_ALLOW_ACTIVATION_URL=true
+// AND the caller is SUPER_ADMIN AND the request carries
+//   ?includeActivationUrl=true
+// the response ADDITIONALLY includes `activationUrl`. Production never
+// sets the env var; staging sets it so Playwright can drive activation.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentPrincipal } from "@/lib/services/principal";
@@ -19,6 +26,8 @@ import {
 } from "@/lib/tenant-admin/invitations";
 import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/profile";
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
+import { isSuperAdmin } from "@/lib/rbac";
+import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
 
 const UNAUTHORIZED = NextResponse.json({ error: "Not authorised" }, { status: 403 });
 
@@ -104,23 +113,50 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const principal = await getCurrentPrincipal();
   if (!principal) return UNAUTHORIZED;
   try {
+    const url = new URL(req.url);
     const body = (await req.json()) as Record<string, unknown>;
     const payload = { ...body, clubId };
-    const { invitation, token } = await createAdminInvitation(principal, payload);
-    const origin = new URL(req.url).origin;
-    return NextResponse.json({
+    const created = await createAdminInvitation(principal, payload);
+
+    // Test-only gate. Production Fly config MUST NOT set
+    // SPECTRE_ALLOW_ACTIVATION_URL. Staging sets it so Playwright can
+    // drive activation without needing an email inbox scrape.
+    const gateOn = process.env.SPECTRE_ALLOW_ACTIVATION_URL === "true";
+    const requested = url.searchParams.get("includeActivationUrl") === "true";
+    const allowActivationUrl = gateOn && requested && isSuperAdmin(principal);
+
+    const responseBody: Record<string, unknown> = {
       invitation: {
-        id: invitation.id,
-        email: invitation.email,
-        status: invitation.status,
-        expiresAt: invitation.expiresAt,
-        initialRoleKeys: invitation.initialRoleKeys.split(",").filter(Boolean),
-        bootstrap: invitation.bootstrap,
+        id: created.invitation.id,
+        email: created.invitation.email,
+        status: created.invitation.status,
+        expiresAt: created.invitation.expiresAt,
+        sentAt: created.invitation.sentAt,
+        initialRoleKeys: created.invitation.initialRoleKeys.split(",").filter(Boolean),
+        bootstrap: created.invitation.bootstrap,
       },
-      activationUrl: `${origin}/invite/${token}`,
-      rawTokenReturnedOnce: true,
-    });
+      delivery: {
+        status: created.delivery.status,
+        externalSendConfirmed: created.delivery.externalSendConfirmed,
+        operatorAlert: created.delivery.operatorAlert,
+        provider: created.delivery.provider,
+        // failureReason surfaced to founder-visible copy — safe (never
+        // contains the token, per invitation-email.ts contract).
+        failureReason: created.delivery.failureReason,
+      },
+      existingUser: created.existingUser,
+    };
+    if (allowActivationUrl) {
+      const publicHost = safePublicHost();
+      responseBody.activationUrl = publicHost ? `${publicHost.replace(/\/$/, "")}/invite/${created.rawToken}` : null;
+      responseBody.rawTokenReturnedOnce = true;
+    }
+    return NextResponse.json(responseBody);
   } catch (err) {
     return handleErr(err);
   }
+}
+
+function safePublicHost(): string | null {
+  try { return resolvePublicHost(); } catch { return null; }
 }
