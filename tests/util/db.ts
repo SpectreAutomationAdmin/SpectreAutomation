@@ -475,6 +475,11 @@ export async function resetDb() {
     c.employeePortalQuickLink.deleteMany(),
     c.clubAnnouncement.deleteMany(),
     c.anonymousFeedback.deleteMany(),
+    // TA-1B (2026-09-03) — Tenant Administration.
+    c.adminInvitation.deleteMany(),
+    c.responsibilityAssignment.deleteMany(),
+    c.userClubProfile.deleteMany(),
+    c.responsibility.deleteMany(),
     c.user.deleteMany(),
     c.member.deleteMany(),
     c.applicant.deleteMany(),
@@ -499,6 +504,20 @@ export async function seedRbac() {
       });
     }
   }
+  // TA-1B — Responsibility catalogue. Only TENANT_ADMINISTRATION seeded.
+  await c.responsibility.upsert({
+    where: { key: "TENANT_ADMINISTRATION" },
+    update: {},
+    create: {
+      key: "TENANT_ADMINISTRATION",
+      displayLabel: "Tenant Administrator",
+      scopeKind: "CLUB",
+      cardinality: "PRIMARY_AND_BACKUPS",
+      description:
+        "Holds Tenant Administration authority for this Club. Primary invites and manages administrative users; may assign further responsibilities.",
+      isSpectreDefined: true,
+    },
+  });
 }
 
 export async function makeClub(name: string) {

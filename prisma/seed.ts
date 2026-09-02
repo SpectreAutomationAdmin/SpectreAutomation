@@ -354,6 +354,24 @@ async function main() {
   }
 
   // ---------------------------------------------------------------
+  // TA-1B — Responsibility catalogue (canonical operational keys).
+  // Only TENANT_ADMINISTRATION is seeded in TA-1B. Additional keys
+  // are added in later slices when their consumers exist.
+  // ---------------------------------------------------------------
+  await prisma.responsibility.deleteMany();
+  await prisma.responsibility.create({
+    data: {
+      key: "TENANT_ADMINISTRATION",
+      displayLabel: "Tenant Administrator",
+      scopeKind: "CLUB",
+      cardinality: "PRIMARY_AND_BACKUPS",
+      description:
+        "Holds Tenant Administration authority for this Club. Primary invites and manages administrative users; may assign further responsibilities. Every Club must have at least one active Primary at all times.",
+      isSpectreDefined: true,
+    },
+  });
+
+  // ---------------------------------------------------------------
   // Club
   // ---------------------------------------------------------------
   const club = await prisma.club.create({

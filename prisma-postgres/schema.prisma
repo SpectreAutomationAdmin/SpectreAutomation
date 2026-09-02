@@ -486,6 +486,11 @@ model Club {
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
   employeeCppDisabilities            EmployeeCppDisability[]
+
+  // TA-1B — Tenant Administration back-relations.
+  userClubProfiles                   UserClubProfile[]
+  responsibilityAssignments          ResponsibilityAssignment[]
+  adminInvitations                   AdminInvitation[]
 }
 
 // ---------------------------------------------------------------------
@@ -669,6 +674,17 @@ model User {
   initiatedOnboardingSessions EmployeeOnboardingSession[]         @relation("OnboardingInitiatedBy")
   approvedOnboardingSessions  EmployeeOnboardingSession[]         @relation("OnboardingApprovedBy")
   onboardingStateTransitions  EmployeeOnboardingStateTransition[] @relation("OnboardingTransitionActor")
+
+  // TA-1B (2026-09-03) — Tenant Administration back-relations.
+  tenantClubProfiles          UserClubProfile[]                   @relation("UserClubProfileUser")
+  createdTenantClubProfiles   UserClubProfile[]                   @relation("UserClubProfileCreatedBy")
+  updatedTenantClubProfiles   UserClubProfile[]                   @relation("UserClubProfileUpdatedBy")
+  responsibilityAssignments   ResponsibilityAssignment[]          @relation("ResponsibilityAssignmentUser")
+  assignedResponsibilities    ResponsibilityAssignment[]          @relation("ResponsibilityAssignedBy")
+  endedResponsibilities       ResponsibilityAssignment[]          @relation("ResponsibilityEndedBy")
+  sentAdminInvitations        AdminInvitation[]                   @relation("AdminInvitationInvitedBy")
+  revokedAdminInvitations     AdminInvitation[]                   @relation("AdminInvitationRevokedBy")
+  activatedAdminInvitations   AdminInvitation[]                   @relation("AdminInvitationActivatedUser")
 }
 
 // -------------------------------------------------------------------
@@ -729,6 +745,144 @@ model UserClubRole {
   @@index([userId])
   @@index([clubId])
   @@index([roleKey])
+}
+
+// -------------------------------------------------------------------
+// 2c. Tenant Administration (TA-1B — 2026-09-03)
+// -------------------------------------------------------------------
+// Foundation for the Tenant Administration module. See
+// docs/tenant-admin/TA-1A-architecture.md for the full design.
+//
+// Concepts introduced:
+//   - UserClubProfile: tenant-scoped organizational identity for an
+//     admin User at a Club (title, department, optional Employee
+//     link, status). Kept separate from UserClubRole so the RBAC
+//     hot-path stays minimal.
+//   - Responsibility: canonical machine-readable operational key
+//     catalogue. Platform-defined; only TENANT_ADMINISTRATION seeded
+//     in TA-1B.
+//   - ResponsibilityAssignment: (User × Club × Responsibility × role)
+//     with PRIMARY / BACKUP semantics. Scope is typed relational
+//     (clubId only in TA-1B). Later slices add nullable typed
+//     scope columns (departmentId, vendorId) — NO opaque scopeJson.
+//   - AdminInvitation: administrative-user invitation lifecycle
+//     (PENDING/SENT/OPENED/ACTIVATED/EXPIRED/REVOKED/FAILED); token
+//     stored as sha256 hash, raw returned once at create.
+
+model UserClubProfile {
+  id              String      @id @default(cuid())
+  clubId          String
+  club            Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation("UserClubProfileUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  displayTitle    String?
+  departmentId   String?
+  department     Department? @relation("UserClubProfileDepartment", fields: [departmentId], references: [id])
+  employeeId     String?     @unique
+  employee       Employee?   @relation("UserClubProfileEmployee", fields: [employeeId], references: [id])
+
+  // Tenant-side membership lifecycle. Distinct from User.status (auth)
+  // and AdminInvitation.status (invite).
+  //   ACTIVE | SUSPENDED | REVOKED
+  status          String      @default("ACTIVE")
+  suspendedAt     DateTime?
+  revokedAt       DateTime?
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  createdByUserId String?
+  createdBy       User?       @relation("UserClubProfileCreatedBy", fields: [createdByUserId], references: [id])
+  updatedByUserId String?
+  updatedBy       User?       @relation("UserClubProfileUpdatedBy", fields: [updatedByUserId], references: [id])
+
+  @@unique([clubId, userId])
+  @@index([clubId, status])
+  @@index([userId])
+  @@index([departmentId])
+}
+
+model Responsibility {
+  key              String                     @id
+  displayLabel     String
+  scopeKind        String                     @default("CLUB")
+  cardinality      String                     @default("SINGLE_PRIMARY")
+  description      String?
+  isSpectreDefined Boolean                    @default(true)
+  createdAt        DateTime                   @default(now())
+
+  assignments      ResponsibilityAssignment[]
+}
+
+model ResponsibilityAssignment {
+  id                String         @id @default(cuid())
+  clubId            String
+  club              Club           @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User           @relation("ResponsibilityAssignmentUser", fields: [userId], references: [id])
+  responsibilityKey String
+  responsibility    Responsibility @relation(fields: [responsibilityKey], references: [key])
+  role              String         @default("PRIMARY")
+
+  effectiveFrom     DateTime       @default(now())
+  effectiveTo       DateTime?
+
+  assignedByUserId  String?
+  assignedBy        User?          @relation("ResponsibilityAssignedBy", fields: [assignedByUserId], references: [id])
+  endedByUserId     String?
+  endedBy           User?          @relation("ResponsibilityEndedBy", fields: [endedByUserId], references: [id])
+  endReason         String?
+  notes             String?
+  createdAt         DateTime       @default(now())
+
+  @@index([clubId, responsibilityKey, role, effectiveTo])
+  @@index([userId, effectiveTo])
+}
+
+model AdminInvitation {
+  id              String      @id @default(cuid())
+  clubId          String
+  club            Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  email           String
+  firstName       String?
+  lastName        String?
+  displayName     String?
+  displayTitle    String?
+
+  departmentId    String?
+  department      Department? @relation("AdminInvitationDepartment", fields: [departmentId], references: [id])
+  employeeId      String?
+  employee        Employee?   @relation("AdminInvitationEmployee", fields: [employeeId], references: [id])
+
+  initialRoleKeys String
+
+  bootstrap       Boolean     @default(false)
+
+  tokenHash       String      @unique
+
+  status          String      @default("PENDING")
+  sentAt          DateTime?
+  openedAt        DateTime?
+  activatedAt     DateTime?
+  revokedAt       DateTime?
+  failedAt        DateTime?
+  expiresAt       DateTime
+  lastError       String?
+  sendCount       Int         @default(0)
+
+  invitedByUserId String?
+  invitedBy       User?       @relation("AdminInvitationInvitedBy", fields: [invitedByUserId], references: [id])
+  revokedByUserId String?
+  revokedBy       User?       @relation("AdminInvitationRevokedBy", fields: [revokedByUserId], references: [id])
+  activatedUserId String?
+  activatedUser   User?       @relation("AdminInvitationActivatedUser", fields: [activatedUserId], references: [id])
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([clubId, status])
+  @@index([email])
 }
 
 // -------------------------------------------------------------------
@@ -1817,6 +1971,10 @@ model Department {
   // Phase 7
   posLocations       POSLocation[]       @relation("POSLocationDepartment")
   posSales           POSSale[]           @relation("POSSaleDepartment")
+
+  // TA-1B — Tenant Administration.
+  userClubProfiles   UserClubProfile[]   @relation("UserClubProfileDepartment")
+  adminInvitations   AdminInvitation[]   @relation("AdminInvitationDepartment")
 
   @@unique([clubId, code])
   @@index([clubId, isActive])
@@ -3419,6 +3577,12 @@ model Employee {
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
   cppDisabilities            EmployeeCppDisability[]
+
+  // TA-1B — Tenant Administration. Optional back-link from an Employee
+  // to their UserClubProfile at THIS club (canonical link). One-to-one
+  // via UserClubProfile.employeeId @unique.
+  userClubProfile            UserClubProfile?   @relation("UserClubProfileEmployee")
+  adminInvitations           AdminInvitation[]  @relation("AdminInvitationEmployee")
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
