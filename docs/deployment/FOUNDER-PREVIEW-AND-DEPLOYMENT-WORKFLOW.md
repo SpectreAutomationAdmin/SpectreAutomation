@@ -2,6 +2,34 @@
 
 Effective **2026-09-04** (adopted starting TA-1C).
 
+## Canonical development / test tenant
+
+**Coulee Ridge Golf & Country Club is Spectre's canonical
+development / test tenant for founder preview and staging acceptance.**
+Feature-specific testing should use synthetic records within Coulee
+Ridge rather than creating additional fictional Club tenants, unless
+a test explicitly requires multi-tenant behavior.
+
+Rationale (TA-1C hotfix, 2026-09-04):
+- Founder-preview and staging acceptance share a mental model when
+  the same tenant name is used. Multiple fictional tenants (`Willow
+  Creek`, `Alpine Ridge`, etc.) fragment that model.
+- Real product bugs — like the TA-1C stale-`activeClubId` isolation
+  crash — surface faster when the founder's mental map of "the test
+  tenant" is stable.
+
+For **automated tenant-isolation unit tests** only, ephemeral
+`Club A` / `Club B` database fixtures remain acceptable — the whole
+point of those tests is cross-tenant behaviour. Product / founder
+testing uses Coulee Ridge.
+
+Locally, `scripts/ta1c-founder-preview-fixture.ts` renames the
+seed Club (`Silver Springs Golf & Country Club` per
+`prisma/seed.ts`) to Coulee Ridge on first run, matching how staging
+carries the tenant. The ID stays stable — every foreign key keeps
+resolving.
+
+
 Development for Spectre follows three clearly-separated environments.
 Which environment applies to a given change is determined by the
 change type, not by developer preference.
