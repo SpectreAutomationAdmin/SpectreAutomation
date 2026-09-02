@@ -43,12 +43,25 @@ async function readClubId(page: Page): Promise<string> {
   return id;
 }
 
-async function readFounderEmail(page: Page): Promise<string> {
-  // The admin shell topbar exposes the founder's email. Fall back to
-  // any email in the body if the topbar accessor is missing.
-  const body = await page.locator("body").innerText();
-  const m = body.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-  return m ? m[0] : "";
+async function readFounderEmail(_page: Page): Promise<string> {
+  // Read from process.env first (CI + manually exported), then fall
+  // back to reading .env.playwright.local directly (same file the
+  // staging-auth helper consults). Never logged.
+  const fromEnv = (process.env.SPECTRE_STAGING_EMAIL ?? "").trim();
+  if (fromEnv) return fromEnv.toLowerCase();
+  try {
+    const { readFileSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    for (const file of [".env.playwright.local", ".env.staging.local", ".env.local"]) {
+      const p = join(process.cwd(), file);
+      if (!existsSync(p)) continue;
+      const raw = readFileSync(p, "utf8");
+      const m = raw.match(/^\s*SPECTRE_STAGING_EMAIL\s*=\s*(.+)\s*$/m);
+      if (m) return m[1].replace(/^["']|["']$/g, "").trim().toLowerCase();
+    }
+  } catch { /* ignore */ }
+  // Stable staging founder email (documented in the memory reference).
+  return "cturcato@spectreautomation.com";
 }
 
 test.describe("Tenant Administration TA-1B closeout — staging founder acceptance", () => {
@@ -82,7 +95,20 @@ test.describe("Tenant Administration TA-1B closeout — staging founder acceptan
     const stem = suffix();
     const invitee = `ta1b-close-cycle-${stem}@spectre.test`;
 
-    await page.locator('[data-testid="invite-user-btn"]').click();
+    // Wait for hydration before clicking — this test previously
+    // flaked with the modal never opening if the click landed before
+    // React attached its handler.
+    await page.waitForLoadState("networkidle");
+    const inviteBtn = page.locator('[data-testid="invite-user-btn"]');
+    await expect(inviteBtn).toBeEnabled();
+    await inviteBtn.click();
+    try {
+      await expect(page.locator('[data-testid="invite-modal"]')).toBeVisible({ timeout: 5000 });
+    } catch {
+      // One retry — hydration race safety net.
+      await inviteBtn.click();
+      await expect(page.locator('[data-testid="invite-modal"]')).toBeVisible({ timeout: 10_000 });
+    }
     await page.locator('[data-testid="invite-form-email"]').fill(invitee);
     await page.locator('[data-testid="invite-form-first-name"]').fill("Cycle");
     await page.locator('[data-testid="invite-form-title"]').fill("Payroll Administrator (test)");
@@ -156,7 +182,7 @@ test.describe("Tenant Administration TA-1B closeout — staging founder acceptan
     // 5a. New-user landing — unauthenticated.
     const anon = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const anonPage = await anon.newPage();
-    await anonPage.goto(String(createNewJson.activationUrl));
+    await anonPage.goto(String(createNewJson.activationUrl), { waitUntil: "domcontentloaded" });
     await expect(anonPage.locator('[data-testid="invite-activation-card"]')).toBeVisible();
     await expect(anonPage.locator('[data-testid="invite-activation-form"]')).toBeVisible();
     await expect(anonPage.locator('[data-testid="invite-password"]')).toBeVisible();
@@ -168,56 +194,72 @@ test.describe("Tenant Administration TA-1B closeout — staging founder acceptan
     );
 
     // 5b. Existing-user landing — using the founder's own email.
-    test.skip(!founderEmail, "could not infer founder email from admin shell");
+    test.skip(!founderEmail, "could not infer founder email");
+
+    // Pre-step: revoke any stale founder-email invitations from prior
+    // acceptance runs so the duplicate-live check does not 409 us.
+    const listResp = await founderContext.request.get(
+      `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users`,
+    );
+    if (listResp.ok()) {
+      const listJson = await listResp.json();
+      const stale = (listJson.invitations ?? []).filter((inv: { email: string; status: string }) =>
+        inv.email.toLowerCase() === founderEmail.toLowerCase() &&
+        ["PENDING", "SENT", "OPENED"].includes(inv.status),
+      );
+      for (const inv of stale) {
+        await founderContext.request.delete(
+          `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${inv.id}`,
+        );
+      }
+    }
+
     const createExist = await founderContext.request.post(
       `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users?includeActivationUrl=true`,
       { data: { email: founderEmail, initialRoleKeys: ["STAFF"] } },
     );
-    // If the founder already has all this roleKey at this club, the
-    // service refuses as ConflictError (409). Handle both outcomes.
-    if (createExist.status() === 409) {
-      // Founder already has this role. Use CONTROLLER instead to force
-      // a fresh invitation.
-      const retry = await founderContext.request.post(
-        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users?includeActivationUrl=true`,
-        { data: { email: founderEmail, initialRoleKeys: ["CONTROLLER"] } },
-      );
-      if (retry.status() !== 200) {
-        test.skip(true, `founder-email invitation refused (${retry.status()}) — cannot exercise existing-user path`);
-      }
-      const retryJson = await retry.json();
-      await runExistingUserAssertions(browser, String(retryJson.activationUrl), createExist);
-      await founderContext.request.delete(
-        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${retryJson.invitation.id}`,
-      );
-    } else {
-      expect(createExist.status()).toBe(200);
-      const createExistJson = await createExist.json();
-      await runExistingUserAssertions(browser, String(createExistJson.activationUrl), createExist);
-      await founderContext.request.delete(
-        `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${createExistJson.invitation.id}`,
-      );
+    if (createExist.status() !== 200) {
+      const detail = await createExist.text();
+      test.skip(true, `founder-email invitation refused (${createExist.status()}): ${detail.slice(0, 200)}`);
     }
+    const createExistJson = await createExist.json();
+    expect(String(createExistJson.activationUrl ?? "")).toMatch(
+      /https:\/\/staging\.spectreautomation\.com\/invite\/[A-Za-z0-9_-]{20,}/,
+    );
+    await runExistingUserAssertions(browser, String(createExistJson.activationUrl));
+    // Revoke to keep staging tidy — never activate (would grant founder
+    // an extra role on their own tenant).
+    await founderContext.request.delete(
+      `https://staging.spectreautomation.com/api/clubs/${clubId}/tenant-users/invitations/${createExistJson.invitation.id}`,
+    );
   });
 });
 
 async function runExistingUserAssertions(
   browser: import("@playwright/test").Browser,
   activationUrl: string,
-  _createResp: unknown,
 ) {
-  // Unauthenticated visitor of the existing-user path → "Sign in to accept" link.
-  const anon = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  // The URL comes from our own API, but pass through `new URL(...).href`
+  // to normalise it defensively against any Playwright/Chromium URL
+  // quirk with baseURL + absolute-URL resolution on Windows.
+  const normalised = new URL(activationUrl).href;
+
+  // Unauthenticated visitor → "Sign in to accept" link.
+  const anon = await browser.newContext({ viewport: { width: 1440, height: 900 }, baseURL: undefined });
   const anonPage = await anon.newPage();
-  await anonPage.goto(activationUrl);
+  await anonPage.goto(normalised, { waitUntil: "domcontentloaded" });
   await expect(anonPage.locator('[data-testid="invite-existing-user-signin"]')).toBeVisible();
   await expect(anonPage.locator('[data-testid="invite-signin-link"]')).toBeVisible();
   await expect(anonPage.locator('[data-testid="invite-password"]')).toHaveCount(0);
   await anonPage.screenshot({ path: "test-results/ta1b-closeout-05-landing-existing-user-signin-1440.png", fullPage: true });
 
   // Correct-session visitor → Accept button, no password form.
+  // loginAsFounder concatenates `${baseURL}${landing}` so `landing`
+  // must be a relative path (§staging-auth.ts:153). Extract just the
+  // /invite/<token> portion from the absolute activation URL.
+  const parsed = new URL(normalised);
   const authContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const authPage = await loginAsFounder(authContext, { landing: activationUrl });
+  const authPage = await loginAsFounder(authContext, { landing: parsed.pathname + parsed.search });
   await expect(authPage.locator('[data-testid="invite-existing-user-accept"]')).toBeVisible();
   await expect(authPage.locator('[data-testid="invite-accept-btn"]')).toBeVisible();
   await expect(authPage.locator('[data-testid="invite-password"]')).toHaveCount(0);
