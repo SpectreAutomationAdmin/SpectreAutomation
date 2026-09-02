@@ -19,6 +19,7 @@ import { prisma } from "@/lib/prisma";
 import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/profile";
 import { listAdminInvitations } from "@/lib/tenant-admin/invitations";
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
+import { listPositions, loadOrgTree } from "@/lib/tenant-admin/org-structure";
 import { ROLE_LABELS } from "@/lib/tenant-admin/constants";
 import { TenantUsersClient } from "./TenantUsersClient";
 
@@ -36,7 +37,7 @@ export default async function TenantUsersPage() {
     redirect("/app/admin");
   }
 
-  const [users, invitations, tenantAdmins, departments] = await Promise.all([
+  const [users, invitations, tenantAdmins, departments, positions, orgTree] = await Promise.all([
     listActiveProfiles(clubId),
     listAdminInvitations(principal, clubId),
     listActiveAssignments(clubId, "TENANT_ADMINISTRATION"),
@@ -45,9 +46,13 @@ export default async function TenantUsersPage() {
       select: { id: true, name: true, code: true },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     }),
+    listPositions(clubId),
+    loadOrgTree(clubId),
   ]);
 
   const tenantAdminUserIds = new Set(tenantAdmins.map((a) => a.userId));
+  // Fold each user's profileId + position + reportsTo hint into their row.
+  const orgByUserId = new Map(orgTree.map((n) => [n.userId, n]));
 
   return (
     <main
@@ -79,22 +84,28 @@ export default async function TenantUsersPage() {
 
       <TenantUsersClient
         clubId={clubId}
-        initialUsers={users.map((u) => ({
-          id: u.id,
-          userId: u.userId,
-          name: u.user.name,
-          email: u.user.email,
-          userStatus: u.user.status,
-          profileStatus: u.status,
-          displayTitle: u.displayTitle,
-          department: u.department
-            ? { id: u.department.id, name: u.department.name }
-            : null,
-          roleKeys: u.user.clubRoles.map((r) => r.roleKey),
-          roleLabels: u.user.clubRoles.map((r) => ROLE_LABELS[r.roleKey as keyof typeof ROLE_LABELS] ?? r.roleKey),
-          lastLoginAt: u.user.lastLoginAt?.toISOString() ?? null,
-          isTenantAdmin: tenantAdminUserIds.has(u.userId),
-        }))}
+        initialUsers={users.map((u) => {
+          const orgNode = orgByUserId.get(u.userId);
+          return {
+            id: u.id,
+            userId: u.userId,
+            name: u.user.name,
+            email: u.user.email,
+            userStatus: u.user.status,
+            profileStatus: u.status,
+            displayTitle: u.displayTitle,
+            positionId: (u as unknown as { positionId: string | null }).positionId ?? null,
+            positionName: orgNode?.positionName ?? null,
+            department: u.department
+              ? { id: u.department.id, name: u.department.name }
+              : null,
+            reportsToProfileId: orgNode?.reportsToProfileId ?? null,
+            roleKeys: u.user.clubRoles.map((r) => r.roleKey),
+            roleLabels: u.user.clubRoles.map((r) => ROLE_LABELS[r.roleKey as keyof typeof ROLE_LABELS] ?? r.roleKey),
+            lastLoginAt: u.user.lastLoginAt?.toISOString() ?? null,
+            isTenantAdmin: tenantAdminUserIds.has(u.userId),
+          };
+        })}
         initialInvitations={invitations.map((inv) => ({
           id: inv.id,
           email: inv.email,
@@ -110,6 +121,14 @@ export default async function TenantUsersPage() {
           department: inv.department ? { id: inv.department.id, name: inv.department.name } : null,
         }))}
         departments={departments.map((d) => ({ id: d.id, name: d.name, code: d.code }))}
+        initialPositions={positions.map((p) => ({
+          id: p.id, name: p.name,
+          departmentId: p.departmentId,
+          departmentName: p.department?.name ?? null,
+          sortOrder: p.sortOrder,
+          isActive: p.isActive,
+        }))}
+        initialOrgTree={orgTree}
       />
     </main>
   );

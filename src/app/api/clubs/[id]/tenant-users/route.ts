@@ -27,6 +27,7 @@ import {
 import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/profile";
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
 import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
+import { listPositions, loadOrgTree } from "@/lib/tenant-admin/org-structure";
 
 const UNAUTHORIZED = NextResponse.json({ error: "Not authorised" }, { status: 403 });
 
@@ -56,10 +57,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     await assertTenantUsersWrite(principal, clubId);
     const url = new URL(req.url);
     const includeTerminal = url.searchParams.get("includeTerminal") === "true";
-    const [users, invitations, tenantAdmins] = await Promise.all([
+    const [users, invitations, tenantAdmins, positions, orgTree] = await Promise.all([
       listActiveProfiles(clubId),
       listAdminInvitations(principal, clubId, { includeTerminal }),
       listActiveAssignments(clubId, "TENANT_ADMINISTRATION"),
+      listPositions(clubId),
+      loadOrgTree(clubId),
     ]);
     return NextResponse.json({
       users: users.map((u) => ({
@@ -101,6 +104,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         userEmail: a.user.email,
         effectiveFrom: a.effectiveFrom,
       })),
+      positions: positions.map((p) => ({
+        id: p.id, name: p.name,
+        departmentId: p.departmentId,
+        departmentName: p.department?.name ?? null,
+        description: p.description, sortOrder: p.sortOrder, isActive: p.isActive,
+      })),
+      orgTree,
     });
   } catch (err) {
     return handleErr(err);
