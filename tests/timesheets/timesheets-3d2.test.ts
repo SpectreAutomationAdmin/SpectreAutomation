@@ -22,6 +22,15 @@
 //   §84 no payroll side effect: PayrollApprovedTimeEntry count == 0
 //   §85 cancel PENDING correction
 //   §86 already-cancelled correction cannot be cancelled again
+//   §86c REGRESSION: mixed-state materialise (Session A complete +
+//        Session B open on the same period) must not crash on
+//        Postgres due to provenance duplicate-key aborting the
+//        surrounding transaction. Local SQLite tolerates the
+//        per-statement failure; Postgres promotes it to 25P02
+//        "current transaction is aborted, commands ignored". Fix:
+//        upsert the provenance rows instead of catching P2002.
+//        Reproduces the staging /employee/timesheets crash (digest
+//        1627805270) that surfaced during the founder walkthrough.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { db, resetDb, seedRbac, makeClub } from "../util/db";
@@ -164,6 +173,76 @@ describe("Payroll-3D-2 · materialization basics", () => {
     expect(entryCount).toBe(1);
     const provCount = await db().payrollTimesheetEntryClockEvent.count({});
     expect(provCount).toBe(2);
+  });
+
+  it("§86c REGRESSION: mixed complete + open session on the same period rematerialises cleanly and returns the timesheet view without throwing", async () => {
+    // Reproduces the staging /employee/timesheets crash from the
+    // founder walkthrough (digest 1627805270). Session A completes
+    // with a break, then Session B opens without a Clock Out. The
+    // second materialise pass would re-insert Session A's provenance
+    // rows (already there) and — on Postgres — abort the surrounding
+    // transaction on the resulting P2002. Fix: upsert provenance
+    // rather than swallowing P2002.
+    const club = await makeClub("3D2-mix");
+    const emp = await makeEmp(club.id, "mix1");
+    const assn = await makeAssn(club.id, emp.id);
+    const { period } = await makeSemiMonthlyPeriod(club.id, "mix1", emp.id);
+
+    // Session A — complete with break.
+    await makeClockEvent(club.id, emp.id, "CLOCK_IN",    utc(2026, 9, 5, 14, 0), { assignmentId: assn.id });
+    await makeClockEvent(club.id, emp.id, "BREAK_START", utc(2026, 9, 5, 18, 0));
+    await makeClockEvent(club.id, emp.id, "BREAK_END",   utc(2026, 9, 5, 19, 0));
+    await makeClockEvent(club.id, emp.id, "CLOCK_OUT",   utc(2026, 9, 5, 22, 0), { assignmentId: assn.id });
+
+    // First materialise — Session A lands with its 4 provenance rows.
+    const r1 = await materializeEmployeeTimesheet(club.id, emp.id, period.id);
+    expect(r1.entriesUpserted).toBe(1);
+    expect(r1.status).toBe("READY_FOR_REVIEW");
+
+    // Session B opens, no Clock Out.
+    await makeClockEvent(club.id, emp.id, "CLOCK_IN",    utc(2026, 9, 6, 14, 0), { assignmentId: assn.id });
+
+    // Second materialise — Session A's provenance already exists; the
+    // materialiser must NOT crash. Session B must surface as an
+    // exception, not as a completed entry.
+    const r2 = await materializeEmployeeTimesheet(club.id, emp.id, period.id);
+    expect(r2.timesheetId).toBe(r1.timesheetId);
+    expect(r2.exceptions.some((e) => e.kind === "MISSING_CLOCK_OUT")).toBe(true);
+    expect(r2.status).toBe("NEEDS_ATTENTION");
+
+    // Session B produced NO PayrollTimesheetEntry.
+    const entries = await db().payrollTimesheetEntry.findMany({
+      where: { timesheetId: r1.timesheetId }, orderBy: { clockInAt: "asc" },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].clockInAt.toISOString()).toBe(utc(2026, 9, 5, 14, 0).toISOString());
+
+    // The user-facing view builder (backing /employee/timesheets) must
+    // also succeed and report the exception.
+    const view = await getTimesheetForPeriod(principalFrom(club.id, emp.id), period.id);
+    expect(view.entries).toHaveLength(1);
+    expect(view.exceptions.some((e) => e.kind === "MISSING_CLOCK_OUT")).toBe(true);
+    expect(view.status).toBe("NEEDS_ATTENTION");
+
+    // Provenance is deduped: Session A retains exactly its 4 rows
+    // (ANCHOR_IN, ANCHOR_OUT, BREAK_START, BREAK_END). No duplicates.
+    const prov = await db().payrollTimesheetEntryClockEvent.findMany({
+      where: { timesheetEntryId: entries[0].id },
+    });
+    expect(prov).toHaveLength(4);
+
+    // No payroll side effect from Session B open state.
+    const approvedCount = await db().payrollApprovedTimeEntry.count({
+      where: { clubId: club.id, employeeId: emp.id },
+    });
+    expect(approvedCount).toBe(0);
+
+    // Third materialise + read for good measure — repeat pass with no
+    // new events must remain clean.
+    const r3 = await materializeEmployeeTimesheet(club.id, emp.id, period.id);
+    expect(r3.timesheetId).toBe(r1.timesheetId);
+    const view2 = await getTimesheetForPeriod(principalFrom(club.id, emp.id), period.id);
+    expect(view2.exceptions.some((e) => e.kind === "MISSING_CLOCK_OUT")).toBe(true);
   });
 
   it("§69 concurrent materialize → one canonical timesheet", async () => {

@@ -315,27 +315,30 @@ export async function materializeEmployeeTimesheet(
           });
       upserted += 1;
 
-      // Provenance — idempotent via per-row create with P2002 tolerate
-      // (skipDuplicates isn't supported on SQLite in Prisma). Each
-      // (timesheetEntryId, clockEventId) is unique, so a rerun of the
-      // materializer that finds already-persisted provenance silently
-      // ignores the collision.
+      // Provenance — idempotent via upsert on the (timesheetEntryId,
+      // clockEventId) composite unique. Postgres-safe: a failed
+      // per-row create that we swallow with try/catch WOULD abort
+      // the surrounding transaction on Postgres (SQLSTATE 25P02),
+      // even though SQLite tolerates it. Upsert is portable to both.
       const provRows = [
         { clockEventId: s.clockInEventId,  role: "ANCHOR_IN"   as const },
         { clockEventId: s.clockOutEventId, role: "ANCHOR_OUT"  as const },
         ...s.breakEvents.map((b) => ({ clockEventId: b.id, role: b.role })),
       ];
       for (const p of provRows) {
-        try {
-          await tx.payrollTimesheetEntryClockEvent.create({
-            data: {
-              clubId, timesheetEntryId: entry.id,
-              clockEventId: p.clockEventId, role: p.role,
+        await tx.payrollTimesheetEntryClockEvent.upsert({
+          where: {
+            timesheetEntryId_clockEventId: {
+              timesheetEntryId: entry.id,
+              clockEventId: p.clockEventId,
             },
-          });
-        } catch (err) {
-          if (!isPrismaP2002(err)) throw err;
-        }
+          },
+          update: {}, // provenance is immutable — nothing to update
+          create: {
+            clubId, timesheetEntryId: entry.id,
+            clockEventId: p.clockEventId, role: p.role,
+          },
+        });
       }
     }
 
