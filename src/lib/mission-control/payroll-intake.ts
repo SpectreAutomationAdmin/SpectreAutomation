@@ -1,17 +1,16 @@
 // Payroll MVP posting (2026-09-05) — Mission Control loader that
-// surfaces Payroll-domain Work Intake cards (PAYROLL_ADMIN_PROCESSING,
-// PAYROLL_REVIEW, PAYROLL_FINAL_APPROVAL) in the founder's feed.
+// surfaces Payroll-domain Work Intake cards in the founder's feed.
 //
-// Reads only WorkIntakeItems owned by the signed-in user with
-// workDomain = "PAYROLL", excluding RESOLVED / SUPPRESSED items.
-// Projects each row into the canonical WorkItem shape used by
-// <FeedItem>, with the primary action's `href` computed via
-// resolvePayrollWorkIntakeDeepLink so the click lands on the correct
-// Payroll surface.
+// Payroll-3D-3B Slice 6 (2026-09-06) — the loader now also produces
+// the rich `payrollCard` projection for correction-review and
+// timesheet-approval obligations so <PayrollActionCard> can render
+// them with full canonical context. Non-payroll-action subtypes
+// continue to project as deep-link-only <FeedItem> rows.
 
 import { prisma } from "../prisma";
-import type { WorkItem } from "./index";
+import type { WorkItem, PayrollWorkIntakeCard } from "./index";
 import { resolvePayrollWorkIntakeDeepLink } from "../payroll/work-intake-deep-link";
+import { getScopeReview } from "../timesheets/approval-scope";
 import type { Principal } from "../rbac";
 
 export interface LoadPayrollAdminIntakeArgs {
@@ -36,9 +35,10 @@ function relTime(now: Date, then: Date): string {
 
 /**
  * Load Payroll-domain Work Intake cards the signed-in user owns.
- * Emits one WorkItem per card, projected into the shape <FeedItem>
- * consumes. The primary action's href routes the click to the
- * correct payroll surface via the canonical deep-link resolver.
+ * Emits one WorkItem per card. When the card is a supported payroll
+ * action obligation (correction review, timesheet approval, or their
+ * config-gap siblings), the rich `payrollCard` projection is attached
+ * so Mission Control dispatches to <PayrollActionCard>.
  */
 export async function loadPayrollAdminIntakeItems(
   args: LoadPayrollAdminIntakeArgs,
@@ -57,8 +57,6 @@ export async function loadPayrollAdminIntakeItems(
   });
   if (items.length === 0) return [];
 
-  // Look up the origin references so we can build correct deep-links.
-  const originByItem = new Map<string, { kind: string; referenceId: string }>();
   const origins = await prisma.workIntakeOrigin.findMany({
     where: {
       clubId,
@@ -67,16 +65,34 @@ export async function loadPayrollAdminIntakeItems(
     },
     select: { workIntakeItemId: true, kind: true, referenceId: true },
   });
-  for (const o of origins) originByItem.set(o.workIntakeItemId, { kind: o.kind, referenceId: o.referenceId });
+  const originByItem = new Map(origins.map((o) => [o.workIntakeItemId, { kind: o.kind, referenceId: o.referenceId }]));
 
-  return items.map((wi): WorkItem => {
+  const results: WorkItem[] = [];
+  for (const wi of items) {
     const origin = originByItem.get(wi.id) ?? null;
     const deep = origin
       ? resolvePayrollWorkIntakeDeepLink(wi.workSubtype ?? origin.kind, origin.referenceId)
       : null;
-
     const state: WorkItem["state"] = wi.workIntent === "APPROVE" ? "approval" : "judgment";
-    return {
+
+    // Slice 6 rich card projection.
+    const payrollCard = origin
+      ? await buildPayrollCardProjection({ clubId, workIntakeItemId: wi.id, origin, deep })
+      : null;
+
+    // For payrollCard-backed items the card component renders its
+    // own primary action; the WorkItem.actions array only carries the
+    // secondary deep-link so the fallback renderer works if the client
+    // dispatch tree somehow misses the payroll variant.
+    const actions: WorkItem["actions"] = payrollCard && deep
+      ? [{ key: "deep_link", label: deep.label, kind: "secondary" as const, href: deep.href }]
+      : [
+        deep
+          ? { key: "review_payroll", label: deep.label, kind: "primary" as const, href: deep.href }
+          : { key: "review_payroll", label: "Open payroll", kind: "primary" as const },
+      ];
+
+    results.push({
       id: `wi-${wi.id}`,
       state,
       idTag: `PAY-${wi.id.slice(0, 6).toUpperCase()}`,
@@ -89,11 +105,7 @@ export async function loadPayrollAdminIntakeItems(
       timestampLabel: relTime(now, wi.createdAt),
       recommendation: undefined,
       readout: [],
-      actions: [
-        deep
-          ? { key: "review_payroll", label: deep.label, kind: "primary" as const, href: deep.href }
-          : { key: "review_payroll", label: "Open payroll", kind: "primary" as const },
-      ],
+      actions,
       workIntakeItemId: wi.id,
       workDomain: "PAYROLL",
       workIntent: wi.workIntent ?? undefined,
@@ -101,6 +113,265 @@ export async function loadPayrollAdminIntakeItems(
       workIntakeStatus: wi.status,
       workIntakeCreatedAt: wi.createdAt.toISOString(),
       sortTimestamp: wi.createdAt.toISOString(),
-    };
+      payrollCard: payrollCard ?? undefined,
+    });
+  }
+  return results;
+}
+
+// -------------------------------------------------------------------
+// Card projection — one function, dispatches on origin.kind. Every
+// value assembled here comes from canonical services / joins. UI code
+// downstream does zero payroll math.
+// -------------------------------------------------------------------
+
+async function buildPayrollCardProjection(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  origin: { kind: string; referenceId: string };
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const { clubId, workIntakeItemId, origin, deep } = args;
+
+  switch (origin.kind) {
+    case "TIMECLOCK_CORRECTION_REVIEW":
+      return buildCorrectionCard({ clubId, workIntakeItemId, correctionRequestId: origin.referenceId, deep });
+    case "PAYROLL_TIMESHEET_APPROVAL":
+      return buildScopeCard({ clubId, workIntakeItemId, referenceId: origin.referenceId, deep });
+    case "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP":
+      return buildCorrectionGapCard({ clubId, workIntakeItemId, referenceId: origin.referenceId, deep });
+    case "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP":
+      return buildScopeGapCard({ clubId, workIntakeItemId, referenceId: origin.referenceId, deep });
+    default:
+      return null;
+  }
+}
+
+// -------------------------------------------------------------------
+// Correction review card
+// -------------------------------------------------------------------
+
+const CORRECTION_TYPE_LABELS: Record<string, string> = {
+  ADD_MISSING_CLOCK_IN:  "Missing Clock In",
+  ADD_MISSING_CLOCK_OUT: "Missing Clock Out",
+  CORRECT_CLOCK_IN:      "Correct Clock In",
+  CORRECT_CLOCK_OUT:     "Correct Clock Out",
+  CORRECT_BREAK_START:   "Correct Break Start",
+  CORRECT_BREAK_END:     "Correct Break End",
+};
+
+async function buildCorrectionCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  correctionRequestId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const c = await prisma.timeClockCorrectionRequest.findFirst({
+    where: { id: args.correctionRequestId, clubId: args.clubId },
+    select: {
+      id: true, employeeId: true, employmentAssignmentId: true,
+      originalClockEventId: true, requestType: true,
+      requestedOccurredAt: true, reason: true, createdAt: true,
+    },
   });
+  if (!c) return null;
+
+  const [employee, assignment, originalEvent] = await Promise.all([
+    prisma.employee.findFirst({
+      where: { id: c.employeeId, clubId: args.clubId },
+      select: { firstName: true, lastName: true, employeeNumber: true },
+    }),
+    c.employmentAssignmentId
+      ? prisma.employeeEmploymentAssignment.findFirst({
+          where: { id: c.employmentAssignmentId, clubId: args.clubId },
+          select: { department: { select: { name: true } } },
+        })
+      : Promise.resolve(null),
+    c.originalClockEventId
+      ? prisma.timeClockEvent.findFirst({
+          where: { id: c.originalClockEventId, clubId: args.clubId },
+          select: { kind: true, occurredAt: true, employmentAssignmentId: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  // Fallback to the original-clock-event's assignment department if
+  // correction.employmentAssignmentId is null.
+  let departmentName: string | null = assignment?.department?.name ?? null;
+  if (!departmentName && originalEvent?.employmentAssignmentId) {
+    const evAssn = await prisma.employeeEmploymentAssignment.findFirst({
+      where: { id: originalEvent.employmentAssignmentId, clubId: args.clubId },
+      select: { department: { select: { name: true } } },
+    });
+    departmentName = evAssn?.department?.name ?? null;
+  }
+
+  const employeeName = employee ? `${employee.firstName} ${employee.lastName}`.trim() : "Employee";
+  const workDate = c.requestedOccurredAt ?? originalEvent?.occurredAt ?? c.createdAt;
+  const originalTimeLabel = originalEvent
+    ? `${prettyClockKind(originalEvent.kind)} at ${formatTimeShort(originalEvent.occurredAt)}`
+    : null;
+  const requestedTimeLabel = c.requestedOccurredAt ? formatTimeShort(c.requestedOccurredAt) : null;
+
+  return {
+    kind: "correction",
+    workIntakeItemId: args.workIntakeItemId,
+    correctionRequestId: c.id,
+    employeeName,
+    employeeNumber: employee?.employeeNumber ?? null,
+    departmentName,
+    workDateIso: workDate.toISOString(),
+    correctionTypeLabel: CORRECTION_TYPE_LABELS[c.requestType] ?? c.requestType,
+    originalTimeLabel,
+    requestedTimeLabel,
+    reason: c.reason,
+    deepLink: args.deep,
+  };
+}
+
+function prettyClockKind(kind: string): string {
+  switch (kind) {
+    case "CLOCK_IN":    return "Clocked in";
+    case "CLOCK_OUT":   return "Clocked out";
+    case "BREAK_START": return "Break start";
+    case "BREAK_END":   return "Break end";
+    default:            return kind;
+  }
+}
+function formatTimeShort(d: Date): string {
+  // Render as HH:MM (24h) in UTC. The workspace deep-link presents
+  // the localised precise view; the card only needs a scannable label.
+  return d.toISOString().slice(11, 16);
+}
+
+// -------------------------------------------------------------------
+// Timesheet-approval scope card
+// -------------------------------------------------------------------
+
+async function buildScopeCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  referenceId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const [payPeriodId, departmentId] = args.referenceId.split(":");
+  if (!payPeriodId || !departmentId) return null;
+
+  const review = await getScopeReview(args.clubId, payPeriodId, departmentId).catch(() => null);
+  if (!review) return null;
+
+  const blockers = humanizeBlockers(review.readiness.blockingReasons);
+  const reviewRequired =
+    !!review.approval && review.approval.state === "REVIEW_REQUIRED";
+
+  return {
+    kind: "scope",
+    workIntakeItemId: args.workIntakeItemId,
+    payPeriodId,
+    departmentId,
+    departmentName: review.departmentName,
+    employeeCount: review.employees.length,
+    recordedHours: Math.round((review.totalRecordedSeconds / 3600) * 100) / 100,
+    exceptionCount:
+      review.exceptionSummary.missingClockOutCount
+      + review.exceptionSummary.openBreakCount
+      + review.exceptionSummary.missingAssignmentCount,
+    pendingCorrectionCount: review.pendingCorrections.length,
+    readinessReady: review.readiness.ready,
+    blockers,
+    currentRevision: review.currentRevision,
+    reviewRequired,
+    deepLink: args.deep,
+  };
+}
+
+function humanizeBlockers(reasons: ReadonlyArray<{ kind: string; count: number; detail: string }>): string[] {
+  return reasons.map((r) => {
+    switch (r.kind) {
+      case "MISSING_CLOCK_OUT":
+        return r.count === 1 ? "1 missing clock-out" : `${r.count} missing clock-outs`;
+      case "OPEN_BREAK":
+        return r.count === 1 ? "1 unresolved open break" : `${r.count} unresolved open breaks`;
+      case "MISSING_ASSIGNMENT":
+        return r.count === 1 ? "1 session missing an assignment" : `${r.count} sessions missing an assignment`;
+      case "PENDING_CORRECTION":
+        return r.count === 1 ? "1 pending correction" : `${r.count} pending corrections`;
+      default:
+        return r.detail;
+    }
+  });
+}
+
+// -------------------------------------------------------------------
+// Config-gap cards (correction + scope)
+// -------------------------------------------------------------------
+
+async function buildCorrectionGapCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  referenceId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  let gapReason: "MISSING_APPROVER" | "MISSING_ASSIGNMENT";
+  let departmentId: string | null = null;
+  let correctionRequestId: string | null = null;
+  if (args.referenceId.startsWith("MISSING_APPROVER:")) {
+    gapReason = "MISSING_APPROVER";
+    const parts = args.referenceId.split(":");
+    departmentId = parts[1] ?? null;
+    correctionRequestId = parts[2] ?? null;
+  } else if (args.referenceId.startsWith("MISSING_ASSIGNMENT:")) {
+    gapReason = "MISSING_ASSIGNMENT";
+    correctionRequestId = args.referenceId.split(":")[1] ?? null;
+  } else {
+    return null;
+  }
+
+  const department = departmentId
+    ? await prisma.department.findFirst({
+        where: { id: departmentId, clubId: args.clubId },
+        select: { name: true },
+      })
+    : null;
+  const correction = correctionRequestId
+    ? await prisma.timeClockCorrectionRequest.findFirst({
+        where: { id: correctionRequestId, clubId: args.clubId },
+        select: {
+          employee: { select: { firstName: true, lastName: true } },
+        },
+      })
+    : null;
+  const employeeName = correction?.employee
+    ? `${correction.employee.firstName} ${correction.employee.lastName}`.trim()
+    : null;
+
+  return {
+    kind: "correction-gap",
+    workIntakeItemId: args.workIntakeItemId,
+    gapReason,
+    departmentName: department?.name ?? null,
+    employeeName,
+    deepLink: args.deep,
+  };
+}
+
+async function buildScopeGapCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  referenceId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const [_payPeriodId, departmentId] = args.referenceId.split(":");
+  const department = departmentId
+    ? await prisma.department.findFirst({
+        where: { id: departmentId, clubId: args.clubId },
+        select: { name: true },
+      })
+    : null;
+  return {
+    kind: "scope-gap",
+    workIntakeItemId: args.workIntakeItemId,
+    departmentName: department?.name ?? null,
+    deepLink: args.deep,
+  };
 }

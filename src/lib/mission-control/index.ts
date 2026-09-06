@@ -153,7 +153,61 @@ export type WorkItem = {
   // (§16). Optional so loader-only rows without a canonical WI
   // (legacy AP/AR adapters) still project safely.
   workIntakeCreatedAt?: string;
+  // Payroll-3D-3B Slice 6 (2026-09-06) — rich card projection for the
+  // manager Work Intake payroll surfaces. When present, Mission
+  // Control dispatches to <PayrollActionCard> instead of <FeedItem>.
+  // The loader assembles every canonical value server-side; the card
+  // renders without recomputing any payroll business logic. All
+  // subtypes carry a `deepLink` for the "View Timesheet" / "Review
+  // Timesheets" secondary action.
+  payrollCard?: PayrollWorkIntakeCard;
 };
+
+export type PayrollWorkIntakeCard =
+  | {
+      kind: "correction";
+      workIntakeItemId: string;
+      correctionRequestId: string;
+      employeeName: string;
+      employeeNumber: string | null;
+      departmentName: string | null;
+      workDateIso: string;
+      correctionTypeLabel: string;
+      originalTimeLabel: string | null;
+      requestedTimeLabel: string | null;
+      reason: string;
+      deepLink: { href: string; label: string } | null;
+    }
+  | {
+      kind: "scope";
+      workIntakeItemId: string;
+      payPeriodId: string;
+      departmentId: string;
+      departmentName: string;
+      employeeCount: number;
+      recordedHours: number;
+      exceptionCount: number;
+      pendingCorrectionCount: number;
+      readinessReady: boolean;
+      blockers: string[];
+      currentRevision: string;
+      reviewRequired: boolean;
+      deepLink: { href: string; label: string } | null;
+    }
+  | {
+      kind: "correction-gap";
+      workIntakeItemId: string;
+      gapReason: "MISSING_APPROVER" | "MISSING_ASSIGNMENT";
+      departmentName: string | null;
+      employeeName: string | null;
+      deepLink: { href: string; label: string } | null;
+    }
+  | {
+      kind: "scope-gap";
+      workIntakeItemId: string;
+      departmentName: string | null;
+      deepLink: { href: string; label: string } | null;
+    };
 
 export type BriefingCounts = {
   arrivedToday: number;

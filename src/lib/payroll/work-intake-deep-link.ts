@@ -86,6 +86,50 @@ export function resolvePayrollWorkIntakeDeepLink(
         label: "Assign Timesheet Approver",
       };
     }
+    // Payroll-3D-3B Slice 6 (2026-09-06) — correction-review deep-link.
+    // The card's "View Timesheet" secondary lands the manager on the
+    // scope workspace already filtered to the correction's employee /
+    // pay period. The exact scope query is unknown at deep-link time
+    // (referenceId is a bare correctionRequestId; scope resolution
+    // requires the correction row) — the target page's own loader
+    // handles the correction-scope join. We forward the correction id
+    // so the page can jump directly to it.
+    case "TIMECLOCK_CORRECTION_REVIEW": {
+      const qs = new URLSearchParams({ correctionRequestId: referenceId }).toString();
+      return {
+        href:  `/app/admin/payroll/time?${qs}`,
+        label: "View timesheet",
+      };
+    }
+    case "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP": {
+      // Two prefix flavours (Slice 2): MISSING_APPROVER:${deptId}:${corrId}
+      // and MISSING_ASSIGNMENT:${corrId}. The remediation destination
+      // differs — approver-gaps route to the Timesheet Approver
+      // settings; assignment-gaps route to the general employee /
+      // timesheet admin surface (the founder's brief §16 explicitly
+      // said: no new settings page in this slice — use the narrowest
+      // existing canonical URL).
+      if (referenceId.startsWith("MISSING_APPROVER:")) {
+        const parts = referenceId.split(":");
+        if (parts.length < 3) return null;
+        const departmentId = parts[1];
+        const qs = new URLSearchParams({ departmentId }).toString();
+        return {
+          href:  `/app/admin/settings/time-approvers?${qs}`,
+          label: "Assign Timesheet Approver",
+        };
+      }
+      if (referenceId.startsWith("MISSING_ASSIGNMENT:")) {
+        // No dedicated URL for correction-assignment repair exists;
+        // send to the payroll time workspace where an admin can fix
+        // the correction's assignment context.
+        return {
+          href:  `/app/admin/payroll/time`,
+          label: "Review correction",
+        };
+      }
+      return null;
+    }
     default:
       return null;
   }

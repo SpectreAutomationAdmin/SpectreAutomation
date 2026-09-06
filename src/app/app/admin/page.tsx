@@ -26,6 +26,7 @@ import { loadMissionControlSnapshot, type WorkItem } from "@/lib/mission-control
 import MissionControlConnectPrompt, { loadMissionControlConnectPromptSpec } from "@/components/mailbox/MissionControlConnectPrompt";
 import EmailIntakeCard, { type EmailFeedCardData } from "@/components/mission-control/EmailIntakeCard";
 import IntelligenceReviewCard from "@/components/mission-control/IntelligenceReviewCard";
+import PayrollActionCard from "@/components/mission-control/PayrollActionCard";
 import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
 import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
@@ -238,7 +239,16 @@ export default async function MissionControlPage({
                 ? computeTimelineMarkers(snapshot.workItems, clubTz, snapshot.syncedAt)
                 : snapshot.workItems.map(() => null);
               return snapshot.workItems.map((item, idx) => {
-                const card = item.emailMessageId ? (
+                // Payroll-3D-3B Slice 6 (2026-09-06) — payroll cards
+                // with rich context (correction reviews, scope
+                // approvals, config gaps) render via PayrollActionCard.
+                // Non-payroll cards continue through their existing
+                // renderers. Payroll rows without payrollCard (legacy
+                // subtypes like PAYROLL_ADMIN_PROCESSING) fall through
+                // to <FeedItem> so nothing regresses.
+                const card = item.payrollCard ? (
+                  <PayrollActionCard key={item.id} item={item} />
+                ) : item.emailMessageId ? (
                   <EmailIntakeCard key={item.id} data={emailFeedData(item)} />
                 ) : item.classification === "AP_INVOICE_REVIEW" ? (
                   <IntelligenceReviewCard key={item.id} data={item} kind="AP_INVOICE_REVIEW" />
