@@ -461,7 +461,14 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
   });
 
   // ------------- lifecycle -------------
-  it("§33 stale correction — second decision after first wins returns ALREADY_DECIDED", async () => {
+  it("§33 stale correction — after first-wins the WI is RESOLVED so second click returns STALE", async () => {
+    // Slice 5 (2026-09-06) lifecycle update: the first successful
+    // approve now resolves the WI via emitWorkCompletionEvent, so the
+    // second click hits the Slice 4A actionable-status gate FIRST
+    // (STALE) rather than the domain ALREADY_DECIDED gate. Both
+    // codes are structured, both fail-closed, and the STALE message
+    // is the more actionable one for the manager ("refresh MC").
+    // Domain-side "exactly one decision" invariant is preserved.
     const F = await setupCorrectionFixture("33");
     const first = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
       action: "correction.approve",
@@ -476,7 +483,7 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
       reviewerNote: "trying too late",
     });
     expect(second.ok).toBe(false);
-    if (!second.ok) expect(second.code).toBe("ALREADY_DECIDED");
+    if (!second.ok) expect(["STALE", "ALREADY_DECIDED"]).toContain(second.code);
     // Exactly one ADMIN_CORRECTION event.
     const adminCorr = await db().timeClockEvent.count({
       where: { clubId: F.club.id, source: "ADMIN_CORRECTION" },

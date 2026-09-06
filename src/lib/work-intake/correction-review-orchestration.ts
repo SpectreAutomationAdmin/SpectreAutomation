@@ -36,6 +36,7 @@ import { logger } from "../observability/logger";
 import { resolveDepartmentTimeApprover } from "../timesheets/manager-approval";
 import { resolveCorrectionScope } from "../timesheets/correction-service";
 import { isCorrectionReviewOriginConflict } from "./origin-conflict";
+import { emitWorkCompletionEvent, type CompletionType } from "./completion";
 
 export const CORRECTION_REVIEW_KIND = "TIMECLOCK_CORRECTION_REVIEW" as const;
 export const CORRECTION_REVIEW_GAP_KIND = "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP" as const;
@@ -77,6 +78,7 @@ export async function ensureCorrectionReviewWorkItems(
       id: true, clubId: true, employeeId: true, status: true,
       requestType: true, requestedOccurredAt: true, reason: true,
       originalClockEventId: true, employmentAssignmentId: true,
+      reviewedByUserId: true,
     },
   });
   if (!correction) {
@@ -86,6 +88,19 @@ export async function ensureCorrectionReviewWorkItems(
     return { kind: "no-op-status", status: "MISSING" };
   }
   if (correction.status !== "PENDING") {
+    // Payroll-3D-3B Slice 5 (2026-09-06) — terminal-correction
+    // lifecycle. When a correction becomes APPROVED / REJECTED /
+    // CANCELLED, any active manager review card AND any active
+    // config-gap card for this correction are no longer meaningful
+    // human obligations. Resolve them via the canonical completion
+    // path (emitWorkCompletionEvent + set status=RESOLVED). Idempotent
+    // and safe to run from anywhere: the recovery job, the direct
+    // approve/reject path, or a periodic sweep.
+    await resolveTerminalCorrectionWorkItems({
+      clubId, correctionRequestId,
+      correctionStatus: correction.status,
+      reviewedByUserId: (correction as unknown as { reviewedByUserId?: string | null }).reviewedByUserId ?? null,
+    });
     return { kind: "no-op-status", status: correction.status };
   }
 
@@ -381,6 +396,106 @@ async function upsertOriginBackedItem(
     });
     throw err;
   }
+}
+
+// -------------------------------------------------------------------
+// Payroll-3D-3B Slice 5 (2026-09-06) — terminal-correction lifecycle.
+//
+// Called when ensureCorrectionReviewWorkItems observes a correction
+// in APPROVED / REJECTED / CANCELLED status. Resolves any active
+// manager review card via the canonical emitWorkCompletionEvent path
+// AND resolves any active config-gap card so obsolete configuration
+// obligations do not linger in Tenant Admin Work Intake.
+//
+// Idempotent: if the review card is already RESOLVED (or SUPPRESSED /
+// INFORMATIONAL — user-intent states are never overwritten), the
+// completion event is NOT emitted a second time. Repeat invocations
+// are no-ops.
+//
+// Failure semantics: this helper NEVER throws. All errors are logged
+// and swallowed — the caller's outer wrapper
+// (orchestrateCorrectionReviewWorkItem) is responsible for enqueue-
+// on-failure recovery via the ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI
+// BackgroundJob, which re-invokes ensureCorrectionReviewWorkItems and
+// therefore this helper again on retry.
+// -------------------------------------------------------------------
+async function resolveTerminalCorrectionWorkItems(args: {
+  clubId: string;
+  correctionRequestId: string;
+  correctionStatus: string;
+  reviewedByUserId: string | null;
+}): Promise<void> {
+  const completionType: CompletionType =
+    args.correctionStatus === "APPROVED" ? "APPROVED_AND_COMPLETED" : "RESOLVED";
+
+  // -----------------------------------------------------------------
+  // 1. Manager review card — resolve via canonical completion path.
+  // -----------------------------------------------------------------
+  const reviewOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId: args.clubId,
+      kind: CORRECTION_REVIEW_KIND,
+      referenceId: args.correctionRequestId,
+      role: "PRIMARY",
+    },
+    select: {
+      workIntakeItemId: true,
+      workIntakeItem: { select: { id: true, status: true, ownerUserId: true } },
+    },
+  });
+  if (reviewOrigin?.workIntakeItem) {
+    const item = reviewOrigin.workIntakeItem;
+    // Only emit completion + flip status for actionable items. If the
+    // item is already RESOLVED (double-run / retry), no-op. If the
+    // user deliberately SUPPRESSED or INFORMATIONAL'd it, respect
+    // that intent (their card is silenced regardless of decision).
+    if (item.status === "OPEN" || item.status === "IN_PROGRESS" || item.status === "DEFERRED") {
+      const resolverUserId = args.reviewedByUserId ?? item.ownerUserId ?? "system";
+      try {
+        await emitWorkCompletionEvent({
+          workIntakeItemId: item.id,
+          clubId: args.clubId,
+          completedByUserId: resolverUserId,
+          completionType,
+          metadata: {
+            source: `TIMECLOCK_CORRECTION_REVIEW.${args.correctionStatus.toLowerCase()}`,
+            correctionRequestId: args.correctionRequestId,
+          } as never, // metadata envelope is a permissive record
+        });
+        // Flip status to RESOLVED. Use updateMany with the actionable
+        // status filter so a concurrent state change (SUPPRESSED /
+        // etc.) is not overwritten.
+        await prisma.workIntakeItem.updateMany({
+          where: { id: item.id, status: { in: ["OPEN", "IN_PROGRESS", "DEFERRED"] } },
+          data: {
+            status: "RESOLVED",
+            resolvedAt: new Date(),
+            resolvedByUserId: resolverUserId,
+          },
+        });
+      } catch (err) {
+        logger.warn("payroll.correction_review.terminal_resolve_failed", {
+          clubId: args.clubId,
+          correctionRequestId: args.correctionRequestId,
+          correctionStatus: args.correctionStatus,
+          workIntakeItemId: item.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // 2. Config-gap cards — the manager decision is now settled, so any
+  // "no approver" or "no assignment" gap for THIS correction is no
+  // longer a live obligation. Resolve via the existing gap-cleanup
+  // helper (updateMany with actionable-status filter; user-intent
+  // states preserved).
+  // -----------------------------------------------------------------
+  await resolveActiveGapCardsForCorrection({
+    clubId: args.clubId,
+    correctionRequestId: args.correctionRequestId,
+  });
 }
 
 // -------------------------------------------------------------------

@@ -720,6 +720,14 @@ export async function approveCorrectionRequest(
     },
   });
 
+  // Payroll-3D-3B Slice 5 (2026-09-06) — canonical Work Intake
+  // lifecycle. Approval terminalizes the correction; the manager
+  // review card + any config-gap card for this correction are no
+  // longer live obligations. Post-commit awaited orchestration with
+  // durable BackgroundJob recovery. The correction is already
+  // committed; a WI failure never rolls it back.
+  await orchestrateCorrectionReviewWorkItem(clubId, existing.id);
+
   return {
     request: toRow(finalRow),
     createdResolutionEventId:  result.createdResolutionEventId,
@@ -788,6 +796,10 @@ export async function rejectCorrectionRequest(
     );
     await orchestrateTimesheetApprovalWorkItem(clubId, affectedPeriod.id, scope.departmentId);
   }
+  // Payroll-3D-3B Slice 5 (2026-09-06) — resolve the correction-review
+  // WI + any config-gap cards for this correction. Rejection is a
+  // terminal decision even without an ADMIN_CORRECTION event.
+  await orchestrateCorrectionReviewWorkItem(clubId, existing.id);
   return {
     request: toRow(finalRow),
     createdResolutionEventId: null,
