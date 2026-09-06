@@ -370,6 +370,18 @@ async function main() {
       isSpectreDefined: true,
     },
   });
+  // Payroll-3D-3 — department-scoped Timesheet Approver.
+  await prisma.responsibility.create({
+    data: {
+      key: "DEPARTMENT_TIME_APPROVAL",
+      displayLabel: "Timesheet Approver",
+      scopeKind: "DEPARTMENT",
+      cardinality: "SINGLE_PRIMARY",
+      description:
+        "Reviews and approves recorded time for a specific department each pay period. Resolved through DepartmentResponsibility until TA-1F ships the generic resolver.",
+      isSpectreDefined: true,
+    },
+  });
 
   // ---------------------------------------------------------------
   // Club

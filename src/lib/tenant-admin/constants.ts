@@ -11,7 +11,15 @@ import type { RoleKey } from "../permissions";
 // slices extend this union (PAYROLL_ADMINISTRATION, PAYROLL_FINAL_APPROVAL,
 // DEPARTMENT_TIME_APPROVAL, AP_APPROVAL, etc.).
 // ---------------------------------------------------------------------
-export const RESPONSIBILITY_KEYS = ["TENANT_ADMINISTRATION"] as const;
+export const RESPONSIBILITY_KEYS = [
+  "TENANT_ADMINISTRATION",
+  // Payroll-3D-3 (2026-09-05) — department-scoped responsibility for
+  // Timesheet Approval. Assigned per-department via
+  // DepartmentResponsibility (see prisma/schema.prisma). Until TA-1F
+  // ships the generic resolver, this key is resolved directly against
+  // DepartmentResponsibility rows.
+  "DEPARTMENT_TIME_APPROVAL",
+] as const;
 export type ResponsibilityKey = (typeof RESPONSIBILITY_KEYS)[number];
 
 // ---------------------------------------------------------------------

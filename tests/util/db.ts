@@ -270,6 +270,13 @@ export async function resetDb() {
     c.payrollRun.deleteMany(),
     c.timesheetEntry.deleteMany(),
     c.timesheet.deleteMany(),
+    // Payroll-3D-2 — wipe 3D-2 tables FK-first (provenance → entries
+    // → timesheet → correction requests) before TimeClockEvent and
+    // PayrollPayPeriod are wiped later.
+    c.payrollTimesheetEntryClockEvent.deleteMany(),
+    c.payrollTimesheetEntry.deleteMany(),
+    c.payrollTimesheet.deleteMany(),
+    c.timeClockCorrectionRequest.deleteMany(),
     c.timeClockEvent.deleteMany(),
     c.payrollPeriod.deleteMany(),
     c.labourBudget.deleteMany(),
@@ -316,10 +323,23 @@ export async function resetDb() {
     c.employeeCppElection.deleteMany(),
     c.employeeCppDisability.deleteMany(),
     c.payrollDepartmentTimeApproval.deleteMany(),
+    // Payroll-3C-2 (2026-09-07) — Component snapshots FK into batch +
+    // component + assignment; wipe before all three.
+    c.payrollBatchComponentSnapshot.deleteMany(),
+    // Payroll-3C-1 (2026-09-07) — Recurring component assignments FK into
+    // PayrollComponent and Employee; wipe before both.
+    c.employeeRecurringPayrollComponent.deleteMany(),
+    c.payrollComponent.deleteMany(),
     c.payrollBatchException.deleteMany(),
     c.payrollBatchAllowanceSnapshot.deleteMany(),
     c.payrollBatchEarning.deleteMany(),
     c.payrollBatchDeduction.deleteMany(),
+    // Payroll-3D-4 — signed late/retro adjustments FK into
+    // PayrollApprovedTimeEntry + PayrollTimesheetEntry + PayrollPayPeriod.
+    c.payrollTimeAdjustment.deleteMany(),
+    // Payroll-3D-4 — clear self-supersession FK on approved-time
+    // rows before delete so the SQLite FK doesn't refuse the wipe.
+    c.payrollApprovedTimeEntry.updateMany({ data: { supersededByApprovedTimeEntryId: null } }),
     c.payrollApprovedTimeEntry.deleteMany(),
     c.payrollBatchEmployee.deleteMany(),
     c.payrollBatch.deleteMany(),
@@ -388,12 +408,17 @@ export async function resetDb() {
     c.journalEntry.deleteMany(),
     c.journalBatch.deleteMany(),
     c.recurringJournal.deleteMany(),
+    // PayrollGlAccountingProfile pins 8 Account rows via FK — wipe before Account.
+    c.payrollGlAccountingProfile.deleteMany(),
     c.account.deleteMany(),
     c.accountCategory.deleteMany(),
     c.financialStatementGroup.deleteMany(),
     c.fiscalPeriod.deleteMany(),
     c.fiscalYear.deleteMany(),
     c.costCenter.deleteMany(),
+    // Payroll-3D-3 — DepartmentResponsibility FKs Department; wipe
+    // BEFORE department.deleteMany().
+    c.departmentResponsibility.deleteMany(),
     c.department.deleteMany(),
     c.auditLog.deleteMany(),
     c.eventRegistration.deleteMany(),
@@ -475,8 +500,9 @@ export async function resetDb() {
     c.employeePortalQuickLink.deleteMany(),
     c.clubAnnouncement.deleteMany(),
     c.anonymousFeedback.deleteMany(),
-    // TA-1B (2026-09-03) — Tenant Administration.
+    // TA-1B (2026-09-03) — Tenant Administration + Payroll-3D-3 bridge.
     c.adminInvitation.deleteMany(),
+    c.departmentResponsibility.deleteMany(),
     c.responsibilityAssignment.deleteMany(),
     c.userClubProfile.deleteMany(),
     c.organizationalPosition.deleteMany(), // TA-1C
@@ -505,7 +531,7 @@ export async function seedRbac() {
       });
     }
   }
-  // TA-1B — Responsibility catalogue. Only TENANT_ADMINISTRATION seeded.
+  // TA-1B / Payroll-3D-3 — Responsibility catalogue.
   await c.responsibility.upsert({
     where: { key: "TENANT_ADMINISTRATION" },
     update: {},
@@ -516,6 +542,19 @@ export async function seedRbac() {
       cardinality: "PRIMARY_AND_BACKUPS",
       description:
         "Holds Tenant Administration authority for this Club. Primary invites and manages administrative users; may assign further responsibilities.",
+      isSpectreDefined: true,
+    },
+  });
+  await c.responsibility.upsert({
+    where: { key: "DEPARTMENT_TIME_APPROVAL" },
+    update: {},
+    create: {
+      key: "DEPARTMENT_TIME_APPROVAL",
+      displayLabel: "Timesheet Approver",
+      scopeKind: "DEPARTMENT",
+      cardinality: "SINGLE_PRIMARY",
+      description:
+        "Reviews and approves recorded time for a specific department each pay period.",
       isSpectreDefined: true,
     },
   });

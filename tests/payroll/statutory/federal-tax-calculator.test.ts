@@ -22,7 +22,7 @@ const FED_2026 = {
 describe("calculateFederalTax — PDOC Scenario 1 anchor", () => {
   it("$2000 biweekly + BPA-only TD1 → federal T4 = 163.23", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -40,7 +40,7 @@ describe("calculateFederalTax — PDOC Scenario 1 anchor", () => {
 describe("calculateFederalTax — Scenario 2 (custom TD1)", () => {
   it("federal TD1 = 20000 → federal T4 = 144.12", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "20000", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -53,7 +53,7 @@ describe("calculateFederalTax — Scenario 2 (custom TD1)", () => {
 describe("calculateFederalTax — Scenario 4 (claim-zero federal)", () => {
   it("claimZeroFederal=true → federal T4 = 251.82 (no BPA / TCF credit)", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "0", claimZeroFederal: true, totalIncomeLessThanClaim: false,
@@ -68,7 +68,7 @@ describe("calculateFederalTax — Scenario 4 (claim-zero federal)", () => {
 describe("calculateFederalTax — A vs A* distinction", () => {
   it("F5A shrinks A but does NOT shrink A*", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -80,7 +80,7 @@ describe("calculateFederalTax — A vs A* distinction", () => {
   });
   it("K4 uses A*, not A — cap at CEA when A* > CEA", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -94,7 +94,7 @@ describe("calculateFederalTax — A vs A* distinction", () => {
 describe("calculateFederalTax — K2 excludes CPP first-additional and CPP2", () => {
   it("K2 depends on baseCPP + EI only (annualised)", () => {
     const r = calculateFederalTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -110,7 +110,7 @@ describe("calculateFederalTax — bracket boundaries", () => {
     // Choose I so that P × I = 58500 (< 58523), F5A=0.
     // I = 58500/26 = 2250.
     const r = calculateFederalTax({
-      grossPay: "2250", f5aThisPay: "0",
+      periodicTaxableRemuneration: "2250", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "0", claimZeroFederal: true, totalIncomeLessThanClaim: false,
@@ -121,7 +121,7 @@ describe("calculateFederalTax — bracket boundaries", () => {
   });
   it("A between bracket-2 and bracket-3 → row 2 (20.5%, K=3804)", () => {
     const r = calculateFederalTax({
-      grossPay: "4000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "4000", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "0", claimZeroFederal: true, totalIncomeLessThanClaim: false,
@@ -136,7 +136,7 @@ describe("calculateFederalTax — bracket boundaries", () => {
 describe("calculateFederalTax — BPA phase-out", () => {
   it("A ≤ phase-out start → BPAF = bpaMax", () => {
     const r = calculateFederalTax({
-      grossPay: "3000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "3000", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -147,7 +147,7 @@ describe("calculateFederalTax — BPA phase-out", () => {
   it("A ≥ phase-out end → BPAF = bpaMin", () => {
     // I = 10000 → A = 260000 > phase-out end 246752 → bpaMin.
     const r = calculateFederalTax({
-      grossPay: "10000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "10000", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -160,7 +160,7 @@ describe("calculateFederalTax — BPA phase-out", () => {
 describe("calculateFederalTax — floors at zero", () => {
   it("very low earnings + high claim → T3 floored at zero, T4 = 0.00", () => {
     const r = calculateFederalTax({
-      grossPay: "100", f5aThisPay: "0",
+      periodicTaxableRemuneration: "100", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: false,
@@ -171,7 +171,7 @@ describe("calculateFederalTax — floors at zero", () => {
   });
   it("totalIncomeLessThanClaim = true → T4 = 0.00 regardless of earnings", () => {
     const r = calculateFederalTax({
-      grossPay: "9999", f5aThisPay: "0",
+      periodicTaxableRemuneration: "9999", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       federalClaim: "16452", claimZeroFederal: false, totalIncomeLessThanClaim: true,

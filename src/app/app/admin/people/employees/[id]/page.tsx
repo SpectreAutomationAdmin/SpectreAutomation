@@ -50,6 +50,8 @@ import { approveAndActivateAction } from "./_approve-actions";
 // HR mobile-hotfix (2026-08-26) — admin-initiated portal password reset.
 import SendPasswordResetButton from "@/components/hr/SendPasswordResetButton";
 import { sendPortalPasswordResetAction } from "./_password-reset-actions";
+// Payroll-3D-1A — Timekeeping method admin control.
+import TimekeepingPanel from "./TimekeepingPanel";
 
 export default async function EmployeeProfilePage({
   params, searchParams,
@@ -480,6 +482,16 @@ export default async function EmployeeProfilePage({
       }
       employmentSection={
         canReadEmployment ? (
+          <div className="space-y-4">
+            {/* Payroll-3D-1A — Timekeeping method admin control.
+                Sits at the TOP of Employment so it's discoverable without
+                scrolling. Server action re-verifies hr:employee:write. */}
+            <TimekeepingPanel
+              employeeId={profile.id}
+              initialMethod={(profile.timekeepingMethod ?? "NO_TIME_ENTRY_REQUIRED") as
+                "NO_TIME_ENTRY_REQUIRED" | "CLOCK_REQUIRED" | "MANUAL_TIMESHEET" | "SCHEDULE_DERIVED"}
+              canWrite={canWriteEmployment}
+            />
           <EmployeeEmploymentSection
             employeeId={profile.id}
             clubId={profile.clubId}
@@ -538,6 +550,7 @@ export default async function EmployeeProfilePage({
               createPosition: createEmployeePositionInlineAction,
             }}
           />
+          </div>
         ) : null
       }
       trainingSection={

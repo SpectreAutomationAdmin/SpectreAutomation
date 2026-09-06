@@ -10,7 +10,11 @@ import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { findActiveBatchForPeriod, getPreparedBatch } from "@/lib/payroll/batch-preparation";
 import { getDepartmentApprovalStatus } from "@/lib/payroll/department-approval";
+import { loadControllerFinalApprovalQueue } from "@/lib/payroll/controller-queue";
 import PayrollProcessWorkspace from "./PayrollProcessWorkspace";
+import TimeReadinessSection from "./TimeReadinessSection";
+import { getPayPeriodTimeReadiness } from "@/lib/payroll/freeze-service";
+import { listOpenLateExceptions } from "@/lib/payroll/late-time-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,20 +31,35 @@ export default async function PayrollProcessPage({
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) redirect("/app/admin");
   const canRun = hasPermission(principal, clubId, "payroll:run");
 
-  const [payPeriods, club] = await Promise.all([
+  const [payPeriods, club, deepLinkedPeriod] = await Promise.all([
     prisma.payrollPayPeriod.findMany({
       where: { clubId },
       orderBy: [{ periodStart: "desc" }],
-      take: 12,
+      take: 60,   // Payroll-3C-3 — enough to include every 2026
+                  //   period across BOTH pay groups so a WI deep-link
+                  //   never lands on a period the dropdown filtered out.
       select: {
         id: true, periodStart: true, periodEnd: true, payDate: true,
         payGroup: { select: { name: true, code: true } },
       },
     }),
     prisma.club.findFirst({ where: { id: clubId }, select: { name: true } }),
+    // Payroll-3C-3 — belt-and-braces: always include the deep-linked
+    // period even if it falls outside the take:60 window.
+    searchParams?.payPeriodId
+      ? prisma.payrollPayPeriod.findFirst({
+          where: { id: searchParams.payPeriodId, clubId },
+          select: {
+            id: true, periodStart: true, periodEnd: true, payDate: true,
+            payGroup: { select: { name: true, code: true } },
+          },
+        })
+      : Promise.resolve(null),
   ]);
-
-  const initialPeriodId = searchParams?.payPeriodId ?? payPeriods[0]?.id ?? null;
+  const mergedPeriods = deepLinkedPeriod && !payPeriods.some((p) => p.id === deepLinkedPeriod.id)
+    ? [deepLinkedPeriod, ...payPeriods]
+    : payPeriods;
+  const initialPeriodId = searchParams?.payPeriodId ?? mergedPeriods[0]?.id ?? null;
   let initialBatchId = searchParams?.batchId ?? null;
   if (!initialBatchId && initialPeriodId) {
     const b = await findActiveBatchForPeriod(principal, clubId, initialPeriodId);
@@ -53,42 +72,21 @@ export default async function PayrollProcessPage({
     ? await getDepartmentApprovalStatus(principal, clubId, initialPeriodId)
     : [];
 
-  // Payroll-3B-5B-3A closeout — Controller approval queue. Every
-  // OPEN PAYROLL_FINAL_APPROVAL Work Intake card for this club,
-  // rendered with a real clickable "Review payroll" link that
-  // navigates to /app/admin/payroll/batches/<batchId>. The batchId
-  // is resolved server-side from WorkIntakeOrigin.referenceId —
-  // never parsed from display text, never hard-coded. Executive-
-  // summary preview only; the sanitized payload from the Payroll
-  // orchestrator is used verbatim (no SIN / bank / TD1 amount
-  // exposure per §41 of the earlier slice).
-  const controllerQueueRows = await prisma.workIntakeOrigin.findMany({
-    where: {
-      clubId,
-      kind: "PAYROLL_FINAL_APPROVAL",
-      role: "PRIMARY",
-      workIntakeItem: { status: "OPEN" },
-    },
-    select: {
-      referenceId: true,
-      workIntakeItem: {
-        select: {
-          id: true, displaySubject: true, displayPreview: true, displayReceivedAt: true,
-          workDomain: true, workIntent: true, workSubtype: true,
-        },
-      },
-    },
-    orderBy: { workIntakeItem: { displayReceivedAt: "desc" } },
-    take: 20,
-  });
-  const controllerQueue = controllerQueueRows.map((r) => ({
-    workIntakeItemId: r.workIntakeItem.id,
-    batchId:          r.referenceId,
-    subject:          r.workIntakeItem.displaySubject,
-    preview:          r.workIntakeItem.displayPreview,
-    receivedAtIso:    r.workIntakeItem.displayReceivedAt.toISOString(),
-    reviewHref:       `/app/admin/payroll/batches/${encodeURIComponent(r.referenceId)}`,
-  }));
+  // Payroll-3D-4 — time-readiness aggregate + open late exceptions.
+  const timeReadiness = initialPeriodId
+    ? await getPayPeriodTimeReadiness(principal, clubId, initialPeriodId)
+    : null;
+  const lateExceptions = initialPeriodId
+    ? await listOpenLateExceptions(principal, clubId, initialPeriodId)
+    : [];
+
+  // Controller · Final approval queue — server-side scoped to the
+  // configured Controller via PayrollClubConfig.controllerUserId
+  // (see loadControllerFinalApprovalQueue). Returns [] for any user
+  // who is not the Controller — including the Payroll Admin. The
+  // Payroll Admin (Raelene) must never see Chris's approval work
+  // on this page.
+  const controllerQueue = await loadControllerFinalApprovalQueue(principal, clubId);
 
   return (
     <div className="max-w-[1120px]" data-testid="payroll-process-page">
@@ -103,9 +101,9 @@ export default async function PayrollProcessPage({
           Payroll processing
         </h1>
         <p className="mt-2 text-spectre-body" style={{ color: "var(--spectre-text-secondary)" }}>
-          {club?.name ?? "Your Club"} — assemble the structural payroll batch once every
-          department has approved its time. Dollar calculation is not performed here yet; that
-          arrives in a later release.
+          {club?.name ?? "Your Club"} — confirm payroll readiness, prepare the batch, and
+          calculate payroll for the selected pay period. Final approval is performed by the
+          Controller on the batch review page.
         </p>
       </header>
 
@@ -148,10 +146,42 @@ export default async function PayrollProcessPage({
         </section>
       )}
 
+      {timeReadiness && initialPeriodId ? (
+        <TimeReadinessSection
+          payPeriodId={initialPeriodId}
+          scopes={timeReadiness.scopes.map((s) => ({
+            departmentId: s.departmentId,
+            departmentCode: s.departmentCode,
+            departmentName: s.departmentName,
+            employeeCount: s.employeeCount,
+            entryCount: s.entryCount,
+            entriesFrozenAndCurrent: s.entriesFrozenAndCurrent,
+            entriesNotYetFrozen: s.entriesNotYetFrozen,
+            openLateAdjustments: s.openLateAdjustments,
+            approvalState: s.approvalState,
+            approvalIsCurrent: s.approvalIsCurrent,
+            overallState: s.overallState,
+          }))}
+          lateExceptions={lateExceptions.map((e) => ({
+            id: e.id,
+            employeeDisplay: `${e.employee.firstName} ${e.employee.lastName}`,
+            reason: e.reason,
+            differenceHours: e.differenceHours.toString(),
+            createdAtIso: e.createdAt.toISOString(),
+            notes: e.notes ?? null,
+          }))}
+          overallReady={timeReadiness.overallReady}
+          hasOpenLateAdjustments={timeReadiness.hasOpenLateAdjustments}
+          hasStaleApprovals={timeReadiness.hasStaleApprovals}
+          hasUnapprovedScopes={timeReadiness.hasUnapprovedScopes}
+          canFreeze={canRun}
+        />
+      ) : null}
+
       <PayrollProcessWorkspace
         clubId={clubId}
         canRun={canRun}
-        payPeriods={payPeriods.map((p) => ({
+        payPeriods={mergedPeriods.map((p) => ({
           id: p.id,
           payGroupName: p.payGroup.name,
           payGroupCode: p.payGroup.code,

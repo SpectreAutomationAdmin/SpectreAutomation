@@ -28,7 +28,13 @@ export interface AlbertaTaxBracket {
 }
 
 export interface AlbertaTaxInput {
-  grossPay:                Decimal | string | number;
+  /** Payroll-3C-3D.3 (2026-09-09) — see federal-tax-calculator
+   *  for full docstring. Periodic taxable remuneration (including
+   *  employer taxable benefits), NOT cash gross. */
+  periodicTaxableRemuneration: Decimal | string | number;
+  /** T4127 §Alberta F — same shape as the federal input; RRSP
+   *  deducted at source flows through here. Payroll-3C-3D. */
+  fThisPay?:               Decimal | string | number;
   f5aThisPay:              Decimal | string | number;
   baseCppThisPay:          Decimal | string | number;
   eiThisPay:               Decimal | string | number;
@@ -39,6 +45,10 @@ export interface AlbertaTaxInput {
   claimZeroProvincial:     boolean;
   /** TD1 "no tax withheld" attestation (federal + provincial share the flag per T4127). */
   totalIncomeLessThanClaim: boolean;
+  /** Payroll-3C-3D.6 — same YTD credit basis as federal K2 (§13). */
+  ytdCreditBasis?: {
+    combinedSelectedBasis: Decimal | string | number;
+  };
   provincial: {
     brackets:      AlbertaTaxBracket[];
     lowestRate:    string;
@@ -85,14 +95,17 @@ function lookupAlbertaBracket(brackets: AlbertaTaxBracket[], a: Decimal): { V: D
 export function calculateAlbertaTax(input: AlbertaTaxInput): AlbertaTaxResult {
   const P    = new Decimal(input.periodsPerYear);
   if (P.lte(0)) throw new Error("periodsPerYear must be > 0");
-  const I    = toDecimal(input.grossPay);
+  const I    = toDecimal(input.periodicTaxableRemuneration);
+  const F    = toDecimal(input.fThisPay ?? 0);
   const F5A  = toDecimal(input.f5aThisPay);
   const base = toDecimal(input.baseCppThisPay);
   const ei   = toDecimal(input.eiThisPay);
   const rate = toDecimal(input.provincial.lowestRate);
   const bpa  = toDecimal(input.provincial.bpa);
   const f5aAnnual = F5A.times(P);
-  const a = I.minus(F5A).times(P);
+  // Payroll-3C-3D — same F as federal: RRSP deducted at source
+  // reduces A pre-annualisation on the provincial side too.
+  const a = I.minus(F).minus(F5A).times(P);
 
   if (input.totalIncomeLessThanClaim) {
     return {
@@ -114,7 +127,11 @@ export function calculateAlbertaTax(input: AlbertaTaxInput): AlbertaTaxResult {
     ? new Decimal(0)
     : rate.times(bpa).plus(rate.times(tcpOverBpa));
 
-  const k2p = rate.times(base.times(P).plus(ei.times(P)));
+  // K2P — Payroll-3C-3D.6: use the CRA YTD basis when supplied
+  // (§13 — federal + Alberta share the same credit basis).
+  const k2p = input.ytdCreditBasis
+    ? rate.times(toDecimal(input.ytdCreditBasis.combinedSelectedBasis))
+    : rate.times(base.times(P).plus(ei.times(P)));
   const k3p = new Decimal(0);
   const k4p = new Decimal(0);   // §22 statutory non-applicability
 

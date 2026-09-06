@@ -93,6 +93,14 @@ async function applyPartialUniqueIndexes(dbPath: string): Promise<void> {
       `CREATE UNIQUE INDEX IF NOT EXISTS "EmployeeBankAccount_employeeId_verified_key" ` +
         `ON "EmployeeBankAccount" ("employeeId") WHERE status = 'VERIFIED';`,
     );
+    // Payroll-3C-4A (2026-09-09) — recurring-assignment uniqueness.
+    // One-time adjustment rows carry sourceAssignmentId = NULL and are
+    // deliberately excluded so an employee can have many one-time rows.
+    await client.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "PayrollBatchComponentSnapshot_recurring_assignment_unique" ` +
+        `ON "PayrollBatchComponentSnapshot" ("batchEmployeeId", "sourceAssignmentId") ` +
+        `WHERE "sourceAssignmentId" IS NOT NULL;`,
+    );
   } finally {
     await client.$disconnect();
   }

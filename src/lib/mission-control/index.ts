@@ -651,12 +651,14 @@ export async function loadMissionControlSnapshot(
   // as tabs. Standalone-upload docs (no email origin) still appear as
   // their own cards.
   const { suppressedApIntakeIds, suppressedStatementIntakeIds } = await loadChildReviewIntakesToSuppress(clubId);
-  const [apItems, arItems, emailItems, apReviewItems, statementReviewItems] = await Promise.all([
+  const { loadPayrollAdminIntakeItems } = await import("./payroll-intake");
+  const [apItems, arItems, emailItems, apReviewItems, statementReviewItems, payrollItems] = await Promise.all([
     loadPendingAPInvoiceItems(principal, clubId, now),
     loadArIntakeItems({ clubId, now }),
     loadEmailIntakeItemsSafe(principal, clubId, now),
     loadApReviewIntakeItems({ clubId, now, suppressedIds: suppressedApIntakeIds }),
     loadStatementReviewIntakeItems({ clubId, now, suppressedIds: suppressedStatementIntakeIds }),
+    loadPayrollAdminIntakeItems({ principal, clubId, now }),
   ]);
   // Augment email items with the aggregated intelligence facets from
   // any attachment-derived AP / Statement child intakes.
@@ -674,6 +676,7 @@ export async function loadMissionControlSnapshot(
   // sort by intake-arrival timestamp. Sender + freshness matter to the
   // reviewer far more than "which loader produced it".
   const unsorted: WorkItem[] = [
+    ...payrollItems,
     ...apReviewItems,
     ...statementReviewItems,
     ...mergeWorkItems({ ap: apItems, ar: arItems, email: emailItems }),

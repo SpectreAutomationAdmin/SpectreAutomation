@@ -159,6 +159,13 @@ model Club {
   timesheets                     Timesheet[]
   timesheetEntries               TimesheetEntry[]
   timeClockEvents                TimeClockEvent[]
+  // Payroll-3D-2 back-relations.
+  payrollTimesheets              PayrollTimesheet[]
+  payrollTimesheetEntries        PayrollTimesheetEntry[]
+  payrollTimesheetEntryClockEvents PayrollTimesheetEntryClockEvent[]
+  timeClockCorrectionRequests    TimeClockCorrectionRequest[]
+  // Payroll-3D-3 back-relation.
+  departmentResponsibilities     DepartmentResponsibility[]
   payrollRuns                    PayrollRun[]
   payrollLines                   PayrollLine[]
   payrollRemittances             PayrollRemittance[]
@@ -473,10 +480,20 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3D-4 back-relation.
+  payrollTimeAdjustments             PayrollTimeAdjustment[]
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
   employeeCppDisabilities            EmployeeCppDisability[]
+  payrollGlAccountingProfile         PayrollGlAccountingProfile?
+  // Payroll-3C-1 (2026-09-07) — tenant-scoped Payroll Component catalogue
+  // + per-Employee recurring assignments.
+  payrollComponents                  PayrollComponent[]
+  employeeRecurringPayrollComponents EmployeeRecurringPayrollComponent[]
+  payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
+  // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
+  payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
   // TA-1B — Tenant Administration back-relations.
   userClubProfiles                   UserClubProfile[]
@@ -680,6 +697,9 @@ model User {
   revokedAdminInvitations     AdminInvitation[]                   @relation("AdminInvitationRevokedBy")
   activatedAdminInvitations   AdminInvitation[]                   @relation("AdminInvitationActivatedUser")
   createdOrganizationalPositions OrganizationalPosition[]         @relation("OrganizationalPositionCreatedBy")
+
+  // Payroll-3D-3 — department-scoped responsibility back-relations.
+  departmentResponsibilities  DepartmentResponsibility[]        @relation("UserDepartmentResponsibilities")
 }
 
 // -------------------------------------------------------------------
@@ -2056,8 +2076,49 @@ model Department {
   // TA-1C — Organizational positions.
   organizationalPositions OrganizationalPosition[] @relation("OrganizationalPositionDepartment")
 
+  // Payroll-3D-3 — department-scoped responsibility bridge.
+  responsibilities   DepartmentResponsibility[] @relation("DepartmentResponsibilities")
+
+  // Payroll-3D-3A — employment assignments back-relation.
+  employmentAssignmentsIn EmployeeEmploymentAssignment[] @relation("AssignmentDepartment")
+
   @@unique([clubId, code])
   @@index([clubId, isActive])
+}
+
+// Payroll-3D-3 (2026-09-05) — Department-scoped responsibility bridge.
+//
+// Bridges the club-wide Responsibility catalogue to the department
+// dimension needed for scope-based routing (e.g. "who approves time
+// for Grounds"). Introduced now for DEPARTMENT_TIME_APPROVAL; will
+// be reused by any future responsibility that must be resolved at
+// (club × department) granularity (e.g. approvals, chit exceptions).
+//
+// TA-1F will introduce the generic resolveResponsibilityOwner()
+// interface; until then, this table IS the resolver source for
+// department-scoped keys. Assignments are single-owner per
+// (club × department × responsibilityKey); replace-in-place semantics.
+//
+// Isolation rules:
+//   - clubId always required; every read scoped by tenant.
+//   - departmentId FK cascades on club deletion via existing
+//     Department relation.
+//   - No back-ref on User; use responsibilityKey + clubId to enumerate.
+model DepartmentResponsibility {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  departmentId       String
+  department         Department @relation("DepartmentResponsibilities", fields: [departmentId], references: [id])
+  responsibilityKey  String
+  userId             String
+  user               User     @relation("UserDepartmentResponsibilities", fields: [userId], references: [id])
+  assignedAt         DateTime @default(now())
+  assignedByUserId   String?
+
+  @@unique([clubId, departmentId, responsibilityKey])
+  @@index([clubId, responsibilityKey])
+  @@index([userId])
 }
 
 model CostCenter {
@@ -2208,6 +2269,23 @@ model Account {
   posSaleLines         POSSaleLine[]         @relation("POSSaleLineRevenue")
   // Phase 9
   tournamentRevenue    Tournament[]          @relation("TournamentRevenue")
+
+  // Payroll MVP posting (2026-09-05) — back-relations for the
+  // per-Club PayrollGlAccountingProfile mapping.
+  payrollGlSalaryExpense         PayrollGlAccountingProfile[] @relation("PayrollGlSalaryExpense")
+  payrollGlEmployerCppExpense    PayrollGlAccountingProfile[] @relation("PayrollGlEmployerCppExpense")
+  payrollGlEmployerEiExpense     PayrollGlAccountingProfile[] @relation("PayrollGlEmployerEiExpense")
+  payrollGlNetPayPayable         PayrollGlAccountingProfile[] @relation("PayrollGlNetPayPayable")
+  payrollGlCppPayable            PayrollGlAccountingProfile[] @relation("PayrollGlCppPayable")
+  payrollGlEiPayable             PayrollGlAccountingProfile[] @relation("PayrollGlEiPayable")
+  payrollGlFederalTaxPayable     PayrollGlAccountingProfile[] @relation("PayrollGlFederalTaxPayable")
+  payrollGlProvincialTaxPayable  PayrollGlAccountingProfile[] @relation("PayrollGlProvincialTaxPayable")
+  // Payroll-3C-1 (2026-09-07) — optional per-component GL account (falls
+  // back to PayrollGlAccountingProfile when null).
+  payrollComponentGlAccount        PayrollComponent[] @relation("PayrollComponentGlAccount")
+  // Payroll-3C-6 (2026-09-05) — component-aware GL back-relations.
+  payrollComponentExpenseAccount   PayrollComponent[] @relation("PayrollComponentExpenseAccount")
+  payrollComponentLiabilityAccount PayrollComponent[] @relation("PayrollComponentLiabilityAccount")
 
   @@unique([clubId, accountNumber])
   @@index([clubId, isActive])
@@ -2388,6 +2466,7 @@ model JournalEntry {
   privateEventFinalJE    PrivateEventBooking[]    @relation("PrivateEventFinalJE")
   lessonAccrualJE        LessonBooking[]          @relation("LessonAccrualJE")
   payrollRunJE           PayrollRun[]             @relation("PayrollRunJE")
+  payrollBatchGL         PayrollBatch[]           @relation("PayrollBatchGL")
   assetAcquisitionJE     CapitalAsset[]           @relation("AssetAcquisitionJE")
   assetDeprJE            AssetDepreciationEntry[] @relation("AssetDeprJE")
   assetDisposalJE        AssetDisposal[]          @relation("AssetDisposalJE")
@@ -3575,6 +3654,28 @@ model Employee {
   onboardingState        String            @default("DRAFT")
   payrollReadiness       String            @default("NOT_READY")
   compensationType       String            @default("HOURLY")
+  // Payroll-3D-1 (2026-09-05) — Timekeeping method.
+  //   NO_TIME_ENTRY_REQUIRED — default; typical salaried employee.
+  //   CLOCK_REQUIRED         — employee must use Clock In / Clock Out.
+  //   MANUAL_TIMESHEET       — reserved for future (3D-2 manual entry).
+  //   SCHEDULE_DERIVED       — reserved for future scheduling integration.
+  // Existing employees default to NO_TIME_ENTRY_REQUIRED — this is
+  // an ADDITIVE migration; nobody is accidentally forced to clock.
+  // Timekeeping method and compensation cadence are SEPARATE concepts
+  // (§5) — do not infer one from the other.
+  timekeepingMethod      String            @default("NO_TIME_ENTRY_REQUIRED")
+  // Payroll-3D-1A (2026-09-05) — optimistic-concurrency counter for
+  // clock-state transitions. Every clock event write MUST
+  // compare-and-swap this value inside its transaction, so two
+  // genuinely concurrent transactions cannot BOTH commit a new
+  // TimeClockEvent for the same employee. On Postgres READ
+  // COMMITTED the second `updateMany({where: {version: N}})` re-reads
+  // the row at write time and sees the incremented value, matches
+  // zero rows, and its transaction rolls back — annihilating its
+  // TimeClockEvent insert. On SQLite writes serialize implicitly.
+  // NOT a state field — the canonical clock history is still the
+  // immutable TimeClockEvent stream.
+  timekeepingStateVersion Int              @default(0)
   // LEGACY (HR-1): canonical source is EmployeeCompensation. HR
   // compensation writes shadow the currently-active rate here in the
   // same transaction to preserve existing PayrollLine.grossPay
@@ -3635,6 +3736,10 @@ model Employee {
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
   employmentAssignments      EmployeeEmploymentAssignment[]
   allowances                 EmployeeAllowance[]
+  // Payroll-3C-1 (2026-09-07) — recurring Payroll Component assignments.
+  recurringPayrollComponents EmployeeRecurringPayrollComponent[]
+  // Payroll-3C-2 (2026-09-07) — batch component snapshots.
+  payrollBatchComponentSnapshots PayrollBatchComponentSnapshot[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -3643,6 +3748,12 @@ model Employee {
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
+  // Payroll-3D-2 back-relations.
+  payrollTimesheets          PayrollTimesheet[]                @relation("EmployeePayrollTimesheets")
+  payrollTimesheetEntries    PayrollTimesheetEntry[]           @relation("EmployeePayrollTimesheetEntries")
+  timeClockCorrectionRequests TimeClockCorrectionRequest[]     @relation("EmployeeCorrectionRequests")
+  // Payroll-3D-4 back-relation.
+  payrollTimeAdjustments     PayrollTimeAdjustment[]
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
   cppDisabilities            EmployeeCppDisability[]
@@ -3687,6 +3798,9 @@ model EmployeeEmploymentAssignment {
   // invariant. Additional roles may overlap.
   role              String
   departmentId      String?
+  // Payroll-3D-3A (2026-09-05) — additive relation so services can
+  // navigate to department metadata (name/code) without a second query.
+  department        Department? @relation("AssignmentDepartment", fields: [departmentId], references: [id])
   positionId        String?
   managerEmployeeId String?
   // FULL_TIME | PART_TIME | SEASONAL | CONTRACT — per-assignment so
@@ -3712,6 +3826,13 @@ model EmployeeEmploymentAssignment {
   // correctly when payroll runs. See §14 of the Payroll-3A brief.
   payrollBatchEarnings PayrollBatchEarning[]
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
+  // Payroll-3D-1 — clock events optionally reference the assignment
+  // the employee was clocking against, so future approval routing
+  // (3D-3) can follow the work being approved.
+  timeClockEvents            TimeClockEvent[] @relation("TimeClockEventAssignment")
+  // Payroll-3D-2 — timesheet entries reference the assignment they
+  // interpret so approval routing follows the work being approved.
+  payrollTimesheetEntries    PayrollTimesheetEntry[] @relation("AssignmentTimesheetEntries")
 
   @@index([clubId, employeeId, effectiveFrom])
   @@index([employeeId, role])
@@ -3905,20 +4026,227 @@ model TimesheetEntry {
 }
 
 // kind: IN | OUT | BREAK_START | BREAK_END
+// Payroll-3D-1 (2026-09-05) — canonical immutable clock-event model.
+//
+// Fields extended for 3D-1 usage:
+//   • createdAt          — server-clock insertion time, ordered index.
+//   • employmentAssignmentId — links the event to a specific
+//                          EmployeeEmploymentAssignment so future
+//                          approval routing follows the work being
+//                          approved, not the employee's primary
+//                          department (§20, §21).
+//   • state (derived)    — NOT persisted. Interpreted from the most
+//                          recent events per employee.
+//
+// Legacy `lat` / `lng` are preserved for schema compatibility but
+// the 3D-1 service NEVER writes them (§38 — no GPS in 3D-1).
+//
+// `source` values written by 3D-1: EMPLOYEE_PORTAL. Reserved future
+// values: ADMIN_CORRECTION, SYSTEM.
+// `kind` values: CLOCK_IN | CLOCK_OUT | BREAK_START | BREAK_END.
+//   (The pre-3D-1 shorthands IN / OUT are also readable but the
+//   3D-1 service always writes the long form.)
+//
+// Append-only. Corrections are represented as NEW events referencing
+// the corrected event via a future ClockEventCorrection model (3D-2).
+// Original events must never be silently rewritten.
 model TimeClockEvent {
-  id         String   @id @default(cuid())
-  clubId     String
-  club       Club     @relation(fields: [clubId], references: [id])
-  employeeId String
-  employee   Employee @relation(fields: [employeeId], references: [id])
-  kind       String
-  occurredAt DateTime
-  source     String   @default("MANUAL")
-  lat        Float?
-  lng        Float?
-  notes      String?
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  kind                   String
+  occurredAt             DateTime
+  source                 String   @default("MANUAL")
+  employmentAssignmentId String?
+  employmentAssignment   EmployeeEmploymentAssignment? @relation("TimeClockEventAssignment", fields: [employmentAssignmentId], references: [id])
+  lat                    Float?
+  lng                    Float?
+  notes                  String?
+  createdAt              DateTime @default(now())
+  // Payroll-3D-3 — supersession. When a CORRECT_CLOCK_* correction is
+  // approved, the ORIGINAL event stays untouched but has its
+  // supersededByEventId set to the newly-created ADMIN_CORRECTION
+  // event. The materializer skips superseded events so the corrected
+  // fact becomes operative without violating append-only history.
+  supersededByEventId    String?
+  supersededByEvent      TimeClockEvent?  @relation("TimeClockEventSupersession", fields: [supersededByEventId], references: [id])
+  supersedes             TimeClockEvent[] @relation("TimeClockEventSupersession")
 
   @@index([clubId, employeeId, occurredAt])
+  @@index([employeeId, kind, occurredAt])
+  @@index([employmentAssignmentId, occurredAt])
+  @@index([supersededByEventId])
+  // Payroll-3D-2 back-relations — see models below.
+  timesheetEntryLinks           PayrollTimesheetEntryClockEvent[]
+  originalOfCorrectionRequests  TimeClockCorrectionRequest[] @relation("CorrectionRequestOriginal")
+  resolutionOfCorrectionRequests TimeClockCorrectionRequest[] @relation("CorrectionRequestResolution")
+}
+
+// ---------------------------------------------------------------------
+// Payroll-3D-2 (2026-09-05) — CANONICAL Time & Attendance timesheet.
+//
+// IMPORTANT: This is NOT the same model as the legacy `Timesheet`
+// higher up in this file. The legacy Timesheet + TimesheetEntry pair
+// is bound to the deprecated `PayrollPeriod` and is consumed only by
+// the pre-3A ops-side payroll path (`src/lib/ops/payroll.ts`). Do
+// NOT wire 3D-2 through the legacy path.
+//
+// PayrollTimesheet binds to the accepted `PayrollPayPeriod`
+// (semi-monthly 1–15 / 16–EOM cadence) and represents Spectre's
+// INTERPRETATION of an employee's recorded work for one pay period.
+//
+// Layered architecture:
+//   TimeClockEvent            — raw historical fact
+//     ↓  (Payroll-3D-2 materializer)
+//   PayrollTimesheet          — interpreted work per employee/period
+//     ↓  (Payroll-3D-3 — future)
+//   Manager approval
+//     ↓  (Payroll-3D-4 — future)
+//   PayrollApprovedTimeEntry  — frozen payroll input
+//
+// Statuses (this slice writes only OPEN / NEEDS_ATTENTION /
+// READY_FOR_REVIEW; SUBMITTED reserved for a possible future
+// MANUAL_TIMESHEET flow — Payroll-3D-2 §41 documents that
+// CLOCK_REQUIRED does NOT require explicit employee submission).
+model PayrollTimesheet {
+  id           String   @id @default(cuid())
+  clubId       String
+  club         Club     @relation(fields: [clubId], references: [id])
+  employeeId   String
+  employee     Employee @relation("EmployeePayrollTimesheets", fields: [employeeId], references: [id])
+  payPeriodId  String
+  payPeriod    PayrollPayPeriod @relation("PayPeriodPayrollTimesheets", fields: [payPeriodId], references: [id])
+  status       String   @default("OPEN")   // OPEN | NEEDS_ATTENTION | READY_FOR_REVIEW | SUBMITTED
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  entries PayrollTimesheetEntry[]
+
+  // One canonical timesheet per (club, employee, pay period).
+  @@unique([clubId, employeeId, payPeriodId])
+  @@index([clubId, payPeriodId, status])
+  @@index([clubId, status])
+}
+
+// Payroll-3D-2 — one entry per completed work session (§13).
+// workDate follows the CLOCK_IN local date (§44 cross-midnight
+// policy). recordedSeconds = gross − break (precise seconds; NO
+// rounding — §59). Assignment provenance follows the work being
+// approved (§14 / §47) — never re-derived from Employee.department.
+// Immutable per source-punch bundle: the materializer identifies an
+// entry by its ANCHOR_IN clock event via provenance below; existing
+// entries are UPDATED in place when re-materializing (idempotent),
+// never duplicated. The DB unique on (timesheetId, clockInAt)
+// enforces this.
+model PayrollTimesheetEntry {
+  id                     String @id @default(cuid())
+  clubId                 String
+  club                   Club @relation(fields: [clubId], references: [id])
+  timesheetId            String
+  timesheet              PayrollTimesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee @relation("EmployeePayrollTimesheetEntries", fields: [employeeId], references: [id])
+  workDate               DateTime
+  employmentAssignmentId String?
+  employmentAssignment   EmployeeEmploymentAssignment? @relation("AssignmentTimesheetEntries", fields: [employmentAssignmentId], references: [id])
+  earningClassification  String  @default("REGULAR")   // REGULAR only in 3D-2; overtime deferred to 3D-4+
+  clockInAt              DateTime
+  clockOutAt             DateTime
+  recordedSeconds        Int
+  breakSeconds           Int  @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  provenance PayrollTimesheetEntryClockEvent[]
+  // Payroll-3D-4 back-relations.
+  frozenAs        PayrollApprovedTimeEntry?  @relation("TimesheetEntryFrozenAs")
+  timeAdjustments PayrollTimeAdjustment[]    @relation("TimesheetEntryAdjustments")
+
+  // One entry per starting punch within a timesheet — the materializer
+  // upserts on this key so reruns are idempotent.
+  @@unique([timesheetId, clockInAt])
+  @@index([timesheetId, workDate])
+  @@index([employmentAssignmentId, workDate])
+  @@index([clubId, employeeId, workDate])
+}
+
+// Payroll-3D-2 — relational provenance from every interpreted entry
+// back to the immutable TimeClockEvent facts that produced it (§8).
+// Roles:
+//   ANCHOR_IN     — the CLOCK_IN that opened the session (exactly 1 per entry)
+//   ANCHOR_OUT    — the CLOCK_OUT that closed the session (exactly 1 per entry)
+//   BREAK_START   — a BREAK_START event within the session
+//   BREAK_END     — a BREAK_END event within the session
+model PayrollTimesheetEntryClockEvent {
+  id                String @id @default(cuid())
+  clubId            String
+  club              Club @relation(fields: [clubId], references: [id])
+  timesheetEntryId  String
+  timesheetEntry    PayrollTimesheetEntry @relation(fields: [timesheetEntryId], references: [id], onDelete: Cascade)
+  clockEventId      String
+  clockEvent        TimeClockEvent @relation(fields: [clockEventId], references: [id])
+  role              String
+  createdAt         DateTime @default(now())
+
+  @@unique([timesheetEntryId, clockEventId])
+  @@index([clockEventId])
+}
+
+// Payroll-3D-2 (§25) — employee-submitted correction request.
+// Immutable request; original TimeClockEvent NEVER mutated.
+// Approval (3D-3) will create a NEW TimeClockEvent with
+// source: ADMIN_CORRECTION and link it via resolutionClockEventId.
+//
+// Request types (§25):
+//   ADD_MISSING_CLOCK_IN
+//   ADD_MISSING_CLOCK_OUT
+//   CORRECT_CLOCK_IN
+//   CORRECT_CLOCK_OUT
+//   CORRECT_BREAK_START
+//   CORRECT_BREAK_END
+//
+// Statuses: PENDING | APPROVED | REJECTED | CANCELLED
+//
+// Concurrency (§36, §79): duplicate-submission guard uses a
+// (employeeId, requestType, originalClockEventId, status) composite
+// unique. Under two simultaneous identical PENDING submissions,
+// exactly one row commits; the loser hits the unique violation and
+// the service returns the existing request idempotently.
+model TimeClockCorrectionRequest {
+  id                     String @id @default(cuid())
+  clubId                 String
+  club                   Club @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation("EmployeeCorrectionRequests", fields: [employeeId], references: [id])
+  originalClockEventId   String?
+  originalClockEvent     TimeClockEvent? @relation("CorrectionRequestOriginal", fields: [originalClockEventId], references: [id])
+  requestType            String
+  requestedOccurredAt    DateTime?
+  employmentAssignmentId String?
+  reason                 String
+  status                 String  @default("PENDING")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  reviewedAt             DateTime?
+  reviewedByUserId       String?
+  // Payroll-3D-3 — optional manager rationale captured at
+  // reject/approve time. Kept short (< 500 chars); visible to the
+  // employee alongside the request status in the portal history.
+  reviewerNote           String?
+  resolutionClockEventId String?
+  resolutionClockEvent   TimeClockEvent? @relation("CorrectionRequestResolution", fields: [resolutionClockEventId], references: [id])
+
+  // Duplicate-pending guard — §36, §79 concurrency invariant.
+  // Composite unique across NULLable originalClockEventId works
+  // because both engines treat two identical NON-NULL tuples as
+  // colliding; NULL originalClockEventId (missing-clock-in case)
+  // still lets multiple ADD_MISSING requests exist across time —
+  // the service adds a further short-window in-tx dedupe check.
+  @@unique([employeeId, requestType, originalClockEventId, status])
+  @@index([clubId, employeeId, status])
+  @@index([status, createdAt])
 }
 
 // status: DRAFT | APPROVED | POSTED | VOIDED
@@ -11549,13 +11877,63 @@ model PayrollClubConfig {
   defaultPaymentMethod   String   @default("DIRECT_DEPOSIT") // DIRECT_DEPOSIT | CHEQUE | OTHER
   payrollAdminUserId     String?  // designated primary Payroll admin (optional)
   controllerUserId       String?  // designated Controller for approval routing (optional)
-  glAccountingProfileId  String?  // future GL integration seam (not resolved in 3A)
+  glAccountingProfileId  String?  // FK to PayrollGlAccountingProfile (MVP posting)
+  glAccountingProfile    PayrollGlAccountingProfile? @relation(fields: [glAccountingProfileId], references: [id])
   paystubNumberPrefix    String?  // optional prefix for future paystub numbering
   paystubNumberSequence  Int      @default(0) // reserved for future paystub numbering
+  // Payroll-3D-4 (2026-09-05) — payroll cutoff lead time (calendar
+  // days before payDate). Nullable so the default of 5 (see
+  // src/lib/payroll/cutoff.ts) is applied at read time — a founder
+  // does not need to configure this to opt-in.
+  payrollCutoffLeadDays  Int?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   @@index([clubId])
+}
+
+// Payroll MVP posting (2026-09-05) — Club-scoped mapping from Payroll
+// categories to GL Account ids. Populated per Club during Payroll
+// setup. postPayrollBatch reads this profile to build the balanced
+// journal entry:
+//
+//   Debits:
+//     - salary expense           (sum of gross earnings)
+//     - employer CPP expense
+//     - employer EI expense
+//   Credits:
+//     - net pay payable          (sum of employee net)
+//     - CPP payable              (employee CPP + CPP2 + employer CPP + CPP2)
+//     - EI payable               (employee EI + employer EI)
+//     - federal income tax payable
+//     - provincial income tax payable
+//
+// One profile per Club (single-tenancy invariant enforced by unique).
+// Every account FK MUST belong to the same Club — enforced service-side.
+model PayrollGlAccountingProfile {
+  id                              String   @id @default(cuid())
+  clubId                          String   @unique
+  club                            Club     @relation(fields: [clubId], references: [id])
+  salaryExpenseAccountId          String
+  salaryExpenseAccount            Account  @relation("PayrollGlSalaryExpense", fields: [salaryExpenseAccountId], references: [id])
+  employerCppExpenseAccountId     String
+  employerCppExpenseAccount       Account  @relation("PayrollGlEmployerCppExpense", fields: [employerCppExpenseAccountId], references: [id])
+  employerEiExpenseAccountId      String
+  employerEiExpenseAccount        Account  @relation("PayrollGlEmployerEiExpense", fields: [employerEiExpenseAccountId], references: [id])
+  netPayPayableAccountId          String
+  netPayPayableAccount            Account  @relation("PayrollGlNetPayPayable", fields: [netPayPayableAccountId], references: [id])
+  cppPayableAccountId             String
+  cppPayableAccount               Account  @relation("PayrollGlCppPayable", fields: [cppPayableAccountId], references: [id])
+  eiPayableAccountId              String
+  eiPayableAccount                Account  @relation("PayrollGlEiPayable", fields: [eiPayableAccountId], references: [id])
+  federalTaxPayableAccountId      String
+  federalTaxPayableAccount        Account  @relation("PayrollGlFederalTaxPayable", fields: [federalTaxPayableAccountId], references: [id])
+  provincialTaxPayableAccountId   String
+  provincialTaxPayableAccount     Account  @relation("PayrollGlProvincialTaxPayable", fields: [provincialTaxPayableAccountId], references: [id])
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
+
+  clubConfigs                     PayrollClubConfig[]
 }
 
 // A pay group is the scheduling + membership boundary for payroll
@@ -11639,6 +12017,11 @@ model PayrollPayPeriod {
 
   batches       PayrollBatch[]
   departmentTimeApprovals PayrollDepartmentTimeApproval[]
+  // Payroll-3D-2 back-relation.
+  payrollTimesheets       PayrollTimesheet[] @relation("PayPeriodPayrollTimesheets")
+  // Payroll-3D-4 back-relations.
+  timeAdjustments         PayrollTimeAdjustment[] @relation("PayPeriodTimeAdjustments")
+  targetOfTimeAdjustments PayrollTimeAdjustment[] @relation("PayPeriodTargetTimeAdjustments")
 
   @@unique([clubId, payGroupId, taxYear, sequenceInYear])
   @@unique([clubId, payGroupId, periodStart])
@@ -11702,6 +12085,11 @@ model PayrollBatch {
   calculationVersion    Int       @default(0)
   algorithmVersion      String?
   packageChecksum       String?
+  // Payroll MVP posting (2026-09-05) — link to the JournalEntry
+  // created when the batch was POSTED. Nullable while status ≠ POSTED.
+  // Once set, further attempts to post the batch are refused (§32 idempotency).
+  glJournalEntryId      String?    @unique
+  glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11711,6 +12099,8 @@ model PayrollBatch {
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+  // Payroll-3C-2 (2026-09-07) — Payroll Component snapshots.
+  componentSnapshots    PayrollBatchComponentSnapshot[]
   exceptions            PayrollBatchException[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
@@ -11898,6 +12288,49 @@ model PayrollOpeningBalance {
 
   @@index([clubId, employeeId, taxYear, status])
   @@index([clubId, taxYear, status])
+  // Payroll-3C-5 (2026-09-09) — child rows carrying per-component YTD
+  // from the prior payroll system.
+  componentOpenings      PayrollOpeningBalanceComponent[]
+}
+
+// Payroll-3C-5 (2026-09-09) — per-Component opening YTD row.
+//
+// Additive extension to PayrollOpeningBalance for Payroll Component
+// history: cell phone allowance, RRSP EE/ER, LTD, one-time bonuses,
+// etc. Recorded against a stable component identity so that pay
+// statements can display "Current + YTD" for every Component the Club
+// has ever posted, without recomputing history from live definitions.
+//
+// One row per (openingBalanceId, componentIdentity) — the parent row
+// scopes the taxYear + employee + club + throughPayDate cutover.
+model PayrollOpeningBalanceComponent {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  openingBalanceId       String
+  openingBalance         PayrollOpeningBalance @relation(fields: [openingBalanceId], references: [id], onDelete: Cascade)
+  // Stable identity — the club-scoped PayrollComponent id if it still
+  // exists, and the frozen componentCode so historical rows survive a
+  // rename or deletion.
+  sourceComponentId      String?
+  sourceComponent        PayrollComponent? @relation(fields: [sourceComponentId], references: [id])
+  componentCode          String
+  displayName            String
+  category               String
+  side                   String  // "EMPLOYEE" | "EMPLOYER"
+  cashEffect             String  // frozen at import time
+  // Prior-to-Spectre YTD contribution for this component in the
+  // opening balance's taxYear (dollars).
+  ytdAmount              Decimal @default(0)
+  // Optional quantity (hours worked, units, etc.) for future use;
+  // pay statement display currently focuses on ytdAmount.
+  ytdQuantity            Decimal?
+  notes                  String?
+  createdAt              DateTime @default(now())
+
+  @@unique([openingBalanceId, componentCode])
+  @@index([clubId, componentCode])
+  @@index([openingBalanceId])
 }
 
 // Per-employee inclusion row in a specific batch (section 12).
@@ -12037,6 +12470,8 @@ model PayrollBatchEmployee {
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
   allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  // Payroll-3C-2 (2026-09-07) — component snapshots.
+  componentSnapshots PayrollBatchComponentSnapshot[]
   exceptions         PayrollBatchException[]
 
   @@unique([batchId, employeeId])
@@ -12262,6 +12697,334 @@ model PayrollBatchAllowanceSnapshot {
   @@index([clubId, batchId])
 }
 
+// ---------------------------------------------------------------------
+// Payroll-3C-1 (2026-09-07) — Payroll Component catalogue.
+//
+// Tenant-scoped library of every distinct compensation / benefit /
+// deduction concept the club operates. A single row here describes
+// what the item IS (semantic categorization + statutory treatment
+// + GL mapping); one or more EmployeeRecurringPayrollComponent rows
+// then attach it to specific employees with amounts.
+//
+// This model is ADDITIVE. Payroll-3C-1 wires no calculator or GL
+// changes yet — it exists so the setup surface, employee assignments,
+// and later slices (3C-2..3C-6) have a canonical schema to build on.
+//
+// Design principles:
+//   • Semantic distinction — cash vs non-cash, employee-paid vs
+//     employer-paid, and each statutory-base membership is a first-
+//     class field. The engine reads these; it does NOT infer from
+//     display name (see §7 of the 3C brief).
+//   • Category taxonomy — REGULAR_EARNING | ADDITIONAL_EARNING |
+//     ALLOWANCE | TAXABLE_BENEFIT | NON_TAXABLE_BENEFIT |
+//     EMPLOYER_CONTRIBUTION | EMPLOYEE_DEDUCTION | REIMBURSEMENT.
+//     Statutory deductions (CPP/EI/tax) are NOT stored here — they
+//     remain calculator outputs (§18).
+//   • Effective dating happens on the assignments, not the catalogue
+//     row itself; catalogue rows are enabled/disabled via `active`.
+// ---------------------------------------------------------------------
+model PayrollComponent {
+  id              String   @id @default(cuid())
+  clubId          String
+  club            Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // Tenant-unique stable key (uppercase snake). Used by fixtures /
+  // imports / API deep-links.
+  code            String
+  displayName     String
+  description     String?
+  // See catalogue comment above for the eight canonical categories.
+  category        String
+  // EMPLOYEE (deduction reduces employee net, or earning credits it)
+  // vs EMPLOYER (contribution/expense, does not reduce employee net).
+  side            String
+  // Payroll-3C-2 (2026-09-07) — replaces the ambiguous `isCash`
+  // boolean from 3C-1 with an explicit cash-effect classifier.
+  // 3C-1 conflated "produces cash remuneration" with "changes net
+  // pay". A regular salary line and an employee LTD deduction were
+  // both `isCash=true`, yet one INCREASES net pay and the other
+  // DECREASES it. `cashEffect` distinguishes them cleanly:
+  //
+  //   INCREASES_NET_PAY  — Regular Salary, Cell Phone Allowance,
+  //                        any employee-side cash earning.
+  //   DECREASES_NET_PAY  — Employee LTD, Employee RRSP (post-tax),
+  //                        any employee-side cash deduction.
+  //   NO_NET_PAY_EFFECT  — Non-cash Taxable Benefit, Employer RRSP,
+  //                        Employer AD&D, any employer-side item.
+  //
+  // The calculator reads this to decide which side of the cash
+  // ledger the amount lands on, INDEPENDENTLY of the statutory-
+  // base flags below.
+  cashEffect            String
+  // Payroll-3C-2 (2026-09-07) — statutory treatment provenance.
+  //
+  //   SPECTRE_LIBRARY — treatment values populated by Spectre's
+  //                     forthcoming Canadian payroll library
+  //                     (RRSP, well-known taxable benefits). 3C-3+
+  //                     will start writing this. Payroll Admins may
+  //                     NOT edit these flags directly on such rows.
+  //   CUSTOM          — treatment values explicitly configured by
+  //                     the club, at their acknowledged risk. All
+  //                     3C-1/3C-2 fixture rows are CUSTOM.
+  statutoryTreatmentSource String   @default("CUSTOM")
+  // Payroll-3C-3C (2026-09-09) — SPECTRE_LIBRARY provenance.
+  // When statutoryTreatmentSource = SPECTRE_LIBRARY, these two fields
+  // MUST identify a rule in src/lib/payroll/statutory-library.ts.
+  // The service layer refuses upserts that claim SPECTRE_LIBRARY
+  // without a resolvable rule (fail-closed per §15).
+  statutoryRuleKey     String?
+  statutoryRuleVariant String?
+  // Payroll-3C-3D (2026-09-09) — T4127 tax-formula deduction input.
+  // When set, the resolved amount for this component is added to the
+  // F (deductions from income) input on both federal and provincial
+  // tax calculators. Does NOT alter taxable / CPP / EI remuneration.
+  //
+  //   RRSP_DEDUCTED_AT_SOURCE — employee RRSP contribution deducted
+  //     directly through payroll where the employer has reasonable
+  //     grounds to believe the contribution is deductible.
+  //   REGISTERED_PENSION_PLAN | UNION_DUES | PRESCRIBED_ZONE |
+  //   AUTHORIZED_OTHER_DEDUCTION — reserved for later slices.
+  taxFormulaDeductionType String?
+  // Payroll-3C-3 (2026-09-08) — directional statutory effects.
+  //
+  // The 3C-2 `affectsTaxable / affectsCppPensionable / affectsEiInsurable`
+  // booleans could only ADD to a base. That works for a non-cash
+  // taxable benefit (+$100 taxable) but is silent about a component
+  // that REDUCES a base (e.g. a pre-tax RRSP employee contribution
+  // reducing taxable remuneration). Directional enums fix that:
+  //
+  //   ADD       — grows the base by resolvedAmount
+  //   SUBTRACT  — reduces the base by resolvedAmount (floored at 0)
+  //   NONE      — no effect
+  //
+  // Each of the three bases carries its own direction — a component
+  // can ADD to taxable while leaving CPP/EI at NONE, etc.
+  //
+  // Migration from 3C-2: booleans true→ADD, false→NONE. Nothing was
+  // auto-mapped to SUBTRACT (§4 of the 3C-3 brief).
+  taxableEffect         String  @default("NONE")
+  cppPensionableEffect  String  @default("NONE")
+  eiInsurableEffect     String  @default("NONE")
+  // FIXED_AMOUNT | PERCENT_OF_ELIGIBLE_EARNINGS (extensible).
+  calculationMethod     String
+  // Payroll-3C-3 (2026-09-08) — for PERCENT_OF_ELIGIBLE_EARNINGS
+  // components, WHAT the percentage is a percentage OF. Null for
+  // FIXED_AMOUNT (no eligible-earnings semantics).
+  //
+  //   REGULAR_EARNINGS_ONLY — base salary / regular hourly earnings
+  //                           only; excludes allowances + additional
+  //                           earnings + other components.
+  //   CASH_EARNINGS         — regular earnings + FIXED_AMOUNT cash
+  //                           earnings/allowances that have already
+  //                           been resolved (INCREASES_NET_PAY items).
+  //
+  // Percentage components NEVER reference other percentage
+  // components (§8 — no component-to-component formula graph).
+  eligibleEarningsBase  String?
+  // Optional per-component GL mapping. When null, posting falls back
+  // to the tenant PayrollGlAccountingProfile default for the item's
+  // category (wired in 3C-6, not 3C-1).
+  glAccountId     String?
+  glAccount       Account? @relation("PayrollComponentGlAccount", fields: [glAccountId], references: [id])
+  // Payroll-3C-6 (2026-09-05) — component-aware GL mapping.
+  // Distinct fields for expense-side vs liability-side accounts
+  // instead of the coarse glAccountId above. Fields are OPTIONAL
+  // because catalogue rows can be edited progressively; the GL
+  // readiness evaluator refuses to post batches whose required
+  // side is missing. Legacy glAccountId is preserved for backward
+  // compatibility but is no longer the recommended shape.
+  //   expenseAccountId  — debited when this component creates an
+  //                       employer cost (cash allowance, employer
+  //                       contribution, non-cash taxable benefit,
+  //                       reimbursement).
+  //   liabilityAccountId — credited when this component creates a
+  //                       liability (employee deduction, employer
+  //                       benefit payable).
+  expenseAccountId    String?
+  expenseAccount      Account? @relation("PayrollComponentExpenseAccount",   fields: [expenseAccountId],   references: [id])
+  liabilityAccountId  String?
+  liabilityAccount    Account? @relation("PayrollComponentLiabilityAccount", fields: [liabilityAccountId], references: [id])
+  // Pay-statement presentation hints.
+  //   displaySection: EARNINGS | BENEFITS | DEDUCTIONS
+  //   displayOrder:    stable ordering within a section
+  displaySection  String
+  displayOrder    Int      @default(0)
+  active          Boolean  @default(true)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  assignments EmployeeRecurringPayrollComponent[]
+  // Payroll-3C-2 (2026-09-07) — batch snapshots that frozen this component.
+  batchSnapshots PayrollBatchComponentSnapshot[]
+  // Payroll-3C-5 (2026-09-09) — per-component opening YTD rows.
+  openingBalanceRows PayrollOpeningBalanceComponent[]
+
+  @@unique([clubId, code])
+  @@index([clubId, category, active])
+}
+
+// Per-Employee recurring assignment of a Payroll Component.
+//
+// One employee may have many assignments (Cell Phone Allowance,
+// RRSP employee contribution, LTD deduction, etc.). Each assignment
+// is effective-dated; historical batches consume the row that was
+// active at prep time and freeze it in the batch snapshot.
+//
+// Amount vs percentBps:
+//   • calculationMethod FIXED_AMOUNT → amount is dollars per period
+//   • calculationMethod PERCENT_OF_ELIGIBLE_EARNINGS → percentBps
+//     is the rate (basis points; e.g. 500 = 5.00%) applied to the
+//     component's eligible-earnings definition (defined in 3C-3).
+//
+// One-time (non-recurring) batch adjustments live on
+// PayrollBatchDeduction / PayrollBatchEarning (or a future
+// dedicated one-time model) — not here.
+model EmployeeRecurringPayrollComponent {
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  componentId   String
+  component     PayrollComponent @relation(fields: [componentId], references: [id])
+  amount        Decimal?
+  percentBps    Int?
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  active        Boolean  @default(true)
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
+  @@index([componentId])
+
+  snapshots PayrollBatchComponentSnapshot[]
+}
+
+// ---------------------------------------------------------------------
+// Payroll-3C-2 (2026-09-07) — PayrollBatchComponentSnapshot.
+//
+// Immutable snapshot of an EmployeeRecurringPayrollComponent applied
+// to a specific batch. Written by preparation, read by calculation
+// and review. NEVER re-read from the live component / assignment
+// after prep — the same guarantee the existing TD1 and salary
+// snapshots hold.
+//
+// Structural invariants:
+//   • One snapshot per (batchEmployeeId, sourceAssignmentId)
+//   • `resolvedAmount` is filled when snapshot is calculable
+//     (FIXED_AMOUNT). PERCENT_OF_ELIGIBLE_EARNINGS lands with
+//     `resolvedAmount = NULL` and `warningCode =
+//     "COMPONENT_PERCENT_UNSUPPORTED"` — calc skips it, review
+//     surfaces the warning.
+//   • Every classification (`cashEffect`, `affectsTaxable`,
+//     `affectsCppPensionable`, `affectsEiInsurable`, `category`,
+//     `side`) is copied at snapshot time so later live edits to
+//     the component definition cannot mutate historical payroll.
+//
+// Coexists with `PayrollBatchAllowanceSnapshot` (the legacy
+// EmployeeAllowance snapshot path). A component MUST NOT double
+// with a legacy allowance for the same economic effect — verified
+// by regression test (§31 of the 3C-2 brief).
+// ---------------------------------------------------------------------
+model PayrollBatchComponentSnapshot {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id])
+  batchId               String
+  batch                 PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId       String
+  batchEmployee         PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId            String
+  employee              Employee @relation(fields: [employeeId], references: [id])
+  sourceComponentId     String
+  sourceComponent       PayrollComponent @relation(fields: [sourceComponentId], references: [id])
+  // Payroll-3C-4 (2026-09-09) — sourceAssignmentId is NULL for
+  // one-time payroll adjustments; those aren't backed by a recurring
+  // EmployeeRecurringPayrollComponent. See `provenance` below.
+  sourceAssignmentId    String?
+  sourceAssignment      EmployeeRecurringPayrollComponent? @relation(fields: [sourceAssignmentId], references: [id])
+  // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
+  //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
+  //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.
+  // Future values: LEGACY_ALLOWANCE (once EmployeeAllowance migrates)
+  // and SYSTEM_GENERATED (retro pay, corrections).
+  provenance            String  @default("RECURRING_EMPLOYEE_SETUP")
+  // One-time-adjustment fields. Required for ONE_TIME_PAYROLL_ADJUSTMENT
+  // (enforced in service); NULL for recurring rows.
+  enteredByUserId       String?
+  reason                String?
+  // Frozen component identity + display.
+  componentCode         String
+  displayName           String
+  category              String
+  side                  String
+  displaySection        String
+  displayOrder          Int      @default(0)
+  // Frozen economic treatment (§2 of 3C-2 brief).
+  cashEffect            String
+  // Payroll-3C-3 (2026-09-08) — directional statutory effects, frozen.
+  taxableEffect         String  @default("NONE")
+  cppPensionableEffect  String  @default("NONE")
+  eiInsurableEffect     String  @default("NONE")
+  calculationMethod     String
+  statutoryTreatmentSource String  @default("CUSTOM")
+  // Payroll-3C-3C (2026-09-09) — frozen SPECTRE_LIBRARY provenance.
+  // Populated at PREPARE time when the component claimed SPECTRE_LIBRARY.
+  // Explainability: the snapshot alone can answer "Why was this
+  // taxable?" without re-reading live library code.
+  statutoryRuleKey             String?
+  statutoryRuleVariant         String?
+  statutoryRuleVersion         String?
+  statutoryRuleSourceAuthority String?
+  statutoryRuleSourceTitle     String?
+  statutoryRuleSourceReference String?
+  // Payroll-3C-3D (2026-09-09) — frozen T4127 tax-formula deduction
+  // input. Non-null on snapshots whose component maps into the
+  // tax-formula F sum (currently RRSP_DEDUCTED_AT_SOURCE only).
+  // Historical batches keep this stamp forever so a later component
+  // reclassification never mutates prior tax withholding results.
+  taxFormulaDeductionType String?
+  // Frozen assignment values.
+  resolvedAmount        Decimal?
+  sourcePercentBps      Int?
+  sourceEffectiveFrom   DateTime
+  sourceEffectiveTo     DateTime?
+  // Payroll-3C-3 (2026-09-08) — percentage math provenance. NULL for
+  // FIXED_AMOUNT. For PERCENT the eligible-earnings basis + the
+  // exact eligible-earnings amount at calculation time are frozen
+  // so historical review can reproduce "X% × $E = $R".
+  eligibleEarningsBase  String?
+  eligibleEarningsAmount Decimal?
+  // Non-null when the snapshot could not be resolved to a calculable
+  // amount and the calculator must skip it. `warningMessage` is human-
+  // readable for the review UI; `warningCode` remains the diagnostic.
+  warningCode           String?
+  warningMessage        String?
+  // Payroll-3C-6 (2026-09-05) — frozen GL mapping. Populated at
+  // PREPARE from the live PayrollComponent.expenseAccountId /
+  // liabilityAccountId. Historical journals must always debit /
+  // credit these accounts, never the live component values — that
+  // is what makes a posted journal immutable to configuration
+  // changes made after the batch was CALCULATED. NULL is allowed
+  // for legacy snapshots or components that don't need a side.
+  expenseAccountIdSnapshot   String?
+  liabilityAccountIdSnapshot String?
+  createdAt             DateTime @default(now())
+
+  // Prisma cannot enforce a partial-unique-when-not-null across sqlite
+  // and postgres uniformly, so we drop the strict unique. Idempotency
+  // for recurring snapshots is preserved by the snapshotter's upsert
+  // (findFirst by batchEmployeeId + sourceAssignmentId, update in place).
+  @@index([batchEmployeeId, sourceAssignmentId])
+  @@index([clubId, batchId])
+  @@index([componentCode])
+  @@index([batchEmployeeId, provenance])
+}
+
 // Approved-time-entry seam (sections 19-20). This is the canonical
 // interface future timekeeping data (Clock In/Out, manager-approved
 // timecards) must satisfy before payroll consumes it. Payroll-3A
@@ -12286,11 +13049,22 @@ model PayrollDepartmentTimeApproval {
   payPeriod            PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
   departmentId         String
   department           Department @relation("DepartmentPayrollTimeApprovals", fields: [departmentId], references: [id])
-  // APPROVED | REOPENED — the row exists only after a manager first
-  // approves the department for this period.
+  // APPROVED | REOPENED | REVIEW_REQUIRED — the row exists only after
+  // a manager first approves the department for this period.
+  // Payroll-3D-3 adds REVIEW_REQUIRED for the case where source time
+  // changed after approval (approvedRevision drifted from
+  // currentRevision) and the manager must re-attest.
   state                String   @default("APPROVED")
   approvedAt           DateTime
   approvedByUserId     String
+  // Payroll-3D-3 — the revision of the (payPeriod × department) time
+  // dataset the manager attested to at approvedAt. Approval is
+  // considered valid ONLY when this equals the currently-computed
+  // revision of the scope; a source change increments the current
+  // revision and this row's state moves to REVIEW_REQUIRED via the
+  // invalidation service (never silently). Optional to remain
+  // backwards-compatible with pre-3D-3 rows.
+  approvedRevision     String?
   reopenedAt           DateTime?
   reopenedByUserId     String?
   reopenReason         String?
@@ -12301,6 +13075,9 @@ model PayrollDepartmentTimeApproval {
   notes                String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+
+  // Payroll-3D-4 back-relation.
+  frozenTimeEntries    PayrollApprovedTimeEntry[] @relation("ApprovalFrozenEntries")
 
   @@unique([clubId, payPeriodId, departmentId])
   @@index([clubId, payPeriodId])
@@ -12321,7 +13098,13 @@ model PayrollApprovedTimeEntry {
   // REGULAR | OVERTIME | STAT_HOLIDAY | VACATION | OTHER - matches the
   // earning-type catalogue subset that time entries can produce.
   earningClassification  String   @default("REGULAR")
-  // DRAFT | APPROVED | POSTED. Payroll consumes APPROVED only.
+  // DRAFT | APPROVED | POSTED | DEFERRED | SUPERSEDED_STALE.
+  // Payroll consumes APPROVED with consumedByBatchId=null AND
+  // supersededByApprovedTimeEntryId=null. DEFERRED = late exception
+  // resolved with "Defer to next payroll" (row stays for audit but is
+  // ignored by batch prep). SUPERSEDED_STALE = frozen row invalidated
+  // by an approved correction before consumption; kept for audit,
+  // ignored by batch prep.
   approvalState          String   @default("DRAFT")
   approvedAt             DateTime?
   approvedByUserId       String?
@@ -12330,12 +13113,91 @@ model PayrollApprovedTimeEntry {
   consumedByBatchId      String?
   consumedByBatchEmployeeId String?
   notes                  String?
+  // Payroll-3D-4 (2026-09-05) — provenance to the timesheet entry
+  // that produced this frozen input, plus the approval revision that
+  // authorised the freeze.
+  payrollTimesheetEntryId String?  @unique
+  payrollTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryFrozenAs", fields: [payrollTimesheetEntryId], references: [id])
+  sourceApprovalId        String?
+  sourceApproval          PayrollDepartmentTimeApproval? @relation("ApprovalFrozenEntries", fields: [sourceApprovalId], references: [id])
+  sourceApprovalRevision  String?
+  // Freeze generation model (§32 / §50) — an unconsumed frozen row
+  // whose source changed via an approved correction is marked
+  // superseded (points at its replacement) rather than mutated in
+  // place. Batch prep MUST filter these out.
+  supersededByApprovedTimeEntryId String?
+  supersededByApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("PayrollApprovedTimeEntrySupersession", fields: [supersededByApprovedTimeEntryId], references: [id])
+  supersedes                      PayrollApprovedTimeEntry[] @relation("PayrollApprovedTimeEntrySupersession")
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   batchEarnings PayrollBatchEarning[]
+  // Payroll-3D-4 back-relation for retro adjustments that reference this row.
+  timeAdjustments PayrollTimeAdjustment[] @relation("AdjustmentOriginalApprovedTimeEntry")
 
   @@index([clubId, employeeId, workDate])
   @@index([clubId, approvalState, workDate])
   @@index([employmentAssignmentId, workDate])
+  @@index([supersededByApprovedTimeEntryId])
+  @@index([sourceApprovalId])
+}
+
+// Payroll-3D-4 (2026-09-05) — Late-time / retro adjustment obligation.
+//
+// Created explicitly by the freeze service (late approval past cutoff)
+// or by the correction-resolution service (correction landed after
+// consumption / on an unconsumed stale row that could not be safely
+// refrozen). Payroll Admin resolves each row with INCLUDE_CURRENT or
+// DEFER_NEXT_PAYROLL; the row NEVER retroactively mutates a consumed
+// PayrollApprovedTimeEntry.
+//
+// Signed `differenceHours`: positive when more time was recorded than
+// the historical input; negative when less. For fresh late approvals
+// (no prior consumed row), differenceHours is the full scope total
+// and originalApprovedTimeEntryId is null.
+//
+// Statuses:
+//   OPEN                — awaiting Payroll Admin decision
+//   INCLUDE_CURRENT     — accepted for the current payroll (the row
+//                          being frozen stays APPROVED and payroll
+//                          consumes it normally)
+//   DEFER_NEXT_PAYROLL  — deferred to targetPayPeriodId; the frozen
+//                          row (if any for this reason) transitions
+//                          to DEFERRED
+//   RESOLVED            — handled out-of-band (payroll cycle already
+//                          closed by admin note; kept for audit)
+//   CANCELLED           — no adjustment required (rare; e.g. duplicate)
+model PayrollTimeAdjustment {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  employeeId           String
+  employee             Employee @relation(fields: [employeeId], references: [id])
+  employmentAssignmentId String?
+  payPeriodId          String
+  payPeriod            PayrollPayPeriod @relation("PayPeriodTimeAdjustments", fields: [payPeriodId], references: [id])
+  targetPayPeriodId    String?
+  targetPayPeriod      PayrollPayPeriod? @relation("PayPeriodTargetTimeAdjustments", fields: [targetPayPeriodId], references: [id])
+  sourceTimesheetEntryId String?
+  sourceTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryAdjustments", fields: [sourceTimesheetEntryId], references: [id])
+  originalApprovedTimeEntryId String?
+  originalApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("AdjustmentOriginalApprovedTimeEntry", fields: [originalApprovedTimeEntryId], references: [id])
+  // Reason enum (documentation): LATE_APPROVAL | RETRO_CORRECTION | UNCONSUMED_STALE.
+  reason               String
+  differenceHours      Decimal
+  earningClassification String  @default("REGULAR")
+  // OPEN | INCLUDE_CURRENT | DEFER_NEXT_PAYROLL | RESOLVED | CANCELLED
+  status               String   @default("OPEN")
+  createdByUserId      String?
+  createdAt            DateTime @default(now())
+  resolvedAt           DateTime?
+  resolvedByUserId     String?
+  resolutionType       String?
+  notes                String?
+  updatedAt            DateTime @updatedAt
+
+  @@index([clubId, payPeriodId, status])
+  @@index([clubId, targetPayPeriodId])
+  @@index([sourceTimesheetEntryId])
+  @@index([originalApprovedTimeEntryId])
 }

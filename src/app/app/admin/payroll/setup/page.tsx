@@ -30,6 +30,8 @@ import PayrollConfigForm from "./PayrollConfigForm";
 import PayGroupsEditor from "./PayGroupsEditor";
 import MembershipEditor from "./MembershipEditor";
 import PayrollCalendarSection from "./PayrollCalendarSection";
+import GlProfileEditor from "./GlProfileEditor";
+import { listAccounts } from "@/lib/accounting/coa";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +44,7 @@ export default async function PayrollSetupPage() {
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) redirect("/app/admin");
 
   const currentTaxYear = new Date().getUTCFullYear();
-  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods] =
+  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods, glProfile, coa] =
     await Promise.all([
       getPayrollClubConfig(principal, clubId),
       checkPayrollActivationPreconditions(clubId),
@@ -75,6 +77,9 @@ export default async function PayrollSetupPage() {
         orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
       }),
       listPayPeriods(principal, clubId, { taxYear: currentTaxYear }),
+      // Payroll-3C-6A — global Payroll GL Accounting Profile + tenant CoA.
+      prisma.payrollGlAccountingProfile.findUnique({ where: { clubId } }),
+      listAccounts(principal, clubId, { includeArchived: false }),
     ]);
     // Group periods by pay-group id for the calendar section.
     const initialCalendarByGroup: Record<string, ReturnType<typeof serializePeriod>[]> = {};
@@ -194,6 +199,60 @@ export default async function PayrollSetupPage() {
           initialByGroup={initialCalendarByGroup}
           defaultTaxYear={currentTaxYear}
         />
+      </section>
+
+      {/* Section 5 — Payroll GL profile (Payroll-3C-6A, 2026-09-05) */}
+      <SectionHeader
+        eyebrow="Section 5"
+        title="Payroll GL profile"
+        subtitle="The 8 tenant-wide accounts every payroll journal debits or credits. Set these once for your Chart of Accounts; per-component mappings (Section 6) route specific earnings, benefits, and deductions to more granular accounts."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+        data-testid="payroll-gl-profile-section"
+      >
+        <GlProfileEditor
+          clubId={clubId}
+          canWrite={canWrite}
+          accounts={coa
+            .filter((a) => a.isActive)
+            .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name, type: a.type }))}
+          initialProfile={{
+            salaryExpenseAccountId:        glProfile?.salaryExpenseAccountId        ?? null,
+            employerCppExpenseAccountId:   glProfile?.employerCppExpenseAccountId   ?? null,
+            employerEiExpenseAccountId:    glProfile?.employerEiExpenseAccountId    ?? null,
+            netPayPayableAccountId:        glProfile?.netPayPayableAccountId        ?? null,
+            cppPayableAccountId:           glProfile?.cppPayableAccountId           ?? null,
+            eiPayableAccountId:            glProfile?.eiPayableAccountId            ?? null,
+            federalTaxPayableAccountId:    glProfile?.federalTaxPayableAccountId    ?? null,
+            provincialTaxPayableAccountId: glProfile?.provincialTaxPayableAccountId ?? null,
+          }}
+        />
+      </section>
+
+      {/* Section 6 — Payroll Components (Payroll-3C-1, 2026-09-07; edit UI 3C-6A, 2026-09-05) */}
+      <SectionHeader
+        eyebrow="Section 6"
+        title="Payroll components"
+        subtitle="Tenant catalogue of every distinct compensation, benefit, and deduction concept your Club operates. Assign an expense and/or liability account per component so payroll can post to your Chart of Accounts."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+        data-testid="payroll-components-section"
+      >
+        <p className="mb-2 text-sm" style={{ color: "var(--spectre-text-secondary)" }}>
+          View the components catalogue, including cash vs non-cash, employee vs employer side,
+          and how each component participates in Canadian statutory bases (taxable / CPP-pensionable / EI-insurable).
+        </p>
+        <a
+          href="/app/admin/payroll/setup/components"
+          className="btn btn-secondary btn-sm"
+          data-testid="payroll-components-link"
+        >
+          Open Payroll components →
+        </a>
       </section>
     </div>
   );

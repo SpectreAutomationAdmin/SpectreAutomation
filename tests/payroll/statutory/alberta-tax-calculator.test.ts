@@ -25,7 +25,7 @@ const AB_2026 = {
 describe("calculateAlbertaTax — PDOC Scenario 1 anchor", () => {
   it("$2000 biweekly + BPA-only TD1 → Alberta T4P = 78.45", () => {
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       provincialClaim: "22769", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -42,7 +42,7 @@ describe("calculateAlbertaTax — PDOC Scenario 1 anchor", () => {
 describe("calculateAlbertaTax — Scenario 2 (custom Alberta TD1)", () => {
   it("Alberta TD1 = 26000 → Alberta T4P = 68.51", () => {
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       provincialClaim: "26000", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -55,7 +55,7 @@ describe("calculateAlbertaTax — Scenario 2 (custom Alberta TD1)", () => {
 describe("calculateAlbertaTax — K2P excludes CPP first-additional and CPP2", () => {
   it("K2P depends on baseCPP + EI only, annualised by P", () => {
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       provincialClaim: "22769", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -70,7 +70,7 @@ describe("calculateAlbertaTax — K5P around the 4,896 threshold", () => {
   it("K1P + K2P BELOW threshold → K5P = 0.00", () => {
     // Set claim so K1P is low.
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "18.65",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "18.65",
       baseCppThisPay: "92.34", eiThisPay: "32.60",
       periodsPerYear: 26,
       provincialClaim: "22769", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -84,7 +84,7 @@ describe("calculateAlbertaTax — K5P around the 4,896 threshold", () => {
     // Add EI to boost K2P: use ei 100 → K2P = 0.08 × (26 × 100 + 26 × 100) = 416.
     // Actually simpler: use a bigger baseCpp to boost K2P.
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "0",
       baseCppThisPay: "200", eiThisPay: "100",
       periodsPerYear: 26,
       provincialClaim: "50000", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -99,7 +99,7 @@ describe("calculateAlbertaTax — K5P around the 4,896 threshold", () => {
   it("K1P + K2P substantially above threshold → K5P = above × 0.25", () => {
     // provincialClaim=60000 → K1P = 4800; ei/base pushed to K2P > 800.
     const r = calculateAlbertaTax({
-      grossPay: "2000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "2000", f5aThisPay: "0",
       baseCppThisPay: "250", eiThisPay: "150",
       periodsPerYear: 26,
       provincialClaim: "60000", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -117,7 +117,7 @@ describe("calculateAlbertaTax — bracket boundaries", () => {
   it("A > 61200 → row 2 (10%, KP=1224)", () => {
     // I = 2500 × 26 = 65000 > 61200 → row 2. claim-zero to isolate bracket lookup.
     const r = calculateAlbertaTax({
-      grossPay: "2500", f5aThisPay: "0",
+      periodicTaxableRemuneration: "2500", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       provincialClaim: "0", claimZeroProvincial: true, totalIncomeLessThanClaim: false,
@@ -128,7 +128,7 @@ describe("calculateAlbertaTax — bracket boundaries", () => {
   });
   it("A > 154259 → row 3 (12%, KP=4309)", () => {
     const r = calculateAlbertaTax({
-      grossPay: "7000", f5aThisPay: "0",
+      periodicTaxableRemuneration: "7000", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       provincialClaim: "0", claimZeroProvincial: true, totalIncomeLessThanClaim: false,
@@ -143,7 +143,7 @@ describe("calculateAlbertaTax — bracket boundaries", () => {
 describe("calculateAlbertaTax — floors at zero", () => {
   it("low earnings + high claim → T3P floored at zero", () => {
     const r = calculateAlbertaTax({
-      grossPay: "100", f5aThisPay: "0",
+      periodicTaxableRemuneration: "100", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       provincialClaim: "22769", claimZeroProvincial: false, totalIncomeLessThanClaim: false,
@@ -154,7 +154,7 @@ describe("calculateAlbertaTax — floors at zero", () => {
   });
   it("totalIncomeLessThanClaim = true → T4P = 0.00", () => {
     const r = calculateAlbertaTax({
-      grossPay: "9999", f5aThisPay: "0",
+      periodicTaxableRemuneration: "9999", f5aThisPay: "0",
       baseCppThisPay: "0", eiThisPay: "0",
       periodsPerYear: 26,
       provincialClaim: "22769", claimZeroProvincial: false, totalIncomeLessThanClaim: true,

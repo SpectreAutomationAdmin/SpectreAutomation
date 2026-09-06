@@ -43,22 +43,76 @@ export interface AllowanceSnapshotLike {
   insurable:   boolean;
 }
 
+// Payroll-3C-2 / -3C-3 — Payroll Component snapshot input.
+//
+// FIXED_AMOUNT: `resolvedAmount` is authoritative.
+// PERCENT_OF_ELIGIBLE_EARNINGS: `resolvedAmount` is NULL from prep;
+//   the calculator resolves it here as
+//     resolvedAmount = eligibleBase(...) × percentBps / 10000
+//   and returns the resolution so caller can persist onto the snapshot.
+// A snapshot with a warning (mid-period, missing amount / percent /
+// eligible base) is silently skipped by the calc.
+export type StatutoryEffect = "ADD" | "SUBTRACT" | "NONE";
+export interface ComponentSnapshotLike {
+  code:              string;
+  side:              "EMPLOYEE" | "EMPLOYER";
+  cashEffect:        "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
+  taxableEffect:        StatutoryEffect;
+  cppPensionableEffect: StatutoryEffect;
+  eiInsurableEffect:    StatutoryEffect;
+  calculationMethod: "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS";
+  resolvedAmount:    Decimal | string | number | null;
+  // Payroll-3C-3 — percent only.
+  eligibleEarningsBase: "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS" | null;
+  sourcePercentBps:  number | null;
+}
+
 export interface EarningsCalcInput {
   sourceFacts:     PayrollBatchSourceFactsV1;
   earningRows:     EarningRowLike[];
   allowances:      AllowanceSnapshotLike[];
+  /** Payroll-3C-2 — optional. Only FIXED_AMOUNT with a resolvedAmount contributes. */
+  componentSnapshots?: ComponentSnapshotLike[];
   approvedHours:   Decimal | string | number;
   periodsPerYear:  number;
   salariedFullPeriod: boolean;
 }
 
 export interface EarningsCalcResult {
+  /**
+   * Legacy field — kept equal to `cashEarnings` so existing
+   * PayrollBatchEmployee.grossPay persistence + downstream statutory
+   * reads do not change shape. New code should read `cashEarnings`.
+   */
   grossPay:            Decimal;
   earningsTaxable:     Decimal;
   earningsPensionable: Decimal;
   earningsInsurable:   Decimal;
+  // Payroll-3C-2 — four independent bases exposed explicitly. Every
+  // callsite that reasons about statutory input reads THESE, not
+  // grossPay. The four fields are the calculation invariant.
+  cashEarnings:                     Decimal;
+  taxableRemuneration:              Decimal;
+  cppPensionableRemuneration:       Decimal;
+  eiInsurableRemuneration:          Decimal;
+  employeeDeductionsFromComponents: Decimal;
+  employerContributionsFromComponents: Decimal;
+  // Payroll-3C-3 — % components landed here for the caller to
+  // persist onto their PayrollBatchComponentSnapshot rows (so the
+  // review DTO can show "5.00% × $5000 = $250").
+  percentResolutions: Array<{
+    code:             string;
+    percentBps:       number;
+    eligibleBase:     "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS";
+    eligibleAmount:   Decimal;   // pre-rounded to cents
+    resolvedAmount:   Decimal;   // pre-rounded to cents
+  }>;
+  // Payroll-3C-3 — non-fatal diagnostics from the calculator itself
+  // (e.g. a SUBTRACT component that would have driven a base below
+  // zero). Callers should surface these as batch WARNINGs.
+  diagnostics: Array<{ code: string; message: string }>;
   /** Per-line breakdown for auditability / T4 reporting downstream. */
-  lines: Array<{ source: "SALARY_DERIVED" | "EARNING_ROW" | "ALLOWANCE"; label: string; amount: Decimal; }>;
+  lines: Array<{ source: "SALARY_DERIVED" | "EARNING_ROW" | "ALLOWANCE" | "COMPONENT" | "COMPONENT_PERCENT"; label: string; amount: Decimal; }>;
 }
 
 /**
@@ -117,6 +171,7 @@ export function computeAllowancePerPeriod(
 
 export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult {
   const { sourceFacts, earningRows, allowances, approvedHours, periodsPerYear, salariedFullPeriod } = input;
+  const componentSnapshots = input.componentSnapshots ?? [];
   const lines: EarningsCalcResult["lines"] = [];
   let taxable     = new Decimal(0);
   let pensionable = new Decimal(0);
@@ -177,23 +232,117 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
   // fold it into the gross calculation below explicitly.
   void allowanceTotal;
 
-  // Gross = every earning + every allowance (unfiltered).
-  const grossPay = nonNegative(gross.plus(earningTotals).plus(salaryDerived).plus(hourlyDerived).plus(allowanceGross));
+  // Payroll-3C-2 / -3C-3 — Payroll Components. TWO-PASS model per
+  // the 3C-3 brief §6:
+  //   Pass 1 — FIXED_AMOUNT contributions to cash and to the three
+  //            statutory bases (directional).
+  //   Pass 2 — PERCENT components resolve against a base derived
+  //            EXCLUSIVELY from pass 1 outputs (§8 — no component-
+  //            to-component graph).
+  //
+  // Directional statutory effects:
+  //   ADD       → grows the target base by the resolved amount
+  //   SUBTRACT  → reduces the target base by the resolved amount
+  //   NONE      → no effect on that base
+  //
+  // A base that would go below zero is floored at zero and a
+  // NEGATIVE_BASE_FLOORED diagnostic is emitted (§21).
+  let componentCashAdds  = new Decimal(0);
+  let componentCashSubs  = new Decimal(0);
+  let componentTaxAdd    = new Decimal(0);
+  let componentTaxSub    = new Decimal(0);
+  let componentPenAdd    = new Decimal(0);
+  let componentPenSub    = new Decimal(0);
+  let componentInsAdd    = new Decimal(0);
+  let componentInsSub    = new Decimal(0);
+  let componentEmployer  = new Decimal(0);
+  const percentResolutions: EarningsCalcResult["percentResolutions"] = [];
+  const diagnostics: EarningsCalcResult["diagnostics"] = [];
 
-  // Bases — earnings are fully taxable/pensionable/insurable by MVP
-  // assumption; allowances honour their three independent flags.
-  const earningsBase = earningTotals.plus(salaryDerived).plus(hourlyDerived);
-  earningsBase; // referenced below
+  const applyFixed = (cs: ComponentSnapshotLike, amt: Decimal): void => {
+    if (cs.side === "EMPLOYER") componentEmployer = componentEmployer.plus(amt);
+    if (cs.cashEffect === "INCREASES_NET_PAY") componentCashAdds = componentCashAdds.plus(amt);
+    if (cs.cashEffect === "DECREASES_NET_PAY") componentCashSubs = componentCashSubs.plus(amt);
+    if (cs.taxableEffect        === "ADD")      componentTaxAdd = componentTaxAdd.plus(amt);
+    if (cs.taxableEffect        === "SUBTRACT") componentTaxSub = componentTaxSub.plus(amt);
+    if (cs.cppPensionableEffect === "ADD")      componentPenAdd = componentPenAdd.plus(amt);
+    if (cs.cppPensionableEffect === "SUBTRACT") componentPenSub = componentPenSub.plus(amt);
+    if (cs.eiInsurableEffect    === "ADD")      componentInsAdd = componentInsAdd.plus(amt);
+    if (cs.eiInsurableEffect    === "SUBTRACT") componentInsSub = componentInsSub.plus(amt);
+  };
 
-  taxable     = taxable.plus(earningTotals).plus(salaryDerived).plus(hourlyDerived).plus(allowanceTax);
-  pensionable = pensionable.plus(earningTotals).plus(salaryDerived).plus(hourlyDerived).plus(allowancePen);
-  insurable   = insurable.plus(earningTotals).plus(salaryDerived).plus(hourlyDerived).plus(allowanceIns);
+  // Pass 1 — FIXED_AMOUNT components (previously the only path).
+  for (const cs of componentSnapshots) {
+    if (cs.calculationMethod !== "FIXED_AMOUNT") continue;
+    if (cs.resolvedAmount == null) continue;
+    const amt = toDecimal(cs.resolvedAmount);
+    applyFixed(cs, amt);
+    lines.push({ source: "COMPONENT", label: cs.code, amount: amt });
+  }
+
+  // Compute the pre-percent cash and regular-earnings baselines
+  // used by Pass 2's eligibleBase resolution (§7-8).
+  const regularEarnings = salaryDerived.plus(hourlyDerived);
+  const cashPrePercent  = regularEarnings.plus(earningTotals).plus(allowanceGross).plus(componentCashAdds);
+
+  // Pass 2 — PERCENT_OF_ELIGIBLE_EARNINGS. Percentage components
+  // resolve against the pre-declared eligible base and never against
+  // each other.
+  for (const cs of componentSnapshots) {
+    if (cs.calculationMethod !== "PERCENT_OF_ELIGIBLE_EARNINGS") continue;
+    if (cs.sourcePercentBps == null || cs.eligibleEarningsBase == null) continue;
+    const eligible = cs.eligibleEarningsBase === "REGULAR_EARNINGS_ONLY"
+      ? regularEarnings
+      : cashPrePercent;
+    const eligibleR = roundCentsHalfUp(nonNegative(eligible));
+    const bpsDec = new Decimal(cs.sourcePercentBps).div(10000);
+    const amountR = roundCentsHalfUp(eligibleR.times(bpsDec));
+    applyFixed(cs, amountR);
+    lines.push({ source: "COMPONENT_PERCENT", label: cs.code, amount: amountR });
+    percentResolutions.push({
+      code: cs.code, percentBps: cs.sourcePercentBps,
+      eligibleBase: cs.eligibleEarningsBase,
+      eligibleAmount: eligibleR, resolvedAmount: amountR,
+    });
+  }
+
+  // Cash earnings = base + INCREASES_NET_PAY component adds.
+  // DECREASES_NET_PAY do NOT reduce cash earnings — they land on the
+  // net-pay side later.
+  const cashBaseline = gross.plus(regularEarnings).plus(earningTotals).plus(allowanceGross);
+  const cashEarnings = nonNegative(cashBaseline.plus(componentCashAdds));
+
+  // Three independent statutory bases with directional composition.
+  const baseAdd = regularEarnings.plus(earningTotals);
+  const rawTaxable     = taxable.plus(baseAdd).plus(allowanceTax).plus(componentTaxAdd).minus(componentTaxSub);
+  const rawPensionable = pensionable.plus(baseAdd).plus(allowancePen).plus(componentPenAdd).minus(componentPenSub);
+  const rawInsurable   = insurable.plus(baseAdd).plus(allowanceIns).plus(componentInsAdd).minus(componentInsSub);
+  const flooredTaxable     = rawTaxable.lt(0)     ? new Decimal(0) : rawTaxable;
+  const flooredPensionable = rawPensionable.lt(0) ? new Decimal(0) : rawPensionable;
+  const flooredInsurable   = rawInsurable.lt(0)   ? new Decimal(0) : rawInsurable;
+  if (rawTaxable.lt(0))
+    diagnostics.push({ code: "NEGATIVE_BASE_FLOORED", message: `taxable remuneration would be ${rawTaxable.toFixed(2)}; floored at 0` });
+  if (rawPensionable.lt(0))
+    diagnostics.push({ code: "NEGATIVE_BASE_FLOORED", message: `CPP pensionable would be ${rawPensionable.toFixed(2)}; floored at 0` });
+  if (rawInsurable.lt(0))
+    diagnostics.push({ code: "NEGATIVE_BASE_FLOORED", message: `EI insurable would be ${rawInsurable.toFixed(2)}; floored at 0` });
+  taxable     = flooredTaxable;
+  pensionable = flooredPensionable;
+  insurable   = flooredInsurable;
 
   return {
-    grossPay:            roundCentsHalfUp(grossPay),
-    earningsTaxable:     roundCentsHalfUp(nonNegative(taxable)),
-    earningsPensionable: roundCentsHalfUp(nonNegative(pensionable)),
-    earningsInsurable:   roundCentsHalfUp(nonNegative(insurable)),
+    grossPay:            roundCentsHalfUp(cashEarnings),
+    earningsTaxable:     roundCentsHalfUp(taxable),
+    earningsPensionable: roundCentsHalfUp(pensionable),
+    earningsInsurable:   roundCentsHalfUp(insurable),
+    cashEarnings:                       roundCentsHalfUp(cashEarnings),
+    taxableRemuneration:                roundCentsHalfUp(taxable),
+    cppPensionableRemuneration:         roundCentsHalfUp(pensionable),
+    eiInsurableRemuneration:            roundCentsHalfUp(insurable),
+    employeeDeductionsFromComponents:   roundCentsHalfUp(componentCashSubs),
+    employerContributionsFromComponents: roundCentsHalfUp(componentEmployer),
+    percentResolutions,
+    diagnostics,
     lines,
   };
 }

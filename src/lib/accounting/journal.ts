@@ -478,12 +478,20 @@ export async function createPostedFromAdapter(
   principal: Principal,
   clubId: string,
   raw: unknown,
-  meta: { source: JournalSource; sourceEntityType: string; sourceEntityId: string }
+  meta: { source: JournalSource; sourceEntityType: string; sourceEntityId: string },
+  // Payroll-3C-6B (2026-09-05) — optional external transaction client.
+  // When the caller (e.g. postPayrollBatch) needs to atomically bind
+  // journal creation to a batch state transition, it passes its own
+  // tx here so a rollback annihilates the JournalEntry along with
+  // every other write. Without this, concurrent posts could leave
+  // an orphan JournalEntry from the losing caller.
+  externalTx?: Prisma.TransactionClient,
 ) {
   await assertPostingAllowed(principal, clubId, `gl.adapter.${meta.source}`, meta.sourceEntityType, meta.sourceEntityId);
   const v = await validateEntry(clubId, raw, { allowControlAccounts: true });
   const period = await resolvePostingPeriod(principal, clubId, v.entryDate, { allowSoftLockOverride: true });
-  const entry = await prisma.$transaction(async (tx) => {
+
+  const doWrites = async (tx: Prisma.TransactionClient) => {
     const entryNumber = await nextEntryNumberTx(tx, clubId);
     const e = await tx.journalEntry.create({
       data: {
@@ -519,7 +527,12 @@ export async function createPostedFromAdapter(
       })),
     });
     return e;
-  });
+  };
+
+  const entry = externalTx
+    ? await doWrites(externalTx)
+    : await prisma.$transaction(doWrites);
+
   await audit(principal, {
     action: `gl.adapter.${meta.source.toLowerCase()}`,
     entityType: "JournalEntry", entityId: entry.id, clubId,
@@ -537,10 +550,21 @@ async function nextEntryNumber(clubId: string): Promise<string> {
 export type AnyTx = Prisma.TransactionClient | typeof prisma;
 export async function nextEntryNumberTx(tx: AnyTx, clubId: string): Promise<string> {
   const year = new Date().getFullYear();
-  const count = await tx.journalEntry.count({
-    where: { clubId, createdAt: { gte: new Date(year, 0, 1) } },
+  const prefix = `JE-${year}-`;
+  // Payroll-3D-1 (2026-09-05) — was `count() + 1` which collides
+  // whenever a JE has been deleted (cleanup of pre-3C-6B orphans,
+  // fixture wipes, etc.) because the count no longer equals the max
+  // used suffix. Use MAX(entryNumber) + 1 instead so gaps don't
+  // produce duplicate numbers.
+  const latest = await tx.journalEntry.findFirst({
+    where: { clubId, entryNumber: { startsWith: prefix } },
+    orderBy: { entryNumber: "desc" },
+    select: { entryNumber: true },
   });
-  return `JE-${year}-${(count + 1).toString().padStart(6, "0")}`;
+  const nextN = latest
+    ? Number(latest.entryNumber.slice(prefix.length)) + 1
+    : 1;
+  return `${prefix}${nextN.toString().padStart(6, "0")}`;
 }
 
 function zerr(err: z.ZodError) {

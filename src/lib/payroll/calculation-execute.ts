@@ -39,7 +39,16 @@ import { DEFAULT_TAX_FACTS_V1 } from "./source-facts-schema";
 import type { YtdSnapshotV1 } from "./ytd-snapshot-schema";
 
 const ENTITY = "PayrollBatch";
-const ALGORITHM_VERSION = "spectre-payroll-2c-v1";
+// Payroll-3C-3D.7 (2026-09-09) — production adopts the CRA projected
+// year-to-date CPP/EI tax-credit method as its STANDARD K2/K2P basis.
+// See src/lib/payroll/statutory/cpp-ei-credit-basis.ts for the
+// authoritative formula (T4127 §Federal K2 optional YTD method).
+// CRA states the T4127 formulas generally produce more precise
+// results than PDOC — a documented Spectre-vs-PDOC delta is
+// intentional under this methodology and NOT a defect. Historical
+// batches keep their frozen `algorithmVersion`; the engine change
+// only affects newly-CALCULATED batches from this version onward.
+const ALGORITHM_VERSION = "spectre-payroll-3c3d7-v2";
 const FINAL_APPROVAL_ORIGIN_KIND = "PAYROLL_FINAL_APPROVAL";
 const REVIEW_ORIGIN_KIND = "PAYROLL_REVIEW";
 
@@ -86,12 +95,24 @@ export async function calculatePayrollBatch(
 
   const batchEmployees = await prisma.payrollBatchEmployee.findMany({
     where: { batchId, clubId },
-    include: { earnings: true, allowanceSnapshots: true },
+    include: {
+      earnings: true, allowanceSnapshots: true,
+      // Payroll-3C-2 (2026-09-07) — component snapshots read by calc.
+      componentSnapshots: true,
+    },
   });
   const batchEmployeeById = new Map(batchEmployees.map((be) => [be.id, be]));
 
   interface Payload {
     batchEmployeeId: string;
+    employeeIdForDiag: string;
+    percentResolutions: Array<{
+      code: string; percentBps: number;
+      eligibleBase: "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS";
+      eligibleAmount: { toFixed: (n: number) => string };
+      resolvedAmount: { toFixed: (n: number) => string };
+    }>;
+    calcDiagnostics: Array<{ code: string; message: string }>;
     data: Record<string, string | null>;
     grossCents:            number;
     netCents:              number;
@@ -116,10 +137,28 @@ export async function calculatePayrollBatch(
       amount: a.amount.toString(), frequency: a.frequency,
       taxable: a.taxable, pensionable: a.pensionable as boolean, insurable: a.insurable as boolean,
     }));
+    // Payroll-3C-2 / -3C-3 — frozen component snapshots contribute
+    // to the four independent bases via directional effects.
+    // PERCENT snapshots have `resolvedAmount = null` here; the
+    // calculator computes the amount from the frozen eligible base
+    // and returns `percentResolutions` we persist back below.
+    const componentSnapshots = be.componentSnapshots.map((cs) => ({
+      code: cs.componentCode,
+      side: cs.side as "EMPLOYEE" | "EMPLOYER",
+      cashEffect: cs.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+      taxableEffect:        cs.taxableEffect        as "ADD" | "SUBTRACT" | "NONE",
+      cppPensionableEffect: cs.cppPensionableEffect as "ADD" | "SUBTRACT" | "NONE",
+      eiInsurableEffect:    cs.eiInsurableEffect    as "ADD" | "SUBTRACT" | "NONE",
+      calculationMethod: cs.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
+      resolvedAmount: cs.resolvedAmount ? cs.resolvedAmount.toString() : null,
+      eligibleEarningsBase: cs.eligibleEarningsBase as "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS" | null,
+      sourcePercentBps: cs.sourcePercentBps ?? null,
+    }));
 
     const earnings = calculateEarnings({
       sourceFacts:        emp.sourceFacts,
       earningRows, allowances,
+      componentSnapshots,
       approvedHours:      emp.approvedHoursSnapshot,
       periodsPerYear:     readiness.periodsPerYear,
       salariedFullPeriod: emp.salariedFullPeriod,
@@ -183,15 +222,84 @@ export async function calculatePayrollBatch(
     // §9 — F5A = employee first-additional CPP + employee CPP2.
     const f5aThisPay = cpp.firstAdd.plus(cpp2.amount);
 
+    // Payroll-3C-3D (2026-09-09) — T4127 F: sum of every EMPLOYEE-side
+    // snapshot whose `taxFormulaDeductionType` maps into the F input
+    // (currently RRSP_DEDUCTED_AT_SOURCE only). Percentage components
+    // whose resolvedAmount is stamped by the calculator earlier in
+    // this loop are covered because the snapshot rows carry the
+    // resolved amount by the time this sum runs. If a component
+    // stamps a category-type here in the future, it should also be
+    // added to the `TAX_FORMULA_F_TYPES` allowlist.
+    const TAX_FORMULA_F_TYPES = new Set(["RRSP_DEDUCTED_AT_SOURCE"]);
+    let fThisPay: import("./statutory/decimal-money").Decimal | undefined;
+    if (be.componentSnapshots.some((s) => s.taxFormulaDeductionType && TAX_FORMULA_F_TYPES.has(s.taxFormulaDeductionType))) {
+      const { toDecimal } = await import("./statutory/decimal-money");
+      // Percentage components whose resolvedAmount is null at snapshot
+      // time have their amount computed inside `calculateEarnings`;
+      // find the matching percentResolution to source the amount.
+      let sum = toDecimal(0);
+      for (const s of be.componentSnapshots) {
+        if (!s.taxFormulaDeductionType || !TAX_FORMULA_F_TYPES.has(s.taxFormulaDeductionType)) continue;
+        if (s.side !== "EMPLOYEE") continue;
+        if (s.resolvedAmount != null) {
+          sum = sum.plus(toDecimal(s.resolvedAmount.toString()));
+          continue;
+        }
+        const pr = earnings.percentResolutions.find((p) => p.code === s.componentCode);
+        if (pr) sum = sum.plus(toDecimal(pr.resolvedAmount.toString()));
+      }
+      fThisPay = sum;
+    }
+
     // Frozen tax facts (parser fills a v1-only default when absent).
     const tax = emp.sourceFacts.tax ?? DEFAULT_TAX_FACTS_V1;
 
+    // Payroll-3C-3D.7 (2026-09-09) — CRA year-to-date K2/K2P credit
+    // basis (production). D/D1 = current-employer YTD strictly BEFORE
+    // this pay (PRIOR_EMPLOYER opening balances contribute zero per
+    // the existing 3B-5B YTD aggregator); PR = pay periods remaining
+    // in taxYear including current; PM = pensionable months from
+    // cppPensionableMonths (age/CPT30/disability/death only — never
+    // hire date); C/EI = this pay's combined-CPP + EI outputs from
+    // the engine. Federal + Alberta consume the SAME selected basis.
+    const { getEmployeePayrollYtd } = await import("./ytd");
+    const priorYtd = await getEmployeePayrollYtd(clubId, emp.employeeId, readiness.payDate);
+    const remainingIncludingCurrent = await prisma.payrollPayPeriod.count({
+      where: {
+        clubId,
+        payGroupId: readiness.payGroupId,
+        taxYear:    readiness.taxYear,
+        payDate:    { gte: readiness.payDate },
+      },
+    });
+    const { calculateCppEiTaxCreditBasis } = await import("./statutory/cpp-ei-credit-basis");
+    const ytdCreditBasis = calculateCppEiTaxCreditBasis({
+      priorYtdCombinedCpp:              priorYtd.ytdCppEE,
+      priorYtdEi:                       priorYtd.ytdEiEE,
+      currentCombinedCpp:               cpp.combined,
+      currentEi:                        ei.employee,
+      periodsRemainingIncludingCurrent: remainingIncludingCurrent,
+      cppPensionableMonths:             emp.pensionableMonths,
+      baseCppRateStr:                   cppParams.baseRateEE,
+      combinedCppRateStr:               cppParams.combinedRateEE,
+      combinedCppBaseMaxEEStr:          cppParams.baseMaxEE,
+      eiMaxAnnualPremiumEEStr:          eiParams.maxAnnualPremiumEE,
+    });
+
     const fed = calculateFederalTax({
-      grossPay:                 earnings.grossPay,
+      // Payroll-3C-3D.3 — corrected: T4127 §Federal / §Alberta I is
+      // periodic TAXABLE remuneration (includes taxable non-cash
+      // benefits), not cash gross. Prior implementation passed
+      // `earnings.grossPay` and under-withheld income tax whenever
+      // the employee had taxable employer benefits.
+      periodicTaxableRemuneration: earnings.taxableRemuneration,
+      fThisPay,
       f5aThisPay,
       baseCppThisPay:           cpp.base,
       eiThisPay:                ei.employee,
       periodsPerYear:           readiness.periodsPerYear,
+      // Payroll-3C-3D.7 — YTD credit basis (production standard).
+      ytdCreditBasis:           { combinedSelectedBasis: ytdCreditBasis.combinedSelectedBasis },
       federalClaim:             tax.federalClaim,
       claimZeroFederal:         tax.claimZeroFederal,
       totalIncomeLessThanClaim: tax.totalIncomeLessThanClaim,
@@ -206,11 +314,19 @@ export async function calculatePayrollBatch(
       },
     });
     const prov = calculateAlbertaTax({
-      grossPay:                 earnings.grossPay,
+      // Payroll-3C-3D.3 — corrected: T4127 §Federal / §Alberta I is
+      // periodic TAXABLE remuneration (includes taxable non-cash
+      // benefits), not cash gross. Prior implementation passed
+      // `earnings.grossPay` and under-withheld income tax whenever
+      // the employee had taxable employer benefits.
+      periodicTaxableRemuneration: earnings.taxableRemuneration,
+      fThisPay,
       f5aThisPay,
       baseCppThisPay:           cpp.base,
       eiThisPay:                ei.employee,
       periodsPerYear:           readiness.periodsPerYear,
+      // Payroll-3C-3D.7 — same YTD credit basis as federal K2 (§13).
+      ytdCreditBasis:           { combinedSelectedBasis: ytdCreditBasis.combinedSelectedBasis },
       provincialClaim:          tax.provincialClaim,
       claimZeroProvincial:      tax.claimZeroProvincial,
       totalIncomeLessThanClaim: tax.totalIncomeLessThanClaim,
@@ -227,10 +343,13 @@ export async function calculatePayrollBatch(
     const additionalProvincial = roundCentsHalfUp(toDecimal(tax.additionalProvincialTaxAmount));
 
     // Total employee deductions + net pay (§27, §28).
+    // Payroll-3C-2 — DECREASES_NET_PAY component amounts (LTD, RRSP EE)
+    // reduce net alongside statutory deductions.
     const totalEmployeeDeductions = roundCentsHalfUp(
       cpp.combined.plus(cpp2.amount).plus(ei.employee)
         .plus(fed.t4PerPeriod).plus(prov.t4pPerPeriod)
-        .plus(additionalFederal).plus(additionalProvincial),
+        .plus(additionalFederal).plus(additionalProvincial)
+        .plus(earnings.employeeDeductionsFromComponents),
     );
     const netPay = earnings.grossPay.minus(totalEmployeeDeductions);
     if (netPay.lt(0)) {
@@ -243,7 +362,11 @@ export async function calculatePayrollBatch(
       continue;
     }
 
-    const totalEmployer = employerCpp.combined.plus(employerCpp2.amount).plus(ei.employer);
+    // Payroll-3C-2 — employer-side component contributions (AD&D,
+    // Dependent Life, Employer Life Insurance, Employer RRSP once
+    // activated) grow employer cost without touching employee net.
+    const totalEmployer = employerCpp.combined.plus(employerCpp2.amount).plus(ei.employer)
+      .plus(earnings.employerContributionsFromComponents);
 
     const ytdSnapshot: YtdSnapshotV1 = {
       schemaVersion: 1,
@@ -319,6 +442,9 @@ export async function calculatePayrollBatch(
 
     payloads.push({
       batchEmployeeId: be.id,
+      employeeIdForDiag: be.employeeId,
+      percentResolutions: earnings.percentResolutions,
+      calcDiagnostics:    earnings.diagnostics,
       data: {
         grossPay:                toCentString(earnings.grossPay),
         earningsTaxable:         toCentString(earnings.earningsTaxable),
@@ -386,6 +512,26 @@ export async function calculatePayrollBatch(
   await prisma.$transaction(async (tx) => {
     for (const p of payloads) {
       await tx.payrollBatchEmployee.update({ where: { id: p.batchEmployeeId }, data: p.data });
+      // Payroll-3C-3 — write the calculator's percent resolutions
+      // back onto the snapshot rows so the review DTO can render the
+      // "X% × $E = $R" derivation.
+      for (const pr of p.percentResolutions) {
+        await tx.payrollBatchComponentSnapshot.updateMany({
+          where: { batchEmployeeId: p.batchEmployeeId, componentCode: pr.code },
+          data: {
+            resolvedAmount:         pr.resolvedAmount.toFixed(2),
+            eligibleEarningsAmount: pr.eligibleAmount.toFixed(2),
+          },
+        });
+      }
+      for (const d of p.calcDiagnostics) {
+        await tx.payrollBatchException.create({
+          data: {
+            clubId, batchId, batchEmployeeId: p.batchEmployeeId, employeeId: p.employeeIdForDiag,
+            severity: "WARNING", code: d.code, message: d.message,
+          },
+        });
+      }
     }
     await tx.payrollBatch.update({
       where: { id: batchId },

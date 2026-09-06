@@ -15,6 +15,7 @@ import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
 import { NotFoundError } from "../errors";
 import { Decimal, roundCentsHalfUp, sum, toCentString, toDecimal } from "./statutory/decimal-money";
+import { parseSourceFactsV1 } from "./source-facts-schema";
 
 const ENTITY = "PayrollBatch";
 
@@ -42,6 +43,11 @@ export interface ReviewBatchHeader {
   statutoryPackageVersion: string | null;
   statutoryPackageChecksum: string | null;
   workIntakeItemId:  string | null;
+  approvedAtIso:     string | null;
+  approvedByUserId:  string | null;
+  postedAtIso:       string | null;
+  postedByUserId:    string | null;
+  glJournalEntryId:  string | null;
 }
 
 export interface ReviewBatchTotals {
@@ -149,14 +155,67 @@ export interface ReviewCalculationExplanation {
 export interface ReviewEmployeeDetail extends ReviewEmployeeRow {
   earningLines: Array<{ earningType: string; label: string; quantity: string; rate: string; amount: string; }>;
   allowanceLines: Array<{ allowanceType: string; frequency: string; amount: string; taxable: boolean; pensionable: boolean; insurable: boolean; }>;
+  // Payroll-3C-2 (2026-09-07) — Payroll Component snapshots grouped
+  // by display section. Only rows with a resolvedAmount contributed
+  // to calculation; warning-carrying rows are still surfaced so the
+  // Payroll Admin sees why (e.g. RRSP percentage pending 3C-3).
+  componentLines: Array<{
+    id:               string;   // Payroll-3C-4 — snapshot id so the UI can request removal.
+    code:             string;
+    displayName:      string;
+    category:         string;
+    side:             "EMPLOYEE" | "EMPLOYER";
+    displaySection:   "EARNINGS" | "BENEFITS" | "DEDUCTIONS";
+    cashEffect:       "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
+    calculationMethod: string;
+    resolvedAmount:   string | null;
+    // Payroll-3C-3 (2026-09-08) — percentage derivation, non-null
+    // only for resolved PERCENT snapshots: shows "X% × $E = $R".
+    percentDerivation: null | {
+      percentBpsLabel:  string;      // "5.00%"
+      eligibleBase:     "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS";
+      eligibleBaseLabel: string;     // "Regular Earnings"
+      eligibleAmount:   string;      // "5000.00"
+    };
+    // Payroll-3C-4 (2026-09-09) — provenance + one-time metadata.
+    provenance:       "RECURRING_EMPLOYEE_SETUP" | "ONE_TIME_PAYROLL_ADJUSTMENT";
+    reason:           string | null;
+    enteredByUserId:  string | null;
+    warningCode:      string | null;
+    warningMessage:   string | null;
+  }>;
   employerContributions: {
     cppCombined: string | null;
     cpp2:        string | null;
     ei:          string | null;
+    /** 3C-2 — sum of employer-side FIXED_AMOUNT component snapshots. */
+    componentsTotal: string;
+  };
+  // Payroll-3C-2 — four independent remuneration bases. The
+  // calculator reads THESE (not `earningsGross`) as inputs to
+  // statutory formulas. Present so the review UI can prove they
+  // are independent.
+  bases: {
+    cashEarnings:              string;
+    taxableRemuneration:       string;
+    cppPensionableRemuneration: string;
+    eiInsurableRemuneration:   string;
   };
   exceptions: Array<{ severity: string; code: string; message: string; recommendedAction: string | null; }>;
   explanation: ReviewCalculationExplanation | null;
   ytdOpeningBalancePriorPayrollKind: string | null;
+  /**
+   * Salary periodization explainer — non-null only for salaried
+   * employees. Shows the Payroll Admin how period gross was
+   * derived: annualSalary ÷ pay-periods-per-year.
+   */
+  salaryDerivation: {
+    annualSalary:   string;   // e.g. "150000.00"
+    frequency:      string;   // "SEMI_MONTHLY" | "MONTHLY" | ...
+    frequencyLabel: string;   // "Semi-monthly"
+    periodsPerYear: number;   // 24
+    periodEarning:  string;   // e.g. "6250.00"
+  } | null;
 }
 
 export interface ReviewBatch {
@@ -253,6 +312,11 @@ export async function getBatchReview(
     statutoryPackageVersion:    batch.statutoryPackage?.packageVersion ?? null,
     statutoryPackageChecksum:   batch.statutoryPackage?.checksum ?? null,
     workIntakeItemId:           batch.workIntakeItemId ?? null,
+    approvedAtIso:              batch.approvedAt ? batch.approvedAt.toISOString() : null,
+    approvedByUserId:           batch.approvedByUserId ?? null,
+    postedAtIso:                batch.postedAt ? batch.postedAt.toISOString() : null,
+    postedByUserId:             batch.postedByUserId ?? null,
+    glJournalEntryId:           (batch as { glJournalEntryId?: string | null }).glJournalEntryId ?? null,
   };
 
   // Decimal-safe aggregation. Every line is a rounded persisted
@@ -356,7 +420,11 @@ export async function getBatchEmployeeReview(
   const be = await prisma.payrollBatchEmployee.findUnique({
     where: { id: batchEmployeeId },
     include: {
-      employee: true, batch: true, earnings: true, allowanceSnapshots: true, exceptions: true,
+      employee: true,
+      batch: { include: { payGroup: true, payPeriod: true } },
+      earnings: true, allowanceSnapshots: true, exceptions: true,
+      // Payroll-3C-2 (2026-09-07) — component snapshots in review.
+      componentSnapshots: { orderBy: [{ displaySection: "asc" }, { displayOrder: "asc" }] },
     },
   });
   if (!be) throw new NotFoundError("PayrollBatchEmployee", batchEmployeeId);
@@ -386,6 +454,33 @@ export async function getBatchEmployeeReview(
 
   const explanation = sanitizeExplanation(be.calculationExplanationJson);
 
+  // Salary derivation explainer — surfaces "annual / P = period"
+  // to the Payroll Admin so a $150k salaried employee's $6,250
+  // period gross is visibly explained. Non-null only when the
+  // snapshot carries a SALARY compensation.
+  let salaryDerivation: ReviewEmployeeDetail["salaryDerivation"] = null;
+  if (be.salaried) {
+    const facts = parseSourceFactsV1(be.sourceFactsJson);
+    const salaryComp = facts?.compensations.find((c) => c.payType === "SALARY" && c.annualSalary != null);
+    if (salaryComp?.annualSalary) {
+      const periodsPerYear = await prisma.payrollPayPeriod.count({
+        where: {
+          clubId: be.clubId, payGroupId: be.batch.payGroupId, taxYear: be.batch.payPeriod.taxYear,
+        },
+      });
+      const frequency = be.batch.payGroup.payFrequency;
+      const annualDec = toDecimal(salaryComp.annualSalary);
+      const periodEarning = periodsPerYear > 0 ? annualDec.div(periodsPerYear).toFixed(2) : "0.00";
+      salaryDerivation = {
+        annualSalary:   annualDec.toFixed(2),
+        frequency,
+        frequencyLabel: humanFrequencyLabel(frequency),
+        periodsPerYear,
+        periodEarning,
+      };
+    }
+  }
+
   const row: ReviewEmployeeRow = {
     batchEmployeeId: be.id, employeeId: be.employeeId, displayName,
     employeeNumber: emp.employeeNumber ?? null, departmentLabel: null,
@@ -405,19 +500,73 @@ export async function getBatchEmployeeReview(
     netPay: be.netPay ? be.netPay.toString() : null,
   };
 
+  // Payroll-3C-2 — component snapshot rendering + employer-side
+  // component total for the review's employer-cost card.
+  const componentLines: ReviewEmployeeDetail["componentLines"] = be.componentSnapshots.map((cs) => {
+    const isPercent = cs.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS";
+    const percentDerivation = isPercent && cs.sourcePercentBps != null && cs.eligibleEarningsAmount != null
+      ? {
+          percentBpsLabel: `${(cs.sourcePercentBps / 100).toFixed(2)}%`,
+          eligibleBase: cs.eligibleEarningsBase as "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS",
+          eligibleBaseLabel: cs.eligibleEarningsBase === "CASH_EARNINGS" ? "Cash Earnings" : "Regular Earnings",
+          eligibleAmount: cs.eligibleEarningsAmount.toString(),
+        }
+      : null;
+    return {
+      id: cs.id,
+      code: cs.componentCode,
+      displayName: cs.displayName,
+      category: cs.category,
+      side: cs.side as "EMPLOYEE" | "EMPLOYER",
+      displaySection: cs.displaySection as "EARNINGS" | "BENEFITS" | "DEDUCTIONS",
+      cashEffect: cs.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+      calculationMethod: cs.calculationMethod,
+      resolvedAmount: cs.resolvedAmount ? cs.resolvedAmount.toString() : null,
+      percentDerivation,
+      provenance: cs.provenance as "RECURRING_EMPLOYEE_SETUP" | "ONE_TIME_PAYROLL_ADJUSTMENT",
+      reason: cs.reason,
+      enteredByUserId: cs.enteredByUserId,
+      warningCode: cs.warningCode,
+      warningMessage: cs.warningMessage,
+    };
+  });
+  const componentsEmployerTotal = be.componentSnapshots
+    .filter((cs) => cs.side === "EMPLOYER" && cs.resolvedAmount != null)
+    .reduce((acc, cs) => acc.plus(toDecimal(cs.resolvedAmount!)), toDecimal(0));
+
   return {
     ...row,
     earningLines,
     allowanceLines,
+    componentLines,
     employerContributions: {
       cppCombined: be.employerCppCombined ? be.employerCppCombined.toString() : null,
       cpp2:        be.employerCpp2        ? be.employerCpp2.toString()        : null,
       ei:          be.employerEi          ? be.employerEi.toString()          : null,
+      componentsTotal: componentsEmployerTotal.toFixed(2),
+    },
+    bases: {
+      cashEarnings:               (be.grossPay ?? toDecimal(0)).toString(),
+      taxableRemuneration:        (be.earningsTaxable ?? toDecimal(0)).toString(),
+      cppPensionableRemuneration: (be.earningsPensionable ?? toDecimal(0)).toString(),
+      eiInsurableRemuneration:    (be.earningsInsurable ?? toDecimal(0)).toString(),
     },
     exceptions,
     explanation,
     ytdOpeningBalancePriorPayrollKind: parseYtdKind(be.ytdSnapshotJson),
+    salaryDerivation,
   };
+}
+
+function humanFrequencyLabel(f: string): string {
+  switch (f) {
+    case "WEEKLY":       return "Weekly";
+    case "BIWEEKLY":     return "Biweekly";
+    case "SEMI_MONTHLY":
+    case "SEMIMONTHLY":  return "Semi-monthly";
+    case "MONTHLY":      return "Monthly";
+    default:             return f;
+  }
 }
 
 // ---------------------------------------------------------------------------

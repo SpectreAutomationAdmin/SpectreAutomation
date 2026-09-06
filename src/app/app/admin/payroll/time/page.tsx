@@ -16,6 +16,10 @@ import { getActiveClubId } from "@/lib/active-club";
 import { getCurrentUser } from "@/lib/session";
 import { getDepartmentApprovalStatus } from "@/lib/payroll/department-approval";
 import PayrollTimeWorkspace from "./PayrollTimeWorkspace";
+import TimesheetApprovalWorkspace from "./TimesheetApprovalWorkspace";
+import { getScopeReview } from "@/lib/timesheets/approval-scope";
+import { materializeEmployeeTimesheet } from "@/lib/timesheets/service";
+import { ensureTimesheetApprovalWorkItems } from "@/lib/timesheets/orchestration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,13 +27,102 @@ export const dynamic = "force-dynamic";
 export default async function PayrollTimePage({
   searchParams,
 }: {
-  searchParams?: { payPeriodId?: string; departmentId?: string };
+  searchParams?: { payPeriodId?: string; departmentId?: string; scope?: string };
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
   const principal = await getCurrentPrincipal();
   if (!principal || !hasPermission(principal, clubId, "payroll:timesheets:read")) redirect("/app/admin");
+
+  // Payroll-3D-3 — Timesheet-scope manager review path.
+  if (searchParams?.scope === "timesheet"
+      && searchParams?.payPeriodId
+      && searchParams?.departmentId) {
+    // Materialize on-read for every employee who has clock events in
+    // this period. This is the "manager opens the workspace" trigger
+    // per brief §61 — makes the workspace show up-to-date recorded
+    // time without requiring the employee to visit their timesheet
+    // first. Then ensure Work Intake cards are current.
+    const periodRow = await prisma.payrollPayPeriod.findFirst({
+      where: { id: searchParams.payPeriodId, clubId },
+      select: { periodStart: true, periodEnd: true },
+    });
+    if (periodRow) {
+      const activeEmployees = await prisma.timeClockEvent.findMany({
+        where: {
+          clubId,
+          occurredAt: { gte: periodRow.periodStart, lt: new Date(periodRow.periodEnd.getTime() + 2 * 86_400_000) },
+        },
+        distinct: ["employeeId"],
+        select: { employeeId: true },
+      });
+      for (const e of activeEmployees) {
+        await materializeEmployeeTimesheet(clubId, e.employeeId, searchParams.payPeriodId);
+      }
+      await ensureTimesheetApprovalWorkItems(clubId, searchParams.payPeriodId);
+    }
+    const [review, club] = await Promise.all([
+      getScopeReview(clubId, searchParams.payPeriodId, searchParams.departmentId),
+      prisma.club.findUnique({ where: { id: clubId }, select: { name: true, timezone: true } }),
+    ]);
+    const start = review.payPeriod.periodStart.toISOString().slice(0, 10);
+    const endInc = new Date(review.payPeriod.periodEnd.getTime() - 86_400_000).toISOString().slice(0, 10);
+    return (
+      <div className="max-w-[1120px]" data-testid="payroll-time-page">
+        <header className="mb-spectre-6">
+          <div
+            className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+            style={{ color: "var(--spectre-text-muted)" }}
+          >
+            Operations · Payroll · Timesheet approval
+          </div>
+          <h1 className="mt-1 text-spectre-h1 font-semibold" style={{ color: "var(--spectre-text-primary)" }}>
+            {review.departmentName} · Timesheets
+          </h1>
+          <p className="mt-2 text-spectre-body" style={{ color: "var(--spectre-text-secondary)" }}>
+            {club?.name ?? "Your Club"} — review recorded time and pending corrections for this department, then approve the scope for payroll consideration.
+          </p>
+        </header>
+        <TimesheetApprovalWorkspace
+          clubId={clubId}
+          payPeriodId={review.payPeriodId}
+          departmentId={review.departmentId}
+          departmentCode={review.departmentCode}
+          departmentName={review.departmentName}
+          periodLabel={`${start} → ${endInc}`}
+          employees={review.employees}
+          entries={review.entries.map((e) => ({
+            id: e.id, employeeId: e.employeeId,
+            workDateIso: e.workDate.toISOString(),
+            clockInIso: e.clockInAt.toISOString(),
+            clockOutIso: e.clockOutAt.toISOString(),
+            recordedSeconds: e.recordedSeconds, breakSeconds: e.breakSeconds,
+            employmentAssignmentId: e.employmentAssignmentId,
+          }))}
+          pendingCorrections={review.pendingCorrections.map((c) => ({
+            id: c.id, employeeId: c.employeeId,
+            requestType: c.requestType,
+            requestedOccurredAtIso: c.requestedOccurredAt?.toISOString() ?? null,
+            originalClockEventId: c.originalClockEventId,
+            reason: c.reason,
+            createdAtIso: c.createdAt.toISOString(),
+          }))}
+          totalRecordedSeconds={review.totalRecordedSeconds}
+          currentRevision={review.currentRevision}
+          approval={review.approval ? {
+            id: review.approval.id,
+            state: review.approval.state,
+            approvedAtIso: review.approval.approvedAt.toISOString(),
+            approvedByUserId: review.approval.approvedByUserId,
+            approvedRevision: review.approval.approvedRevision,
+          } : null}
+          readiness={review.readiness}
+          clubTimezone={club?.timezone ?? null}
+        />
+      </div>
+    );
+  }
 
   const canWrite = hasPermission(principal, clubId, "payroll:write");
   const canApprove = hasPermission(principal, clubId, "payroll:timesheets:approve");

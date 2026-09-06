@@ -121,6 +121,7 @@ export const ADMIN_SECTIONS: NavSection[] = [
       { href: "/app/admin/payroll/setup", label: "Payroll setup", perm: "payroll:read" },
       { href: "/app/admin/payroll/time", label: "Payroll time", perm: "payroll:timesheets:read" },
       { href: "/app/admin/payroll/process", label: "Payroll processing", perm: "payroll:read" },
+      { href: "/app/admin/payroll/history", label: "Payroll history", perm: "payroll:read" },
       { href: "/app/admin/ops/floor-plans", label: "Floor Plans", perm: "hospitality:floor:view" },
     ],
   },

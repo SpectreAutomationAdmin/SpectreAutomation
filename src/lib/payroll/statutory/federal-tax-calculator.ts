@@ -31,8 +31,35 @@ export interface FederalTaxBracket {
 }
 
 export interface FederalTaxInput {
-  /** Current pay-period gross earnings (I). */
-  grossPay:                Decimal | string | number;
+  /**
+   * T4127 §Federal `I` — periodic taxable remuneration for this pay
+   * period, INCLUDING employer-paid taxable benefits (e.g. group
+   * life, dependent life, employer RRSP taxable benefit) and taxable
+   * cash allowances, and EXCLUDING non-periodic remuneration such
+   * as bonuses / retroactive pay (which have separate T4127 formulas).
+   *
+   * Payroll-3C-3D.3 (2026-09-09) — corrected from the pre-3C-3D.3
+   * value which was `earnings.grossPay` (cash-only). Cash gross and
+   * periodic taxable remuneration differ whenever the employee has
+   * non-cash employer-paid taxable benefits. For Sam Complex this
+   * gap is $4,874.01 − $4,620.83 = $253.18, and using cash gross
+   * under-withheld federal income tax by ~$52 per period.
+   *
+   * Callers should pass `earnings.taxableRemuneration` from
+   * `calculateEarnings()`, which is the frozen periodic taxable
+   * base the calculator computed from the four-base pipeline.
+   */
+  periodicTaxableRemuneration: Decimal | string | number;
+  /**
+   * T4127 §Federal F — deductions from income reported on the T1
+   * return. Payroll-3C-3D (2026-09-09) wires in RRSP contributions
+   * deducted directly through payroll (RRSP_DEDUCTED_AT_SOURCE) here.
+   * Other categories (registered pension plan, union dues, prescribed
+   * zone deductions, other CRA-authorised deductions) may be added
+   * to this sum in later slices — the input is a single Decimal so
+   * the caller composes them.
+   */
+  fThisPay?:               Decimal | string | number;
   /** Sum of employee CPP first-additional + CPP2 for this pay period (F5A). */
   f5aThisPay:              Decimal | string | number;
   /** Per-period base CPP amount for K2 (already cent-rounded by 2b). */
@@ -47,6 +74,20 @@ export interface FederalTaxInput {
   claimZeroFederal:        boolean;
   /** TD1 "no tax withheld" attestation — total income < total claim. */
   totalIncomeLessThanClaim: boolean;
+  /**
+   * Payroll-3C-3D.6 (2026-09-09) — CRA YTD CPP/EI tax-credit basis.
+   *
+   * When present, K2 = federalLowestRate × combinedSelectedBasis
+   * (the CRA year-to-date projected/capped credit basis).
+   *
+   * When absent, K2 falls back to the legacy per-period annualisation
+   * `rate × (baseCppThisPay × P + eiThisPay × P)` — preserved so
+   * existing unit tests continue to run unchanged. Production
+   * (calculation-execute.ts) always passes the YTD basis.
+   */
+  ytdCreditBasis?: {
+    combinedSelectedBasis: Decimal | string | number;
+  };
   federal: {
     brackets:                 FederalTaxBracket[];
     lowestRate:               string;
@@ -109,7 +150,8 @@ function computeBpaf(input: FederalTaxInput, a: Decimal): Decimal {
 export function calculateFederalTax(input: FederalTaxInput): FederalTaxResult {
   const P    = new Decimal(input.periodsPerYear);
   if (P.lte(0)) throw new Error("periodsPerYear must be > 0");
-  const I    = toDecimal(input.grossPay);
+  const I    = toDecimal(input.periodicTaxableRemuneration);
+  const F    = toDecimal(input.fThisPay ?? 0);
   const F5A  = toDecimal(input.f5aThisPay);
   const base = toDecimal(input.baseCppThisPay);
   const ei   = toDecimal(input.eiThisPay);
@@ -120,9 +162,11 @@ export function calculateFederalTax(input: FederalTaxInput): FederalTaxResult {
   // annual TAXABLE income (rate lookup + BPAF phase-out).
   const aStar = I.times(P);
   const f5aAnnual = F5A.times(P);
-  // MVP unsupported inputs (F, F1, HD, F2, U1, F5B) — all zero;
-  // readiness would BLOCK if any applied.
-  const a = I.minus(F5A).times(P);
+  // Payroll-3C-3D (2026-09-09) — F now supported. RRSP contributions
+  // deducted at source (and other T4127 F-category deductions the
+  // caller sums into fThisPay) reduce A pre-annualisation.
+  // F1/HD/F2/U1/F5B remain unsupported and default to zero.
+  const a = I.minus(F).minus(F5A).times(P);
 
   // TD1 "no tax withheld" attestation short-circuit: T3 = 0.
   if (input.totalIncomeLessThanClaim) {
@@ -143,8 +187,13 @@ export function calculateFederalTax(input: FederalTaxInput): FederalTaxResult {
   const tcfOverBpa = nonNegative(claim.minus(bpaf));
   const k1 = rate.times(bpaf).plus(rate.times(tcfOverBpa));
 
-  // K2 — BASE CPP + EI credits, annualised via P.
-  const k2 = rate.times(base.times(P).plus(ei.times(P)));
+  // K2 — CPP base + EI credits. When the CRA YTD basis is supplied
+  // (Payroll-3C-3D.6 standard for production), K2 uses that basis
+  // directly. Otherwise falls back to the legacy per-period
+  // annualisation for backwards test compatibility.
+  const k2 = input.ytdCreditBasis
+    ? rate.times(toDecimal(input.ytdCreditBasis.combinedSelectedBasis))
+    : rate.times(base.times(P).plus(ei.times(P)));
 
   // K3 — MVP zero.
   const k3 = new Decimal(0);

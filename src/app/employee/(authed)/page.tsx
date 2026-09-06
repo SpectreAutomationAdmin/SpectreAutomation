@@ -289,7 +289,7 @@ export default async function EmployeePortalHome() {
     { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOff />, tourTarget: "time-off" },
     { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconForms />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTraining />, tourTarget: "training" },
-    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClock />, tourTarget: "clocking-in-out" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: "/employee/time", icon: <IconClock />, tourTarget: "clocking-in-out" },
   ];
 
   // HR-2C refinement (2026-08-27) — Year-end Tax Forms removed.
@@ -303,7 +303,7 @@ export default async function EmployeePortalHome() {
     { key: "time-off", title: "Time Off", description: "Request time off and view balances", href: null, icon: <IconTimeOffShared size={56} />, tourTarget: "time-off" },
     { key: "documents", title: "Documents", description: "View and manage your documents", href: null, icon: <IconDocumentsShared size={56} />, tourTarget: "documents" },
     { key: "training", title: "Safety & Training", description: "Resources and mandatory training", href: "/employee/safety-training", icon: <IconTrainingShared size={56} />, tourTarget: "training" },
-    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: null, icon: <IconClockShared size={56} />, tourTarget: "clocking-in-out" },
+    { key: "clocking-in-out", title: "Clock In / Out", description: "Record your work hours", href: "/employee/time", icon: <IconClockShared size={56} />, tourTarget: "clocking-in-out" },
   ];
 
   // Club-name for the mobile welcome banner. Uses the same resolved

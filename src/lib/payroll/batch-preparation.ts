@@ -92,6 +92,7 @@ export interface ExceptionView {
   message: string;
   batchEmployeeId: string | null;
   employeeId: string | null;
+  employeeDisplayName: string | null;  // "First Last" — helps the Payroll Admin identify affected people
   recommendedAction: string | null;
   resolvedAt: Date | null;
 }
@@ -390,12 +391,15 @@ async function snapshotEmployee(
   const salaried = compensations.some((c) => (c.cadence ?? "").toUpperCase() === "SALARY");
 
   // Approved unconsumed time for this employee falling in the period.
+  // Payroll-3D-4 — also exclude superseded (stale-freeze) rows so the
+  // §32 unconsumed-stale case doesn't leak into batch consumption.
   const approvedTime = await prisma.payrollApprovedTimeEntry.findMany({
     where: {
       clubId,
       employeeId,
       approvalState: "APPROVED",
       consumedByBatchId: null,
+      supersededByApprovedTimeEntryId: null,
       workDate: { gte: periodStart, lt: periodEnd },
     },
     select: { id: true, hours: true, workDate: true },
@@ -812,6 +816,35 @@ export async function preparePayrollBatch(
         });
       }
 
+      // Payroll-3C-2 (2026-09-07) — snapshot every active recurring
+      // component assignment BEFORE emitting exceptions so any
+      // component-side warnings (PERCENT_UNSUPPORTED, mid-period
+      // change) join the employee's other exceptions in one place.
+      const { snapshotEmployeeComponentsForBatch } = await import("./components-snapshot");
+      const snap = await snapshotEmployeeComponentsForBatch({
+        clubId,
+        batchId: batch.id,
+        batchEmployeeId: be.id,
+        employeeId: s.employeeId,
+        periodStart: pre.periodStart,
+        periodEnd: pre.periodEnd,
+      }, tx);
+      for (const w of snap.warnings) {
+        await tx.payrollBatchException.create({
+          data: {
+            clubId,
+            batchId: batch.id,
+            batchEmployeeId: be.id,
+            employeeId: s.employeeId,
+            severity: "WARNING",
+            code: w.code,
+            message: `${w.componentCode}: ${w.message}`,
+            recommendedAction: null,
+          },
+        });
+        warningCount++;
+      }
+
       // Exceptions.
       for (const e of s.exceptions) {
         await tx.payrollBatchException.create({
@@ -950,6 +983,23 @@ export async function getPreparedBatch(
     },
   });
   if (!batch) return null;
+
+  // Enrich exceptions with employee display names — the Payroll Admin
+  // needs to know WHOSE record is broken. We do a single scoped
+  // lookup rather than an N+1 include on WorkIntakeException.
+  const exceptionEmployeeIds = Array.from(new Set(
+    batch.exceptions.map((x) => x.employeeId).filter((v): v is string => !!v),
+  ));
+  const employeeNameById = new Map<string, string>();
+  if (exceptionEmployeeIds.length > 0) {
+    const rows = await prisma.employee.findMany({
+      where: { id: { in: exceptionEmployeeIds } },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    for (const r of rows) {
+      employeeNameById.set(r.id, `${r.firstName} ${r.lastName}`.trim());
+    }
+  }
   return {
     id: batch.id,
     clubId: batch.clubId,
@@ -1002,6 +1052,7 @@ export async function getPreparedBatch(
       message: x.message,
       batchEmployeeId: x.batchEmployeeId,
       employeeId: x.employeeId,
+      employeeDisplayName: x.employeeId ? employeeNameById.get(x.employeeId) ?? null : null,
       recommendedAction: x.recommendedAction,
       resolvedAt: x.resolvedAt,
     })),

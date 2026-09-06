@@ -275,6 +275,11 @@ export interface UpdateEmployeeInput {
   employmentType?: string | null;
   employeeLifecycle?: string;
   compensationType?: string;
+  // Payroll-3D-1A (2026-09-05) — Timekeeping method configuration.
+  // One of: CLOCK_REQUIRED | MANUAL_TIMESHEET | SCHEDULE_DERIVED |
+  // NO_TIME_ENTRY_REQUIRED. Validated server-side against
+  // TIMEKEEPING_METHODS; invalid values throw ValidationError.
+  timekeepingMethod?: string;
   payrollIdExternal?: string | null;
   // HR mobile-hotfix (2026-08-30) §1 — admin-side home address writes.
   // Admin optionally captures address at hire so the employee sees a
@@ -319,6 +324,19 @@ export async function updateEmployee(
   if (input.compensationType != null && !(COMPENSATION_TYPES as readonly string[]).includes(input.compensationType)) {
     throw new ValidationError([{ path: "compensationType", message: `must be one of ${COMPENSATION_TYPES.join(", ")}` }]);
   }
+  // Payroll-3D-1A — Timekeeping method server-side validation.
+  const TIMEKEEPING_METHODS = [
+    "NO_TIME_ENTRY_REQUIRED",
+    "CLOCK_REQUIRED",
+    "MANUAL_TIMESHEET",
+    "SCHEDULE_DERIVED",
+  ] as const;
+  if (input.timekeepingMethod != null && !(TIMEKEEPING_METHODS as readonly string[]).includes(input.timekeepingMethod)) {
+    throw new ValidationError([{
+      path: "timekeepingMethod",
+      message: `must be one of ${TIMEKEEPING_METHODS.join(", ")}`,
+    }]);
+  }
 
   const data: Record<string, unknown> = {};
   if (input.firstName !== undefined) data.firstName = input.firstName.trim();
@@ -352,6 +370,8 @@ export async function updateEmployee(
   if (input.employmentType !== undefined) data.employmentType = input.employmentType;
   if (input.employeeLifecycle !== undefined) data.employeeLifecycle = input.employeeLifecycle;
   if (input.compensationType !== undefined) data.compensationType = input.compensationType;
+  // Payroll-3D-1A — timekeeping method persist.
+  if (input.timekeepingMethod !== undefined) data.timekeepingMethod = input.timekeepingMethod;
   if (input.payrollIdExternal !== undefined) data.payrollIdExternal = input.payrollIdExternal;
   // HR mobile-hotfix (2026-08-30) §1 — admin home-address writes.
   if (input.homeAddressLine1 !== undefined) data.homeAddressLine1 = input.homeAddressLine1;
@@ -376,12 +396,16 @@ export async function updateEmployee(
       lastName: employee.lastName,
       employeeLifecycle: employee.employeeLifecycle,
       compensationType: employee.compensationType,
+      // Payroll-3D-1A — audit trail for timekeeping-method changes
+      // (required by §6 of the 3D-1A brief). No sensitive data.
+      timekeepingMethod: employee.timekeepingMethod,
     },
     after: {
       firstName: updated.firstName,
       lastName: updated.lastName,
       employeeLifecycle: updated.employeeLifecycle,
       compensationType: updated.compensationType,
+      timekeepingMethod: updated.timekeepingMethod,
     },
   });
 
@@ -960,6 +984,8 @@ export async function getEmployee(
     onboardingState: employee.onboardingState,
     payrollReadiness: employee.payrollReadiness,
     compensationType: employee.compensationType,
+    // Payroll-3D-1A — surface timekeeping method to the admin profile.
+    timekeepingMethod: employee.timekeepingMethod,
     memberId: employee.memberId,
     managerEmployeeId: employee.managerEmployeeId,
     profilePhotoDocumentId: employee.profilePhotoDocumentId,

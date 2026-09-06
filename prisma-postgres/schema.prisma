@@ -155,6 +155,13 @@ model Club {
   timesheets                     Timesheet[]
   timesheetEntries               TimesheetEntry[]
   timeClockEvents                TimeClockEvent[]
+  // Payroll-3D-2 back-relations.
+  payrollTimesheets              PayrollTimesheet[]
+  payrollTimesheetEntries        PayrollTimesheetEntry[]
+  payrollTimesheetEntryClockEvents PayrollTimesheetEntryClockEvent[]
+  timeClockCorrectionRequests    TimeClockCorrectionRequest[]
+  // Payroll-3D-3 back-relation.
+  departmentResponsibilities     DepartmentResponsibility[]
   payrollRuns                    PayrollRun[]
   payrollLines                   PayrollLine[]
   payrollRemittances             PayrollRemittance[]
@@ -482,10 +489,18 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3D-4.
+  payrollTimeAdjustments             PayrollTimeAdjustment[]
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
   employeeCppDisabilities            EmployeeCppDisability[]
+  payrollGlAccountingProfile         PayrollGlAccountingProfile?
+  // Payroll-3C-1 (2026-09-07) — tenant-scoped Payroll Component catalogue.
+  payrollComponents                  PayrollComponent[]
+  employeeRecurringPayrollComponents EmployeeRecurringPayrollComponent[]
+  payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
+  payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
   // TA-1B — Tenant Administration back-relations.
   userClubProfiles                   UserClubProfile[]
@@ -689,6 +704,9 @@ model User {
   revokedAdminInvitations     AdminInvitation[]                   @relation("AdminInvitationRevokedBy")
   activatedAdminInvitations   AdminInvitation[]                   @relation("AdminInvitationActivatedUser")
   createdOrganizationalPositions OrganizationalPosition[]         @relation("OrganizationalPositionCreatedBy")
+
+  // Payroll-3D-3.
+  departmentResponsibilities  DepartmentResponsibility[]        @relation("UserDepartmentResponsibilities")
 }
 
 // -------------------------------------------------------------------
@@ -2016,8 +2034,32 @@ model Department {
   // TA-1C — Organizational positions.
   organizationalPositions OrganizationalPosition[] @relation("OrganizationalPositionDepartment")
 
+  // Payroll-3D-3.
+  responsibilities   DepartmentResponsibility[] @relation("DepartmentResponsibilities")
+
+  // Payroll-3D-3A — back-relation for assignments.
+  employmentAssignmentsIn EmployeeEmploymentAssignment[] @relation("AssignmentDepartment")
+
   @@unique([clubId, code])
   @@index([clubId, isActive])
+}
+
+// Payroll-3D-3 (2026-09-05) — see prisma/schema.prisma for full doc block.
+model DepartmentResponsibility {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  departmentId       String
+  department         Department @relation("DepartmentResponsibilities", fields: [departmentId], references: [id])
+  responsibilityKey  String
+  userId             String
+  user               User     @relation("UserDepartmentResponsibilities", fields: [userId], references: [id])
+  assignedAt         DateTime @default(now())
+  assignedByUserId   String?
+
+  @@unique([clubId, departmentId, responsibilityKey])
+  @@index([clubId, responsibilityKey])
+  @@index([userId])
 }
 
 model CostCenter {
@@ -2182,6 +2224,22 @@ model Account {
   posSaleLines         POSSaleLine[]         @relation("POSSaleLineRevenue")
   // Phase 9
   tournamentRevenue    Tournament[]          @relation("TournamentRevenue")
+
+  // Payroll MVP posting (2026-09-05) — Account back-relations for
+  // the per-Club PayrollGlAccountingProfile mapping.
+  payrollGlSalaryExpense         PayrollGlAccountingProfile[] @relation("PayrollGlSalaryExpense")
+  payrollGlEmployerCppExpense    PayrollGlAccountingProfile[] @relation("PayrollGlEmployerCppExpense")
+  payrollGlEmployerEiExpense     PayrollGlAccountingProfile[] @relation("PayrollGlEmployerEiExpense")
+  payrollGlNetPayPayable         PayrollGlAccountingProfile[] @relation("PayrollGlNetPayPayable")
+  payrollGlCppPayable            PayrollGlAccountingProfile[] @relation("PayrollGlCppPayable")
+  payrollGlEiPayable             PayrollGlAccountingProfile[] @relation("PayrollGlEiPayable")
+  payrollGlFederalTaxPayable     PayrollGlAccountingProfile[] @relation("PayrollGlFederalTaxPayable")
+  payrollGlProvincialTaxPayable  PayrollGlAccountingProfile[] @relation("PayrollGlProvincialTaxPayable")
+  // Payroll-3C-1 (2026-09-07) — optional per-component GL account.
+  payrollComponentGlAccount        PayrollComponent[] @relation("PayrollComponentGlAccount")
+  // Payroll-3C-6 (2026-09-05) — component-aware GL back-relations.
+  payrollComponentExpenseAccount   PayrollComponent[] @relation("PayrollComponentExpenseAccount")
+  payrollComponentLiabilityAccount PayrollComponent[] @relation("PayrollComponentLiabilityAccount")
 
   @@unique([clubId, accountNumber])
   @@index([clubId, isActive])
@@ -2362,6 +2420,7 @@ model JournalEntry {
   privateEventFinalJE    PrivateEventBooking[]    @relation("PrivateEventFinalJE")
   lessonAccrualJE        LessonBooking[]          @relation("LessonAccrualJE")
   payrollRunJE           PayrollRun[]             @relation("PayrollRunJE")
+  payrollBatchGL         PayrollBatch[]           @relation("PayrollBatchGL")
   assetAcquisitionJE     CapitalAsset[]           @relation("AssetAcquisitionJE")
   assetDeprJE            AssetDepreciationEntry[] @relation("AssetDeprJE")
   assetDisposalJE        AssetDisposal[]          @relation("AssetDisposalJE")
@@ -3542,6 +3601,10 @@ model Employee {
   onboardingState        String            @default("DRAFT")
   payrollReadiness       String            @default("NOT_READY")
   compensationType       String            @default("HOURLY")
+  // Payroll-3D-1 (2026-09-05) — see prisma/schema.prisma.
+  timekeepingMethod      String            @default("NO_TIME_ENTRY_REQUIRED")
+  // Payroll-3D-1A (2026-09-05) — see prisma/schema.prisma.
+  timekeepingStateVersion Int              @default(0)
   // LEGACY (HR-1): canonical source is EmployeeCompensation. HR
   // compensation writes shadow the currently-active rate here in the
   // same transaction to preserve existing PayrollLine.grossPay
@@ -3606,6 +3669,10 @@ model Employee {
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
   employmentAssignments      EmployeeEmploymentAssignment[]
   allowances                 EmployeeAllowance[]
+  // Payroll-3C-1 (2026-09-07) — recurring Payroll Component assignments.
+  recurringPayrollComponents EmployeeRecurringPayrollComponent[]
+  // Payroll-3C-2 (2026-09-07) — batch component snapshots.
+  payrollBatchComponentSnapshots PayrollBatchComponentSnapshot[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -3614,6 +3681,12 @@ model Employee {
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
+  // Payroll-3D-2 back-relations.
+  payrollTimesheets          PayrollTimesheet[]           @relation("EmployeePayrollTimesheets")
+  payrollTimesheetEntries    PayrollTimesheetEntry[]      @relation("EmployeePayrollTimesheetEntries")
+  timeClockCorrectionRequests TimeClockCorrectionRequest[] @relation("EmployeeCorrectionRequests")
+  // Payroll-3D-4.
+  payrollTimeAdjustments     PayrollTimeAdjustment[]
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
   cppDisabilities            EmployeeCppDisability[]
@@ -3750,20 +3823,127 @@ model TimesheetEntry {
 }
 
 // kind: IN | OUT | BREAK_START | BREAK_END
+// Payroll-3D-1 (2026-09-05) — see prisma/schema.prisma for full doc.
 model TimeClockEvent {
-  id         String   @id @default(cuid())
-  clubId     String
-  club       Club     @relation(fields: [clubId], references: [id])
-  employeeId String
-  employee   Employee @relation(fields: [employeeId], references: [id])
-  kind       String
-  occurredAt DateTime
-  source     String   @default("MANUAL")
-  lat        Float?
-  lng        Float?
-  notes      String?
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation(fields: [employeeId], references: [id])
+  kind                   String
+  occurredAt             DateTime
+  source                 String   @default("MANUAL")
+  employmentAssignmentId String?
+  employmentAssignment   EmployeeEmploymentAssignment? @relation("TimeClockEventAssignment", fields: [employmentAssignmentId], references: [id])
+  lat                    Float?
+  lng                    Float?
+  notes                  String?
+  createdAt              DateTime @default(now())
+
+  // Payroll-3D-3 — supersession.
+  supersededByEventId    String?
+  supersededByEvent      TimeClockEvent?  @relation("TimeClockEventSupersession", fields: [supersededByEventId], references: [id])
+  supersedes             TimeClockEvent[] @relation("TimeClockEventSupersession")
 
   @@index([clubId, employeeId, occurredAt])
+  @@index([employeeId, kind, occurredAt])
+  @@index([employmentAssignmentId, occurredAt])
+  @@index([supersededByEventId])
+  timesheetEntryLinks           PayrollTimesheetEntryClockEvent[]
+  originalOfCorrectionRequests  TimeClockCorrectionRequest[] @relation("CorrectionRequestOriginal")
+  resolutionOfCorrectionRequests TimeClockCorrectionRequest[] @relation("CorrectionRequestResolution")
+}
+
+// Payroll-3D-2 (2026-09-05) — see prisma/schema.prisma for full docs.
+model PayrollTimesheet {
+  id           String   @id @default(cuid())
+  clubId       String
+  club         Club     @relation(fields: [clubId], references: [id])
+  employeeId   String
+  employee     Employee @relation("EmployeePayrollTimesheets", fields: [employeeId], references: [id])
+  payPeriodId  String
+  payPeriod    PayrollPayPeriod @relation("PayPeriodPayrollTimesheets", fields: [payPeriodId], references: [id])
+  status       String   @default("OPEN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  entries PayrollTimesheetEntry[]
+
+  @@unique([clubId, employeeId, payPeriodId])
+  @@index([clubId, payPeriodId, status])
+  @@index([clubId, status])
+}
+
+model PayrollTimesheetEntry {
+  id                     String @id @default(cuid())
+  clubId                 String
+  club                   Club @relation(fields: [clubId], references: [id])
+  timesheetId            String
+  timesheet              PayrollTimesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+  employeeId             String
+  employee               Employee @relation("EmployeePayrollTimesheetEntries", fields: [employeeId], references: [id])
+  workDate               DateTime
+  employmentAssignmentId String?
+  employmentAssignment   EmployeeEmploymentAssignment? @relation("AssignmentTimesheetEntries", fields: [employmentAssignmentId], references: [id])
+  earningClassification  String  @default("REGULAR")
+  clockInAt              DateTime
+  clockOutAt             DateTime
+  recordedSeconds        Int
+  breakSeconds           Int  @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  provenance PayrollTimesheetEntryClockEvent[]
+  // Payroll-3D-4 back-relations.
+  frozenAs        PayrollApprovedTimeEntry?  @relation("TimesheetEntryFrozenAs")
+  timeAdjustments PayrollTimeAdjustment[]    @relation("TimesheetEntryAdjustments")
+
+  @@unique([timesheetId, clockInAt])
+  @@index([timesheetId, workDate])
+  @@index([employmentAssignmentId, workDate])
+  @@index([clubId, employeeId, workDate])
+}
+
+model PayrollTimesheetEntryClockEvent {
+  id                String @id @default(cuid())
+  clubId            String
+  club              Club @relation(fields: [clubId], references: [id])
+  timesheetEntryId  String
+  timesheetEntry    PayrollTimesheetEntry @relation(fields: [timesheetEntryId], references: [id], onDelete: Cascade)
+  clockEventId      String
+  clockEvent        TimeClockEvent @relation(fields: [clockEventId], references: [id])
+  role              String
+  createdAt         DateTime @default(now())
+
+  @@unique([timesheetEntryId, clockEventId])
+  @@index([clockEventId])
+}
+
+model TimeClockCorrectionRequest {
+  id                     String @id @default(cuid())
+  clubId                 String
+  club                   Club @relation(fields: [clubId], references: [id])
+  employeeId             String
+  employee               Employee @relation("EmployeeCorrectionRequests", fields: [employeeId], references: [id])
+  originalClockEventId   String?
+  originalClockEvent     TimeClockEvent? @relation("CorrectionRequestOriginal", fields: [originalClockEventId], references: [id])
+  requestType            String
+  requestedOccurredAt    DateTime?
+  employmentAssignmentId String?
+  reason                 String
+  status                 String  @default("PENDING")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  reviewedAt             DateTime?
+  reviewedByUserId       String?
+  // Payroll-3D-3 — optional manager rationale at review time.
+  reviewerNote           String?
+  resolutionClockEventId String?
+  resolutionClockEvent   TimeClockEvent? @relation("CorrectionRequestResolution", fields: [resolutionClockEventId], references: [id])
+
+  @@unique([employeeId, requestType, originalClockEventId, status])
+  @@index([clubId, employeeId, status])
+  @@index([status, createdAt])
 }
 
 // status: DRAFT | APPROVED | POSTED | VOIDED
@@ -10483,6 +10663,8 @@ model EmployeeEmploymentAssignment {
   employee          Employee  @relation(fields: [employeeId], references: [id])
   role              String
   departmentId      String?
+  // Payroll-3D-3A additive relation (see prisma/schema.prisma).
+  department        Department? @relation("AssignmentDepartment", fields: [departmentId], references: [id])
   positionId        String?
   managerEmployeeId String?
   employmentType    String
@@ -10498,6 +10680,10 @@ model EmployeeEmploymentAssignment {
   // Payroll-3A (2026-08-28) — role-specific earnings + time entries.
   payrollBatchEarnings PayrollBatchEarning[]
   payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
+  // Payroll-3D-1 — clock events optionally reference the assignment.
+  timeClockEvents            TimeClockEvent[] @relation("TimeClockEventAssignment")
+  // Payroll-3D-2 — timesheet entries reference the assignment.
+  payrollTimesheetEntries    PayrollTimesheetEntry[] @relation("AssignmentTimesheetEntries")
 
   @@index([clubId, employeeId, effectiveFrom])
   @@index([employeeId, role])
@@ -11545,19 +11731,49 @@ model PayrollClubConfig {
   clubId                 String   @unique
   club                   Club     @relation(fields: [clubId], references: [id])
   enabled                Boolean  @default(false)
-  country                String   @default("CA") // ISO 3166-1 alpha-2
-  provinceOfEmployment   String?  // 2-char CA province (AB / BC / ON / etc.)
-  defaultPayFrequency    String   @default("BIWEEKLY") // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
-  defaultPaymentMethod   String   @default("DIRECT_DEPOSIT") // DIRECT_DEPOSIT | CHEQUE | OTHER
-  payrollAdminUserId     String?  // designated primary Payroll admin (optional)
-  controllerUserId       String?  // designated Controller for approval routing (optional)
-  glAccountingProfileId  String?  // future GL integration seam (not resolved in 3A)
-  paystubNumberPrefix    String?  // optional prefix for future paystub numbering
-  paystubNumberSequence  Int      @default(0) // reserved for future paystub numbering
+  country                String   @default("CA")
+  provinceOfEmployment   String?
+  defaultPayFrequency    String   @default("BIWEEKLY")
+  defaultPaymentMethod   String   @default("DIRECT_DEPOSIT")
+  payrollAdminUserId     String?
+  controllerUserId       String?
+  glAccountingProfileId  String?
+  glAccountingProfile    PayrollGlAccountingProfile? @relation(fields: [glAccountingProfileId], references: [id])
+  paystubNumberPrefix    String?
+  paystubNumberSequence  Int      @default(0)
+  // Payroll-3D-4 (2026-09-05).
+  payrollCutoffLeadDays  Int?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   @@index([clubId])
+}
+
+// Payroll MVP posting (2026-09-05) — see prisma/schema.prisma for docs.
+model PayrollGlAccountingProfile {
+  id                              String   @id @default(cuid())
+  clubId                          String   @unique
+  club                            Club     @relation(fields: [clubId], references: [id])
+  salaryExpenseAccountId          String
+  salaryExpenseAccount            Account  @relation("PayrollGlSalaryExpense", fields: [salaryExpenseAccountId], references: [id])
+  employerCppExpenseAccountId     String
+  employerCppExpenseAccount       Account  @relation("PayrollGlEmployerCppExpense", fields: [employerCppExpenseAccountId], references: [id])
+  employerEiExpenseAccountId      String
+  employerEiExpenseAccount        Account  @relation("PayrollGlEmployerEiExpense", fields: [employerEiExpenseAccountId], references: [id])
+  netPayPayableAccountId          String
+  netPayPayableAccount            Account  @relation("PayrollGlNetPayPayable", fields: [netPayPayableAccountId], references: [id])
+  cppPayableAccountId             String
+  cppPayableAccount               Account  @relation("PayrollGlCppPayable", fields: [cppPayableAccountId], references: [id])
+  eiPayableAccountId              String
+  eiPayableAccount                Account  @relation("PayrollGlEiPayable", fields: [eiPayableAccountId], references: [id])
+  federalTaxPayableAccountId      String
+  federalTaxPayableAccount        Account  @relation("PayrollGlFederalTaxPayable", fields: [federalTaxPayableAccountId], references: [id])
+  provincialTaxPayableAccountId   String
+  provincialTaxPayableAccount     Account  @relation("PayrollGlProvincialTaxPayable", fields: [provincialTaxPayableAccountId], references: [id])
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
+
+  clubConfigs                     PayrollClubConfig[]
 }
 
 // A pay group is the scheduling + membership boundary for payroll
@@ -11635,6 +11851,11 @@ model PayrollPayPeriod {
 
   batches       PayrollBatch[]
   departmentTimeApprovals PayrollDepartmentTimeApproval[]
+  // Payroll-3D-2 back-relation.
+  payrollTimesheets       PayrollTimesheet[] @relation("PayPeriodPayrollTimesheets")
+  // Payroll-3D-4 back-relations.
+  timeAdjustments         PayrollTimeAdjustment[] @relation("PayPeriodTimeAdjustments")
+  targetOfTimeAdjustments PayrollTimeAdjustment[] @relation("PayPeriodTargetTimeAdjustments")
 
   @@unique([clubId, payGroupId, taxYear, sequenceInYear])
   @@unique([clubId, payGroupId, periodStart])
@@ -11682,6 +11903,9 @@ model PayrollBatch {
   calculationVersion    Int       @default(0)
   algorithmVersion      String?
   packageChecksum       String?
+  // Payroll MVP posting (2026-09-05) — see prisma/schema.prisma.
+  glJournalEntryId      String?    @unique
+  glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -11691,6 +11915,7 @@ model PayrollBatch {
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+  componentSnapshots    PayrollBatchComponentSnapshot[]
   exceptions            PayrollBatchException[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
@@ -11778,6 +12003,32 @@ model PayrollOpeningBalance {
 
   @@index([clubId, employeeId, taxYear, status])
   @@index([clubId, taxYear, status])
+  componentOpenings      PayrollOpeningBalanceComponent[]
+}
+
+// Payroll-3C-5 (2026-09-09) — per-Component opening YTD row.
+// See prisma/schema.prisma for the full doc block.
+model PayrollOpeningBalanceComponent {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  openingBalanceId       String
+  openingBalance         PayrollOpeningBalance @relation(fields: [openingBalanceId], references: [id], onDelete: Cascade)
+  sourceComponentId      String?
+  sourceComponent        PayrollComponent? @relation(fields: [sourceComponentId], references: [id])
+  componentCode          String
+  displayName            String
+  category               String
+  side                   String
+  cashEffect             String
+  ytdAmount              Decimal @default(0)
+  ytdQuantity            Decimal?
+  notes                  String?
+  createdAt              DateTime @default(now())
+
+  @@unique([openingBalanceId, componentCode])
+  @@index([clubId, componentCode])
+  @@index([openingBalanceId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation
@@ -11882,6 +12133,7 @@ model PayrollBatchEmployee {
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
   allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  componentSnapshots PayrollBatchComponentSnapshot[]
   exceptions         PayrollBatchException[]
 
   @@unique([batchId, employeeId])
@@ -12048,6 +12300,141 @@ model PayrollBatchAllowanceSnapshot {
   @@index([clubId, batchId])
 }
 
+// ---------------------------------------------------------------------
+// Payroll-3C-1 (2026-09-07) — Payroll Component catalogue (see
+// prisma/schema.prisma for the full doc block).
+// ---------------------------------------------------------------------
+model PayrollComponent {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  code                  String
+  displayName           String
+  description           String?
+  category              String
+  side                  String
+  // Payroll-3C-2 (2026-09-07) — replaces isCash. See prisma/schema.prisma.
+  cashEffect            String
+  statutoryTreatmentSource String   @default("CUSTOM")
+  // Payroll-3C-3C (2026-09-09) — SPECTRE_LIBRARY provenance.
+  statutoryRuleKey     String?
+  statutoryRuleVariant String?
+  // Payroll-3C-3D (2026-09-09) — T4127 tax-formula deduction input.
+  taxFormulaDeductionType String?
+  // Payroll-3C-3 (2026-09-08) — directional statutory effects. See prisma/schema.prisma.
+  taxableEffect         String  @default("NONE")
+  cppPensionableEffect  String  @default("NONE")
+  eiInsurableEffect     String  @default("NONE")
+  calculationMethod     String
+  eligibleEarningsBase  String?
+  glAccountId           String?
+  glAccount             Account? @relation("PayrollComponentGlAccount", fields: [glAccountId], references: [id])
+  // Payroll-3C-6 (2026-09-05) — see prisma/schema.prisma for detail.
+  expenseAccountId      String?
+  expenseAccount        Account? @relation("PayrollComponentExpenseAccount",   fields: [expenseAccountId],   references: [id])
+  liabilityAccountId    String?
+  liabilityAccount      Account? @relation("PayrollComponentLiabilityAccount", fields: [liabilityAccountId], references: [id])
+  displaySection        String
+  displayOrder          Int      @default(0)
+  active                Boolean  @default(true)
+  notes                 String?
+  createdByUserId       String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  assignments EmployeeRecurringPayrollComponent[]
+  batchSnapshots PayrollBatchComponentSnapshot[]
+  openingBalanceRows PayrollOpeningBalanceComponent[]
+
+  @@unique([clubId, code])
+  @@index([clubId, category, active])
+}
+
+model EmployeeRecurringPayrollComponent {
+  id              String   @id @default(cuid())
+  clubId          String
+  club            Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId      String
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  componentId     String
+  component       PayrollComponent @relation(fields: [componentId], references: [id])
+  amount          Decimal?
+  percentBps      Int?
+  effectiveFrom   DateTime
+  effectiveTo     DateTime?
+  active          Boolean  @default(true)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([clubId, employeeId, effectiveFrom])
+  @@index([componentId])
+
+  snapshots PayrollBatchComponentSnapshot[]
+}
+
+// Payroll-3C-2 (2026-09-07) — see prisma/schema.prisma for full doc.
+model PayrollBatchComponentSnapshot {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id])
+  batchId               String
+  batch                 PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId       String
+  batchEmployee         PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId            String
+  employee              Employee @relation(fields: [employeeId], references: [id])
+  sourceComponentId     String
+  sourceComponent       PayrollComponent @relation(fields: [sourceComponentId], references: [id])
+  // Payroll-3C-4 (2026-09-09) — see prisma/schema.prisma.
+  sourceAssignmentId    String?
+  sourceAssignment      EmployeeRecurringPayrollComponent? @relation(fields: [sourceAssignmentId], references: [id])
+  provenance            String  @default("RECURRING_EMPLOYEE_SETUP")
+  enteredByUserId       String?
+  reason                String?
+  componentCode         String
+  displayName           String
+  category              String
+  side                  String
+  displaySection        String
+  displayOrder          Int      @default(0)
+  cashEffect            String
+  // Payroll-3C-3 — directional statutory effects. See prisma/schema.prisma.
+  taxableEffect         String  @default("NONE")
+  cppPensionableEffect  String  @default("NONE")
+  eiInsurableEffect     String  @default("NONE")
+  calculationMethod     String
+  statutoryTreatmentSource String  @default("CUSTOM")
+  // Payroll-3C-3C (2026-09-09) — frozen SPECTRE_LIBRARY provenance.
+  statutoryRuleKey             String?
+  statutoryRuleVariant         String?
+  statutoryRuleVersion         String?
+  statutoryRuleSourceAuthority String?
+  statutoryRuleSourceTitle     String?
+  statutoryRuleSourceReference String?
+  // Payroll-3C-3D (2026-09-09) — frozen tax-formula deduction stamp.
+  taxFormulaDeductionType String?
+  resolvedAmount        Decimal?
+  sourcePercentBps      Int?
+  sourceEffectiveFrom   DateTime
+  sourceEffectiveTo     DateTime?
+  // Payroll-3C-3 — percentage-math provenance.
+  eligibleEarningsBase  String?
+  eligibleEarningsAmount Decimal?
+  warningCode           String?
+  warningMessage        String?
+  // Payroll-3C-6 (2026-09-05) — frozen GL mapping. See prisma/schema.prisma.
+  expenseAccountIdSnapshot   String?
+  liabilityAccountIdSnapshot String?
+  createdAt             DateTime @default(now())
+
+  @@index([batchEmployeeId, sourceAssignmentId])
+  @@index([clubId, batchId])
+  @@index([componentCode])
+  @@index([batchEmployeeId, provenance])
+}
+
 // Payroll-3B-3 (2026-08-28) — canonical department-level approval
 // of a Pay Period. See prisma/schema.prisma for the full doc block.
 model PayrollDepartmentTimeApproval {
@@ -12058,9 +12445,12 @@ model PayrollDepartmentTimeApproval {
   payPeriod            PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
   departmentId         String
   department           Department @relation("DepartmentPayrollTimeApprovals", fields: [departmentId], references: [id])
+  // Payroll-3D-3 — state extended with REVIEW_REQUIRED for revision drift.
   state                String   @default("APPROVED")
   approvedAt           DateTime
   approvedByUserId     String
+  // Payroll-3D-3 — revision the approver attested to (see prisma/schema.prisma).
+  approvedRevision     String?
   reopenedAt           DateTime?
   reopenedByUserId     String?
   reopenReason         String?
@@ -12068,6 +12458,9 @@ model PayrollDepartmentTimeApproval {
   notes                String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
+
+  // Payroll-3D-4 back-relation.
+  frozenTimeEntries    PayrollApprovedTimeEntry[] @relation("ApprovalFrozenEntries")
 
   @@unique([clubId, payPeriodId, departmentId])
   @@index([clubId, payPeriodId])
@@ -12102,12 +12495,58 @@ model PayrollApprovedTimeEntry {
   consumedByBatchId      String?
   consumedByBatchEmployeeId String?
   notes                  String?
+  // Payroll-3D-4 (2026-09-05) — see prisma/schema.prisma for doc.
+  payrollTimesheetEntryId String?  @unique
+  payrollTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryFrozenAs", fields: [payrollTimesheetEntryId], references: [id])
+  sourceApprovalId        String?
+  sourceApproval          PayrollDepartmentTimeApproval? @relation("ApprovalFrozenEntries", fields: [sourceApprovalId], references: [id])
+  sourceApprovalRevision  String?
+  supersededByApprovedTimeEntryId String?
+  supersededByApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("PayrollApprovedTimeEntrySupersession", fields: [supersededByApprovedTimeEntryId], references: [id])
+  supersedes                      PayrollApprovedTimeEntry[] @relation("PayrollApprovedTimeEntrySupersession")
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
   batchEarnings PayrollBatchEarning[]
+  timeAdjustments PayrollTimeAdjustment[] @relation("AdjustmentOriginalApprovedTimeEntry")
 
   @@index([clubId, employeeId, workDate])
   @@index([clubId, approvalState, workDate])
   @@index([employmentAssignmentId, workDate])
+  @@index([supersededByApprovedTimeEntryId])
+  @@index([sourceApprovalId])
+}
+
+// Payroll-3D-4 (2026-09-05) — see prisma/schema.prisma for full doc.
+model PayrollTimeAdjustment {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  employeeId           String
+  employee             Employee @relation(fields: [employeeId], references: [id])
+  employmentAssignmentId String?
+  payPeriodId          String
+  payPeriod            PayrollPayPeriod @relation("PayPeriodTimeAdjustments", fields: [payPeriodId], references: [id])
+  targetPayPeriodId    String?
+  targetPayPeriod      PayrollPayPeriod? @relation("PayPeriodTargetTimeAdjustments", fields: [targetPayPeriodId], references: [id])
+  sourceTimesheetEntryId String?
+  sourceTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryAdjustments", fields: [sourceTimesheetEntryId], references: [id])
+  originalApprovedTimeEntryId String?
+  originalApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("AdjustmentOriginalApprovedTimeEntry", fields: [originalApprovedTimeEntryId], references: [id])
+  reason               String
+  differenceHours      Decimal
+  earningClassification String  @default("REGULAR")
+  status               String   @default("OPEN")
+  createdByUserId      String?
+  createdAt            DateTime @default(now())
+  resolvedAt           DateTime?
+  resolvedByUserId     String?
+  resolutionType       String?
+  notes                String?
+  updatedAt            DateTime @updatedAt
+
+  @@index([clubId, payPeriodId, status])
+  @@index([clubId, targetPayPeriodId])
+  @@index([sourceTimesheetEntryId])
+  @@index([originalApprovedTimeEntryId])
 }

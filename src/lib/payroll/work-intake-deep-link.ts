@@ -13,7 +13,10 @@
 export type PayrollWorkSubtype =
   | "PAYROLL_ADMIN_PROCESSING"
   | "PAYROLL_REVIEW"
-  | "PAYROLL_FINAL_APPROVAL";
+  | "PAYROLL_FINAL_APPROVAL"
+  // Payroll-3D-3 — manager timesheet approval scope + config-gap card.
+  | "TIMESHEET_APPROVAL"
+  | "TIMESHEET_APPROVAL_CONFIG_GAP";
 
 export interface PayrollDeepLink {
   href:  string;
@@ -40,14 +43,49 @@ export function resolvePayrollWorkIntakeDeepLink(
         label: "Review payroll",
       };
     case "PAYROLL_REVIEW":
-    case "PAYROLL_ADMIN_PROCESSING":
+      // PAYROLL_REVIEW originates from a materialised batch — referenceId
+      // is a batchId. Pass as ?batchId so the processing page resolves
+      // the batch and its pay period together.
       return {
-        // Batch context lives on the processing surface. The
-        // process page already accepts `?batchId=` and `?payPeriodId=`
-        // deep-link params.
         href:  `/app/admin/payroll/process?batchId=${encodeURIComponent(referenceId)}`,
         label: "Open payroll processing",
       };
+    case "PAYROLL_ADMIN_PROCESSING":
+      // PAYROLL_ADMIN_PROCESSING originates from a pay period — referenceId
+      // is a payPeriodId. Pass as ?payPeriodId so the processing page
+      // pre-selects the correct period (never defaults to the latest
+      // period in the dropdown, which for a full 24-period calendar
+      // could sit in a different tax year).
+      return {
+        href:  `/app/admin/payroll/process?payPeriodId=${encodeURIComponent(referenceId)}`,
+        label: "Open payroll processing",
+      };
+    case "TIMESHEET_APPROVAL": {
+      // Payroll-3D-3 — deep-link the manager to their scope's review
+      // workspace. referenceId encoding: `${payPeriodId}:${departmentId}`.
+      const [payPeriodId, departmentId] = referenceId.split(":");
+      if (!payPeriodId || !departmentId) return null;
+      const qs = new URLSearchParams({
+        payPeriodId, departmentId, scope: "timesheet",
+      }).toString();
+      return {
+        href:  `/app/admin/payroll/time?${qs}`,
+        label: "Open timesheet approval",
+      };
+    }
+    case "TIMESHEET_APPROVAL_CONFIG_GAP": {
+      // Payroll-3D-3A — Configuration gap deep-links the Tenant
+      // Administrator directly to the Timesheet Approver assignment
+      // surface, pre-focused on the department that's missing an
+      // approver. The gap card auto-resolves after a successful save.
+      const [_payPeriodId, departmentId] = referenceId.split(":");
+      if (!departmentId) return null;
+      const qs = new URLSearchParams({ departmentId }).toString();
+      return {
+        href:  `/app/admin/settings/time-approvers?${qs}`,
+        label: "Assign Timesheet Approver",
+      };
+    }
     default:
       return null;
   }

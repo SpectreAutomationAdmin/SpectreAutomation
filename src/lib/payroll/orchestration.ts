@@ -155,6 +155,40 @@ function formatHours(cents: bigint): string {
 }
 
 /**
+ * Founder-preview helper: materialise the Payroll Admin's
+ * PAYROLL_ADMIN_PROCESSING card directly for a Pay Period that has
+ * no department time approvals (e.g. an all-salaried pay group).
+ *
+ * The orchestrator's normal path derives readiness from department
+ * tallies; a salary-only period produces no tallies and the card is
+ * not created. This helper wraps the same canonical origin-backed
+ * primitive so the Payroll Admin can begin the workflow from
+ * Mission Control → Work Intake instead of a hidden URL.
+ *
+ * Idempotent — re-running against the same (clubId, payPeriodId)
+ * reuses the existing card and refreshes owner + display projection.
+ */
+export async function ensurePayrollAdminProcessingCardForSalaryPeriod(args: {
+  clubId: string;
+  payPeriodId: string;
+  ownerUserId: string;
+  subject: string;
+  preview: string;
+}): Promise<{ workIntakeItemId: string; created: boolean }> {
+  return ensureOriginBackedItem({
+    clubId:            args.clubId,
+    originKind:        ADMIN_ORIGIN_KIND,
+    originReferenceId: args.payPeriodId,
+    workIntent:        "REVIEW",
+    workSubtype:       "PAYROLL_ADMIN_PROCESSING",
+    ownerUserId:       args.ownerUserId,
+    subject:           args.subject,
+    preview:           args.preview,
+    linkReason:        "Payroll orchestrator — salary-only pay period, direct materialisation of admin-processing card.",
+  });
+}
+
+/**
  * Ensure a Work Intake card exists for every Department with payable
  * time in the given Pay Period. Idempotent: re-running with the same
  * inputs updates display + owner but does NOT create duplicates.
