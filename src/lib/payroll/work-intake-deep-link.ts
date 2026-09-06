@@ -86,21 +86,17 @@ export function resolvePayrollWorkIntakeDeepLink(
         label: "Assign Timesheet Approver",
       };
     }
-    // Payroll-3D-3B Slice 6 (2026-09-06) — correction-review deep-link.
-    // The card's "View Timesheet" secondary lands the manager on the
-    // scope workspace already filtered to the correction's employee /
-    // pay period. The exact scope query is unknown at deep-link time
-    // (referenceId is a bare correctionRequestId; scope resolution
-    // requires the correction row) — the target page's own loader
-    // handles the correction-scope join. We forward the correction id
-    // so the page can jump directly to it.
-    case "TIMECLOCK_CORRECTION_REVIEW": {
-      const qs = new URLSearchParams({ correctionRequestId: referenceId }).toString();
-      return {
-        href:  `/app/admin/payroll/time?${qs}`,
-        label: "View timesheet",
-      };
-    }
+    // Payroll-3D-3B Slice 6 / 6A (2026-09-06) — correction-review
+    // deep-link. The Payroll Time workspace does NOT consume a
+    // correctionRequestId query parameter, so this resolver returns
+    // null for the bare-referenceId call. The loader
+    // (src/lib/mission-control/payroll-intake.ts::buildCorrectionCard)
+    // pre-resolves the correction's payPeriodId + departmentId from
+    // the correction record and builds the canonical deep-link
+    // directly (?payPeriodId=X&departmentId=Y&scope=timesheet) so the
+    // page's existing scope-review renderer picks it up correctly.
+    case "TIMECLOCK_CORRECTION_REVIEW":
+      return null;
     case "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP": {
       // Two prefix flavours (Slice 2): MISSING_APPROVER:${deptId}:${corrId}
       // and MISSING_ASSIGNMENT:${corrId}. The remediation destination

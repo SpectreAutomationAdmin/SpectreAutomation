@@ -1461,6 +1461,70 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     letter-spacing: 0.005em;
   }
 
+  /* Payroll-3D-3B Slice 6A (2026-09-06) — PayrollActionCard inline
+     controls. Reuses existing tokens (colors, spacing, borders) so
+     the reject panel + action-result message read as native Mission
+     Control chrome rather than browser-default form widgets. */
+  .spectre-mc-action-message {
+    margin: var(--spectre-space-3) 0 0;
+    font-size: 12.5px;
+    line-height: 18px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--spectre-border-hairline);
+    background: var(--spectre-canvas-sunken);
+    color: var(--spectre-text-secondary);
+    font-weight: 500;
+  }
+  .spectre-mc-action-message--error {
+    border-color: var(--spectre-status-warning);
+    color: var(--spectre-text-primary);
+  }
+  .spectre-mc-action-message--success {
+    border-color: var(--spectre-status-success);
+    color: var(--spectre-text-primary);
+  }
+
+  .spectre-mc-reject-panel {
+    margin-top: var(--spectre-space-3);
+    padding: 12px;
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 4px;
+    background: var(--spectre-canvas-sunken);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .spectre-mc-reject-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--spectre-text-secondary);
+    letter-spacing: 0.005em;
+  }
+  .spectre-mc-reject-textarea {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--spectre-canvas-raised);
+    border: 1px solid var(--spectre-border-strong);
+    border-radius: 4px;
+    color: var(--spectre-text-primary);
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 18px;
+    resize: vertical;
+    min-height: 56px;
+  }
+  .spectre-mc-reject-textarea:focus {
+    outline: none;
+    border-color: var(--spectre-accent);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--spectre-accent) 18%, transparent);
+  }
+  .spectre-mc-reject-textarea:disabled {
+    opacity: 0.7; cursor: not-allowed;
+  }
+  .spectre-mc-reject-panel .spectre-mc-actions {
+    margin-top: 4px;
+  }
+
   /* --- Sprint 3 Checkpoint 15I — Variant D card interaction ---- */
   /* Phase 4R rev-9 (2026-08-15) — tabbed-document geometry. The
      tab group is INLINE-flex so it sizes to its labels (no

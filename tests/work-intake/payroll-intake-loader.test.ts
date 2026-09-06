@@ -144,8 +144,13 @@ describe("Payroll-3D-3B Slice 6 · payroll-intake loader (rich card projection)"
       expect(card.originalTimeLabel).toContain("Clocked in at 14:00");
       expect(card.requestedTimeLabel).toBe("14:15");
       expect(card.reason).toContain("Rounded");
+      // Slice 6A — deep-link now uses payPeriodId + departmentId
+      // (the params the workspace page actually consumes) instead of
+      // the unread correctionRequestId. Verify both params present.
       expect(card.deepLink).not.toBeNull();
-      expect(card.deepLink!.href).toContain("correctionRequestId=");
+      expect(card.deepLink!.href).toContain("payPeriodId=");
+      expect(card.deepLink!.href).toContain("departmentId=");
+      expect(card.deepLink!.href).toContain("scope=timesheet");
     }
   });
 

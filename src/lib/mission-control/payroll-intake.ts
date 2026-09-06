@@ -184,7 +184,7 @@ async function buildCorrectionCard(args: {
     c.employmentAssignmentId
       ? prisma.employeeEmploymentAssignment.findFirst({
           where: { id: c.employmentAssignmentId, clubId: args.clubId },
-          select: { department: { select: { name: true } } },
+          select: { departmentId: true, department: { select: { name: true } } },
         })
       : Promise.resolve(null),
     c.originalClockEventId
@@ -197,12 +197,14 @@ async function buildCorrectionCard(args: {
 
   // Fallback to the original-clock-event's assignment department if
   // correction.employmentAssignmentId is null.
+  let departmentId: string | null = assignment?.departmentId ?? null;
   let departmentName: string | null = assignment?.department?.name ?? null;
   if (!departmentName && originalEvent?.employmentAssignmentId) {
     const evAssn = await prisma.employeeEmploymentAssignment.findFirst({
       where: { id: originalEvent.employmentAssignmentId, clubId: args.clubId },
-      select: { department: { select: { name: true } } },
+      select: { departmentId: true, department: { select: { name: true } } },
     });
+    departmentId = evAssn?.departmentId ?? null;
     departmentName = evAssn?.department?.name ?? null;
   }
 
@@ -212,6 +214,37 @@ async function buildCorrectionCard(args: {
     ? `${prettyClockKind(originalEvent.kind)} at ${formatTimeShort(originalEvent.occurredAt)}`
     : null;
   const requestedTimeLabel = c.requestedOccurredAt ? formatTimeShort(c.requestedOccurredAt) : null;
+
+  // Slice 6A — build the deep-link from the correction's canonical
+  // context so the target page's existing ?payPeriodId=&departmentId=
+  // handlers pick it up. The bare deep-link resolver returns null for
+  // TIMECLOCK_CORRECTION_REVIEW (audited: the workspace page does
+  // NOT read a correctionRequestId query param). We resolve the pay
+  // period that contains the correction's operative moment — same
+  // logic the correction service itself uses at approval time.
+  let correctionDeep: { href: string; label: string } | null = args.deep;
+  if (!correctionDeep && departmentId) {
+    const period = await prisma.payrollPayPeriod.findFirst({
+      where: {
+        clubId: args.clubId,
+        periodStart: { lte: workDate },
+        periodEnd:   { gt:  workDate },
+      },
+      orderBy: { periodStart: "desc" },
+      select: { id: true },
+    });
+    if (period) {
+      const qs = new URLSearchParams({
+        payPeriodId: period.id,
+        departmentId,
+        scope: "timesheet",
+      }).toString();
+      correctionDeep = {
+        href:  `/app/admin/payroll/time?${qs}`,
+        label: "View timesheet",
+      };
+    }
+  }
 
   return {
     kind: "correction",
@@ -225,7 +258,7 @@ async function buildCorrectionCard(args: {
     originalTimeLabel,
     requestedTimeLabel,
     reason: c.reason,
-    deepLink: args.deep,
+    deepLink: correctionDeep,
   };
 }
 
