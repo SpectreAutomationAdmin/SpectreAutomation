@@ -254,11 +254,19 @@ export async function ensureTimesheetApprovalWorkItems(
       // reopens the card via the normal path.
       const currentApproval = await prisma.payrollDepartmentTimeApproval.findFirst({
         where: { clubId, payPeriodId, departmentId: scope.departmentId },
-        select: { state: true, approvedRevision: true },
+        select: { state: true, approvedRevision: true, approvedScopeVersion: true },
       });
+      // Payroll-3D-3B Slice 7C (2026-09-06) — approval currency now
+      // gates on BOTH the revision hash AND the scope-version. If
+      // either drifts the manager has active work, so don't
+      // short-circuit the WI create/reopen path. Legacy null
+      // approvedScopeVersion falls back to revision-only.
+      const versionMatches = currentApproval?.approvedScopeVersion == null
+        || currentApproval.approvedScopeVersion === scope.currentScopeVersion;
       if (
         currentApproval?.state === "APPROVED"
         && currentApproval.approvedRevision === scope.currentRevision
+        && versionMatches
       ) {
         continue;
       }

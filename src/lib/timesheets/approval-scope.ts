@@ -109,7 +109,20 @@ export interface ScopeReview {
   readiness:         {
     ready:            boolean;
     blockingReasons:  ReadinessBlockingReason[];
-    approvalValid:    boolean; // approvedRevision == currentRevision
+    /**
+     * True iff the persisted approval is currently valid.
+     *
+     * For new approvals (approvedScopeVersion != null): requires
+     * state=APPROVED AND approvedRevision == currentRevision AND
+     * approvedScopeVersion == currentScopeVersion.
+     *
+     * For legacy approvals (approvedScopeVersion == null,
+     * pre-Slice-7B): falls back to state=APPROVED AND
+     * approvedRevision == currentRevision. See §11 of the Slice 7C
+     * brief — legacy rows use revision-only currency for backward
+     * compatibility; the version rail is authoritative for new work.
+     */
+    approvalValid:    boolean;
   };
 }
 
@@ -128,6 +141,9 @@ export interface ReviewableScope {
   pendingCorrectionCount: number;
   recordedSeconds:   number;
   currentRevision:   string;
+  // Payroll-3D-3B Slice 7C (2026-09-06) — scope-version rail exposed
+  // so freeze-readiness can gate on version currency, not just revision.
+  currentScopeVersion: number;
 }
 
 export async function listReviewableScopes(
@@ -255,6 +271,9 @@ export async function listReviewableScopes(
     const d = deptById.get(did);
     if (!d) continue;
     const rev = await computeScopeRevision(clubId, payPeriodId, did);
+    // Payroll-3D-3B Slice 7C (2026-09-06) — scope-version rail.
+    const { readScopeVersion } = await import("./scope-state");
+    const scopeVersion = await readScopeVersion(clubId, payPeriodId, did);
     out.push({
       clubId, payPeriodId, departmentId: did,
       departmentCode: d.code, departmentName: d.name,
@@ -264,6 +283,7 @@ export async function listReviewableScopes(
       pendingCorrectionCount: row.pendingCorrections,
       recordedSeconds: row.recordedSeconds,
       currentRevision: rev,
+      currentScopeVersion: scopeVersion,
     });
   }
   out.sort((a, b) => a.departmentCode.localeCompare(b.departmentCode));
@@ -471,9 +491,19 @@ export async function getScopeReview(
     detail: `${pendingCorrRows.length} pending correction request${pendingCorrRows.length === 1 ? "" : "s"} — decide first`,
   });
 
+  // Payroll-3D-3B Slice 7C (2026-09-06) — approval currency is now
+  // the AND of the revision hash rail (Slice 7A) AND the scope-version
+  // rail (Slice 7B). Version mismatch alone makes the approval
+  // non-current IMMEDIATELY, before any REVIEW_REQUIRED projection
+  // catches up. Legacy null approvedScopeVersion falls back to
+  // revision-only (§11 legacy policy).
+  const versionMatches =
+    approvalRow?.approvedScopeVersion == null
+    || approvalRow.approvedScopeVersion === currentScopeVersion;
   const approvalValid = !!approvalRow
     && approvalRow.state === "APPROVED"
-    && approvalRow.approvedRevision === currentRevision;
+    && approvalRow.approvedRevision === currentRevision
+    && versionMatches;
 
   const approval: ApprovalRecordView | null = approvalRow ? {
     id: approvalRow.id,

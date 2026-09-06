@@ -39,9 +39,18 @@ export interface ScopeStateRow {
 
 /**
  * Return the current scope-state row, creating it lazily on first
- * access. Safe to call concurrently — races converge to a single
- * canonical row via the (clubId, payPeriodId, departmentId) unique
- * index (Prisma upsert semantics on the unique key).
+ * access. Safe to call concurrently under real PostgreSQL semantics —
+ * Prisma's upsert on Postgres emits a single `INSERT ... ON CONFLICT
+ * (unique_key) DO UPDATE SET ... RETURNING ...` statement, which is
+ * atomic and NEVER raises SQLSTATE 23505 (unique_violation). No P2002
+ * is caught + swallowed inside a caller's `$transaction`, so no risk
+ * of transaction poisoning (SQLSTATE 25P02).
+ *
+ * A non-empty `update` payload (`updatedAt = now()`) is intentional —
+ * with an empty update payload, some Prisma versions degrade to
+ * SELECT + INSERT under the hood, which is not atomic. The `updatedAt`
+ * self-touch keeps the statement on the ON CONFLICT DO UPDATE path
+ * and still preserves `version` unchanged for concurrent callers.
  */
 export async function ensureScopeState(
   clubId: string, payPeriodId: string, departmentId: string,
@@ -52,7 +61,10 @@ export async function ensureScopeState(
     where: {
       clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
     },
-    update: {},
+    // Non-empty update — keeps Prisma on the atomic ON CONFLICT DO
+    // UPDATE path on Postgres. `version` is intentionally unchanged so
+    // a concurrent bump on the same first-create never regresses.
+    update: { updatedAt: new Date() },
     create: { clubId, payPeriodId, departmentId, version: 0 },
     select: { id: true, clubId: true, payPeriodId: true, departmentId: true, version: true },
   });
@@ -82,18 +94,25 @@ export async function readScopeVersion(
 /**
  * Atomically bump the scope-state version for a single scope. Called
  * by every material writer INSIDE its own transaction so the bump
- * commits with the material change. Creates the row on first bump.
+ * commits with the material change.
+ *
+ * Postgres semantics:
+ *   INSERT INTO "PayrollDepartmentTimeScopeState" (...) VALUES (...)
+ *   ON CONFLICT ("clubId","payPeriodId","departmentId")
+ *   DO UPDATE SET "version" = "PayrollDepartmentTimeScopeState"."version" + 1
+ *   RETURNING ...;
+ *
+ * This is a single atomic statement. Two concurrent bumps against the
+ * same scope compose correctly (both take the DO UPDATE branch;
+ * `version + 1` runs twice under row lock; final value = start + 2).
+ * No SQLSTATE 23505 raised → no P2002 caught → no risk of poisoning
+ * the enclosing transaction.
  */
 export async function bumpScopeVersion(
   clubId: string, payPeriodId: string, departmentId: string,
   tx?: PrismaTxOrClient,
 ): Promise<void> {
   const client = tx ?? prisma;
-  // Ensure the row exists (upsert with no-op update). Then increment.
-  // Two writes rather than one because Prisma's upsert doesn't offer
-  // an "atomic increment on both create and update" shape cleanly.
-  // The upsert is race-safe via the unique index; the increment is
-  // an unconditional `{ increment: 1 }` so concurrent bumps compose.
   await client.payrollDepartmentTimeScopeState.upsert({
     where: {
       clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
@@ -135,6 +154,12 @@ export async function casScopeVersion(
   expectedVersion: number,
   tx: PrismaTxOrClient,
 ): Promise<number> {
+  // `updateMany` with a filter that matches zero rows is a NO-OP on
+  // Postgres — it returns `{ count: 0 }` cleanly, WITHOUT raising any
+  // constraint or SQLSTATE error. That is the whole point: the tx
+  // stays healthy, we detect the miss by inspecting `count`, and we
+  // throw ConflictError ourselves so the enclosing $transaction
+  // rolls back cleanly (no SQLSTATE 25P02, no zombie state).
   const result = await tx.payrollDepartmentTimeScopeState.updateMany({
     where: {
       clubId, payPeriodId, departmentId,

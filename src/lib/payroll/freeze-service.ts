@@ -109,6 +109,18 @@ export async function freezeApprovedScopeIntoPayroll(
       "The manager-approved revision has drifted since approval. Ask the manager to re-attest.",
     );
   }
+  // Payroll-3D-3B Slice 7C (2026-09-06) — scope-version rail: even if
+  // the revision hash matches (e.g. because a bumped-then-reverted
+  // sequence produced an identical hash), the version counter is the
+  // authoritative concurrency signal. Legacy null approvals skip this
+  // gate (§11 backward-compat policy).
+  if (approval.approvedScopeVersion != null
+      && approval.approvedScopeVersion !== review.currentScopeVersion) {
+    await invalidateApprovalIfDrifted(input.clubId, input.payPeriodId, input.departmentId);
+    throw new ConflictError(
+      "The scope changed since approval (version drift). Ask the manager to re-attest.",
+    );
+  }
 
   // Compute cutoff timing.
   const leadDays = clubConfig?.payrollCutoffLeadDays ?? 5;
@@ -313,8 +325,15 @@ export async function getPayPeriodTimeReadiness(
       : approval.state === "REVIEW_REQUIRED" ? "REVIEW_REQUIRED" as const
       : approval.state === "APPROVED" ? "APPROVED" as const
       : "PENDING" as const;
+    // Payroll-3D-3B Slice 7C — approval currency requires BOTH the
+    // revision hash rail AND (for new approvals) the scope-version
+    // rail. Legacy null approvedScopeVersion falls back to
+    // revision-only (§11 policy).
+    const versionMatches = approval?.approvedScopeVersion == null
+      || approval.approvedScopeVersion === s.currentScopeVersion;
     const approvalIsCurrent = approval?.state === "APPROVED"
-      && approval.approvedRevision === currentRevision;
+      && approval.approvedRevision === currentRevision
+      && versionMatches;
 
     // Count frozen entries in scope + how many still map to current
     // timesheet entries (i.e. not superseded/stale).

@@ -356,6 +356,12 @@ export async function orchestratePayrollAdminHandoff(
       pendingDepartments: [],
     };
   }
+  // Payroll-3D-3B Slice 7C (2026-09-06) — Payroll Admin readiness
+  // gate. A department is "currently approved" only when the row is
+  // in state=APPROVED AND its approvedRevision matches the current
+  // scope revision AND (for new approvals) approvedScopeVersion
+  // matches the current scope version. Legacy null approvedScopeVersion
+  // falls back to revision-only currency (§11 policy).
   const approvals = await prisma.payrollDepartmentTimeApproval.findMany({
     where: {
       clubId,
@@ -363,12 +369,29 @@ export async function orchestratePayrollAdminHandoff(
       departmentId: { in: Array.from(tallies.keys()) },
       state: "APPROVED",
     },
-    select: { departmentId: true },
+    select: { departmentId: true, approvedRevision: true, approvedScopeVersion: true },
   });
-  const approvedIds = new Set(approvals.map((a) => a.departmentId));
+  const approvedByDept = new Map(approvals.map((a) => [a.departmentId, a]));
+  const { computeScopeRevision } = await import("../timesheets/approval-scope");
+  const { readScopeVersion } = await import("../timesheets/scope-state");
+  const currentlyApproved = new Set<string>();
+  for (const [deptId, appr] of approvedByDept.entries()) {
+    const rev = await computeScopeRevision(clubId, payPeriodId, deptId);
+    const ver = await readScopeVersion(clubId, payPeriodId, deptId);
+    // Legacy compat (§11): null revision or null version means a
+    // pre-Slice-7B (or legacy 3D-2 approveDepartmentTime) row —
+    // trust the persisted state for that field.
+    const revisionMatches = appr.approvedRevision == null
+      || appr.approvedRevision === rev;
+    const versionMatches = appr.approvedScopeVersion == null
+      || appr.approvedScopeVersion === ver;
+    if (revisionMatches && versionMatches) {
+      currentlyApproved.add(deptId);
+    }
+  }
   const pending: string[] = [];
   for (const t of Array.from(tallies.values()).sort((a, b) => a.code.localeCompare(b.code))) {
-    if (!approvedIds.has(t.departmentId)) pending.push(t.code);
+    if (!currentlyApproved.has(t.departmentId)) pending.push(t.code);
   }
   if (pending.length > 0) {
     return {

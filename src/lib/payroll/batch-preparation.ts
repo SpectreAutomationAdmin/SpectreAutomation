@@ -159,11 +159,29 @@ async function assertPreconditions(clubId: string, payPeriodId: string): Promise
     if (e.employmentAssignment?.departmentId) departmentIds.add(e.employmentAssignment.departmentId);
   }
   if (departmentIds.size > 0) {
+    // Payroll-3D-3B Slice 7C (2026-09-06) — currency-gated
+    // "approved" set: state=APPROVED AND (for new approvals) both
+    // approvedRevision matches AND approvedScopeVersion matches.
+    // Legacy null approvedScopeVersion falls back to revision-only.
     const approvals = await prisma.payrollDepartmentTimeApproval.findMany({
       where: { clubId, payPeriodId, departmentId: { in: Array.from(departmentIds) }, state: "APPROVED" },
-      select: { departmentId: true },
+      select: { departmentId: true, approvedRevision: true, approvedScopeVersion: true },
     });
-    const approvedIds = new Set(approvals.map((a) => a.departmentId));
+    const { computeScopeRevision } = await import("../timesheets/approval-scope");
+    const { readScopeVersion } = await import("../timesheets/scope-state");
+    const approvedIds = new Set<string>();
+    for (const a of approvals) {
+      const rev = await computeScopeRevision(clubId, payPeriodId, a.departmentId);
+      const ver = await readScopeVersion(clubId, payPeriodId, a.departmentId);
+      // Legacy compat (§11): null revision + null version means a
+      // pre-Slice-7B row (or the legacy 3D-2 approveDepartmentTime
+      // path) — trust the persisted state as current. Non-null
+      // fields must match; a mix (null revision + set version) is
+      // treated conservatively as non-current.
+      const revisionMatches = a.approvedRevision == null || a.approvedRevision === rev;
+      const versionMatches = a.approvedScopeVersion == null || a.approvedScopeVersion === ver;
+      if (revisionMatches && versionMatches) approvedIds.add(a.departmentId);
+    }
     const missing = Array.from(departmentIds).filter((id) => !approvedIds.has(id));
     if (missing.length > 0) {
       const missingDepartments = await prisma.department.findMany({

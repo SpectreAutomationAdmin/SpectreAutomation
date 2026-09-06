@@ -41,6 +41,7 @@ playwright/.cache/
 # --- Local deploy scratch (Neon schema snapshots, pg-validate scratch) ----
 .neondeploy/
 .pgvalidate/
+.pgvalidate-slice7b/
 
 # --- OS / IDE ------------------------------------------------------------
 .DS_Store
