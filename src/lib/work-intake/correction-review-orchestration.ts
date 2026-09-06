@@ -281,6 +281,21 @@ async function upsertOriginBackedItem(
         displayReceivedAt: new Date(),
       },
     });
+    // Slice 4A (2026-09-06) — reconciliation reopen. Any caller that
+    // reaches this function has already verified the domain still
+    // requires action (the top-level ensureCorrectionReviewWorkItems
+    // no-ops on non-PENDING status). If the WI card was previously
+    // RESOLVED — either by an earlier bug or by the manager clicking
+    // resolve manually — reopening it is the correct outcome so the
+    // canonical obligation surfaces on the manager's Work Intake.
+    // Terminal states set deliberately by a human (SUPPRESSED,
+    // INFORMATIONAL) are NOT overwritten — reconciliation must not
+    // fight explicit user intent; those cards stay silenced and the
+    // dispatcher's STALE result guides the user to Restore first.
+    await prisma.workIntakeItem.updateMany({
+      where: { id: existing.workIntakeItemId, status: "RESOLVED" },
+      data:  { status: "OPEN", resolvedAt: null, resolvedByUserId: null },
+    });
     return { workIntakeItemId: existing.workIntakeItemId, created: false };
   }
 

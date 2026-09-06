@@ -532,27 +532,34 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
     expect(approval).toBeNull();
   });
 
-  it("§36 RESOLVED WI — action against a RESOLVED card is safely rejected", async () => {
+  it("§36 (Slice 4A revised) RESOLVED WI + PENDING correction — STALE + reconciliation reopens card", async () => {
+    // Slice 4A INVARIANT: a RESOLVED card is not a valid execution
+    // path even when the underlying correction is still PENDING. The
+    // dispatcher must return STALE and trigger canonical
+    // reconciliation so the card is reopened for the responsible
+    // manager — the user then acts from the current active
+    // obligation, not the stale card.
     const F = await setupCorrectionFixture("36");
     // Manually resolve the WI to simulate a stale-card scenario.
     await db().workIntakeItem.update({
       where: { id: F.workIntakeItemId },
       data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
     });
-    // Approve is still attempted; correction is still PENDING, so the
-    // binding check succeeds (the WI item is still the canonical
-    // origin for this correction — resolution is just a status flag),
-    // and the canonical service commits. This is the "reconciliation
-    // over blind rejection" behavior called out in §16.
-    // Verify: the domain action succeeds.
     const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
       action: "correction.approve",
       workIntakeItemId: F.workIntakeItemId,
       correctionRequestId: F.request.id,
     });
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Correction was NOT decided.
     const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
-    expect(corr!.status).toBe("APPROVED");
+    expect(corr!.status).toBe("PENDING");
+    // Reconciliation reopened the card — it's now OPEN, still owned
+    // by the same responsible manager, ready to act from.
+    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(reopened!.status).toBe("OPEN");
+    expect(reopened!.ownerUserId).toBe(F.eMgr.id);
   });
 
   it("§37 employee denial — a portal-shaped principal without memberships is rejected", async () => {
@@ -621,5 +628,295 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(["VALIDATION_ERROR", "INTERNAL_ERROR"]).toContain(r.code);
+  });
+});
+
+// ==================================================================
+// Slice 4A · Work Intake actionable-status invariant
+// ==================================================================
+describe("Payroll-3D-3B Slice 4A · WI actionable-status invariant", () => {
+  beforeAll(async () => {
+    await db().$executeRawUnsafe(DDL);
+  });
+  beforeEach(async () => {
+    await resetDb();
+    await seedRbac();
+  });
+
+  it("§4A-1 OPEN correction WI + PENDING correction → action still succeeds (baseline)", async () => {
+    const F = await setupCorrectionFixture("4A-1");
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("§4A-2 RESOLVED correction WI + PENDING correction → STALE + reconciliation reopens", async () => {
+    const F = await setupCorrectionFixture("4A-2");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Domain unchanged.
+    const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corr!.status).toBe("PENDING");
+    // Reconciliation reopened the canonical WI.
+    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(reopened!.status).toBe("OPEN");
+    expect(reopened!.resolvedAt).toBeNull();
+    expect(reopened!.resolvedByUserId).toBeNull();
+    // Fresh invocation from the (now-active) card succeeds.
+    const r2 = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r2.ok).toBe(true);
+  });
+
+  it("§4A-3 RESOLVED correction WI + APPROVED correction → STALE, no duplicate action, no reopen", async () => {
+    const F = await setupCorrectionFixture("4A-3");
+    // Approve first (valid) → WI resolves normally via Slice 5 (not yet
+    // wired), so manually flip to APPROVED + RESOLVED to model the
+    // "already decided + resolved" state.
+    await db().timeClockCorrectionRequest.update({
+      where: { id: F.request.id }, data: { status: "APPROVED" },
+    });
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Reconciliation runs `ensureCorrectionReviewWorkItems` — that
+    // helper short-circuits on non-PENDING status, so no reopen.
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("RESOLVED");
+    // Correction stays APPROVED (single decision).
+    const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corr!.status).toBe("APPROVED");
+  });
+
+  it("§4A-4 RESOLVED correction WI + REJECTED correction → same invariant, no duplicate", async () => {
+    const F = await setupCorrectionFixture("4A-4");
+    await db().timeClockCorrectionRequest.update({
+      where: { id: F.request.id }, data: { status: "REJECTED" },
+    });
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.reject",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+      reviewerNote: "second attempt",
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("RESOLVED");
+  });
+
+  it("§4A-5 SUPPRESSED correction WI → STALE + NO reconciliation (user intent preserved)", async () => {
+    const F = await setupCorrectionFixture("4A-5");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "SUPPRESSED" },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Stays SUPPRESSED — reconciliation must NOT fight the user's intent.
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("SUPPRESSED");
+  });
+
+  it("§4A-6 INFORMATIONAL correction WI → STALE + NO reconciliation", async () => {
+    const F = await setupCorrectionFixture("4A-6");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "INFORMATIONAL" },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("INFORMATIONAL");
+  });
+
+  it("§4A-7 DEFERRED correction WI → STALE + NO reconciliation (postponed by user)", async () => {
+    const F = await setupCorrectionFixture("4A-7");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "DEFERRED", deferredUntil: new Date(Date.now() + 86400_000) },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("DEFERRED");
+  });
+
+  it("§4A-8 RESOLVED timesheet WI + ready scope → STALE + reconciliation reopens", async () => {
+    const F = await setupReadyScopeFixture("4A-8");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
+    });
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "timesheetScope.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      payPeriodId: F.period.id,
+      departmentId: F.events.id,
+      expectedRevision: F.currentRevision,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // No approval row created.
+    const approval = await db().payrollDepartmentTimeApproval.findFirst({
+      where: { clubId: F.club.id, payPeriodId: F.period.id, departmentId: F.events.id },
+    });
+    expect(approval).toBeNull();
+    // Reconciliation reopened the card.
+    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(reopened!.status).toBe("OPEN");
+  });
+
+  it("§4A-9 RESOLVED timesheet WI + already APPROVED scope at current revision → STALE, no reopen", async () => {
+    // Set up a fully-approved scope, then manually clear the WI ID
+    // link + mark WI resolved to model the invariant.
+    const F = await setupReadyScopeFixture("4A-9");
+    // Approve first via canonical service.
+    await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "timesheetScope.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      payPeriodId: F.period.id,
+      departmentId: F.events.id,
+      expectedRevision: F.currentRevision,
+    });
+    // WI is now RESOLVED naturally via approveTimesheetScope's emit.
+    const afterApproval = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(afterApproval!.status).toBe("RESOLVED");
+    // Second click on the (still RESOLVED) card.
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "timesheetScope.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      payPeriodId: F.period.id,
+      departmentId: F.events.id,
+      expectedRevision: F.currentRevision,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Slice 3 already-approved guard prevents reopen.
+    const still = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(still!.status).toBe("RESOLVED");
+    // Exactly one approval — no duplicate.
+    const approvalCount = await db().payrollDepartmentTimeApproval.count({
+      where: { clubId: F.club.id, payPeriodId: F.period.id, departmentId: F.events.id },
+    });
+    expect(approvalCount).toBe(1);
+  });
+
+  it("§4A-10 REVIEW_REQUIRED after drift — orchestration reactivates WI, action succeeds from active card", async () => {
+    const F = await setupReadyScopeFixture("4A-10");
+    // Approve.
+    await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "timesheetScope.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      payPeriodId: F.period.id,
+      departmentId: F.events.id,
+      expectedRevision: F.currentRevision,
+    });
+    // Drift the scope.
+    await makeClock(F.club.id, F.emp.id, "CLOCK_IN", utc(2026, 9, 7, 14, 0), F.assn.id);
+    await makeClock(F.club.id, F.emp.id, "CLOCK_OUT", utc(2026, 9, 7, 22, 0), F.assn.id);
+    await materializeEmployeeTimesheet(F.club.id, F.emp.id, F.period.id);
+    const { invalidateApprovalIfDrifted } = await import("@/lib/timesheets/manager-approval");
+    await invalidateApprovalIfDrifted(F.club.id, F.period.id, F.events.id);
+    // WI should now be OPEN again (reactivated by invalidate path in Slice 3).
+    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(reopened!.status).toBe("OPEN");
+    // Approve with the NEW revision.
+    const freshReview = await getScopeReview(F.club.id, F.period.id, F.events.id);
+    const r = await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "timesheetScope.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      payPeriodId: F.period.id,
+      departmentId: F.events.id,
+      expectedRevision: freshReview.currentRevision,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("§4A-11 Payroll Admin override + RESOLVED card → cannot use stale card", async () => {
+    const F = await setupCorrectionFixture("4A-11");
+    const pa = await makePayrollAdmin(F.club.id, "payroll.admin@t.test");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: pa.id },
+    });
+    const r = await invokeWorkIntakeAction(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("STALE");
+    // Correction unchanged.
+    const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corr!.status).toBe("PENDING");
+    // Reconciliation reopened → PA can act via canonical override on
+    // the fresh active card.
+    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
+    expect(reopened!.status).toBe("OPEN");
+    const r2 = await invokeWorkIntakeAction(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(r2.ok).toBe(true);
+  });
+
+  it("§4A-14/§4A-15 side-effect isolation: PayrollApprovedTimeEntry / PayrollBatch / JournalEntry unchanged", async () => {
+    const F = await setupCorrectionFixture("4A-14");
+    await db().workIntakeItem.update({
+      where: { id: F.workIntakeItemId },
+      data: { status: "RESOLVED", resolvedAt: new Date(), resolvedByUserId: F.eMgr.id },
+    });
+    await invokeWorkIntakeAction(principal(F.eMgr, F.club.id, "DEPARTMENT_MANAGER"), F.club.id, {
+      action: "correction.approve",
+      workIntakeItemId: F.workIntakeItemId,
+      correctionRequestId: F.request.id,
+    });
+    expect(await db().payrollApprovedTimeEntry.count({ where: { clubId: F.club.id } })).toBe(0);
+    expect(await db().payrollBatch.count({ where: { clubId: F.club.id } })).toBe(0);
+    expect(await db().journalEntry.count({ where: { clubId: F.club.id } })).toBe(0);
   });
 });
