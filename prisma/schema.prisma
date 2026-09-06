@@ -480,6 +480,8 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  payrollDepartmentTimeScopeStates   PayrollDepartmentTimeScopeState[]
   // Payroll-3D-4 back-relation.
   payrollTimeAdjustments             PayrollTimeAdjustment[]
   payrollBatchExceptions             PayrollBatchException[]
@@ -2059,6 +2061,8 @@ model Department {
   employees          Employee[]          @relation("EmployeeDepartment")
   positions          EmployeePosition[]  @relation("PositionDepartment")
   payrollTimeApprovals PayrollDepartmentTimeApproval[] @relation("DepartmentPayrollTimeApprovals")
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  payrollScopeStates   PayrollDepartmentTimeScopeState[] @relation("DepartmentScopeStates")
   timesheetEntries   TimesheetEntry[]    @relation("TimesheetEntryDepartment")
   payrollLines       PayrollLine[]       @relation("PayrollLineDepartment")
   labourBudgets      LabourBudget[]      @relation("LabourBudgetDepartment")
@@ -12017,6 +12021,8 @@ model PayrollPayPeriod {
 
   batches       PayrollBatch[]
   departmentTimeApprovals PayrollDepartmentTimeApproval[]
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  scopeStates             PayrollDepartmentTimeScopeState[] @relation("PayPeriodScopeStates")
   // Payroll-3D-2 back-relation.
   payrollTimesheets       PayrollTimesheet[] @relation("PayPeriodPayrollTimesheets")
   // Payroll-3D-4 back-relations.
@@ -13065,6 +13071,11 @@ model PayrollDepartmentTimeApproval {
   // invalidation service (never silently). Optional to remain
   // backwards-compatible with pre-3D-3 rows.
   approvedRevision     String?
+  // Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token.
+  // approvedScopeVersion pins the PayrollDepartmentTimeScopeState.version
+  // this approval attested to. Legacy approvals (from before 7B) may
+  // be null; new approvals always persist it. See scope-state.ts.
+  approvedScopeVersion Int?
   reopenedAt           DateTime?
   reopenedByUserId     String?
   reopenReason         String?
@@ -13083,6 +13094,31 @@ model PayrollDepartmentTimeApproval {
   @@index([clubId, payPeriodId])
   @@index([clubId, departmentId])
   @@index([workIntakeItemId])
+}
+
+// Payroll-3D-3B Slice 7B (2026-09-06) — DB-controlled concurrency
+// token for the (clubId × payPeriodId × departmentId) approval scope.
+// Every material writer that changes computeScopeRevision inputs
+// atomically bumps `version` inside its own transaction; every
+// manager approval performs a version CAS. Both operations contend
+// on the same row so the database determines the winner. Row exists
+// independently of whether a manager has ever approved — created on
+// first material write or first getScopeReview.
+model PayrollDepartmentTimeScopeState {
+  id           String   @id @default(cuid())
+  clubId       String
+  club         Club     @relation(fields: [clubId], references: [id])
+  payPeriodId  String
+  payPeriod    PayrollPayPeriod @relation("PayPeriodScopeStates", fields: [payPeriodId], references: [id])
+  departmentId String
+  department   Department @relation("DepartmentScopeStates", fields: [departmentId], references: [id])
+  version      Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([clubId, payPeriodId, departmentId])
+  @@index([clubId, payPeriodId])
+  @@index([clubId, departmentId])
 }
 
 model PayrollApprovedTimeEntry {

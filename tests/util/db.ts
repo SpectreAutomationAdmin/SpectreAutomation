@@ -322,6 +322,11 @@ export async function resetDb() {
     c.employeeCppElection.updateMany({ data: { supersededById: null, revokesElectionId: null } }),
     c.employeeCppElection.deleteMany(),
     c.employeeCppDisability.deleteMany(),
+    // Payroll-3D-3B Slice 7B (2026-09-06) — scope-state CAS token
+    // FKs into Club + PayrollPayPeriod + Department. Wipe before all
+    // three (matches the departmentTimeApproval ordering already
+    // present in this phase).
+    c.payrollDepartmentTimeScopeState.deleteMany(),
     c.payrollDepartmentTimeApproval.deleteMany(),
     // Payroll-3C-2 (2026-09-07) — Component snapshots FK into batch +
     // component + assignment; wipe before all three.

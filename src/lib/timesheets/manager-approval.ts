@@ -33,6 +33,8 @@ import {
 // vi.spyOn(module, "computeScopeRevision"); a namespace-qualified
 // call site reads the export freshly each time and is spy-able.
 import * as approvalScope from "./approval-scope";
+// Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token.
+import { casScopeVersion, ensureScopeState } from "./scope-state";
 import { emitWorkCompletionEvent } from "../work-intake/completion";
 
 const ENTITY = "PayrollDepartmentTimeApproval";
@@ -99,6 +101,17 @@ export interface ApproveScopeInput {
   /** The revision the manager reviewed. Server rejects if this !=
    *  currentRevision at the moment of approval commit (§71 / §92). */
   attestedRevision:  string;
+  /**
+   * Payroll-3D-3B Slice 7B (2026-09-06) — the scope-state version
+   * the manager attested to. If any material writer bumped the
+   * PayrollDepartmentTimeScopeState.version between the attestation
+   * read and the approve tx, the DB-CAS inside the tx fails and the
+   * whole tx rolls back — no APPROVED at obsolete version persists.
+   * Optional to keep the legacy caller (revision-hash-only) working
+   * during the transition; new callers via the dispatcher always
+   * pass this from the loader's server-side snapshot.
+   */
+  expectedScopeVersion?: number;
   notes?:            string | null;
 }
 
@@ -164,7 +177,35 @@ export async function approveTimesheetScope(
   // Postgres READ COMMITTED (default) makes the re-read observe any
   // committed material change from a concurrent transaction; the
   // rollback prevents an obsolete APPROVED from persisting.
+  // Payroll-3D-3B Slice 7B (2026-09-06) — Shared scope-version CAS.
+  //
+  // The atomic-approval boundary is a DB-controlled row on
+  // PayrollDepartmentTimeScopeState. Every material writer that
+  // affects computeScopeRevision atomically bumps `version` inside
+  // its own transaction. This function's tx does a version CAS
+  // (updateMany with a version filter that MUST match the manager's
+  // attested version) — if any writer bumped the row between
+  // attestation and approval commit, the CAS returns count=0 and
+  // the whole tx rolls back.
+  //
+  // The 7A post-write revision re-verify is retained as a
+  // defense-in-depth layer (catches semantic hash changes not
+  // reflected by a version bump — should be an empty set, but
+  // costs one query and provides audit clarity).
+  //
+  // Legacy callers without an expectedScopeVersion still receive the
+  // 7A revision-hash safety net. New callers (dispatcher) always
+  // pass the version from the server-side loader snapshot.
+  const bootScopeState = await ensureScopeState(input.clubId, input.payPeriodId, input.departmentId);
+  const attestedScopeVersion = input.expectedScopeVersion ?? bootScopeState.version;
+
   const approval = await prisma.$transaction(async (tx) => {
+    // Slice 7B — DB-CAS gate FIRST inside the tx.
+    await casScopeVersion(
+      input.clubId, input.payPeriodId, input.departmentId,
+      attestedScopeVersion, tx,
+    );
+
     const upserted = await tx.payrollDepartmentTimeApproval.upsert({
       where: {
         clubId_payPeriodId_departmentId: {
@@ -176,6 +217,7 @@ export async function approveTimesheetScope(
         approvedAt: now,
         approvedByUserId: principal.id,
         approvedRevision: review.currentRevision,
+        approvedScopeVersion: attestedScopeVersion,
         reopenedAt: null,
         reopenedByUserId: null,
         reopenReason: null,
@@ -190,11 +232,13 @@ export async function approveTimesheetScope(
         approvedAt: now,
         approvedByUserId: principal.id,
         approvedRevision: review.currentRevision,
+        approvedScopeVersion: attestedScopeVersion,
         workIntakeItemId,
         notes,
       },
     });
-    // Post-write revision re-verify — TOCTOU close (Slice 7A §I).
+
+    // Slice 7A defense-in-depth: post-write revision re-verify.
     // Namespace-qualified call so vitest can spy on it.
     const postWriteRevision = await approvalScope.computeScopeRevision(
       input.clubId, input.payPeriodId, input.departmentId, tx,

@@ -22,6 +22,7 @@ import { resolveDepartmentTimeApprover, invalidateApprovalIfDrifted } from "./ma
 import { ensureCorrectionReviewWorkItems } from "../work-intake/correction-review-orchestration";
 import { enqueue } from "../queue";
 import { logger } from "../observability/logger";
+import { bumpScopeVersion } from "./scope-state";
 
 export const CORRECTION_REQUEST_TYPES = [
   "ADD_MISSING_CLOCK_IN",
@@ -226,18 +227,60 @@ export async function submitCorrectionRequest(
   // Insert with unique-collision idempotency. If a PENDING request
   // for the same (type, original event) already exists, the DB
   // unique fires and we swallow it → treat as idempotent success.
+  //
+  // Payroll-3D-3B Slice 7B (2026-09-06) — Correction submission is
+  // a material state change (pendingCorrectionCount contributes to
+  // computeScopeRevision). Wrap the create + scope-version bump in
+  // a single $transaction so any concurrent approveTimesheetScope
+  // observes the bump via its CAS.
   try {
-    const created = await prisma.timeClockCorrectionRequest.create({
-      data: {
-        clubId: principal.clubId,
-        employeeId: principal.employeeId,
-        originalClockEventId,
-        requestType: input.requestType,
-        requestedOccurredAt,
-        employmentAssignmentId,
-        reason,
-        status: "PENDING",
-      },
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.timeClockCorrectionRequest.create({
+        data: {
+          clubId: principal.clubId,
+          employeeId: principal.employeeId,
+          originalClockEventId,
+          requestType: input.requestType,
+          requestedOccurredAt,
+          employmentAssignmentId,
+          reason,
+          status: "PENDING",
+        },
+      });
+      // Bump scope version for the affected department (if resolvable).
+      let deptId: string | null = null;
+      if (employmentAssignmentId) {
+        const a = await tx.employeeEmploymentAssignment.findUnique({
+          where: { id: employmentAssignmentId }, select: { departmentId: true },
+        });
+        deptId = a?.departmentId ?? null;
+      } else if (originalClockEventId) {
+        const ev = await tx.timeClockEvent.findUnique({
+          where: { id: originalClockEventId }, select: { employmentAssignmentId: true },
+        });
+        if (ev?.employmentAssignmentId) {
+          const a2 = await tx.employeeEmploymentAssignment.findUnique({
+            where: { id: ev.employmentAssignmentId }, select: { departmentId: true },
+          });
+          deptId = a2?.departmentId ?? null;
+        }
+      }
+      if (deptId) {
+        // Bump requires payPeriodId — resolve from the correction's
+        // operative moment (same logic reject/approve use).
+        const at = requestedOccurredAt ?? row.createdAt;
+        const period = await tx.payrollPayPeriod.findFirst({
+          where: {
+            clubId: principal.clubId,
+            periodStart: { lte: at }, periodEnd: { gt: at },
+          },
+          orderBy: { periodStart: "desc" }, select: { id: true },
+        });
+        if (period) {
+          await bumpScopeVersion(principal.clubId, period.id, deptId, tx);
+        }
+      }
+      return row;
     });
     await audit(null, {
       clubId: principal.clubId,
@@ -343,8 +386,26 @@ export async function cancelCorrectionRequest(
   if (row.status !== "PENDING") {
     throw new ConflictError(`Correction request is ${row.status}, not PENDING.`);
   }
-  const updated = await prisma.timeClockCorrectionRequest.update({
-    where: { id: row.id }, data: { status: "CANCELLED", updatedAt: new Date() },
+  // Payroll-3D-3B Slice 7B — cancel is a material change (removes a
+  // PENDING correction from the scope's pendingCorrectionCount).
+  // Wrap status flip + scope bump in one tx.
+  const updated = await prisma.$transaction(async (tx) => {
+    const u = await tx.timeClockCorrectionRequest.update({
+      where: { id: row.id }, data: { status: "CANCELLED", updatedAt: new Date() },
+    });
+    // Resolve department for the bump.
+    const scope = await resolveCorrectionScope(principal.clubId, row);
+    if (scope.departmentId) {
+      const at = row.requestedOccurredAt ?? row.createdAt;
+      const per = await tx.payrollPayPeriod.findFirst({
+        where: { clubId: principal.clubId, periodStart: { lte: at }, periodEnd: { gt: at } },
+        orderBy: { periodStart: "desc" }, select: { id: true },
+      });
+      if (per) {
+        await bumpScopeVersion(principal.clubId, per.id, scope.departmentId, tx);
+      }
+    }
+    return u;
   });
   await audit(null, {
     clubId: principal.clubId,
@@ -595,6 +656,22 @@ export async function approveCorrectionRequest(
       createdResolutionEventId = newEvent.id;
     }
 
+    // Payroll-3D-3B Slice 7B (2026-09-06) — bump scope version so a
+    // concurrent approveTimesheetScope observes the correction
+    // decision via its CAS. Runs INSIDE the correction approve tx so
+    // the bump commits atomically with the status change +
+    // ADMIN_CORRECTION event.
+    if (scope.departmentId) {
+      const at = requestedAt ?? existing.createdAt;
+      const per = await tx.payrollPayPeriod.findFirst({
+        where: { clubId, periodStart: { lte: at }, periodEnd: { gt: at } },
+        orderBy: { periodStart: "desc" }, select: { id: true },
+      });
+      if (per) {
+        await bumpScopeVersion(clubId, per.id, scope.departmentId, tx);
+      }
+    }
+
     return { createdResolutionEventId, supersededOriginalEventId };
   }, { timeout: 20_000, maxWait: 5_000 });
 
@@ -755,14 +832,29 @@ export async function rejectCorrectionRequest(
   const reviewerNote = (input.reviewerNote ?? "").trim().replace(/[<>]/g, "").slice(0, 500) || null;
   const now = new Date();
 
-  const cas = await prisma.timeClockCorrectionRequest.updateMany({
-    where: { id: existing.id, status: "PENDING" },
-    data:  { status: "REJECTED", reviewedAt: now, reviewedByUserId: principal.id, reviewerNote },
+  // Payroll-3D-3B Slice 7B (2026-09-06) — CAS + scope bump in one tx
+  // so a concurrent approveTimesheetScope observes the rejection via
+  // its version CAS.
+  await prisma.$transaction(async (tx) => {
+    const cas = await tx.timeClockCorrectionRequest.updateMany({
+      where: { id: existing.id, status: "PENDING" },
+      data:  { status: "REJECTED", reviewedAt: now, reviewedByUserId: principal.id, reviewerNote },
+    });
+    if (cas.count === 0) {
+      const cur = await tx.timeClockCorrectionRequest.findUnique({ where: { id: existing.id } });
+      throw new ConflictError(`Correction request already ${cur?.status ?? "resolved"}.`);
+    }
+    if (scope.departmentId) {
+      const at = existing.requestedOccurredAt ?? existing.createdAt;
+      const per = await tx.payrollPayPeriod.findFirst({
+        where: { clubId, periodStart: { lte: at }, periodEnd: { gt: at } },
+        orderBy: { periodStart: "desc" }, select: { id: true },
+      });
+      if (per) {
+        await bumpScopeVersion(clubId, per.id, scope.departmentId, tx);
+      }
+    }
   });
-  if (cas.count === 0) {
-    const cur = await prisma.timeClockCorrectionRequest.findUnique({ where: { id: existing.id } });
-    throw new ConflictError(`Correction request already ${cur?.status ?? "resolved"}.`);
-  }
   const finalRow = await prisma.timeClockCorrectionRequest.findUniqueOrThrow({
     where: { id: existing.id },
   });

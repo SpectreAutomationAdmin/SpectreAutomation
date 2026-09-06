@@ -287,32 +287,50 @@ export async function materializeEmployeeTimesheet(
     const seenClockIns = new Set<number>();
 
     let upserted = 0;
+    // Payroll-3D-3B Slice 7B (2026-09-06) — track TRULY-material
+    // changes (new entry OR existing entry with a diff) so no-op
+    // materialise passes don't spuriously bump the scope version and
+    // trigger false REVIEW_REQUIRED cascades.
+    let materiallyChanged = 0;
     for (const s of inPeriod) {
       seenClockIns.add(s.clockInAt.getTime());
       const existing = existingByClockIn.get(s.clockInAt.getTime()) ?? null;
-      const entry = existing
-        ? await tx.payrollTimesheetEntry.update({
-            where: { id: existing.id },
-            data: {
-              clockOutAt:      s.clockOutAt,
-              recordedSeconds: s.recordedSeconds,
-              breakSeconds:    s.breakSeconds,
-              workDate:        s.workDate,
-              employmentAssignmentId: s.employmentAssignmentId,
-              earningClassification:  "REGULAR",
-            },
-          })
-        : await tx.payrollTimesheetEntry.create({
-            data: {
-              clubId, timesheetId: timesheet.id, employeeId,
-              workDate: s.workDate,
-              employmentAssignmentId: s.employmentAssignmentId,
-              earningClassification:  "REGULAR",
-              clockInAt: s.clockInAt, clockOutAt: s.clockOutAt,
-              recordedSeconds: s.recordedSeconds,
-              breakSeconds:    s.breakSeconds,
-            },
-          });
+      let entry;
+      if (existing) {
+        // Compare BEFORE writing — cheap diff on the material fields
+        // hashed into computeScopeRevision.
+        const diff =
+          existing.clockOutAt.getTime() !== s.clockOutAt.getTime()
+          || existing.recordedSeconds !== s.recordedSeconds
+          || existing.breakSeconds !== s.breakSeconds
+          || existing.workDate.getTime() !== s.workDate.getTime()
+          || existing.employmentAssignmentId !== s.employmentAssignmentId;
+        entry = await tx.payrollTimesheetEntry.update({
+          where: { id: existing.id },
+          data: {
+            clockOutAt:      s.clockOutAt,
+            recordedSeconds: s.recordedSeconds,
+            breakSeconds:    s.breakSeconds,
+            workDate:        s.workDate,
+            employmentAssignmentId: s.employmentAssignmentId,
+            earningClassification:  "REGULAR",
+          },
+        });
+        if (diff) materiallyChanged += 1;
+      } else {
+        entry = await tx.payrollTimesheetEntry.create({
+          data: {
+            clubId, timesheetId: timesheet.id, employeeId,
+            workDate: s.workDate,
+            employmentAssignmentId: s.employmentAssignmentId,
+            earningClassification:  "REGULAR",
+            clockInAt: s.clockInAt, clockOutAt: s.clockOutAt,
+            recordedSeconds: s.recordedSeconds,
+            breakSeconds:    s.breakSeconds,
+          },
+        });
+        materiallyChanged += 1;
+      }
       upserted += 1;
 
       // Provenance — idempotent via upsert on the (timesheetEntryId,
@@ -369,6 +387,53 @@ export async function materializeEmployeeTimesheet(
       : "OPEN";
     if (timesheet.status !== status) {
       await tx.payrollTimesheet.update({ where: { id: timesheet.id }, data: { status } });
+    }
+
+    // Payroll-3D-3B Slice 7B (2026-09-06) — atomically bump the
+    // scope-version for every department whose material state
+    // changed. Skips no-op materialise passes (no entries upserted,
+    // no stale deletions, no status change) so unchanged reads don't
+    // pathologically invalidate a still-valid approval. Otherwise
+    // enumerate affected departments via the current entries + the
+    // deleted-stale entries.
+    const materialChanged = materiallyChanged > 0 || deletedStale > 0 || timesheet.status !== status;
+    if (materialChanged) {
+      // Enumerate department ids the current + pre-existing entries
+      // reference. Two Prisma reads inside the tx so we see committed
+      // state without races.
+      const currentEntries = await tx.payrollTimesheetEntry.findMany({
+        where: { timesheetId: timesheet.id },
+        select: {
+          employmentAssignmentId: true,
+        },
+      });
+      const assnIds = new Set<string>();
+      for (const e of currentEntries) {
+        if (e.employmentAssignmentId) assnIds.add(e.employmentAssignmentId);
+      }
+      // Include pre-existing entries' assignments (so a delete-only
+      // materialise still bumps the department whose entry vanished).
+      for (const e of existingEntries) {
+        if (e.employmentAssignmentId) assnIds.add(e.employmentAssignmentId);
+      }
+      const assignments = assnIds.size > 0
+        ? await tx.employeeEmploymentAssignment.findMany({
+            where: { id: { in: Array.from(assnIds) } },
+            select: { departmentId: true },
+          })
+        : [];
+      const deptIds = Array.from(new Set(
+        assignments.map((a) => a.departmentId).filter((d): d is string => !!d),
+      )).sort();
+      for (const departmentId of deptIds) {
+        await tx.payrollDepartmentTimeScopeState.upsert({
+          where: {
+            clubId_payPeriodId_departmentId: { clubId, payPeriodId, departmentId },
+          },
+          update: { version: { increment: 1 } },
+          create: { clubId, payPeriodId, departmentId, version: 1 },
+        });
+      }
     }
 
     return {

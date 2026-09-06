@@ -323,6 +323,7 @@ function ScopeApprovalCard(props: {
           payPeriodId: card.payPeriodId,
           departmentId: card.departmentId,
           expectedRevision: card.currentRevision,
+          expectedScopeVersion: card.currentScopeVersion,
         });
         handleResult(r);
       } finally {

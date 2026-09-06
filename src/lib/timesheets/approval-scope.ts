@@ -98,6 +98,13 @@ export interface ScopeReview {
   totalRecordedSeconds: number;
   exceptionSummary:   ScopeExceptionSummary;
   currentRevision:    string;
+  /**
+   * Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token
+   * the manager attests to. Server increments on every material
+   * write; approve rejects with STALE if this doesn't match at
+   * commit time. See scope-state.ts for the mechanism.
+   */
+  currentScopeVersion: number;
   approval:          ApprovalRecordView | null;
   readiness:         {
     ready:            boolean;
@@ -441,6 +448,9 @@ export async function getScopeReview(
   });
 
   const currentRevision = await computeScopeRevision(clubId, payPeriodId, departmentId);
+  // Payroll-3D-3B Slice 7B (2026-09-06) — scope-version attestation.
+  const { readScopeVersion } = await import("./scope-state");
+  const currentScopeVersion = await readScopeVersion(clubId, payPeriodId, departmentId);
 
   // Blocking readiness reasons (§29, §66).
   const blocking: ReadinessBlockingReason[] = [];
@@ -508,6 +518,7 @@ export async function getScopeReview(
       missingAssignmentCount: missingAssignment,
     },
     currentRevision,
+    currentScopeVersion,
     approval,
     readiness: {
       ready: blocking.length === 0 && entryRows.length > 0,

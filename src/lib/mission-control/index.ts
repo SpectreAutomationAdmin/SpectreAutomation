@@ -191,6 +191,10 @@ export type PayrollWorkIntakeCard =
       readinessReady: boolean;
       blockers: string[];
       currentRevision: string;
+      // Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token
+      // the client passes back through the dispatcher. Server never
+      // trusts client — the CAS re-validates at commit time.
+      currentScopeVersion: number;
       reviewRequired: boolean;
       deepLink: { href: string; label: string } | null;
     }

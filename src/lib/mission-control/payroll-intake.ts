@@ -313,6 +313,7 @@ async function buildScopeCard(args: {
     readinessReady: review.readiness.ready,
     blockers,
     currentRevision: review.currentRevision,
+    currentScopeVersion: review.currentScopeVersion,
     reviewRequired,
     deepLink: args.deep,
   };

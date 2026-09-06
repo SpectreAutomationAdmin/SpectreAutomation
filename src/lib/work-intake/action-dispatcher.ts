@@ -122,6 +122,11 @@ export type WorkIntakeActionRequest =
       payPeriodId: string;
       departmentId: string;
       expectedRevision: string;
+      // Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token
+      // captured server-side from getScopeReview at loader time. The
+      // browser passes it back verbatim; the server never trusts it,
+      // and the approve tx's DB CAS re-validates at commit.
+      expectedScopeVersion?: number;
     };
 
 export type WorkIntakeActionErrorCode =
@@ -255,6 +260,7 @@ async function dispatchTimesheetScopeApprove(
     payPeriodId: req.payPeriodId,
     departmentId: req.departmentId,
     attestedRevision: req.expectedRevision,
+    expectedScopeVersion: req.expectedScopeVersion,
   });
   return { ok: true, action: "timesheetScope.approve" };
 }

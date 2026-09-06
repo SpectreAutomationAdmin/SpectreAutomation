@@ -489,6 +489,8 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  payrollDepartmentTimeScopeStates   PayrollDepartmentTimeScopeState[]
   // Payroll-3D-4.
   payrollTimeAdjustments             PayrollTimeAdjustment[]
   payrollBatchExceptions             PayrollBatchException[]
@@ -2017,6 +2019,8 @@ model Department {
   employees          Employee[]          @relation("EmployeeDepartment")
   positions          EmployeePosition[]  @relation("PositionDepartment")
   payrollTimeApprovals PayrollDepartmentTimeApproval[] @relation("DepartmentPayrollTimeApprovals")
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  payrollScopeStates   PayrollDepartmentTimeScopeState[] @relation("DepartmentScopeStates")
   timesheetEntries   TimesheetEntry[]    @relation("TimesheetEntryDepartment")
   payrollLines       PayrollLine[]       @relation("PayrollLineDepartment")
   labourBudgets      LabourBudget[]      @relation("LabourBudgetDepartment")
@@ -11851,6 +11855,8 @@ model PayrollPayPeriod {
 
   batches       PayrollBatch[]
   departmentTimeApprovals PayrollDepartmentTimeApproval[]
+  // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
+  scopeStates             PayrollDepartmentTimeScopeState[] @relation("PayPeriodScopeStates")
   // Payroll-3D-2 back-relation.
   payrollTimesheets       PayrollTimesheet[] @relation("PayPeriodPayrollTimesheets")
   // Payroll-3D-4 back-relations.
@@ -12451,6 +12457,8 @@ model PayrollDepartmentTimeApproval {
   approvedByUserId     String
   // Payroll-3D-3 — revision the approver attested to (see prisma/schema.prisma).
   approvedRevision     String?
+  // Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token.
+  approvedScopeVersion Int?
   reopenedAt           DateTime?
   reopenedByUserId     String?
   reopenReason         String?
@@ -12466,6 +12474,25 @@ model PayrollDepartmentTimeApproval {
   @@index([clubId, payPeriodId])
   @@index([clubId, departmentId])
   @@index([workIntakeItemId])
+}
+
+// Payroll-3D-3B Slice 7B (2026-09-06) — DB-controlled concurrency
+// token for the (clubId × payPeriodId × departmentId) approval scope.
+model PayrollDepartmentTimeScopeState {
+  id           String   @id @default(cuid())
+  clubId       String
+  club         Club     @relation(fields: [clubId], references: [id])
+  payPeriodId  String
+  payPeriod    PayrollPayPeriod @relation("PayPeriodScopeStates", fields: [payPeriodId], references: [id])
+  departmentId String
+  department   Department @relation("DepartmentScopeStates", fields: [departmentId], references: [id])
+  version      Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([clubId, payPeriodId, departmentId])
+  @@index([clubId, payPeriodId])
+  @@index([clubId, departmentId])
 }
 
 // Approved-time-entry seam (sections 19-20). This is the canonical
