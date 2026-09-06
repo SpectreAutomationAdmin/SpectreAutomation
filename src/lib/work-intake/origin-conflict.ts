@@ -22,7 +22,16 @@
 export const CORRECTION_REVIEW_ORIGIN_INDEX_NAME =
   "WorkIntakeOrigin_timeclock_correction_primary_key" as const;
 
+// Payroll-3D-3B Slice 7 (2026-09-06) — timesheet-approval scope
+// partial-unique. Same shape as the correction-review index, distinct
+// index name so P2002 targets can be distinguished.
+export const SCOPE_APPROVAL_ORIGIN_INDEX_NAME =
+  "WorkIntakeOrigin_timesheet_approval_primary_key" as const;
+
 const CORRECTION_REVIEW_ORIGIN_COLUMNS = ["clubId", "kind", "referenceId"] as const;
+// Same column tuple for both indexes; the discriminator is the index
+// name / kind. Callers pass the expected index name when checking.
+const SCOPE_APPROVAL_ORIGIN_COLUMNS = ["clubId", "kind", "referenceId"] as const;
 
 /**
  * Returns true iff the given error is a Prisma P2002 unique-constraint
@@ -33,40 +42,53 @@ const CORRECTION_REVIEW_ORIGIN_COLUMNS = ["clubId", "kind", "referenceId"] as co
  * canonical row" from "unrelated P2002, propagate the error."
  */
 export function isCorrectionReviewOriginConflict(err: unknown): boolean {
+  return isP2002ForIndex(err, CORRECTION_REVIEW_ORIGIN_INDEX_NAME, CORRECTION_REVIEW_ORIGIN_COLUMNS);
+}
+
+// Payroll-3D-3B Slice 7 (2026-09-06) — recognises P2002 on the
+// timesheet-approval scope partial-unique. Same column tuple; the
+// index name is the discriminator when Prisma surfaces the target
+// as a string. When the target is a column-array, the shim can't
+// distinguish which of the two indexes fired — that's acceptable
+// because both indexes name the same origin canonical uniqueness
+// guarantee: refetch canonical → return existing. Callers that need
+// to distinguish (rare) should read the origin.kind on the refetched
+// row.
+export function isScopeApprovalOriginConflict(err: unknown): boolean {
+  return isP2002ForIndex(err, SCOPE_APPROVAL_ORIGIN_INDEX_NAME, SCOPE_APPROVAL_ORIGIN_COLUMNS);
+}
+
+// Combined check: either narrow WorkIntakeOrigin index fired. Safe
+// callers that just need "refetch canonical" semantics.
+export function isWorkIntakeOriginConflict(err: unknown): boolean {
+  return isCorrectionReviewOriginConflict(err) || isScopeApprovalOriginConflict(err);
+}
+
+function isP2002ForIndex(err: unknown, indexName: string, cols: readonly string[]): boolean {
   if (!err || typeof err !== "object") return false;
   const anyErr = err as { code?: unknown; meta?: unknown };
   if (anyErr.code !== "P2002") return false;
-  // The target-tuple check IS the second gate — a bespoke error shape
-  // would need to fake both .code AND the exact 3-column meta.target,
-  // which is narrow enough that we don't need a .name check on top.
-  return targetMatches(anyErr.meta);
+  return targetMatches(anyErr.meta, indexName, cols);
 }
 
-function targetMatches(meta: unknown): boolean {
+function targetMatches(meta: unknown, indexName: string, cols: readonly string[]): boolean {
   if (!meta || typeof meta !== "object") return false;
   const target = (meta as { target?: unknown }).target;
-  // Prisma surfaces `target` as:
-  //   * a string (index name OR comma-separated columns depending on adapter)
-  //   * an array of column names
-  //   * a single column name (rare)
   if (typeof target === "string") {
-    if (target === CORRECTION_REVIEW_ORIGIN_INDEX_NAME) return true;
-    if (target.includes(CORRECTION_REVIEW_ORIGIN_INDEX_NAME)) return true;
-    // Column-list surface as a comma-joined string.
-    return matchesColumnList(target.split(",").map((s) => s.trim()));
+    if (target === indexName) return true;
+    if (target.includes(indexName)) return true;
+    return matchesColumnList(target.split(",").map((s) => s.trim()), cols);
   }
   if (Array.isArray(target)) {
-    return matchesColumnList(target);
+    return matchesColumnList(target, cols);
   }
   return false;
 }
 
-function matchesColumnList(cols: unknown[]): boolean {
-  if (cols.length !== CORRECTION_REVIEW_ORIGIN_COLUMNS.length) return false;
-  // Order does not matter — Prisma reports columns in index order but
-  // some adapters sort alphabetically. Compare as sets of strings.
-  const set = new Set(cols.map((c) => String(c)));
-  for (const expected of CORRECTION_REVIEW_ORIGIN_COLUMNS) {
+function matchesColumnList(actualCols: unknown[], expectedCols: readonly string[]): boolean {
+  if (actualCols.length !== expectedCols.length) return false;
+  const set = new Set(actualCols.map((c) => String(c)));
+  for (const expected of expectedCols) {
     if (!set.has(expected)) return false;
   }
   return true;

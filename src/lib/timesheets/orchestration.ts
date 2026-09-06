@@ -26,6 +26,7 @@
 import { prisma } from "../prisma";
 import { listReviewableScopes, type ReviewableScope } from "./approval-scope";
 import { resolveDepartmentTimeApprover } from "./manager-approval";
+import { isScopeApprovalOriginConflict } from "../work-intake/origin-conflict";
 
 const SCOPE_ORIGIN_KIND = "PAYROLL_TIMESHEET_APPROVAL";
 const GAP_ORIGIN_KIND   = "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP";
@@ -97,51 +98,84 @@ async function ensureOriginBackedItem(args: {
     });
     return { workIntakeItemId: existing.workIntakeItemId, created: false };
   }
-  const now = new Date();
-  const created = await prisma.workIntakeItem.create({
-    data: {
-      clubId: args.clubId,
-      status: "OPEN",
-      judgmentRequired: true,
-      ownerUserId: args.ownerUserId,
-      classification: args.classification,
-      classificationReason: `Spectre Payroll orchestrated a ${args.workSubtype} task.`,
-      classificationMethod: "RULE",
-      classificationRuleKey: "payroll-timesheet-approval.v1",
-      classificationRuleVersion: 1,
-      displaySourceLabel: "Spectre Payroll",
-      displaySender: "Payroll orchestration",
-      displaySubject: args.subject,
-      displayPreview: args.preview,
-      displayReceivedAt: now,
-      displayHasAttachments: false,
-      workDomain: "PAYROLL",
-      workIntent: args.workIntent,
-      workSubtype: args.workSubtype,
-      workDomainConfidence: 1,
-      workDomainClassifiedAt: now,
-      workDomainClassifierVersion: "payroll-timesheet-approval.v1",
-    },
-    select: { id: true },
-  });
-  await prisma.workIntakeOrigin.create({
-    data: {
-      clubId: args.clubId,
-      workIntakeItemId: created.id,
-      kind: args.originKind,
-      referenceId: args.originReferenceId,
-      role: "PRIMARY",
-      linkReason: args.linkReason,
-    },
-  });
-  await prisma.workIntakeActivity.create({
-    data: {
-      workIntakeItemId: created.id,
-      action: "MATERIALISED",
-      note: args.linkReason,
-    },
-  });
-  return { workIntakeItemId: created.id, created: true };
+  // Payroll-3D-3B Slice 7 (2026-09-06) — race-safe create. Item +
+  // origin + activity in one $transaction so a P2002 rejection on
+  // the partial-unique rolls back the orphan item. On our specific
+  // scope-approval conflict, refetch canonical → return existing.
+  // Same pattern as Slice 2's correction-review orchestrator.
+  try {
+    const itemId = await prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const created = await tx.workIntakeItem.create({
+        data: {
+          clubId: args.clubId,
+          status: "OPEN",
+          judgmentRequired: true,
+          ownerUserId: args.ownerUserId,
+          classification: args.classification,
+          classificationReason: `Spectre Payroll orchestrated a ${args.workSubtype} task.`,
+          classificationMethod: "RULE",
+          classificationRuleKey: "payroll-timesheet-approval.v1",
+          classificationRuleVersion: 1,
+          displaySourceLabel: "Spectre Payroll",
+          displaySender: "Payroll orchestration",
+          displaySubject: args.subject,
+          displayPreview: args.preview,
+          displayReceivedAt: now,
+          displayHasAttachments: false,
+          workDomain: "PAYROLL",
+          workIntent: args.workIntent,
+          workSubtype: args.workSubtype,
+          workDomainConfidence: 1,
+          workDomainClassifiedAt: now,
+          workDomainClassifierVersion: "payroll-timesheet-approval.v1",
+        },
+        select: { id: true },
+      });
+      await tx.workIntakeOrigin.create({
+        data: {
+          clubId: args.clubId,
+          workIntakeItemId: created.id,
+          kind: args.originKind,
+          referenceId: args.originReferenceId,
+          role: "PRIMARY",
+          linkReason: args.linkReason,
+        },
+      });
+      await tx.workIntakeActivity.create({
+        data: {
+          workIntakeItemId: created.id,
+          action: "MATERIALISED",
+          note: args.linkReason,
+        },
+      });
+      return created.id;
+    });
+    return { workIntakeItemId: itemId, created: true };
+  } catch (err) {
+    if (!isScopeApprovalOriginConflict(err)) throw err;
+    // Race loser — refetch canonical origin.
+    const canonical = await prisma.workIntakeOrigin.findFirst({
+      where: {
+        clubId: args.clubId, kind: args.originKind,
+        referenceId: args.originReferenceId, role: "PRIMARY",
+      },
+      select: { workIntakeItemId: true },
+    });
+    if (canonical) {
+      await prisma.workIntakeItem.update({
+        where: { id: canonical.workIntakeItemId },
+        data: {
+          ownerUserId: args.ownerUserId,
+          displaySubject: args.subject,
+          displayPreview: args.preview,
+          displayReceivedAt: new Date(),
+        },
+      });
+      return { workIntakeItemId: canonical.workIntakeItemId, created: false };
+    }
+    throw err;
+  }
 }
 
 function fmtHours(seconds: number): string {
@@ -227,6 +261,26 @@ export async function ensureTimesheetApprovalWorkItems(
       // Configuration gap — route to Tenant Admin so a real person
       // becomes accountable for setting the Timesheet Approver.
       const tenantAdmin = await resolveTenantAdmin(clubId);
+      if (!tenantAdmin) {
+        // Payroll-3D-3B Slice 7 (2026-09-06) — fail-closed: no
+        // ownerless active WI. If a tenant somehow has no Primary
+        // Tenant Administrator, that's tenant-integrity corruption
+        // (Slice 7 §10 — do NOT route opportunistically to any
+        // arbitrary user). Log with high severity + skip creating
+        // the gap card. The BackgroundJob recovery layer + the
+        // periodic worker sweep will retry, and once a Tenant Admin
+        // is assigned, the next orchestration run will create the
+        // canonical config-gap obligation correctly.
+        const { logger } = await import("../observability/logger");
+        logger.error("payroll.timesheet_approval.tenant_admin_missing", {
+          clubId, payPeriodId,
+          departmentId: scope.departmentId,
+          departmentCode: scope.departmentCode,
+          obligationKind: "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP",
+          severity: "TENANT_INTEGRITY_CORRUPTION",
+        });
+        continue;
+      }
       const subject = `Timesheet Approver missing — ${scope.departmentName}`;
       const preview = `Assign a Timesheet Approver for ${scope.departmentName} before recorded time can be reviewed.`;
       const { workIntakeItemId, created } = await ensureOriginBackedItem({

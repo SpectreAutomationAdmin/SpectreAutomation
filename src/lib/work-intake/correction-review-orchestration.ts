@@ -204,6 +204,18 @@ async function ensureMissingApproverGap(args: {
     select: { firstName: true, lastName: true },
   });
   const tenantAdmin = await resolveTenantAdmin(clubId);
+  if (!tenantAdmin) {
+    // Payroll-3D-3B Slice 7 (2026-09-06) — fail-closed: never
+    // create an ownerless config-gap WI. See orchestration.ts for
+    // the paired policy note.
+    logger.error("payroll.correction_review.tenant_admin_missing", {
+      clubId, correctionRequestId: correction.id, departmentId,
+      obligationKind: "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP",
+      gapReason: "MISSING_APPROVER",
+      severity: "TENANT_INTEGRITY_CORRUPTION",
+    });
+    return { kind: "no-op-status", status: "TENANT_ADMIN_MISSING" };
+  }
   const subject = `Timesheet correction routing needs attention — ${department?.name ?? "department"}`;
   const preview =
     `No Timesheet Approver is configured for ${department?.name ?? "this department"}.`
@@ -237,6 +249,16 @@ async function ensureMissingAssignmentGap(args: {
     select: { firstName: true, lastName: true, employeeNumber: true },
   });
   const tenantAdmin = await resolveTenantAdmin(clubId);
+  if (!tenantAdmin) {
+    // Payroll-3D-3B Slice 7 (2026-09-06) — fail-closed.
+    logger.error("payroll.correction_review.tenant_admin_missing", {
+      clubId, correctionRequestId: correction.id,
+      obligationKind: "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP",
+      gapReason: "MISSING_ASSIGNMENT",
+      severity: "TENANT_INTEGRITY_CORRUPTION",
+    });
+    return { kind: "no-op-status", status: "TENANT_ADMIN_MISSING" };
+  }
   const subject = `Timesheet correction routing needs attention — no work assignment`;
   const preview =
     `A correction from ${employee?.firstName ?? "an employee"} ${employee?.lastName ?? ""}`.trim()

@@ -583,12 +583,15 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
     if (!r.ok) expect(r.code).toBe("UNAUTHORIZED");
   });
 
-  it("§38 admin override — tenant-scoped payroll:write may still act on correction (canonical behaviour)", async () => {
-    // Documents the intentional pre-existing override: a tenant-
-    // scoped Payroll Admin may decide corrections independent of
-    // DEPARTMENT_TIME_APPROVAL ownership (see
-    // assertCorrectionScopeAuthorization in correction-service.ts).
-    // Slice 4 preserves this. It does NOT invent a new privilege.
+  it("§38 (Slice 7 §17 revised) Payroll Admin CANNOT use another manager's WI card — canonical override remains via detailed workspace", async () => {
+    // Slice 7 §17 (2026-09-06) — Work Intake ownership guard.
+    // Founder-preferred model: routing = responsibility, override =
+    // detailed workspace. A Payroll Admin using another manager's
+    // WI card would blur that distinction. The canonical
+    // approveCorrectionRequest / rejectCorrectionRequest service
+    // still permits Payroll Admin override when called directly
+    // (from the Payroll Time workspace), but the Work Intake
+    // dispatcher fails-closed on ownership mismatch.
     const F = await setupCorrectionFixture("38");
     const pa = await makePayrollAdmin(F.club.id, "payroll.admin@t.test");
     const r = await invokeWorkIntakeAction(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
@@ -596,7 +599,18 @@ describe("Payroll-3D-3B Slice 4 · Work Intake action dispatcher", () => {
       workIntakeItemId: F.workIntakeItemId,
       correctionRequestId: F.request.id,
     });
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("UNAUTHORIZED");
+    // Correction is UNCHANGED — no domain mutation via the stolen card.
+    const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corr!.status).toBe("PENDING");
+    // Detailed-workspace override still works — direct canonical call.
+    const { approveCorrectionRequest } = await import("@/lib/timesheets/correction-service");
+    await approveCorrectionRequest(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
+      requestId: F.request.id, reviewerNote: null,
+    });
+    const corrAfter = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corrAfter!.status).toBe("APPROVED");
   });
 
   it("§39/§40 correction approve → no PayrollApprovedTimeEntry, no PayrollBatch, no JournalEntry", async () => {
@@ -882,7 +896,12 @@ describe("Payroll-3D-3B Slice 4A · WI actionable-status invariant", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("§4A-11 Payroll Admin override + RESOLVED card → cannot use stale card", async () => {
+  it("§4A-11 (Slice 7 revised) Payroll Admin + RESOLVED card → UNAUTHORIZED (Slice 7 responsibility guard fires before STALE), detailed workspace override still works", async () => {
+    // Under Slice 7 §17, PA is not the CURRENT
+    // DEPARTMENT_TIME_APPROVAL owner for this correction's scope
+    // (Events Manager is). The responsibility guard fires before
+    // the actionable-status STALE gate → UNAUTHORIZED regardless of
+    // WI status. Detailed-workspace override remains available.
     const F = await setupCorrectionFixture("4A-11");
     const pa = await makePayrollAdmin(F.club.id, "payroll.admin@t.test");
     await db().workIntakeItem.update({
@@ -895,20 +914,16 @@ describe("Payroll-3D-3B Slice 4A · WI actionable-status invariant", () => {
       correctionRequestId: F.request.id,
     });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe("STALE");
-    // Correction unchanged.
+    if (!r.ok) expect(r.code).toBe("UNAUTHORIZED");
     const corr = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
     expect(corr!.status).toBe("PENDING");
-    // Reconciliation reopened → PA can act via canonical override on
-    // the fresh active card.
-    const reopened = await db().workIntakeItem.findUnique({ where: { id: F.workIntakeItemId } });
-    expect(reopened!.status).toBe("OPEN");
-    const r2 = await invokeWorkIntakeAction(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
-      action: "correction.approve",
-      workIntakeItemId: F.workIntakeItemId,
-      correctionRequestId: F.request.id,
+    // Detailed-workspace override still works.
+    const { approveCorrectionRequest } = await import("@/lib/timesheets/correction-service");
+    await approveCorrectionRequest(principal(pa, F.club.id, "PAYROLL_ADMIN"), F.club.id, {
+      requestId: F.request.id, reviewerNote: null,
     });
-    expect(r2.ok).toBe(true);
+    const corrAfter = await db().timeClockCorrectionRequest.findUnique({ where: { id: F.request.id } });
+    expect(corrAfter!.status).toBe("APPROVED");
   });
 
   it("§4A-14/§4A-15 side-effect isolation: PayrollApprovedTimeEntry / PayrollBatch / JournalEntry unchanged", async () => {

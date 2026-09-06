@@ -184,6 +184,7 @@ async function dispatchCorrectionApprove(
     activeClubId,
     workIntakeItemId: req.workIntakeItemId,
     correctionRequestId: req.correctionRequestId,
+    principalUserId: principal.id,
   });
   if (!bindOutcome.ok) return bindOutcome.result;
 
@@ -207,6 +208,7 @@ async function dispatchCorrectionReject(
     activeClubId,
     workIntakeItemId: req.workIntakeItemId,
     correctionRequestId: req.correctionRequestId,
+    principalUserId: principal.id,
   });
   if (!bindOutcome.ok) return bindOutcome.result;
 
@@ -231,6 +233,7 @@ async function dispatchTimesheetScopeApprove(
     workIntakeItemId: req.workIntakeItemId,
     payPeriodId: req.payPeriodId,
     departmentId: req.departmentId,
+    principalUserId: principal.id,
   });
   if (!bindOutcome.ok) return bindOutcome.result;
 
@@ -268,6 +271,7 @@ async function verifyCorrectionBinding(args: {
   activeClubId: string;
   workIntakeItemId: string;
   correctionRequestId: string;
+  principalUserId?: string;
 }): Promise<{ ok: true } | { ok: false; result: WorkIntakeActionResult }> {
   const item = await prisma.workIntakeItem.findFirst({
     where: { id: args.workIntakeItemId, clubId: args.activeClubId },
@@ -280,7 +284,7 @@ async function verifyCorrectionBinding(args: {
   const primaryOrigin = item.origins[0];
   if (!primaryOrigin) return notFound("WorkIntakeOrigin", args.workIntakeItemId);
 
-  // §17 — config-gap items are configuration work, not decision authority.
+  // Config-gap items are configuration work, not decision authority.
   if (primaryOrigin.kind === CORRECTION_REVIEW_GAP_KIND) {
     return {
       ok: false,
@@ -289,11 +293,45 @@ async function verifyCorrectionBinding(args: {
   }
 
   // §5 — WI must be the canonical correction-review card for the exact target.
+  // Runs BEFORE any ownership check so wrong-binding attempts always
+  // return NOT_FOUND (no information leakage about who owns which card).
   if (
     primaryOrigin.kind !== CORRECTION_REVIEW_KIND
     || primaryOrigin.referenceId !== args.correctionRequestId
   ) {
     return notFound("WorkIntakeItem", args.workIntakeItemId);
+  }
+
+  // Payroll-3D-3B Slice 7 (§17) — Work Intake responsibility guard.
+  // A Work-Intake-originated correction decision requires the
+  // principal to be the CURRENT DEPARTMENT_TIME_APPROVAL owner for
+  // the correction's scope — NOT the (possibly stale) ownerUserId
+  // projected onto the WI item. This preserves the responsibility-
+  // change flow (Slice 4 §30) while blocking the Payroll Admin
+  // tenant-scoped override from acting via someone else's card. The
+  // canonical override remains available via the DETAILED workspace
+  // (approveCorrectionRequest called directly). Placement is AFTER
+  // the reference-ID check so wrong-binding still returns NOT_FOUND.
+  if (args.principalUserId) {
+    const scope = await resolveCorrectionScope(args.activeClubId, {
+      id: args.correctionRequestId,
+      employmentAssignmentId: null,
+      originalClockEventId: null,
+    });
+    // Only enforce responsibility routing when a scope can be
+    // resolved. Corrections with no derivable scope fall through to
+    // the canonical service's own authorization (which permits
+    // tenant-scoped admins — that's the intentional fallback for
+    // ownerless obligations).
+    if (scope.departmentId) {
+      const currentOwner = await resolveDepartmentTimeApprover(args.activeClubId, scope.departmentId);
+      if (currentOwner && currentOwner !== args.principalUserId) {
+        return {
+          ok: false,
+          result: { ok: false, code: "UNAUTHORIZED", message: "You are not the current reviewer for this item." },
+        };
+      }
+    }
   }
 
   // Slice 4A — Work Intake actionability invariant. A card in any
@@ -353,6 +391,7 @@ async function verifyTimesheetScopeBinding(args: {
   workIntakeItemId: string;
   payPeriodId: string;
   departmentId: string;
+  principalUserId?: string;
 }): Promise<{ ok: true } | { ok: false; result: WorkIntakeActionResult }> {
   const item = await prisma.workIntakeItem.findFirst({
     where: { id: args.workIntakeItemId, clubId: args.activeClubId },
@@ -365,7 +404,7 @@ async function verifyTimesheetScopeBinding(args: {
   const primaryOrigin = item.origins[0];
   if (!primaryOrigin) return notFound("WorkIntakeOrigin", args.workIntakeItemId);
 
-  // §17 — config-gap items are configuration work.
+  // Config-gap items are configuration work.
   if (primaryOrigin.kind === SCOPE_GAP_ORIGIN_KIND) {
     return {
       ok: false,
@@ -374,12 +413,28 @@ async function verifyTimesheetScopeBinding(args: {
   }
 
   // §5 — WI must be the canonical timesheet-approval card for the exact scope.
+  // Runs BEFORE ownership check so wrong-binding attempts always
+  // return NOT_FOUND (no information leakage).
   const expectedReferenceId = `${args.payPeriodId}:${args.departmentId}`;
   if (
     primaryOrigin.kind !== SCOPE_ORIGIN_KIND
     || primaryOrigin.referenceId !== expectedReferenceId
   ) {
     return notFound("WorkIntakeItem", args.workIntakeItemId);
+  }
+
+  // Slice 7 §17 — Work Intake responsibility guard. Principal must
+  // be the CURRENT DEPARTMENT_TIME_APPROVAL owner for the target
+  // department (not the possibly-stale item.ownerUserId projection).
+  // See verifyCorrectionBinding for the full rationale.
+  if (args.principalUserId) {
+    const currentOwner = await resolveDepartmentTimeApprover(args.activeClubId, args.departmentId);
+    if (currentOwner && currentOwner !== args.principalUserId) {
+      return {
+        ok: false,
+        result: { ok: false, code: "UNAUTHORIZED", message: "You are not the current reviewer for this item." },
+      };
+    }
   }
 
   // Slice 4A — actionability invariant. Same rule as correction:
