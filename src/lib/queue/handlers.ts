@@ -272,6 +272,26 @@ registerHandler("PRODUCT_REFERENCE_RESEARCH", async ({ payload, jobId }) => {
   });
 });
 
+// Payroll-3D-3B Slice 2 (2026-09-06) — recovery hook for the
+// correction-review Work Intake obligation. Enqueued from
+// submitCorrectionRequest when the inline await fails. Handler
+// re-resolves routing from the correction id and is a no-op when
+// the correction is no longer PENDING (§ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI
+// in src/lib/queue/index.ts).
+registerHandler<{
+  clubId: string;
+  correctionRequestId: string;
+}>("ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI", async ({ payload }) => {
+  const { ensureCorrectionReviewWorkItems } = await import(
+    "../work-intake/correction-review-orchestration"
+  );
+  const outcome = await ensureCorrectionReviewWorkItems({
+    clubId: payload.clubId,
+    correctionRequestId: payload.correctionRequestId,
+  });
+  return { outcomeKind: outcome.kind };
+});
+
 /**
  * Sprint 2 B4.1 — Which mailbox JobKinds are implemented today. Used
  * by a future health endpoint to distinguish "reserved" from "live".

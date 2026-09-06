@@ -212,7 +212,11 @@ describe("Payroll-3D-3B Slice 1 · correction-review origin partial unique", () 
 
   it("§K concurrent config-gap — exactly one canonical gap WI", async () => {
     const club = await makeClub("3D3B-slice1-K");
-    const gapKey = "dept-nnn:req-K-1";
+    // Slice 2 formalised gap referenceId prefixes: MISSING_APPROVER
+    // (department known, no approver) and MISSING_ASSIGNMENT
+    // (no derivable department). Slice 1 exercises the constraint
+    // itself so the string only needs to be deterministic + distinct.
+    const gapKey = "MISSING_APPROVER:dept-nnn:req-K-1";
 
     const [a, b] = await Promise.all([
       idempotentCreateCorrectionReviewCard({

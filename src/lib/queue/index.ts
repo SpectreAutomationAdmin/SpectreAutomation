@@ -110,7 +110,18 @@ export type JobKind =
   //
   // Payload: { normalizedKey, refRequest, dependentDocumentIds, dependentClubIds }
   // Handler: src/lib/ap-intelligence/external-product-reference/research-worker.ts
-  | "PRODUCT_REFERENCE_RESEARCH";
+  | "PRODUCT_REFERENCE_RESEARCH"
+  // Payroll-3D-3B Slice 2 (2026-09-06) — recovery hook for the
+  // correction-review Work Intake obligation. Enqueued from
+  // submitCorrectionRequest ONLY when the inline
+  // ensureCorrectionReviewWorkItems await fails. Handler re-resolves
+  // routing from the correction id and is a no-op when the correction
+  // is no longer PENDING. Idempotency key:
+  //   `ensure-tccr-wi:{clubId}:{correctionRequestId}`
+  // Payload: { clubId: string; correctionRequestId: string }
+  // Handler: src/lib/queue/handlers.ts →
+  //   runEnsureTimeclockCorrectionReviewWi
+  | "ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

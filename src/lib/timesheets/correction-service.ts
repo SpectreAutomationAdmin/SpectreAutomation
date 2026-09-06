@@ -19,6 +19,9 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from ".
 import type { EmployeePortalPrincipal } from "../employee-portal-session";
 import { materializeEmployeeTimesheet } from "./service";
 import { resolveDepartmentTimeApprover, invalidateApprovalIfDrifted } from "./manager-approval";
+import { ensureCorrectionReviewWorkItems } from "../work-intake/correction-review-orchestration";
+import { enqueue } from "../queue";
+import { logger } from "../observability/logger";
 
 export const CORRECTION_REQUEST_TYPES = [
   "ADD_MISSING_CLOCK_IN",
@@ -247,6 +250,14 @@ export async function submitCorrectionRequest(
         requestedOccurredAt: requestedOccurredAt?.toISOString() ?? null,
       },
     });
+    // Payroll-3D-3B Slice 2 — post-commit orchestration for the
+    // manager correction-review Work Intake obligation. Awaited so
+    // any inline failure lands as a durable BackgroundJob (rather
+    // than silently fire-and-forget). The correction itself is
+    // already committed and correct; a WI failure never rolls it
+    // back. Do NOT surface WI infrastructure detail to the employee
+    // UI — the returned shape is unchanged.
+    await orchestrateCorrectionReviewWorkItem(principal.clubId, created.id);
     return { request: toRow(created), idempotent: false };
   } catch (err) {
     // P2002 = unique constraint violation.
@@ -259,9 +270,61 @@ export async function submitCorrectionRequest(
           status: "PENDING",
         },
       });
-      if (existing) return { request: toRow(existing), idempotent: true };
+      if (existing) {
+        // The idempotent-submit branch still needs to guarantee the
+        // manager card exists — a prior submission may have committed
+        // the correction but crashed before orchestration.
+        await orchestrateCorrectionReviewWorkItem(principal.clubId, existing.id);
+        return { request: toRow(existing), idempotent: true };
+      }
     }
     throw err;
+  }
+}
+
+// -------------------------------------------------------------------
+// Payroll-3D-3B Slice 2 — post-commit Work Intake orchestration
+// with durable recovery.
+//
+// Contract:
+//   1. Await the inline ensure. Best case: the manager review card
+//      (or config-gap card) is created before this function returns.
+//   2. On any inline failure: log structured error + enqueue a
+//      durable BackgroundJob (kind ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI)
+//      so the worker sweeps it up. Idempotency key is deterministic
+//      per correction — repeated failures collapse to one job.
+//   3. Never rethrow. The correction is already durably committed;
+//      failing here would mislead the employee into thinking their
+//      correction wasn't accepted.
+// -------------------------------------------------------------------
+async function orchestrateCorrectionReviewWorkItem(
+  clubId: string, correctionRequestId: string,
+): Promise<void> {
+  try {
+    await ensureCorrectionReviewWorkItems({ clubId, correctionRequestId });
+  } catch (err) {
+    logger.error("payroll.correction_review.orchestrate_failed", {
+      clubId, correctionRequestId,
+      obligationKind: "TIMECLOCK_CORRECTION_REVIEW",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      await enqueue({
+        kind: "ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI",
+        clubId,
+        payload: { clubId, correctionRequestId },
+        idempotencyKey: `ensure-tccr-wi:${clubId}:${correctionRequestId}`,
+        maxAttempts: 5,
+      });
+    } catch (enqueueErr) {
+      // Even the enqueue failed — worst case. Log loudly so a
+      // sweeper (Slice 3+ or ops) can pick this up.
+      logger.error("payroll.correction_review.enqueue_failed", {
+        clubId, correctionRequestId,
+        obligationKind: "TIMECLOCK_CORRECTION_REVIEW",
+        error: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+      });
+    }
   }
 }
 
@@ -413,7 +476,7 @@ async function assertCorrectionScopeAuthorization(
   }
 }
 
-async function resolveCorrectionScope(
+export async function resolveCorrectionScope(
   clubId: string,
   correction: {
     id: string;
