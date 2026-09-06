@@ -272,6 +272,23 @@ registerHandler("PRODUCT_REFERENCE_RESEARCH", async ({ payload, jobId }) => {
   });
 });
 
+// Payroll-3D-3B Slice 3 (2026-09-06) — proactive orchestration for
+// the department timesheet-approval Work Intake obligation. Handler
+// re-resolves every scope owner and approval state from the pay
+// period id; a period with no reviewable scopes is a harmless no-op.
+registerHandler<{
+  clubId: string;
+  payPeriodId: string;
+}>("ENSURE_TIMESHEET_APPROVAL_WI", async ({ payload }) => {
+  const { ensureTimesheetApprovalWorkItems } = await import(
+    "../timesheets/orchestration"
+  );
+  const result = await ensureTimesheetApprovalWorkItems(
+    payload.clubId, payload.payPeriodId,
+  );
+  return { itemsHandled: result.items.length };
+});
+
 // Payroll-3D-3B Slice 2 (2026-09-06) — recovery hook for the
 // correction-review Work Intake obligation. Enqueued from
 // submitCorrectionRequest when the inline await fails. Handler

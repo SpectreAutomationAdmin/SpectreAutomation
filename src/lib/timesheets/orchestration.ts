@@ -168,6 +168,25 @@ export async function ensureTimesheetApprovalWorkItems(
     const owner = await resolveDepartmentTimeApprover(clubId, scope.departmentId);
     const referenceId = `${payPeriodId}:${scope.departmentId}`;
     if (owner) {
+      // Payroll-3D-3B Slice 3 (2026-09-06) — Already-approved guard.
+      // If this scope has an APPROVED approval row whose approvedRevision
+      // equals the currently-computed revision, the manager has no
+      // active work. Skip both the create-if-missing AND the
+      // reopen-if-resolved paths so proactive orchestration never
+      // resurrects a card that a clean approval put to bed. A
+      // subsequent material change flips the row to REVIEW_REQUIRED
+      // via invalidateApprovalIfDrifted; the same orchestrator then
+      // reopens the card via the normal path.
+      const currentApproval = await prisma.payrollDepartmentTimeApproval.findFirst({
+        where: { clubId, payPeriodId, departmentId: scope.departmentId },
+        select: { state: true, approvedRevision: true },
+      });
+      if (
+        currentApproval?.state === "APPROVED"
+        && currentApproval.approvedRevision === scope.currentRevision
+      ) {
+        continue;
+      }
       // Suppress the configuration-gap card if one exists (recovery
       // path when the responsibility gets assigned after a gap card
       // was already materialised).

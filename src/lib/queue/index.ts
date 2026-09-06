@@ -121,7 +121,22 @@ export type JobKind =
   // Payload: { clubId: string; correctionRequestId: string }
   // Handler: src/lib/queue/handlers.ts →
   //   runEnsureTimeclockCorrectionReviewWi
-  | "ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI";
+  | "ENSURE_TIMECLOCK_CORRECTION_REVIEW_WI"
+  // Payroll-3D-3B Slice 3 (2026-09-06) — proactive orchestration for
+  // the department timesheet-approval Work Intake obligation.
+  // Enqueued from three sites (per Slice 0B pattern):
+  //   1. inline recovery after materializeEmployeeTimesheet / correction
+  //      reject / invalidate-on-drift when the awaited call fails;
+  //   2. periodic worker sweep of calendar-eligible pay periods
+  //      (tickTimesheetApprovalWiSweep in
+  //      src/lib/work-intake/timesheet-approval-orchestration.ts).
+  // Idempotency key: `ensure-timesheet-approval-wi:{clubId}:{payPeriodId}`
+  // Payload: { clubId: string; payPeriodId: string }
+  // Handler: src/lib/queue/handlers.ts →
+  //   runEnsureTimesheetApprovalWi. Re-resolves every scope owner
+  //   and approval state; never trusts stale routing in the payload;
+  //   a period with no reviewable scopes is a harmless no-op.
+  | "ENSURE_TIMESHEET_APPROVAL_WI";
 
 export type JobHandler<P = unknown, R = unknown> = (args: {
   jobId: string;

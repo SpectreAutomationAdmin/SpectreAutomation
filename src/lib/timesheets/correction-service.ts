@@ -766,6 +766,28 @@ export async function rejectCorrectionRequest(
     before: { status: "PENDING" },
     after:  { status: "REJECTED", reviewerNote },
   });
+  // Payroll-3D-3B Slice 3 (2026-09-06) — rejecting a correction may
+  // unblock a department scope that was gated on pendingCorrectionCount
+  // > 0. Proactively orchestrate the approval WI so the manager sees
+  // the transition without needing to visit Payroll Time. Awaited +
+  // durable-recovery via the same seam used post-materialise.
+  const affectedInstant =
+    existing.requestedOccurredAt ?? existing.createdAt;
+  const affectedPeriod = await prisma.payrollPayPeriod.findFirst({
+    where: {
+      clubId,
+      periodStart: { lte: affectedInstant },
+      periodEnd:   { gt:  affectedInstant },
+    },
+    orderBy: { periodStart: "desc" },
+    select: { id: true },
+  });
+  if (affectedPeriod) {
+    const { orchestrateTimesheetApprovalWorkItem } = await import(
+      "../work-intake/timesheet-approval-orchestration"
+    );
+    await orchestrateTimesheetApprovalWorkItem(clubId, affectedPeriod.id, scope.departmentId);
+  }
   return {
     request: toRow(finalRow),
     createdResolutionEventId: null,

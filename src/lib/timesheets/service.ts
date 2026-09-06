@@ -380,6 +380,19 @@ export async function materializeEmployeeTimesheet(
     };
   }, { timeout: 20_000, maxWait: 5_000 });
 
+  // Payroll-3D-3B Slice 3 (2026-09-06) — proactive department
+  // timesheet-approval Work Intake. Post-commit awaited orchestration
+  // with durable BackgroundJob recovery on failure. Only fires when
+  // the timesheet holds actionable state — an OPEN empty period
+  // doesn't need to wake a manager card. This is what removes the
+  // page-load dependency from the manager's discovery flow.
+  if (result.status === "READY_FOR_REVIEW" || result.status === "NEEDS_ATTENTION") {
+    const { orchestrateTimesheetApprovalWorkItem } = await import(
+      "../work-intake/timesheet-approval-orchestration"
+    );
+    await orchestrateTimesheetApprovalWorkItem(clubId, payPeriodId);
+  }
+
   return result;
 }
 

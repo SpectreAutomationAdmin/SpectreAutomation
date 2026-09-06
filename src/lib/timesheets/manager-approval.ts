@@ -266,5 +266,16 @@ export async function invalidateApprovalIfDrifted(
     before: { state: "APPROVED", approvedRevision: approval.approvedRevision },
     after:  { state: "REVIEW_REQUIRED", currentRevision },
   });
+  // Payroll-3D-3B Slice 3 (2026-09-06) — proactive orchestration on
+  // drift. The existing branch above reopens a LINKED WI when
+  // approval.workIntakeItemId is present, but earlier code paths may
+  // have approved a scope without ever linking a WI (e.g., approved
+  // via the deep-link only, before proactive creation existed).
+  // Running the orchestrator ensures a fresh manager card exists
+  // regardless. Idempotent.
+  const { orchestrateTimesheetApprovalWorkItem } = await import(
+    "../work-intake/timesheet-approval-orchestration"
+  );
+  await orchestrateTimesheetApprovalWorkItem(clubId, payPeriodId, departmentId);
   return { invalidated: true, newState: "REVIEW_REQUIRED" };
 }

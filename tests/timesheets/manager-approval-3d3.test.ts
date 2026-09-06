@@ -156,11 +156,19 @@ describe("Payroll-3D-3 · scope enumeration + Work Intake materialiser", () => {
     expect(scopes).toHaveLength(1);
     expect(scopes[0].departmentCode).toBe("GROUNDS");
 
+    // Payroll-3D-3B Slice 3 (2026-09-06): materializeEmployeeTimesheet
+    // now proactively runs the orchestrator after any transition to
+    // READY_FOR_REVIEW / NEEDS_ATTENTION, so by the time we call
+    // ensureTimesheetApprovalWorkItems explicitly the card already
+    // exists — both r1 and r2 report created:false. The important
+    // invariant remains: exactly ONE canonical WI per scope, owned
+    // by the responsible department manager, regardless of how many
+    // times the ensure runs.
     const r1 = await ensureTimesheetApprovalWorkItems(F.club.id, F.period.id);
     expect(r1.items).toHaveLength(1);
     expect(r1.items[0].gap).toBe(false);
     expect(r1.items[0].ownerUserId).toBe(F.groundsMgr.id);
-    expect(r1.items[0].created).toBe(true);
+    expect(r1.items[0].created).toBe(false);
 
     const r2 = await ensureTimesheetApprovalWorkItems(F.club.id, F.period.id);
     expect(r2.items[0].workIntakeItemId).toBe(r1.items[0].workIntakeItemId);

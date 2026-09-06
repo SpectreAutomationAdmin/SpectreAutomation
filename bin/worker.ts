@@ -14,6 +14,7 @@ import "../src/lib/pos/webhooks";
 import { processPending, captureQueueHealth, listRegisteredHandlers } from "../src/lib/queue";
 import { logger } from "../src/lib/observability/logger";
 import { tickAutoSync } from "../src/lib/mailbox/auto-sync-scheduler";
+import { tickTimesheetApprovalWiSweep } from "../src/lib/work-intake/timesheet-approval-orchestration";
 
 const queues = process.argv.slice(2);
 const workerId = `worker-${process.pid}-${Date.now().toString(36)}`;
@@ -34,6 +35,14 @@ async function main() {
       // so multiple worker instances only produce one delta job per
       // mailbox per interval. Never enqueues if the feature is off.
       await tickAutoSync();
+      // Payroll-3D-3B Slice 3 (2026-09-06) — periodic sweep of
+      // manager-relevant pay periods → enqueue ensure jobs so the
+      // approval WI obligation always exists even if inline
+      // orchestration AND its enqueue-on-failure fallback both fail.
+      // Interval-budgeted (default 5 min); calendar-bounded window;
+      // built-in enqueue dedupe collapses concurrent workers to one
+      // job per (clubId, payPeriodId).
+      await tickTimesheetApprovalWiSweep();
     } catch (err) {
       logger.error("worker.loop_error", { error: err instanceof Error ? err.message : String(err) });
     }
