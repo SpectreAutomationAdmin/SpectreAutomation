@@ -26,6 +26,13 @@ import {
   computeScopeRevision,
   getScopeReview,
 } from "./approval-scope";
+// Payroll-3D-3B Slice 7A (2026-09-06) — namespace import so
+// vitest can spy on the post-write revision re-verify call inside
+// approveTimesheetScope's transaction. Static named imports resolve
+// their binding at load time and can't be intercepted by
+// vi.spyOn(module, "computeScopeRevision"); a namespace-qualified
+// call site reads the export freshly each time and is spy-able.
+import * as approvalScope from "./approval-scope";
 import { emitWorkCompletionEvent } from "../work-intake/completion";
 
 const ENTITY = "PayrollDepartmentTimeApproval";
@@ -140,34 +147,64 @@ export async function approveTimesheetScope(
   });
   const workIntakeItemId = linkedOrigin?.workIntakeItemId ?? null;
 
-  const approval = await prisma.payrollDepartmentTimeApproval.upsert({
-    where: {
-      clubId_payPeriodId_departmentId: {
-        clubId: input.clubId, payPeriodId: input.payPeriodId, departmentId: input.departmentId,
+  // Payroll-3D-3B Slice 7A (2026-09-06) — atomic approve.
+  //
+  // Wrap the pre-check + upsert + post-write revision re-verify in a
+  // single Prisma $transaction. The pattern:
+  //   1. Read revision inside tx (already validated against
+  //      attestedRevision above via review.currentRevision).
+  //   2. Upsert the approval row.
+  //   3. RE-read revision inside the SAME tx after the upsert.
+  //   4. If the re-read hash differs from the attested hash, a
+  //      concurrent material writer committed between step 1 and
+  //      step 2 — rollback with ConflictError (STALE).
+  //
+  // This closes the TOCTOU documented in Slice 7 §AB without
+  // requiring material writers to participate in an explicit lock.
+  // Postgres READ COMMITTED (default) makes the re-read observe any
+  // committed material change from a concurrent transaction; the
+  // rollback prevents an obsolete APPROVED from persisting.
+  const approval = await prisma.$transaction(async (tx) => {
+    const upserted = await tx.payrollDepartmentTimeApproval.upsert({
+      where: {
+        clubId_payPeriodId_departmentId: {
+          clubId: input.clubId, payPeriodId: input.payPeriodId, departmentId: input.departmentId,
+        },
       },
-    },
-    update: {
-      state: "APPROVED",
-      approvedAt: now,
-      approvedByUserId: principal.id,
-      approvedRevision: review.currentRevision,
-      reopenedAt: null,
-      reopenedByUserId: null,
-      reopenReason: null,
-      workIntakeItemId,
-      notes,
-    },
-    create: {
-      clubId: input.clubId,
-      payPeriodId: input.payPeriodId,
-      departmentId: input.departmentId,
-      state: "APPROVED",
-      approvedAt: now,
-      approvedByUserId: principal.id,
-      approvedRevision: review.currentRevision,
-      workIntakeItemId,
-      notes,
-    },
+      update: {
+        state: "APPROVED",
+        approvedAt: now,
+        approvedByUserId: principal.id,
+        approvedRevision: review.currentRevision,
+        reopenedAt: null,
+        reopenedByUserId: null,
+        reopenReason: null,
+        workIntakeItemId,
+        notes,
+      },
+      create: {
+        clubId: input.clubId,
+        payPeriodId: input.payPeriodId,
+        departmentId: input.departmentId,
+        state: "APPROVED",
+        approvedAt: now,
+        approvedByUserId: principal.id,
+        approvedRevision: review.currentRevision,
+        workIntakeItemId,
+        notes,
+      },
+    });
+    // Post-write revision re-verify — TOCTOU close (Slice 7A §I).
+    // Namespace-qualified call so vitest can spy on it.
+    const postWriteRevision = await approvalScope.computeScopeRevision(
+      input.clubId, input.payPeriodId, input.departmentId, tx,
+    );
+    if (postWriteRevision !== review.currentRevision) {
+      throw new ConflictError(
+        "The time this scope contains changed while approval was committing. Refresh and re-attest.",
+      );
+    }
+    return upserted;
   });
 
   if (workIntakeItemId) {

@@ -265,12 +265,23 @@ export async function listReviewableScopes(
 
 // -------------------------------------------------------------------
 // Revision hash (§72)
+//
+// Payroll-3D-3B Slice 7A (2026-09-06) — accepts an optional Prisma
+// transaction client. Callers that need atomic revision reads inside
+// a wider transaction (e.g., approveTimesheetScope's pre-check +
+// post-write verify) pass their tx so the revision reads observe the
+// transaction's snapshot of the material state. Callers that only
+// need a snapshot pass no tx and use the global client.
 // -------------------------------------------------------------------
+type PrismaTxOrClient = typeof prisma | Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+
 export async function computeScopeRevision(
   clubId: string, payPeriodId: string, departmentId: string,
+  tx?: PrismaTxOrClient,
 ): Promise<string> {
+  const client = tx ?? prisma;
   // Materialised entries in the scope (stable ordered).
-  const entries = await prisma.payrollTimesheetEntry.findMany({
+  const entries = await client.payrollTimesheetEntry.findMany({
     where: {
       clubId, timesheet: { payPeriodId },
       OR: [
@@ -294,11 +305,11 @@ export async function computeScopeRevision(
   // TimeClockCorrectionRequest.employmentAssignmentId is a scalar
   // with no relation on the model — resolve department via a subquery
   // on the assignment ids that are in this department.
-  const deptAssignmentIds = await prisma.employeeEmploymentAssignment.findMany({
+  const deptAssignmentIds = await client.employeeEmploymentAssignment.findMany({
     where: { clubId, departmentId }, select: { id: true },
   });
   const assnIds = deptAssignmentIds.map((a) => a.id);
-  const pendingCorrs = assnIds.length ? await prisma.timeClockCorrectionRequest.findMany({
+  const pendingCorrs = assnIds.length ? await client.timeClockCorrectionRequest.findMany({
     where: {
       clubId,
       status: { in: ["PENDING"] },

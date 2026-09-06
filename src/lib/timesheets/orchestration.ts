@@ -31,6 +31,16 @@ import { isScopeApprovalOriginConflict } from "../work-intake/origin-conflict";
 const SCOPE_ORIGIN_KIND = "PAYROLL_TIMESHEET_APPROVAL";
 const GAP_ORIGIN_KIND   = "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP";
 
+// Payroll-3D-3B Slice 7A (2026-09-06) — well-known WorkIntakeActivity
+// note prefixes for system-driven state transitions. Reconciliation
+// distinguishes SYSTEM-suppressed cards (which should be reopened
+// when responsibility is restored) from USER-suppressed cards (which
+// must be preserved per Slice 4A intent).
+export const SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX =
+  "SYSTEM_SUPPRESSED_RESPONSIBILITY_REMOVED";
+export const SYSTEM_RESPONSIBILITY_RESTORATION_PREFIX =
+  "SYSTEM_REOPENED_RESPONSIBILITY_RESTORED";
+
 export interface TimesheetApprovalWorkItemResult {
   scope:            ReviewableScope;
   workIntakeItemId: string;
@@ -202,6 +212,37 @@ export async function ensureTimesheetApprovalWorkItems(
     const owner = await resolveDepartmentTimeApprover(clubId, scope.departmentId);
     const referenceId = `${payPeriodId}:${scope.departmentId}`;
     if (owner) {
+      // Payroll-3D-3B Slice 7A (2026-09-06) — responsibility restore.
+      // If the canonical manager card for this scope was previously
+      // system-suppressed because the approver responsibility went
+      // away (§13), the assign-approver + rerun path should REACTIVATE
+      // it (not leave it silenced). Distinguishable by the SYSTEM
+      // suppression note prefix — user-suppressed cards are NOT touched.
+      const existingManagerOrigin = await prisma.workIntakeOrigin.findFirst({
+        where: { clubId, kind: SCOPE_ORIGIN_KIND, referenceId, role: "PRIMARY" },
+        select: { workIntakeItemId: true },
+      });
+      if (existingManagerOrigin) {
+        const lastActivity = await prisma.workIntakeActivity.findFirst({
+          where: { workIntakeItemId: existingManagerOrigin.workIntakeItemId, action: "SUPPRESSED" },
+          orderBy: { createdAt: "desc" },
+          select: { note: true },
+        });
+        if (lastActivity?.note?.startsWith(SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX)) {
+          await prisma.workIntakeItem.updateMany({
+            where: { id: existingManagerOrigin.workIntakeItemId, status: "SUPPRESSED" },
+            data:  { status: "OPEN" },
+          });
+          await prisma.workIntakeActivity.create({
+            data: {
+              workIntakeItemId: existingManagerOrigin.workIntakeItemId,
+              action: "REOPENED",
+              note: `${SYSTEM_RESPONSIBILITY_RESTORATION_PREFIX}: responsibility restored — routing to current approver.`,
+            },
+          });
+        }
+      }
+
       // Payroll-3D-3B Slice 3 (2026-09-06) — Already-approved guard.
       // If this scope has an APPROVED approval row whose approvedRevision
       // equals the currently-computed revision, the manager has no
@@ -258,6 +299,33 @@ export async function ensureTimesheetApprovalWorkItems(
       });
       results.push({ scope, workIntakeItemId, ownerUserId: owner, gap: false, created });
     } else {
+      // Payroll-3D-3B Slice 7A (2026-09-06) — responsibility-removal
+      // projection. If a previously-active manager card exists for
+      // this scope (from a prior owner), SUPPRESS it and tag the
+      // suppression with a well-known system prefix so restoration
+      // can reopen it later. Old manager's Mission Control feed will
+      // NOT show this card anymore — matching the Work Intake
+      // invariant "represents current human obligations."
+      const stalePriorOrigin = await prisma.workIntakeOrigin.findFirst({
+        where: { clubId, kind: SCOPE_ORIGIN_KIND, referenceId, role: "PRIMARY" },
+        include: { workIntakeItem: { select: { id: true, status: true } } },
+      });
+      if (stalePriorOrigin?.workIntakeItem
+        && (stalePriorOrigin.workIntakeItem.status === "OPEN"
+          || stalePriorOrigin.workIntakeItem.status === "IN_PROGRESS")) {
+        await prisma.workIntakeItem.updateMany({
+          where: { id: stalePriorOrigin.workIntakeItem.id, status: { in: ["OPEN", "IN_PROGRESS"] } },
+          data:  { status: "SUPPRESSED" },
+        });
+        await prisma.workIntakeActivity.create({
+          data: {
+            workIntakeItemId: stalePriorOrigin.workIntakeItem.id,
+            action: "SUPPRESSED",
+            note: `${SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX}: DEPARTMENT_TIME_APPROVAL responsibility removed for ${scope.departmentCode}; obligation not currently routable.`,
+          },
+        });
+      }
+
       // Configuration gap — route to Tenant Admin so a real person
       // becomes accountable for setting the Timesheet Approver.
       const tenantAdmin = await resolveTenantAdmin(clubId);

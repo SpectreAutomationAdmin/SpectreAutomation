@@ -44,6 +44,14 @@ export const CORRECTION_REVIEW_GAP_KIND = "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GA
 export const GAP_PREFIX_MISSING_APPROVER = "MISSING_APPROVER" as const;
 export const GAP_PREFIX_MISSING_ASSIGNMENT = "MISSING_ASSIGNMENT" as const;
 
+// Payroll-3D-3B Slice 7A (2026-09-06) — well-known WorkIntakeActivity
+// note prefixes for system-driven responsibility state transitions.
+// Mirrors the pattern in src/lib/timesheets/orchestration.ts.
+export const SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX =
+  "SYSTEM_SUPPRESSED_RESPONSIBILITY_REMOVED";
+export const SYSTEM_RESPONSIBILITY_RESTORATION_PREFIX =
+  "SYSTEM_REOPENED_RESPONSIBILITY_RESTORED";
+
 export function correctionReviewReferenceId(correctionRequestId: string): string {
   return correctionRequestId;
 }
@@ -141,6 +149,37 @@ async function ensureManagerReviewCard(args: {
   ownerUserId: string;
 }): Promise<CorrectionReviewOutcome> {
   const { clubId, correction, departmentId, ownerUserId } = args;
+
+  // Payroll-3D-3B Slice 7A (2026-09-06) — responsibility restoration.
+  // If the card was previously system-SUPPRESSED (because
+  // responsibility went away), reopen it. User-set SUPPRESSED /
+  // INFORMATIONAL are preserved — we distinguish via the last
+  // SUPPRESSED activity's note prefix.
+  const existingSuppressed = await prisma.workIntakeOrigin.findFirst({
+    where: { clubId, kind: CORRECTION_REVIEW_KIND, referenceId: correction.id, role: "PRIMARY" },
+    include: { workIntakeItem: { select: { id: true, status: true } } },
+  });
+  if (existingSuppressed?.workIntakeItem?.status === "SUPPRESSED") {
+    const lastSuppression = await prisma.workIntakeActivity.findFirst({
+      where: { workIntakeItemId: existingSuppressed.workIntakeItem.id, action: "SUPPRESSED" },
+      orderBy: { createdAt: "desc" },
+      select: { note: true },
+    });
+    if (lastSuppression?.note?.startsWith(SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX)) {
+      await prisma.workIntakeItem.updateMany({
+        where: { id: existingSuppressed.workIntakeItem.id, status: "SUPPRESSED" },
+        data:  { status: "OPEN" },
+      });
+      await prisma.workIntakeActivity.create({
+        data: {
+          workIntakeItemId: existingSuppressed.workIntakeItem.id,
+          action: "REOPENED",
+          note: `${SYSTEM_RESPONSIBILITY_RESTORATION_PREFIX}: responsibility restored — routing to current approver.`,
+        },
+      });
+    }
+  }
+
   const department = await prisma.department.findFirst({
     where: { id: departmentId, clubId },
     select: { name: true, code: true },
@@ -195,6 +234,34 @@ async function ensureMissingApproverGap(args: {
   departmentId: string;
 }): Promise<CorrectionReviewOutcome> {
   const { clubId, correction, departmentId } = args;
+
+  // Payroll-3D-3B Slice 7A (2026-09-06) — responsibility-removal
+  // projection. If a previously-active manager review card exists
+  // for this correction (from a prior owner who lost responsibility),
+  // suppress it with a system-tagged activity so restoration can
+  // reactivate it later. User-set SUPPRESSED / INFORMATIONAL states
+  // are preserved (the updateMany filter only touches actionable
+  // statuses).
+  const stalePriorOrigin = await prisma.workIntakeOrigin.findFirst({
+    where: { clubId, kind: CORRECTION_REVIEW_KIND, referenceId: correction.id, role: "PRIMARY" },
+    include: { workIntakeItem: { select: { id: true, status: true } } },
+  });
+  if (stalePriorOrigin?.workIntakeItem
+    && (stalePriorOrigin.workIntakeItem.status === "OPEN"
+      || stalePriorOrigin.workIntakeItem.status === "IN_PROGRESS")) {
+    await prisma.workIntakeItem.updateMany({
+      where: { id: stalePriorOrigin.workIntakeItem.id, status: { in: ["OPEN", "IN_PROGRESS"] } },
+      data:  { status: "SUPPRESSED" },
+    });
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: stalePriorOrigin.workIntakeItem.id,
+        action: "SUPPRESSED",
+        note: `${SYSTEM_RESPONSIBILITY_SUPPRESSION_PREFIX}: DEPARTMENT_TIME_APPROVAL responsibility removed; correction not currently routable.`,
+      },
+    });
+  }
+
   const department = await prisma.department.findFirst({
     where: { id: departmentId, clubId },
     select: { name: true, code: true },
