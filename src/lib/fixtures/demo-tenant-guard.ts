@@ -27,8 +27,37 @@
 
 import { PrismaClient } from "@prisma/client";
 
-export type FixtureWriteClass = "SYNTHETIC_OPERATIONAL" | "REGRESSION_DOCUMENT";
+// Staging T&A acceptance (2026-09-05) — the SYNTHETIC_TIME_ATTENDANCE
+// write class exists SOLELY so the founder-review Coulee Ridge staging
+// tenant can host a narrowly-scoped Time & Attendance acceptance fixture
+// (Taylor Fixture + Grounds/Banquets manager fixtures + their clock
+// events, timesheets, corrections, department approvals, approved-time
+// freezes) without weakening the general SYNTHETIC_OPERATIONAL block.
+//
+// The staging Coulee Ridge Club ID and Club.name are BAKED IN and must
+// match exactly. Every target employee/user must live under the
+// approved synthetic email domain — production people (Lise Montsion,
+// Chris Turcato, or any other real name that survived a prior demo
+// tenant) are refused by name as an additional safety layer.
+export type FixtureWriteClass =
+  | "SYNTHETIC_OPERATIONAL"
+  | "REGRESSION_DOCUMENT"
+  | "SYNTHETIC_TIME_ATTENDANCE";
 export type StagingDataMode = "FOUNDER_REVIEW" | "REGRESSION" | "SYNTHETIC_DEMO";
+
+// Coulee Ridge staging tenant — see reference_staging_infra.md.
+export const COULEE_RIDGE_STAGING_CLUB_ID = "cmrvdeny7000144372ktmmg9c";
+export const COULEE_RIDGE_STAGING_CLUB_NAME = "Coulee Ridge Golf & Country Club";
+// Only staging fixture identities whose email ends with this suffix
+// (case-insensitive) may be created/updated by SYNTHETIC_TIME_ATTENDANCE.
+export const STAGING_SYNTHETIC_EMAIL_DOMAIN = "fixture.spectre.test";
+// Hard PRESERVE list — names that must NEVER be modified by
+// SYNTHETIC_TIME_ATTENDANCE even if they somehow acquire a fixture
+// email. Match is case-insensitive on "<firstName> <lastName>".
+export const STAGING_PRESERVE_NAMES: ReadonlyArray<string> = [
+  "chris turcato",
+  "lise montsion",
+];
 
 export interface DemoTenantGuardArgs {
   prisma: PrismaClient;
@@ -54,6 +83,7 @@ export interface DemoTenantGuardResult {
 const ALLOWED_MODES: Record<FixtureWriteClass, StagingDataMode[]> = {
   SYNTHETIC_OPERATIONAL: ["SYNTHETIC_DEMO"],
   REGRESSION_DOCUMENT: ["FOUNDER_REVIEW", "REGRESSION"],
+  SYNTHETIC_TIME_ATTENDANCE: ["FOUNDER_REVIEW"],
 };
 
 /**
@@ -110,6 +140,23 @@ export async function guardDemoTenant(args: DemoTenantGuardArgs): Promise<DemoTe
     );
   }
 
+  // SYNTHETIC_TIME_ATTENDANCE — one additional layer.
+  if (args.writeClass === "SYNTHETIC_TIME_ATTENDANCE") {
+    if (club.id !== COULEE_RIDGE_STAGING_CLUB_ID) {
+      bail(7, `SYNTHETIC_TIME_ATTENDANCE requires Club.id=${COULEE_RIDGE_STAGING_CLUB_ID}; got ${club.id}.`);
+    }
+    if (club.name !== COULEE_RIDGE_STAGING_CLUB_NAME) {
+      bail(7, `SYNTHETIC_TIME_ATTENDANCE requires Club.name="${COULEE_RIDGE_STAGING_CLUB_NAME}"; got "${club.name}".`);
+    }
+    if (process.env.ALLOW_STAGING_TA_FIXTURE !== "YES") {
+      bail(8, `SYNTHETIC_TIME_ATTENDANCE requires ALLOW_STAGING_TA_FIXTURE=YES.`);
+    }
+    // APP_URL must indicate staging (already verified not-production above).
+    if (!appUrl.includes("staging")) {
+      bail(9, `SYNTHETIC_TIME_ATTENDANCE requires APP_URL to include "staging"; got "${appUrl}".`);
+    }
+  }
+
   return {
     clubSlug: club.slug,
     clubName: club.name,
@@ -118,4 +165,46 @@ export async function guardDemoTenant(args: DemoTenantGuardArgs): Promise<DemoTe
     databaseIdentity: dbHost || dbUrl.slice(0, 40),
     environment: process.env.NODE_ENV ?? "development",
   };
+}
+
+// -------------------------------------------------------------------
+// Per-target safety helper for SYNTHETIC_TIME_ATTENDANCE writers.
+//
+// Every write that touches a specific Employee/User (create, update,
+// or delete) must first call this. The helper enforces:
+//   • target email (if present) ends in @fixture.spectre.test (case-insensitive);
+//   • target's "<firstName> <lastName>" is NOT in the PRESERVE list;
+//   • target's clubId (if given) is the Coulee Ridge staging club;
+//   • employeeId (if given) has already been read to verify identity
+//     — the caller is expected to have loaded the row first and pass
+//     its identity fields explicitly.
+//
+// Throws with a clear reason on refusal; returns silently on allow.
+// -------------------------------------------------------------------
+export interface AssertStagingTaTargetArgs {
+  callerName: string;
+  identity: {
+    firstName?: string | null;
+    lastName?: string | null;
+    email?: string | null;
+    clubId?: string | null;
+  };
+}
+
+export function assertStagingTaTargetAllowed(args: AssertStagingTaTargetArgs): void {
+  const label = args.callerName;
+  const { firstName, lastName, email, clubId } = args.identity;
+  if (clubId && clubId !== COULEE_RIDGE_STAGING_CLUB_ID) {
+    throw new Error(`REFUSED [${label}]: target clubId=${clubId} is not the Coulee Ridge staging tenant (${COULEE_RIDGE_STAGING_CLUB_ID}).`);
+  }
+  const fullName = `${(firstName ?? "").trim()} ${(lastName ?? "").trim()}`.trim().toLowerCase();
+  if (fullName && STAGING_PRESERVE_NAMES.includes(fullName)) {
+    throw new Error(`REFUSED [${label}]: target "${fullName}" is on the PRESERVE list and must NEVER be modified by SYNTHETIC_TIME_ATTENDANCE.`);
+  }
+  if (email && email.length > 0) {
+    const lowered = email.toLowerCase();
+    if (!lowered.endsWith(`@${STAGING_SYNTHETIC_EMAIL_DOMAIN}`)) {
+      throw new Error(`REFUSED [${label}]: target email "${email}" must end in @${STAGING_SYNTHETIC_EMAIL_DOMAIN} to qualify as a synthetic staging fixture identity.`);
+    }
+  }
 }
