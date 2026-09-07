@@ -55,6 +55,10 @@ const URLS = {
   aboutYouEmployment: "/hr/onboarding/about-you/employment",
   aboutYouPhoto: "/hr/onboarding/about-you/photo",
   aboutYouComplete: "/hr/onboarding/about-you/complete",
+  // Scheduling Foundation · Phase C (2026-09-07) — hourly-only
+  // "Your Availability" step. Placed AFTER photo and BEFORE SIN per
+  // founder amendment §3. Salaried employees skip this step entirely.
+  availability: "/hr/onboarding/availability",
   // Payroll
   payrollSin: "/hr/onboarding/payroll/sin",
   payrollDirectDeposit: "/hr/onboarding/payroll/direct-deposit",
@@ -144,6 +148,7 @@ export async function resolveOnboardingContinuation(
     addressAck,
     employmentAck,
     correctionCount,
+    availabilityProfile,
     sinRow,
     bankRow,
     taxRow,
@@ -155,6 +160,8 @@ export async function resolveOnboardingContinuation(
       where: { id: ctx.employeeId, clubId: ctx.clubId },
       select: {
         profilePhotoDocumentId: true,
+        // Phase C — compensationType gates the hourly-only availability step.
+        compensationType: true,
       },
     }),
     prisma.employeeOnboardingAcknowledgement.findFirst({
@@ -197,6 +204,15 @@ export async function resolveOnboardingContinuation(
         clubId: ctx.clubId,
         field: { in: ["positionId", "departmentId", "expectedStartDate", "employmentType"] },
       },
+    }),
+    // Scheduling Foundation · Phase C (2026-09-07) — availability
+    // completion signal is the presence of any EmployeeAvailabilityProfile
+    // for this employee. No separate acknowledgement row is created —
+    // the persisted profile IS the canonical completion signal per
+    // founder amendment §3.
+    prisma.employeeAvailabilityProfile.findFirst({
+      where: { employeeId: ctx.employeeId, clubId: ctx.clubId },
+      select: { id: true },
     }),
     prisma.employeeSensitiveIdentity.findFirst({
       where: { employeeId: ctx.employeeId, clubId: ctx.clubId },
@@ -256,6 +272,17 @@ export async function resolveOnboardingContinuation(
   if (!addressDone) return URLS.aboutYouAddress;
   if (!employmentDone) return URLS.aboutYouEmployment;
   if (!photoDone) return URLS.aboutYouPhoto;
+
+  // 3b. Scheduling Foundation · Phase C (2026-09-07) — hourly-only
+  //     "Your Availability" step. Placed between About You / Photo
+  //     and Payroll / SIN per founder amendment §3. Salaried
+  //     employees skip this branch entirely and go straight to SIN.
+  //     The completion signal is the presence of any persisted
+  //     EmployeeAvailabilityProfile (the row IS the signal — no
+  //     duplicate acknowledgement is written).
+  const isHourly = employee.compensationType === "HOURLY";
+  const availabilityDone = Boolean(availabilityProfile);
+  if (isHourly && !availabilityDone) return URLS.availability;
 
   // 4. Payroll cascade.
   const sinDone = Boolean(sinRow && sinRow.sinLastThree);

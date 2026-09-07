@@ -36,6 +36,8 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
         personalEmail: true,
         mobilePhone: true,
         profilePhotoDocumentId: true,
+        // Phase C — hourly gates Availability rail visibility.
+        compensationType: true,
       },
     }),
     getPayrollCompletion(actor),
@@ -86,6 +88,16 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
   const photoDone = Boolean(employee.profilePhotoDocumentId);
   const aboutYouDone = nameDone && contactDone && employmentDone && photoDone;
 
+  // Phase C (2026-09-07) — hourly Availability rail visibility.
+  const isHourly = employee.compensationType === "HOURLY";
+  const availabilityProfile = isHourly
+    ? await prisma.employeeAvailabilityProfile.findFirst({
+        where: { employeeId: actor.employeeId, clubId: actor.clubId },
+        select: { id: true },
+      })
+    : null;
+  const availabilityDone = Boolean(availabilityProfile);
+
   return (
     <main className="mx-auto max-w-5xl px-4 pt-8 pb-16 md:pt-12 md:pb-24">
       <header className="text-center md:text-left">
@@ -128,11 +140,23 @@ export default async function PayrollLayout({ children }: { children: ReactNode 
                   { key: "photo", label: "Photo", done: photoDone, href: photoDone ? "/hr/onboarding/about-you/photo" : undefined },
                 ],
               },
+              // Phase C (2026-09-07) — Availability rail entry between
+              // About You and Payroll for hourly employees. Salaried
+              // employees never see this row.
+              ...(isHourly
+                ? [{
+                    key: "availability",
+                    label: "Availability",
+                    done: availabilityDone,
+                    current: aboutYouDone && !availabilityDone,
+                    href: aboutYouDone ? "/hr/onboarding/availability" : undefined,
+                  }]
+                : []),
               {
                 key: "payroll",
                 label: "Payroll",
                 done: completion.complete,
-                current: aboutYouDone && !completion.complete,
+                current: aboutYouDone && (!isHourly || availabilityDone) && !completion.complete,
                 href: "/hr/onboarding/payroll",
                 subStages: [
                   { key: "sin", label: "SIN", done: completion.sin, href: completion.sin ? "/hr/onboarding/payroll/sin" : undefined },

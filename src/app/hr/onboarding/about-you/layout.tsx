@@ -37,6 +37,8 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
           firstName: true,
           preferredName: true,
           profilePhotoDocumentId: true,
+          // Phase C (2026-09-07) — hourly gates the Availability rail entry.
+          compensationType: true,
         },
       }),
       prisma.employeeOnboardingAcknowledgement.findFirst({
@@ -79,6 +81,18 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
   const employmentDone = Boolean(employmentAck) || corrections.length > 0;
   const photoDone = Boolean(employee.profilePhotoDocumentId);
   const aboutYouDone = nameDone && contactDone && employmentDone && photoDone;
+
+  // Phase C (2026-09-07) — Availability rail visibility. Hourly
+  // employees see an Availability entry between About You and
+  // Payroll. Salaried employees do not.
+  const isHourly = employee.compensationType === "HOURLY";
+  const availabilityProfile = isHourly
+    ? await prisma.employeeAvailabilityProfile.findFirst({
+        where: { employeeId: actor.employeeId, clubId: actor.clubId },
+        select: { id: true },
+      })
+    : null;
+  const availabilityDone = Boolean(availabilityProfile);
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
@@ -130,7 +144,17 @@ export default async function AboutYouLayout({ children }: { children: ReactNode
                   { key: "photo", label: "Photo", done: photoDone, href: photoDone ? "/hr/onboarding/about-you/photo" : undefined },
                 ],
               },
-              { key: "payroll", label: "Payroll", done: false, current: aboutYouDone, future: !aboutYouDone, href: aboutYouDone ? "/hr/onboarding/payroll" : undefined },
+              ...(isHourly
+                ? [{
+                    key: "availability",
+                    label: "Availability",
+                    done: availabilityDone,
+                    current: aboutYouDone && !availabilityDone,
+                    future: !aboutYouDone,
+                    href: aboutYouDone ? "/hr/onboarding/availability" : undefined,
+                  }]
+                : []),
+              { key: "payroll", label: "Payroll", done: false, current: aboutYouDone && (!isHourly || availabilityDone), future: !aboutYouDone || (isHourly && !availabilityDone), href: aboutYouDone && (!isHourly || availabilityDone) ? "/hr/onboarding/payroll" : undefined },
               { key: "emergency", label: "Emergency", done: false, current: false, future: true },
               { key: "documents", label: "Documents", done: false, current: false, future: true },
               { key: "review", label: "Review", done: false, current: false, future: true },

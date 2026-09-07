@@ -47,7 +47,11 @@ export default async function PostPayrollShell({
     prisma.club.findFirst({ where: { id: actor.clubId }, select: { name: true } }),
     prisma.employee.findFirst({
       where: { id: actor.employeeId, clubId: actor.clubId },
-      select: { firstName: true, preferredName: true, profilePhotoDocumentId: true },
+      select: {
+        firstName: true, preferredName: true, profilePhotoDocumentId: true,
+        // Phase C (2026-09-07) — hourly gates Availability rail visibility.
+        compensationType: true,
+      },
     }),
     getPayrollCompletion(actor),
     prisma.employeeOnboardingAcknowledgement.findFirst({
@@ -87,6 +91,16 @@ export default async function PostPayrollShell({
   const photoDone = Boolean(employee.profilePhotoDocumentId);
   const aboutYouDone = nameDone && contactDone && employmentDone && photoDone;
 
+  // Phase C (2026-09-07) — hourly Availability rail visibility.
+  const isHourly = employee.compensationType === "HOURLY";
+  const availabilityProfile = isHourly
+    ? await prisma.employeeAvailabilityProfile.findFirst({
+        where: { employeeId: actor.employeeId, clubId: actor.clubId },
+        select: { id: true },
+      })
+    : null;
+  const availabilityDone = Boolean(availabilityProfile);
+
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
     : employee.firstName;
@@ -120,6 +134,18 @@ export default async function PostPayrollShell({
                   { key: "photo", label: "Photo", done: photoDone, href: photoDone ? "/hr/onboarding/about-you/photo" : undefined },
                 ],
               },
+              // Phase C (2026-09-07) — Availability rail entry between
+              // About You and Payroll for hourly employees. Salaried
+              // employees never see this row.
+              ...(isHourly
+                ? [{
+                    key: "availability",
+                    label: "Availability",
+                    done: availabilityDone,
+                    current: false,
+                    href: availabilityDone ? "/hr/onboarding/availability" : undefined,
+                  }]
+                : []),
               {
                 key: "payroll",
                 label: "Payroll",
