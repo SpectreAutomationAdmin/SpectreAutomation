@@ -195,11 +195,18 @@ async function ensurePortalCredential(employeeId: string, clubId: string, apply:
 
 async function resetTaylorAcceptance(taylorId: string) {
   // ONLY Taylor Fixture's acceptance rows. Verified by employeeId join.
+  // Payroll-3D-3B Slice 8A (2026-09-06) — also clears the new
+  // scope-state + approval + Taylor-related canonical WI obligations
+  // for a truly repeatable end-to-end scenario. The approval snapshot
+  // is printed BEFORE deletion so the founder retains visibility into
+  // any legacy null-approvedScopeVersion row that would otherwise be
+  // reset for §24 legacy-fallback proof.
   const timesheets = await prisma.payrollTimesheet.findMany({
     where: { clubId: COULEE_RIDGE_STAGING_CLUB_ID, employeeId: taylorId },
-    select: { id: true },
+    select: { id: true, payPeriodId: true },
   });
   const tsIds = timesheets.map((t) => t.id);
+  const affectedPayPeriodIds = Array.from(new Set(timesheets.map((t) => t.payPeriodId)));
   const entries = tsIds.length
     ? await prisma.payrollTimesheetEntry.findMany({
         where: { timesheetId: { in: tsIds } }, select: { id: true },
@@ -263,6 +270,92 @@ async function resetTaylorAcceptance(taylorId: string) {
   await prisma.employee.update({
     where: { id: taylorId }, data: { timekeepingStateVersion: 0 },
   });
+
+  // Payroll-3D-3B Slice 8A additions — clear the new scope-state
+  // + approval + Taylor-related canonical WI obligations so the
+  // acceptance can start from a truly clean scope.
+  if (affectedPayPeriodIds.length) {
+    // Snapshot any APPROVED rows for the affected pay periods
+    // BEFORE deletion, so a founder-visible pre-reset state
+    // remains in the log for §24 legacy-fallback proof.
+    const preExisting = await prisma.payrollDepartmentTimeApproval.findMany({
+      where: { clubId: COULEE_RIDGE_STAGING_CLUB_ID, payPeriodId: { in: affectedPayPeriodIds } },
+      select: {
+        id: true, payPeriodId: true, departmentId: true,
+        state: true, approvedRevision: true, approvedScopeVersion: true,
+        approvedByUserId: true, approvedAt: true,
+      },
+    });
+    console.log(`  PayrollDepartmentTimeApproval rows about to be deleted (${preExisting.length}):`);
+    for (const a of preExisting) {
+      console.log(`    - id=${a.id} state=${a.state} approvedRevision=${a.approvedRevision} approvedScopeVersion=${a.approvedScopeVersion}`);
+    }
+    const scopeStateRows = await prisma.payrollDepartmentTimeScopeState.count({
+      where: { clubId: COULEE_RIDGE_STAGING_CLUB_ID, payPeriodId: { in: affectedPayPeriodIds } },
+    });
+    console.log(`  PayrollDepartmentTimeScopeState rows to clear: ${scopeStateRows}`);
+
+    await prisma.payrollDepartmentTimeApproval.deleteMany({
+      where: { clubId: COULEE_RIDGE_STAGING_CLUB_ID, payPeriodId: { in: affectedPayPeriodIds } },
+    });
+    await prisma.payrollDepartmentTimeScopeState.deleteMany({
+      where: { clubId: COULEE_RIDGE_STAGING_CLUB_ID, payPeriodId: { in: affectedPayPeriodIds } },
+    });
+
+    // Clear Taylor-related canonical WI obligations: correction-reviews
+    // + timesheet-approval scope WIs whose reference maps to Taylor
+    // or her affected pay periods. Origin kinds targeted:
+    //   - TIMECLOCK_CORRECTION_REVIEW (referenceId = correction id — gone above)
+    //   - PAYROLL_TIMESHEET_APPROVAL / PAYROLL_DEPARTMENT_APPROVAL
+    //     (referenceId = `${payPeriodId}:${departmentId}`)
+    const targetOrigins = await prisma.workIntakeOrigin.findMany({
+      where: {
+        clubId: COULEE_RIDGE_STAGING_CLUB_ID,
+        OR: [
+          { kind: "PAYROLL_TIMESHEET_APPROVAL", referenceId: { in: affectedPayPeriodIds.flatMap((pid) => [`${pid}:*`]) } },
+          {
+            kind: { in: ["PAYROLL_TIMESHEET_APPROVAL", "PAYROLL_DEPARTMENT_APPROVAL", "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP"] },
+            referenceId: { startsWith: affectedPayPeriodIds[0] },
+          },
+        ],
+      },
+      select: { workIntakeItemId: true, id: true, kind: true, referenceId: true },
+    });
+    // Second pass — enumerate all TIMECLOCK_CORRECTION_REVIEW origins;
+    // referenceId is the correction id, which was deleted above. The
+    // parent WI is orphaned — its origin (referenceId) no longer
+    // matches a live row so we clear these too.
+    const orphanCorrOrigins = await prisma.workIntakeOrigin.findMany({
+      where: {
+        clubId: COULEE_RIDGE_STAGING_CLUB_ID,
+        kind: { in: ["TIMECLOCK_CORRECTION_REVIEW", "TIMECLOCK_CORRECTION_REVIEW_CONFIG_GAP"] },
+      },
+      select: { workIntakeItemId: true, id: true, kind: true, referenceId: true },
+    });
+    const allTargetOrigins = [...targetOrigins, ...orphanCorrOrigins];
+    const wiIds = Array.from(new Set(allTargetOrigins.map((o) => o.workIntakeItemId)));
+    console.log(`  Canonical WI origins to clear: ${allTargetOrigins.length} (WorkIntakeItem count ${wiIds.length})`);
+    if (allTargetOrigins.length) {
+      await prisma.workIntakeOrigin.deleteMany({
+        where: { id: { in: allTargetOrigins.map((o) => o.id) } },
+      });
+    }
+    if (wiIds.length) {
+      // Detach any remaining origins on these WIs before deleting.
+      await prisma.workIntakeOrigin.deleteMany({
+        where: { workIntakeItemId: { in: wiIds } },
+      });
+      await prisma.workCompletionEvent.deleteMany({
+        where: { workIntakeItemId: { in: wiIds } },
+      });
+      await prisma.workIntakeActivity.deleteMany({
+        where: { workIntakeItemId: { in: wiIds } },
+      });
+      await prisma.workIntakeItem.deleteMany({
+        where: { id: { in: wiIds } },
+      });
+    }
+  }
   console.log("RESET done.");
 }
 

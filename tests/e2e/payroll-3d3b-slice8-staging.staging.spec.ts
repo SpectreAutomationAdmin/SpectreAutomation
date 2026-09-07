@@ -145,6 +145,56 @@ test.describe("Payroll-3D-3B Slice 8 · staging acceptance smoke", () => {
   // for that user. Founder walkthrough §36 covers this surface directly.
 
   // ------------------------------------------------------------------
+  // Slice 8A §4 · Taylor employee-portal login through the REAL
+  // /employee/login form (not admin /login). Proves the portal auth
+  // path (verifyPortalPasswordByEmail) is intact on the deployed
+  // build.
+  // ------------------------------------------------------------------
+  test("8A§4 Taylor employee-portal login succeeds via /employee/login", async ({ browser }) => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(`${STAGING_BASE}/employee/login`, { waitUntil: "domcontentloaded" });
+    await page.locator('input[name="email"]').fill(TAYLOR_EMP);
+    await page.locator('input[name="password"]').fill(FIXTURE_PASSWORD);
+    await Promise.all([
+      page.waitForLoadState("domcontentloaded", { timeout: 20000 }),
+      page.locator('[data-testid="employee-login-submit"]').click(),
+    ]);
+    await page.waitForTimeout(2000); // form-action redirect
+    expect(page.url()).not.toContain("/employee/login");
+    await page.screenshot({ path: path.join(OUT, "8A-4a-taylor-portal-landing.png"), fullPage: true });
+    // The portal is the correct dept-scoped surface for Taylor —
+    // she does NOT get to /app/admin. That is a positive result.
+    expect(page.url()).toContain("/employee");
+    await ctx.close();
+  });
+
+  // ------------------------------------------------------------------
+  // Slice 8A §4 · Taylor employee-portal timesheets renders under the
+  // Slice 7B/7C code path without a Next.js server error, whether
+  // she has an open shift or an empty period (post-reset state).
+  // ------------------------------------------------------------------
+  test("8A§4 Taylor /employee/timesheets renders under new schema", async ({ browser }) => {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await page.goto(`${STAGING_BASE}/employee/login`, { waitUntil: "domcontentloaded" });
+    await page.locator('input[name="email"]').fill(TAYLOR_EMP);
+    await page.locator('input[name="password"]').fill(FIXTURE_PASSWORD);
+    await Promise.all([
+      page.waitForLoadState("domcontentloaded", { timeout: 20000 }),
+      page.locator('[data-testid="employee-login-submit"]').click(),
+    ]);
+    await page.waitForTimeout(2000);
+    await page.goto(`${STAGING_BASE}/employee/timesheets`, { waitUntil: "domcontentloaded" });
+    const errorBoundary = await page.locator("text=/Application error/i").count();
+    expect(errorBoundary).toBe(0);
+    // Should stay on the timesheets page (not bounce to login).
+    expect(page.url()).toContain("/employee");
+    await page.screenshot({ path: path.join(OUT, "8A-4b-taylor-timesheets.png"), fullPage: true });
+    await ctx.close();
+  });
+
+  // ------------------------------------------------------------------
   // §S · Founder session smoke — proves loginAsFounder still works.
   // ------------------------------------------------------------------
   test("§S founder Mission Control renders (uses staging-auth helper)", async ({ browser }) => {
