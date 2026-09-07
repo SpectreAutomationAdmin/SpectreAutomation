@@ -69,29 +69,32 @@ export default function ShiftOpportunitiesList({
         {opportunities.map((o) => (
           <li
             key={o.opportunityId}
-            className="rounded-2xl bg-white border border-stone-200/70 p-5"
+            className="rounded-2xl bg-club-gold/[0.06] border border-club-gold/25 p-5"
             data-testid={`fore-shifts-row-${o.opportunityId}`}
           >
-            <p className="text-[11px] uppercase tracking-widest text-club-green-800">
-              Available shift
+            <p className="text-[11px] uppercase tracking-[0.16em] text-club-gold-700 font-medium">
+              Available Shift
             </p>
-            <p className="mt-1 font-serif text-[19px] text-club-ink">
+            <p className="mt-1.5 font-serif text-[19px] text-club-ink leading-tight">
               {fmtDate(o.scheduledStartIso)}
             </p>
-            <p className="mt-1 text-sm text-stone-700">
-              <span className="uppercase tracking-wide text-[11px] text-club-green-800">
-                {o.positionName ?? o.departmentName}
-              </span>{" "}· {o.templateName}
+            <p className="mt-1 text-[11px] uppercase tracking-[0.14em] text-club-green-800 font-medium">
+              {o.positionName ?? o.departmentName}
+              <span className="normal-case tracking-normal text-stone-700 text-[13px]"> · {o.templateName}</span>
             </p>
-            <p className="mt-1 text-sm text-stone-600">
+            <p className="mt-1 text-[13px] text-stone-700 tabular-nums">
               {fmtTime(o.scheduledStartIso)} – {fmtTime(o.scheduledEndIso)}
-              {" · "}{fmtHM(o.scheduledSeconds)}
+              {" · "}<span className="text-stone-500">{fmtHM(o.scheduledSeconds)}</span>
+            </p>
+            <p className="mt-2.5 text-[12.5px] text-stone-600 leading-snug">
+              A {o.templateName.toLowerCase()} is available. Tap below to view the
+              shift and claim it.
             </p>
             <button
               type="button"
               onClick={() => setOpen({ ...o })}
               data-testid={`fore-shifts-view-${o.opportunityId}`}
-              className="mt-4 rounded-md bg-club-green-800 px-4 py-2 text-sm font-medium text-white hover:bg-club-green-900"
+              className="mt-4 w-full rounded-md bg-club-green-800 px-4 py-2.5 text-[14px] font-medium text-white hover:bg-club-green-900"
             >
               View Shift
             </button>

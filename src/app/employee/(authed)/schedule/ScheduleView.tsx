@@ -203,7 +203,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
   const isPopulated = props.weekShifts.length > 0 || props.nextShift != null;
 
   return (
-    <div className="space-y-6 md:space-y-8" data-testid="portal-schedule-populated">
+    <div className="space-y-5 md:space-y-6 md:max-w-[1280px]" data-testid="portal-schedule-populated">
       {/* ============= TOAST (server-action confirmation) ============= */}
       {props.toast && (
         <div
@@ -220,25 +220,25 @@ export default function ScheduleView(props: ScheduleViewProps) {
       )}
       {/* ============= HEADER ============= */}
       <header>
-        <p className="hidden md:block text-[11px] uppercase tracking-[0.2em] text-stone-500">
+        <p className="hidden md:block text-[10px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-1 font-serif text-2xl md:text-3xl text-club-ink">
+        <h1 className="mt-0.5 font-serif text-[26px] md:text-[32px] text-club-ink leading-tight">
           My Schedule
         </h1>
       </header>
 
       {/* ============= TOOLBAR ============= */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div className="flex items-center gap-2 md:gap-3">
+        <div className="inline-flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => navigateWeek(props.prevWeekStartIso)}
             data-testid="portal-schedule-week-prev"
             aria-label="Previous week"
-            className="h-8 w-8 grid place-items-center rounded-md border border-stone-300 text-stone-600 hover:border-stone-500"
+            className="h-7 w-7 grid place-items-center rounded-md border border-stone-200 bg-white text-stone-500 hover:border-stone-400 hover:text-stone-800 transition-colors"
           >‹</button>
-          <div className="font-serif text-base md:text-lg text-club-ink px-1" data-testid="portal-schedule-week-label">
+          <div className="font-serif text-[15px] md:text-base text-club-ink px-2.5" data-testid="portal-schedule-week-label">
             {weekLabel(props.weekStartIso)}
           </div>
           <button
@@ -246,16 +246,19 @@ export default function ScheduleView(props: ScheduleViewProps) {
             onClick={() => navigateWeek(props.nextWeekStartIso)}
             data-testid="portal-schedule-week-next"
             aria-label="Next week"
-            className="h-8 w-8 grid place-items-center rounded-md border border-stone-300 text-stone-600 hover:border-stone-500"
+            className="h-7 w-7 grid place-items-center rounded-md border border-stone-200 bg-white text-stone-500 hover:border-stone-400 hover:text-stone-800 transition-colors"
           >›</button>
           <button
             type="button"
             onClick={() => navigateWeek(props.todayIso)}
             data-testid="portal-schedule-today"
-            className="ml-1 md:ml-2 rounded-md border border-stone-300 bg-white px-3 py-1 text-xs text-stone-700 hover:border-stone-500"
+            className="ml-2 rounded-md border border-stone-200 bg-white px-2.5 py-1 text-[12px] text-stone-700 hover:border-stone-400 transition-colors"
           >Today</button>
         </div>
-        <nav className="inline-flex rounded-md border border-stone-300 overflow-hidden text-xs md:text-sm" aria-label="Schedule view">
+        <nav
+          className="inline-flex rounded-md border border-stone-200 overflow-hidden text-[12px] md:text-[13px] bg-white"
+          aria-label="Schedule view"
+        >
           {(["week", "month"] as const).map((v) => (
             <button
               key={v}
@@ -264,10 +267,10 @@ export default function ScheduleView(props: ScheduleViewProps) {
               data-testid={`portal-schedule-view-${v}`}
               aria-pressed={props.view === v}
               className={
-                "px-3 py-1.5 " +
+                "px-3 py-1.5 border-r border-stone-200 last:border-r-0 transition-colors " +
                 (props.view === v
                   ? "bg-club-green-800 text-white"
-                  : "bg-white text-stone-700 hover:bg-club-cream")
+                  : "text-stone-600 hover:bg-club-cream")
               }
             >
               {v[0].toUpperCase() + v.slice(1)}
@@ -276,7 +279,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-my-availability"
-            className="px-3 py-1.5 bg-white text-stone-700 hover:bg-club-cream border-l border-stone-300"
+            className="px-3 py-1.5 text-stone-600 hover:bg-club-cream"
           >
             My Availability
           </Link>
@@ -285,7 +288,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
 
       {/* ============= MOBILE DATE STRIP ============= */}
       <div className="md:hidden">
-        <div className="flex items-center justify-between rounded-md border border-stone-200 bg-white px-2 py-2">
+        <div className="flex items-center justify-between rounded-xl border border-stone-200 bg-white px-1.5 py-2">
           {weekDays.map((d) => {
             const isSelected = isoDate(d.iso) === isoDate(selectedDayIso);
             const hasShift = d.shifts.length > 0;
@@ -297,78 +300,85 @@ export default function ScheduleView(props: ScheduleViewProps) {
                 aria-pressed={isSelected}
                 data-testid={`portal-schedule-mobile-day-${isoDate(d.iso)}`}
                 className={
-                  "flex flex-col items-center justify-center rounded-md w-9 py-1.5 text-[11px] " +
+                  "flex flex-col items-center justify-center rounded-lg w-10 py-1.5 text-[11px] transition-colors " +
                   (isSelected
                     ? "bg-club-green-800 text-white"
                     : "text-stone-600 hover:bg-club-cream")
                 }
               >
                 <span className="uppercase tracking-wide">{d.label[0]}</span>
-                <span className="mt-0.5 font-serif text-sm">{d.dateNumber}</span>
-                {hasShift && (
-                  <span className={
-                    "mt-0.5 h-1 w-1 rounded-full " +
-                    (isSelected ? "bg-white" : "bg-club-green-800")
-                  } />
-                )}
+                <span className="mt-0.5 font-serif text-[15px]">{d.dateNumber}</span>
+                <span className={
+                  "mt-1 h-1 w-1 rounded-full " +
+                  (hasShift
+                    ? (isSelected ? "bg-white" : "bg-club-green-800")
+                    : "bg-transparent")
+                } />
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* ============= DESKTOP WEEK GRID (only if view=week) ============= */}
+      {/* ============= DESKTOP WEEK GRID — ONE UNIFIED CARD WITH 7 COLUMNS ============= */}
       {props.view === "week" && (
-        <div className="hidden md:grid grid-cols-7 gap-3" data-testid="portal-schedule-week-grid">
-          {weekDays.map((d) => (
-            <div key={d.iso} className="min-h-40 rounded-lg border border-stone-200 bg-white p-3">
-              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500">
-                {d.label}
-              </div>
-              <div className="mt-0.5 font-serif text-lg text-club-ink">{d.dateNumber}</div>
-              <div className="mt-3 space-y-2">
-                {d.shifts.length === 0 ? (
-                  <p className="text-[11px] text-stone-400">No shift</p>
-                ) : d.shifts.map((s) => {
-                  const offered = !!s.openOpportunity;
-                  return (
-                    <button
-                      key={s.assignmentId}
-                      type="button"
-                      onClick={() => openPanelFor(s)}
-                      data-testid={`portal-schedule-shift-${s.assignmentId}`}
-                      className={
-                        "w-full text-left rounded-md border px-2.5 py-2 transition-colors " +
-                        (offered
-                          ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
-                          : "border-club-green-200 bg-club-green-50/70 hover:bg-club-green-100/70")
-                      }
-                    >
-                      <p className={
-                        "text-[10px] uppercase tracking-[0.14em] " +
-                        (offered ? "text-club-gold-700" : "text-club-green-800")
-                      }>
-                        {s.positionName ?? s.departmentName}
-                      </p>
-                      <p className="mt-0.5 font-serif text-sm text-club-ink leading-tight">{s.templateName}</p>
-                      <p className="mt-1 text-[11px] text-stone-600">
-                        {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
-                      </p>
-                      <p className="text-[11px] text-stone-500">{fmtHM(s.scheduledSeconds)}</p>
-                      {offered && (
-                        <p
-                          className="mt-1 text-[10px] uppercase tracking-[0.14em] text-club-gold-700"
-                          data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
-                        >
-                          Shift offered · waiting
+        <div
+          className="hidden md:block rounded-lg border border-stone-200 bg-white overflow-hidden"
+          data-testid="portal-schedule-week-grid"
+        >
+          <div className="grid grid-cols-7 divide-x divide-stone-100">
+            {weekDays.map((d) => (
+              <div key={d.iso} className="px-3 pt-3 pb-3 min-h-[168px] flex flex-col">
+                <div className="text-[10px] uppercase tracking-[0.16em] text-stone-500 text-center">
+                  {d.label}
+                </div>
+                <div className="mt-0.5 font-serif text-[15px] text-club-ink text-center">
+                  {d.dateNumber}
+                </div>
+                <div className="mt-2.5 flex-1 space-y-1.5">
+                  {d.shifts.length === 0 ? (
+                    <p className="mt-6 text-center text-[11px] text-stone-400">— No shift</p>
+                  ) : d.shifts.map((s) => {
+                    const offered = !!s.openOpportunity;
+                    return (
+                      <button
+                        key={s.assignmentId}
+                        type="button"
+                        onClick={() => openPanelFor(s)}
+                        data-testid={`portal-schedule-shift-${s.assignmentId}`}
+                        className={
+                          "w-full text-left rounded-md border px-2 py-1.5 transition-colors " +
+                          (offered
+                            ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
+                            : "border-club-green-100 bg-club-green-50/60 hover:bg-club-green-100/70")
+                        }
+                      >
+                        <p className={
+                          "text-[10px] uppercase tracking-[0.12em] font-medium " +
+                          (offered ? "text-club-gold-700" : "text-club-green-800")
+                        }>
+                          {s.positionName ?? s.departmentName}
                         </p>
-                      )}
-                    </button>
-                  );
-                })}
+                        <p className="mt-0.5 font-serif text-[13px] text-club-ink leading-tight">{s.templateName}</p>
+                        <p className="mt-1 text-[11px] text-stone-600 leading-tight">
+                          {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
+                        </p>
+                        <p className="text-[11px] text-stone-500 leading-tight">{fmtHM(s.scheduledSeconds)}</p>
+                        {offered && (
+                          <p
+                            className="mt-1 text-[10px] uppercase tracking-[0.12em] text-club-gold-700"
+                            data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
+                          >
+                            Offered · waiting
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
@@ -397,16 +407,18 @@ export default function ScheduleView(props: ScheduleViewProps) {
         />
       </div>
 
-      {/* ============= RECENT SHIFTS ============= */}
+      {/* ============= RECENT SHIFTS — single card, dense rows ============= */}
       {props.recentShifts.length > 0 && (
         <section aria-labelledby="portal-schedule-recent-heading" data-testid="portal-schedule-recent">
-          <h2 id="portal-schedule-recent-heading" className="font-serif text-xl text-club-ink">
+          <h2 id="portal-schedule-recent-heading" className="font-serif text-[19px] text-club-ink">
             Recent Shifts
           </h2>
-          <div className="mt-3 space-y-2 md:space-y-3">
-            {props.recentShifts.map((s) => (
-              <RecentShiftRow key={s.assignmentId} shift={s} />
-            ))}
+          <div className="mt-3 rounded-lg border border-stone-200 bg-white overflow-hidden">
+            <ul className="divide-y divide-stone-100">
+              {props.recentShifts.map((s) => (
+                <RecentShiftRow key={s.assignmentId} shift={s} />
+              ))}
+            </ul>
           </div>
         </section>
       )}
@@ -438,32 +450,107 @@ export default function ScheduleView(props: ScheduleViewProps) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  ICONS — dark-green outline, restrained, from the club-* palette.  */
+/* ------------------------------------------------------------------ */
+function CalendarIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 9h18M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+function ClockIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+function BoltIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <path d="M13 3 5 14h6l-1 7 8-11h-6l1-7Z" />
+    </svg>
+  );
+}
+function AvailabilityIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 9h18M9 13l2 2 4-4" />
+    </svg>
+  );
+}
+function TimeOffIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 9h18M8 3v4M16 3v4M9 15h6" />
+    </svg>
+  );
+}
+function ChevronRightIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
       <div className="rounded-lg border border-stone-200 bg-white p-4 md:p-5">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Next Shift</p>
+        <div className="flex items-center gap-2">
+          <CalendarIcon className="h-4 w-4 text-club-green-800" />
+          <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500">Next Shift</p>
+        </div>
         <p className="mt-3 text-sm text-stone-600">Nothing scheduled ahead.</p>
       </div>
     );
   }
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-4 md:p-5" data-testid="portal-schedule-next-shift">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Next Shift</p>
-      <p className="mt-2 font-serif text-lg text-club-ink">
+      <div className="flex items-center gap-2">
+        <CalendarIcon className="h-4 w-4 text-club-green-800" />
+        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500">Next Shift</p>
+      </div>
+      <p className="mt-2.5 font-serif text-[17px] text-club-ink leading-tight">
         {fmtLongDate(shift.scheduledStartIso)}
       </p>
-      <p className="mt-1 text-sm text-stone-700">
-        <span className="uppercase tracking-wide text-[11px] text-club-green-800">
-          {shift.positionName ?? shift.departmentName}
-        </span>{" "}· {shift.templateName}
+      <p className="mt-1.5 text-[11px] uppercase tracking-[0.14em] text-club-green-800">
+        {shift.positionName ?? shift.departmentName} · <span className="normal-case tracking-normal text-stone-700 text-[13px]">{shift.templateName}</span>
       </p>
-      <p className="mt-1 text-sm text-stone-600">
-        {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)}
+      <p className="mt-1.5 text-[13px] text-stone-700">
+        {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)} · <span className="text-stone-500">{fmtHM(shift.scheduledSeconds)}</span>
       </p>
-      <p className="text-xs text-stone-500">{fmtHM(shift.scheduledSeconds)}</p>
       {relLabel && (
-        <div className="mt-3 inline-block rounded-full bg-club-green-50 text-club-green-800 px-3 py-1 text-xs" data-testid="portal-schedule-next-rel">
+        <div
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-club-green-50 text-club-green-800 px-2.5 py-1 text-[11px] font-medium"
+          data-testid="portal-schedule-next-rel"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-club-green-800" />
           {relLabel}
         </div>
       )}
@@ -476,19 +563,22 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-4 md:p-5" data-testid="portal-schedule-this-week">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">This Week</p>
-      <dl className="mt-3 space-y-2 text-sm">
-        <div className="flex justify-between text-stone-700">
-          <dt>Scheduled hours</dt>
-          <dd className="font-serif" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
+      <div className="flex items-center gap-2">
+        <ClockIcon className="h-4 w-4 text-club-green-800" />
+        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500">This Week</p>
+      </div>
+      <dl className="mt-3 space-y-2 text-[13px]">
+        <div className="flex justify-between items-baseline">
+          <dt className="text-stone-600">Scheduled hours</dt>
+          <dd className="font-serif text-club-ink" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
         </div>
-        <div className="flex justify-between text-stone-700">
-          <dt>Worked hours</dt>
-          <dd className="font-serif" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
+        <div className="flex justify-between items-baseline">
+          <dt className="text-stone-600">Worked hours</dt>
+          <dd className="font-serif text-club-ink" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
         </div>
-        <div className="flex justify-between text-stone-700">
-          <dt>Remaining hours</dt>
-          <dd className="font-serif" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
+        <div className="flex justify-between items-baseline">
+          <dt className="text-stone-600">Remaining hours</dt>
+          <dd className="font-serif text-club-ink" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
         </div>
       </dl>
     </div>
@@ -498,41 +588,49 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-4 md:p-5" data-testid="portal-schedule-actions">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">Actions</p>
-      <ul className="mt-3 space-y-3 text-sm">
+      <div className="flex items-center gap-2">
+        <BoltIcon className="h-4 w-4 text-club-green-800" />
+        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500">Actions</p>
+      </div>
+      <ul className="mt-3 space-y-2">
         <li>
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-actions-view-availability"
-            className="font-medium text-club-green-800 hover:text-club-green-900"
+            className="flex items-start gap-2.5 rounded-md px-1.5 py-1 -mx-1.5 hover:bg-club-cream/60 transition-colors"
           >
-            View my availability
+            <AvailabilityIcon className="h-4 w-4 mt-0.5 shrink-0 text-club-green-800" />
+            <span>
+              <span className="block font-medium text-[13px] text-club-ink leading-tight">View my availability</span>
+              <span className="block text-[11.5px] text-stone-500 mt-0.5">Update your availability</span>
+            </span>
           </Link>
-          <p className="text-xs text-stone-500">Update your availability</p>
         </li>
         <li>
           {hasTimeOffRoute ? (
-            <>
-              <Link
-                href="/employee/time-off"
-                data-testid="portal-schedule-actions-time-off"
-                className="font-medium text-club-green-800 hover:text-club-green-900"
-              >
-                Request time off
-              </Link>
-              <p className="text-xs text-stone-500">Submit a time off request</p>
-            </>
-          ) : (
-            <>
-              <span
-                data-testid="portal-schedule-actions-time-off-disabled"
-                className="font-medium text-stone-400 cursor-not-allowed"
-                aria-disabled
-              >
-                Request time off
+            <Link
+              href="/employee/time-off"
+              data-testid="portal-schedule-actions-time-off"
+              className="flex items-start gap-2.5 rounded-md px-1.5 py-1 -mx-1.5 hover:bg-club-cream/60 transition-colors"
+            >
+              <TimeOffIcon className="h-4 w-4 mt-0.5 shrink-0 text-club-green-800" />
+              <span>
+                <span className="block font-medium text-[13px] text-club-ink leading-tight">Request time off</span>
+                <span className="block text-[11.5px] text-stone-500 mt-0.5">Submit a time off request</span>
               </span>
-              <p className="text-xs text-stone-500">Coming with the Time Off module.</p>
-            </>
+            </Link>
+          ) : (
+            <div
+              data-testid="portal-schedule-actions-time-off-disabled"
+              aria-disabled
+              className="flex items-start gap-2.5 rounded-md px-1.5 py-1 -mx-1.5 opacity-60"
+            >
+              <TimeOffIcon className="h-4 w-4 mt-0.5 shrink-0 text-stone-400" />
+              <span>
+                <span className="block font-medium text-[13px] text-stone-500 leading-tight">Request time off</span>
+                <span className="block text-[11.5px] text-stone-500 mt-0.5">Coming with the Time Off module.</span>
+              </span>
+            </div>
           )}
         </li>
       </ul>
@@ -542,61 +640,88 @@ function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
 
 function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
   const variance = fmtVariance(shift.varianceSeconds);
+  const varianceClass =
+    variance.tone === "up"
+      ? "bg-club-green-50 text-club-green-800"
+      : variance.tone === "down"
+        ? "bg-club-gold/10 text-club-gold-700"
+        : "bg-stone-100 text-stone-500";
+  const dayLabel = new Date(shift.scheduledStartIso).toLocaleDateString("en-US", {
+    weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
+  });
   return (
-    <div
+    <li
       data-testid={`portal-schedule-recent-${shift.assignmentId}`}
-      className="rounded-lg border border-stone-200 bg-white px-4 py-3 md:px-5 md:py-4"
+      className="px-4 py-3 md:px-5 md:py-3.5 hover:bg-club-cream/40 transition-colors"
     >
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-6">
+      {/* Desktop: single-row table layout with 6 columns + chevron */}
+      <div className="hidden md:grid md:grid-cols-[160px_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_88px_120px_16px] items-center gap-4">
         <div>
-          <p className="text-xs uppercase tracking-wide text-stone-500">
-            {new Date(shift.scheduledStartIso).toLocaleDateString("en-US", {
-              weekday: "short", month: "short", day: "numeric", timeZone: "UTC",
-            })}
+          <p className="font-serif text-[14px] text-club-ink leading-tight">{dayLabel}</p>
+        </div>
+        <div className="min-w-0">
+          <p className="text-[11px] uppercase tracking-[0.12em] text-club-green-800 font-medium">
+            {shift.positionName ?? shift.departmentName}
           </p>
-          <p className="mt-0.5 text-sm text-stone-800">
-            <span className="uppercase tracking-wide text-[11px] text-club-green-800">
-              {shift.positionName ?? shift.departmentName}
-            </span>{" "}· {shift.templateName}
+          <p className="mt-0.5 text-[13px] text-stone-700 truncate">{shift.templateName}</p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-stone-500">Scheduled</p>
+          <p className="mt-0.5 text-[12.5px] text-stone-700 tabular-nums">
+            {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)}
           </p>
         </div>
-        <dl className="grid grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-1 text-xs">
-          <div>
-            <dt className="text-stone-500">Scheduled</dt>
-            <dd className="text-stone-800">
-              {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-stone-500">Worked</dt>
-            <dd className="text-stone-800">
-              {shift.worked
-                ? `${fmtTime(shift.worked.clockInIso)} – ${fmtTime(shift.worked.clockOutIso)}`
-                : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-stone-500">Total</dt>
-            <dd className="text-stone-800 font-serif">
-              {shift.worked ? fmtHM(shift.worked.workedSeconds) : "—"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-stone-500">Variance</dt>
-            <dd
-              className={
-                "font-serif " +
-                (variance.tone === "up" ? "text-club-green-800"
-                  : variance.tone === "down" ? "text-stone-800"
-                  : "text-stone-500")
-              }
-            >
-              {variance.label}
-            </dd>
-          </div>
-        </dl>
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-stone-500">Worked</p>
+          <p className="mt-0.5 text-[12.5px] text-stone-700 tabular-nums">
+            {shift.worked
+              ? `${fmtTime(shift.worked.clockInIso)} – ${fmtTime(shift.worked.clockOutIso)}`
+              : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-stone-500">Total</p>
+          <p className="mt-0.5 font-serif text-[14px] text-club-ink tabular-nums">
+            {shift.worked ? fmtHM(shift.worked.workedSeconds) : "—"}
+          </p>
+        </div>
+        <div className="justify-self-end">
+          <span
+            className={"inline-block rounded-full px-2.5 py-0.5 text-[11px] font-medium tabular-nums " + varianceClass}
+          >
+            {variance.label}
+          </span>
+        </div>
+        <ChevronRightIcon className="h-3.5 w-3.5 text-stone-300" />
       </div>
-    </div>
+
+      {/* Mobile: stacked but still dense — date on top, then role/name, then two-col metadata */}
+      <div className="md:hidden">
+        <div className="flex items-baseline justify-between">
+          <p className="font-serif text-[14px] text-club-ink">{dayLabel}</p>
+          <span
+            className={"inline-block rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums " + varianceClass}
+          >
+            {variance.label}
+          </span>
+        </div>
+        <p className="mt-0.5 text-[11px] uppercase tracking-[0.12em] text-club-green-800 font-medium">
+          {shift.positionName ?? shift.departmentName} <span className="normal-case tracking-normal text-stone-700 text-[12.5px]">· {shift.templateName}</span>
+        </p>
+        <div className="mt-1.5 grid grid-cols-2 gap-2 text-[11.5px] text-stone-600 tabular-nums">
+          <p>
+            <span className="text-stone-400">Sch.</span>{" "}
+            {fmtTime(shift.scheduledStartIso)}–{fmtTime(shift.scheduledEndIso)}
+          </p>
+          <p>
+            <span className="text-stone-400">Work.</span>{" "}
+            {shift.worked
+              ? `${fmtTime(shift.worked.clockInIso)}–${fmtTime(shift.worked.clockOutIso)}`
+              : "—"}
+          </p>
+        </div>
+      </div>
+    </li>
   );
 }
 

@@ -1,15 +1,11 @@
 // Scheduling Foundation · Phase E (2026-09-07) — shift-detail panel
-// (right-side drawer on desktop, bottom-sheet on mobile). Owns the
-// Give Up flow + Offered/Waiting + Withdraw + past-shift read-only.
-//
-// Two consumers instantiate this component: ScheduleView (the weekly
-// grid) and the mobile SelectedDayDetail — both pass an open shift
-// via `activeShift` and receive an `onClose` callback.
+// (right-side drawer on desktop, bottom-sheet on mobile). Matches
+// the approved visual concept: date as sheet title, shift summary
+// card with calendar icon, direct-to-form Give Up flow.
 
 "use client";
 
 import { useState, useTransition } from "react";
-import Link from "next/link";
 import { offerShiftAction, withdrawOpportunityAction } from "./_actions";
 
 export type ShiftPanelShift = {
@@ -59,13 +55,24 @@ const REASON_OPTIONS = [
   { value: "OTHER",       label: "Other" },
 ];
 
+function CalendarIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+      strokeLinecap="round" strokeLinejoin="round"
+      className={className} aria-hidden="true"
+    >
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 9h18M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
 export default function ShiftDetailPanel({
   activeShift, onClose,
 }: {
   activeShift: ShiftPanelShift | null;
   onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"detail" | "give-up">("detail");
   const [reason, setReason] = useState<string>("");
   const [note, setNote] = useState<string>("");
   const [pending, startTransition] = useTransition();
@@ -78,9 +85,6 @@ export default function ShiftDetailPanel({
     fd.set("shiftAssignmentId", activeShift.assignmentId);
     if (reason) fd.set("reason", reason);
     if (note) fd.set("note", note);
-    // Close the panel immediately so the fixed backdrop doesn't
-    // linger through the server-action navigation. If the action
-    // fails, the ?err= toast surfaces on return.
     onClose();
     startTransition(() => { void offerShiftAction(fd); });
   }
@@ -94,17 +98,14 @@ export default function ShiftDetailPanel({
 
   const isOffered = !!activeShift.openOpportunity;
   const canGiveUp = !activeShift.isPast && !isOffered;
-  const canWithdraw = isOffered;
 
   return (
     <>
-      {/* Backdrop */}
       <div
         onClick={onClose}
         className="fixed inset-0 z-40 bg-black/30"
         data-testid="portal-schedule-panel-backdrop"
       />
-      {/* Panel — bottom sheet on mobile, right drawer on desktop */}
       <aside
         role="dialog"
         aria-modal="true"
@@ -112,156 +113,142 @@ export default function ShiftDetailPanel({
         data-testid="portal-schedule-shift-panel"
         className={
           "fixed z-50 bg-white overflow-y-auto shadow-xl " +
-          // Mobile: bottom sheet
-          "bottom-0 left-0 right-0 rounded-t-2xl max-h-[85vh] pb-6 " +
-          // Desktop (md+): right drawer
-          "md:top-0 md:right-0 md:left-auto md:bottom-0 md:h-full md:w-[420px] md:rounded-none md:pb-0"
+          "bottom-0 left-0 right-0 rounded-t-2xl max-h-[88vh] pb-6 " +
+          "md:top-0 md:right-0 md:left-auto md:bottom-0 md:h-full md:w-[440px] md:rounded-none md:pb-0"
         }
       >
-        <div className="px-6 pt-5 md:pt-8 flex items-center justify-between">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">
-            Shift detail
+        {/* Sheet title bar: date, X close */}
+        <div className="px-6 pt-5 md:pt-8 pb-3 flex items-start justify-between border-b border-stone-100">
+          <p className="font-serif text-[19px] text-club-ink leading-tight">
+            {fmtDate(activeShift.scheduledStartIso)}
           </p>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close shift detail"
             data-testid="portal-schedule-panel-close"
-            className="h-8 w-8 grid place-items-center rounded-md text-stone-500 hover:bg-stone-100"
+            className="-mt-0.5 h-8 w-8 grid place-items-center rounded-md text-stone-500 hover:bg-stone-100"
           >×</button>
         </div>
 
-        <div className="px-6 mt-2">
-          <p className="font-serif text-2xl text-club-ink">
-            {fmtDate(activeShift.scheduledStartIso)}
-          </p>
-          <p className="mt-3 text-[11px] uppercase tracking-[0.14em] text-club-green-800">
-            {activeShift.positionName ?? activeShift.departmentName}
-          </p>
-          <p className="mt-0.5 font-serif text-xl text-club-ink">{activeShift.templateName}</p>
-          <p className="mt-2 text-sm text-stone-700">
-            {fmtTime(activeShift.scheduledStartIso)} – {fmtTime(activeShift.scheduledEndIso)}
-          </p>
-          <p className="text-xs text-stone-500">{fmtHM(activeShift.scheduledSeconds)}</p>
+        {/* Shift summary — tinted card with calendar icon */}
+        <div className="px-6 mt-5">
+          <div className="rounded-xl border border-club-green-100 bg-club-green-50/60 px-4 py-3 flex items-start gap-3">
+            <div className="mt-0.5 h-9 w-9 grid place-items-center rounded-lg bg-white/70 text-club-green-800 shrink-0">
+              <CalendarIcon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-[0.14em] text-club-green-800 font-medium">
+                {activeShift.positionName ?? activeShift.departmentName}
+              </p>
+              <p className="mt-0.5 font-serif text-[16px] text-club-ink leading-tight">
+                {activeShift.templateName}
+              </p>
+              <p className="mt-1 text-[13px] text-stone-700 tabular-nums">
+                {fmtTime(activeShift.scheduledStartIso)} – {fmtTime(activeShift.scheduledEndIso)}
+              </p>
+              <p className="text-[12px] text-stone-500">{fmtHM(activeShift.scheduledSeconds)}</p>
+            </div>
+          </div>
         </div>
 
-        {/* ---------- OFFERED / WAITING ---------- */}
+        {/* OFFERED / WAITING state */}
         {isOffered && (
-          <div className="mt-6 mx-6 rounded-md border border-club-gold/40 bg-club-gold/10 px-4 py-3">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-club-gold-700">
-              Shift offered
-            </p>
-            <p className="mt-1 text-sm text-stone-700">
-              Waiting for a coworker to pick it up. You remain responsible
-              until someone picks it up.
-            </p>
-          </div>
-        )}
-
-        {/* ---------- DEFAULT DETAIL: Give Up CTA ---------- */}
-        {mode === "detail" && canGiveUp && (
-          <div className="mt-8 px-6">
-            <p className="text-sm text-stone-600">Can't work this shift?</p>
-            <button
-              type="button"
-              onClick={() => setMode("give-up")}
-              data-testid="portal-schedule-give-up-open"
-              className="mt-3 w-full rounded-md border border-stone-300 bg-white px-4 py-2.5 text-sm font-medium text-stone-800 hover:border-stone-500"
-            >
-              Give Up Shift
-            </button>
-          </div>
-        )}
-
-        {/* ---------- GIVE UP CONFIRMATION ---------- */}
-        {mode === "give-up" && canGiveUp && (
-          <div className="mt-6 px-6 space-y-4" data-testid="portal-schedule-give-up-form">
-            <div>
-              <p className="font-serif text-lg text-club-ink">Give up this shift?</p>
-              <p className="mt-1 text-sm text-stone-600">
-                You can offer this shift to eligible coworkers in your department.
+          <>
+            <div className="mt-5 mx-6 rounded-md border border-club-gold/40 bg-club-gold/10 px-4 py-3">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-club-gold-700 font-medium">
+                Shift offered
+              </p>
+              <p className="mt-1 text-[13px] text-stone-700">
+                Waiting for a coworker to pick it up. You remain responsible
+                until someone does.
               </p>
             </div>
-            <div>
-              <label htmlFor="reason" className="block text-xs uppercase tracking-[0.14em] text-stone-500">
+            <div className="mt-4 px-6">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={submitWithdraw}
+                data-testid="portal-schedule-withdraw-offer"
+                className="w-full rounded-md border border-stone-300 bg-white px-4 py-2.5 text-sm text-stone-800 hover:border-stone-500 disabled:opacity-50"
+              >
+                {pending ? "Withdrawing…" : "Withdraw Offer"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* GIVE UP FORM — direct, no intermediate CTA */}
+        {canGiveUp && (
+          <div className="mt-6 px-6" data-testid="portal-schedule-give-up-form">
+            <p className="font-serif text-[17px] text-club-ink">Give up this shift?</p>
+            <p className="mt-1 text-[13px] text-stone-600">
+              You can offer this shift to eligible coworkers in your department.
+            </p>
+            <div className="mt-4">
+              <label htmlFor="reason" className="block text-[11px] uppercase tracking-[0.14em] text-stone-500">
                 Reason (optional)
               </label>
               <select
                 id="reason" name="reason" value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 data-testid="portal-schedule-give-up-reason"
-                className="mt-1 w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm"
+                className="mt-1.5 w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-[13px]"
               >
-                <option value="">Prefer not to say</option>
+                <option value="">Select a reason</option>
                 {REASON_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
             </div>
-            <div>
-              <label htmlFor="note" className="block text-xs uppercase tracking-[0.14em] text-stone-500">
-                Note (optional)
+            <div className="mt-4">
+              <label htmlFor="note" className="block text-[11px] uppercase tracking-[0.14em] text-stone-500">
+                Add a note (optional)
               </label>
               <textarea
                 id="note" name="note" rows={3}
                 value={note} onChange={(e) => setNote(e.target.value)}
                 data-testid="portal-schedule-give-up-note"
-                placeholder="Anything your manager should know?"
-                className="mt-1 w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm"
+                placeholder="e.g. family commitment"
+                className="mt-1.5 w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-[13px]"
               />
             </div>
-            <p className="text-xs text-stone-500">
-              You'll remain responsible for this shift until someone picks it up.
-            </p>
-            <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setMode("detail")}
-                data-testid="portal-schedule-give-up-cancel"
-                className="rounded-md border border-stone-300 bg-white px-4 py-2 text-sm text-stone-700 hover:border-stone-500"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={pending}
-                onClick={submitOffer}
-                data-testid="portal-schedule-give-up-submit"
-                className="rounded-md bg-club-green-800 px-4 py-2 text-sm font-medium text-white hover:bg-club-green-900 disabled:opacity-50"
-              >
-                {pending ? "Offering…" : "Offer My Shift"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* ---------- WITHDRAW OFFER ---------- */}
-        {canWithdraw && (
-          <div className="mt-4 px-6">
             <button
               type="button"
               disabled={pending}
-              onClick={submitWithdraw}
-              data-testid="portal-schedule-withdraw-offer"
-              className="w-full rounded-md border border-stone-300 bg-white px-4 py-2.5 text-sm text-stone-800 hover:border-stone-500 disabled:opacity-50"
+              onClick={submitOffer}
+              data-testid="portal-schedule-give-up-submit"
+              className="mt-5 w-full rounded-md bg-club-green-800 px-4 py-3 text-[14px] font-medium text-white hover:bg-club-green-900 disabled:opacity-50"
             >
-              {pending ? "Withdrawing…" : "Withdraw Offer"}
+              {pending ? "Offering…" : "Offer My Shift"}
             </button>
+            <button
+              type="button"
+              onClick={onClose}
+              data-testid="portal-schedule-give-up-cancel"
+              className="mt-2.5 w-full rounded-md border border-stone-300 bg-white px-4 py-2.5 text-[13px] text-stone-700 hover:border-stone-500"
+            >
+              Cancel
+            </button>
+            <div className="mt-4 flex items-start gap-2 text-[11.5px] text-stone-500">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+                strokeLinecap="round" strokeLinejoin="round"
+                className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 8v4M12 16h.01" />
+              </svg>
+              <span>You'll remain responsible for this shift until the change is confirmed.</span>
+            </div>
           </div>
         )}
 
-        {/* ---------- PAST SHIFT (read-only) ---------- */}
+        {/* PAST SHIFT (read-only) */}
         {activeShift.isPast && (
-          <div className="mt-8 px-6 text-sm text-stone-500">
+          <div className="mt-6 px-6 text-[13px] text-stone-500">
             Past shifts cannot be given up.
           </div>
         )}
-
-        <div className="mt-8 px-6 pb-4 text-center text-xs text-stone-400">
-          <Link href="/employee/announcements?tab=shifts" className="hover:underline underline-offset-4">
-            Browse Shift Opportunities in FORE!
-          </Link>
-        </div>
       </aside>
     </>
   );

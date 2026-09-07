@@ -190,12 +190,12 @@ export default function AvailabilityForm({
                 ))}
               </div>
 
-              {/* MOBILE — stacked day sections; template cards per day */}
+              {/* MOBILE — stacked day sections; template cards per day (2-column grid to match concept) */}
               <div className="md:hidden px-4 py-4 divide-y divide-stone-100">
                 {WEEKDAYS.map((day) => (
                   <div key={day.index} className="py-4 first:pt-0 last:pb-0">
-                    <p className="text-[11px] uppercase tracking-[0.2em] text-stone-500">{day.label}</p>
-                    <div className="mt-3 space-y-2">
+                    <p className="font-serif text-[15px] text-club-ink">{day.label}</p>
+                    <div className="mt-2.5 grid grid-cols-2 gap-2">
                       {templates.map((t) => {
                         const on = isSelected(day.index, t.id);
                         return (
@@ -206,20 +206,26 @@ export default function AvailabilityForm({
                             aria-pressed={on}
                             data-testid={`avail-cell-${day.index}-${t.id}`}
                             className={
-                              "w-full flex items-center justify-between gap-3 rounded-lg border px-4 py-3 text-left transition-colors " +
+                              "rounded-lg border px-3 py-2.5 text-left transition-colors " +
                               (on
-                                ? "bg-club-green-800 text-white border-club-green-800"
-                                : "bg-club-cream text-stone-700 border-stone-200")
+                                ? "bg-club-cream border-club-green-800"
+                                : "bg-white border-stone-200")
                             }
                           >
-                            <div>
-                              <p className={"font-serif text-sm " + (on ? "text-white" : "text-stone-900")}>{t.name}</p>
-                              <p className={"mt-0.5 text-[11px] " + (on ? "text-white/80" : "text-stone-500")}>
-                                {formatTimeMinutes(t.startTimeMinutes)} – {formatTimeMinutes(t.endTimeMinutes)}
-                                {" · "}{t.departmentName}
-                              </p>
-                            </div>
-                            <span className={"text-xs " + (on ? "text-white" : "text-stone-500")}>
+                            <p className={"font-serif text-[13.5px] leading-tight " + (on ? "text-club-ink" : "text-stone-800")}>
+                              {t.name}
+                            </p>
+                            <p className="mt-0.5 text-[10.5px] text-stone-500 leading-tight">
+                              {formatTimeMinutes(t.startTimeMinutes)} – {formatTimeMinutes(t.endTimeMinutes)}
+                            </p>
+                            <span
+                              className={
+                                "mt-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium " +
+                                (on
+                                  ? "bg-club-green-800 text-white"
+                                  : "bg-stone-100 text-stone-500")
+                              }
+                            >
                               {on ? "✓ Available" : "Not available"}
                             </span>
                           </button>
