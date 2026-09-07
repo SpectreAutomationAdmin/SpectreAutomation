@@ -232,6 +232,19 @@ export default async function EmployeePortalHome() {
   ]);
   if (!employee) redirect("/employee/login");
 
+  // Scheduling Foundation · Phase E (2026-09-07) — restrained
+  // "N shifts available" indicator on the FORE! home card. Sourced
+  // from the same canonical listEligibleOpportunitiesForEmployee
+  // used by the FORE! Shift Opportunities tab so counts stay in
+  // sync. Zero → no indicator (§9 amendment).
+  const shiftOpportunityCount = await (async () => {
+    try {
+      const { countEligibleOpportunitiesForEmployee } =
+        await import("@/lib/scheduling/shift-opportunities");
+      return await countEligibleOpportunitiesForEmployee(principal.clubId, principal.employeeId);
+    } catch { return 0; }
+  })();
+
   // Resolve the tenant's current weather through the canonical shared
   // weather service (src/lib/reporting/weather) — the same source the
   // Monthly Reporting Package consumes. Falls back to the seed provider
@@ -504,6 +517,7 @@ export default async function EmployeePortalHome() {
             <DesktopAnnouncementsCard
               items={buildAnnouncementItems(announcementRows.slice(0, HOME_ANNOUNCEMENT_LIMIT))}
               viewAllHref={announcementRows.length > HOME_ANNOUNCEMENT_LIMIT ? "/employee/announcements" : null}
+              shiftOpportunityCount={shiftOpportunityCount}
             />
           </div>
         </div>

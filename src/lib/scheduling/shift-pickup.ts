@@ -39,6 +39,7 @@
 import { prisma } from "../prisma";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../errors";
 import { isSchedulingEligible } from "../hr/scheduling-eligibility";
+import { resolveApplicableAvailabilityProfile } from "./availability-profiles";
 
 export interface PickUpShiftInput {
   clubId: string;
@@ -69,7 +70,8 @@ export async function pickUpShift(input: PickUpShiftInput): Promise<PickUpShiftR
       include: {
         shift: {
           select: {
-            id: true, clubId: true, departmentId: true, startAt: true, endAt: true, state: true,
+            id: true, clubId: true, departmentId: true, shiftTemplateId: true,
+            startAt: true, endAt: true, state: true,
           },
         },
         offeredByAssignment: {
@@ -97,10 +99,18 @@ export async function pickUpShift(input: PickUpShiftInput): Promise<PickUpShiftR
     }
 
     // Claimant must have an ACTIVE employment assignment in the
-    // shift's department to preserve role provenance on the new
-    // ShiftAssignment row.
+    // shift's department (Phase B). Phase E §11 tightens this: if
+    // the shift pins a positionId, the claimant's chosen assignment
+    // MUST also carry that positionId. Prefer an assignment whose
+    // positionId matches the shift's; only fall back to a department-
+    // only assignment when the shift has no pinned position.
     const now = new Date();
-    const claimantAssignment = await tx.employeeEmploymentAssignment.findFirst({
+    const positionScoped = await prisma.shift.findUnique({
+      where: { id: opp.shift.id },
+      select: { positionId: true },
+    });
+    const requiredPositionId = positionScoped?.positionId ?? null;
+    const candidateAssignments = await tx.employeeEmploymentAssignment.findMany({
       where: {
         clubId: input.clubId,
         employeeId: input.employeeId,
@@ -108,11 +118,59 @@ export async function pickUpShift(input: PickUpShiftInput): Promise<PickUpShiftR
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
       },
-      orderBy: { effectiveFrom: "desc" },
+      orderBy: [{ role: "asc" }, { effectiveFrom: "desc" }],
+      select: { id: true, positionId: true, role: true },
+    });
+    let claimantAssignment: { id: string } | null = null;
+    if (requiredPositionId) {
+      claimantAssignment = candidateAssignments.find(
+        (a) => a.positionId === requiredPositionId,
+      ) ?? null;
+    } else {
+      claimantAssignment = candidateAssignments[0] ?? null;
+    }
+    if (!claimantAssignment) {
+      throw new ForbiddenError(
+        requiredPositionId
+          ? "You are not qualified for this shift's role."
+          : "You do not have an active assignment in this department.",
+      );
+    }
+
+    // Phase E §13 — overlap detection. Refuse if the claimant already
+    // owns any ACTIVE ASSIGNED shift that overlaps this one. Interval
+    // overlap: existing.startAt < candidate.endAt AND
+    // existing.endAt > candidate.startAt.
+    const overlap = await tx.shiftAssignment.findFirst({
+      where: {
+        clubId: input.clubId,
+        employeeId: input.employeeId,
+        state: "ASSIGNED",
+        shift: {
+          state: "PUBLISHED",
+          startAt: { lt: opp.shift.endAt },
+          endAt: { gt: opp.shift.startAt },
+        },
+      },
       select: { id: true },
     });
-    if (!claimantAssignment) {
-      throw new ForbiddenError("You do not have an active assignment in this department.");
+    if (overlap) {
+      throw new ConflictError("You already have an overlapping scheduled shift.");
+    }
+
+    // Phase E §12 — availability. If the claimant's applicable
+    // availability profile EXPLICITLY marks the (weekday × template)
+    // as unavailable, refuse. No profile → permissive (documented
+    // in listEligibleOpportunitiesForEmployee).
+    const profile = await resolveApplicableAvailabilityProfile(input.employeeId, opp.shift.startAt);
+    if (profile) {
+      const weekday = opp.shift.startAt.getUTCDay();
+      const rule = profile.rules.find(
+        (r) => r.weekday === weekday && r.shiftTemplateId === opp.shift.shiftTemplateId,
+      );
+      if (rule && rule.available === false) {
+        throw new ForbiddenError("Your availability marks you unavailable for this shift.");
+      }
     }
 
     // 1. CAS the opportunity OPEN → CLAIMED.

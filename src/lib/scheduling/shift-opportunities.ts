@@ -13,6 +13,7 @@
 import { prisma } from "../prisma";
 import { ValidationError, NotFoundError, ForbiddenError, ConflictError } from "../errors";
 import { isSchedulingEligible } from "../hr/scheduling-eligibility";
+import { resolveApplicableAvailabilityProfile } from "./availability-profiles";
 
 export interface OfferShiftInput {
   clubId: string;
@@ -189,11 +190,14 @@ export async function listEligibleOpportunitiesForEmployee(
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
       departmentId: { not: null },
     },
-    select: { departmentId: true },
+    select: { departmentId: true, positionId: true },
   });
   const departmentIds = Array.from(new Set(
     activeAssignments.map((a) => a.departmentId).filter((d): d is string => !!d),
   ));
+  const positionIds = new Set(
+    activeAssignments.map((a) => a.positionId).filter((p): p is string => !!p),
+  );
   if (!departmentIds.length) return [];
 
   const rows = await prisma.shiftOpportunity.findMany({
@@ -218,7 +222,56 @@ export async function listEligibleOpportunitiesForEmployee(
       },
     },
   });
-  return rows.map((o) => ({
+
+  // Phase E §11 — position qualification: if the shift pins a
+  // positionId, the employee must have an ACTIVE
+  // EmployeeEmploymentAssignment with the same positionId (any role).
+  // Shifts with no pinned position remain open to anyone with a
+  // qualifying department assignment.
+  //
+  // Phase E §13 — overlap detection: exclude opportunities whose
+  // window overlaps any ACTIVE ASSIGNED shift the claimant already
+  // owns. Interval overlap: existing.startAt < candidate.endAt AND
+  // existing.endAt > candidate.startAt.
+  const claimantAssignments = await prisma.shiftAssignment.findMany({
+    where: {
+      clubId, employeeId, state: "ASSIGNED",
+      shift: { state: "PUBLISHED" },
+    },
+    include: {
+      shift: { select: { startAt: true, endAt: true } },
+    },
+  });
+  const claimantIntervals = claimantAssignments.map((a) => ({
+    startAt: a.shift.startAt.getTime(),
+    endAt: a.shift.endAt.getTime(),
+  }));
+
+  const filtered: typeof rows = [];
+  for (const o of rows) {
+    // Position qualification.
+    if (o.shift.position?.id && !positionIds.has(o.shift.position.id)) continue;
+    // Overlap detection.
+    const cs = o.shift.startAt.getTime();
+    const ce = o.shift.endAt.getTime();
+    if (claimantIntervals.some((iv) => iv.startAt < ce && iv.endAt > cs)) continue;
+    // Availability (Phase E §12). If the applicable profile EXPLICITLY
+    // marks the (weekday × shift-template) as unavailable, exclude.
+    // No applicable profile → do NOT exclude (permissive default, so
+    // an employee who hasn't set availability can still be offered a
+    // shift; enforced at pickUpShift too).
+    const profile = await resolveApplicableAvailabilityProfile(employeeId, o.shift.startAt);
+    if (profile) {
+      const weekday = o.shift.startAt.getUTCDay();
+      const rule = profile.rules.find(
+        (r) => r.weekday === weekday && r.shiftTemplateId === o.shift.shiftTemplateId,
+      );
+      if (rule && rule.available === false) continue;
+    }
+    filtered.push(o);
+  }
+
+  return filtered.map((o) => ({
     id: o.id,
     shiftId: o.shiftId,
     shiftDate: o.shift.shiftDate,

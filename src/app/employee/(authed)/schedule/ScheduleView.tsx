@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import ShiftDetailPanel, { type ShiftPanelShift } from "./ShiftDetailPanel";
 
 // Serialisable shape from the server component.
 export interface ScheduleViewShift {
@@ -31,6 +32,8 @@ export interface ScheduleViewShift {
     workedSeconds: number;
   };
   varianceSeconds: number | null;
+  // Phase E — OPEN ShiftOpportunity for this shift/assignment.
+  openOpportunity: null | { id: string; offeredAtIso: string };
 }
 
 export interface ScheduleViewProps {
@@ -47,6 +50,8 @@ export interface ScheduleViewProps {
   recentShifts: ScheduleViewShift[];
   employeeDisplayName: string;
   hasTimeOffRoute: boolean;
+  /** Server-action confirmation banner. */
+  toast: null | { kind: "success" | "error"; msg: string };
 }
 
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -156,6 +161,24 @@ export default function ScheduleView(props: ScheduleViewProps) {
 
   const selectedDayIso = params.get("day") ?? weekDays.find((d) => d.shifts.length > 0)?.iso ?? weekDays[0].iso;
 
+  // Phase E — currently-open detail panel target.
+  const [openShift, setOpenShift] = useState<ShiftPanelShift | null>(null);
+  function openPanelFor(s: ScheduleViewShift) {
+    const isPast = new Date(s.scheduledEndIso).getTime() <= Date.now();
+    setOpenShift({
+      assignmentId: s.assignmentId,
+      shiftId: s.shiftId,
+      scheduledStartIso: s.scheduledStartIso,
+      scheduledEndIso: s.scheduledEndIso,
+      scheduledSeconds: s.scheduledSeconds,
+      departmentName: s.departmentName,
+      templateName: s.templateName,
+      positionName: s.positionName,
+      openOpportunity: s.openOpportunity,
+      isPast,
+    });
+  }
+
   function navigateWeek(nextWeekStart: string) {
     const p = new URLSearchParams(params);
     p.set("weekStart", isoDate(nextWeekStart));
@@ -181,6 +204,20 @@ export default function ScheduleView(props: ScheduleViewProps) {
 
   return (
     <div className="space-y-6 md:space-y-8" data-testid="portal-schedule-populated">
+      {/* ============= TOAST (server-action confirmation) ============= */}
+      {props.toast && (
+        <div
+          data-testid={`portal-schedule-toast-${props.toast.kind}`}
+          className={
+            "rounded-md border px-4 py-3 text-sm " +
+            (props.toast.kind === "success"
+              ? "border-club-green-200 bg-club-green-50 text-club-green-800"
+              : "border-stone-300 bg-stone-50 text-stone-800")
+          }
+        >
+          {props.toast.msg}
+        </div>
+      )}
       {/* ============= HEADER ============= */}
       <header>
         <p className="hidden md:block text-[11px] uppercase tracking-[0.2em] text-stone-500">
@@ -292,22 +329,43 @@ export default function ScheduleView(props: ScheduleViewProps) {
               <div className="mt-3 space-y-2">
                 {d.shifts.length === 0 ? (
                   <p className="text-[11px] text-stone-400">No shift</p>
-                ) : d.shifts.map((s) => (
-                  <div
-                    key={s.assignmentId}
-                    data-testid={`portal-schedule-shift-${s.assignmentId}`}
-                    className="rounded-md border border-club-green-200 bg-club-green-50/70 px-2.5 py-2"
-                  >
-                    <p className="text-[10px] uppercase tracking-[0.14em] text-club-green-800">
-                      {s.positionName ?? s.departmentName}
-                    </p>
-                    <p className="mt-0.5 font-serif text-sm text-club-ink leading-tight">{s.templateName}</p>
-                    <p className="mt-1 text-[11px] text-stone-600">
-                      {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
-                    </p>
-                    <p className="text-[11px] text-stone-500">{fmtHM(s.scheduledSeconds)}</p>
-                  </div>
-                ))}
+                ) : d.shifts.map((s) => {
+                  const offered = !!s.openOpportunity;
+                  return (
+                    <button
+                      key={s.assignmentId}
+                      type="button"
+                      onClick={() => openPanelFor(s)}
+                      data-testid={`portal-schedule-shift-${s.assignmentId}`}
+                      className={
+                        "w-full text-left rounded-md border px-2.5 py-2 transition-colors " +
+                        (offered
+                          ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
+                          : "border-club-green-200 bg-club-green-50/70 hover:bg-club-green-100/70")
+                      }
+                    >
+                      <p className={
+                        "text-[10px] uppercase tracking-[0.14em] " +
+                        (offered ? "text-club-gold-700" : "text-club-green-800")
+                      }>
+                        {s.positionName ?? s.departmentName}
+                      </p>
+                      <p className="mt-0.5 font-serif text-sm text-club-ink leading-tight">{s.templateName}</p>
+                      <p className="mt-1 text-[11px] text-stone-600">
+                        {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
+                      </p>
+                      <p className="text-[11px] text-stone-500">{fmtHM(s.scheduledSeconds)}</p>
+                      {offered && (
+                        <p
+                          className="mt-1 text-[10px] uppercase tracking-[0.14em] text-club-gold-700"
+                          data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
+                        >
+                          Shift offered · waiting
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -335,6 +393,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         <SelectedDayDetail
           selectedDayIso={selectedDayIso}
           shifts={weekDays.find((d) => isoDate(d.iso) === isoDate(selectedDayIso))?.shifts ?? []}
+          onSelectShift={openPanelFor}
         />
       </div>
 
@@ -372,6 +431,9 @@ export default function ScheduleView(props: ScheduleViewProps) {
           </Link>
         </section>
       )}
+
+      {/* ============= SHIFT DETAIL PANEL (drawer/sheet) ============= */}
+      <ShiftDetailPanel activeShift={openShift} onClose={() => setOpenShift(null)} />
     </div>
   );
 }
@@ -538,8 +600,9 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
   );
 }
 
-function SelectedDayDetail({ selectedDayIso, shifts }: {
+function SelectedDayDetail({ selectedDayIso, shifts, onSelectShift }: {
   selectedDayIso: string; shifts: ScheduleViewShift[];
+  onSelectShift: (s: ScheduleViewShift) => void;
 }) {
   const heading = new Date(selectedDayIso).toLocaleDateString("en-US", {
     weekday: "long", month: "long", day: "numeric", timeZone: "UTC",
@@ -554,22 +617,40 @@ function SelectedDayDetail({ selectedDayIso, shifts }: {
           <p className="rounded-lg border border-dashed border-stone-300 bg-white px-4 py-4 text-sm text-stone-500 text-center">
             No shift this day.
           </p>
-        ) : shifts.map((s) => (
-          <div
-            key={s.assignmentId}
-            className="rounded-lg border border-club-green-200 bg-club-green-50/70 px-4 py-3"
-            data-testid={`portal-schedule-mobile-shift-${s.assignmentId}`}
-          >
-            <p className="text-[11px] uppercase tracking-[0.14em] text-club-green-800">
-              {s.positionName ?? s.departmentName}
-            </p>
-            <p className="mt-0.5 font-serif text-base text-club-ink">{s.templateName}</p>
-            <p className="mt-1 text-sm text-stone-700">
-              {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
-            </p>
-            <p className="text-xs text-stone-500">{fmtHM(s.scheduledSeconds)}</p>
-          </div>
-        ))}
+        ) : shifts.map((s) => {
+          const offered = !!s.openOpportunity;
+          return (
+            <button
+              key={s.assignmentId}
+              type="button"
+              onClick={() => onSelectShift(s)}
+              className={
+                "w-full text-left rounded-lg border px-4 py-3 transition-colors " +
+                (offered
+                  ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
+                  : "border-club-green-200 bg-club-green-50/70 hover:bg-club-green-100/70")
+              }
+              data-testid={`portal-schedule-mobile-shift-${s.assignmentId}`}
+            >
+              <p className={
+                "text-[11px] uppercase tracking-[0.14em] " +
+                (offered ? "text-club-gold-700" : "text-club-green-800")
+              }>
+                {s.positionName ?? s.departmentName}
+              </p>
+              <p className="mt-0.5 font-serif text-base text-club-ink">{s.templateName}</p>
+              <p className="mt-1 text-sm text-stone-700">
+                {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
+              </p>
+              <p className="text-xs text-stone-500">{fmtHM(s.scheduledSeconds)}</p>
+              {offered && (
+                <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-club-gold-700">
+                  Shift offered · waiting
+                </p>
+              )}
+            </button>
+          );
+        })}
       </div>
     </section>
   );

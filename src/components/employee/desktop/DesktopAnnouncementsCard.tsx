@@ -19,9 +19,15 @@ export interface AnnouncementItem {
 interface Props {
   items: AnnouncementItem[];
   viewAllHref?: string | null;
+  /** Scheduling Foundation · Phase E — restrained indicator shown
+   *  when the logged-in employee has one or more eligible OPEN
+   *  shift opportunities. Zero → no indicator (per amendment §9). */
+  shiftOpportunityCount?: number;
 }
 
-export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: Props) {
+export default function DesktopAnnouncementsCard({
+  items, viewAllHref = null, shiftOpportunityCount = 0,
+}: Props) {
   return (
     // Density rebalance (2026-08-26) — panel trimmed for the
     // one-screen-fit target: p-6 → p-4, min-h 240 → 160. Still holds
@@ -108,6 +114,22 @@ export default function DesktopAnnouncementsCard({ items, viewAllHref = null }: 
             );
           })}
         </ul>
+      )}
+      {/* Scheduling Foundation · Phase E (2026-09-07) — restrained
+         shift-available indicator per amendment §9. Only rendered
+         when > 0; navigates to the Shift Opportunities tab. Does
+         NOT redesign the existing card layout. */}
+      {shiftOpportunityCount > 0 && (
+        <a
+          href="/employee/announcements?tab=shifts"
+          data-testid="portal-desktop-announcements-shifts-indicator"
+          className="mt-2 inline-flex items-center gap-2 rounded-md border border-club-green-200 bg-white px-2.5 py-1.5 text-[11.5px] text-club-green-800 hover:bg-club-green-50 self-start"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-club-green-800" aria-hidden />
+          {shiftOpportunityCount === 1
+            ? "1 shift available"
+            : `${shiftOpportunityCount} shifts available`}
+        </a>
       )}
       {viewAllHref && items.length > 0 && (
         <div className="pt-3 text-right">

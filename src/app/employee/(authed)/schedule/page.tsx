@@ -32,7 +32,10 @@ export const dynamic = "force-dynamic";
 
 const RECENT_LOOKBACK_DAYS = 14;
 
-function toViewShift(e: ReconciliationEntry): ScheduleViewShift {
+function toViewShift(
+  e: ReconciliationEntry,
+  openOpportunity: { id: string; offeredAtIso: string } | null,
+): ScheduleViewShift {
   return {
     assignmentId: e.assignmentId,
     shiftId: e.shiftId,
@@ -51,6 +54,7 @@ function toViewShift(e: ReconciliationEntry): ScheduleViewShift {
       workedSeconds: e.worked.workedSeconds,
     } : null,
     varianceSeconds: e.varianceSeconds,
+    openOpportunity,
   };
 }
 
@@ -65,7 +69,10 @@ function parseWeekStartParam(raw: string | undefined): Date {
 export default async function EmployeePortalSchedulePage({
   searchParams,
 }: {
-  searchParams?: { weekStart?: string; view?: string; day?: string };
+  searchParams?: {
+    weekStart?: string; view?: string; day?: string;
+    offered?: string; withdrawn?: string; picked?: string; err?: string;
+  };
 }) {
   const principal = await getEmployeePortalPrincipal();
   if (!principal) redirect("/employee/login");
@@ -143,7 +150,27 @@ export default async function EmployeePortalSchedulePage({
     ),
   ]);
 
-  const weekShifts = reconciliation.entries.map(toViewShift);
+  // Phase E — load OPEN ShiftOpportunities for the employee's own
+  // shifts (both windows) so the ScheduleView cards render offered
+  // state + the detail panel can withdraw.
+  const openOpps = await prisma.shiftOpportunity.findMany({
+    where: {
+      clubId: principal.clubId,
+      state: "OPEN",
+      offeredByEmployeeId: principal.employeeId,
+      shift: { state: "PUBLISHED" },
+    },
+    select: {
+      id: true, offeredAt: true, offeredByAssignmentId: true,
+    },
+  });
+  const oppByAssignmentId = new Map(
+    openOpps.map((o) => [o.offeredByAssignmentId, { id: o.id, offeredAtIso: o.offeredAt.toISOString() }]),
+  );
+
+  const weekShifts = reconciliation.entries.map((e) =>
+    toViewShift(e, oppByAssignmentId.get(e.assignmentId) ?? null),
+  );
   const summary = summariseReconciliation(reconciliation, now);
   const nextShiftEntry = pickNextShift(reconciliation, now);
   // Recent list: worked shifts inside the lookback window that
@@ -152,11 +179,23 @@ export default async function EmployeePortalSchedulePage({
     .filter((e) => e.worked != null)
     .sort((a, b) => b.scheduledStart.getTime() - a.scheduledStart.getTime())
     .slice(0, 5)
-    .map(toViewShift);
+    .map((e) => toViewShift(e, oppByAssignmentId.get(e.assignmentId) ?? null));
 
   const displayName = employee.preferredName?.trim().length
     ? employee.preferredName
     : employee.firstName;
+
+  // Toast surface from server-action redirects.
+  const toast =
+      searchParams?.offered === "1"
+        ? { kind: "success" as const, msg: "Shift offered. Waiting for a coworker." }
+    : searchParams?.withdrawn === "1"
+        ? { kind: "success" as const, msg: "Offer withdrawn. The shift is back on your schedule." }
+    : searchParams?.picked
+        ? { kind: "success" as const, msg: "Shift added to your schedule." }
+    : searchParams?.err
+        ? { kind: "error" as const, msg: searchParams.err }
+    : null;
 
   return (
     <ScheduleView
@@ -169,10 +208,11 @@ export default async function EmployeePortalSchedulePage({
       scheduledSeconds={summary.scheduledSeconds}
       workedSeconds={summary.workedSeconds}
       remainingSeconds={summary.remainingSeconds}
-      nextShift={nextShiftEntry ? toViewShift(nextShiftEntry) : null}
+      nextShift={nextShiftEntry ? toViewShift(nextShiftEntry, oppByAssignmentId.get(nextShiftEntry.assignmentId) ?? null) : null}
       recentShifts={recentShifts}
       employeeDisplayName={displayName ?? "there"}
       hasTimeOffRoute={timeOffRoute}
+      toast={toast}
     />
   );
 }
