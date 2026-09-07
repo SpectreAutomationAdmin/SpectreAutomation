@@ -223,7 +223,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         <p className="hidden md:block text-[10.5px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-1.5 font-serif text-[28px] md:text-[36px] text-club-ink leading-[1.05]">
+        <h1 className="mt-1 font-serif text-[26px] md:text-[30px] text-club-ink leading-[1.05]">
           My Schedule
         </h1>
       </header>
@@ -338,12 +338,12 @@ export default function ScheduleView(props: ScheduleViewProps) {
         >
           <div className="grid grid-cols-7 divide-x divide-stone-100">
             {weekDays.map((d) => (
-              <div key={d.iso} className="px-3 pt-5 pb-5 min-h-[300px] flex flex-col">
-                <div className="text-[11.5px] uppercase tracking-[0.16em] text-stone-500 text-center font-medium">
+              <div key={d.iso} className="px-3 pt-4 pb-4 min-h-[210px] flex flex-col">
+                <div className="text-[12.5px] text-stone-800 text-center font-medium">
                   {d.label}
                 </div>
-                <div className="mt-1.5 font-serif text-[18px] text-club-ink text-center leading-none">
-                  {d.dateNumber}
+                <div className="mt-0.5 text-[11.5px] text-stone-500 text-center">
+                  {d.headingLabel}
                 </div>
                 <div className="mt-4 flex-1 flex flex-col space-y-2">
                   {d.shifts.length === 0 ? (
@@ -539,7 +539,7 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]">
+      <div className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]">
         <div className="flex items-center gap-2">
           <CalendarIcon className="h-4 w-4 text-club-green-800" />
           <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">Next Shift</p>
@@ -550,7 +550,7 @@ function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; r
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
       data-testid="portal-schedule-next-shift"
     >
       <div className="flex items-center gap-2">
@@ -586,7 +586,7 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
       data-testid="portal-schedule-this-week"
     >
       <div className="flex items-center gap-2">
@@ -614,7 +614,7 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
       data-testid="portal-schedule-actions"
     >
       <div className="flex items-center gap-2">
@@ -689,34 +689,34 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
       data-testid={`portal-schedule-recent-${shift.assignmentId}`}
       className="px-5 py-4 md:px-6 md:py-5 hover:bg-club-cream/40 transition-colors"
     >
-      {/* Desktop: single-row table layout with 6 columns + chevron */}
-      <div className="hidden md:grid md:grid-cols-[170px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_100px_92px_18px] items-center gap-5">
+      {/* Desktop: single-row table layout matching the concept: title-case labels, role · shift */}
+      <div className="hidden md:grid md:grid-cols-[150px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_90px_88px_18px] items-center gap-4">
         <div>
-          <p className="font-serif text-[15px] text-club-ink leading-tight">{dayLabel}</p>
+          <p className="font-serif text-[14px] text-club-ink leading-tight">{dayLabel}</p>
         </div>
         <div className="min-w-0">
-          <p className="text-[11px] uppercase tracking-[0.13em] text-club-green-800 font-semibold">
-            {shift.positionName ?? shift.departmentName}
+          <p className="text-[13.5px] text-stone-700 truncate">
+            <span className="text-club-ink">{shift.positionName ?? shift.departmentName}</span>
+            <span className="text-stone-500"> · {shift.templateName}</span>
           </p>
-          <p className="mt-1 text-[13.5px] text-stone-700 truncate">{shift.templateName}</p>
         </div>
         <div>
-          <p className="text-[10.5px] uppercase tracking-[0.14em] text-stone-500 font-medium">Scheduled</p>
-          <p className="mt-1 text-[13px] text-stone-700 tabular-nums">
+          <p className="text-[11px] text-stone-500">Scheduled</p>
+          <p className="mt-0.5 text-[13px] text-stone-700 tabular-nums">
             {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)}
           </p>
         </div>
         <div>
-          <p className="text-[10.5px] uppercase tracking-[0.14em] text-stone-500 font-medium">Worked</p>
-          <p className="mt-1 text-[13px] text-stone-700 tabular-nums">
+          <p className="text-[11px] text-stone-500">Worked</p>
+          <p className="mt-0.5 text-[13px] text-stone-700 tabular-nums">
             {shift.worked
               ? `${fmtTime(shift.worked.clockInIso)} – ${fmtTime(shift.worked.clockOutIso)}`
               : "—"}
           </p>
         </div>
         <div>
-          <p className="text-[10.5px] uppercase tracking-[0.14em] text-stone-500 font-medium">Total</p>
-          <p className="mt-1 font-serif text-[15px] text-club-ink tabular-nums">
+          <p className="text-[11px] text-stone-500">Total</p>
+          <p className="mt-0.5 font-serif text-[14px] text-club-ink tabular-nums">
             {shift.worked ? fmtHM(shift.worked.workedSeconds) : "—"}
           </p>
         </div>
