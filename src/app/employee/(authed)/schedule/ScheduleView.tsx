@@ -338,16 +338,16 @@ export default function ScheduleView(props: ScheduleViewProps) {
         >
           <div className="grid grid-cols-7 divide-x divide-stone-100">
             {weekDays.map((d) => (
-              <div key={d.iso} className="px-3 pt-4 pb-4 min-h-[220px] flex flex-col">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-stone-500 text-center font-medium">
+              <div key={d.iso} className="px-3 pt-5 pb-5 min-h-[300px] flex flex-col">
+                <div className="text-[11.5px] uppercase tracking-[0.16em] text-stone-500 text-center font-medium">
                   {d.label}
                 </div>
-                <div className="mt-1 font-serif text-[17px] text-club-ink text-center leading-none">
+                <div className="mt-1.5 font-serif text-[18px] text-club-ink text-center leading-none">
                   {d.dateNumber}
                 </div>
-                <div className="mt-4 flex-1 flex flex-col justify-center space-y-1.5">
+                <div className="mt-5 flex-1 flex flex-col justify-center space-y-2">
                   {d.shifts.length === 0 ? (
-                    <p className="text-center text-[12px] text-stone-400">— No shift</p>
+                    <p className="text-center text-[12.5px] text-stone-400">— No shift</p>
                   ) : d.shifts.map((s) => {
                     const offered = !!s.openOpportunity;
                     return (
@@ -357,26 +357,26 @@ export default function ScheduleView(props: ScheduleViewProps) {
                         onClick={() => openPanelFor(s)}
                         data-testid={`portal-schedule-shift-${s.assignmentId}`}
                         className={
-                          "w-full text-left rounded-md border px-2.5 py-2.5 transition-colors " +
+                          "w-full text-left rounded-md border px-3 py-3.5 transition-colors " +
                           (offered
                             ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
                             : "border-club-green-200/70 bg-club-green-50/70 hover:bg-club-green-100/70")
                         }
                       >
                         <p className={
-                          "text-[10.5px] uppercase tracking-[0.13em] font-semibold " +
+                          "text-[11px] uppercase tracking-[0.13em] font-semibold " +
                           (offered ? "text-club-gold-700" : "text-club-green-800")
                         }>
                           {s.positionName ?? s.departmentName}
                         </p>
-                        <p className="mt-1 font-serif text-[14px] text-club-ink leading-[1.15]">{s.templateName}</p>
-                        <p className="mt-1.5 text-[11.5px] text-stone-600 leading-tight tabular-nums">
+                        <p className="mt-1.5 font-serif text-[15px] text-club-ink leading-[1.15]">{s.templateName}</p>
+                        <p className="mt-2 text-[12px] text-stone-600 leading-tight tabular-nums">
                           {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
                         </p>
-                        <p className="text-[11.5px] text-stone-500 leading-tight tabular-nums">{fmtHM(s.scheduledSeconds)}</p>
+                        <p className="text-[12px] text-stone-500 leading-tight tabular-nums">{fmtHM(s.scheduledSeconds)}</p>
                         {offered && (
                           <p
-                            className="mt-1 text-[10px] uppercase tracking-[0.12em] text-club-gold-700"
+                            className="mt-1.5 text-[10.5px] uppercase tracking-[0.12em] text-club-gold-700"
                             data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
                           >
                             Offered · waiting
@@ -417,19 +417,24 @@ export default function ScheduleView(props: ScheduleViewProps) {
         />
       </div>
 
-      {/* ============= RECENT SHIFTS — single card, dense rows ============= */}
+      {/* ============= RECENT SHIFTS — one white card: title + divider + rows ============= */}
       {props.recentShifts.length > 0 && (
-        <section aria-labelledby="portal-schedule-recent-heading" data-testid="portal-schedule-recent">
-          <h2 id="portal-schedule-recent-heading" className="font-serif text-[20px] text-club-ink">
-            Recent Shifts
-          </h2>
-          <div className="mt-3 rounded-lg border border-stone-200 bg-white overflow-hidden">
-            <ul className="divide-y divide-stone-100">
-              {props.recentShifts.map((s) => (
-                <RecentShiftRow key={s.assignmentId} shift={s} />
-              ))}
-            </ul>
+        <section
+          aria-labelledby="portal-schedule-recent-heading"
+          data-testid="portal-schedule-recent"
+          className="rounded-lg border border-stone-200 bg-white overflow-hidden"
+        >
+          <div className="px-6 pt-5 pb-4">
+            <h2 id="portal-schedule-recent-heading" className="font-serif text-[20px] text-club-ink leading-none">
+              Recent Shifts
+            </h2>
           </div>
+          <div className="border-t border-stone-100" />
+          <ul className="divide-y divide-stone-100">
+            {props.recentShifts.map((s) => (
+              <RecentShiftRow key={s.assignmentId} shift={s} />
+            ))}
+          </ul>
         </section>
       )}
 
@@ -534,7 +539,7 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[168px]">
+      <div className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]">
         <div className="flex items-center gap-2">
           <CalendarIcon className="h-4 w-4 text-club-green-800" />
           <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">Next Shift</p>
@@ -545,7 +550,7 @@ function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; r
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[168px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
       data-testid="portal-schedule-next-shift"
     >
       <div className="flex items-center gap-2">
@@ -581,7 +586,7 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[168px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
       data-testid="portal-schedule-this-week"
     >
       <div className="flex items-center gap-2">
@@ -609,7 +614,7 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[168px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[220px]"
       data-testid="portal-schedule-actions"
     >
       <div className="flex items-center gap-2">
