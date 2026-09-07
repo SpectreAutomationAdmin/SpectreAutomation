@@ -345,9 +345,9 @@ export default function ScheduleView(props: ScheduleViewProps) {
                 <div className="mt-1.5 font-serif text-[18px] text-club-ink text-center leading-none">
                   {d.dateNumber}
                 </div>
-                <div className="mt-5 flex-1 flex flex-col justify-center space-y-2">
+                <div className="mt-4 flex-1 flex flex-col space-y-2">
                   {d.shifts.length === 0 ? (
-                    <p className="text-center text-[12.5px] text-stone-400">— No shift</p>
+                    <p className="my-auto text-center text-[12.5px] text-stone-400">— No shift</p>
                   ) : d.shifts.map((s) => {
                     const offered = !!s.openOpportunity;
                     return (
