@@ -223,7 +223,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         <p className="hidden md:block text-[10.5px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-1 font-serif text-[26px] md:text-[30px] text-club-ink leading-[1.05]">
+        <h1 className="mt-1 font-serif text-[26px] md:text-[32px] text-club-ink leading-[1.05]">
           My Schedule
         </h1>
       </header>
@@ -338,7 +338,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         >
           <div className="grid grid-cols-7 divide-x divide-stone-100">
             {weekDays.map((d) => (
-              <div key={d.iso} className="px-3 pt-4 pb-4 min-h-[210px] flex flex-col">
+              <div key={d.iso} className="px-3 pt-4 pb-5 min-h-[230px] flex flex-col">
                 <div className="text-[12.5px] text-stone-800 text-center font-medium">
                   {d.label}
                 </div>
@@ -424,8 +424,8 @@ export default function ScheduleView(props: ScheduleViewProps) {
           data-testid="portal-schedule-recent"
           className="rounded-lg border border-stone-200 bg-white overflow-hidden"
         >
-          <div className="px-6 pt-5 pb-4">
-            <h2 id="portal-schedule-recent-heading" className="font-serif text-[20px] text-club-ink leading-none">
+          <div className="px-6 pt-6 pb-5">
+            <h2 id="portal-schedule-recent-heading" className="font-serif text-[24px] text-club-ink leading-none">
               Recent Shifts
             </h2>
           </div>
@@ -539,41 +539,39 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]">
-        <div className="flex items-center gap-2">
-          <CalendarIcon className="h-4 w-4 text-club-green-800" />
-          <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">Next Shift</p>
+      <div className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]">
+        <div className="flex items-center gap-2.5">
+          <CalendarIcon className="h-5 w-5 text-club-green-800" />
+          <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
         </div>
-        <p className="mt-4 text-sm text-stone-600">Nothing scheduled ahead.</p>
+        <p className="mt-5 text-sm text-stone-600">Nothing scheduled ahead.</p>
       </div>
     );
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
       data-testid="portal-schedule-next-shift"
     >
-      <div className="flex items-center gap-2">
-        <CalendarIcon className="h-4 w-4 text-club-green-800" />
-        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">Next Shift</p>
+      <div className="flex items-center gap-2.5">
+        <CalendarIcon className="h-5 w-5 text-club-green-800" />
+        <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
       </div>
-      <p className="mt-4 font-serif text-[19px] text-club-ink leading-[1.15]">
+      <p className="mt-5 font-serif text-[19px] text-club-ink leading-[1.15]">
         {fmtLongDate(shift.scheduledStartIso)}
       </p>
-      <p className="mt-1.5 text-[12.5px] text-stone-700">
-        <span className="uppercase tracking-[0.14em] text-[11px] text-club-green-800 font-semibold">
-          {shift.positionName ?? shift.departmentName}
-        </span>{" "}· {shift.templateName}
+      <p className="mt-1.5 text-[14px] text-club-ink">
+        {shift.positionName ?? shift.departmentName}{" "}<span className="text-stone-500">· {shift.templateName}</span>
       </p>
-      <p className="mt-1 text-[12.5px] text-stone-600 tabular-nums">
+      <p className="mt-1 text-[13.5px] text-stone-600 tabular-nums">
         {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)} ({fmtHM(shift.scheduledSeconds)})
       </p>
       {relLabel && (
         <div
-          className="mt-3.5 inline-flex items-center gap-1.5 rounded-full bg-club-green-50 text-club-green-800 px-3 py-1 text-[11.5px] font-medium"
+          className="mt-4 inline-flex items-center gap-2 rounded-full bg-club-green-50 text-club-green-800 px-3.5 py-1.5 text-[13px] font-medium"
           data-testid="portal-schedule-next-rel"
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-club-green-800" />
+          <ClockIcon className="h-3.5 w-3.5" />
           {relLabel}
         </div>
       )}
@@ -586,25 +584,25 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
       data-testid="portal-schedule-this-week"
     >
-      <div className="flex items-center gap-2">
-        <ClockIcon className="h-4 w-4 text-club-green-800" />
-        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">This Week</p>
+      <div className="flex items-center gap-2.5">
+        <CalendarIcon className="h-5 w-5 text-club-green-800" />
+        <p className="font-serif text-[19px] text-club-ink leading-none">This Week</p>
       </div>
-      <dl className="mt-4 space-y-2.5 text-[13px]">
+      <dl className="mt-5 text-[14px] space-y-3">
         <div className="flex justify-between items-baseline">
           <dt className="text-stone-600">Scheduled hours</dt>
-          <dd className="font-serif text-club-ink tabular-nums" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
+          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
         </div>
         <div className="flex justify-between items-baseline">
           <dt className="text-stone-600">Worked hours</dt>
-          <dd className="font-serif text-club-ink tabular-nums" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
+          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
         </div>
         <div className="flex justify-between items-baseline">
           <dt className="text-stone-600">Remaining hours</dt>
-          <dd className="font-serif text-club-ink tabular-nums" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
+          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
         </div>
       </dl>
     </div>
@@ -614,26 +612,24 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-5 md:px-6 md:py-6 min-h-[150px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
       data-testid="portal-schedule-actions"
     >
-      <div className="flex items-center gap-2">
-        <UsersIcon className="h-4 w-4 text-club-green-800" />
-        <p className="text-[11px] uppercase tracking-[0.18em] text-stone-500 font-medium">Actions</p>
+      <div className="flex items-center gap-2.5">
+        <UsersIcon className="h-5 w-5 text-club-green-800" />
+        <p className="font-serif text-[19px] text-club-ink leading-none">Actions</p>
       </div>
-      <ul className="mt-4 space-y-3">
+      <ul className="mt-5 space-y-3">
         <li>
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-actions-view-availability"
-            className="flex items-center gap-3 rounded-md hover:bg-club-cream/60 -mx-1 px-1 py-0.5 transition-colors"
+            className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
           >
-            <span className="h-8 w-8 grid place-items-center rounded-md bg-club-green-50 text-club-green-800 shrink-0">
-              <AvailabilityIcon className="h-4 w-4" />
-            </span>
+            <AvailabilityIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
             <span className="min-w-0">
-              <span className="block font-medium text-[13px] text-club-ink leading-tight">View my availability</span>
-              <span className="block text-[11.5px] text-stone-500 mt-0.5">Update your availability</span>
+              <span className="block font-medium text-[14px] text-club-ink leading-tight">View my availability</span>
+              <span className="block text-[12.5px] text-stone-500 mt-0.5">Update your availability</span>
             </span>
           </Link>
         </li>
@@ -642,28 +638,24 @@ function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
             <Link
               href="/employee/time-off"
               data-testid="portal-schedule-actions-time-off"
-              className="flex items-center gap-3 rounded-md hover:bg-club-cream/60 -mx-1 px-1 py-0.5 transition-colors"
+              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
             >
-              <span className="h-8 w-8 grid place-items-center rounded-md bg-club-green-50 text-club-green-800 shrink-0">
-                <TimeOffIcon className="h-4 w-4" />
-              </span>
+              <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
               <span className="min-w-0">
-                <span className="block font-medium text-[13px] text-club-ink leading-tight">Request time off</span>
-                <span className="block text-[11.5px] text-stone-500 mt-0.5">Submit a time off request</span>
+                <span className="block font-medium text-[14px] text-club-ink leading-tight">Request time off</span>
+                <span className="block text-[12.5px] text-stone-500 mt-0.5">Submit a time off request</span>
               </span>
             </Link>
           ) : (
             <div
               data-testid="portal-schedule-actions-time-off-disabled"
               aria-disabled
-              className="flex items-center gap-3 -mx-1 px-1 py-0.5 opacity-70"
+              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 opacity-80"
             >
-              <span className="h-8 w-8 grid place-items-center rounded-md bg-stone-100 text-stone-400 shrink-0">
-                <TimeOffIcon className="h-4 w-4" />
-              </span>
+              <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
               <span className="min-w-0">
-                <span className="block font-medium text-[13px] text-stone-500 leading-tight">Request time off</span>
-                <span className="block text-[11.5px] text-stone-500 mt-0.5">Coming with the Time Off module.</span>
+                <span className="block font-medium text-[14px] text-club-ink leading-tight">Request time off</span>
+                <span className="block text-[12.5px] text-stone-500 mt-0.5">Submit a time off request</span>
               </span>
             </div>
           )}
