@@ -203,7 +203,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
   const isPopulated = props.weekShifts.length > 0 || props.nextShift != null;
 
   return (
-    <div className="space-y-6 md:space-y-7 md:max-w-[1180px]" data-testid="portal-schedule-populated">
+    <div className="space-y-5 md:space-y-6 md:max-w-[1180px]" data-testid="portal-schedule-populated">
       {/* ============= TOAST (server-action confirmation) ============= */}
       {props.toast && (
         <div
@@ -223,7 +223,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         <p className="hidden md:block text-[10.5px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-1 font-serif text-[26px] md:text-[32px] text-club-ink leading-[1.05]">
+        <h1 className="mt-1 font-serif text-[24px] md:text-[28px] text-club-ink leading-[1.05]">
           My Schedule
         </h1>
       </header>
@@ -338,7 +338,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         >
           <div className="grid grid-cols-7 divide-x divide-stone-100">
             {weekDays.map((d) => (
-              <div key={d.iso} className="px-3 pt-4 pb-5 min-h-[230px] flex flex-col">
+              <div key={d.iso} className="px-3 pt-4 pb-4 min-h-[200px] flex flex-col">
                 <div className="text-[12.5px] text-stone-800 text-center font-medium">
                   {d.label}
                 </div>
@@ -424,8 +424,8 @@ export default function ScheduleView(props: ScheduleViewProps) {
           data-testid="portal-schedule-recent"
           className="rounded-lg border border-stone-200 bg-white overflow-hidden"
         >
-          <div className="px-6 pt-6 pb-5">
-            <h2 id="portal-schedule-recent-heading" className="font-serif text-[24px] text-club-ink leading-none">
+          <div className="px-6 pt-5 pb-4">
+            <h2 id="portal-schedule-recent-heading" className="font-serif text-[22px] text-club-ink leading-none">
               Recent Shifts
             </h2>
           </div>
@@ -539,7 +539,7 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]">
+      <div className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]">
         <div className="flex items-center gap-2.5">
           <CalendarIcon className="h-5 w-5 text-club-green-800" />
           <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
@@ -550,14 +550,14 @@ function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; r
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
       data-testid="portal-schedule-next-shift"
     >
       <div className="flex items-center gap-2.5">
         <CalendarIcon className="h-5 w-5 text-club-green-800" />
         <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
       </div>
-      <p className="mt-5 font-serif text-[19px] text-club-ink leading-[1.15]">
+      <p className="mt-4 font-serif text-[19px] text-club-ink leading-[1.15]">
         {fmtLongDate(shift.scheduledStartIso)}
       </p>
       <p className="mt-1.5 text-[14px] text-club-ink">
@@ -584,14 +584,14 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
       data-testid="portal-schedule-this-week"
     >
       <div className="flex items-center gap-2.5">
         <CalendarIcon className="h-5 w-5 text-club-green-800" />
         <p className="font-serif text-[19px] text-club-ink leading-none">This Week</p>
       </div>
-      <dl className="mt-5 text-[14px] space-y-3">
+      <dl className="mt-4 text-[14px] space-y-2.5">
         <div className="flex justify-between items-baseline">
           <dt className="text-stone-600">Scheduled hours</dt>
           <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
@@ -612,19 +612,19 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-6 min-h-[220px]"
+      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
       data-testid="portal-schedule-actions"
     >
       <div className="flex items-center gap-2.5">
         <UsersIcon className="h-5 w-5 text-club-green-800" />
         <p className="font-serif text-[19px] text-club-ink leading-none">Actions</p>
       </div>
-      <ul className="mt-5 space-y-3">
+      <ul className="mt-4 space-y-2.5">
         <li>
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-actions-view-availability"
-            className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
+            className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
           >
             <AvailabilityIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
             <span className="min-w-0">
@@ -638,7 +638,7 @@ function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
             <Link
               href="/employee/time-off"
               data-testid="portal-schedule-actions-time-off"
-              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
+              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
             >
               <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
               <span className="min-w-0">
@@ -650,7 +650,7 @@ function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
             <div
               data-testid="portal-schedule-actions-time-off-disabled"
               aria-disabled
-              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-3 opacity-80"
+              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 opacity-80"
             >
               <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
               <span className="min-w-0">
@@ -679,7 +679,7 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
   return (
     <li
       data-testid={`portal-schedule-recent-${shift.assignmentId}`}
-      className="px-5 py-4 md:px-6 md:py-5 hover:bg-club-cream/40 transition-colors"
+      className="px-5 py-3.5 md:px-6 md:py-4 hover:bg-club-cream/40 transition-colors"
     >
       {/* Desktop: single-row table layout matching the concept: title-case labels, role · shift */}
       <div className="hidden md:grid md:grid-cols-[150px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_90px_88px_18px] items-center gap-4">

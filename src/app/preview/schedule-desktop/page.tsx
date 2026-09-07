@@ -44,7 +44,7 @@ const weekShifts = [
   shift(1, "Server",    "Day Shift",     11, 0,  17, 30, { assignmentId: "prev-a1", shiftId: "prev-s1" }),
   shift(2, "Server",    "Evening Shift", 17, 30, 23, 0,  { assignmentId: "prev-a2", shiftId: "prev-s2" }),
   shift(3, "Server",    "Evening Shift", 17, 30, 23, 0,  { assignmentId: "prev-a3", shiftId: "prev-s3" }),
-  shift(4, "Server",    "Evening Shift", 17, 30, 22, 30, { assignmentId: "prev-a4", shiftId: "prev-s4" }),
+  shift(4, "Server",    "Evening Shift", 17, 30, 23, 0,  { assignmentId: "prev-a4", shiftId: "prev-s4" }),
   shift(5, "Bartender", "Evening Shift", 17, 30, 23, 30, { assignmentId: "prev-a5", shiftId: "prev-s5" }),
 ];
 
