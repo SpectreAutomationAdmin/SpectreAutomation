@@ -328,6 +328,19 @@ export async function resetDb() {
     // present in this phase).
     c.payrollDepartmentTimeScopeState.deleteMany(),
     c.payrollDepartmentTimeApproval.deleteMany(),
+    // Scheduling Foundation (2026-09-07) — availability rules FK into
+    // profile + shift-template; opportunities FK into shift +
+    // assignment; assignments FK into shift + employee + employment-
+    // assignment; shifts FK into template + department. Order:
+    //   rules → profiles → opportunities → assignments (self-FK first)
+    //   → shifts → templates.
+    c.employeeAvailabilityRule.deleteMany(),
+    c.employeeAvailabilityProfile.deleteMany(),
+    c.shiftOpportunity.deleteMany(),
+    c.shiftAssignment.updateMany({ data: { replacedByAssignmentId: null } }),
+    c.shiftAssignment.deleteMany(),
+    c.shift.deleteMany(),
+    c.shiftTemplate.deleteMany(),
     // Payroll-3C-2 (2026-09-07) — Component snapshots FK into batch +
     // component + assignment; wipe before all three.
     c.payrollBatchComponentSnapshot.deleteMany(),

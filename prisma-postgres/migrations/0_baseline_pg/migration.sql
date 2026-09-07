@@ -7,11 +7,16 @@ CREATE TABLE "Club" (
     "logoUrl" TEXT,
     "primaryColor" TEXT NOT NULL DEFAULT '#2f5832',
     "whitelabelEnabled" BOOLEAN NOT NULL DEFAULT true,
+    "isDemoTenant" BOOLEAN NOT NULL DEFAULT false,
+    "stagingDataMode" TEXT NOT NULL DEFAULT 'FOUNDER_REVIEW',
+    "timezone" TEXT,
     "address" TEXT,
     "region" TEXT,
     "salesTaxRegion" TEXT,
+    "payrollProvince" TEXT,
     "foundedYear" INTEGER,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "outboundMailboxConnectionId" TEXT,
 
     CONSTRAINT "Club_pkey" PRIMARY KEY ("id")
 );
@@ -121,6 +126,106 @@ CREATE TABLE "UserClubRole" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "UserClubRole_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "UserClubProfile" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "displayTitle" TEXT,
+    "departmentId" TEXT,
+    "employeeId" TEXT,
+    "positionId" TEXT,
+    "reportsToProfileId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "suspendedAt" TIMESTAMP(3),
+    "revokedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdByUserId" TEXT,
+    "updatedByUserId" TEXT,
+
+    CONSTRAINT "UserClubProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OrganizationalPosition" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "departmentId" TEXT,
+    "description" TEXT,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdByUserId" TEXT,
+
+    CONSTRAINT "OrganizationalPosition_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Responsibility" (
+    "key" TEXT NOT NULL,
+    "displayLabel" TEXT NOT NULL,
+    "scopeKind" TEXT NOT NULL DEFAULT 'CLUB',
+    "cardinality" TEXT NOT NULL DEFAULT 'SINGLE_PRIMARY',
+    "description" TEXT,
+    "isSpectreDefined" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "Responsibility_pkey" PRIMARY KEY ("key")
+);
+
+-- CreateTable
+CREATE TABLE "ResponsibilityAssignment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "responsibilityKey" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'PRIMARY',
+    "effectiveFrom" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "effectiveTo" TIMESTAMP(3),
+    "assignedByUserId" TEXT,
+    "endedByUserId" TEXT,
+    "endReason" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ResponsibilityAssignment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AdminInvitation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "firstName" TEXT,
+    "lastName" TEXT,
+    "displayName" TEXT,
+    "displayTitle" TEXT,
+    "departmentId" TEXT,
+    "employeeId" TEXT,
+    "initialRoleKeys" TEXT NOT NULL,
+    "bootstrap" BOOLEAN NOT NULL DEFAULT false,
+    "tokenHash" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "sentAt" TIMESTAMP(3),
+    "openedAt" TIMESTAMP(3),
+    "activatedAt" TIMESTAMP(3),
+    "revokedAt" TIMESTAMP(3),
+    "failedAt" TIMESTAMP(3),
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "lastError" TEXT,
+    "sendCount" INTEGER NOT NULL DEFAULT 0,
+    "invitedByUserId" TEXT,
+    "revokedByUserId" TEXT,
+    "activatedUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AdminInvitation_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -246,6 +351,12 @@ CREATE TABLE "Member" (
     "state" TEXT,
     "postalCode" TEXT,
     "country" TEXT,
+    "middleName" TEXT,
+    "nickname" TEXT,
+    "salutation" TEXT,
+    "gender" TEXT,
+    "homePhone" TEXT,
+    "profileImageUrl" TEXT,
     "status" TEXT NOT NULL DEFAULT 'ONBOARDING',
     "joinDate" TIMESTAMP(3),
     "membershipCategory" TEXT,
@@ -613,10 +724,70 @@ CREATE TABLE "MemberHouseholdMember" (
     "email" TEXT,
     "phone" TEXT,
     "dateOfBirth" TIMESTAMP(3),
+    "middleName" TEXT,
+    "nickname" TEXT,
+    "salutation" TEXT,
+    "gender" TEXT,
+    "homePhone" TEXT,
+    "profileImageUrl" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "MemberHouseholdMember_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MemberGroup" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "sortOrder" INTEGER NOT NULL DEFAULT 100,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "MemberGroup_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MemberGroupAssignment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "memberId" TEXT NOT NULL,
+    "groupId" TEXT NOT NULL,
+    "assignedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "assignedByUserId" TEXT,
+
+    CONSTRAINT "MemberGroupAssignment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MemberCustomFieldDefinition" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "kind" TEXT NOT NULL DEFAULT 'TEXT',
+    "helpText" TEXT,
+    "optionsJson" TEXT,
+    "sortOrder" INTEGER NOT NULL DEFAULT 100,
+    "archivedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "MemberCustomFieldDefinition_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "MemberCustomFieldValue" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "memberId" TEXT NOT NULL,
+    "definitionId" TEXT NOT NULL,
+    "valueText" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "updatedByUserId" TEXT,
+
+    CONSTRAINT "MemberCustomFieldValue_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -642,11 +813,16 @@ CREATE TABLE "ClubAnnouncement" (
     "clubId" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "body" TEXT NOT NULL,
-    "audience" TEXT NOT NULL DEFAULT 'ALL_MEMBERS',
+    "audience" TEXT NOT NULL DEFAULT 'EMPLOYEE',
+    "isPublished" BOOLEAN NOT NULL DEFAULT false,
     "publishedAt" TIMESTAMP(3),
     "expiresAt" TIMESTAMP(3),
+    "isPinned" BOOLEAN NOT NULL DEFAULT false,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdByUserId" TEXT,
+    "updatedByUserId" TEXT,
 
     CONSTRAINT "ClubAnnouncement_pkey" PRIMARY KEY ("id")
 );
@@ -761,6 +937,19 @@ CREATE TABLE "Department" (
 );
 
 -- CreateTable
+CREATE TABLE "DepartmentResponsibility" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "departmentId" TEXT NOT NULL,
+    "responsibilityKey" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "assignedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "assignedByUserId" TEXT,
+
+    CONSTRAINT "DepartmentResponsibility_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "CostCenter" (
     "id" TEXT NOT NULL,
     "clubId" TEXT NOT NULL,
@@ -817,6 +1006,7 @@ CREATE TABLE "Account" (
     "isBankAccount" BOOLEAN NOT NULL DEFAULT false,
     "isControlAccount" BOOLEAN NOT NULL DEFAULT false,
     "isCashAccount" BOOLEAN NOT NULL DEFAULT false,
+    "accountRole" TEXT NOT NULL DEFAULT 'STANDARD',
     "fsGroupId" TEXT,
     "fundApplicability" TEXT,
     "defaultDepartmentId" TEXT,
@@ -1738,6 +1928,7 @@ CREATE TABLE "EmployeePosition" (
     "clubId" TEXT NOT NULL,
     "code" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "departmentId" TEXT,
     "defaultPayRate" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "isExempt" BOOLEAN NOT NULL DEFAULT false,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
@@ -1753,21 +1944,122 @@ CREATE TABLE "Employee" (
     "employeeNumber" TEXT NOT NULL,
     "firstName" TEXT NOT NULL,
     "lastName" TEXT NOT NULL,
+    "middleName" TEXT,
+    "preferredName" TEXT,
     "email" TEXT,
+    "personalEmail" TEXT,
     "phone" TEXT,
+    "mobilePhone" TEXT,
+    "homeAddressLine1" TEXT,
+    "homeAddressLine2" TEXT,
+    "homeCity" TEXT,
+    "homeProvince" TEXT,
+    "homePostalCode" TEXT,
+    "homeCountry" TEXT,
     "userId" TEXT,
     "departmentId" TEXT,
     "positionId" TEXT,
     "hireDate" TIMESTAMP(3),
+    "dateOfBirth" TIMESTAMP(3),
+    "expectedStartDate" TIMESTAMP(3),
+    "activatedAt" TIMESTAMP(3),
     "terminationDate" TIMESTAMP(3),
+    "terminationReason" TEXT,
     "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "employmentType" TEXT,
+    "employeeLifecycle" TEXT NOT NULL DEFAULT 'PRE_HIRE',
+    "onboardingState" TEXT NOT NULL DEFAULT 'DRAFT',
+    "payrollReadiness" TEXT NOT NULL DEFAULT 'NOT_READY',
     "compensationType" TEXT NOT NULL DEFAULT 'HOURLY',
+    "timekeepingMethod" TEXT NOT NULL DEFAULT 'NO_TIME_ENTRY_REQUIRED',
+    "timekeepingStateVersion" INTEGER NOT NULL DEFAULT 0,
     "payRate" DECIMAL(65,30) NOT NULL DEFAULT 0,
     "payrollIdExternal" TEXT,
+    "createdByUserId" TEXT,
+    "memberId" TEXT,
+    "profilePhotoDocumentId" TEXT,
+    "resumeDocumentId" TEXT,
+    "managerEmployeeId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "portalTourCompletedAt" TIMESTAMP(3),
+
+    CONSTRAINT "Employee_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeEmploymentAssignment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "role" TEXT NOT NULL,
+    "departmentId" TEXT,
+    "positionId" TEXT,
+    "managerEmployeeId" TEXT,
+    "employmentType" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "notes" TEXT,
+    "createdByUserId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "Employee_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "EmployeeEmploymentAssignment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeAllowance" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "assignmentId" TEXT,
+    "allowanceType" TEXT NOT NULL,
+    "description" TEXT,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "currency" TEXT,
+    "frequency" TEXT NOT NULL,
+    "taxable" BOOLEAN NOT NULL DEFAULT true,
+    "pensionable" BOOLEAN,
+    "insurable" BOOLEAN,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeAllowance_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeHomeNotificationDismissal" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "notificationKey" TEXT NOT NULL,
+    "dismissedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeHomeNotificationDismissal_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeAvailabilityWeek" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "weekStart" TIMESTAMP(3) NOT NULL,
+    "monday" BOOLEAN NOT NULL DEFAULT false,
+    "tuesday" BOOLEAN NOT NULL DEFAULT false,
+    "wednesday" BOOLEAN NOT NULL DEFAULT false,
+    "thursday" BOOLEAN NOT NULL DEFAULT false,
+    "friday" BOOLEAN NOT NULL DEFAULT false,
+    "saturday" BOOLEAN NOT NULL DEFAULT false,
+    "sunday" BOOLEAN NOT NULL DEFAULT false,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeAvailabilityWeek_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -1831,11 +2123,79 @@ CREATE TABLE "TimeClockEvent" (
     "kind" TEXT NOT NULL,
     "occurredAt" TIMESTAMP(3) NOT NULL,
     "source" TEXT NOT NULL DEFAULT 'MANUAL',
+    "employmentAssignmentId" TEXT,
     "lat" DOUBLE PRECISION,
     "lng" DOUBLE PRECISION,
     "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "supersededByEventId" TEXT,
 
     CONSTRAINT "TimeClockEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollTimesheet" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "payPeriodId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollTimesheet_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollTimesheetEntry" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "timesheetId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "workDate" TIMESTAMP(3) NOT NULL,
+    "employmentAssignmentId" TEXT,
+    "earningClassification" TEXT NOT NULL DEFAULT 'REGULAR',
+    "clockInAt" TIMESTAMP(3) NOT NULL,
+    "clockOutAt" TIMESTAMP(3) NOT NULL,
+    "recordedSeconds" INTEGER NOT NULL,
+    "breakSeconds" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollTimesheetEntry_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollTimesheetEntryClockEvent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "timesheetEntryId" TEXT NOT NULL,
+    "clockEventId" TEXT NOT NULL,
+    "role" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollTimesheetEntryClockEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TimeClockCorrectionRequest" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "originalClockEventId" TEXT,
+    "requestType" TEXT NOT NULL,
+    "requestedOccurredAt" TIMESTAMP(3),
+    "employmentAssignmentId" TEXT,
+    "reason" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "reviewedAt" TIMESTAMP(3),
+    "reviewedByUserId" TEXT,
+    "reviewerNote" TEXT,
+    "resolutionClockEventId" TEXT,
+
+    CONSTRAINT "TimeClockCorrectionRequest_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -5625,8 +5985,200 @@ CREATE TABLE "WorkIntakeItem" (
     "displayHasAttachments" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "lastAnalysedAt" TIMESTAMP(3),
+    "analysisVersion" TEXT,
+    "workDomain" TEXT,
+    "workIntent" TEXT,
+    "workSubtype" TEXT,
+    "workDomainConfidence" DOUBLE PRECISION,
+    "workDomainSupportingEvidenceJson" TEXT,
+    "workDomainAlternativesJson" TEXT,
+    "workDomainRequiresReview" BOOLEAN NOT NULL DEFAULT false,
+    "workDomainClassifiedAt" TIMESTAMP(3),
+    "workDomainClassifierVersion" TEXT,
 
     CONSTRAINT "WorkIntakeItem_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WorkRestorationEvent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "restoredByUserId" TEXT NOT NULL,
+    "restoredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "priorCompletionEventId" TEXT,
+    "reason" TEXT,
+
+    CONSTRAINT "WorkRestorationEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WorkCompletionEvent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "completedByUserId" TEXT NOT NULL,
+    "completedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "completionType" TEXT NOT NULL,
+    "metadataJson" TEXT,
+
+    CONSTRAINT "WorkCompletionEvent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OutlookReplyMutation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeId" TEXT NOT NULL,
+    "mailboxConnectionId" TEXT NOT NULL,
+    "sourceEmailMessageId" TEXT NOT NULL,
+    "initiatedByUserId" TEXT NOT NULL,
+    "mode" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "graphMessageId" TEXT,
+    "graphConversationId" TEXT,
+    "sentAt" TIMESTAMP(3),
+    "attemptCount" INTEGER NOT NULL DEFAULT 0,
+    "errorCode" TEXT,
+    "idempotencyKey" TEXT NOT NULL,
+    "bodyCiphertext" TEXT,
+    "bodySecretRef" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OutlookReplyMutation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OutlookArchiveMutation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeId" TEXT NOT NULL,
+    "workCompletionEventId" TEXT,
+    "emailMessageId" TEXT NOT NULL,
+    "originalExternalMessageId" TEXT NOT NULL,
+    "resultingExternalMessageId" TEXT,
+    "originalFolderId" TEXT,
+    "destinationFolderId" TEXT,
+    "mailboxConnectionId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "attemptCount" INTEGER NOT NULL DEFAULT 0,
+    "lastAttemptAt" TIMESTAMP(3),
+    "completedAt" TIMESTAMP(3),
+    "errorCode" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OutlookArchiveMutation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OutlookMarkReadMutation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "emailMessageId" TEXT NOT NULL,
+    "graphMessageId" TEXT NOT NULL,
+    "mailboxConnectionId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "attemptCount" INTEGER NOT NULL DEFAULT 0,
+    "lastAttemptAt" TIMESTAMP(3),
+    "completedAt" TIMESTAMP(3),
+    "errorCode" TEXT,
+    "triggeredByUserId" TEXT,
+    "generationCursor" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "OutlookMarkReadMutation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ProposedCommitment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT,
+    "title" TEXT NOT NULL,
+    "dueAt" TIMESTAMP(3) NOT NULL,
+    "sourceRule" TEXT NOT NULL,
+    "rationaleCode" TEXT NOT NULL,
+    "confidence" DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    "status" TEXT NOT NULL DEFAULT 'PROPOSED',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ProposedCommitment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WorkDomainCorrection" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "originalDomain" TEXT,
+    "correctedDomain" TEXT NOT NULL,
+    "originalSubtype" TEXT,
+    "correctedSubtype" TEXT,
+    "correctedByUserId" TEXT NOT NULL,
+    "correctedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reason" TEXT,
+
+    CONSTRAINT "WorkDomainCorrection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WorkIntakeOrigin" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "referenceId" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'PRIMARY',
+    "linkReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdByUserId" TEXT,
+
+    CONSTRAINT "WorkIntakeOrigin_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WorkIntakeFinding" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "statement" TEXT NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'CONFIRMED',
+    "severity" TEXT NOT NULL DEFAULT 'INFO',
+    "materialityCents" BIGINT,
+    "ruleKey" TEXT NOT NULL,
+    "ruleVersion" INTEGER NOT NULL DEFAULT 1,
+    "evidenceRefsJson" TEXT NOT NULL DEFAULT '[]',
+    "analysisRunId" TEXT,
+    "overriddenByUserId" TEXT,
+    "overriddenAt" TIMESTAMP(3),
+    "overrideReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WorkIntakeFinding_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ApReviewOverride" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT NOT NULL,
+    "reviewedByUserId" TEXT NOT NULL,
+    "reviewedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "overrideKind" TEXT NOT NULL,
+    "satisfiesBlocker" TEXT,
+    "originalValueJson" TEXT,
+    "correctedValueJson" TEXT,
+    "reason" TEXT,
+    "resultingDecisionJson" TEXT,
+
+    CONSTRAINT "ApReviewOverride_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -5644,6 +6196,15 @@ CREATE TABLE "WorkIntakeActivity" (
 );
 
 -- CreateTable
+CREATE TABLE "WorkIntakeItemRead" (
+    "workIntakeItemId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "readAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WorkIntakeItemRead_pkey" PRIMARY KEY ("workIntakeItemId","userId")
+);
+
+-- CreateTable
 CREATE TABLE "EmailWorkIntakeOrigin" (
     "id" TEXT NOT NULL,
     "clubId" TEXT NOT NULL,
@@ -5655,6 +6216,252 @@ CREATE TABLE "EmailWorkIntakeOrigin" (
     "createdByUserId" TEXT,
 
     CONSTRAINT "EmailWorkIntakeOrigin_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ConversationMessage" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "mailboxConnectionId" TEXT NOT NULL,
+    "workIntakeItemId" TEXT,
+    "conversationId" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "source" TEXT NOT NULL,
+    "providerMessageId" TEXT,
+    "internetMessageId" TEXT,
+    "replyMutationId" TEXT,
+    "senderName" TEXT NOT NULL,
+    "senderAddress" TEXT NOT NULL,
+    "recipientsJson" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "bodyHtmlSanitized" TEXT,
+    "bodyTextExtract" TEXT,
+    "bodyCiphertext" TEXT,
+    "bodySecretRef" TEXT,
+    "sentAt" TIMESTAMP(3),
+    "receivedAt" TIMESTAMP(3),
+    "providerReconciledAt" TIMESTAMP(3),
+    "reconciliationStatus" TEXT NOT NULL DEFAULT 'NOT_APPLICABLE',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ConversationMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "IngestedDocument" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "sourceKind" TEXT NOT NULL,
+    "sourceReferenceId" TEXT NOT NULL,
+    "filename" TEXT NOT NULL,
+    "originalFilename" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "byteLength" INTEGER NOT NULL,
+    "sha256Hash" TEXT NOT NULL,
+    "storageBucket" TEXT NOT NULL,
+    "storageKey" TEXT NOT NULL,
+    "classification" TEXT NOT NULL DEFAULT 'UNKNOWN',
+    "classificationSource" TEXT NOT NULL DEFAULT 'RULE',
+    "classificationRuleKey" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'STORED',
+    "receivedAt" TIMESTAMP(3) NOT NULL,
+    "ingestedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "IngestedDocument_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "IngestedDocumentEvidenceLink" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "ingestedDocumentId" TEXT NOT NULL,
+    "targetKind" TEXT NOT NULL,
+    "targetReferenceId" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'EVIDENCE',
+    "linkReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdByUserId" TEXT,
+
+    CONSTRAINT "IngestedDocumentEvidenceLink_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "IngestedDocumentAuditLog" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "ingestedDocumentId" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "actorUserId" TEXT,
+    "ip" TEXT,
+    "userAgent" TEXT,
+    "detailsJson" TEXT,
+    "occurredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "IngestedDocumentAuditLog_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "DocumentOcrExtraction" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "ingestedDocumentId" TEXT NOT NULL,
+    "documentSha256" TEXT NOT NULL,
+    "documentClass" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "providerApi" TEXT NOT NULL,
+    "providerRegion" TEXT,
+    "extractionVersion" INTEGER NOT NULL,
+    "normalizedSchemaVersion" INTEGER NOT NULL,
+    "strategy" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "normalizedExtractionJson" TEXT,
+    "confidenceSummaryJson" TEXT,
+    "warningsJson" TEXT,
+    "sanitizedErrorCode" TEXT,
+    "attemptCount" INTEGER NOT NULL DEFAULT 0,
+    "nextRetryAt" TIMESTAMP(3),
+    "startedAt" TIMESTAMP(3),
+    "completedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "pageNumber" INTEGER NOT NULL DEFAULT 0,
+    "regionKey" TEXT,
+
+    CONSTRAINT "DocumentOcrExtraction_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "RegressionExpectation" (
+    "id" TEXT NOT NULL,
+    "documentSha256" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "expectedSupplier" TEXT,
+    "expectedInvoiceNumber" TEXT,
+    "expectedGrossTotalCents" INTEGER,
+    "expectedCurrency" TEXT,
+    "expectedAccountingNature" TEXT,
+    "expectedDepartmentKey" TEXT,
+    "expectedGlAccountNumber" TEXT,
+    "expectedAllocationCount" INTEGER,
+    "assertSupplier" BOOLEAN NOT NULL DEFAULT true,
+    "assertGlAccount" BOOLEAN NOT NULL DEFAULT true,
+    "assertAccountingNature" BOOLEAN NOT NULL DEFAULT true,
+    "assertDepartment" BOOLEAN NOT NULL DEFAULT false,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "RegressionExpectation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VendorAlias" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "canonicalVendorId" TEXT NOT NULL,
+    "aliasKind" TEXT NOT NULL,
+    "aliasValue" TEXT NOT NULL,
+    "aliasValueNormalized" TEXT NOT NULL,
+    "originVendorId" TEXT,
+    "createdViaMergeId" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "VendorAlias_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VendorMergeRecord" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "winnerVendorId" TEXT NOT NULL,
+    "loserVendorId" TEXT NOT NULL,
+    "initiatedByUserId" TEXT,
+    "approvedByUserId" TEXT,
+    "reason" TEXT NOT NULL,
+    "movedInvoicesCount" INTEGER NOT NULL DEFAULT 0,
+    "movedPaymentsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedContactsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedBankingCount" INTEGER NOT NULL DEFAULT 0,
+    "movedDocumentsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedRiskFlagsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedApExceptionsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedInventoryItemsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedInventoryReceivingsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedGolfProfessionalsCount" INTEGER NOT NULL DEFAULT 0,
+    "movedLibraryDocumentsCount" INTEGER NOT NULL DEFAULT 0,
+    "cancelledApprovalsCount" INTEGER NOT NULL DEFAULT 0,
+    "createdAliasesCount" INTEGER NOT NULL DEFAULT 0,
+    "simulationJson" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'COMMITTED',
+    "reversalOfMergeId" TEXT,
+    "committedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "VendorMergeRecord_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VendorStatementReconciliation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "ingestedDocumentId" TEXT NOT NULL,
+    "canonicalVendorId" TEXT,
+    "statementDate" TIMESTAMP(3),
+    "periodStart" TIMESTAMP(3),
+    "periodEnd" TIMESTAMP(3),
+    "openingBalance" DECIMAL(65,30) DEFAULT 0,
+    "closingBalance" DECIMAL(65,30) DEFAULT 0,
+    "amountDue" DECIMAL(65,30) DEFAULT 0,
+    "currency" TEXT NOT NULL DEFAULT 'CAD',
+    "extractionState" TEXT NOT NULL,
+    "reconciliationState" TEXT NOT NULL,
+    "extractionRuleVersion" INTEGER NOT NULL DEFAULT 1,
+    "reconciliationRuleVersion" INTEGER NOT NULL DEFAULT 1,
+    "lastAnalysedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "VendorStatementReconciliation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VendorStatementLine" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "reconciliationId" TEXT NOT NULL,
+    "sequence" INTEGER NOT NULL,
+    "transactionDate" TIMESTAMP(3),
+    "referenceNumber" TEXT,
+    "description" TEXT,
+    "transactionKind" TEXT NOT NULL DEFAULT 'UNKNOWN',
+    "debitAmount" DECIMAL(65,30) DEFAULT 0,
+    "creditAmount" DECIMAL(65,30) DEFAULT 0,
+    "runningBalance" DECIMAL(65,30),
+    "extractionEvidence" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "VendorStatementLine_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "VendorStatementLineMatch" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "statementLineId" TEXT NOT NULL,
+    "targetKind" TEXT NOT NULL,
+    "targetReferenceId" TEXT,
+    "matchState" TEXT NOT NULL,
+    "matchBasis" TEXT,
+    "amountDifference" DECIMAL(65,30),
+    "dateDifferenceDays" INTEGER,
+    "reviewerDecision" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "VendorStatementLineMatch_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -5788,6 +6595,9 @@ CREATE TABLE "MailboxOAuthTransaction" (
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "consumedAt" TIMESTAMP(3),
     "outcome" TEXT,
+    "expectedMailboxConnectionId" TEXT,
+    "expectedExternalUserId" TEXT,
+    "expectedExternalTenantId" TEXT,
 
     CONSTRAINT "MailboxOAuthTransaction_pkey" PRIMARY KEY ("id")
 );
@@ -5808,6 +6618,1319 @@ CREATE TABLE "EmailAttachment" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "EmailAttachment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ApIntakeSource" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "emailAttachmentId" TEXT NOT NULL,
+    "emailMessageId" TEXT NOT NULL,
+    "ingestedDocumentId" TEXT NOT NULL,
+    "canonicalApIntakeId" TEXT NOT NULL,
+    "relationship" TEXT NOT NULL,
+    "reason" TEXT,
+    "analysisVersionAtLink" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ApIntakeSource_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ProductReference" (
+    "id" TEXT NOT NULL,
+    "normalizedKey" TEXT NOT NULL,
+    "normalizedManufacturer" TEXT NOT NULL,
+    "normalizedModel" TEXT NOT NULL,
+    "normalizedPartNumber" TEXT,
+    "productFamily" TEXT,
+    "objectType" TEXT,
+    "identityEvidenceJson" TEXT NOT NULL DEFAULT '[]',
+    "sourceEvidenceJson" TEXT NOT NULL DEFAULT '[]',
+    "evidenceQuality" TEXT NOT NULL DEFAULT 'UNKNOWN',
+    "confidence" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "researchState" TEXT NOT NULL DEFAULT 'PENDING',
+    "provider" TEXT,
+    "providerVersion" TEXT,
+    "researchVersion" TEXT NOT NULL DEFAULT '1',
+    "evidenceSchemaVersion" TEXT NOT NULL DEFAULT '1',
+    "identityVerifiedAt" TIMESTAMP(3),
+    "identityExpiresAt" TIMESTAMP(3),
+    "priceExpiresAt" TIMESTAMP(3),
+    "researchAttempts" INTEGER NOT NULL DEFAULT 0,
+    "lastResearchAttemptAt" TIMESTAMP(3),
+    "lastResearchError" TEXT,
+    "nextRetryAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ProductReference_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmploymentPeriod" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "employmentType" TEXT NOT NULL,
+    "reason" TEXT NOT NULL,
+    "positionId" TEXT,
+    "departmentId" TEXT,
+    "managerEmployeeId" TEXT,
+    "actorUserId" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmploymentPeriod_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeCompensation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "cadence" TEXT NOT NULL,
+    "rate" DECIMAL(65,30) NOT NULL,
+    "currency" TEXT,
+    "notes" TEXT,
+    "actorUserId" TEXT,
+    "assignmentId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeCompensation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollProfile" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "jurisdiction" TEXT NOT NULL,
+    "payGroup" TEXT NOT NULL,
+    "payFrequency" TEXT NOT NULL,
+    "directDepositActive" BOOLEAN NOT NULL DEFAULT false,
+    "activatedAt" TIMESTAMP(3),
+    "suspendedAt" TIMESTAMP(3),
+    "suspensionReason" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBenefit" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payrollProfileId" TEXT NOT NULL,
+    "benefitCode" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "computationKind" TEXT NOT NULL,
+    "amount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "currency" TEXT,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "employerFundedPct" DECIMAL(65,30),
+    "employeeFundedPct" DECIMAL(65,30),
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollBenefit_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollDeduction" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payrollProfileId" TEXT NOT NULL,
+    "deductionCode" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "computationKind" TEXT NOT NULL,
+    "amount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "currency" TEXT,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "preTax" BOOLEAN NOT NULL DEFAULT false,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollDeduction_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeSensitiveIdentity" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "sinSecretRef" TEXT NOT NULL,
+    "sinLastThree" TEXT,
+    "sinFingerprint" TEXT,
+    "issuingCountry" TEXT,
+    "effectiveFrom" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeSensitiveIdentity_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeBankAccount" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "institutionSecretRef" TEXT NOT NULL,
+    "transitSecretRef" TEXT NOT NULL,
+    "accountSecretRef" TEXT NOT NULL,
+    "accountLastFour" TEXT,
+    "holderName" TEXT NOT NULL,
+    "bankFingerprint" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'PENDING_PENNY_TEST',
+    "activatedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeBankAccount_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeTaxProfile" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "province" TEXT NOT NULL,
+    "td1FormVersion" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "federalClaimSecretRef" TEXT NOT NULL,
+    "provincialClaimSecretRef" TEXT NOT NULL,
+    "additionalDeductionSecretRef" TEXT,
+    "additionalFederalTaxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "additionalProvincialTaxAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "claimZeroFederal" BOOLEAN NOT NULL DEFAULT false,
+    "claimZeroProvincial" BOOLEAN NOT NULL DEFAULT false,
+    "totalIncomeLessThanClaim" BOOLEAN NOT NULL DEFAULT false,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeTaxProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeDocument" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "storageKey" TEXT NOT NULL,
+    "contentSha256" TEXT NOT NULL,
+    "sizeBytes" INTEGER NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "sensitivity" TEXT NOT NULL DEFAULT 'STANDARD',
+    "displayName" TEXT,
+    "uploadedByUserId" TEXT,
+    "uploadedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeDocument_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeCredential" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "credentialCode" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "issuer" TEXT,
+    "reference" TEXT,
+    "issuedAt" TIMESTAMP(3),
+    "expiresAt" TIMESTAMP(3),
+    "documentId" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeCredential_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeEmergencyContact" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "relation" TEXT NOT NULL,
+    "phone" TEXT NOT NULL,
+    "email" TEXT,
+    "addressLine1" TEXT,
+    "addressLine2" TEXT,
+    "city" TEXT,
+    "province" TEXT,
+    "postalCode" TEXT,
+    "country" TEXT,
+    "isPrimary" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeEmergencyContact_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OnboardingRequirement" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "explanation" TEXT,
+    "kind" TEXT NOT NULL,
+    "documentCategory" TEXT,
+    "appliesToAll" BOOLEAN NOT NULL DEFAULT false,
+    "appliesToDeptIds" TEXT,
+    "appliesToPositionIds" TEXT,
+    "required" BOOLEAN NOT NULL DEFAULT true,
+    "requireExpiry" BOOLEAN NOT NULL DEFAULT false,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdByUserId" TEXT,
+
+    CONSTRAINT "OnboardingRequirement_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingInvitation" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "revokedAt" TIMESTAMP(3),
+    "redeemedAt" TIMESTAMP(3),
+    "redeemedByIpHash" TEXT,
+    "issuedByUserId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deliveryStatus" TEXT,
+    "deliveryProvider" TEXT,
+    "deliveryProviderMessageId" TEXT,
+    "deliveryAttemptedAt" TIMESTAMP(3),
+    "deliveryFailureReason" TEXT,
+
+    CONSTRAINT "EmployeeOnboardingInvitation_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingSession" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "initiatedByUserId" TEXT NOT NULL,
+    "approvedByUserId" TEXT,
+    "state" TEXT NOT NULL DEFAULT 'DRAFT',
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "completedAt" TIMESTAMP(3),
+    "submittedAt" TIMESTAMP(3),
+    "approvedAt" TIMESTAMP(3),
+    "rejectedAt" TIMESTAMP(3),
+    "rejectionReason" TEXT,
+
+    CONSTRAINT "EmployeeOnboardingSession_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingStateTransition" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "sessionId" TEXT,
+    "fromState" TEXT NOT NULL,
+    "toState" TEXT NOT NULL,
+    "actorSource" TEXT NOT NULL,
+    "actorUserId" TEXT,
+    "actorEmployeeId" TEXT,
+    "reason" TEXT,
+    "at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeOnboardingStateTransition_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingQuestion" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT,
+    "key" TEXT NOT NULL,
+    "section" TEXT NOT NULL,
+    "prompt" TEXT NOT NULL,
+    "helpText" TEXT,
+    "answerKind" TEXT NOT NULL,
+    "required" BOOLEAN NOT NULL DEFAULT false,
+    "optionsJson" TEXT,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeOnboardingQuestion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingResponse" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "questionId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "responseJson" TEXT,
+    "answeredAt" TIMESTAMP(3),
+    "reviewedAt" TIMESTAMP(3),
+    "reviewerNote" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeOnboardingResponse_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingAcknowledgement" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "actorEmployeeId" TEXT,
+    "acknowledgedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeOnboardingAcknowledgement_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeOnboardingCorrection" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "sessionId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "field" TEXT NOT NULL,
+    "employeeStatedValue" TEXT NOT NULL,
+    "note" TEXT,
+    "resolvedAt" TIMESTAMP(3),
+    "resolvedByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeeOnboardingCorrection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeePortalCredential" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "passwordHash" TEXT NOT NULL,
+    "passwordUpdatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastLoginAt" TIMESTAMP(3),
+    "failedAttemptCount" INTEGER NOT NULL DEFAULT 0,
+    "lockedUntil" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeePortalCredential_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeePortalPasswordReset" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "tokenHash" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "consumedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "EmployeePortalPasswordReset_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ClubMedia" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "storageKey" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "sizeBytes" INTEGER NOT NULL,
+    "sha256" TEXT NOT NULL,
+    "displayName" TEXT,
+    "uploadedByUserId" TEXT,
+    "uploadedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "desktopFocalX" DOUBLE PRECISION,
+    "desktopFocalY" DOUBLE PRECISION,
+    "desktopZoom" DOUBLE PRECISION,
+    "mobileFocalX" DOUBLE PRECISION,
+    "mobileFocalY" DOUBLE PRECISION,
+    "mobileZoom" DOUBLE PRECISION,
+    "framingUpdatedAt" TIMESTAMP(3),
+    "framingUpdatedBy" TEXT,
+
+    CONSTRAINT "ClubMedia_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeePortalQuickLink" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "destinationType" TEXT NOT NULL,
+    "url" TEXT,
+    "storageKey" TEXT,
+    "fileMimeType" TEXT,
+    "fileSizeBytes" INTEGER,
+    "fileOriginalName" TEXT,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdByUserId" TEXT,
+    "updatedByUserId" TEXT,
+
+    CONSTRAINT "EmployeePortalQuickLink_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AnonymousFeedback" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "category" TEXT,
+    "message" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'NEW',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reviewedAt" TIMESTAMP(3),
+
+    CONSTRAINT "AnonymousFeedback_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingCourse" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "description" TEXT,
+    "retiredAt" TIMESTAMP(3),
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "currentVersionId" TEXT,
+
+    CONSTRAINT "TrainingCourse_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingCourseVersion" (
+    "id" TEXT NOT NULL,
+    "courseId" TEXT NOT NULL,
+    "version" INTEGER NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'DRAFT',
+    "title" TEXT NOT NULL,
+    "description" TEXT,
+    "passingScore" INTEGER NOT NULL DEFAULT 80,
+    "retakesAllowed" BOOLEAN NOT NULL DEFAULT true,
+    "requiresKnowledgeTest" BOOLEAN NOT NULL DEFAULT true,
+    "videoStorageKey" TEXT,
+    "videoMimeType" TEXT,
+    "videoSizeBytes" INTEGER,
+    "videoSha256" TEXT,
+    "videoDurationSec" INTEGER,
+    "appliesToAll" BOOLEAN NOT NULL DEFAULT false,
+    "appliesToDeptIds" TEXT,
+    "appliesToPositionIds" TEXT,
+    "required" BOOLEAN NOT NULL DEFAULT true,
+    "publishedAt" TIMESTAMP(3),
+    "publishedByUserId" TEXT,
+    "retiredAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TrainingCourseVersion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingQuestion" (
+    "id" TEXT NOT NULL,
+    "courseVersionId" TEXT NOT NULL,
+    "prompt" TEXT NOT NULL,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TrainingQuestion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingAnswerOption" (
+    "id" TEXT NOT NULL,
+    "questionId" TEXT NOT NULL,
+    "text" TEXT NOT NULL,
+    "isCorrect" BOOLEAN NOT NULL DEFAULT false,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TrainingAnswerOption_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingAssignment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "courseId" TEXT NOT NULL,
+    "assignedByUserId" TEXT,
+    "assignedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "note" TEXT,
+
+    CONSTRAINT "TrainingAssignment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingProgress" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "courseVersionId" TEXT NOT NULL,
+    "secondsWatched" INTEGER NOT NULL DEFAULT 0,
+    "farthestSecond" INTEGER NOT NULL DEFAULT 0,
+    "percentComplete" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TrainingProgress_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingAttempt" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "courseVersionId" TEXT NOT NULL,
+    "attemptNumber" INTEGER NOT NULL,
+    "score" INTEGER NOT NULL DEFAULT 0,
+    "passed" BOOLEAN NOT NULL DEFAULT false,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "submittedAt" TIMESTAMP(3),
+
+    CONSTRAINT "TrainingAttempt_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingQuestionResponse" (
+    "id" TEXT NOT NULL,
+    "attemptId" TEXT NOT NULL,
+    "questionId" TEXT NOT NULL,
+    "selectedOptionId" TEXT NOT NULL,
+    "wasCorrect" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "TrainingQuestionResponse_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "TrainingCompletion" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "courseId" TEXT NOT NULL,
+    "courseVersionId" TEXT NOT NULL,
+    "attemptId" TEXT NOT NULL,
+    "score" INTEGER NOT NULL,
+    "completedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "TrainingCompletion_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollClubConfig" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT false,
+    "country" TEXT NOT NULL DEFAULT 'CA',
+    "provinceOfEmployment" TEXT,
+    "defaultPayFrequency" TEXT NOT NULL DEFAULT 'BIWEEKLY',
+    "defaultPaymentMethod" TEXT NOT NULL DEFAULT 'DIRECT_DEPOSIT',
+    "payrollAdminUserId" TEXT,
+    "controllerUserId" TEXT,
+    "glAccountingProfileId" TEXT,
+    "paystubNumberPrefix" TEXT,
+    "paystubNumberSequence" INTEGER NOT NULL DEFAULT 0,
+    "payrollCutoffLeadDays" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollClubConfig_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollGlAccountingProfile" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "salaryExpenseAccountId" TEXT NOT NULL,
+    "employerCppExpenseAccountId" TEXT NOT NULL,
+    "employerEiExpenseAccountId" TEXT NOT NULL,
+    "netPayPayableAccountId" TEXT NOT NULL,
+    "cppPayableAccountId" TEXT NOT NULL,
+    "eiPayableAccountId" TEXT NOT NULL,
+    "federalTaxPayableAccountId" TEXT NOT NULL,
+    "provincialTaxPayableAccountId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollGlAccountingProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollPayGroup" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "payFrequency" TEXT NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "payDateOffsetDays" INTEGER NOT NULL DEFAULT 5,
+    "calendarAnchorDate" TIMESTAMP(3),
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollPayGroup_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollPayGroupMember" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payGroupId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollPayGroupMember_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollPayPeriod" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payGroupId" TEXT NOT NULL,
+    "sequenceInYear" INTEGER NOT NULL,
+    "taxYear" INTEGER NOT NULL,
+    "periodStart" TIMESTAMP(3) NOT NULL,
+    "periodEnd" TIMESTAMP(3) NOT NULL,
+    "payDate" TIMESTAMP(3) NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'FUTURE',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollPayPeriod_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatch" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payGroupId" TEXT NOT NULL,
+    "payPeriodId" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "sequence" INTEGER NOT NULL DEFAULT 1,
+    "preparedAt" TIMESTAMP(3),
+    "preparedByUserId" TEXT,
+    "submittedAt" TIMESTAMP(3),
+    "submittedByUserId" TEXT,
+    "approvedAt" TIMESTAMP(3),
+    "approvedByUserId" TEXT,
+    "postedAt" TIMESTAMP(3),
+    "postedByUserId" TEXT,
+    "voidedAt" TIMESTAMP(3),
+    "voidedByUserId" TEXT,
+    "voidReason" TEXT,
+    "workIntakeItemId" TEXT,
+    "sourceSnapshotAt" TIMESTAMP(3),
+    "statutoryPackageId" TEXT,
+    "calculatedAt" TIMESTAMP(3),
+    "calculationVersion" INTEGER NOT NULL DEFAULT 0,
+    "algorithmVersion" TEXT,
+    "packageChecksum" TEXT,
+    "glJournalEntryId" TEXT,
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollBatch_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchException" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "batchEmployeeId" TEXT,
+    "employeeId" TEXT,
+    "severity" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "message" TEXT NOT NULL,
+    "recommendedAction" TEXT,
+    "resolvedAt" TIMESTAMP(3),
+    "resolvedByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollBatchException_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollStatutoryPackage" (
+    "id" TEXT NOT NULL,
+    "jurisdictionCountry" TEXT NOT NULL,
+    "jurisdictionProvince" TEXT,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "packageVersion" TEXT NOT NULL,
+    "algorithmVersion" TEXT NOT NULL DEFAULT 'v1',
+    "sourcePublication" TEXT NOT NULL,
+    "sourceEdition" TEXT,
+    "sourcePublicationDate" TIMESTAMP(3),
+    "sourceUrl" TEXT,
+    "checksum" TEXT NOT NULL,
+    "paramsJson" TEXT NOT NULL,
+    "publishedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "publishedByUserId" TEXT,
+    "supersededAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollStatutoryPackage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollOpeningBalance" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "taxYear" INTEGER NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "throughPayDate" TIMESTAMP(3),
+    "ytdGrossEarnings" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdTaxableEarnings" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdPensionableEarnings" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdInsurableEarnings" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppEE_Base" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppEE_FirstAdd" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppEE" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCpp2EE" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdEiEE" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdFederalTax" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdProvincialTax" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppER_Base" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppER_FirstAdd" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCppER" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdCpp2ER" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdEiER" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "importBatchId" TEXT,
+    "importSource" TEXT,
+    "importedAt" TIMESTAMP(3),
+    "importedByUserId" TEXT,
+    "notes" TEXT,
+    "priorPayrollKind" TEXT NOT NULL DEFAULT 'PRIOR_SYSTEM_SAME_EMPLOYER',
+    "priorEmployerId" TEXT,
+    "supersededAt" TIMESTAMP(3),
+    "supersededByUserId" TEXT,
+    "supersededById" TEXT,
+    "activatedAt" TIMESTAMP(3),
+    "activatedByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollOpeningBalance_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollOpeningBalanceComponent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "openingBalanceId" TEXT NOT NULL,
+    "sourceComponentId" TEXT,
+    "componentCode" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "side" TEXT NOT NULL,
+    "cashEffect" TEXT NOT NULL,
+    "ytdAmount" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "ytdQuantity" DECIMAL(65,30),
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollOpeningBalanceComponent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchEmployee" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "payGroupMemberId" TEXT,
+    "jurisdictionCountry" TEXT NOT NULL,
+    "jurisdictionProvince" TEXT,
+    "employeeLifecycleAtPrep" TEXT NOT NULL,
+    "bankingReady" BOOLEAN NOT NULL DEFAULT false,
+    "bankingStatus" TEXT,
+    "sinReady" BOOLEAN NOT NULL DEFAULT false,
+    "federalTd1Ready" BOOLEAN NOT NULL DEFAULT false,
+    "provincialTd1Ready" BOOLEAN NOT NULL DEFAULT false,
+    "compensationReady" BOOLEAN NOT NULL DEFAULT false,
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
+    "grossPay" DECIMAL(65,30),
+    "netPay" DECIMAL(65,30),
+    "salaried" BOOLEAN NOT NULL DEFAULT false,
+    "employmentStartInPeriod" TIMESTAMP(3),
+    "employmentEndInPeriod" TIMESTAMP(3),
+    "approvedHoursSnapshot" DECIMAL(65,30),
+    "sourceFactsJson" TEXT,
+    "membershipEffectiveFrom" TIMESTAMP(3),
+    "membershipEffectiveTo" TIMESTAMP(3),
+    "coverageStart" TIMESTAMP(3),
+    "coverageEnd" TIMESTAMP(3),
+    "dateOfBirthSnapshot" TIMESTAMP(3),
+    "earningsTaxable" DECIMAL(65,30),
+    "earningsPensionable" DECIMAL(65,30),
+    "earningsInsurable" DECIMAL(65,30),
+    "deductionCppEeBase" DECIMAL(65,30),
+    "deductionCppEeFirstAdd" DECIMAL(65,30),
+    "deductionCpp2Ee" DECIMAL(65,30),
+    "deductionEiEe" DECIMAL(65,30),
+    "deductionFederalTax" DECIMAL(65,30),
+    "deductionProvincialTax" DECIMAL(65,30),
+    "employerCppBase" DECIMAL(65,30),
+    "employerCppFirstAdd" DECIMAL(65,30),
+    "employerCpp2" DECIMAL(65,30),
+    "employerEi" DECIMAL(65,30),
+    "deductionCppEeCombined" DECIMAL(65,30),
+    "employerCppCombined" DECIMAL(65,30),
+    "additionalFederalTax" DECIMAL(65,30),
+    "additionalProvincialTax" DECIMAL(65,30),
+    "totalEmployeeDeductions" DECIMAL(65,30),
+    "ytdSnapshotJson" TEXT,
+    "calculationExplanationJson" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollBatchEmployee_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeCppElection" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "pensionType" TEXT,
+    "retirementPensionReceived" BOOLEAN NOT NULL DEFAULT false,
+    "employeeSignedOn" TIMESTAMP(3),
+    "receivedOn" TIMESTAMP(3) NOT NULL,
+    "effectiveOn" TIMESTAMP(3) NOT NULL,
+    "revokesElectionId" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
+    "supersededById" TEXT,
+    "notes" TEXT,
+    "evidenceDocumentId" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeCppElection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeCppDisability" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "status" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "sourceBasis" TEXT,
+    "recordedByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeCppDisability_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchEarning" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "batchEmployeeId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "employmentAssignmentId" TEXT,
+    "earningType" TEXT NOT NULL,
+    "description" TEXT,
+    "quantity" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "rate" DECIMAL(65,30) NOT NULL DEFAULT 0,
+    "currency" TEXT NOT NULL DEFAULT 'CAD',
+    "rateSource" TEXT NOT NULL DEFAULT 'MANUAL',
+    "approvedTimeEntryId" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollBatchEarning_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchDeduction" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "batchEmployeeId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "deductionType" TEXT NOT NULL,
+    "description" TEXT,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'CAD',
+    "source" TEXT NOT NULL DEFAULT 'MANUAL',
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollBatchDeduction_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchAllowanceSnapshot" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "batchEmployeeId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "sourceAllowanceId" TEXT NOT NULL,
+    "allowanceType" TEXT NOT NULL,
+    "description" TEXT,
+    "amount" DECIMAL(65,30) NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'CAD',
+    "frequency" TEXT NOT NULL,
+    "taxable" BOOLEAN NOT NULL,
+    "pensionable" BOOLEAN,
+    "insurable" BOOLEAN,
+    "sourceEffectiveFrom" TIMESTAMP(3) NOT NULL,
+    "sourceEffectiveTo" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollBatchAllowanceSnapshot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollComponent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "description" TEXT,
+    "category" TEXT NOT NULL,
+    "side" TEXT NOT NULL,
+    "cashEffect" TEXT NOT NULL,
+    "statutoryTreatmentSource" TEXT NOT NULL DEFAULT 'CUSTOM',
+    "statutoryRuleKey" TEXT,
+    "statutoryRuleVariant" TEXT,
+    "taxFormulaDeductionType" TEXT,
+    "taxableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "cppPensionableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "eiInsurableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "calculationMethod" TEXT NOT NULL,
+    "eligibleEarningsBase" TEXT,
+    "glAccountId" TEXT,
+    "expenseAccountId" TEXT,
+    "liabilityAccountId" TEXT,
+    "displaySection" TEXT NOT NULL,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollComponent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeRecurringPayrollComponent" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "componentId" TEXT NOT NULL,
+    "amount" DECIMAL(65,30),
+    "percentBps" INTEGER,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "effectiveTo" TIMESTAMP(3),
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeRecurringPayrollComponent_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollBatchComponentSnapshot" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "batchEmployeeId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "sourceComponentId" TEXT NOT NULL,
+    "sourceAssignmentId" TEXT,
+    "provenance" TEXT NOT NULL DEFAULT 'RECURRING_EMPLOYEE_SETUP',
+    "enteredByUserId" TEXT,
+    "reason" TEXT,
+    "componentCode" TEXT NOT NULL,
+    "displayName" TEXT NOT NULL,
+    "category" TEXT NOT NULL,
+    "side" TEXT NOT NULL,
+    "displaySection" TEXT NOT NULL,
+    "displayOrder" INTEGER NOT NULL DEFAULT 0,
+    "cashEffect" TEXT NOT NULL,
+    "taxableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "cppPensionableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "eiInsurableEffect" TEXT NOT NULL DEFAULT 'NONE',
+    "calculationMethod" TEXT NOT NULL,
+    "statutoryTreatmentSource" TEXT NOT NULL DEFAULT 'CUSTOM',
+    "statutoryRuleKey" TEXT,
+    "statutoryRuleVariant" TEXT,
+    "statutoryRuleVersion" TEXT,
+    "statutoryRuleSourceAuthority" TEXT,
+    "statutoryRuleSourceTitle" TEXT,
+    "statutoryRuleSourceReference" TEXT,
+    "taxFormulaDeductionType" TEXT,
+    "resolvedAmount" DECIMAL(65,30),
+    "sourcePercentBps" INTEGER,
+    "sourceEffectiveFrom" TIMESTAMP(3) NOT NULL,
+    "sourceEffectiveTo" TIMESTAMP(3),
+    "eligibleEarningsBase" TEXT,
+    "eligibleEarningsAmount" DECIMAL(65,30),
+    "warningCode" TEXT,
+    "warningMessage" TEXT,
+    "expenseAccountIdSnapshot" TEXT,
+    "liabilityAccountIdSnapshot" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "PayrollBatchComponentSnapshot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollDepartmentTimeApproval" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payPeriodId" TEXT NOT NULL,
+    "departmentId" TEXT NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'APPROVED',
+    "approvedAt" TIMESTAMP(3) NOT NULL,
+    "approvedByUserId" TEXT NOT NULL,
+    "approvedRevision" TEXT,
+    "approvedScopeVersion" INTEGER,
+    "reopenedAt" TIMESTAMP(3),
+    "reopenedByUserId" TEXT,
+    "reopenReason" TEXT,
+    "workIntakeItemId" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollDepartmentTimeApproval_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollDepartmentTimeScopeState" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "payPeriodId" TEXT NOT NULL,
+    "departmentId" TEXT NOT NULL,
+    "version" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollDepartmentTimeScopeState_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollApprovedTimeEntry" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "employmentAssignmentId" TEXT,
+    "workDate" TIMESTAMP(3) NOT NULL,
+    "hours" DECIMAL(65,30) NOT NULL,
+    "earningClassification" TEXT NOT NULL DEFAULT 'REGULAR',
+    "approvalState" TEXT NOT NULL DEFAULT 'DRAFT',
+    "approvedAt" TIMESTAMP(3),
+    "approvedByUserId" TEXT,
+    "consumedByBatchId" TEXT,
+    "consumedByBatchEmployeeId" TEXT,
+    "notes" TEXT,
+    "payrollTimesheetEntryId" TEXT,
+    "sourceApprovalId" TEXT,
+    "sourceApprovalRevision" TEXT,
+    "supersededByApprovedTimeEntryId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollApprovedTimeEntry_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PayrollTimeAdjustment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "employmentAssignmentId" TEXT,
+    "payPeriodId" TEXT NOT NULL,
+    "targetPayPeriodId" TEXT,
+    "sourceTimesheetEntryId" TEXT,
+    "originalApprovedTimeEntryId" TEXT,
+    "reason" TEXT NOT NULL,
+    "differenceHours" DECIMAL(65,30) NOT NULL,
+    "earningClassification" TEXT NOT NULL DEFAULT 'REGULAR',
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolvedAt" TIMESTAMP(3),
+    "resolvedByUserId" TEXT,
+    "resolutionType" TEXT,
+    "notes" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "PayrollTimeAdjustment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ShiftTemplate" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "departmentId" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "startTimeMinutes" INTEGER NOT NULL,
+    "endTimeMinutes" INTEGER NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ShiftTemplate_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Shift" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "departmentId" TEXT NOT NULL,
+    "shiftTemplateId" TEXT NOT NULL,
+    "shiftDate" TIMESTAMP(3) NOT NULL,
+    "startAt" TIMESTAMP(3) NOT NULL,
+    "endAt" TIMESTAMP(3) NOT NULL,
+    "positionId" TEXT,
+    "state" TEXT NOT NULL DEFAULT 'PUBLISHED',
+    "publishedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "publishedByUserId" TEXT,
+    "notes" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Shift_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ShiftAssignment" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "shiftId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "employmentAssignmentId" TEXT NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'ASSIGNED',
+    "replacedByAssignmentId" TEXT,
+    "cancelledAt" TIMESTAMP(3),
+    "cancelledByUserId" TEXT,
+    "cancelledReason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ShiftAssignment_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ShiftOpportunity" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "shiftId" TEXT NOT NULL,
+    "offeredByEmployeeId" TEXT NOT NULL,
+    "offeredByAssignmentId" TEXT NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'OPEN',
+    "reason" TEXT,
+    "note" TEXT,
+    "expiresAt" TIMESTAMP(3),
+    "offeredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "claimedByEmployeeId" TEXT,
+    "claimedByAssignmentId" TEXT,
+    "claimedAt" TIMESTAMP(3),
+    "withdrawnAt" TIMESTAMP(3),
+    "withdrawnByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ShiftOpportunity_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeAvailabilityProfile" (
+    "id" TEXT NOT NULL,
+    "clubId" TEXT NOT NULL,
+    "employeeId" TEXT NOT NULL,
+    "effectiveFrom" TIMESTAMP(3) NOT NULL,
+    "preferredHoursPerWeek" INTEGER,
+    "maximumHoursPerWeek" INTEGER,
+    "notes" TEXT,
+    "createdByUserId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeAvailabilityProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "EmployeeAvailabilityRule" (
+    "id" TEXT NOT NULL,
+    "availabilityProfileId" TEXT NOT NULL,
+    "shiftTemplateId" TEXT NOT NULL,
+    "weekday" INTEGER NOT NULL,
+    "available" BOOLEAN NOT NULL,
+    "availableFrom" TIMESTAMP(3),
+    "availableUntil" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "EmployeeAvailabilityRule_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -5842,6 +7965,51 @@ CREATE INDEX "UserClubRole_roleKey_idx" ON "UserClubRole"("roleKey");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "UserClubRole_userId_clubId_roleKey_key" ON "UserClubRole"("userId", "clubId", "roleKey");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UserClubProfile_employeeId_key" ON "UserClubProfile"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "UserClubProfile_clubId_status_idx" ON "UserClubProfile"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "UserClubProfile_userId_idx" ON "UserClubProfile"("userId");
+
+-- CreateIndex
+CREATE INDEX "UserClubProfile_departmentId_idx" ON "UserClubProfile"("departmentId");
+
+-- CreateIndex
+CREATE INDEX "UserClubProfile_positionId_idx" ON "UserClubProfile"("positionId");
+
+-- CreateIndex
+CREATE INDEX "UserClubProfile_clubId_reportsToProfileId_idx" ON "UserClubProfile"("clubId", "reportsToProfileId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UserClubProfile_clubId_userId_key" ON "UserClubProfile"("clubId", "userId");
+
+-- CreateIndex
+CREATE INDEX "OrganizationalPosition_clubId_isActive_sortOrder_idx" ON "OrganizationalPosition"("clubId", "isActive", "sortOrder");
+
+-- CreateIndex
+CREATE INDEX "OrganizationalPosition_departmentId_idx" ON "OrganizationalPosition"("departmentId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OrganizationalPosition_clubId_name_key" ON "OrganizationalPosition"("clubId", "name");
+
+-- CreateIndex
+CREATE INDEX "ResponsibilityAssignment_clubId_responsibilityKey_role_effe_idx" ON "ResponsibilityAssignment"("clubId", "responsibilityKey", "role", "effectiveTo");
+
+-- CreateIndex
+CREATE INDEX "ResponsibilityAssignment_userId_effectiveTo_idx" ON "ResponsibilityAssignment"("userId", "effectiveTo");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "AdminInvitation_tokenHash_key" ON "AdminInvitation"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "AdminInvitation_clubId_status_idx" ON "AdminInvitation"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "AdminInvitation_email_idx" ON "AdminInvitation"("email");
 
 -- CreateIndex
 CREATE INDEX "AuditLog_clubId_createdAt_idx" ON "AuditLog"("clubId", "createdAt");
@@ -5961,10 +8129,46 @@ CREATE UNIQUE INDEX "ClubWidgetConfig_clubId_widgetType_key" ON "ClubWidgetConfi
 CREATE INDEX "MemberHouseholdMember_memberId_idx" ON "MemberHouseholdMember"("memberId");
 
 -- CreateIndex
+CREATE INDEX "MemberGroup_clubId_sortOrder_idx" ON "MemberGroup"("clubId", "sortOrder");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MemberGroup_clubId_name_key" ON "MemberGroup"("clubId", "name");
+
+-- CreateIndex
+CREATE INDEX "MemberGroupAssignment_clubId_groupId_idx" ON "MemberGroupAssignment"("clubId", "groupId");
+
+-- CreateIndex
+CREATE INDEX "MemberGroupAssignment_memberId_idx" ON "MemberGroupAssignment"("memberId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MemberGroupAssignment_memberId_groupId_key" ON "MemberGroupAssignment"("memberId", "groupId");
+
+-- CreateIndex
+CREATE INDEX "MemberCustomFieldDefinition_clubId_sortOrder_idx" ON "MemberCustomFieldDefinition"("clubId", "sortOrder");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MemberCustomFieldDefinition_clubId_key_key" ON "MemberCustomFieldDefinition"("clubId", "key");
+
+-- CreateIndex
+CREATE INDEX "MemberCustomFieldValue_clubId_definitionId_idx" ON "MemberCustomFieldValue"("clubId", "definitionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "MemberCustomFieldValue_memberId_definitionId_key" ON "MemberCustomFieldValue"("memberId", "definitionId");
+
+-- CreateIndex
 CREATE INDEX "MemberDocument_memberId_kind_idx" ON "MemberDocument"("memberId", "kind");
 
 -- CreateIndex
 CREATE INDEX "ClubAnnouncement_clubId_publishedAt_idx" ON "ClubAnnouncement"("clubId", "publishedAt");
+
+-- CreateIndex
+CREATE INDEX "ClubAnnouncement_clubId_isPublished_idx" ON "ClubAnnouncement"("clubId", "isPublished");
+
+-- CreateIndex
+CREATE INDEX "ClubAnnouncement_clubId_audience_idx" ON "ClubAnnouncement"("clubId", "audience");
+
+-- CreateIndex
+CREATE INDEX "ClubAnnouncement_clubId_expiresAt_idx" ON "ClubAnnouncement"("clubId", "expiresAt");
 
 -- CreateIndex
 CREATE INDEX "AccountAdjustment_memberId_transactionDate_idx" ON "AccountAdjustment"("memberId", "transactionDate");
@@ -5992,6 +8196,15 @@ CREATE INDEX "Department_clubId_isActive_idx" ON "Department"("clubId", "isActiv
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Department_clubId_code_key" ON "Department"("clubId", "code");
+
+-- CreateIndex
+CREATE INDEX "DepartmentResponsibility_clubId_responsibilityKey_idx" ON "DepartmentResponsibility"("clubId", "responsibilityKey");
+
+-- CreateIndex
+CREATE INDEX "DepartmentResponsibility_userId_idx" ON "DepartmentResponsibility"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "DepartmentResponsibility_clubId_departmentId_responsibility_key" ON "DepartmentResponsibility"("clubId", "departmentId", "responsibilityKey");
 
 -- CreateIndex
 CREATE INDEX "CostCenter_clubId_isActive_idx" ON "CostCenter"("clubId", "isActive");
@@ -6312,16 +8525,49 @@ CREATE INDEX "LessonPayable_clubId_status_idx" ON "LessonPayable"("clubId", "sta
 CREATE INDEX "LessonPayable_instructorId_idx" ON "LessonPayable"("instructorId");
 
 -- CreateIndex
+CREATE INDEX "EmployeePosition_clubId_departmentId_isActive_idx" ON "EmployeePosition"("clubId", "departmentId", "isActive");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "EmployeePosition_clubId_code_key" ON "EmployeePosition"("clubId", "code");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Employee_userId_key" ON "Employee"("userId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "Employee_memberId_key" ON "Employee"("memberId");
+
+-- CreateIndex
 CREATE INDEX "Employee_clubId_status_idx" ON "Employee"("clubId", "status");
 
 -- CreateIndex
+CREATE INDEX "Employee_clubId_employeeLifecycle_idx" ON "Employee"("clubId", "employeeLifecycle");
+
+-- CreateIndex
+CREATE INDEX "Employee_clubId_managerEmployeeId_idx" ON "Employee"("clubId", "managerEmployeeId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Employee_clubId_employeeNumber_key" ON "Employee"("clubId", "employeeNumber");
+
+-- CreateIndex
+CREATE INDEX "EmployeeEmploymentAssignment_clubId_employeeId_effectiveFro_idx" ON "EmployeeEmploymentAssignment"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeEmploymentAssignment_employeeId_role_idx" ON "EmployeeEmploymentAssignment"("employeeId", "role");
+
+-- CreateIndex
+CREATE INDEX "EmployeeAllowance_clubId_employeeId_effectiveFrom_idx" ON "EmployeeAllowance"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeHomeNotificationDismissal_clubId_employeeId_idx" ON "EmployeeHomeNotificationDismissal"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeHomeNotificationDismissal_employeeId_notificationKe_key" ON "EmployeeHomeNotificationDismissal"("employeeId", "notificationKey");
+
+-- CreateIndex
+CREATE INDEX "EmployeeAvailabilityWeek_clubId_weekStart_idx" ON "EmployeeAvailabilityWeek"("clubId", "weekStart");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeAvailabilityWeek_employeeId_weekStart_key" ON "EmployeeAvailabilityWeek"("employeeId", "weekStart");
 
 -- CreateIndex
 CREATE INDEX "PayrollPeriod_clubId_status_idx" ON "PayrollPeriod"("clubId", "status");
@@ -6343,6 +8589,51 @@ CREATE INDEX "TimesheetEntry_timesheetId_idx" ON "TimesheetEntry"("timesheetId")
 
 -- CreateIndex
 CREATE INDEX "TimeClockEvent_clubId_employeeId_occurredAt_idx" ON "TimeClockEvent"("clubId", "employeeId", "occurredAt");
+
+-- CreateIndex
+CREATE INDEX "TimeClockEvent_employeeId_kind_occurredAt_idx" ON "TimeClockEvent"("employeeId", "kind", "occurredAt");
+
+-- CreateIndex
+CREATE INDEX "TimeClockEvent_employmentAssignmentId_occurredAt_idx" ON "TimeClockEvent"("employmentAssignmentId", "occurredAt");
+
+-- CreateIndex
+CREATE INDEX "TimeClockEvent_supersededByEventId_idx" ON "TimeClockEvent"("supersededByEventId");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheet_clubId_payPeriodId_status_idx" ON "PayrollTimesheet"("clubId", "payPeriodId", "status");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheet_clubId_status_idx" ON "PayrollTimesheet"("clubId", "status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollTimesheet_clubId_employeeId_payPeriodId_key" ON "PayrollTimesheet"("clubId", "employeeId", "payPeriodId");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheetEntry_timesheetId_workDate_idx" ON "PayrollTimesheetEntry"("timesheetId", "workDate");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheetEntry_employmentAssignmentId_workDate_idx" ON "PayrollTimesheetEntry"("employmentAssignmentId", "workDate");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheetEntry_clubId_employeeId_workDate_idx" ON "PayrollTimesheetEntry"("clubId", "employeeId", "workDate");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollTimesheetEntry_timesheetId_clockInAt_key" ON "PayrollTimesheetEntry"("timesheetId", "clockInAt");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimesheetEntryClockEvent_clockEventId_idx" ON "PayrollTimesheetEntryClockEvent"("clockEventId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollTimesheetEntryClockEvent_timesheetEntryId_clockEvent_key" ON "PayrollTimesheetEntryClockEvent"("timesheetEntryId", "clockEventId");
+
+-- CreateIndex
+CREATE INDEX "TimeClockCorrectionRequest_clubId_employeeId_status_idx" ON "TimeClockCorrectionRequest"("clubId", "employeeId", "status");
+
+-- CreateIndex
+CREATE INDEX "TimeClockCorrectionRequest_status_createdAt_idx" ON "TimeClockCorrectionRequest"("status", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TimeClockCorrectionRequest_employeeId_requestType_originalC_key" ON "TimeClockCorrectionRequest"("employeeId", "requestType", "originalClockEventId", "status");
 
 -- CreateIndex
 CREATE INDEX "PayrollRun_clubId_status_idx" ON "PayrollRun"("clubId", "status");
@@ -7485,7 +9776,91 @@ CREATE INDEX "WorkIntakeItem_ownerUserId_status_idx" ON "WorkIntakeItem"("ownerU
 CREATE INDEX "WorkIntakeItem_clubId_updatedAt_idx" ON "WorkIntakeItem"("clubId", "updatedAt");
 
 -- CreateIndex
+CREATE INDEX "WorkIntakeItem_clubId_workDomain_idx" ON "WorkIntakeItem"("clubId", "workDomain");
+
+-- CreateIndex
+CREATE INDEX "WorkRestorationEvent_clubId_restoredAt_idx" ON "WorkRestorationEvent"("clubId", "restoredAt");
+
+-- CreateIndex
+CREATE INDEX "WorkRestorationEvent_workIntakeItemId_idx" ON "WorkRestorationEvent"("workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "WorkCompletionEvent_clubId_completedAt_idx" ON "WorkCompletionEvent"("clubId", "completedAt");
+
+-- CreateIndex
+CREATE INDEX "WorkCompletionEvent_workIntakeItemId_idx" ON "WorkCompletionEvent"("workIntakeItemId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OutlookReplyMutation_idempotencyKey_key" ON "OutlookReplyMutation"("idempotencyKey");
+
+-- CreateIndex
+CREATE INDEX "OutlookReplyMutation_clubId_createdAt_idx" ON "OutlookReplyMutation"("clubId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "OutlookReplyMutation_workIntakeId_idx" ON "OutlookReplyMutation"("workIntakeId");
+
+-- CreateIndex
+CREATE INDEX "OutlookReplyMutation_sourceEmailMessageId_idx" ON "OutlookReplyMutation"("sourceEmailMessageId");
+
+-- CreateIndex
+CREATE INDEX "OutlookArchiveMutation_clubId_status_idx" ON "OutlookArchiveMutation"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "OutlookArchiveMutation_workIntakeId_idx" ON "OutlookArchiveMutation"("workIntakeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OutlookArchiveMutation_workCompletionEventId_emailMessageId_key" ON "OutlookArchiveMutation"("workCompletionEventId", "emailMessageId");
+
+-- CreateIndex
+CREATE INDEX "OutlookMarkReadMutation_clubId_status_idx" ON "OutlookMarkReadMutation"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "OutlookMarkReadMutation_workIntakeItemId_idx" ON "OutlookMarkReadMutation"("workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "OutlookMarkReadMutation_mailboxConnectionId_emailMessageId__idx" ON "OutlookMarkReadMutation"("mailboxConnectionId", "emailMessageId", "status");
+
+-- CreateIndex
+CREATE INDEX "ProposedCommitment_clubId_dueAt_idx" ON "ProposedCommitment"("clubId", "dueAt");
+
+-- CreateIndex
+CREATE INDEX "ProposedCommitment_clubId_status_idx" ON "ProposedCommitment"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "WorkDomainCorrection_clubId_correctedAt_idx" ON "WorkDomainCorrection"("clubId", "correctedAt");
+
+-- CreateIndex
+CREATE INDEX "WorkDomainCorrection_workIntakeItemId_idx" ON "WorkDomainCorrection"("workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "WorkIntakeOrigin_workIntakeItemId_idx" ON "WorkIntakeOrigin"("workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "WorkIntakeOrigin_clubId_kind_referenceId_idx" ON "WorkIntakeOrigin"("clubId", "kind", "referenceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WorkIntakeOrigin_workIntakeItemId_kind_referenceId_role_key" ON "WorkIntakeOrigin"("workIntakeItemId", "kind", "referenceId", "role");
+
+-- CreateIndex
+CREATE INDEX "WorkIntakeFinding_workIntakeItemId_key_idx" ON "WorkIntakeFinding"("workIntakeItemId", "key");
+
+-- CreateIndex
+CREATE INDEX "WorkIntakeFinding_clubId_key_state_idx" ON "WorkIntakeFinding"("clubId", "key", "state");
+
+-- CreateIndex
+CREATE INDEX "ApReviewOverride_workIntakeItemId_reviewedAt_idx" ON "ApReviewOverride"("workIntakeItemId", "reviewedAt");
+
+-- CreateIndex
+CREATE INDEX "ApReviewOverride_clubId_reviewedAt_idx" ON "ApReviewOverride"("clubId", "reviewedAt");
+
+-- CreateIndex
+CREATE INDEX "ApReviewOverride_satisfiesBlocker_idx" ON "ApReviewOverride"("satisfiesBlocker");
+
+-- CreateIndex
 CREATE INDEX "WorkIntakeActivity_workIntakeItemId_createdAt_idx" ON "WorkIntakeActivity"("workIntakeItemId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "WorkIntakeItemRead_userId_readAt_idx" ON "WorkIntakeItemRead"("userId", "readAt");
 
 -- CreateIndex
 CREATE INDEX "EmailWorkIntakeOrigin_emailMessageId_role_idx" ON "EmailWorkIntakeOrigin"("emailMessageId", "role");
@@ -7495,6 +9870,111 @@ CREATE INDEX "EmailWorkIntakeOrigin_clubId_idx" ON "EmailWorkIntakeOrigin"("club
 
 -- CreateIndex
 CREATE UNIQUE INDEX "EmailWorkIntakeOrigin_workIntakeItemId_emailMessageId_key" ON "EmailWorkIntakeOrigin"("workIntakeItemId", "emailMessageId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ConversationMessage_replyMutationId_key" ON "ConversationMessage"("replyMutationId");
+
+-- CreateIndex
+CREATE INDEX "ConversationMessage_clubId_workIntakeItemId_idx" ON "ConversationMessage"("clubId", "workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "ConversationMessage_mailboxConnectionId_conversationId_idx" ON "ConversationMessage"("mailboxConnectionId", "conversationId");
+
+-- CreateIndex
+CREATE INDEX "ConversationMessage_workIntakeItemId_idx" ON "ConversationMessage"("workIntakeItemId");
+
+-- CreateIndex
+CREATE INDEX "ConversationMessage_reconciliationStatus_idx" ON "ConversationMessage"("reconciliationStatus");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ConversationMessage_mailboxConnectionId_providerMessageId_key" ON "ConversationMessage"("mailboxConnectionId", "providerMessageId");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocument_clubId_receivedAt_idx" ON "IngestedDocument"("clubId", "receivedAt");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocument_clubId_classification_idx" ON "IngestedDocument"("clubId", "classification");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocument_clubId_sourceKind_sourceReferenceId_idx" ON "IngestedDocument"("clubId", "sourceKind", "sourceReferenceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "IngestedDocument_clubId_sha256Hash_key" ON "IngestedDocument"("clubId", "sha256Hash");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocumentEvidenceLink_clubId_targetKind_targetRefere_idx" ON "IngestedDocumentEvidenceLink"("clubId", "targetKind", "targetReferenceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "IngestedDocumentEvidenceLink_ingestedDocumentId_targetKind__key" ON "IngestedDocumentEvidenceLink"("ingestedDocumentId", "targetKind", "targetReferenceId", "role");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocumentAuditLog_ingestedDocumentId_occurredAt_idx" ON "IngestedDocumentAuditLog"("ingestedDocumentId", "occurredAt");
+
+-- CreateIndex
+CREATE INDEX "IngestedDocumentAuditLog_clubId_occurredAt_idx" ON "IngestedDocumentAuditLog"("clubId", "occurredAt");
+
+-- CreateIndex
+CREATE INDEX "DocumentOcrExtraction_clubId_status_idx" ON "DocumentOcrExtraction"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "DocumentOcrExtraction_ingestedDocumentId_idx" ON "DocumentOcrExtraction"("ingestedDocumentId");
+
+-- CreateIndex
+CREATE INDEX "DocumentOcrExtraction_clubId_updatedAt_idx" ON "DocumentOcrExtraction"("clubId", "updatedAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "DocumentOcrExtraction_clubId_documentSha256_provider_extrac_key" ON "DocumentOcrExtraction"("clubId", "documentSha256", "provider", "extractionVersion", "pageNumber");
+
+-- CreateIndex
+CREATE INDEX "RegressionExpectation_category_idx" ON "RegressionExpectation"("category");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "RegressionExpectation_documentSha256_key" ON "RegressionExpectation"("documentSha256");
+
+-- CreateIndex
+CREATE INDEX "VendorAlias_canonicalVendorId_idx" ON "VendorAlias"("canonicalVendorId");
+
+-- CreateIndex
+CREATE INDEX "VendorAlias_clubId_aliasKind_idx" ON "VendorAlias"("clubId", "aliasKind");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "VendorAlias_clubId_aliasKind_aliasValueNormalized_key" ON "VendorAlias"("clubId", "aliasKind", "aliasValueNormalized");
+
+-- CreateIndex
+CREATE INDEX "VendorMergeRecord_clubId_committedAt_idx" ON "VendorMergeRecord"("clubId", "committedAt");
+
+-- CreateIndex
+CREATE INDEX "VendorMergeRecord_winnerVendorId_idx" ON "VendorMergeRecord"("winnerVendorId");
+
+-- CreateIndex
+CREATE INDEX "VendorMergeRecord_loserVendorId_idx" ON "VendorMergeRecord"("loserVendorId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "VendorStatementReconciliation_ingestedDocumentId_key" ON "VendorStatementReconciliation"("ingestedDocumentId");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementReconciliation_clubId_statementDate_idx" ON "VendorStatementReconciliation"("clubId", "statementDate");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementReconciliation_clubId_canonicalVendorId_idx" ON "VendorStatementReconciliation"("clubId", "canonicalVendorId");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementReconciliation_clubId_reconciliationState_idx" ON "VendorStatementReconciliation"("clubId", "reconciliationState");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementLine_reconciliationId_idx" ON "VendorStatementLine"("reconciliationId");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementLine_clubId_referenceNumber_idx" ON "VendorStatementLine"("clubId", "referenceNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "VendorStatementLine_reconciliationId_sequence_key" ON "VendorStatementLine"("reconciliationId", "sequence");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementLineMatch_statementLineId_idx" ON "VendorStatementLineMatch"("statementLineId");
+
+-- CreateIndex
+CREATE INDEX "VendorStatementLineMatch_clubId_targetKind_targetReferenceI_idx" ON "VendorStatementLineMatch"("clubId", "targetKind", "targetReferenceId");
 
 -- CreateIndex
 CREATE INDEX "MailboxConnection_clubId_status_idx" ON "MailboxConnection"("clubId", "status");
@@ -7547,6 +10027,507 @@ CREATE INDEX "MailboxOAuthTransaction_expiresAt_idx" ON "MailboxOAuthTransaction
 -- CreateIndex
 CREATE UNIQUE INDEX "EmailAttachment_emailMessageId_graphAttachmentId_key" ON "EmailAttachment"("emailMessageId", "graphAttachmentId");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "ApIntakeSource_emailAttachmentId_key" ON "ApIntakeSource"("emailAttachmentId");
+
+-- CreateIndex
+CREATE INDEX "ApIntakeSource_clubId_canonicalApIntakeId_idx" ON "ApIntakeSource"("clubId", "canonicalApIntakeId");
+
+-- CreateIndex
+CREATE INDEX "ApIntakeSource_clubId_emailMessageId_idx" ON "ApIntakeSource"("clubId", "emailMessageId");
+
+-- CreateIndex
+CREATE INDEX "ApIntakeSource_clubId_ingestedDocumentId_idx" ON "ApIntakeSource"("clubId", "ingestedDocumentId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ProductReference_normalizedKey_key" ON "ProductReference"("normalizedKey");
+
+-- CreateIndex
+CREATE INDEX "ProductReference_researchState_idx" ON "ProductReference"("researchState");
+
+-- CreateIndex
+CREATE INDEX "ProductReference_normalizedManufacturer_normalizedModel_idx" ON "ProductReference"("normalizedManufacturer", "normalizedModel");
+
+-- CreateIndex
+CREATE INDEX "ProductReference_nextRetryAt_idx" ON "ProductReference"("nextRetryAt");
+
+-- CreateIndex
+CREATE INDEX "EmploymentPeriod_clubId_idx" ON "EmploymentPeriod"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmploymentPeriod_employeeId_effectiveFrom_idx" ON "EmploymentPeriod"("employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCompensation_clubId_idx" ON "EmployeeCompensation"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCompensation_employeeId_effectiveFrom_idx" ON "EmployeeCompensation"("employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCompensation_assignmentId_effectiveFrom_idx" ON "EmployeeCompensation"("assignmentId", "effectiveFrom");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollProfile_employeeId_key" ON "PayrollProfile"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "PayrollProfile_clubId_idx" ON "PayrollProfile"("clubId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBenefit_clubId_idx" ON "PayrollBenefit"("clubId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBenefit_payrollProfileId_effectiveFrom_idx" ON "PayrollBenefit"("payrollProfileId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "PayrollDeduction_clubId_idx" ON "PayrollDeduction"("clubId");
+
+-- CreateIndex
+CREATE INDEX "PayrollDeduction_payrollProfileId_effectiveFrom_idx" ON "PayrollDeduction"("payrollProfileId", "effectiveFrom");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeSensitiveIdentity_employeeId_key" ON "EmployeeSensitiveIdentity"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeSensitiveIdentity_clubId_idx" ON "EmployeeSensitiveIdentity"("clubId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeSensitiveIdentity_clubId_sinFingerprint_key" ON "EmployeeSensitiveIdentity"("clubId", "sinFingerprint");
+
+-- CreateIndex
+CREATE INDEX "EmployeeBankAccount_clubId_idx" ON "EmployeeBankAccount"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeBankAccount_employeeId_status_idx" ON "EmployeeBankAccount"("employeeId", "status");
+
+-- CreateIndex
+CREATE INDEX "EmployeeBankAccount_clubId_bankFingerprint_status_idx" ON "EmployeeBankAccount"("clubId", "bankFingerprint", "status");
+
+-- CreateIndex
+CREATE INDEX "EmployeeTaxProfile_clubId_idx" ON "EmployeeTaxProfile"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeTaxProfile_employeeId_effectiveFrom_idx" ON "EmployeeTaxProfile"("employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeDocument_clubId_idx" ON "EmployeeDocument"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeDocument_employeeId_category_idx" ON "EmployeeDocument"("employeeId", "category");
+
+-- CreateIndex
+CREATE INDEX "EmployeeDocument_contentSha256_idx" ON "EmployeeDocument"("contentSha256");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCredential_clubId_idx" ON "EmployeeCredential"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCredential_employeeId_expiresAt_idx" ON "EmployeeCredential"("employeeId", "expiresAt");
+
+-- CreateIndex
+CREATE INDEX "EmployeeEmergencyContact_clubId_idx" ON "EmployeeEmergencyContact"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeEmergencyContact_employeeId_idx" ON "EmployeeEmergencyContact"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "OnboardingRequirement_clubId_active_idx" ON "OnboardingRequirement"("clubId", "active");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OnboardingRequirement_clubId_code_key" ON "OnboardingRequirement"("clubId", "code");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeOnboardingInvitation_tokenHash_key" ON "EmployeeOnboardingInvitation"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingInvitation_clubId_idx" ON "EmployeeOnboardingInvitation"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingInvitation_employeeId_idx" ON "EmployeeOnboardingInvitation"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingInvitation_expiresAt_idx" ON "EmployeeOnboardingInvitation"("expiresAt");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingSession_clubId_idx" ON "EmployeeOnboardingSession"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingSession_employeeId_state_idx" ON "EmployeeOnboardingSession"("employeeId", "state");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingStateTransition_clubId_idx" ON "EmployeeOnboardingStateTransition"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingStateTransition_employeeId_at_idx" ON "EmployeeOnboardingStateTransition"("employeeId", "at");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingQuestion_clubId_section_displayOrder_idx" ON "EmployeeOnboardingQuestion"("clubId", "section", "displayOrder");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeOnboardingQuestion_clubId_key_key" ON "EmployeeOnboardingQuestion"("clubId", "key");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingResponse_clubId_idx" ON "EmployeeOnboardingResponse"("clubId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingResponse_sessionId_idx" ON "EmployeeOnboardingResponse"("sessionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeOnboardingResponse_sessionId_questionId_key" ON "EmployeeOnboardingResponse"("sessionId", "questionId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingAcknowledgement_clubId_sessionId_idx" ON "EmployeeOnboardingAcknowledgement"("clubId", "sessionId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingAcknowledgement_clubId_employeeId_idx" ON "EmployeeOnboardingAcknowledgement"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeOnboardingAcknowledgement_sessionId_kind_key" ON "EmployeeOnboardingAcknowledgement"("sessionId", "kind");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingCorrection_clubId_sessionId_idx" ON "EmployeeOnboardingCorrection"("clubId", "sessionId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeOnboardingCorrection_clubId_employeeId_idx" ON "EmployeeOnboardingCorrection"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeePortalCredential_employeeId_key" ON "EmployeePortalCredential"("employeeId");
+
+-- CreateIndex
+CREATE INDEX "EmployeePortalCredential_clubId_idx" ON "EmployeePortalCredential"("clubId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeePortalPasswordReset_tokenHash_key" ON "EmployeePortalPasswordReset"("tokenHash");
+
+-- CreateIndex
+CREATE INDEX "EmployeePortalPasswordReset_clubId_employeeId_idx" ON "EmployeePortalPasswordReset"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE INDEX "ClubMedia_clubId_idx" ON "ClubMedia"("clubId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ClubMedia_clubId_category_key" ON "ClubMedia"("clubId", "category");
+
+-- CreateIndex
+CREATE INDEX "EmployeePortalQuickLink_clubId_sortOrder_idx" ON "EmployeePortalQuickLink"("clubId", "sortOrder");
+
+-- CreateIndex
+CREATE INDEX "EmployeePortalQuickLink_clubId_isActive_idx" ON "EmployeePortalQuickLink"("clubId", "isActive");
+
+-- CreateIndex
+CREATE INDEX "AnonymousFeedback_clubId_createdAt_idx" ON "AnonymousFeedback"("clubId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AnonymousFeedback_clubId_status_idx" ON "AnonymousFeedback"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "TrainingCourse_clubId_idx" ON "TrainingCourse"("clubId");
+
+-- CreateIndex
+CREATE INDEX "TrainingCourse_clubId_category_idx" ON "TrainingCourse"("clubId", "category");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingCourse_clubId_code_key" ON "TrainingCourse"("clubId", "code");
+
+-- CreateIndex
+CREATE INDEX "TrainingCourseVersion_state_idx" ON "TrainingCourseVersion"("state");
+
+-- CreateIndex
+CREATE INDEX "TrainingCourseVersion_courseId_state_idx" ON "TrainingCourseVersion"("courseId", "state");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingCourseVersion_courseId_version_key" ON "TrainingCourseVersion"("courseId", "version");
+
+-- CreateIndex
+CREATE INDEX "TrainingQuestion_courseVersionId_displayOrder_idx" ON "TrainingQuestion"("courseVersionId", "displayOrder");
+
+-- CreateIndex
+CREATE INDEX "TrainingAnswerOption_questionId_displayOrder_idx" ON "TrainingAnswerOption"("questionId", "displayOrder");
+
+-- CreateIndex
+CREATE INDEX "TrainingAssignment_clubId_employeeId_idx" ON "TrainingAssignment"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE INDEX "TrainingAssignment_clubId_courseId_idx" ON "TrainingAssignment"("clubId", "courseId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingAssignment_clubId_employeeId_courseId_key" ON "TrainingAssignment"("clubId", "employeeId", "courseId");
+
+-- CreateIndex
+CREATE INDEX "TrainingProgress_clubId_employeeId_idx" ON "TrainingProgress"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingProgress_employeeId_courseVersionId_key" ON "TrainingProgress"("employeeId", "courseVersionId");
+
+-- CreateIndex
+CREATE INDEX "TrainingAttempt_clubId_employeeId_idx" ON "TrainingAttempt"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE INDEX "TrainingAttempt_courseVersionId_passed_idx" ON "TrainingAttempt"("courseVersionId", "passed");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingAttempt_employeeId_courseVersionId_attemptNumber_key" ON "TrainingAttempt"("employeeId", "courseVersionId", "attemptNumber");
+
+-- CreateIndex
+CREATE INDEX "TrainingQuestionResponse_attemptId_idx" ON "TrainingQuestionResponse"("attemptId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingQuestionResponse_attemptId_questionId_key" ON "TrainingQuestionResponse"("attemptId", "questionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingCompletion_attemptId_key" ON "TrainingCompletion"("attemptId");
+
+-- CreateIndex
+CREATE INDEX "TrainingCompletion_clubId_employeeId_idx" ON "TrainingCompletion"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE INDEX "TrainingCompletion_clubId_courseId_idx" ON "TrainingCompletion"("clubId", "courseId");
+
+-- CreateIndex
+CREATE INDEX "TrainingCompletion_employeeId_courseId_idx" ON "TrainingCompletion"("employeeId", "courseId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "TrainingCompletion_employeeId_courseVersionId_key" ON "TrainingCompletion"("employeeId", "courseVersionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollClubConfig_clubId_key" ON "PayrollClubConfig"("clubId");
+
+-- CreateIndex
+CREATE INDEX "PayrollClubConfig_clubId_idx" ON "PayrollClubConfig"("clubId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollGlAccountingProfile_clubId_key" ON "PayrollGlAccountingProfile"("clubId");
+
+-- CreateIndex
+CREATE INDEX "PayrollPayGroup_clubId_active_idx" ON "PayrollPayGroup"("clubId", "active");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollPayGroup_clubId_code_key" ON "PayrollPayGroup"("clubId", "code");
+
+-- CreateIndex
+CREATE INDEX "PayrollPayGroupMember_clubId_payGroupId_effectiveFrom_idx" ON "PayrollPayGroupMember"("clubId", "payGroupId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "PayrollPayGroupMember_clubId_employeeId_effectiveFrom_idx" ON "PayrollPayGroupMember"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "PayrollPayPeriod_clubId_payGroupId_periodStart_idx" ON "PayrollPayPeriod"("clubId", "payGroupId", "periodStart");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollPayPeriod_clubId_payGroupId_taxYear_sequenceInYear_key" ON "PayrollPayPeriod"("clubId", "payGroupId", "taxYear", "sequenceInYear");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollPayPeriod_clubId_payGroupId_periodStart_key" ON "PayrollPayPeriod"("clubId", "payGroupId", "periodStart");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollBatch_workIntakeItemId_key" ON "PayrollBatch"("workIntakeItemId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollBatch_glJournalEntryId_key" ON "PayrollBatch"("glJournalEntryId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatch_clubId_status_idx" ON "PayrollBatch"("clubId", "status");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatch_clubId_payPeriodId_idx" ON "PayrollBatch"("clubId", "payPeriodId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatch_statutoryPackageId_idx" ON "PayrollBatch"("statutoryPackageId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollBatch_clubId_payGroupId_payPeriodId_sequence_key" ON "PayrollBatch"("clubId", "payGroupId", "payPeriodId", "sequence");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchException_clubId_batchId_idx" ON "PayrollBatchException"("clubId", "batchId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchException_batchId_severity_idx" ON "PayrollBatchException"("batchId", "severity");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchException_batchEmployeeId_severity_idx" ON "PayrollBatchException"("batchEmployeeId", "severity");
+
+-- CreateIndex
+CREATE INDEX "PayrollStatutoryPackage_jurisdictionCountry_jurisdictionPro_idx" ON "PayrollStatutoryPackage"("jurisdictionCountry", "jurisdictionProvince", "effectiveFrom");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollStatutoryPackage_jurisdictionCountry_jurisdictionPro_key" ON "PayrollStatutoryPackage"("jurisdictionCountry", "jurisdictionProvince", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "PayrollOpeningBalance_clubId_employeeId_taxYear_status_idx" ON "PayrollOpeningBalance"("clubId", "employeeId", "taxYear", "status");
+
+-- CreateIndex
+CREATE INDEX "PayrollOpeningBalance_clubId_taxYear_status_idx" ON "PayrollOpeningBalance"("clubId", "taxYear", "status");
+
+-- CreateIndex
+CREATE INDEX "PayrollOpeningBalanceComponent_clubId_componentCode_idx" ON "PayrollOpeningBalanceComponent"("clubId", "componentCode");
+
+-- CreateIndex
+CREATE INDEX "PayrollOpeningBalanceComponent_openingBalanceId_idx" ON "PayrollOpeningBalanceComponent"("openingBalanceId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollOpeningBalanceComponent_openingBalanceId_componentCo_key" ON "PayrollOpeningBalanceComponent"("openingBalanceId", "componentCode");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchEmployee_clubId_batchId_idx" ON "PayrollBatchEmployee"("clubId", "batchId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchEmployee_clubId_employeeId_idx" ON "PayrollBatchEmployee"("clubId", "employeeId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollBatchEmployee_batchId_employeeId_key" ON "PayrollBatchEmployee"("batchId", "employeeId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCppElection_clubId_employeeId_status_idx" ON "EmployeeCppElection"("clubId", "employeeId", "status");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCppElection_clubId_employeeId_effectiveOn_idx" ON "EmployeeCppElection"("clubId", "employeeId", "effectiveOn");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCppElection_revokesElectionId_idx" ON "EmployeeCppElection"("revokesElectionId");
+
+-- CreateIndex
+CREATE INDEX "EmployeeCppDisability_clubId_employeeId_effectiveFrom_idx" ON "EmployeeCppDisability"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchEarning_clubId_batchId_idx" ON "PayrollBatchEarning"("clubId", "batchId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchEarning_clubId_employeeId_earningType_idx" ON "PayrollBatchEarning"("clubId", "employeeId", "earningType");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchEarning_batchEmployeeId_earningType_idx" ON "PayrollBatchEarning"("batchEmployeeId", "earningType");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchDeduction_clubId_batchId_idx" ON "PayrollBatchDeduction"("clubId", "batchId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchDeduction_clubId_employeeId_deductionType_idx" ON "PayrollBatchDeduction"("clubId", "employeeId", "deductionType");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchDeduction_batchEmployeeId_deductionType_idx" ON "PayrollBatchDeduction"("batchEmployeeId", "deductionType");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchAllowanceSnapshot_clubId_batchId_idx" ON "PayrollBatchAllowanceSnapshot"("clubId", "batchId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollBatchAllowanceSnapshot_batchEmployeeId_sourceAllowan_key" ON "PayrollBatchAllowanceSnapshot"("batchEmployeeId", "sourceAllowanceId");
+
+-- CreateIndex
+CREATE INDEX "PayrollComponent_clubId_category_active_idx" ON "PayrollComponent"("clubId", "category", "active");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollComponent_clubId_code_key" ON "PayrollComponent"("clubId", "code");
+
+-- CreateIndex
+CREATE INDEX "EmployeeRecurringPayrollComponent_clubId_employeeId_effecti_idx" ON "EmployeeRecurringPayrollComponent"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeRecurringPayrollComponent_componentId_idx" ON "EmployeeRecurringPayrollComponent"("componentId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchComponentSnapshot_batchEmployeeId_sourceAssignm_idx" ON "PayrollBatchComponentSnapshot"("batchEmployeeId", "sourceAssignmentId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchComponentSnapshot_clubId_batchId_idx" ON "PayrollBatchComponentSnapshot"("clubId", "batchId");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchComponentSnapshot_componentCode_idx" ON "PayrollBatchComponentSnapshot"("componentCode");
+
+-- CreateIndex
+CREATE INDEX "PayrollBatchComponentSnapshot_batchEmployeeId_provenance_idx" ON "PayrollBatchComponentSnapshot"("batchEmployeeId", "provenance");
+
+-- CreateIndex
+CREATE INDEX "PayrollDepartmentTimeApproval_clubId_payPeriodId_idx" ON "PayrollDepartmentTimeApproval"("clubId", "payPeriodId");
+
+-- CreateIndex
+CREATE INDEX "PayrollDepartmentTimeApproval_clubId_departmentId_idx" ON "PayrollDepartmentTimeApproval"("clubId", "departmentId");
+
+-- CreateIndex
+CREATE INDEX "PayrollDepartmentTimeApproval_workIntakeItemId_idx" ON "PayrollDepartmentTimeApproval"("workIntakeItemId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollDepartmentTimeApproval_clubId_payPeriodId_department_key" ON "PayrollDepartmentTimeApproval"("clubId", "payPeriodId", "departmentId");
+
+-- CreateIndex
+CREATE INDEX "PayrollDepartmentTimeScopeState_clubId_payPeriodId_idx" ON "PayrollDepartmentTimeScopeState"("clubId", "payPeriodId");
+
+-- CreateIndex
+CREATE INDEX "PayrollDepartmentTimeScopeState_clubId_departmentId_idx" ON "PayrollDepartmentTimeScopeState"("clubId", "departmentId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollDepartmentTimeScopeState_clubId_payPeriodId_departme_key" ON "PayrollDepartmentTimeScopeState"("clubId", "payPeriodId", "departmentId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PayrollApprovedTimeEntry_payrollTimesheetEntryId_key" ON "PayrollApprovedTimeEntry"("payrollTimesheetEntryId");
+
+-- CreateIndex
+CREATE INDEX "PayrollApprovedTimeEntry_clubId_employeeId_workDate_idx" ON "PayrollApprovedTimeEntry"("clubId", "employeeId", "workDate");
+
+-- CreateIndex
+CREATE INDEX "PayrollApprovedTimeEntry_clubId_approvalState_workDate_idx" ON "PayrollApprovedTimeEntry"("clubId", "approvalState", "workDate");
+
+-- CreateIndex
+CREATE INDEX "PayrollApprovedTimeEntry_employmentAssignmentId_workDate_idx" ON "PayrollApprovedTimeEntry"("employmentAssignmentId", "workDate");
+
+-- CreateIndex
+CREATE INDEX "PayrollApprovedTimeEntry_supersededByApprovedTimeEntryId_idx" ON "PayrollApprovedTimeEntry"("supersededByApprovedTimeEntryId");
+
+-- CreateIndex
+CREATE INDEX "PayrollApprovedTimeEntry_sourceApprovalId_idx" ON "PayrollApprovedTimeEntry"("sourceApprovalId");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimeAdjustment_clubId_payPeriodId_status_idx" ON "PayrollTimeAdjustment"("clubId", "payPeriodId", "status");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimeAdjustment_clubId_targetPayPeriodId_idx" ON "PayrollTimeAdjustment"("clubId", "targetPayPeriodId");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimeAdjustment_sourceTimesheetEntryId_idx" ON "PayrollTimeAdjustment"("sourceTimesheetEntryId");
+
+-- CreateIndex
+CREATE INDEX "PayrollTimeAdjustment_originalApprovedTimeEntryId_idx" ON "PayrollTimeAdjustment"("originalApprovedTimeEntryId");
+
+-- CreateIndex
+CREATE INDEX "ShiftTemplate_clubId_departmentId_active_idx" ON "ShiftTemplate"("clubId", "departmentId", "active");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ShiftTemplate_clubId_departmentId_code_key" ON "ShiftTemplate"("clubId", "departmentId", "code");
+
+-- CreateIndex
+CREATE INDEX "Shift_clubId_departmentId_shiftDate_idx" ON "Shift"("clubId", "departmentId", "shiftDate");
+
+-- CreateIndex
+CREATE INDEX "Shift_clubId_startAt_idx" ON "Shift"("clubId", "startAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ShiftAssignment_replacedByAssignmentId_key" ON "ShiftAssignment"("replacedByAssignmentId");
+
+-- CreateIndex
+CREATE INDEX "ShiftAssignment_clubId_employeeId_state_idx" ON "ShiftAssignment"("clubId", "employeeId", "state");
+
+-- CreateIndex
+CREATE INDEX "ShiftAssignment_clubId_shiftId_state_idx" ON "ShiftAssignment"("clubId", "shiftId", "state");
+
+-- CreateIndex
+CREATE INDEX "ShiftOpportunity_clubId_state_idx" ON "ShiftOpportunity"("clubId", "state");
+
+-- CreateIndex
+CREATE INDEX "ShiftOpportunity_clubId_shiftId_state_idx" ON "ShiftOpportunity"("clubId", "shiftId", "state");
+
+-- CreateIndex
+CREATE INDEX "EmployeeAvailabilityProfile_clubId_employeeId_effectiveFrom_idx" ON "EmployeeAvailabilityProfile"("clubId", "employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeAvailabilityProfile_employeeId_effectiveFrom_key" ON "EmployeeAvailabilityProfile"("employeeId", "effectiveFrom");
+
+-- CreateIndex
+CREATE INDEX "EmployeeAvailabilityRule_shiftTemplateId_weekday_idx" ON "EmployeeAvailabilityRule"("shiftTemplateId", "weekday");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "EmployeeAvailabilityRule_availabilityProfileId_weekday_shif_key" ON "EmployeeAvailabilityRule"("availabilityProfileId", "weekday", "shiftTemplateId");
+
+-- AddForeignKey
+ALTER TABLE "Club" ADD CONSTRAINT "Club_outboundMailboxConnectionId_fkey" FOREIGN KEY ("outboundMailboxConnectionId") REFERENCES "MailboxConnection"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
 -- AddForeignKey
 ALTER TABLE "ClubProfile" ADD CONSTRAINT "ClubProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -7570,6 +10551,72 @@ ALTER TABLE "UserClubRole" ADD CONSTRAINT "UserClubRole_clubId_fkey" FOREIGN KEY
 
 -- AddForeignKey
 ALTER TABLE "UserClubRole" ADD CONSTRAINT "UserClubRole_roleKey_fkey" FOREIGN KEY ("roleKey") REFERENCES "Role"("key") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_positionId_fkey" FOREIGN KEY ("positionId") REFERENCES "OrganizationalPosition"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_reportsToProfileId_fkey" FOREIGN KEY ("reportsToProfileId") REFERENCES "UserClubProfile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "UserClubProfile" ADD CONSTRAINT "UserClubProfile_updatedByUserId_fkey" FOREIGN KEY ("updatedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrganizationalPosition" ADD CONSTRAINT "OrganizationalPosition_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrganizationalPosition" ADD CONSTRAINT "OrganizationalPosition_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrganizationalPosition" ADD CONSTRAINT "OrganizationalPosition_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ResponsibilityAssignment" ADD CONSTRAINT "ResponsibilityAssignment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ResponsibilityAssignment" ADD CONSTRAINT "ResponsibilityAssignment_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ResponsibilityAssignment" ADD CONSTRAINT "ResponsibilityAssignment_responsibilityKey_fkey" FOREIGN KEY ("responsibilityKey") REFERENCES "Responsibility"("key") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ResponsibilityAssignment" ADD CONSTRAINT "ResponsibilityAssignment_assignedByUserId_fkey" FOREIGN KEY ("assignedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ResponsibilityAssignment" ADD CONSTRAINT "ResponsibilityAssignment_endedByUserId_fkey" FOREIGN KEY ("endedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_invitedByUserId_fkey" FOREIGN KEY ("invitedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_revokedByUserId_fkey" FOREIGN KEY ("revokedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AdminInvitation" ADD CONSTRAINT "AdminInvitation_activatedUserId_fkey" FOREIGN KEY ("activatedUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -7761,6 +10808,30 @@ ALTER TABLE "MemberHouseholdMember" ADD CONSTRAINT "MemberHouseholdMember_clubId
 ALTER TABLE "MemberHouseholdMember" ADD CONSTRAINT "MemberHouseholdMember_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "MemberGroup" ADD CONSTRAINT "MemberGroup_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberGroupAssignment" ADD CONSTRAINT "MemberGroupAssignment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberGroupAssignment" ADD CONSTRAINT "MemberGroupAssignment_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberGroupAssignment" ADD CONSTRAINT "MemberGroupAssignment_groupId_fkey" FOREIGN KEY ("groupId") REFERENCES "MemberGroup"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberCustomFieldDefinition" ADD CONSTRAINT "MemberCustomFieldDefinition_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberCustomFieldValue" ADD CONSTRAINT "MemberCustomFieldValue_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberCustomFieldValue" ADD CONSTRAINT "MemberCustomFieldValue_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "MemberCustomFieldValue" ADD CONSTRAINT "MemberCustomFieldValue_definitionId_fkey" FOREIGN KEY ("definitionId") REFERENCES "MemberCustomFieldDefinition"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "MemberDocument" ADD CONSTRAINT "MemberDocument_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -7816,6 +10887,15 @@ ALTER TABLE "Department" ADD CONSTRAINT "Department_clubId_fkey" FOREIGN KEY ("c
 
 -- AddForeignKey
 ALTER TABLE "Department" ADD CONSTRAINT "Department_parentDepartmentId_fkey" FOREIGN KEY ("parentDepartmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DepartmentResponsibility" ADD CONSTRAINT "DepartmentResponsibility_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DepartmentResponsibility" ADD CONSTRAINT "DepartmentResponsibility_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DepartmentResponsibility" ADD CONSTRAINT "DepartmentResponsibility_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "CostCenter" ADD CONSTRAINT "CostCenter_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -8274,6 +11354,9 @@ ALTER TABLE "LessonPayable" ADD CONSTRAINT "LessonPayable_paidApInvoiceId_fkey" 
 ALTER TABLE "EmployeePosition" ADD CONSTRAINT "EmployeePosition_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "EmployeePosition" ADD CONSTRAINT "EmployeePosition_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Employee" ADD CONSTRAINT "Employee_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -8284,6 +11367,51 @@ ALTER TABLE "Employee" ADD CONSTRAINT "Employee_departmentId_fkey" FOREIGN KEY (
 
 -- AddForeignKey
 ALTER TABLE "Employee" ADD CONSTRAINT "Employee_positionId_fkey" FOREIGN KEY ("positionId") REFERENCES "EmployeePosition"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Employee" ADD CONSTRAINT "Employee_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Employee" ADD CONSTRAINT "Employee_memberId_fkey" FOREIGN KEY ("memberId") REFERENCES "Member"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Employee" ADD CONSTRAINT "Employee_profilePhotoDocumentId_fkey" FOREIGN KEY ("profilePhotoDocumentId") REFERENCES "EmployeeDocument"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Employee" ADD CONSTRAINT "Employee_resumeDocumentId_fkey" FOREIGN KEY ("resumeDocumentId") REFERENCES "EmployeeDocument"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Employee" ADD CONSTRAINT "Employee_managerEmployeeId_fkey" FOREIGN KEY ("managerEmployeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeEmploymentAssignment" ADD CONSTRAINT "EmployeeEmploymentAssignment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeEmploymentAssignment" ADD CONSTRAINT "EmployeeEmploymentAssignment_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeEmploymentAssignment" ADD CONSTRAINT "EmployeeEmploymentAssignment_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAllowance" ADD CONSTRAINT "EmployeeAllowance_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAllowance" ADD CONSTRAINT "EmployeeAllowance_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAllowance" ADD CONSTRAINT "EmployeeAllowance_assignmentId_fkey" FOREIGN KEY ("assignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeHomeNotificationDismissal" ADD CONSTRAINT "EmployeeHomeNotificationDismissal_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeHomeNotificationDismissal" ADD CONSTRAINT "EmployeeHomeNotificationDismissal_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityWeek" ADD CONSTRAINT "EmployeeAvailabilityWeek_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityWeek" ADD CONSTRAINT "EmployeeAvailabilityWeek_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PayrollPeriod" ADD CONSTRAINT "PayrollPeriod_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -8311,6 +11439,54 @@ ALTER TABLE "TimeClockEvent" ADD CONSTRAINT "TimeClockEvent_clubId_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "TimeClockEvent" ADD CONSTRAINT "TimeClockEvent_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockEvent" ADD CONSTRAINT "TimeClockEvent_employmentAssignmentId_fkey" FOREIGN KEY ("employmentAssignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockEvent" ADD CONSTRAINT "TimeClockEvent_supersededByEventId_fkey" FOREIGN KEY ("supersededByEventId") REFERENCES "TimeClockEvent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheet" ADD CONSTRAINT "PayrollTimesheet_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheet" ADD CONSTRAINT "PayrollTimesheet_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheet" ADD CONSTRAINT "PayrollTimesheet_payPeriodId_fkey" FOREIGN KEY ("payPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntry" ADD CONSTRAINT "PayrollTimesheetEntry_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntry" ADD CONSTRAINT "PayrollTimesheetEntry_timesheetId_fkey" FOREIGN KEY ("timesheetId") REFERENCES "PayrollTimesheet"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntry" ADD CONSTRAINT "PayrollTimesheetEntry_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntry" ADD CONSTRAINT "PayrollTimesheetEntry_employmentAssignmentId_fkey" FOREIGN KEY ("employmentAssignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntryClockEvent" ADD CONSTRAINT "PayrollTimesheetEntryClockEvent_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntryClockEvent" ADD CONSTRAINT "PayrollTimesheetEntryClockEvent_timesheetEntryId_fkey" FOREIGN KEY ("timesheetEntryId") REFERENCES "PayrollTimesheetEntry"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimesheetEntryClockEvent" ADD CONSTRAINT "PayrollTimesheetEntryClockEvent_clockEventId_fkey" FOREIGN KEY ("clockEventId") REFERENCES "TimeClockEvent"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockCorrectionRequest" ADD CONSTRAINT "TimeClockCorrectionRequest_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockCorrectionRequest" ADD CONSTRAINT "TimeClockCorrectionRequest_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockCorrectionRequest" ADD CONSTRAINT "TimeClockCorrectionRequest_originalClockEventId_fkey" FOREIGN KEY ("originalClockEventId") REFERENCES "TimeClockEvent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TimeClockCorrectionRequest" ADD CONSTRAINT "TimeClockCorrectionRequest_resolutionClockEventId_fkey" FOREIGN KEY ("resolutionClockEventId") REFERENCES "TimeClockEvent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "PayrollRun" ADD CONSTRAINT "PayrollRun_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -9606,16 +12782,109 @@ ALTER TABLE "WorkIntakeItem" ADD CONSTRAINT "WorkIntakeItem_resolvedByUserId_fke
 ALTER TABLE "WorkIntakeItem" ADD CONSTRAINT "WorkIntakeItem_classificationOverriddenByUserId_fkey" FOREIGN KEY ("classificationOverriddenByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "WorkRestorationEvent" ADD CONSTRAINT "WorkRestorationEvent_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkCompletionEvent" ADD CONSTRAINT "WorkCompletionEvent_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OutlookArchiveMutation" ADD CONSTRAINT "OutlookArchiveMutation_workCompletionEventId_fkey" FOREIGN KEY ("workCompletionEventId") REFERENCES "WorkCompletionEvent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ProposedCommitment" ADD CONSTRAINT "ProposedCommitment_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkDomainCorrection" ADD CONSTRAINT "WorkDomainCorrection_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkIntakeOrigin" ADD CONSTRAINT "WorkIntakeOrigin_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkIntakeFinding" ADD CONSTRAINT "WorkIntakeFinding_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApReviewOverride" ADD CONSTRAINT "ApReviewOverride_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApReviewOverride" ADD CONSTRAINT "ApReviewOverride_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApReviewOverride" ADD CONSTRAINT "ApReviewOverride_reviewedByUserId_fkey" FOREIGN KEY ("reviewedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "WorkIntakeActivity" ADD CONSTRAINT "WorkIntakeActivity_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "WorkIntakeActivity" ADD CONSTRAINT "WorkIntakeActivity_actorUserId_fkey" FOREIGN KEY ("actorUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "WorkIntakeItemRead" ADD CONSTRAINT "WorkIntakeItemRead_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WorkIntakeItemRead" ADD CONSTRAINT "WorkIntakeItemRead_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "EmailWorkIntakeOrigin" ADD CONSTRAINT "EmailWorkIntakeOrigin_workIntakeItemId_fkey" FOREIGN KEY ("workIntakeItemId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "EmailWorkIntakeOrigin" ADD CONSTRAINT "EmailWorkIntakeOrigin_emailMessageId_fkey" FOREIGN KEY ("emailMessageId") REFERENCES "EmailMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IngestedDocument" ADD CONSTRAINT "IngestedDocument_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IngestedDocumentEvidenceLink" ADD CONSTRAINT "IngestedDocumentEvidenceLink_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IngestedDocumentEvidenceLink" ADD CONSTRAINT "IngestedDocumentEvidenceLink_ingestedDocumentId_fkey" FOREIGN KEY ("ingestedDocumentId") REFERENCES "IngestedDocument"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IngestedDocumentAuditLog" ADD CONSTRAINT "IngestedDocumentAuditLog_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "IngestedDocumentAuditLog" ADD CONSTRAINT "IngestedDocumentAuditLog_ingestedDocumentId_fkey" FOREIGN KEY ("ingestedDocumentId") REFERENCES "IngestedDocument"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DocumentOcrExtraction" ADD CONSTRAINT "DocumentOcrExtraction_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "DocumentOcrExtraction" ADD CONSTRAINT "DocumentOcrExtraction_ingestedDocumentId_fkey" FOREIGN KEY ("ingestedDocumentId") REFERENCES "IngestedDocument"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorAlias" ADD CONSTRAINT "VendorAlias_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorAlias" ADD CONSTRAINT "VendorAlias_canonicalVendorId_fkey" FOREIGN KEY ("canonicalVendorId") REFERENCES "Vendor"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorMergeRecord" ADD CONSTRAINT "VendorMergeRecord_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorMergeRecord" ADD CONSTRAINT "VendorMergeRecord_winnerVendorId_fkey" FOREIGN KEY ("winnerVendorId") REFERENCES "Vendor"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorMergeRecord" ADD CONSTRAINT "VendorMergeRecord_loserVendorId_fkey" FOREIGN KEY ("loserVendorId") REFERENCES "Vendor"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementReconciliation" ADD CONSTRAINT "VendorStatementReconciliation_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementReconciliation" ADD CONSTRAINT "VendorStatementReconciliation_ingestedDocumentId_fkey" FOREIGN KEY ("ingestedDocumentId") REFERENCES "IngestedDocument"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementReconciliation" ADD CONSTRAINT "VendorStatementReconciliation_canonicalVendorId_fkey" FOREIGN KEY ("canonicalVendorId") REFERENCES "Vendor"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementLine" ADD CONSTRAINT "VendorStatementLine_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementLine" ADD CONSTRAINT "VendorStatementLine_reconciliationId_fkey" FOREIGN KEY ("reconciliationId") REFERENCES "VendorStatementReconciliation"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementLineMatch" ADD CONSTRAINT "VendorStatementLineMatch_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "VendorStatementLineMatch" ADD CONSTRAINT "VendorStatementLineMatch_statementLineId_fkey" FOREIGN KEY ("statementLineId") REFERENCES "VendorStatementLine"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "MailboxConnection" ADD CONSTRAINT "MailboxConnection_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -9655,4 +12924,565 @@ ALTER TABLE "MailboxOAuthTransaction" ADD CONSTRAINT "MailboxOAuthTransaction_cl
 
 -- AddForeignKey
 ALTER TABLE "EmailAttachment" ADD CONSTRAINT "EmailAttachment_emailMessageId_fkey" FOREIGN KEY ("emailMessageId") REFERENCES "EmailMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApIntakeSource" ADD CONSTRAINT "ApIntakeSource_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApIntakeSource" ADD CONSTRAINT "ApIntakeSource_emailAttachmentId_fkey" FOREIGN KEY ("emailAttachmentId") REFERENCES "EmailAttachment"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApIntakeSource" ADD CONSTRAINT "ApIntakeSource_emailMessageId_fkey" FOREIGN KEY ("emailMessageId") REFERENCES "EmailMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApIntakeSource" ADD CONSTRAINT "ApIntakeSource_ingestedDocumentId_fkey" FOREIGN KEY ("ingestedDocumentId") REFERENCES "IngestedDocument"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ApIntakeSource" ADD CONSTRAINT "ApIntakeSource_canonicalApIntakeId_fkey" FOREIGN KEY ("canonicalApIntakeId") REFERENCES "WorkIntakeItem"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmploymentPeriod" ADD CONSTRAINT "EmploymentPeriod_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmploymentPeriod" ADD CONSTRAINT "EmploymentPeriod_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCompensation" ADD CONSTRAINT "EmployeeCompensation_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCompensation" ADD CONSTRAINT "EmployeeCompensation_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCompensation" ADD CONSTRAINT "EmployeeCompensation_actorUserId_fkey" FOREIGN KEY ("actorUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCompensation" ADD CONSTRAINT "EmployeeCompensation_assignmentId_fkey" FOREIGN KEY ("assignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollProfile" ADD CONSTRAINT "PayrollProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollProfile" ADD CONSTRAINT "PayrollProfile_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBenefit" ADD CONSTRAINT "PayrollBenefit_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBenefit" ADD CONSTRAINT "PayrollBenefit_payrollProfileId_fkey" FOREIGN KEY ("payrollProfileId") REFERENCES "PayrollProfile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDeduction" ADD CONSTRAINT "PayrollDeduction_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDeduction" ADD CONSTRAINT "PayrollDeduction_payrollProfileId_fkey" FOREIGN KEY ("payrollProfileId") REFERENCES "PayrollProfile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeSensitiveIdentity" ADD CONSTRAINT "EmployeeSensitiveIdentity_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeSensitiveIdentity" ADD CONSTRAINT "EmployeeSensitiveIdentity_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeBankAccount" ADD CONSTRAINT "EmployeeBankAccount_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeBankAccount" ADD CONSTRAINT "EmployeeBankAccount_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeTaxProfile" ADD CONSTRAINT "EmployeeTaxProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeTaxProfile" ADD CONSTRAINT "EmployeeTaxProfile_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeDocument" ADD CONSTRAINT "EmployeeDocument_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeDocument" ADD CONSTRAINT "EmployeeDocument_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeDocument" ADD CONSTRAINT "EmployeeDocument_uploadedByUserId_fkey" FOREIGN KEY ("uploadedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCredential" ADD CONSTRAINT "EmployeeCredential_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCredential" ADD CONSTRAINT "EmployeeCredential_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeEmergencyContact" ADD CONSTRAINT "EmployeeEmergencyContact_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeEmergencyContact" ADD CONSTRAINT "EmployeeEmergencyContact_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OnboardingRequirement" ADD CONSTRAINT "OnboardingRequirement_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingInvitation" ADD CONSTRAINT "EmployeeOnboardingInvitation_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingInvitation" ADD CONSTRAINT "EmployeeOnboardingInvitation_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingInvitation" ADD CONSTRAINT "EmployeeOnboardingInvitation_issuedByUserId_fkey" FOREIGN KEY ("issuedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingSession" ADD CONSTRAINT "EmployeeOnboardingSession_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingSession" ADD CONSTRAINT "EmployeeOnboardingSession_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingSession" ADD CONSTRAINT "EmployeeOnboardingSession_initiatedByUserId_fkey" FOREIGN KEY ("initiatedByUserId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingSession" ADD CONSTRAINT "EmployeeOnboardingSession_approvedByUserId_fkey" FOREIGN KEY ("approvedByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingStateTransition" ADD CONSTRAINT "EmployeeOnboardingStateTransition_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingStateTransition" ADD CONSTRAINT "EmployeeOnboardingStateTransition_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingStateTransition" ADD CONSTRAINT "EmployeeOnboardingStateTransition_actorUserId_fkey" FOREIGN KEY ("actorUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingQuestion" ADD CONSTRAINT "EmployeeOnboardingQuestion_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingResponse" ADD CONSTRAINT "EmployeeOnboardingResponse_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingResponse" ADD CONSTRAINT "EmployeeOnboardingResponse_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "EmployeeOnboardingSession"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingResponse" ADD CONSTRAINT "EmployeeOnboardingResponse_questionId_fkey" FOREIGN KEY ("questionId") REFERENCES "EmployeeOnboardingQuestion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingAcknowledgement" ADD CONSTRAINT "EmployeeOnboardingAcknowledgement_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingAcknowledgement" ADD CONSTRAINT "EmployeeOnboardingAcknowledgement_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "EmployeeOnboardingSession"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingAcknowledgement" ADD CONSTRAINT "EmployeeOnboardingAcknowledgement_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingCorrection" ADD CONSTRAINT "EmployeeOnboardingCorrection_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingCorrection" ADD CONSTRAINT "EmployeeOnboardingCorrection_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "EmployeeOnboardingSession"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeOnboardingCorrection" ADD CONSTRAINT "EmployeeOnboardingCorrection_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeePortalCredential" ADD CONSTRAINT "EmployeePortalCredential_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeePortalCredential" ADD CONSTRAINT "EmployeePortalCredential_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeePortalPasswordReset" ADD CONSTRAINT "EmployeePortalPasswordReset_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeePortalPasswordReset" ADD CONSTRAINT "EmployeePortalPasswordReset_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ClubMedia" ADD CONSTRAINT "ClubMedia_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeePortalQuickLink" ADD CONSTRAINT "EmployeePortalQuickLink_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AnonymousFeedback" ADD CONSTRAINT "AnonymousFeedback_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCourse" ADD CONSTRAINT "TrainingCourse_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCourseVersion" ADD CONSTRAINT "TrainingCourseVersion_courseId_fkey" FOREIGN KEY ("courseId") REFERENCES "TrainingCourse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingQuestion" ADD CONSTRAINT "TrainingQuestion_courseVersionId_fkey" FOREIGN KEY ("courseVersionId") REFERENCES "TrainingCourseVersion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAnswerOption" ADD CONSTRAINT "TrainingAnswerOption_questionId_fkey" FOREIGN KEY ("questionId") REFERENCES "TrainingQuestion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAssignment" ADD CONSTRAINT "TrainingAssignment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAssignment" ADD CONSTRAINT "TrainingAssignment_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAssignment" ADD CONSTRAINT "TrainingAssignment_courseId_fkey" FOREIGN KEY ("courseId") REFERENCES "TrainingCourse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingProgress" ADD CONSTRAINT "TrainingProgress_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingProgress" ADD CONSTRAINT "TrainingProgress_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingProgress" ADD CONSTRAINT "TrainingProgress_courseVersionId_fkey" FOREIGN KEY ("courseVersionId") REFERENCES "TrainingCourseVersion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAttempt" ADD CONSTRAINT "TrainingAttempt_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAttempt" ADD CONSTRAINT "TrainingAttempt_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingAttempt" ADD CONSTRAINT "TrainingAttempt_courseVersionId_fkey" FOREIGN KEY ("courseVersionId") REFERENCES "TrainingCourseVersion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingQuestionResponse" ADD CONSTRAINT "TrainingQuestionResponse_attemptId_fkey" FOREIGN KEY ("attemptId") REFERENCES "TrainingAttempt"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingQuestionResponse" ADD CONSTRAINT "TrainingQuestionResponse_questionId_fkey" FOREIGN KEY ("questionId") REFERENCES "TrainingQuestion"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingQuestionResponse" ADD CONSTRAINT "TrainingQuestionResponse_selectedOptionId_fkey" FOREIGN KEY ("selectedOptionId") REFERENCES "TrainingAnswerOption"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCompletion" ADD CONSTRAINT "TrainingCompletion_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCompletion" ADD CONSTRAINT "TrainingCompletion_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCompletion" ADD CONSTRAINT "TrainingCompletion_courseId_fkey" FOREIGN KEY ("courseId") REFERENCES "TrainingCourse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCompletion" ADD CONSTRAINT "TrainingCompletion_courseVersionId_fkey" FOREIGN KEY ("courseVersionId") REFERENCES "TrainingCourseVersion"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "TrainingCompletion" ADD CONSTRAINT "TrainingCompletion_attemptId_fkey" FOREIGN KEY ("attemptId") REFERENCES "TrainingAttempt"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollClubConfig" ADD CONSTRAINT "PayrollClubConfig_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollClubConfig" ADD CONSTRAINT "PayrollClubConfig_glAccountingProfileId_fkey" FOREIGN KEY ("glAccountingProfileId") REFERENCES "PayrollGlAccountingProfile"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_salaryExpenseAccountId_fkey" FOREIGN KEY ("salaryExpenseAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_employerCppExpenseAccountId_fkey" FOREIGN KEY ("employerCppExpenseAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_employerEiExpenseAccountId_fkey" FOREIGN KEY ("employerEiExpenseAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_netPayPayableAccountId_fkey" FOREIGN KEY ("netPayPayableAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_cppPayableAccountId_fkey" FOREIGN KEY ("cppPayableAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_eiPayableAccountId_fkey" FOREIGN KEY ("eiPayableAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_federalTaxPayableAccountId_fkey" FOREIGN KEY ("federalTaxPayableAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollGlAccountingProfile" ADD CONSTRAINT "PayrollGlAccountingProfile_provincialTaxPayableAccountId_fkey" FOREIGN KEY ("provincialTaxPayableAccountId") REFERENCES "Account"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayGroup" ADD CONSTRAINT "PayrollPayGroup_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayGroupMember" ADD CONSTRAINT "PayrollPayGroupMember_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayGroupMember" ADD CONSTRAINT "PayrollPayGroupMember_payGroupId_fkey" FOREIGN KEY ("payGroupId") REFERENCES "PayrollPayGroup"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayGroupMember" ADD CONSTRAINT "PayrollPayGroupMember_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayPeriod" ADD CONSTRAINT "PayrollPayPeriod_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollPayPeriod" ADD CONSTRAINT "PayrollPayPeriod_payGroupId_fkey" FOREIGN KEY ("payGroupId") REFERENCES "PayrollPayGroup"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatch" ADD CONSTRAINT "PayrollBatch_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatch" ADD CONSTRAINT "PayrollBatch_payGroupId_fkey" FOREIGN KEY ("payGroupId") REFERENCES "PayrollPayGroup"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatch" ADD CONSTRAINT "PayrollBatch_payPeriodId_fkey" FOREIGN KEY ("payPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatch" ADD CONSTRAINT "PayrollBatch_statutoryPackageId_fkey" FOREIGN KEY ("statutoryPackageId") REFERENCES "PayrollStatutoryPackage"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatch" ADD CONSTRAINT "PayrollBatch_glJournalEntryId_fkey" FOREIGN KEY ("glJournalEntryId") REFERENCES "JournalEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchException" ADD CONSTRAINT "PayrollBatchException_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchException" ADD CONSTRAINT "PayrollBatchException_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchException" ADD CONSTRAINT "PayrollBatchException_batchEmployeeId_fkey" FOREIGN KEY ("batchEmployeeId") REFERENCES "PayrollBatchEmployee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchException" ADD CONSTRAINT "PayrollBatchException_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalance" ADD CONSTRAINT "PayrollOpeningBalance_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalance" ADD CONSTRAINT "PayrollOpeningBalance_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalance" ADD CONSTRAINT "PayrollOpeningBalance_supersededById_fkey" FOREIGN KEY ("supersededById") REFERENCES "PayrollOpeningBalance"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalanceComponent" ADD CONSTRAINT "PayrollOpeningBalanceComponent_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalanceComponent" ADD CONSTRAINT "PayrollOpeningBalanceComponent_openingBalanceId_fkey" FOREIGN KEY ("openingBalanceId") REFERENCES "PayrollOpeningBalance"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollOpeningBalanceComponent" ADD CONSTRAINT "PayrollOpeningBalanceComponent_sourceComponentId_fkey" FOREIGN KEY ("sourceComponentId") REFERENCES "PayrollComponent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEmployee" ADD CONSTRAINT "PayrollBatchEmployee_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEmployee" ADD CONSTRAINT "PayrollBatchEmployee_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEmployee" ADD CONSTRAINT "PayrollBatchEmployee_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppElection" ADD CONSTRAINT "EmployeeCppElection_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppElection" ADD CONSTRAINT "EmployeeCppElection_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppElection" ADD CONSTRAINT "EmployeeCppElection_revokesElectionId_fkey" FOREIGN KEY ("revokesElectionId") REFERENCES "EmployeeCppElection"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppElection" ADD CONSTRAINT "EmployeeCppElection_supersededById_fkey" FOREIGN KEY ("supersededById") REFERENCES "EmployeeCppElection"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppDisability" ADD CONSTRAINT "EmployeeCppDisability_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeCppDisability" ADD CONSTRAINT "EmployeeCppDisability_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_batchEmployeeId_fkey" FOREIGN KEY ("batchEmployeeId") REFERENCES "PayrollBatchEmployee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_employmentAssignmentId_fkey" FOREIGN KEY ("employmentAssignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchEarning" ADD CONSTRAINT "PayrollBatchEarning_approvedTimeEntryId_fkey" FOREIGN KEY ("approvedTimeEntryId") REFERENCES "PayrollApprovedTimeEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchDeduction" ADD CONSTRAINT "PayrollBatchDeduction_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchDeduction" ADD CONSTRAINT "PayrollBatchDeduction_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchDeduction" ADD CONSTRAINT "PayrollBatchDeduction_batchEmployeeId_fkey" FOREIGN KEY ("batchEmployeeId") REFERENCES "PayrollBatchEmployee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchDeduction" ADD CONSTRAINT "PayrollBatchDeduction_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchAllowanceSnapshot" ADD CONSTRAINT "PayrollBatchAllowanceSnapshot_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchAllowanceSnapshot" ADD CONSTRAINT "PayrollBatchAllowanceSnapshot_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchAllowanceSnapshot" ADD CONSTRAINT "PayrollBatchAllowanceSnapshot_batchEmployeeId_fkey" FOREIGN KEY ("batchEmployeeId") REFERENCES "PayrollBatchEmployee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchAllowanceSnapshot" ADD CONSTRAINT "PayrollBatchAllowanceSnapshot_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchAllowanceSnapshot" ADD CONSTRAINT "PayrollBatchAllowanceSnapshot_sourceAllowanceId_fkey" FOREIGN KEY ("sourceAllowanceId") REFERENCES "EmployeeAllowance"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollComponent" ADD CONSTRAINT "PayrollComponent_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollComponent" ADD CONSTRAINT "PayrollComponent_glAccountId_fkey" FOREIGN KEY ("glAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollComponent" ADD CONSTRAINT "PayrollComponent_expenseAccountId_fkey" FOREIGN KEY ("expenseAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollComponent" ADD CONSTRAINT "PayrollComponent_liabilityAccountId_fkey" FOREIGN KEY ("liabilityAccountId") REFERENCES "Account"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeRecurringPayrollComponent" ADD CONSTRAINT "EmployeeRecurringPayrollComponent_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeRecurringPayrollComponent" ADD CONSTRAINT "EmployeeRecurringPayrollComponent_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeRecurringPayrollComponent" ADD CONSTRAINT "EmployeeRecurringPayrollComponent_componentId_fkey" FOREIGN KEY ("componentId") REFERENCES "PayrollComponent"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "PayrollBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_batchEmployeeId_fkey" FOREIGN KEY ("batchEmployeeId") REFERENCES "PayrollBatchEmployee"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_sourceComponentId_fkey" FOREIGN KEY ("sourceComponentId") REFERENCES "PayrollComponent"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollBatchComponentSnapshot" ADD CONSTRAINT "PayrollBatchComponentSnapshot_sourceAssignmentId_fkey" FOREIGN KEY ("sourceAssignmentId") REFERENCES "EmployeeRecurringPayrollComponent"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeApproval" ADD CONSTRAINT "PayrollDepartmentTimeApproval_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeApproval" ADD CONSTRAINT "PayrollDepartmentTimeApproval_payPeriodId_fkey" FOREIGN KEY ("payPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeApproval" ADD CONSTRAINT "PayrollDepartmentTimeApproval_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeScopeState" ADD CONSTRAINT "PayrollDepartmentTimeScopeState_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeScopeState" ADD CONSTRAINT "PayrollDepartmentTimeScopeState_payPeriodId_fkey" FOREIGN KEY ("payPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollDepartmentTimeScopeState" ADD CONSTRAINT "PayrollDepartmentTimeScopeState_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_employmentAssignmentId_fkey" FOREIGN KEY ("employmentAssignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_payrollTimesheetEntryId_fkey" FOREIGN KEY ("payrollTimesheetEntryId") REFERENCES "PayrollTimesheetEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_sourceApprovalId_fkey" FOREIGN KEY ("sourceApprovalId") REFERENCES "PayrollDepartmentTimeApproval"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollApprovedTimeEntry" ADD CONSTRAINT "PayrollApprovedTimeEntry_supersededByApprovedTimeEntryId_fkey" FOREIGN KEY ("supersededByApprovedTimeEntryId") REFERENCES "PayrollApprovedTimeEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_payPeriodId_fkey" FOREIGN KEY ("payPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_targetPayPeriodId_fkey" FOREIGN KEY ("targetPayPeriodId") REFERENCES "PayrollPayPeriod"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_sourceTimesheetEntryId_fkey" FOREIGN KEY ("sourceTimesheetEntryId") REFERENCES "PayrollTimesheetEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PayrollTimeAdjustment" ADD CONSTRAINT "PayrollTimeAdjustment_originalApprovedTimeEntryId_fkey" FOREIGN KEY ("originalApprovedTimeEntryId") REFERENCES "PayrollApprovedTimeEntry"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftTemplate" ADD CONSTRAINT "ShiftTemplate_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftTemplate" ADD CONSTRAINT "ShiftTemplate_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Shift" ADD CONSTRAINT "Shift_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Shift" ADD CONSTRAINT "Shift_departmentId_fkey" FOREIGN KEY ("departmentId") REFERENCES "Department"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Shift" ADD CONSTRAINT "Shift_shiftTemplateId_fkey" FOREIGN KEY ("shiftTemplateId") REFERENCES "ShiftTemplate"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Shift" ADD CONSTRAINT "Shift_positionId_fkey" FOREIGN KEY ("positionId") REFERENCES "EmployeePosition"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftAssignment" ADD CONSTRAINT "ShiftAssignment_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftAssignment" ADD CONSTRAINT "ShiftAssignment_shiftId_fkey" FOREIGN KEY ("shiftId") REFERENCES "Shift"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftAssignment" ADD CONSTRAINT "ShiftAssignment_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftAssignment" ADD CONSTRAINT "ShiftAssignment_employmentAssignmentId_fkey" FOREIGN KEY ("employmentAssignmentId") REFERENCES "EmployeeEmploymentAssignment"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftAssignment" ADD CONSTRAINT "ShiftAssignment_replacedByAssignmentId_fkey" FOREIGN KEY ("replacedByAssignmentId") REFERENCES "ShiftAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_shiftId_fkey" FOREIGN KEY ("shiftId") REFERENCES "Shift"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_offeredByEmployeeId_fkey" FOREIGN KEY ("offeredByEmployeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_offeredByAssignmentId_fkey" FOREIGN KEY ("offeredByAssignmentId") REFERENCES "ShiftAssignment"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_claimedByEmployeeId_fkey" FOREIGN KEY ("claimedByEmployeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ShiftOpportunity" ADD CONSTRAINT "ShiftOpportunity_claimedByAssignmentId_fkey" FOREIGN KEY ("claimedByAssignmentId") REFERENCES "ShiftAssignment"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityProfile" ADD CONSTRAINT "EmployeeAvailabilityProfile_clubId_fkey" FOREIGN KEY ("clubId") REFERENCES "Club"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityProfile" ADD CONSTRAINT "EmployeeAvailabilityProfile_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityRule" ADD CONSTRAINT "EmployeeAvailabilityRule_availabilityProfileId_fkey" FOREIGN KEY ("availabilityProfileId") REFERENCES "EmployeeAvailabilityProfile"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "EmployeeAvailabilityRule" ADD CONSTRAINT "EmployeeAvailabilityRule_shiftTemplateId_fkey" FOREIGN KEY ("shiftTemplateId") REFERENCES "ShiftTemplate"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 

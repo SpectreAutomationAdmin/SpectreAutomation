@@ -101,6 +101,19 @@ async function applyPartialUniqueIndexes(dbPath: string): Promise<void> {
         `ON "PayrollBatchComponentSnapshot" ("batchEmployeeId", "sourceAssignmentId") ` +
         `WHERE "sourceAssignmentId" IS NOT NULL;`,
     );
+    // Scheduling Foundation (2026-09-07) — partial-uniques on
+    // ShiftAssignment (one ASSIGNED per shift) and ShiftOpportunity
+    // (one OPEN per shift). Same reason as the two above: Prisma's
+    // schema DSL can't declare them, but the migration SQL DOES,
+    // so `db push` needs the replay here for parity.
+    await client.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ShiftAssignment_shiftId_active_unique" ` +
+        `ON "ShiftAssignment" ("clubId", "shiftId") WHERE "state" = 'ASSIGNED';`,
+    );
+    await client.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ShiftOpportunity_shiftId_open_unique" ` +
+        `ON "ShiftOpportunity" ("clubId", "shiftId") WHERE "state" = 'OPEN';`,
+    );
   } finally {
     await client.$disconnect();
   }

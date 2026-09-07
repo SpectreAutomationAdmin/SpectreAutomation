@@ -27,6 +27,7 @@ import { prisma } from "../prisma";
 import { listReviewableScopes, type ReviewableScope } from "./approval-scope";
 import { resolveDepartmentTimeApprover } from "./manager-approval";
 import { isScopeApprovalOriginConflict } from "../work-intake/origin-conflict";
+import { ensureOriginBackedItem as ensureOriginBackedItemShared } from "../work-intake/ensure-origin-backed-item";
 
 const SCOPE_ORIGIN_KIND = "PAYROLL_TIMESHEET_APPROVAL";
 const GAP_ORIGIN_KIND   = "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP";
@@ -75,6 +76,11 @@ async function resolveTenantAdmin(clubId: string): Promise<string | null> {
   return asn?.userId ?? null;
 }
 
+// Scheduling Foundation (2026-09-07) — the race-safe origin+item
+// materialiser was lifted to src/lib/work-intake/ensure-origin-backed-item.ts
+// so shift-reassignment notifications (and any future orchestrators)
+// can reuse it. This local wrapper preserves the exact call-shape the
+// payroll orchestrator uses so no downstream call sites changed.
 async function ensureOriginBackedItem(args: {
   clubId: string;
   originKind: string;
@@ -87,105 +93,17 @@ async function ensureOriginBackedItem(args: {
   linkReason: string;
   classification: string;
 }): Promise<{ workIntakeItemId: string; created: boolean }> {
-  const existing = await prisma.workIntakeOrigin.findFirst({
-    where: {
-      clubId: args.clubId,
-      kind: args.originKind,
-      referenceId: args.originReferenceId,
-      role: "PRIMARY",
-    },
-    select: { workIntakeItemId: true },
+  return ensureOriginBackedItemShared({
+    ...args,
+    workDomain: "PAYROLL",
+    classificationReason: `Spectre Payroll orchestrated a ${args.workSubtype} task.`,
+    classificationRuleKey: "payroll-timesheet-approval.v1",
+    classificationRuleVersion: 1,
+    displaySourceLabel: "Spectre Payroll",
+    displaySender: "Payroll orchestration",
+    workDomainClassifierVersion: "payroll-timesheet-approval.v1",
+    onOriginConflict: isScopeApprovalOriginConflict,
   });
-  if (existing) {
-    await prisma.workIntakeItem.update({
-      where: { id: existing.workIntakeItemId },
-      data: {
-        ownerUserId: args.ownerUserId,
-        displaySubject: args.subject,
-        displayPreview: args.preview,
-        displayReceivedAt: new Date(),
-      },
-    });
-    return { workIntakeItemId: existing.workIntakeItemId, created: false };
-  }
-  // Payroll-3D-3B Slice 7 (2026-09-06) — race-safe create. Item +
-  // origin + activity in one $transaction so a P2002 rejection on
-  // the partial-unique rolls back the orphan item. On our specific
-  // scope-approval conflict, refetch canonical → return existing.
-  // Same pattern as Slice 2's correction-review orchestrator.
-  try {
-    const itemId = await prisma.$transaction(async (tx) => {
-      const now = new Date();
-      const created = await tx.workIntakeItem.create({
-        data: {
-          clubId: args.clubId,
-          status: "OPEN",
-          judgmentRequired: true,
-          ownerUserId: args.ownerUserId,
-          classification: args.classification,
-          classificationReason: `Spectre Payroll orchestrated a ${args.workSubtype} task.`,
-          classificationMethod: "RULE",
-          classificationRuleKey: "payroll-timesheet-approval.v1",
-          classificationRuleVersion: 1,
-          displaySourceLabel: "Spectre Payroll",
-          displaySender: "Payroll orchestration",
-          displaySubject: args.subject,
-          displayPreview: args.preview,
-          displayReceivedAt: now,
-          displayHasAttachments: false,
-          workDomain: "PAYROLL",
-          workIntent: args.workIntent,
-          workSubtype: args.workSubtype,
-          workDomainConfidence: 1,
-          workDomainClassifiedAt: now,
-          workDomainClassifierVersion: "payroll-timesheet-approval.v1",
-        },
-        select: { id: true },
-      });
-      await tx.workIntakeOrigin.create({
-        data: {
-          clubId: args.clubId,
-          workIntakeItemId: created.id,
-          kind: args.originKind,
-          referenceId: args.originReferenceId,
-          role: "PRIMARY",
-          linkReason: args.linkReason,
-        },
-      });
-      await tx.workIntakeActivity.create({
-        data: {
-          workIntakeItemId: created.id,
-          action: "MATERIALISED",
-          note: args.linkReason,
-        },
-      });
-      return created.id;
-    });
-    return { workIntakeItemId: itemId, created: true };
-  } catch (err) {
-    if (!isScopeApprovalOriginConflict(err)) throw err;
-    // Race loser — refetch canonical origin.
-    const canonical = await prisma.workIntakeOrigin.findFirst({
-      where: {
-        clubId: args.clubId, kind: args.originKind,
-        referenceId: args.originReferenceId, role: "PRIMARY",
-      },
-      select: { workIntakeItemId: true },
-    });
-    if (canonical) {
-      await prisma.workIntakeItem.update({
-        where: { id: canonical.workIntakeItemId },
-        data: {
-          ownerUserId: args.ownerUserId,
-          displaySubject: args.subject,
-          displayPreview: args.preview,
-          displayReceivedAt: new Date(),
-        },
-      });
-      return { workIntakeItemId: canonical.workIntakeItemId, created: false };
-    }
-    throw err;
-  }
 }
 
 function fmtHours(seconds: number): string {

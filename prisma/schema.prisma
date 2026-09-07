@@ -504,6 +504,13 @@ model Club {
 
   // TA-1C — Organizational positions.
   organizationalPositions            OrganizationalPosition[]
+
+  // Scheduling Foundation (2026-09-07).
+  shiftTemplates                     ShiftTemplate[]              @relation("ClubShiftTemplates")
+  shifts                             Shift[]                      @relation("ClubShifts")
+  shiftAssignments                   ShiftAssignment[]            @relation("ClubShiftAssignments")
+  shiftOpportunities                 ShiftOpportunity[]           @relation("ClubShiftOpportunities")
+  employeeAvailabilityProfiles       EmployeeAvailabilityProfile[] @relation("ClubEmployeeAvailabilityProfiles")
 }
 
 // ---------------------------------------------------------------------
@@ -2086,6 +2093,10 @@ model Department {
   // Payroll-3D-3A — employment assignments back-relation.
   employmentAssignmentsIn EmployeeEmploymentAssignment[] @relation("AssignmentDepartment")
 
+  // Scheduling Foundation (2026-09-07).
+  shiftTemplates          ShiftTemplate[]                 @relation("DepartmentShiftTemplates")
+  shifts                  Shift[]                         @relation("DepartmentShifts")
+
   @@unique([clubId, code])
   @@index([clubId, isActive])
 }
@@ -3589,6 +3600,9 @@ model EmployeePosition {
 
   employees Employee[]
 
+  // Scheduling Foundation (2026-09-07).
+  shifts    Shift[] @relation("PositionShifts")
+
   @@unique([clubId, code])
   @@index([clubId, departmentId, isActive])
 }
@@ -3768,6 +3782,12 @@ model Employee {
   userClubProfile            UserClubProfile?   @relation("UserClubProfileEmployee")
   adminInvitations           AdminInvitation[]  @relation("AdminInvitationEmployee")
 
+  // Scheduling Foundation (2026-09-07).
+  shiftAssignments           ShiftAssignment[]              @relation("EmployeeShiftAssignments")
+  offeredShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeOfferedShiftOpportunities")
+  claimedShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeClaimedShiftOpportunities")
+  availabilityProfiles       EmployeeAvailabilityProfile[]  @relation("EmployeeAvailabilityProfiles")
+
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
   @@index([clubId, employeeLifecycle])
@@ -3837,6 +3857,14 @@ model EmployeeEmploymentAssignment {
   // Payroll-3D-2 — timesheet entries reference the assignment they
   // interpret so approval routing follows the work being approved.
   payrollTimesheetEntries    PayrollTimesheetEntry[] @relation("AssignmentTimesheetEntries")
+
+  // Scheduling Foundation (2026-09-07) — the assignment context for
+  // a scheduled ShiftAssignment is the same key used by
+  // TimeClockEvent + PayrollTimesheetEntry, so scheduled-vs-worked
+  // reconciliation is a natural join. ShiftOpportunity does NOT
+  // link to EmployeeEmploymentAssignment directly — it links to a
+  // ShiftAssignment which carries the assignment context.
+  shiftAssignments           ShiftAssignment[]  @relation("EmploymentAssignmentShiftAssignments")
 
   @@index([clubId, employeeId, effectiveFrom])
   @@index([employeeId, role])
@@ -13236,4 +13264,274 @@ model PayrollTimeAdjustment {
   @@index([clubId, targetPayPeriodId])
   @@index([sourceTimesheetEntryId])
   @@index([originalApprovedTimeEntryId])
+}
+
+// ===================================================================
+// Scheduling Foundation (2026-09-07)
+// ===================================================================
+// Employee-facing shift scheduling. Orthogonal to the canonical
+// worked-time stack (TimeClockEvent -> PayrollTimesheet ->
+// PayrollTimesheetEntry -> PayrollApprovedTimeEntry). Scheduled time
+// joins the worked-time stack on EmployeeEmploymentAssignment.id so
+// scheduled-vs-actual reconciliation is a natural join.
+//
+// Models:
+//   ShiftTemplate                - reusable per-department shift definition
+//   Shift                        - a published concrete shift instance
+//   ShiftAssignment              - WHO is scheduled to work the shift
+//   ShiftOpportunity             - coworker-visible offer via FORE!
+//   EmployeeAvailabilityProfile  - versioned recurring availability header
+//   EmployeeAvailabilityRule     - one (weekday x shift-template) cell
+//
+// Availability policy (founder amendment 2 and 6):
+//   - Editing availability MUST be allowed for any hourly employee
+//     regardless of training-completion state. Training gates BEING
+//     SCHEDULED, not COMMUNICATING availability.
+//   - Availability changes affect FUTURE schedule decisions only.
+//     A profile effective 2026-10-01 applies to shifts dated
+//     2026-10-01+ that are NOT already published/assigned. Already-
+//     published shifts remain unchanged.
+//
+// Shift-assignment concurrency invariant:
+//   At most ONE ShiftAssignment per (clubId, shiftId) may be in
+//   state ASSIGNED. Enforced via partial-unique index at the DB
+//   layer (see migration). This is the same pattern used by the
+//   Payroll-3D-3B correction-review and scope-approval origins.
+//
+// Shift-opportunity concurrency invariant:
+//   At most ONE ShiftOpportunity per (clubId, shiftId) may be in
+//   state OPEN. Prevents double-offer and races the atomic
+//   pickup CAS during claim.
+
+// ShiftTemplate - tenant/department-owned reusable shift definition.
+// Times are stored as minutes-from-midnight in the club's local
+// timezone and materialised to instants when a Shift is published.
+// Templates are managed by the department manager (and privileged
+// HR/Payroll admins with cross-department authority); employees have
+// read-only access. No management UI ships in this phase - templates
+// are seeded per-tenant.
+model ShiftTemplate {
+  id                  String     @id @default(cuid())
+  clubId              String
+  club                Club       @relation("ClubShiftTemplates", fields: [clubId], references: [id])
+  departmentId        String
+  department          Department @relation("DepartmentShiftTemplates", fields: [departmentId], references: [id])
+  code                String
+  name                String
+  // Start / end expressed as minutes since 00:00 local (club timezone).
+  // Range: 0 <= startTimeMinutes < 1440. endTimeMinutes may equal 1440
+  // to represent midnight of the following day; it never wraps past.
+  startTimeMinutes    Int
+  endTimeMinutes      Int
+  active              Boolean    @default(true)
+  sortOrder           Int        @default(0)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  shifts              Shift[]                     @relation("TemplateShifts")
+  availabilityRules   EmployeeAvailabilityRule[]  @relation("TemplateAvailabilityRules")
+
+  @@unique([clubId, departmentId, code])
+  @@index([clubId, departmentId, active])
+}
+
+// Shift - one published concrete work session on a specific date.
+// Persists the resolved instant window so downstream reads never
+// need to re-materialise from template + timezone.
+model Shift {
+  id                  String        @id @default(cuid())
+  clubId              String
+  club                Club          @relation("ClubShifts", fields: [clubId], references: [id])
+  departmentId        String
+  department          Department    @relation("DepartmentShifts", fields: [departmentId], references: [id])
+  shiftTemplateId     String
+  shiftTemplate       ShiftTemplate @relation("TemplateShifts", fields: [shiftTemplateId], references: [id])
+  // Civil date the shift belongs to (club-local midnight, stored UTC
+  // per repo civil-date convention).
+  shiftDate           DateTime
+  // Concrete instant window resolved at publish time from
+  // (shiftTemplate, shiftDate, club.timezone).
+  startAt             DateTime
+  endAt               DateTime
+  positionId          String?
+  position            EmployeePosition? @relation("PositionShifts", fields: [positionId], references: [id])
+  // PUBLISHED | CANCELLED - CANCELLED preserves history but hides
+  // the shift from live views. A cancelled shift MUST NOT have any
+  // ASSIGNED ShiftAssignment (transitional cancel flips them to
+  // CANCELLED in the same tx).
+  state               String        @default("PUBLISHED")
+  publishedAt         DateTime      @default(now())
+  publishedByUserId   String?
+  notes               String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  assignments         ShiftAssignment[]  @relation("ShiftAssignments")
+  opportunities       ShiftOpportunity[] @relation("ShiftOpportunities")
+
+  @@index([clubId, departmentId, shiftDate])
+  @@index([clubId, startAt])
+}
+
+// ShiftAssignment - WHO is scheduled to work a Shift.
+//
+// State lifecycle (founder amendment 8):
+//   ASSIGNED  - currently on the hook
+//   REPLACED  - a successful pickup transferred responsibility;
+//               replacedByAssignmentId points at the new ASSIGNED row
+//   CANCELLED - the parent Shift was cancelled or the assignment
+//               was removed for another reason
+//
+// The offering employee's assignment STAYS ASSIGNED while an
+// opportunity is OPEN. Only a successful pickup atomically transitions
+// original ASSIGNED -> REPLACED and creates the claimant's new ASSIGNED.
+//
+// Concurrency contract (enforced by migration partial-unique index):
+//   UNIQUE (clubId, shiftId) WHERE state = 'ASSIGNED'
+//   -> at most one ASSIGNED row per shift; race-safe CAS pickup.
+model ShiftAssignment {
+  id                       String    @id @default(cuid())
+  clubId                   String
+  club                     Club      @relation("ClubShiftAssignments", fields: [clubId], references: [id])
+  shiftId                  String
+  shift                    Shift     @relation("ShiftAssignments", fields: [shiftId], references: [id])
+  employeeId               String
+  employee                 Employee  @relation("EmployeeShiftAssignments", fields: [employeeId], references: [id])
+  employmentAssignmentId   String
+  employmentAssignment     EmployeeEmploymentAssignment @relation("EmploymentAssignmentShiftAssignments", fields: [employmentAssignmentId], references: [id])
+  // ASSIGNED | REPLACED | CANCELLED
+  state                    String    @default("ASSIGNED")
+  // Provenance for a pickup transition. Optional 1:1 self-relation.
+  replacedByAssignmentId   String?   @unique
+  replacedByAssignment     ShiftAssignment?  @relation("AssignmentReplacement", fields: [replacedByAssignmentId], references: [id])
+  replacedFromAssignment   ShiftAssignment?  @relation("AssignmentReplacement")
+  cancelledAt              DateTime?
+  cancelledByUserId        String?
+  cancelledReason          String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  // Back-relations from ShiftOpportunity (both directions).
+  offeredOpportunities     ShiftOpportunity[] @relation("AssignmentOfferedOpportunities")
+  claimedOpportunities     ShiftOpportunity[] @relation("AssignmentClaimedOpportunities")
+
+  @@index([clubId, employeeId, state])
+  @@index([clubId, shiftId, state])
+}
+
+// ShiftOpportunity - a give-up-shift offer visible to eligible
+// coworkers via FORE!. Distinct from ShiftAssignment: the offering
+// employee's ShiftAssignment stays ASSIGNED until a successful pickup.
+//
+// State lifecycle (founder amendment 8):
+//   OPEN      - awaiting a claim; visible in FORE!
+//   CLAIMED   - a coworker successfully picked up
+//   WITHDRAWN - the offering employee cancelled the offer
+//   EXPIRED   - passed a deadline without a claim
+//
+// Concurrency contract (enforced by migration partial-unique index):
+//   UNIQUE (clubId, shiftId) WHERE state = 'OPEN'
+//   -> at most one OPEN opportunity per shift.
+//
+// The atomic pickup transaction:
+//   1. UPDATE ShiftOpportunity SET state='CLAIMED', claimedBy...
+//      WHERE id = X AND state = 'OPEN'  - count=1 or 0
+//   2. If count=0 -> race lost -> throw ConflictError, tx rolls back
+//   3. UPDATE ShiftAssignment SET state='REPLACED', replacedBy...
+//      WHERE id = <original ASSIGNED> AND state = 'ASSIGNED'
+//   4. INSERT ShiftAssignment for claimant (state='ASSIGNED')
+//   Both partial-unique indexes protect step 3/4 from double-writes.
+model ShiftOpportunity {
+  id                             String    @id @default(cuid())
+  clubId                         String
+  club                           Club      @relation("ClubShiftOpportunities", fields: [clubId], references: [id])
+  shiftId                        String
+  shift                          Shift     @relation("ShiftOpportunities", fields: [shiftId], references: [id])
+  offeredByEmployeeId            String
+  offeredByEmployee              Employee  @relation("EmployeeOfferedShiftOpportunities", fields: [offeredByEmployeeId], references: [id])
+  offeredByAssignmentId          String
+  offeredByAssignment            ShiftAssignment @relation("AssignmentOfferedOpportunities", fields: [offeredByAssignmentId], references: [id])
+  // OPEN | CLAIMED | WITHDRAWN | EXPIRED
+  state                          String    @default("OPEN")
+  reason                         String?
+  note                           String?
+  expiresAt                      DateTime?
+  offeredAt                      DateTime  @default(now())
+  claimedByEmployeeId            String?
+  claimedByEmployee              Employee? @relation("EmployeeClaimedShiftOpportunities", fields: [claimedByEmployeeId], references: [id])
+  claimedByAssignmentId          String?
+  claimedByAssignment            ShiftAssignment? @relation("AssignmentClaimedOpportunities", fields: [claimedByAssignmentId], references: [id])
+  claimedAt                      DateTime?
+  withdrawnAt                    DateTime?
+  withdrawnByUserId              String?
+  createdAt                      DateTime  @default(now())
+  updatedAt                      DateTime  @updatedAt
+
+  @@index([clubId, state])
+  @@index([clubId, shiftId, state])
+}
+
+// EmployeeAvailabilityProfile - one versioned availability record.
+//
+// The employee's recurring availability is expressed as a header
+// (this table) plus per-weekday-per-shift-template rules (see
+// EmployeeAvailabilityRule).
+//
+// Resolution rule (founder amendment 6):
+//   The applicable profile for date D is the row with the LARGEST
+//   effectiveFrom <= D. No `currentAvailabilityId` pointer on
+//   Employee - resolve by date every read.
+//
+// Editing rule (founder amendment 2):
+//   Hourly employees MAY create/update their availability profile
+//   regardless of training-completion status. Training gates the
+//   READY-TO-BE-SCHEDULED state, not the ability to communicate
+//   availability.
+model EmployeeAvailabilityProfile {
+  id                        String    @id @default(cuid())
+  clubId                    String
+  club                      Club      @relation("ClubEmployeeAvailabilityProfiles", fields: [clubId], references: [id])
+  employeeId                String
+  employee                  Employee  @relation("EmployeeAvailabilityProfiles", fields: [employeeId], references: [id])
+  // Civil date the profile begins to apply (club-local midnight,
+  // stored UTC per repo civil-date convention).
+  effectiveFrom             DateTime
+  preferredHoursPerWeek     Int?
+  maximumHoursPerWeek       Int?
+  notes                     String?
+  createdByUserId           String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  rules                     EmployeeAvailabilityRule[] @relation("ProfileAvailabilityRules")
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([clubId, employeeId, effectiveFrom])
+}
+
+// EmployeeAvailabilityRule - one (weekday x shift-template) cell
+// inside a profile.
+//
+// weekday: 0=Sunday, 1=Monday, ..., 6=Saturday (JS Date.getDay
+// convention). Duplicate (weekday, shiftTemplateId) rows within the
+// same profile are blocked by the unique index.
+//
+// availableFrom / availableUntil narrow the rule within the profile's
+// window (rare; usually null so the rule holds for the profile's
+// entire lifetime).
+model EmployeeAvailabilityRule {
+  id                         String    @id @default(cuid())
+  availabilityProfileId      String
+  availabilityProfile        EmployeeAvailabilityProfile @relation("ProfileAvailabilityRules", fields: [availabilityProfileId], references: [id])
+  shiftTemplateId            String
+  shiftTemplate              ShiftTemplate @relation("TemplateAvailabilityRules", fields: [shiftTemplateId], references: [id])
+  weekday                    Int
+  available                  Boolean
+  availableFrom              DateTime?
+  availableUntil             DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@unique([availabilityProfileId, weekday, shiftTemplateId])
+  @@index([shiftTemplateId, weekday])
 }

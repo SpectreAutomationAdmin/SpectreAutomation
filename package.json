@@ -15,6 +15,7 @@
     "fixture:payroll-3d1-taylor-hourly": "tsx scripts/payroll-3d1-taylor-hourly-fixture.ts",
     "fixture:payroll-3d3": "tsx scripts/payroll-3d3-fixture.ts",
     "fixture:staging-time-attendance": "tsx scripts/payroll-staging-ta-fixture.ts",
+    "seed:scheduling-templates": "tsx scripts/scheduling-seed-shift-templates.ts",
     "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",

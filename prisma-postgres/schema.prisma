@@ -34,27 +34,31 @@ model Club {
   whitelabelEnabled Boolean  @default(true)
   // Sprint 3 · Checkpoint 16F (2026-08-04) — demo/regression tenant
   // marker retained as an environment safeguard. NOT the primary
-  // discriminator; see `stagingDataMode` below.
+  // discriminator for fixture writes — see `stagingDataMode` below.
   isDemoTenant      Boolean  @default(false)
   // Sprint 3 · Checkpoint 16F revised (2026-08-04) — data-mode
-  // discriminator: FOUNDER_REVIEW / REGRESSION / SYNTHETIC_DEMO.
+  // discriminator for fixture / regression / synthetic-demo writes.
+  // Coulee Ridge (staging demo AND founder-review tenant) is
+  // "FOUNDER_REVIEW": synthetic Members / Vendors / AR balances /
+  // Work Intake cards forbidden; only genuine operational work.
+  // "REGRESSION": regression documents may be stored + evaluated
+  // by the benchmark runner, but no operational wrappers created.
+  // "SYNTHETIC_DEMO": synthetic fixtures allowed (dev / disposable
+  // test DB only).
   stagingDataMode   String   @default("FOUNDER_REVIEW")
   // Sprint 3 · Checkpoint 16G Stage A (2026-08-04) — IANA timezone
-  // for local-calendar arithmetic. Nullable so onboarding must
-  // explicitly set it. Never defaulted to a global tz.
+  // identifier for local-calendar arithmetic. Every "today", "since
+  // midnight", "overnight" calculation in Mission Control resolves
+  // against this. Nullable so onboarding forces an explicit choice —
+  // never defaulted to a global timezone. Coulee Ridge = America/Edmonton.
   timezone          String?
   address           String?
   region            String?
   salesTaxRegion    String?
   // HR-2B.3.5 (2026-08-19) — canonical province of employment used
-  // by payroll for TD1 resolution. Set once when the Club is onboarded
-  // to Spectre HR. The employee-facing TD1 flow reads THIS value; a
-  // browser-supplied province is refused. Nullable during rollout so
-  // pre-HR clubs migrate cleanly; the resolver falls back to
-  // ClubProfile.provinceState (address province) as a temporary bridge
-  // and reports "unconfigured" when neither is present so no employee
-  // is asked to guess. Stored as a 2-letter Canadian province/territory
-  // code (AB, BC, ON, …). See src/lib/hr/club-payroll-province.ts.
+  // by payroll for TD1 resolution. See prisma-postgres/schema.prisma
+  // for the full note; kept in sync here so SQLite dev mirrors the
+  // Postgres shape.
   payrollProvince   String?
   foundedYear       Int?
   createdAt         DateTime @default(now())
@@ -417,25 +421,12 @@ model Club {
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
   mailboxOAuthTransactions MailboxOAuthTransaction[] @relation("MailboxTransactionClub")
+  // Sprint 3 · Post-16H Phase 3.2.
+  apReviewOverrides        ApReviewOverride[]
 
-  // HR-2B.3 tail (2026-08-18) — the Club's DESIGNATED outbound
-  // Microsoft 365 mailbox. Populated by an explicit operator action
-  // (an admin pins one of the Club's connected mailboxes as the
-  // outbound sender). Nullable — a Club with no designation falls
-  // through to Priority 2 of selectEmailAdapter (per-Club
-  // IntegrationSetting) rather than silently selecting an arbitrary
-  // MailboxConnection.
-  //
-  // onDelete: SetNull — if the underlying MailboxConnection is
-  // hard-deleted, the Club's designation drops gracefully rather
-  // than orphaning a pointer. Disconnection sets MailboxConnection.
-  // status = DISCONNECTED but does NOT delete the row, so the FK
-  // remains valid; the adapter selector refuses to use a non-
-  // CONNECTED designated mailbox and reports the failure honestly.
+  // HR-2B.3 tail — designated outbound M365 mailbox. See prisma-postgres/schema.prisma.
   outboundMailboxConnectionId String?
   outboundMailboxConnection   MailboxConnection? @relation("ClubOutboundMailbox", fields: [outboundMailboxConnectionId], references: [id], onDelete: SetNull)
-  // Sprint 3 · Post-16H Phase 3.2 (2026-08-06).
-  apReviewOverrides           ApReviewOverride[]
 
   // HR-1 (2026-08-16) — canonical people / employment / payroll
   // infrastructure. Every tenant-scoped HR table FKs back to Club.
@@ -491,17 +482,19 @@ model Club {
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
   // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
   payrollDepartmentTimeScopeStates   PayrollDepartmentTimeScopeState[]
-  // Payroll-3D-4.
+  // Payroll-3D-4 back-relation.
   payrollTimeAdjustments             PayrollTimeAdjustment[]
   payrollBatchExceptions             PayrollBatchException[]
   payrollOpeningBalances             PayrollOpeningBalance[]
   employeeCppElections               EmployeeCppElection[]
   employeeCppDisabilities            EmployeeCppDisability[]
   payrollGlAccountingProfile         PayrollGlAccountingProfile?
-  // Payroll-3C-1 (2026-09-07) — tenant-scoped Payroll Component catalogue.
+  // Payroll-3C-1 (2026-09-07) — tenant-scoped Payroll Component catalogue
+  // + per-Employee recurring assignments.
   payrollComponents                  PayrollComponent[]
   employeeRecurringPayrollComponents EmployeeRecurringPayrollComponent[]
   payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
+  // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
   payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
   // TA-1B — Tenant Administration back-relations.
@@ -511,6 +504,13 @@ model Club {
 
   // TA-1C — Organizational positions.
   organizationalPositions            OrganizationalPosition[]
+
+  // Scheduling Foundation (2026-09-07).
+  shiftTemplates                     ShiftTemplate[]              @relation("ClubShiftTemplates")
+  shifts                             Shift[]                      @relation("ClubShifts")
+  shiftAssignments                   ShiftAssignment[]            @relation("ClubShiftAssignments")
+  shiftOpportunities                 ShiftOpportunity[]           @relation("ClubShiftOpportunities")
+  employeeAvailabilityProfiles       EmployeeAvailabilityProfile[] @relation("ClubEmployeeAvailabilityProfiles")
 }
 
 // ---------------------------------------------------------------------
@@ -707,7 +707,7 @@ model User {
   activatedAdminInvitations   AdminInvitation[]                   @relation("AdminInvitationActivatedUser")
   createdOrganizationalPositions OrganizationalPosition[]         @relation("OrganizationalPositionCreatedBy")
 
-  // Payroll-3D-3.
+  // Payroll-3D-3 — department-scoped responsibility back-relations.
   departmentResponsibilities  DepartmentResponsibility[]        @relation("UserDepartmentResponsibilities")
 }
 
@@ -807,6 +807,16 @@ model UserClubProfile {
   employee       Employee?   @relation("UserClubProfileEmployee", fields: [employeeId], references: [id])
 
   // TA-1C (2026-09-04) — organizational structure.
+  //   positionId          — FK to OrganizationalPosition (Club-defined
+  //                          administrative title, distinct from
+  //                          HR EmployeePosition which carries payroll
+  //                          fields). Optional; UserClubProfile.displayTitle
+  //                          may still express a personal override.
+  //   reportsToProfileId  — FK to another UserClubProfile at the SAME
+  //                          Club. Reporting is a tenant-specific fact —
+  //                          a person may report to different people
+  //                          at different Clubs. Same-club invariant
+  //                          + cycle detection enforced service-side.
   positionId         String?
   position           OrganizationalPosition? @relation("UserClubProfilePosition", fields: [positionId], references: [id])
   reportsToProfileId String?
@@ -836,7 +846,14 @@ model UserClubProfile {
 }
 
 // TA-1C — Organizational Position (Club-defined administrative title).
-// Distinct from HR EmployeePosition which carries payroll fields.
+//
+// Distinct from HR EmployeePosition which carries defaultPayRate +
+// isExempt and drives payroll math on Employee. Organizational titles
+// apply to admin Users who may or may not also be Employees; they are
+// Club-defined free-form names (no product enum) so different Clubs
+// can use their own vocabulary (Controller / CFO / Director of
+// Finance; Head Professional / Director of Golf / Golf Operations
+// Manager).
 model OrganizationalPosition {
   id           String      @id @default(cuid())
   clubId       String
@@ -862,8 +879,8 @@ model OrganizationalPosition {
 model Responsibility {
   key              String                     @id
   displayLabel     String
-  scopeKind        String                     @default("CLUB")
-  cardinality      String                     @default("SINGLE_PRIMARY")
+  scopeKind        String                     @default("CLUB") // CLUB | DEPARTMENT | ... (typed columns on assignment)
+  cardinality      String                     @default("SINGLE_PRIMARY") // SINGLE_PRIMARY | PRIMARY_AND_BACKUPS | MULTIPLE_PRIMARIES
   description      String?
   isSpectreDefined Boolean                    @default(true)
   createdAt        DateTime                   @default(now())
@@ -879,8 +896,10 @@ model ResponsibilityAssignment {
   user              User           @relation("ResponsibilityAssignmentUser", fields: [userId], references: [id])
   responsibilityKey String
   responsibility    Responsibility @relation(fields: [responsibilityKey], references: [key])
-  role              String         @default("PRIMARY")
+  role              String         @default("PRIMARY") // PRIMARY | BACKUP
 
+  // Effective-dating. Assignments are append-only: a change writes a
+  // new row and closes the previous by setting effectiveTo.
   effectiveFrom     DateTime       @default(now())
   effectiveTo       DateTime?
 
@@ -912,13 +931,18 @@ model AdminInvitation {
   employeeId      String?
   employee        Employee?   @relation("AdminInvitationEmployee", fields: [employeeId], references: [id])
 
+  // Initial UserClubRole grants applied on activation. Comma-separated
+  // (matches the ApprovalRequest.eligibleRoleKeys precedent). Validated
+  // against the tenant-assignable allow-list.
   initialRoleKeys String
 
+  // Set true only by the bootstrap flow. On activation the invitation
+  // service also creates the club's first TENANT_ADMINISTRATION PRIMARY.
   bootstrap       Boolean     @default(false)
 
   tokenHash       String      @unique
 
-  status          String      @default("PENDING")
+  status          String      @default("PENDING") // PENDING | SENT | OPENED | ACTIVATED | EXPIRED | REVOKED | FAILED
   sentAt          DateTime?
   openedAt        DateTime?
   activatedAt     DateTime?
@@ -1735,10 +1759,13 @@ model MemberHouseholdMember {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 20 — Member Database (2026-08-15)
-// Segmentation groups + extensible per-club custom-field catalog.
-// Details in `prisma/schema.prisma` (sqlite dev twin).
+// Phase 20 — Member Database + Member Profile (2026-08-15)
 // ---------------------------------------------------------------------------
+// Segmentation groups (Sailing Approved, Tennis, Wednesday Night Racing…).
+// Per-club, unique by name inside a club. The many-to-many junction is
+// `MemberGroupAssignment` — kept as an explicit model rather than an
+// implicit `@relation` so we can carry auditing fields (assignedAt +
+// assignedByUserId) without another schema change later.
 model MemberGroup {
   id        String   @id @default(cuid())
   clubId    String
@@ -1770,15 +1797,24 @@ model MemberGroupAssignment {
   @@index([memberId])
 }
 
+// Extensible custom-fields per club (Resignation, Interested in RC?, …).
+// Modelled as `Definition` + sparse `Value` — a single member row does
+// not carry a nullable column for every conceivable field, and adding a
+// new club-defined field is a data write rather than a migration.
+//
+// `kind` is a UI-hint discriminator: TEXT | LONG_TEXT | BOOLEAN | DATE |
+// NUMBER | SELECT. All values are stored as a single `valueText` string
+// so the schema stays portable across SQLite (staging + dev) and
+// Postgres (production); typed parsing is a client concern.
 model MemberCustomFieldDefinition {
   id          String    @id @default(cuid())
   clubId      String
   club        Club      @relation(fields: [clubId], references: [id])
-  key         String
-  label       String
+  key         String // stable snake_case identifier
+  label       String // founder-facing label
   kind        String    @default("TEXT")
   helpText    String?
-  optionsJson String?
+  optionsJson String? // JSON list for SELECT
   sortOrder   Int       @default(100)
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
@@ -1830,13 +1866,26 @@ model MemberDocument {
 // audience: ALL_MEMBERS | ACTIVE_ONLY | SPECIFIC_CATEGORY (Phase 3+)
 // HR-2C Fore! Announcements (2026-08-27) — extended for tenant-
 // authored announcements shown on the Employee Portal Fore! card.
+// Also usable by a future Member Portal surface (audience MEMBER
+// or BOTH) — this is the canonical announcement model; no
+// parallel EmployeeAnnouncement architecture.
+//
+// Every write goes through `src/lib/announcements.ts` (permission
+// + posting-guard + audit). Read paths filter on: `isPublished`
+// + `publishedAt <= now` + (`expiresAt IS NULL OR expiresAt > now`)
+// + audience.
 model ClubAnnouncement {
   id              String    @id @default(cuid())
   clubId          String
   club            Club      @relation(fields: [clubId], references: [id])
   title           String
   body            String
+  // "EMPLOYEE" | "MEMBER" | "BOTH". Legacy default "ALL_MEMBERS"
+  // preserved so any historical rows survive the migration; the
+  // service normalises unknown values to "EMPLOYEE".
   audience        String    @default("EMPLOYEE")
+  // Draft/published lifecycle. `isPublished=false` = draft (admin-
+  // only). `publishedAt` gates when a published row becomes visible.
   isPublished     Boolean   @default(false)
   publishedAt     DateTime?
   expiresAt       DateTime?
@@ -2038,17 +2087,38 @@ model Department {
   // TA-1C — Organizational positions.
   organizationalPositions OrganizationalPosition[] @relation("OrganizationalPositionDepartment")
 
-  // Payroll-3D-3.
+  // Payroll-3D-3 — department-scoped responsibility bridge.
   responsibilities   DepartmentResponsibility[] @relation("DepartmentResponsibilities")
 
-  // Payroll-3D-3A — back-relation for assignments.
+  // Payroll-3D-3A — employment assignments back-relation.
   employmentAssignmentsIn EmployeeEmploymentAssignment[] @relation("AssignmentDepartment")
+
+  // Scheduling Foundation (2026-09-07).
+  shiftTemplates          ShiftTemplate[]                 @relation("DepartmentShiftTemplates")
+  shifts                  Shift[]                         @relation("DepartmentShifts")
 
   @@unique([clubId, code])
   @@index([clubId, isActive])
 }
 
-// Payroll-3D-3 (2026-09-05) — see prisma/schema.prisma for full doc block.
+// Payroll-3D-3 (2026-09-05) — Department-scoped responsibility bridge.
+//
+// Bridges the club-wide Responsibility catalogue to the department
+// dimension needed for scope-based routing (e.g. "who approves time
+// for Grounds"). Introduced now for DEPARTMENT_TIME_APPROVAL; will
+// be reused by any future responsibility that must be resolved at
+// (club × department) granularity (e.g. approvals, chit exceptions).
+//
+// TA-1F will introduce the generic resolveResponsibilityOwner()
+// interface; until then, this table IS the resolver source for
+// department-scoped keys. Assignments are single-owner per
+// (club × department × responsibilityKey); replace-in-place semantics.
+//
+// Isolation rules:
+//   - clubId always required; every read scoped by tenant.
+//   - departmentId FK cascades on club deletion via existing
+//     Department relation.
+//   - No back-ref on User; use responsibilityKey + clubId to enumerate.
 model DepartmentResponsibility {
   id                 String   @id @default(cuid())
   clubId             String
@@ -2154,24 +2224,10 @@ model Account {
   isBankAccount       Boolean                  @default(false)
   isControlAccount    Boolean                  @default(false)
   isCashAccount       Boolean                  @default(false) // tagged for cash-flow grouping
-  /// Sprint 3 · Post-16H Phase 2.1 (2026-08-06) — durable
-  /// account-role for the accounting eligibility service. Closes
-  /// the Jonas-convention gap where accumulated-depreciation
-  /// accounts are stored as ASSET/DEBIT and would otherwise pass
-  /// the type+normalBalance contra rule. Runtime eligibility uses
-  /// this field STRUCTURALLY — never a name pattern.
-  ///
-  /// Enum-shaped string (Prisma provides no cross-DB enum for
-  /// this schema variant). Closed set enforced in
-  /// src/lib/accounting/eligibility/types.ts.
-  ///
-  /// Values: STANDARD | CONTRA_ASSET | CONTRA_REVENUE |
-  ///         CONTRA_LIABILITY | CONTROL | CLEARING | BANK | CASH
-  ///
-  /// Default STANDARD so existing rows stay eligible. Backfill via
-  /// scripts/backfill-account-role.ts uses the reporting-side
-  /// helper isAccumulatedDepreciationLine as a ONE-TIME migration
-  /// aid; runtime never consults that helper again.
+  /// Sprint 3 · Post-16H Phase 2.1 (2026-08-06) — durable account
+  /// role. Values: STANDARD | CONTRA_ASSET | CONTRA_REVENUE |
+  /// CONTRA_LIABILITY | CONTROL | CLEARING | BANK | CASH.
+  /// See prisma-postgres/schema.prisma for full documentation.
   accountRole         String                   @default("STANDARD")
   fsGroupId           String?
   fsGroup             FinancialStatementGroup? @relation(fields: [fsGroupId], references: [id])
@@ -2229,8 +2285,8 @@ model Account {
   // Phase 9
   tournamentRevenue    Tournament[]          @relation("TournamentRevenue")
 
-  // Payroll MVP posting (2026-09-05) — Account back-relations for
-  // the per-Club PayrollGlAccountingProfile mapping.
+  // Payroll MVP posting (2026-09-05) — back-relations for the
+  // per-Club PayrollGlAccountingProfile mapping.
   payrollGlSalaryExpense         PayrollGlAccountingProfile[] @relation("PayrollGlSalaryExpense")
   payrollGlEmployerCppExpense    PayrollGlAccountingProfile[] @relation("PayrollGlEmployerCppExpense")
   payrollGlEmployerEiExpense     PayrollGlAccountingProfile[] @relation("PayrollGlEmployerEiExpense")
@@ -2239,7 +2295,8 @@ model Account {
   payrollGlEiPayable             PayrollGlAccountingProfile[] @relation("PayrollGlEiPayable")
   payrollGlFederalTaxPayable     PayrollGlAccountingProfile[] @relation("PayrollGlFederalTaxPayable")
   payrollGlProvincialTaxPayable  PayrollGlAccountingProfile[] @relation("PayrollGlProvincialTaxPayable")
-  // Payroll-3C-1 (2026-09-07) — optional per-component GL account.
+  // Payroll-3C-1 (2026-09-07) — optional per-component GL account (falls
+  // back to PayrollGlAccountingProfile when null).
   payrollComponentGlAccount        PayrollComponent[] @relation("PayrollComponentGlAccount")
   // Payroll-3C-6 (2026-09-05) — component-aware GL back-relations.
   payrollComponentExpenseAccount   PayrollComponent[] @relation("PayrollComponentExpenseAccount")
@@ -3534,9 +3591,6 @@ model EmployeePosition {
   code           String
   name           String
   // HR-2B.3.6 (2026-08-19) — Position now belongs to a Department.
-  // Nullable during backfill; the admin Add Employee form requires it
-  // (Department must be picked BEFORE Position). Reconciled for the
-  // Coulee Ridge staging fixture via a one-shot post-deploy script.
   departmentId   String?
   department     Department? @relation("PositionDepartment", fields: [departmentId], references: [id])
   defaultPayRate Decimal     @default(0)
@@ -3545,6 +3599,9 @@ model EmployeePosition {
   createdAt      DateTime    @default(now())
 
   employees Employee[]
+
+  // Scheduling Foundation (2026-09-07).
+  shifts    Shift[] @relation("PositionShifts")
 
   @@unique([clubId, code])
   @@index([clubId, departmentId, isActive])
@@ -3584,15 +3641,25 @@ model Employee {
   position               EmployeePosition? @relation(fields: [positionId], references: [id])
   hireDate               DateTime?
   // Payroll-3B-5B-1a (2026-08-31) — canonical Employee date of birth.
-  // See prisma/schema.prisma for full doc.
+  // Civil date; stored as UTC midnight per the Payroll civil-date
+  // convention (see src/lib/payroll/intervals.ts). NEVER an
+  // instant-in-time birth timestamp. Required for CPP age eligibility
+  // — a missing DOB on a payable Employee produces a BLOCKER during
+  // batch preparation. Age is never stored — always derived from
+  // (dateOfBirth, payDate).
   dateOfBirth            DateTime?
   // HR-1 — pre-hire lifecycle.
   expectedStartDate      DateTime?
   activatedAt            DateTime?
   terminationDate        DateTime?
-  // Payroll-3B-5B-1 (2026-08-31) — see prisma/schema.prisma for the
-  // full doc. RESIGNED | TERMINATED | LAYOFF | END_OF_SEASON |
-  // RETIRED | DECEASED | OTHER
+  // Payroll-3B-5B-1 (2026-08-31) — canonical termination reason.
+  // Distinguishes ordinary employment ending from statutory events
+  // (DECEASED) that alter payroll calculation. Enum values validated
+  // in service layer (`src/lib/hr/employees.ts`):
+  //   RESIGNED | TERMINATED | LAYOFF | END_OF_SEASON | RETIRED | DECEASED | OTHER
+  // NULL for still-employed rows. When set, DECEASED alters CPP
+  // pensionable-month determination (contributions stop the last
+  // pay dated in the month of death).
   terminationReason      String?
   status                 String            @default("ACTIVE")
   // HR-1 lifecycle enums (validated in service layer, not DB).
@@ -3605,9 +3672,27 @@ model Employee {
   onboardingState        String            @default("DRAFT")
   payrollReadiness       String            @default("NOT_READY")
   compensationType       String            @default("HOURLY")
-  // Payroll-3D-1 (2026-09-05) — see prisma/schema.prisma.
+  // Payroll-3D-1 (2026-09-05) — Timekeeping method.
+  //   NO_TIME_ENTRY_REQUIRED — default; typical salaried employee.
+  //   CLOCK_REQUIRED         — employee must use Clock In / Clock Out.
+  //   MANUAL_TIMESHEET       — reserved for future (3D-2 manual entry).
+  //   SCHEDULE_DERIVED       — reserved for future scheduling integration.
+  // Existing employees default to NO_TIME_ENTRY_REQUIRED — this is
+  // an ADDITIVE migration; nobody is accidentally forced to clock.
+  // Timekeeping method and compensation cadence are SEPARATE concepts
+  // (§5) — do not infer one from the other.
   timekeepingMethod      String            @default("NO_TIME_ENTRY_REQUIRED")
-  // Payroll-3D-1A (2026-09-05) — see prisma/schema.prisma.
+  // Payroll-3D-1A (2026-09-05) — optimistic-concurrency counter for
+  // clock-state transitions. Every clock event write MUST
+  // compare-and-swap this value inside its transaction, so two
+  // genuinely concurrent transactions cannot BOTH commit a new
+  // TimeClockEvent for the same employee. On Postgres READ
+  // COMMITTED the second `updateMany({where: {version: N}})` re-reads
+  // the row at write time and sees the incremented value, matches
+  // zero rows, and its transaction rolls back — annihilating its
+  // TimeClockEvent insert. On SQLite writes serialize implicitly.
+  // NOT a state field — the canonical clock history is still the
+  // immutable TimeClockEvent stream.
   timekeepingStateVersion Int              @default(0)
   // LEGACY (HR-1): canonical source is EmployeeCompensation. HR
   // compensation writes shadow the currently-active rate here in the
@@ -3657,18 +3742,14 @@ model Employee {
   onboardingTransitions      EmployeeOnboardingStateTransition[]
   onboardingCorrections      EmployeeOnboardingCorrection[]
   onboardingAcknowledgements EmployeeOnboardingAcknowledgement[]
-  // HR-2B.5 — permanent portal credential + password-reset trail + tour completion.
   portalCredential           EmployeePortalCredential?
   portalPasswordResets       EmployeePortalPasswordReset[]
   portalTourCompletedAt      DateTime?
-  // HR-2C — Safety & Training compliance.
   trainingAssignments        TrainingAssignment[]
   trainingProgress           TrainingProgress[]
   trainingAttempts           TrainingAttempt[]
   trainingCompletions        TrainingCompletion[]
-  // HR-2C B4 (2026-08-23) — Employee weekly availability.
   availabilityWeeks          EmployeeAvailabilityWeek[]
-  // HR-2C Home refinement (2026-08-24) — dismissible Home notifications.
   homeNotificationDismissals EmployeeHomeNotificationDismissal[]
   // HR-2C Employment (2026-08-24) — multi-role assignments + allowances.
   employmentAssignments      EmployeeEmploymentAssignment[]
@@ -3686,10 +3767,10 @@ model Employee {
   payrollPayGroupMemberships PayrollPayGroupMember[]
   payrollBatchExceptions     PayrollBatchException[]
   // Payroll-3D-2 back-relations.
-  payrollTimesheets          PayrollTimesheet[]           @relation("EmployeePayrollTimesheets")
-  payrollTimesheetEntries    PayrollTimesheetEntry[]      @relation("EmployeePayrollTimesheetEntries")
-  timeClockCorrectionRequests TimeClockCorrectionRequest[] @relation("EmployeeCorrectionRequests")
-  // Payroll-3D-4.
+  payrollTimesheets          PayrollTimesheet[]                @relation("EmployeePayrollTimesheets")
+  payrollTimesheetEntries    PayrollTimesheetEntry[]           @relation("EmployeePayrollTimesheetEntries")
+  timeClockCorrectionRequests TimeClockCorrectionRequest[]     @relation("EmployeeCorrectionRequests")
+  // Payroll-3D-4 back-relation.
   payrollTimeAdjustments     PayrollTimeAdjustment[]
   payrollOpeningBalances     PayrollOpeningBalance[]
   cppElections               EmployeeCppElection[]
@@ -3701,10 +3782,177 @@ model Employee {
   userClubProfile            UserClubProfile?   @relation("UserClubProfileEmployee")
   adminInvitations           AdminInvitation[]  @relation("AdminInvitationEmployee")
 
+  // Scheduling Foundation (2026-09-07).
+  shiftAssignments           ShiftAssignment[]              @relation("EmployeeShiftAssignments")
+  offeredShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeOfferedShiftOpportunities")
+  claimedShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeClaimedShiftOpportunities")
+  availabilityProfiles       EmployeeAvailabilityProfile[]  @relation("EmployeeAvailabilityProfiles")
+
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
   @@index([clubId, employeeLifecycle])
   @@index([clubId, managerEmployeeId])
+}
+
+// HR-2C Employment (2026-08-24) — Effective-dated role assignment.
+//
+// Multi-role model. An employee may hold zero or one PRIMARY
+// assignment AND any number of ADDITIONAL assignments concurrently.
+// Ended assignments (effectiveTo <= now) remain as historical rows
+// and never mutate.
+//
+// EmploymentPeriod (existing) records lifecycle transitions (HIRE /
+// TRANSFER / PROMOTION / TERMINATION) at the Employee level and
+// remains authoritative for those. EmployeeEmploymentAssignment is
+// the ROLE registry — Payroll and future Scheduling reference an
+// assignment id when they need role-specific rate/department/manager.
+//
+// Invariants (service-enforced):
+//   - one active PRIMARY per (employeeId, active-window);
+//   - ADDITIONAL rows may overlap freely;
+//   - historical rows never mutate — a "change" closes the current
+//     row and opens a new one.
+model EmployeeEmploymentAssignment {
+  id                String    @id @default(cuid())
+  clubId            String
+  club              Club      @relation(fields: [clubId], references: [id])
+  employeeId        String
+  employee          Employee  @relation(fields: [employeeId], references: [id])
+  // PRIMARY | ADDITIONAL — service enforces the single-active-primary
+  // invariant. Additional roles may overlap.
+  role              String
+  departmentId      String?
+  // Payroll-3D-3A (2026-09-05) — additive relation so services can
+  // navigate to department metadata (name/code) without a second query.
+  department        Department? @relation("AssignmentDepartment", fields: [departmentId], references: [id])
+  positionId        String?
+  managerEmployeeId String?
+  // FULL_TIME | PART_TIME | SEASONAL | CONTRACT — per-assignment so
+  // a salaried primary + hourly seasonal secondary are both expressible.
+  employmentType    String
+  // Half-open interval [effectiveFrom, effectiveTo). NULL effectiveTo
+  // = still open. The row is CURRENT at time `t` when
+  //   effectiveFrom <= t AND (effectiveTo IS NULL OR effectiveTo > t).
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  notes             String?
+  createdByUserId   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Role-specific compensation opts into this assignment via
+  // EmployeeCompensation.assignmentId. Cascade left to service so a
+  // deleted assignment does not silently orphan history.
+  compensations     EmployeeCompensation[]  @relation("AssignmentCompensations")
+  allowances        EmployeeAllowance[]
+  // Payroll-3A (2026-08-28) — role-specific earnings + time entries
+  // preserve assignment context so multi-role compensation resolves
+  // correctly when payroll runs. See §14 of the Payroll-3A brief.
+  payrollBatchEarnings PayrollBatchEarning[]
+  payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
+  // Payroll-3D-1 — clock events optionally reference the assignment
+  // the employee was clocking against, so future approval routing
+  // (3D-3) can follow the work being approved.
+  timeClockEvents            TimeClockEvent[] @relation("TimeClockEventAssignment")
+  // Payroll-3D-2 — timesheet entries reference the assignment they
+  // interpret so approval routing follows the work being approved.
+  payrollTimesheetEntries    PayrollTimesheetEntry[] @relation("AssignmentTimesheetEntries")
+
+  // Scheduling Foundation (2026-09-07) — the assignment context for
+  // a scheduled ShiftAssignment is the same key used by
+  // TimeClockEvent + PayrollTimesheetEntry, so scheduled-vs-worked
+  // reconciliation is a natural join. ShiftOpportunity does NOT
+  // link to EmployeeEmploymentAssignment directly — it links to a
+  // ShiftAssignment which carries the assignment context.
+  shiftAssignments           ShiftAssignment[]  @relation("EmploymentAssignmentShiftAssignments")
+
+  @@index([clubId, employeeId, effectiveFrom])
+  @@index([employeeId, role])
+}
+
+// HR-2C Employment (2026-08-24) — Recurring employee allowance.
+//
+// Effective-dated. Frequency PER_PAY_PERIOD | MONTHLY | ANNUAL.
+// `assignmentId` is optional — an allowance MAY be tied to a specific
+// role (e.g. Vehicle allowance only for the Grounds Superintendent
+// role) or MAY be employee-wide (e.g. Cell Phone allowance regardless
+// of which role they're working).
+//
+// `allowanceType` uses the canonical suggested catalogue
+// (CELL_PHONE / UNIFORM / VEHICLE / PROFESSIONAL_DUES / OTHER) but is
+// stored as a free-form string so a Club may extend it. `taxable`
+// is the payroll-consumption seam — the classification is admin-
+// controlled and stored, never inferred.
+model EmployeeAllowance {
+  id            String    @id @default(cuid())
+  clubId        String
+  club          Club      @relation(fields: [clubId], references: [id])
+  employeeId    String
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  assignmentId  String?
+  assignment    EmployeeEmploymentAssignment? @relation(fields: [assignmentId], references: [id])
+  // CELL_PHONE | UNIFORM | VEHICLE | PROFESSIONAL_DUES | OTHER (or Club extension)
+  allowanceType String
+  description   String?
+  amount        Decimal
+  currency      String?
+  // PER_PAY_PERIOD | MONTHLY | ANNUAL
+  frequency     String
+  // Payroll-3B-5B-1b (2026-09-01, §18) — income-tax treatment,
+  // CPP pensionability, and EI insurability are RELATED BUT NOT
+  // SYNONYMOUS. The prior single `taxable` flag conflated all three.
+  //
+  // `taxable` remains for backward compatibility (it now maps to
+  // income-tax treatment). `pensionable` and `insurable` decouple
+  // the statutory classifications so a source that is taxable but
+  // NOT pensionable (e.g. certain retiring allowances) is
+  // represented honestly.
+  //
+  // Migration behaviour: existing rows have `taxable` set; the
+  // service layer defaults `pensionable = taxable` and
+  // `insurable = taxable` when NULL, preserving 3A/3B-4/5A prep
+  // behaviour. New rows should set all three explicitly.
+  taxable       Boolean   @default(true)
+  pensionable   Boolean?
+  insurable     Boolean?
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  notes         String?
+  createdByUserId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Payroll-3A (2026-08-28) — snapshot at run prep records the
+  // effective allowance rows applied to a specific PayrollBatch.
+  payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
+
+  @@index([clubId, employeeId, effectiveFrom])
+}
+
+// HR-2C Home refinement (2026-08-24) — Employee-scoped dismissal of
+// a Home notification bar. Dismissal identity is `notificationKey`
+// which encodes the underlying obligation state (e.g. a hash of the
+// outstanding required-training version ids). If the obligation set
+// changes, the key changes, and a fresh bar renders — dismissal is
+// tied to what was dismissed, not to a generic "training bar".
+//
+// This is NOT a general notification framework. There is no message
+// text stored here; the Home page derives message content from the
+// canonical resolver at render time and only asks this table
+// "has this key been dismissed?". Dismissal must never affect
+// eligibility, availability, or scheduling — it is purely a Home-
+// page visibility toggle.
+model EmployeeHomeNotificationDismissal {
+  id               String   @id @default(cuid())
+  clubId           String
+  club             Club     @relation(fields: [clubId], references: [id])
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id])
+  notificationKey  String
+  dismissedAt      DateTime @default(now())
+
+  @@unique([employeeId, notificationKey])
+  @@index([clubId, employeeId])
 }
 
 // HR-2C B4 (2026-08-23) — Employee weekly availability.
@@ -3723,6 +3971,7 @@ model EmployeeAvailabilityWeek {
   club        Club     @relation(fields: [clubId], references: [id])
   employeeId  String
   employee    Employee @relation(fields: [employeeId], references: [id])
+  // Monday 00:00 (club-timezone-agnostic; the service normalises).
   weekStart   DateTime
   monday      Boolean  @default(false)
   tuesday     Boolean  @default(false)
@@ -3737,24 +3986,6 @@ model EmployeeAvailabilityWeek {
 
   @@unique([employeeId, weekStart])
   @@index([clubId, weekStart])
-}
-
-// HR-2C Home refinement (2026-08-24) — Employee-scoped dismissal of
-// a Home notification bar. Dismissal identity is `notificationKey`
-// which encodes the underlying obligation state (a hash of the
-// outstanding required-training version ids). Never affects
-// eligibility or availability — purely a Home-page visibility toggle.
-model EmployeeHomeNotificationDismissal {
-  id               String   @id @default(cuid())
-  clubId           String
-  club             Club     @relation(fields: [clubId], references: [id])
-  employeeId       String
-  employee         Employee @relation(fields: [employeeId], references: [id])
-  notificationKey  String
-  dismissedAt      DateTime @default(now())
-
-  @@unique([employeeId, notificationKey])
-  @@index([clubId, employeeId])
 }
 
 // status: DRAFT | OPEN | LOCKED | POSTED
@@ -3827,7 +4058,30 @@ model TimesheetEntry {
 }
 
 // kind: IN | OUT | BREAK_START | BREAK_END
-// Payroll-3D-1 (2026-09-05) — see prisma/schema.prisma for full doc.
+// Payroll-3D-1 (2026-09-05) — canonical immutable clock-event model.
+//
+// Fields extended for 3D-1 usage:
+//   • createdAt          — server-clock insertion time, ordered index.
+//   • employmentAssignmentId — links the event to a specific
+//                          EmployeeEmploymentAssignment so future
+//                          approval routing follows the work being
+//                          approved, not the employee's primary
+//                          department (§20, §21).
+//   • state (derived)    — NOT persisted. Interpreted from the most
+//                          recent events per employee.
+//
+// Legacy `lat` / `lng` are preserved for schema compatibility but
+// the 3D-1 service NEVER writes them (§38 — no GPS in 3D-1).
+//
+// `source` values written by 3D-1: EMPLOYEE_PORTAL. Reserved future
+// values: ADMIN_CORRECTION, SYSTEM.
+// `kind` values: CLOCK_IN | CLOCK_OUT | BREAK_START | BREAK_END.
+//   (The pre-3D-1 shorthands IN / OUT are also readable but the
+//   3D-1 service always writes the long form.)
+//
+// Append-only. Corrections are represented as NEW events referencing
+// the corrected event via a future ClockEventCorrection model (3D-2).
+// Original events must never be silently rewritten.
 model TimeClockEvent {
   id                     String   @id @default(cuid())
   clubId                 String
@@ -3843,8 +4097,11 @@ model TimeClockEvent {
   lng                    Float?
   notes                  String?
   createdAt              DateTime @default(now())
-
-  // Payroll-3D-3 — supersession.
+  // Payroll-3D-3 — supersession. When a CORRECT_CLOCK_* correction is
+  // approved, the ORIGINAL event stays untouched but has its
+  // supersededByEventId set to the newly-created ADMIN_CORRECTION
+  // event. The materializer skips superseded events so the corrected
+  // fact becomes operative without violating append-only history.
   supersededByEventId    String?
   supersededByEvent      TimeClockEvent?  @relation("TimeClockEventSupersession", fields: [supersededByEventId], references: [id])
   supersedes             TimeClockEvent[] @relation("TimeClockEventSupersession")
@@ -3853,12 +4110,38 @@ model TimeClockEvent {
   @@index([employeeId, kind, occurredAt])
   @@index([employmentAssignmentId, occurredAt])
   @@index([supersededByEventId])
+  // Payroll-3D-2 back-relations — see models below.
   timesheetEntryLinks           PayrollTimesheetEntryClockEvent[]
   originalOfCorrectionRequests  TimeClockCorrectionRequest[] @relation("CorrectionRequestOriginal")
   resolutionOfCorrectionRequests TimeClockCorrectionRequest[] @relation("CorrectionRequestResolution")
 }
 
-// Payroll-3D-2 (2026-09-05) — see prisma/schema.prisma for full docs.
+// ---------------------------------------------------------------------
+// Payroll-3D-2 (2026-09-05) — CANONICAL Time & Attendance timesheet.
+//
+// IMPORTANT: This is NOT the same model as the legacy `Timesheet`
+// higher up in this file. The legacy Timesheet + TimesheetEntry pair
+// is bound to the deprecated `PayrollPeriod` and is consumed only by
+// the pre-3A ops-side payroll path (`src/lib/ops/payroll.ts`). Do
+// NOT wire 3D-2 through the legacy path.
+//
+// PayrollTimesheet binds to the accepted `PayrollPayPeriod`
+// (semi-monthly 1–15 / 16–EOM cadence) and represents Spectre's
+// INTERPRETATION of an employee's recorded work for one pay period.
+//
+// Layered architecture:
+//   TimeClockEvent            — raw historical fact
+//     ↓  (Payroll-3D-2 materializer)
+//   PayrollTimesheet          — interpreted work per employee/period
+//     ↓  (Payroll-3D-3 — future)
+//   Manager approval
+//     ↓  (Payroll-3D-4 — future)
+//   PayrollApprovedTimeEntry  — frozen payroll input
+//
+// Statuses (this slice writes only OPEN / NEEDS_ATTENTION /
+// READY_FOR_REVIEW; SUBMITTED reserved for a possible future
+// MANUAL_TIMESHEET flow — Payroll-3D-2 §41 documents that
+// CLOCK_REQUIRED does NOT require explicit employee submission).
 model PayrollTimesheet {
   id           String   @id @default(cuid())
   clubId       String
@@ -3867,17 +4150,28 @@ model PayrollTimesheet {
   employee     Employee @relation("EmployeePayrollTimesheets", fields: [employeeId], references: [id])
   payPeriodId  String
   payPeriod    PayrollPayPeriod @relation("PayPeriodPayrollTimesheets", fields: [payPeriodId], references: [id])
-  status       String   @default("OPEN")
+  status       String   @default("OPEN")   // OPEN | NEEDS_ATTENTION | READY_FOR_REVIEW | SUBMITTED
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   entries PayrollTimesheetEntry[]
 
+  // One canonical timesheet per (club, employee, pay period).
   @@unique([clubId, employeeId, payPeriodId])
   @@index([clubId, payPeriodId, status])
   @@index([clubId, status])
 }
 
+// Payroll-3D-2 — one entry per completed work session (§13).
+// workDate follows the CLOCK_IN local date (§44 cross-midnight
+// policy). recordedSeconds = gross − break (precise seconds; NO
+// rounding — §59). Assignment provenance follows the work being
+// approved (§14 / §47) — never re-derived from Employee.department.
+// Immutable per source-punch bundle: the materializer identifies an
+// entry by its ANCHOR_IN clock event via provenance below; existing
+// entries are UPDATED in place when re-materializing (idempotent),
+// never duplicated. The DB unique on (timesheetId, clockInAt)
+// enforces this.
 model PayrollTimesheetEntry {
   id                     String @id @default(cuid())
   clubId                 String
@@ -3889,7 +4183,7 @@ model PayrollTimesheetEntry {
   workDate               DateTime
   employmentAssignmentId String?
   employmentAssignment   EmployeeEmploymentAssignment? @relation("AssignmentTimesheetEntries", fields: [employmentAssignmentId], references: [id])
-  earningClassification  String  @default("REGULAR")
+  earningClassification  String  @default("REGULAR")   // REGULAR only in 3D-2; overtime deferred to 3D-4+
   clockInAt              DateTime
   clockOutAt             DateTime
   recordedSeconds        Int
@@ -3902,12 +4196,21 @@ model PayrollTimesheetEntry {
   frozenAs        PayrollApprovedTimeEntry?  @relation("TimesheetEntryFrozenAs")
   timeAdjustments PayrollTimeAdjustment[]    @relation("TimesheetEntryAdjustments")
 
+  // One entry per starting punch within a timesheet — the materializer
+  // upserts on this key so reruns are idempotent.
   @@unique([timesheetId, clockInAt])
   @@index([timesheetId, workDate])
   @@index([employmentAssignmentId, workDate])
   @@index([clubId, employeeId, workDate])
 }
 
+// Payroll-3D-2 — relational provenance from every interpreted entry
+// back to the immutable TimeClockEvent facts that produced it (§8).
+// Roles:
+//   ANCHOR_IN     — the CLOCK_IN that opened the session (exactly 1 per entry)
+//   ANCHOR_OUT    — the CLOCK_OUT that closed the session (exactly 1 per entry)
+//   BREAK_START   — a BREAK_START event within the session
+//   BREAK_END     — a BREAK_END event within the session
 model PayrollTimesheetEntryClockEvent {
   id                String @id @default(cuid())
   clubId            String
@@ -3923,6 +4226,26 @@ model PayrollTimesheetEntryClockEvent {
   @@index([clockEventId])
 }
 
+// Payroll-3D-2 (§25) — employee-submitted correction request.
+// Immutable request; original TimeClockEvent NEVER mutated.
+// Approval (3D-3) will create a NEW TimeClockEvent with
+// source: ADMIN_CORRECTION and link it via resolutionClockEventId.
+//
+// Request types (§25):
+//   ADD_MISSING_CLOCK_IN
+//   ADD_MISSING_CLOCK_OUT
+//   CORRECT_CLOCK_IN
+//   CORRECT_CLOCK_OUT
+//   CORRECT_BREAK_START
+//   CORRECT_BREAK_END
+//
+// Statuses: PENDING | APPROVED | REJECTED | CANCELLED
+//
+// Concurrency (§36, §79): duplicate-submission guard uses a
+// (employeeId, requestType, originalClockEventId, status) composite
+// unique. Under two simultaneous identical PENDING submissions,
+// exactly one row commits; the loser hits the unique violation and
+// the service returns the existing request idempotently.
 model TimeClockCorrectionRequest {
   id                     String @id @default(cuid())
   clubId                 String
@@ -3940,11 +4263,19 @@ model TimeClockCorrectionRequest {
   updatedAt              DateTime @updatedAt
   reviewedAt             DateTime?
   reviewedByUserId       String?
-  // Payroll-3D-3 — optional manager rationale at review time.
+  // Payroll-3D-3 — optional manager rationale captured at
+  // reject/approve time. Kept short (< 500 chars); visible to the
+  // employee alongside the request status in the portal history.
   reviewerNote           String?
   resolutionClockEventId String?
   resolutionClockEvent   TimeClockEvent? @relation("CorrectionRequestResolution", fields: [resolutionClockEventId], references: [id])
 
+  // Duplicate-pending guard — §36, §79 concurrency invariant.
+  // Composite unique across NULLable originalClockEventId works
+  // because both engines treat two identical NON-NULL tuples as
+  // colliding; NULL originalClockEventId (missing-clock-in case)
+  // still lets multiple ADD_MISSING requests exist across time —
+  // the service adds a further short-window in-tx dedupe check.
   @@unique([employeeId, requestType, originalClockEventId, status])
   @@index([clubId, employeeId, status])
   @@index([status, createdAt])
@@ -9385,48 +9716,62 @@ model WorkIntakeItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Sprint 3 Checkpoint 15B (2026-07-24) — Operational Intelligence
-  // freshness marker. Distinct from `updatedAt` because a user's
-  // assignment or defer bump updatedAt but not the analysis. NULL
-  // until the first analysis run persists findings.
+  // Sprint 3 Checkpoint 15B (2026-07-24) — see prisma-postgres schema
+  // for the canonical doc block. Mirrored here so `prisma generate`
+  // against the SQLite dev schema stays consistent.
   lastAnalysedAt DateTime?
 
   // Sprint 3 · Checkpoint 15S (2026-07-29) — composite analyser
-  // version at time of the most-recent successful analysis. See
-  // src/lib/ap-intelligence/analysis-version.ts for the composite
-  // spec. Projection compares stored value against the current
-  // composite: mismatch triggers controlled reanalysis rather than
-  // mixing old + new logic silently.
+  // version at time of the most-recent successful analysis. Combines
+  // every analyser module's version (parse-invoice, supplier-extract,
+  // line-items-extract, tax-reconcile, economic-purpose,
+  // gl-recommend, analyse) into a single fingerprint. When the
+  // projection reads a WorkIntakeItem and the current composite
+  // does not match this value, controlled reanalysis is triggered
+  // instead of silently mixing old + new logic.
   analysisVersion String?
 
   // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — work-domain
-  // taxonomy. Separates the ingestion classifier's initial label
-  // (`classification`) from the renderer's ownership decision
-  // (`workDomain`), the user intent (`workIntent`), and the specific
-  // subtype (`workSubtype`). The renderer picks fields, actions and
-  // tabs by workDomain — NEVER by `classification` — so a
-  // membership inquiry never renders through the AP shell again.
-  workDomain                       String?
-  workIntent                       String?
+  // taxonomy. The renderer picks the correct card + fields + actions
+  // by workDomain, NOT by the legacy `classification` string (which
+  // remains for the ingestion classifier's own bookkeeping).
+  //   workDomain    — which business function owns this item
+  //   workIntent    — what the user needs to do
+  //   workSubtype   — domain-specific narrower kind (nullable)
+  //   workDomainConfidence — 0.0..1.0
+  //   workDomainSupportingEvidenceJson — audit trail of why
+  workDomain                       String? // ACCOUNTS_PAYABLE | ACCOUNTS_RECEIVABLE | PAYROLL | MEMBERSHIP | COMMUNICATIONS | GOVERNANCE | OPERATIONS | HOSPITALITY | INFORMATIONAL | GENERAL
+  workIntent                       String? // REVIEW | APPROVE | RESPOND | COLLECT | RESOLVE | INFORM | SCHEDULE | CREATE_RECORD | POST | OTHER
   workSubtype                      String?
   workDomainConfidence             Float?
-  workDomainSupportingEvidenceJson String?
-  workDomainAlternativesJson       String?
+  workDomainSupportingEvidenceJson String? // JSON array
+  workDomainAlternativesJson       String? // JSON array of {domain, confidence}
   workDomainRequiresReview         Boolean   @default(false)
   workDomainClassifiedAt           DateTime?
   workDomainClassifierVersion      String?
 
-  emailOrigins                EmailWorkIntakeOrigin[]
-  origins                     WorkIntakeOrigin[]
-  findings                    WorkIntakeFinding[]
-  activity                    WorkIntakeActivity[]
-  apReviewOverrides           ApReviewOverride[]
-  reads                       WorkIntakeItemRead[]
-  apIntakeSourcesForCanonical ApIntakeSource[]        @relation("ApIntakeSourceCanonical")
-  domainCorrections           WorkDomainCorrection[]
-  proposedCommitments         ProposedCommitment[]
-  completionEvents            WorkCompletionEvent[]
-  restorationEvents           WorkRestorationEvent[]
+  emailOrigins      EmailWorkIntakeOrigin[]
+  origins           WorkIntakeOrigin[]
+  findings          WorkIntakeFinding[]
+  activity          WorkIntakeActivity[]
+  apReviewOverrides ApReviewOverride[]
+  reads             WorkIntakeItemRead[]
+
+  // Sprint 3 · Checkpoint 15S — persistent source-to-canonical-AP
+  // relationship. Every email attachment that becomes part of an AP
+  // workflow gets an ApIntakeSource row; the AP intake this record
+  // resolves to is the ONE founder-visible workflow for that
+  // document. Multiple emails carrying the same PDF share ONE
+  // canonical AP intake. See ApIntakeSource model below.
+  apIntakeSourcesForCanonical ApIntakeSource[] @relation("ApIntakeSourceCanonical")
+
+  // Sprint 3 · Checkpoint 16G Stage B — user corrections to
+  // workDomain / workSubtype. Corrections inform future generalized
+  // classification; no subject-specific hardcoded rules.
+  domainCorrections   WorkDomainCorrection[]
+  proposedCommitments ProposedCommitment[]
+  completionEvents    WorkCompletionEvent[]
+  restorationEvents   WorkRestorationEvent[]
 
   @@index([clubId, status, displayReceivedAt])
   @@index([ownerUserId, status])
@@ -9435,7 +9780,10 @@ model WorkIntakeItem {
 }
 
 // Sprint 3 · Checkpoint 16H completion (2026-08-05) — audit record
-// for restoring a completed Work Intake back to Active.
+// for restoring a completed Work Intake back to Active. The
+// operation is asymmetric: restoration returns the WI to the
+// visible feed, but does NOT reverse accounting, does NOT resend
+// replies, does NOT move archived Outlook mail back to Inbox.
 model WorkRestorationEvent {
   id                     String         @id @default(cuid())
   clubId                 String
@@ -9451,9 +9799,10 @@ model WorkRestorationEvent {
 }
 
 // Sprint 3 · Checkpoint 16H (2026-08-04) — canonical completion
-// event emitter for every WI terminal transition. Downstream
-// services (Outlook archive worker, analytics) consume this without
-// each caller having to know about every side-effect.
+// event. Every place that transitions a Work Intake item to a
+// terminal state emits ONE of these. Downstream services (Outlook
+// archive worker, audit log, analytics) consume them without each
+// caller having to know about every downstream side-effect.
 model WorkCompletionEvent {
   id                String         @id @default(cuid())
   clubId            String
@@ -9461,7 +9810,7 @@ model WorkCompletionEvent {
   workIntakeItem    WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
   completedByUserId String
   completedAt       DateTime       @default(now())
-  completionType    String
+  completionType    String // RESOLVED | POSTED_AND_CLEARED | REPLIED_AND_CLOSED | APPROVED_AND_COMPLETED | OTHER
   metadataJson      String?
 
   archiveMutations OutlookArchiveMutation[]
@@ -9470,10 +9819,11 @@ model WorkCompletionEvent {
   @@index([workIntakeItemId])
 }
 
-// Sprint 3 · Checkpoint 16H (2026-08-04) — Spectre-originated
-// Outlook reply record. Row exists for audit + idempotency + so
-// delta-sync can recognise its own sent messages and not create
-// duplicate Work Intake items.
+// Sprint 3 · Checkpoint 16H (2026-08-04) — durable record of a
+// reply sent through the connected user's Outlook mailbox from
+// Spectre. Never duplicates the raw body — the actual email lives
+// in Outlook Sent Items; this row records the send attempt +
+// outcome for audit, idempotency, and delta-sync recognition.
 model OutlookReplyMutation {
   id                   String    @id @default(cuid())
   clubId               String
@@ -9481,15 +9831,15 @@ model OutlookReplyMutation {
   mailboxConnectionId  String
   sourceEmailMessageId String
   initiatedByUserId    String
-  mode                 String
-  status               String    @default("DRAFT")
+  mode                 String // REPLY | REPLY_ALL
+  status               String    @default("DRAFT") // DRAFT | PENDING | SENDING | SENT | FAILED_RETRYABLE | FAILED_TERMINAL | CANCELLED
   graphMessageId       String?
   graphConversationId  String?
   sentAt               DateTime?
   attemptCount         Int       @default(0)
   errorCode            String?
   idempotencyKey       String    @unique
-  bodyCiphertext       String?
+  bodyCiphertext       String? // Optional encrypted draft body (KMS envelope)
   bodySecretRef        String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
@@ -9499,8 +9849,9 @@ model OutlookReplyMutation {
   @@index([sourceEmailMessageId])
 }
 
-// Sprint 3 · Checkpoint 16H (2026-08-04) — durable Outlook archive
-// job. Idempotent per (completionEvent, message).
+// Sprint 3 · Checkpoint 16H (2026-08-04) — durable record of an
+// Outlook archive move triggered by a Spectre completion event.
+// Idempotency key = (workCompletionEventId, sourceEmailMessageId).
 model OutlookArchiveMutation {
   id                         String               @id @default(cuid())
   clubId                     String
@@ -9513,7 +9864,7 @@ model OutlookArchiveMutation {
   originalFolderId           String?
   destinationFolderId        String?
   mailboxConnectionId        String
-  status                     String               @default("PENDING")
+  status                     String               @default("PENDING") // PENDING | RUNNING | SUCCEEDED | RETRYABLE | FAILED_TERMINAL | NOT_REQUIRED
   attemptCount               Int                  @default(0)
   lastAttemptAt              DateTime?
   completedAt                DateTime?
@@ -9521,22 +9872,15 @@ model OutlookArchiveMutation {
   createdAt                  DateTime             @default(now())
   updatedAt                  DateTime             @updatedAt
 
+  // Idempotency: at most one row per (completion, message).
   @@unique([workCompletionEventId, emailMessageId])
   @@index([clubId, status])
   @@index([workIntakeId])
 }
 
 // Phase 4R rev-10 (2026-08-15) — Outlook mark-as-read mutations.
-//
-// When a founder first meaningfully interacts with an unread
-// email-backed Work Intake card, Spectre PATCHes the source
-// message with `isRead: true` via Microsoft Graph. That call is
-// enqueued (never blocking the UI click) and this row is the
-// durable idempotency + audit record for one such call.
-//
-// Uniqueness on (mailboxConnectionId, emailMessageId) ensures a
-// second click cannot enqueue a duplicate Graph PATCH — the worker
-// finds the existing SUCCEEDED row and returns immediately.
+// See prisma-postgres/schema.prisma for full docs; this is the
+// SQLite mirror for dev/test parity.
 model OutlookMarkReadMutation {
   id                  String    @id @default(cuid())
   clubId              String
@@ -9544,36 +9888,19 @@ model OutlookMarkReadMutation {
   emailMessageId      String
   graphMessageId      String
   mailboxConnectionId String
-  // PENDING → RUNNING → SUCCEEDED | FAILED_TERMINAL | NOT_REQUIRED | SUPERSEDED
   status              String    @default("PENDING")
   attemptCount        Int       @default(0)
   lastAttemptAt       DateTime?
   completedAt         DateTime?
   errorCode           String?
-  // The user who triggered the mark-read (for audit — the card
-  // interaction is per-user even though Outlook's isRead is shared).
   triggeredByUserId   String?
-  // Phase 4R rev-13 (2026-08-16) — the read/unread cycle is
-  // reversible. Each Spectre-initiated mark-read intent is its
-  // own GENERATION with an immutable audit trail. Historical
-  // SUCCEEDED / FAILED_TERMINAL / SUPERSEDED rows must NEVER
-  // block a later legitimate intent (see rev-12 diagnostic
-  // Defect B). `generationCursor` records the EmailMessage's
-  // `updatedAt` timestamp (or `graphMessageId` fingerprint) at
-  // enqueue time so per-row provenance is auditable; it is not
-  // load-bearing at write time.
+  // Rev-13 audit-only cursor — see postgres schema for docs.
   generationCursor    String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  // Rev-13: the @@unique([mailboxConnectionId, emailMessageId])
-  // is INTENTIONALLY REMOVED. Each new read-generation creates a
-  // new row; historical rows remain as immutable audit. Active-
-  // intent deduplication is enforced at the ENQUEUE site by
-  // querying for a currently-active row (status IN
-  // ['PENDING','RUNNING','RETRYABLE']) rather than at the DB
-  // constraint layer. See src/lib/work-intake/actions.ts +
-  // src/lib/mailbox/mark-read.ts.
+  // Rev-13 removes @@unique([mailboxConnectionId, emailMessageId]).
+  // See postgres schema for the full architectural note.
   @@index([clubId, status])
   @@index([workIntakeItemId])
   @@index([mailboxConnectionId, emailMessageId, status])
@@ -9581,8 +9908,10 @@ model OutlookMarkReadMutation {
 
 // Sprint 3 · Checkpoint 16G Stage E (2026-08-04) — Today's
 // Commitments proposals. Spectre-inferred deadlines derived from
-// genuine WorkIntake evidence. Kept separate from real Outlook
-// calendar events.
+// genuine WorkIntake evidence (invoice due dates, payroll cutoffs,
+// user defer dates, promised responses, aging thresholds). Kept
+// separate from real Outlook calendar events — the two are joined
+// for presentation in the panel but stored distinctly.
 model ProposedCommitment {
   id               String          @id @default(cuid())
   clubId           String
@@ -9593,7 +9922,7 @@ model ProposedCommitment {
   sourceRule       String
   rationaleCode    String
   confidence       Float           @default(0.5)
-  status           String          @default("PROPOSED")
+  status           String          @default("PROPOSED") // PROPOSED | ACCEPTED | DISMISSED | COMPLETED
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
@@ -9602,8 +9931,10 @@ model ProposedCommitment {
 }
 
 // Sprint 3 · Checkpoint 16G Stage B (2026-08-04) — user-corrected
-// work-domain labels. Feeds the classifier's future generalized
-// evidence base without subject-specific hardcoded rules.
+// work-domain labels. Feeds the classifier's evidence base without
+// creating subject-specific hardcoded rules. For this checkpoint
+// the data model + service contract exist; the correction UI is
+// deferred to a follow-up checkpoint.
 model WorkDomainCorrection {
   id                String         @id @default(cuid())
   clubId            String
@@ -9621,20 +9952,6 @@ model WorkDomainCorrection {
   @@index([workIntakeItemId])
 }
 
-// Sprint 3 Checkpoint 15B (2026-07-24) — Generic source-independent
-// evidence link for Operational Intelligence.
-//
-// One row per (situation, kind, referenceId, role). The referenceId
-// is polymorphic — Prisma cannot enforce a foreign key on it. Every
-// resolver MUST validate the reference against the correct source
-// table AND enforce clubId parity server-side.
-//
-// AR-only kinds are approved for this checkpoint:
-//   MEMBER_ACCOUNT | MEMBER | COLLECTION_NOTICE | MEMBER_TRANSACTION
-//
-// Future checkpoints will approve additional kinds (EMAIL_MESSAGE,
-// AP_INVOICE, APPROVAL_REQUEST, etc.) explicitly — do not silently
-// widen the enum.
 model WorkIntakeOrigin {
   id               String         @id @default(cuid())
   clubId           String
@@ -9642,7 +9959,7 @@ model WorkIntakeOrigin {
   workIntakeItem   WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
   kind             String
   referenceId      String
-  role             String         @default("PRIMARY") // PRIMARY | EVIDENCE
+  role             String         @default("PRIMARY")
   linkReason       String?
   createdAt        DateTime       @default(now())
   createdByUserId  String?
@@ -9652,15 +9969,6 @@ model WorkIntakeOrigin {
   @@index([clubId, kind, referenceId])
 }
 
-// Sprint 3 Checkpoint 15B (2026-07-24) — Persistent operational
-// finding produced by a deterministic analyser rule.
-//
-// state enum values: CONFIRMED | OBSERVED | SUPERSEDED | USER_REJECTED | ERROR
-// severity enum values: INFO | LOW | MEDIUM | HIGH | CRITICAL
-//
-// One analysis run writes 0..N findings, all sharing an
-// `analysisRunId`. Rerunning against unchanged inputs produces
-// zero new active findings (identical rows are preserved by key).
 model WorkIntakeFinding {
   id                 String         @id @default(cuid())
   clubId             String
@@ -9673,11 +9981,7 @@ model WorkIntakeFinding {
   materialityCents   BigInt?
   ruleKey            String
   ruleVersion        Int            @default(1)
-  // Array of { kind, referenceId } pointing at WorkIntakeOrigin rows
-  // on the same intake. Denormalised for fast render; cross-checked
-  // on write.
   evidenceRefsJson   String         @default("[]")
-  // Groups findings produced together by one analysis run.
   analysisRunId      String?
   overriddenByUserId String?
   overriddenAt       DateTime?
@@ -9689,48 +9993,22 @@ model WorkIntakeFinding {
 }
 
 // Sprint 3 · Post-16H Phase 3.2 (2026-08-06) — AP review-override
-// audit row. Preserves the founder's §3 audit requirement:
-// distinguish machine extraction from user correction so future
-// learning (Phase 4+) can measure both surfaces independently AND
-// so the server-side posting gate can prove that REQUIRES_EXPLICIT_
-// REVIEW blockers were actually reviewed before posting.
-//
-// One row per corrected field or reviewed blocker. Immutable — never
-// updated, never deleted; a subsequent correction inserts a new row.
+// audit row. Immutable per correction. See prisma-postgres/schema.prisma
+// for full documentation.
 model ApReviewOverride {
-  id               String         @id @default(cuid())
-  clubId           String
-  club             Club           @relation(fields: [clubId], references: [id])
-  workIntakeItemId String
-  workIntakeItem   WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
-  reviewedByUserId String
-  reviewedBy       User           @relation("ApReviewOverrideActor", fields: [reviewedByUserId], references: [id])
-  reviewedAt       DateTime       @default(now())
-
-  // What was reviewed / corrected. Closed enum in code.
-  //   SUPPLIER | INVOICE_NUMBER | INVOICE_DATE | SUBTOTAL | TAX |
-  //   TOTAL | CURRENCY | GL_ACCOUNT | DEPARTMENT | ALLOCATION |
-  //   CAPITAL_TREATMENT | TAX_UNCERTAINTY |
-  //   MULTI_ALLOCATION_REVIEW | VENDOR_ONBOARDING | BLOCKER_ACK |
-  //   OTHER
-  overrideKind String
-
-  // ApWorkflowBlockerCode string this override satisfies (nullable
-  // when the override is a straight correction, not a blocker ack).
-  satisfiesBlocker String?
-
-  // Original machine value + corrected user value. JSON so the
-  // schema does not need to distinguish string / number / object.
-  // Null for BLOCKER_ACK-type rows where there is no field value.
-  originalValueJson  String?
-  correctedValueJson String?
-
-  // Human-readable reason the reviewer supplied (optional).
-  reason String?
-
-  // Snapshot of the canonical decision produced by the server AFTER
-  // this override was persisted — records the exact state at
-  // review time so audit trail is complete.
+  id                    String         @id @default(cuid())
+  clubId                String
+  club                  Club           @relation(fields: [clubId], references: [id])
+  workIntakeItemId      String
+  workIntakeItem        WorkIntakeItem @relation(fields: [workIntakeItemId], references: [id], onDelete: Cascade)
+  reviewedByUserId      String
+  reviewedBy            User           @relation("ApReviewOverrideActor", fields: [reviewedByUserId], references: [id])
+  reviewedAt            DateTime       @default(now())
+  overrideKind          String
+  satisfiesBlocker      String?
+  originalValueJson     String?
+  correctedValueJson    String?
+  reason                String?
   resultingDecisionJson String?
 
   @@index([workIntakeItemId, reviewedAt])
@@ -9796,8 +10074,33 @@ model EmailWorkIntakeOrigin {
 
 // ---------------------------------------------------------------------------
 // Sprint 3 · Checkpoint 16H rejection (2026-08-04) — Canonical
-// provider-neutral conversation message. See prisma/schema.prisma for
-// the full contract + rationale.
+// provider-neutral conversation message.
+//
+// Represents ONE message in a Work Intake conversation regardless of
+// origin: pulled from Outlook by delta sync, OR originated locally by a
+// Spectre reply. The Conversation tab reads THIS table for outbound
+// rows and the existing EmailMessage table for inbound rows (Sprint 2
+// C14C thread loader is extended by 16H rejection).
+//
+// Why a separate model:
+//   EmailMessage requires non-null graphMessageId + receivedAt +
+//   lastSyncedAt and enforces @@unique([mailboxConnectionId,
+//   graphMessageId]). A locally-originated reply has none of those at
+//   send time — fabricating them would either violate the invariant
+//   or, per founder §3, "create a misleading fake Graph message ID."
+//   ConversationMessage owns the provider-neutral contract.
+//
+// Idempotency (§4):
+//   Exactly one canonical outbound message per successful
+//   OutlookReplyMutation → replyMutationId is unique.
+//   Reconciled provider messages are unique per (mailboxConnectionId,
+//   providerMessageId).
+//
+// Storage of message body (§12):
+//   bodyCiphertext + bodySecretRef mirror the existing
+//   OutlookReplyMutation encryption contract. Plaintext bodyHtml /
+//   bodyText are populated only if the existing security model
+//   already stores plaintext for the same class of message.
 model ConversationMessage {
   id                  String  @id @default(cuid())
   clubId              String
@@ -9805,10 +10108,10 @@ model ConversationMessage {
   workIntakeItemId    String?
   conversationId      String
 
-  direction String
-  source    String
+  direction String // "INBOUND" | "OUTBOUND"
+  source    String // "OUTLOOK_SYNC" | "SPECTRE_REPLY"
 
-  providerMessageId String?
+  providerMessageId String? // null until Sent-Items reconciliation lands
   internetMessageId String?
   replyMutationId   String? @unique
 
@@ -9825,7 +10128,7 @@ model ConversationMessage {
   sentAt               DateTime?
   receivedAt           DateTime?
   providerReconciledAt DateTime?
-  reconciliationStatus String    @default("NOT_APPLICABLE")
+  reconciliationStatus String    @default("NOT_APPLICABLE") // NOT_APPLICABLE | PENDING | RECONCILED | FAILED
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -9839,18 +10142,7 @@ model ConversationMessage {
 
 // ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15D (2026-07-24) — Immutable ingested-document store.
-//
-// An IngestedDocument is a canonical, immutable binary object ingested from
-// an operational source (email attachment today; direct upload reserved).
-// Identity = SHA256 hash. The original bytes are never mutated. Corrections,
-// extraction, annotations, and OCR go on OTHER models — not here.
-//
-// sourceKind: EMAIL_ATTACHMENT (Phase C). Additional kinds require an
-// explicit checkpoint approval; do not silently widen the enum.
-// classification: UNKNOWN | INVOICE | STATEMENT | CREDIT_NOTE |
-//                 PURCHASE_ORDER | REMITTANCE | OTHER
-// status:         STORED | REFUSED_UNSAFE_TYPE | REFUSED_TOO_LARGE |
-//                 REFUSED_CORRUPT | REFUSED_DUPLICATE_SUPERSEDED
+// See prisma-postgres/schema.prisma for the canonical documentation.
 // ---------------------------------------------------------------------------
 model IngestedDocument {
   id                    String   @id @default(cuid())
@@ -9888,11 +10180,6 @@ model IngestedDocument {
   @@index([clubId, sourceKind, sourceReferenceId])
 }
 
-// One row per (document, target) evidence relationship. The target is
-// polymorphic; targetKind is a closed enum enforced in code.
-//   targetKind: WORK_INTAKE_ITEM (initial). Additional kinds require an
-//   explicit checkpoint approval.
-//   role: PRIMARY | EVIDENCE (mirrors WorkIntakeOrigin's role convention)
 model IngestedDocumentEvidenceLink {
   id                 String           @id @default(cuid())
   clubId             String
@@ -9910,11 +10197,6 @@ model IngestedDocumentEvidenceLink {
   @@index([clubId, targetKind, targetReferenceId])
 }
 
-// The audit chain answers: where did it come from, when did it arrive,
-// who retrieved it, when.
-//   action: INGESTED | DUPLICATE_DETECTED | RETRIEVED_METADATA |
-//           RETRIEVED_PREVIEW | RETRIEVED_DOWNLOAD | REFUSED |
-//           EVIDENCE_LINKED | EVIDENCE_UNLINKED
 model IngestedDocumentAuditLog {
   id                 String           @id @default(cuid())
   clubId             String
@@ -9974,13 +10256,7 @@ model DocumentOcrExtraction {
   createdAt                DateTime         @default(now())
   updatedAt                DateTime         @updatedAt
 
-  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level OCR
-  // dispatch. Persistence identity extends to include the specific
-  // page the extraction covers so mixed digital+scanned PDFs can
-  // run OCR page-by-page independently. `pageNumber = 0` reserved
-  // for whole-document extractions (pre-5.1 rows migrate to 0).
-  // A future deterministic `regionKey` can be added without
-  // breaking the current key.
+  // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level dispatch.
   pageNumber Int     @default(0)
   regionKey  String?
 
@@ -9992,26 +10268,48 @@ model DocumentOcrExtraction {
 
 // ---------------------------------------------------------------------------
 // Sprint 3 · Checkpoint 16F (2026-08-04) — AP regression library.
-// See prisma/schema.prisma for the canonical documentation.
+//
+// A permanent, tenant-independent expectation set that the AP
+// intelligence engine can be evaluated against. Rows are keyed by
+// document SHA-256 so the same PDF can be loaded from any tenant's
+// storage (or from a fixture bucket) and scored against the same
+// expected answers.
+//
+// The founder-review tenant (Coulee Ridge) MUST NOT contain the
+// Work Intake wrappers for regression PDFs. The regression runner
+// reads directly from a demo tenant's IngestedDocument rows and
+// compares analysis output to a RegressionExpectation row.
 // ---------------------------------------------------------------------------
 model RegressionExpectation {
   id                       String   @id @default(cuid())
+  // Document identity — SHA-256 of the PDF bytes. Independent of
+  // which tenant currently holds the IngestedDocument.
   documentSha256           String
+  // Human-readable label for reports (e.g. "1091559-Oakcreek-capital").
+  // Never a supplier / customer name in production tests.
   label                    String
+  // Category shape — one of: CAPITAL_EQUIPMENT, REPAIR_PARTS,
+  // PROFESSIONAL_MEMBERSHIP, RECURRING_TELECOM, VENDOR_STATEMENT,
+  // IMAGE_ONLY_OCR, MULTI_PAGE, MULTI_ALLOCATION, GST_EDGE, CREDIT_MEMO,
+  // FUEL_SURCHARGE, INTEREST_CHARGE, UNKNOWN.
   category                 String
+  // Expected extraction / classification answers. Nullable when
+  // the expectation is "abstains cleanly" for that dimension.
   expectedSupplier         String?
   expectedInvoiceNumber    String?
   expectedGrossTotalCents  Int?
   expectedCurrency         String?
-  expectedAccountingNature String?
-  expectedDepartmentKey    String?
+  expectedAccountingNature String? // CAPITAL_ASSET / REPAIR_AND_MAINTENANCE / …
+  expectedDepartmentKey    String? // grounds / kitchen / it / …
   expectedGlAccountNumber  String?
   expectedAllocationCount  Int?
+  // Whether the runner should assert supplier match / GL match /
+  // etc. Some regressions are "must abstain" — no expected GL.
   assertSupplier           Boolean  @default(true)
   assertGlAccount          Boolean  @default(true)
   assertAccountingNature   Boolean  @default(true)
   assertDepartment         Boolean  @default(false)
-  notes                    String?
+  notes                    String? // one-line rationale
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
@@ -10021,22 +10319,7 @@ model RegressionExpectation {
 
 // ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15F (2026-07-24) — Vendor Master Intelligence.
-//
-// Two additive tables sit alongside Vendor. Nothing else changes.
-//   * VendorAlias — historical Jonas (or any other) vendor code that
-//     resolves to a canonical Spectre Vendor. Future imports resolve
-//     against this table BEFORE creating a new Vendor row.
-//   * VendorMergeRecord — immutable audit row per executed merge.
-//     Never edited, never deleted. Provides the "rollback reference"
-//     required by Phase J.
-//
-// aliasKind values (closed enum enforced in code):
-//   JONAS_VENDOR_CODE | LEGACY_INVOICE_NUMBER | LEGAL_NAME | OTHER
-// mergeStatus values:
-//   COMMITTED   — merge succeeded and is live
-//   REVERSED    — a subsequent counter-merge reversed this one
-//                (still audit-visible; never edit history)
-// Vendor.status values now include "MERGED" (added by this checkpoint).
+// See prisma-postgres/schema.prisma for the canonical documentation.
 // ---------------------------------------------------------------------------
 model VendorAlias {
   id                   String   @id @default(cuid())
@@ -10047,8 +10330,8 @@ model VendorAlias {
   aliasKind            String
   aliasValue           String
   aliasValueNormalized String
-  originVendorId       String? // set when this alias was created from a merged Vendor
-  createdViaMergeId    String? // FK to VendorMergeRecord.id (nullable so seed aliases can exist without a merge)
+  originVendorId       String?
+  createdViaMergeId    String?
   createdByUserId      String?
   createdAt            DateTime @default(now())
 
@@ -10061,14 +10344,13 @@ model VendorMergeRecord {
   id                            String   @id @default(cuid())
   clubId                        String
   club                          Club     @relation(fields: [clubId], references: [id])
-  winnerVendorId                String // the canonical vendor that survived
+  winnerVendorId                String
   winnerVendor                  Vendor   @relation("VendorMergeWinner", fields: [winnerVendorId], references: [id])
-  loserVendorId                 String // the vendor marked MERGED
+  loserVendorId                 String
   loserVendor                   Vendor   @relation("VendorMergeLoser", fields: [loserVendorId], references: [id])
   initiatedByUserId             String?
   approvedByUserId              String?
   reason                        String
-  // Immutable snapshot of the counts moved during merge. NEVER updated.
   movedInvoicesCount            Int      @default(0)
   movedPaymentsCount            Int      @default(0)
   movedContactsCount            Int      @default(0)
@@ -10082,8 +10364,6 @@ model VendorMergeRecord {
   movedLibraryDocumentsCount    Int      @default(0)
   cancelledApprovalsCount       Int      @default(0)
   createdAliasesCount           Int      @default(0)
-  // Full simulation JSON preserved so a reviewer can always see what
-  // the executor thought it was about to do.
   simulationJson                String
   status                        String   @default("COMMITTED")
   reversalOfMergeId             String?
@@ -10096,31 +10376,7 @@ model VendorMergeRecord {
 
 // ---------------------------------------------------------------------------
 // Sprint 3 Checkpoint 15G (2026-07-24) — Vendor statement reconciliation.
-//
-// Three additive models. Nothing else changes. A vendor statement PDF is
-// already immutable in IngestedDocument; the three models below persist
-// (a) the reconciliation situation, (b) the parsed lines, and (c) the
-// per-line match decisions against APInvoice / VendorPayment / AP credit.
-//
-// Closed enum values (enforced in code):
-//   extractionState:      STRUCTURED | PARTIALLY_STRUCTURED |
-//                         DOCUMENT_UNREADABLE | UNSUPPORTED_LAYOUT |
-//                         INSUFFICIENT_EVIDENCE
-//   reconciliationState:  RECONCILED | RECONCILED_WITH_TIMING_DIFFERENCES |
-//                         EXCEPTIONS_FOUND | VENDOR_UNRESOLVED |
-//                         DOCUMENT_UNREADABLE | INSUFFICIENT_EVIDENCE |
-//                         REVIEW_REQUIRED
-//   transactionKind:      INVOICE | CREDIT_NOTE | PAYMENT | FINANCE_CHARGE |
-//                         OPENING_BALANCE | BALANCE_FORWARD | ADJUSTMENT |
-//                         OTHER | UNKNOWN
-//   targetKind:           AP_INVOICE | VENDOR_PAYMENT | AP_CREDIT | NONE
-//   matchState:           EXACT_MATCH | PROBABLE_MATCH | AMBIGUOUS_MATCH |
-//                         AMOUNT_MISMATCH | DATE_MISMATCH | NOT_FOUND |
-//                         DUPLICATE_LEDGER_ENTRY | DUPLICATE_STATEMENT_LINE |
-//                         UNAPPLIED_PAYMENT | UNAPPLIED_CREDIT |
-//                         PAYMENT_NOT_FOUND | PAYMENT_AMOUNT_MISMATCH |
-//                         PAYMENT_DATE_MISMATCH | VOIDED_PAYMENT_CONFLICT |
-//                         CREDIT_NOT_FOUND | CREDIT_AMOUNT_MISMATCH
+// See prisma-postgres/schema.prisma for the canonical documentation.
 // ---------------------------------------------------------------------------
 model VendorStatementReconciliation {
   id                        String           @id @default(cuid())
@@ -10128,7 +10384,7 @@ model VendorStatementReconciliation {
   club                      Club             @relation(fields: [clubId], references: [id])
   ingestedDocumentId        String           @unique
   ingestedDocument          IngestedDocument @relation(fields: [ingestedDocumentId], references: [id], onDelete: Cascade)
-  canonicalVendorId         String? // null when vendor resolution returned NOT_FOUND / AMBIGUOUS
+  canonicalVendorId         String?
   canonicalVendor           Vendor?          @relation("VendorStatementReconciliationVendor", fields: [canonicalVendorId], references: [id])
   statementDate             DateTime?
   periodStart               DateTime?
@@ -10166,7 +10422,7 @@ model VendorStatementLine {
   debitAmount        Decimal?                      @default(0)
   creditAmount       Decimal?                      @default(0)
   runningBalance     Decimal?
-  extractionEvidence String? // JSON — { ruleKey, sourcePage?, matchedText? }
+  extractionEvidence String?
   createdAt          DateTime                      @default(now())
 
   matches VendorStatementLineMatch[]
@@ -10182,13 +10438,13 @@ model VendorStatementLineMatch {
   club               Club                @relation(fields: [clubId], references: [id])
   statementLineId    String
   statementLine      VendorStatementLine @relation(fields: [statementLineId], references: [id], onDelete: Cascade)
-  targetKind         String // AP_INVOICE | VENDOR_PAYMENT | AP_CREDIT | NONE
-  targetReferenceId  String? // null when targetKind = NONE (missing / not-found)
+  targetKind         String
+  targetReferenceId  String?
   matchState         String
-  matchBasis         String? // JSON — { ruleKey, signals }
+  matchBasis         String?
   amountDifference   Decimal?
   dateDifferenceDays Int?
-  reviewerDecision   String? // JSON — { userId, decision, at, note }
+  reviewerDecision   String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -10256,12 +10512,7 @@ model MailboxConnection {
   messages      EmailMessage[]
   syncRuns      MailboxSyncRun[]
 
-  // HR-2B.3 tail (2026-08-18) — back-relation for the Club's
-  // designated outbound mailbox. Zero or more Clubs may designate
-  // this connection (in practice one Club per connection because the
-  // MailboxConnection is already Club-scoped, but the plural form
-  // keeps referential integrity clean without a unique constraint
-  // that would fight the SetNull semantics on delete).
+  // HR-2B.3 tail — back-relation for the Club's designated outbound mailbox.
   clubsUsingAsOutbound Club[] @relation("ClubOutboundMailbox")
 
   @@unique([userId, clubId, provider, externalUserId])
@@ -10445,8 +10696,12 @@ model MailboxOAuthTransaction {
   outcome      String?
 
   // Sprint 3 · Checkpoint 16H remediation (2026-08-05) — expected
-  // Microsoft identity for permission-update reconnect. Callback
-  // validates returned oid+tid against these before any token write.
+  // Microsoft identity for an "update permissions on existing
+  // mailbox" reconnect. When populated at startConnect time, the
+  // callback validates the returned id_token's oid + tid against
+  // these values BEFORE any token write. login_hint on the
+  // authorization URL is an identity-selection aid, NOT a security
+  // control; the server-side comparison is authoritative.
   expectedMailboxConnectionId String?
   expectedExternalUserId      String?
   expectedExternalTenantId    String?
@@ -10481,9 +10736,38 @@ model EmailAttachment {
 }
 
 // Sprint 3 · Checkpoint 15S (2026-07-29) — persistent source-to-
-// canonical-AP relationship. See prisma/schema.prisma for the
-// canonical doc block. Tenant-scoped (`clubId`), one row per
-// EmailAttachment, resolves to one canonical AP WorkIntakeItem.
+// canonical-AP relationship.
+//
+// Founder rule (architectural reset, §Required architectural correction):
+//   "Use SHA deduplication to reuse document bytes and document
+//    analysis, but do not use SHA equality alone as the permanent
+//    workflow relationship. When a new email attachment resolves to
+//    an existing IngestedDocument, persist an explicit link from
+//    the new source attachment/email intake to the canonical AP
+//    intake or canonical AP analysis."
+//
+// Row semantics: one row per (EmailAttachment) that becomes part of
+// an AP workflow. The `canonicalApIntakeId` names the ONE
+// AP_INVOICE_REVIEW WorkIntakeItem the founder sees for this
+// invoice. Multiple emails carrying the same PDF resolve to the
+// SAME `canonicalApIntakeId`.
+//
+// Tenant safety: every row carries `clubId`; foreign keys guarantee
+// same-tenant. Cross-tenant SHA equality never establishes a link.
+//
+// Relationship classification:
+//   ORIGINAL_SUBMISSION — this attachment is the first submission of
+//                         the invoice document to the AP workflow.
+//   RETRANSMISSION      — the attachment restates a document already
+//                         under an unresolved AP workflow (e.g.
+//                         "Pt2" of the founder's forwarded chain).
+//   FORWARDED_COPY      — a different party forwards the same
+//                         invoice into the same mailbox.
+//   POSSIBLE_DUPLICATE  — the document matches an AP workflow that
+//                         is already resolved / posted / voided /
+//                         rejected. The row does NOT reopen the
+//                         workflow; it records the receipt for
+//                         audit + surfaces via history.
 model ApIntakeSource {
   id     String @id @default(cuid())
   clubId String
@@ -10499,7 +10783,6 @@ model ApIntakeSource {
   canonicalApIntakeId String
   canonicalApIntake   WorkIntakeItem @relation("ApIntakeSourceCanonical", fields: [canonicalApIntakeId], references: [id], onDelete: Cascade)
 
-  // ORIGINAL_SUBMISSION | RETRANSMISSION | FORWARDED_COPY | POSSIBLE_DUPLICATE
   relationship          String
   reason                String?
   analysisVersionAtLink String?
@@ -10513,35 +10796,59 @@ model ApIntakeSource {
 }
 
 // Sprint 3 · Phase 4 Slice 5.7B (2026-08-09) — durable, GLOBAL product
-// reference knowledge. §6 Option C: product FACTS reusable across
-// tenants; tenant ACCOUNTING conclusions re-derive per-tenant.
+// reference knowledge. §6 Option C: product FACTS (manufacturer, model,
+// object type, component relationships) are reusable across tenants;
+// tenant ACCOUNTING conclusions (department, capital, GL) are never
+// stored here and always re-derive per-tenant via analyseIngestedInvoice.
+//
+// Privacy invariants (§7, §29): this table must NEVER contain
+//   clubId · invoiceNumber · workIntakeItemId · emailMessageId
+//   · member/customer/vendor identity · bank/tax/payment data
+//   · full webpage bodies · full invoice text.
+// The persistence audit in ap-intelligence/tests/product-reference-privacy.test.ts
+// enforces this at CI.
 model ProductReference {
   id String @id @default(cuid())
 
-  normalizedKey          String  @unique
+  // Canonical dedupe key: `${MANUFACTURER}|${MODEL}|${PART}` uppercased.
+  // Empty segments allowed (e.g. no partNumber). Unique globally.
+  normalizedKey String @unique
+
   normalizedManufacturer String
   normalizedModel        String
   normalizedPartNumber   String?
 
+  // Derived facts (from provider evidence). Nullable when research is
+  // pending / inconclusive.
   productFamily        String?
   objectType           String?
+  // Bounded structured facts. Never a full webpage body.
   identityEvidenceJson String  @default("[]")
   sourceEvidenceJson   String  @default("[]")
 
-  evidenceQuality String @default("UNKNOWN")
+  evidenceQuality String @default("UNKNOWN") // HIGH | MEDIUM | LOW | UNKNOWN
   confidence      Float  @default(0)
 
+  // §9 research state model — explicit, never inferred from null fields.
   researchState String @default("PENDING")
+  // NOT_REQUIRED | PENDING | RUNNING | COMPLETED
+  // | FAILED_RETRYABLE | FAILED_TERMINAL | NO_RESULT | CONFLICTING_EVIDENCE
 
+  // §12 versioning — factual evidence is re-usable across accounting
+  // releases so long as the evidence schema version matches. Bump
+  // researchVersion to force controlled re-research.
   provider              String?
   providerVersion       String?
   researchVersion       String  @default("1")
   evidenceSchemaVersion String  @default("1")
 
+  // §8 TTL policy — identity is long-lived; price observations decay
+  // faster. Nullable expiresAt = no expiry.
   identityVerifiedAt DateTime?
   identityExpiresAt  DateTime?
   priceExpiresAt     DateTime?
 
+  // Operational counters (§17 retry policy).
   researchAttempts      Int       @default(0)
   lastResearchAttemptAt DateTime?
   lastResearchError     String?
@@ -10647,6 +10954,10 @@ model EmployeeCompensation {
   actorUserId   String?
   actor         User?     @relation("EmployeeCompensationActor", fields: [actorUserId], references: [id])
   // HR-2C Employment (2026-08-24) — optional role-specific compensation.
+  // When null, this row is employee-wide (legacy — backwards compatible
+  // with existing rows). When set, the rate applies only to hours
+  // worked / salary associated with the referenced assignment. Payroll
+  // consumers must handle both branches.
   assignmentId  String?
   assignment    EmployeeEmploymentAssignment? @relation("AssignmentCompensations", fields: [assignmentId], references: [id])
   createdAt     DateTime  @default(now())
@@ -10654,77 +10965,6 @@ model EmployeeCompensation {
   @@index([clubId])
   @@index([employeeId, effectiveFrom])
   @@index([assignmentId, effectiveFrom])
-}
-
-// HR-2C Employment (2026-08-24) — Multi-role assignment registry.
-// One PRIMARY active per employee; multiple ADDITIONAL allowed.
-// Effective-dated half-open interval [effectiveFrom, effectiveTo).
-model EmployeeEmploymentAssignment {
-  id                String    @id @default(cuid())
-  clubId            String
-  club              Club      @relation(fields: [clubId], references: [id])
-  employeeId        String
-  employee          Employee  @relation(fields: [employeeId], references: [id])
-  role              String
-  departmentId      String?
-  // Payroll-3D-3A additive relation (see prisma/schema.prisma).
-  department        Department? @relation("AssignmentDepartment", fields: [departmentId], references: [id])
-  positionId        String?
-  managerEmployeeId String?
-  employmentType    String
-  effectiveFrom     DateTime
-  effectiveTo       DateTime?
-  notes             String?
-  createdByUserId   String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  compensations     EmployeeCompensation[]  @relation("AssignmentCompensations")
-  allowances        EmployeeAllowance[]
-  // Payroll-3A (2026-08-28) — role-specific earnings + time entries.
-  payrollBatchEarnings PayrollBatchEarning[]
-  payrollApprovedTimeEntries PayrollApprovedTimeEntry[]
-  // Payroll-3D-1 — clock events optionally reference the assignment.
-  timeClockEvents            TimeClockEvent[] @relation("TimeClockEventAssignment")
-  // Payroll-3D-2 — timesheet entries reference the assignment.
-  payrollTimesheetEntries    PayrollTimesheetEntry[] @relation("AssignmentTimesheetEntries")
-
-  @@index([clubId, employeeId, effectiveFrom])
-  @@index([employeeId, role])
-}
-
-// HR-2C Employment (2026-08-24) — Recurring employee allowance.
-// Effective-dated. Optional per-assignment scope. `taxable` is admin-
-// controlled classification for Payroll consumption.
-model EmployeeAllowance {
-  id              String    @id @default(cuid())
-  clubId          String
-  club            Club      @relation(fields: [clubId], references: [id])
-  employeeId      String
-  employee        Employee  @relation(fields: [employeeId], references: [id])
-  assignmentId    String?
-  assignment      EmployeeEmploymentAssignment? @relation(fields: [assignmentId], references: [id])
-  allowanceType   String
-  description     String?
-  amount          Decimal
-  currency        String?
-  frequency       String
-  taxable         Boolean   @default(true)
-  // Payroll-3B-5B-1b (§18) — decoupled statutory classifications.
-  pensionable     Boolean?
-  insurable       Boolean?
-  effectiveFrom   DateTime
-  effectiveTo     DateTime?
-  notes           String?
-  createdByUserId String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  // Payroll-3A (2026-08-28) — snapshot at run prep records the
-  // effective allowance rows applied to a specific PayrollBatch.
-  payrollBatchAllowanceSnapshots PayrollBatchAllowanceSnapshot[]
-
-  @@index([clubId, employeeId, effectiveFrom])
 }
 
 // One-per-Employee payroll profile. Foundational configuration for
@@ -10830,8 +11070,11 @@ model EmployeeSensitiveIdentity {
   sinSecretRef   String
   // Masked helper — safe to render.
   sinLastThree   String?
-  // HR mobile-hotfix (2026-08-30) — HMAC-SHA256 keyed fingerprint.
-  // Enforces (clubId, sinFingerprint) uniqueness.
+  // HR mobile-hotfix (2026-08-30) — HMAC-SHA256 keyed fingerprint of
+  // the normalised SIN. Used ONLY for deterministic equality lookup
+  // to enforce (clubId, sinFingerprint) uniqueness. Never returned
+  // to the browser, never logged in cleartext audit fields. See
+  // src/lib/kms/keyed-fingerprint.ts for the key-management model.
   sinFingerprint String?
   // Optional country-of-issue hint (CA | US | ...).
   issuingCountry String?
@@ -10862,11 +11105,12 @@ model EmployeeBankAccount {
   accountLastFour      String?
   holderName           String
   // HR mobile-hotfix (2026-08-30) — HMAC-SHA256 keyed fingerprint of
-  // the normalised banking triple. Detects two different employees
-  // sharing the same payroll destination. Historical rows for the
-  // same employee may share a fingerprint; only the currently-
-  // active (non-terminal) row is fingerprint-unique across
-  // employees in a Club.
+  // the normalised (institution, transit, account) triple. Used to
+  // detect two DIFFERENT employees pointing at the same payroll
+  // destination. Historical rows for the SAME employee may share a
+  // fingerprint; the partial uniqueness constraint applies to the
+  // currently-active (non-terminal) row across employees within a
+  // Club. See src/lib/kms/keyed-fingerprint.ts.
   bankFingerprint      String?
   status               String    @default("PENDING_PENNY_TEST")
   activatedAt          DateTime?
@@ -10899,7 +11143,20 @@ model EmployeeTaxProfile {
   provincialClaimSecretRef     String
   additionalDeductionSecretRef String?
   // Payroll-3B-5B-1b (2026-09-01) — TD1 source facts required by
-  // T4127. See prisma/schema.prisma for full doc.
+  // the T4127 withholding formulas. Sensitive per HR policy but
+  // NOT KMS-wrapped here (they're integer/decimal amounts, not
+  // opaque secrets like SIN):
+  //   • additionalFederalTaxAmount: TD1 "additional tax to be
+  //     deducted" field. Added AFTER the formula's T4 result;
+  //     never modifies the base T3.
+  //   • additionalProvincialTaxAmount: Alberta TD1 equivalent.
+  //   • claimZeroFederal: TD1 "more than one employer / payer"
+  //     checkbox on federal TD1. When true, calculator applies
+  //     zero claim for federal — no BPA.
+  //   • claimZeroProvincial: Alberta TD1 equivalent.
+  //   • totalIncomeLessThanClaim: TD1 "no tax withheld" attestation
+  //     — when true, calculator withholds zero income tax overall
+  //     regardless of gross earnings.
   additionalFederalTaxAmount   Decimal   @default(0)
   additionalProvincialTaxAmount Decimal  @default(0)
   claimZeroFederal             Boolean   @default(false)
@@ -11004,54 +11261,21 @@ model EmployeeEmergencyContact {
   @@index([employeeId])
 }
 
-// HR-2B.4 (2026-08-19) — OnboardingRequirement: Club-configurable
-// document / credential / confirmation requirements presented to the
-// employee during onboarding's Documents & Credentials stage.
-//
-// Applicability resolution (fastest → coarsest):
-//   1. `appliesToAll = true`       → applies to every employee at this Club.
-//   2. positionId in `appliesToPositionIds` (JSON string array)  → applies.
-//   3. departmentId in `appliesToDeptIds` (JSON string array)    → applies.
-//   Otherwise → does NOT apply.
-//
-// Fulfillment is queried through EXISTING canonical rows keyed on
-// `code`. No new fulfillment table is introduced:
-//   * kind=DOCUMENT_UPLOAD          → EmployeeDocument where
-//                                     category == `documentCategory`.
-//   * kind=CREDENTIAL_WITH_EXPIRY   → EmployeeCredential where
-//                                     credentialCode == `code`.
-//   * kind=CONFIRMATION_ONLY        → EmployeeOnboardingAcknowledgement
-//                                     with kind == `requirement_confirmation:<code>`.
-//
-// Deactivating (active=false) a requirement stops new onboardings from
-// seeing it; existing satisfied rows are NEVER destroyed by the
-// deactivation.
+// HR-2B.4 (2026-08-19) — Club-configurable onboarding requirement.
+// See prisma-postgres/schema.prisma for the full architectural note.
 model OnboardingRequirement {
   id                   String   @id @default(cuid())
   clubId               String
   club                 Club     @relation(fields: [clubId], references: [id])
-  // Machine key — e.g. "PROSERVE" | "WORK_PERMIT" | "FOOD_SAFETY".
-  // Never rendered to the employee. Uppercased snake_case.
   code                 String
   displayName          String
-  // One-sentence explanation shown to the employee ("Because your role
-  // may involve serving alcohol, the Club needs a copy of your current
-  // ProServe certificate.").
   explanation          String?
-  // DOCUMENT_UPLOAD | CREDENTIAL_WITH_EXPIRY | CONFIRMATION_ONLY
   kind                 String
-  // When kind involves a document, which EMPLOYEE_DOCUMENT_CATEGORIES
-  // entry the upload persists as. Ignored for CONFIRMATION_ONLY.
   documentCategory     String?
-  // True → applies to every employee at this Club (bypasses the JSON
-  // dept / position lists).
   appliesToAll         Boolean  @default(false)
-  // JSON string arrays. Empty / null means "no dept-specific rule".
   appliesToDeptIds     String?
   appliesToPositionIds String?
   required             Boolean  @default(true)
-  // For CREDENTIAL_WITH_EXPIRY: does the requirement mandate the
-  // expiry date field on the persisted EmployeeCredential row?
   requireExpiry        Boolean  @default(false)
   active               Boolean  @default(true)
   displayOrder         Int      @default(0)
@@ -11083,29 +11307,8 @@ model EmployeeOnboardingInvitation {
   issuedBy         User      @relation("InvitationIssuedBy", fields: [issuedByUserId], references: [id])
   createdAt        DateTime  @default(now())
 
-  // HR-2B.3 tail (2026-08-20) — delivery attempt tracking. Populated
-  // by the invitation route after selectEmailAdapter+send. The
-  // columns here NEVER carry the raw token, plaintext SIN/banking,
-  // or a full email body.
-  //   deliveryStatus:
-  //     null            — the row was created before delivery
-  //                       tracking existed (backfill state).
-  //     NOT_ATTEMPTED   — invitation issued without a recipient
-  //                       address on file (rare).
-  //     DEV_LOGGED      — the console-only devEmailAdapter fired;
-  //                       no external email was sent. Staging with
-  //                       no EMAIL provider configured lands here.
-  //     DELIVERED       — a real provider (SES/SMTP/M365) accepted
-  //                       the message and returned a message id.
-  //     FAILED          — a real provider was selected but rejected
-  //                       the send (auth failure, verified-sender
-  //                       missing, throttling, etc.).
-  //   deliveryProvider          — "ses" | "smtp" | "microsoft365" | "console" | null
-  //   deliveryProviderMessageId — provider-returned message id
-  //                               ("dev-<ts>" for DEV_LOGGED).
-  //   deliveryAttemptedAt       — when the send() call returned.
-  //   deliveryFailureReason     — provider-returned reason for FAILED.
-  //                               Non-sensitive; safe to display.
+  // HR-2B.3 tail (2026-08-20) — delivery attempt tracking. See
+  // prisma-postgres/schema.prisma for full column semantics.
   deliveryStatus            String?
   deliveryProvider          String?
   deliveryProviderMessageId String?
@@ -11241,18 +11444,7 @@ model EmployeeOnboardingResponse {
 }
 
 // EmployeeOnboardingAcknowledgement — HR-2B.2 final (2026-08-19).
-//
-// Durable record of a positive assertion the employee makes during
-// self-service onboarding. Currently the ONLY `kind` is
-// `employment_confirmation` — the employee explicitly stating that
-// the Club-provided position/department/type/start-date bundle is
-// correct. Introduced so the progress rail's "employment done"
-// signal reads a persisted fact rather than inferring from adjacent
-// progress. Future kinds (handbook_acknowledged, code_of_conduct,
-// etc.) can be added additively without further schema churn.
-//
-// Uniqueness: one active row per (sessionId, kind). Re-acknowledging
-// updates `acknowledgedAt` on the existing row.
+// See prisma-postgres/schema.prisma for full documentation.
 model EmployeeOnboardingAcknowledgement {
   id              String                    @id @default(cuid())
   clubId          String
@@ -11261,12 +11453,7 @@ model EmployeeOnboardingAcknowledgement {
   session         EmployeeOnboardingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   employeeId      String
   employee        Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  // Vocabulary: "employment_confirmation" (HR-2B.2). Future kinds
-  // will extend this string enum in the service layer.
   kind            String
-  // Provenance — set to `actorEmployeeId` when the acknowledgement
-  // was made by the employee themselves via the self-service surface.
-  // NULL means system/staff.
   actorEmployeeId String?
   acknowledgedAt  DateTime                  @default(now())
 
@@ -11276,16 +11463,7 @@ model EmployeeOnboardingAcknowledgement {
 }
 
 // EmployeeOnboardingCorrection — HR-2B.2 (2026-08-18).
-//
-// The employee cannot mutate Club-authoritative employment fields
-// (positionId, departmentId, expectedStartDate, employmentType)
-// directly during self-service onboarding. When the employee reports
-// a discrepancy — "You've told me I'm joining as Assistant Golf
-// Professional, but I was hired as Golf Shop Attendant" — the fact
-// is captured here for staff review, never applied silently.
-//
-// Rows are surfaced in the Club-side onboarding review UI (HR-2B.5+)
-// and resolved by a staff user (`resolvedAt` + `resolvedByUserId`).
+// See prisma-postgres/schema.prisma for full documentation.
 model EmployeeOnboardingCorrection {
   id                  String                    @id @default(cuid())
   clubId              String
@@ -11294,7 +11472,6 @@ model EmployeeOnboardingCorrection {
   session             EmployeeOnboardingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   employeeId          String
   employee            Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  // "positionId" | "departmentId" | "expectedStartDate" | "employmentType"
   field               String
   employeeStatedValue String
   note                String?
@@ -11307,29 +11484,7 @@ model EmployeeOnboardingCorrection {
 }
 
 // EmployeePortalCredential — HR-2B.5 (2026-08-19).
-//
-// The employee's PERMANENT authentication credential for the Employee
-// Portal. Created by the employee during the "portal-password"
-// onboarding step, then used for all future portal logins.
-//
-// Design notes:
-//
-// - One row per Employee (`employeeId @unique`). Rotating the password
-//   updates `passwordHash` + `passwordUpdatedAt` in place; we do not
-//   accumulate hash history here (an audit log entry captures the
-//   change with actor/time).
-// - `passwordHash` is a bcrypt hash produced by the canonical
-//   `hashPassword()` helper in `src/lib/services/auth.ts` (cost 12).
-//   Plaintext passwords MUST NEVER be stored, logged, audited,
-//   returned in JSON, or placed in URLs / cookies / storage /
-//   analytics.
-// - `failedAttemptCount` + `lockedUntil` mirror the AccountLock
-//   escalation the admin login flow already uses (5 fails → 15 min,
-//   10 fails → 60 min). Login handlers must consult `lockedUntil`
-//   before verifying and reset the counter on any successful login.
-// - Not a `User`. Employees do NOT gain admin-side authority by
-//   completing onboarding. See `EmployeePortalActor` for the
-//   principal type that reads this row.
+// See prisma-postgres/schema.prisma for full documentation.
 model EmployeePortalCredential {
   id                 String    @id @default(cuid())
   clubId             String
@@ -11348,24 +11503,7 @@ model EmployeePortalCredential {
 }
 
 // EmployeePortalPasswordReset — HR-2B.5 (2026-08-19).
-//
-// One row per issued password-reset token. Follows the same
-// randomBytes(32) + sha256 pattern the invitation / member-invite
-// flows use. The RAW token is emailed to the employee's personal
-// email through the Club's designated Microsoft mailbox; only the
-// sha256 hash is persisted.
-//
-// - `expiresAt` — typically 30 minutes from issuance.
-// - `consumedAt` — set when the token is redeemed. A consumed row
-//   cannot be re-redeemed (replay prevention).
-// - `tokenHash @unique` — indexed for fast lookup on redemption.
-// - Rate limiting on issuance uses the existing `password_reset`
-//   scope in `src/lib/security/rate-limit.ts`.
-//
-// HR-2B.5 lands the model + canonical service (`sendPortalPasswordResetEmail`
-// / `redeemPortalPasswordReset`) so the seam is real; the user-facing
-// "Forgot password?" UI may be finished in a follow-up if scope
-// warrants — this row is architecturally sufficient.
+// See prisma-postgres/schema.prisma for full documentation.
 model EmployeePortalPasswordReset {
   id         String    @id @default(cuid())
   clubId     String
@@ -11381,7 +11519,6 @@ model EmployeePortalPasswordReset {
 }
 
 // ClubMedia — HR-2C (2026-08-20).
-//
 // Canonical per-Club media store for tenant-owned assets like the
 // Employee Portal hero photograph. One row per (clubId, category)
 // — replacing the row rotates the asset. Bytes live in the canonical
@@ -11396,14 +11533,12 @@ model EmployeePortalPasswordReset {
 //
 // Additive-only model — no back-fill required. Absence of a row is
 // treated as "no asset set" and the surface renders its own branded
-// fallback based on Club.primaryColor.
+// fallback.
 model ClubMedia {
   id               String   @id @default(cuid())
   clubId           String
   club             Club     @relation(fields: [clubId], references: [id])
-  // "employee_portal_hero" | future categories. Service-validated.
   category         String
-  // Content-addressed storage key under clubs/{clubId}/media/{sha256}.
   storageKey       String
   mimeType         String
   sizeBytes        Int
@@ -11412,8 +11547,13 @@ model ClubMedia {
   uploadedByUserId String?
   uploadedAt       DateTime @default(now())
 
-  // HR portal hero framing (2026-08-26) — see prisma/schema.prisma
-  // for the canonical comment.
+  // HR portal hero framing (2026-08-26) — normalized focal point +
+  // zoom persisted per asset so tenant admins can position the hero
+  // photograph without a code change. Null = fall back to the
+  // Spectre default centered `object-position: 50% 50%` + zoom 1.0,
+  // which preserves current visual behavior for every existing row.
+  // Desktop and mobile are independent because the two surfaces
+  // have different aspect ratios.
   desktopFocalX    Float?
   desktopFocalY    Float?
   desktopZoom      Float?
@@ -11430,12 +11570,19 @@ model ClubMedia {
 // ============================================================
 // Employee Portal Quick Links (2026-08-27)
 // ============================================================
+//
+// Tenant-configured Quick Links rendered in the Employee Portal
+// right rail (desktop) and the mobile Quick Links strip. Each row
+// points either to an external/relative URL OR to an uploaded
+// document (PDF). Both destination fields nullable — service
+// enforces "exactly one is set". `storageKey` lives under the
+// canonical Spectre document storage prefix.
 model EmployeePortalQuickLink {
   id                String   @id @default(cuid())
   clubId            String
   club              Club     @relation(fields: [clubId], references: [id])
   label             String
-  destinationType   String
+  destinationType   String   // "url" | "file"
   url               String?
   storageKey        String?
   fileMimeType      String?
@@ -11455,12 +11602,33 @@ model EmployeePortalQuickLink {
 // ============================================================
 // HR-2C — Anonymous Employee Feedback (2026-08-27)
 // ============================================================
+//
+// Employee-submitted feedback where the submitter is intentionally
+// NOT persisted at the application level. The Club must still know
+// which tenant the feedback belongs to, so `clubId` is derived
+// server-side from the authenticated employee session — but no
+// employeeId / userId / name / email / employee-number field
+// exists on the row itself.
+//
+// Never add an author field to this model. Never add a column that
+// could be joined to an employee row. Doing so violates the
+// founder-mandated anonymity contract enforced end-to-end.
+//
+// Discipline mirrors ClubAnnouncement: every write goes through
+// `src/lib/anonymous-feedback.ts`; audit rows are recorded WITHOUT
+// author metadata.
 model AnonymousFeedback {
   id         String   @id @default(cuid())
   clubId     String
   club       Club     @relation(fields: [clubId], references: [id])
+  // Optional soft category. Free-form string; the UI shows a
+  // closed dropdown but the service accepts any string ≤ 40 chars
+  // so a future admin categorisation flow can grow the list
+  // without a schema change. Empty string / null = uncategorised.
   category   String?
   message    String
+  // Lightweight review lifecycle: NEW → REVIEWED → ARCHIVED.
+  // Admin-only; not exposed to employees.
   status     String   @default("NEW")
   createdAt  DateTime @default(now())
   reviewedAt DateTime?
@@ -11735,17 +11903,20 @@ model PayrollClubConfig {
   clubId                 String   @unique
   club                   Club     @relation(fields: [clubId], references: [id])
   enabled                Boolean  @default(false)
-  country                String   @default("CA")
-  provinceOfEmployment   String?
-  defaultPayFrequency    String   @default("BIWEEKLY")
-  defaultPaymentMethod   String   @default("DIRECT_DEPOSIT")
-  payrollAdminUserId     String?
-  controllerUserId       String?
-  glAccountingProfileId  String?
+  country                String   @default("CA") // ISO 3166-1 alpha-2
+  provinceOfEmployment   String?  // 2-char CA province (AB / BC / ON / etc.)
+  defaultPayFrequency    String   @default("BIWEEKLY") // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
+  defaultPaymentMethod   String   @default("DIRECT_DEPOSIT") // DIRECT_DEPOSIT | CHEQUE | OTHER
+  payrollAdminUserId     String?  // designated primary Payroll admin (optional)
+  controllerUserId       String?  // designated Controller for approval routing (optional)
+  glAccountingProfileId  String?  // FK to PayrollGlAccountingProfile (MVP posting)
   glAccountingProfile    PayrollGlAccountingProfile? @relation(fields: [glAccountingProfileId], references: [id])
-  paystubNumberPrefix    String?
-  paystubNumberSequence  Int      @default(0)
-  // Payroll-3D-4 (2026-09-05).
+  paystubNumberPrefix    String?  // optional prefix for future paystub numbering
+  paystubNumberSequence  Int      @default(0) // reserved for future paystub numbering
+  // Payroll-3D-4 (2026-09-05) — payroll cutoff lead time (calendar
+  // days before payDate). Nullable so the default of 5 (see
+  // src/lib/payroll/cutoff.ts) is applied at read time — a founder
+  // does not need to configure this to opt-in.
   payrollCutoffLeadDays  Int?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -11753,7 +11924,24 @@ model PayrollClubConfig {
   @@index([clubId])
 }
 
-// Payroll MVP posting (2026-09-05) — see prisma/schema.prisma for docs.
+// Payroll MVP posting (2026-09-05) — Club-scoped mapping from Payroll
+// categories to GL Account ids. Populated per Club during Payroll
+// setup. postPayrollBatch reads this profile to build the balanced
+// journal entry:
+//
+//   Debits:
+//     - salary expense           (sum of gross earnings)
+//     - employer CPP expense
+//     - employer EI expense
+//   Credits:
+//     - net pay payable          (sum of employee net)
+//     - CPP payable              (employee CPP + CPP2 + employer CPP + CPP2)
+//     - EI payable               (employee EI + employer EI)
+//     - federal income tax payable
+//     - provincial income tax payable
+//
+// One profile per Club (single-tenancy invariant enforced by unique).
+// Every account FK MUST belong to the same Club — enforced service-side.
 model PayrollGlAccountingProfile {
   id                              String   @id @default(cuid())
   clubId                          String   @unique
@@ -11791,12 +11979,18 @@ model PayrollPayGroup {
   name          String   // human-readable (e.g. "Hourly Employees - Biweekly")
   payFrequency  String   // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY
   active        Boolean  @default(true)
+  // Payment-timing metadata (days after period end that pay is issued).
   // Payroll-3B-2 canonical semantics: payDate = periodEnd + payDateOffsetDays
-  // measured in CALENDAR DAYS. Banking-holiday shifting arrives in a later slice.
+  // measured in CALENDAR DAYS. Not business days. Banking-holiday shifting
+  // will arrive in a later Payroll slice; this offset is intentionally
+  // calendar-day-only for the MVP.
   payDateOffsetDays Int  @default(5)
-  // Payroll-3B-2 (2026-08-28) — canonical calendar anchor. Nullable
-  // so pre-3B-2 rows migrate cleanly; generation refuses when the
-  // frequency requires an anchor and none is set.
+  // Payroll-3B-2 (2026-08-28) — canonical calendar anchor. A known
+  // period-start date that establishes the recurring WEEKLY or
+  // BIWEEKLY payroll cadence both backward and forward. Nullable so
+  // pre-3B-2 Pay Groups migrate cleanly; generation refuses when the
+  // frequency requires an anchor and none is set. SEMI_MONTHLY and
+  // MONTHLY are anchor-agnostic (calendar-rule driven).
   calendarAnchorDate DateTime?
   notes         String?
   createdByUserId String?
@@ -11880,7 +12074,12 @@ model PayrollBatch {
   payPeriodId   String
   payPeriod     PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
   // DRAFT | PREPARED | CALCULATED | SUBMITTED_FOR_APPROVAL | APPROVED | POSTED | VOIDED
-  // Payroll-3B-5B-2a — see prisma/schema.prisma for CALCULATED rationale.
+  //
+  // Payroll-3B-5B-2a (2026-08-31) — CALCULATED added between PREPARED
+  // and SUBMITTED_FOR_APPROVAL. The 3B-5B-2b/2c calculator writes
+  // per-employee statutory results and flips the batch to CALCULATED.
+  // The Controller final-approval task materialises OFF the CALCULATED
+  // state, never off PREPARED (per §23 of the pre-calc gate).
   status        String   @default("DRAFT")
   // Sequence within (payGroup, taxYear) - one authoritative batch per
   // period unless a future revision/versioning slice adds sequencing.
@@ -11899,17 +12098,30 @@ model PayrollBatch {
   // Work Intake handoff (sections 29-30). Set at submit; single item
   // routed to the Controller's inbox with workDomain = "PAYROLL".
   workIntakeItemId String? @unique
+  // Payroll-3B-4 (2026-08-29) — timestamp of the source snapshot
+  // that produced this batch. Frozen at preparation time; a source-
+  // fact change after this timestamp does NOT mutate the batch.
   sourceSnapshotAt DateTime?
-  // Payroll-3B-5A (2026-08-31) — pinned statutory package (see
-  // prisma/schema.prisma for full doc block).
+  // Payroll-3B-5A (2026-08-31) — statutory package pinned when the
+  // calculator runs. NULL at PREPARED — the calculator resolves the
+  // package via `resolveStatutoryPackage({country, province, payDate})`
+  // and pins it at CALCULATED. Once pinned, recalculation of the
+  // same frozen batch reuses this exact package for reproducibility.
   statutoryPackageId String?
   statutoryPackage   PayrollStatutoryPackage? @relation(fields: [statutoryPackageId], references: [id])
-  // Payroll-3B-5B-2a — calculation provenance. See prisma/schema.prisma.
+  // Payroll-3B-5B-2a (2026-08-31) — calculation provenance. Set at
+  // CALCULATED by the 3B-5B-2b/2c calculator. Denormalised copies of
+  // the resolved package's `checksum` + `algorithmVersion` are kept
+  // so the result stays fully auditable even if the pinned package
+  // row is later superseded. `calculationVersion` starts at 0 and
+  // increments on each recalculate (before POSTED).
   calculatedAt          DateTime?
   calculationVersion    Int       @default(0)
   algorithmVersion      String?
   packageChecksum       String?
-  // Payroll MVP posting (2026-09-05) — see prisma/schema.prisma.
+  // Payroll MVP posting (2026-09-05) — link to the JournalEntry
+  // created when the batch was POSTED. Nullable while status ≠ POSTED.
+  // Once set, further attempts to post the batch are refused (§32 idempotency).
   glJournalEntryId      String?    @unique
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
   notes         String?
@@ -11921,6 +12133,7 @@ model PayrollBatch {
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
+  // Payroll-3C-2 (2026-09-07) — Payroll Component snapshots.
   componentSnapshots    PayrollBatchComponentSnapshot[]
   exceptions            PayrollBatchException[]
 
@@ -11930,25 +12143,80 @@ model PayrollBatch {
   @@index([statutoryPackageId])
 }
 
-// Payroll-3B-5A (2026-08-31) — effective-dated Spectre-owned
-// statutory calculation packages. See prisma/schema.prisma for
-// full doc.
+// Payroll-3B-4 (2026-08-29) — structural readiness / preparation
+// exception. Emitted per (batch, batchEmployee?) during
+// `preparePayrollBatch`. Two severity levels:
+//   BLOCKER — Batch cannot safely proceed to calculation (missing
+//     compensation, invalid assignment, ambiguous pay-group
+//     membership). Preparation refuses to leave DRAFT.
+//   WARNING — Batch can prepare/calculate but requires resolution
+//     downstream (banking not verified before payment submission).
+model PayrollBatchException {
+  id               String        @id @default(cuid())
+  clubId           String
+  club             Club          @relation(fields: [clubId], references: [id])
+  batchId          String
+  batch            PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId  String?
+  batchEmployee    PayrollBatchEmployee? @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId       String?
+  employee         Employee?     @relation(fields: [employeeId], references: [id])
+  severity         String        // BLOCKER | WARNING | INFO
+  code             String        // machine-readable, e.g. MISSING_COMPENSATION
+  message          String        // human-readable
+  recommendedAction String?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime      @default(now())
+
+  @@index([clubId, batchId])
+  @@index([batchId, severity])
+  @@index([batchEmployeeId, severity])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll-3B-5A (2026-08-31) — statutory calculation packages.
+//
+// Effective-dated, Spectre-owned rule packages. NEVER tenant-writable.
+// CRA can (and did in 2026) publish two formula editions within one
+// calendar year (Jan 1 + Jul 1), so keying by `taxYear` alone is
+// unsafe — this model keys by `[effectiveFrom, effectiveTo)` on the
+// payroll pay date and pins the resolved package to
+// `PayrollBatch.statutoryPackageId` for reproducibility.
+//
+// paramsJson is validated against a strict Zod schema
+// (`CanadianPayrollStatutoryParamsV1` in
+// src/lib/payroll/statutory-package.ts) at install and read time.
+// ---------------------------------------------------------------------------
 model PayrollStatutoryPackage {
   id                     String   @id @default(cuid())
-  jurisdictionCountry    String
-  jurisdictionProvince   String?
+  // "CA" only in the 3B MVP; jurisdiction-scoped for future expansion.
+  jurisdictionCountry    String   // ISO 3166-1 alpha-2
+  jurisdictionProvince   String?  // 2-char province; NULL = federal-only package
+  // Half-open effective interval [effectiveFrom, effectiveTo) on
+  // PayrollPayPeriod.payDate. `effectiveTo` may be NULL for the
+  // "current" package.
   effectiveFrom          DateTime
   effectiveTo            DateTime?
+  // Human-readable version tag ("CRA-T4127-123rd-2026-07-01").
   packageVersion         String
+  // Algorithm code version ("v1"); the calculator refuses to run
+  // against a params package whose algorithm version it does not
+  // implement.
   algorithmVersion       String   @default("v1")
-  sourcePublication      String
-  sourceEdition          String?
+  // Canonical source citation.
+  sourcePublication      String   // e.g. "T4127 Payroll Deductions Formulas"
+  sourceEdition          String?  // e.g. "123rd Edition"
   sourcePublicationDate  DateTime?
   sourceUrl              String?
+  // Content-addressed checksum of paramsJson for tamper detection.
   checksum               String
+  // Structured statutory params. Validated by
+  // CanadianPayrollStatutoryParamsV1 at both write and read time.
   paramsJson             String
+  // Provenance.
   publishedAt            DateTime @default(now())
-  publishedByUserId      String?
+  publishedByUserId      String?  // NULL when installed via internal seed
   supersededAt           DateTime?
   createdAt              DateTime @default(now())
 
@@ -11958,8 +12226,21 @@ model PayrollStatutoryPackage {
   @@index([jurisdictionCountry, jurisdictionProvince, effectiveFrom])
 }
 
+// ---------------------------------------------------------------------------
 // Payroll-3B-5A (2026-08-31) — mid-year opening balances.
-// See prisma/schema.prisma for full doc.
+//
+// When a Club adopts Spectre Payroll mid-calendar-year, prior-system
+// payroll history is authoritative for CPP/EI YTD caps and tax
+// bracketing. Opening balances are per (Club, Employee, taxYear).
+//
+// Corrections do NOT mutate history — the ACTIVE row's status flips
+// to SUPERSEDED and a new row (linked via `supersededById`) becomes
+// ACTIVE. YTD aggregation always reads the ACTIVE row for a given
+// (Club, Employee, taxYear).
+//
+// Sensitive plaintext values (SIN, bank account numbers, TD1 amounts)
+// are NEVER stored here — this is a YTD-numerics row only.
+// ---------------------------------------------------------------------------
 model PayrollOpeningBalance {
   id                     String   @id @default(cuid())
   clubId                 String
@@ -11967,35 +12248,67 @@ model PayrollOpeningBalance {
   employeeId             String
   employee               Employee @relation(fields: [employeeId], references: [id])
   taxYear                Int
+  // DRAFT | VALIDATED | ACTIVE | SUPERSEDED
   status                 String   @default("DRAFT")
-  // Payroll-3B-5B-2 pre-calc gate (2026-08-31) — cutover boundary.
-  // See prisma/schema.prisma for the full doc block. Nullable at
-  // the DB layer for additive forward-only migration; REQUIRED at
-  // the application layer for every new draft/validated/active row.
+  // Payroll-3B-5B-2 pre-calc gate (2026-08-31) — Cutover boundary.
+  // Required semantic: "this opening balance includes all
+  // same-employer payroll results with pay date <= throughPayDate".
+  // The YTD aggregator uses this to filter Spectre POSTED batches
+  // with `payDate > throughPayDate` when an ACTIVE opening balance
+  // exists, preventing double-counting of any pre-cutover Spectre
+  // batches. Nullable at the DB layer for additive forward-only
+  // migration; REQUIRED at the application layer for every new
+  // draft/validated/active row. YTD refuses to aggregate an ACTIVE
+  // opening balance with a null throughPayDate.
   throughPayDate         DateTime?
-  ytdGrossEarnings        Decimal @default(0)
-  ytdTaxableEarnings      Decimal @default(0)
-  ytdPensionableEarnings  Decimal @default(0)
-  ytdInsurableEarnings    Decimal @default(0)
-  ytdCppEE_Base           Decimal @default(0)
-  ytdCppEE_FirstAdd       Decimal @default(0)
-  ytdCppEE                Decimal @default(0)
-  ytdCpp2EE               Decimal @default(0)
-  ytdEiEE                 Decimal @default(0)
-  ytdFederalTax           Decimal @default(0)
-  ytdProvincialTax        Decimal @default(0)
-  ytdCppER_Base           Decimal @default(0)
-  ytdCppER_FirstAdd       Decimal @default(0)
-  ytdCppER                Decimal @default(0)
-  ytdCpp2ER               Decimal @default(0)
-  ytdEiER                 Decimal @default(0)
+  // ---- YTD numerics (CAD, Decimal). Every field documented so a
+  // future contributor cannot add one accidentally without stating
+  // its downstream calculation dependency. ----
+  ytdGrossEarnings        Decimal @default(0)  // T4 Box 14 aggregate
+  ytdTaxableEarnings      Decimal @default(0)  // income tax base
+  ytdPensionableEarnings  Decimal @default(0)  // CPP base (T4 Box 26)
+  ytdInsurableEarnings    Decimal @default(0)  // EI base (T4 Box 24)
+  // Payroll-3B-5B-1 (2026-08-31, §21) — CPP base and first-additional
+  // are preserved separately for statutory traceability. Historically
+  // T4 Box 16 combined them; CRA now separates them (Box 16A). YTD
+  // reads treat `ytdCppEE` as the OVERALL Box 16 total, and expose
+  // the split explicitly:
+  ytdCppEE_Base           Decimal @default(0)  // CPP base employee contribution (component of Box 16)
+  ytdCppEE_FirstAdd       Decimal @default(0)  // CPP first-additional employee contribution (component of Box 16)
+  ytdCppEE                Decimal @default(0)  // combined base + first-additional (Box 16 aggregate)
+  ytdCpp2EE               Decimal @default(0)  // CPP2 (second-additional) employee contribution (Box 16A)
+  ytdEiEE                 Decimal @default(0)  // employee EI premiums (T4 Box 18)
+  ytdFederalTax           Decimal @default(0)  // federal income tax withheld (T4 Box 22 fed portion)
+  ytdProvincialTax        Decimal @default(0)  // provincial income tax withheld
+  ytdCppER_Base           Decimal @default(0)  // employer CPP base
+  ytdCppER_FirstAdd       Decimal @default(0)  // employer CPP first-additional
+  ytdCppER                Decimal @default(0)  // combined employer CPP (base + first-additional)
+  ytdCpp2ER               Decimal @default(0)  // employer CPP2 (second-additional)
+  ytdEiER                 Decimal @default(0)  // employer EI premiums
+  // ---- Provenance ----
   importBatchId          String?
-  importSource           String?
+  importSource           String?  // "CSV" | "MANUAL" | "MIGRATION"
   importedAt             DateTime?
   importedByUserId       String?
   notes                  String?
+  // Payroll-3B-5B-1 (§23) — prior-payroll provenance kind. Distinguishes:
+  //   PRIOR_SYSTEM_SAME_EMPLOYER — this Club's payroll ran on
+  //     another system earlier in the tax year (same Business
+  //     Number). YTD contributes to CPP/EI annual maximums.
+  //   PRIOR_EMPLOYER            — a different employer's payroll.
+  //     YTD is RECORDED for information / T4 continuity, but per
+  //     CRA rules each employer deducts CPP/EI independently; the
+  //     calculator MUST NOT reduce this employer's statutory
+  //     maximums by prior-employer contributions. Persisting the
+  //     kind on the row prevents silent misuse.
+  //   PRIOR_ADJUSTMENT          — an authoritative correction to
+  //     an already-imported balance (e.g. year-end reconciliation).
+  //     Same-employer semantics.
   priorPayrollKind       String   @default("PRIOR_SYSTEM_SAME_EMPLOYER")
+  // Optional employer identifier (BN9 or full BN15) for the source
+  // of a PRIOR_EMPLOYER row. Never used as a lookup key.
   priorEmployerId        String?
+  // ---- Correction / versioning ----
   supersededAt           DateTime?
   supersededByUserId     String?
   supersededById         String?
@@ -12009,25 +12322,42 @@ model PayrollOpeningBalance {
 
   @@index([clubId, employeeId, taxYear, status])
   @@index([clubId, taxYear, status])
+  // Payroll-3C-5 (2026-09-09) — child rows carrying per-component YTD
+  // from the prior payroll system.
   componentOpenings      PayrollOpeningBalanceComponent[]
 }
 
 // Payroll-3C-5 (2026-09-09) — per-Component opening YTD row.
-// See prisma/schema.prisma for the full doc block.
+//
+// Additive extension to PayrollOpeningBalance for Payroll Component
+// history: cell phone allowance, RRSP EE/ER, LTD, one-time bonuses,
+// etc. Recorded against a stable component identity so that pay
+// statements can display "Current + YTD" for every Component the Club
+// has ever posted, without recomputing history from live definitions.
+//
+// One row per (openingBalanceId, componentIdentity) — the parent row
+// scopes the taxYear + employee + club + throughPayDate cutover.
 model PayrollOpeningBalanceComponent {
   id                     String   @id @default(cuid())
   clubId                 String
   club                   Club     @relation(fields: [clubId], references: [id])
   openingBalanceId       String
   openingBalance         PayrollOpeningBalance @relation(fields: [openingBalanceId], references: [id], onDelete: Cascade)
+  // Stable identity — the club-scoped PayrollComponent id if it still
+  // exists, and the frozen componentCode so historical rows survive a
+  // rename or deletion.
   sourceComponentId      String?
   sourceComponent        PayrollComponent? @relation(fields: [sourceComponentId], references: [id])
   componentCode          String
   displayName            String
   category               String
-  side                   String
-  cashEffect             String
+  side                   String  // "EMPLOYEE" | "EMPLOYER"
+  cashEffect             String  // frozen at import time
+  // Prior-to-Spectre YTD contribution for this component in the
+  // opening balance's taxYear (dollars).
   ytdAmount              Decimal @default(0)
+  // Optional quantity (hours worked, units, etc.) for future use;
+  // pay statement display currently focuses on ytdAmount.
   ytdQuantity            Decimal?
   notes                  String?
   createdAt              DateTime @default(now())
@@ -12035,31 +12365,6 @@ model PayrollOpeningBalanceComponent {
   @@unique([openingBalanceId, componentCode])
   @@index([clubId, componentCode])
   @@index([openingBalanceId])
-}
-
-// Payroll-3B-4 (2026-08-29) — structural readiness / preparation
-// exception. See prisma/schema.prisma for the full doc block.
-model PayrollBatchException {
-  id               String        @id @default(cuid())
-  clubId           String
-  club             Club          @relation(fields: [clubId], references: [id])
-  batchId          String
-  batch            PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  batchEmployeeId  String?
-  batchEmployee    PayrollBatchEmployee? @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
-  employeeId       String?
-  employee         Employee?     @relation(fields: [employeeId], references: [id])
-  severity         String
-  code             String
-  message          String
-  recommendedAction String?
-  resolvedAt       DateTime?
-  resolvedByUserId String?
-  createdAt        DateTime      @default(now())
-
-  @@index([clubId, batchId])
-  @@index([batchId, severity])
-  @@index([batchEmployeeId, severity])
 }
 
 // Per-employee inclusion row in a specific batch (section 12).
@@ -12094,51 +12399,112 @@ model PayrollBatchEmployee {
   // contract.
   grossPay                Decimal?
   netPay                  Decimal?
+  // Payroll-3B-4 (2026-08-29) — structural snapshot fields for the
+  // deterministic input assembly. NONE of these are computed
+  // dollar amounts. They freeze the source facts a future
+  // calculator will consume.
+  //   salaried             — structural flag: employee compensation
+  //                          is salary-based (no hourly earnings
+  //                          derived from PayrollApprovedTimeEntry).
+  //   employmentStartInPeriod / employmentEndInPeriod — set only
+  //                          when the employee hires or terminates
+  //                          within the pay period; NULL when the
+  //                          employee is active for the whole period.
+  //   approvedHoursSnapshot — sum of attached approved-time hours
+  //                          (Decimal, 4 dp). Zero for salaried-only
+  //                          employees with no time entries.
+  //   sourceFactsJson      — machine-readable JSON blob capturing
+  //                          the relevant assignment ids + windows,
+  //                          compensation record ids + effective
+  //                          windows, and other source references
+  //                          the future calculator needs. Never
+  //                          contains sensitive HR values (SIN,
+  //                          bank account numbers, TD1 amounts).
   salaried                Boolean  @default(false)
   employmentStartInPeriod DateTime?
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
-  // Payroll-3B-5A (2026-08-31) — Pay Group membership coverage
-  // window. See prisma/schema.prisma for full doc block.
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?
   coverageEnd             DateTime?
-  // Payroll-3B-5B-1a (2026-08-31) — frozen Employee DOB for CPP
-  // age eligibility. See prisma/schema.prisma for full doc.
   dateOfBirthSnapshot     DateTime?
-  // Payroll-3B-5B-1 (§20) — persisted calc contract; NULL at
-  // PREPARED, populated at CALCULATED. See prisma/schema.prisma.
-  earningsTaxable        Decimal?
-  earningsPensionable    Decimal?
-  earningsInsurable      Decimal?
-  deductionCppEeBase       Decimal?
-  deductionCppEeFirstAdd   Decimal?
-  deductionCpp2Ee          Decimal?
-  deductionEiEe            Decimal?
-  deductionFederalTax      Decimal?
-  deductionProvincialTax   Decimal?
-  employerCppBase          Decimal?
-  employerCppFirstAdd      Decimal?
-  employerCpp2             Decimal?
-  employerEi               Decimal?
-  // Payroll-3B-5B-2a — additional persisted result fields for the
-  // Gross-to-Net calculator. See prisma/schema.prisma for full doc.
+  // ---------------------------------------------------------------------
+  // Payroll-3B-5B-1 (2026-08-31, §20) — persisted calculation result
+  // contract. All fields nullable and left NULL by the 3B-4/5A
+  // preparation service; the 3B-5B calculator populates them at
+  // CALCULATED. Model separates:
+  //   • Earnings / statutory bases (grossPay = gross, plus taxable,
+  //     pensionable, insurable — grossPay already declared above as a
+  //     Payroll-3A seam)
+  //   • Employee deductions (CPP base + first-add, CPP2, EI, fed, prov)
+  //   • Employer amounts (CPP base + first-add, CPP2, EI)
+  //   • Payment (netPay already declared above)
+  // Every deduction is stored as Decimal — never Float. Zero
+  // arithmetic happens in this slice.
+  // ---------------------------------------------------------------------
+  earningsTaxable        Decimal? // Income-tax base
+  earningsPensionable    Decimal? // CPP base
+  earningsInsurable      Decimal? // EI base
+  // Payroll-3B-5B-1 (§21) — CPP components MUST be tracked
+  // separately for CRA T4 reporting + statutory maximums.
+  deductionCppEeBase       Decimal? // employee CPP base
+  deductionCppEeFirstAdd   Decimal? // employee CPP first-additional
+  deductionCpp2Ee          Decimal? // employee CPP2 (second-additional)
+  deductionEiEe            Decimal? // employee EI
+  deductionFederalTax      Decimal? // federal income tax
+  deductionProvincialTax   Decimal? // provincial income tax (Alberta MVP)
+  employerCppBase          Decimal? // employer CPP base
+  employerCppFirstAdd      Decimal? // employer CPP first-additional
+  employerCpp2             Decimal? // employer CPP2
+  employerEi               Decimal? // employer EI (typically 1.4 × employee EI, per statutory param)
+  // Payroll-3B-5B-2a (2026-08-31) — additional persisted result fields
+  // added for the Gross-to-Net calculator foundation. All nullable
+  // until the calculator writes them at CALCULATED. Zero arithmetic
+  // happens in 3B-5B-2a; the earnings + statutory calculation ships
+  // in 3B-5B-2b and 3B-5B-2c.
+  //
+  //   deductionCppEeCombined  — persisted convenience column = base
+  //                             + first-additional. Enforces the
+  //                             invariant `base + firstAdd == combined`
+  //                             at read time so downstream YTD /
+  //                             T4 code cannot recompute drift.
+  //   employerCppCombined     — same for the employer side.
+  //   additionalFederalTax    — TD1 additional withholding, kept
+  //                             SEPARATE from `deductionFederalTax`
+  //                             (base statutory tax) per T4127. PDOC
+  //                             Scenario 3 proves this shape.
+  //   additionalProvincialTax — Alberta equivalent, same rule.
+  //   totalEmployeeDeductions — persisted convenience for the paystub
+  //                             + net-pay reconciliation contract.
+  //   ytdSnapshotJson         — per-employee YTD state as it was at
+  //                             the moment the calculator ran. Frozen
+  //                             so the result stays explainable even
+  //                             after later opening-balance edits or
+  //                             POSTED-batch corrections.
   deductionCppEeCombined   Decimal?
   employerCppCombined      Decimal?
   additionalFederalTax     Decimal?
   additionalProvincialTax  Decimal?
   totalEmployeeDeductions  Decimal?
   ytdSnapshotJson          String?
-  // Payroll-3B-5B-2c — versioned calculation explanation snapshot.
+  // Payroll-3B-5B-2c (2026-09-02) — versioned per-employee
+  // calculation explanation snapshot. Captures every intermediate
+  // T4127 factor (A, A*, F5A, BPAF, K1, K2, K3, K4, K1P, K2P,
+  // K3P, K5P, T, T3, T4, TP, T3P, T4P, plus package identity)
+  // so a future auditor can answer "why $X federal tax?" without
+  // recalculating from today's code. NEVER contains SIN or bank
+  // account numbers. Frozen TD1 amounts are captured — they are
+  // Payroll-sensitive and must stay inside the Payroll domain.
   calculationExplanationJson String?
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   earnings           PayrollBatchEarning[]
   deductions         PayrollBatchDeduction[]
   allowanceSnapshots PayrollBatchAllowanceSnapshot[]
+  // Payroll-3C-2 (2026-09-07) — component snapshots.
   componentSnapshots PayrollBatchComponentSnapshot[]
   exceptions         PayrollBatchException[]
 
@@ -12147,28 +12513,66 @@ model PayrollBatchEmployee {
   @@index([clubId, employeeId])
 }
 
+// ---------------------------------------------------------------------------
 // Payroll-3B-5B-1a (2026-08-31) — CPT30 election foundation.
-// See prisma/schema.prisma for full doc.
+//
+// Age 65–69 employees receiving a CPP/QPP retirement pension may
+// file Form CPT30 with their employer to STOP CPP contributions,
+// and may later REVOKE that election. The election takes effect the
+// first day of the month after Spectre receives the form; a
+// revocation likewise takes effect the following month.
+//
+// This model is the minimum foundation so the 3B-5B calculator
+// never treats all age 65–69 employees identically. UI/upload flow
+// is deferred — 3B-5A ships the schema only; the calculator reads
+// the ACTIVE row via `resolveCppContributionEligibility`.
+// ---------------------------------------------------------------------------
 model EmployeeCppElection {
   id                String   @id @default(cuid())
   clubId            String
   club              Club     @relation(fields: [clubId], references: [id])
   employeeId        String
   employee          Employee @relation(fields: [employeeId], references: [id])
+  // ELECTION_TO_STOP | REVOCATION_OF_ELECTION
   kind              String
+  // ---- Source facts (§3 — evidence-driven) --------------------------
+  // Pension type declared on the CPT30 (Part B): CPP | QPP
   pensionType       String?
+  // Employee attests to receiving a CPP or QPP retirement pension
+  // (Part B). CRA rule: this is a prerequisite to a valid stop
+  // election. Frozen on the election row so historical elections
+  // remain reproducible when current pension status changes.
   retirementPensionReceived Boolean @default(false)
+  // Date the employee signed the CPT30 (Part D).
   employeeSignedOn  DateTime?
+  // ---- Effective-date facts (§4 — CRA derivation) --------------------
+  // The date Spectre / the employer received the completed form.
   receivedOn        DateTime
+  // The statutory effective date derived from source facts per CRA
+  // CPT30 rules. Spectre's business contract (pending founder
+  // verification against the current CRA CPT30 publication):
+  //   Election-to-stop:  first day of the calendar month that is at
+  //     least the month AFTER `max(employeeSignedOn, receivedOn)`.
+  //   Revocation:        first day of the calendar month at least
+  //     the month AFTER `max(employeeSignedOn, receivedOn)`, and no
+  //     earlier than January 1 of the calendar year FOLLOWING the
+  //     year of the original stop election (§5 same-year rule).
+  // Never accepts an admin-typed date inconsistent with the source
+  // facts — service layer refuses (`src/lib/payroll/cpp-election.ts`).
   effectiveOn       DateTime
+  // Pointer to the ELECTION_TO_STOP a REVOCATION revokes. Required
+  // for kind = REVOCATION_OF_ELECTION; enforces the same-year rule.
   revokesElectionId String?
   revokesElection   EmployeeCppElection?  @relation("EmployeeCppElectionRevokes", fields: [revokesElectionId], references: [id])
   revocations       EmployeeCppElection[] @relation("EmployeeCppElectionRevokes")
-  status            String   @default("ACTIVE")
+  // ---- History ------------------------------------------------------
+  status            String   @default("ACTIVE") // ACTIVE | SUPERSEDED
   supersededById    String?
   supersededBy      EmployeeCppElection?  @relation("EmployeeCppElectionSuperseded", fields: [supersededById], references: [id])
   supersedes        EmployeeCppElection[] @relation("EmployeeCppElectionSuperseded")
   notes             String?
+  // Optional pointer to an evidence document (a photo/scan of the
+  // signed form). Sensitive; not surfaced on Work Intake cards.
   evidenceDocumentId String?
   createdByUserId   String?
   createdAt         DateTime @default(now())
@@ -12179,17 +12583,37 @@ model EmployeeCppElection {
   @@index([revokesElectionId])
 }
 
-// Payroll-3B-5B-1 (2026-08-31) — CPP disability status. See
-// prisma/schema.prisma for full doc.
+// ---------------------------------------------------------------------------
+// Payroll-3B-5B-1 (2026-08-31) — CPP disability status (§9).
+//
+// Effective-dated Payroll statutory fact. NOT a medical record —
+// Spectre stores ONLY what the calculator needs to stop or restart
+// CPP contributions. Diagnosis, treatment, and medical detail are
+// explicitly out of scope; adding any is a violation of §36.
+//
+// Statuses (validated in service layer):
+//   NOT_DISABLED     — default; no CPP effect.
+//   CPP_DISABLED     — receiving a CPP disability benefit; CPP
+//                      contributions stop per CRA rules.
+//   QPP_DISABLED     — receiving a QPP disability benefit; CPP
+//                      contributions stop per CRA rules.
+//
+// The effective-dated interval [effectiveFrom, effectiveTo) is the
+// source of truth the calculator uses to determine whether a given
+// pay date's employment is CPP-pensionable.
+// ---------------------------------------------------------------------------
 model EmployeeCppDisability {
   id                 String   @id @default(cuid())
   clubId             String
   club               Club     @relation(fields: [clubId], references: [id])
   employeeId         String
   employee           Employee @relation(fields: [employeeId], references: [id])
-  status             String
+  status             String   // NOT_DISABLED | CPP_DISABLED | QPP_DISABLED
   effectiveFrom      DateTime
   effectiveTo        DateTime?
+  // Basis of the record — evidence Spectre relied on. Free-text at
+  // the service layer, capped 500 chars. Not diagnostic; only what
+  // was received (e.g. "CPP disability approval letter dated ...").
   sourceBasis        String?
   recordedByUserId   String?
   createdAt          DateTime @default(now())
@@ -12294,7 +12718,8 @@ model PayrollBatchAllowanceSnapshot {
   frequency              String
   taxable                Boolean
   // Payroll-3B-5B-1b (§18) — decoupled classification frozen at
-  // snapshot time.
+  // snapshot time. `pensionable` / `insurable` fallback to `taxable`
+  // for legacy rows.
   pensionable            Boolean?
   insurable              Boolean?
   // Effective window of the SOURCE allowance at snapshot time.
@@ -12307,72 +12732,205 @@ model PayrollBatchAllowanceSnapshot {
 }
 
 // ---------------------------------------------------------------------
-// Payroll-3C-1 (2026-09-07) — Payroll Component catalogue (see
-// prisma/schema.prisma for the full doc block).
+// Payroll-3C-1 (2026-09-07) — Payroll Component catalogue.
+//
+// Tenant-scoped library of every distinct compensation / benefit /
+// deduction concept the club operates. A single row here describes
+// what the item IS (semantic categorization + statutory treatment
+// + GL mapping); one or more EmployeeRecurringPayrollComponent rows
+// then attach it to specific employees with amounts.
+//
+// This model is ADDITIVE. Payroll-3C-1 wires no calculator or GL
+// changes yet — it exists so the setup surface, employee assignments,
+// and later slices (3C-2..3C-6) have a canonical schema to build on.
+//
+// Design principles:
+//   • Semantic distinction — cash vs non-cash, employee-paid vs
+//     employer-paid, and each statutory-base membership is a first-
+//     class field. The engine reads these; it does NOT infer from
+//     display name (see §7 of the 3C brief).
+//   • Category taxonomy — REGULAR_EARNING | ADDITIONAL_EARNING |
+//     ALLOWANCE | TAXABLE_BENEFIT | NON_TAXABLE_BENEFIT |
+//     EMPLOYER_CONTRIBUTION | EMPLOYEE_DEDUCTION | REIMBURSEMENT.
+//     Statutory deductions (CPP/EI/tax) are NOT stored here — they
+//     remain calculator outputs (§18).
+//   • Effective dating happens on the assignments, not the catalogue
+//     row itself; catalogue rows are enabled/disabled via `active`.
 // ---------------------------------------------------------------------
 model PayrollComponent {
-  id                    String   @id @default(cuid())
-  clubId                String
-  club                  Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
-  code                  String
-  displayName           String
-  description           String?
-  category              String
-  side                  String
-  // Payroll-3C-2 (2026-09-07) — replaces isCash. See prisma/schema.prisma.
+  id              String   @id @default(cuid())
+  clubId          String
+  club            Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // Tenant-unique stable key (uppercase snake). Used by fixtures /
+  // imports / API deep-links.
+  code            String
+  displayName     String
+  description     String?
+  // See catalogue comment above for the eight canonical categories.
+  category        String
+  // EMPLOYEE (deduction reduces employee net, or earning credits it)
+  // vs EMPLOYER (contribution/expense, does not reduce employee net).
+  side            String
+  // Payroll-3C-2 (2026-09-07) — replaces the ambiguous `isCash`
+  // boolean from 3C-1 with an explicit cash-effect classifier.
+  // 3C-1 conflated "produces cash remuneration" with "changes net
+  // pay". A regular salary line and an employee LTD deduction were
+  // both `isCash=true`, yet one INCREASES net pay and the other
+  // DECREASES it. `cashEffect` distinguishes them cleanly:
+  //
+  //   INCREASES_NET_PAY  — Regular Salary, Cell Phone Allowance,
+  //                        any employee-side cash earning.
+  //   DECREASES_NET_PAY  — Employee LTD, Employee RRSP (post-tax),
+  //                        any employee-side cash deduction.
+  //   NO_NET_PAY_EFFECT  — Non-cash Taxable Benefit, Employer RRSP,
+  //                        Employer AD&D, any employer-side item.
+  //
+  // The calculator reads this to decide which side of the cash
+  // ledger the amount lands on, INDEPENDENTLY of the statutory-
+  // base flags below.
   cashEffect            String
+  // Payroll-3C-2 (2026-09-07) — statutory treatment provenance.
+  //
+  //   SPECTRE_LIBRARY — treatment values populated by Spectre's
+  //                     forthcoming Canadian payroll library
+  //                     (RRSP, well-known taxable benefits). 3C-3+
+  //                     will start writing this. Payroll Admins may
+  //                     NOT edit these flags directly on such rows.
+  //   CUSTOM          — treatment values explicitly configured by
+  //                     the club, at their acknowledged risk. All
+  //                     3C-1/3C-2 fixture rows are CUSTOM.
   statutoryTreatmentSource String   @default("CUSTOM")
   // Payroll-3C-3C (2026-09-09) — SPECTRE_LIBRARY provenance.
+  // When statutoryTreatmentSource = SPECTRE_LIBRARY, these two fields
+  // MUST identify a rule in src/lib/payroll/statutory-library.ts.
+  // The service layer refuses upserts that claim SPECTRE_LIBRARY
+  // without a resolvable rule (fail-closed per §15).
   statutoryRuleKey     String?
   statutoryRuleVariant String?
   // Payroll-3C-3D (2026-09-09) — T4127 tax-formula deduction input.
+  // When set, the resolved amount for this component is added to the
+  // F (deductions from income) input on both federal and provincial
+  // tax calculators. Does NOT alter taxable / CPP / EI remuneration.
+  //
+  //   RRSP_DEDUCTED_AT_SOURCE — employee RRSP contribution deducted
+  //     directly through payroll where the employer has reasonable
+  //     grounds to believe the contribution is deductible.
+  //   REGISTERED_PENSION_PLAN | UNION_DUES | PRESCRIBED_ZONE |
+  //   AUTHORIZED_OTHER_DEDUCTION — reserved for later slices.
   taxFormulaDeductionType String?
-  // Payroll-3C-3 (2026-09-08) — directional statutory effects. See prisma/schema.prisma.
+  // Payroll-3C-3 (2026-09-08) — directional statutory effects.
+  //
+  // The 3C-2 `affectsTaxable / affectsCppPensionable / affectsEiInsurable`
+  // booleans could only ADD to a base. That works for a non-cash
+  // taxable benefit (+$100 taxable) but is silent about a component
+  // that REDUCES a base (e.g. a pre-tax RRSP employee contribution
+  // reducing taxable remuneration). Directional enums fix that:
+  //
+  //   ADD       — grows the base by resolvedAmount
+  //   SUBTRACT  — reduces the base by resolvedAmount (floored at 0)
+  //   NONE      — no effect
+  //
+  // Each of the three bases carries its own direction — a component
+  // can ADD to taxable while leaving CPP/EI at NONE, etc.
+  //
+  // Migration from 3C-2: booleans true→ADD, false→NONE. Nothing was
+  // auto-mapped to SUBTRACT (§4 of the 3C-3 brief).
   taxableEffect         String  @default("NONE")
   cppPensionableEffect  String  @default("NONE")
   eiInsurableEffect     String  @default("NONE")
+  // FIXED_AMOUNT | PERCENT_OF_ELIGIBLE_EARNINGS (extensible).
   calculationMethod     String
+  // Payroll-3C-3 (2026-09-08) — for PERCENT_OF_ELIGIBLE_EARNINGS
+  // components, WHAT the percentage is a percentage OF. Null for
+  // FIXED_AMOUNT (no eligible-earnings semantics).
+  //
+  //   REGULAR_EARNINGS_ONLY — base salary / regular hourly earnings
+  //                           only; excludes allowances + additional
+  //                           earnings + other components.
+  //   CASH_EARNINGS         — regular earnings + FIXED_AMOUNT cash
+  //                           earnings/allowances that have already
+  //                           been resolved (INCREASES_NET_PAY items).
+  //
+  // Percentage components NEVER reference other percentage
+  // components (§8 — no component-to-component formula graph).
   eligibleEarningsBase  String?
-  glAccountId           String?
-  glAccount             Account? @relation("PayrollComponentGlAccount", fields: [glAccountId], references: [id])
-  // Payroll-3C-6 (2026-09-05) — see prisma/schema.prisma for detail.
-  expenseAccountId      String?
-  expenseAccount        Account? @relation("PayrollComponentExpenseAccount",   fields: [expenseAccountId],   references: [id])
-  liabilityAccountId    String?
-  liabilityAccount      Account? @relation("PayrollComponentLiabilityAccount", fields: [liabilityAccountId], references: [id])
-  displaySection        String
-  displayOrder          Int      @default(0)
-  active                Boolean  @default(true)
-  notes                 String?
-  createdByUserId       String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  // Optional per-component GL mapping. When null, posting falls back
+  // to the tenant PayrollGlAccountingProfile default for the item's
+  // category (wired in 3C-6, not 3C-1).
+  glAccountId     String?
+  glAccount       Account? @relation("PayrollComponentGlAccount", fields: [glAccountId], references: [id])
+  // Payroll-3C-6 (2026-09-05) — component-aware GL mapping.
+  // Distinct fields for expense-side vs liability-side accounts
+  // instead of the coarse glAccountId above. Fields are OPTIONAL
+  // because catalogue rows can be edited progressively; the GL
+  // readiness evaluator refuses to post batches whose required
+  // side is missing. Legacy glAccountId is preserved for backward
+  // compatibility but is no longer the recommended shape.
+  //   expenseAccountId  — debited when this component creates an
+  //                       employer cost (cash allowance, employer
+  //                       contribution, non-cash taxable benefit,
+  //                       reimbursement).
+  //   liabilityAccountId — credited when this component creates a
+  //                       liability (employee deduction, employer
+  //                       benefit payable).
+  expenseAccountId    String?
+  expenseAccount      Account? @relation("PayrollComponentExpenseAccount",   fields: [expenseAccountId],   references: [id])
+  liabilityAccountId  String?
+  liabilityAccount    Account? @relation("PayrollComponentLiabilityAccount", fields: [liabilityAccountId], references: [id])
+  // Pay-statement presentation hints.
+  //   displaySection: EARNINGS | BENEFITS | DEDUCTIONS
+  //   displayOrder:    stable ordering within a section
+  displaySection  String
+  displayOrder    Int      @default(0)
+  active          Boolean  @default(true)
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   assignments EmployeeRecurringPayrollComponent[]
+  // Payroll-3C-2 (2026-09-07) — batch snapshots that frozen this component.
   batchSnapshots PayrollBatchComponentSnapshot[]
+  // Payroll-3C-5 (2026-09-09) — per-component opening YTD rows.
   openingBalanceRows PayrollOpeningBalanceComponent[]
 
   @@unique([clubId, code])
   @@index([clubId, category, active])
 }
 
+// Per-Employee recurring assignment of a Payroll Component.
+//
+// One employee may have many assignments (Cell Phone Allowance,
+// RRSP employee contribution, LTD deduction, etc.). Each assignment
+// is effective-dated; historical batches consume the row that was
+// active at prep time and freeze it in the batch snapshot.
+//
+// Amount vs percentBps:
+//   • calculationMethod FIXED_AMOUNT → amount is dollars per period
+//   • calculationMethod PERCENT_OF_ELIGIBLE_EARNINGS → percentBps
+//     is the rate (basis points; e.g. 500 = 5.00%) applied to the
+//     component's eligible-earnings definition (defined in 3C-3).
+//
+// One-time (non-recurring) batch adjustments live on
+// PayrollBatchDeduction / PayrollBatchEarning (or a future
+// dedicated one-time model) — not here.
 model EmployeeRecurringPayrollComponent {
-  id              String   @id @default(cuid())
-  clubId          String
-  club            Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
-  employeeId      String
-  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  componentId     String
-  component       PayrollComponent @relation(fields: [componentId], references: [id])
-  amount          Decimal?
-  percentBps      Int?
-  effectiveFrom   DateTime
-  effectiveTo     DateTime?
-  active          Boolean  @default(true)
-  notes           String?
+  id            String   @id @default(cuid())
+  clubId        String
+  club          Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId    String
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  componentId   String
+  component     PayrollComponent @relation(fields: [componentId], references: [id])
+  amount        Decimal?
+  percentBps    Int?
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  active        Boolean  @default(true)
+  notes         String?
   createdByUserId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([clubId, employeeId, effectiveFrom])
   @@index([componentId])
@@ -12380,7 +12938,32 @@ model EmployeeRecurringPayrollComponent {
   snapshots PayrollBatchComponentSnapshot[]
 }
 
-// Payroll-3C-2 (2026-09-07) — see prisma/schema.prisma for full doc.
+// ---------------------------------------------------------------------
+// Payroll-3C-2 (2026-09-07) — PayrollBatchComponentSnapshot.
+//
+// Immutable snapshot of an EmployeeRecurringPayrollComponent applied
+// to a specific batch. Written by preparation, read by calculation
+// and review. NEVER re-read from the live component / assignment
+// after prep — the same guarantee the existing TD1 and salary
+// snapshots hold.
+//
+// Structural invariants:
+//   • One snapshot per (batchEmployeeId, sourceAssignmentId)
+//   • `resolvedAmount` is filled when snapshot is calculable
+//     (FIXED_AMOUNT). PERCENT_OF_ELIGIBLE_EARNINGS lands with
+//     `resolvedAmount = NULL` and `warningCode =
+//     "COMPONENT_PERCENT_UNSUPPORTED"` — calc skips it, review
+//     surfaces the warning.
+//   • Every classification (`cashEffect`, `affectsTaxable`,
+//     `affectsCppPensionable`, `affectsEiInsurable`, `category`,
+//     `side`) is copied at snapshot time so later live edits to
+//     the component definition cannot mutate historical payroll.
+//
+// Coexists with `PayrollBatchAllowanceSnapshot` (the legacy
+// EmployeeAllowance snapshot path). A component MUST NOT double
+// with a legacy allowance for the same economic effect — verified
+// by regression test (§31 of the 3C-2 brief).
+// ---------------------------------------------------------------------
 model PayrollBatchComponentSnapshot {
   id                    String   @id @default(cuid())
   clubId                String
@@ -12393,56 +12976,105 @@ model PayrollBatchComponentSnapshot {
   employee              Employee @relation(fields: [employeeId], references: [id])
   sourceComponentId     String
   sourceComponent       PayrollComponent @relation(fields: [sourceComponentId], references: [id])
-  // Payroll-3C-4 (2026-09-09) — see prisma/schema.prisma.
+  // Payroll-3C-4 (2026-09-09) — sourceAssignmentId is NULL for
+  // one-time payroll adjustments; those aren't backed by a recurring
+  // EmployeeRecurringPayrollComponent. See `provenance` below.
   sourceAssignmentId    String?
   sourceAssignment      EmployeeRecurringPayrollComponent? @relation(fields: [sourceAssignmentId], references: [id])
+  // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
+  //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
+  //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.
+  // Future values: LEGACY_ALLOWANCE (once EmployeeAllowance migrates)
+  // and SYSTEM_GENERATED (retro pay, corrections).
   provenance            String  @default("RECURRING_EMPLOYEE_SETUP")
+  // One-time-adjustment fields. Required for ONE_TIME_PAYROLL_ADJUSTMENT
+  // (enforced in service); NULL for recurring rows.
   enteredByUserId       String?
   reason                String?
+  // Frozen component identity + display.
   componentCode         String
   displayName           String
   category              String
   side                  String
   displaySection        String
   displayOrder          Int      @default(0)
+  // Frozen economic treatment (§2 of 3C-2 brief).
   cashEffect            String
-  // Payroll-3C-3 — directional statutory effects. See prisma/schema.prisma.
+  // Payroll-3C-3 (2026-09-08) — directional statutory effects, frozen.
   taxableEffect         String  @default("NONE")
   cppPensionableEffect  String  @default("NONE")
   eiInsurableEffect     String  @default("NONE")
   calculationMethod     String
   statutoryTreatmentSource String  @default("CUSTOM")
   // Payroll-3C-3C (2026-09-09) — frozen SPECTRE_LIBRARY provenance.
+  // Populated at PREPARE time when the component claimed SPECTRE_LIBRARY.
+  // Explainability: the snapshot alone can answer "Why was this
+  // taxable?" without re-reading live library code.
   statutoryRuleKey             String?
   statutoryRuleVariant         String?
   statutoryRuleVersion         String?
   statutoryRuleSourceAuthority String?
   statutoryRuleSourceTitle     String?
   statutoryRuleSourceReference String?
-  // Payroll-3C-3D (2026-09-09) — frozen tax-formula deduction stamp.
+  // Payroll-3C-3D (2026-09-09) — frozen T4127 tax-formula deduction
+  // input. Non-null on snapshots whose component maps into the
+  // tax-formula F sum (currently RRSP_DEDUCTED_AT_SOURCE only).
+  // Historical batches keep this stamp forever so a later component
+  // reclassification never mutates prior tax withholding results.
   taxFormulaDeductionType String?
+  // Frozen assignment values.
   resolvedAmount        Decimal?
   sourcePercentBps      Int?
   sourceEffectiveFrom   DateTime
   sourceEffectiveTo     DateTime?
-  // Payroll-3C-3 — percentage-math provenance.
+  // Payroll-3C-3 (2026-09-08) — percentage math provenance. NULL for
+  // FIXED_AMOUNT. For PERCENT the eligible-earnings basis + the
+  // exact eligible-earnings amount at calculation time are frozen
+  // so historical review can reproduce "X% × $E = $R".
   eligibleEarningsBase  String?
   eligibleEarningsAmount Decimal?
+  // Non-null when the snapshot could not be resolved to a calculable
+  // amount and the calculator must skip it. `warningMessage` is human-
+  // readable for the review UI; `warningCode` remains the diagnostic.
   warningCode           String?
   warningMessage        String?
-  // Payroll-3C-6 (2026-09-05) — frozen GL mapping. See prisma/schema.prisma.
+  // Payroll-3C-6 (2026-09-05) — frozen GL mapping. Populated at
+  // PREPARE from the live PayrollComponent.expenseAccountId /
+  // liabilityAccountId. Historical journals must always debit /
+  // credit these accounts, never the live component values — that
+  // is what makes a posted journal immutable to configuration
+  // changes made after the batch was CALCULATED. NULL is allowed
+  // for legacy snapshots or components that don't need a side.
   expenseAccountIdSnapshot   String?
   liabilityAccountIdSnapshot String?
   createdAt             DateTime @default(now())
 
+  // Prisma cannot enforce a partial-unique-when-not-null across sqlite
+  // and postgres uniformly, so we drop the strict unique. Idempotency
+  // for recurring snapshots is preserved by the snapshotter's upsert
+  // (findFirst by batchEmployeeId + sourceAssignmentId, update in place).
   @@index([batchEmployeeId, sourceAssignmentId])
   @@index([clubId, batchId])
   @@index([componentCode])
   @@index([batchEmployeeId, provenance])
 }
 
+// Approved-time-entry seam (sections 19-20). This is the canonical
+// interface future timekeeping data (Clock In/Out, manager-approved
+// timecards) must satisfy before payroll consumes it. Payroll-3A
+// does NOT fabricate rows; the model is written by the future
+// timekeeping approval flow and read by run preparation.
 // Payroll-3B-3 (2026-08-28) — canonical department-level approval
-// of a Pay Period. See prisma/schema.prisma for the full doc block.
+// record for a Pay Period. One row per (Club, PayPeriod, Department).
+// Represents "Department X has approved its time for Pay Period Y";
+// the underlying PayrollApprovedTimeEntry rows carry their own
+// approval fields, but this row is the audit anchor + Work Intake
+// linkage for the department-scoped approval workflow.
+//
+// Lifecycle: PENDING (implicit — no row) → APPROVED → REOPENED.
+// If time changes after approval, the service transitions the row to
+// REOPENED and reactivates the associated Work Intake card so the
+// department head sees the correction is required.
 model PayrollDepartmentTimeApproval {
   id                   String   @id @default(cuid())
   clubId               String
@@ -12451,17 +13083,33 @@ model PayrollDepartmentTimeApproval {
   payPeriod            PayrollPayPeriod @relation(fields: [payPeriodId], references: [id])
   departmentId         String
   department           Department @relation("DepartmentPayrollTimeApprovals", fields: [departmentId], references: [id])
-  // Payroll-3D-3 — state extended with REVIEW_REQUIRED for revision drift.
+  // APPROVED | REOPENED | REVIEW_REQUIRED — the row exists only after
+  // a manager first approves the department for this period.
+  // Payroll-3D-3 adds REVIEW_REQUIRED for the case where source time
+  // changed after approval (approvedRevision drifted from
+  // currentRevision) and the manager must re-attest.
   state                String   @default("APPROVED")
   approvedAt           DateTime
   approvedByUserId     String
-  // Payroll-3D-3 — revision the approver attested to (see prisma/schema.prisma).
+  // Payroll-3D-3 — the revision of the (payPeriod × department) time
+  // dataset the manager attested to at approvedAt. Approval is
+  // considered valid ONLY when this equals the currently-computed
+  // revision of the scope; a source change increments the current
+  // revision and this row's state moves to REVIEW_REQUIRED via the
+  // invalidation service (never silently). Optional to remain
+  // backwards-compatible with pre-3D-3 rows.
   approvedRevision     String?
   // Payroll-3D-3B Slice 7B (2026-09-06) — DB-CAS concurrency token.
+  // approvedScopeVersion pins the PayrollDepartmentTimeScopeState.version
+  // this approval attested to. Legacy approvals (from before 7B) may
+  // be null; new approvals always persist it. See scope-state.ts.
   approvedScopeVersion Int?
   reopenedAt           DateTime?
   reopenedByUserId     String?
   reopenReason         String?
+  // Optional linkage to the source Work Intake card that resolved
+  // into this approval. The Work Intake orchestrator writes this
+  // pointer so audit + reopen can find and reactivate the same card.
   workIntakeItemId     String?
   notes                String?
   createdAt            DateTime @default(now())
@@ -12478,6 +13126,12 @@ model PayrollDepartmentTimeApproval {
 
 // Payroll-3D-3B Slice 7B (2026-09-06) — DB-controlled concurrency
 // token for the (clubId × payPeriodId × departmentId) approval scope.
+// Every material writer that changes computeScopeRevision inputs
+// atomically bumps `version` inside its own transaction; every
+// manager approval performs a version CAS. Both operations contend
+// on the same row so the database determines the winner. Row exists
+// independently of whether a manager has ever approved — created on
+// first material write or first getScopeReview.
 model PayrollDepartmentTimeScopeState {
   id           String   @id @default(cuid())
   clubId       String
@@ -12495,11 +13149,6 @@ model PayrollDepartmentTimeScopeState {
   @@index([clubId, departmentId])
 }
 
-// Approved-time-entry seam (sections 19-20). This is the canonical
-// interface future timekeeping data (Clock In/Out, manager-approved
-// timecards) must satisfy before payroll consumes it. Payroll-3A
-// does NOT fabricate rows; the model is written by the future
-// timekeeping approval flow and read by run preparation.
 model PayrollApprovedTimeEntry {
   id                     String   @id @default(cuid())
   clubId                 String
@@ -12513,7 +13162,13 @@ model PayrollApprovedTimeEntry {
   // REGULAR | OVERTIME | STAT_HOLIDAY | VACATION | OTHER - matches the
   // earning-type catalogue subset that time entries can produce.
   earningClassification  String   @default("REGULAR")
-  // DRAFT | APPROVED | POSTED. Payroll consumes APPROVED only.
+  // DRAFT | APPROVED | POSTED | DEFERRED | SUPERSEDED_STALE.
+  // Payroll consumes APPROVED with consumedByBatchId=null AND
+  // supersededByApprovedTimeEntryId=null. DEFERRED = late exception
+  // resolved with "Defer to next payroll" (row stays for audit but is
+  // ignored by batch prep). SUPERSEDED_STALE = frozen row invalidated
+  // by an approved correction before consumption; kept for audit,
+  // ignored by batch prep.
   approvalState          String   @default("DRAFT")
   approvedAt             DateTime?
   approvedByUserId       String?
@@ -12522,12 +13177,18 @@ model PayrollApprovedTimeEntry {
   consumedByBatchId      String?
   consumedByBatchEmployeeId String?
   notes                  String?
-  // Payroll-3D-4 (2026-09-05) — see prisma/schema.prisma for doc.
+  // Payroll-3D-4 (2026-09-05) — provenance to the timesheet entry
+  // that produced this frozen input, plus the approval revision that
+  // authorised the freeze.
   payrollTimesheetEntryId String?  @unique
   payrollTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryFrozenAs", fields: [payrollTimesheetEntryId], references: [id])
   sourceApprovalId        String?
   sourceApproval          PayrollDepartmentTimeApproval? @relation("ApprovalFrozenEntries", fields: [sourceApprovalId], references: [id])
   sourceApprovalRevision  String?
+  // Freeze generation model (§32 / §50) — an unconsumed frozen row
+  // whose source changed via an approved correction is marked
+  // superseded (points at its replacement) rather than mutated in
+  // place. Batch prep MUST filter these out.
   supersededByApprovedTimeEntryId String?
   supersededByApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("PayrollApprovedTimeEntrySupersession", fields: [supersededByApprovedTimeEntryId], references: [id])
   supersedes                      PayrollApprovedTimeEntry[] @relation("PayrollApprovedTimeEntrySupersession")
@@ -12535,6 +13196,7 @@ model PayrollApprovedTimeEntry {
   updatedAt              DateTime @updatedAt
 
   batchEarnings PayrollBatchEarning[]
+  // Payroll-3D-4 back-relation for retro adjustments that reference this row.
   timeAdjustments PayrollTimeAdjustment[] @relation("AdjustmentOriginalApprovedTimeEntry")
 
   @@index([clubId, employeeId, workDate])
@@ -12544,7 +13206,31 @@ model PayrollApprovedTimeEntry {
   @@index([sourceApprovalId])
 }
 
-// Payroll-3D-4 (2026-09-05) — see prisma/schema.prisma for full doc.
+// Payroll-3D-4 (2026-09-05) — Late-time / retro adjustment obligation.
+//
+// Created explicitly by the freeze service (late approval past cutoff)
+// or by the correction-resolution service (correction landed after
+// consumption / on an unconsumed stale row that could not be safely
+// refrozen). Payroll Admin resolves each row with INCLUDE_CURRENT or
+// DEFER_NEXT_PAYROLL; the row NEVER retroactively mutates a consumed
+// PayrollApprovedTimeEntry.
+//
+// Signed `differenceHours`: positive when more time was recorded than
+// the historical input; negative when less. For fresh late approvals
+// (no prior consumed row), differenceHours is the full scope total
+// and originalApprovedTimeEntryId is null.
+//
+// Statuses:
+//   OPEN                — awaiting Payroll Admin decision
+//   INCLUDE_CURRENT     — accepted for the current payroll (the row
+//                          being frozen stays APPROVED and payroll
+//                          consumes it normally)
+//   DEFER_NEXT_PAYROLL  — deferred to targetPayPeriodId; the frozen
+//                          row (if any for this reason) transitions
+//                          to DEFERRED
+//   RESOLVED            — handled out-of-band (payroll cycle already
+//                          closed by admin note; kept for audit)
+//   CANCELLED           — no adjustment required (rare; e.g. duplicate)
 model PayrollTimeAdjustment {
   id                   String   @id @default(cuid())
   clubId               String
@@ -12560,9 +13246,11 @@ model PayrollTimeAdjustment {
   sourceTimesheetEntry   PayrollTimesheetEntry? @relation("TimesheetEntryAdjustments", fields: [sourceTimesheetEntryId], references: [id])
   originalApprovedTimeEntryId String?
   originalApprovedTimeEntry   PayrollApprovedTimeEntry? @relation("AdjustmentOriginalApprovedTimeEntry", fields: [originalApprovedTimeEntryId], references: [id])
+  // Reason enum (documentation): LATE_APPROVAL | RETRO_CORRECTION | UNCONSUMED_STALE.
   reason               String
   differenceHours      Decimal
   earningClassification String  @default("REGULAR")
+  // OPEN | INCLUDE_CURRENT | DEFER_NEXT_PAYROLL | RESOLVED | CANCELLED
   status               String   @default("OPEN")
   createdByUserId      String?
   createdAt            DateTime @default(now())
@@ -12576,4 +13264,274 @@ model PayrollTimeAdjustment {
   @@index([clubId, targetPayPeriodId])
   @@index([sourceTimesheetEntryId])
   @@index([originalApprovedTimeEntryId])
+}
+
+// ===================================================================
+// Scheduling Foundation (2026-09-07)
+// ===================================================================
+// Employee-facing shift scheduling. Orthogonal to the canonical
+// worked-time stack (TimeClockEvent -> PayrollTimesheet ->
+// PayrollTimesheetEntry -> PayrollApprovedTimeEntry). Scheduled time
+// joins the worked-time stack on EmployeeEmploymentAssignment.id so
+// scheduled-vs-actual reconciliation is a natural join.
+//
+// Models:
+//   ShiftTemplate                - reusable per-department shift definition
+//   Shift                        - a published concrete shift instance
+//   ShiftAssignment              - WHO is scheduled to work the shift
+//   ShiftOpportunity             - coworker-visible offer via FORE!
+//   EmployeeAvailabilityProfile  - versioned recurring availability header
+//   EmployeeAvailabilityRule     - one (weekday x shift-template) cell
+//
+// Availability policy (founder amendment 2 and 6):
+//   - Editing availability MUST be allowed for any hourly employee
+//     regardless of training-completion state. Training gates BEING
+//     SCHEDULED, not COMMUNICATING availability.
+//   - Availability changes affect FUTURE schedule decisions only.
+//     A profile effective 2026-10-01 applies to shifts dated
+//     2026-10-01+ that are NOT already published/assigned. Already-
+//     published shifts remain unchanged.
+//
+// Shift-assignment concurrency invariant:
+//   At most ONE ShiftAssignment per (clubId, shiftId) may be in
+//   state ASSIGNED. Enforced via partial-unique index at the DB
+//   layer (see migration). This is the same pattern used by the
+//   Payroll-3D-3B correction-review and scope-approval origins.
+//
+// Shift-opportunity concurrency invariant:
+//   At most ONE ShiftOpportunity per (clubId, shiftId) may be in
+//   state OPEN. Prevents double-offer and races the atomic
+//   pickup CAS during claim.
+
+// ShiftTemplate - tenant/department-owned reusable shift definition.
+// Times are stored as minutes-from-midnight in the club's local
+// timezone and materialised to instants when a Shift is published.
+// Templates are managed by the department manager (and privileged
+// HR/Payroll admins with cross-department authority); employees have
+// read-only access. No management UI ships in this phase - templates
+// are seeded per-tenant.
+model ShiftTemplate {
+  id                  String     @id @default(cuid())
+  clubId              String
+  club                Club       @relation("ClubShiftTemplates", fields: [clubId], references: [id])
+  departmentId        String
+  department          Department @relation("DepartmentShiftTemplates", fields: [departmentId], references: [id])
+  code                String
+  name                String
+  // Start / end expressed as minutes since 00:00 local (club timezone).
+  // Range: 0 <= startTimeMinutes < 1440. endTimeMinutes may equal 1440
+  // to represent midnight of the following day; it never wraps past.
+  startTimeMinutes    Int
+  endTimeMinutes      Int
+  active              Boolean    @default(true)
+  sortOrder           Int        @default(0)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  shifts              Shift[]                     @relation("TemplateShifts")
+  availabilityRules   EmployeeAvailabilityRule[]  @relation("TemplateAvailabilityRules")
+
+  @@unique([clubId, departmentId, code])
+  @@index([clubId, departmentId, active])
+}
+
+// Shift - one published concrete work session on a specific date.
+// Persists the resolved instant window so downstream reads never
+// need to re-materialise from template + timezone.
+model Shift {
+  id                  String        @id @default(cuid())
+  clubId              String
+  club                Club          @relation("ClubShifts", fields: [clubId], references: [id])
+  departmentId        String
+  department          Department    @relation("DepartmentShifts", fields: [departmentId], references: [id])
+  shiftTemplateId     String
+  shiftTemplate       ShiftTemplate @relation("TemplateShifts", fields: [shiftTemplateId], references: [id])
+  // Civil date the shift belongs to (club-local midnight, stored UTC
+  // per repo civil-date convention).
+  shiftDate           DateTime
+  // Concrete instant window resolved at publish time from
+  // (shiftTemplate, shiftDate, club.timezone).
+  startAt             DateTime
+  endAt               DateTime
+  positionId          String?
+  position            EmployeePosition? @relation("PositionShifts", fields: [positionId], references: [id])
+  // PUBLISHED | CANCELLED - CANCELLED preserves history but hides
+  // the shift from live views. A cancelled shift MUST NOT have any
+  // ASSIGNED ShiftAssignment (transitional cancel flips them to
+  // CANCELLED in the same tx).
+  state               String        @default("PUBLISHED")
+  publishedAt         DateTime      @default(now())
+  publishedByUserId   String?
+  notes               String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  assignments         ShiftAssignment[]  @relation("ShiftAssignments")
+  opportunities       ShiftOpportunity[] @relation("ShiftOpportunities")
+
+  @@index([clubId, departmentId, shiftDate])
+  @@index([clubId, startAt])
+}
+
+// ShiftAssignment - WHO is scheduled to work a Shift.
+//
+// State lifecycle (founder amendment 8):
+//   ASSIGNED  - currently on the hook
+//   REPLACED  - a successful pickup transferred responsibility;
+//               replacedByAssignmentId points at the new ASSIGNED row
+//   CANCELLED - the parent Shift was cancelled or the assignment
+//               was removed for another reason
+//
+// The offering employee's assignment STAYS ASSIGNED while an
+// opportunity is OPEN. Only a successful pickup atomically transitions
+// original ASSIGNED -> REPLACED and creates the claimant's new ASSIGNED.
+//
+// Concurrency contract (enforced by migration partial-unique index):
+//   UNIQUE (clubId, shiftId) WHERE state = 'ASSIGNED'
+//   -> at most one ASSIGNED row per shift; race-safe CAS pickup.
+model ShiftAssignment {
+  id                       String    @id @default(cuid())
+  clubId                   String
+  club                     Club      @relation("ClubShiftAssignments", fields: [clubId], references: [id])
+  shiftId                  String
+  shift                    Shift     @relation("ShiftAssignments", fields: [shiftId], references: [id])
+  employeeId               String
+  employee                 Employee  @relation("EmployeeShiftAssignments", fields: [employeeId], references: [id])
+  employmentAssignmentId   String
+  employmentAssignment     EmployeeEmploymentAssignment @relation("EmploymentAssignmentShiftAssignments", fields: [employmentAssignmentId], references: [id])
+  // ASSIGNED | REPLACED | CANCELLED
+  state                    String    @default("ASSIGNED")
+  // Provenance for a pickup transition. Optional 1:1 self-relation.
+  replacedByAssignmentId   String?   @unique
+  replacedByAssignment     ShiftAssignment?  @relation("AssignmentReplacement", fields: [replacedByAssignmentId], references: [id])
+  replacedFromAssignment   ShiftAssignment?  @relation("AssignmentReplacement")
+  cancelledAt              DateTime?
+  cancelledByUserId        String?
+  cancelledReason          String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  // Back-relations from ShiftOpportunity (both directions).
+  offeredOpportunities     ShiftOpportunity[] @relation("AssignmentOfferedOpportunities")
+  claimedOpportunities     ShiftOpportunity[] @relation("AssignmentClaimedOpportunities")
+
+  @@index([clubId, employeeId, state])
+  @@index([clubId, shiftId, state])
+}
+
+// ShiftOpportunity - a give-up-shift offer visible to eligible
+// coworkers via FORE!. Distinct from ShiftAssignment: the offering
+// employee's ShiftAssignment stays ASSIGNED until a successful pickup.
+//
+// State lifecycle (founder amendment 8):
+//   OPEN      - awaiting a claim; visible in FORE!
+//   CLAIMED   - a coworker successfully picked up
+//   WITHDRAWN - the offering employee cancelled the offer
+//   EXPIRED   - passed a deadline without a claim
+//
+// Concurrency contract (enforced by migration partial-unique index):
+//   UNIQUE (clubId, shiftId) WHERE state = 'OPEN'
+//   -> at most one OPEN opportunity per shift.
+//
+// The atomic pickup transaction:
+//   1. UPDATE ShiftOpportunity SET state='CLAIMED', claimedBy...
+//      WHERE id = X AND state = 'OPEN'  - count=1 or 0
+//   2. If count=0 -> race lost -> throw ConflictError, tx rolls back
+//   3. UPDATE ShiftAssignment SET state='REPLACED', replacedBy...
+//      WHERE id = <original ASSIGNED> AND state = 'ASSIGNED'
+//   4. INSERT ShiftAssignment for claimant (state='ASSIGNED')
+//   Both partial-unique indexes protect step 3/4 from double-writes.
+model ShiftOpportunity {
+  id                             String    @id @default(cuid())
+  clubId                         String
+  club                           Club      @relation("ClubShiftOpportunities", fields: [clubId], references: [id])
+  shiftId                        String
+  shift                          Shift     @relation("ShiftOpportunities", fields: [shiftId], references: [id])
+  offeredByEmployeeId            String
+  offeredByEmployee              Employee  @relation("EmployeeOfferedShiftOpportunities", fields: [offeredByEmployeeId], references: [id])
+  offeredByAssignmentId          String
+  offeredByAssignment            ShiftAssignment @relation("AssignmentOfferedOpportunities", fields: [offeredByAssignmentId], references: [id])
+  // OPEN | CLAIMED | WITHDRAWN | EXPIRED
+  state                          String    @default("OPEN")
+  reason                         String?
+  note                           String?
+  expiresAt                      DateTime?
+  offeredAt                      DateTime  @default(now())
+  claimedByEmployeeId            String?
+  claimedByEmployee              Employee? @relation("EmployeeClaimedShiftOpportunities", fields: [claimedByEmployeeId], references: [id])
+  claimedByAssignmentId          String?
+  claimedByAssignment            ShiftAssignment? @relation("AssignmentClaimedOpportunities", fields: [claimedByAssignmentId], references: [id])
+  claimedAt                      DateTime?
+  withdrawnAt                    DateTime?
+  withdrawnByUserId              String?
+  createdAt                      DateTime  @default(now())
+  updatedAt                      DateTime  @updatedAt
+
+  @@index([clubId, state])
+  @@index([clubId, shiftId, state])
+}
+
+// EmployeeAvailabilityProfile - one versioned availability record.
+//
+// The employee's recurring availability is expressed as a header
+// (this table) plus per-weekday-per-shift-template rules (see
+// EmployeeAvailabilityRule).
+//
+// Resolution rule (founder amendment 6):
+//   The applicable profile for date D is the row with the LARGEST
+//   effectiveFrom <= D. No `currentAvailabilityId` pointer on
+//   Employee - resolve by date every read.
+//
+// Editing rule (founder amendment 2):
+//   Hourly employees MAY create/update their availability profile
+//   regardless of training-completion status. Training gates the
+//   READY-TO-BE-SCHEDULED state, not the ability to communicate
+//   availability.
+model EmployeeAvailabilityProfile {
+  id                        String    @id @default(cuid())
+  clubId                    String
+  club                      Club      @relation("ClubEmployeeAvailabilityProfiles", fields: [clubId], references: [id])
+  employeeId                String
+  employee                  Employee  @relation("EmployeeAvailabilityProfiles", fields: [employeeId], references: [id])
+  // Civil date the profile begins to apply (club-local midnight,
+  // stored UTC per repo civil-date convention).
+  effectiveFrom             DateTime
+  preferredHoursPerWeek     Int?
+  maximumHoursPerWeek       Int?
+  notes                     String?
+  createdByUserId           String?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  rules                     EmployeeAvailabilityRule[] @relation("ProfileAvailabilityRules")
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([clubId, employeeId, effectiveFrom])
+}
+
+// EmployeeAvailabilityRule - one (weekday x shift-template) cell
+// inside a profile.
+//
+// weekday: 0=Sunday, 1=Monday, ..., 6=Saturday (JS Date.getDay
+// convention). Duplicate (weekday, shiftTemplateId) rows within the
+// same profile are blocked by the unique index.
+//
+// availableFrom / availableUntil narrow the rule within the profile's
+// window (rare; usually null so the rule holds for the profile's
+// entire lifetime).
+model EmployeeAvailabilityRule {
+  id                         String    @id @default(cuid())
+  availabilityProfileId      String
+  availabilityProfile        EmployeeAvailabilityProfile @relation("ProfileAvailabilityRules", fields: [availabilityProfileId], references: [id])
+  shiftTemplateId            String
+  shiftTemplate              ShiftTemplate @relation("TemplateAvailabilityRules", fields: [shiftTemplateId], references: [id])
+  weekday                    Int
+  available                  Boolean
+  availableFrom              DateTime?
+  availableUntil             DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  @@unique([availabilityProfileId, weekday, shiftTemplateId])
+  @@index([shiftTemplateId, weekday])
 }
