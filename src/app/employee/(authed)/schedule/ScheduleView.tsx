@@ -226,7 +226,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
         <p className="hidden md:block text-[11px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-3 md:mt-4 font-serif text-[26px] md:text-[30px] lg:text-[34px] text-club-ink leading-[1.05]">
+        <h1 className="mt-3 md:mt-4 font-serif font-semibold text-[26px] md:text-[30px] lg:text-[34px] text-club-ink leading-[1.05]">
           My Schedule
         </h1>
       </header>
@@ -355,13 +355,14 @@ export default function ScheduleView(props: ScheduleViewProps) {
               <div key={`s-${d.iso}`} className="px-3 pt-4 pb-5 flex flex-col">
                 {d.shifts.length === 0 ? (
                   <div className="my-auto flex flex-col items-center justify-center text-stone-400">
-                    <span className="text-[16px] leading-none">—</span>
-                    <span className="mt-2 text-[13px]">No shift</span>
+                    <span className="text-[18px] leading-none">—</span>
+                    <span className="mt-2.5 text-[14px]">No shift</span>
                   </div>
                 ) : (
-                  <div className="mx-auto w-full max-w-[150px] flex flex-col space-y-2">
+                  <div className="mx-auto w-full max-w-[158px] flex flex-col space-y-2">
                     {d.shifts.map((s) => {
                       const offered = !!s.openOpportunity;
+                      const isBartender = (s.positionName ?? "").toLowerCase().includes("bartender");
                       return (
                         <button
                           key={s.assignmentId}
@@ -369,28 +370,34 @@ export default function ScheduleView(props: ScheduleViewProps) {
                           onClick={() => openPanelFor(s)}
                           data-testid={`portal-schedule-shift-${s.assignmentId}`}
                           className={
-                            "w-full text-left rounded-md border px-3 py-3.5 transition-colors " +
+                            "w-full text-left rounded-md border px-3.5 py-3.5 transition-colors " +
                             (offered
                               ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
-                              : "border-club-green-200/70 bg-club-green-50/70 hover:bg-club-green-100/70")
+                              : isBartender
+                                ? "border-sky-200/70 bg-sky-50/60 hover:bg-sky-100/60"
+                                : "border-club-green-200/70 bg-club-green-50/70 hover:bg-club-green-100/70")
                           }
                         >
-                          {/* DOMINANT: role/job title */}
+                          {/* Small uppercase role eyebrow (per approved shell) */}
                           <p className={
-                            "font-serif text-[16px] leading-[1.1] " +
-                            (offered ? "text-club-gold-700" : "text-club-ink")
+                            "text-[11px] uppercase tracking-[0.14em] font-semibold whitespace-nowrap " +
+                            (offered
+                              ? "text-club-gold-700"
+                              : isBartender
+                                ? "text-sky-800"
+                                : "text-club-green-700")
                           }>
                             {s.positionName ?? s.departmentName}
                           </p>
-                          {/* SECONDARY: shift template */}
-                          <p className="mt-1 text-[12.5px] text-stone-600">
+                          {/* Dominant serif template name */}
+                          <p className="mt-1.5 font-serif text-[16px] text-club-ink leading-[1.15] whitespace-nowrap">
                             {s.templateName}
                           </p>
-                          {/* TERTIARY: time + duration */}
-                          <p className="mt-1.5 text-[11.5px] text-stone-500 leading-tight tabular-nums">
+                          {/* Secondary time + duration */}
+                          <p className="mt-2 text-[12.5px] text-stone-700 leading-tight tabular-nums whitespace-nowrap">
                             {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
                           </p>
-                          <p className="text-[11.5px] text-stone-500 leading-tight tabular-nums">
+                          <p className="text-[12.5px] text-stone-500 leading-tight tabular-nums whitespace-nowrap">
                             {fmtHM(s.scheduledSeconds)}
                           </p>
                           {offered && (
@@ -559,44 +566,56 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
-      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}>
-        <div className="flex items-center gap-2.5">
-          <CalendarIcon className="h-5 w-5 text-club-green-800" />
-          <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
+      <div className="rounded-lg border border-stone-200 bg-white px-5 py-2.5 grid grid-cols-[36px_minmax(0,1fr)] gap-x-3">
+        <div className="row-start-1 flex items-center h-[26px]">
+          <img
+            src="/design/scheduling/icons/next-shift.svg"
+            alt=""
+            aria-hidden="true"
+            className="block w-[26px] h-[26px]"
+          />
         </div>
-        <p className="mt-5 text-sm text-stone-600">Nothing scheduled ahead.</p>
+        <p className="row-start-1 self-center font-serif text-[22px] text-club-ink leading-none">Next Shift</p>
+        <div className="col-start-2">
+          <p className="mt-3 text-sm text-stone-600">Nothing scheduled ahead.</p>
+        </div>
       </div>
     );
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
-      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
+      className="rounded-lg border border-stone-200 bg-white px-5 py-2.5 grid grid-cols-[36px_minmax(0,1fr)] gap-x-3"
       data-testid="portal-schedule-next-shift"
     >
-      <div className="flex items-center gap-2.5">
-        <CalendarIcon className="h-6 w-6 text-club-green-800" />
-        <p className="font-serif text-[20px] text-club-ink leading-none">Next Shift</p>
+      <div className="row-start-1 flex items-center h-[26px]">
+        <img
+          src="/design/scheduling/icons/next-shift.svg"
+          alt=""
+          aria-hidden="true"
+          className="block w-[26px] h-[26px]"
+        />
       </div>
-      <p className="mt-4 font-serif text-[19px] text-club-ink leading-[1.15]">
-        {fmtLongDate(shift.scheduledStartIso)}
-      </p>
-      <p className="mt-1.5 text-[14px] text-club-ink">
-        {shift.positionName ?? shift.departmentName}{" "}<span className="text-stone-500">· {shift.templateName}</span>
-      </p>
-      <p className="mt-1 text-[13.5px] text-stone-600 tabular-nums">
-        {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)} ({fmtHM(shift.scheduledSeconds)})
-      </p>
-      {relLabel && (
-        <div
-          className="mt-4 inline-flex items-center gap-2 rounded-full bg-club-green-50 text-club-green-800 px-3.5 py-1.5 text-[13px] font-medium"
-          data-testid="portal-schedule-next-rel"
-        >
-          <ClockIcon className="h-3.5 w-3.5" />
-          {relLabel}
-        </div>
-      )}
+      <p className="row-start-1 self-center font-serif text-[22px] text-club-ink leading-none">Next Shift</p>
+      <div className="col-start-2">
+        <p className="mt-3 font-serif text-[18px] font-normal text-club-ink leading-[1.15]">
+          {fmtLongDate(shift.scheduledStartIso)}
+        </p>
+        <p className="mt-2 text-[15px] text-club-ink font-medium">
+          {shift.positionName ?? shift.departmentName}{" "}<span className="text-stone-500 font-normal">· {shift.templateName}</span>
+        </p>
+        <p className="mt-1 text-[14.5px] text-stone-600 tabular-nums">
+          {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)} ({fmtHM(shift.scheduledSeconds)})
+        </p>
+        {relLabel && (
+          <div
+            className="mt-4 inline-flex items-center gap-2 rounded-full bg-club-green-50 text-club-green-800 px-4 py-2 text-[14px] font-medium"
+            data-testid="portal-schedule-next-rel"
+          >
+            <ClockIcon className="h-4 w-4" />
+            {relLabel}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -606,28 +625,34 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
-      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
+      className="rounded-lg border border-stone-200 bg-white px-5 py-2.5 grid grid-cols-[36px_minmax(0,1fr)] gap-x-3"
       data-testid="portal-schedule-this-week"
     >
-      <div className="flex items-center gap-2.5">
-        <CalendarIcon className="h-6 w-6 text-club-green-800" />
-        <p className="font-serif text-[20px] text-club-ink leading-none">This Week</p>
+      <div className="row-start-1 flex items-center h-[26px]">
+        <img
+          src="/design/scheduling/icons/this-week.svg"
+          alt=""
+          aria-hidden="true"
+          className="block w-[26px] h-[26px]"
+        />
       </div>
-      <dl className="mt-4 text-[14px] space-y-2.5">
-        <div className="flex justify-between items-baseline">
-          <dt className="text-stone-600">Scheduled hours</dt>
-          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
-        </div>
-        <div className="flex justify-between items-baseline">
-          <dt className="text-stone-600">Worked hours</dt>
-          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
-        </div>
-        <div className="flex justify-between items-baseline">
-          <dt className="text-stone-600">Remaining hours</dt>
-          <dd className="font-medium text-club-ink tabular-nums" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
-        </div>
-      </dl>
+      <p className="row-start-1 self-center font-serif text-[22px] text-club-ink leading-none">This Week</p>
+      <div className="col-start-2">
+        <dl className="mt-4 text-[15px] divide-y divide-stone-100">
+          <div className="flex justify-between items-baseline py-2.5">
+            <dt className="text-stone-600">Scheduled hours</dt>
+            <dd className="font-semibold text-club-ink tabular-nums" data-testid="portal-schedule-hours-scheduled">{fmtHM(scheduledSeconds)}</dd>
+          </div>
+          <div className="flex justify-between items-baseline py-2.5">
+            <dt className="text-stone-600">Worked hours</dt>
+            <dd className="font-semibold text-club-ink tabular-nums" data-testid="portal-schedule-hours-worked">{fmtHM(workedSeconds)}</dd>
+          </div>
+          <div className="flex justify-between items-baseline py-2.5">
+            <dt className="text-stone-600">Remaining hours</dt>
+            <dd className="font-semibold text-club-ink tabular-nums" data-testid="portal-schedule-hours-remaining">{fmtHM(remainingSeconds)}</dd>
+          </div>
+        </dl>
+      </div>
     </div>
   );
 }
@@ -635,25 +660,31 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
-      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
+      className="rounded-lg border border-stone-200 bg-white px-5 py-2.5"
       data-testid="portal-schedule-actions"
     >
-      <div className="flex items-center gap-2.5">
-        <UsersIcon className="h-6 w-6 text-club-green-800" />
-        <p className="font-serif text-[20px] text-club-ink leading-none">Actions</p>
+      <div className="grid grid-cols-[36px_minmax(0,1fr)] gap-x-3 items-center">
+        <div className="flex items-center h-[26px]">
+          <img
+            src="/design/scheduling/icons/actions.svg"
+            alt=""
+            aria-hidden="true"
+            className="block w-[26px] h-[26px]"
+          />
+        </div>
+        <p className="font-serif text-[22px] text-club-ink leading-none">Actions</p>
       </div>
-      <ul className="mt-4 space-y-2.5">
+      <ul className="mt-4 space-y-2">
         <li>
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-actions-view-availability"
-            className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
+            className="flex items-center gap-3.5 rounded-md border border-stone-200 px-4 py-2 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
           >
-            <AvailabilityIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
+            <AvailabilityIcon className="h-[30px] w-[30px] self-center shrink-0 text-[#2f6a3e]" />
             <span className="min-w-0">
-              <span className="block font-medium text-[14px] text-club-ink leading-tight">View my availability</span>
-              <span className="block text-[12.5px] text-stone-500 mt-0.5">Update your availability</span>
+              <span className="block font-medium text-[15px] text-club-ink leading-tight">View my availability</span>
+              <span className="block text-[13px] text-stone-500 mt-0.5">Update your availability</span>
             </span>
           </Link>
         </li>
@@ -662,24 +693,24 @@ function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
             <Link
               href="/employee/time-off"
               data-testid="portal-schedule-actions-time-off"
-              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
+              className="flex items-center gap-3.5 rounded-md border border-stone-200 px-4 py-2 hover:border-stone-400 hover:bg-club-cream/40 transition-colors"
             >
-              <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
+              <TimeOffIcon className="h-[30px] w-[30px] self-center shrink-0 text-[#2f6a3e]" />
               <span className="min-w-0">
-                <span className="block font-medium text-[14px] text-club-ink leading-tight">Request time off</span>
-                <span className="block text-[12.5px] text-stone-500 mt-0.5">Submit a time off request</span>
+                <span className="block font-medium text-[15px] text-club-ink leading-tight">Request time off</span>
+                <span className="block text-[13px] text-stone-500 mt-0.5">Submit a time off request</span>
               </span>
             </Link>
           ) : (
             <div
               data-testid="portal-schedule-actions-time-off-disabled"
               aria-disabled
-              className="flex items-start gap-3 rounded-md border border-stone-200 px-3.5 py-2.5 opacity-80"
+              className="flex items-center gap-3.5 rounded-md border border-stone-200 px-4 py-2 opacity-80"
             >
-              <TimeOffIcon className="h-5 w-5 mt-0.5 shrink-0 text-club-green-800" />
+              <TimeOffIcon className="h-[30px] w-[30px] self-center shrink-0 text-[#2f6a3e]" />
               <span className="min-w-0">
-                <span className="block font-medium text-[14px] text-club-ink leading-tight">Request time off</span>
-                <span className="block text-[12.5px] text-stone-500 mt-0.5">Submit a time off request</span>
+                <span className="block font-medium text-[15px] text-club-ink leading-tight">Request time off</span>
+                <span className="block text-[13px] text-stone-500 mt-0.5">Submit a time off request</span>
               </span>
             </div>
           )}
@@ -737,7 +768,7 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
         </div>
         <div>
           <p className="text-[11.5px] text-stone-500">Total</p>
-          <p className="mt-0.5 font-serif text-[15px] text-club-ink tabular-nums">
+          <p className="mt-0.5 font-serif text-[16px] text-club-ink leading-none">
             {shift.worked ? fmtHM(shift.worked.workedSeconds) : "—"}
           </p>
         </div>
