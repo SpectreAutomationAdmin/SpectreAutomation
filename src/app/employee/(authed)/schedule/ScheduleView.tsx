@@ -203,7 +203,10 @@ export default function ScheduleView(props: ScheduleViewProps) {
   const isPopulated = props.weekShifts.length > 0 || props.nextShift != null;
 
   return (
-    <div className="space-y-5 md:space-y-6 md:max-w-[1180px]" data-testid="portal-schedule-populated">
+    <div
+      className="px-6 md:px-10 pt-5 md:pt-6 pb-6 md:pb-8 space-y-4 md:space-y-5 w-full"
+      data-testid="portal-schedule-populated"
+    >
       {/* ============= TOAST (server-action confirmation) ============= */}
       {props.toast && (
         <div
@@ -220,30 +223,30 @@ export default function ScheduleView(props: ScheduleViewProps) {
       )}
       {/* ============= HEADER ============= */}
       <header>
-        <p className="hidden md:block text-[10.5px] uppercase tracking-[0.22em] text-stone-500">
+        <p className="hidden md:block text-[11px] uppercase tracking-[0.22em] text-stone-500">
           App &nbsp;&rsaquo;&nbsp; Employee Portal &nbsp;&rsaquo;&nbsp; Schedule
         </p>
-        <h1 className="mt-1 font-serif text-[24px] md:text-[28px] text-club-ink leading-[1.05]">
+        <h1 className="mt-3 md:mt-4 font-serif text-[26px] md:text-[30px] lg:text-[34px] text-club-ink leading-[1.05]">
           My Schedule
         </h1>
       </header>
 
       {/* ============= TOOLBAR ============= */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div className="inline-flex items-center gap-2">
+        <div className="inline-flex items-center gap-1">
           <button
             type="button"
             onClick={() => navigateWeek(props.prevWeekStartIso)}
             data-testid="portal-schedule-week-prev"
             aria-label="Previous week"
-            className="h-8 w-8 grid place-items-center rounded-md border border-stone-300 bg-white text-stone-700 hover:border-stone-500 hover:text-club-ink transition-colors"
+            className="h-9 w-9 grid place-items-center rounded-md text-stone-500 hover:text-club-ink hover:bg-white/70 transition-colors"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-              strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}
+              strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
               <path d="M15 6l-6 6 6 6" />
             </svg>
           </button>
-          <div className="font-serif text-[17px] md:text-[19px] text-club-ink px-3" data-testid="portal-schedule-week-label">
+          <div className="font-serif text-[19px] md:text-[21px] lg:text-[22px] text-club-ink px-2" data-testid="portal-schedule-week-label">
             {weekLabel(props.weekStartIso)}
           </div>
           <button
@@ -251,10 +254,10 @@ export default function ScheduleView(props: ScheduleViewProps) {
             onClick={() => navigateWeek(props.nextWeekStartIso)}
             data-testid="portal-schedule-week-next"
             aria-label="Next week"
-            className="h-8 w-8 grid place-items-center rounded-md border border-stone-300 bg-white text-stone-700 hover:border-stone-500 hover:text-club-ink transition-colors"
+            className="h-9 w-9 grid place-items-center rounded-md text-stone-500 hover:text-club-ink hover:bg-white/70 transition-colors"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-              strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75}
+              strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
               <path d="M9 6l6 6-6 6" />
             </svg>
           </button>
@@ -262,11 +265,11 @@ export default function ScheduleView(props: ScheduleViewProps) {
             type="button"
             onClick={() => navigateWeek(props.todayIso)}
             data-testid="portal-schedule-today"
-            className="ml-2 rounded-md border border-stone-300 bg-white px-3.5 py-1.5 text-[13px] text-stone-800 hover:border-stone-500 transition-colors"
+            className="ml-3 rounded-md border border-stone-300 bg-white px-4 py-2 text-[14px] text-stone-800 hover:border-stone-500 transition-colors"
           >Today</button>
         </div>
         <nav
-          className="inline-flex rounded-md border border-stone-300 overflow-hidden text-[13px] bg-white"
+          className="inline-flex rounded-md border border-stone-300 overflow-hidden text-[14px] bg-white"
           aria-label="Schedule view"
         >
           {(["week", "month"] as const).map((v) => (
@@ -277,7 +280,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
               data-testid={`portal-schedule-view-${v}`}
               aria-pressed={props.view === v}
               className={
-                "px-4 py-1.5 border-r border-stone-300 last:border-r-0 transition-colors " +
+                "px-5 py-2 border-r border-stone-300 last:border-r-0 transition-colors " +
                 (props.view === v
                   ? "bg-club-green-800 text-white"
                   : "text-stone-700 hover:bg-club-cream")
@@ -289,7 +292,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
           <Link
             href="/employee/availability"
             data-testid="portal-schedule-my-availability"
-            className="px-4 py-1.5 text-stone-700 hover:bg-club-cream"
+            className="px-5 py-2 text-stone-700 hover:bg-club-cream"
           >
             My Availability
           </Link>
@@ -336,56 +339,73 @@ export default function ScheduleView(props: ScheduleViewProps) {
           className="hidden md:block rounded-lg border border-stone-200 bg-white overflow-hidden"
           data-testid="portal-schedule-week-grid"
         >
-          <div className="grid grid-cols-7 divide-x divide-stone-100">
+          {/* Day-header band with horizontal separator underneath */}
+          <div className="grid grid-cols-7 divide-x divide-stone-100 border-b border-stone-200">
             {weekDays.map((d) => (
-              <div key={d.iso} className="px-3 pt-4 pb-4 min-h-[200px] flex flex-col">
-                <div className="text-[12.5px] text-stone-800 text-center font-medium">
-                  {d.label}
-                </div>
-                <div className="mt-0.5 text-[11.5px] text-stone-500 text-center">
-                  {d.headingLabel}
-                </div>
-                <div className="mt-4 flex-1 flex flex-col space-y-2">
-                  {d.shifts.length === 0 ? (
-                    <p className="my-auto text-center text-[12.5px] text-stone-400">— No shift</p>
-                  ) : d.shifts.map((s) => {
-                    const offered = !!s.openOpportunity;
-                    return (
-                      <button
-                        key={s.assignmentId}
-                        type="button"
-                        onClick={() => openPanelFor(s)}
-                        data-testid={`portal-schedule-shift-${s.assignmentId}`}
-                        className={
-                          "w-full text-left rounded-md border px-3 py-3.5 transition-colors " +
-                          (offered
-                            ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
-                            : "border-club-green-200/70 bg-club-green-50/70 hover:bg-club-green-100/70")
-                        }
-                      >
-                        <p className={
-                          "text-[11px] uppercase tracking-[0.13em] font-semibold " +
-                          (offered ? "text-club-gold-700" : "text-club-green-800")
-                        }>
-                          {s.positionName ?? s.departmentName}
-                        </p>
-                        <p className="mt-1.5 font-serif text-[15px] text-club-ink leading-[1.15]">{s.templateName}</p>
-                        <p className="mt-2 text-[12px] text-stone-600 leading-tight tabular-nums">
-                          {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
-                        </p>
-                        <p className="text-[12px] text-stone-500 leading-tight tabular-nums">{fmtHM(s.scheduledSeconds)}</p>
-                        {offered && (
-                          <p
-                            className="mt-1.5 text-[10.5px] uppercase tracking-[0.12em] text-club-gold-700"
-                            data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
-                          >
-                            Offered · waiting
+              <div key={`h-${d.iso}`} className="px-3 pt-4 pb-3 text-center">
+                <div className="text-[13px] text-stone-800 font-medium">{d.label}</div>
+                <div className="mt-0.5 text-[12px] text-stone-500">{d.headingLabel}</div>
+              </div>
+            ))}
+          </div>
+          {/* Shift-content band — responsive height */}
+          <div className="grid grid-cols-7 divide-x divide-stone-100"
+               style={{ minHeight: "clamp(160px, 20vh, 280px)" }}>
+            {weekDays.map((d) => (
+              <div key={`s-${d.iso}`} className="px-3 pt-4 pb-5 flex flex-col">
+                {d.shifts.length === 0 ? (
+                  <div className="my-auto flex flex-col items-center justify-center text-stone-400">
+                    <span className="text-[16px] leading-none">—</span>
+                    <span className="mt-2 text-[13px]">No shift</span>
+                  </div>
+                ) : (
+                  <div className="mx-auto w-full max-w-[150px] flex flex-col space-y-2">
+                    {d.shifts.map((s) => {
+                      const offered = !!s.openOpportunity;
+                      return (
+                        <button
+                          key={s.assignmentId}
+                          type="button"
+                          onClick={() => openPanelFor(s)}
+                          data-testid={`portal-schedule-shift-${s.assignmentId}`}
+                          className={
+                            "w-full text-left rounded-md border px-3 py-3.5 transition-colors " +
+                            (offered
+                              ? "border-club-gold/40 bg-club-gold/10 hover:bg-club-gold/20"
+                              : "border-club-green-200/70 bg-club-green-50/70 hover:bg-club-green-100/70")
+                          }
+                        >
+                          {/* DOMINANT: role/job title */}
+                          <p className={
+                            "font-serif text-[16px] leading-[1.1] " +
+                            (offered ? "text-club-gold-700" : "text-club-ink")
+                          }>
+                            {s.positionName ?? s.departmentName}
                           </p>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+                          {/* SECONDARY: shift template */}
+                          <p className="mt-1 text-[12.5px] text-stone-600">
+                            {s.templateName}
+                          </p>
+                          {/* TERTIARY: time + duration */}
+                          <p className="mt-1.5 text-[11.5px] text-stone-500 leading-tight tabular-nums">
+                            {fmtTime(s.scheduledStartIso)} – {fmtTime(s.scheduledEndIso)}
+                          </p>
+                          <p className="text-[11.5px] text-stone-500 leading-tight tabular-nums">
+                            {fmtHM(s.scheduledSeconds)}
+                          </p>
+                          {offered && (
+                            <p
+                              className="mt-1.5 text-[10.5px] uppercase tracking-[0.12em] text-club-gold-700"
+                              data-testid={`portal-schedule-shift-offered-${s.assignmentId}`}
+                            >
+                              Offered · waiting
+                            </p>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -424,8 +444,8 @@ export default function ScheduleView(props: ScheduleViewProps) {
           data-testid="portal-schedule-recent"
           className="rounded-lg border border-stone-200 bg-white overflow-hidden"
         >
-          <div className="px-6 pt-5 pb-4">
-            <h2 id="portal-schedule-recent-heading" className="font-serif text-[22px] text-club-ink leading-none">
+          <div className="px-6 lg:px-8 pt-5 lg:pt-6 pb-4">
+            <h2 id="portal-schedule-recent-heading" className="font-serif text-[20px] lg:text-[22px] text-club-ink leading-none">
               Recent Shifts
             </h2>
           </div>
@@ -539,7 +559,8 @@ function ChevronRightIcon({ className = "" }: { className?: string }) {
 function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; relLabel: string | null }) {
   if (!shift) {
     return (
-      <div className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]">
+      <div className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
+      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}>
         <div className="flex items-center gap-2.5">
           <CalendarIcon className="h-5 w-5 text-club-green-800" />
           <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
@@ -550,12 +571,13 @@ function NextShiftCard({ shift, relLabel }: { shift: ScheduleViewShift | null; r
   }
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
+      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
       data-testid="portal-schedule-next-shift"
     >
       <div className="flex items-center gap-2.5">
-        <CalendarIcon className="h-5 w-5 text-club-green-800" />
-        <p className="font-serif text-[19px] text-club-ink leading-none">Next Shift</p>
+        <CalendarIcon className="h-6 w-6 text-club-green-800" />
+        <p className="font-serif text-[20px] text-club-ink leading-none">Next Shift</p>
       </div>
       <p className="mt-4 font-serif text-[19px] text-club-ink leading-[1.15]">
         {fmtLongDate(shift.scheduledStartIso)}
@@ -584,12 +606,13 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
+      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
       data-testid="portal-schedule-this-week"
     >
       <div className="flex items-center gap-2.5">
-        <CalendarIcon className="h-5 w-5 text-club-green-800" />
-        <p className="font-serif text-[19px] text-club-ink leading-none">This Week</p>
+        <CalendarIcon className="h-6 w-6 text-club-green-800" />
+        <p className="font-serif text-[20px] text-club-ink leading-none">This Week</p>
       </div>
       <dl className="mt-4 text-[14px] space-y-2.5">
         <div className="flex justify-between items-baseline">
@@ -612,12 +635,13 @@ function ThisWeekCard({ scheduledSeconds, workedSeconds, remainingSeconds }: {
 function ActionsCard({ hasTimeOffRoute }: { hasTimeOffRoute: boolean }) {
   return (
     <div
-      className="rounded-lg border border-stone-200 bg-white px-5 py-4 min-h-[170px]"
+      className="rounded-lg border border-stone-200 bg-white px-6 py-5 flex flex-col"
+      style={{ minHeight: "clamp(150px, 18vh, 230px)" }}
       data-testid="portal-schedule-actions"
     >
       <div className="flex items-center gap-2.5">
-        <UsersIcon className="h-5 w-5 text-club-green-800" />
-        <p className="font-serif text-[19px] text-club-ink leading-none">Actions</p>
+        <UsersIcon className="h-6 w-6 text-club-green-800" />
+        <p className="font-serif text-[20px] text-club-ink leading-none">Actions</p>
       </div>
       <ul className="mt-4 space-y-2.5">
         <li>
@@ -679,42 +703,47 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
   return (
     <li
       data-testid={`portal-schedule-recent-${shift.assignmentId}`}
-      className="px-5 py-3.5 md:px-6 md:py-4 hover:bg-club-cream/40 transition-colors"
+      className="px-5 py-4 md:px-6 lg:px-8 md:py-5 hover:bg-club-cream/40 transition-colors"
     >
-      {/* Desktop: single-row table layout matching the concept: title-case labels, role · shift */}
-      <div className="hidden md:grid md:grid-cols-[150px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_90px_88px_18px] items-center gap-4">
-        <div>
-          <p className="font-serif text-[14px] text-club-ink leading-tight">{dayLabel}</p>
+      {/* Desktop: single-row table layout — date column has vertical divider
+          (border-r on date cell). Row scales modestly on larger viewports via
+          clamp min-height. */}
+      <div
+        className="hidden md:grid md:grid-cols-[180px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_100px_96px_18px] items-center gap-5"
+        style={{ minHeight: "clamp(60px, 7vh, 88px)" }}
+      >
+        <div className="pr-5 border-r border-stone-200 self-stretch flex items-center">
+          <p className="font-serif text-[15px] text-club-ink leading-tight">{dayLabel}</p>
         </div>
         <div className="min-w-0">
-          <p className="text-[13.5px] text-stone-700 truncate">
+          <p className="text-[14px] text-stone-700 truncate">
             <span className="text-club-ink">{shift.positionName ?? shift.departmentName}</span>
             <span className="text-stone-500"> · {shift.templateName}</span>
           </p>
         </div>
         <div>
-          <p className="text-[11px] text-stone-500">Scheduled</p>
-          <p className="mt-0.5 text-[13px] text-stone-700 tabular-nums">
+          <p className="text-[11.5px] text-stone-500">Scheduled</p>
+          <p className="mt-0.5 text-[13.5px] text-stone-700 tabular-nums">
             {fmtTime(shift.scheduledStartIso)} – {fmtTime(shift.scheduledEndIso)}
           </p>
         </div>
         <div>
-          <p className="text-[11px] text-stone-500">Worked</p>
-          <p className="mt-0.5 text-[13px] text-stone-700 tabular-nums">
+          <p className="text-[11.5px] text-stone-500">Worked</p>
+          <p className="mt-0.5 text-[13.5px] text-stone-700 tabular-nums">
             {shift.worked
               ? `${fmtTime(shift.worked.clockInIso)} – ${fmtTime(shift.worked.clockOutIso)}`
               : "—"}
           </p>
         </div>
         <div>
-          <p className="text-[11px] text-stone-500">Total</p>
-          <p className="mt-0.5 font-serif text-[14px] text-club-ink tabular-nums">
+          <p className="text-[11.5px] text-stone-500">Total</p>
+          <p className="mt-0.5 font-serif text-[15px] text-club-ink tabular-nums">
             {shift.worked ? fmtHM(shift.worked.workedSeconds) : "—"}
           </p>
         </div>
         <div className="justify-self-end">
           <span
-            className={"inline-block rounded-full px-2.5 py-1 text-[11.5px] font-medium tabular-nums " + varianceClass}
+            className={"inline-block rounded-full px-3 py-1 text-[12px] font-medium tabular-nums " + varianceClass}
           >
             {variance.label}
           </span>
