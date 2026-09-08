@@ -348,9 +348,9 @@ export default function ScheduleView(props: ScheduleViewProps) {
               </div>
             ))}
           </div>
-          {/* Shift-content band — responsive height */}
+          {/* Shift-content band — fixed 130px to match approved static shell exactly */}
           <div className="grid grid-cols-7 divide-x divide-stone-100"
-               style={{ minHeight: "clamp(160px, 20vh, 280px)" }}>
+               style={{ minHeight: "130px" }}>
             {weekDays.map((d) => (
               <div key={`s-${d.iso}`} className="px-3 pt-4 pb-5 flex flex-col">
                 {d.shifts.length === 0 ? (
@@ -451,7 +451,7 @@ export default function ScheduleView(props: ScheduleViewProps) {
           data-testid="portal-schedule-recent"
           className="rounded-lg border border-stone-200 bg-white overflow-hidden"
         >
-          <div className="px-6 lg:px-8 pt-5 lg:pt-6 pb-4">
+          <div className="px-6 lg:px-8 pt-3.5 pb-2.5">
             <h2 id="portal-schedule-recent-heading" className="font-serif text-[20px] lg:text-[22px] text-club-ink leading-none">
               Recent Shifts
             </h2>
@@ -734,14 +734,13 @@ function RecentShiftRow({ shift }: { shift: ScheduleViewShift }) {
   return (
     <li
       data-testid={`portal-schedule-recent-${shift.assignmentId}`}
-      className="px-5 py-4 md:px-6 lg:px-8 md:py-5 hover:bg-club-cream/40 transition-colors"
+      className="px-5 py-4 md:px-6 lg:px-8 md:py-2.5 hover:bg-club-cream/40 transition-colors"
     >
       {/* Desktop: single-row table layout — date column has vertical divider
           (border-r on date cell). Row scales modestly on larger viewports via
           clamp min-height. */}
       <div
         className="hidden md:grid md:grid-cols-[180px_minmax(0,1.15fr)_minmax(0,1fr)_minmax(0,1fr)_100px_96px_18px] items-center gap-5"
-        style={{ minHeight: "clamp(60px, 7vh, 88px)" }}
       >
         <div className="pr-5 border-r border-stone-200 self-stretch flex items-center">
           <p className="font-serif text-[15px] text-club-ink leading-tight">{dayLabel}</p>
