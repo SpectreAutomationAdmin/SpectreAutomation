@@ -304,6 +304,41 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-nav-section-header:hover .spectre-nav-section-icon { opacity: 0.9; }
   .spectre-nav-section-header[data-contains-active="true"] { color: var(--spectre-text-primary); }
   .spectre-nav-section-header[data-contains-active="true"] .spectre-nav-section-icon { opacity: 1; color: var(--spectre-accent); }
+
+  /* ================================================================
+   * Payroll Admin Phase 2 (2026-09-10) — founder-authorized dark-navy
+   * sidebar treatment.
+   *
+   * VISUAL-ONLY change. No modification to `sidebar-nav-data.ts`,
+   * no change to permission gating, accordion behavior, active-route
+   * resolution, section grouping, icon set, or link ordering.
+   *
+   * The override is SCOPED to the `.spectre-sidebar` element and its
+   * descendants: redeclaring the semantic `--spectre-*` tokens inside
+   * that block cascades to nav items, section headers, chevrons, and
+   * the sidebar identity chip only. Every other admin surface — the
+   * topbar, workspace, tables, cards, buttons, dialogs — continues
+   * reading the top-level tokens declared on `:root`.
+   * ================================================================ */
+  .spectre-sidebar {
+    background-color: #0f172a;
+    --spectre-sidebar:            #0f172a;
+    --spectre-text-primary:       #e5e7eb;
+    --spectre-text-secondary:     rgba(229, 231, 235, 0.78);
+    --spectre-text-muted:         rgba(229, 231, 235, 0.55);
+    --spectre-text-subtle:        rgba(229, 231, 235, 0.38);
+    --spectre-text-inverse:       #0f172a;
+    --spectre-border-hairline:    rgba(255, 255, 255, 0.08);
+    --spectre-border-default:     rgba(255, 255, 255, 0.12);
+    --spectre-surface:            #17202f;
+    --spectre-surface-hover:      #152036;
+    --spectre-surface-elevated:   #1a2540;
+    --spectre-accent:             #1e40af;
+    --spectre-accent-hover:       #1e3a8a;
+    --spectre-accent-soft:        rgba(30, 64, 175, 0.22);
+    --spectre-accent-ring:        rgba(30, 64, 175, 0.30);
+    color: var(--spectre-text-primary);
+  }
   /* --- Buttons --------------------------------------------------- */
   .spectre-btn {    display: inline-flex;
       align-items: center;
