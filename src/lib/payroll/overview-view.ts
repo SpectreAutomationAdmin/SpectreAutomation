@@ -139,16 +139,25 @@ export function batchEmployeeStatusToDisplay(raw: string, batchStatus: string): 
 function isoDate(d: Date | null | undefined): string {
   return d ? d.toISOString().slice(0, 10) : "";
 }
-function fmtLongDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-CA", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+// Payroll 3A date-boundary hotfix (2026-09-11) — timezone-agnostic
+// calendar-date formatting. See PayrollAdminOverview.tsx fmtCalendarDate
+// for the client-side twin. Both must agree exactly for header /
+// selector / Pay Period card to display the same calendar date.
+const MONTH_SHORT_SRV = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtShortMonthDay(iso: string): string {
+  const raw = iso.slice(0, 10);
+  const [y, m, d] = raw.split("-").map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return iso;
+  return `${MONTH_SHORT_SRV[m - 1]} ${d}`;
+}
+function fmtShortMonthDayYear(iso: string): string {
+  const raw = iso.slice(0, 10);
+  const [y, m, d] = raw.split("-").map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return iso;
+  return `${MONTH_SHORT_SRV[m - 1]} ${d}, ${y}`;
 }
 function fmtPeriodLabel(startISO: string, endISO: string): string {
-  const s = new Date(startISO), e = new Date(endISO);
-  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return `${startISO} – ${endISO}`;
-  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
-  return `${s.toLocaleDateString("en-CA", opts)} – ${e.toLocaleDateString("en-CA", opts)}`;
+  return `${fmtShortMonthDayYear(startISO)} – ${fmtShortMonthDayYear(endISO)}`;
 }
 function fmtHoursDecimal(n: number): string {
   return n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -205,13 +214,18 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     listPayPeriods(principal, clubId, { payGroupId: chosenPayGroup.id, taxYear: currentYear - 1 }),
   ]);
   const allPeriods = [...lastYear, ...thisYear];
-  const availablePayPeriods: PayrollOverviewPayPeriodRef[] = allPeriods.map((p) => ({
-    id: p.id,
-    label: `${fmtPeriodLabel(p.periodStart.toString(), p.periodEnd.toString())} · Pay ${new Date(p.payDate).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}`,
-    periodStartISO: isoDate(new Date(p.periodStart)),
-    periodEndISO: isoDate(new Date(p.periodEnd)),
-    payDateISO: isoDate(new Date(p.payDate)),
-  }));
+  const availablePayPeriods: PayrollOverviewPayPeriodRef[] = allPeriods.map((p) => {
+    const startISO = isoDate(new Date(p.periodStart));
+    const endISO = isoDate(new Date(p.periodEnd));
+    const payISO = isoDate(new Date(p.payDate));
+    return ({
+      id: p.id,
+      label: `${fmtPeriodLabel(startISO, endISO)} · Pay ${fmtShortMonthDay(payISO)}`,
+      periodStartISO: startISO,
+      periodEndISO: endISO,
+      payDateISO: payISO,
+    });
+  });
 
   // Prefer the requested period; else current OPEN period; else most
   // recent CLOSED; else last available.
@@ -487,10 +501,20 @@ function emptyOverview(filter: PayrollOverviewFilterState, page: number): Payrol
   };
 }
 
-/** Small helper the Overview page uses to format the pay-date line. */
+/** Small helper the Overview page uses to format the pay-date line.
+ *  Timezone-agnostic (calendar-date semantics per §3 hotfix). */
 export function payDateLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return fmtLongDate(payPeriod.payDateISO);
+  return fmtLongCalendarDate(payPeriod.payDateISO);
 }
 export function periodLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return `${fmtLongDate(payPeriod.periodStartISO)} – ${fmtLongDate(payPeriod.periodEndISO)}`;
+  return `${fmtLongCalendarDate(payPeriod.periodStartISO)} – ${fmtLongCalendarDate(payPeriod.periodEndISO)}`;
+}
+const WEEKDAY_SHORT_SRV = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function fmtLongCalendarDate(iso: string): string {
+  const raw = iso.slice(0, 10);
+  const [y, m, d] = raw.split("-").map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return iso;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const weekday = WEEKDAY_SHORT_SRV[dt.getUTCDay()];
+  return `${weekday}, ${MONTH_SHORT_SRV[m - 1]} ${d}, ${y}`;
 }

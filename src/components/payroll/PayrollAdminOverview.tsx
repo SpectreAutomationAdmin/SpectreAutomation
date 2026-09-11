@@ -19,18 +19,40 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import type { PayrollOverviewViewModel, PayrollOverviewPayPeriodRef } from "@/lib/payroll/overview-view";
 
-// Inlined date formatters — importing them from overview-view would drag
-// the server-only prisma/rbac stack through the client bundler.
-function fmtLongDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-CA", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+// Payroll 3A date-boundary hotfix (2026-09-11) — timezone-agnostic
+// calendar-date formatting for payroll period dates.
+//
+// PROBLEM: `new Date("2026-08-30").toLocaleDateString("en-CA", …)` in an
+// Alberta browser converts the UTC-midnight instant to the previous
+// evening in MDT (UTC−6) and renders "Aug 29" — one day earlier than
+// the persisted business date. This broke the header display while
+// the selector (formatted server-side in UTC) was correct.
+//
+// FIX: parse the ISO `YYYY-MM-DD` prefix as a pure calendar date and
+// compute the weekday via UTC methods only. The output is stable in
+// every viewer timezone, honours the domain's date-only intent, and
+// never crosses a day boundary due to DST or timezone conversion.
+const MONTH_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const WEEKDAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+export function fmtCalendarDate(iso: string): string {
+  if (!iso) return iso;
+  const raw = iso.slice(0, 10);
+  const [y, m, d] = raw.split("-").map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return iso;
+  // Build a Date pinned to UTC midnight for that calendar day, then
+  // read the weekday via getUTCDay so the local browser timezone
+  // never enters the calculation.
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const weekday = WEEKDAY_SHORT[dt.getUTCDay()];
+  const month = MONTH_SHORT[m - 1];
+  return `${weekday}, ${month} ${d}, ${y}`;
 }
 function payDateLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return fmtLongDate(payPeriod.payDateISO);
+  return fmtCalendarDate(payPeriod.payDateISO);
 }
 function periodLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return `${fmtLongDate(payPeriod.periodStartISO)} – ${fmtLongDate(payPeriod.periodEndISO)}`;
+  return `${fmtCalendarDate(payPeriod.periodStartISO)} – ${fmtCalendarDate(payPeriod.periodEndISO)}`;
 }
 
 /* Inline SVGs — same set as the approved shell. */
@@ -382,7 +404,18 @@ function Workspace({ view, prepare }: { view: PayrollOverviewViewModel; prepare:
             {view.employeeTable.rows.length === 0 ? (
               <tr>
                 <td colSpan={9} className="text-center text-stone-500 text-[13px] py-10" data-testid="payroll-admin-employee-empty">
-                  {view.hasBatch ? "No employees match the current filters." : "No batch prepared for this pay period."}
+                  {view.hasBatch ? (
+                    "No employees match the current filters."
+                  ) : (
+                    <>
+                      <p className="text-stone-700">No batch prepared for this pay period.</p>
+                      {prepare && prepare.canPrepare ? (
+                        <p className="mt-2 text-stone-500 text-[12.5px]">
+                          Click <span className="font-semibold">Prepare Payroll</span> above to create the employee population for this pay period.
+                        </p>
+                      ) : null}
+                    </>
+                  )}
                 </td>
               </tr>
             ) : view.employeeTable.rows.map((r) => (
