@@ -92,4 +92,36 @@ test.describe.serial("Payroll Admin 3A — staging", () => {
     expect(err).toBe(0);
     await page.screenshot({ path: path.join(OUT, "staging-mission-control-1440x900.png"), fullPage: false });
   });
+
+  test("G. Sidebar Payroll link is present in the Finance section", async ({ context }) => {
+    const page = await loginAsFounder(context);
+    await page.goto(`${STAGING}/app/admin`, { waitUntil: "networkidle" });
+    const sidebar = page.getByTestId("spectre-sidebar");
+    // Open the Finance section (single-open accordion).
+    const financeToggle = sidebar.getByTestId("nav-section-toggle-finance");
+    await financeToggle.waitFor({ state: "visible" });
+    const isOpen = await financeToggle.getAttribute("data-open");
+    if (isOpen !== "true") await financeToggle.click();
+    // The Payroll link (href=/app/admin/payroll) must appear in the expanded body.
+    const payrollLink = sidebar.locator('a[href="/app/admin/payroll"]');
+    await expect(payrollLink).toBeVisible();
+    await sidebar.screenshot({ path: path.join(OUT, "staging-sidebar-payroll-link.png") });
+  });
+
+  test("H. Prepare Payroll button appears when no batch exists", async ({ context }) => {
+    const page = await loginAsFounder(context);
+    await page.goto(`${STAGING}/app/admin/payroll`, { waitUntil: "networkidle" });
+    // Either the no-batch state renders the Prepare button, OR a batch already exists.
+    const prepareBtn = page.getByTestId("payroll-admin-prepare");
+    const hasPrepare = await prepareBtn.count();
+    if (hasPrepare > 0) {
+      await expect(prepareBtn).toBeVisible();
+      await expect(prepareBtn).toBeEnabled();
+    } else {
+      // Populated case — an existing batch was found. Ensure the workspace is not the empty state.
+      const empty = page.getByTestId("payroll-admin-employee-empty");
+      const isEmpty = await empty.count();
+      expect(isEmpty, "either Prepare button or a non-empty workspace must be visible").toBe(0);
+    }
+  });
 });
