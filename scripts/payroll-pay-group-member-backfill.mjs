@@ -62,7 +62,7 @@ async function main() {
         select: { effectiveFrom: true },
         take: 1,
       },
-      compensations: {
+      compensationHistory: {
         where: { OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }] },
         orderBy: { effectiveFrom: "asc" },
         select: { effectiveFrom: true },
@@ -80,8 +80,8 @@ async function main() {
       effectiveFrom = e.employmentAssignments[0].effectiveFrom;
       source = "EARLIEST_ACTIVE_EMPLOYMENT_ASSIGNMENT";
     }
-    else if (e.compensations[0]?.effectiveFrom) {
-      effectiveFrom = e.compensations[0].effectiveFrom;
+    else if (e.compensationHistory[0]?.effectiveFrom) {
+      effectiveFrom = e.compensationHistory[0].effectiveFrom;
       source = "EARLIEST_ACTIVE_COMPENSATION";
     }
     else { effectiveFrom = now; source = "BACKFILL_NOW"; }
