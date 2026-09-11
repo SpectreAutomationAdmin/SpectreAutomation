@@ -86,6 +86,9 @@ export const ADMIN_SECTIONS: NavSection[] = [
       { href: "/app/admin/ops/budgets", label: "Budgets", perm: "budget:read" },
       { href: "/app/admin/opening-balances", label: "Opening balances", perm: "gl:post" },
       { href: "/app/admin/reports", label: "Reports", perm: ["reports:read", "reports:operating", "reports:financial"] },
+      // Payroll 3A hotfix (2026-09-11) — Payroll Admin Overview link.
+      // Same permission gate the route enforces server-side.
+      { href: "/app/admin/payroll", label: "Payroll", perm: "payroll:read" },
     ],
   },
   {

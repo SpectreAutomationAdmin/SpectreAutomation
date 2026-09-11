@@ -33,6 +33,7 @@ import { requirePermission, hasPermission, type Principal } from "../rbac";
 import { AppError, NotFoundError } from "../errors";
 import { transitionSession } from "./onboarding-sessions";
 import { assertTenantOwned } from "../services/tenant";
+import { autoAssignSinglePayGroupOnActivation } from "../payroll/pay-group-auto-assign";
 
 const EMPLOYEE_ENTITY = "Employee";
 
@@ -130,6 +131,31 @@ export async function approveAndActivateEmployee(
       sessionId: currentSession.id,
     },
   });
+
+  // Payroll 3A hotfix (2026-09-11): close the pay-group membership
+  // lifecycle gap identified in the founder audit. When the Club has
+  // exactly one active PayrollPayGroup we assign the newly-activated
+  // employee to it deterministically. Multi-pay-group and no-pay-group
+  // cases are logged via audit() so they surface for admin follow-up
+  // without silently omitting the employee from payroll. Failure of
+  // this call MUST NOT roll back the activation — HR activation and
+  // Payroll setup are separately auditable domains.
+  try {
+    await autoAssignSinglePayGroupOnActivation({
+      principal,
+      clubId: employee.clubId,
+      employeeId,
+      now,
+    });
+  } catch (err) {
+    await audit(principal, {
+      action: "payroll.pay-group-member.auto-assign.error",
+      entityType: EMPLOYEE_ENTITY,
+      entityId: employeeId,
+      clubId: employee.clubId,
+      after: { error: err instanceof Error ? err.message : String(err) },
+    });
+  }
 
   return {
     employeeId,

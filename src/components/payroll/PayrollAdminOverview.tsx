@@ -134,15 +134,16 @@ const STATUS_LABELS: Record<string, string> = {
    ============================================================ */
 export interface PayrollAdminOverviewProps {
   view: PayrollOverviewViewModel;
+  prepare?: PrepareControls | null;
 }
 
-export default function PayrollAdminOverview({ view }: PayrollAdminOverviewProps) {
+export default function PayrollAdminOverview({ view, prepare = null }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
-      <Header view={view} />
+      <Header view={view} prepare={prepare} />
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <Workspace view={view} />
+        <Workspace view={view} prepare={prepare} />
         <div className="space-y-2">
           <ActionsCard />
           <ChecklistCard view={view} />
@@ -157,7 +158,7 @@ export default function PayrollAdminOverview({ view }: PayrollAdminOverviewProps
 /* ============================================================
    REGION 2 — HEADER + 8-STAGE WORKFLOW
    ============================================================ */
-function Header({ view }: { view: PayrollOverviewViewModel }) {
+function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null }) {
   const workflow = deriveWorkflow(view.batch?.status);
   const firstFilled = workflow.findLastIndex((w) => w.state === "done");
   const connectorFillPct = firstFilled >= 0 ? ((firstFilled) * (100 / 7)) : 0;
@@ -187,7 +188,22 @@ function Header({ view }: { view: PayrollOverviewViewModel }) {
             </span>
           </div>
         </div>
-        <ChangePeriodPicker view={view} />
+        <div className="flex items-center gap-2">
+          {prepare && prepare.canPrepare && !view.hasBatch && view.payPeriod ? (
+            <form action={prepare.action}>
+              <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
+              <button
+                type="submit"
+                data-testid="payroll-admin-prepare"
+                className="inline-flex items-center gap-2 rounded-md bg-[#1e40af] text-white px-3.5 py-2 text-[13px] font-medium hover:bg-[#1e3a8a]"
+              >
+                <PlusIcon className="h-4 w-4" />
+                Prepare Payroll
+              </button>
+            </form>
+          ) : null}
+          <ChangePeriodPicker view={view} />
+        </div>
       </div>
 
       <div className="mt-4 relative" data-testid="payroll-admin-workflow">
@@ -326,7 +342,12 @@ function KpiCard({ icon, iconColor, label, value, valueColor, sub, subEl, testId
 /* ============================================================
    REGION 4 — WORKSPACE (tabs + filters + table + pagination)
    ============================================================ */
-function Workspace({ view }: { view: PayrollOverviewViewModel }) {
+export interface PrepareControls {
+  action: (formData: FormData) => Promise<void>;
+  canPrepare: boolean;
+}
+
+function Workspace({ view, prepare }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null }) {
   const totalCount = view.employeeTable.filteredTotal;
   const start = totalCount === 0 ? 0 : (view.employeeTable.page - 1) * view.employeeTable.pageSize + 1;
   const end = Math.min(view.employeeTable.page * view.employeeTable.pageSize, totalCount);

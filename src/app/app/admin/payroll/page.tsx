@@ -22,6 +22,7 @@ import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { buildPayrollOverview } from "@/lib/payroll/overview-view";
 import PayrollAdminOverview from "@/components/payroll/PayrollAdminOverview";
+import { preparePayrollAction } from "./_prepare-action";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,5 +63,11 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
     page: searchParams?.page ? Math.max(1, Number.parseInt(searchParams.page, 10) || 1) : 1,
   });
 
-  return <PayrollAdminOverview view={view} />;
+  const canPrepare = hasPermission(principal, clubId, "payroll:run");
+  return (
+    <PayrollAdminOverview
+      view={view}
+      prepare={{ action: preparePayrollAction, canPrepare }}
+    />
+  );
 }
