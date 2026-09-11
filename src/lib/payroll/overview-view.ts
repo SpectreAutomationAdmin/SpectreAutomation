@@ -113,6 +113,7 @@ const DEFAULT_PAGE_SIZE = 10;
 function frequencyLabel(payFrequency: string): string {
   switch (payFrequency) {
     case "WEEKLY":       return "Weekly";
+    case "BIWEEKLY":     return "Bi-Weekly";
     case "BI_WEEKLY":    return "Bi-Weekly";
     case "SEMI_MONTHLY": return "Semi-Monthly";
     case "MONTHLY":      return "Monthly";
