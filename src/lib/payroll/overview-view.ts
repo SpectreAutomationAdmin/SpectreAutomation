@@ -106,6 +106,34 @@ export interface PayrollOverviewViewModel {
 }
 
 const DEFAULT_PAGE_SIZE = 10;
+export const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+export type PayrollOverviewPageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+
+function normalizePageSize(raw: number | null | undefined): PayrollOverviewPageSize {
+  const n = typeof raw === "number" ? raw : Number.NaN;
+  if (n === 25) return 25;
+  if (n === 50) return 50;
+  return 10;
+}
+
+// Actionable (non-terminal) batch statuses — the resume algorithm
+// selects the period of the most recent actionable batch so the
+// Payroll Admin lands where their work-in-progress is. POSTED and
+// VOIDED are TERMINAL and never resume; if only terminal batches
+// exist, the algorithm falls through to the current-period path.
+const ACTIONABLE_BATCH_STATUSES = [
+  "DRAFT",
+  "PREPARED",
+  "CALCULATED",
+  "SUBMITTED_FOR_APPROVAL",
+  "APPROVED",
+] as const;
+
+/** UTC-midnight of the given moment — the payroll domain treats
+ *  today as a calendar day, not an instant. */
+function todayCalendarUTC(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
 
 /* ============================================================
    Frequency labels — display-only mapping over PayGroup enum.
@@ -180,6 +208,7 @@ export interface BuildPayrollOverviewInput {
   employmentType?: "Hourly" | "Salary" | null;
   status?: string | null;
   page?: number | null;
+  pageSize?: number | null;
 }
 
 export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Promise<PayrollOverviewViewModel> {
@@ -194,6 +223,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     status: input.status?.trim() || null,
   };
   const page = Math.max(1, Math.floor(input.page ?? 1));
+  const pageSize: PayrollOverviewPageSize = normalizePageSize(input.pageSize ?? null);
 
   // Resolve default pay group.
   const payGroups = await listPayGroups(principal, clubId);
@@ -203,45 +233,145 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     (activePayGroups[0] ?? payGroups[0] ?? null);
 
   if (!chosenPayGroup) {
-    return emptyOverview(filter, page);
+    return emptyOverview(filter, page, pageSize);
   }
 
-  // Resolve pay periods for chosen pay group. Prefer the current-year
-  // list ordered by sequence so "current" is deterministic.
+  // Load pay periods for chosen pay group across this + last tax year.
+  // 3A hotfix (2026-09-11) — the "up to one period beyond current"
+  // horizon and the reverse-chronological sort are applied AFTER the
+  // canonical asc-sorted set is loaded, so the resume algorithm below
+  // can still see historical periods when picking a landing spot.
   const currentYear = now.getUTCFullYear();
   const [thisYear, lastYear] = await Promise.all([
     listPayPeriods(principal, clubId, { payGroupId: chosenPayGroup.id, taxYear: currentYear }),
     listPayPeriods(principal, clubId, { payGroupId: chosenPayGroup.id, taxYear: currentYear - 1 }),
   ]);
-  const allPeriods = [...lastYear, ...thisYear];
-  const availablePayPeriods: PayrollOverviewPayPeriodRef[] = allPeriods.map((p) => {
+  const allPeriodsAsc = [...lastYear, ...thisYear];
+
+  // Identify today's calendar-day position within the period set.
+  //   currentIdx = last period whose periodStart <= today (may equal
+  //   the period we're inside, or the most-recently-ended period if
+  //   today lands on a generation gap).
+  //   nextIdx    = first period whose periodStart > today.
+  const today = todayCalendarUTC(now);
+  let currentIdx = -1;
+  for (let i = 0; i < allPeriodsAsc.length; i++) {
+    if (new Date(allPeriodsAsc[i]!.periodStart).getTime() <= today.getTime()) currentIdx = i;
+    else break;
+  }
+  const nextIdx = Math.min(currentIdx + 1, allPeriodsAsc.length - 1);
+
+  // Horizon rule (§5): dropdown includes all periods with index <=
+  // nextIdx — i.e. every historical period + current + exactly one
+  // upcoming. If an explicit payPeriodId sits outside that window,
+  // it's added so the selector can still display the requested
+  // period (§4 — explicit URL always wins).
+  const horizonIndices = new Set<number>();
+  for (let i = 0; i <= nextIdx && i < allPeriodsAsc.length; i++) horizonIndices.add(i);
+
+  // Default period selection — resume algorithm (§3, §4).
+  let chosenId: string | null = null;
+
+  //   Priority 1 (§4): explicit URL wins.
+  if (input.payPeriodId) {
+    const found = allPeriodsAsc.find((p) => p.id === input.payPeriodId);
+    if (found) chosenId = found.id;
+  }
+
+  //   Priority 2 (§3.1): most recent actionable batch for this pay
+  //   group. "Actionable" = non-terminal (POSTED / VOIDED excluded).
+  //   Ordered by preparedAt desc, then createdAt desc, so the most
+  //   recently-touched work-in-progress wins.
+  if (!chosenId) {
+    const actionable = await prisma.payrollBatch.findFirst({
+      where: {
+        clubId,
+        payGroupId: chosenPayGroup.id,
+        status: { in: [...ACTIONABLE_BATCH_STATUSES] },
+      },
+      orderBy: [{ preparedAt: "desc" }, { createdAt: "desc" }],
+      select: { payPeriodId: true },
+    });
+    if (actionable) chosenId = actionable.payPeriodId;
+  }
+
+  //   Priority 3 (§3.2): current pay period — today falls inside
+  //   [periodStart, periodEnd).
+  if (!chosenId && currentIdx >= 0) {
+    const cur = allPeriodsAsc[currentIdx]!;
+    const curEnd = new Date(cur.periodEnd).getTime();
+    if (curEnd > today.getTime()) chosenId = cur.id;
+  }
+
+  //   Priority 4 (§3.3): next allowable pay period.
+  if (!chosenId && nextIdx < allPeriodsAsc.length) {
+    const nxt = allPeriodsAsc[nextIdx]!;
+    if (new Date(nxt.periodStart).getTime() > today.getTime()) chosenId = nxt.id;
+  }
+
+  //   Priority 5 (§3.4): most recently completed period as a
+  //   sensible fallback — largest periodEnd <= today.
+  if (!chosenId && allPeriodsAsc.length > 0) {
+    const lastCompleted = [...allPeriodsAsc]
+      .filter((p) => new Date(p.periodEnd).getTime() <= today.getTime())
+      .sort((a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime())[0];
+    if (lastCompleted) chosenId = lastCompleted.id;
+  }
+
+  // If the chosen period sits outside the horizon (e.g. explicit
+  // URL for a POSTED historical period, or an actionable batch on
+  // a period farther back than the default horizon), include it in
+  // the visible list so the selector can display it.
+  const chosenIdx = chosenId ? allPeriodsAsc.findIndex((p) => p.id === chosenId) : -1;
+  if (chosenIdx >= 0) horizonIndices.add(chosenIdx);
+
+  const horizonPeriodsAsc = allPeriodsAsc.filter((_, i) => horizonIndices.has(i));
+
+  // Fetch existing (non-VOIDED) batches for the horizon periods —
+  // used to append " · DRAFT" / " · PREPARED" / … / " · No batch"
+  // to each option label. Keep the highest-sequence per period.
+  const horizonPeriodIds = horizonPeriodsAsc.map((p) => p.id);
+  const batchByPeriodId = new Map<string, { status: string; sequence: number }>();
+  if (horizonPeriodIds.length > 0) {
+    const batchRows = await prisma.payrollBatch.findMany({
+      where: {
+        clubId,
+        payGroupId: chosenPayGroup.id,
+        payPeriodId: { in: horizonPeriodIds },
+        status: { not: "VOIDED" },
+      },
+      orderBy: [{ payPeriodId: "asc" }, { sequence: "desc" }],
+      select: { payPeriodId: true, status: true, sequence: true },
+    });
+    for (const r of batchRows) {
+      const existing = batchByPeriodId.get(r.payPeriodId);
+      if (!existing || r.sequence > existing.sequence) {
+        batchByPeriodId.set(r.payPeriodId, { status: r.status, sequence: r.sequence });
+      }
+    }
+  }
+
+  // Reverse-chronological sort for display (§6). Newest first.
+  const horizonPeriodsDesc = [...horizonPeriodsAsc].sort(
+    (a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime(),
+  );
+  const availablePayPeriods: PayrollOverviewPayPeriodRef[] = horizonPeriodsDesc.map((p) => {
     const startISO = isoDate(new Date(p.periodStart));
     const endISO = isoDate(new Date(p.periodEnd));
     const payISO = isoDate(new Date(p.payDate));
-    return ({
+    const b = batchByPeriodId.get(p.id);
+    const statusSuffix = b ? ` · ${b.status}` : " · No batch";
+    return {
       id: p.id,
-      label: `${fmtPeriodLabel(startISO, endISO)} · Pay ${fmtShortMonthDay(payISO)}`,
+      label: `${fmtPeriodLabel(startISO, endISO)} · Pay ${fmtShortMonthDay(payISO)}${statusSuffix}`,
       periodStartISO: startISO,
       periodEndISO: endISO,
       payDateISO: payISO,
-    });
+    };
   });
 
-  // Prefer the requested period; else current OPEN period; else most
-  // recent CLOSED; else last available.
-  let chosenPeriod: PayrollOverviewPayPeriodRef | null = null;
-  if (input.payPeriodId) {
-    chosenPeriod = availablePayPeriods.find((p) => p.id === input.payPeriodId) ?? null;
-  }
-  if (!chosenPeriod) {
-    const rawOpen = allPeriods.find((p) => p.status === "OPEN");
-    if (rawOpen) chosenPeriod = availablePayPeriods.find((p) => p.id === rawOpen.id) ?? null;
-  }
-  if (!chosenPeriod && allPeriods.length > 0) {
-    // most-recent by periodEnd
-    const sortedByEnd = [...allPeriods].sort((a, b) => new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime());
-    chosenPeriod = availablePayPeriods.find((p) => p.id === sortedByEnd[0].id) ?? null;
-  }
+  const chosenPeriod: PayrollOverviewPayPeriodRef | null =
+    chosenId ? (availablePayPeriods.find((p) => p.id === chosenId) ?? null) : null;
 
   const payGroupRef: PayrollOverviewPayGroupRef = {
     id: chosenPayGroup.id,
@@ -257,7 +387,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       batch: null,
       hasBatch: false,
       kpi: emptyKpi(),
-      employeeTable: emptyEmployeeTable(page),
+      employeeTable: emptyEmployeeTable(page, pageSize),
       availableDepartments: [],
       availableEmploymentTypes: [],
       availableStatuses: [],
@@ -276,7 +406,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       batch: null,
       hasBatch: false,
       kpi: emptyKpi(),
-      employeeTable: emptyEmployeeTable(page),
+      employeeTable: emptyEmployeeTable(page, pageSize),
       availableDepartments: [],
       availableEmploymentTypes: [],
       availableStatuses: [],
@@ -443,7 +573,6 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   });
 
   // ---- Pagination ----
-  const pageSize = DEFAULT_PAGE_SIZE;
   const filteredTotal = filtered.length;
   const pageCount = Math.max(1, Math.ceil(filteredTotal / pageSize));
   const safePage = Math.min(page, pageCount);
@@ -488,14 +617,14 @@ function emptyKpi(): PayrollOverviewViewModel["kpi"] {
     adjustmentsCount: null, exceptionsCount: null,
   };
 }
-function emptyEmployeeTable(page: number): PayrollOverviewViewModel["employeeTable"] {
-  return { rows: [], filteredTotal: 0, unfilteredTotal: 0, page, pageSize: DEFAULT_PAGE_SIZE };
+function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel["employeeTable"] {
+  return { rows: [], filteredTotal: 0, unfilteredTotal: 0, page, pageSize };
 }
-function emptyOverview(filter: PayrollOverviewFilterState, page: number): PayrollOverviewViewModel {
+function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel {
   return {
     payGroup: null, payPeriod: null, availablePayPeriods: [],
     batch: null, hasBatch: false,
-    kpi: emptyKpi(), employeeTable: emptyEmployeeTable(page),
+    kpi: emptyKpi(), employeeTable: emptyEmployeeTable(page, pageSize),
     availableDepartments: [], availableEmploymentTypes: [], availableStatuses: [],
     activeFilter: filter,
   };

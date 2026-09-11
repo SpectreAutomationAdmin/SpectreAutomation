@@ -36,6 +36,7 @@ interface PageProps {
     employmentType?: string;
     status?: string;
     page?: string;
+    pageSize?: string;
   };
 }
 
@@ -51,6 +52,9 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
   const employmentType: "Hourly" | "Salary" | null =
     rawEmp === "Hourly" || rawEmp === "Salary" ? rawEmp : null;
 
+  const pageSizeRaw = searchParams?.pageSize ? Number.parseInt(searchParams.pageSize, 10) : null;
+  const pageSize = pageSizeRaw === 25 || pageSizeRaw === 50 ? pageSizeRaw : 10;
+
   const view = await buildPayrollOverview({
     principal,
     clubId,
@@ -61,6 +65,7 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
     employmentType,
     status: searchParams?.status ?? null,
     page: searchParams?.page ? Math.max(1, Number.parseInt(searchParams.page, 10) || 1) : 1,
+    pageSize,
   });
 
   const canPrepare = hasPermission(principal, clubId, "payroll:run");

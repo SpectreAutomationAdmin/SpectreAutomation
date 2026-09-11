@@ -251,7 +251,11 @@ describe("Payroll-3B-4 — batch preparation", () => {
 
   // ---- Salaried structural inclusion ------------------------------------
 
-  it("salaried employee — included without approved time; salaried=true; source facts snapshotted; NO earnings created", async () => {
+  it("salaried employee — included without approved time; salaried=true; source facts snapshotted; SALARY earning projected", async () => {
+    // Payroll 3A hotfix (2026-09-11) — Prepare projects a SALARY
+    // earning for full-period salaried employees so the Overview can
+    // display a real gross-pay estimate before Calculate. Reconciles
+    // exactly with the calculator's SALARY_DERIVED path.
     const s = await scenario();
     // Only hourly time is created; salaried has no time entries.
     await createTimeEntry(s.adminP, s.clubA.id, {
@@ -268,9 +272,23 @@ describe("Payroll-3B-4 — batch preparation", () => {
     expect(salaried.sourceFacts!.compensations.length).toBe(1);
     expect(salaried.sourceFacts!.compensations[0]!.payType).toBe("SALARY");
     expect(salaried.sourceFacts!.compensations[0]!.annualSalary).toBe("72000");
-    // NO PayrollBatchEarning rows populated by 3B-4.
-    const earnings = await db().payrollBatchEarning.count({ where: { batchId: result.batchId } });
-    expect(earnings).toBe(0);
+    // Salaried employee: one SALARY_PROJECTION earning row.
+    const salaryRow = await db().payrollBatchEarning.findFirst({
+      where: { batchId: result.batchId, batchEmployeeId: salaried.id, earningType: "SALARY" },
+    });
+    expect(salaryRow).not.toBeNull();
+    expect(salaryRow!.rateSource).toBe("SALARY_PROJECTION");
+    expect(Number(salaryRow!.quantity)).toBe(1);
+    // 72000 / (single biweekly period generated in taxYear 2026 for
+    // this custom scenario). Reconciles to computePeriodSalary =
+    // annualSalary / periodsPerYear via the same helper.
+    expect(Number(salaryRow!.rate)).toBeGreaterThan(0);
+    // Hourly employee has NO SALARY earning row.
+    const hourly = batch!.employees.find((e) => e.employeeId === s.hourlyEmp.id)!;
+    const hourlyEarnings = await db().payrollBatchEarning.count({
+      where: { batchId: result.batchId, batchEmployeeId: hourly.id },
+    });
+    expect(hourlyEarnings).toBe(0);
   });
 
   // ---- Hourly time attachment -------------------------------------------
@@ -298,9 +316,80 @@ describe("Payroll-3B-4 — batch preparation", () => {
       where: { clubId: s.clubA.id, consumedByBatchId: result.batchId },
     });
     expect(reserved).toBe(2);
-    // NO monetary earnings created.
-    const earnings = await db().payrollBatchEarning.count({ where: { batchId: result.batchId } });
-    expect(earnings).toBe(0);
+    // Hourly employee has NO earnings — Prepare projects only SALARY
+    // earnings, hourly amounts are still deferred to Calculate.
+    const hourlyEarnings = await db().payrollBatchEarning.count({
+      where: { batchId: result.batchId, batchEmployeeId: hourly.id },
+    });
+    expect(hourlyEarnings).toBe(0);
+  });
+
+  // ---- 3A hotfix: salary earning projection -----------------------------
+
+  it("Payroll 3A hotfix: SALARY earning rate reconciles to annualSalary/periodsPerYear (Decimal precision preserved)", async () => {
+    const s = await scenario();
+    // Second biweekly period so periodsPerYear count >= 2 for the
+    // reconciliation test. Idempotent: the scenario period already
+    // exists (Aug 10 – Aug 24).
+    await db().payrollPayPeriod.create({
+      data: {
+        clubId: s.clubA.id, payGroupId: s.payGroup.id,
+        sequenceInYear: 18, taxYear: 2026,
+        periodStart: utc(2026, 8, 24), periodEnd: utc(2026, 9, 7),
+        payDate: utc(2026, 9, 12),
+      },
+    });
+    await createTimeEntry(s.adminP, s.clubA.id, {
+      employeeId: s.hourlyEmp.id, employmentAssignmentId: s.hourlyAssign.id,
+      workDate: utc(2026, 8, 15), hours: 8,
+    });
+    await approveDepartmentTime(s.adminP, s.clubA.id, s.payPeriod.id, s.grounds.id);
+    const result = await preparePayrollBatch(s.adminP, s.clubA.id, s.payPeriod.id);
+    const salariedBe = await db().payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: result.batchId, employeeId: s.salariedEmp.id },
+    });
+    const salaryRow = await db().payrollBatchEarning.findFirstOrThrow({
+      where: { batchId: result.batchId, batchEmployeeId: salariedBe.id, earningType: "SALARY" },
+    });
+    // 2 periods exist in taxYear 2026; annualSalary 72000 → 36000/period.
+    const periodsPerYearInScenario = await db().payrollPayPeriod.count({
+      where: { clubId: s.clubA.id, payGroupId: s.payGroup.id, taxYear: 2026 },
+    });
+    expect(periodsPerYearInScenario).toBe(2);
+    expect(Number(salaryRow.rate)).toBe(72000 / 2);
+    expect(salaryRow.rateSource).toBe("SALARY_PROJECTION");
+  });
+
+  it("Payroll 3A hotfix: non-full-period salaried employee — NO SALARY earning projected (proration policy respected)", async () => {
+    const s = await scenario();
+    // Rewrite the salaried employee's membership so it starts
+    // mid-period (Aug 15) — coverage.isFullPeriod becomes false and
+    // the projection is skipped by design.
+    await db().payrollPayGroupMember.updateMany({
+      where: { clubId: s.clubA.id, payGroupId: s.payGroup.id, employeeId: s.salariedEmp.id },
+      data: { effectiveFrom: utc(2026, 8, 15) },
+    });
+    await createTimeEntry(s.adminP, s.clubA.id, {
+      employeeId: s.hourlyEmp.id, employmentAssignmentId: s.hourlyAssign.id,
+      workDate: utc(2026, 8, 15), hours: 8,
+    });
+    await approveDepartmentTime(s.adminP, s.clubA.id, s.payPeriod.id, s.grounds.id);
+    const result = await preparePayrollBatch(s.adminP, s.clubA.id, s.payPeriod.id);
+    const salariedBe = await db().payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: result.batchId, employeeId: s.salariedEmp.id },
+    });
+    const salaryRows = await db().payrollBatchEarning.count({
+      where: { batchId: result.batchId, batchEmployeeId: salariedBe.id, earningType: "SALARY" },
+    });
+    expect(salaryRows).toBe(0);
+    // sourceFacts.coverage.isFullPeriod must be false to prove the
+    // domain surface for the calculator's later SALARY_PRORATION_
+    // POLICY_REQUIRED blocker is intact.
+    const salariedFull = await db().payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: result.batchId, employeeId: s.salariedEmp.id },
+    });
+    const facts = JSON.parse(salariedFull.sourceFactsJson!);
+    expect(facts.coverage.isFullPeriod).toBe(false);
   });
 
   // ---- Blockers / warnings ----------------------------------------------

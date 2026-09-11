@@ -35,6 +35,8 @@ import {
 } from "./source-facts-schema";
 import { resolveTd1ClaimAtPreparation, isResolvedTd1, isTd1ResolutionFailure } from "./td1-claim-resolver";
 import { TD1_CLAIM_RESOLUTION_FAILED } from "./calculation-blockers";
+import { computePeriodSalary } from "./earnings-calculator";
+import { resolvePeriodsPerYearFromCalendar } from "./statutory/periods-per-year";
 
 const ENTITY = "PayrollBatch";
 
@@ -733,6 +735,37 @@ export async function preparePayrollBatch(
     snapshots.push(await snapshotEmployee(clubId, province, pre.periodStart, pre.periodEnd, m));
   }
 
+  // Payroll 3A hotfix (2026-09-11) — projected salary earnings.
+  //
+  // Snapshot the per-period base salary as a canonical
+  // `PayrollBatchEarning` (earningType=SALARY, rateSource=
+  // SALARY_PROJECTION) at Prepare time, so the Overview surface can
+  // display a domain-authoritative gross-pay estimate for salaried
+  // employees before Calculate runs. `computePeriodSalary` and
+  // `resolvePeriodsPerYearFromCalendar` are the same helpers the
+  // calculator uses at Calculate — so the row reconciles exactly
+  // with what the calculator would derive later.
+  //
+  // Semantics we deliberately preserve (matching earnings-calculator.ts):
+  //   • Full-period only. Non-full-period salaried employees trip
+  //     the calculator's SALARY_PRORATION_POLICY_REQUIRED blocker
+  //     at Calculate; Spectre has no founder-approved proration
+  //     policy, so we skip the projection here (no gross-pay
+  //     estimate → the Overview shows "—" for that row, honestly).
+  //   • rate = annualSalary / periodsPerYear as a Decimal, NO
+  //     per-row rounding. The calculator rounds only the final
+  //     cashEarnings via roundCentsHalfUp. Storing a raw Decimal
+  //     rate keeps sub-cent precision so a later recalc reconciles.
+  //   • payType/annualSalary picked from the frozen sourceFacts
+  //     compensations (the FIRST SALARY row, matching the
+  //     calculator's `Array.prototype.find` selection).
+  const periodTaxYear = pre.payDate.getUTCFullYear();
+  const periodsPerYear = await resolvePeriodsPerYearFromCalendar({
+    clubId,
+    payGroupId: pre.payGroupId,
+    taxYear: periodTaxYear,
+  });
+
   const anyBlocker = snapshots.some((s) => s.exceptions.some((e) => e.severity === "BLOCKER"));
   const targetStatus = anyBlocker ? "DRAFT" : "PREPARED";
 
@@ -785,6 +818,29 @@ export async function preparePayrollBatch(
           status: s.exceptions.some((e) => e.severity === "BLOCKER") ? "ERRORED" : "INCLUDED",
         },
       });
+
+      // Payroll 3A hotfix (2026-09-11) — write a projected SALARY
+      // earning row for full-period salaried employees. See the top
+      // of preparePayrollBatch for the semantic rationale. Guarded
+      // by `salaried && isFullPeriod` so we never guess at proration.
+      if (s.salaried && s.sourceFacts.coverage.isFullPeriod) {
+        const periodSalary = computePeriodSalary(s.sourceFacts, periodsPerYear);
+        if (periodSalary) {
+          await tx.payrollBatchEarning.create({
+            data: {
+              clubId,
+              batchId: batch.id,
+              batchEmployeeId: be.id,
+              employeeId: s.employeeId,
+              earningType: "SALARY",
+              rateSource: "SALARY_PROJECTION",
+              quantity: "1",
+              rate: periodSalary.toString(),
+              description: "Salary (annual / P) — projected at Prepare",
+            },
+          });
+        }
+      }
 
       // Allowance snapshots — one row per applicable allowance.
       // Payroll-3B-5B-3A closeout — carry the split classification

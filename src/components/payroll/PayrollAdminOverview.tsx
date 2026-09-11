@@ -17,6 +17,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
+import { useFormStatus } from "react-dom";
 import type { PayrollOverviewViewModel, PayrollOverviewPayPeriodRef } from "@/lib/payroll/overview-view";
 
 // Payroll 3A date-boundary hotfix (2026-09-11) — timezone-agnostic
@@ -97,6 +98,16 @@ function DownloadIcon({ className = "" }: { className?: string }) {
 }
 function PlusIcon({ className = "" }: { className?: string }) {
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>);
+}
+function SpinnerIcon({ className = "" }: { className?: string }) {
+  // Indeterminate spinner — no fake percentage. Rotates via Tailwind's
+  // animate-spin utility so it works without extra CSS.
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={"animate-spin " + className} aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity={0.25} strokeWidth={3} />
+      <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth={3} strokeLinecap="round" />
+    </svg>
+  );
 }
 function RefreshIcon({ className = "" }: { className?: string }) {
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7" /><path d="M21 4v5h-5" /></svg>);
@@ -214,14 +225,7 @@ function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: Pr
           {prepare && prepare.canPrepare && !view.hasBatch && view.payPeriod ? (
             <form action={prepare.action}>
               <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
-              <button
-                type="submit"
-                data-testid="payroll-admin-prepare"
-                className="inline-flex items-center gap-2 rounded-md bg-[#1e40af] text-white px-3.5 py-2 text-[13px] font-medium hover:bg-[#1e3a8a]"
-              >
-                <PlusIcon className="h-4 w-4" />
-                Prepare Payroll
-              </button>
+              <PrepareSubmitButton />
             </form>
           ) : null}
           <ChangePeriodPicker view={view} />
@@ -369,6 +373,39 @@ export interface PrepareControls {
   canPrepare: boolean;
 }
 
+// Prepare Payroll submit control — MUST live inside the <form action=…>
+// so `useFormStatus` can read the pending state of the surrounding
+// server-action submission. While the server action runs (network
+// round-trip + preparePayrollBatch — up to several seconds for a
+// pay group with many employees), the button:
+//   • disables (blocking a second click),
+//   • swaps its icon to an indeterminate spinner (no fake percentage),
+//   • swaps its label to "Preparing Payroll…" so the click is
+//     visibly acknowledged.
+// After the server action returns and Next.js redirects+revalidates,
+// the button vanishes on the next render (view.hasBatch flips true).
+function PrepareSubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid="payroll-admin-prepare"
+      data-pending={pending ? "true" : "false"}
+      className={
+        "inline-flex items-center gap-2 rounded-md text-white px-3.5 py-2 text-[13px] font-medium " +
+        (pending
+          ? "bg-[#1e40af]/70 cursor-wait"
+          : "bg-[#1e40af] hover:bg-[#1e3a8a]")
+      }
+    >
+      {pending ? <SpinnerIcon className="h-4 w-4" /> : <PlusIcon className="h-4 w-4" />}
+      {pending ? "Preparing Payroll…" : "Prepare Payroll"}
+    </button>
+  );
+}
+
 function Workspace({ view, prepare }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null }) {
   const totalCount = view.employeeTable.filteredTotal;
   const start = totalCount === 0 ? 0 : (view.employeeTable.page - 1) * view.employeeTable.pageSize + 1;
@@ -439,13 +476,44 @@ function Workspace({ view, prepare }: { view: PayrollOverviewViewModel; prepare:
       <div className="px-6 py-2 flex items-center justify-between text-[12.5px] text-stone-500 border-t border-stone-100">
         <p data-testid="payroll-admin-pagination-summary">Showing {start}–{end} of {totalCount} employees</p>
         <Pagination view={view} />
-        <div className="inline-flex items-center gap-2">
-          <button disabled className="inline-flex items-center gap-1.5 h-8 rounded-md border border-stone-200 bg-white px-2.5 text-[12.5px] text-stone-500 cursor-not-allowed">
-            10 per page <ChevronDown className="h-3 w-3 text-stone-400" />
-          </button>
-        </div>
+        <PageSizeControl view={view} />
       </div>
     </section>
+  );
+}
+
+function PageSizeControl({ view }: { view: PayrollOverviewViewModel }) {
+  const router = useRouter();
+  const pathname = usePathname() ?? "/app/admin/payroll";
+  const params = useSearchParams();
+  const currentSize = view.employeeTable.pageSize;
+  const onChange = (raw: string) => {
+    const p = new URLSearchParams(params?.toString() ?? "");
+    const n = Number.parseInt(raw, 10);
+    if (n === 10 || n === 25 || n === 50) p.set("pageSize", String(n));
+    else p.delete("pageSize");
+    // §8: reset to page 1 on page-size change; preserve search/filter.
+    p.set("page", "1");
+    router.push(`${pathname}?${p.toString()}`);
+  };
+  return (
+    <div className="inline-flex items-center gap-2">
+      <label className="sr-only" htmlFor="payroll-admin-page-size">Rows per page</label>
+      <div className="relative">
+        <select
+          id="payroll-admin-page-size"
+          data-testid="payroll-admin-page-size"
+          value={String(currentSize)}
+          onChange={(e) => onChange(e.target.value)}
+          className="appearance-none inline-flex items-center h-8 rounded-md border border-stone-200 bg-white pl-2.5 pr-7 text-[12.5px] text-stone-700 hover:bg-stone-50"
+        >
+          <option value="10">10 per page</option>
+          <option value="25">25 per page</option>
+          <option value="50">50 per page</option>
+        </select>
+        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-stone-400 pointer-events-none" />
+      </div>
+    </div>
   );
 }
 function StatusPill({ status }: { status: string }) {
