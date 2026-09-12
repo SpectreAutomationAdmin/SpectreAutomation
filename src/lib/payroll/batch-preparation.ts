@@ -382,16 +382,29 @@ async function snapshotEmployee(
     });
   }
 
-  // Compensation records for the covering assignments intersecting
-  // the period. Employees with zero compensation cannot calculate;
-  // BLOCKER at prep.
+  // Compensation records intersecting the period. Employees with
+  // zero compensation cannot calculate; BLOCKER at prep.
+  //
+  // Payroll 3A hotfix (2026-09-11): also include compensation rows
+  // whose `assignmentId` is NULL. These are legitimate
+  // "employee-wide" comp records (the HR write path creates them
+  // without an assignmentId when the employee has a single active
+  // assignment). The prior assignmentId-scoped query silently
+  // dropped them, causing Chris Turcato + Lise Montsion to appear
+  // as MISSING_COMPENSATION ERRORED rows on staging despite having
+  // a real compensation record. Query is now scoped by
+  // `employeeId` for tenant-safety since null `assignmentId` is
+  // no longer a scoping mechanism.
   const compensations = assignments.length
     ? await prisma.employeeCompensation.findMany({
         where: {
           clubId,
-          assignmentId: { in: assignments.map((a) => a.id) },
+          employeeId,
           effectiveFrom: { lt: periodEnd },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: periodStart } }],
+          AND: [
+            { OR: [{ effectiveTo: null }, { effectiveTo: { gt: periodStart } }] },
+            { OR: [{ assignmentId: { in: assignments.map((a) => a.id) } }, { assignmentId: null }] },
+          ],
         },
         orderBy: [{ effectiveFrom: "asc" }],
       })

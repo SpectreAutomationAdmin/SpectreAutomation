@@ -360,6 +360,47 @@ describe("Payroll-3B-4 — batch preparation", () => {
     expect(salaryRow.rateSource).toBe("SALARY_PROJECTION");
   });
 
+  it("Payroll 3A hotfix: employee-wide compensation (assignmentId = null) is included in preparation", async () => {
+    const s = await scenario();
+    // Rewrite Sam's compensation to be employee-wide (assignmentId = null)
+    // — the legacy shape the HR write path produces for a single-
+    // assignment employee. Under the old query this would silently
+    // vanish and trigger MISSING_COMPENSATION; under the hotfix it
+    // is preserved.
+    await db().employeeCompensation.deleteMany({ where: { employeeId: s.salariedEmp.id } });
+    await db().employeeCompensation.create({
+      data: {
+        clubId: s.clubA.id, employeeId: s.salariedEmp.id, assignmentId: null,
+        cadence: "SALARY", rate: "72000", currency: "CAD",
+        effectiveFrom: utc(2026, 1, 1),
+      },
+    });
+    await createTimeEntry(s.adminP, s.clubA.id, {
+      employeeId: s.hourlyEmp.id, employmentAssignmentId: s.hourlyAssign.id,
+      workDate: utc(2026, 8, 15), hours: 8,
+    });
+    await approveDepartmentTime(s.adminP, s.clubA.id, s.payPeriod.id, s.grounds.id);
+    const result = await preparePayrollBatch(s.adminP, s.clubA.id, s.payPeriod.id);
+    const batch = await getPreparedBatch(s.adminP, s.clubA.id, result.batchId);
+    const salaried = batch!.employees.find((e) => e.employeeId === s.salariedEmp.id)!;
+    // Employee-wide compensation is captured.
+    expect(salaried.salaried).toBe(true);
+    expect(salaried.compensationReady).toBe(true);
+    expect(salaried.sourceFacts!.compensations.length).toBe(1);
+    expect(salaried.sourceFacts!.compensations[0]!.payType).toBe("SALARY");
+    expect(salaried.sourceFacts!.compensations[0]!.annualSalary).toBe("72000");
+    expect(salaried.sourceFacts!.compensations[0]!.assignmentId).toBeNull();
+    // MISSING_COMPENSATION BLOCKER must NOT be raised.
+    const blockers = batch!.exceptions.filter((x) => x.severity === "BLOCKER" && x.code === "MISSING_COMPENSATION");
+    expect(blockers).toEqual([]);
+    // SALARY earning row still projected via the v360 path.
+    const earnings = await db().payrollBatchEarning.findFirst({
+      where: { batchId: result.batchId, batchEmployeeId: salaried.id, earningType: "SALARY" },
+    });
+    expect(earnings).not.toBeNull();
+    expect(earnings!.rateSource).toBe("SALARY_PROJECTION");
+  });
+
   it("Payroll 3A hotfix: non-full-period salaried employee — NO SALARY earning projected (proration policy respected)", async () => {
     const s = await scenario();
     // Rewrite the salaried employee's membership so it starts
