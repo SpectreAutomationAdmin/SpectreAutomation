@@ -49,8 +49,8 @@ const ENTITY = "PayrollBatch";
 // batches keep their frozen `algorithmVersion`; the engine change
 // only affects newly-CALCULATED batches from this version onward.
 const ALGORITHM_VERSION = "spectre-payroll-3c3d7-v2";
-const FINAL_APPROVAL_ORIGIN_KIND = "PAYROLL_FINAL_APPROVAL";
-const REVIEW_ORIGIN_KIND = "PAYROLL_REVIEW";
+// Payroll 3E: FINAL_APPROVAL_ORIGIN_KIND + REVIEW_ORIGIN_KIND relocated
+// to src/lib/payroll/controller-work-intake.ts.
 
 /** Payroll 3D acceptance hotfix (2026-09-12) — raised when a
  *  concurrent Calculate request loses the compare-and-set race. The
@@ -592,60 +592,16 @@ export async function calculatePayrollBatch(
     throw new CalculateConcurrencyConflictError(batchId, expectedStatus, expectedVersion);
   }
 
-  // §40, §44 — Controller PAYROLL_FINAL_APPROVAL handoff + resolve
-  // PAYROLL_REVIEW. Idempotent by (kind, batchId).
-  const config = await prisma.payrollClubConfig.findUnique({ where: { clubId } });
-  let finalApprovalItemId: string | null = null;
-  let finalApprovalOwnerUserId: string | null = null;
-
-  if (!config?.controllerUserId) {
-    // §40 — do NOT invent an owner. Leave the task un-materialised
-    // and expose the gap on the result. Batch is CALCULATED; a
-    // future config edit + explicit re-run of calculatePayrollBatch
-    // will materialise it.
-    await audit(principal, {
-      action: "payroll.batch.calculate.controller-gap",
-      entityType: ENTITY, entityId: batchId, clubId,
-      after: { reason: "PayrollClubConfig.controllerUserId not set" },
-    });
-  } else {
-    finalApprovalOwnerUserId = config.controllerUserId;
-    const period = await prisma.payrollPayPeriod.findFirst({
-      where: { id: priorBatch.payPeriodId, clubId },
-      select: { periodStart: true, periodEnd: true, payDate: true },
-    });
-    const totals = payloads.reduce(
-      (acc, p) => ({
-        gross:     acc.gross     + p.grossCents,
-        net:       acc.net       + p.netCents,
-        deducted:  acc.deducted  + p.totalDeductionsCents,
-        employer:  acc.employer  + p.totalEmployerCents,
-      }),
-      { gross: 0, net: 0, deducted: 0, employer: 0 },
-    );
-    const money = (cents: number) => (cents / 100).toFixed(2);
-    const payDateLabel = period ? period.payDate.toISOString().slice(0, 10) : "unknown";
-    const dateLabel = period
-      ? `${period.periodStart.toISOString().slice(0, 10)} → ${new Date(period.periodEnd.getTime() - 86_400_000).toISOString().slice(0, 10)}`
-      : priorBatch.payPeriodId;
-
-    // Executive-summary preview per §41 — NO SIN / bank / TD1 / individual employee data.
-    // Payroll-3B-5B-3A closeout — also carries the canonical review
-    // deep-link URL so a mission-control card without a dedicated
-    // CTA still lets the Controller reach the review workspace.
-    const reviewUrl = `/app/admin/payroll/batches/${batchId}`;
-    const preview =
-      `${payloads.length} employees · pay ${payDateLabel} · ` +
-      `gross $${money(totals.gross)} · deductions $${money(totals.deducted)} · ` +
-      `net $${money(totals.net)} · employer contributions $${money(totals.employer)} · ` +
-      `Review payroll → ${reviewUrl}`;
-    const subject = `Payroll ready for final approval · ${dateLabel}`;
-
-    finalApprovalItemId = await materialiseFinalApprovalItem({
-      clubId, batchId, controllerUserId: config.controllerUserId, subject, preview,
-    });
-    await resolveOutstandingReviewItem(clubId, batchId, principal.id);
-  }
+  // Payroll Admin Slice 3E (2026-09-12) — the Controller
+  // PAYROLL_FINAL_APPROVAL handoff has moved to `submitPayrollBatch`.
+  // Calculate NO LONGER creates the Controller Work Intake card,
+  // NO LONGER resolves the Payroll-Admin PAYROLL_REVIEW task, and
+  // NEVER materialises the final-approval item pre-Submit. The batch
+  // reaches CALCULATED and waits for the Payroll Admin to attest the
+  // CALCULATED_PAYROLL review and click Submit for Approval. See
+  // src/lib/payroll/submit-payroll-batch.ts for the moved logic.
+  const finalApprovalItemId: string | null = null;
+  const finalApprovalOwnerUserId: string | null = null;
 
   await audit(principal, {
     action: "payroll.batch.calculate",
@@ -678,90 +634,10 @@ function centsOf(d: Decimal): number {
   return Math.round(Number(d.toFixed(2)) * 100);
 }
 
-async function materialiseFinalApprovalItem(args: {
-  clubId: string;
-  batchId: string;
-  controllerUserId: string;
-  subject: string;
-  preview: string;
-}): Promise<string> {
-  const existing = await prisma.workIntakeOrigin.findFirst({
-    where: {
-      clubId: args.clubId, kind: FINAL_APPROVAL_ORIGIN_KIND,
-      referenceId: args.batchId, role: "PRIMARY",
-    },
-    select: { workIntakeItemId: true },
-  });
-  const now = new Date();
-  if (existing) {
-    // §43 idempotency — repeated recalculation refreshes the same card.
-    await prisma.workIntakeItem.update({
-      where: { id: existing.workIntakeItemId },
-      data: {
-        status: "OPEN", ownerUserId: args.controllerUserId,
-        displaySubject: args.subject, displayPreview: args.preview,
-        displayReceivedAt: now, resolvedAt: null, resolvedByUserId: null,
-      },
-    });
-    return existing.workIntakeItemId;
-  }
-  const created = await prisma.workIntakeItem.create({
-    data: {
-      clubId: args.clubId, status: "OPEN", judgmentRequired: true,
-      ownerUserId: args.controllerUserId,
-      classification: FINAL_APPROVAL_ORIGIN_KIND,
-      classificationReason: "Payroll batch reached CALCULATED — Controller final approval required.",
-      classificationMethod: "RULE",
-      classificationRuleKey: "payroll-orchestration.v1",
-      classificationRuleVersion: 1,
-      displaySourceLabel: "Spectre Payroll",
-      displaySender: "Payroll orchestration",
-      displaySubject: args.subject,
-      displayPreview: args.preview,
-      displayReceivedAt: now,
-      displayHasAttachments: false,
-      workDomain: "PAYROLL", workIntent: "APPROVE",
-      workSubtype: FINAL_APPROVAL_ORIGIN_KIND,
-      workDomainConfidence: 1,
-      workDomainClassifiedAt: now,
-      workDomainClassifierVersion: "payroll-orchestration.v1",
-    },
-    select: { id: true },
-  });
-  await prisma.workIntakeOrigin.create({
-    data: {
-      clubId: args.clubId, workIntakeItemId: created.id,
-      kind: FINAL_APPROVAL_ORIGIN_KIND, referenceId: args.batchId, role: "PRIMARY",
-      linkReason: `Payroll orchestrator — batch ${args.batchId} reached CALCULATED.`,
-    },
-  });
-  await prisma.workIntakeActivity.create({
-    data: {
-      workIntakeItemId: created.id, action: "MATERIALISED",
-      note: "Controller final-approval task materialised on PREPARED → CALCULATED transition.",
-    },
-  });
-  return created.id;
-}
-
-async function resolveOutstandingReviewItem(clubId: string, batchId: string, actorUserId: string): Promise<void> {
-  const link = await prisma.workIntakeOrigin.findFirst({
-    where: { clubId, kind: REVIEW_ORIGIN_KIND, referenceId: batchId, role: "PRIMARY" },
-    select: { workIntakeItemId: true },
-  });
-  if (!link) return;
-  const now = new Date();
-  await prisma.workIntakeItem.updateMany({
-    where: { id: link.workIntakeItemId, status: { not: "RESOLVED" } },
-    data: { status: "RESOLVED", resolvedAt: now, resolvedByUserId: actorUserId },
-  });
-  await prisma.workIntakeActivity.create({
-    data: {
-      workIntakeItemId: link.workIntakeItemId, actorUserId, action: "RESOLVED",
-      note: "Batch reached CALCULATED — responsibility handed off to the Controller.",
-    },
-  });
-}
+// Payroll 3E (2026-09-12) — `materialiseFinalApprovalItem` and
+// `resolveOutstandingReviewItem` moved to
+// `src/lib/payroll/controller-work-intake.ts` and are now called at
+// Submit time, not Calculate time. See §7 of the 3E directive.
 
 function emptyResult(readiness: CalculationReadinessResult, batchId: string): ExecutePayrollCalculationResult {
   return {

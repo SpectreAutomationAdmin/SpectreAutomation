@@ -57,6 +57,13 @@ export interface PayrollOverviewBatchRef {
   submittedAt: string | null;
   approvedAt: string | null;
   postedAt: string | null;
+  // Payroll 3E (2026-09-12).
+  submittedByDisplayName?: string | null;
+  approvedByDisplayName?: string | null;
+  returnedAt?: string | null;
+  returnedByDisplayName?: string | null;
+  returnReason?: string | null;
+  calculationVersion?: number | null;
 }
 export interface PayrollOverviewEmployeeRow {
   batchEmployeeId: string;
@@ -833,7 +840,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       where: { id: activeBatch.id, clubId },
       select: {
         id: true, status: true, sequence: true, calculationVersion: true,
-        preparedAt: true, calculatedAt: true, submittedAt: true, approvedAt: true, postedAt: true,
+        preparedAt: true, calculatedAt: true, submittedAt: true, submittedByUserId: true,
+        approvedAt: true, approvedByUserId: true, postedAt: true,
       },
     }),
     prisma.payrollBatchEmployee.findMany({
@@ -887,6 +895,37 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     getBatchReviewStatus(principal, clubId, activeBatch.id),
   ]);
 
+  // Payroll 3E (2026-09-12) — resolve display names for submitter /
+  // approver / returner. Also read the most-recent
+  // PAYROLL_RETURNED_FOR_CORRECTION activity when the batch is
+  // RETURNED_FOR_CORRECTION, so the surface can display who / when /
+  // why without a schema migration.
+  const auxUserIds = new Set<string>();
+  if (batchRow?.submittedByUserId) auxUserIds.add(batchRow.submittedByUserId);
+  if (batchRow?.approvedByUserId)  auxUserIds.add(batchRow.approvedByUserId);
+  let returnActivity: { actorUserId: string | null; note: string | null; createdAt: Date } | null = null;
+  if (batchRow?.status === "RETURNED_FOR_CORRECTION") {
+    const originLink = await prisma.workIntakeOrigin.findFirst({
+      where: { clubId, kind: "PAYROLL_RETURNED_FOR_CORRECTION", referenceId: batchRow.id, role: "PRIMARY" },
+      select: { workIntakeItemId: true },
+    });
+    if (originLink) {
+      returnActivity = await prisma.workIntakeActivity.findFirst({
+        where: { workIntakeItemId: originLink.workIntakeItemId, action: "MATERIALISED" },
+        orderBy: { createdAt: "desc" },
+        select: { actorUserId: true, note: true, createdAt: true },
+      });
+      if (returnActivity?.actorUserId) auxUserIds.add(returnActivity.actorUserId);
+    }
+  }
+  const auxUsers = auxUserIds.size > 0
+    ? await prisma.user.findMany({
+        where: { id: { in: Array.from(auxUserIds) } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const auxNameById = new Map(auxUsers.map((u) => [u.id, u.name || u.email || null]));
+
   const batchRef: PayrollOverviewBatchRef | null = batchRow ? {
     id: batchRow.id,
     status: batchRow.status,
@@ -896,6 +935,12 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     submittedAt: batchRow.submittedAt?.toISOString() ?? null,
     approvedAt: batchRow.approvedAt?.toISOString() ?? null,
     postedAt: batchRow.postedAt?.toISOString() ?? null,
+    submittedByDisplayName: batchRow.submittedByUserId ? (auxNameById.get(batchRow.submittedByUserId) ?? null) : null,
+    approvedByDisplayName: batchRow.approvedByUserId ? (auxNameById.get(batchRow.approvedByUserId) ?? null) : null,
+    calculationVersion: batchRow.calculationVersion ?? null,
+    returnedAt: returnActivity?.createdAt?.toISOString() ?? null,
+    returnedByDisplayName: returnActivity?.actorUserId ? (auxNameById.get(returnActivity.actorUserId) ?? null) : null,
+    returnReason: returnActivity?.note?.replace(/^Returned for correction:\s*/i, "") ?? null,
   } : null;
 
   // ---- Enrich employees with department (from sourceFactsJson primary assignment) ----
@@ -1310,7 +1355,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     activeBatch.status === "CALCULATED" ||
     activeBatch.status === "SUBMITTED_FOR_APPROVAL" ||
     activeBatch.status === "APPROVED" ||
-    activeBatch.status === "POSTED"
+    activeBatch.status === "POSTED" ||
+    activeBatch.status === "RETURNED_FOR_CORRECTION"
   );
   if (batchHasBeenCalculated) {
     workflow[3] = { ...workflow[3]!, state: "done" };
@@ -1319,11 +1365,30 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       if (calcReviewCurrent) {
         workflow[5] = { ...workflow[5]!, state: "current" };
       }
-    } else {
-      // SUBMITTED_FOR_APPROVAL / APPROVED / POSTED — Step 5 is `done`
-      // because we've moved past it. Step 6/7/8 are owned by later
-      // slices; 3D does not toggle them.
+    } else if (activeBatch.status === "SUBMITTED_FOR_APPROVAL") {
+      // 3E — Steps 5 + 6 done; Step 7 is the Controller's current step.
       workflow[4] = { ...workflow[4]!, state: "done" };
+      workflow[5] = { ...workflow[5]!, state: "done" };
+      workflow[6] = { ...workflow[6]!, state: "current" };
+    } else if (activeBatch.status === "RETURNED_FOR_CORRECTION") {
+      // 3E — Controller returned the batch. Step 6 rewinds to current
+      // and the CALCULATED_PAYROLL review is stale. Steps 4/5 remain
+      // done because the calculated result is still persisted — the
+      // Payroll Admin corrects and resubmits without re-Calculating
+      // unless HR data changes.
+      workflow[4] = { ...workflow[4]!, state: "current" };
+      workflow[5] = { ...workflow[5]!, state: "pending" };
+    } else if (activeBatch.status === "APPROVED") {
+      // 3E — Steps 5, 6, 7 done. Step 8 (posting) is 3F's target.
+      workflow[4] = { ...workflow[4]!, state: "done" };
+      workflow[5] = { ...workflow[5]!, state: "done" };
+      workflow[6] = { ...workflow[6]!, state: "done" };
+      workflow[7] = { ...workflow[7]!, state: "current" };
+    } else if (activeBatch.status === "POSTED") {
+      workflow[4] = { ...workflow[4]!, state: "done" };
+      workflow[5] = { ...workflow[5]!, state: "done" };
+      workflow[6] = { ...workflow[6]!, state: "done" };
+      workflow[7] = { ...workflow[7]!, state: "done" };
     }
   } else if (approvalsDone && blockerCount === 0 && activeBatch.status === "PREPARED") {
     // PREPARED + Steps 1-3 done → Step 4 is the current step, regardless

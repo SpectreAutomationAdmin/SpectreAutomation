@@ -73,7 +73,7 @@ const ENTITY = "PayrollBatch";
 
 export interface ReturnToPreparationResult {
   batchId: string;
-  priorStatus: "CALCULATED";
+  priorStatus: "CALCULATED" | "RETURNED_FOR_CORRECTION";
   nextStatus:  "PREPARED";
   calculationVersion: number;
   invalidatedAttestationCount: number;
@@ -93,10 +93,14 @@ export async function returnBatchToPreparation(
     select: { id: true, status: true, calculationVersion: true },
   });
   if (!batch) throw new NotFoundError(ENTITY, batchId);
-  if (batch.status !== "CALCULATED") {
+  // Payroll 3E (2026-09-12): accepts CALCULATED (Payroll Admin
+  // self-service, from 3D) and RETURNED_FOR_CORRECTION (Payroll Admin
+  // reopening a Controller-returned batch for a batch-local edit).
+  // Refuses SUBMITTED_FOR_APPROVAL — the Controller must Return first.
+  if (batch.status !== "CALCULATED" && batch.status !== "RETURNED_FOR_CORRECTION") {
     throw new ValidationError([{
       path: "status",
-      message: `Batch is ${batch.status}; only CALCULATED batches can be returned to Preparation.`,
+      message: `Batch is ${batch.status}; Return to Preparation accepts only CALCULATED or RETURNED_FOR_CORRECTION batches.`,
     }]);
   }
   const trimmed = (reason ?? "").trim();
@@ -120,7 +124,7 @@ export async function returnBatchToPreparation(
     action: "payroll.batch.return-to-preparation",
     entityType: ENTITY, entityId: batchId, clubId,
     after: {
-      priorStatus: "CALCULATED",
+      priorStatus: batch.status,
       nextStatus: "PREPARED",
       calculationVersion: batch.calculationVersion,
       reason: trimmed,
@@ -130,7 +134,7 @@ export async function returnBatchToPreparation(
 
   return {
     batchId,
-    priorStatus: "CALCULATED",
+    priorStatus: batch.status as "CALCULATED" | "RETURNED_FOR_CORRECTION",
     nextStatus: "PREPARED",
     calculationVersion: batch.calculationVersion,
     invalidatedAttestationCount: invalidated,

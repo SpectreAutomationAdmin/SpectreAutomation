@@ -157,6 +157,7 @@ const STATUS_LABELS: Record<string, string> = {
   PREPARED:                 "PREPARED",
   CALCULATED:               "CALCULATED",
   SUBMITTED_FOR_APPROVAL:   "SUBMITTED FOR APPROVAL",
+  RETURNED_FOR_CORRECTION:  "RETURNED FOR CORRECTION",
   APPROVED:                 "APPROVED",
   POSTED:                   "POSTED",
   VOIDED:                   "VOIDED",
@@ -174,11 +175,12 @@ export interface PayrollAdminOverviewProps {
   review?: ReviewControls | null;
   calculate?: CalculateControls | null;
   returnToPrep?: ReturnControls | null;
+  submit?: SubmitControls | null;
 }
 
 export default function PayrollAdminOverview({
   view, prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
-  calculate = null, returnToPrep = null,
+  calculate = null, returnToPrep = null, submit = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
@@ -187,7 +189,7 @@ export default function PayrollAdminOverview({
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
         <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} returnToPrep={returnToPrep} />
         <div className="space-y-2">
-          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} />
+          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} submit={submit} />
           <ChecklistCard view={view} />
           <PayPeriodInfoCard view={view} />
         </div>
@@ -274,6 +276,7 @@ function badgeToneFor(status: string | null): string {
     case "PREPARED":  return "bg-[#dcfce7] text-[#166534]";
     case "CALCULATED":
     case "SUBMITTED_FOR_APPROVAL": return "bg-[#e0f2fe] text-[#075985]";
+    case "RETURNED_FOR_CORRECTION": return "bg-[#fef3c7] text-[#92400e]";
     case "APPROVED":  return "bg-[#dcfce7] text-[#166534]";
     case "POSTED":    return "bg-stone-200 text-stone-700";
     case "VOIDED":    return "bg-stone-200 text-stone-500";
@@ -583,6 +586,28 @@ function EmployeesTabContent({ view, prepare, review, returnToPrep }: {
           payPeriodId={payPeriodId}
           payGroupId={payGroupId}
           batchId={batchId}
+        />
+      ) : null}
+      {view.hasBatch && batchStatus === "SUBMITTED_FOR_APPROVAL" ? (
+        <SubmittedForApprovalBanner
+          submittedAtISO={view.batch?.submittedAt ?? null}
+          submittedByDisplayName={view.batch?.submittedByDisplayName ?? null}
+          calculationVersion={view.batch?.calculationVersion ?? null}
+        />
+      ) : null}
+      {view.hasBatch && batchStatus === "RETURNED_FOR_CORRECTION" ? (
+        <ReturnedForCorrectionBanner
+          returnedAtISO={view.batch?.returnedAt ?? null}
+          returnedByDisplayName={view.batch?.returnedByDisplayName ?? null}
+          returnReason={view.batch?.returnReason ?? null}
+          calculationVersion={view.batch?.calculationVersion ?? null}
+        />
+      ) : null}
+      {view.hasBatch && batchStatus === "APPROVED" ? (
+        <ApprovedBanner
+          approvedAtISO={view.batch?.approvedAt ?? null}
+          approvedByDisplayName={view.batch?.approvedByDisplayName ?? null}
+          calculationVersion={view.batch?.calculationVersion ?? null}
         />
       ) : null}
       <FilterBar view={view} />
@@ -1464,6 +1489,90 @@ function CalculatedPayrollReviewBanner({
   );
 }
 
+// Slice 3E (2026-09-12) — lifecycle banners for SUBMITTED_FOR_APPROVAL,
+// RETURNED_FOR_CORRECTION, and APPROVED.
+function SubmittedForApprovalBanner({ submittedAtISO, submittedByDisplayName, calculationVersion }: {
+  submittedAtISO: string | null;
+  submittedByDisplayName: string | null;
+  calculationVersion: number | null;
+}) {
+  const at = submittedAtISO ? new Date(submittedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
+  const v = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
+  return (
+    <div
+      className="px-6 py-2.5 flex items-center justify-between gap-3 border-b border-stone-100 bg-[#eff6ff]"
+      data-testid="payroll-admin-submitted-banner"
+      data-state="submitted-for-approval"
+    >
+      <div className="flex items-center gap-3">
+        <ClockIcon className="h-4 w-4 text-[#1e40af]" />
+        <div>
+          <p className="text-[12.5px] font-semibold text-stone-800">Awaiting Controller Approval{v}</p>
+          <p className="text-[11.5px] text-stone-500">
+            Submitted{submittedByDisplayName ? ` by ${submittedByDisplayName}` : ""}{at ? ` at ${at}` : ""}. The Controller has been notified via Work Intake.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReturnedForCorrectionBanner({ returnedAtISO, returnedByDisplayName, returnReason, calculationVersion }: {
+  returnedAtISO: string | null;
+  returnedByDisplayName: string | null;
+  returnReason: string | null;
+  calculationVersion: number | null;
+}) {
+  const at = returnedAtISO ? new Date(returnedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
+  const v = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
+  return (
+    <div
+      className="px-6 py-2.5 flex items-start justify-between gap-3 border-b border-stone-100 bg-[#fef3c7]"
+      data-testid="payroll-admin-returned-banner"
+      data-state="returned-for-correction"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangleIcon className="h-4 w-4 text-[#92400e] mt-0.5" />
+        <div>
+          <p className="text-[12.5px] font-semibold text-stone-800">Returned for Correction{v}</p>
+          <p className="text-[11.5px] text-stone-600">
+            Returned{returnedByDisplayName ? ` by ${returnedByDisplayName}` : ""}{at ? ` at ${at}` : ""}.
+          </p>
+          {returnReason ? (
+            <p className="text-[12px] text-stone-700 mt-0.5"><span className="font-semibold">Reason:</span> {returnReason}</p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApprovedBanner({ approvedAtISO, approvedByDisplayName, calculationVersion }: {
+  approvedAtISO: string | null;
+  approvedByDisplayName: string | null;
+  calculationVersion: number | null;
+}) {
+  const at = approvedAtISO ? new Date(approvedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
+  const v = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
+  return (
+    <div
+      className="px-6 py-2.5 flex items-center justify-between gap-3 border-b border-stone-100 bg-[#f0fdf4]"
+      data-testid="payroll-admin-approved-banner"
+      data-state="approved"
+    >
+      <div className="flex items-center gap-3">
+        <CheckCircleIcon className="h-4 w-4 text-[#166534]" />
+        <div>
+          <p className="text-[12.5px] font-semibold text-stone-800">Approved{v}</p>
+          <p className="text-[11.5px] text-stone-500">
+            Approved{approvedByDisplayName ? ` by ${approvedByDisplayName}` : ""}{at ? ` at ${at}` : ""}. Posting is a later slice (3F).
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Slice 3D (2026-09-12) — Return-to-Preparation control. Uses a
 // details/summary for the inline reason prompt so the confirmation
 // stays inside the Employees tab shell (no modal, no route change).
@@ -1842,10 +1951,17 @@ function PageBtn({ children, active, disabled, onClick }: { children: ReactNode;
 /* ============================================================
    REGION 5 — PAYROLL ACTIONS (visual only in 3A)
    ============================================================ */
-function ActionsCard({ view, calculate, returnToPrep }: {
+// Slice 3E (2026-09-12) — Submit for Approval control bundle.
+export interface SubmitControls {
+  action: (formData: FormData) => Promise<void>;
+  canSubmit: boolean;
+}
+
+function ActionsCard({ view, calculate, returnToPrep, submit }: {
   view: PayrollOverviewViewModel;
   calculate: CalculateControls | null;
   returnToPrep: ReturnControls | null;
+  submit: SubmitControls | null;
 }) {
   // Slice 3B: Resolve Exceptions activates the Exceptions tab
   // (in-place navigation via ?tab=exceptions). View Time Approvals
@@ -1895,25 +2011,181 @@ function ActionsCard({ view, calculate, returnToPrep }: {
           disabledTitle="Prepare a payroll batch to see approvals"
           targetTab="approvals" />
 
-        {batchStatus === "CALCULATED" && showReturnButton && returnToPrep && view.payPeriod && view.batch ? (
-          <ReturnToPreparationSidebarButton
-            action={returnToPrep.action}
-            payPeriodId={view.payPeriod.id}
-            payGroupId={view.payGroup?.id ?? ""}
-            batchId={view.batch.id}
-          />
-        ) : canCalculatePrimary && calculate && view.batch && view.payPeriod ? (
-          <form action={calculate.action}>
-            <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
-            <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
-            <input type="hidden" name="batchId" value={view.batch.id} />
-            <CalculateSubmitButton />
-          </form>
-        ) : (
-          <CalculateDisabledButton readiness={readiness} batchStatus={batchStatus} />
-        )}
+        {(() => {
+          const calcAtt = view.reviewAttestations.find((r) => r.dimension === "CALCULATED_PAYROLL");
+          const submitReady =
+            submit?.canSubmit === true &&
+            batchStatus === "CALCULATED" &&
+            calcAtt?.isCurrent === true &&
+            view.payPeriod && view.batch;
+          const isSubmitted = batchStatus === "SUBMITTED_FOR_APPROVAL";
+          const isReturned  = batchStatus === "RETURNED_FOR_CORRECTION";
+          const isApproved  = batchStatus === "APPROVED";
+          const isPosted    = batchStatus === "POSTED";
+          if (isPosted) {
+            return <PostedStatusButton />;
+          }
+          if (isApproved) {
+            return <ApprovedStatusButton />;
+          }
+          if (isSubmitted) {
+            return <AwaitingApprovalStatusButton submittedByDisplayName={view.batch?.submittedByDisplayName ?? null} />;
+          }
+          if (isReturned && showReturnButton && returnToPrep && view.payPeriod && view.batch) {
+            return (
+              <ReturnedForCorrectionActionButton
+                action={returnToPrep.action}
+                payPeriodId={view.payPeriod.id}
+                payGroupId={view.payGroup?.id ?? ""}
+                batchId={view.batch.id}
+              />
+            );
+          }
+          if (submitReady && submit && view.payPeriod && view.batch) {
+            return (
+              <form action={submit.action}>
+                <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
+                <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
+                <input type="hidden" name="batchId" value={view.batch.id} />
+                <SubmitForApprovalButton />
+              </form>
+            );
+          }
+          if (batchStatus === "CALCULATED" && showReturnButton && returnToPrep && view.payPeriod && view.batch) {
+            return (
+              <ReturnToPreparationSidebarButton
+                action={returnToPrep.action}
+                payPeriodId={view.payPeriod.id}
+                payGroupId={view.payGroup?.id ?? ""}
+                batchId={view.batch.id}
+              />
+            );
+          }
+          if (canCalculatePrimary && calculate && view.batch && view.payPeriod) {
+            return (
+              <form action={calculate.action}>
+                <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
+                <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
+                <input type="hidden" name="batchId" value={view.batch.id} />
+                <CalculateSubmitButton />
+              </form>
+            );
+          }
+          return <CalculateDisabledButton readiness={readiness} batchStatus={batchStatus} />;
+        })()}
       </div>
     </section>
+  );
+}
+
+function SubmitForApprovalButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid="payroll-admin-submit-for-approval"
+      data-pending={pending ? "true" : "false"}
+      className={
+        "w-full inline-flex items-center justify-between rounded-md text-white px-3.5 py-1.5 text-[13px] font-medium " +
+        (pending ? "bg-[#1e40af]/70 cursor-wait" : "bg-[#1e40af] hover:bg-[#1e3a8a]")
+      }
+    >
+      <span className="inline-flex items-center gap-2">
+        {pending ? <SpinnerIcon className="h-4 w-4" /> : <ArrowRight className="h-4 w-4" />}
+        {pending ? "Submitting…" : "Submit for Approval"}
+      </span>
+      {!pending ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+    </button>
+  );
+}
+
+function AwaitingApprovalStatusButton({ submittedByDisplayName }: { submittedByDisplayName: string | null }) {
+  return (
+    <div
+      className="w-full inline-flex items-center justify-between rounded-md bg-[#eff6ff] border border-[#bfdbfe] text-[#1e40af] px-3.5 py-1.5 text-[13px] font-medium"
+      data-testid="payroll-admin-status-awaiting-controller"
+    >
+      <span className="inline-flex items-center gap-2">
+        <ClockIcon className="h-4 w-4" />
+        Awaiting Controller Approval
+      </span>
+      {submittedByDisplayName ? <span className="text-[11px] text-[#1e40af]/70">by {submittedByDisplayName}</span> : null}
+    </div>
+  );
+}
+
+function ApprovedStatusButton() {
+  return (
+    <div
+      className="w-full inline-flex items-center justify-between rounded-md bg-[#f0fdf4] border border-[#bbf7d0] text-[#166534] px-3.5 py-1.5 text-[13px] font-medium"
+      data-testid="payroll-admin-status-approved"
+    >
+      <span className="inline-flex items-center gap-2">
+        <CheckCircleIcon className="h-4 w-4" />
+        Approved · Ready for Posting
+      </span>
+      <span className="text-[11px] text-[#166534]/70">Step 8 in 3F</span>
+    </div>
+  );
+}
+
+function PostedStatusButton() {
+  return (
+    <div
+      className="w-full inline-flex items-center justify-between rounded-md bg-stone-100 border border-stone-200 text-stone-700 px-3.5 py-1.5 text-[13px] font-medium"
+      data-testid="payroll-admin-status-posted"
+    >
+      <span className="inline-flex items-center gap-2">
+        <CheckCircleIcon className="h-4 w-4" />
+        Posted
+      </span>
+    </div>
+  );
+}
+
+function ReturnedForCorrectionActionButton({ action, payPeriodId, payGroupId, batchId }: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+}) {
+  return (
+    <details className="relative" data-testid="payroll-admin-actions-reopen-for-correction">
+      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md bg-[#d97706] text-white hover:bg-[#b45309] px-3.5 py-1.5 text-[13px] font-medium">
+        <span className="inline-flex items-center gap-2"><RefreshIcon className="h-4 w-4" /> Reopen for correction</span>
+        <ArrowRight className="h-3.5 w-3.5" />
+      </summary>
+      <div className="absolute right-0 top-full mt-1 z-10 w-[320px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-actions-reopen-panel">
+        <form action={action} className="space-y-2">
+          <input type="hidden" name="payPeriodId" value={payPeriodId} />
+          <input type="hidden" name="payGroupId" value={payGroupId} />
+          <input type="hidden" name="batchId" value={batchId} />
+          <p className="text-[11.5px] text-stone-500 leading-snug">
+            Move this payroll back into PREPARED for a batch-local edit
+            (add/remove a one-time adjustment). The frozen employee inputs
+            captured at Prepare are kept — void and re-Prepare if HR data
+            changed.
+          </p>
+          <div>
+            <label htmlFor="reopen-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
+            <input
+              id="reopen-reason"
+              name="reason"
+              type="text"
+              required
+              maxLength={240}
+              placeholder="e.g. adjusting bonus after Controller review"
+              className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
+            />
+          </div>
+          <div className="flex items-center justify-end">
+            <button type="submit" data-testid="payroll-admin-actions-reopen-submit" className="inline-flex items-center gap-1 rounded-md bg-[#dc2626] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#b91c1c]">Return to Preparation</button>
+          </div>
+        </form>
+      </div>
+    </details>
   );
 }
 

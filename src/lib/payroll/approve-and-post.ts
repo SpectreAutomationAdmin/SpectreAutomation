@@ -97,17 +97,64 @@ function sumDec(rows: Array<Record<string, unknown>>, field: string): Prisma.Dec
 }
 
 // ---------------------------------------------------------------------
-// Approve — CALCULATED → APPROVED.
+// Approve — SUBMITTED_FOR_APPROVAL → APPROVED.
 //
-// Segregation-of-duties (§30): the approver's principal.id must not
-// match the batch's preparedByUserId. A single user MAY still
-// prepare and approve if RBAC lets them (small-club convenience),
-// but we surface a distinct audit event so it's visible on the
-// batch history.
+// Payroll Admin Slice 3E (2026-09-12): approve is now the Controller's
+// deliberate act on a SUBMITTED_FOR_APPROVAL batch. The prior CALCULATED
+// branch is closed — Payroll Admin must Submit first (see
+// submit-payroll-batch.ts). New guards (§13-15, §26-29):
+//
+//   • Refuses non-SUBMITTED_FOR_APPROVAL states (idempotent on
+//     APPROVED/POSTED only when same-actor re-hits).
+//   • CAS on (id, status="SUBMITTED_FOR_APPROVAL",
+//     calculationVersion=expectedVersion, submittedAt=expectedSubmitted).
+//   • Optional expectedCalculationVersion pin — the Controller's
+//     review surface passes the version they reviewed; a stale v1
+//     approval against a resubmitted v2 batch refuses.
+//   • Segregation of duties (§25, §43): the submitter (submittedByUserId)
+//     MUST NOT be the approver. SUPER_ADMIN / founder does NOT bypass —
+//     if the same user submitted and would approve, refuse.
+//   • Closes the Controller PAYROLL_FINAL_APPROVAL card on success.
 // ---------------------------------------------------------------------
+export class ApproveConcurrencyConflictError extends Error {
+  readonly code = "PAYROLL_APPROVE_CONCURRENCY_CONFLICT";
+  readonly batchId: string;
+  readonly expectedStatus: string;
+  readonly expectedVersion: number;
+  constructor(batchId: string, expectedStatus: string, expectedVersion: number) {
+    super(
+      `Concurrent Approve detected on batch ${batchId}: expected status=${expectedStatus} version=${expectedVersion} ` +
+        "but the row changed under the transaction. Reload the batch and retry.",
+    );
+    this.batchId = batchId;
+    this.expectedStatus = expectedStatus;
+    this.expectedVersion = expectedVersion;
+  }
+}
+
+export class ApproveSegregationOfDutiesError extends Error {
+  readonly code = "PAYROLL_APPROVE_SOD_REFUSED";
+  readonly batchId: string;
+  readonly actorUserId: string;
+  constructor(batchId: string, actorUserId: string) {
+    super(
+      `Approval refused: the user who submitted this payroll may not also approve it. batchId=${batchId}, actorUserId=${actorUserId}.`,
+    );
+    this.batchId = batchId;
+    this.actorUserId = actorUserId;
+  }
+}
+
+export interface ApprovePayrollBatchOptions {
+  /** Optional pin: the calculationVersion the Controller reviewed.
+   *  Refuses if the batch's current calculationVersion differs. */
+  expectedCalculationVersion?: number;
+}
+
 export async function approvePayrollBatch(
   principal: Principal,
   batchId: string,
+  options: ApprovePayrollBatchOptions = {},
 ): Promise<Awaited<ReturnType<typeof prisma.payrollBatch.findUnique>>> {
   const batch = await loadBatchOrThrow(principal, batchId);
   requirePermission(principal, batch.clubId, "payroll:approve");
@@ -118,33 +165,66 @@ export async function approvePayrollBatch(
     if (batch.approvedByUserId === principal.id) return batch;
     throw new ConflictError(`Batch is already ${batch.status.toLowerCase()}.`);
   }
-  if (batch.status !== "CALCULATED" && batch.status !== "SUBMITTED_FOR_APPROVAL") {
+  if (batch.status !== "SUBMITTED_FOR_APPROVAL") {
     throw new ConflictError(
-      `Batch must be CALCULATED before it can be approved; current status is ${batch.status}.`,
+      `Batch must be SUBMITTED_FOR_APPROVAL before it can be approved; current status is ${batch.status}.`,
     );
+  }
+  if (options.expectedCalculationVersion != null &&
+      batch.calculationVersion !== options.expectedCalculationVersion) {
+    throw new ConflictError(
+      `Approval refused: expected calculationVersion=${options.expectedCalculationVersion} but the batch is now v${batch.calculationVersion}. Reload and re-review.`,
+    );
+  }
+  if (batch.submittedByUserId && batch.submittedByUserId === principal.id) {
+    throw new ApproveSegregationOfDutiesError(batch.id, principal.id);
   }
 
   const now = new Date();
-  const updated = await prisma.payrollBatch.update({
-    where: { id: batch.id },
+  const gate = await prisma.payrollBatch.updateMany({
+    where: {
+      id: batch.id, clubId: batch.clubId,
+      status: "SUBMITTED_FOR_APPROVAL",
+      calculationVersion: batch.calculationVersion,
+      submittedByUserId: batch.submittedByUserId,
+    },
     data: {
       status: "APPROVED",
       approvedAt: now,
       approvedByUserId: principal.id,
     },
   });
+  if (gate.count !== 1) {
+    throw new ApproveConcurrencyConflictError(batch.id, "SUBMITTED_FOR_APPROVAL", batch.calculationVersion);
+  }
 
-  const sameActor = batch.preparedByUserId && batch.preparedByUserId === principal.id;
+  // Close the Controller's queue-side task on approve (mirror of
+  // Return's Controller-side close). Non-fatal on failure.
+  try {
+    const { resolveFinalApprovalItem: resolveFinal } = await import("./controller-work-intake");
+    await resolveFinal(batch.clubId, batch.id, principal.id,
+      `Payroll approved by Controller — batch ${batch.id} at calculationVersion ${batch.calculationVersion}.`);
+  } catch {
+    // Non-fatal — approval succeeded regardless.
+  }
+
+  const updated = await prisma.payrollBatch.findUnique({ where: { id: batch.id } });
+
   await audit(principal, {
     clubId: batch.clubId,
-    action: sameActor ? "payroll.batch.approve.same-actor" : "payroll.batch.approve",
+    action: "payroll.batch.controller-approve",
     entityType: PAYROLL_ENTITY,
     entityId: batch.id,
-    before: { status: batch.status },
+    before: {
+      status: "SUBMITTED_FOR_APPROVAL",
+      calculationVersion: batch.calculationVersion,
+      submittedByUserId: batch.submittedByUserId,
+    },
     after: {
       status: "APPROVED",
       approvedAt: now,
       preparedByUserId: batch.preparedByUserId,
+      submittedByUserId: batch.submittedByUserId,
       approvedByUserId: principal.id,
       calculationVersion: batch.calculationVersion,
       packageChecksum: batch.packageChecksum,

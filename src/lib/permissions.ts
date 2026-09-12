@@ -105,6 +105,7 @@ export const PERMISSIONS = {
   "payroll:prepare":           { name: "Prepare a payroll batch (draft inputs)", category: "PAYROLL" },
   "payroll:edit":              { name: "Edit payroll batch inputs while DRAFT/PREPARED", category: "PAYROLL" },
   "payroll:submit":            { name: "Submit a payroll batch to Controller for approval", category: "PAYROLL" },
+  "payroll:return":            { name: "Return a submitted payroll batch to the Payroll Admin for correction", category: "PAYROLL" },
   "payroll:post":              { name: "Post an approved payroll batch (finalise + accounting)", category: "PAYROLL" },
   "payroll:void":              { name: "Void a payroll batch (audited)",  category: "PAYROLL" },
   "payroll:paygroup:read":     { name: "Read payroll pay groups + periods", category: "PAYROLL" },
@@ -336,7 +337,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hospitality:floor:view", "hospitality:floor:edit", "hospitality:floor:publish",
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
-    "payroll:run", "payroll:approve",
+    "payroll:run", "payroll:approve", "payroll:return",
     // Payroll-3A — CLUB_ADMIN holds every canonical Payroll-3A key
     // EXCEPT payroll:post (finalisation is Controller-only per §31).
     "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void",
@@ -466,11 +467,14 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hospitality:floor:view", "hospitality:floor:edit", "hospitality:floor:publish",
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
-    "payroll:run", "payroll:approve",
+    "payroll:run", "payroll:approve", "payroll:return",
     // Payroll-3A — Controller holds READ + APPROVE + POST only.
     // Preparation / editing / submission are deliberately separate
     // (Payroll admin owns those). Controller never gains SIN/banking
     // reveal via payroll approval per §31.
+    // Payroll 3E — `payroll:return` allows the Controller to send a
+    // SUBMITTED_FOR_APPROVAL batch back to the Payroll Admin with a
+    // reason instead of approving it.
     "payroll:paygroup:read", "payroll:config:read",
     "payroll:post",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",

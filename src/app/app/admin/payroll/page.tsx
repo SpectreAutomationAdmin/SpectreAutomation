@@ -32,6 +32,7 @@ import {
 } from "./_adjustment-actions";
 import { attestBatchReviewAction } from "./_review-actions";
 import { calculatePayrollAction, returnToPreparationAction } from "./_calculate-action";
+import { submitPayrollAction } from "./_submit-return-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -110,6 +111,10 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
       returnToPrep={{
         action: returnToPreparationAction,
         canReturn: canEditAdjustments,
+      }}
+      submit={{
+        action: submitPayrollAction,
+        canSubmit: hasPermission(principal, clubId, "payroll:submit"),
       }}
     />
   );

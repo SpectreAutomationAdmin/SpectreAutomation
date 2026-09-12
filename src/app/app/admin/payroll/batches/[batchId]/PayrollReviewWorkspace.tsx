@@ -371,28 +371,42 @@ export default function PayrollReviewWorkspace({ clubId, review }: Props) {
       )}
 
       {/* Final approval + posting action block (Payroll MVP) */}
-      <ApproveAndPostActions clubId={clubId} batchId={review.header.batchId} status={review.header.status} glJournalEntryId={review.header.glJournalEntryId ?? null} />
+      <ApproveAndPostActions
+        clubId={clubId}
+        batchId={review.header.batchId}
+        status={review.header.status}
+        glJournalEntryId={review.header.glJournalEntryId ?? null}
+        calculationVersion={(review.header as unknown as { calculationVersion?: number }).calculationVersion ?? null}
+      />
     </div>
   );
 }
 
 function ApproveAndPostActions({
-  clubId, batchId, status, glJournalEntryId,
+  clubId, batchId, status, glJournalEntryId, calculationVersion,
 }: {
   clubId: string; batchId: string; status: string; glJournalEntryId: string | null;
+  calculationVersion?: number | null;
 }) {
   const router = useRouter();
-  const [busy, setBusy] = useState<"approve" | "post" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "post" | "return" | null>(null);
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string; jeId?: string; totalDebits?: string; totalCredits?: string } | null>(null);
+  const [returnReason, setReturnReason] = useState("");
+  const [showReturnPanel, setShowReturnPanel] = useState(false);
 
   async function approve() {
-    if (!confirm("Approve this payroll batch? This authorises posting to the general ledger.")) return;
+    if (!confirm("Approve this payroll batch? This locks in the calculated result. Posting is a separate step in a later slice.")) return;
     setBanner(null); setBusy("approve");
     try {
-      const res = await fetch(`/api/clubs/${clubId}/payroll/batches/${batchId}/approve`, { method: "POST" });
+      const body = calculationVersion != null ? JSON.stringify({ expectedCalculationVersion: calculationVersion }) : undefined;
+      const res = await fetch(`/api/clubs/${clubId}/payroll/batches/${batchId}/approve`, {
+        method: "POST",
+        headers: body ? { "content-type": "application/json" } : undefined,
+        body,
+      });
       const j = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) { setBanner({ tone: "error", text: j.error ?? `Approve failed (HTTP ${res.status})` }); return; }
-      setBanner({ tone: "success", text: "Payroll approved. You can now post to the general ledger." });
+      setBanner({ tone: "success", text: "Payroll approved." });
       router.refresh();
     } finally { setBusy(null); }
   }
@@ -411,8 +425,25 @@ function ApproveAndPostActions({
       router.refresh();
     } finally { setBusy(null); }
   }
+  async function returnForCorrection() {
+    const trimmed = returnReason.trim();
+    if (!trimmed) { setBanner({ tone: "error", text: "Return reason is required." }); return; }
+    setBanner(null); setBusy("return");
+    try {
+      const res = await fetch(`/api/clubs/${clubId}/payroll/batches/${batchId}/return`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: trimmed }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) { setBanner({ tone: "error", text: j.error ?? `Return failed (HTTP ${res.status})` }); return; }
+      setBanner({ tone: "success", text: "Payroll returned to Payroll Admin for correction." });
+      setShowReturnPanel(false); setReturnReason("");
+      router.refresh();
+    } finally { setBusy(null); }
+  }
 
-  const isCalculated = status === "CALCULATED" || status === "SUBMITTED_FOR_APPROVAL";
+  const isSubmitted  = status === "SUBMITTED_FOR_APPROVAL";
   const isApproved   = status === "APPROVED";
   const isPosted     = status === "POSTED";
 
@@ -444,11 +475,21 @@ function ApproveAndPostActions({
           type="button"
           className="btn btn-primary btn-sm"
           onClick={approve}
-          disabled={!isCalculated || busy !== null}
+          disabled={!isSubmitted || busy !== null}
           data-testid="review-approve-btn"
-          style={{ opacity: !isCalculated ? 0.5 : 1 }}
+          style={{ opacity: !isSubmitted ? 0.5 : 1 }}
         >
           {busy === "approve" ? "Approving…" : "Approve payroll"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={() => setShowReturnPanel((v) => !v)}
+          disabled={!isSubmitted || busy !== null}
+          data-testid="review-return-open-btn"
+          style={{ opacity: !isSubmitted ? 0.5 : 1 }}
+        >
+          Return for correction
         </button>
         <button
           type="button"
@@ -475,10 +516,53 @@ function ApproveAndPostActions({
           >View pay statements</a>
         ) : null}
       </div>
+      {showReturnPanel ? (
+        <div
+          className="mt-3 rounded-md border p-3"
+          style={{ borderColor: "var(--spectre-border-muted)", background: "#fef3c7" }}
+          data-testid="review-return-panel"
+        >
+          <label htmlFor="review-return-reason" className="block text-xs font-semibold text-stone-700 mb-1">
+            Return reason (required)
+          </label>
+          <textarea
+            id="review-return-reason"
+            data-testid="review-return-reason"
+            value={returnReason}
+            onChange={(e) => setReturnReason(e.target.value)}
+            rows={2}
+            maxLength={500}
+            placeholder="e.g. Verify Riley's one-time bonus."
+            className="w-full rounded border border-stone-300 bg-white text-sm px-2 py-1"
+          />
+          <p className="mt-1 text-[11px] text-stone-600">
+            The Payroll Admin will receive a Work Intake task with this reason. Their calculated-payroll
+            review will be invalidated so they must re-review after correcting.
+          </p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setShowReturnPanel(false); setReturnReason(""); }}
+              disabled={busy !== null}
+            >Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={returnForCorrection}
+              disabled={busy !== null || returnReason.trim().length === 0}
+              data-testid="review-return-submit-btn"
+              style={{ background: "#b91c1c" }}
+            >
+              {busy === "return" ? "Returning…" : "Return for correction"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <p className="mt-3 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
-        Segregation of duties: the user who prepared this batch may not be its final approver
-        (a same-actor approval is recorded distinctly in the audit trail). Posting writes a
-        balanced GL journal — payment transmission is not enabled in this build.
+        Segregation of duties (§25): the user who submitted this payroll may not also approve it.
+        Approval requires SUBMITTED_FOR_APPROVAL. Posting to the general ledger is a later slice
+        (3F) and remains disabled here until then.
       </p>
     </section>
   );

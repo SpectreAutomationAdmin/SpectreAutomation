@@ -145,13 +145,19 @@ async function seedCalculatedBatch(opts: {
     },
   });
 
+  // Payroll 3E (2026-09-12): approvePayrollBatch now requires
+  // SUBMITTED_FOR_APPROVAL. Seed the batch with a submitter (raelene)
+  // so Chris — the Controller/approver — is a distinct actor and the
+  // segregation-of-duties gate lets him approve.
   const batch = await c.payrollBatch.create({
     data: {
       clubId: club.id, payGroupId: pg.id, payPeriodId: pp.id,
-      sequence: 1, status: "CALCULATED",
+      sequence: 1, status: "SUBMITTED_FOR_APPROVAL",
       calculatedAt: new Date(),
       calculationVersion: 1,
       algorithmVersion: "spectre-payroll-test-1",
+      submittedAt: new Date(),
+      submittedByUserId: raelene.id,
     },
   });
   // One "salaried" employee row with persisted calculation columns.
