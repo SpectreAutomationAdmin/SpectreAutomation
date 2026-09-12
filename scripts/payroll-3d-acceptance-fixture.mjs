@@ -162,8 +162,8 @@ async function main() {
     await prisma.employeeCompensation.create({
       data: {
         clubId: COULEE, employeeId: sam.id, assignmentId: samAssignmentId,
-        payType: "SALARY", annualSalary: "52000.00",
-        effectiveFrom: SAM_HIRE,
+        cadence: "SALARY", rate: "52000.00",
+        effectiveFrom: SAM_HIRE, currency: "CAD",
       },
     });
     console.log(`  + Created Sam SALARY $52,000/yr compensation`);
