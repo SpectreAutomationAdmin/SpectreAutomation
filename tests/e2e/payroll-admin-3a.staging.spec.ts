@@ -66,13 +66,17 @@ test.describe.serial("Payroll Admin 3A — staging", () => {
     expect(leaked, `forbidden fixtures leaked: ${leaked.join(", ")}`).toEqual([]);
   });
 
-  test("D. Change Period + Export disabled + Payroll Actions disabled", async ({ context }) => {
+  test("D. Change Period + Export disabled + future-slice Payroll Actions still disabled", async ({ context }) => {
+    // Slice 3B activated Resolve Exceptions + View Time Approvals
+    // (when a batch exists). The three future-slice actions —
+    // Add One-Time Adjustment, Manage Recurring Components, and
+    // Calculate Payroll — remain disabled until 3C/3D own them.
     const page = await loginAsFounder(context);
     await page.goto(`${STAGING}/app/admin/payroll`, { waitUntil: "networkidle" });
     await expect(page.getByTestId("payroll-admin-change-period")).toBeVisible();
     await expect(page.getByTestId("payroll-admin-export")).toBeDisabled();
     const disabledActionCount = await page.getByTestId("payroll-admin-actions").locator("button[disabled]").count();
-    expect(disabledActionCount).toBeGreaterThanOrEqual(5);
+    expect(disabledActionCount).toBeGreaterThanOrEqual(3);
   });
 
   test("E. Filter bar + search URL echo", async ({ context }) => {
