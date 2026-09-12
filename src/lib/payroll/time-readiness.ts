@@ -76,15 +76,38 @@ export interface TimeReadiness {
   allImported: boolean;
 
   // Derived: is every reviewable department APPROVED + FROZEN?
+  // Retained for the pre-existing consumer that gates Calculate
+  // readiness — this asks the STRONGER question ("frozen and ready
+  // for payroll consumption"). NOT the checklist / Step-3 gate.
   allApproved: boolean;
+
+  // 3B semantics-hotfix (2026-09-12) — split department-approval
+  // progress from payroll-freeze progress. These are two governance
+  // gates in the founder-mandated two-gate flow (Manager review →
+  // Payroll Admin freeze) and MUST NEVER be conflated.
+  //
+  // Department-approval scope: state is APPROVED_UNFROZEN or FROZEN
+  // (a manager has attested to the current revision + scope version).
+  // A REOPENED or NEEDS_ATTENTION scope is NOT approved.
+  //
+  // Freeze scope: state is FROZEN (the Payroll Admin has clicked
+  // Freeze and PayrollApprovedTimeEntry rows exist).
+  allDepartmentApproved: boolean;
+  allFrozen: boolean;
 
   // Roll-up counts (convenience for view + checklist).
   scopeCount: number;
-  approvedScopeCount: number;
-  frozenScopeCount: number;
-  pendingScopeCount: number;
-  reopenedScopeCount: number;
-  needsAttentionScopeCount: number;
+  approvedScopeCount: number;              // legacy: FROZEN + APPROVED_UNFROZEN
+  frozenScopeCount: number;                // FROZEN only
+  pendingScopeCount: number;               // PENDING only
+  reopenedScopeCount: number;              // REOPENED only
+  needsAttentionScopeCount: number;        // NEEDS_ATTENTION only
+
+  // 3B semantics-hotfix — named counts matching the two-gate flow.
+  departmentApprovedScopeCount: number;    // valid current Manager approval (APPROVED_UNFROZEN | FROZEN)
+  departmentPendingScopeCount: number;     // Manager approval still needed (PENDING | NEEDS_ATTENTION | REOPENED)
+  awaitingFreezeScopeCount: number;        // Manager approved but Payroll Admin hasn't clicked Freeze (APPROVED_UNFROZEN)
+  payrollFrozenScopeCount: number;         // Payroll Admin has frozen (FROZEN) — alias of frozenScopeCount for clarity
 }
 
 function stateLabelFor(state: TimeReadinessState): string {
@@ -281,6 +304,10 @@ export async function getTimeReadiness(
   const pendingScopeCount  = scopes.filter((s) => s.state === "PENDING").length;
   const reopenedScopeCount = scopes.filter((s) => s.state === "REOPENED").length;
   const needsAttentionScopeCount = scopes.filter((s) => s.state === "NEEDS_ATTENTION").length;
+  const departmentApprovedScopeCount = approvedScopeCount;
+  const departmentPendingScopeCount  = pendingScopeCount + reopenedScopeCount + needsAttentionScopeCount;
+  const awaitingFreezeScopeCount     = scopes.filter((s) => s.state === "APPROVED_UNFROZEN").length;
+  const payrollFrozenScopeCount      = frozenScopeCount;
 
   //   All imported:
   //   - No open sessions (needsAttentionTimesheetCount === 0)
@@ -291,11 +318,23 @@ export async function getTimeReadiness(
     nullAssignmentEntryCount === 0 &&
     (timesheetEntryCount > 0 || clockEventCount === 0);
 
-  //   All approved: every reviewable department is FROZEN, and there
-  //   are no lingering REOPENED / PENDING / NEEDS_ATTENTION scopes.
+  //   All approved (STRONG — every scope is FROZEN):
+  //   used only by legacy callers gating Calculate-readiness.
   const allApproved =
     scopes.length === 0 ||
     (frozenScopeCount === scopes.length && scopes.every((s) => s.state === "FROZEN"));
+
+  //   3B semantics-hotfix:
+  //   - allDepartmentApproved: every scope has a valid current Manager
+  //     approval (APPROVED_UNFROZEN or FROZEN). This is what the
+  //     Approvals tab count, workflow Step 3, and checklist item 2
+  //     mean when they say "Department head approvals".
+  //   - allFrozen: every scope has been frozen by Payroll Admin. This
+  //     is the separate Calculate-readiness prerequisite.
+  const allDepartmentApproved =
+    scopes.length === 0 || departmentApprovedScopeCount === scopes.length;
+  const allFrozen =
+    scopes.length === 0 || payrollFrozenScopeCount === scopes.length;
 
   return {
     scopes,
@@ -308,12 +347,18 @@ export async function getTimeReadiness(
     nullAssignmentEntryCount,
     allImported,
     allApproved,
+    allDepartmentApproved,
+    allFrozen,
     scopeCount: scopes.length,
     approvedScopeCount,
     frozenScopeCount,
     pendingScopeCount,
     reopenedScopeCount,
     needsAttentionScopeCount,
+    departmentApprovedScopeCount,
+    departmentPendingScopeCount,
+    awaitingFreezeScopeCount,
+    payrollFrozenScopeCount,
   };
 }
 
@@ -355,11 +400,17 @@ function emptyReadiness(): TimeReadiness {
     nullAssignmentEntryCount: 0,
     allImported: true,
     allApproved: true,
+    allDepartmentApproved: true,
+    allFrozen: true,
     scopeCount: 0,
     approvedScopeCount: 0,
     frozenScopeCount: 0,
     pendingScopeCount: 0,
     reopenedScopeCount: 0,
     needsAttentionScopeCount: 0,
+    departmentApprovedScopeCount: 0,
+    departmentPendingScopeCount: 0,
+    awaitingFreezeScopeCount: 0,
+    payrollFrozenScopeCount: 0,
   };
 }

@@ -23,6 +23,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { buildPayrollOverview } from "@/lib/payroll/overview-view";
 import PayrollAdminOverview from "@/components/payroll/PayrollAdminOverview";
 import { preparePayrollAction } from "./_prepare-action";
+import { freezeScopeFromOverviewAction } from "./_freeze-scope-action";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,10 +72,12 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
   });
 
   const canPrepare = hasPermission(principal, clubId, "payroll:run");
+  const canFreeze  = hasPermission(principal, clubId, "payroll:write");
   return (
     <PayrollAdminOverview
       view={view}
       prepare={{ action: preparePayrollAction, canPrepare }}
+      freeze={{ action: freezeScopeFromOverviewAction, canFreeze }}
     />
   );
 }

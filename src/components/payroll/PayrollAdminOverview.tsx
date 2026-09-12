@@ -168,15 +168,16 @@ const STATUS_LABELS: Record<string, string> = {
 export interface PayrollAdminOverviewProps {
   view: PayrollOverviewViewModel;
   prepare?: PrepareControls | null;
+  freeze?: FreezeControls | null;
 }
 
-export default function PayrollAdminOverview({ view, prepare = null }: PayrollAdminOverviewProps) {
+export default function PayrollAdminOverview({ view, prepare = null, freeze = null }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
       <Header view={view} prepare={prepare} />
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <Workspace view={view} prepare={prepare} />
+        <Workspace view={view} prepare={prepare} freeze={freeze} />
         <div className="space-y-2">
           <ActionsCard view={view} />
           <ChecklistCard view={view} />
@@ -401,6 +402,14 @@ export interface PrepareControls {
   canPrepare: boolean;
 }
 
+// 3B semantics-hotfix (2026-09-12) — Freeze server-action bundle,
+// passed into the Approvals tab so an APPROVED_UNFROZEN scope can
+// be frozen without navigating away to /app/admin/payroll/process.
+export interface FreezeControls {
+  action: (formData: FormData) => Promise<void>;
+  canFreeze: boolean;
+}
+
 // Prepare Payroll submit control — MUST live inside the <form action=…>
 // so `useFormStatus` can read the pending state of the surrounding
 // server-action submission. While the server action runs (network
@@ -434,14 +443,14 @@ function PrepareSubmitButton() {
   );
 }
 
-function Workspace({ view, prepare }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null }) {
+function Workspace({ view, prepare, freeze }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null; freeze: FreezeControls | null }) {
   const activeTab = view.activeTab;
   return (
     <section className="rounded-lg border border-stone-200 bg-white overflow-hidden" data-testid="payroll-admin-workspace">
       <WorkspaceTabs view={view} />
       {activeTab === "employees"   && <EmployeesTabContent view={view} prepare={prepare} />}
       {activeTab === "exceptions"  && <ExceptionsTabContent view={view} />}
-      {activeTab === "approvals"   && <ApprovalsTabContent view={view} />}
+      {activeTab === "approvals"   && <ApprovalsTabContent view={view} freeze={freeze} />}
       {activeTab === "adjustments" && <FutureTabContent label="Adjustments" note="Adjustments become functional in Payroll Admin 3C." />}
       {activeTab === "summary"     && <FutureTabContent label="Summary" note="Summary view becomes functional after Calculate." />}
     </section>
@@ -634,12 +643,20 @@ function ExceptionRow({ row }: { row: PayrollOverviewViewModel["exceptions"][num
   );
 }
 
-function ApprovalsTabContent({ view }: { view: PayrollOverviewViewModel }) {
-  // 3B acceptance hotfix (2026-09-12) — reviewable department time
-  // is surfaced independently of whether a payroll batch has been
-  // prepared. A manager may need to approve time BEFORE the Payroll
-  // Admin has clicked Prepare — the tab must show it either way.
+function ApprovalsTabContent({ view, freeze }: { view: PayrollOverviewViewModel; freeze: FreezeControls | null }) {
+  // 3B semantics-hotfix (2026-09-12) — the Approvals tab tracks TWO
+  // governance gates independently:
+  //   Gate 1 (Manager approval) : the tab-badge, workflow Step 3,
+  //     and checklist item 2 all report progress on THIS gate.
+  //   Gate 2 (Payroll Admin freeze) : each row's state pill +
+  //     the aggregate sub-caption below report progress on this
+  //     separately.
   const rows = view.approvals;
+  const approved = view.kpi.approvalsCompleteCount ?? 0;
+  const required = view.kpi.approvalsRequiredCount ?? 0;
+  const awaitingFreeze = view.kpi.awaitingFreezeScopeCount ?? 0;
+  const frozen        = view.kpi.payrollFrozenScopeCount ?? 0;
+
   if (rows.length === 0) {
     return (
       <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-approvals-empty">
@@ -652,6 +669,26 @@ function ApprovalsTabContent({ view }: { view: PayrollOverviewViewModel }) {
   }
   return (
     <div className="border-t border-stone-100" data-testid="payroll-admin-approvals-tab">
+      {/* Aggregate sub-caption — approval vs freeze progress as two
+          separate dimensions (§6). */}
+      <div className="px-6 py-2 flex items-center justify-between text-[12px] text-stone-600 bg-[#fbfaf7] border-b border-stone-100" data-testid="payroll-admin-approvals-aggregate">
+        <p>
+          <span className="font-semibold text-stone-800" data-testid="payroll-admin-approvals-aggregate-approved">{approved} approved</span>
+          {required > 0 ? <span className="text-stone-400"> of {required}</span> : null}
+          {awaitingFreeze > 0 ? (
+            <>
+              <span className="mx-2 text-stone-300">·</span>
+              <span data-testid="payroll-admin-approvals-aggregate-awaiting-freeze">{awaitingFreeze} awaiting freeze</span>
+            </>
+          ) : null}
+          {frozen > 0 ? (
+            <>
+              <span className="mx-2 text-stone-300">·</span>
+              <span data-testid="payroll-admin-approvals-aggregate-frozen">{frozen} frozen</span>
+            </>
+          ) : null}
+        </p>
+      </div>
       <table className="w-full text-[13px]">
         <thead>
           <tr className="text-left text-[12px] text-stone-500 bg-[#fbfaf7]">
@@ -675,15 +712,63 @@ function ApprovalsTabContent({ view }: { view: PayrollOverviewViewModel }) {
               <td className="py-1.5"><ApprovalPill state={r.state} label={r.stateLabel} /></td>
               <td className="py-1.5 text-stone-600 text-[12.5px]">{r.approvedAt ? new Date(r.approvedAt).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "—"}</td>
               <td className="py-1.5 pr-6">
-                <Link href={r.reviewHref} className="text-[#1e40af] inline-flex items-center gap-1 text-[13px]" data-testid={`payroll-admin-approval-review-${r.departmentId}`}>
-                  Review time <ArrowRight className="h-3 w-3" />
-                </Link>
+                <ApprovalRowAction row={r} freeze={freeze} periodId={view.payPeriod?.id ?? ""} />
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// 3B semantics-hotfix (2026-09-12) — per-row action selector. An
+// APPROVED_UNFROZEN scope gets an inline "Freeze into Payroll →"
+// server-action form (delegates to freezeApprovedScopeIntoPayroll —
+// the domain-canonical freeze service — the same one behind the
+// /app/admin/payroll/process page's Freeze button). Every other
+// state shows the existing "Review time →" deep-link into the
+// scope-version-safe workspace.
+function ApprovalRowAction({ row, freeze, periodId }: {
+  row: PayrollOverviewViewModel["approvals"][number];
+  freeze: FreezeControls | null;
+  periodId: string;
+}) {
+  const canFreeze = freeze?.canFreeze === true;
+  if (row.state === "APPROVED_UNFROZEN" && canFreeze && periodId) {
+    return (
+      <form action={freeze!.action} className="inline-flex">
+        <input type="hidden" name="payPeriodId"  value={periodId} />
+        <input type="hidden" name="departmentId" value={row.departmentId} />
+        <FreezeSubmitButton departmentId={row.departmentId} />
+      </form>
+    );
+  }
+  return (
+    <Link href={row.reviewHref} className="text-[#1e40af] inline-flex items-center gap-1 text-[13px]" data-testid={`payroll-admin-approval-review-${row.departmentId}`}>
+      Review time <ArrowRight className="h-3 w-3" />
+    </Link>
+  );
+}
+
+function FreezeSubmitButton({ departmentId }: { departmentId: string }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid={`payroll-admin-approval-freeze-${departmentId}`}
+      data-pending={pending ? "true" : "false"}
+      className={
+        "inline-flex items-center gap-1 rounded-md text-white px-2.5 py-1 text-[12.5px] font-medium " +
+        (pending ? "bg-[#0f5f3f]/70 cursor-wait" : "bg-[#0f5f3f] hover:bg-[#0d4f34]")
+      }
+    >
+      {pending ? <SpinnerIcon className="h-3 w-3" /> : null}
+      {pending ? "Freezing…" : "Freeze into Payroll"}
+      {!pending ? <ArrowRight className="h-3 w-3" /> : null}
+    </button>
   );
 }
 

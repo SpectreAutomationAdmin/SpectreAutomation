@@ -171,6 +171,12 @@ export interface PayrollOverviewViewModel {
     openSessionCount: number | null;
     nullAssignmentEntryCount: number | null;
     clockEventCount: number | null;
+    // 3B semantics-hotfix (2026-09-12) — freeze progress is a
+    // SEPARATE dimension from Department Head approval progress.
+    // These counts feed the Approvals tab's aggregate sub-caption
+    // and the Calculate readiness prerequisite (see below).
+    awaitingFreezeScopeCount: number | null;
+    payrollFrozenScopeCount: number | null;
   };
 
   // employee table population — after filters + search + pagination
@@ -575,10 +581,17 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     };
     noBatchChecklist[1] = {
       ...noBatchChecklist[1]!,
-      done: r.allApproved && r.scopeCount > 0,
+      // Department Head approvals — mirror the batched-path
+      // semantics: completes on the Manager-approval gate, not on
+      // Payroll Admin freeze.
+      done: r.allDepartmentApproved && r.scopeCount > 0,
       detail: r.scopeCount === 0
         ? "No departments to approve"
-        : `${r.frozenScopeCount}/${r.scopeCount} frozen · ${r.pendingScopeCount} pending${r.reopenedScopeCount > 0 ? ` · ${r.reopenedScopeCount} reopened` : ""}`,
+        : `${r.departmentApprovedScopeCount}/${r.scopeCount} approved${
+            r.departmentPendingScopeCount > 0 ? ` · ${r.departmentPendingScopeCount} pending` : ""
+          }${
+            r.reopenedScopeCount > 0 ? ` · ${r.reopenedScopeCount} reopened` : ""
+          }`,
     };
     return {
       payGroup: payGroupRef,
@@ -593,8 +606,10 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         openSessionCount: r.needsAttentionTimesheetCount,
         nullAssignmentEntryCount: r.nullAssignmentEntryCount,
         clockEventCount: r.clockEventCount,
-        approvalsCompleteCount: r.frozenScopeCount,
+        approvalsCompleteCount: r.departmentApprovedScopeCount,
         approvalsRequiredCount: r.scopeCount,
+        awaitingFreezeScopeCount: r.awaitingFreezeScopeCount,
+        payrollFrozenScopeCount: r.payrollFrozenScopeCount,
       },
       employeeTable: emptyEmployeeTable(page, pageSize),
       workflow: baseWorkflow(),
@@ -853,7 +868,11 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     approvedByDisplayName: null,
     reviewHref: s.reviewHref,
   }));
-  const approvalsCompleteCount = readiness.frozenScopeCount;
+  // 3B semantics-hotfix (2026-09-12) — Department Head approval
+  // progress. Numerator counts scopes with a VALID current manager
+  // approval (APPROVED_UNFROZEN or FROZEN), NOT scopes that a
+  // Payroll Admin has frozen. The two are separate gates.
+  const approvalsCompleteCount = readiness.departmentApprovedScopeCount;
   const approvalsRequiredCount = readiness.scopeCount;
 
   // ---- Slice 3B (acceptance-hotfix rev): workflow tracker ----
@@ -868,7 +887,10 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const workflow = baseWorkflow();
   workflow[0] = { ...workflow[0]!, state: "done" };
   workflow[1] = { ...workflow[1]!, state: blockerCount === 0 ? "done" : "current" };
-  const approvalsDone = readiness.allApproved && readiness.allImported;
+  //   Step 3 is titled "Approvals (Dept. Heads)" — it completes on
+  //   the DEPARTMENT-APPROVAL gate. Payroll-Admin Freeze is a SEPARATE
+  //   prerequisite that gates Calculate (Step 4) separately, not Step 3.
+  const approvalsDone = readiness.allDepartmentApproved && readiness.allImported;
   workflow[2] = { ...workflow[2]!, state: approvalsDone ? "done" : "current" };
 
   // ---- Slice 3B (acceptance-hotfix rev): checklist ----
@@ -900,15 +922,24 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     done: readiness.allImported,
     detail: detailForItem1,
   };
-  //   Item 2 — Department head approvals. X/Y frozen (frozen is the
-  //   payroll-usable state; approved-unfrozen still requires a
-  //   Payroll Admin freeze click before Calculate can consume it).
+  //   Item 2 — "Department head approvals". Completes when every
+  //   required scope has a valid current Manager approval. Freeze
+  //   is a separate Payroll Admin responsibility, tracked below in
+  //   the Approvals tab aggregate and the Calculate readiness gate.
   checklist[1] = {
     ...checklist[1]!,
     done: approvalsDone,
     detail: readiness.scopeCount === 0
       ? "No departments to approve"
-      : `${readiness.frozenScopeCount}/${readiness.scopeCount} frozen · ${readiness.pendingScopeCount} pending${readiness.reopenedScopeCount > 0 ? ` · ${readiness.reopenedScopeCount} reopened` : ""}`,
+      : `${readiness.departmentApprovedScopeCount}/${readiness.scopeCount} approved${
+          readiness.departmentPendingScopeCount > 0
+            ? ` · ${readiness.departmentPendingScopeCount} pending`
+            : ""
+        }${
+          readiness.reopenedScopeCount > 0
+            ? ` · ${readiness.reopenedScopeCount} reopened`
+            : ""
+        }`,
   };
   //   Item 3 — Resolve payroll exceptions (BLOCKERS only per §28).
   checklist[2] = {
@@ -944,6 +975,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       openSessionCount: readiness.needsAttentionTimesheetCount,
       nullAssignmentEntryCount: readiness.nullAssignmentEntryCount,
       clockEventCount: readiness.clockEventCount,
+      awaitingFreezeScopeCount: readiness.awaitingFreezeScopeCount,
+      payrollFrozenScopeCount: readiness.payrollFrozenScopeCount,
     },
     employeeTable: {
       rows: pagedRows,
@@ -974,6 +1007,7 @@ function emptyKpi(): PayrollOverviewViewModel["kpi"] {
     approvalsCompleteCount: null, approvalsRequiredCount: null,
     timesheetEntryCount: null, approvedTimeEntryCount: null,
     openSessionCount: null, nullAssignmentEntryCount: null, clockEventCount: null,
+    awaitingFreezeScopeCount: null, payrollFrozenScopeCount: null,
   };
 }
 function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel["employeeTable"] {
