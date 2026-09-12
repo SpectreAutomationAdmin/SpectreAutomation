@@ -79,12 +79,14 @@ test.describe.serial("Payroll 3B — local", () => {
     await expect(btn).toBeDisabled();
   });
 
-  test("F. Pre-Calculation Checklist has 6 items with 3 3B-owned + 3 future-neutral", async ({ page }) => {
+  test("F. Pre-Calculation Checklist has 6 items with 3 3B-owned + 3 future-neutral (no batch)", async ({ page }) => {
     await loginAsAdmin(page);
     await page.goto("http://localhost:3000/app/admin/payroll", { waitUntil: "networkidle" });
     const items = page.locator('[data-testid^="payroll-admin-checklist-item-"]');
     await expect(items).toHaveCount(6);
-    // The first 3 items belong to Slice 3B — they carry data-future=false.
+    // In the no-batch state (local dev DB): items 1-3 are 3B-owned,
+    // items 4-6 remain future-neutral. Items 4-5 become real when a
+    // batch exists (covered by 3C staging tests).
     for (const id of ["time-imported", "department-approvals", "resolve-exceptions"]) {
       const el = page.getByTestId(`payroll-admin-checklist-item-${id}`);
       const future = await el.getAttribute("data-future");

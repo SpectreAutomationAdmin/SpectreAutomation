@@ -132,6 +132,58 @@ export interface PayrollOverviewChecklistItem {
   future: boolean;
 }
 
+// Payroll Admin Slice 3C (2026-09-12) — one-time-adjustment and
+// recurring-component-snapshot row shapes surfaced on the
+// Adjustments tab. Both provenances live in the same underlying
+// PayrollBatchComponentSnapshot model but carry very different
+// semantics — the tab renders them in DISTINCT sections so the
+// operator never confuses batch-specific corrections with frozen
+// recurring-employee-setup snapshots (§8 of the 3C directive).
+export interface PayrollOverviewAdjustmentRow {
+  id: string;
+  batchEmployeeId: string;
+  employeeId: string;
+  employeeDisplayName: string;
+  componentCode: string;
+  componentDisplayName: string;
+  category: string;
+  side: string;
+  displaySection: string;
+  cashEffect: string;
+  amountDisplay: string;
+  reason: string;
+  enteredAtISO: string;
+}
+export interface PayrollOverviewRecurringSnapshotRow {
+  id: string;
+  batchEmployeeId: string;
+  employeeId: string;
+  employeeDisplayName: string;
+  sourceAssignmentId: string | null;
+  componentCode: string;
+  componentDisplayName: string;
+  category: string;
+  side: string;
+  displaySection: string;
+  cashEffect: string;
+  amountDisplay: string;
+  warningCode: string | null;
+  warningMessage: string | null;
+}
+
+// Payroll Admin Slice 3C — component catalogue rows exposed to the
+// Add-Adjustment and Manage-Recurring drawers.
+export interface PayrollOverviewComponentPickerRow {
+  id: string;
+  code: string;
+  displayName: string;
+  category: string;
+  side: string;
+  displaySection: string;
+  calculationMethod: string;
+  cashEffect: string;
+}
+
 export type PayrollOverviewTab =
   | "employees"
   | "exceptions"
@@ -177,6 +229,9 @@ export interface PayrollOverviewViewModel {
     // and the Calculate readiness prerequisite (see below).
     awaitingFreezeScopeCount: number | null;
     payrollFrozenScopeCount: number | null;
+    // 3C (2026-09-12) — Adjustments KPI breakdown by provenance.
+    oneTimeAdjustmentCount: number | null;
+    recurringSnapshotCount: number | null;
   };
 
   // employee table population — after filters + search + pagination
@@ -195,6 +250,12 @@ export interface PayrollOverviewViewModel {
   exceptions: PayrollOverviewExceptionRow[];
   approvals: PayrollOverviewApprovalRow[];
   activeTab: PayrollOverviewTab;
+
+  // Slice 3C (2026-09-12) — Adjustments tab data feeds.
+  oneTimeAdjustments: PayrollOverviewAdjustmentRow[];
+  recurringSnapshots: PayrollOverviewRecurringSnapshotRow[];
+  componentPicker: PayrollOverviewComponentPickerRow[];
+  batchAcceptsAdjustments: boolean;
 
   // filter/search UI populators
   availableDepartments: Array<{ id: string; name: string }>;
@@ -532,6 +593,10 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       checklist: baseChecklist(),
       exceptions: [],
       approvals: [],
+      oneTimeAdjustments: [],
+      recurringSnapshots: [],
+      componentPicker: [],
+      batchAcceptsAdjustments: false,
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -616,6 +681,10 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       checklist: noBatchChecklist,
       exceptions: [],
       approvals: approvalsPreBatch,
+      oneTimeAdjustments: [],
+      recurringSnapshots: [],
+      componentPicker: [],
+      batchAcceptsAdjustments: false,
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -638,8 +707,9 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     batchEmployees,
     batchEarnings,
     batchExceptionRows,
-    batchAdjustments,
+    componentSnapshots,
     readiness,
+    componentCatalogue,
   ] = await Promise.all([
     prisma.payrollBatch.findFirst({
       where: { id: activeBatch.id, clubId },
@@ -666,10 +736,35 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         recommendedAction: true, employeeId: true, batchEmployeeId: true,
       },
     }),
-    prisma.payrollBatchComponentSnapshot.count({
-      where: { batch: { id: activeBatch.id, clubId }, provenance: "ONE_TIME_PAYROLL_ADJUSTMENT" },
+    // 3C (2026-09-12) — fetch every component snapshot for the
+    // batch (both provenance branches). We project the ONE_TIME
+    // rows and the RECURRING rows into distinct view arrays below.
+    prisma.payrollBatchComponentSnapshot.findMany({
+      where: { batch: { id: activeBatch.id, clubId } },
+      orderBy: [{ provenance: "asc" }, { batchEmployeeId: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true, batchEmployeeId: true, employeeId: true,
+        provenance: true, sourceAssignmentId: true,
+        componentCode: true, displayName: true, category: true, side: true,
+        displaySection: true, cashEffect: true,
+        resolvedAmount: true, sourcePercentBps: true,
+        reason: true, warningCode: true, warningMessage: true,
+        createdAt: true,
+      },
     }),
     getTimeReadiness(principal, clubId, chosenPeriod.id),
+    // 3C — component catalogue for the Add-Adjustment + Manage-
+    // Recurring drawer pickers. Read-only projection; hides
+    // inactive components + statutory-source rows the operator
+    // is not authorized to author from a per-batch drawer.
+    prisma.payrollComponent.findMany({
+      where: { clubId, active: true },
+      orderBy: [{ displaySection: "asc" }, { displayOrder: "asc" }, { displayName: "asc" }],
+      select: {
+        id: true, code: true, displayName: true, category: true, side: true,
+        displaySection: true, calculationMethod: true, cashEffect: true,
+      },
+    }),
   ]);
 
   const batchRef: PayrollOverviewBatchRef | null = batchRow ? {
@@ -950,6 +1045,100 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       : `${blockerCount} blocker${blockerCount === 1 ? "" : "s"} unresolved`,
   };
 
+  // ---- 3C: project component snapshots into Adjustments-tab rows ----
+  const employeeNameByEmpId = new Map<string, string>();
+  for (const be of batchEmployees) {
+    if (!be.employee) continue;
+    employeeNameByEmpId.set(
+      be.employeeId,
+      (be.employee.preferredName || `${be.employee.firstName ?? ""} ${be.employee.lastName ?? ""}`).trim() || "(unnamed)",
+    );
+  }
+  const fmtSnapshotAmount = (
+    resolvedAmount: unknown | null,
+    sourcePercentBps: number | null,
+    calculationMethodHint: "AMOUNT" | "PERCENT",
+  ): string => {
+    if (calculationMethodHint === "PERCENT" && sourcePercentBps != null) {
+      return `${(sourcePercentBps / 100).toFixed(2)}%`;
+    }
+    if (resolvedAmount == null) return "—";
+    const num = Number(resolvedAmount);
+    return `$${num.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+  const oneTimeAdjustments: PayrollOverviewAdjustmentRow[] = componentSnapshots
+    .filter((s) => s.provenance === "ONE_TIME_PAYROLL_ADJUSTMENT")
+    .map((s) => ({
+      id: s.id,
+      batchEmployeeId: s.batchEmployeeId,
+      employeeId: s.employeeId,
+      employeeDisplayName: employeeNameByEmpId.get(s.employeeId) ?? "(unnamed)",
+      componentCode: s.componentCode,
+      componentDisplayName: s.displayName,
+      category: s.category,
+      side: s.side,
+      displaySection: s.displaySection,
+      cashEffect: s.cashEffect,
+      amountDisplay: fmtSnapshotAmount(
+        s.resolvedAmount,
+        s.sourcePercentBps,
+        s.sourcePercentBps != null ? "PERCENT" : "AMOUNT",
+      ),
+      reason: s.reason ?? "",
+      enteredAtISO: s.createdAt.toISOString(),
+    }));
+  const recurringSnapshots: PayrollOverviewRecurringSnapshotRow[] = componentSnapshots
+    .filter((s) => s.provenance === "RECURRING_EMPLOYEE_SETUP")
+    .map((s) => ({
+      id: s.id,
+      batchEmployeeId: s.batchEmployeeId,
+      employeeId: s.employeeId,
+      employeeDisplayName: employeeNameByEmpId.get(s.employeeId) ?? "(unnamed)",
+      sourceAssignmentId: s.sourceAssignmentId,
+      componentCode: s.componentCode,
+      componentDisplayName: s.displayName,
+      category: s.category,
+      side: s.side,
+      displaySection: s.displaySection,
+      cashEffect: s.cashEffect,
+      amountDisplay: fmtSnapshotAmount(
+        s.resolvedAmount,
+        s.sourcePercentBps,
+        s.sourcePercentBps != null ? "PERCENT" : "AMOUNT",
+      ),
+      warningCode: s.warningCode,
+      warningMessage: s.warningMessage,
+    }));
+
+  // 3C — checklist items 4 & 5. In the ABSENCE of a persisted
+  // review-attestation mechanism (§46 architectural gap reported to
+  // founder), items 4 and 5 auto-complete ONLY when zero rows of
+  // the reviewed provenance exist for the batch. If rows exist,
+  // items 4/5 stay incomplete with an honest "Manual review
+  // pending — attestation persistence pending schema decision"
+  // detail. Attestation is deferred until founder approves the
+  // schema addition.
+  const oneTimeAdjustmentCount = oneTimeAdjustments.length;
+  const recurringSnapshotCount = recurringSnapshots.length;
+  checklist[3] = {
+    ...checklist[3]!,
+    future: false,
+    done: oneTimeAdjustmentCount === 0,
+    detail: oneTimeAdjustmentCount === 0
+      ? "No one-time adjustments"
+      : `${oneTimeAdjustmentCount} adjustment${oneTimeAdjustmentCount === 1 ? "" : "s"} · review pending`,
+  };
+  checklist[4] = {
+    ...checklist[4]!,
+    future: false,
+    done: recurringSnapshotCount === 0,
+    detail: recurringSnapshotCount === 0
+      ? "No recurring components"
+      : `${recurringSnapshotCount} snapshot${recurringSnapshotCount === 1 ? "" : "s"} · review pending`,
+  };
+
+  const batchAcceptsAdjustments = activeBatch.status === "PREPARED";
+
   return {
     payGroup: payGroupRef,
     payPeriod: chosenPeriod,
@@ -963,7 +1152,9 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       totalHoursDisplay,
       grossPayDisplay,
       grossPaySemantics,
-      adjustmentsCount: batchAdjustments,
+      adjustmentsCount: oneTimeAdjustmentCount + recurringSnapshotCount,
+      oneTimeAdjustmentCount,
+      recurringSnapshotCount,
       exceptionsCount: exceptions.length,
       exceptionsBlockerCount: blockerCount,
       exceptionsWarningCount: warningCount,
@@ -989,6 +1180,19 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     checklist,
     exceptions,
     approvals,
+    oneTimeAdjustments,
+    recurringSnapshots,
+    componentPicker: componentCatalogue.map((c) => ({
+      id: c.id,
+      code: c.code,
+      displayName: c.displayName,
+      category: c.category,
+      side: c.side,
+      displaySection: c.displaySection,
+      calculationMethod: c.calculationMethod,
+      cashEffect: c.cashEffect,
+    })),
+    batchAcceptsAdjustments,
     activeTab,
     availableDepartments,
     availableEmploymentTypes,
@@ -1008,6 +1212,7 @@ function emptyKpi(): PayrollOverviewViewModel["kpi"] {
     timesheetEntryCount: null, approvedTimeEntryCount: null,
     openSessionCount: null, nullAssignmentEntryCount: null, clockEventCount: null,
     awaitingFreezeScopeCount: null, payrollFrozenScopeCount: null,
+    oneTimeAdjustmentCount: null, recurringSnapshotCount: null,
   };
 }
 function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel["employeeTable"] {
@@ -1021,6 +1226,7 @@ function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSiz
     workflow: baseWorkflow(),
     checklist: baseChecklist(),
     exceptions: [], approvals: [],
+    oneTimeAdjustments: [], recurringSnapshots: [], componentPicker: [], batchAcceptsAdjustments: false,
     activeTab: "employees",
     availableDepartments: [], availableEmploymentTypes: [], availableStatuses: [],
     activeFilter: filter,

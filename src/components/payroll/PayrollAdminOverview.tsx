@@ -169,15 +169,19 @@ export interface PayrollAdminOverviewProps {
   view: PayrollOverviewViewModel;
   prepare?: PrepareControls | null;
   freeze?: FreezeControls | null;
+  adjustments?: AdjustmentControls | null;
+  recurring?: RecurringControls | null;
 }
 
-export default function PayrollAdminOverview({ view, prepare = null, freeze = null }: PayrollAdminOverviewProps) {
+export default function PayrollAdminOverview({
+  view, prepare = null, freeze = null, adjustments = null, recurring = null,
+}: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
       <Header view={view} prepare={prepare} />
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <Workspace view={view} prepare={prepare} freeze={freeze} />
+        <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} />
         <div className="space-y-2">
           <ActionsCard view={view} />
           <ChecklistCard view={view} />
@@ -410,6 +414,21 @@ export interface FreezeControls {
   canFreeze: boolean;
 }
 
+// Slice 3C (2026-09-12) — one-time adjustment + recurring
+// component write actions. Passed into the Adjustments tab so its
+// drawers can invoke the canonical domain services without
+// duplicating them client-side.
+export interface AdjustmentControls {
+  addAction: (formData: FormData) => Promise<void>;
+  removeAction: (formData: FormData) => Promise<void>;
+  canEdit: boolean;
+}
+export interface RecurringControls {
+  createAction: (formData: FormData) => Promise<void>;
+  endAction: (formData: FormData) => Promise<void>;
+  canWrite: boolean;
+}
+
 // Prepare Payroll submit control — MUST live inside the <form action=…>
 // so `useFormStatus` can read the pending state of the surrounding
 // server-action submission. While the server action runs (network
@@ -443,7 +462,13 @@ function PrepareSubmitButton() {
   );
 }
 
-function Workspace({ view, prepare, freeze }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null; freeze: FreezeControls | null }) {
+function Workspace({ view, prepare, freeze, adjustments, recurring }: {
+  view: PayrollOverviewViewModel;
+  prepare: PrepareControls | null;
+  freeze: FreezeControls | null;
+  adjustments: AdjustmentControls | null;
+  recurring: RecurringControls | null;
+}) {
   const activeTab = view.activeTab;
   return (
     <section className="rounded-lg border border-stone-200 bg-white overflow-hidden" data-testid="payroll-admin-workspace">
@@ -451,7 +476,7 @@ function Workspace({ view, prepare, freeze }: { view: PayrollOverviewViewModel; 
       {activeTab === "employees"   && <EmployeesTabContent view={view} prepare={prepare} />}
       {activeTab === "exceptions"  && <ExceptionsTabContent view={view} />}
       {activeTab === "approvals"   && <ApprovalsTabContent view={view} freeze={freeze} />}
-      {activeTab === "adjustments" && <FutureTabContent label="Adjustments" note="Adjustments become functional in Payroll Admin 3C." />}
+      {activeTab === "adjustments" && <AdjustmentsTabContent view={view} adjustments={adjustments} recurring={recurring} />}
       {activeTab === "summary"     && <FutureTabContent label="Summary" note="Summary view becomes functional after Calculate." />}
     </section>
   );
@@ -802,6 +827,279 @@ function FutureTabContent({ label, note }: { label: string; note: string }) {
   );
 }
 
+// Slice 3C — Adjustments tab (functional). Two clearly-labelled
+// sections: One-Time Adjustments (batch-specific) and Recurring
+// Components (frozen at Prepare). Add / Remove wired to the
+// canonical domain services; batch-status gating is enforced by
+// the domain (assertBatchAcceptsAdjustments — PREPARED-only).
+function AdjustmentsTabContent({ view, adjustments, recurring }: {
+  view: PayrollOverviewViewModel;
+  adjustments: AdjustmentControls | null;
+  recurring: RecurringControls | null;
+}) {
+  if (!view.hasBatch) {
+    return (
+      <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-adjustments-empty">
+        <p className="text-stone-700">Prepare payroll before adding batch-specific adjustments.</p>
+        <p className="mt-2 text-stone-500 text-[12.5px]">Recurring employee setup can still be edited from an employee profile.</p>
+      </div>
+    );
+  }
+  const canAdd  = adjustments?.canEdit === true && view.batchAcceptsAdjustments;
+  const canRemove = adjustments?.canEdit === true && view.batchAcceptsAdjustments;
+  const canRecur = recurring?.canWrite === true;
+  const employeePickerRows = view.employeeTable.rows.map((r) => ({
+    batchEmployeeId: r.batchEmployeeId,
+    employeeId: r.employeeId,
+    displayName: r.displayName,
+  }));
+  const payPeriodId = view.payPeriod?.id ?? "";
+  const batchId = view.batch?.id ?? "";
+  return (
+    <div className="border-t border-stone-100" data-testid="payroll-admin-adjustments-tab">
+      <AdjustmentsSectionHeader
+        title="One-Time Adjustments"
+        subtitle="Batch-specific corrections attached to this payroll run"
+        right={canAdd ? (
+          <details className="relative">
+            <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md bg-[#1e40af] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#1e3a8a]" data-testid="payroll-admin-adjustments-add-open">
+              <PlusIcon className="h-3.5 w-3.5" /> Add One-Time Adjustment
+            </summary>
+            <AddAdjustmentPanel
+              action={adjustments!.addAction}
+              payPeriodId={payPeriodId}
+              batchId={batchId}
+              employees={employeePickerRows}
+              components={view.componentPicker}
+            />
+          </details>
+        ) : (
+          <button
+            disabled
+            title={
+              !view.batchAcceptsAdjustments
+                ? "Batch must be PREPARED to add adjustments"
+                : "Insufficient permissions"
+            }
+            data-testid="payroll-admin-adjustments-add-disabled"
+            className="inline-flex items-center gap-1 rounded-md bg-stone-200 text-stone-500 px-3 py-1.5 text-[12.5px] font-medium cursor-not-allowed"
+          >
+            <PlusIcon className="h-3.5 w-3.5" /> Add One-Time Adjustment
+          </button>
+        )}
+      />
+      {view.oneTimeAdjustments.length === 0 ? (
+        <p className="px-6 py-4 text-[12.5px] text-stone-500" data-testid="payroll-admin-adjustments-none">
+          No one-time adjustments on this batch.
+        </p>
+      ) : (
+        <table className="w-full text-[13px]" data-testid="payroll-admin-adjustments-table">
+          <thead>
+            <tr className="text-left text-[12px] text-stone-500 bg-[#fbfaf7]">
+              <th className="pl-6 py-2 font-medium">Employee</th>
+              <th className="py-2 font-medium">Component</th>
+              <th className="py-2 font-medium text-right pr-4">Amount</th>
+              <th className="py-2 font-medium">Reason</th>
+              <th className="py-2 font-medium pr-6">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.oneTimeAdjustments.map((a) => (
+              <tr key={a.id} className="border-t border-stone-100" data-testid={`payroll-admin-adjustment-row-${a.id}`}>
+                <td className="pl-6 py-1.5 text-stone-900">{a.employeeDisplayName}</td>
+                <td className="py-1.5 text-stone-700">
+                  <p className="font-medium">{a.componentDisplayName}</p>
+                  <p className="text-[11.5px] text-stone-500">{a.componentCode} · {a.category}</p>
+                </td>
+                <td className="py-1.5 text-right pr-4 tabular-nums text-stone-900">{a.amountDisplay}</td>
+                <td className="py-1.5 text-stone-700">{a.reason}</td>
+                <td className="py-1.5 pr-6">
+                  {canRemove ? (
+                    <form action={adjustments!.removeAction}>
+                      <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                      <input type="hidden" name="snapshotId" value={a.id} />
+                      <button type="submit" data-testid={`payroll-admin-adjustment-remove-${a.id}`} className="text-[12.5px] text-[#dc2626] hover:underline">Remove</button>
+                    </form>
+                  ) : (
+                    <span className="text-[12px] text-stone-400">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="border-t border-stone-100" />
+      <AdjustmentsSectionHeader
+        title="Recurring Components"
+        subtitle="Frozen from employee recurring setup at Prepare"
+        right={canRecur ? (
+          <details className="relative">
+            <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-3 py-1.5 text-[12.5px] text-stone-700 hover:bg-stone-50" data-testid="payroll-admin-recurring-manage-open">
+              <RefreshIcon className="h-3.5 w-3.5" /> Manage Recurring Components
+            </summary>
+            <ManageRecurringPanel
+              createAction={recurring!.createAction}
+              payPeriodId={payPeriodId}
+              employees={employeePickerRows}
+              components={view.componentPicker}
+            />
+          </details>
+        ) : (
+          <button disabled className="inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-3 py-1.5 text-[12.5px] text-stone-400 cursor-not-allowed" data-testid="payroll-admin-recurring-manage-disabled">
+            <RefreshIcon className="h-3.5 w-3.5" /> Manage Recurring Components
+          </button>
+        )}
+      />
+      {view.recurringSnapshots.length === 0 ? (
+        <p className="px-6 py-4 text-[12.5px] text-stone-500" data-testid="payroll-admin-recurring-none">
+          No recurring components on this batch.
+        </p>
+      ) : (
+        <table className="w-full text-[13px]" data-testid="payroll-admin-recurring-table">
+          <thead>
+            <tr className="text-left text-[12px] text-stone-500 bg-[#fbfaf7]">
+              <th className="pl-6 py-2 font-medium">Employee</th>
+              <th className="py-2 font-medium">Component</th>
+              <th className="py-2 font-medium text-right pr-4">Amount</th>
+              <th className="py-2 font-medium pr-6">Warning</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.recurringSnapshots.map((r) => (
+              <tr key={r.id} className="border-t border-stone-100" data-testid={`payroll-admin-recurring-row-${r.id}`}>
+                <td className="pl-6 py-1.5 text-stone-900">{r.employeeDisplayName}</td>
+                <td className="py-1.5 text-stone-700">
+                  <p className="font-medium">{r.componentDisplayName}</p>
+                  <p className="text-[11.5px] text-stone-500">{r.componentCode} · {r.category}</p>
+                </td>
+                <td className="py-1.5 text-right pr-4 tabular-nums text-stone-900">{r.amountDisplay}</td>
+                <td className="py-1.5 pr-6 text-[12px] text-stone-500">
+                  {r.warningMessage ?? "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function AdjustmentsSectionHeader({ title, subtitle, right }: { title: string; subtitle: string; right: ReactNode }) {
+  return (
+    <div className="px-6 py-3 flex items-start justify-between gap-4 bg-white">
+      <div>
+        <h3 className="text-[14px] font-semibold text-stone-900">{title}</h3>
+        <p className="text-[12px] text-stone-500 mt-0.5">{subtitle}</p>
+      </div>
+      <div className="shrink-0">{right}</div>
+    </div>
+  );
+}
+
+function AddAdjustmentPanel({ action, payPeriodId, batchId, employees, components }: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  batchId: string;
+  employees: Array<{ batchEmployeeId: string; employeeId: string; displayName: string }>;
+  components: PayrollOverviewViewModel["componentPicker"];
+}) {
+  return (
+    <div className="absolute right-0 top-full mt-1 z-10 w-[380px] rounded-md border border-stone-200 bg-white shadow-lg p-4" data-testid="payroll-admin-adjustments-add-panel">
+      <form action={action} className="space-y-2.5">
+        <input type="hidden" name="payPeriodId" value={payPeriodId} />
+        <input type="hidden" name="batchId" value={batchId} />
+        <div>
+          <label htmlFor="adj-emp" className="text-[11.5px] text-stone-600 font-medium">Employee</label>
+          <select id="adj-emp" name="batchEmployeeId" required data-testid="payroll-admin-adjustments-add-employee" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2">
+            <option value="">Select employee…</option>
+            {employees.map((e) => (
+              <option key={e.batchEmployeeId} value={e.batchEmployeeId}>{e.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="adj-comp" className="text-[11.5px] text-stone-600 font-medium">Payroll component</label>
+          <select id="adj-comp" name="componentCode" required data-testid="payroll-admin-adjustments-add-component" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2">
+            <option value="">Select component…</option>
+            {components
+              .filter((c) => c.calculationMethod === "FIXED_AMOUNT")
+              .map((c) => (
+                <option key={c.id} value={c.code}>{c.displayName} ({c.category})</option>
+              ))}
+          </select>
+          <p className="mt-1 text-[11px] text-stone-400">
+            Only FIXED_AMOUNT components accept a one-time adjustment. Manage the catalogue at{" "}
+            <Link href="/app/admin/payroll/setup/components" className="text-[#1e40af] hover:underline">Payroll Components</Link>.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="adj-amt" className="text-[11.5px] text-stone-600 font-medium">Amount (positive dollars)</label>
+          <input id="adj-amt" name="amount" type="number" step="0.01" min="0.01" required data-testid="payroll-admin-adjustments-add-amount" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2" />
+        </div>
+        <div>
+          <label htmlFor="adj-reason" className="text-[11.5px] text-stone-600 font-medium">Reason (required)</label>
+          <input id="adj-reason" name="reason" type="text" required maxLength={240} data-testid="payroll-admin-adjustments-add-reason" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2" />
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="submit" data-testid="payroll-admin-adjustments-add-submit" className="inline-flex items-center gap-1 rounded-md bg-[#1e40af] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#1e3a8a]">Save adjustment</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ManageRecurringPanel({ createAction, payPeriodId, employees, components }: {
+  createAction: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  employees: Array<{ batchEmployeeId: string; employeeId: string; displayName: string }>;
+  components: PayrollOverviewViewModel["componentPicker"];
+}) {
+  return (
+    <div className="absolute right-0 top-full mt-1 z-10 w-[420px] rounded-md border border-stone-200 bg-white shadow-lg p-4" data-testid="payroll-admin-recurring-manage-panel">
+      <p className="text-[12px] text-stone-500 mb-2">
+        Add a recurring payroll component to an employee. Existing prepared batches are NOT modified — the assignment flows into the next Prepare.
+      </p>
+      <form action={createAction} className="space-y-2.5">
+        <input type="hidden" name="payPeriodId" value={payPeriodId} />
+        <div>
+          <label htmlFor="rec-emp" className="text-[11.5px] text-stone-600 font-medium">Employee</label>
+          <select id="rec-emp" name="employeeId" required data-testid="payroll-admin-recurring-add-employee" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2">
+            <option value="">Select employee…</option>
+            {employees.map((e) => (
+              <option key={e.employeeId} value={e.employeeId}>{e.displayName}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="rec-comp" className="text-[11.5px] text-stone-600 font-medium">Payroll component</label>
+          <select id="rec-comp" name="componentId" required data-testid="payroll-admin-recurring-add-component" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2">
+            <option value="">Select component…</option>
+            {components
+              .filter((c) => c.calculationMethod === "FIXED_AMOUNT")
+              .map((c) => (
+                <option key={c.id} value={c.id}>{c.displayName} ({c.category})</option>
+              ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="rec-amt" className="text-[11.5px] text-stone-600 font-medium">Amount per period (positive dollars)</label>
+          <input id="rec-amt" name="amount" type="number" step="0.01" min="0.01" required data-testid="payroll-admin-recurring-add-amount" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2" />
+        </div>
+        <div>
+          <label htmlFor="rec-eff" className="text-[11.5px] text-stone-600 font-medium">Effective from</label>
+          <input id="rec-eff" name="effectiveFrom" type="date" required data-testid="payroll-admin-recurring-add-effective-from" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2" />
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <button type="submit" data-testid="payroll-admin-recurring-add-submit" className="inline-flex items-center gap-1 rounded-md bg-[#0f5f3f] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#0d4f34]">Add assignment</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function PageSizeControl({ view }: { view: PayrollOverviewViewModel }) {
   const router = useRouter();
   const pathname = usePathname() ?? "/app/admin/payroll";
@@ -989,8 +1287,18 @@ function ActionsCard({ view }: { view: PayrollOverviewViewModel }) {
           disabled={!canResolveExceptions}
           disabledTitle="Prepare a payroll batch to see exceptions"
           targetTab="exceptions" />
-        <DisabledBtn icon={<PlusIcon className="h-4 w-4 text-stone-500" />} label="Add One-Time Adjustment" />
-        <DisabledBtn icon={<RefreshIcon className="h-4 w-4 text-stone-500" />} label="Manage Recurring Components" />
+        <TabNavigateBtn testId="payroll-admin-actions-add-adjustment"
+          icon={<PlusIcon className="h-4 w-4 text-stone-500" />}
+          label="Add One-Time Adjustment"
+          disabled={!canResolveExceptions}
+          disabledTitle="Prepare a payroll batch to add adjustments"
+          targetTab="adjustments" />
+        <TabNavigateBtn testId="payroll-admin-actions-manage-recurring"
+          icon={<RefreshIcon className="h-4 w-4 text-stone-500" />}
+          label="Manage Recurring Components"
+          disabled={!canResolveExceptions}
+          disabledTitle="Prepare a payroll batch to manage recurring components"
+          targetTab="adjustments" />
         <TabNavigateBtn testId="payroll-admin-actions-view-approvals"
           icon={<EyeCheckIcon className="h-4 w-4 text-stone-500" />}
           label="View Time Approvals"
@@ -1027,7 +1335,7 @@ function TabNavigateBtn({ tone, icon, label, targetTab, disabled, disabledTitle,
   tone?: "primary";
   icon: ReactNode;
   label: string;
-  targetTab: "exceptions" | "approvals";
+  targetTab: "exceptions" | "approvals" | "adjustments";
   disabled: boolean;
   disabledTitle: string;
   testId: string;

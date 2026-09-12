@@ -24,6 +24,12 @@ import { buildPayrollOverview } from "@/lib/payroll/overview-view";
 import PayrollAdminOverview from "@/components/payroll/PayrollAdminOverview";
 import { preparePayrollAction } from "./_prepare-action";
 import { freezeScopeFromOverviewAction } from "./_freeze-scope-action";
+import {
+  addAdjustmentAction,
+  removeAdjustmentAction,
+  createRecurringAssignmentAction,
+  endRecurringAssignmentAction,
+} from "./_adjustment-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,11 +79,23 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
 
   const canPrepare = hasPermission(principal, clubId, "payroll:run");
   const canFreeze  = hasPermission(principal, clubId, "payroll:write");
+  const canEditAdjustments = hasPermission(principal, clubId, "payroll:edit");
+  const canWriteRecurring  = hasPermission(principal, clubId, "payroll:write");
   return (
     <PayrollAdminOverview
       view={view}
       prepare={{ action: preparePayrollAction, canPrepare }}
       freeze={{ action: freezeScopeFromOverviewAction, canFreeze }}
+      adjustments={{
+        addAction: addAdjustmentAction,
+        removeAction: removeAdjustmentAction,
+        canEdit: canEditAdjustments,
+      }}
+      recurring={{
+        createAction: createRecurringAssignmentAction,
+        endAction: endRecurringAssignmentAction,
+        canWrite: canWriteRecurring,
+      }}
     />
   );
 }
