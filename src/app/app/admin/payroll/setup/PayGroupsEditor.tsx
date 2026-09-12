@@ -255,7 +255,7 @@ export default function PayGroupsEditor({
                     <span className="font-mono text-xs text-stone-500">{g.code}</span>
                     <span className="text-[11px] text-stone-500">
                       {FREQ_LABEL[g.payFrequency] ?? g.payFrequency} · pay date +{g.payDateOffsetDays}d ·{" "}
-                      {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
+                      {g.memberCount} employee{g.memberCount === 1 ? "" : "s"} assigned
                     </span>
                   </div>
                   <input

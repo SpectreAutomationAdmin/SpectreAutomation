@@ -37,6 +37,7 @@ interface PageProps {
     status?: string;
     page?: string;
     pageSize?: string;
+    tab?: string;
   };
 }
 
@@ -66,6 +67,7 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
     status: searchParams?.status ?? null,
     page: searchParams?.page ? Math.max(1, Number.parseInt(searchParams.page, 10) || 1) : 1,
     pageSize,
+    tab: searchParams?.tab ?? null,
   });
 
   const canPrepare = hasPermission(principal, clubId, "payroll:run");

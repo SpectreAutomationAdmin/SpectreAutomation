@@ -23,6 +23,8 @@ import { listPayGroups } from "./pay-groups";
 import { listPayPeriods } from "./pay-periods";
 import { findActiveBatchForPeriod } from "./batch-preparation";
 import { parseSourceFactsV1 } from "./source-facts-schema";
+import { getDepartmentApprovalStatus, type DepartmentApprovalState } from "./department-approval";
+import { translateException, type ExceptionSeverity } from "./exception-translations";
 
 /* ============================================================
    Types
@@ -69,6 +71,66 @@ export interface PayrollOverviewFilterState {
   employmentType: "Hourly" | "Salary" | null;
   status: string | null;
 }
+
+// Payroll Admin Slice 3B (2026-09-12) — real Exceptions tab data.
+export interface PayrollOverviewExceptionRow {
+  id: string;
+  severity: ExceptionSeverity;
+  code: string;
+  label: string;
+  message: string;
+  employeeId: string | null;
+  employeeDisplayName: string | null;
+  recommendedAction: string | null;
+  remediation: {
+    kind: string;
+    label: string;
+    href: string | null;
+  };
+}
+
+// Payroll Admin Slice 3B — real Approvals tab data.
+export interface PayrollOverviewApprovalRow {
+  departmentId: string;
+  departmentCode: string;
+  departmentName: string;
+  employeeCount: number;
+  entryCount: number;
+  totalHoursDisplay: string;
+  state: DepartmentApprovalState;
+  stateLabel: string;
+  approvedAt: string | null;
+  approvedByDisplayName: string | null;
+  reviewHref: string;
+}
+
+// Payroll Admin Slice 3B — data-driven workflow tracker.
+export type PayrollOverviewWorkflowState = "done" | "current" | "pending";
+export interface PayrollOverviewWorkflowStep {
+  n: number;
+  label: string;
+  sub: string;
+  state: PayrollOverviewWorkflowState;
+}
+
+// Payroll Admin Slice 3B — data-driven pre-calculation checklist.
+export interface PayrollOverviewChecklistItem {
+  id: string;
+  label: string;
+  done: boolean;
+  detail: string | null;
+  /** True for items that legitimately belong to a later slice — the
+   *  UI renders them in a neutral not-yet-owned state. */
+  future: boolean;
+}
+
+export type PayrollOverviewTab =
+  | "employees"
+  | "exceptions"
+  | "approvals"
+  | "adjustments"
+  | "summary";
+
 export interface PayrollOverviewViewModel {
   // context
   payGroup: PayrollOverviewPayGroupRef | null;
@@ -87,6 +149,11 @@ export interface PayrollOverviewViewModel {
     grossPaySemantics: "PRE_PREPARE" | "PREPARED_ESTIMATE" | "CALCULATED" | "POSTED";
     adjustmentsCount: number | null;
     exceptionsCount: number | null;
+    exceptionsBlockerCount: number | null;
+    exceptionsWarningCount: number | null;
+    exceptionsInfoCount: number | null;
+    approvalsCompleteCount: number | null;
+    approvalsRequiredCount: number | null;
   };
 
   // employee table population — after filters + search + pagination
@@ -97,6 +164,14 @@ export interface PayrollOverviewViewModel {
     page: number;
     pageSize: number;
   };
+
+  // Slice 3B — real data feeds for the workflow tracker, checklist,
+  // Exceptions tab, and Approvals tab.
+  workflow: PayrollOverviewWorkflowStep[];
+  checklist: PayrollOverviewChecklistItem[];
+  exceptions: PayrollOverviewExceptionRow[];
+  approvals: PayrollOverviewApprovalRow[];
+  activeTab: PayrollOverviewTab;
 
   // filter/search UI populators
   availableDepartments: Array<{ id: string; name: string }>;
@@ -209,6 +284,47 @@ export interface BuildPayrollOverviewInput {
   status?: string | null;
   page?: number | null;
   pageSize?: number | null;
+  tab?: string | null;
+}
+
+function normalizeTab(raw: string | null | undefined): PayrollOverviewTab {
+  if (raw === "exceptions" || raw === "approvals" || raw === "adjustments" || raw === "summary") return raw;
+  return "employees";
+}
+
+function approvalStateLabel(state: DepartmentApprovalState): string {
+  switch (state) {
+    case "PENDING":  return "Pending";
+    case "APPROVED": return "Approved";
+    case "REOPENED": return "Reopened — review required";
+    default:         return state;
+  }
+}
+
+function baseWorkflow(): PayrollOverviewWorkflowStep[] {
+  // Payroll Admin Slice 3B: only steps 1-3 have real state. Steps
+  // 4-8 remain "pending" until their slice owns them.
+  return [
+    { n: 1, label: "Prepare",         sub: "",              state: "current" },
+    { n: 2, label: "Review",          sub: "Exceptions",    state: "pending" },
+    { n: 3, label: "Approvals",       sub: "(Dept. Heads)", state: "pending" },
+    { n: 4, label: "Calculate",       sub: "Payroll",       state: "pending" },
+    { n: 5, label: "Review & Adjust", sub: "",              state: "pending" },
+    { n: 6, label: "Submit",          sub: "for Approval",  state: "pending" },
+    { n: 7, label: "Approved",        sub: "(Controller)",  state: "pending" },
+    { n: 8, label: "Posted",          sub: "Complete",      state: "pending" },
+  ];
+}
+
+function baseChecklist(): PayrollOverviewChecklistItem[] {
+  return [
+    { id: "time-imported",         label: "All time entries imported",     done: false, detail: null, future: false },
+    { id: "department-approvals",  label: "Department head approvals",     done: false, detail: null, future: false },
+    { id: "resolve-exceptions",    label: "Resolve payroll exceptions",    done: false, detail: null, future: false },
+    { id: "one-time-adjustments",  label: "Review one-time adjustments",   done: false, detail: null, future: true },
+    { id: "recurring-components",  label: "Review recurring components",   done: false, detail: null, future: true },
+    { id: "verify-employee-data",  label: "Verify employee data",          done: false, detail: null, future: true },
+  ];
 }
 
 export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Promise<PayrollOverviewViewModel> {
@@ -224,6 +340,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   };
   const page = Math.max(1, Math.floor(input.page ?? 1));
   const pageSize: PayrollOverviewPageSize = normalizePageSize(input.pageSize ?? null);
+  const activeTab: PayrollOverviewTab = normalizeTab(input.tab ?? null);
 
   // Resolve default pay group.
   const payGroups = await listPayGroups(principal, clubId);
@@ -388,6 +505,11 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       hasBatch: false,
       kpi: emptyKpi(),
       employeeTable: emptyEmployeeTable(page, pageSize),
+      workflow: baseWorkflow(),
+      checklist: baseChecklist(),
+      exceptions: [],
+      approvals: [],
+      activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
       availableStatuses: [],
@@ -407,6 +529,11 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       hasBatch: false,
       kpi: emptyKpi(),
       employeeTable: emptyEmployeeTable(page, pageSize),
+      workflow: baseWorkflow(),
+      checklist: baseChecklist(),
+      exceptions: [],
+      approvals: [],
+      activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
       availableStatuses: [],
@@ -415,7 +542,15 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   }
 
   // ---- Load batch employees + relations we need for the table ----
-  const [batchRow, batchEmployees, batchEarnings, batchExceptions, batchAdjustments] = await Promise.all([
+  const [
+    batchRow,
+    batchEmployees,
+    batchEarnings,
+    batchExceptionRows,
+    batchAdjustments,
+    approvalRows,
+    approvedTimeEntryCount,
+  ] = await Promise.all([
     prisma.payrollBatch.findFirst({
       where: { id: activeBatch.id, clubId },
       select: {
@@ -433,11 +568,28 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       where: { batchId: activeBatch.id, clubId },
       select: { batchEmployeeId: true, earningType: true, quantity: true, rate: true },
     }),
-    prisma.payrollBatchException.count({
+    // Slice 3B — full unresolved exception list (was: count-only).
+    prisma.payrollBatchException.findMany({
       where: { batchId: activeBatch.id, clubId, resolvedAt: null },
+      orderBy: [{ severity: "asc" }, { code: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true, severity: true, code: true, message: true,
+        recommendedAction: true, employeeId: true, batchEmployeeId: true,
+      },
     }),
     prisma.payrollBatchComponentSnapshot.count({
       where: { batch: { id: activeBatch.id, clubId }, provenance: "ONE_TIME_PAYROLL_ADJUSTMENT" },
+    }),
+    // Slice 3B — department approvals for the SELECTED PAY PERIOD
+    // (not just the batch). Approvals are period-scoped in the domain.
+    getDepartmentApprovalStatus(principal, clubId, chosenPeriod.id),
+    // Slice 3B — checklist item 1 needs to know whether any time has
+    // been imported (materialised) for the selected pay period.
+    prisma.payrollApprovedTimeEntry.count({
+      where: {
+        clubId,
+        workDate: { gte: new Date(chosenPeriod.periodStartISO), lt: new Date(chosenPeriod.periodEndISO) },
+      },
     }),
   ]);
 
@@ -579,6 +731,102 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const start = (safePage - 1) * pageSize;
   const pagedRows = filtered.slice(start, start + pageSize);
 
+  // ---- Slice 3B: exception rollup ----
+  const employeeNameById = new Map<string, string>();
+  for (const be of batchEmployees) {
+    if (!be.employee) continue;
+    employeeNameById.set(
+      be.employeeId,
+      (be.employee.preferredName || `${be.employee.firstName ?? ""} ${be.employee.lastName ?? ""}`).trim() || "(unnamed)",
+    );
+  }
+  const exceptions: PayrollOverviewExceptionRow[] = batchExceptionRows.map((x) => {
+    const t = translateException(x.code);
+    const href = t.remediation.hrefFor({ employeeId: x.employeeId, payPeriodId: chosenPeriod.id });
+    return {
+      id: x.id,
+      severity: x.severity as ExceptionSeverity,
+      code: x.code,
+      label: t.label,
+      message: x.message,
+      employeeId: x.employeeId,
+      employeeDisplayName: x.employeeId ? (employeeNameById.get(x.employeeId) ?? null) : null,
+      recommendedAction: x.recommendedAction,
+      remediation: {
+        kind: t.remediation.kind,
+        label: t.remediation.label,
+        href,
+      },
+    };
+  });
+  const blockerCount = exceptions.filter((e) => e.severity === "BLOCKER").length;
+  const warningCount = exceptions.filter((e) => e.severity === "WARNING").length;
+  const infoCount    = exceptions.filter((e) => e.severity === "INFO").length;
+
+  // ---- Slice 3B: approvals rollup ----
+  const approvals: PayrollOverviewApprovalRow[] = approvalRows.map((a) => {
+    const qs = new URLSearchParams({
+      payPeriodId: chosenPeriod.id,
+      departmentId: a.departmentId,
+      scope: "timesheet",
+    }).toString();
+    return {
+      departmentId: a.departmentId,
+      departmentCode: a.departmentCode,
+      departmentName: a.departmentName,
+      employeeCount: a.employeeCount,
+      entryCount: a.entryCount,
+      totalHoursDisplay: fmtHoursDecimal(Number(a.totalHours)),
+      state: a.state,
+      stateLabel: approvalStateLabel(a.state),
+      approvedAt: a.approvedAt?.toISOString() ?? null,
+      approvedByDisplayName: null,
+      reviewHref: `/app/admin/payroll/time?${qs}`,
+    };
+  });
+  const approvalsCompleteCount = approvals.filter((a) => a.state === "APPROVED").length;
+  const approvalsRequiredCount = approvals.length;
+
+  // ---- Slice 3B: workflow tracker (steps 1-3 real, 4-8 pending) ----
+  const workflow = baseWorkflow();
+  // Step 1 Prepare — batch exists → done. (No batch is caught earlier.)
+  workflow[0] = { ...workflow[0]!, state: "done" };
+  // Step 2 Review Exceptions — done iff no unresolved BLOCKERS remain.
+  workflow[1] = { ...workflow[1]!, state: blockerCount === 0 ? "done" : "current" };
+  // Step 3 Approvals — done iff no required approvals OR every one is APPROVED.
+  const approvalsDone = approvalsRequiredCount === 0 || approvalsCompleteCount === approvalsRequiredCount;
+  workflow[2] = { ...workflow[2]!, state: approvalsDone ? "done" : "current" };
+
+  // ---- Slice 3B: checklist ----
+  const checklist = baseChecklist();
+  //   Item 1 — All time entries imported. Complete iff at least one
+  //   PayrollApprovedTimeEntry exists in the period OR the batch has
+  //   no departments with time to import.
+  const timeImportedDone = approvedTimeEntryCount > 0 || approvalsRequiredCount === 0;
+  checklist[0] = {
+    ...checklist[0]!,
+    done: timeImportedDone,
+    detail: approvedTimeEntryCount > 0
+      ? `${approvedTimeEntryCount} entr${approvedTimeEntryCount === 1 ? "y" : "ies"} imported`
+      : (approvalsRequiredCount === 0 ? "No time to import" : "None imported yet"),
+  };
+  //   Item 2 — Department head approvals. X/Y approved.
+  checklist[1] = {
+    ...checklist[1]!,
+    done: approvalsDone,
+    detail: approvalsRequiredCount === 0
+      ? "No departments to approve"
+      : `${approvalsCompleteCount}/${approvalsRequiredCount} approved`,
+  };
+  //   Item 3 — Resolve payroll exceptions (BLOCKERS only per §28).
+  checklist[2] = {
+    ...checklist[2]!,
+    done: blockerCount === 0,
+    detail: blockerCount === 0
+      ? (warningCount === 0 ? "No unresolved issues" : `${warningCount} warning${warningCount === 1 ? "" : "s"} remain`)
+      : `${blockerCount} blocker${blockerCount === 1 ? "" : "s"} unresolved`,
+  };
+
   return {
     payGroup: payGroupRef,
     payPeriod: chosenPeriod,
@@ -593,7 +841,12 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       grossPayDisplay,
       grossPaySemantics,
       adjustmentsCount: batchAdjustments,
-      exceptionsCount: batchExceptions,
+      exceptionsCount: exceptions.length,
+      exceptionsBlockerCount: blockerCount,
+      exceptionsWarningCount: warningCount,
+      exceptionsInfoCount: infoCount,
+      approvalsCompleteCount,
+      approvalsRequiredCount,
     },
     employeeTable: {
       rows: pagedRows,
@@ -602,6 +855,11 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       page: safePage,
       pageSize,
     },
+    workflow,
+    checklist,
+    exceptions,
+    approvals,
+    activeTab,
     availableDepartments,
     availableEmploymentTypes,
     availableStatuses,
@@ -615,6 +873,8 @@ function emptyKpi(): PayrollOverviewViewModel["kpi"] {
     totalHoursDisplay: "—", grossPayDisplay: "—",
     grossPaySemantics: "PRE_PREPARE",
     adjustmentsCount: null, exceptionsCount: null,
+    exceptionsBlockerCount: null, exceptionsWarningCount: null, exceptionsInfoCount: null,
+    approvalsCompleteCount: null, approvalsRequiredCount: null,
   };
 }
 function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel["employeeTable"] {
@@ -625,6 +885,10 @@ function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSiz
     payGroup: null, payPeriod: null, availablePayPeriods: [],
     batch: null, hasBatch: false,
     kpi: emptyKpi(), employeeTable: emptyEmployeeTable(page, pageSize),
+    workflow: baseWorkflow(),
+    checklist: baseChecklist(),
+    exceptions: [], approvals: [],
+    activeTab: "employees",
     availableDepartments: [], availableEmploymentTypes: [], availableStatuses: [],
     activeFilter: filter,
   };
