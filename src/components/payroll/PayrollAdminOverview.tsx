@@ -688,13 +688,20 @@ function ApprovalsTabContent({ view }: { view: PayrollOverviewViewModel }) {
 }
 
 function ApprovalPill({ state, label }: { state: string; label: string }) {
-  const cfg = state === "APPROVED"
-    ? { bg: "bg-[#dcfce7]", text: "text-[#166534]", dot: "bg-[#16a34a]" }
-    : state === "REOPENED"
-      ? { bg: "bg-[#fef3c7]", text: "text-[#92400e]", dot: "bg-[#d97706]" }
-      : { bg: "bg-stone-100", text: "text-stone-600", dot: "bg-stone-400" };
+  // 3B acceptance hotfix (2026-09-12) — pill palette now covers the
+  // FROZEN vs APPROVED_UNFROZEN distinction so a manager can see at
+  // a glance whether a Payroll Admin still needs to click Freeze.
+  const cfg = state === "FROZEN"
+    ? { bg: "bg-[#dcfce7]",  text: "text-[#166534]", dot: "bg-[#16a34a]" }
+    : state === "APPROVED_UNFROZEN"
+      ? { bg: "bg-[#e0f2fe]", text: "text-[#075985]", dot: "bg-[#0ea5e9]" }
+      : state === "REOPENED"
+        ? { bg: "bg-[#fef3c7]", text: "text-[#92400e]", dot: "bg-[#d97706]" }
+        : state === "NEEDS_ATTENTION"
+          ? { bg: "bg-[#fee2e2]", text: "text-[#991b1b]", dot: "bg-[#dc2626]" }
+          : { bg: "bg-stone-100", text: "text-stone-600", dot: "bg-stone-400" };
   return (
-    <span className={"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11.5px] " + cfg.bg + " " + cfg.text}>
+    <span className={"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11.5px] " + cfg.bg + " " + cfg.text} data-state={state}>
       <span className={"h-1.5 w-1.5 rounded-full " + cfg.dot} />
       {label}
     </span>

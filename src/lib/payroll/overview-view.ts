@@ -25,6 +25,7 @@ import { findActiveBatchForPeriod } from "./batch-preparation";
 import { parseSourceFactsV1 } from "./source-facts-schema";
 import { getDepartmentApprovalStatus, type DepartmentApprovalState } from "./department-approval";
 import { translateException, type ExceptionSeverity } from "./exception-translations";
+import { getTimeReadiness, type TimeReadinessState } from "./time-readiness";
 
 /* ============================================================
    Types
@@ -89,15 +90,22 @@ export interface PayrollOverviewExceptionRow {
   };
 }
 
-// Payroll Admin Slice 3B — real Approvals tab data.
+// Payroll Admin Slice 3B — real Approvals tab data. Extended by the
+// 3B acceptance hotfix (2026-09-12) to distinguish reviewable-but-
+// unfrozen scopes from Payroll-frozen scopes so the Approvals tab
+// stops falsely showing "No departments to approve" when materialised
+// timesheet entries exist.
 export interface PayrollOverviewApprovalRow {
   departmentId: string;
   departmentCode: string;
   departmentName: string;
   employeeCount: number;
   entryCount: number;
+  frozenEntryCount: number;
+  exceptionCount: number;
+  pendingCorrectionCount: number;
   totalHoursDisplay: string;
-  state: DepartmentApprovalState;
+  state: TimeReadinessState;
   stateLabel: string;
   approvedAt: string | null;
   approvedByDisplayName: string | null;
@@ -154,6 +162,15 @@ export interface PayrollOverviewViewModel {
     exceptionsInfoCount: number | null;
     approvalsCompleteCount: number | null;
     approvalsRequiredCount: number | null;
+    // 3B acceptance hotfix (2026-09-12) — time-readiness rollup so
+    // the Overview can honestly reflect Manager-approval + Freeze
+    // progression without misleading "no departments" language when
+    // reviewable timesheet entries exist.
+    timesheetEntryCount: number | null;
+    approvedTimeEntryCount: number | null;
+    openSessionCount: number | null;
+    nullAssignmentEntryCount: number | null;
+    clockEventCount: number | null;
   };
 
   // employee table population — after filters + search + pagination
@@ -542,14 +559,21 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   }
 
   // ---- Load batch employees + relations we need for the table ----
+  //
+  // 3B acceptance hotfix (2026-09-12): the Approvals tab data source
+  // is now the unified per-department `getTimeReadiness` projection
+  // — it reads BOTH the manager-review lens (PayrollTimesheetEntry
+  // via listReviewableScopes) AND the payroll-frozen lens
+  // (PayrollApprovedTimeEntry via getDepartmentApprovalStatus) so a
+  // department appears in the tab the moment any reviewable time
+  // exists, not only after Payroll Admin has clicked Freeze.
   const [
     batchRow,
     batchEmployees,
     batchEarnings,
     batchExceptionRows,
     batchAdjustments,
-    approvalRows,
-    approvedTimeEntryCount,
+    readiness,
   ] = await Promise.all([
     prisma.payrollBatch.findFirst({
       where: { id: activeBatch.id, clubId },
@@ -568,7 +592,6 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       where: { batchId: activeBatch.id, clubId },
       select: { batchEmployeeId: true, earningType: true, quantity: true, rate: true },
     }),
-    // Slice 3B — full unresolved exception list (was: count-only).
     prisma.payrollBatchException.findMany({
       where: { batchId: activeBatch.id, clubId, resolvedAt: null },
       orderBy: [{ severity: "asc" }, { code: "asc" }, { createdAt: "asc" }],
@@ -580,17 +603,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     prisma.payrollBatchComponentSnapshot.count({
       where: { batch: { id: activeBatch.id, clubId }, provenance: "ONE_TIME_PAYROLL_ADJUSTMENT" },
     }),
-    // Slice 3B — department approvals for the SELECTED PAY PERIOD
-    // (not just the batch). Approvals are period-scoped in the domain.
-    getDepartmentApprovalStatus(principal, clubId, chosenPeriod.id),
-    // Slice 3B — checklist item 1 needs to know whether any time has
-    // been imported (materialised) for the selected pay period.
-    prisma.payrollApprovedTimeEntry.count({
-      where: {
-        clubId,
-        workDate: { gte: new Date(chosenPeriod.periodStartISO), lt: new Date(chosenPeriod.periodEndISO) },
-      },
-    }),
+    getTimeReadiness(principal, clubId, chosenPeriod.id),
   ]);
 
   const batchRef: PayrollOverviewBatchRef | null = batchRow ? {
@@ -763,60 +776,88 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const warningCount = exceptions.filter((e) => e.severity === "WARNING").length;
   const infoCount    = exceptions.filter((e) => e.severity === "INFO").length;
 
-  // ---- Slice 3B: approvals rollup ----
-  const approvals: PayrollOverviewApprovalRow[] = approvalRows.map((a) => {
-    const qs = new URLSearchParams({
-      payPeriodId: chosenPeriod.id,
-      departmentId: a.departmentId,
-      scope: "timesheet",
-    }).toString();
-    return {
-      departmentId: a.departmentId,
-      departmentCode: a.departmentCode,
-      departmentName: a.departmentName,
-      employeeCount: a.employeeCount,
-      entryCount: a.entryCount,
-      totalHoursDisplay: fmtHoursDecimal(Number(a.totalHours)),
-      state: a.state,
-      stateLabel: approvalStateLabel(a.state),
-      approvedAt: a.approvedAt?.toISOString() ?? null,
-      approvedByDisplayName: null,
-      reviewHref: `/app/admin/payroll/time?${qs}`,
-    };
-  });
-  const approvalsCompleteCount = approvals.filter((a) => a.state === "APPROVED").length;
-  const approvalsRequiredCount = approvals.length;
+  // ---- Slice 3B (acceptance-hotfix rev): approvals rollup ----
+  //
+  // Rows now come from `getTimeReadiness` so the tab reflects the
+  // FULL manager-review + freeze lifecycle, not just frozen scopes.
+  // States:
+  //   PENDING             — reviewable time exists, manager not yet approved
+  //   NEEDS_ATTENTION     — open sessions / null-assignment entries
+  //   APPROVED_UNFROZEN   — manager approved, Payroll Admin has not clicked Freeze
+  //   FROZEN              — manager approved + frozen into PayrollApprovedTimeEntry
+  //   REOPENED            — approval reopened after a source-time correction
+  const approvals: PayrollOverviewApprovalRow[] = readiness.scopes.map((s) => ({
+    departmentId: s.departmentId,
+    departmentCode: s.departmentCode,
+    departmentName: s.departmentName,
+    employeeCount: s.employeeCount,
+    entryCount: s.entryCount,
+    frozenEntryCount: s.frozenEntryCount,
+    exceptionCount: s.exceptionCount,
+    pendingCorrectionCount: s.pendingCorrectionCount,
+    totalHoursDisplay: s.recordedHoursDisplay,
+    state: s.state,
+    stateLabel: s.stateLabel,
+    approvedAt: s.approvedAt?.toISOString() ?? null,
+    approvedByDisplayName: null,
+    reviewHref: s.reviewHref,
+  }));
+  const approvalsCompleteCount = readiness.frozenScopeCount;
+  const approvalsRequiredCount = readiness.scopeCount;
 
-  // ---- Slice 3B: workflow tracker (steps 1-3 real, 4-8 pending) ----
+  // ---- Slice 3B (acceptance-hotfix rev): workflow tracker ----
+  //
+  // Step 3 now honours the full reconciliation: it is `done` ONLY
+  // when every reviewable department has been Manager-approved AND
+  // frozen (readiness.allApproved), AND no unmaterialised source
+  // time remains (readiness.allImported). This prevents the prior
+  // false-positive where Step 3 auto-completed just because
+  // getDepartmentApprovalStatus returned empty on an unfrozen
+  // period.
   const workflow = baseWorkflow();
-  // Step 1 Prepare — batch exists → done. (No batch is caught earlier.)
   workflow[0] = { ...workflow[0]!, state: "done" };
-  // Step 2 Review Exceptions — done iff no unresolved BLOCKERS remain.
   workflow[1] = { ...workflow[1]!, state: blockerCount === 0 ? "done" : "current" };
-  // Step 3 Approvals — done iff no required approvals OR every one is APPROVED.
-  const approvalsDone = approvalsRequiredCount === 0 || approvalsCompleteCount === approvalsRequiredCount;
+  const approvalsDone = readiness.allApproved && readiness.allImported;
   workflow[2] = { ...workflow[2]!, state: approvalsDone ? "done" : "current" };
 
-  // ---- Slice 3B: checklist ----
+  // ---- Slice 3B (acceptance-hotfix rev): checklist ----
+  //
+  // Item 1 is now a reconciliation rule against the time-readiness
+  // rollup. "All time entries imported" = every eligible completed
+  // source-time record has entered the reviewable payroll-time
+  // pipeline (PayrollTimesheetEntry), with no open sessions and no
+  // null-assignment entries lingering. Simply having a single
+  // PayrollApprovedTimeEntry is NOT enough — it never was.
   const checklist = baseChecklist();
-  //   Item 1 — All time entries imported. Complete iff at least one
-  //   PayrollApprovedTimeEntry exists in the period OR the batch has
-  //   no departments with time to import.
-  const timeImportedDone = approvedTimeEntryCount > 0 || approvalsRequiredCount === 0;
+  const detailForItem1 = (() => {
+    if (readiness.needsAttentionTimesheetCount > 0) {
+      return `${readiness.needsAttentionTimesheetCount} timesheet${readiness.needsAttentionTimesheetCount === 1 ? "" : "s"} needs attention`;
+    }
+    if (readiness.nullAssignmentEntryCount > 0) {
+      return `${readiness.nullAssignmentEntryCount} entr${readiness.nullAssignmentEntryCount === 1 ? "y" : "ies"} missing department`;
+    }
+    if (readiness.timesheetEntryCount === 0 && readiness.clockEventCount === 0) {
+      return "No time to import";
+    }
+    if (readiness.timesheetEntryCount === 0 && readiness.clockEventCount > 0) {
+      return `${readiness.clockEventCount} clock event${readiness.clockEventCount === 1 ? "" : "s"} awaiting materialization`;
+    }
+    return `${readiness.timesheetEntryCount} imported · ${readiness.approvedTimeEntryCount} frozen`;
+  })();
   checklist[0] = {
     ...checklist[0]!,
-    done: timeImportedDone,
-    detail: approvedTimeEntryCount > 0
-      ? `${approvedTimeEntryCount} entr${approvedTimeEntryCount === 1 ? "y" : "ies"} imported`
-      : (approvalsRequiredCount === 0 ? "No time to import" : "None imported yet"),
+    done: readiness.allImported,
+    detail: detailForItem1,
   };
-  //   Item 2 — Department head approvals. X/Y approved.
+  //   Item 2 — Department head approvals. X/Y frozen (frozen is the
+  //   payroll-usable state; approved-unfrozen still requires a
+  //   Payroll Admin freeze click before Calculate can consume it).
   checklist[1] = {
     ...checklist[1]!,
     done: approvalsDone,
-    detail: approvalsRequiredCount === 0
+    detail: readiness.scopeCount === 0
       ? "No departments to approve"
-      : `${approvalsCompleteCount}/${approvalsRequiredCount} approved`,
+      : `${readiness.frozenScopeCount}/${readiness.scopeCount} frozen · ${readiness.pendingScopeCount} pending${readiness.reopenedScopeCount > 0 ? ` · ${readiness.reopenedScopeCount} reopened` : ""}`,
   };
   //   Item 3 — Resolve payroll exceptions (BLOCKERS only per §28).
   checklist[2] = {
@@ -847,6 +888,11 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       exceptionsInfoCount: infoCount,
       approvalsCompleteCount,
       approvalsRequiredCount,
+      timesheetEntryCount: readiness.timesheetEntryCount,
+      approvedTimeEntryCount: readiness.approvedTimeEntryCount,
+      openSessionCount: readiness.needsAttentionTimesheetCount,
+      nullAssignmentEntryCount: readiness.nullAssignmentEntryCount,
+      clockEventCount: readiness.clockEventCount,
     },
     employeeTable: {
       rows: pagedRows,
@@ -875,6 +921,8 @@ function emptyKpi(): PayrollOverviewViewModel["kpi"] {
     adjustmentsCount: null, exceptionsCount: null,
     exceptionsBlockerCount: null, exceptionsWarningCount: null, exceptionsInfoCount: null,
     approvalsCompleteCount: null, approvalsRequiredCount: null,
+    timesheetEntryCount: null, approvedTimeEntryCount: null,
+    openSessionCount: null, nullAssignmentEntryCount: null, clockEventCount: null,
   };
 }
 function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel["employeeTable"] {
