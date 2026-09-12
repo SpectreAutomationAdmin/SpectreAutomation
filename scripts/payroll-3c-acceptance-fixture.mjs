@@ -25,9 +25,14 @@ const prisma = new PrismaClient();
 const COULEE = "cmrvdeny7000144372ktmmg9c";
 const PAY_GROUP_CODE = "3C-ACCEPT";
 const PAY_GROUP_NAME = "3C Acceptance (Bi-Weekly)";
-const PERIOD_START = new Date(Date.UTC(2026, 7, 30)); // Aug 30, 2026
-const PERIOD_END   = new Date(Date.UTC(2026, 8, 13)); // Sep 13, 2026 (exclusive)
-const PAY_DATE     = new Date(Date.UTC(2026, 8, 12)); // Sep 12, 2026
+// Sep 27 – Oct 10 chosen so the period does NOT intersect Riley's
+// existing Sep 2 + Sep 4 clock activity. That means the batch has
+// no departments-with-time to approve → `assertPreconditions`
+// skips the approval gate → Prepare reaches PREPARED regardless
+// of the founder period's Grounds approval state.
+const PERIOD_START = new Date(Date.UTC(2026, 8, 27)); // Sep 27, 2026
+const PERIOD_END   = new Date(Date.UTC(2026, 9, 11)); // Oct 11, 2026 (exclusive)
+const PAY_DATE     = new Date(Date.UTC(2026, 9, 10)); // Oct 10, 2026
 const RILEY_EMAIL  = "riley.reconcile@fixture.spectre.test";
 const BONUS_CODE   = "3C_ACCEPT_BONUS";
 
@@ -53,12 +58,29 @@ async function main() {
     console.log(`  = Pay group ${PAY_GROUP_CODE} exists: ${payGroup.id}`);
   }
 
-  // ---- Ensure the Aug 30–Sep 12 pay period exists ----
+  // ---- Ensure the Sep 27 – Oct 10 pay period exists ----
+  //
+  // A prior version of this fixture used Aug 30 – Sep 12; if that
+  // period exists we void any batch on it and update the dates in
+  // place, since the schema uniques on (clubId, payGroupId, taxYear,
+  // sequenceInYear) prevent duplicates.
   let payPeriod = await prisma.payrollPayPeriod.findFirst({
-    where: { clubId: COULEE, payGroupId: payGroup.id, periodStart: PERIOD_START },
-    select: { id: true },
+    where: { clubId: COULEE, payGroupId: payGroup.id, sequenceInYear: 18, taxYear: 2026 },
+    select: { id: true, periodStart: true },
   });
-  if (!payPeriod) {
+  if (payPeriod && payPeriod.periodStart.getTime() !== PERIOD_START.getTime()) {
+    // Void any non-VOIDED batches on this period so its dates can be
+    // updated safely.
+    await prisma.payrollBatch.updateMany({
+      where: { payPeriodId: payPeriod.id, status: { not: "VOIDED" } },
+      data:  { status: "VOIDED", voidedAt: new Date(), voidReason: "3C-acceptance fixture repointed dates" },
+    });
+    await prisma.payrollPayPeriod.update({
+      where: { id: payPeriod.id },
+      data:  { periodStart: PERIOD_START, periodEnd: PERIOD_END, payDate: PAY_DATE },
+    });
+    console.log(`  ~ Repointed pay period to Sep 27 – Oct 10: ${payPeriod.id}`);
+  } else if (!payPeriod) {
     payPeriod = await prisma.payrollPayPeriod.create({
       data: {
         clubId: COULEE, payGroupId: payGroup.id,
@@ -66,9 +88,9 @@ async function main() {
         periodStart: PERIOD_START, periodEnd: PERIOD_END,
         payDate: PAY_DATE, status: "OPEN",
       },
-      select: { id: true },
+      select: { id: true, periodStart: true },
     });
-    console.log(`  + Created pay period Aug 30 – Sep 12: ${payPeriod.id}`);
+    console.log(`  + Created pay period Sep 27 – Oct 10: ${payPeriod.id}`);
   } else {
     console.log(`  = Pay period exists: ${payPeriod.id}`);
   }
@@ -137,7 +159,7 @@ async function main() {
 
   console.log(`\n== Summary ==`);
   console.log(`  Pay group:       ${payGroup.id} (${PAY_GROUP_CODE})`);
-  console.log(`  Pay period:      ${payPeriod.id} (Aug 30 – Sep 12, 2026)`);
+  console.log(`  Pay period:      ${payPeriod.id} (Sep 27 – Oct 10, 2026)`);
   console.log(`  Riley:           ${riley.id}`);
   console.log(`  Bonus component: ${BONUS_CODE}`);
   console.log(`\nNext step: navigate to /app/admin/payroll?payPeriodId=${payPeriod.id}`);
