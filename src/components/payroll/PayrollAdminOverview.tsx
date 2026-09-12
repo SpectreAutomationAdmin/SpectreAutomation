@@ -236,6 +236,7 @@ function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: Pr
           {prepare && prepare.canPrepare && !view.hasBatch && view.payPeriod ? (
             <form action={prepare.action}>
               <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
+              <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
               <PrepareSubmitButton />
             </form>
           ) : null}
