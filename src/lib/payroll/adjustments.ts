@@ -143,32 +143,40 @@ export async function addOneTimeAdjustment(
     }]);
   }
 
-  const created = await prisma.payrollBatchComponentSnapshot.create({
-    data: {
-      clubId, batchId, batchEmployeeId: be.id, employeeId: be.employeeId,
-      sourceComponentId: component.id, sourceAssignmentId: null,
-      componentCode: component.code, displayName: component.displayName,
-      category: component.category, side: component.side,
-      displaySection: component.displaySection, displayOrder: component.displayOrder,
-      cashEffect: component.cashEffect,
-      taxableEffect: component.taxableEffect,
-      cppPensionableEffect: component.cppPensionableEffect,
-      eiInsurableEffect: component.eiInsurableEffect,
-      calculationMethod: component.calculationMethod,
-      statutoryTreatmentSource: component.statutoryTreatmentSource,
-      resolvedAmount, sourcePercentBps: percentBps, eligibleEarningsBase,
-      sourceEffectiveFrom: new Date(),
-      sourceEffectiveTo: null,
-      provenance: "ONE_TIME_PAYROLL_ADJUSTMENT",
-      enteredByUserId: principal.id,
-      reason,
-      // Payroll-3C-6 (2026-09-05) — one-time adjustments freeze the
-      // component's GL mapping at add-time so they post through the
-      // same tenant-configured accounts as their recurring siblings.
-      expenseAccountIdSnapshot:   component.expenseAccountId   ?? null,
-      liabilityAccountIdSnapshot: component.liabilityAccountId ?? null,
-    },
-    select: { id: true },
+  // Payroll 3C acceptance hotfix (2026-09-12) — the snapshot write
+  // and the atomic invalidation of any current ONE_TIME_ADJUSTMENTS
+  // review attestation share a single transaction. This gives us
+  // the §3 invariant "dataset change must invalidate review".
+  const created = await prisma.$transaction(async (tx) => {
+    const snapshot = await tx.payrollBatchComponentSnapshot.create({
+      data: {
+        clubId, batchId, batchEmployeeId: be.id, employeeId: be.employeeId,
+        sourceComponentId: component.id, sourceAssignmentId: null,
+        componentCode: component.code, displayName: component.displayName,
+        category: component.category, side: component.side,
+        displaySection: component.displaySection, displayOrder: component.displayOrder,
+        cashEffect: component.cashEffect,
+        taxableEffect: component.taxableEffect,
+        cppPensionableEffect: component.cppPensionableEffect,
+        eiInsurableEffect: component.eiInsurableEffect,
+        calculationMethod: component.calculationMethod,
+        statutoryTreatmentSource: component.statutoryTreatmentSource,
+        resolvedAmount, sourcePercentBps: percentBps, eligibleEarningsBase,
+        sourceEffectiveFrom: new Date(),
+        sourceEffectiveTo: null,
+        provenance: "ONE_TIME_PAYROLL_ADJUSTMENT",
+        enteredByUserId: principal.id,
+        reason,
+        expenseAccountIdSnapshot:   component.expenseAccountId   ?? null,
+        liabilityAccountIdSnapshot: component.liabilityAccountId ?? null,
+      },
+      select: { id: true },
+    });
+    await tx.payrollBatchReviewAttestation.updateMany({
+      where: { clubId, batchId, dimension: "ONE_TIME_ADJUSTMENTS", invalidatedAt: null },
+      data:  { invalidatedAt: new Date(), invalidatedByReason: "payroll.adjustment.add" },
+    });
+    return snapshot;
   });
 
   await audit(principal, {
@@ -216,7 +224,16 @@ export async function removeOneTimeAdjustment(
   }
   assertBatchAcceptsAdjustments(snap.batch.status);
 
-  await prisma.payrollBatchComponentSnapshot.delete({ where: { id: snap.id } });
+  // Payroll 3C acceptance hotfix (2026-09-12) — snapshot delete and
+  // ONE_TIME_ADJUSTMENTS review-attestation invalidation share a
+  // single transaction (§3).
+  await prisma.$transaction(async (tx) => {
+    await tx.payrollBatchComponentSnapshot.delete({ where: { id: snap.id } });
+    await tx.payrollBatchReviewAttestation.updateMany({
+      where: { clubId, batchId: snap.batchId, dimension: "ONE_TIME_ADJUSTMENTS", invalidatedAt: null },
+      data:  { invalidatedAt: new Date(), invalidatedByReason: "payroll.adjustment.remove" },
+    });
+  });
 
   await audit(principal, {
     clubId, action: "payroll.adjustment.remove",

@@ -30,6 +30,7 @@ import {
   createRecurringAssignmentAction,
   endRecurringAssignmentAction,
 } from "./_adjustment-actions";
+import { attestBatchReviewAction } from "./_review-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -95,6 +96,10 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
         createAction: createRecurringAssignmentAction,
         endAction: endRecurringAssignmentAction,
         canWrite: canWriteRecurring,
+      }}
+      review={{
+        action: attestBatchReviewAction,
+        canAttest: canEditAdjustments,
       }}
     />
   );

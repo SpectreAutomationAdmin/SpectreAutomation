@@ -480,6 +480,8 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3C-acceptance (2026-09-12) — batch review attestations.
+  payrollBatchReviewAttestations     PayrollBatchReviewAttestation[]
   // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
   payrollDepartmentTimeScopeStates   PayrollDepartmentTimeScopeState[]
   // Payroll-3D-4 back-relation.
@@ -12136,6 +12138,9 @@ model PayrollBatch {
   // Payroll-3C-2 (2026-09-07) — Payroll Component snapshots.
   componentSnapshots    PayrollBatchComponentSnapshot[]
   exceptions            PayrollBatchException[]
+  // Payroll-3C-acceptance (2026-09-12) — governance review
+  // attestations, one row per (batch, dimension, attestation).
+  reviewAttestations    PayrollBatchReviewAttestation[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
@@ -13122,6 +13127,56 @@ model PayrollDepartmentTimeApproval {
   @@index([clubId, payPeriodId])
   @@index([clubId, departmentId])
   @@index([workIntakeItemId])
+}
+
+// Payroll-3C-acceptance (2026-09-12) — governance review attestation.
+//
+// A PayrollBatchReviewAttestation row records that a Payroll Admin
+// attested to a specific dataset dimension of a specific batch, at
+// a specific dataset fingerprint. Two dimensions in the 3C
+// acceptance hotfix; a third (EMPLOYEE_DATA) is reserved for a
+// later slice.
+//
+// Semantics:
+//   • The "current" attestation for a (batch, dimension) pair is
+//     the row with `invalidatedAt IS NULL`. Multiple rows may exist
+//     per (batch, dimension) across a batch's lifecycle — every
+//     mutation that changes the underlying dataset sets the current
+//     row's `invalidatedAt` inside the same transaction, and the
+//     next attestation creates a fresh row (historical audit trail
+//     preserved per §1 of the acceptance directive).
+//   • `fingerprint` is a deterministic hash of the reviewed dataset
+//     (see src/lib/payroll/batch-review.ts::computeReviewFingerprint).
+//     An attestation is considered current only when the recomputed
+//     fingerprint matches `fingerprint`.
+//   • Fresh batches carry ZERO attestations — review state is never
+//     carried across `voidPayrollBatch` + re-Prepare.
+model PayrollBatchReviewAttestation {
+  id                  String        @id @default(cuid())
+  clubId              String
+  club                Club          @relation(fields: [clubId], references: [id])
+  batchId             String
+  batch               PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  // ONE_TIME_ADJUSTMENTS | RECURRING_COMPONENTS | EMPLOYEE_DATA (future)
+  dimension           String
+  // sha256 hex of the reviewed dataset — see batch-review.ts.
+  fingerprint         String
+  attestedAt          DateTime      @default(now())
+  // User ID string only (no @relation) — mirrors the payroll batch
+  // preparedByUserId / approvedByUserId pattern. The user's display
+  // name is resolved at read time.
+  attestedByUserId    String
+  invalidatedAt       DateTime?
+  // e.g. "payroll.adjustment.add" / "payroll.adjustment.remove" —
+  // populated in the same transaction as the mutation that
+  // invalidated the attestation. NULL while the attestation is
+  // current.
+  invalidatedByReason String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([clubId, batchId, dimension])
+  @@index([batchId, dimension, invalidatedAt])
 }
 
 // Payroll-3D-3B Slice 7B (2026-09-06) — DB-controlled concurrency

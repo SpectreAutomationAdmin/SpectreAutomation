@@ -171,17 +171,18 @@ export interface PayrollAdminOverviewProps {
   freeze?: FreezeControls | null;
   adjustments?: AdjustmentControls | null;
   recurring?: RecurringControls | null;
+  review?: ReviewControls | null;
 }
 
 export default function PayrollAdminOverview({
-  view, prepare = null, freeze = null, adjustments = null, recurring = null,
+  view, prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
       <Header view={view} prepare={prepare} />
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} />
+        <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} />
         <div className="space-y-2">
           <ActionsCard view={view} />
           <ChecklistCard view={view} />
@@ -429,6 +430,13 @@ export interface RecurringControls {
   canWrite: boolean;
 }
 
+// Slice 3C acceptance hotfix (2026-09-12) — Mark Reviewed server-
+// action bundle for the two governance-review dimensions.
+export interface ReviewControls {
+  action: (formData: FormData) => Promise<void>;
+  canAttest: boolean;
+}
+
 // Prepare Payroll submit control — MUST live inside the <form action=…>
 // so `useFormStatus` can read the pending state of the surrounding
 // server-action submission. While the server action runs (network
@@ -462,12 +470,13 @@ function PrepareSubmitButton() {
   );
 }
 
-function Workspace({ view, prepare, freeze, adjustments, recurring }: {
+function Workspace({ view, prepare, freeze, adjustments, recurring, review }: {
   view: PayrollOverviewViewModel;
   prepare: PrepareControls | null;
   freeze: FreezeControls | null;
   adjustments: AdjustmentControls | null;
   recurring: RecurringControls | null;
+  review: ReviewControls | null;
 }) {
   const activeTab = view.activeTab;
   return (
@@ -476,7 +485,7 @@ function Workspace({ view, prepare, freeze, adjustments, recurring }: {
       {activeTab === "employees"   && <EmployeesTabContent view={view} prepare={prepare} />}
       {activeTab === "exceptions"  && <ExceptionsTabContent view={view} />}
       {activeTab === "approvals"   && <ApprovalsTabContent view={view} freeze={freeze} />}
-      {activeTab === "adjustments" && <AdjustmentsTabContent view={view} adjustments={adjustments} recurring={recurring} />}
+      {activeTab === "adjustments" && <AdjustmentsTabContent view={view} adjustments={adjustments} recurring={recurring} review={review} />}
       {activeTab === "summary"     && <FutureTabContent label="Summary" note="Summary view becomes functional after Calculate." />}
     </section>
   );
@@ -832,11 +841,14 @@ function FutureTabContent({ label, note }: { label: string; note: string }) {
 // Components (frozen at Prepare). Add / Remove wired to the
 // canonical domain services; batch-status gating is enforced by
 // the domain (assertBatchAcceptsAdjustments — PREPARED-only).
-function AdjustmentsTabContent({ view, adjustments, recurring }: {
+function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
   view: PayrollOverviewViewModel;
   adjustments: AdjustmentControls | null;
   recurring: RecurringControls | null;
+  review: ReviewControls | null;
 }) {
+  const oneTimeAtt = view.reviewAttestations.find((r) => r.dimension === "ONE_TIME_ADJUSTMENTS");
+  const recurAtt   = view.reviewAttestations.find((r) => r.dimension === "RECURRING_COMPONENTS");
   if (!view.hasBatch) {
     return (
       <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-adjustments-empty">
@@ -860,6 +872,18 @@ function AdjustmentsTabContent({ view, adjustments, recurring }: {
       <AdjustmentsSectionHeader
         title="One-Time Adjustments"
         subtitle="Batch-specific corrections attached to this payroll run"
+        pill={view.oneTimeAdjustments.length === 0 ? null : (
+          <ReviewStatusPill kind="one-time" attestation={oneTimeAtt ?? null} />
+        )}
+        markReviewed={view.oneTimeAdjustments.length > 0 && review?.canAttest === true && !(oneTimeAtt?.isCurrent) ? (
+          <MarkReviewedButton
+            action={review!.action}
+            payPeriodId={payPeriodId}
+            batchId={batchId}
+            dimension="ONE_TIME_ADJUSTMENTS"
+            testId="payroll-admin-review-mark-one-time"
+          />
+        ) : null}
         right={canAdd ? (
           <details className="relative">
             <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md bg-[#1e40af] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#1e3a8a]" data-testid="payroll-admin-adjustments-add-open">
@@ -934,6 +958,18 @@ function AdjustmentsTabContent({ view, adjustments, recurring }: {
       <AdjustmentsSectionHeader
         title="Recurring Components"
         subtitle="Frozen from employee recurring setup at Prepare"
+        pill={view.recurringSnapshots.length === 0 ? null : (
+          <ReviewStatusPill kind="recurring" attestation={recurAtt ?? null} />
+        )}
+        markReviewed={view.recurringSnapshots.length > 0 && review?.canAttest === true && !(recurAtt?.isCurrent) ? (
+          <MarkReviewedButton
+            action={review!.action}
+            payPeriodId={payPeriodId}
+            batchId={batchId}
+            dimension="RECURRING_COMPONENTS"
+            testId="payroll-admin-review-mark-recurring"
+          />
+        ) : null}
         right={canRecur ? (
           <details className="relative">
             <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-stone-200 bg-white px-3 py-1.5 text-[12.5px] text-stone-700 hover:bg-stone-50" data-testid="payroll-admin-recurring-manage-open">
@@ -941,9 +977,11 @@ function AdjustmentsTabContent({ view, adjustments, recurring }: {
             </summary>
             <ManageRecurringPanel
               createAction={recurring!.createAction}
+              endAction={recurring!.endAction}
               payPeriodId={payPeriodId}
               employees={employeePickerRows}
               components={view.componentPicker}
+              assignmentsByEmployee={view.recurringAssignmentsByEmployee}
             />
           </details>
         ) : (
@@ -987,15 +1025,70 @@ function AdjustmentsTabContent({ view, adjustments, recurring }: {
   );
 }
 
-function AdjustmentsSectionHeader({ title, subtitle, right }: { title: string; subtitle: string; right: ReactNode }) {
+function AdjustmentsSectionHeader({ title, subtitle, right, pill = null, markReviewed = null }: {
+  title: string;
+  subtitle: string;
+  right: ReactNode;
+  pill?: ReactNode;
+  markReviewed?: ReactNode;
+}) {
   return (
     <div className="px-6 py-3 flex items-start justify-between gap-4 bg-white">
       <div>
-        <h3 className="text-[14px] font-semibold text-stone-900">{title}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-[14px] font-semibold text-stone-900">{title}</h3>
+          {pill}
+        </div>
         <p className="text-[12px] text-stone-500 mt-0.5">{subtitle}</p>
       </div>
-      <div className="shrink-0">{right}</div>
+      <div className="shrink-0 flex items-center gap-2">
+        {markReviewed}
+        {right}
+      </div>
     </div>
+  );
+}
+
+function ReviewStatusPill({ kind, attestation }: {
+  kind: "one-time" | "recurring";
+  attestation: PayrollOverviewViewModel["reviewAttestations"][number] | null;
+}) {
+  const isReviewed = attestation?.isCurrent === true;
+  const cfg = isReviewed
+    ? { bg: "bg-[#dcfce7]", text: "text-[#166534]", dot: "bg-[#16a34a]", label: "Reviewed" }
+    : { bg: "bg-[#fef3c7]", text: "text-[#92400e]", dot: "bg-[#d97706]", label: "Review required" };
+  return (
+    <span
+      className={"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11.5px] " + cfg.bg + " " + cfg.text}
+      data-testid={`payroll-admin-review-pill-${kind}`}
+      data-state={isReviewed ? "reviewed" : "review-required"}
+    >
+      <span className={"h-1.5 w-1.5 rounded-full " + cfg.dot} />
+      {cfg.label}
+    </span>
+  );
+}
+
+function MarkReviewedButton({ action, payPeriodId, batchId, dimension, testId }: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  batchId: string;
+  dimension: "ONE_TIME_ADJUSTMENTS" | "RECURRING_COMPONENTS";
+  testId: string;
+}) {
+  return (
+    <form action={action} className="inline-flex">
+      <input type="hidden" name="payPeriodId" value={payPeriodId} />
+      <input type="hidden" name="batchId" value={batchId} />
+      <input type="hidden" name="dimension" value={dimension} />
+      <button
+        type="submit"
+        data-testid={testId}
+        className="inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3 py-1 text-[12.5px] text-stone-700"
+      >
+        Mark Reviewed
+      </button>
+    </form>
   );
 }
 
@@ -1051,16 +1144,26 @@ function AddAdjustmentPanel({ action, payPeriodId, batchId, employees, component
   );
 }
 
-function ManageRecurringPanel({ createAction, payPeriodId, employees, components }: {
+function ManageRecurringPanel({ createAction, endAction, payPeriodId, employees, components, assignmentsByEmployee }: {
   createAction: (fd: FormData) => Promise<void>;
+  endAction: (fd: FormData) => Promise<void>;
   payPeriodId: string;
   employees: Array<{ batchEmployeeId: string; employeeId: string; displayName: string }>;
   components: PayrollOverviewViewModel["componentPicker"];
+  assignmentsByEmployee: PayrollOverviewViewModel["recurringAssignmentsByEmployee"];
 }) {
+  const employeeIds = employees.map((e) => e.employeeId);
+  const flatActive = employeeIds
+    .flatMap((eid) => assignmentsByEmployee[eid] ?? [])
+    .filter((a) => !a.isHistorical);
+  const flatHistorical = employeeIds
+    .flatMap((eid) => assignmentsByEmployee[eid] ?? [])
+    .filter((a) => a.isHistorical);
+  const todayISO = new Date().toISOString().slice(0, 10);
   return (
-    <div className="absolute right-0 top-full mt-1 z-10 w-[420px] rounded-md border border-stone-200 bg-white shadow-lg p-4" data-testid="payroll-admin-recurring-manage-panel">
+    <div className="absolute right-0 top-full mt-1 z-10 w-[520px] max-h-[560px] overflow-auto rounded-md border border-stone-200 bg-white shadow-lg p-4" data-testid="payroll-admin-recurring-manage-panel">
       <p className="text-[12px] text-stone-500 mb-2">
-        Add a recurring payroll component to an employee. Existing prepared batches are NOT modified — the assignment flows into the next Prepare.
+        Add a recurring payroll component to an employee. Existing prepared batches are NOT modified — the assignment flows into the next Prepare (§13).
       </p>
       <form action={createAction} className="space-y-2.5">
         <input type="hidden" name="payPeriodId" value={payPeriodId} />
@@ -1096,6 +1199,49 @@ function ManageRecurringPanel({ createAction, payPeriodId, employees, components
           <button type="submit" data-testid="payroll-admin-recurring-add-submit" className="inline-flex items-center gap-1 rounded-md bg-[#0f5f3f] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#0d4f34]">Add assignment</button>
         </div>
       </form>
+
+      <div className="mt-4 pt-3 border-t border-stone-200">
+        <p className="text-[12.5px] font-semibold text-stone-700 mb-1">Active Assignments</p>
+        {flatActive.length === 0 ? (
+          <p className="text-[11.5px] text-stone-500" data-testid="payroll-admin-recurring-active-empty">
+            No active recurring assignments for employees in this batch.
+          </p>
+        ) : (
+          <ul className="space-y-1.5" data-testid="payroll-admin-recurring-active-list">
+            {flatActive.map((a) => (
+              <li key={a.id} className="flex items-start justify-between gap-2 text-[12px] text-stone-800" data-testid={`payroll-admin-recurring-active-${a.id}`}>
+                <div className="min-w-0 flex-1">
+                  <p><span className="font-semibold">{a.employeeDisplayName}</span> · {a.componentDisplayName} <span className="text-stone-500">({a.componentCode})</span></p>
+                  <p className="text-stone-500 text-[11px]">
+                    {a.amountDisplay} · effective {a.effectiveFromISO.slice(0, 10)}
+                    {a.effectiveToISO ? ` – ${a.effectiveToISO.slice(0, 10)}` : ""}
+                  </p>
+                </div>
+                <form action={endAction} className="inline-flex items-start gap-1">
+                  <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                  <input type="hidden" name="assignmentId" value={a.id} />
+                  <input type="date" name="effectiveTo" defaultValue={todayISO} required className="h-7 rounded border border-stone-200 text-[11px] px-1 w-[110px]" />
+                  <button type="submit" data-testid={`payroll-admin-recurring-end-${a.id}`} className="rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-2 py-0.5 text-[11.5px] text-stone-700">End Assignment</button>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {flatHistorical.length > 0 ? (
+        <div className="mt-3 pt-3 border-t border-stone-200">
+          <p className="text-[12.5px] font-semibold text-stone-700 mb-1">Historical Assignments</p>
+          <ul className="space-y-1" data-testid="payroll-admin-recurring-historical-list">
+            {flatHistorical.slice(0, 10).map((a) => (
+              <li key={a.id} className="text-[11.5px] text-stone-500" data-testid={`payroll-admin-recurring-historical-${a.id}`}>
+                {a.employeeDisplayName} · {a.componentDisplayName} · {a.amountDisplay} · {a.effectiveFromISO.slice(0, 10)}
+                {a.effectiveToISO ? ` – ${a.effectiveToISO.slice(0, 10)}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

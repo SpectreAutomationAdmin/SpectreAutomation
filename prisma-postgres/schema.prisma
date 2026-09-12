@@ -480,6 +480,8 @@ model Club {
   payrollBatchAllowanceSnapshots     PayrollBatchAllowanceSnapshot[]
   payrollApprovedTimeEntries         PayrollApprovedTimeEntry[]
   payrollDepartmentTimeApprovals     PayrollDepartmentTimeApproval[]
+  // Payroll-3C-acceptance (2026-09-12) — batch review attestations.
+  payrollBatchReviewAttestations     PayrollBatchReviewAttestation[]
   // Payroll-3D-3B Slice 7B — DB-CAS scope-state back-relation.
   payrollDepartmentTimeScopeStates   PayrollDepartmentTimeScopeState[]
   // Payroll-3D-4 back-relation.
@@ -12136,6 +12138,9 @@ model PayrollBatch {
   // Payroll-3C-2 (2026-09-07) — Payroll Component snapshots.
   componentSnapshots    PayrollBatchComponentSnapshot[]
   exceptions            PayrollBatchException[]
+  // Payroll-3C-acceptance (2026-09-12) — governance review
+  // attestations, one row per (batch, dimension, attestation).
+  reviewAttestations    PayrollBatchReviewAttestation[]
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
@@ -13122,6 +13127,26 @@ model PayrollDepartmentTimeApproval {
   @@index([clubId, payPeriodId])
   @@index([clubId, departmentId])
   @@index([workIntakeItemId])
+}
+
+// Payroll-3C-acceptance (2026-09-12) — governance review attestation.
+model PayrollBatchReviewAttestation {
+  id                  String        @id @default(cuid())
+  clubId              String
+  club                Club          @relation(fields: [clubId], references: [id])
+  batchId             String
+  batch               PayrollBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  dimension           String
+  fingerprint         String
+  attestedAt          DateTime      @default(now())
+  attestedByUserId    String
+  invalidatedAt       DateTime?
+  invalidatedByReason String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([clubId, batchId, dimension])
+  @@index([batchId, dimension, invalidatedAt])
 }
 
 // Payroll-3D-3B Slice 7B (2026-09-06) — DB-controlled concurrency

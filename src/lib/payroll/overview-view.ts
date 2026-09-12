@@ -26,6 +26,7 @@ import { parseSourceFactsV1 } from "./source-facts-schema";
 import { getDepartmentApprovalStatus, type DepartmentApprovalState } from "./department-approval";
 import { translateException, type ExceptionSeverity } from "./exception-translations";
 import { getTimeReadiness, type TimeReadinessState } from "./time-readiness";
+import { getBatchReviewStatus, type ReviewDimension } from "./batch-review";
 
 /* ============================================================
    Types
@@ -184,6 +185,32 @@ export interface PayrollOverviewComponentPickerRow {
   cashEffect: string;
 }
 
+// Payroll Admin Slice 3C acceptance hotfix (2026-09-12) — governance
+// review-attestation status per dimension.
+export interface PayrollOverviewReviewAttestationRow {
+  dimension: ReviewDimension;
+  isCurrent: boolean;
+  attestedAt: string | null;
+  attestedByDisplayName: string | null;
+}
+
+// Payroll Admin Slice 3C acceptance hotfix — per-employee recurring
+// assignment list, active + historical, for the Manage-Recurring UI.
+export interface PayrollOverviewRecurringAssignmentRow {
+  id: string;
+  employeeId: string;
+  employeeDisplayName: string;
+  componentId: string;
+  componentCode: string;
+  componentDisplayName: string;
+  category: string;
+  amountDisplay: string;
+  effectiveFromISO: string;
+  effectiveToISO: string | null;
+  active: boolean;
+  isHistorical: boolean;
+}
+
 export type PayrollOverviewTab =
   | "employees"
   | "exceptions"
@@ -256,6 +283,12 @@ export interface PayrollOverviewViewModel {
   recurringSnapshots: PayrollOverviewRecurringSnapshotRow[];
   componentPicker: PayrollOverviewComponentPickerRow[];
   batchAcceptsAdjustments: boolean;
+
+  // Slice 3C acceptance hotfix (2026-09-12) — governance review
+  // attestation state and per-employee recurring assignment editor
+  // data (both active + historical rows for every batch employee).
+  reviewAttestations: PayrollOverviewReviewAttestationRow[];
+  recurringAssignmentsByEmployee: Record<string, PayrollOverviewRecurringAssignmentRow[]>;
 
   // filter/search UI populators
   availableDepartments: Array<{ id: string; name: string }>;
@@ -597,6 +630,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       recurringSnapshots: [],
       componentPicker: [],
       batchAcceptsAdjustments: false,
+      reviewAttestations: [],
+      recurringAssignmentsByEmployee: {},
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -685,6 +720,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       recurringSnapshots: [],
       componentPicker: [],
       batchAcceptsAdjustments: false,
+      reviewAttestations: [],
+      recurringAssignmentsByEmployee: {},
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -710,6 +747,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     componentSnapshots,
     readiness,
     componentCatalogue,
+    reviewStatus,
   ] = await Promise.all([
     prisma.payrollBatch.findFirst({
       where: { id: activeBatch.id, clubId },
@@ -765,6 +803,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         displaySection: true, calculationMethod: true, cashEffect: true,
       },
     }),
+    // 3C acceptance hotfix — governance review attestation state.
+    getBatchReviewStatus(principal, clubId, activeBatch.id),
   ]);
 
   const batchRef: PayrollOverviewBatchRef | null = batchRow ? {
@@ -1110,34 +1150,90 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       warningMessage: s.warningMessage,
     }));
 
-  // 3C — checklist items 4 & 5. In the ABSENCE of a persisted
-  // review-attestation mechanism (§46 architectural gap reported to
-  // founder), items 4 and 5 auto-complete ONLY when zero rows of
-  // the reviewed provenance exist for the batch. If rows exist,
-  // items 4/5 stay incomplete with an honest "Manual review
-  // pending — attestation persistence pending schema decision"
-  // detail. Attestation is deferred until founder approves the
-  // schema addition.
+  // 3C acceptance hotfix (2026-09-12) — checklist items 4/5 now
+  // consult the persisted review attestation. An item completes iff
+  // EITHER the dataset is empty (auto-complete) OR the most recent
+  // attestation for the dimension is CURRENT (fingerprint matches
+  // the current dataset).
   const oneTimeAdjustmentCount = oneTimeAdjustments.length;
   const recurringSnapshotCount = recurringSnapshots.length;
+  const oneTimeAttestation   = reviewStatus.find((r) => r.dimension === "ONE_TIME_ADJUSTMENTS")?.attestation ?? null;
+  const recurringAttestation = reviewStatus.find((r) => r.dimension === "RECURRING_COMPONENTS")?.attestation ?? null;
+  const oneTimeReviewed = oneTimeAttestation?.isCurrent === true;
+  const recurringReviewed = recurringAttestation?.isCurrent === true;
+
+  const fmtAttested = (a: NonNullable<typeof oneTimeAttestation>): string => {
+    const at = new Date(a.attestedAt).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
+    return a.attestedByDisplayName
+      ? `reviewed by ${a.attestedByDisplayName} at ${at}`
+      : `reviewed at ${at}`;
+  };
   checklist[3] = {
     ...checklist[3]!,
     future: false,
-    done: oneTimeAdjustmentCount === 0,
+    done: oneTimeAdjustmentCount === 0 || oneTimeReviewed,
     detail: oneTimeAdjustmentCount === 0
       ? "No one-time adjustments"
-      : `${oneTimeAdjustmentCount} adjustment${oneTimeAdjustmentCount === 1 ? "" : "s"} · review pending`,
+      : (oneTimeReviewed
+          ? `${oneTimeAdjustmentCount} adjustment${oneTimeAdjustmentCount === 1 ? "" : "s"} · ${fmtAttested(oneTimeAttestation!)}`
+          : `${oneTimeAdjustmentCount} adjustment${oneTimeAdjustmentCount === 1 ? "" : "s"} · review required`),
   };
   checklist[4] = {
     ...checklist[4]!,
     future: false,
-    done: recurringSnapshotCount === 0,
+    done: recurringSnapshotCount === 0 || recurringReviewed,
     detail: recurringSnapshotCount === 0
       ? "No recurring components"
-      : `${recurringSnapshotCount} snapshot${recurringSnapshotCount === 1 ? "" : "s"} · review pending`,
+      : (recurringReviewed
+          ? `${recurringSnapshotCount} recurring component${recurringSnapshotCount === 1 ? "" : "s"} · ${fmtAttested(recurringAttestation!)}`
+          : `${recurringSnapshotCount} recurring component${recurringSnapshotCount === 1 ? "" : "s"} · review required`),
   };
 
   const batchAcceptsAdjustments = activeBatch.status === "PREPARED";
+
+  // 3C acceptance hotfix — per-employee recurring-assignment editor
+  // data (both active + historical) for the Manage-Recurring UI.
+  const employeeIds = batchEmployees.map((be) => be.employeeId);
+  const recurringAssignments = employeeIds.length > 0
+    ? await prisma.employeeRecurringPayrollComponent.findMany({
+        where: { clubId, employeeId: { in: employeeIds } },
+        include: {
+          component: { select: { id: true, code: true, displayName: true, category: true } },
+        },
+        orderBy: [{ employeeId: "asc" }, { active: "desc" }, { effectiveFrom: "desc" }],
+      })
+    : [];
+  const nowRc = new Date();
+  const recurringAssignmentsByEmployee: Record<string, PayrollOverviewRecurringAssignmentRow[]> = {};
+  for (const a of recurringAssignments) {
+    const key = a.employeeId;
+    if (!recurringAssignmentsByEmployee[key]) recurringAssignmentsByEmployee[key] = [];
+    const amtDisplay = a.amount != null
+      ? `$${Number(a.amount).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : (a.percentBps != null ? `${(a.percentBps / 100).toFixed(2)}%` : "—");
+    const isHistorical = !a.active || (a.effectiveTo != null && a.effectiveTo.getTime() <= nowRc.getTime());
+    recurringAssignmentsByEmployee[key]!.push({
+      id: a.id,
+      employeeId: a.employeeId,
+      employeeDisplayName: employeeNameByEmpId.get(a.employeeId) ?? "(unnamed)",
+      componentId: a.componentId,
+      componentCode: a.component?.code ?? "",
+      componentDisplayName: a.component?.displayName ?? "",
+      category: a.component?.category ?? "",
+      amountDisplay: amtDisplay,
+      effectiveFromISO: a.effectiveFrom.toISOString(),
+      effectiveToISO: a.effectiveTo?.toISOString() ?? null,
+      active: a.active,
+      isHistorical,
+    });
+  }
+
+  const reviewAttestationRows: PayrollOverviewReviewAttestationRow[] = reviewStatus.map((r) => ({
+    dimension: r.dimension,
+    isCurrent: r.attestation?.isCurrent === true,
+    attestedAt: r.attestation?.attestedAt?.toISOString() ?? null,
+    attestedByDisplayName: r.attestation?.attestedByDisplayName ?? null,
+  }));
 
   return {
     payGroup: payGroupRef,
@@ -1193,6 +1289,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       cashEffect: c.cashEffect,
     })),
     batchAcceptsAdjustments,
+    reviewAttestations: reviewAttestationRows,
+    recurringAssignmentsByEmployee,
     activeTab,
     availableDepartments,
     availableEmploymentTypes,
@@ -1227,6 +1325,7 @@ function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSiz
     checklist: baseChecklist(),
     exceptions: [], approvals: [],
     oneTimeAdjustments: [], recurringSnapshots: [], componentPicker: [], batchAcceptsAdjustments: false,
+    reviewAttestations: [], recurringAssignmentsByEmployee: {},
     activeTab: "employees",
     availableDepartments: [], availableEmploymentTypes: [], availableStatuses: [],
     activeFilter: filter,
