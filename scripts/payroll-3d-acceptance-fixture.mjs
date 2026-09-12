@@ -36,6 +36,7 @@ const PAY_DATE        = new Date(Date.UTC(2026, 10, 21));  // Nov 21, 2026
 const RILEY_EMAIL     = "riley.reconcile@fixture.spectre.test";
 const SAM_EMAIL       = "sam.salary@fixture.spectre.test";
 const SAM_HIRE        = new Date(Date.UTC(2026, 7, 1));    // Aug 1, 2026
+const SAM_DOB         = new Date(Date.UTC(1988, 4, 12));   // May 12, 1988
 
 async function main() {
   console.log(`\n== Payroll 3D acceptance fixture @ ${new Date().toISOString()} ==`);
@@ -123,14 +124,20 @@ async function main() {
       data: {
         clubId: COULEE, firstName: "Sam", lastName: "Salary",
         personalEmail: SAM_EMAIL, employeeNumber: "S3D-001",
-        hireDate: SAM_HIRE, employeeLifecycle: "ACTIVE",
+        hireDate: SAM_HIRE, dateOfBirth: SAM_DOB,
+        employeeLifecycle: "ACTIVE",
         timekeepingMethod: "NO_CLOCK",
       },
       select: { id: true },
     });
     console.log(`  + Created Sam Salary (SALARIED): ${sam.id}`);
   } else {
-    console.log(`  = Sam Salary exists: ${sam.id}`);
+    // Backfill dateOfBirth on existing rows if it's missing (CPP calc requires it).
+    await prisma.employee.update({
+      where: { id: sam.id },
+      data: { dateOfBirth: SAM_DOB },
+    });
+    console.log(`  = Sam Salary exists: ${sam.id} (dateOfBirth ensured)`);
   }
 
   // Employment assignment (SALARIED)
@@ -188,28 +195,27 @@ async function main() {
     console.log(`  = Sam already on ${PAY_GROUP_CODE}`);
   }
 
-  // Tax profile — federal + provincial claim
-  const samTax = await prisma.employeeTaxProfile.findFirst({
+  // Tax profile — intentionally OMITTED. Synthetic KMS refs fail
+  // decryption and raise a TD1_CLAIM_RESOLUTION_FAILED BLOCKER that
+  // holds the batch in DRAFT. Without any EmployeeTaxProfile row, the
+  // Prepare service emits WARNING-level MISSING_FEDERAL_TD1 /
+  // MISSING_PROVINCIAL_TD1 exceptions and the calculator uses the
+  // default federal + provincial claim amounts (2026 T4127 defaults).
+  // Delete any prior row from an earlier fixture pass — a stale row
+  // with synthetic secrets would keep failing decryption.
+  await prisma.employeeTaxProfile.deleteMany({
     where: { clubId: COULEE, employeeId: sam.id },
-    select: { id: true },
   });
-  if (!samTax) {
-    await prisma.employeeTaxProfile.create({
-      data: {
-        clubId: COULEE, employeeId: sam.id,
-        province: "AB", td1FormVersion: "2026",
-        effectiveFrom: SAM_HIRE,
-        federalClaimSecretRef: "kms://synthetic/sam-3d-fed",
-        provincialClaimSecretRef: "kms://synthetic/sam-3d-prov",
-        additionalFederalTaxAmount: "0",
-        additionalProvincialTaxAmount: "0",
-        claimZeroFederal: false, claimZeroProvincial: false,
-        totalIncomeLessThanClaim: false,
-      },
-    });
-    console.log(`  + Created Sam EmployeeTaxProfile (synthetic KMS refs)`);
-  } else {
-    console.log(`  = Sam EmployeeTaxProfile exists`);
+  console.log(`  ~ Removed Sam EmployeeTaxProfile (calculator uses default claims)`);
+
+  // Void any DRAFT batch that predates the fixture's KYC fixes so the
+  // next Prepare click regenerates it against the corrected inputs.
+  const staleBatches = await prisma.payrollBatch.updateMany({
+    where: { clubId: COULEE, payPeriodId: payPeriod.id, status: "DRAFT" },
+    data:  { status: "VOIDED", voidedAt: new Date(), voidReason: "3D fixture refresh — TD1 KMS + DOB fixed" },
+  });
+  if (staleBatches.count > 0) {
+    console.log(`  ~ Voided ${staleBatches.count} DRAFT batch(es) so re-Prepare regenerates on fixed inputs`);
   }
 
   // ---- Summary --------------------------------------------------------
