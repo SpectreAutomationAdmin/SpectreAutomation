@@ -60,35 +60,61 @@ async function main() {
     console.log(`  = Pay group ${PAY_GROUP_CODE} exists: ${payGroup.id}`);
   }
 
-  // ---- Pay period Nov 8 – Nov 21 --------------------------------------
-  let payPeriod = await prisma.payrollPayPeriod.findFirst({
-    where: { clubId: COULEE, payGroupId: payGroup.id, taxYear: 2026, sequenceInYear: 22 },
-    select: { id: true, periodStart: true },
-  });
-  if (payPeriod && payPeriod.periodStart.getTime() !== PERIOD_START.getTime()) {
-    await prisma.payrollBatch.updateMany({
-      where: { payPeriodId: payPeriod.id, status: { not: "VOIDED" } },
-      data:  { status: "VOIDED", voidedAt: new Date(), voidReason: "3D fixture repointed dates" },
+  // ---- Full 26-row 2026 calendar for the 3D-ACCEPT pay group ----------
+  //
+  // Payroll 3D acceptance hotfix (2026-09-12): `periods-per-year` now
+  // refuses to divide an annual salary by fewer periods than the pay
+  // group's canonical cadence — a BIWEEKLY group requires ≥26 rows for
+  // 2026. Seed all 26 anchored on Nov 8 – Nov 21 (sequenceInYear 22)
+  // walking backwards / forwards in 14-day increments. Anchor Riley +
+  // Sam remain on sequenceInYear 22.
+  const ANCHOR_SEQ = 22;
+  const MS_14D = 14 * 24 * 60 * 60 * 1000;
+  const ANCHOR_START_MS = PERIOD_START.getTime();
+  let periodsSeeded = 0;
+  for (let seq = 1; seq <= 26; seq++) {
+    const offset = seq - ANCHOR_SEQ;
+    const start = new Date(ANCHOR_START_MS + offset * MS_14D);
+    const end   = new Date(start.getTime() + MS_14D); // exclusive
+    const pay   = new Date(end.getTime() - 24 * 60 * 60 * 1000); // day before end
+    const existing = await prisma.payrollPayPeriod.findFirst({
+      where: { clubId: COULEE, payGroupId: payGroup.id, taxYear: 2026, sequenceInYear: seq },
+      select: { id: true, periodStart: true, periodEnd: true, payDate: true },
     });
-    await prisma.payrollPayPeriod.update({
-      where: { id: payPeriod.id },
-      data:  { periodStart: PERIOD_START, periodEnd: PERIOD_END, payDate: PAY_DATE },
-    });
-    console.log(`  ~ Repointed pay period to Nov 8 – Nov 21: ${payPeriod.id}`);
-  } else if (!payPeriod) {
-    payPeriod = await prisma.payrollPayPeriod.create({
+    if (existing) {
+      // Repoint the anchor period if its dates drifted; leave others as-is.
+      if (seq === ANCHOR_SEQ && existing.periodStart.getTime() !== ANCHOR_START_MS) {
+        await prisma.payrollBatch.updateMany({
+          where: { payPeriodId: existing.id, status: { not: "VOIDED" } },
+          data:  { status: "VOIDED", voidedAt: new Date(), voidReason: "3D fixture repointed anchor" },
+        });
+        await prisma.payrollPayPeriod.update({
+          where: { id: existing.id },
+          data:  { periodStart: PERIOD_START, periodEnd: PERIOD_END, payDate: PAY_DATE },
+        });
+        console.log(`  ~ Repointed anchor period seq ${seq}`);
+      }
+      continue;
+    }
+    await prisma.payrollPayPeriod.create({
       data: {
         clubId: COULEE, payGroupId: payGroup.id,
-        sequenceInYear: 22, taxYear: 2026,
-        periodStart: PERIOD_START, periodEnd: PERIOD_END,
-        payDate: PAY_DATE, status: "OPEN",
+        sequenceInYear: seq, taxYear: 2026,
+        periodStart: start, periodEnd: end,
+        payDate: pay, status: "OPEN",
       },
-      select: { id: true, periodStart: true },
     });
-    console.log(`  + Created pay period Nov 8 – Nov 21: ${payPeriod.id}`);
-  } else {
-    console.log(`  = Pay period exists: ${payPeriod.id}`);
+    periodsSeeded += 1;
   }
+  if (periodsSeeded > 0) {
+    console.log(`  + Seeded ${periodsSeeded} of 26 biweekly pay periods for 3D-ACCEPT taxYear 2026`);
+  } else {
+    console.log(`  = All 26 pay periods already exist for 3D-ACCEPT taxYear 2026`);
+  }
+  const payPeriod = await prisma.payrollPayPeriod.findFirstOrThrow({
+    where: { clubId: COULEE, payGroupId: payGroup.id, taxYear: 2026, sequenceInYear: ANCHOR_SEQ },
+    select: { id: true, periodStart: true },
+  });
 
   // ---- Riley (reuse from 3B fixture) — HOURLY zero-pay case -----------
   const riley = await prisma.employee.findFirst({

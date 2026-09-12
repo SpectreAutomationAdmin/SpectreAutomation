@@ -1488,6 +1488,12 @@ function ReturnToPreparationButton({ action, payPeriodId, payGroupId, batchId }:
             The current calculation will no longer be the active result. Payroll must be
             calculated again before it can be submitted.
           </p>
+          <p className="text-[11.5px] text-stone-500 leading-snug">
+            <span className="font-semibold text-stone-700">This run retains the inputs captured when it was prepared.</span>{" "}
+            Use this to add or remove a one-time adjustment before recalculating. If an employee&rsquo;s
+            HR record (compensation, TD1, assignment) has changed, this payroll run must be
+            <span className="whitespace-nowrap"> voided</span> and prepared again to use the updated setup.
+          </p>
           <div>
             <label htmlFor="ret-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
             <input
@@ -1496,7 +1502,7 @@ function ReturnToPreparationButton({ action, payPeriodId, payGroupId, batchId }:
               type="text"
               required
               maxLength={240}
-              placeholder="e.g. correcting Tim's hours"
+              placeholder="e.g. adding a one-time bonus"
               data-testid="payroll-admin-return-to-prep-reason"
               className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
             />
@@ -1982,7 +1988,9 @@ function ReturnToPreparationSidebarButton({ action, payPeriodId, payGroupId, bat
           <input type="hidden" name="payGroupId" value={payGroupId} />
           <input type="hidden" name="batchId" value={batchId} />
           <p className="text-[11.5px] text-stone-500 leading-snug">
-            This will reopen this payroll run for changes. Payroll must be calculated again before submission.
+            Reopens this run for a batch-local change (add/remove a one-time adjustment,
+            re-review). The frozen inputs captured at Prepare are kept — void and prepare
+            again if an employee&rsquo;s HR record has changed.
           </p>
           <div>
             <label htmlFor="ret-side-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
@@ -1992,7 +2000,7 @@ function ReturnToPreparationSidebarButton({ action, payPeriodId, payGroupId, bat
               type="text"
               required
               maxLength={240}
-              placeholder="e.g. correcting Tim's hours"
+              placeholder="e.g. adding a one-time bonus"
               data-testid="payroll-admin-actions-return-to-prep-reason"
               className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
             />

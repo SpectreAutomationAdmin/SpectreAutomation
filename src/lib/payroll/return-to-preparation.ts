@@ -1,11 +1,41 @@
 // Payroll Admin Slice 3D (2026-09-12) — Return to Preparation.
 //
 // Safely transitions CALCULATED → PREPARED so a Payroll Admin can
-// correct an input that was discovered post-Calculate (§24-25). This
-// is the ONLY sanctioned path for editing a CALCULATED batch —
-// silent-edit of a calculated payroll is forbidden.
+// correct a BATCH-LOCAL input that was discovered post-Calculate
+// (§24-25). This is the ONLY sanctioned path for editing a CALCULATED
+// batch — silent-edit of a calculated payroll is forbidden.
 //
-// Contract (§25):
+// FROZEN-BATCH CONTRACT (Payroll 3D acceptance hotfix, 2026-09-12 §10-14):
+//
+// This service is Option A. It does NOT re-run `preparePayrollBatch`.
+// The batch's frozen inputs — `PayrollBatchEmployee.sourceFactsJson`,
+// the projected `PayrollBatchEarning` rows, `PayrollBatchComponentSnapshot`
+// recurring rows, `PayrollBatchAllowanceSnapshot` rows — remain
+// exactly as they were at Prepare time. When Calculate re-runs, it
+// re-reads those frozen rows and produces the same output UNLESS a
+// batch-local dataset (adjustments, review attestations, calculator
+// parameters) has changed.
+//
+// USE CASES SUPPORTED:
+//   • Add / remove a one-time adjustment on this batch.
+//   • Mark a review dimension reviewed and recalculate.
+//   • Rerun after correcting a calculator-parameter defect.
+//
+// USE CASES NOT SUPPORTED — the operator MUST void and re-prepare:
+//   • Correcting an employee's compensation (annual salary, hourly
+//     rate) in HR.
+//   • Correcting an employee's TD1 / tax profile.
+//   • Correcting an employment assignment or department.
+//   • Approving additional source time or changing frozen hours.
+//   • Rebuilding recurring-component setup for the batch.
+//
+// `preparePayrollBatch` is idempotent on non-VOIDED batches and
+// returns the existing row (see batch-preparation.ts:700-730 —
+// "The founder-mandated policy is that source changes DO NOT
+// auto-refresh"). To pull in HR changes the operator must
+// `voidPayrollBatch` and re-Prepare, which resnapshots.
+//
+// Contract details (§25):
 //   • Requires `payroll:edit`.
 //   • Refuses when batch is not CALCULATED (a batch already returned to
 //     PREPARED, or any post-CALCULATED lifecycle: SUBMITTED_FOR_APPROVAL,

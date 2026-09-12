@@ -116,7 +116,7 @@ function iso(d: Date | null | undefined): string | null {
 async function loadPayPeriod(clubId: string, payPeriodId: string) {
   const p = await prisma.payrollPayPeriod.findFirst({
     where: { id: payPeriodId, clubId },
-    include: { payGroup: { select: { id: true, code: true, name: true, active: true } } },
+    include: { payGroup: { select: { id: true, code: true, name: true, active: true, payFrequency: true } } },
   });
   if (!p) throw new NotFoundError("PayrollPayPeriod", payPeriodId);
   return p;
@@ -132,6 +132,7 @@ async function assertPreconditions(clubId: string, payPeriodId: string): Promise
   periodStart: Date;
   periodEnd: Date;
   payDate: Date;
+  payFrequency: string;
 }> {
   const period = await loadPayPeriod(clubId, payPeriodId);
   if (!period.payGroup.active) {
@@ -207,6 +208,7 @@ async function assertPreconditions(clubId: string, payPeriodId: string): Promise
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
     payDate: period.payDate,
+    payFrequency: period.payGroup.payFrequency,
   };
 }
 
@@ -773,10 +775,15 @@ export async function preparePayrollBatch(
   //     compensations (the FIRST SALARY row, matching the
   //     calculator's `Array.prototype.find` selection).
   const periodTaxYear = pre.payDate.getUTCFullYear();
+  // Payroll 3D acceptance hotfix (2026-09-12) — cross-check calendar
+  // row count against the Pay Group's payFrequency. Under-populated
+  // calendars would otherwise silently divide annual salary by too
+  // few periods (e.g. one row → gross = full annual amount).
   const periodsPerYear = await resolvePeriodsPerYearFromCalendar({
     clubId,
     payGroupId: pre.payGroupId,
     taxYear: periodTaxYear,
+    payFrequency: pre.payFrequency,
   });
 
   const anyBlocker = snapshots.some((s) => s.exceptions.some((e) => e.severity === "BLOCKER"));

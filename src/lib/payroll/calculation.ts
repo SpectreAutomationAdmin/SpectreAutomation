@@ -145,6 +145,7 @@ export async function prepareCalculationInput(
     where: { id: batchId },
     include: {
       payPeriod: true,
+      payGroup: { select: { payFrequency: true } },
       employees: {
         include: {
           earnings: true,
@@ -230,13 +231,34 @@ export async function prepareCalculationInput(
     });
   }
 
-  // §6 (7) — actual pay-period count for the tax year.
+  // §6 (7) — actual pay-period count for the tax year. Payroll 3D
+  // acceptance hotfix (2026-09-12): the resolver cross-checks the
+  // calendar row count against the Pay Group's `payFrequency` and
+  // refuses when the calendar is materially under-populated, so a
+  // one-row synthetic calendar can never silently divide a salary
+  // by 1. See src/lib/payroll/statutory/periods-per-year.ts.
   const taxYear = payDate.getUTCFullYear();
-  const periodsPerYear = await resolvePeriodsPerYearFromCalendar({
-    clubId,
-    payGroupId: batch.payGroupId,
-    taxYear,
-  });
+  let periodsPerYear: number;
+  try {
+    periodsPerYear = await resolvePeriodsPerYearFromCalendar({
+      clubId,
+      payGroupId: batch.payGroupId,
+      taxYear,
+      payFrequency: batch.payGroup?.payFrequency ?? null,
+    });
+  } catch (err) {
+    const code = (err as { code?: string }).code === "PAY_PERIOD_CALENDAR_INCOMPLETE"
+      ? "PAY_PERIOD_CALENDAR_INCOMPLETE"
+      : "PAY_PERIOD_CALENDAR_MISSING";
+    exceptions.push({
+      employeeId: null,
+      severity: "BLOCKER",
+      code,
+      message: err instanceof Error ? err.message : String(err),
+      recommendedAction: "Generate the full payroll calendar for this tax year before calculating payroll.",
+    });
+    return earlyResult(batch, exceptions);
+  }
 
   // §6 (8-13) — per-employee readiness.
   const employees: EmployeeCalculationInput[] = [];

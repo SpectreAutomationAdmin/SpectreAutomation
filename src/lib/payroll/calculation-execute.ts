@@ -52,6 +52,26 @@ const ALGORITHM_VERSION = "spectre-payroll-3c3d7-v2";
 const FINAL_APPROVAL_ORIGIN_KIND = "PAYROLL_FINAL_APPROVAL";
 const REVIEW_ORIGIN_KIND = "PAYROLL_REVIEW";
 
+/** Payroll 3D acceptance hotfix (2026-09-12) — raised when a
+ *  concurrent Calculate request loses the compare-and-set race. The
+ *  loser must NOT retry blindly; the current batch state should be
+ *  re-fetched and the operator informed. */
+export class CalculateConcurrencyConflictError extends Error {
+  readonly code = "PAYROLL_CALCULATE_CONCURRENCY_CONFLICT";
+  readonly batchId: string;
+  readonly expectedStatus: string;
+  readonly expectedVersion: number;
+  constructor(batchId: string, expectedStatus: string, expectedVersion: number) {
+    super(
+      `Concurrent Calculate detected on batch ${batchId}: expected status=${expectedStatus} version=${expectedVersion} ` +
+        "but the row changed under the transaction. Reload the batch and retry.",
+    );
+    this.batchId = batchId;
+    this.expectedStatus = expectedStatus;
+    this.expectedVersion = expectedVersion;
+  }
+}
+
 export interface ExecutePayrollCalculationResult {
   batchId: string;
   employeeCount: number;
@@ -509,12 +529,43 @@ export async function calculatePayrollBatch(
   const nextVersion = priorBatch.calculationVersion + 1;
   const now = new Date();
 
+  // Payroll 3D acceptance hotfix (2026-09-12) — compare-and-set guard
+  // for concurrent Calculate. The status/version tuple observed above
+  // (`priorBatch.status === "PREPARED"|"CALCULATED"` and
+  // `priorBatch.calculationVersion === expectedVersion`) is asserted
+  // inside the transaction by an `updateMany` with that WHERE clause.
+  // Two concurrent Calculate calls race on the update — the first
+  // sees the row unchanged and applies; the second observes 0 rows
+  // affected and refuses without silently producing a second
+  // calculation. This makes exactly-one-Calculate a database
+  // guarantee, not a UI-only expectation.
+  const expectedStatus = priorBatch.status; // PREPARED (fresh) or CALCULATED (recalc)
+  const expectedVersion = priorBatch.calculationVersion;
+  let casSucceeded = false;
   await prisma.$transaction(async (tx) => {
+    const gate = await tx.payrollBatch.updateMany({
+      where: {
+        id: batchId, clubId,
+        status: expectedStatus,
+        calculationVersion: expectedVersion,
+      },
+      data: {
+        status:             "CALCULATED",
+        calculatedAt:       now,
+        calculationVersion: nextVersion,
+        statutoryPackageId: pkg.id,
+        algorithmVersion:   ALGORITHM_VERSION,
+        packageChecksum:    pkg.checksum,
+      },
+    });
+    if (gate.count !== 1) {
+      // Race lost — the batch's status or calculationVersion changed
+      // between prior-read and this transaction. Abort the transaction
+      // by throwing; no employee-row updates persist.
+      throw new CalculateConcurrencyConflictError(batchId, expectedStatus, expectedVersion);
+    }
     for (const p of payloads) {
       await tx.payrollBatchEmployee.update({ where: { id: p.batchEmployeeId }, data: p.data });
-      // Payroll-3C-3 — write the calculator's percent resolutions
-      // back onto the snapshot rows so the review DTO can render the
-      // "X% × $E = $R" derivation.
       for (const pr of p.percentResolutions) {
         await tx.payrollBatchComponentSnapshot.updateMany({
           where: { batchEmployeeId: p.batchEmployeeId, componentCode: pr.code },
@@ -533,18 +584,13 @@ export async function calculatePayrollBatch(
         });
       }
     }
-    await tx.payrollBatch.update({
-      where: { id: batchId },
-      data: {
-        status:             "CALCULATED",
-        calculatedAt:       now,
-        calculationVersion: nextVersion,
-        statutoryPackageId: pkg.id,
-        algorithmVersion:   ALGORITHM_VERSION,
-        packageChecksum:    pkg.checksum,
-      },
-    });
+    casSucceeded = true;
   });
+  if (!casSucceeded) {
+    // Belt-and-braces: throw only fires above; this line is unreachable
+    // but appeases the type-narrowing pass and documents intent.
+    throw new CalculateConcurrencyConflictError(batchId, expectedStatus, expectedVersion);
+  }
 
   // §40, §44 — Controller PAYROLL_FINAL_APPROVAL handoff + resolve
   // PAYROLL_REVIEW. Idempotent by (kind, batchId).
