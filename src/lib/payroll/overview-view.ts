@@ -27,6 +27,10 @@ import { getDepartmentApprovalStatus, type DepartmentApprovalState } from "./dep
 import { translateException, type ExceptionSeverity } from "./exception-translations";
 import { getTimeReadiness, type TimeReadinessState } from "./time-readiness";
 import { getBatchReviewStatus, type ReviewDimension } from "./batch-review";
+import {
+  derivePayrollCalculateReadiness,
+  type PayrollCalculateReadiness,
+} from "./payroll-readiness";
 
 /* ============================================================
    Types
@@ -211,6 +215,56 @@ export interface PayrollOverviewRecurringAssignmentRow {
   isHistorical: boolean;
 }
 
+// Payroll Admin Slice 3D (2026-09-12) — Summary tab aggregates. Every
+// value below sums the corresponding column on `PayrollBatchEmployee`
+// AFTER a batch reaches CALCULATED. Pre-CALCULATED the summary is null
+// and the Summary tab renders its readiness empty-state.
+export interface PayrollOverviewSummaryDepartmentRow {
+  departmentId: string;
+  departmentName: string;
+  employeeCount: number;
+  regularHoursDisplay: string;
+  overtimeHoursDisplay: string;
+  totalHoursDisplay: string;
+  grossPayDisplay: string;
+}
+export interface PayrollOverviewSummary {
+  calculatedAtISO: string;
+  calculationVersion: number;
+  employeeCount: number;
+  regularHoursDisplay: string;
+  overtimeHoursDisplay: string;
+  totalHoursDisplay: string;
+  grossPayDisplay: string;
+  totalEmployeeDeductionsDisplay: string;
+  netPayDisplay: string;
+  totalEmployerContributionsDisplay: string;
+  totalEmployerPayrollCostDisplay: string;
+  earnings: {
+    salary: string;
+    regular: string;
+    overtime: string;
+    vacation: string;
+    statHoliday: string;
+    componentsGross: string;
+  };
+  deductions: {
+    cpp: string;
+    cpp2: string;
+    ei: string;
+    federalTax: string;
+    provincialTax: string;
+    additionalFederalTax: string;
+    additionalProvincialTax: string;
+  };
+  employerContributions: {
+    cpp: string;
+    cpp2: string;
+    ei: string;
+  };
+  departments: PayrollOverviewSummaryDepartmentRow[];
+}
+
 export type PayrollOverviewTab =
   | "employees"
   | "exceptions"
@@ -289,6 +343,13 @@ export interface PayrollOverviewViewModel {
   // data (both active + historical rows for every batch employee).
   reviewAttestations: PayrollOverviewReviewAttestationRow[];
   recurringAssignmentsByEmployee: Record<string, PayrollOverviewRecurringAssignmentRow[]>;
+
+  // Slice 3D (2026-09-12) — canonical Calculate readiness (drives
+  // the primary-button enablement in the Payroll Actions card and
+  // the disabled-state explanatory copy) + Summary aggregates
+  // (populated only when the batch is CALCULATED+).
+  calculateReadiness: PayrollCalculateReadiness;
+  summary: PayrollOverviewSummary | null;
 
   // filter/search UI populators
   availableDepartments: Array<{ id: string; name: string }>;
@@ -632,6 +693,14 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       batchAcceptsAdjustments: false,
       reviewAttestations: [],
       recurringAssignmentsByEmployee: {},
+      calculateReadiness: derivePayrollCalculateReadiness({
+        batchStatus: null, allImported: false, allDepartmentApproved: false,
+        awaitingFreezeScopeCount: 0, blockerExceptionCount: 0,
+        oneTimeAdjustmentCount: 0, oneTimeReviewed: false,
+        recurringSnapshotCount: 0, recurringReviewed: false,
+        batchEmployeeCount: 0, employeeDataReviewed: false,
+      }),
+      summary: null,
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -722,6 +791,17 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       batchAcceptsAdjustments: false,
       reviewAttestations: [],
       recurringAssignmentsByEmployee: {},
+      calculateReadiness: derivePayrollCalculateReadiness({
+        batchStatus: null,
+        allImported: r.allImported,
+        allDepartmentApproved: r.allDepartmentApproved,
+        awaitingFreezeScopeCount: r.awaitingFreezeScopeCount,
+        blockerExceptionCount: 0,
+        oneTimeAdjustmentCount: 0, oneTimeReviewed: false,
+        recurringSnapshotCount: 0, recurringReviewed: false,
+        batchEmployeeCount: 0, employeeDataReviewed: false,
+      }),
+      summary: null,
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
@@ -752,7 +832,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     prisma.payrollBatch.findFirst({
       where: { id: activeBatch.id, clubId },
       select: {
-        id: true, status: true, sequence: true,
+        id: true, status: true, sequence: true, calculationVersion: true,
         preparedAt: true, calculatedAt: true, submittedAt: true, approvedAt: true, postedAt: true,
       },
     }),
@@ -1027,6 +1107,18 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   //   prerequisite that gates Calculate (Step 4) separately, not Step 3.
   const approvalsDone = readiness.allDepartmentApproved && readiness.allImported;
   workflow[2] = { ...workflow[2]!, state: approvalsDone ? "done" : "current" };
+  // Payroll 3D (2026-09-12) — Steps 4/5/6 semantics (§28).
+  //   Step 4 (Calculate) is `done` once the batch has reached
+  //     CALCULATED at least once (batchRow.calculatedAt != null).
+  //     It is `current` on a PREPARED batch that has never been
+  //     calculated AND passes every readiness gate. Otherwise pending.
+  //   Step 5 (Review & Adjust) is `current` on a CALCULATED batch
+  //     whose CALCULATED_PAYROLL attestation is NOT current, and
+  //     `done` once that attestation is current. It stays `pending`
+  //     while the batch is still PREPARED.
+  //   Step 6 (Submit for Approval) is `current` once Step 5 is done
+  //     (attestation current + batch still CALCULATED). Later steps
+  //     (7 Approved, 8 Posted) remain pending in 3D.
 
   // ---- Slice 3B (acceptance-hotfix rev): checklist ----
   //
@@ -1155,12 +1247,19 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   // EITHER the dataset is empty (auto-complete) OR the most recent
   // attestation for the dimension is CURRENT (fingerprint matches
   // the current dataset).
+  // Payroll 3D (2026-09-12) — item 6 (`verify-employee-data`) now
+  // consults the EMPLOYEE_DATA dimension the same way. Its fingerprint
+  // covers every batch employee's frozen sourceFactsJson + salaried
+  // flag + approvedHoursSnapshot.
   const oneTimeAdjustmentCount = oneTimeAdjustments.length;
   const recurringSnapshotCount = recurringSnapshots.length;
-  const oneTimeAttestation   = reviewStatus.find((r) => r.dimension === "ONE_TIME_ADJUSTMENTS")?.attestation ?? null;
-  const recurringAttestation = reviewStatus.find((r) => r.dimension === "RECURRING_COMPONENTS")?.attestation ?? null;
-  const oneTimeReviewed = oneTimeAttestation?.isCurrent === true;
-  const recurringReviewed = recurringAttestation?.isCurrent === true;
+  const oneTimeAttestation     = reviewStatus.find((r) => r.dimension === "ONE_TIME_ADJUSTMENTS")?.attestation ?? null;
+  const recurringAttestation   = reviewStatus.find((r) => r.dimension === "RECURRING_COMPONENTS")?.attestation ?? null;
+  const employeeDataAttestation = reviewStatus.find((r) => r.dimension === "EMPLOYEE_DATA")?.attestation ?? null;
+  const oneTimeReviewed        = oneTimeAttestation?.isCurrent === true;
+  const recurringReviewed      = recurringAttestation?.isCurrent === true;
+  const employeeDataReviewed   = employeeDataAttestation?.isCurrent === true;
+  const batchEmployeeCount     = batchEmployees.length;
 
   const fmtAttested = (a: NonNullable<typeof oneTimeAttestation>): string => {
     const at = new Date(a.attestedAt).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" });
@@ -1188,8 +1287,66 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
           ? `${recurringSnapshotCount} recurring component${recurringSnapshotCount === 1 ? "" : "s"} · ${fmtAttested(recurringAttestation!)}`
           : `${recurringSnapshotCount} recurring component${recurringSnapshotCount === 1 ? "" : "s"} · review required`),
   };
+  checklist[5] = {
+    ...checklist[5]!,
+    future: false,
+    done: batchEmployeeCount === 0 || employeeDataReviewed,
+    detail: batchEmployeeCount === 0
+      ? "No employees in batch"
+      : (employeeDataReviewed
+          ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · ${fmtAttested(employeeDataAttestation!)}`
+          : (employeeDataAttestation
+              ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · review required — data changed since review`
+              : `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · review required`)),
+  };
 
   const batchAcceptsAdjustments = activeBatch.status === "PREPARED";
+
+  // Payroll 3D (2026-09-12) — advance workflow Steps 4/5/6 based on
+  // the batch lifecycle + CALCULATED_PAYROLL attestation.
+  const calcAttestationRow = reviewStatus.find((r) => r.dimension === "CALCULATED_PAYROLL")?.attestation ?? null;
+  const calcReviewCurrent = calcAttestationRow?.isCurrent === true;
+  const batchHasBeenCalculated = batchRow?.calculatedAt != null && (
+    activeBatch.status === "CALCULATED" ||
+    activeBatch.status === "SUBMITTED_FOR_APPROVAL" ||
+    activeBatch.status === "APPROVED" ||
+    activeBatch.status === "POSTED"
+  );
+  if (batchHasBeenCalculated) {
+    workflow[3] = { ...workflow[3]!, state: "done" };
+    if (activeBatch.status === "CALCULATED") {
+      workflow[4] = { ...workflow[4]!, state: calcReviewCurrent ? "done" : "current" };
+      if (calcReviewCurrent) {
+        workflow[5] = { ...workflow[5]!, state: "current" };
+      }
+    } else {
+      // SUBMITTED_FOR_APPROVAL / APPROVED / POSTED — Step 5 is `done`
+      // because we've moved past it. Step 6/7/8 are owned by later
+      // slices; 3D does not toggle them.
+      workflow[4] = { ...workflow[4]!, state: "done" };
+    }
+  } else if (approvalsDone && blockerCount === 0 && activeBatch.status === "PREPARED") {
+    // PREPARED + Steps 1-3 done → Step 4 is the current step, regardless
+    // of whether the review-attestation gates are current (those are the
+    // FINAL prerequisites the Payroll Admin acts on to unlock Calculate).
+    workflow[3] = { ...workflow[3]!, state: "current" };
+  }
+
+  // Slice 3D (2026-09-12) — canonical Calculate readiness composition.
+  // See src/lib/payroll/payroll-readiness.ts for the derivation contract.
+  const calculateReadiness = derivePayrollCalculateReadiness({
+    batchStatus:              activeBatch.status,
+    allImported:              readiness.allImported,
+    allDepartmentApproved:    readiness.allDepartmentApproved,
+    awaitingFreezeScopeCount: readiness.awaitingFreezeScopeCount,
+    blockerExceptionCount:    blockerCount,
+    oneTimeAdjustmentCount,
+    oneTimeReviewed,
+    recurringSnapshotCount,
+    recurringReviewed,
+    batchEmployeeCount,
+    employeeDataReviewed,
+  });
 
   // 3C acceptance hotfix — per-employee recurring-assignment editor
   // data (both active + historical) for the Manage-Recurring UI.
@@ -1234,6 +1391,122 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     attestedAt: r.attestation?.attestedAt?.toISOString() ?? null,
     attestedByDisplayName: r.attestation?.attestedByDisplayName ?? null,
   }));
+
+  // Slice 3D (2026-09-12) — Summary aggregate. Populated only when the
+  // batch is CALCULATED+ (§20). Every value sums the corresponding
+  // Decimal column on PayrollBatchEmployee — never a JS float — so the
+  // §40 rounding invariant holds: summary totals reconcile exactly
+  // with persisted per-employee results (see §39 arithmetic invariant).
+  let summary: PayrollOverviewSummary | null = null;
+  if (isCalculated && batchRow?.calculatedAt) {
+    const money = (getVal: (be: (typeof batchEmployees)[number]) => unknown): string => {
+      let cents = 0;
+      for (const be of batchEmployees) {
+        const raw = getVal(be);
+        if (raw == null) continue;
+        cents += Math.round(Number(raw.toString()) * 100);
+      }
+      return fmtMoney(cents);
+    };
+    const sumHrsByType = (t: string): number => batchEarnings
+      .filter((e) => e.earningType === t)
+      .reduce((sum, e) => sum + Number(e.quantity), 0);
+    const regHours = sumHrsByType("REGULAR");
+    const otHours  = sumHrsByType("OVERTIME");
+    const totHours = regHours + otHours;
+    const grossPayCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.grossPay ?? 0) * 100), 0);
+    const deductionsCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.totalEmployeeDeductions ?? 0) * 100), 0);
+    const netPayCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.netPay ?? 0) * 100), 0);
+    const employerCppCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerCppCombined ?? 0) * 100), 0);
+    const employerCpp2Cents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerCpp2 ?? 0) * 100), 0);
+    const employerEiCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerEi ?? 0) * 100), 0);
+    const employerTotalCents = employerCppCents + employerCpp2Cents + employerEiCents;
+
+    // Earnings by canonical type from PayrollBatchEarning.quantity * rate.
+    const earningsCentsByType = new Map<string, number>();
+    for (const e of batchEarnings) {
+      const cents = Math.round(Number(e.quantity) * Number(e.rate) * 100);
+      earningsCentsByType.set(e.earningType, (earningsCentsByType.get(e.earningType) ?? 0) + cents);
+    }
+    const knownEarnCents =
+      (earningsCentsByType.get("REGULAR") ?? 0) +
+      (earningsCentsByType.get("OVERTIME") ?? 0) +
+      (earningsCentsByType.get("SALARY") ?? 0) +
+      (earningsCentsByType.get("VACATION") ?? 0) +
+      (earningsCentsByType.get("STAT_HOLIDAY") ?? 0);
+    // Everything else counts as "components/other" (allowances etc).
+    const componentsGrossCents = Math.max(0, grossPayCents - knownEarnCents);
+
+    // Department breakdown — group by primary department resolved
+    // earlier from sourceFactsJson.
+    const departmentAggregates = new Map<string, {
+      employeeCount: number;
+      regularHours: number;
+      overtimeHours: number;
+      totalHours: number;
+      grossCents: number;
+    }>();
+    const UNASSIGNED_KEY = "__unassigned__";
+    for (const be of batchEmployees) {
+      const deptId = primaryDepartmentByBatchEmployeeId.get(be.id) ?? UNASSIGNED_KEY;
+      const key = deptId ?? UNASSIGNED_KEY;
+      const bucket = departmentAggregates.get(key) ?? { employeeCount: 0, regularHours: 0, overtimeHours: 0, totalHours: 0, grossCents: 0 };
+      bucket.employeeCount += 1;
+      bucket.regularHours += regHrsByBe.get(be.id) ?? 0;
+      bucket.overtimeHours += otHrsByBe.get(be.id) ?? 0;
+      bucket.totalHours += Number(be.approvedHoursSnapshot ?? 0);
+      bucket.grossCents += Math.round(Number(be.grossPay ?? 0) * 100);
+      departmentAggregates.set(key, bucket);
+    }
+    const departmentRows: PayrollOverviewSummaryDepartmentRow[] = Array.from(departmentAggregates.entries())
+      .map(([id, agg]) => ({
+        departmentId: id === UNASSIGNED_KEY ? "" : id,
+        departmentName: id === UNASSIGNED_KEY ? "Unassigned" : (departmentNameById.get(id) ?? "—"),
+        employeeCount: agg.employeeCount,
+        regularHoursDisplay: fmtHoursDecimal(agg.regularHours),
+        overtimeHoursDisplay: fmtHoursDecimal(agg.overtimeHours),
+        totalHoursDisplay: fmtHoursDecimal(agg.totalHours),
+        grossPayDisplay: fmtMoney(agg.grossCents),
+      }))
+      .sort((a, b) => a.departmentName.localeCompare(b.departmentName));
+
+    summary = {
+      calculatedAtISO: batchRow.calculatedAt.toISOString(),
+      calculationVersion: batchRow.calculationVersion ?? 0,
+      employeeCount: batchEmployees.length,
+      regularHoursDisplay: fmtHoursDecimal(regHours),
+      overtimeHoursDisplay: fmtHoursDecimal(otHours),
+      totalHoursDisplay: fmtHoursDecimal(totHours),
+      grossPayDisplay: fmtMoney(grossPayCents),
+      totalEmployeeDeductionsDisplay: fmtMoney(deductionsCents),
+      netPayDisplay: fmtMoney(netPayCents),
+      totalEmployerContributionsDisplay: fmtMoney(employerTotalCents),
+      totalEmployerPayrollCostDisplay: fmtMoney(grossPayCents + employerTotalCents),
+      earnings: {
+        salary:          fmtMoney(earningsCentsByType.get("SALARY")       ?? 0),
+        regular:         fmtMoney(earningsCentsByType.get("REGULAR")      ?? 0),
+        overtime:        fmtMoney(earningsCentsByType.get("OVERTIME")     ?? 0),
+        vacation:        fmtMoney(earningsCentsByType.get("VACATION")     ?? 0),
+        statHoliday:     fmtMoney(earningsCentsByType.get("STAT_HOLIDAY") ?? 0),
+        componentsGross: fmtMoney(componentsGrossCents),
+      },
+      deductions: {
+        cpp:                     money((be) => be.deductionCppEeCombined),
+        cpp2:                    money((be) => be.deductionCpp2Ee),
+        ei:                      money((be) => be.deductionEiEe),
+        federalTax:              money((be) => be.deductionFederalTax),
+        provincialTax:           money((be) => be.deductionProvincialTax),
+        additionalFederalTax:    money((be) => be.additionalFederalTax),
+        additionalProvincialTax: money((be) => be.additionalProvincialTax),
+      },
+      employerContributions: {
+        cpp:  fmtMoney(employerCppCents),
+        cpp2: fmtMoney(employerCpp2Cents),
+        ei:   fmtMoney(employerEiCents),
+      },
+      departments: departmentRows,
+    };
+  }
 
   return {
     payGroup: payGroupRef,
@@ -1291,6 +1564,8 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     batchAcceptsAdjustments,
     reviewAttestations: reviewAttestationRows,
     recurringAssignmentsByEmployee,
+    calculateReadiness,
+    summary,
     activeTab,
     availableDepartments,
     availableEmploymentTypes,
@@ -1326,6 +1601,14 @@ function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSiz
     exceptions: [], approvals: [],
     oneTimeAdjustments: [], recurringSnapshots: [], componentPicker: [], batchAcceptsAdjustments: false,
     reviewAttestations: [], recurringAssignmentsByEmployee: {},
+    calculateReadiness: derivePayrollCalculateReadiness({
+      batchStatus: null, allImported: false, allDepartmentApproved: false,
+      awaitingFreezeScopeCount: 0, blockerExceptionCount: 0,
+      oneTimeAdjustmentCount: 0, oneTimeReviewed: false,
+      recurringSnapshotCount: 0, recurringReviewed: false,
+      batchEmployeeCount: 0, employeeDataReviewed: false,
+    }),
+    summary: null,
     activeTab: "employees",
     availableDepartments: [], availableEmploymentTypes: [], availableStatuses: [],
     activeFilter: filter,

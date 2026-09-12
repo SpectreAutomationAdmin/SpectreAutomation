@@ -31,6 +31,7 @@ import {
   endRecurringAssignmentAction,
 } from "./_adjustment-actions";
 import { attestBatchReviewAction } from "./_review-actions";
+import { calculatePayrollAction, returnToPreparationAction } from "./_calculate-action";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +83,7 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
   const canFreeze  = hasPermission(principal, clubId, "payroll:write");
   const canEditAdjustments = hasPermission(principal, clubId, "payroll:edit");
   const canWriteRecurring  = hasPermission(principal, clubId, "payroll:write");
+  const canRunPayroll      = hasPermission(principal, clubId, "payroll:run");
   return (
     <PayrollAdminOverview
       view={view}
@@ -100,6 +102,14 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
       review={{
         action: attestBatchReviewAction,
         canAttest: canEditAdjustments,
+      }}
+      calculate={{
+        action: calculatePayrollAction,
+        canCalculate: canRunPayroll,
+      }}
+      returnToPrep={{
+        action: returnToPreparationAction,
+        canReturn: canEditAdjustments,
       }}
     />
   );

@@ -44,10 +44,15 @@ import { ValidationError, NotFoundError } from "../errors";
 
 const ENTITY = "PayrollBatchReviewAttestation";
 
+// Payroll 3D (2026-09-12): EMPLOYEE_DATA + CALCULATED_PAYROLL now
+// owned. The `dimension` column is a free-form String on the model
+// (schema.prisma:13161) so no migration is required — the set of
+// supported values is enforced at the service layer.
 export const REVIEW_DIMENSIONS = [
   "ONE_TIME_ADJUSTMENTS",
   "RECURRING_COMPONENTS",
-  // EMPLOYEE_DATA reserved for a later slice.
+  "EMPLOYEE_DATA",
+  "CALCULATED_PAYROLL",
 ] as const;
 export type ReviewDimension = (typeof REVIEW_DIMENSIONS)[number];
 
@@ -60,13 +65,112 @@ type PrismaTxOrClient = typeof prisma | Prisma.TransactionClient;
 /** Deterministic sha256 hex of the reviewed dataset for the given
  *  batch × dimension pair. Empty-dataset case returns the sha256 of
  *  the string `"<dimension>:empty"` — a distinct fingerprint from
- *  any populated dataset. */
+ *  any populated dataset.
+ *
+ *  Dimensions:
+ *    ONE_TIME_ADJUSTMENTS  — snapshots with provenance = ONE_TIME_PAYROLL_ADJUSTMENT.
+ *    RECURRING_COMPONENTS  — snapshots with provenance = RECURRING_EMPLOYEE_SETUP.
+ *    EMPLOYEE_DATA         — Payroll 3D (2026-09-12): the FROZEN
+ *      `PayrollBatchEmployee.sourceFactsJson` for every batch employee
+ *      + `salaried` + `approvedHoursSnapshot`. These are the inputs
+ *      the statutory calculator consumes; they are set once at Prepare
+ *      and are immutable across the batch's PREPARED lifecycle. If a
+ *      Payroll Admin edits live employee data after Prepare, the frozen
+ *      snapshot is unchanged and the EMPLOYEE_DATA fingerprint stays
+ *      stable — a re-Prepare is required to incorporate the source
+ *      change, per §3 of the 3D directive.
+ *    CALCULATED_PAYROLL    — Payroll 3D (2026-09-12): the batch's
+ *      `calculationVersion` + `calculatedAt` + every batch employee's
+ *      persisted result columns (grossPay, netPay, deductionCppEeCombined,
+ *      deductionCpp2Ee, deductionEiEe, deductionFederalTax,
+ *      deductionProvincialTax, totalEmployeeDeductions, employerCppCombined,
+ *      employerCpp2, employerEi). Fingerprint changes on every
+ *      recalculation (calculationVersion bumps) so a prior calculated-
+ *      payroll review becomes stale automatically.
+ */
 export async function computeReviewFingerprint(
   clubId: string,
   batchId: string,
   dimension: ReviewDimension,
   txOrClient: PrismaTxOrClient = prisma,
 ): Promise<string> {
+  if (dimension === "EMPLOYEE_DATA") {
+    const employees = await txOrClient.payrollBatchEmployee.findMany({
+      where: { clubId, batchId },
+      orderBy: [{ id: "asc" }],
+      select: {
+        id: true,
+        employeeId: true,
+        salaried: true,
+        approvedHoursSnapshot: true,
+        sourceFactsJson: true,
+      },
+    });
+    if (employees.length === 0) {
+      return crypto.createHash("sha256").update(`${dimension}:empty`).digest("hex");
+    }
+    const stable = employees
+      .map((e) => [
+        e.id,
+        e.employeeId,
+        e.salaried ? "S" : "H",
+        e.approvedHoursSnapshot == null ? "" : e.approvedHoursSnapshot.toString(),
+        e.sourceFactsJson ?? "",
+      ].join("|"))
+      .join("\n");
+    return crypto.createHash("sha256").update(`${dimension}:${stable}`).digest("hex");
+  }
+
+  if (dimension === "CALCULATED_PAYROLL") {
+    const batch = await txOrClient.payrollBatch.findFirst({
+      where: { id: batchId, clubId },
+      select: { calculationVersion: true, calculatedAt: true, status: true },
+    });
+    if (!batch || batch.status === "PREPARED" || batch.status === "DRAFT" || batch.calculatedAt == null) {
+      return crypto.createHash("sha256").update(`${dimension}:empty`).digest("hex");
+    }
+    const employees = await txOrClient.payrollBatchEmployee.findMany({
+      where: { clubId, batchId },
+      orderBy: [{ id: "asc" }],
+      select: {
+        id: true,
+        grossPay: true,
+        netPay: true,
+        totalEmployeeDeductions: true,
+        deductionCppEeCombined: true,
+        deductionCpp2Ee: true,
+        deductionEiEe: true,
+        deductionFederalTax: true,
+        deductionProvincialTax: true,
+        additionalFederalTax: true,
+        additionalProvincialTax: true,
+        employerCppCombined: true,
+        employerCpp2: true,
+        employerEi: true,
+      },
+    });
+    const stable = employees
+      .map((e) => [
+        e.id,
+        e.grossPay?.toString() ?? "",
+        e.netPay?.toString() ?? "",
+        e.totalEmployeeDeductions?.toString() ?? "",
+        e.deductionCppEeCombined?.toString() ?? "",
+        e.deductionCpp2Ee?.toString() ?? "",
+        e.deductionEiEe?.toString() ?? "",
+        e.deductionFederalTax?.toString() ?? "",
+        e.deductionProvincialTax?.toString() ?? "",
+        e.additionalFederalTax?.toString() ?? "",
+        e.additionalProvincialTax?.toString() ?? "",
+        e.employerCppCombined?.toString() ?? "",
+        e.employerCpp2?.toString() ?? "",
+        e.employerEi?.toString() ?? "",
+      ].join("|"))
+      .join("\n");
+    const header = `v=${batch.calculationVersion}|at=${batch.calculatedAt.toISOString()}`;
+    return crypto.createHash("sha256").update(`${dimension}:${header}\n${stable}`).digest("hex");
+  }
+
   const rows = await txOrClient.payrollBatchComponentSnapshot.findMany({
     where: {
       clubId,

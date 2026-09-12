@@ -172,19 +172,22 @@ export interface PayrollAdminOverviewProps {
   adjustments?: AdjustmentControls | null;
   recurring?: RecurringControls | null;
   review?: ReviewControls | null;
+  calculate?: CalculateControls | null;
+  returnToPrep?: ReturnControls | null;
 }
 
 export default function PayrollAdminOverview({
   view, prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
+  calculate = null, returnToPrep = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
       <Header view={view} prepare={prepare} />
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
-        <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} />
+        <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} returnToPrep={returnToPrep} />
         <div className="space-y-2">
-          <ActionsCard view={view} />
+          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} />
           <ChecklistCard view={view} />
           <PayPeriodInfoCard view={view} />
         </div>
@@ -431,10 +434,23 @@ export interface RecurringControls {
 }
 
 // Slice 3C acceptance hotfix (2026-09-12) — Mark Reviewed server-
-// action bundle for the two governance-review dimensions.
+// action bundle for the four governance-review dimensions
+// (ONE_TIME_ADJUSTMENTS, RECURRING_COMPONENTS, EMPLOYEE_DATA,
+// CALCULATED_PAYROLL — the latter two added in 3D).
 export interface ReviewControls {
   action: (formData: FormData) => Promise<void>;
   canAttest: boolean;
+}
+
+// Slice 3D (2026-09-12) — Calculate Payroll + Return-to-Preparation
+// server actions.
+export interface CalculateControls {
+  action: (formData: FormData) => Promise<void>;
+  canCalculate: boolean;
+}
+export interface ReturnControls {
+  action: (formData: FormData) => Promise<void>;
+  canReturn: boolean;
 }
 
 // Prepare Payroll submit control — MUST live inside the <form action=…>
@@ -470,23 +486,24 @@ function PrepareSubmitButton() {
   );
 }
 
-function Workspace({ view, prepare, freeze, adjustments, recurring, review }: {
+function Workspace({ view, prepare, freeze, adjustments, recurring, review, returnToPrep }: {
   view: PayrollOverviewViewModel;
   prepare: PrepareControls | null;
   freeze: FreezeControls | null;
   adjustments: AdjustmentControls | null;
   recurring: RecurringControls | null;
   review: ReviewControls | null;
+  returnToPrep: ReturnControls | null;
 }) {
   const activeTab = view.activeTab;
   return (
     <section className="rounded-lg border border-stone-200 bg-white overflow-hidden" data-testid="payroll-admin-workspace">
       <WorkspaceTabs view={view} />
-      {activeTab === "employees"   && <EmployeesTabContent view={view} prepare={prepare} />}
+      {activeTab === "employees"   && <EmployeesTabContent view={view} prepare={prepare} review={review} returnToPrep={returnToPrep} />}
       {activeTab === "exceptions"  && <ExceptionsTabContent view={view} />}
       {activeTab === "approvals"   && <ApprovalsTabContent view={view} freeze={freeze} />}
       {activeTab === "adjustments" && <AdjustmentsTabContent view={view} adjustments={adjustments} recurring={recurring} review={review} />}
-      {activeTab === "summary"     && <FutureTabContent label="Summary" note="Summary view becomes functional after Calculate." />}
+      {activeTab === "summary"     && <SummaryTabContent view={view} review={review} />}
     </section>
   );
 }
@@ -525,12 +542,48 @@ function WorkspaceTabs({ view }: { view: PayrollOverviewViewModel }) {
   );
 }
 
-function EmployeesTabContent({ view, prepare }: { view: PayrollOverviewViewModel; prepare: PrepareControls | null }) {
+function EmployeesTabContent({ view, prepare, review, returnToPrep }: {
+  view: PayrollOverviewViewModel;
+  prepare: PrepareControls | null;
+  review: ReviewControls | null;
+  returnToPrep: ReturnControls | null;
+}) {
   const totalCount = view.employeeTable.filteredTotal;
   const start = totalCount === 0 ? 0 : (view.employeeTable.page - 1) * view.employeeTable.pageSize + 1;
   const end = Math.min(view.employeeTable.page * view.employeeTable.pageSize, totalCount);
+  const empDataAtt = view.reviewAttestations.find((r) => r.dimension === "EMPLOYEE_DATA");
+  const calcAtt    = view.reviewAttestations.find((r) => r.dimension === "CALCULATED_PAYROLL");
+  const payPeriodId = view.payPeriod?.id ?? "";
+  const payGroupId  = view.payGroup?.id ?? "";
+  const batchId     = view.batch?.id ?? "";
+  const batchStatus = view.batch?.status ?? null;
+  const empCount    = view.employeeTable.unfilteredTotal;
   return (
     <>
+      {view.hasBatch && batchStatus === "PREPARED" && empCount > 0 && review?.canAttest ? (
+        <EmployeeDataReviewBanner
+          attestation={empDataAtt ?? null}
+          action={review.action}
+          payPeriodId={payPeriodId}
+          payGroupId={payGroupId}
+          batchId={batchId}
+        />
+      ) : null}
+      {view.hasBatch && (batchStatus === "CALCULATED" || batchStatus === "SUBMITTED_FOR_APPROVAL" || batchStatus === "APPROVED" || batchStatus === "POSTED") ? (
+        <CalculatedPayrollReviewBanner
+          attestation={calcAtt ?? null}
+          batchStatus={batchStatus}
+          calculatedAtISO={view.batch?.calculatedAt ?? null}
+          calculationVersion={view.summary?.calculationVersion ?? null}
+          action={review?.action ?? null}
+          canAttest={review?.canAttest === true && batchStatus === "CALCULATED"}
+          returnAction={returnToPrep?.action ?? null}
+          canReturn={returnToPrep?.canReturn === true && batchStatus === "CALCULATED"}
+          payPeriodId={payPeriodId}
+          payGroupId={payGroupId}
+          batchId={batchId}
+        />
+      ) : null}
       <FilterBar view={view} />
       <div className="border-t border-stone-100">
         <table className="w-full text-[13px]">
@@ -836,6 +889,184 @@ function FutureTabContent({ label, note }: { label: string; note: string }) {
   );
 }
 
+// Slice 3D (2026-09-12) — Summary tab. Aggregate + department breakdown
+// computed server-side in overview-view.ts's `summary` field (populated
+// only when the batch is CALCULATED+). Every value ties EXACTLY to the
+// persisted per-employee results — no client-side re-arithmetic. Empty
+// state before CALCULATED renders a restrained readiness message.
+function SummaryTabContent({ view, review }: {
+  view: PayrollOverviewViewModel;
+  review: ReviewControls | null;
+}) {
+  const s = view.summary;
+  const batchStatus = view.batch?.status ?? null;
+  const calcAtt = view.reviewAttestations.find((r) => r.dimension === "CALCULATED_PAYROLL");
+  if (!s) {
+    return (
+      <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-summary-empty">
+        <p className="text-stone-700">
+          {batchStatus === "PREPARED"
+            ? "Calculate payroll to view the payroll summary."
+            : "Prepare and calculate payroll to view the payroll summary."}
+        </p>
+        <p className="mt-2 text-stone-500 text-[12.5px]">
+          Summary numbers reconcile exactly to the per-employee calculated results.
+        </p>
+      </div>
+    );
+  }
+  const attRow = calcAtt ?? null;
+  const isReviewed = attRow?.isCurrent === true;
+  return (
+    <div className="border-t border-stone-100" data-testid="payroll-admin-summary-tab">
+      {/* Attestation strip */}
+      <div className={"px-6 py-2 flex items-center justify-between text-[12px] border-b border-stone-100 " + (isReviewed ? "bg-[#f0fdf4]" : "bg-[#fbfaf7]")}>
+        <p className="text-stone-600">
+          Calculated {new Date(s.calculatedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}
+          {s.calculationVersion > 0 ? <span className="text-stone-400"> · v{s.calculationVersion}</span> : null}
+        </p>
+        <ReviewStatusPillSummary attestation={attRow} />
+      </div>
+
+      {/* Top-level totals */}
+      <div className="px-6 py-3 grid grid-cols-4 gap-3" data-testid="payroll-admin-summary-totals">
+        <SummaryTile label="Employees"                 value={String(s.employeeCount)}                       testId="payroll-admin-summary-employees" />
+        <SummaryTile label="Total Hours"               value={s.totalHoursDisplay}                            testId="payroll-admin-summary-total-hours" />
+        <SummaryTile label="Gross Earnings"            value={s.grossPayDisplay}                              testId="payroll-admin-summary-gross" />
+        <SummaryTile label="Employee Deductions"       value={s.totalEmployeeDeductionsDisplay}               testId="payroll-admin-summary-deductions" />
+      </div>
+      <div className="px-6 pb-3 grid grid-cols-4 gap-3">
+        <SummaryTile label="Net Pay"                   value={s.netPayDisplay}                                emphasize testId="payroll-admin-summary-net" />
+        <SummaryTile label="Employer Contributions"    value={s.totalEmployerContributionsDisplay}            testId="payroll-admin-summary-employer" />
+        <SummaryTile label="Total Employer Cost"       value={s.totalEmployerPayrollCostDisplay}              testId="payroll-admin-summary-employer-cost" />
+        <SummaryTile label="Regular / OT Hours"        value={`${s.regularHoursDisplay} / ${s.overtimeHoursDisplay}`} testId="payroll-admin-summary-hours-breakdown" />
+      </div>
+
+      {/* Earnings / Deductions / Employer breakdowns */}
+      <div className="px-6 pb-3 grid grid-cols-3 gap-3">
+        <SummaryBreakdown title="Earnings" testId="payroll-admin-summary-earnings-breakdown" rows={[
+          ["Salary",           s.earnings.salary],
+          ["Regular",          s.earnings.regular],
+          ["Overtime",         s.earnings.overtime],
+          ["Vacation",         s.earnings.vacation],
+          ["Stat holiday",     s.earnings.statHoliday],
+          ["Components/other", s.earnings.componentsGross],
+        ]} />
+        <SummaryBreakdown title="Employee Deductions" testId="payroll-admin-summary-deductions-breakdown" rows={[
+          ["CPP",                       s.deductions.cpp],
+          ["CPP2",                      s.deductions.cpp2],
+          ["EI",                        s.deductions.ei],
+          ["Federal income tax",        s.deductions.federalTax],
+          ["Provincial income tax",     s.deductions.provincialTax],
+          ["Additional federal tax",    s.deductions.additionalFederalTax],
+          ["Additional provincial tax", s.deductions.additionalProvincialTax],
+        ]} />
+        <SummaryBreakdown title="Employer Contributions" testId="payroll-admin-summary-employer-breakdown" rows={[
+          ["Employer CPP",  s.employerContributions.cpp],
+          ["Employer CPP2", s.employerContributions.cpp2],
+          ["Employer EI",   s.employerContributions.ei],
+        ]} />
+      </div>
+
+      {/* Department breakdown */}
+      {s.departments.length > 0 ? (
+        <div className="border-t border-stone-100" data-testid="payroll-admin-summary-departments">
+          <div className="px-6 py-2">
+            <h3 className="text-[13px] font-semibold text-stone-900">Department Breakdown</h3>
+          </div>
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[12px] text-stone-500 bg-[#fbfaf7]">
+                <th className="pl-6 py-2 font-medium">Department</th>
+                <th className="py-2 font-medium text-right pr-4">Employees</th>
+                <th className="py-2 font-medium text-right pr-4">Regular Hrs</th>
+                <th className="py-2 font-medium text-right pr-4">OT Hrs</th>
+                <th className="py-2 font-medium text-right pr-4">Total Hrs</th>
+                <th className="py-2 font-medium text-right pr-6">Gross Pay</th>
+              </tr>
+            </thead>
+            <tbody>
+              {s.departments.map((d) => (
+                <tr key={d.departmentId || "__unassigned__"} className="border-t border-stone-100" data-testid={`payroll-admin-summary-department-${d.departmentId || "unassigned"}`}>
+                  <td className="pl-6 py-1.5 text-stone-900">{d.departmentName}</td>
+                  <td className="py-1.5 text-right pr-4 tabular-nums text-stone-800">{d.employeeCount}</td>
+                  <td className="py-1.5 text-right pr-4 tabular-nums text-stone-800">{d.regularHoursDisplay}</td>
+                  <td className="py-1.5 text-right pr-4 tabular-nums text-stone-800">{d.overtimeHoursDisplay}</td>
+                  <td className="py-1.5 text-right pr-4 tabular-nums text-stone-800">{d.totalHoursDisplay}</td>
+                  <td className="py-1.5 text-right pr-6 tabular-nums text-stone-900">{d.grossPayDisplay}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {/* Mark Reviewed action if a Payroll Admin is on this surface */}
+      {review?.canAttest && !isReviewed && batchStatus === "CALCULATED" ? (
+        <div className="px-6 py-3 border-t border-stone-100 flex items-center justify-end gap-2 bg-white">
+          <p className="text-[12px] text-stone-500 mr-auto">
+            Attest that the calculated payroll has been reviewed to complete Step 5.
+          </p>
+          <MarkReviewedButton
+            action={review.action}
+            payPeriodId={view.payPeriod?.id ?? ""}
+            payGroupId={view.payGroup?.id ?? ""}
+            batchId={view.batch?.id ?? ""}
+            dimension="CALCULATED_PAYROLL"
+            testId="payroll-admin-summary-review-mark"
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+function SummaryTile({ label, value, emphasize = false, testId }: { label: string; value: string; emphasize?: boolean; testId?: string }) {
+  return (
+    <div className="rounded-md border border-stone-200 bg-white px-3 py-2" data-testid={testId}>
+      <p className="text-[11.5px] text-stone-500">{label}</p>
+      <p className={"mt-0.5 tabular-nums " + (emphasize ? "text-[20px] font-semibold text-[#0f5f3f]" : "text-[17px] font-semibold text-stone-900")}>{value}</p>
+    </div>
+  );
+}
+function SummaryBreakdown({ title, rows, testId }: { title: string; rows: Array<[string, string]>; testId?: string }) {
+  const nonZero = rows.filter(([_, v]) => v !== "$0.00");
+  const displayRows = nonZero.length > 0 ? nonZero : rows.slice(0, 1);
+  return (
+    <div className="rounded-md border border-stone-200 bg-white" data-testid={testId}>
+      <div className="px-3 py-1.5 border-b border-stone-100">
+        <h4 className="text-[12.5px] font-semibold text-stone-800">{title}</h4>
+      </div>
+      <ul className="px-3 py-1.5 space-y-0.5 text-[12.5px]">
+        {displayRows.map(([label, value]) => (
+          <li key={label} className="flex items-center justify-between">
+            <span className="text-stone-600">{label}</span>
+            <span className="tabular-nums text-stone-900">{value}</span>
+          </li>
+        ))}
+        {nonZero.length === 0 ? (
+          <li className="text-[11.5px] text-stone-400 italic">no non-zero rows</li>
+        ) : null}
+      </ul>
+    </div>
+  );
+}
+function ReviewStatusPillSummary({ attestation }: { attestation: PayrollOverviewViewModel["reviewAttestations"][number] | null }) {
+  const isReviewed = attestation?.isCurrent === true;
+  const cfg = isReviewed
+    ? { bg: "bg-[#dcfce7]", text: "text-[#166534]", dot: "bg-[#16a34a]", label: "Reviewed" }
+    : { bg: "bg-[#fef3c7]", text: "text-[#92400e]", dot: "bg-[#d97706]", label: "Review required" };
+  return (
+    <span
+      className={"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11.5px] " + cfg.bg + " " + cfg.text}
+      data-testid="payroll-admin-summary-calc-pill"
+      data-state={isReviewed ? "reviewed" : "review-required"}
+    >
+      <span className={"h-1.5 w-1.5 rounded-full " + cfg.dot} />
+      {cfg.label}
+    </span>
+  );
+}
+
 // Slice 3C — Adjustments tab (functional). Two clearly-labelled
 // sections: One-Time Adjustments (batch-specific) and Recurring
 // Components (frozen at Prepare). Add / Remove wired to the
@@ -1080,7 +1311,7 @@ function MarkReviewedButton({ action, payPeriodId, payGroupId, batchId, dimensio
   payPeriodId: string;
   payGroupId: string;
   batchId: string;
-  dimension: "ONE_TIME_ADJUSTMENTS" | "RECURRING_COMPONENTS";
+  dimension: "ONE_TIME_ADJUSTMENTS" | "RECURRING_COMPONENTS" | "EMPLOYEE_DATA" | "CALCULATED_PAYROLL";
   testId: string;
 }) {
   return (
@@ -1097,6 +1328,184 @@ function MarkReviewedButton({ action, payPeriodId, payGroupId, batchId, dimensio
         Mark Reviewed
       </button>
     </form>
+  );
+}
+
+// Slice 3D (2026-09-12) — Employee Data review banner. Renders inside
+// the Employees tab so a Payroll Admin can attest that batch employee
+// inputs are correct BEFORE calculating. The banner disappears once the
+// batch leaves PREPARED (no employee-data changes are permitted from
+// PREPARED-only, so post-Prepare edits require Return-to-Preparation).
+function EmployeeDataReviewBanner({ attestation, action, payPeriodId, payGroupId, batchId }: {
+  attestation: PayrollOverviewViewModel["reviewAttestations"][number] | null;
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+}) {
+  const isReviewed = attestation?.isCurrent === true;
+  const isStale = attestation != null && !attestation.isCurrent;
+  const detail = isReviewed
+    ? (attestation!.attestedByDisplayName
+        ? `Reviewed by ${attestation!.attestedByDisplayName} at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}`
+        : `Reviewed at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}`)
+    : (isStale
+        ? "Review required — data changed since review"
+        : "Review employee inputs before calculating.");
+  return (
+    <div
+      className={
+        "px-6 py-2.5 flex items-center justify-between gap-3 border-b border-stone-100 " +
+        (isReviewed ? "bg-[#f0fdf4]" : "bg-[#fffbeb]")
+      }
+      data-testid="payroll-admin-employee-data-review-banner"
+      data-state={isReviewed ? "reviewed" : "review-required"}
+    >
+      <div className="flex items-center gap-3">
+        {isReviewed
+          ? <CheckCircleIcon className="h-4 w-4 text-[#166534]" />
+          : <AlertTriangleIcon className="h-4 w-4 text-[#92400e]" />}
+        <div>
+          <p className="text-[12.5px] font-semibold text-stone-800">
+            Employee Data · {isReviewed ? "Reviewed" : "Review required"}
+          </p>
+          <p className="text-[11.5px] text-stone-500">{detail}</p>
+        </div>
+      </div>
+      {!isReviewed ? (
+        <MarkReviewedButton
+          action={action}
+          payPeriodId={payPeriodId}
+          payGroupId={payGroupId}
+          batchId={batchId}
+          dimension="EMPLOYEE_DATA"
+          testId="payroll-admin-review-mark-employee-data"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// Slice 3D (2026-09-12) — Calculated Payroll review banner. Appears
+// once the batch reaches CALCULATED. Combines Mark Reviewed (Step 5
+// attestation) with Return-to-Preparation for post-calc corrections.
+function CalculatedPayrollReviewBanner({
+  attestation, batchStatus, calculatedAtISO, calculationVersion,
+  action, canAttest, returnAction, canReturn,
+  payPeriodId, payGroupId, batchId,
+}: {
+  attestation: PayrollOverviewViewModel["reviewAttestations"][number] | null;
+  batchStatus: string;
+  calculatedAtISO: string | null;
+  calculationVersion: number | null;
+  action: ((fd: FormData) => Promise<void>) | null;
+  canAttest: boolean;
+  returnAction: ((fd: FormData) => Promise<void>) | null;
+  canReturn: boolean;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+}) {
+  const isReviewed = attestation?.isCurrent === true;
+  const isStale    = attestation != null && !attestation.isCurrent;
+  const versionLabel = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
+  const calcLabel = calculatedAtISO
+    ? new Date(calculatedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })
+    : "";
+  const detail = isReviewed
+    ? (attestation!.attestedByDisplayName
+        ? `Reviewed by ${attestation!.attestedByDisplayName} at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}${versionLabel}`
+        : `Reviewed at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}${versionLabel}`)
+    : (isStale
+        ? `Review required — recalculated ${calcLabel}${versionLabel}`
+        : `Calculated ${calcLabel}${versionLabel} — review the results before submitting for approval.`);
+  return (
+    <div
+      className={
+        "px-6 py-2.5 flex items-center justify-between gap-3 border-b border-stone-100 " +
+        (isReviewed ? "bg-[#f0fdf4]" : "bg-[#eff6ff]")
+      }
+      data-testid="payroll-admin-calculated-payroll-review-banner"
+      data-state={isReviewed ? "reviewed" : "review-required"}
+    >
+      <div className="flex items-center gap-3">
+        {isReviewed
+          ? <CheckCircleIcon className="h-4 w-4 text-[#166534]" />
+          : <EyeCheckIcon className="h-4 w-4 text-[#1e40af]" />}
+        <div>
+          <p className="text-[12.5px] font-semibold text-stone-800">
+            Calculated Payroll · {isReviewed ? "Reviewed" : "Review required"}
+          </p>
+          <p className="text-[11.5px] text-stone-500">{detail}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {!isReviewed && canAttest && action ? (
+          <MarkReviewedButton
+            action={action}
+            payPeriodId={payPeriodId}
+            payGroupId={payGroupId}
+            batchId={batchId}
+            dimension="CALCULATED_PAYROLL"
+            testId="payroll-admin-review-mark-calculated-payroll"
+          />
+        ) : null}
+        {batchStatus === "CALCULATED" && canReturn && returnAction ? (
+          <ReturnToPreparationButton
+            action={returnAction}
+            payPeriodId={payPeriodId}
+            payGroupId={payGroupId}
+            batchId={batchId}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Slice 3D (2026-09-12) — Return-to-Preparation control. Uses a
+// details/summary for the inline reason prompt so the confirmation
+// stays inside the Employees tab shell (no modal, no route change).
+function ReturnToPreparationButton({ action, payPeriodId, payGroupId, batchId }: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+}) {
+  return (
+    <details className="relative" data-testid="payroll-admin-return-to-prep">
+      <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3 py-1 text-[12.5px] text-stone-700">
+        <RefreshIcon className="h-3.5 w-3.5" /> Return to Preparation
+      </summary>
+      <div className="absolute right-0 top-full mt-1 z-10 w-[380px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-return-to-prep-panel">
+        <form action={action} className="space-y-2">
+          <input type="hidden" name="payPeriodId" value={payPeriodId} />
+          <input type="hidden" name="payGroupId" value={payGroupId} />
+          <input type="hidden" name="batchId" value={batchId} />
+          <p className="text-[12px] text-stone-700 font-medium">Return this payroll to Preparation?</p>
+          <p className="text-[11.5px] text-stone-500 leading-snug">
+            The current calculation will no longer be the active result. Payroll must be
+            calculated again before it can be submitted.
+          </p>
+          <div>
+            <label htmlFor="ret-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
+            <input
+              id="ret-reason"
+              name="reason"
+              type="text"
+              required
+              maxLength={240}
+              placeholder="e.g. correcting Tim's hours"
+              data-testid="payroll-admin-return-to-prep-reason"
+              className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button type="submit" data-testid="payroll-admin-return-to-prep-submit" className="inline-flex items-center gap-1 rounded-md bg-[#dc2626] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#b91c1c]">Return to Preparation</button>
+          </div>
+        </form>
+      </div>
+    </details>
   );
 }
 
@@ -1426,7 +1835,11 @@ function PageBtn({ children, active, disabled, onClick }: { children: ReactNode;
 /* ============================================================
    REGION 5 — PAYROLL ACTIONS (visual only in 3A)
    ============================================================ */
-function ActionsCard({ view }: { view: PayrollOverviewViewModel }) {
+function ActionsCard({ view, calculate, returnToPrep }: {
+  view: PayrollOverviewViewModel;
+  calculate: CalculateControls | null;
+  returnToPrep: ReturnControls | null;
+}) {
   // Slice 3B: Resolve Exceptions activates the Exceptions tab
   // (in-place navigation via ?tab=exceptions). View Time Approvals
   // activates the Approvals tab. Both are enabled only when a batch
@@ -1434,6 +1847,16 @@ function ActionsCard({ view }: { view: PayrollOverviewViewModel }) {
   const canResolveExceptions = view.hasBatch;
   const canViewApprovals     = view.hasBatch;
   const blockerCount = view.kpi.exceptionsBlockerCount ?? 0;
+  const readiness = view.calculateReadiness;
+  const batchStatus = view.batch?.status ?? null;
+  const canCalculatePrimary =
+    calculate?.canCalculate === true &&
+    readiness.canCalculate &&
+    view.hasBatch &&
+    !!view.batch?.id;
+  const showReturnButton =
+    returnToPrep?.canReturn === true &&
+    batchStatus === "CALCULATED";
   return (
     <section className="rounded-lg border border-stone-200 bg-white overflow-hidden" data-testid="payroll-admin-actions">
       <div className="px-5 pt-2.5 pb-1.5">
@@ -1464,9 +1887,121 @@ function ActionsCard({ view }: { view: PayrollOverviewViewModel }) {
           disabled={!canViewApprovals}
           disabledTitle="Prepare a payroll batch to see approvals"
           targetTab="approvals" />
-        <DisabledBtn icon={<CalcIcon className="h-4 w-4 text-stone-500" />} label="Calculate Payroll (Preview)" />
+
+        {batchStatus === "CALCULATED" && showReturnButton && returnToPrep && view.payPeriod && view.batch ? (
+          <ReturnToPreparationSidebarButton
+            action={returnToPrep.action}
+            payPeriodId={view.payPeriod.id}
+            payGroupId={view.payGroup?.id ?? ""}
+            batchId={view.batch.id}
+          />
+        ) : canCalculatePrimary && calculate && view.batch && view.payPeriod ? (
+          <form action={calculate.action}>
+            <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
+            <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
+            <input type="hidden" name="batchId" value={view.batch.id} />
+            <CalculateSubmitButton />
+          </form>
+        ) : (
+          <CalculateDisabledButton readiness={readiness} batchStatus={batchStatus} />
+        )}
       </div>
     </section>
+  );
+}
+
+function CalculateSubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid="payroll-admin-calculate"
+      data-pending={pending ? "true" : "false"}
+      className={
+        "w-full inline-flex items-center justify-between rounded-md text-white px-3.5 py-1.5 text-[13px] font-medium " +
+        (pending
+          ? "bg-[#0f5f3f]/70 cursor-wait"
+          : "bg-[#0f5f3f] hover:bg-[#0d4f34]")
+      }
+    >
+      <span className="inline-flex items-center gap-2">
+        {pending ? <SpinnerIcon className="h-4 w-4" /> : <CalcIcon className="h-4 w-4" />}
+        {pending ? "Calculating Payroll…" : "Calculate Payroll"}
+      </span>
+      {!pending ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+    </button>
+  );
+}
+
+function CalculateDisabledButton({ readiness, batchStatus }: {
+  readiness: PayrollOverviewViewModel["calculateReadiness"];
+  batchStatus: string | null;
+}) {
+  const firstBlocker = readiness.blockers[0];
+  const isPostCalculated =
+    batchStatus === "CALCULATED" ||
+    batchStatus === "SUBMITTED_FOR_APPROVAL" ||
+    batchStatus === "APPROVED" ||
+    batchStatus === "POSTED";
+  const label = isPostCalculated
+    ? "Payroll calculated"
+    : "Calculate Payroll";
+  const title = firstBlocker?.message ?? "Calculate is available once all readiness items are complete.";
+  return (
+    <button
+      disabled
+      title={title}
+      data-testid="payroll-admin-calculate-disabled"
+      data-reason={firstBlocker?.code ?? "NONE"}
+      className="w-full inline-flex items-center justify-between rounded-md bg-stone-200 text-stone-500 px-3.5 py-1.5 text-[13px] font-medium cursor-not-allowed"
+    >
+      <span className="inline-flex items-center gap-2"><CalcIcon className="h-4 w-4" /> {label}</span>
+      <ArrowRight className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function ReturnToPreparationSidebarButton({ action, payPeriodId, payGroupId, batchId }: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+}) {
+  return (
+    <details className="relative" data-testid="payroll-admin-actions-return-to-prep">
+      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3.5 py-1.5 text-[13px] font-medium text-stone-700">
+        <span className="inline-flex items-center gap-2"><RefreshIcon className="h-4 w-4 text-stone-500" /> Return to Preparation</span>
+        <ArrowRight className="h-3.5 w-3.5" />
+      </summary>
+      <div className="absolute right-0 top-full mt-1 z-10 w-[300px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-actions-return-to-prep-panel">
+        <form action={action} className="space-y-2">
+          <input type="hidden" name="payPeriodId" value={payPeriodId} />
+          <input type="hidden" name="payGroupId" value={payGroupId} />
+          <input type="hidden" name="batchId" value={batchId} />
+          <p className="text-[11.5px] text-stone-500 leading-snug">
+            This will reopen this payroll run for changes. Payroll must be calculated again before submission.
+          </p>
+          <div>
+            <label htmlFor="ret-side-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
+            <input
+              id="ret-side-reason"
+              name="reason"
+              type="text"
+              required
+              maxLength={240}
+              placeholder="e.g. correcting Tim's hours"
+              data-testid="payroll-admin-actions-return-to-prep-reason"
+              className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
+            />
+          </div>
+          <div className="flex items-center justify-end">
+            <button type="submit" data-testid="payroll-admin-actions-return-to-prep-submit" className="inline-flex items-center gap-1 rounded-md bg-[#dc2626] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#b91c1c]">Return to Preparation</button>
+          </div>
+        </form>
+      </div>
+    </details>
   );
 }
 function DisabledBtn({ tone, icon, label }: { tone?: "primary"; icon: ReactNode; label: string }) {
@@ -1544,17 +2079,23 @@ function TabNavigateBtn({ tone, icon, label, targetTab, disabled, disabledTitle,
    REGION 6 — PRE-CALCULATION CHECKLIST (real data in 3B)
    ============================================================ */
 function ChecklistCard({ view }: { view: PayrollOverviewViewModel }) {
+  // Payroll 3D (2026-09-12): the header's N-of-M MUST derive from the
+  // same array that renders the rows. The previous defect used two
+  // arrays — `owned = items.filter(!future)` for the caption and
+  // `items` for the rows — so a `future: true` row (item 6, "Verify
+  // employee data") was visible but not counted, showing "5 of 5"
+  // beside six visible rows.
   const items = view.checklist;
-  const owned = items.filter((i) => !i.future);
-  const doneOwned = owned.filter((i) => i.done).length;
-  const progressPct = owned.length === 0 ? 0 : Math.round((doneOwned / owned.length) * 100);
+  const done = items.filter((i) => i.done).length;
+  const total = items.length;
+  const progressPct = total === 0 ? 0 : Math.round((done / total) * 100);
   return (
     <section className="rounded-lg border border-stone-200 bg-white overflow-hidden" data-testid="payroll-admin-checklist">
       <div className="px-5 pt-2.5 pb-1.5">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-[15px] text-stone-900">Pre-Calculation Checklist</h2>
-          <p className="text-[12px] text-stone-500 tabular-nums" data-testid="payroll-admin-checklist-progress">
-            {doneOwned} of {owned.length} complete
+          <p className="text-[12px] text-stone-500 tabular-nums" data-testid="payroll-admin-checklist-progress" data-done={done} data-total={total}>
+            {done} of {total} complete
           </p>
         </div>
         <div className="mt-1.5 h-1.5 rounded-full bg-stone-100 overflow-hidden">
