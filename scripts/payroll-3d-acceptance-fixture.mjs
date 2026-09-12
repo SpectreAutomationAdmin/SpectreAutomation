@@ -197,6 +197,8 @@ async function main() {
     await prisma.employeeTaxProfile.create({
       data: {
         clubId: COULEE, employeeId: sam.id,
+        province: "AB", td1FormVersion: "2026",
+        effectiveFrom: SAM_HIRE,
         federalClaimSecretRef: "kms://synthetic/sam-3d-fed",
         provincialClaimSecretRef: "kms://synthetic/sam-3d-prov",
         additionalFederalTaxAmount: "0",
