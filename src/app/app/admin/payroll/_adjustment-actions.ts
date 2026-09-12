@@ -35,8 +35,12 @@ async function context() {
   return { principal, clubId };
 }
 
-function backToAdjustments(payPeriodId: string): never {
-  redirect(`/app/admin/payroll?payPeriodId=${encodeURIComponent(payPeriodId)}&tab=adjustments`);
+function backToAdjustments(payPeriodId: string, payGroupId?: string | null): never {
+  const q = new URLSearchParams();
+  if (payGroupId) q.set("payGroupId", payGroupId);
+  if (payPeriodId) q.set("payPeriodId", payPeriodId);
+  q.set("tab", "adjustments");
+  redirect(`/app/admin/payroll?${q.toString()}`);
 }
 
 /** Add a one-time adjustment to a PREPARED batch. Refuses on any
@@ -44,6 +48,7 @@ function backToAdjustments(payPeriodId: string): never {
 export async function addAdjustmentAction(formData: FormData): Promise<void> {
   const { principal, clubId } = await context();
   const payPeriodId    = String(formData.get("payPeriodId")    ?? "").trim();
+  const payGroupId     = String(formData.get("payGroupId")     ?? "").trim() || null;
   const batchId        = String(formData.get("batchId")        ?? "").trim();
   const batchEmployeeId = String(formData.get("batchEmployeeId") ?? "").trim();
   const componentCode  = String(formData.get("componentCode")  ?? "").trim();
@@ -56,7 +61,7 @@ export async function addAdjustmentAction(formData: FormData): Promise<void> {
     batchEmployeeId, componentCode, amount: amountRaw, reason,
   });
   revalidatePath("/app/admin/payroll");
-  backToAdjustments(payPeriodId);
+  backToAdjustments(payPeriodId, payGroupId);
 }
 
 /** Remove a one-time adjustment. Only permitted while the batch is
@@ -64,11 +69,12 @@ export async function addAdjustmentAction(formData: FormData): Promise<void> {
 export async function removeAdjustmentAction(formData: FormData): Promise<void> {
   const { principal, clubId } = await context();
   const payPeriodId = String(formData.get("payPeriodId") ?? "").trim();
+  const payGroupId  = String(formData.get("payGroupId")  ?? "").trim() || null;
   const snapshotId  = String(formData.get("snapshotId")  ?? "").trim();
   if (!snapshotId) backToAdjustments(payPeriodId);
   await removeOneTimeAdjustment(principal, clubId, { snapshotId });
   revalidatePath("/app/admin/payroll");
-  backToAdjustments(payPeriodId);
+  backToAdjustments(payPeriodId, payGroupId);
 }
 
 /** Create a recurring-component assignment on an employee. Effect
@@ -78,6 +84,7 @@ export async function removeAdjustmentAction(formData: FormData): Promise<void> 
 export async function createRecurringAssignmentAction(formData: FormData): Promise<void> {
   const { principal, clubId } = await context();
   const payPeriodId    = String(formData.get("payPeriodId")    ?? "").trim();
+  const payGroupId     = String(formData.get("payGroupId")     ?? "").trim() || null;
   const employeeId     = String(formData.get("employeeId")     ?? "").trim();
   const componentId    = String(formData.get("componentId")    ?? "").trim();
   const amountRaw      = String(formData.get("amount")         ?? "").trim();
@@ -93,7 +100,7 @@ export async function createRecurringAssignmentAction(formData: FormData): Promi
     employeeId, componentId, amount: amountRaw, effectiveFrom,
   });
   revalidatePath("/app/admin/payroll");
-  backToAdjustments(payPeriodId);
+  backToAdjustments(payPeriodId, payGroupId);
 }
 
 /** End a recurring-component assignment (sets effectiveTo + inactive).
@@ -102,6 +109,7 @@ export async function createRecurringAssignmentAction(formData: FormData): Promi
 export async function endRecurringAssignmentAction(formData: FormData): Promise<void> {
   const { principal, clubId } = await context();
   const payPeriodId    = String(formData.get("payPeriodId")    ?? "").trim();
+  const payGroupId     = String(formData.get("payGroupId")     ?? "").trim() || null;
   const assignmentId   = String(formData.get("assignmentId")   ?? "").trim();
   const effectiveToISO = String(formData.get("effectiveTo")    ?? "").trim();
   if (!assignmentId || !effectiveToISO) backToAdjustments(payPeriodId);
@@ -111,5 +119,5 @@ export async function endRecurringAssignmentAction(formData: FormData): Promise<
   }
   await endRecurringComponentAssignment(principal, clubId, assignmentId, effectiveTo);
   revalidatePath("/app/admin/payroll");
-  backToAdjustments(payPeriodId);
+  backToAdjustments(payPeriodId, payGroupId);
 }

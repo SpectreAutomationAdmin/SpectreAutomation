@@ -21,16 +21,25 @@ async function context() {
   return { principal, clubId };
 }
 
+function backToAdjustments(payPeriodId: string, payGroupId?: string | null): never {
+  const q = new URLSearchParams();
+  if (payGroupId) q.set("payGroupId", payGroupId);
+  if (payPeriodId) q.set("payPeriodId", payPeriodId);
+  q.set("tab", "adjustments");
+  redirect(`/app/admin/payroll?${q.toString()}`);
+}
+
 export async function attestBatchReviewAction(formData: FormData): Promise<void> {
   const { principal, clubId } = await context();
   const payPeriodId  = String(formData.get("payPeriodId") ?? "").trim();
+  const payGroupId   = String(formData.get("payGroupId")  ?? "").trim() || null;
   const batchId      = String(formData.get("batchId")     ?? "").trim();
   const dimensionRaw = String(formData.get("dimension")   ?? "").trim();
-  if (!batchId || !dimensionRaw) redirect(`/app/admin/payroll?payPeriodId=${encodeURIComponent(payPeriodId)}&tab=adjustments`);
+  if (!batchId || !dimensionRaw) backToAdjustments(payPeriodId, payGroupId);
   if (!(REVIEW_DIMENSIONS as readonly string[]).includes(dimensionRaw)) {
-    redirect(`/app/admin/payroll?payPeriodId=${encodeURIComponent(payPeriodId)}&tab=adjustments&err=bad-dim`);
+    backToAdjustments(payPeriodId, payGroupId);
   }
   await attestBatchReview(principal, clubId, batchId, dimensionRaw as ReviewDimension);
   revalidatePath("/app/admin/payroll");
-  redirect(`/app/admin/payroll?payPeriodId=${encodeURIComponent(payPeriodId)}&tab=adjustments`);
+  backToAdjustments(payPeriodId, payGroupId);
 }

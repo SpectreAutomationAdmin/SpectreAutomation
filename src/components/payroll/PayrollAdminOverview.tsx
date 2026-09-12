@@ -866,6 +866,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
     displayName: r.displayName,
   }));
   const payPeriodId = view.payPeriod?.id ?? "";
+  const payGroupId  = view.payGroup?.id ?? "";
   const batchId = view.batch?.id ?? "";
   return (
     <div className="border-t border-stone-100" data-testid="payroll-admin-adjustments-tab">
@@ -879,6 +880,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
           <MarkReviewedButton
             action={review!.action}
             payPeriodId={payPeriodId}
+            payGroupId={payGroupId}
             batchId={batchId}
             dimension="ONE_TIME_ADJUSTMENTS"
             testId="payroll-admin-review-mark-one-time"
@@ -892,6 +894,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
             <AddAdjustmentPanel
               action={adjustments!.addAction}
               payPeriodId={payPeriodId}
+              payGroupId={payGroupId}
               batchId={batchId}
               employees={employeePickerRows}
               components={view.componentPicker}
@@ -941,6 +944,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
                   {canRemove ? (
                     <form action={adjustments!.removeAction}>
                       <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                      <input type="hidden" name="payGroupId" value={payGroupId} />
                       <input type="hidden" name="snapshotId" value={a.id} />
                       <button type="submit" data-testid={`payroll-admin-adjustment-remove-${a.id}`} className="text-[12.5px] text-[#dc2626] hover:underline">Remove</button>
                     </form>
@@ -965,6 +969,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
           <MarkReviewedButton
             action={review!.action}
             payPeriodId={payPeriodId}
+            payGroupId={payGroupId}
             batchId={batchId}
             dimension="RECURRING_COMPONENTS"
             testId="payroll-admin-review-mark-recurring"
@@ -979,6 +984,7 @@ function AdjustmentsTabContent({ view, adjustments, recurring, review }: {
               createAction={recurring!.createAction}
               endAction={recurring!.endAction}
               payPeriodId={payPeriodId}
+              payGroupId={payGroupId}
               employees={employeePickerRows}
               components={view.componentPicker}
               assignmentsByEmployee={view.recurringAssignmentsByEmployee}
@@ -1069,9 +1075,10 @@ function ReviewStatusPill({ kind, attestation }: {
   );
 }
 
-function MarkReviewedButton({ action, payPeriodId, batchId, dimension, testId }: {
+function MarkReviewedButton({ action, payPeriodId, payGroupId, batchId, dimension, testId }: {
   action: (fd: FormData) => Promise<void>;
   payPeriodId: string;
+  payGroupId: string;
   batchId: string;
   dimension: "ONE_TIME_ADJUSTMENTS" | "RECURRING_COMPONENTS";
   testId: string;
@@ -1079,6 +1086,7 @@ function MarkReviewedButton({ action, payPeriodId, batchId, dimension, testId }:
   return (
     <form action={action} className="inline-flex">
       <input type="hidden" name="payPeriodId" value={payPeriodId} />
+      <input type="hidden" name="payGroupId" value={payGroupId} />
       <input type="hidden" name="batchId" value={batchId} />
       <input type="hidden" name="dimension" value={dimension} />
       <button
@@ -1092,9 +1100,10 @@ function MarkReviewedButton({ action, payPeriodId, batchId, dimension, testId }:
   );
 }
 
-function AddAdjustmentPanel({ action, payPeriodId, batchId, employees, components }: {
+function AddAdjustmentPanel({ action, payPeriodId, payGroupId, batchId, employees, components }: {
   action: (fd: FormData) => Promise<void>;
   payPeriodId: string;
+  payGroupId: string;
   batchId: string;
   employees: Array<{ batchEmployeeId: string; employeeId: string; displayName: string }>;
   components: PayrollOverviewViewModel["componentPicker"];
@@ -1103,6 +1112,7 @@ function AddAdjustmentPanel({ action, payPeriodId, batchId, employees, component
     <div className="absolute right-0 top-full mt-1 z-10 w-[380px] rounded-md border border-stone-200 bg-white shadow-lg p-4" data-testid="payroll-admin-adjustments-add-panel">
       <form action={action} className="space-y-2.5">
         <input type="hidden" name="payPeriodId" value={payPeriodId} />
+        <input type="hidden" name="payGroupId" value={payGroupId} />
         <input type="hidden" name="batchId" value={batchId} />
         <div>
           <label htmlFor="adj-emp" className="text-[11.5px] text-stone-600 font-medium">Employee</label>
@@ -1144,10 +1154,11 @@ function AddAdjustmentPanel({ action, payPeriodId, batchId, employees, component
   );
 }
 
-function ManageRecurringPanel({ createAction, endAction, payPeriodId, employees, components, assignmentsByEmployee }: {
+function ManageRecurringPanel({ createAction, endAction, payPeriodId, payGroupId, employees, components, assignmentsByEmployee }: {
   createAction: (fd: FormData) => Promise<void>;
   endAction: (fd: FormData) => Promise<void>;
   payPeriodId: string;
+  payGroupId: string;
   employees: Array<{ batchEmployeeId: string; employeeId: string; displayName: string }>;
   components: PayrollOverviewViewModel["componentPicker"];
   assignmentsByEmployee: PayrollOverviewViewModel["recurringAssignmentsByEmployee"];
@@ -1167,6 +1178,7 @@ function ManageRecurringPanel({ createAction, endAction, payPeriodId, employees,
       </p>
       <form action={createAction} className="space-y-2.5">
         <input type="hidden" name="payPeriodId" value={payPeriodId} />
+        <input type="hidden" name="payGroupId" value={payGroupId} />
         <div>
           <label htmlFor="rec-emp" className="text-[11.5px] text-stone-600 font-medium">Employee</label>
           <select id="rec-emp" name="employeeId" required data-testid="payroll-admin-recurring-add-employee" className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2">
@@ -1219,6 +1231,7 @@ function ManageRecurringPanel({ createAction, endAction, payPeriodId, employees,
                 </div>
                 <form action={endAction} className="inline-flex items-start gap-1">
                   <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                  <input type="hidden" name="payGroupId" value={payGroupId} />
                   <input type="hidden" name="assignmentId" value={a.id} />
                   <input type="date" name="effectiveTo" defaultValue={todayISO} required className="h-7 rounded border border-stone-200 text-[11px] px-1 w-[110px]" />
                   <button type="submit" data-testid={`payroll-admin-recurring-end-${a.id}`} className="rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-2 py-0.5 text-[11.5px] text-stone-700">End Assignment</button>
