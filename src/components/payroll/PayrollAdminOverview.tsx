@@ -635,18 +635,18 @@ function ExceptionRow({ row }: { row: PayrollOverviewViewModel["exceptions"][num
 }
 
 function ApprovalsTabContent({ view }: { view: PayrollOverviewViewModel }) {
+  // 3B acceptance hotfix (2026-09-12) — reviewable department time
+  // is surfaced independently of whether a payroll batch has been
+  // prepared. A manager may need to approve time BEFORE the Payroll
+  // Admin has clicked Prepare — the tab must show it either way.
   const rows = view.approvals;
-  if (!view.hasBatch) {
-    return (
-      <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-approvals-empty">
-        <p className="text-stone-700">No batch prepared for this pay period.</p>
-      </div>
-    );
-  }
   if (rows.length === 0) {
     return (
       <div className="px-6 py-10 text-center text-stone-500 text-[13px]" data-testid="payroll-admin-approvals-empty">
         <p className="text-stone-700">No departments have time to approve for this period.</p>
+        {!view.hasBatch ? (
+          <p className="mt-2 text-stone-500 text-[12.5px]">Reviewable time appears here as soon as any employee clocks in.</p>
+        ) : null}
       </div>
     );
   }

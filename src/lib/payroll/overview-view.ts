@@ -534,22 +534,73 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     };
   }
 
-  // Resolve active (non-VOIDED) batch for the period.
+  // 3B acceptance hotfix (2026-09-12) — resolve time-readiness for
+  // the chosen period BEFORE the active-batch check. Reviewable
+  // department time exists independently of whether Prepare has
+  // been clicked yet — a manager may need to approve time before
+  // the Payroll Admin has even created the batch. Surfacing this
+  // scope on the Approvals tab is exactly the founder's §11 rule.
   const activeBatch = await findActiveBatchForPeriod(principal, clubId, chosenPeriod.id);
+  const preBatchReadiness = activeBatch ? null : await getTimeReadiness(principal, clubId, chosenPeriod.id);
 
   if (!activeBatch) {
+    const r = preBatchReadiness!;
+    const approvalsPreBatch: PayrollOverviewApprovalRow[] = r.scopes.map((s) => ({
+      departmentId: s.departmentId,
+      departmentCode: s.departmentCode,
+      departmentName: s.departmentName,
+      employeeCount: s.employeeCount,
+      entryCount: s.entryCount,
+      frozenEntryCount: s.frozenEntryCount,
+      exceptionCount: s.exceptionCount,
+      pendingCorrectionCount: s.pendingCorrectionCount,
+      totalHoursDisplay: s.recordedHoursDisplay,
+      state: s.state,
+      stateLabel: s.stateLabel,
+      approvedAt: s.approvedAt?.toISOString() ?? null,
+      approvedByDisplayName: null,
+      reviewHref: s.reviewHref,
+    }));
+    // No-batch checklist: item 1 still reconciles source-time even
+    // when no batch has been prepared yet.
+    const noBatchChecklist = baseChecklist();
+    noBatchChecklist[0] = {
+      ...noBatchChecklist[0]!,
+      done: r.allImported,
+      detail: r.timesheetEntryCount === 0 && r.clockEventCount === 0
+        ? "No time to import"
+        : r.needsAttentionTimesheetCount > 0
+          ? `${r.needsAttentionTimesheetCount} timesheet${r.needsAttentionTimesheetCount === 1 ? "" : "s"} needs attention`
+          : `${r.timesheetEntryCount} imported`,
+    };
+    noBatchChecklist[1] = {
+      ...noBatchChecklist[1]!,
+      done: r.allApproved && r.scopeCount > 0,
+      detail: r.scopeCount === 0
+        ? "No departments to approve"
+        : `${r.frozenScopeCount}/${r.scopeCount} frozen · ${r.pendingScopeCount} pending${r.reopenedScopeCount > 0 ? ` · ${r.reopenedScopeCount} reopened` : ""}`,
+    };
     return {
       payGroup: payGroupRef,
       payPeriod: chosenPeriod,
       availablePayPeriods,
       batch: null,
       hasBatch: false,
-      kpi: emptyKpi(),
+      kpi: {
+        ...emptyKpi(),
+        timesheetEntryCount: r.timesheetEntryCount,
+        approvedTimeEntryCount: r.approvedTimeEntryCount,
+        openSessionCount: r.needsAttentionTimesheetCount,
+        nullAssignmentEntryCount: r.nullAssignmentEntryCount,
+        clockEventCount: r.clockEventCount,
+        approvalsCompleteCount: r.frozenScopeCount,
+        approvalsRequiredCount: r.scopeCount,
+      },
       employeeTable: emptyEmployeeTable(page, pageSize),
       workflow: baseWorkflow(),
-      checklist: baseChecklist(),
+      checklist: noBatchChecklist,
       exceptions: [],
-      approvals: [],
+      approvals: approvalsPreBatch,
       activeTab,
       availableDepartments: [],
       availableEmploymentTypes: [],
