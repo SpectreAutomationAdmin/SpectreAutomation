@@ -150,8 +150,12 @@ test.describe.serial("Payroll 3A hotfix — staging", () => {
       console.log("[gross-pay] founder period unprepared — skipping row assertion");
       return;
     }
-    // Chris Turcato — salaried, full-period membership. Expect a
-    // non-"—" gross pay value for the row.
+    // Chris Turcato — salaried, full-period membership. With
+    // pagination active on staging, ensure the largest page size
+    // is used so Chris is on the visible page regardless of alpha
+    // order + newly-seeded fixture employees.
+    await page.getByTestId("payroll-admin-page-size").selectOption("50");
+    await page.waitForURL(/pageSize=50/, { timeout: 20_000 });
     const chrisRow = page.locator('tr[data-testid^="payroll-admin-employee-row-"]', { hasText: "Chris Turcato" });
     await expect(chrisRow).toBeVisible();
     const rowCells = await chrisRow.locator("td").allInnerTexts();

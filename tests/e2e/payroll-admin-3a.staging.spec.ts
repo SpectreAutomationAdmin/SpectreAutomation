@@ -56,8 +56,9 @@ test.describe.serial("Payroll Admin 3A — staging", () => {
     const html = await page.content();
     const forbidden = [
       "Taylor Hourly", "Riley Preview", "Casey Preview", "Devon Preview",
-      "Lise Montsion", "Alex Chen", "Jordan Keller", "Morgan West", "Jamie Park",
-      // Chris Turcato is the real founder account; do NOT flag his name here.
+      "Alex Chen", "Jordan Keller", "Morgan West", "Jamie Park",
+      // Chris Turcato + Lise Montsion are real founder + Coulee
+      // employees now — never flag their names.
       "$32,487.62", "1,248.50", "42 hourly · 6 salary",
       "5% vs. previous period", "3% vs. previous period",
       "5 of 6 complete",
@@ -66,17 +67,20 @@ test.describe.serial("Payroll Admin 3A — staging", () => {
     expect(leaked, `forbidden fixtures leaked: ${leaked.join(", ")}`).toEqual([]);
   });
 
-  test("D. Change Period + Export disabled + future-slice Payroll Actions still disabled", async ({ context }) => {
-    // Slice 3B activated Resolve Exceptions + View Time Approvals
-    // (when a batch exists). The three future-slice actions —
-    // Add One-Time Adjustment, Manage Recurring Components, and
-    // Calculate Payroll — remain disabled until 3C/3D own them.
+  test("D. Change Period + Export disabled + Calculate Payroll still disabled", async ({ context }) => {
+    // Slice 3B activated Resolve Exceptions + View Time Approvals.
+    // Slice 3C activated Add One-Time Adjustment + Manage Recurring
+    // Components. Only Calculate Payroll remains disabled until 3D.
     const page = await loginAsFounder(context);
     await page.goto(`${STAGING}/app/admin/payroll`, { waitUntil: "networkidle" });
     await expect(page.getByTestId("payroll-admin-change-period")).toBeVisible();
     await expect(page.getByTestId("payroll-admin-export")).toBeDisabled();
+    // At least one action remains disabled (Calculate Payroll). The
+    // count varies with batch state: pre-batch all 5 are disabled;
+    // once a batch exists 4 are enabled and only Calculate stays
+    // disabled.
     const disabledActionCount = await page.getByTestId("payroll-admin-actions").locator("button[disabled]").count();
-    expect(disabledActionCount).toBeGreaterThanOrEqual(3);
+    expect(disabledActionCount).toBeGreaterThanOrEqual(1);
   });
 
   test("E. Filter bar + search URL echo", async ({ context }) => {
