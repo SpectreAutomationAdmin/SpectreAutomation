@@ -85,6 +85,11 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma-postgres ./prisma-postgres
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+# One-shot maintenance scripts (backfills, verification helpers).
+# Bundled so `flyctl ssh console --command 'node /app/scripts/...'`
+# has them without a separate SFTP hop. Read-only at runtime;
+# nothing on the serving path imports from here.
+COPY --from=builder /app/scripts ./scripts
 
 USER spectre
 EXPOSE 3000
