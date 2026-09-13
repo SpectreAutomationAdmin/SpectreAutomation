@@ -67,7 +67,7 @@ export default async function PayrollReviewPage({ params }: Props) {
         </nav>
       </header>
 
-      <PayrollReviewWorkspace clubId={clubId} review={review} />
+      <PayrollReviewWorkspace clubId={clubId} review={review} currentUserId={user?.id ?? null} />
     </div>
   );
 }

@@ -2043,12 +2043,15 @@ function ActionsCard({ view, calculate, returnToPrep, submit }: {
           }
           if (submitReady && submit && view.payPeriod && view.batch) {
             return (
-              <form action={submit.action}>
-                <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
-                <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
-                <input type="hidden" name="batchId" value={view.batch.id} />
-                <SubmitForApprovalButton />
-              </form>
+              <SubmitForApprovalConfirmation
+                action={submit.action}
+                payPeriodId={view.payPeriod.id}
+                payGroupId={view.payGroup?.id ?? ""}
+                batchId={view.batch.id}
+                summary={view.summary}
+                grossPayDisplay={view.kpi.grossPayDisplay}
+                warningCount={view.kpi.exceptionsWarningCount ?? 0}
+              />
             );
           }
           if (batchStatus === "CALCULATED" && showReturnButton && returnToPrep && view.payPeriod && view.batch) {
@@ -2085,7 +2088,7 @@ function SubmitForApprovalButton() {
       type="submit"
       disabled={pending}
       aria-busy={pending}
-      data-testid="payroll-admin-submit-for-approval"
+      data-testid="payroll-admin-submit-for-approval-confirm"
       data-pending={pending ? "true" : "false"}
       className={
         "w-full inline-flex items-center justify-between rounded-md text-white px-3.5 py-1.5 text-[13px] font-medium " +
@@ -2094,10 +2097,68 @@ function SubmitForApprovalButton() {
     >
       <span className="inline-flex items-center gap-2">
         {pending ? <SpinnerIcon className="h-4 w-4" /> : <ArrowRight className="h-4 w-4" />}
-        {pending ? "Submitting…" : "Submit for Approval"}
+        {pending ? "Submitting…" : "Confirm & Submit"}
       </span>
       {!pending ? <ArrowRight className="h-3.5 w-3.5" /> : null}
     </button>
+  );
+}
+
+// Payroll 3E acceptance hotfix §13 — Submit confirmation panel.
+// The primary Submit button opens a details panel showing the
+// summary; the form action only fires from the confirm button
+// inside the panel.
+function SubmitForApprovalConfirmation({
+  action, payPeriodId, payGroupId, batchId, summary, grossPayDisplay, warningCount,
+}: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+  summary: PayrollOverviewViewModel["summary"];
+  grossPayDisplay: string;
+  warningCount: number;
+}) {
+  return (
+    <details className="relative" data-testid="payroll-admin-submit-for-approval">
+      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md bg-[#1e40af] text-white hover:bg-[#1e3a8a] px-3.5 py-1.5 text-[13px] font-medium">
+        <span className="inline-flex items-center gap-2"><ArrowRight className="h-4 w-4" /> Submit for Approval</span>
+        <ArrowRight className="h-3.5 w-3.5" />
+      </summary>
+      <div className="absolute right-0 top-full mt-1 z-10 w-[360px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-submit-confirm-panel">
+        <p className="text-[12.5px] font-semibold text-stone-800">Submit calculated payroll?</p>
+        <p className="text-[11.5px] text-stone-500 leading-snug mt-1">
+          This sends the current calculated payroll to the Controller for final approval. Payroll
+          cannot be edited while it is awaiting approval.
+        </p>
+        <dl className="mt-2 grid grid-cols-2 gap-y-1 text-[12px] text-stone-700">
+          <dt className="font-semibold">Employees</dt>
+          <dd className="tabular-nums">{summary?.employeeCount ?? "—"}</dd>
+          <dt className="font-semibold">Gross</dt>
+          <dd className="tabular-nums">{summary?.grossPayDisplay ?? grossPayDisplay}</dd>
+          <dt className="font-semibold">Deductions</dt>
+          <dd className="tabular-nums">{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
+          <dt className="font-semibold">Net</dt>
+          <dd className="tabular-nums">{summary?.netPayDisplay ?? "—"}</dd>
+          <dt className="font-semibold">Employer</dt>
+          <dd className="tabular-nums">{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
+          <dt className="font-semibold">Total cost</dt>
+          <dd className="tabular-nums">{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
+          <dt className="font-semibold">Warnings</dt>
+          <dd className="tabular-nums">{warningCount}</dd>
+          <dt className="font-semibold">Calc version</dt>
+          <dd className="tabular-nums">v{summary?.calculationVersion ?? "?"}</dd>
+        </dl>
+        <form action={action} className="mt-2">
+          <input type="hidden" name="payPeriodId" value={payPeriodId} />
+          <input type="hidden" name="payGroupId" value={payGroupId} />
+          <input type="hidden" name="batchId" value={batchId} />
+          <div className="flex items-center justify-end gap-2">
+            <SubmitForApprovalButton />
+          </div>
+        </form>
+      </div>
+    </details>
   );
 }
 

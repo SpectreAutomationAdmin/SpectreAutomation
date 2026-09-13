@@ -41,6 +41,7 @@ import {
   returnPayrollBatch,
 } from "@/lib/payroll/return-payroll-batch";
 import { attestBatchReview } from "@/lib/payroll/batch-review";
+import { seedRbac } from "./util/db";
 
 const prisma = new PrismaClient();
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
@@ -59,6 +60,9 @@ async function seedCalculatedBatch(): Promise<{
   clubId: string; batchId: string;
   payrollAdminId: string; controllerId: string;
 }> {
+  // Payroll 3E acceptance hotfix — Submit pre-flight queries
+  // UserClubRole → Role; ensure the role catalogue exists.
+  await seedRbac();
   const clubId = `club-${Math.random().toString(36).slice(2, 8)}`;
   const paId = `pa-${Math.random().toString(36).slice(2, 8)}`;
   const ctrlId = `ctrl-${Math.random().toString(36).slice(2, 8)}`;
@@ -72,6 +76,15 @@ async function seedCalculatedBatch(): Promise<{
     data: [
       { id: paId,   email: `${paId}@test`,   name: "Test PA",   role: "PAYROLL_ADMIN", passwordHash: "x" },
       { id: ctrlId, email: `${ctrlId}@test`, name: "Test Ctrl", role: "CONTROLLER",    passwordHash: "x" },
+    ],
+  });
+  // Payroll 3E acceptance hotfix — Submit's Controller pre-flight
+  // requires the configured Controller to hold the CONTROLLER role at
+  // this club via UserClubRole.
+  await prisma.userClubRole.createMany({
+    data: [
+      { userId: paId,   clubId, roleKey: "PAYROLL_ADMIN" },
+      { userId: ctrlId, clubId, roleKey: "CONTROLLER" },
     ],
   });
   const payGroupId = `pg-${Math.random().toString(36).slice(2, 8)}`;
@@ -278,6 +291,62 @@ describe("Payroll 3E — Approve (§13-15, §25, §26, §43)", () => {
     await submitPayrollBatch(pa, s.clubId, s.batchId);
     await expect(approvePayrollBatch(ctrl, s.batchId, { expectedCalculationVersion: 999 }))
       .rejects.toThrow(/expected calculationVersion=999/);
+  });
+});
+
+describe("Payroll 3E acceptance hotfix — Controller pre-flight (§1-3)", () => {
+  it("refuses Submit when PayrollClubConfig.controllerUserId is null", async () => {
+    const s = await seedCalculatedBatch();
+    const pa = principal(s.clubId, s.payrollAdminId, "PAYROLL_ADMIN");
+    await attestBatchReview(pa, s.clubId, s.batchId, "CALCULATED_PAYROLL");
+    // Null out the controller.
+    await prisma.payrollClubConfig.update({
+      where: { clubId: s.clubId }, data: { controllerUserId: null },
+    });
+    await expect(submitPayrollBatch(pa, s.clubId, s.batchId))
+      .rejects.toThrow(/Validation failed|no Controller is configured/);
+    // Batch still CALCULATED — not stranded.
+    const batch = await prisma.payrollBatch.findFirstOrThrow({ where: { id: s.batchId } });
+    expect(batch.status).toBe("CALCULATED");
+  });
+
+  it("refuses Submit when configured Controller lacks the CONTROLLER role at the club", async () => {
+    const s = await seedCalculatedBatch();
+    const pa = principal(s.clubId, s.payrollAdminId, "PAYROLL_ADMIN");
+    await attestBatchReview(pa, s.clubId, s.batchId, "CALCULATED_PAYROLL");
+    // Delete the controller's UserClubRole so the pre-flight fails.
+    await prisma.userClubRole.deleteMany({
+      where: { userId: s.controllerId, clubId: s.clubId, roleKey: "CONTROLLER" },
+    });
+    await expect(submitPayrollBatch(pa, s.clubId, s.batchId))
+      .rejects.toThrow(/Validation failed|not assigned the CONTROLLER role/);
+    const batch = await prisma.payrollBatch.findFirstOrThrow({ where: { id: s.batchId } });
+    expect(batch.status).toBe("CALCULATED");
+  });
+
+  it("refuses Submit when configured Controller user is not ACTIVE", async () => {
+    const s = await seedCalculatedBatch();
+    const pa = principal(s.clubId, s.payrollAdminId, "PAYROLL_ADMIN");
+    await attestBatchReview(pa, s.clubId, s.batchId, "CALCULATED_PAYROLL");
+    await prisma.user.update({ where: { id: s.controllerId }, data: { status: "INACTIVE" } });
+    await expect(submitPayrollBatch(pa, s.clubId, s.batchId))
+      .rejects.toThrow(/Validation failed|not an active user/);
+    const batch = await prisma.payrollBatch.findFirstOrThrow({ where: { id: s.batchId } });
+    expect(batch.status).toBe("CALCULATED");
+  });
+
+  it("Submit is atomic — batch and WI item both exist on success, exactly one active card", async () => {
+    const s = await seedCalculatedBatch();
+    const pa = principal(s.clubId, s.payrollAdminId, "PAYROLL_ADMIN");
+    await attestBatchReview(pa, s.clubId, s.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(pa, s.clubId, s.batchId);
+    const origins = await prisma.workIntakeOrigin.findMany({
+      where: { clubId: s.clubId, kind: "PAYROLL_FINAL_APPROVAL", referenceId: s.batchId, role: "PRIMARY" },
+    });
+    expect(origins.length).toBe(1);
+    const item = await prisma.workIntakeItem.findFirstOrThrow({ where: { id: origins[0]!.workIntakeItemId } });
+    expect(item.status).toBe("OPEN");
+    expect(item.ownerUserId).toBe(s.controllerId);
   });
 });
 

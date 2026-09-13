@@ -12,6 +12,7 @@ import type { ReviewBatch, ReviewEmployeeDetail } from "@/lib/payroll/review-dto
 interface Props {
   clubId: string;
   review: ReviewBatch;
+  currentUserId?: string | null;
 }
 
 const money = (v: string | null | undefined): string => {
@@ -64,7 +65,7 @@ function SummaryCard({ label, value, testid, hint }: { label: string; value: str
   );
 }
 
-export default function PayrollReviewWorkspace({ clubId, review }: Props) {
+export default function PayrollReviewWorkspace({ clubId, review, currentUserId = null }: Props) {
   const router = useRouter();
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [detail, setDetail]                 = useState<ReviewEmployeeDetail | null>(null);
@@ -376,7 +377,17 @@ export default function PayrollReviewWorkspace({ clubId, review }: Props) {
         batchId={review.header.batchId}
         status={review.header.status}
         glJournalEntryId={review.header.glJournalEntryId ?? null}
-        calculationVersion={(review.header as unknown as { calculationVersion?: number }).calculationVersion ?? null}
+        calculationVersion={review.header.calculationVersion ?? null}
+        submittedByUserId={review.header.submittedByUserId ?? null}
+        currentUserId={currentUserId}
+        headerContext={{
+          periodStartIso: review.header.periodStartIso,
+          periodEndInclusiveIso: review.header.periodEndInclusiveIso,
+          payDateIso: review.header.payDateIso,
+          employeeCount: review.header.employeeCount,
+          grossPay: review.totals?.gross ?? "0",
+          netPay: review.totals?.netPay ?? "0",
+        }}
       />
     </div>
   );
@@ -384,18 +395,33 @@ export default function PayrollReviewWorkspace({ clubId, review }: Props) {
 
 function ApproveAndPostActions({
   clubId, batchId, status, glJournalEntryId, calculationVersion,
+  submittedByUserId, currentUserId, headerContext,
 }: {
   clubId: string; batchId: string; status: string; glJournalEntryId: string | null;
   calculationVersion?: number | null;
+  submittedByUserId?: string | null;
+  currentUserId?: string | null;
+  headerContext?: {
+    periodStartIso: string;
+    periodEndInclusiveIso: string;
+    payDateIso: string;
+    employeeCount: number;
+    grossPay: string;
+    netPay: string;
+  };
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"approve" | "post" | "return" | null>(null);
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string; jeId?: string; totalDebits?: string; totalCredits?: string } | null>(null);
   const [returnReason, setReturnReason] = useState("");
   const [showReturnPanel, setShowReturnPanel] = useState(false);
+  const [showApproveConfirm, setShowApproveConfirm] = useState(false);
+
+  // Payroll 3E acceptance hotfix §5 — segregation-of-duties in the UI.
+  const isSubmitter = !!currentUserId && !!submittedByUserId && currentUserId === submittedByUserId;
 
   async function approve() {
-    if (!confirm("Approve this payroll batch? This locks in the calculated result. Posting is a separate step in a later slice.")) return;
+    setShowApproveConfirm(false);
     setBanner(null); setBusy("approve");
     try {
       const body = calculationVersion != null ? JSON.stringify({ expectedCalculationVersion: calculationVersion }) : undefined;
@@ -470,14 +496,25 @@ function ApproveAndPostActions({
           data-testid="review-actions-banner"
         >{banner.text}</div>
       ) : null}
+      {isSubmitter && isSubmitted ? (
+        <div
+          className="mb-3 rounded-md border px-3 py-2 text-sm"
+          style={{ borderColor: "#b45309", background: "#fef3c7", color: "#78350f" }}
+          data-testid="review-sod-notice"
+        >
+          Approval unavailable — you submitted this payroll. Segregation of duties (§25) requires a different Controller to approve or return it.
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          onClick={approve}
-          disabled={!isSubmitted || busy !== null}
+          onClick={() => setShowApproveConfirm(true)}
+          disabled={!isSubmitted || busy !== null || isSubmitter}
           data-testid="review-approve-btn"
-          style={{ opacity: !isSubmitted ? 0.5 : 1 }}
+          data-sod-blocked={isSubmitter ? "true" : "false"}
+          title={isSubmitter ? "You submitted this payroll — another Controller must approve it." : ""}
+          style={{ opacity: !isSubmitted || isSubmitter ? 0.5 : 1 }}
         >
           {busy === "approve" ? "Approving…" : "Approve payroll"}
         </button>
@@ -485,9 +522,11 @@ function ApproveAndPostActions({
           type="button"
           className="btn btn-secondary btn-sm"
           onClick={() => setShowReturnPanel((v) => !v)}
-          disabled={!isSubmitted || busy !== null}
+          disabled={!isSubmitted || busy !== null || isSubmitter}
           data-testid="review-return-open-btn"
-          style={{ opacity: !isSubmitted ? 0.5 : 1 }}
+          data-sod-blocked={isSubmitter ? "true" : "false"}
+          title={isSubmitter ? "You submitted this payroll — another Controller must approve or return it." : ""}
+          style={{ opacity: !isSubmitted || isSubmitter ? 0.5 : 1 }}
         >
           Return for correction
         </button>
@@ -516,6 +555,52 @@ function ApproveAndPostActions({
           >View pay statements</a>
         ) : null}
       </div>
+      {showApproveConfirm ? (
+        <div
+          className="mt-3 rounded-md border p-3"
+          style={{ borderColor: "var(--spectre-border-muted)", background: "#f0fdf4" }}
+          data-testid="review-approve-confirm-panel"
+        >
+          <p className="text-sm font-semibold text-stone-800">Approve calculated payroll?</p>
+          <p className="mt-1 text-[12px] text-stone-700 leading-snug">
+            This approves the current calculated payroll for posting. Posting occurs as a separate step (3F).
+          </p>
+          {headerContext ? (
+            <dl className="mt-2 grid grid-cols-2 gap-y-1 text-[12px] text-stone-700">
+              <dt className="font-semibold">Pay period</dt>
+              <dd>{headerContext.periodStartIso.slice(0, 10)} → {headerContext.periodEndInclusiveIso.slice(0, 10)}</dd>
+              <dt className="font-semibold">Pay date</dt>
+              <dd>{headerContext.payDateIso.slice(0, 10)}</dd>
+              <dt className="font-semibold">Employees</dt>
+              <dd className="tabular-nums">{headerContext.employeeCount}</dd>
+              <dt className="font-semibold">Gross</dt>
+              <dd className="tabular-nums">${headerContext.grossPay}</dd>
+              <dt className="font-semibold">Net</dt>
+              <dd className="tabular-nums">${headerContext.netPay}</dd>
+              <dt className="font-semibold">Calculation version</dt>
+              <dd className="tabular-nums">v{calculationVersion ?? "?"}</dd>
+            </dl>
+          ) : null}
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowApproveConfirm(false)}
+              disabled={busy !== null}
+            >Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={approve}
+              disabled={busy !== null}
+              data-testid="review-approve-confirm-btn"
+              style={{ background: "#0f5f3f" }}
+            >
+              {busy === "approve" ? "Approving…" : "Approve payroll"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {showReturnPanel ? (
         <div
           className="mt-3 rounded-md border p-3"

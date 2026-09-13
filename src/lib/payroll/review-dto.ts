@@ -45,6 +45,10 @@ export interface ReviewBatchHeader {
   workIntakeItemId:  string | null;
   approvedAtIso:     string | null;
   approvedByUserId:  string | null;
+  // Payroll 3E acceptance hotfix (2026-09-12) — submitter identity for
+  // the Controller UI's segregation-of-duties check.
+  submittedAtIso:    string | null;
+  submittedByUserId: string | null;
   postedAtIso:       string | null;
   postedByUserId:    string | null;
   glJournalEntryId:  string | null;
@@ -314,6 +318,8 @@ export async function getBatchReview(
     workIntakeItemId:           batch.workIntakeItemId ?? null,
     approvedAtIso:              batch.approvedAt ? batch.approvedAt.toISOString() : null,
     approvedByUserId:           batch.approvedByUserId ?? null,
+    submittedAtIso:             (batch as { submittedAt?: Date | null }).submittedAt?.toISOString() ?? null,
+    submittedByUserId:          (batch as { submittedByUserId?: string | null }).submittedByUserId ?? null,
     postedAtIso:                batch.postedAt ? batch.postedAt.toISOString() : null,
     postedByUserId:             batch.postedByUserId ?? null,
     glJournalEntryId:           (batch as { glJournalEntryId?: string | null }).glJournalEntryId ?? null,
