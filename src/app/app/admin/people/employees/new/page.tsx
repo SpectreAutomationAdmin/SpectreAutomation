@@ -22,30 +22,25 @@ export default async function AddEmployeePage() {
     redirect("/app/admin/people/employees");
   }
 
-  const [departments, positions, managers] = await Promise.all([
+  // Organizational Foundation (2026-09-13) — canonical Position and
+  // union manager selector. Positions come from OrganizationalPosition
+  // (the canonical model); managers come from the union of Employees
+  // and UserClubProfiles, deduped on the same-human link.
+  const [departments, positions, managerBundle] = await Promise.all([
     prisma.department.findMany({
       where: { clubId, isActive: true },
       select: { id: true, name: true, code: true },
       orderBy: { name: "asc" },
     }),
-    prisma.employeePosition.findMany({
+    prisma.organizationalPosition.findMany({
       where: { clubId, isActive: true },
-      // HR-2B.3.6 — expose departmentId so the client-side cascade
-      // (AddEmployeeForm) knows which Department each position belongs to.
       select: { id: true, name: true, code: true, departmentId: true },
-      orderBy: { name: "asc" },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     }),
-    prisma.employee.findMany({
-      where: { clubId, employeeLifecycle: "ACTIVE" },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        preferredName: true,
-        position: { select: { name: true } },
-      },
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-    }),
+    (async () => {
+      const { listManagerOptions } = await import("@/lib/organizational/manager-resolver");
+      return listManagerOptions(clubId);
+    })(),
   ]);
 
   return (
@@ -70,13 +65,13 @@ export default async function AddEmployeePage() {
         // ordinary admin UI.
         departments={departments.map((d) => ({ id: d.id, label: d.name }))}
         positions={positions.map((p) => ({ id: p.id, label: p.name, departmentId: p.departmentId }))}
-        managers={managers.map((m) => {
-          const displayName = m.preferredName?.trim().length
-            ? `${m.preferredName} ${m.lastName}`
-            : `${m.firstName} ${m.lastName}`;
-          const suffix = m.position?.name ? ` · ${m.position.name}` : "";
-          return { id: m.id, label: `${displayName}${suffix}` };
-        })}
+        managers={managerBundle.options.map((m) => ({
+          // Encode kind + id in the option value so the server action
+          // can route the write to Employee.managerEmployeeId or
+          // Employee.managerProfileId.
+          id: `${m.kind}:${m.id}`,
+          label: m.positionName ? `${m.displayName} — ${m.positionName}` : m.displayName,
+        }))}
         canCreatePosition={hasPermission(principal, clubId, "hr:employee:write")}
         canSetCompensation={hasPermission(principal, clubId, "hr:compensation:write")}
       />

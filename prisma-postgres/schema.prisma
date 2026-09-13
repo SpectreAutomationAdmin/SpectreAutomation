@@ -839,6 +839,10 @@ model UserClubProfile {
   updatedByUserId String?
   updatedBy       User?       @relation("UserClubProfileUpdatedBy", fields: [updatedByUserId], references: [id])
 
+  // Organizational Foundation (2026-09-13) — back-relation for the
+  // Employee.managerProfileId cross-type manager link.
+  employeesManaged Employee[] @relation("EmployeeManagerProfile")
+
   @@unique([clubId, userId])
   @@index([clubId, status])
   @@index([userId])
@@ -856,26 +860,35 @@ model UserClubProfile {
 // can use their own vocabulary (Controller / CFO / Director of
 // Finance; Head Professional / Director of Golf / Golf Operations
 // Manager).
+// Spectre canonical Position (2026-09-13). See prisma/schema.prisma
+// for full documentation.
 model OrganizationalPosition {
   id           String      @id @default(cuid())
   clubId       String
   club         Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
   name         String
+  code         String?
   departmentId String?
   department   Department? @relation("OrganizationalPositionDepartment", fields: [departmentId], references: [id])
   description  String?
   sortOrder    Int         @default(0)
   isActive     Boolean     @default(true)
+  reportsToPositionId String?
+  reportsToPosition   OrganizationalPosition?  @relation("PositionHierarchy", fields: [reportsToPositionId], references: [id])
+  directReports       OrganizationalPosition[] @relation("PositionHierarchy")
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   createdByUserId String?
   createdBy       User?    @relation("OrganizationalPositionCreatedBy", fields: [createdByUserId], references: [id])
 
   profiles     UserClubProfile[] @relation("UserClubProfilePosition")
+  employees    Employee[]        @relation("EmployeeOrgPosition")
 
   @@unique([clubId, name])
+  @@unique([clubId, code])
   @@index([clubId, isActive, sortOrder])
   @@index([departmentId])
+  @@index([reportsToPositionId])
 }
 
 model Responsibility {
@@ -3722,6 +3735,11 @@ model Employee {
   managerEmployeeId      String?
   manager                Employee?         @relation("EmployeeReports", fields: [managerEmployeeId], references: [id])
   reports                Employee[]        @relation("EmployeeReports")
+  // Organizational Foundation (2026-09-13) — cross-type manager + canonical Position FK.
+  managerProfileId       String?
+  managerProfile         UserClubProfile?  @relation("EmployeeManagerProfile", fields: [managerProfileId], references: [id])
+  orgPositionId          String?
+  orgPosition            OrganizationalPosition? @relation("EmployeeOrgPosition", fields: [orgPositionId], references: [id])
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
 

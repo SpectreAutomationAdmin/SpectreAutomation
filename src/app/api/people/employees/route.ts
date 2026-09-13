@@ -96,7 +96,23 @@ export async function POST(req: NextRequest) {
   const preferredName = readOptionalString(fd, "preferredName");
   const departmentId = readOptionalString(fd, "departmentId");
   const positionId = readOptionalString(fd, "positionId");
-  const managerEmployeeId = readOptionalString(fd, "managerEmployeeId");
+  // Organizational Foundation (2026-09-13) — Reports-To may reference
+  // either an Employee or a UserClubProfile. The form encodes the
+  // choice as "employee:<id>" or "profile:<id>" in the same field.
+  const managerRawId = readOptionalString(fd, "managerEmployeeId");
+  let managerEmployeeId: string | null = null;
+  let managerProfileId: string | null = null;
+  if (managerRawId) {
+    if (managerRawId.startsWith("profile:")) {
+      managerProfileId = managerRawId.slice("profile:".length) || null;
+    } else if (managerRawId.startsWith("employee:")) {
+      managerEmployeeId = managerRawId.slice("employee:".length) || null;
+    } else {
+      // Legacy value (unencoded) — treat as employee id for
+      // backwards compatibility.
+      managerEmployeeId = managerRawId;
+    }
+  }
   const memberId = readOptionalString(fd, "memberId");
   // HR mobile-hotfix (2026-08-30) §1 — optional admin prefill of the
   // new hire's home address. All six fields are optional; a blank
@@ -177,7 +193,11 @@ export async function POST(req: NextRequest) {
       personalEmail,
       mobilePhone,
       departmentId,
-      positionId,
+      // Organizational Foundation (2026-09-13) — the form's positionId
+      // now references OrganizationalPosition (canonical), not
+      // EmployeePosition. Route it to orgPositionId; the legacy
+      // Employee.positionId stays null on new records.
+      orgPositionId: positionId,
       expectedStartDate,
       dateOfBirth,
       employmentType,
@@ -198,6 +218,25 @@ export async function POST(req: NextRequest) {
     // same-tenant on the target manager row.
     if (managerEmployeeId) {
       await setManager(principal, employee.id, managerEmployeeId);
+    } else if (managerProfileId) {
+      // Cross-type manager: the reports-to target is an org User,
+      // not an Employee. Verify same-tenant then write the FK
+      // directly (setManager only handles Employee-to-Employee).
+      const { prisma } = await import("@/lib/prisma");
+      const target = await prisma.userClubProfile.findUnique({
+        where: { id: managerProfileId },
+        select: { clubId: true },
+      });
+      if (!target || target.clubId !== clubId) {
+        return NextResponse.json(
+          { error: "The selected manager does not belong to this Club." },
+          { status: 422 },
+        );
+      }
+      await prisma.employee.update({
+        where: { id: employee.id },
+        data: { managerProfileId },
+      });
     }
 
     // 3. Initial employment period — half-open interval, HIRE reason.

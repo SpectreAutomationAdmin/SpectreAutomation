@@ -839,6 +839,10 @@ model UserClubProfile {
   updatedByUserId String?
   updatedBy       User?       @relation("UserClubProfileUpdatedBy", fields: [updatedByUserId], references: [id])
 
+  // Organizational Foundation (2026-09-13) — back-relation for the
+  // Employee.managerProfileId cross-type manager link.
+  employeesManaged Employee[] @relation("EmployeeManagerProfile")
+
   @@unique([clubId, userId])
   @@index([clubId, status])
   @@index([userId])
@@ -856,26 +860,55 @@ model UserClubProfile {
 // can use their own vocabulary (Controller / CFO / Director of
 // Finance; Head Professional / Director of Golf / Golf Operations
 // Manager).
+// Spectre canonical Position (2026-09-13).
+//
+// Represents ONE organizational role at a Club — used by both
+// organizational Users (via UserClubProfile.positionId) and Employees
+// (via Employee.orgPositionId). The legacy HR-only EmployeePosition
+// table remains temporarily for FK-integrity on historical Employee
+// rows; NEW writes go to this table.
+//
+// Hierarchy: reportsToPositionId points at another Position within
+// the SAME club. Cycle prevention + same-club invariant enforced at
+// the service layer (see src/lib/organizational/positions.ts).
+//
+// Compensation lives OUTSIDE this model (§10, §12): defaultPayRate
+// + isExempt are intentionally NOT migrated onto canonical Position.
+// They stay on EmployeePosition until a dedicated
+// PositionCompensationTemplate is designed.
 model OrganizationalPosition {
   id           String      @id @default(cuid())
   clubId       String
   club         Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
   name         String
+  // Stable tenant-scoped identifier (e.g. GENERAL_MANAGER, CONTROLLER,
+  // CLUBHOUSE_MANAGER). Nullable so existing rows migrate cleanly.
+  // Unique per (clubId, code) when populated. Distinct from
+  // SecurityRole — Position codes never grant permissions.
+  code         String?
   departmentId String?
   department   Department? @relation("OrganizationalPositionDepartment", fields: [departmentId], references: [id])
   description  String?
   sortOrder    Int         @default(0)
   isActive     Boolean     @default(true)
+  // Position hierarchy (2026-09-13). Nullable so root positions
+  // (typically General Manager) have no parent.
+  reportsToPositionId String?
+  reportsToPosition   OrganizationalPosition?  @relation("PositionHierarchy", fields: [reportsToPositionId], references: [id])
+  directReports       OrganizationalPosition[] @relation("PositionHierarchy")
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   createdByUserId String?
   createdBy       User?    @relation("OrganizationalPositionCreatedBy", fields: [createdByUserId], references: [id])
 
   profiles     UserClubProfile[] @relation("UserClubProfilePosition")
+  employees    Employee[]        @relation("EmployeeOrgPosition")
 
   @@unique([clubId, name])
+  @@unique([clubId, code])
   @@index([clubId, isActive, sortOrder])
   @@index([departmentId])
+  @@index([reportsToPositionId])
 }
 
 model Responsibility {
@@ -3722,6 +3755,19 @@ model Employee {
   managerEmployeeId      String?
   manager                Employee?         @relation("EmployeeReports", fields: [managerEmployeeId], references: [id])
   reports                Employee[]        @relation("EmployeeReports")
+  // Organizational Foundation (2026-09-13) — cross-type manager
+  // reference: when an Employee's manager is an organizational User
+  // who does not have an Employee profile, store the manager's
+  // UserClubProfile id here. Never populated together with
+  // managerEmployeeId — the resolver picks whichever is set. Distinct
+  // from UserClubProfile.employeeId (same-human identity link, §22).
+  managerProfileId       String?
+  managerProfile         UserClubProfile?  @relation("EmployeeManagerProfile", fields: [managerProfileId], references: [id])
+  // Organizational Foundation (2026-09-13) — canonical Position FK.
+  // New Employee creation writes this. Existing rows retain
+  // positionId → EmployeePosition until backfilled.
+  orgPositionId          String?
+  orgPosition            OrganizationalPosition? @relation("EmployeeOrgPosition", fields: [orgPositionId], references: [id])
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
 

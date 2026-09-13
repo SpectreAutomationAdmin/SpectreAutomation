@@ -89,6 +89,8 @@ export interface CreateEmployeeInput {
   mobilePhone?: string | null;
   departmentId?: string | null;
   positionId?: string | null;
+  // Organizational Foundation (2026-09-13) — canonical Position FK.
+  orgPositionId?: string | null;
   hireDate?: Date | string | null;
   // Payroll-3B-5B-1a — canonical Employee date of birth (civil date).
   // Optional at create time; a missing DOB downstream produces a
@@ -194,6 +196,8 @@ export async function createEmployee(
       mobilePhone: input.mobilePhone ?? null,
       departmentId: input.departmentId ?? null,
       positionId: input.positionId ?? null,
+      // Organizational Foundation (2026-09-13) — canonical Position FK.
+      orgPositionId: input.orgPositionId ?? null,
       hireDate: toOptionalDate(input.hireDate ?? null, "hireDate"),
       dateOfBirth: toOptionalDateOfBirth(input.dateOfBirth ?? null, "dateOfBirth"),
       terminationReason: input.terminationReason
