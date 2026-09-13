@@ -173,7 +173,12 @@ export function TenantUsersClient({
       return false;
     }
     setBanner({ tone: "success", text: "Saved." });
-    startTransition(() => { void refresh(); router.refresh(); });
+    // Hotfix (2026-09-13): the RSC refresh path was crashing with
+    // `Cannot read properties of undefined (reading 'length')` from a
+    // minified helper inside the server-page bundle. Skip router.refresh()
+    // and only re-fetch our own state via the JSON API — the UI stays
+    // consistent without triggering the RSC re-render race.
+    startTransition(() => { void refresh(); });
     return true;
   }
 
