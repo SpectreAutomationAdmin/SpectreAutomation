@@ -16,6 +16,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ROLE_LABELS, TENANT_ASSIGNABLE_ROLES } from "@/lib/tenant-admin/constants";
 import type { OrgNode } from "@/lib/tenant-admin/org-structure";
+import OrganizationHierarchyTab from "./OrganizationHierarchyTab";
 
 type TenantUserRow = {
   id: string;
@@ -81,6 +82,8 @@ export function TenantUsersClient({
   initialPositions,
   initialOrgTree,
   initialEmployees,
+  canonicalPositionTree,
+  canonicalPositionsFlat,
 }: {
   clubId: string;
   initialUsers: TenantUserRow[];
@@ -89,6 +92,8 @@ export function TenantUsersClient({
   initialPositions: PositionOption[];
   initialOrgTree: OrgNode[];
   initialEmployees: EmployeeOption[];
+  canonicalPositionTree: { roots: import("@/lib/organizational/position-tree").PositionNode[]; orphans: import("@/lib/organizational/position-tree").PositionNode[] };
+  canonicalPositionsFlat: import("./OrganizationHierarchyTab").FlatPositionRef[];
 }) {
   const [users, setUsers] = useState<TenantUserRow[]>(initialUsers);
   const [invitations, setInvitations] = useState<InvitationRow[]>(initialInvitations);
@@ -235,7 +240,13 @@ export function TenantUsersClient({
       ) : null}
 
       {tab === "organization" ? (
-        <OrganizationTab nodes={orgTree} />
+        <OrganizationHierarchyTab
+          clubId={clubId}
+          roots={canonicalPositionTree.roots}
+          orphans={canonicalPositionTree.orphans}
+          allPositions={canonicalPositionsFlat}
+          departments={departments.map((d) => ({ id: d.id, name: d.name }))}
+        />
       ) : null}
 
       {showInvite ? (

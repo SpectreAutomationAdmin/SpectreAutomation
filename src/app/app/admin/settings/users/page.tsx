@@ -37,7 +37,8 @@ export default async function TenantUsersPage() {
     redirect("/app/admin");
   }
 
-  const [users, invitations, tenantAdmins, departments, positions, orgTree, employees, linkedProfiles] = await Promise.all([
+  const { loadCanonicalPositionTree } = await import("@/lib/organizational/position-tree");
+  const [users, invitations, tenantAdmins, departments, positions, orgTree, employees, linkedProfiles, positionTree, positionsAll] = await Promise.all([
     listActiveProfiles(clubId),
     listAdminInvitations(principal, clubId),
     listActiveAssignments(clubId, "TENANT_ADMINISTRATION"),
@@ -61,6 +62,15 @@ export default async function TenantUsersPage() {
     prisma.userClubProfile.findMany({
       where: { clubId, NOT: { employeeId: null } },
       select: { employeeId: true },
+    }),
+    // Organizational Foundation closeout (2026-09-13) — canonical
+    // Position tree includes archived positions so the founder can
+    // reactivate. The Organization tab handles rendering + edits.
+    loadCanonicalPositionTree(clubId, { includeInactive: true }),
+    prisma.organizationalPosition.findMany({
+      where: { clubId },
+      select: { id: true, name: true, code: true, departmentId: true, isActive: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     }),
   ]);
 
@@ -153,6 +163,11 @@ export default async function TenantUsersPage() {
           lifecycle: e.employeeLifecycle,
           departmentName: e.department?.name ?? null,
           alreadyLinked: linkedEmployeeIds.has(e.id),
+        }))}
+        canonicalPositionTree={{ roots: positionTree.roots, orphans: positionTree.orphans }}
+        canonicalPositionsFlat={positionsAll.map((p) => ({
+          id: p.id, name: p.name, code: p.code,
+          departmentId: p.departmentId, isActive: p.isActive,
         }))}
       />
     </main>

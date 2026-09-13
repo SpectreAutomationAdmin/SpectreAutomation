@@ -41,6 +41,11 @@ export const upsertPositionSchema = z.object({
   departmentId: z.string().optional().nullable(),
   description: z.string().max(500).optional().nullable(),
   sortOrder: z.number().int().min(0).max(9999).optional(),
+  // Organizational Foundation closeout (2026-09-13) — reports-to
+  // editable from the Organization tab. Handled by
+  // setPositionReportsTo which enforces cycle/self/tenant checks.
+  reportsToPositionId: z.string().optional().nullable(),
+  code: z.string().max(60).optional().nullable(),
 });
 
 export async function listPositions(clubId: string, opts?: { includeInactive?: boolean }) {
@@ -116,6 +121,11 @@ export async function updatePosition(principal: Principal, positionId: string, r
     });
     if (dup) throw new ConflictError(`A position named "${input.name}" already exists at this Club.`);
   }
+  // Reports-to changes go through the cycle-checked setter.
+  if (input.reportsToPositionId !== undefined) {
+    const { setPositionReportsTo } = await import("@/lib/organizational/provisioning");
+    await setPositionReportsTo(existing.clubId, positionId, input.reportsToPositionId ?? null);
+  }
   const updated = await prisma.organizationalPosition.update({
     where: { id: positionId },
     data: {
@@ -123,6 +133,7 @@ export async function updatePosition(principal: Principal, positionId: string, r
       ...(input.departmentId !== undefined ? { departmentId: input.departmentId } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
+      ...(input.code !== undefined ? { code: input.code } : {}),
     },
   });
   await audit(principal, {
@@ -141,10 +152,20 @@ export async function archivePosition(principal: Principal, positionId: string) 
   if (!existing) throw new NotFoundError("OrganizationalPosition", positionId);
   await assertTenantUsersWrite(principal, existing.clubId);
   if (!existing.isActive) return existing;
-  const inUse = await prisma.userClubProfile.count({ where: { positionId } });
-  if (inUse > 0) {
+  // Occupant safety: refuse if any active UserClubProfile or Employee occupies this Position.
+  const profileInUse = await prisma.userClubProfile.count({
+    where: { positionId, status: "ACTIVE" },
+  });
+  const employeeInUse = await prisma.employee.count({
+    where: {
+      orgPositionId: positionId,
+      employeeLifecycle: { in: ["ACTIVE", "PRE_HIRE"] },
+    },
+  });
+  const total = profileInUse + employeeInUse;
+  if (total > 0) {
     throw new ConflictError(
-      `Cannot archive — ${inUse} tenant user${inUse === 1 ? " holds" : "s hold"} this position. Reassign them first.`,
+      `Cannot deactivate — ${total} active occupant${total === 1 ? " holds" : "s hold"} this position. Reassign them first.`,
     );
   }
   const updated = await prisma.organizationalPosition.update({
@@ -154,6 +175,29 @@ export async function archivePosition(principal: Principal, positionId: string) 
   await audit(principal, {
     clubId: existing.clubId,
     action: "organizational.position.archived",
+    entityType: "OrganizationalPosition",
+    entityId: positionId,
+  });
+  return updated;
+}
+
+/**
+ * Reactivate a previously archived Position. Safe — no occupant
+ * validation needed because inactive Positions carry no active
+ * occupants by construction (see archivePosition).
+ */
+export async function reactivatePosition(principal: Principal, positionId: string) {
+  const existing = await prisma.organizationalPosition.findUnique({ where: { id: positionId } });
+  if (!existing) throw new NotFoundError("OrganizationalPosition", positionId);
+  await assertTenantUsersWrite(principal, existing.clubId);
+  if (existing.isActive) return existing;
+  const updated = await prisma.organizationalPosition.update({
+    where: { id: positionId },
+    data: { isActive: true },
+  });
+  await audit(principal, {
+    clubId: existing.clubId,
+    action: "organizational.position.reactivated",
     entityType: "OrganizationalPosition",
     entityId: positionId,
   });
