@@ -26,7 +26,10 @@ const prisma = new PrismaClient();
 const COULEE      = "cmrvdeny7000144372ktmmg9c";
 const PA_EMAIL    = "fixture.payroll-admin.3e@spectre.test";
 const CTRL_EMAIL  = "fixture.controller.3e@spectre.test";
-const PASSWORD_HASH = "$2b$12$K0.7pWM9OKvJTG8kSwF/CuI2xY8ZQqiBRTFcXFHmpXPn7GtVJa7A6"; // "spectre-3e-fixture"
+// bcryptjs hash of "spectre-3e-fixture" — generated locally; the auth
+// service uses `bcryptjs.compare` (src/lib/services/auth.ts) so any
+// bcrypt-compatible hash works.
+const PASSWORD_HASH = "$2a$10$3NdHFZO.5GJLWfOVhv033e6OKjo5Rll5.G5Qjpl.BsbifK9pVWofq";
 
 // Save file location — relative to repo root, kept OUT of prisma/config
 // (which is checked-in seed data). This directory is safe for staging-
@@ -46,7 +49,16 @@ async function ensureUserWithRole(email, name, roleKey) {
         select: { id: true },
       });
   if (!existing) console.log(`  + Created user ${email} (${roleKey}): ${user.id}`);
-  else           console.log(`  = User ${email} exists: ${user.id}`);
+  else {
+    // Ensure the password hash is the known-good bcrypt of
+    // "spectre-3e-fixture". Prior fixture runs may have left a
+    // placeholder hash that does not decrypt.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: PASSWORD_HASH, status: "ACTIVE" },
+    });
+    console.log(`  = User ${email} exists: ${user.id} (password hash normalised)`);
+  }
   const link = await prisma.userClubRole.findFirst({
     where: { userId: user.id, clubId: COULEE, roleKey },
     select: { id: true },
