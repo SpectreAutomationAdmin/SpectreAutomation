@@ -40,15 +40,20 @@ interface Props {
 export default function OrganizationHierarchyTab({
   clubId, roots, orphans, allPositions, departments,
 }: Props) {
+  // Defensive defaults — a stray undefined prop from a stale RSC
+  // hydration should not crash the whole page (bug fix 2026-09-13).
+  const safeRoots = Array.isArray(roots) ? roots : [];
+  const safeOrphans = Array.isArray(orphans) ? orphans : [];
+  const safeAllPositions = Array.isArray(allPositions) ? allPositions : [];
+  const safeDepartments = Array.isArray(departments) ? departments : [];
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
-    // Default: everything expanded so the founder sees the whole tree.
     const map: Record<string, boolean> = {};
     const walk = (n: PositionNode) => {
       map[n.id] = true;
-      n.children.forEach(walk);
+      (n.children ?? []).forEach(walk);
     };
-    roots.forEach(walk);
-    orphans.forEach(walk);
+    safeRoots.forEach(walk);
+    safeOrphans.forEach(walk);
     return map;
   });
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -57,8 +62,8 @@ export default function OrganizationHierarchyTab({
   const [isPending, startTransition] = useTransition();
 
   const departmentById = useMemo(
-    () => Object.fromEntries(departments.map((d) => [d.id, d.name] as const)),
-    [departments],
+    () => Object.fromEntries(safeDepartments.map((d) => [d.id, d.name] as const)),
+    [safeDepartments],
   );
 
   function toggle(id: string) {
@@ -77,8 +82,8 @@ export default function OrganizationHierarchyTab({
     }
   }
 
-  const totalPositions = allPositions.length;
-  const activeCount = allPositions.filter((p) => p.isActive).length;
+  const totalPositions = safeAllPositions.length;
+  const activeCount = safeAllPositions.filter((p) => p.isActive).length;
 
   return (
     <section
@@ -136,7 +141,7 @@ export default function OrganizationHierarchyTab({
       ) : null}
 
       <ol className="mt-2 space-y-1" data-testid="org-tree-roots">
-        {roots.map((n) => (
+        {safeRoots.map((n) => (
           <PositionRow
             key={n.id}
             node={n}
@@ -147,8 +152,8 @@ export default function OrganizationHierarchyTab({
             setEditingId={setEditingId}
             addingParentId={addingParentId}
             setAddingParentId={setAddingParentId}
-            allPositions={allPositions}
-            departments={departments}
+            allPositions={safeAllPositions}
+            departments={safeDepartments}
             departmentById={departmentById}
             clubId={clubId}
             onSubmitUpdate={(id, input) => {
@@ -180,13 +185,13 @@ export default function OrganizationHierarchyTab({
         ))}
       </ol>
 
-      {orphans.length > 0 ? (
+      {safeOrphans.length > 0 ? (
         <div className="mt-6">
           <h4 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-stone-500">
             Positions with an archived parent
           </h4>
           <ol className="mt-2 space-y-1">
-            {orphans.map((n) => (
+            {safeOrphans.map((n) => (
               <PositionRow
                 key={n.id}
                 node={n}

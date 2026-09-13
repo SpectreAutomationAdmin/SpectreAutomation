@@ -273,15 +273,25 @@ export default async function EmployeeProfilePage({
   const primaryAssignmentRow = assignments.find((a) => a.role === "PRIMARY" && a.isCurrent) ?? null;
 
   const overviewDeptId = primaryAssignmentRow?.departmentId ?? profile.departmentId ?? null;
+  // Hotfix §17 (2026-09-13): canonical position lives on
+  // Employee.orgPositionId (→ OrganizationalPosition). Legacy
+  // Employee.positionId (→ EmployeePosition) is a fallback for
+  // pre-migration rows only. Both go through positionOptions which
+  // still indexes off EmployeePosition ids; when the canonical
+  // orgPosition exists, use its name directly to bypass the legacy
+  // catalogue.
   const overviewPositionId = primaryAssignmentRow?.positionId ?? profile.positionId ?? null;
+  const canonicalOrgPosition = (profile as unknown as { orgPosition?: { id: string; name: string } | null }).orgPosition ?? null;
   const overviewManagerId = primaryAssignmentRow?.managerEmployeeId ?? profile.managerEmployeeId ?? null;
 
   const canonicalDepartment = overviewDeptId
     ? (deptOptions.find((d) => d.id === overviewDeptId) ?? department)
     : null;
-  const canonicalPosition = overviewPositionId
-    ? (positionOptions.find((p) => p.id === overviewPositionId) ?? position)
-    : null;
+  const canonicalPosition = canonicalOrgPosition
+    ? { id: canonicalOrgPosition.id, name: canonicalOrgPosition.name, code: null as string | null }
+    : overviewPositionId
+      ? (positionOptions.find((p) => p.id === overviewPositionId) ?? position)
+      : null;
   const canonicalManager = overviewManagerId
     ? (manager?.id === overviewManagerId
         ? manager

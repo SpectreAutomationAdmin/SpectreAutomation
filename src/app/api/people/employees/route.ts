@@ -201,6 +201,10 @@ export async function POST(req: NextRequest) {
       expectedStartDate,
       dateOfBirth,
       employmentType,
+      // Hotfix §11 (2026-09-13): persist the compensation cadence onto
+      // the Employee row so the salary-vs-hourly onboarding branch
+      // (Availability step) reads the correct value.
+      compensationType: compensationCadence ?? undefined,
       // HR mobile-hotfix (2026-08-30) §1 — optional admin prefill.
       // Any subset may be blank; the service persists whatever the
       // admin provided. The onboarding Address step prefills from

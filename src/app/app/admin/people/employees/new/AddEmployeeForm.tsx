@@ -40,6 +40,15 @@ export interface AddEmployeeManagerOption {
   label: string;
 }
 
+/** Per-Position recommendation payload from the parent-Position
+ *  hierarchy. Keyed by positionId. §3 (2026-09-13 hotfix). */
+export interface PerPositionRecommendation {
+  recommended: { kind: "profile" | "employee"; id: string; label: string } | null;
+  recommendationLabel: string | null;
+  recommendedIsVacant: boolean;
+  ambiguousRecommendations: { kind: "profile" | "employee"; id: string; label: string }[];
+}
+
 export interface MemberCandidate {
   id: string;
   memberNumber: string;
@@ -57,6 +66,7 @@ interface Props {
    *  is chosen. */
   positions: AddEmployeePositionOption[];
   managers: AddEmployeeManagerOption[];
+  perPositionRecommendation?: Record<string, PerPositionRecommendation>;
   /** True when the operator holds `hr:employee:write` and can therefore
    *  create a new EmployeePosition inline via POST /api/hr/positions. */
   canCreatePosition?: boolean;
@@ -81,7 +91,7 @@ const COMPENSATION_CADENCES = [
   { value: "SALARY", label: "Salary" },
 ];
 
-export default function AddEmployeeForm({ departments, positions: initialPositions, managers, canCreatePosition, canSetCompensation }: Props) {
+export default function AddEmployeeForm({ departments, positions: initialPositions, managers, perPositionRecommendation = {}, canCreatePosition, canSetCompensation }: Props) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -587,13 +597,11 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
             </p>
           </div>
           <div className="md:col-span-2">
-            <label className="label" htmlFor="managerEmployeeId">Reports to</label>
-            <select id="managerEmployeeId" name="managerEmployeeId" className="select" defaultValue="">
-              <option value="">— No manager —</option>
-              {managers.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </select>
+            <ReportsToField
+              managers={managers}
+              perPositionRecommendation={perPositionRecommendation}
+              selectedPositionId={selectedPositionId}
+            />
           </div>
         </div>
       </section>
@@ -716,5 +724,125 @@ export default function AddEmployeeForm({ departments, positions: initialPositio
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * "Reports to" field — hotfix §3 (2026-09-13). Position hierarchy
+ * drives the recommendation; the all-managers list is behind an
+ * "Other manager (override)" disclosure so an unrelated senior
+ * person doesn't get equal prominence with the correct manager.
+ */
+function ReportsToField({
+  managers,
+  perPositionRecommendation,
+  selectedPositionId,
+}: {
+  managers: AddEmployeeManagerOption[];
+  perPositionRecommendation: Record<string, PerPositionRecommendation>;
+  selectedPositionId: string;
+}) {
+  const [overrideMode, setOverrideMode] = useState(false);
+  const [manualId, setManualId] = useState("");
+  const rec = selectedPositionId ? perPositionRecommendation[selectedPositionId] : undefined;
+
+  // What we submit on the form: prefer manual override when the
+  // founder has picked one; otherwise, when a single-occupant
+  // recommendation exists, submit it as the default reports-to. If
+  // the recommendation is vacant/ambiguous, submit "" (no manager).
+  const recommendedValue = rec?.recommended ? `${rec.recommended.kind}:${rec.recommended.id}` : "";
+  const finalValue = overrideMode ? manualId : recommendedValue;
+
+  return (
+    <div data-testid="reports-to-field">
+      <label className="label" htmlFor="managerEmployeeId">Reports to</label>
+      {!selectedPositionId ? (
+        <p className="mt-1 text-[13px] text-stone-500">
+          Choose a Position to see the recommended manager.
+        </p>
+      ) : rec?.recommended && !overrideMode ? (
+        <div className="mt-1 flex flex-wrap items-center gap-3" data-testid="reports-to-recommended">
+          <span className="rounded-full border border-green-700 bg-green-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-800">
+            Recommended
+          </span>
+          <span className="text-[14px] font-medium text-stone-900">{rec.recommended.label}</span>
+          <button
+            type="button"
+            className="text-[12px] text-stone-500 underline underline-offset-2 hover:text-stone-800"
+            onClick={() => setOverrideMode(true)}
+            data-testid="reports-to-override-toggle"
+          >
+            Change (override)
+          </button>
+        </div>
+      ) : rec?.recommendedIsVacant && !overrideMode ? (
+        <div className="mt-1 flex flex-wrap items-center gap-3" data-testid="reports-to-vacant">
+          <span className="rounded-full border border-stone-400 bg-stone-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-stone-600">
+            Recommended · Vacant
+          </span>
+          <span className="text-[14px] text-stone-800">
+            {rec.recommendationLabel} — Vacant
+          </span>
+          <button
+            type="button"
+            className="text-[12px] text-stone-500 underline underline-offset-2 hover:text-stone-800"
+            onClick={() => setOverrideMode(true)}
+            data-testid="reports-to-override-toggle"
+          >
+            Pick a manager (override)
+          </button>
+        </div>
+      ) : rec?.ambiguousRecommendations.length && !overrideMode ? (
+        <div className="mt-1" data-testid="reports-to-ambiguous">
+          <p className="text-[13px] text-stone-700">
+            Multiple people occupy the {rec.recommendationLabel ?? "manager"} position. Pick one:
+          </p>
+          <select
+            className="select mt-1 w-full"
+            value={manualId}
+            onChange={(e) => setManualId(e.target.value)}
+            data-testid="reports-to-ambiguous-select"
+          >
+            <option value="">— Choose —</option>
+            {rec.ambiguousRecommendations.map((m) => (
+              <option key={`${m.kind}:${m.id}`} value={`${m.kind}:${m.id}`}>{m.label}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="mt-1 text-[12px] text-stone-500 underline underline-offset-2 hover:text-stone-800"
+            onClick={() => setOverrideMode(true)}
+            data-testid="reports-to-override-toggle"
+          >
+            Or pick a different manager (override)
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1" data-testid="reports-to-override">
+          <select
+            className="select w-full"
+            value={manualId}
+            onChange={(e) => setManualId(e.target.value)}
+            data-testid="reports-to-override-select"
+          >
+            <option value="">— No manager —</option>
+            {managers.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          {overrideMode && rec?.recommendationLabel ? (
+            <button
+              type="button"
+              className="mt-1 text-[12px] text-stone-500 underline underline-offset-2 hover:text-stone-800"
+              onClick={() => { setOverrideMode(false); setManualId(""); }}
+              data-testid="reports-to-recommended-restore"
+            >
+              Use the recommended manager instead
+            </button>
+          ) : null}
+        </div>
+      )}
+      <input type="hidden" name="managerEmployeeId" value={finalValue} />
+    </div>
   );
 }

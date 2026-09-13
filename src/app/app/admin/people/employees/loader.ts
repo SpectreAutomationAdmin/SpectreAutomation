@@ -69,10 +69,13 @@ export async function loadEmployeeDirectory(
       hireDate: true,
       profilePhotoDocumentId: true,
       department: { select: { id: true, name: true } },
-      // EmployeePosition uses `name` as its title column — expose it
-      // as `title` in the directory row so the UI + tests speak the
-      // same language regardless of the underlying schema field.
+      // Hotfix §17 (2026-09-13): canonical Position is Employee.orgPosition.
+      // Fall back to legacy Employee.position only when orgPositionId is
+      // null (temporary compatibility per §17). NEW employees write
+      // orgPositionId; legacy pre-migration employees may still read
+      // through the fallback until backfilled.
       position: { select: { id: true, name: true } },
+      orgPosition: { select: { id: true, name: true } },
       member: { select: { id: true, memberNumber: true } },
     },
     orderBy: [
@@ -95,7 +98,13 @@ export async function loadEmployeeDirectory(
     expectedStartDate: r.expectedStartDate,
     hireDate: r.hireDate,
     department: r.department,
-    position: r.position ? { id: r.position.id, title: r.position.name } : null,
+    // §17: canonical orgPosition takes precedence; legacy positionId
+    // is a fallback for pre-migration Employee rows only.
+    position: r.orgPosition
+      ? { id: r.orgPosition.id, title: r.orgPosition.name }
+      : r.position
+        ? { id: r.position.id, title: r.position.name }
+        : null,
     member: r.member,
     profilePhotoDocumentId: r.profilePhotoDocumentId,
   }));

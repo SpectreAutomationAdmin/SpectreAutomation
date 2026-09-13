@@ -42,6 +42,37 @@ export default async function AddEmployeePage() {
       return listManagerOptions(clubId);
     })(),
   ]);
+  // §3 (2026-09-13 hotfix): pre-compute the parent-Position
+  // recommendation per Position so the client selector renders the
+  // correct "Recommended manager" the moment the founder picks a
+  // Position — without falling back to Controller / CFO merely
+  // because Controller happens to be the only occupied senior seat.
+  const { listManagerOptions: listMgrOptsInner } = await import("@/lib/organizational/manager-resolver");
+  const perPositionRec: Record<string, {
+    recommended: { kind: "profile" | "employee"; id: string; label: string } | null;
+    recommendationLabel: string | null;
+    recommendedIsVacant: boolean;
+    ambiguousRecommendations: { kind: "profile" | "employee"; id: string; label: string }[];
+  }> = {};
+  for (const p of positions) {
+    const b = await listMgrOptsInner(clubId, { positionId: p.id });
+    perPositionRec[p.id] = {
+      recommended: b.recommended
+        ? {
+            kind: b.recommended.kind, id: b.recommended.id,
+            label: b.recommended.positionName
+              ? `${b.recommended.displayName} — ${b.recommended.positionName}`
+              : b.recommended.displayName,
+          }
+        : null,
+      recommendationLabel: b.recommendationLabel,
+      recommendedIsVacant: b.recommendedIsVacant,
+      ambiguousRecommendations: b.ambiguousRecommendations.map((r) => ({
+        kind: r.kind, id: r.id,
+        label: r.positionName ? `${r.displayName} — ${r.positionName}` : r.displayName,
+      })),
+    };
+  }
 
   return (
     <div>
@@ -66,12 +97,10 @@ export default async function AddEmployeePage() {
         departments={departments.map((d) => ({ id: d.id, label: d.name }))}
         positions={positions.map((p) => ({ id: p.id, label: p.name, departmentId: p.departmentId }))}
         managers={managerBundle.options.map((m) => ({
-          // Encode kind + id in the option value so the server action
-          // can route the write to Employee.managerEmployeeId or
-          // Employee.managerProfileId.
           id: `${m.kind}:${m.id}`,
           label: m.positionName ? `${m.displayName} — ${m.positionName}` : m.displayName,
         }))}
+        perPositionRecommendation={perPositionRec}
         canCreatePosition={hasPermission(principal, clubId, "hr:employee:write")}
         canSetCompensation={hasPermission(principal, clubId, "hr:compensation:write")}
       />

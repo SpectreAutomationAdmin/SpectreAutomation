@@ -994,6 +994,19 @@ export async function getEmployee(
     managerEmployeeId: employee.managerEmployeeId,
     profilePhotoDocumentId: employee.profilePhotoDocumentId,
     resumeDocumentId: employee.resumeDocumentId,
+    // Hotfix §17 (2026-09-13): canonical Position surface for the
+    // profile page + admin reads. `orgPositionId` scalar available on
+    // every Employee row (nullable). The consumer resolves the name
+    // via a separate lookup or the getEmployeeWithOrgPosition helper.
+    orgPositionId: (employee as unknown as { orgPositionId: string | null }).orgPositionId ?? null,
+    managerProfileId: (employee as unknown as { managerProfileId: string | null }).managerProfileId ?? null,
+    orgPosition: await (async () => {
+      const id = (employee as unknown as { orgPositionId: string | null }).orgPositionId ?? null;
+      if (!id) return null;
+      return prisma.organizationalPosition.findUnique({
+        where: { id }, select: { id: true, name: true, code: true },
+      });
+    })(),
     // Sensitive summaries — pulled through the security-compliance
     // service reads. Never plaintext.
     sinMasked,

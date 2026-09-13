@@ -193,10 +193,40 @@ export interface ManagerOption extends ManagerRef {
   recommended?: boolean;
 }
 
+/**
+ * Return manager options for the Add/Edit Employee "Reports to" field.
+ *
+ * §3 (2026-09-13 hotfix): the selector must be driven by the Position
+ * HIERARCHY, not the entire user population. Behaviour:
+ *
+ *   - `recommended`         — the single active occupant of the parent
+ *                             Position, when there is exactly one.
+ *   - `recommendationLabel` — human-readable label for the recommended
+ *                             manager Position (e.g. "General Manager"),
+ *                             whether or not it is occupied.
+ *   - `recommendedIsVacant` — true when the parent Position exists but
+ *                             has zero occupants — the UI shows
+ *                             "<Position> — Vacant" and does NOT fall
+ *                             back to some unrelated senior person.
+ *   - `ambiguousRecommendations` — the candidates when the parent
+ *                             Position has multiple active occupants.
+ *   - `options`             — every eligible manager (active
+ *                             UserClubProfiles + active/pre-hire
+ *                             Employees), deduped on same-human link.
+ *                             Intended for the "Other manager (override)"
+ *                             disclosure; NOT shown alongside the
+ *                             recommendation with equal prominence.
+ */
 export async function listManagerOptions(
   clubId: string,
   opts: { positionId?: string | null } = {},
-): Promise<{ recommended: ManagerOption | null; ambiguousRecommendations: ManagerOption[]; options: ManagerOption[] }> {
+): Promise<{
+  recommended: ManagerOption | null;
+  recommendationLabel: string | null;
+  recommendedIsVacant: boolean;
+  ambiguousRecommendations: ManagerOption[];
+  options: ManagerOption[];
+}> {
   const [profiles, employees, linkedProfiles] = await Promise.all([
     prisma.userClubProfile.findMany({
       where: { clubId, status: "ACTIVE" },
@@ -243,6 +273,8 @@ export async function listManagerOptions(
   ];
 
   let recommended: ManagerOption | null = null;
+  let recommendationLabel: string | null = null;
+  let recommendedIsVacant = false;
   let ambiguousRecommendations: ManagerOption[] = [];
   if (opts.positionId) {
     const pos = await prisma.organizationalPosition.findUnique({
@@ -250,40 +282,67 @@ export async function listManagerOptions(
       select: { reportsToPositionId: true, clubId: true },
     });
     if (pos?.clubId === clubId && pos.reportsToPositionId) {
-      const parentOccupants = options.filter((o) => {
-        // Reverse lookup — we need to know each option's positionId to
-        // determine occupancy of the parent. This is expensive if done
-        // per option, so re-query occupants of the parent position
-        // instead.
-        return false;
-      });
-      // Instead, fetch parent occupants directly.
       const parentId = pos.reportsToPositionId;
+      const parent = await prisma.organizationalPosition.findUnique({
+        where: { id: parentId },
+        select: { name: true },
+      });
+      recommendationLabel = parent?.name ?? null;
+
+      // Fetch occupants of the parent Position directly. Dedupe on the
+      // same-human profile ↔ employee link so we never surface the
+      // same person twice.
       const [pfOccupants, emOccupants] = await Promise.all([
         prisma.userClubProfile.findMany({
           where: { clubId, positionId: parentId, status: "ACTIVE" },
-          select: { id: true },
+          select: {
+            id: true, displayTitle: true,
+            user: { select: { name: true } },
+            position: { select: { name: true } },
+          },
         }),
         prisma.employee.findMany({
           where: {
             clubId, orgPositionId: parentId,
             employeeLifecycle: { in: ["ACTIVE", "PRE_HIRE"] },
           },
-          select: { id: true },
+          select: {
+            id: true, firstName: true, lastName: true, preferredName: true,
+            orgPosition: { select: { name: true } },
+          },
         }),
       ]);
-      const parentIds = new Set<string>([
-        ...pfOccupants.map((p) => `profile:${p.id}`),
-        ...emOccupants.filter((e) => !linkedEmpIds.has(e.id)).map((e) => `employee:${e.id}`),
-      ]);
-      const parentOccupantOptions = options.filter((o) => parentIds.has(`${o.kind}:${o.id}`));
-      if (parentOccupantOptions.length === 1) {
-        recommended = { ...parentOccupantOptions[0], recommended: true };
-      } else if (parentOccupantOptions.length > 1) {
-        ambiguousRecommendations = parentOccupantOptions.map((o) => ({ ...o, recommended: true }));
+      const parentOccupantOptions: ManagerOption[] = [
+        ...pfOccupants.map<ManagerOption>((p) => ({
+          kind: "profile", id: p.id,
+          displayName: p.user.name,
+          positionName: p.position?.name ?? p.displayTitle ?? null,
+          recommended: true,
+        })),
+        ...emOccupants
+          .filter((e) => !linkedEmpIds.has(e.id))
+          .map<ManagerOption>((e) => ({
+            kind: "employee", id: e.id,
+            displayName: `${e.preferredName?.trim() || e.firstName} ${e.lastName}`.trim(),
+            positionName: e.orgPosition?.name ?? null,
+            recommended: true,
+          })),
+      ];
+      if (parentOccupantOptions.length === 0) {
+        // Vacant recommendation — the correct manager Position is
+        // known but currently unoccupied. UI shows "<Position> —
+        // Vacant" and does NOT recommend anyone else.
+        recommendedIsVacant = true;
+      } else if (parentOccupantOptions.length === 1) {
+        recommended = parentOccupantOptions[0];
+      } else {
+        ambiguousRecommendations = parentOccupantOptions;
       }
     }
   }
 
-  return { recommended, ambiguousRecommendations, options };
+  return {
+    recommended, recommendationLabel, recommendedIsVacant,
+    ambiguousRecommendations, options,
+  };
 }

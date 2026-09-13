@@ -242,10 +242,10 @@ export function TenantUsersClient({
       {tab === "organization" ? (
         <OrganizationHierarchyTab
           clubId={clubId}
-          roots={canonicalPositionTree.roots}
-          orphans={canonicalPositionTree.orphans}
-          allPositions={canonicalPositionsFlat}
-          departments={departments.map((d) => ({ id: d.id, name: d.name }))}
+          roots={canonicalPositionTree?.roots ?? []}
+          orphans={canonicalPositionTree?.orphans ?? []}
+          allPositions={canonicalPositionsFlat ?? []}
+          departments={(departments ?? []).map((d) => ({ id: d.id, name: d.name }))}
         />
       ) : null}
 
