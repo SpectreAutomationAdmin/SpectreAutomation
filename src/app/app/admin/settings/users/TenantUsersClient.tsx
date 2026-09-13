@@ -173,12 +173,13 @@ export function TenantUsersClient({
       return false;
     }
     setBanner({ tone: "success", text: "Saved." });
-    // Hotfix (2026-09-13): the RSC refresh path was crashing with
-    // `Cannot read properties of undefined (reading 'length')` from a
-    // minified helper inside the server-page bundle. Skip router.refresh()
-    // and only re-fetch our own state via the JSON API — the UI stays
-    // consistent without triggering the RSC re-render race.
-    startTransition(() => { void refresh(); });
+    // Hotfix (2026-09-13): the users-page RSC bundle was crashing on
+    // the post-save re-render with `Cannot read properties of undefined
+    // (reading 'length')` from a minified server-page helper. Skip
+    // BOTH client refresh() and router.refresh() — the profile state
+    // update we already have in the current form is sufficient; the
+    // full re-fetch happens on the next natural navigation. This is
+    // a deliberate temporary trade-off to keep Save working.
     return true;
   }
 
