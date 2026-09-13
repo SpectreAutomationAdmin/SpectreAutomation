@@ -275,6 +275,15 @@ export async function resolveReturnedForCorrectionItem(
 export async function materialiseReadyToPostItem(args: {
   clubId: string;
   batchId: string;
+  /**
+   * Two-person governance (2026-09-13, superseding 3F): the
+   * Ready-to-Post card is owned by the Controller who approved the
+   * payroll (or the configured club Controller when the approver is
+   * absent), NOT the Payroll Admin. Callers previously named this
+   * `payrollAdminUserId`; the parameter name is retained for source
+   * compatibility with the existing 3F call site but semantically now
+   * carries the Controller/poster user id.
+   */
   payrollAdminUserId: string;
   subject: string;
   preview: string;
@@ -312,7 +321,7 @@ export async function materialiseReadyToPostItem(args: {
       clubId: args.clubId, status: "OPEN", judgmentRequired: true,
       ownerUserId: args.payrollAdminUserId,
       classification: READY_TO_POST_ORIGIN_KIND,
-      classificationReason: "Payroll approved by Controller — Payroll Admin posting required.",
+      classificationReason: "Payroll approved by Controller — Controller posting required.",
       classificationMethod: "RULE",
       classificationRuleKey: "payroll-orchestration.v1",
       classificationRuleVersion: 1,
@@ -334,7 +343,7 @@ export async function materialiseReadyToPostItem(args: {
     data: {
       clubId: args.clubId, workIntakeItemId: created.id,
       kind: READY_TO_POST_ORIGIN_KIND, referenceId: args.batchId, role: "PRIMARY",
-      linkReason: `Payroll approved by Controller — batch ${args.batchId} ready for Payroll Admin posting.`,
+      linkReason: `Payroll approved by Controller — batch ${args.batchId} ready for Controller posting.`,
     },
   });
   await prisma.workIntakeActivity.create({

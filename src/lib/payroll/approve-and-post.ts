@@ -132,8 +132,11 @@ export class ApproveConcurrencyConflictError extends Error {
   }
 }
 
-/** Payroll 3F (2026-09-13) — raised when the submitter attempts to
- *  post their own payroll. Server-side gate for §25 SoD. */
+/** Retained for backwards-compatibility of consumers that catch this
+ *  error class. The two-person governance change (2026-09-13) no
+ *  longer *throws* this — the submitter is now permitted to post
+ *  provided a distinct Controller approved the payroll first. Kept
+ *  exported so downstream imports do not break in one revision. */
 export class PostSegregationOfDutiesError extends Error {
   readonly code = "PAYROLL_POST_SOD_REFUSED";
   readonly batchId: string;
@@ -231,8 +234,13 @@ export async function approvePayrollBatch(
     await resolveFinal(batch.clubId, batch.id, principal.id,
       `Payroll approved by Controller — batch ${batch.id} at calculationVersion ${batch.calculationVersion}.`);
 
+    // Payroll two-person governance (2026-09-13, superseding 3F §7):
+    // Ready-to-Post routes to the Controller who approved, not to the
+    // Payroll Admin. Fall back to the configured club controller if,
+    // for any reason, the approver's principal id is unavailable.
     const cfg = await prisma.payrollClubConfig.findUnique({ where: { clubId: batch.clubId } });
-    if (cfg?.payrollAdminUserId) {
+    const posterUserId = principal.id ?? cfg?.controllerUserId;
+    if (posterUserId) {
       const period = await prisma.payrollPayPeriod.findFirst({
         where: { id: batch.payPeriodId, clubId: batch.clubId },
         select: { periodStart: true, periodEnd: true, payDate: true },
@@ -268,7 +276,9 @@ export async function approvePayrollBatch(
         `Post payroll → ${reviewUrl}`;
       await materialiseReadyToPostItem({
         clubId: batch.clubId, batchId: batch.id,
-        payrollAdminUserId: cfg.payrollAdminUserId,
+        // Retained parameter name for source compatibility; the value
+        // is the Controller-poster user id (see helper JSDoc).
+        payrollAdminUserId: posterUserId,
         subject: `Payroll Approved — Ready to Post · ${dateLabel}`,
         preview,
         approvedByUserId: principal.id,
@@ -337,13 +347,15 @@ export async function postPayrollBatch(
     );
   }
 
-  // Payroll 3F (2026-09-13) §6, §25 — Segregation of duties:
-  // the actor who SUBMITTED this payroll may not also POST it. Same
-  // guarantee as approvePayrollBatch's submitter/approver SoD but on
-  // a different pair. Server-side; UI cannot bypass.
-  if (batch.submittedByUserId && batch.submittedByUserId === principal.id) {
-    throw new PostSegregationOfDutiesError(batch.id, principal.id, "submitter");
-  }
+  // Payroll two-person governance (2026-09-13, superseding 3F §25):
+  // the SUBMITTER cannot approve their own payroll (that check remains
+  // in approvePayrollBatch), but the APPROVER is free to also post it.
+  // Once a distinct Controller has approved a specific immutable
+  // calculationVersion, requiring a third human to execute the
+  // accounting posting adds no accounting-control value. The
+  // separation Spectre enforces is between preparation/submission and
+  // independent approval; posting sits with the Controller who
+  // already validated the payroll.
 
   // Payroll-3C-6 (2026-09-05) — component-aware GL readiness check.
   // Runs BEFORE any journal drafting so component-carrying batches

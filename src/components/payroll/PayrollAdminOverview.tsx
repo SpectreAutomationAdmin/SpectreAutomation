@@ -2040,35 +2040,11 @@ function ActionsCard({ view, calculate, returnToPrep, submit, post, clubId, curr
             return <PostedStatusButton />;
           }
           if (isApproved) {
-            // Payroll 3F (2026-09-13) — Payroll Admin sees the Post
-            // Payroll button when they hold payroll:post AND are NOT
-            // the submitter (§25 SoD, server-authoritative). Otherwise
-            // the read-only "Approved · Ready for Posting" tile.
-            const isSubmitterViewingApproved =
-              !!currentUserId && !!view.batch?.submittedByUserId &&
-              currentUserId === view.batch.submittedByUserId;
-            const postReady =
-              post?.canPost === true &&
-              !isSubmitterViewingApproved &&
-              !!view.payPeriod && !!view.batch;
-            if (postReady && post && view.payPeriod && view.batch && clubId) {
-              return (
-                <PostPayrollConfirmation
-                  action={post.action}
-                  payPeriodId={view.payPeriod.id}
-                  payGroupId={view.payGroup?.id ?? ""}
-                  batchId={view.batch.id}
-                  summary={view.summary}
-                  approvedByDisplayName={view.batch.approvedByDisplayName ?? null}
-                  approvedAtISO={view.batch.approvedAt ?? null}
-                  calculationVersion={view.batch.calculationVersion ?? null}
-                  previewUrl={`/api/clubs/${clubId}/payroll/batches/${view.batch.id}/journal-preview`}
-                />
-              );
-            }
-            if (isSubmitterViewingApproved) {
-              return <PostSoDStatusButton />;
-            }
+            // Payroll two-person governance (2026-09-13, superseding
+            // 3F §7): Post is a Controller action executed from the
+            // review workspace. On the Payroll Admin overview the
+            // Approved status is read-only — the Payroll Admin can
+            // follow the review link but does not post from here.
             return <ApprovedStatusButton />;
           }
           if (isSubmitted) {
@@ -2228,9 +2204,8 @@ function ApprovedStatusButton() {
     >
       <span className="inline-flex items-center gap-2">
         <CheckCircleIcon className="h-4 w-4" />
-        Approved · Ready for Posting
+        Approved — Awaiting Controller Posting
       </span>
-      <span className="text-[11px] text-[#166534]/70">Awaiting Payroll Admin</span>
     </div>
   );
 }

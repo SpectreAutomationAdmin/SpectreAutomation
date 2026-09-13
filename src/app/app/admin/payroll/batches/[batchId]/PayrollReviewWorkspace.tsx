@@ -496,18 +496,16 @@ function ApproveAndPostActions({
           data-testid="review-actions-banner"
         >{banner.text}</div>
       ) : null}
-      {/* Payroll 3F (2026-09-13) — Awaiting Payroll Admin Posting.
-          Visible to anyone opening an APPROVED batch. Controller sees
-          it to know the responsibility has moved to the Payroll Admin;
-          the Payroll Admin sees it as confirmation before clicking
-          Post from THIS screen or the Payroll Overview. */}
+      {/* Payroll two-person governance (2026-09-13, superseding 3F §7):
+          the Controller who approved is also the actor who posts. This
+          banner is the Controller-facing prompt for the next step. */}
       {isApproved ? (
         <div
           className="mb-3 rounded-md border px-3 py-2 text-sm"
           style={{ borderColor: "#166534", background: "#f0fdf4", color: "#14532d" }}
           data-testid="review-awaiting-post-banner"
         >
-          Approved · Awaiting Payroll Admin Posting. Posting is a separate governance
+          Approved — Ready to Post. Posting is a separate governance
           event; it does not transmit employee payments or file government remittances.
         </div>
       ) : null}
@@ -545,21 +543,22 @@ function ApproveAndPostActions({
         >
           Return for correction
         </button>
-        {/* Payroll 3F (2026-09-13) — Post is now Payroll Admin's action.
-            Controller sees the button as ALWAYS disabled with an
-            explanatory title. Server-side permission (payroll:post)
-            now belongs to PAYROLL_ADMIN + CLUB_ADMIN. */}
+        {/* Payroll two-person governance (2026-09-13, superseding 3F §7):
+            Post is the Controller's next action after Approve. Enabled
+            only when the batch is APPROVED and the current actor holds
+            payroll:post (CONTROLLER + CLUB_ADMIN grant it; server-side
+            RBAC enforces the permission regardless of this UI state). */}
         <button
           type="button"
           className="btn btn-primary btn-sm"
           onClick={post}
-          disabled
+          disabled={!isApproved || busy !== null}
           data-testid="review-post-btn"
-          data-controller-locked="true"
-          title="Payroll 3F — posting is a Payroll Admin action. This button is intentionally disabled on the Controller review workspace."
-          style={{ opacity: 0.35 }}
+          data-controller-post-enabled={isApproved ? "true" : "false"}
+          title={isApproved ? "Post the approved payroll to the general ledger." : "Approve the payroll first."}
+          style={{ opacity: !isApproved ? 0.35 : 1 }}
         >
-          {isApproved ? "Awaiting Payroll Admin posting" : "Post payroll"}
+          {busy === "post" ? "Posting…" : "Post payroll"}
         </button>
         {isPosted && glJournalEntryId ? (
           <a

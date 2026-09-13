@@ -1,24 +1,20 @@
-// Payroll Admin Slice 3F (2026-09-13) — Post Payroll domain regression.
+// Payroll Post Payroll domain regression — updated 2026-09-13 for
+// two-person governance (superseding 3F §7 §25).
 //
-// Uses the existing approve-and-post test seed (`seedCalculatedBatch`
-// from tests/payroll/approve-and-post.test.ts) — imported here as a
-// helper so we don't duplicate the GL profile + accounts + tax profile
-// wiring. Because that helper lives in the sibling test file, we
-// inline the essential seed here.
-//
-// Covers §51-55 test matrix:
+// Covers:
 //   §51 Concurrent Post: exactly one succeeds, exactly one journal.
 //   §52 Idempotency: a second Post returns the same journal.
-//   §53 Stale: submitter attempting to Post = SoD refusal.
 //   §54 Missing mapping: profile removed → Post refuses.
-//   §55 Out-of-balance: unreachable in tests (invariant baked into
-//                       builder); tested via unit assertion on lines.
-//   §3-4  Ready-to-Post WI item materialised on Approve, resolved on Post.
-//   §F    Preview returns the same journal as Post (identity check).
+//   §F  Preview returns the same journal as Post (identity check).
+//   §3-4 Ready-to-Post WI item materialised on Approve, resolved on Post.
+//   Two-person: golden PA→submits/Controller→approves+posts test.
+//   Two-person: submitter (CLUB_ADMIN) may post after distinct approval.
+//   Two-person: pre-approval Post refuses.
+//   Two-person: PAYROLL_ADMIN cannot post (permission refused).
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "./util/db";
-import { approvePayrollBatch, postPayrollBatch, PostSegregationOfDutiesError } from "@/lib/payroll/approve-and-post";
+import { approvePayrollBatch, postPayrollBatch } from "@/lib/payroll/approve-and-post";
 import { previewPayrollJournal } from "@/lib/payroll/payroll-journal-preview";
 import { Prisma } from "@prisma/client";
 
@@ -205,20 +201,87 @@ describe("Payroll 3F — Post Payroll (§51-55)", () => {
     expect(jeCount).toBe(1);
   });
 
-  it("§25, §6 SoD: submitter is refused Post with PostSegregationOfDutiesError", async () => {
+  // Two-person governance (2026-09-13) — golden test: PAYROLL_ADMIN
+  // submits, CONTROLLER approves + posts. Matches the intended
+  // organizational workflow. Assertions cover A ≠ B, approved==posted
+  // by the same Controller, and a single balanced JournalEntry.
+  it("golden two-person: PA(A) submits, Controller(B) approves + posts", async () => {
+    const s = await seedApprovedBatch({
+      clubName: "Post Club Golden", submitterEmail: "pa.g@t.test", approverEmail: "ctrl.g@t.test",
+    });
+    // Controller B has payroll:approve + payroll:return + payroll:post
+    // via the two-person governance restore; approve was performed in
+    // seedApprovedBatch. Now B posts.
+    const posted = await postPayrollBatch(s.approverP, s.batch.id);
+    const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
+    expect(b.status).toBe("POSTED");
+    expect(b.submittedByUserId).toBe(s.submitter.id);
+    expect(b.approvedByUserId).toBe(s.approver.id);
+    expect(b.postedByUserId).toBe(s.approver.id);
+    expect(s.submitter.id).not.toBe(s.approver.id);
+    expect(b.approvedByUserId).toBe(b.postedByUserId);
+    expect(b.glJournalEntryId).toBe(posted.journalEntryId);
+    // JournalEntry balances.
+    expect(Number(posted.totalDebits)).toBeCloseTo(Number(posted.totalCredits), 2);
+  });
+
+  // Two-person governance (2026-09-13) — the submitter (with an
+  // added CLUB_ADMIN role for payroll:post) may now post their own
+  // submission PROVIDED a distinct Controller approved it first.
+  it("submitter (CLUB_ADMIN) may post after a distinct Controller-approval", async () => {
     const s = await seedApprovedBatch({
       clubName: "Post Club C", submitterEmail: "sub.c@t.test", approverEmail: "ctrl.c@t.test",
     });
-    // Grant payroll:post to the submitter via CLUB_ADMIN membership.
-    // Then attempt Post as the submitter — SoD should refuse.
-    const c = db();
-    await c.userClubRole.create({
+    // Grant the submitter CLUB_ADMIN so they hold payroll:post, then
+    // re-derive the principal so the added role is present on it. The
+    // approver is a distinct Controller.
+    await db().userClubRole.create({
       data: { userId: s.submitter.id, clubId: s.club.id, roleKey: "CLUB_ADMIN" },
     });
-    await expect(postPayrollBatch(s.submitterP, s.batch.id))
-      .rejects.toBeInstanceOf(PostSegregationOfDutiesError);
-    // Batch stays APPROVED.
-    const b = await c.payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
+    const submitterAsAdminP = await principalFor("sub.c@t.test");
+    const posted = await postPayrollBatch(submitterAsAdminP, s.batch.id);
+    const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
+    expect(b.status).toBe("POSTED");
+    expect(b.submittedByUserId).toBe(s.submitter.id);
+    expect(b.postedByUserId).toBe(s.submitter.id);
+    expect(b.approvedByUserId).toBe(s.approver.id);
+    expect(b.glJournalEntryId).toBe(posted.journalEntryId);
+  });
+
+  // Two-person governance retains the accounting-control invariant
+  // that posting cannot happen before Controller approval.
+  it("pre-approval Post refuses (removing submitter≠poster must not permit posting unapproved payroll)", async () => {
+    // Build a batch that is CALCULATED but NOT approved.
+    const s = await seedApprovedBatch({
+      clubName: "Post Club Pre", submitterEmail: "sub.p@t.test", approverEmail: "ctrl.p@t.test",
+    });
+    // Force the batch back to CALCULATED to simulate the pre-approval
+    // state without re-plumbing the seed helper.
+    await db().payrollBatch.update({
+      where: { id: s.batch.id },
+      data: { status: "CALCULATED", approvedAt: null, approvedByUserId: null },
+    });
+    const poster = await makeUser({ email: "poster.p@t.test", clubId: s.club.id, role: "CLUB_ADMIN" });
+    const posterP = await principalFor("poster.p@t.test");
+    await expect(postPayrollBatch(posterP, s.batch.id))
+      .rejects.toThrow(/must be APPROVED before it can be posted/);
+    const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
+    expect(b.status).toBe("CALCULATED");
+    expect(b.glJournalEntryId).toBeNull();
+  });
+
+  // Two-person governance regression: PAYROLL_ADMIN no longer holds
+  // payroll:post. A pure PAYROLL_ADMIN cannot post; RBAC refuses.
+  it("PAYROLL_ADMIN cannot post — permission refused", async () => {
+    const s = await seedApprovedBatch({
+      clubName: "Post Club PA", submitterEmail: "sub.pa@t.test", approverEmail: "ctrl.pa@t.test",
+    });
+    // A distinct PAYROLL_ADMIN who did not submit this batch.
+    const pa = await makeUser({ email: "another.pa@t.test", clubId: s.club.id, role: "PAYROLL_ADMIN" });
+    const paP = await principalFor("another.pa@t.test");
+    await expect(postPayrollBatch(paP, s.batch.id))
+      .rejects.toThrow(/permission|payroll:post|forbidden/i);
+    const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
     expect(b.status).toBe("APPROVED");
     expect(b.glJournalEntryId).toBeNull();
   });
@@ -275,7 +338,10 @@ describe("Payroll 3F — Post Payroll (§51-55)", () => {
     });
     expect(origin).not.toBeNull();
     expect(origin!.workIntakeItem.status).toBe("OPEN");
-    expect(origin!.workIntakeItem.ownerUserId).toBe(s.submitter.id);
+    // Two-person governance (2026-09-13): the Ready-to-Post card is
+    // owned by the Controller who approved, not the Payroll Admin who
+    // submitted.
+    expect(origin!.workIntakeItem.ownerUserId).toBe(s.approver.id);
     // Post the batch as a Club Admin distinct from the submitter.
     const poster = await makeUser({ email: "poster.f@t.test", clubId: s.club.id, role: "CLUB_ADMIN" });
     const posterP = await principalFor("poster.f@t.test");

@@ -338,13 +338,13 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
-    // Payroll 3F (2026-09-13) — governance decision: `payroll:post` is
-    // owned by PAYROLL_ADMIN + CLUB_ADMIN (accounting execution), while
-    // Controller retains payroll:approve + payroll:return (financial
-    // approval only). This creates the intended separation between
-    // approval and posting. See src/lib/payroll/approve-and-post.ts
-    // for the new SoD guard (submitter ≠ poster) that prevents a
-    // single actor from submitting, approving, AND posting.
+    // Payroll two-person governance (2026-09-13, superseding 3F §7):
+    // CLUB_ADMIN retains the full set of payroll grants (including
+    // payroll:post) as the broad-override role. The intended normal
+    // operating model is Payroll Admin submits → Controller approves +
+    // posts. CLUB_ADMIN can perform any step but is still bound by
+    // the service-layer submitter ≠ approver invariant, so a single
+    // CLUB_ADMIN cannot both submit and approve the same batch.
     "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void", "payroll:post",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
@@ -473,13 +473,15 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
-    // Payroll 3F (2026-09-13) — Controller loses `payroll:post`.
-    // Governance now separates financial approval (Controller) from
-    // accounting execution (Payroll Admin). Controller retains
-    // payroll:approve + payroll:return only. Preparation / editing /
-    // submission / posting are all Payroll Admin responsibilities.
-    // Controller never gains SIN/banking reveal via payroll approval
-    // per §31.
+    // Payroll two-person governance (2026-09-13, superseding 3F §7):
+    // Controller regains `payroll:post`. The authoritative model is
+    // Payroll Admin submits → Controller approves + posts. The prior
+    // 3F "Controller approves / Payroll Admin posts" split has been
+    // rescinded because it forced a third human without added
+    // accounting-control value. Controller still does NOT gain
+    // prepare/edit/submit/void grants, and does NOT gain SIN/banking
+    // reveal via payroll approval per §31.
+    "payroll:post",
     "payroll:paygroup:read", "payroll:config:read",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
@@ -588,12 +590,13 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:timesheets:approve", "payroll:run", "payroll:approve",
     // Payroll-3A — PAYROLL_ADMIN prepares + edits + submits payroll
     // batches, owns pay-group + config administration. Does NOT
-    // approve or post — those are Controller-only (§28, §31).
-    // Payroll 3F (2026-09-13) — governance decision: PAYROLL_ADMIN
-    // OWNS `payroll:post`. Controller approves; Payroll Admin posts.
-    // SoD is enforced at the service layer (submitter ≠ poster) so
-    // the same actor cannot submit + post their own batch.
-    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:post",
+    // approve or post — those are Controller-only.
+    // Payroll two-person governance (2026-09-13, superseding 3F §7):
+    // PAYROLL_ADMIN LOSES `payroll:post`. The Controller who approves
+    // is also the actor who posts. Split-role rationale: Payroll
+    // Admin owns preparation + submission; Controller owns
+    // independent approval + accounting execution.
+    "payroll:prepare", "payroll:edit", "payroll:submit",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "reports:operating",
