@@ -33,6 +33,7 @@ import {
 import { attestBatchReviewAction } from "./_review-actions";
 import { calculatePayrollAction, returnToPreparationAction } from "./_calculate-action";
 import { submitPayrollAction } from "./_submit-return-actions";
+import { postPayrollAction } from "./_post-action";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -88,6 +89,8 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
   return (
     <PayrollAdminOverview
       view={view}
+      clubId={clubId}
+      currentUserId={user?.id ?? null}
       prepare={{ action: preparePayrollAction, canPrepare }}
       freeze={{ action: freezeScopeFromOverviewAction, canFreeze }}
       adjustments={{
@@ -115,6 +118,10 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
       submit={{
         action: submitPayrollAction,
         canSubmit: hasPermission(principal, clubId, "payroll:submit"),
+      }}
+      post={{
+        action: postPayrollAction,
+        canPost: hasPermission(principal, clubId, "payroll:post"),
       }}
     />
   );

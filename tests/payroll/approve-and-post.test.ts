@@ -72,8 +72,16 @@ async function seedCalculatedBatch(opts: {
   const club = await makeClub(opts.clubName);
   const raelene = await makeUser({ email: opts.raeleneEmail, role: "PAYROLL_ADMIN", clubId: club.id });
   const chris   = await makeUser({ email: opts.chrisEmail,   role: "CONTROLLER",    clubId: club.id });
+  // Payroll 3F (2026-09-13): payroll:post migrated from CONTROLLER to
+  // PAYROLL_ADMIN + CLUB_ADMIN. Add a distinct CLUB_ADMIN who is NOT
+  // the submitter so the post SoD gate is satisfied.
+  const admin = await makeUser({
+    email: `admin-${opts.clubName.toLowerCase().replace(/[^a-z0-9]/g, "")}@t.test`,
+    role: "CLUB_ADMIN", clubId: club.id,
+  });
   const raeleneP = await principalFor(raelene.email);
   const chrisP   = await principalFor(chris.email);
+  const adminP   = await principalFor(admin.email);
 
   const { profile } = await seedGlProfileAccounts(club.id);
 
@@ -190,7 +198,7 @@ async function seedCalculatedBatch(opts: {
     },
   });
 
-  return { club, raelene, chris, raeleneP, chrisP, batch, pp };
+  return { club, raelene, chris, admin, raeleneP, chrisP, adminP, batch, pp };
 }
 
 // -------------------------------------------------------------------
@@ -248,7 +256,7 @@ describe("postPayrollBatch — GL write + state machine", () => {
       clubName: "Post Club A", raeleneEmail: "raelene.pa@t.test", chrisEmail: "chris.pa@t.test",
     });
     await approvePayrollBatch(s.chrisP, s.batch.id);
-    const out = await postPayrollBatch(s.chrisP, s.batch.id);
+    const out = await postPayrollBatch(s.adminP, s.batch.id);
     expect(out.journalEntryId).toBeTruthy();
     // Balanced.
     expect(out.totalDebits).toBe(out.totalCredits);
@@ -256,7 +264,7 @@ describe("postPayrollBatch — GL write + state machine", () => {
     const posted = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
     expect(posted.status).toBe("POSTED");
     expect(posted.glJournalEntryId).toBe(out.journalEntryId);
-    expect(posted.postedByUserId).toBe(s.chris.id);
+    expect(posted.postedByUserId).toBe(s.admin.id);
     // 3 debits + 5 credits = 8 lines total.
     const lines = await db().journalEntryLine.findMany({ where: { journalEntryId: out.journalEntryId } });
     expect(lines.length).toBe(8);
@@ -273,8 +281,8 @@ describe("postPayrollBatch — GL write + state machine", () => {
       clubName: "Post Club B", raeleneEmail: "raelene.pb@t.test", chrisEmail: "chris.pb@t.test",
     });
     await approvePayrollBatch(s.chrisP, s.batch.id);
-    const first  = await postPayrollBatch(s.chrisP, s.batch.id);
-    const second = await postPayrollBatch(s.chrisP, s.batch.id);
+    const first  = await postPayrollBatch(s.adminP, s.batch.id);
+    const second = await postPayrollBatch(s.adminP, s.batch.id);
     expect(second.journalEntryId).toBe(first.journalEntryId);
     const entries = await db().journalEntry.findMany({ where: { sourceEntityType: "PayrollBatch", sourceEntityId: s.batch.id } });
     expect(entries.length).toBe(1);
@@ -285,7 +293,7 @@ describe("postPayrollBatch — GL write + state machine", () => {
       clubName: "Post Club C", raeleneEmail: "raelene.pc@t.test", chrisEmail: "chris.pc@t.test",
     });
     // Still CALCULATED — no approval yet.
-    await expect(postPayrollBatch(s.chrisP, s.batch.id)).rejects.toBeInstanceOf(ConflictError);
+    await expect(postPayrollBatch(s.adminP, s.batch.id)).rejects.toBeInstanceOf(ConflictError);
   });
 
   it("refuses without a PayrollGlAccountingProfile", async () => {
@@ -297,7 +305,7 @@ describe("postPayrollBatch — GL write + state machine", () => {
       where: { clubId: s.club.id }, data: { glAccountingProfileId: null },
     });
     await approvePayrollBatch(s.chrisP, s.batch.id);
-    await expect(postPayrollBatch(s.chrisP, s.batch.id)).rejects.toBeInstanceOf(ConflictError);
+    await expect(postPayrollBatch(s.adminP, s.batch.id)).rejects.toBeInstanceOf(ConflictError);
   });
 
   it("closes the Controller PAYROLL_FINAL_APPROVAL WI item on POSTED", async () => {
@@ -325,7 +333,7 @@ describe("postPayrollBatch — GL write + state machine", () => {
       },
     });
     await approvePayrollBatch(s.chrisP, s.batch.id);
-    await postPayrollBatch(s.chrisP, s.batch.id);
+    await postPayrollBatch(s.adminP, s.batch.id);
     const closed = await db().workIntakeItem.findUniqueOrThrow({ where: { id: wi.id } });
     expect(closed.status).toBe("RESOLVED");
   });
@@ -342,7 +350,7 @@ describe("getBatchPayStatements — immutable pay statements", () => {
       clubName: "Stub Club A", raeleneEmail: "raelene.st@t.test", chrisEmail: "chris.st@t.test",
     });
     await approvePayrollBatch(s.chrisP, s.batch.id);
-    await postPayrollBatch(s.chrisP, s.batch.id);
+    await postPayrollBatch(s.adminP, s.batch.id);
     const stubs = await getBatchPayStatements(s.chrisP, s.club.id, s.batch.id);
     expect(stubs.length).toBe(1);
     const stub = stubs[0];

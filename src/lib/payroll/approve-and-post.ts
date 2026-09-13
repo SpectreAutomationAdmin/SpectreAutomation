@@ -132,6 +132,24 @@ export class ApproveConcurrencyConflictError extends Error {
   }
 }
 
+/** Payroll 3F (2026-09-13) — raised when the submitter attempts to
+ *  post their own payroll. Server-side gate for §25 SoD. */
+export class PostSegregationOfDutiesError extends Error {
+  readonly code = "PAYROLL_POST_SOD_REFUSED";
+  readonly batchId: string;
+  readonly actorUserId: string;
+  readonly conflictingRole: "submitter";
+  constructor(batchId: string, actorUserId: string, conflictingRole: "submitter") {
+    super(
+      `Posting refused: the user who submitted this payroll may not also post it. ` +
+        `batchId=${batchId}, actorUserId=${actorUserId}.`,
+    );
+    this.batchId = batchId;
+    this.actorUserId = actorUserId;
+    this.conflictingRole = conflictingRole;
+  }
+}
+
 export class ApproveSegregationOfDutiesError extends Error {
   readonly code = "PAYROLL_APPROVE_SOD_REFUSED";
   readonly batchId: string;
@@ -200,12 +218,66 @@ export async function approvePayrollBatch(
 
   // Close the Controller's queue-side task on approve (mirror of
   // Return's Controller-side close). Non-fatal on failure.
+  //
+  // Payroll 3F (2026-09-13) — also materialise the Payroll Admin's
+  // PAYROLL_READY_TO_POST card so posting responsibility is routed
+  // to the correct owner. Idempotent per-origin. Non-fatal on
+  // failure — approval already succeeded regardless.
   try {
-    const { resolveFinalApprovalItem: resolveFinal } = await import("./controller-work-intake");
+    const {
+      resolveFinalApprovalItem: resolveFinal,
+      materialiseReadyToPostItem,
+    } = await import("./controller-work-intake");
     await resolveFinal(batch.clubId, batch.id, principal.id,
       `Payroll approved by Controller — batch ${batch.id} at calculationVersion ${batch.calculationVersion}.`);
-  } catch {
+
+    const cfg = await prisma.payrollClubConfig.findUnique({ where: { clubId: batch.clubId } });
+    if (cfg?.payrollAdminUserId) {
+      const period = await prisma.payrollPayPeriod.findFirst({
+        where: { id: batch.payPeriodId, clubId: batch.clubId },
+        select: { periodStart: true, periodEnd: true, payDate: true },
+      });
+      const dateLabel = period
+        ? `${period.periodStart.toISOString().slice(0, 10)} → ${new Date(period.periodEnd.getTime() - 86_400_000).toISOString().slice(0, 10)}`
+        : batch.payPeriodId;
+      // Executive summary — reuse the persisted per-employee results.
+      const bes = await prisma.payrollBatchEmployee.findMany({
+        where: { batchId: batch.id, clubId: batch.clubId },
+        select: {
+          grossPay: true, netPay: true, totalEmployeeDeductions: true,
+          employerCppCombined: true, employerCpp2: true, employerEi: true,
+        },
+      });
+      const totals = bes.reduce(
+        (acc, be) => ({
+          gross:    acc.gross    + Math.round(Number(be.grossPay ?? 0) * 100),
+          deducted: acc.deducted + Math.round(Number(be.totalEmployeeDeductions ?? 0) * 100),
+          net:      acc.net      + Math.round(Number(be.netPay ?? 0) * 100),
+          employer: acc.employer + Math.round(Number(be.employerCppCombined ?? 0) * 100)
+                                + Math.round(Number(be.employerCpp2 ?? 0) * 100)
+                                + Math.round(Number(be.employerEi ?? 0) * 100),
+        }),
+        { gross: 0, deducted: 0, net: 0, employer: 0 },
+      );
+      const money = (cents: number) => (cents / 100).toFixed(2);
+      const reviewUrl = `/app/admin/payroll/batches/${batch.id}`;
+      const preview =
+        `v${batch.calculationVersion} · ${bes.length} employees · ` +
+        `gross $${money(totals.gross)} · deductions $${money(totals.deducted)} · ` +
+        `net $${money(totals.net)} · employer contributions $${money(totals.employer)} · ` +
+        `Post payroll → ${reviewUrl}`;
+      await materialiseReadyToPostItem({
+        clubId: batch.clubId, batchId: batch.id,
+        payrollAdminUserId: cfg.payrollAdminUserId,
+        subject: `Payroll Approved — Ready to Post · ${dateLabel}`,
+        preview,
+        approvedByUserId: principal.id,
+      });
+    }
+  } catch (err) {
     // Non-fatal — approval succeeded regardless.
+    // eslint-disable-next-line no-console
+    console.warn("[payroll approve] Ready-to-Post handoff failed", err);
   }
 
   const updated = await prisma.payrollBatch.findUnique({ where: { id: batch.id } });
@@ -263,6 +335,14 @@ export async function postPayrollBatch(
     throw new ConflictError(
       `Batch must be APPROVED before it can be posted; current status is ${batch.status}.`,
     );
+  }
+
+  // Payroll 3F (2026-09-13) §6, §25 — Segregation of duties:
+  // the actor who SUBMITTED this payroll may not also POST it. Same
+  // guarantee as approvePayrollBatch's submitter/approver SoD but on
+  // a different pair. Server-side; UI cannot bypass.
+  if (batch.submittedByUserId && batch.submittedByUserId === principal.id) {
+    throw new PostSegregationOfDutiesError(batch.id, principal.id, "submitter");
   }
 
   // Payroll-3C-6 (2026-09-05) — component-aware GL readiness check.
@@ -544,6 +624,17 @@ export async function postPayrollBatch(
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("[payroll post] resolveFinalApprovalItem failed", err);
+  }
+
+  // Payroll 3F (2026-09-13) — resolve the Payroll Admin's
+  // PAYROLL_READY_TO_POST card. Non-fatal on failure.
+  try {
+    const { resolveReadyToPostItem } = await import("./controller-work-intake");
+    await resolveReadyToPostItem(batch.clubId, batch.id, principal.id,
+      `Payroll posted — journal ${entry.id}, batch ${batch.id} at calculationVersion ${batch.calculationVersion}.`);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[payroll post] resolveReadyToPostItem failed", err);
   }
 
   await audit(principal, {

@@ -25,6 +25,8 @@ import { prisma } from "../prisma";
 export const FINAL_APPROVAL_ORIGIN_KIND = "PAYROLL_FINAL_APPROVAL";
 export const REVIEW_ORIGIN_KIND         = "PAYROLL_REVIEW";
 export const RETURNED_ORIGIN_KIND       = "PAYROLL_RETURNED_FOR_CORRECTION";
+// Payroll 3F (2026-09-13) — post-approval Payroll Admin handoff.
+export const READY_TO_POST_ORIGIN_KIND  = "PAYROLL_READY_TO_POST";
 
 /**
  * Idempotent create-or-refresh of the Controller's
@@ -259,6 +261,111 @@ export async function resolveReturnedForCorrectionItem(
     data: {
       workIntakeItemId: link.workIntakeItemId, actorUserId, action: "RESOLVED",
       note: note ?? "Payroll resubmitted after correction — Payroll Admin return card closed.",
+    },
+  });
+}
+
+// ---------------------------------------------------------------------
+// Payroll 3F (2026-09-13) — PAYROLL_READY_TO_POST handoff helpers.
+// After a Controller Approves a payroll, the Payroll Admin receives
+// a Work Intake item routed to `PayrollClubConfig.payrollAdminUserId`.
+// The item is resolved on successful Post.
+// ---------------------------------------------------------------------
+
+export async function materialiseReadyToPostItem(args: {
+  clubId: string;
+  batchId: string;
+  payrollAdminUserId: string;
+  subject: string;
+  preview: string;
+  approvedByUserId: string;
+}): Promise<string> {
+  const existing = await prisma.workIntakeOrigin.findFirst({
+    where: {
+      clubId: args.clubId, kind: READY_TO_POST_ORIGIN_KIND,
+      referenceId: args.batchId, role: "PRIMARY",
+    },
+    select: { workIntakeItemId: true },
+  });
+  const now = new Date();
+  if (existing) {
+    await prisma.workIntakeItem.update({
+      where: { id: existing.workIntakeItemId },
+      data: {
+        status: "OPEN", ownerUserId: args.payrollAdminUserId,
+        displaySubject: args.subject, displayPreview: args.preview,
+        displayReceivedAt: now, resolvedAt: null, resolvedByUserId: null,
+      },
+    });
+    await prisma.workIntakeActivity.create({
+      data: {
+        workIntakeItemId: existing.workIntakeItemId,
+        actorUserId: args.approvedByUserId,
+        action: "MATERIALISED",
+        note: "Payroll re-approved — Ready-to-Post task reopened for the current calculation version.",
+      },
+    });
+    return existing.workIntakeItemId;
+  }
+  const created = await prisma.workIntakeItem.create({
+    data: {
+      clubId: args.clubId, status: "OPEN", judgmentRequired: true,
+      ownerUserId: args.payrollAdminUserId,
+      classification: READY_TO_POST_ORIGIN_KIND,
+      classificationReason: "Payroll approved by Controller — Payroll Admin posting required.",
+      classificationMethod: "RULE",
+      classificationRuleKey: "payroll-orchestration.v1",
+      classificationRuleVersion: 1,
+      displaySourceLabel: "Spectre Payroll",
+      displaySender: "Payroll orchestration",
+      displaySubject: args.subject,
+      displayPreview: args.preview,
+      displayReceivedAt: now,
+      displayHasAttachments: false,
+      workDomain: "PAYROLL", workIntent: "APPROVE",
+      workSubtype: READY_TO_POST_ORIGIN_KIND,
+      workDomainConfidence: 1,
+      workDomainClassifiedAt: now,
+      workDomainClassifierVersion: "payroll-orchestration.v1",
+    },
+    select: { id: true },
+  });
+  await prisma.workIntakeOrigin.create({
+    data: {
+      clubId: args.clubId, workIntakeItemId: created.id,
+      kind: READY_TO_POST_ORIGIN_KIND, referenceId: args.batchId, role: "PRIMARY",
+      linkReason: `Payroll approved by Controller — batch ${args.batchId} ready for Payroll Admin posting.`,
+    },
+  });
+  await prisma.workIntakeActivity.create({
+    data: {
+      workIntakeItemId: created.id,
+      actorUserId: args.approvedByUserId,
+      action: "MATERIALISED",
+      note: "Ready-to-Post task materialised on Controller approval.",
+    },
+  });
+  return created.id;
+}
+
+/** Close the Ready-to-Post item on successful Post. */
+export async function resolveReadyToPostItem(
+  clubId: string, batchId: string, actorUserId: string, note?: string,
+): Promise<void> {
+  const link = await prisma.workIntakeOrigin.findFirst({
+    where: { clubId, kind: READY_TO_POST_ORIGIN_KIND, referenceId: batchId, role: "PRIMARY" },
+    select: { workIntakeItemId: true },
+  });
+  if (!link) return;
+  const now = new Date();
+  await prisma.workIntakeItem.updateMany({
+    where: { id: link.workIntakeItemId, status: { not: "RESOLVED" } },
+    data: { status: "RESOLVED", resolvedAt: now, resolvedByUserId: actorUserId },
+  });
+  await prisma.workIntakeActivity.create({
+    data: {
+      workIntakeItemId: link.workIntakeItemId, actorUserId, action: "RESOLVED",
+      note: note ?? "Payroll posted — Ready-to-Post task closed.",
     },
   });
 }

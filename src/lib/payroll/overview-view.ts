@@ -60,6 +60,9 @@ export interface PayrollOverviewBatchRef {
   // Payroll 3E (2026-09-12).
   submittedByDisplayName?: string | null;
   approvedByDisplayName?: string | null;
+  // Payroll 3F (2026-09-13) — submitterId exposed so the surface can
+  // enforce the submitter ≠ poster UI SoD.
+  submittedByUserId?: string | null;
   returnedAt?: string | null;
   returnedByDisplayName?: string | null;
   returnReason?: string | null;
@@ -937,6 +940,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     postedAt: batchRow.postedAt?.toISOString() ?? null,
     submittedByDisplayName: batchRow.submittedByUserId ? (auxNameById.get(batchRow.submittedByUserId) ?? null) : null,
     approvedByDisplayName: batchRow.approvedByUserId ? (auxNameById.get(batchRow.approvedByUserId) ?? null) : null,
+    submittedByUserId: batchRow.submittedByUserId ?? null,
     calculationVersion: batchRow.calculationVersion ?? null,
     returnedAt: returnActivity?.createdAt?.toISOString() ?? null,
     returnedByDisplayName: returnActivity?.actorUserId ? (auxNameById.get(returnActivity.actorUserId) ?? null) : null,

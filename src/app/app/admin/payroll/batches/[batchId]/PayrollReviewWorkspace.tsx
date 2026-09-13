@@ -496,6 +496,21 @@ function ApproveAndPostActions({
           data-testid="review-actions-banner"
         >{banner.text}</div>
       ) : null}
+      {/* Payroll 3F (2026-09-13) — Awaiting Payroll Admin Posting.
+          Visible to anyone opening an APPROVED batch. Controller sees
+          it to know the responsibility has moved to the Payroll Admin;
+          the Payroll Admin sees it as confirmation before clicking
+          Post from THIS screen or the Payroll Overview. */}
+      {isApproved ? (
+        <div
+          className="mb-3 rounded-md border px-3 py-2 text-sm"
+          style={{ borderColor: "#166534", background: "#f0fdf4", color: "#14532d" }}
+          data-testid="review-awaiting-post-banner"
+        >
+          Approved · Awaiting Payroll Admin Posting. Posting is a separate governance
+          event; it does not transmit employee payments or file government remittances.
+        </div>
+      ) : null}
       {isSubmitter && isSubmitted ? (
         <div
           className="mb-3 rounded-md border px-3 py-2 text-sm"
@@ -530,15 +545,21 @@ function ApproveAndPostActions({
         >
           Return for correction
         </button>
+        {/* Payroll 3F (2026-09-13) — Post is now Payroll Admin's action.
+            Controller sees the button as ALWAYS disabled with an
+            explanatory title. Server-side permission (payroll:post)
+            now belongs to PAYROLL_ADMIN + CLUB_ADMIN. */}
         <button
           type="button"
           className="btn btn-primary btn-sm"
           onClick={post}
-          disabled={!isApproved || busy !== null}
+          disabled
           data-testid="review-post-btn"
-          style={{ opacity: !isApproved ? 0.5 : 1 }}
+          data-controller-locked="true"
+          title="Payroll 3F — posting is a Payroll Admin action. This button is intentionally disabled on the Controller review workspace."
+          style={{ opacity: 0.35 }}
         >
-          {busy === "post" ? "Posting…" : "Post payroll"}
+          {isApproved ? "Awaiting Payroll Admin posting" : "Post payroll"}
         </button>
         {isPosted && glJournalEntryId ? (
           <a

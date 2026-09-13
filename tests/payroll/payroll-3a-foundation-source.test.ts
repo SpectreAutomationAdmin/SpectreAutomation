@@ -156,29 +156,29 @@ describe("Payroll-3A · canonical permission separation-of-duties (§28 + §31)"
     }
   });
 
-  it("CLUB_ADMIN holds every canonical Payroll-3A key EXCEPT payroll:post", () => {
+  it("Payroll 3F (2026-09-13) — CLUB_ADMIN holds every canonical Payroll-3A key INCLUDING payroll:post", () => {
+    // Governance decision (3F §2): payroll:post migrated from
+    // CONTROLLER to PAYROLL_ADMIN + CLUB_ADMIN. Controller retains
+    // financial approval; Payroll Admin owns accounting execution.
     const grants = ROLE_PERMISSIONS.CLUB_ADMIN as readonly string[];
     for (const key of CANONICAL_KEYS) {
-      if (key === "payroll:post") {
-        expect(grants).not.toContain(key);
-      } else {
-        expect(grants, `CLUB_ADMIN must hold ${key}`).toContain(key);
-      }
+      expect(grants, `CLUB_ADMIN must hold ${key}`).toContain(key);
     }
   });
 
-  it("CONTROLLER holds payroll:post + read-only Payroll-3A grants; NO prepare/edit/submit/void/write", () => {
+  it("Payroll 3F (2026-09-13) — CONTROLLER holds approve/return + read-only; NO post/prepare/edit/submit/void/write", () => {
     const grants = ROLE_PERMISSIONS.CONTROLLER as readonly string[];
     expect(grants).toContain("payroll:read");
     expect(grants).toContain("payroll:approve");
-    expect(grants).toContain("payroll:post");
+    expect(grants).toContain("payroll:return");
     expect(grants).toContain("payroll:paygroup:read");
     expect(grants).toContain("payroll:config:read");
     // Separation of duties — Controller does NOT prepare / edit /
-    // submit / void payroll batches, and NEVER writes pay groups
-    // or config.
+    // submit / post / void payroll batches, and NEVER writes pay
+    // groups or config. Post migrated to Payroll Admin in 3F.
     for (const banned of [
       "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void",
+      "payroll:post",
       "payroll:paygroup:write", "payroll:config:write",
     ]) {
       expect(grants, `CONTROLLER must NOT hold ${banned}`).not.toContain(banned);
@@ -195,16 +195,18 @@ describe("Payroll-3A · canonical permission separation-of-duties (§28 + §31)"
     }
   });
 
-  it("PAYROLL_ADMIN holds prepare/edit/submit + paygroup + config writes; NO approve/post/void", () => {
+  it("Payroll 3F (2026-09-13) — PAYROLL_ADMIN holds prepare/edit/submit/post + paygroup + config writes; NO void", () => {
+    // 3F governance: PAYROLL_ADMIN now owns payroll:post. Void is
+    // still Club-Admin-only.
     const grants = ROLE_PERMISSIONS.PAYROLL_ADMIN as readonly string[];
     for (const required of [
-      "payroll:prepare", "payroll:edit", "payroll:submit",
+      "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:post",
       "payroll:paygroup:read", "payroll:paygroup:write",
       "payroll:config:read", "payroll:config:write",
     ]) {
       expect(grants, `PAYROLL_ADMIN must hold ${required}`).toContain(required);
     }
-    for (const banned of ["payroll:post", "payroll:void"]) {
+    for (const banned of ["payroll:void"]) {
       expect(grants, `PAYROLL_ADMIN must NOT hold ${banned}`).not.toContain(banned);
     }
   });

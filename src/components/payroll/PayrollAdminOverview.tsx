@@ -16,7 +16,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import type { PayrollOverviewViewModel, PayrollOverviewPayPeriodRef } from "@/lib/payroll/overview-view";
 
@@ -166,8 +166,17 @@ const STATUS_LABELS: Record<string, string> = {
 /* ============================================================
    Composition — server-driven from PayrollOverviewViewModel.
    ============================================================ */
+// Payroll 3F (2026-09-13) — Post Payroll control bundle. Post is
+// gated by BOTH permission (payroll:post) AND SoD (submitter ≠ poster).
+export interface PostControls {
+  action: (formData: FormData) => Promise<void>;
+  canPost: boolean;
+}
+
 export interface PayrollAdminOverviewProps {
   view: PayrollOverviewViewModel;
+  clubId?: string;
+  currentUserId?: string | null;
   prepare?: PrepareControls | null;
   freeze?: FreezeControls | null;
   adjustments?: AdjustmentControls | null;
@@ -176,11 +185,13 @@ export interface PayrollAdminOverviewProps {
   calculate?: CalculateControls | null;
   returnToPrep?: ReturnControls | null;
   submit?: SubmitControls | null;
+  post?: PostControls | null;
 }
 
 export default function PayrollAdminOverview({
-  view, prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
-  calculate = null, returnToPrep = null, submit = null,
+  view, clubId = "", currentUserId = null,
+  prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
+  calculate = null, returnToPrep = null, submit = null, post = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
@@ -189,7 +200,7 @@ export default function PayrollAdminOverview({
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
         <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} returnToPrep={returnToPrep} />
         <div className="space-y-2">
-          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} submit={submit} />
+          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} submit={submit} post={post} clubId={clubId} currentUserId={currentUserId} />
           <ChecklistCard view={view} />
           <PayPeriodInfoCard view={view} />
         </div>
@@ -1957,11 +1968,14 @@ export interface SubmitControls {
   canSubmit: boolean;
 }
 
-function ActionsCard({ view, calculate, returnToPrep, submit }: {
+function ActionsCard({ view, calculate, returnToPrep, submit, post, clubId, currentUserId }: {
   view: PayrollOverviewViewModel;
   calculate: CalculateControls | null;
   returnToPrep: ReturnControls | null;
   submit: SubmitControls | null;
+  post: PostControls | null;
+  clubId: string;
+  currentUserId: string | null;
 }) {
   // Slice 3B: Resolve Exceptions activates the Exceptions tab
   // (in-place navigation via ?tab=exceptions). View Time Approvals
@@ -2026,6 +2040,35 @@ function ActionsCard({ view, calculate, returnToPrep, submit }: {
             return <PostedStatusButton />;
           }
           if (isApproved) {
+            // Payroll 3F (2026-09-13) — Payroll Admin sees the Post
+            // Payroll button when they hold payroll:post AND are NOT
+            // the submitter (§25 SoD, server-authoritative). Otherwise
+            // the read-only "Approved · Ready for Posting" tile.
+            const isSubmitterViewingApproved =
+              !!currentUserId && !!view.batch?.submittedByUserId &&
+              currentUserId === view.batch.submittedByUserId;
+            const postReady =
+              post?.canPost === true &&
+              !isSubmitterViewingApproved &&
+              !!view.payPeriod && !!view.batch;
+            if (postReady && post && view.payPeriod && view.batch && clubId) {
+              return (
+                <PostPayrollConfirmation
+                  action={post.action}
+                  payPeriodId={view.payPeriod.id}
+                  payGroupId={view.payGroup?.id ?? ""}
+                  batchId={view.batch.id}
+                  summary={view.summary}
+                  approvedByDisplayName={view.batch.approvedByDisplayName ?? null}
+                  approvedAtISO={view.batch.approvedAt ?? null}
+                  calculationVersion={view.batch.calculationVersion ?? null}
+                  previewUrl={`/api/clubs/${clubId}/payroll/batches/${view.batch.id}/journal-preview`}
+                />
+              );
+            }
+            if (isSubmitterViewingApproved) {
+              return <PostSoDStatusButton />;
+            }
             return <ApprovedStatusButton />;
           }
           if (isSubmitted) {
@@ -2187,9 +2230,204 @@ function ApprovedStatusButton() {
         <CheckCircleIcon className="h-4 w-4" />
         Approved · Ready for Posting
       </span>
-      <span className="text-[11px] text-[#166534]/70">Step 8 in 3F</span>
+      <span className="text-[11px] text-[#166534]/70">Awaiting Payroll Admin</span>
     </div>
   );
+}
+
+// Payroll 3F (2026-09-13) — segregation-of-duties tile shown to a
+// Payroll Admin who is ALSO the submitter of the approved batch.
+// Server refuses Post with PayrollPostSegregationOfDutiesError; the
+// UI reflects the domain refusal here.
+function PostSoDStatusButton() {
+  return (
+    <div
+      className="w-full inline-flex items-center justify-between rounded-md bg-[#fef3c7] border border-[#fcd34d] text-[#78350f] px-3.5 py-1.5 text-[13px] font-medium"
+      data-testid="payroll-admin-status-post-sod-blocked"
+      title="You submitted this payroll — another Payroll Admin (or Club Admin) must post it."
+    >
+      <span className="inline-flex items-center gap-2">
+        <AlertTriangleIcon className="h-4 w-4" />
+        Approved · Post unavailable
+      </span>
+      <span className="text-[11px] text-[#78350f]/70">You submitted this run</span>
+    </div>
+  );
+}
+
+// Payroll 3F (2026-09-13) — Post Payroll confirmation. Opens a
+// details panel with the persisted totals + a live GL journal preview
+// fetched from the canonical preview endpoint. Only the inner
+// Confirm & Post button submits the form; the primary button just
+// opens the panel.
+function PostPayrollConfirmation({
+  action, payPeriodId, payGroupId, batchId,
+  summary, approvedByDisplayName, approvedAtISO, calculationVersion,
+  previewUrl,
+}: {
+  action: (fd: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+  summary: PayrollOverviewViewModel["summary"];
+  approvedByDisplayName: string | null;
+  approvedAtISO: string | null;
+  calculationVersion: number | null;
+  previewUrl: string;
+}) {
+  return (
+    <details className="relative" data-testid="payroll-admin-post-payroll">
+      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md bg-[#0f5f3f] text-white hover:bg-[#0d4f34] px-3.5 py-1.5 text-[13px] font-medium">
+        <span className="inline-flex items-center gap-2"><CalcIcon className="h-4 w-4" /> Post Payroll</span>
+        <ArrowRight className="h-3.5 w-3.5" />
+      </summary>
+      <div className="absolute right-0 top-full mt-1 z-10 w-[440px] max-h-[560px] overflow-auto rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-post-confirm-panel">
+        <p className="text-[12.5px] font-semibold text-stone-800">Post approved payroll to the GL?</p>
+        <p className="text-[11.5px] text-stone-500 leading-snug mt-1">
+          Posting will finalize this payroll and create the accounting journal.
+          This action does not transmit employee payments or submit government
+          remittances.
+        </p>
+        <div className="mt-2 rounded border border-stone-200 bg-[#fbfaf7] px-2 py-1.5">
+          <p className="text-[11px] font-semibold text-stone-700 mb-0.5">Payroll totals</p>
+          <dl className="grid grid-cols-2 gap-y-0.5 text-[11.5px] text-stone-700">
+            <dt>Employees</dt>       <dd className="tabular-nums">{summary?.employeeCount ?? "—"}</dd>
+            <dt>Gross</dt>           <dd className="tabular-nums">{summary?.grossPayDisplay ?? "—"}</dd>
+            <dt>Employee ded.</dt>   <dd className="tabular-nums">{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
+            <dt>Net</dt>             <dd className="tabular-nums">{summary?.netPayDisplay ?? "—"}</dd>
+            <dt>Employer contrib.</dt><dd className="tabular-nums">{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
+            <dt>Total cost</dt>      <dd className="tabular-nums">{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
+            <dt>Calc version</dt>    <dd className="tabular-nums">v{calculationVersion ?? "?"}</dd>
+            <dt>Approved by</dt>     <dd>{approvedByDisplayName ?? "—"}</dd>
+            <dt>Approved at</dt>     <dd>{approvedAtISO ? new Date(approvedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "—"}</dd>
+          </dl>
+        </div>
+        <PostJournalPreview previewUrl={previewUrl} />
+        <form action={action} className="mt-2">
+          <input type="hidden" name="payPeriodId" value={payPeriodId} />
+          <input type="hidden" name="payGroupId" value={payGroupId} />
+          <input type="hidden" name="batchId" value={batchId} />
+          <div className="flex items-center justify-end">
+            <PostPayrollSubmitButton />
+          </div>
+        </form>
+      </div>
+    </details>
+  );
+}
+
+function PostPayrollSubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid="payroll-admin-post-confirm-btn"
+      data-pending={pending ? "true" : "false"}
+      className={
+        "inline-flex items-center gap-1 rounded-md text-white px-3 py-1.5 text-[12.5px] font-medium " +
+        (pending ? "bg-[#0f5f3f]/70 cursor-wait" : "bg-[#0f5f3f] hover:bg-[#0d4f34]")
+      }
+    >
+      {pending ? <SpinnerIcon className="h-3.5 w-3.5" /> : <CalcIcon className="h-3.5 w-3.5" />}
+      {pending ? "Posting Payroll…" : "Confirm & Post"}
+    </button>
+  );
+}
+
+// Payroll 3F (2026-09-13) — GL journal preview fetched from the
+// canonical preview endpoint. Uses SWR-lite pattern (fetch once on
+// mount, no polling). Displays the account × debit × credit table
+// exactly as the real Post will commit it.
+function PostJournalPreview({ previewUrl }: { previewUrl: string }) {
+  const [state, setState] = useState<
+    | { kind: "loading" }
+    | { kind: "error"; message: string }
+    | { kind: "ready"; preview: PostPreviewResponse }
+  >({ kind: "loading" });
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(previewUrl, { credentials: "include" });
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; preview?: PostPreviewResponse; error?: string };
+        if (!alive) return;
+        if (!res.ok || !j.ok || !j.preview) {
+          setState({ kind: "error", message: j.error ?? `Preview failed (HTTP ${res.status})` });
+          return;
+        }
+        setState({ kind: "ready", preview: j.preview });
+      } catch (err) {
+        if (!alive) return;
+        setState({ kind: "error", message: (err as Error).message });
+      }
+    })();
+    return () => { alive = false; };
+  }, [previewUrl]);
+  return (
+    <div className="mt-2 rounded border border-stone-200 bg-white overflow-hidden">
+      <div className="px-2 py-1 bg-[#f0fdf4] border-b border-stone-200">
+        <p className="text-[11px] font-semibold text-[#166534]">GL journal preview</p>
+      </div>
+      {state.kind === "loading" ? (
+        <p className="px-2 py-2 text-[11.5px] text-stone-500">Loading preview…</p>
+      ) : state.kind === "error" ? (
+        <p className="px-2 py-2 text-[11.5px] text-[#b91c1c]" data-testid="payroll-admin-post-preview-error">{state.message}</p>
+      ) : state.preview.readinessBlockers.length > 0 ? (
+        <div className="px-2 py-2" data-testid="payroll-admin-post-preview-blockers">
+          <p className="text-[11.5px] text-[#b91c1c] font-semibold">Cannot post — resolve first:</p>
+          <ul className="mt-1 text-[11px] text-[#b91c1c] list-disc list-inside space-y-0.5">
+            {state.preview.readinessBlockers.slice(0, 6).map((b, i) => (
+              <li key={i}><code className="font-mono text-[10.5px]">{b.code}</code> · {b.message}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <>
+          <table className="w-full text-[10.5px]" data-testid="payroll-admin-post-preview-table">
+            <thead className="bg-[#fbfaf7]">
+              <tr className="text-left text-stone-500">
+                <th className="px-1 py-0.5 font-medium w-[46px]">Acct</th>
+                <th className="px-1 py-0.5 font-medium">Account</th>
+                <th className="px-1 py-0.5 font-medium text-right w-[72px]">Debit</th>
+                <th className="px-1 py-0.5 font-medium text-right w-[72px]">Credit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.preview.lines.map((l) => (
+                <tr key={l.lineNumber} className="border-t border-stone-100">
+                  <td className="px-1 py-0.5 tabular-nums text-stone-800">{l.accountNumber}</td>
+                  <td className="px-1 py-0.5 text-stone-800 truncate max-w-[180px]" title={l.accountName + " · " + l.description}>{l.accountName}</td>
+                  <td className="px-1 py-0.5 text-right tabular-nums text-stone-900">{l.debit ?? ""}</td>
+                  <td className="px-1 py-0.5 text-right tabular-nums text-stone-900">{l.credit ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-stone-300 bg-[#fbfaf7]">
+                <td colSpan={2} className="px-1 py-0.5 text-right font-semibold text-stone-700">Totals</td>
+                <td className="px-1 py-0.5 text-right tabular-nums font-semibold text-stone-900" data-testid="payroll-admin-post-preview-debit">${state.preview.totalDebits}</td>
+                <td className="px-1 py-0.5 text-right tabular-nums font-semibold text-stone-900" data-testid="payroll-admin-post-preview-credit">${state.preview.totalCredits}</td>
+              </tr>
+            </tfoot>
+          </table>
+          <p className={"px-2 py-0.5 text-[10.5px] " + (state.preview.balanced ? "text-[#166534]" : "text-[#b91c1c]")} data-testid="payroll-admin-post-preview-balanced">
+            {state.preview.balanced ? "Balanced" : `Out of balance (Δ ${state.preview.differenceCents} cents)`}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface PostPreviewResponse {
+  lines: Array<{ lineNumber: number; accountNumber: string; accountName: string; debit: string | null; credit: string | null; description: string }>;
+  totalDebits: string;
+  totalCredits: string;
+  balanced: boolean;
+  differenceCents: number;
+  readinessBlockers: Array<{ code: string; message: string }>;
 }
 
 function PostedStatusButton() {

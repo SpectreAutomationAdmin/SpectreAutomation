@@ -338,9 +338,14 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
-    // Payroll-3A — CLUB_ADMIN holds every canonical Payroll-3A key
-    // EXCEPT payroll:post (finalisation is Controller-only per §31).
-    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void",
+    // Payroll 3F (2026-09-13) — governance decision: `payroll:post` is
+    // owned by PAYROLL_ADMIN + CLUB_ADMIN (accounting execution), while
+    // Controller retains payroll:approve + payroll:return (financial
+    // approval only). This creates the intended separation between
+    // approval and posting. See src/lib/payroll/approve-and-post.ts
+    // for the new SoD guard (submitter ≠ poster) that prevents a
+    // single actor from submitting, approving, AND posting.
+    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void", "payroll:post",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
@@ -468,15 +473,14 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
-    // Payroll-3A — Controller holds READ + APPROVE + POST only.
-    // Preparation / editing / submission are deliberately separate
-    // (Payroll admin owns those). Controller never gains SIN/banking
-    // reveal via payroll approval per §31.
-    // Payroll 3E — `payroll:return` allows the Controller to send a
-    // SUBMITTED_FOR_APPROVAL batch back to the Payroll Admin with a
-    // reason instead of approving it.
+    // Payroll 3F (2026-09-13) — Controller loses `payroll:post`.
+    // Governance now separates financial approval (Controller) from
+    // accounting execution (Payroll Admin). Controller retains
+    // payroll:approve + payroll:return only. Preparation / editing /
+    // submission / posting are all Payroll Admin responsibilities.
+    // Controller never gains SIN/banking reveal via payroll approval
+    // per §31.
     "payroll:paygroup:read", "payroll:config:read",
-    "payroll:post",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -585,7 +589,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // Payroll-3A — PAYROLL_ADMIN prepares + edits + submits payroll
     // batches, owns pay-group + config administration. Does NOT
     // approve or post — those are Controller-only (§28, §31).
-    "payroll:prepare", "payroll:edit", "payroll:submit",
+    // Payroll 3F (2026-09-13) — governance decision: PAYROLL_ADMIN
+    // OWNS `payroll:post`. Controller approves; Payroll Admin posts.
+    // SoD is enforced at the service layer (submitter ≠ poster) so
+    // the same actor cannot submit + post their own batch.
+    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:post",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "reports:operating",
