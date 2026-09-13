@@ -156,6 +156,43 @@ export async function loginAsFounder(
   return page;
 }
 
+/**
+ * Payroll 3E acceptance hotfix (2026-09-12) — log in as an
+ * ARBITRARY fixture-user credential pair on staging. Used by the
+ * real Payroll Admin + Controller lifecycle walk which needs two
+ * distinct actors on the same staging tenant.
+ *
+ * Security: passwords passed here are FIXTURE-ONLY passwords for
+ * synthetic accounts created by `scripts/payroll-3e-acceptance-fixture.mjs`.
+ * Never pass a real user's credential here.
+ */
+export async function loginAs(
+  context: BrowserContext,
+  email: string,
+  password: string,
+  opts: { landing?: string } = {},
+): Promise<Page> {
+  if (!email || !password) throw new Error("loginAs called without credentials.");
+  const { baseURL, loginPath } = readCreds();
+  const page = await context.newPage();
+  await page.goto(`${baseURL}${loginPath}`, { waitUntil: "domcontentloaded" });
+  await page.locator('input[name="email"]').fill(email);
+  await page.locator('input[name="password"]').fill(password);
+  await Promise.all([
+    page.waitForURL((url) => !url.pathname.startsWith(loginPath), { timeout: 30_000 }),
+    page.locator('form[action] button[type="submit"], form button[type="submit"]').first().click(),
+  ]).catch(async () => {
+    const currentUrl = page.url();
+    throw new Error(
+      `Staging login did not redirect off ${loginPath} for user ${email}. Current URL: ${currentUrl}.`,
+    );
+  });
+  if (opts.landing) {
+    await page.goto(`${baseURL}${opts.landing}`, { waitUntil: "domcontentloaded" });
+  }
+  return page;
+}
+
 /** Convenience: assert the browser is currently authenticated by
  *  checking that a protected route does NOT redirect to /login. */
 export async function assertAuthenticated(page: Page, protectedPath = "/app/admin"): Promise<void> {
