@@ -11,6 +11,7 @@
 // No calculation, no periods, no batches. Those arrive in later
 // Payroll-3B slices.
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentPrincipal } from "@/lib/services/principal";
@@ -95,14 +96,28 @@ export default async function PayrollSetupPage() {
   return (
     <div className="max-w-[960px]" data-testid="payroll-setup-page">
       <header className="mb-spectre-8">
+        {/* Payroll/HR Integration hotfix (2026-09-14) §12 — canonical
+            return navigation to the Finance → Payroll workspace. Rendered
+            above the eyebrow so a Payroll Admin never lands in Setup
+            without an obvious exit. */}
+        <nav className="mb-3">
+          <Link
+            href="/app/admin/payroll"
+            data-testid="payroll-setup-back-to-payroll"
+            className="inline-flex items-center gap-1 text-[13px] text-stone-600 hover:text-stone-900"
+          >
+            <span aria-hidden>←</span>
+            <span>Payroll</span>
+          </Link>
+        </nav>
         <div
           className="text-[11px] font-semibold uppercase tracking-[0.06em]"
           style={{ color: "var(--spectre-text-muted)" }}
         >
-          Operations
+          Finance
         </div>
         <h1 className="mt-1 text-spectre-h1 font-semibold" style={{ color: "var(--spectre-text-primary)" }}>
-          Payroll setup
+          Payroll Settings
         </h1>
         <p className="mt-2 text-spectre-body" style={{ color: "var(--spectre-text-secondary)" }}>
           Configure Payroll for {club.name}. Set up your jurisdiction, pay groups, and who each

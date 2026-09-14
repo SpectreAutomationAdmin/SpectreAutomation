@@ -172,18 +172,26 @@ export async function upsertPayrollProfile(
 // Activate — payroll processing becomes enabled for this employee.
 // ---------------------------------------------------------------------------
 /**
- * Preconditions checked via MASKED reads from the security-compliance
- * services — never plaintext:
+ * Payroll/HR Integration hotfix (2026-09-14) §4 — activation semantics
+ * are IDENTITY + TAX + COMPENSATION only. Banking readiness is a
+ * SEPARATE concern (its own `BANKING_NOT_VERIFIED` warning at Prepare)
+ * and NOT a gate on activation. This distinction lets Marc-shape
+ * employees (fully onboarded — SIN, TD1 federal + provincial,
+ * compensation — but banking still PENDING_VERIFICATION) exit
+ * approval in a state where T4-issuance readiness is TRUE while the
+ * Club still tracks banking-verification as its own outstanding
+ * warning at Prepare.
  *
+ * Preconditions (post-hotfix):
  *   1. `getCurrentCompensation(principal, employeeId)` returns a row.
  *   2. `getSinMasked(principal, employeeId)` returns non-null (a SIN
  *      row exists; `sinLastThree` is populated).
- *   3. `getBankAccountMasked(principal, employeeId)` returns a row
- *      with `status === "VERIFIED"` (direct deposit has been
- *      penny-tested / approved).
  *
- * Any failure throws `PayrollProfileActivationPreconditionError` with
- * a machine-inspectable `precondition` field. Plaintext values are
+ * Bank-account presence at activation is INFORMATIONAL — logged into
+ * the audit trail for provenance, never gates activation.
+ *
+ * Any missing precondition throws `PayrollProfileActivationPreconditionError`
+ * with a machine-inspectable `precondition` field. Plaintext values are
  * never quoted into the error message.
  */
 export async function activatePayrollProfile(
@@ -225,14 +233,17 @@ export async function activatePayrollProfile(
     );
   }
 
-  // Precondition 3 — active (VERIFIED) bank account.
+  // Payroll/HR Integration hotfix (2026-09-14) §4 — activation semantics
+  // are now identity + tax + compensation ONLY. Banking is a SEPARATE
+  // payment-readiness concern with its own `BANKING_NOT_VERIFIED`
+  // warning at Prepare. Bundling banking here caused Marc's Employee →
+  // Payroll tab to falsely display "Payroll profile not activated" for
+  // an employee whose T4/identity requirements were already complete —
+  // the founder rejected that conflation.
+  //
+  // Bank-account presence is INFORMATIONAL — logged into the audit if
+  // available for provenance, but never a gate on activation.
   const bankMasked = await getBankAccountMasked(principal, employeeId);
-  if (!bankMasked || bankMasked.status !== "VERIFIED") {
-    throw new PayrollProfileActivationPreconditionError(
-      "bank_not_active",
-      "direct-deposit banking is not in VERIFIED status",
-    );
-  }
 
   const activatedAt = new Date();
   const updated = await prisma.payrollProfile.update({
@@ -266,7 +277,10 @@ export async function activatePayrollProfile(
     meta: {
       // Masked helpers only — no plaintext.
       sinMasked,
-      accountLastFour: bankMasked.accountMasked,
+      // Banking is informational at activation time (§4). Log the mask
+      // when present so the audit trail carries provenance.
+      accountLastFour: bankMasked?.accountMasked ?? null,
+      bankStatusAtActivation: bankMasked?.status ?? null,
       compensationCadence: currentComp.cadence,
     },
   });

@@ -460,13 +460,24 @@ async function snapshotEmployee(
     orderBy: [{ effectiveFrom: "asc" }],
   });
 
-  // Readiness — PayrollProfile activation, TD1 (via EmployeeTaxProfile)
-  // and banking. `sinReady` is the payroll-profile activation signal
-  // (never touches the actual SIN ciphertext). TD1 readiness comes
-  // from the effective EmployeeTaxProfile row, which carries the
-  // KMS envelope refs (never displayed).
+  // Payroll/HR Integration hotfix (2026-09-14) §3-4 — payroll-profile
+  // readiness is derived from the ACTUAL identity + tax sources of truth,
+  // never from the fragile `PayrollProfile.activatedAt` state transition
+  // (which no onboarding-approval code path fires, so the flag was
+  // permanently stuck at `NULL` for every real employee — see Marc's
+  // staging state where the underlying SIN/TD1/DOB data were all present
+  // yet the warning still fired). The `PayrollProfile.suspendedAt` flag
+  // is still respected — an explicit suspension halts payroll.
   const payrollProfile = await prisma.payrollProfile.findUnique({ where: { employeeId } });
-  const sinReady = !!payrollProfile && !!payrollProfile.activatedAt && !payrollProfile.suspendedAt;
+  const sensitiveIdentity = await prisma.employeeSensitiveIdentity.findFirst({
+    where: { employeeId },
+    select: { id: true, sinLastThree: true },
+  });
+  const sinReady =
+    !!sensitiveIdentity &&
+    typeof sensitiveIdentity.sinLastThree === "string" &&
+    sensitiveIdentity.sinLastThree.length === 3 &&
+    !payrollProfile?.suspendedAt;
   const taxProfile = await prisma.employeeTaxProfile.findFirst({
     where: {
       employeeId,
@@ -504,11 +515,20 @@ async function snapshotEmployee(
   }
 
   if (!sinReady) {
+    // Payroll/HR Integration hotfix (2026-09-14) §14 — precise language.
+    // The warning now says what is ACTUALLY missing (the SIN row) rather
+    // than conflating multiple concerns into one generic "profile not
+    // activated" message. Direct link is Employee → Payroll where the
+    // Payroll Admin can supply the SIN.
     exceptions.push({
       severity: "WARNING",
       code: "MISSING_SIN",
-      message: "Employee has no activated Payroll profile / SIN. Calculation may proceed; T4 issuance requires this.",
-      recommendedAction: "Complete the employee's Payroll onboarding to activate the payroll profile.",
+      message: payrollProfile?.suspendedAt
+        ? "Employee's Payroll profile is currently suspended. Resume the profile before calculation."
+        : "Employee has no SIN on file. Calculation may proceed but T4 issuance requires this.",
+      recommendedAction: payrollProfile?.suspendedAt
+        ? "Review the employee's Payroll profile and resume it when appropriate."
+        : "Add the employee's SIN via the Employee → Payroll tab.",
     });
   }
   if (!federalTd1Ready) {

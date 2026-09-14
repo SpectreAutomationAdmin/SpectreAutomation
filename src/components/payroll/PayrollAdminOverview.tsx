@@ -96,6 +96,12 @@ function UsersRoundIcon({ className = "" }: { className?: string }) {
 function DownloadIcon({ className = "" }: { className?: string }) {
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 20h16" /></svg>);
 }
+function SettingsGearIcon({ className = "" }: { className?: string }) {
+  // Payroll/HR Integration hotfix (2026-09-14) §11 — gear icon for
+  // Payroll Settings navigation. Matches the outline stroke used across
+  // this file's icon set.
+  return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.05 4.3l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>);
+}
 function PlusIcon({ className = "" }: { className?: string }) {
   return (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>);
 }
@@ -255,6 +261,19 @@ function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: Pr
             </form>
           ) : null}
           <ChangePeriodPicker view={view} />
+          {/* Payroll/HR Integration hotfix (2026-09-14) §11 — canonical
+              navigation into Payroll Setup. Gear icon + text, sized as a
+              secondary action so it never competes with Prepare/Calculate
+              in prominence. Founder should never have to memorise the URL. */}
+          <Link
+            href="/app/admin/payroll/setup"
+            data-testid="payroll-admin-settings-link"
+            className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-[13px] text-stone-700 hover:bg-stone-50"
+            title="Payroll Settings — pay groups, membership, calendar, GL profile"
+          >
+            <SettingsGearIcon className="h-4 w-4 text-stone-500" />
+            <span>Payroll Settings</span>
+          </Link>
         </div>
       </div>
 

@@ -114,11 +114,19 @@ export const EXCEPTION_TRANSLATIONS: Record<string, ExceptionTranslation> = {
     },
   },
   MISSING_SIN: {
-    label: "Payroll profile not activated",
-    shortLabel: "Payroll profile inactive",
+    // Payroll/HR Integration hotfix (2026-09-14) §14 — precise language.
+    // Historically this displayed "Payroll profile not activated" +
+    // "Complete Payroll onboarding" even when onboarding was fully
+    // complete but the underlying source of truth (SensitiveIdentity)
+    // was absent or an explicit suspension was in place. The predicate
+    // now derives from actual data (see batch-preparation.ts:sinReady)
+    // and the remediation label + href routes to the exact place a
+    // Payroll Admin fixes the underlying data.
+    label: "SIN not on file",
+    shortLabel: "SIN missing",
     remediation: {
       kind: "employee-profile",
-      label: "Complete Payroll onboarding",
+      label: "Open employee Payroll tab",
       hrefFor: ({ employeeId }) => EMPLOYEE_PROFILE(employeeId),
     },
   },
