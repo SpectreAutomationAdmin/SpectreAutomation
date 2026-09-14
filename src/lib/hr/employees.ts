@@ -634,15 +634,22 @@ export async function deleteEmployee(
   };
 
   await prisma.$transaction(async (tx) => {
-    // 1. Onboarding-related.
-    //
-    // EmployeeOnboardingResponse rows are keyed on sessionId, not
-    // employeeId — delete via a subquery on this employee's sessions.
+    // 1. Onboarding-related. Responses are keyed on sessionId; state
+    // transitions and the invitation/session parents are keyed on
+    // employeeId (or sessionId for transitions in some schemas).
     await tx.employeeOnboardingCorrection.deleteMany({ where: { employeeId } });
     await tx.employeeOnboardingAcknowledgement.deleteMany({ where: { employeeId } });
     await tx.employeeOnboardingResponse.deleteMany({
       where: { session: { employeeId } },
     });
+    // Hotfix (2026-09-13): onboarding state transitions were missing
+    // from the cleanup — they FK-RESTRICT the session delete when the
+    // employee has advanced through even one step.
+    try {
+      await (tx as any).employeeOnboardingStateTransition.deleteMany({
+        where: { session: { employeeId } },
+      });
+    } catch { /* schema may not carry this table */ }
     await tx.employeeOnboardingInvitation.deleteMany({ where: { employeeId } });
     await tx.employeeOnboardingSession.deleteMany({ where: { employeeId } });
     // 2. Sensitive HR rows.
@@ -654,19 +661,31 @@ export async function deleteEmployee(
     await tx.employeeCredential.deleteMany({ where: { employeeId } });
     // 4. Documents (may include void cheques, resume, profile photo).
     await tx.employeeDocument.deleteMany({ where: { employeeId } });
-    // 5. Compensation history (HR-1 canonical rate table). Table may
-    //    not exist in every older schema — guard the delete.
+    // 5. Compensation history (HR-1 canonical rate table).
     if ((tx as unknown as { employeeCompensation?: { deleteMany?: (arg: unknown) => Promise<unknown> } }).employeeCompensation?.deleteMany) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (tx as any).employeeCompensation.deleteMany({ where: { employeeId } });
     }
-    // 5a. HR mobile-hotfix (2026-08-30) — HR-2C canonical child tables.
-    //     Commit B (`4a89e1f`) made every new employee carry a canonical
-    //     PRIMARY assignment; without cleaning those + their sibling
-    //     tables the final `Employee.delete` fails with a FK constraint
-    //     violation. These are guarded with the same shape as the
-    //     compensation guard above so older environments where the
-    //     table has not yet migrated stay operable.
+    // 5a. Availability model (Hotfix 2026-09-13). EmployeeAvailabilityRule
+    //     FKs the profile, so rules must go first, then the profile
+    //     itself. EmployeeAvailabilityWeek is Employee-scoped.
+    try {
+      const profiles = await (tx as any).employeeAvailabilityProfile.findMany({
+        where: { employeeId }, select: { id: true },
+      });
+      const profileIds = profiles.map((p: { id: string }) => p.id);
+      if (profileIds.length) {
+        try {
+          await (tx as any).employeeAvailabilityRule.deleteMany({
+            where: { availabilityProfileId: { in: profileIds } },
+          });
+        } catch { /* schema variant */ }
+      }
+      await (tx as any).employeeAvailabilityProfile.deleteMany({ where: { employeeId } });
+    } catch { /* schema variant */ }
+    // 5b. HR-2C canonical child tables + tables referenced by newer
+    //     onboarding + payroll setup flows. All guarded so older schemas
+    //     without these tables continue to work.
     for (const child of [
       "employeeEmploymentAssignment",
       "employeeAllowance",
@@ -674,22 +693,59 @@ export async function deleteEmployee(
       "employeePortalCredential",
       "employeeHomeNotificationDismissal",
       "employeeAvailabilityWeek",
+      "employeeRecurringPayrollComponent",
+      "employeeCppElection",
+      "employeeCppDisability",
+      "payrollPayGroupMember",
+      "payrollOpeningBalance",
+      "shiftAssignment",
+      "timeClockEvent",
+      "payrollTimesheet",
+      "payrollApprovedTimeEntry",
+      "payrollTimeAdjustment",
+      "timeClockCorrectionRequest",
+      "trainingAssignment",
+      "trainingProgress",
+      "trainingCompletion",
+      "trainingAttempt",
+      "employeePortalQuickLink",
     ] as const) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const child_ = (tx as any)[child];
       if (child_?.deleteMany) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (child_ as any).deleteMany({ where: { employeeId } });
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (child_ as any).deleteMany({ where: { employeeId } });
+        } catch { /* protected-history rows should have already been refused by eligibility */ }
       }
     }
     // 6. Employment period. Eligibility check above already refused if
     //    payroll/timesheet history exists.
     await tx.employmentPeriod.deleteMany({ where: { employeeId } });
-    // 7. Unpin the profile-photo / resume pointers before deleting
-    //    the Employee row — the FK on Employee → EmployeeDocument
-    //    references the document, not the reverse.
-    // Already handled by step 4 (documents deleted before employee).
-    // 8. Employee itself.
+    // 7. Same-human link safety (Hotfix §13, 2026-09-13). If a Tenant
+    //    User's UserClubProfile is linked to this Employee, UNLINK the
+    //    profile rather than deleting the Tenant User. Deletion of the
+    //    Employee does not imply the User should go away.
+    try {
+      await (tx as any).userClubProfile.updateMany({
+        where: { employeeId },
+        data: { employeeId: null },
+      });
+    } catch { /* schema without the link column stays untouched */ }
+    // 8. Clear other Employees' managerEmployeeId references pointing at
+    //    this Employee (Hotfix §14). Position-hierarchy resolves the
+    //    manager again after the person-level override is cleared.
+    await tx.employee.updateMany({
+      where: { managerEmployeeId: employeeId },
+      data: { managerEmployeeId: null },
+    });
+    try {
+      await (tx as any).employee.updateMany({
+        where: { managerProfileId: employeeId },
+        data: { managerProfileId: null },
+      });
+    } catch { /* schema variant */ }
+    // 9. Employee itself.
     await tx.employee.delete({ where: { id: employeeId } });
   });
 

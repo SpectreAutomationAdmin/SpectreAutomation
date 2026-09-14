@@ -73,6 +73,19 @@ export async function DELETE(
     if (isAppError(err)) {
       return NextResponse.json({ error: err.safeMessage }, { status: err.httpStatus });
     }
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    // Hotfix (2026-09-13): the previous generic "Server error" hid the
+    // FK constraint that was actually blocking delete (missing child-row
+    // cleanup for EmployeeAvailabilityProfile / OnboardingStateTransition).
+    // Log the raw error server-side; return a specific-but-safe message
+    // to the client so ambiguous failures are diagnosable in the wild.
+    const raw = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error("[people.employees.delete] internal error", { employeeId: params.id, raw });
+    if (/foreign key constraint/i.test(raw) || /RESTRICT setting/i.test(raw)) {
+      return NextResponse.json({
+        error: "Delete failed — this employee still has protected history that could not be cleaned up. Please report this so it can be fixed.",
+      }, { status: 500 });
+    }
+    return NextResponse.json({ error: "Server error while deleting employee." }, { status: 500 });
   }
 }
