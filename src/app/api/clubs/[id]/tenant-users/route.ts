@@ -28,6 +28,7 @@ import { listActiveProfiles, assertTenantUsersWrite } from "@/lib/tenant-admin/p
 import { listActiveAssignments } from "@/lib/tenant-admin/responsibilities";
 import { resolvePublicHost } from "@/lib/tenant-admin/invitation-email";
 import { listPositions, loadOrgTree } from "@/lib/tenant-admin/org-structure";
+import { ROLE_LABELS } from "@/lib/tenant-admin/constants";
 import { prisma } from "@/lib/prisma";
 
 const UNAUTHORIZED = NextResponse.json({ error: "Not authorised" }, { status: 403 });
@@ -87,20 +88,39 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }),
     ]);
     const linkedEmployeeIds = new Set(linkedProfiles.map((p) => p.employeeId).filter((id): id is string => id !== null));
+    // Post-onboarding-admin hotfix (2026-09-13): the GET response shape
+    // MUST match the SSR shape in `page.tsx` (initialUsers mapping at
+    // lines 112-133). If it doesn't, TenantUsersClient's `refresh()`
+    // after invite/resend/revoke sets state with missing fields
+    // (`roleLabels`, `positionId`, `positionName`, `reportsToProfileId`,
+    // `isTenantAdmin`, `hasEmployeeLink`) and `PersonRow` crashes on
+    // `user.roleLabels.length` — the founder saw a full-page
+    // "Application error: a client-side exception has occurred".
+    const tenantAdminUserIds = new Set(tenantAdmins.map((a) => a.userId));
+    const orgByUserId = new Map(orgTree.map((n) => [n.userId, n]));
     return NextResponse.json({
-      users: users.map((u) => ({
-        id: u.id,
-        userId: u.userId,
-        name: u.user.name,
-        email: u.user.email,
-        userStatus: u.user.status,
-        profileStatus: u.status,
-        displayTitle: u.displayTitle,
-        department: u.department ? { id: u.department.id, name: u.department.name } : null,
-        roleKeys: u.user.clubRoles.map((r) => r.roleKey),
-        lastLoginAt: u.user.lastLoginAt,
-        createdAt: u.createdAt,
-      })),
+      users: users.map((u) => {
+        const orgNode = orgByUserId.get(u.userId);
+        return {
+          id: u.id,
+          userId: u.userId,
+          name: u.user.name,
+          email: u.user.email,
+          userStatus: u.user.status,
+          profileStatus: u.status,
+          displayTitle: u.displayTitle,
+          positionId: (u as unknown as { positionId: string | null }).positionId ?? null,
+          positionName: orgNode?.positionName ?? null,
+          department: u.department ? { id: u.department.id, name: u.department.name } : null,
+          reportsToProfileId: orgNode?.reportsToProfileId ?? null,
+          roleKeys: u.user.clubRoles.map((r) => r.roleKey),
+          roleLabels: u.user.clubRoles.map((r) => ROLE_LABELS[r.roleKey as keyof typeof ROLE_LABELS] ?? r.roleKey),
+          lastLoginAt: u.user.lastLoginAt,
+          createdAt: u.createdAt,
+          isTenantAdmin: tenantAdminUserIds.has(u.userId),
+          hasEmployeeLink: orgNode?.hasEmployeeLink ?? false,
+        };
+      }),
       invitations: invitations.map((inv) => ({
         id: inv.id,
         email: inv.email,
