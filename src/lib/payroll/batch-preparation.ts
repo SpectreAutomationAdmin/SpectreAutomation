@@ -735,6 +735,24 @@ export async function preparePayrollBatch(
   const province = config?.provinceOfEmployment ?? null;
   const members = await resolvePopulation(clubId, pre.payGroupId, pre.periodStart, pre.periodEnd);
 
+  // Payroll-readiness hotfix (2026-09-14) §10-12 — exclusion visibility.
+  // ACTIVE Employees at the Club who are NOT in the selected pay group's
+  // membership for this period would otherwise silently vanish from Prepare.
+  // Surface them as INFO exceptions so the founder can see who was skipped
+  // and act (typically: enroll them via Payroll Setup → Membership). INFO
+  // severity does NOT affect the batch's DRAFT/PREPARED status.
+  const memberEmployeeIds = new Set(members.map((m) => m.employeeId));
+  const unenrolledActive = await prisma.employee.findMany({
+    where: {
+      clubId,
+      employeeLifecycle: "ACTIVE",
+      onboardingState: "APPROVED",
+      id: { notIn: [...memberEmployeeIds] },
+    },
+    select: { id: true, firstName: true, lastName: true, employeeNumber: true },
+    orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+  });
+
   // Compute the next sequence within the (Club, PayGroup, PayPeriod)
   // — respects the accepted @@unique constraint. Voided batches
   // still hold a sequence; the new batch bumps.
@@ -958,7 +976,27 @@ export async function preparePayrollBatch(
       }
     }
 
-    return { batch, exceptionSummary: { blockerCount, warningCount } };
+    // Payroll-readiness hotfix (2026-09-14) — surface un-enrolled ACTIVE
+    // Employees as batch-level INFO exceptions. No batchEmployee row is
+    // created (they weren't populated), so `batchEmployeeId` stays null and
+    // `employeeId` links directly. Recommended action tells the operator
+    // where to fix it.
+    for (const u of unenrolledActive) {
+      await tx.payrollBatchException.create({
+        data: {
+          clubId,
+          batchId: batch.id,
+          batchEmployeeId: null,
+          employeeId: u.id,
+          severity: "INFO",
+          code: "NOT_ENROLLED_IN_PAY_GROUP",
+          message: `${u.firstName} ${u.lastName} (${u.employeeNumber}) is an active employee at this Club but is not enrolled in this pay group for the period, so no earnings were calculated. Enroll them via Payroll Setup → Membership if this pay period should include them.`,
+          recommendedAction: "Payroll Setup → Membership",
+        },
+      });
+    }
+
+    return { batch, exceptionSummary: { blockerCount, warningCount, unenrolledCount: unenrolledActive.length } };
   });
 
   await audit(principal, {

@@ -45,6 +45,11 @@ interface ComposeArgs {
   isExistingUser: boolean;
   activationUrl: string;
   expiresAt: Date;
+  // Payroll-readiness hotfix (2026-09-14) §14-15 — the resend flow must
+  // produce a distinct, legibly-different email so it does not thread
+  // with the original send in the recipient's Gmail/Outlook (which
+  // otherwise collapses identical-subject messages to a "…" preview).
+  isResend?: boolean;
 }
 
 interface SendArgs extends Omit<ComposeArgs, "activationUrl"> {
@@ -54,6 +59,7 @@ interface SendArgs extends Omit<ComposeArgs, "activationUrl"> {
   rawToken: string;
   publicHost: string;
   callerUserId: string | null;
+  // `isResend` is inherited from ComposeArgs — declared here for clarity.
 }
 
 // ---------------------------------------------------------------------
@@ -69,12 +75,21 @@ export function composeAdminInvitationEmail(args: ComposeArgs): Composed {
   const acceptLine = args.isExistingUser
     ? `Sign in to your Spectre account and accept your invitation.`
     : `Set up your Spectre account to begin.`;
-
-  const subject = `You've been invited to Spectre — ${args.clubName}`;
+  // Payroll-readiness hotfix (2026-09-14) — resend variant. Distinct subject +
+  // a lead-in line so Gmail/Outlook do not collapse the email into a "…"
+  // preview by threading it with the original invitation.
+  const resendPreamble = args.isResend
+    ? `We've issued you a fresh invitation link. The previous link is no longer valid.`
+    : null;
+  const subject = args.isResend
+    ? `Resent invitation to Spectre — ${args.clubName}`
+    : `You've been invited to Spectre — ${args.clubName}`;
+  const headline = args.isResend ? "Here's your new invitation." : "You've been invited.";
 
   const text = [
     `Hello ${args.displayName || "there"},`,
     ``,
+    ...(resendPreamble ? [resendPreamble, ``] : []),
     `${args.inviterName} has invited you to help operate ${args.clubName} on Spectre.`,
     ``,
     acceptLine,
@@ -98,10 +113,11 @@ export function composeAdminInvitationEmail(args: ComposeArgs): Composed {
             <div style="font-size:11px;letter-spacing:0.25em;text-transform:uppercase;color:#78716c;">${escapeHtml(args.clubName)}</div>
           </td></tr>
           <tr><td style="padding:0 40px;">
-            <h1 style="margin:8px 0 24px 0;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:26px;line-height:1.2;color:#1c1917;">You've been invited.</h1>
+            <h1 style="margin:8px 0 24px 0;font-family:Georgia,'Times New Roman',serif;font-weight:600;font-size:26px;line-height:1.2;color:#1c1917;">${escapeHtml(headline)}</h1>
           </td></tr>
           <tr><td style="padding:0 40px;">
             <p style="margin:0 0 16px 0;font-size:15px;color:#292524;">Hello ${escapeHtml(args.displayName || "there")},</p>
+            ${resendPreamble ? `<p style="margin:0 0 16px 0;font-size:15px;color:#292524;">${escapeHtml(resendPreamble)}</p>` : ""}
             <p style="margin:0 0 16px 0;font-size:15px;color:#292524;">${escapeHtml(args.inviterName)} has invited you to help operate ${escapeHtml(args.clubName)} on Spectre.</p>
             <p style="margin:0 0 24px 0;font-size:15px;color:#292524;">${escapeHtml(acceptLine)}</p>
           </td></tr>
@@ -222,6 +238,7 @@ export async function sendAdminInvitationEmail(args: SendArgs): Promise<AdminInv
     isExistingUser: args.isExistingUser,
     activationUrl,
     expiresAt: args.expiresAt,
+    isResend: args.isResend,
   });
 
   const [adapter, mode, descriptor] = await Promise.all([

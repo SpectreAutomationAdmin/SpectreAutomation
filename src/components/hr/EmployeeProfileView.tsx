@@ -141,6 +141,12 @@ interface Props {
       hasAdditionalDeductions: boolean;
     } | null;
     taxAccessible: boolean;
+    // Payroll-readiness hotfix (2026-09-14) — canonical TD1 readiness fields.
+    // See src/lib/hr/tax-readiness.ts.
+    federalTd1Ready?: boolean;
+    provincialTd1Ready?: boolean;
+    federalTd1CompletedAt?: string | null;
+    provincialTd1CompletedAt?: string | null;
     td1Attestations: Array<{ kind: string; acknowledgedAt: string }>;
   };
   /** HR-2B.4 (2026-08-19) — Emergency contact rollup. `null` when the
@@ -747,16 +753,21 @@ function FederalTd1Panel({ payroll }: { payroll: Props["payroll"] }) {
   if (!payroll.taxAccessible) {
     return <p className="text-xs text-stone-500">Requires Payroll Admin access</p>;
   }
-  const attestation = payroll.td1Attestations.find(
-    (a) => a.kind === "td1_federal_attestation",
-  );
-  if (!attestation) {
+  // Payroll-readiness hotfix (2026-09-14) — canonical TD1 readiness. Prefer
+  // the new fields; fall back to the legacy acknowledgement array for
+  // backwards compatibility with older data + tests.
+  const ready = payroll.federalTd1Ready
+    ?? Boolean(payroll.td1Attestations.find((a) => a.kind === "td1_federal_attestation"));
+  const completedAt = payroll.federalTd1CompletedAt
+    ?? payroll.td1Attestations.find((a) => a.kind === "td1_federal_attestation")?.acknowledgedAt
+    ?? null;
+  if (!ready) {
     return <p className="spectre-person-not-provided">Not yet completed</p>;
   }
   return (
     <div>
       <p className="text-sm text-stone-900">
-        Completed {formatDate(attestation.acknowledgedAt)}
+        {completedAt ? `Completed ${formatDate(completedAt)}` : "Completed"}
       </p>
       {payroll.taxProfileMasked && (
         <p className="mt-0.5 text-xs text-stone-500">
@@ -772,16 +783,18 @@ function ProvincialTd1Panel({ payroll }: { payroll: Props["payroll"] }) {
   if (!payroll.taxAccessible) {
     return <p className="text-xs text-stone-500">Requires Payroll Admin access</p>;
   }
-  const attestation = payroll.td1Attestations.find(
-    (a) => a.kind === "td1_provincial_attestation",
-  );
-  if (!attestation) {
+  const ready = payroll.provincialTd1Ready
+    ?? Boolean(payroll.td1Attestations.find((a) => a.kind === "td1_provincial_attestation"));
+  const completedAt = payroll.provincialTd1CompletedAt
+    ?? payroll.td1Attestations.find((a) => a.kind === "td1_provincial_attestation")?.acknowledgedAt
+    ?? null;
+  if (!ready) {
     return <p className="spectre-person-not-provided">Not yet completed</p>;
   }
   return (
     <div>
       <p className="text-sm text-stone-900">
-        Completed {formatDate(attestation.acknowledgedAt)}
+        {completedAt ? `Completed ${formatDate(completedAt)}` : "Completed"}
       </p>
       {payroll.taxProfileMasked && (
         <p className="mt-0.5 text-xs text-stone-500">

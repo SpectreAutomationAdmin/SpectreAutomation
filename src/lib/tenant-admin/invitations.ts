@@ -291,8 +291,9 @@ async function deliverInvitationEmail(args: {
   principal: Principal;
   rawToken: string;
   existingUser: boolean;
+  isResend?: boolean;
 }): Promise<AdminInvitationDeliveryResult> {
-  const { invitation, principal, rawToken, existingUser } = args;
+  const { invitation, principal, rawToken, existingUser, isResend } = args;
   const [club, inviter] = await Promise.all([
     prisma.club.findUnique({ where: { id: invitation.clubId }, select: { name: true } }),
     prisma.user.findUnique({ where: { id: principal.id }, select: { name: true, email: true } }),
@@ -334,6 +335,7 @@ async function deliverInvitationEmail(args: {
     publicHost,
     expiresAt: invitation.expiresAt,
     callerUserId: principal.id,
+    isResend,
   });
 }
 
@@ -424,6 +426,10 @@ export async function resendAdminInvitation(
   const existingUser = await prisma.user.findUnique({ where: { email: invitation.email }, select: { id: true } });
   const delivery = await deliverInvitationEmail({
     invitation, principal, rawToken, existingUser: existingUser !== null,
+    // Payroll-readiness hotfix (2026-09-14) §14-15 — resend must produce a
+    // distinct email so it doesn't collapse into the recipient's Gmail/Outlook
+    // thread as a "…" preview. The composer branches on this flag.
+    isResend: true,
   });
   const refreshed = await prisma.adminInvitation.findUniqueOrThrow({ where: { id: invitation.id } });
   return { invitation: refreshed, delivery, rawToken };

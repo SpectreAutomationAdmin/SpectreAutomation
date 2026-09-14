@@ -112,7 +112,7 @@ export default async function EmployeeProfilePage({
     sinMasked,
     bankingMasked,
     taxProfileMasked,
-    td1Attestations,
+    taxReadiness,
   ] = await Promise.all([
     canReadEmployment ? listEmploymentPeriods(principal, profile.id) : Promise.resolve([]),
     canReadDocuments ? listEmployeeDocuments(principal, profile.id) : Promise.resolve([]),
@@ -144,16 +144,16 @@ export default async function EmployeeProfilePage({
     canReadSin ? getSinMasked(principal, profile.id) : Promise.resolve(null),
     canReadBanking ? getBankAccountMasked(principal, profile.id) : Promise.resolve(null),
     canReadTax ? getTaxProfileMasked(principal, profile.id) : Promise.resolve(null),
-    canReadOnboarding
-      ? prisma.employeeOnboardingAcknowledgement.findMany({
-          where: {
-            clubId: profile.clubId,
-            employeeId: profile.id,
-            kind: { in: ["td1_federal_attestation", "td1_provincial_attestation"] },
-          },
-          select: { kind: true, acknowledgedAt: true },
-        })
-      : Promise.resolve([]),
+    // Payroll-readiness hotfix (2026-09-14) §7 — Employee Payroll tab TD1
+    // completion state must reflect the canonical `EmployeeTaxProfile`, the
+    // same source Prepare Payroll + approval readiness use. Reading the
+    // acknowledgements alone (and gating on hr:onboarding:read) meant Marc's
+    // TD1s displayed as "Not yet completed" on the Payroll tab even though
+    // his EmployeeTaxProfile existed and Prepare Payroll marked
+    // federalTd1Ready=true / provincialTd1Ready=true. The shared helper
+    // ungates the read from onboarding-permission (payroll:read is enough
+    // to see the payroll tab; the tax profile is not extra-sensitive here).
+    (await import("@/lib/hr/tax-readiness")).getEmployeeTaxReadiness(profile.clubId, profile.id),
   ]);
 
   // HR-2C Employment (2026-08-24) — Employment tab data.
@@ -445,10 +445,21 @@ export default async function EmployeeProfilePage({
             }
           : null,
         taxAccessible: canReadTax,
-        td1Attestations: td1Attestations.map((a) => ({
-          kind: a.kind,
-          acknowledgedAt: a.acknowledgedAt.toISOString(),
-        })),
+        // Payroll-readiness hotfix (2026-09-14) — canonical TD1 readiness.
+        // See src/lib/hr/tax-readiness.ts. The panels render "Completed"
+        // from `federalTd1Ready` / `provincialTd1Ready`, prefer the enriched
+        // acknowledgement timestamp where present, otherwise fall back to
+        // the tax profile's effectiveFrom.
+        federalTd1Ready: taxReadiness.federal.ready,
+        provincialTd1Ready: taxReadiness.provincial.ready,
+        federalTd1CompletedAt: taxReadiness.federalCompletedAt?.toISOString() ?? taxReadiness.effectiveFrom?.toISOString() ?? null,
+        provincialTd1CompletedAt: taxReadiness.provincialCompletedAt?.toISOString() ?? taxReadiness.effectiveFrom?.toISOString() ?? null,
+        // Legacy passthrough — a few consumers still reach into this array;
+        // keep it populated from the same acknowledgement data.
+        td1Attestations: [
+          taxReadiness.federalCompletedAt ? { kind: "td1_federal_attestation", acknowledgedAt: taxReadiness.federalCompletedAt.toISOString() } : null,
+          taxReadiness.provincialCompletedAt ? { kind: "td1_provincial_attestation", acknowledgedAt: taxReadiness.provincialCompletedAt.toISOString() } : null,
+        ].filter((x): x is { kind: string; acknowledgedAt: string } => x !== null),
       }}
       emergencyContacts={
         canReadEmergency
