@@ -3,7 +3,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
-import { getPreparedBatch, voidPayrollBatch } from "@/lib/payroll/batch-preparation";
+import {
+  discardPreparedPayrollBatch,
+  getPreparedBatch,
+  voidPayrollBatch,
+} from "@/lib/payroll/batch-preparation";
 import { orchestratePayrollReviewVoid } from "@/lib/payroll/orchestration";
 
 const NOT_FOUND = NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -25,17 +29,22 @@ export async function POST(
 ) {
   const principal = await getCurrentPrincipal();
   if (!principal || !hasPermission(principal, params.id, "payroll:run")) return NOT_FOUND;
-  let body: { action?: "void"; reason?: string };
+  let body: { action?: "void" | "discard"; reason?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  if (body.action !== "void") {
-    return NextResponse.json({ error: "action must be 'void'" }, { status: 400 });
+  // Discard-Prepared-Payroll hotfix (2026-09-14) — `discard` is the
+  // founder-facing verb for abandoning a PREPARED batch; internally it
+  // lands the batch in VOIDED (one canonical state, distinct audit event).
+  if (body.action !== "void" && body.action !== "discard") {
+    return NextResponse.json({ error: "action must be 'void' or 'discard'" }, { status: 400 });
   }
   try {
-    const result = await voidPayrollBatch(principal, params.id, params.batchId, body.reason);
+    const result = body.action === "discard"
+      ? await discardPreparedPayrollBatch(principal, params.id, params.batchId, body.reason)
+      : await voidPayrollBatch(principal, params.id, params.batchId, body.reason);
     // Also transition WI cards.
     const batch = await getPreparedBatch(principal, params.id, params.batchId);
     if (batch) {

@@ -1097,6 +1097,102 @@ export async function voidPayrollBatch(
   return { batchId: batch.id, releasedTimeEntryCount: released };
 }
 
+/**
+ * Discard-Prepared-Payroll hotfix (2026-09-14) — Payroll Admin's founder-
+ * facing action to abandon a PREPARED batch and return to a state from
+ * which Prepare can be run again after source corrections.
+ *
+ * Founder-facing terminology is "Discard Prepared Payroll" (§2). The
+ * internal canonical state is VOIDED — one lifecycle sink; no second
+ * competing cancellation mechanism (§2). The distinction matters
+ * because "Void" implies reversal of processed payroll — this action
+ * is exclusive to PREPARED batches which have not been calculated,
+ * submitted, approved, posted, or paid.
+ *
+ * Strict guards (§9):
+ *   * batch.status === "PREPARED" — hard fail on DRAFT / CALCULATED /
+ *     SUBMITTED_FOR_APPROVAL / APPROVED / POSTED with a specific error.
+ *   * idempotent on VOIDED — a second call returns success without side
+ *     effects (satisfies §18 item 12 double-discard).
+ *   * per-batch CAS via `where: { id, status: "PREPARED" }` inside the
+ *     update — two concurrent discards land only one flip.
+ *
+ * Side effects (§10-12):
+ *   * releases approved-time reservations (consumedByBatchId → null) so
+ *     the replacement Prepare can consume the same entries.
+ *   * retains PayrollBatchEmployee / exceptions / snapshots as historical
+ *     audit evidence attached to the discarded batch — nothing hard-deleted.
+ *   * emits `payroll.batch.discard` audit event (§17) distinct from the
+ *     general `payroll.batch.void` audit for clean lifecycle timeline.
+ */
+export async function discardPreparedPayrollBatch(
+  principal: Principal,
+  clubId: string,
+  batchId: string,
+  reason?: string,
+): Promise<VoidPayrollBatchResult> {
+  requirePermission(principal, clubId, "payroll:run");
+  await assertPostingAllowed(principal, clubId, "payroll.batch.discard", ENTITY, batchId);
+
+  const batch = await prisma.payrollBatch.findFirst({ where: { id: batchId, clubId } });
+  if (!batch) throw new NotFoundError(ENTITY, batchId);
+
+  // Idempotency — a second discard against an already-discarded batch
+  // returns success with no side effects. This satisfies §18 item 12
+  // ("concurrent double-discard is idempotent/CAS-safe") while still
+  // giving the caller a stable response contract.
+  if (batch.status === "VOIDED") {
+    return { batchId: batch.id, releasedTimeEntryCount: 0 };
+  }
+  // Strict founder guard — this action is EXCLUSIVELY for PREPARED.
+  if (batch.status !== "PREPARED") {
+    throw new ValidationError([
+      { path: "status",
+        message: `Discard Prepared Payroll is only available for PREPARED batches (this batch is ${batch.status}). Use the appropriate lifecycle action for the current state.` },
+    ]);
+  }
+
+  const { released } = await prisma.$transaction(async (tx) => {
+    const rel = await tx.payrollApprovedTimeEntry.updateMany({
+      where: { clubId, consumedByBatchId: batch.id },
+      data: { consumedByBatchId: null, consumedByBatchEmployeeId: null },
+    });
+    // CAS on `status: "PREPARED"` — two concurrent discards land only once.
+    const updated = await tx.payrollBatch.updateMany({
+      where: { id: batch.id, status: "PREPARED" },
+      data: {
+        status: "VOIDED",
+        voidedAt: new Date(),
+        voidedByUserId: principal.id,
+        voidReason: reason?.trim() || null,
+      },
+    });
+    if (updated.count === 0) {
+      // Lost the race — another concurrent discard already flipped it.
+      // Roll back this transaction's release so the winner's release stands.
+      throw new ValidationError([
+        { path: "status", message: "Batch was concurrently discarded — no changes applied." },
+      ]);
+    }
+    return { released: rel.count };
+  });
+
+  await audit(principal, {
+    action: "payroll.batch.discard",
+    entityType: ENTITY,
+    entityId: batch.id,
+    clubId,
+    before: { status: "PREPARED" },
+    after: {
+      status: "VOIDED",
+      releasedTimeEntryCount: released,
+      voidReason: reason?.trim() || null,
+    },
+  });
+
+  return { batchId: batch.id, releasedTimeEntryCount: released };
+}
+
 // ---------------------------------------------------------------------------
 // Read paths
 // ---------------------------------------------------------------------------

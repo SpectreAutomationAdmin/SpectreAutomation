@@ -194,6 +194,39 @@ export default function PayrollProcessWorkspace({
     }
   };
 
+  // Discard-Prepared-Payroll hotfix (2026-09-14) — founder-facing action.
+  // Kept separate from `voidBatch` above so the confirmation copy and
+  // audit event are specific to the PREPARED-only path.
+  const formatDate = (iso: string): string => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  };
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const discardPrepared = async () => {
+    if (!canRun || !batch) return;
+    setDiscardOpen(false);
+    setBusy(true);
+    setMessage({ tone: "idle", text: "" });
+    try {
+      const res = await fetch(api(`/batches/${batch.id}`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "discard" }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setBatch(null);
+      setMessage({
+        tone: "ok",
+        text: "Prepared payroll discarded. Time reservations released — you may correct source setup (e.g. Payroll Setup → Membership) and prepare payroll again.",
+      });
+    } catch (err) {
+      setMessage({ tone: "err", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="process-workspace">
       <label className="block text-sm max-w-md">
@@ -308,7 +341,23 @@ export default function PayrollProcessWorkspace({
               Open batch review →
             </a>
           )}
-          {canRun && batch.status !== "VOIDED" && (
+          {/* Discard-Prepared-Payroll hotfix (2026-09-14) — PREPARED-only
+              action with a proper confirmation dialog. For other pre-Post
+              states (DRAFT / CALCULATED / SUBMITTED_FOR_APPROVAL) the
+              existing "Void this batch" affordance remains available with
+              its prompt-based reason capture. */}
+          {canRun && batch.status === "PREPARED" && (
+            <button
+              type="button"
+              onClick={() => setDiscardOpen(true)}
+              disabled={busy}
+              className="text-sm text-red-700 hover:underline ml-4"
+              data-testid="process-discard-prepared"
+            >
+              Discard Prepared Payroll
+            </button>
+          )}
+          {canRun && batch.status !== "VOIDED" && batch.status !== "PREPARED" && (
             <button
               type="button"
               onClick={voidBatch}
@@ -320,6 +369,102 @@ export default function PayrollProcessWorkspace({
             </button>
           )}
         </section>
+      )}
+
+      {/* Discard-Prepared-Payroll confirmation dialog (§6). */}
+      {discardOpen && batch && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="discard-title"
+          data-testid="process-discard-dialog"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setDiscardOpen(false); }}
+        >
+          <div
+            style={{
+              background: "#ffffff",
+              borderRadius: 8,
+              maxWidth: 480,
+              width: "100%",
+              margin: "0 16px",
+              padding: 24,
+              boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+            }}
+          >
+            <h2 id="discard-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Discard prepared payroll?
+            </h2>
+            <p style={{ margin: "12px 0 12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              This payroll has not been submitted or posted. Discarding it will remove this prepared
+              snapshot so payroll can be prepared again using the latest employee, pay-group, time
+              and payroll setup.
+            </p>
+            <dl style={{ margin: "0 0 16px 0", fontSize: 13, color: "#44403c" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Pay period</dt>
+                <dd style={{ margin: 0 }}>
+                  {period ? `${formatDate(period.periodStart)} – ${formatDate(period.periodEnd)}` : "—"}
+                </dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Employees</dt>
+                <dd style={{ margin: 0 }}>{batch.employees.length}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Status</dt>
+                <dd style={{ margin: 0 }}>{batch.status}</dd>
+              </div>
+            </dl>
+            <p style={{ margin: "0 0 20px 0", fontSize: 13, color: "#b91c1c", fontWeight: 500 }}>
+              This cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setDiscardOpen(false)}
+                disabled={busy}
+                data-testid="process-discard-cancel"
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 14,
+                  border: "1px solid #d0c9bd",
+                  background: "transparent",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={discardPrepared}
+                disabled={busy}
+                data-testid="process-discard-confirm"
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 14,
+                  border: "none",
+                  background: "#b91c1c",
+                  color: "white",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  opacity: busy ? 0.6 : 1,
+                }}
+              >
+                Discard Prepared Payroll
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {message.text && (
