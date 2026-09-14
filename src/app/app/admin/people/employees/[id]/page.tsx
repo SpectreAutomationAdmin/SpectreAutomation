@@ -228,6 +228,10 @@ export default async function EmployeeProfilePage({
     hasPermission(principal, profile.clubId, "hr:onboarding:invite") &&
     currentSession?.state === "DRAFT";
   const canWritePhoto = hasPermission(principal, profile.clubId, "hr:employee:write");
+  // Post-onboarding-admin hotfix (2026-09-13) §16 — same permission
+  // gates the Basic Details editor (name / email / phone / address).
+  // SIN / banking / TD1 remain on their own sensitive-data workflows (§24).
+  const canEditBasicDetails = hasPermission(principal, profile.clubId, "hr:employee:write");
 
   // HR-2B.3.6 (2026-08-19) — Lifecycle controls: Delete vs Archive.
   // Only surface controls to operators with hr:employee:write; the API
@@ -368,6 +372,12 @@ export default async function EmployeeProfilePage({
         payrollReadiness: profile.payrollReadiness,
         memberId: profile.memberId ?? null,
         profilePhotoDocumentId: profile.profilePhotoDocumentId ?? null,
+        homeAddressLine1: profile.homeAddressLine1 ?? null,
+        homeAddressLine2: profile.homeAddressLine2 ?? null,
+        homeCity: profile.homeCity ?? null,
+        homeProvince: profile.homeProvince ?? null,
+        homePostalCode: profile.homePostalCode ?? null,
+        homeCountry: profile.homeCountry ?? null,
       }}
       department={primaryOverview.department}
       position={primaryOverview.position}
@@ -409,6 +419,7 @@ export default async function EmployeeProfilePage({
       }))}
       canInvite={canInvite}
       canWritePhoto={canWritePhoto}
+      canEditBasicDetails={canEditBasicDetails}
       canResendInvitation={canResendInvitation}
       priorInvitation={priorInvitation}
       payroll={{

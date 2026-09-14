@@ -13,7 +13,9 @@
 // structure is display + routing input, never authorization.
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+// useRouter intentionally NOT imported — router.refresh() causes the
+// RSC re-render crash documented in handleResend/handleRevoke/InviteModal
+// onSuccess handlers. The client-side refresh() (GET-based) suffices.
 import { ROLE_LABELS, TENANT_ASSIGNABLE_ROLES } from "@/lib/tenant-admin/constants";
 import type { OrgNode } from "@/lib/tenant-admin/org-structure";
 import OrganizationHierarchyTab from "./OrganizationHierarchyTab";
@@ -104,7 +106,6 @@ export function TenantUsersClient({
   const [showInvite, setShowInvite] = useState(false);
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
-  const router = useRouter();
 
   async function refresh() {
     const res = await fetch(`/api/clubs/${clubId}/tenant-users`);
@@ -141,7 +142,15 @@ export function TenantUsersClient({
     }
     const email = j.invitation?.email ?? "the invitee";
     setBanner(deliveryBanner(email, j.delivery, "resent"));
-    startTransition(() => { void refresh(); router.refresh(); });
+    // Post-onboarding-admin hotfix (2026-09-13): router.refresh() triggers
+    // an RSC re-render of `page.tsx` that crashes with `Cannot read
+    // properties of undefined (reading 'length')` in a minified server
+    // helper — same failure mode as saveProfileField (v388). Keep the
+    // client-side refresh() (rehydrates via GET /api/clubs/.../tenant-users)
+    // but drop the router.refresh() until the underlying RSC helper is
+    // fixed. The list still updates because refresh() replaces our local
+    // state from the same tenant-users API the server component uses.
+    startTransition(() => { void refresh(); });
   }
 
   async function handleRevoke(invitationId: string) {
@@ -154,7 +163,8 @@ export function TenantUsersClient({
       return;
     }
     setBanner({ tone: "success", text: "Invitation revoked." });
-    startTransition(() => { void refresh(); router.refresh(); });
+    // Same rationale as handleResend — skip router.refresh().
+    startTransition(() => { void refresh(); });
   }
 
   async function saveProfileField(
@@ -265,7 +275,15 @@ export function TenantUsersClient({
           onSuccess={(email, delivery, existingUser) => {
             setShowInvite(false);
             setBanner(deliveryBanner(email, delivery, "sent", existingUser));
-            startTransition(() => { void refresh(); router.refresh(); });
+            // Post-onboarding-admin hotfix (2026-09-13): Marc's founder
+            // hit a full-page crash right here — `router.refresh()`
+            // re-runs the server component, which crashes in a minified
+            // helper before rendering (same failure mode as
+            // saveProfileField in v388). Skip the RSC refresh; the
+            // client-side GET-based `refresh()` still repopulates the
+            // People + Invitations tabs so the newly linked user or
+            // pending invitation appears without a full navigation.
+            startTransition(() => { void refresh(); });
           }}
         />
       ) : null}

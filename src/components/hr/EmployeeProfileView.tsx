@@ -30,6 +30,7 @@ import Link from "next/link";
 import { IconChevronLeft } from "@/components/spectre/icons";
 import InviteToOnboardingButton from "@/app/app/admin/people/employees/[id]/InviteToOnboardingButton";
 import AdminPhotoEditor from "@/components/hr/AdminPhotoEditor";
+import EditBasicDetailsPanel from "@/components/hr/EditBasicDetailsPanel";
 import ResendOnboardingButton, {
   type PriorInvitation,
 } from "@/app/app/admin/people/employees/[id]/ResendOnboardingButton";
@@ -71,6 +72,15 @@ interface Props {
     payrollReadiness: string;
     memberId: string | null;
     profilePhotoDocumentId: string | null;
+    // Post-onboarding-admin hotfix (2026-09-13) §14 — home address is
+    // legitimate basic HR data. Rendered on Overview under Basic Details;
+    // gated by `hr:employee:read` at the page level (§15).
+    homeAddressLine1: string | null;
+    homeAddressLine2: string | null;
+    homeCity: string | null;
+    homeProvince: string | null;
+    homePostalCode: string | null;
+    homeCountry: string | null;
   };
   department: { id: string; name: string; code: string | null } | null;
   position: { id: string; name: string; code: string | null } | null;
@@ -106,6 +116,9 @@ interface Props {
   }>;
   canInvite: boolean;
   canWritePhoto?: boolean;
+  /** Post-onboarding-admin hotfix (2026-09-13) §16-19 — operator holds
+   *  `hr:employee:write`, enabling the Edit affordance on Basic Details. */
+  canEditBasicDetails?: boolean;
   /** True when the operator holds `hr:onboarding:invite` AND the
    *  session is still resumable (DRAFT / INVITED / IN_PROGRESS)
    *  AND at least one prior invitation exists for this employee. */
@@ -211,7 +224,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -302,8 +315,27 @@ export default function EmployeeProfileView(props: Props) {
             {/* LEFT column: BASIC DETAILS + EMPLOYMENT + optional CLUB MEMBER */}
             <div className="spectre-person-col-left">
               <div className="spectre-person-section" data-testid="employee-basic-details">
-                <div className="spectre-person-section-head">
+                <div className="spectre-person-section-head" style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
                   <h3 className="spectre-person-eyebrow">Basic Details</h3>
+                  {canEditBasicDetails && (
+                    <EditBasicDetailsPanel
+                      employeeId={employee.id}
+                      initial={{
+                        firstName: employee.firstName,
+                        middleName: employee.middleName,
+                        lastName: employee.lastName,
+                        preferredName: employee.preferredName,
+                        personalEmail: employee.personalEmail,
+                        mobilePhone: employee.mobilePhone,
+                        homeAddressLine1: employee.homeAddressLine1,
+                        homeAddressLine2: employee.homeAddressLine2,
+                        homeCity: employee.homeCity,
+                        homeProvince: employee.homeProvince,
+                        homePostalCode: employee.homePostalCode,
+                        homeCountry: employee.homeCountry,
+                      }}
+                    />
+                  )}
                 </div>
                 <dl className="spectre-person-grid">
                   <PersonRow label="Legal first name" value={employee.firstName} />
@@ -313,6 +345,14 @@ export default function EmployeeProfileView(props: Props) {
                   <PersonRow label="Personal email" value={employee.personalEmail} kind="email" />
                   <PersonRow label="Mobile" value={employee.mobilePhone ?? employee.phone} kind="phone" />
                   {employee.email && <PersonRow label="Work email" value={employee.email} kind="email" />}
+                  <HomeAddressRow
+                    line1={employee.homeAddressLine1 ?? null}
+                    line2={employee.homeAddressLine2 ?? null}
+                    city={employee.homeCity ?? null}
+                    province={employee.homeProvince ?? null}
+                    postalCode={employee.homePostalCode ?? null}
+                    country={employee.homeCountry ?? null}
+                  />
                 </dl>
               </div>
 
@@ -782,6 +822,51 @@ function PersonRow({
           <a href={`tel:${trimmed}`} className="spectre-person-link">{trimmed}</a>
         ) : (
           value ?? "—"
+        )}
+      </dd>
+    </div>
+  );
+}
+
+// Post-onboarding-admin hotfix (2026-09-13) §14 — Home Address on Overview.
+// Renders a clean formatted block. Skips empty lines so a partial address
+// (e.g. no line2) doesn't leave a visible blank gap.
+function HomeAddressRow({
+  line1, line2, city, province, postalCode, country,
+}: {
+  line1: string | null; line2: string | null;
+  city: string | null; province: string | null;
+  postalCode: string | null; country: string | null;
+}) {
+  const hasAny = Boolean(line1 || line2 || city || province || postalCode || country);
+  const cityLine = [city, province, postalCode]
+    .map((s) => (s ?? "").trim())
+    .filter((s) => s.length > 0)
+    .join(
+      // "Calgary, AB  T2T 0Z7" — comma between city/province, two spaces
+      // before postal code. Rebuild carefully in JS since we joined all
+      // three above.
+      ", ",
+    );
+  // The above join produces "Calgary, AB, T2T 0Z7"; rewrite the last
+  // separator to the postal-code-friendly "  " spacing when both province
+  // and postal are present.
+  const cityLineFormatted =
+    city && province && postalCode
+      ? `${city.trim()}, ${province.trim()}  ${postalCode.trim()}`
+      : cityLine;
+  return (
+    <div className="spectre-person-row" data-testid="employee-home-address-row">
+      <dt>Home address</dt>
+      <dd>
+        {hasAny ? (
+          <address className="spectre-person-address" style={{ fontStyle: "normal", whiteSpace: "pre-line" }}>
+            {[line1?.trim(), line2?.trim(), cityLineFormatted, country?.trim()]
+              .filter((s) => (s ?? "").length > 0)
+              .join("\n")}
+          </address>
+        ) : (
+          <span className="spectre-person-not-provided">Not provided</span>
         )}
       </dd>
     </div>

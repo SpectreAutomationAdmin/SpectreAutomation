@@ -1101,6 +1101,15 @@ export async function getEmployee(
     managerEmployeeId: employee.managerEmployeeId,
     profilePhotoDocumentId: employee.profilePhotoDocumentId,
     resumeDocumentId: employee.resumeDocumentId,
+    // Post-onboarding-admin hotfix (2026-09-13) §14 — Home address
+    // is projected on Overview under Basic Details. Gated by the
+    // same `hr:employee:read` this whole projection is gated by.
+    homeAddressLine1: employee.homeAddressLine1,
+    homeAddressLine2: employee.homeAddressLine2,
+    homeCity: employee.homeCity,
+    homeProvince: employee.homeProvince,
+    homePostalCode: employee.homePostalCode,
+    homeCountry: employee.homeCountry,
     // Hotfix §17 (2026-09-13): canonical Position surface for the
     // profile page + admin reads. `orgPositionId` scalar available on
     // every Employee row (nullable). The consumer resolves the name
