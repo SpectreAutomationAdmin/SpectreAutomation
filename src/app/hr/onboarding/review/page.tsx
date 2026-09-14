@@ -36,6 +36,7 @@ import {
 } from "@/lib/hr/employee-self-service";
 import { resolveRequirementStatus } from "@/lib/hr/onboarding-requirements";
 import { getProvincialTd1, TD1_FEDERAL_CURRENT } from "@/lib/hr/td1-forms";
+import { formatEmploymentPositionLabel } from "@/lib/hr/employment-position";
 import { submitOnboardingAction } from "../_hr2b5-actions";
 import PostPayrollShell from "../_post-payroll-shell";
 import ReviewSubmitForm from "./ReviewSubmitForm";
@@ -133,6 +134,10 @@ export default async function ReviewStep() {
         employmentType: true,
         profilePhotoDocumentId: true,
         department: { select: { name: true } },
+        // Onboarding canonical Position hotfix (2026-09-13) — read BOTH
+        // relations. Canonical `orgPosition` wins; legacy `position`
+        // survives only as a pre-migration fallback.
+        orgPosition: { select: { name: true } },
         position: { select: { name: true } },
         manager: { select: { firstName: true, lastName: true, preferredName: true } },
       },
@@ -204,7 +209,7 @@ export default async function ReviewStep() {
             <span className="font-mono">{employee.employeeNumber}</span>
           </Row>
           <Row label="Position" correction={correctionByField.get("positionId")?.employeeStatedValue}>
-            {employee.position?.name ?? "—"}
+            {formatEmploymentPositionLabel(employee)}
           </Row>
           <Row label="Department" correction={correctionByField.get("departmentId")?.employeeStatedValue}>
             {employee.department?.name ?? "—"}

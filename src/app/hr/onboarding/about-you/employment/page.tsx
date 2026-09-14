@@ -22,6 +22,7 @@
 import { redirect } from "next/navigation";
 import { resolveEmployeeOnboardingActor } from "@/lib/hr/employee-actor";
 import { prisma } from "@/lib/prisma";
+import { formatEmploymentPositionLabel } from "@/lib/hr/employment-position";
 import { confirmEmploymentAction } from "../_actions";
 import EmploymentConfirmationForm, {
   type EmploymentField,
@@ -40,6 +41,12 @@ export default async function EmploymentStep() {
       expectedStartDate: true,
       employmentType: true,
       department: { select: { name: true } },
+      // Onboarding canonical Position hotfix (2026-09-13) — read BOTH
+      // relations. The resolver prefers orgPosition (canonical) when
+      // present and falls back to legacy `position` only for pre-migration
+      // records. Never displays a placeholder role name when the Club
+      // has already recorded one.
+      orgPosition: { select: { name: true } },
       position: { select: { name: true } },
       club: { select: { name: true } },
     },
@@ -60,8 +67,11 @@ export default async function EmploymentStep() {
   for (const c of priorCorrections) priorByField.set(c.field, c.employeeStatedValue);
   const hadCorrection = priorCorrections.length > 0;
 
-  const positionLabel = employee.position?.name ?? "your role";
-  const departmentLabel = employee.department?.name ?? "our team";
+  // Canonical Position resolver — see `src/lib/hr/employment-position.ts`.
+  // Returns "Not provided" only when neither orgPosition nor legacy
+  // position exists — never masquerades missing data as a role label.
+  const positionLabel = formatEmploymentPositionLabel(employee);
+  const departmentLabel = employee.department?.name ?? "Not provided";
   const startLabel = employee.expectedStartDate
     ? formatDate(employee.expectedStartDate)
     : null;
