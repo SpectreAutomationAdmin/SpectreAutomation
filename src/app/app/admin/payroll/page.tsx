@@ -32,6 +32,7 @@ import {
 } from "./_adjustment-actions";
 import { attestBatchReviewAction } from "./_review-actions";
 import { calculatePayrollAction, returnToPreparationAction } from "./_calculate-action";
+import { discardPreparedPayrollAction } from "./_discard-action";
 import { submitPayrollAction } from "./_submit-return-actions";
 import { postPayrollAction } from "./_post-action";
 
@@ -110,6 +111,14 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
       calculate={{
         action: calculatePayrollAction,
         canCalculate: canRunPayroll,
+      }}
+      discard={{
+        // Payroll Consolidation (2026-09-14) — canonical Discard Prepared
+        // Payroll action, exposed on Finance → Payroll for the first time.
+        // Same permission (`payroll:run`) + same domain service the v396
+        // process workspace already uses. See docs/payroll/canonical-payroll-ui.md.
+        action: discardPreparedPayrollAction,
+        canDiscard: canRunPayroll,
       }}
       returnToPrep={{
         action: returnToPreparationAction,

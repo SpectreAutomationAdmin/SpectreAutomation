@@ -120,11 +120,16 @@ export const ADMIN_SECTIONS: NavSection[] = [
       { href: "/app/admin/ops/lessons", label: "Lessons", perm: "lessons:view" },
       { href: "/app/admin/ops/inventory", label: "Inventory", perm: ["inventory:read", "inventory:view"] },
       { href: "/app/admin/ops/assets", label: "Capital Assets", perm: "assets:read" },
-      { href: "/app/admin/ops/payroll", label: "Payroll (legacy)", perm: "payroll:read" },
-      { href: "/app/admin/payroll/setup", label: "Payroll setup", perm: "payroll:read" },
-      { href: "/app/admin/payroll/time", label: "Payroll time", perm: "payroll:timesheets:read" },
-      { href: "/app/admin/payroll/process", label: "Payroll processing", perm: "payroll:read" },
-      { href: "/app/admin/payroll/history", label: "Payroll history", perm: "payroll:read" },
+      // Payroll Consolidation (2026-09-14): the canonical payroll workspace
+      // is Finance → Payroll (`/app/admin/payroll`). The legacy
+      // /app/admin/ops/payroll route (flat 22% tax placeholder on
+      // PayrollRun) has been retired — the URL now server-redirects to
+      // the canonical entry. The canonical /app/admin/payroll/{setup,
+      // time,process,history} subroutes remain reachable via Work Intake
+      // deep-links, back-links, and exception remediation URLs, but are
+      // no longer exposed as top-level Operations nav entries — everything
+      // the founder needs is reachable from Finance → Payroll.
+      // See docs/payroll/canonical-payroll-ui.md.
       { href: "/app/admin/ops/floor-plans", label: "Floor Plans", perm: "hospitality:floor:view" },
     ],
   },

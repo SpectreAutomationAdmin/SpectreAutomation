@@ -140,10 +140,16 @@ export async function reindexClub(clubId: string) {
     });
   }
   for (const e of employees) {
+    // Payroll Consolidation (2026-09-14) — Employee search results now
+    // land on the canonical HR profile page. The previous URL pointed at
+    // `/app/admin/ops/payroll` (the retired legacy workspace) — every
+    // Employee row was silently misdirecting the founder into the old UI.
+    // The canonical HR profile is `/app/admin/people/employees/[id]` and
+    // is gated by `hr:employee:read`.
     await indexEntity({
       clubId, entityType: "EMPLOYEE", entityId: e.id,
       title: `${e.firstName} ${e.lastName}`, subtitle: e.employeeNumber,
-      url: `/app/admin/ops/payroll`, permissionKey: "payroll:read",
+      url: `/app/admin/people/employees/${e.id}`, permissionKey: "hr:employee:read",
     });
   }
   for (const d of documents) {

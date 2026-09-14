@@ -183,6 +183,7 @@ export interface PayrollAdminOverviewProps {
   recurring?: RecurringControls | null;
   review?: ReviewControls | null;
   calculate?: CalculateControls | null;
+  discard?: DiscardControls | null;
   returnToPrep?: ReturnControls | null;
   submit?: SubmitControls | null;
   post?: PostControls | null;
@@ -191,7 +192,7 @@ export interface PayrollAdminOverviewProps {
 export default function PayrollAdminOverview({
   view, clubId = "", currentUserId = null,
   prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
-  calculate = null, returnToPrep = null, submit = null, post = null,
+  calculate = null, discard = null, returnToPrep = null, submit = null, post = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
@@ -200,7 +201,7 @@ export default function PayrollAdminOverview({
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
         <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} returnToPrep={returnToPrep} />
         <div className="space-y-2">
-          <ActionsCard view={view} calculate={calculate} returnToPrep={returnToPrep} submit={submit} post={post} clubId={clubId} currentUserId={currentUserId} />
+          <ActionsCard view={view} calculate={calculate} discard={discard} returnToPrep={returnToPrep} submit={submit} post={post} clubId={clubId} currentUserId={currentUserId} />
           <ChecklistCard view={view} />
           <PayPeriodInfoCard view={view} />
         </div>
@@ -462,6 +463,13 @@ export interface ReviewControls {
 export interface CalculateControls {
   action: (formData: FormData) => Promise<void>;
   canCalculate: boolean;
+}
+// Payroll Consolidation (2026-09-14) — canonical Discard Prepared Payroll
+// action, exposed on Finance → Payroll (previously only available on the
+// process workspace subroute). See docs/payroll/canonical-payroll-ui.md.
+export interface DiscardControls {
+  action: (formData: FormData) => Promise<void>;
+  canDiscard: boolean;
 }
 export interface ReturnControls {
   action: (formData: FormData) => Promise<void>;
@@ -1968,9 +1976,10 @@ export interface SubmitControls {
   canSubmit: boolean;
 }
 
-function ActionsCard({ view, calculate, returnToPrep, submit, post, clubId, currentUserId }: {
+function ActionsCard({ view, calculate, discard, returnToPrep, submit, post, clubId, currentUserId }: {
   view: PayrollOverviewViewModel;
   calculate: CalculateControls | null;
+  discard: DiscardControls | null;
   returnToPrep: ReturnControls | null;
   submit: SubmitControls | null;
   post: PostControls | null;
@@ -2095,8 +2104,128 @@ function ActionsCard({ view, calculate, returnToPrep, submit, post, clubId, curr
           }
           return <CalculateDisabledButton readiness={readiness} batchStatus={batchStatus} />;
         })()}
+
+        {/* Payroll Consolidation (2026-09-14) — Discard Prepared Payroll.
+            Secondary/destructive treatment per §5: never comparable in
+            prominence to Calculate Payroll. PREPARED-only; the server
+            service (`discardPreparedPayrollBatch`) is authoritative and
+            hard-fails any other state even if this UI ever misfires. */}
+        {batchStatus === "PREPARED" && discard?.canDiscard && view.batch && view.payPeriod && (
+          <DiscardPreparedPayrollAction
+            action={discard.action}
+            payPeriodId={view.payPeriod.id}
+            payGroupId={view.payGroup?.id ?? ""}
+            batchId={view.batch.id}
+            batchStatus={batchStatus}
+            payPeriodLabel={periodLongLabel(view.payPeriod)}
+            employeeCount={view.employeeTable.unfilteredTotal ?? 0}
+          />
+        )}
       </div>
     </section>
+  );
+}
+
+// Payroll Consolidation (2026-09-14) — Discard Prepared Payroll button +
+// confirmation dialog. Mirrors the v396 process-workspace dialog copy
+// verbatim so the founder-visible confirmation is identical wherever
+// Discard is invoked from. Both surfaces post to the SAME canonical
+// server action + domain service (`discardPreparedPayrollBatch`).
+function DiscardPreparedPayrollAction({
+  action, payPeriodId, payGroupId, batchId, batchStatus, payPeriodLabel, employeeCount,
+}: {
+  action: (formData: FormData) => Promise<void>;
+  payPeriodId: string;
+  payGroupId: string;
+  batchId: string;
+  batchStatus: string;
+  payPeriodLabel: string;
+  employeeCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-1.5 text-xs text-red-700 hover:underline"
+        data-testid="payroll-admin-actions-discard-prepared"
+      >
+        Discard Prepared Payroll
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="finance-discard-title"
+          data-testid="payroll-admin-discard-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 8, maxWidth: 480, width: "100%",
+            margin: "0 16px", padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+          }}>
+            <h2 id="finance-discard-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Discard prepared payroll?
+            </h2>
+            <p style={{ margin: "12px 0 12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              This payroll has not been submitted or posted. Discarding it will remove this prepared
+              snapshot so payroll can be prepared again using the latest employee, pay-group, time
+              and payroll setup.
+            </p>
+            <dl style={{ margin: "0 0 16px 0", fontSize: 13, color: "#44403c" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Pay period</dt>
+                <dd style={{ margin: 0 }}>{payPeriodLabel}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Employees</dt>
+                <dd style={{ margin: 0 }}>{employeeCount}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <dt style={{ minWidth: 120, color: "#78716c" }}>Status</dt>
+                <dd style={{ margin: 0 }}>{batchStatus}</dd>
+              </div>
+            </dl>
+            <p style={{ margin: "0 0 20px 0", fontSize: 13, color: "#b91c1c", fontWeight: 500 }}>
+              This cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                data-testid="payroll-admin-discard-cancel"
+                style={{
+                  padding: "8px 16px", fontSize: 14, border: "1px solid #d0c9bd",
+                  background: "transparent", borderRadius: 4, cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <form action={action} style={{ display: "inline" }}>
+                <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                <input type="hidden" name="payGroupId" value={payGroupId} />
+                <input type="hidden" name="batchId" value={batchId} />
+                <button
+                  type="submit"
+                  data-testid="payroll-admin-discard-confirm"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "none",
+                    background: "#b91c1c", color: "white", borderRadius: 4, cursor: "pointer",
+                  }}
+                >
+                  Discard Prepared Payroll
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

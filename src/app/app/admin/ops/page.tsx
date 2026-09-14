@@ -53,7 +53,9 @@ export default async function OperationsHubPage() {
         <Card href="/app/admin/ops/inventory" title="Inventory" body="Items, receivings, counts, transfers, and valuation." />
         <Card href="/app/admin/ops/private-events" title="Private Events" body="Inquiries, bookings, deposits, and final billing." />
         <Card href="/app/admin/ops/lessons" title="Lessons" body="Bookings, instructor confirmation, Head Pro approval, and payables." />
-        <Card href="/app/admin/ops/payroll" title="Payroll" body="Employees, timesheets, payroll runs, and remittances." />
+        {/* Payroll Consolidation (2026-09-14): the canonical payroll workspace
+            lives at Finance → Payroll. The old Ops Payroll card has been
+            removed; the /ops/payroll route now redirects to /app/admin/payroll. */}
         <Card href="/app/admin/ops/assets" title="Capital Assets" body="Register, depreciation, and disposal." />
         <Card href="/app/admin/ops/budgets" title="Budgets &amp; Forecasts" body="Annual budgets, variance, and forecasting." />
       </div>
