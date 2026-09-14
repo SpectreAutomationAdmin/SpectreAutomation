@@ -63,9 +63,26 @@ export const TERMINATION_REASONS = [
 // records anchor real accounting entries.
 const ONBOARDING_TERMINAL_STATES = new Set(["SUBMITTED", "APPROVED", "REJECTED"]);
 
+// Post-v389 hotfix (2026-09-13): allocator MUST be MAX-of-numeric-suffix + 1,
+// not count + 1. Count + 1 collides after any PRE_HIRE deletion — e.g. Marc
+// (E-00001) deleted, Chris (E-00002) remains → count=1 → count+1="E-00002"
+// → unique-constraint failure on (clubId, employeeNumber). MAX-based logic
+// is gap-safe. Retry on P2002 (see createEmployee) guards against concurrent
+// creates racing to the same MAX+1.
 async function nextEmployeeNumber(clubId: string): Promise<string> {
-  const count = await prisma.employee.count({ where: { clubId } });
-  return `E-${(count + 1).toString().padStart(5, "0")}`;
+  const rows = await prisma.employee.findMany({
+    where: { clubId, employeeNumber: { startsWith: "E-" } },
+    select: { employeeNumber: true },
+  });
+  let max = 0;
+  for (const r of rows) {
+    const m = /^E-(\d+)$/.exec(r.employeeNumber ?? "");
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return `E-${(max + 1).toString().padStart(5, "0")}`;
 }
 
 async function loadEmployee(principal: Principal, employeeId: string) {
@@ -179,49 +196,80 @@ export async function createEmployee(
     throw new ValidationError([{ path: "compensationType", message: `must be one of ${COMPENSATION_TYPES.join(", ")}` }]);
   }
 
-  const created = await prisma.employee.create({
-    data: {
-      clubId,
-      employeeNumber: input.employeeNumber ?? (await nextEmployeeNumber(clubId)),
-      firstName,
-      lastName,
-      middleName: input.middleName ?? null,
-      preferredName: input.preferredName ?? null,
-      email: input.email ?? null,
-      // HR mobile-hotfix (2026-08-25) — canonical email is the portal
-      // login identifier. Lowercased at every write path for portable
-      // case-insensitive lookup.
-      personalEmail: input.personalEmail ? input.personalEmail.trim().toLowerCase() : null,
-      phone: input.phone ?? null,
-      mobilePhone: input.mobilePhone ?? null,
-      departmentId: input.departmentId ?? null,
-      positionId: input.positionId ?? null,
-      // Organizational Foundation (2026-09-13) — canonical Position FK.
-      orgPositionId: input.orgPositionId ?? null,
-      hireDate: toOptionalDate(input.hireDate ?? null, "hireDate"),
-      dateOfBirth: toOptionalDateOfBirth(input.dateOfBirth ?? null, "dateOfBirth"),
-      terminationReason: input.terminationReason
-        ? ((TERMINATION_REASONS as readonly string[]).includes(input.terminationReason)
-            ? input.terminationReason
-            : (() => { throw new ValidationError([{ path: "terminationReason", message: `must be one of ${TERMINATION_REASONS.join(", ")}` }]); })())
-        : null,
-      expectedStartDate: toOptionalDate(input.expectedStartDate ?? null, "expectedStartDate"),
-      employmentType,
-      employeeLifecycle: lifecycle,
-      compensationType: compType,
-      payRate: input.payRate ?? 0,
-      // HR mobile-hotfix (2026-08-30) §1 — pass-through home address
-      // fields from the admin AddEmployeeForm. All optional; null
-      // stays null so the onboarding Address step sees blank inputs.
-      homeAddressLine1: input.homeAddressLine1 ?? null,
-      homeAddressLine2: input.homeAddressLine2 ?? null,
-      homeCity: input.homeCity ?? null,
-      homeProvince: input.homeProvince ? input.homeProvince.toUpperCase() : null,
-      homePostalCode: input.homePostalCode ?? null,
-      homeCountry: input.homeCountry ? input.homeCountry.toUpperCase() : null,
-      createdByUserId: principal.id,
-    },
+  const buildData = (employeeNumber: string) => ({
+    clubId,
+    employeeNumber,
+    firstName,
+    lastName,
+    middleName: input.middleName ?? null,
+    preferredName: input.preferredName ?? null,
+    email: input.email ?? null,
+    // HR mobile-hotfix (2026-08-25) — canonical email is the portal
+    // login identifier. Lowercased at every write path for portable
+    // case-insensitive lookup.
+    personalEmail: input.personalEmail ? input.personalEmail.trim().toLowerCase() : null,
+    phone: input.phone ?? null,
+    mobilePhone: input.mobilePhone ?? null,
+    departmentId: input.departmentId ?? null,
+    positionId: input.positionId ?? null,
+    // Organizational Foundation (2026-09-13) — canonical Position FK.
+    orgPositionId: input.orgPositionId ?? null,
+    hireDate: toOptionalDate(input.hireDate ?? null, "hireDate"),
+    dateOfBirth: toOptionalDateOfBirth(input.dateOfBirth ?? null, "dateOfBirth"),
+    terminationReason: input.terminationReason
+      ? ((TERMINATION_REASONS as readonly string[]).includes(input.terminationReason)
+          ? input.terminationReason
+          : (() => { throw new ValidationError([{ path: "terminationReason", message: `must be one of ${TERMINATION_REASONS.join(", ")}` }]); })())
+      : null,
+    expectedStartDate: toOptionalDate(input.expectedStartDate ?? null, "expectedStartDate"),
+    employmentType,
+    employeeLifecycle: lifecycle,
+    compensationType: compType,
+    payRate: input.payRate ?? 0,
+    // HR mobile-hotfix (2026-08-30) §1 — pass-through home address
+    // fields from the admin AddEmployeeForm. All optional; null
+    // stays null so the onboarding Address step sees blank inputs.
+    homeAddressLine1: input.homeAddressLine1 ?? null,
+    homeAddressLine2: input.homeAddressLine2 ?? null,
+    homeCity: input.homeCity ?? null,
+    homeProvince: input.homeProvince ? input.homeProvince.toUpperCase() : null,
+    homePostalCode: input.homePostalCode ?? null,
+    homeCountry: input.homeCountry ? input.homeCountry.toUpperCase() : null,
+    createdByUserId: principal.id,
   });
+
+  // Post-v389 hotfix (2026-09-13): retry on P2002 for (clubId, employeeNumber)
+  // — a concurrent Add Employee could observe the same MAX just before us and
+  // race us to the same value. Try up to 5 fresh allocations; the DB unique
+  // constraint is authoritative. If a caller-supplied number collides we do
+  // NOT retry — that's a caller bug.
+  const explicitNumber = input.employeeNumber ?? null;
+  let created;
+  const MAX_ATTEMPTS = explicitNumber ? 1 : 5;
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const employeeNumber = explicitNumber ?? (await nextEmployeeNumber(clubId));
+    try {
+      created = await prisma.employee.create({ data: buildData(employeeNumber) });
+      break;
+    } catch (err) {
+      lastError = err;
+      const code = (err as { code?: string })?.code;
+      const target = (err as { meta?: { target?: unknown } })?.meta?.target;
+      const targetsEmployeeNumber = Array.isArray(target)
+        ? target.includes("employeeNumber")
+        : typeof target === "string" && target.includes("employeeNumber");
+      if (code === "P2002" && targetsEmployeeNumber && !explicitNumber) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (!created) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Employee create failed after retries");
+  }
 
   await audit(principal, {
     action: "hr.employee.write.update",
@@ -644,10 +692,11 @@ export async function deleteEmployee(
     });
     // Hotfix (2026-09-13): onboarding state transitions were missing
     // from the cleanup — they FK-RESTRICT the session delete when the
-    // employee has advanced through even one step.
+    // employee has advanced through even one step. Post-v389 correction:
+    // this model has a direct `employeeId` column (not `session.employeeId`).
     try {
       await (tx as any).employeeOnboardingStateTransition.deleteMany({
-        where: { session: { employeeId } },
+        where: { employeeId },
       });
     } catch { /* schema may not carry this table */ }
     await tx.employeeOnboardingInvitation.deleteMany({ where: { employeeId } });
@@ -708,7 +757,9 @@ export async function deleteEmployee(
       "trainingProgress",
       "trainingCompletion",
       "trainingAttempt",
-      "employeePortalQuickLink",
+      // EmployeePortalQuickLink intentionally OMITTED: it is a club-scoped
+      // resource with no `employeeId` FK. Deleting an Employee does not
+      // remove the club-wide quick-link catalogue.
     ] as const) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const child_ = (tx as any)[child];

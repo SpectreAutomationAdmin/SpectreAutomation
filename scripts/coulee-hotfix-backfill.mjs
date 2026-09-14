@@ -33,32 +33,60 @@ async function main() {
     where: { clubId: COULEE, code: "CONTROLLER" }, select: { id: true },
   });
 
+  // Post-v389 provenance hotfix (2026-09-13): first-user Employee data must
+  // come from the same-human User row, NEVER from a hardcoded string or a
+  // similarly-named historical Employee. Chris's Employee.personalEmail
+  // now derives from Chris's User.email (`cturcato@spectreautomation.com`),
+  // which is the founder-authorised identity for the first-user Employee.
+  const chrisUser = await p.user.findUniqueOrThrow({
+    where: { id: CHRIS_USER },
+    select: { email: true, name: true },
+  });
+  const derivedPersonalEmail = chrisUser.email?.trim().toLowerCase() ?? null;
+
   let chrisEmp;
   if (chrisProfile.employeeId) {
     chrisEmp = await p.employee.findUniqueOrThrow({
       where: { id: chrisProfile.employeeId },
-      select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true },
+      select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true, personalEmail: true },
     });
     console.log(`Chris Employee already linked: ${chrisEmp.id}`);
   } else {
-    // Find existing Chris Employee by personalEmail or firstName+lastName.
+    // Find existing Chris Employee by firstName+lastName within THIS
+    // tenant. We never match by email against unrelated historical rows.
     chrisEmp = await p.employee.findFirst({
       where: {
         clubId: COULEE,
         firstName: "Chris", lastName: "Turcato",
       },
-      select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true },
+      select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true, personalEmail: true },
     });
     if (!chrisEmp) {
-      // Create a clean canonical first-user Employee.
-      const count = await p.employee.count({ where: { clubId: COULEE } });
-      const employeeNumber = `E-${(count + 1).toString().padStart(5, "0")}`;
+      // Create a clean canonical first-user Employee. Allocator is
+      // MAX-of-numeric-suffix + 1 — matches src/lib/hr/employees.ts
+      // nextEmployeeNumber. Gap-safe after any prior deletion.
+      const rows = await p.employee.findMany({
+        where: { clubId: COULEE, employeeNumber: { startsWith: "E-" } },
+        select: { employeeNumber: true },
+      });
+      let max = 0;
+      for (const r of rows) {
+        const m = /^E-(\d+)$/.exec(r.employeeNumber ?? "");
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (Number.isFinite(n) && n > max) max = n;
+        }
+      }
+      const employeeNumber = `E-${(max + 1).toString().padStart(5, "0")}`;
       chrisEmp = await p.employee.create({
         data: {
           clubId: COULEE,
           employeeNumber,
           firstName: "Chris", lastName: "Turcato",
-          personalEmail: "c.s.turcato@gmail.com",
+          // Derived from the same-human User row — never a hardcoded
+          // literal. If User.email is missing, personalEmail stays null
+          // (per founder rule: "if a value is unknown, leave it null").
+          personalEmail: derivedPersonalEmail,
           orgPositionId: controllerPos.id,
           departmentId: admin.id,
           employmentType: "FULL_TIME",
@@ -68,9 +96,9 @@ async function main() {
           compensationType: "SALARY",
           status: "ACTIVE",
         },
-        select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true },
+        select: { id: true, orgPositionId: true, departmentId: true, employeeLifecycle: true, personalEmail: true },
       });
-      console.log(`Chris Employee created: ${chrisEmp.id}`);
+      console.log(`Chris Employee created: ${chrisEmp.id} (personalEmail=${derivedPersonalEmail ?? "(null)"})`);
     } else {
       console.log(`Chris Employee found (unlinked): ${chrisEmp.id}`);
     }
@@ -80,6 +108,25 @@ async function main() {
       data: { employeeId: chrisEmp.id },
     });
     console.log("Chris UserClubProfile.employeeId linked.");
+  }
+
+  // Post-v389 provenance hotfix (2026-09-13): correct any prior Chris
+  // Employee row whose personalEmail was set to the hardcoded
+  // "c.s.turcato@gmail.com" string. The authorised value is the same-human
+  // User.email (`cturcato@spectreautomation.com`). Only rewrites if
+  // (a) the current value differs, AND (b) a derivedPersonalEmail exists.
+  if (
+    derivedPersonalEmail &&
+    chrisEmp.personalEmail !== derivedPersonalEmail
+  ) {
+    await p.employee.update({
+      where: { id: chrisEmp.id },
+      data: { personalEmail: derivedPersonalEmail },
+    });
+    console.log(
+      `Chris Employee.personalEmail corrected: ${chrisEmp.personalEmail ?? "(null)"} → ${derivedPersonalEmail}`,
+    );
+    chrisEmp.personalEmail = derivedPersonalEmail;
   }
 
   // 2. Backfill Chris's canonical position/department if the row exists

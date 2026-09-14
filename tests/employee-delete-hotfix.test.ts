@@ -70,13 +70,19 @@ describe("deleteEmployee hotfix · pre-hire with dependencies", () => {
     });
     for (let i = 0; i < 3; i++) {
       await db().employeeOnboardingAcknowledgement.create({
-        data: { clubId: club.id, employeeId: emp.id, kind: `TEST_ACK_${i}`, acknowledgedAt: new Date() },
+        data: {
+          clubId: club.id, employeeId: emp.id, sessionId: session.id,
+          kind: `TEST_ACK_${i}`, acknowledgedAt: new Date(),
+        },
       }).catch(() => {});
     }
     // Best-effort — schema variants may not have transitions in dev.
     try {
       await db().employeeOnboardingStateTransition.create({
-        data: { sessionId: session.id, fromState: "INIT", toState: "IN_PROGRESS", occurredAt: new Date() },
+        data: {
+          clubId: club.id, employeeId: emp.id, sessionId: session.id,
+          fromState: "INIT", toState: "IN_PROGRESS", actorSource: "SYSTEM",
+        },
       });
     } catch { /* schema variant */ }
     await deleteEmployee(adminP, emp.id);

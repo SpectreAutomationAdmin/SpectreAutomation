@@ -24,6 +24,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { isAppError, ValidationError } from "@/lib/errors";
 import {
   createEmployee,
+  deleteEmployee,
   linkEmployeeToMember,
   setManager,
   setResume,
@@ -307,6 +308,26 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ employeeId: employee.id }, { status: 201 });
   } catch (err) {
+    // Post-v389 hotfix (2026-09-13): atomicity — if the Employee row was
+    // written before a later step (setManager / openEmploymentPeriod /
+    // changeCompensation / createSession / resume upload) failed, roll
+    // back the partial graph so the founder can retry cleanly without
+    // manual DB cleanup. §21 requires: either the create succeeds
+    // completely or no incomplete Employee is committed.
+    if (createdEmployeeId) {
+      try {
+        await deleteEmployee(principal, createdEmployeeId, {
+          reason: "atomic-rollback: post-create step failed",
+        });
+      } catch (rollbackErr) {
+        // eslint-disable-next-line no-console
+        console.error("[people.employees.create] rollback failed", {
+          employeeId: createdEmployeeId,
+          rollbackErr: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      }
+    }
+
     if (err instanceof ValidationError) {
       return NextResponse.json(
         { error: err.safeMessage, issues: err.issues },
@@ -316,7 +337,35 @@ export async function POST(req: NextRequest) {
     if (isAppError(err)) {
       return NextResponse.json({ error: err.safeMessage }, { status: err.httpStatus });
     }
-    // Unexpected — do not leak internal detail.
-    return NextResponse.json({ error: "Server error", employeeId: createdEmployeeId }, { status: 500 });
+    // Post-v389 hotfix (2026-09-13): the previous generic "Server error"
+    // hid the (clubId, employeeNumber) unique-constraint collision that
+    // was the Marc-post-delete Add Employee root cause. Log the raw error
+    // server-side; surface a specific-but-safe message.
+    const raw = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string })?.code;
+    // eslint-disable-next-line no-console
+    console.error("[people.employees.create] internal error", {
+      firstName, lastName, personalEmail, code, raw: raw.slice(0, 500),
+    });
+    if (code === "P2002" || /Unique constraint failed/i.test(raw)) {
+      const target = (err as { meta?: { target?: unknown } })?.meta?.target;
+      const targetStr = Array.isArray(target) ? target.join(", ") : String(target ?? "");
+      if (targetStr.includes("employeeNumber")) {
+        return NextResponse.json({
+          error: "Add Employee failed — employee number collision. Please retry; if this recurs, report it.",
+        }, { status: 409 });
+      }
+      return NextResponse.json({
+        error: `Add Employee failed — duplicate value detected${targetStr ? ` on ${targetStr}` : ""}.`,
+      }, { status: 409 });
+    }
+    if (/foreign key constraint/i.test(raw)) {
+      return NextResponse.json({
+        error: "Add Employee failed — referenced Position, Department, or manager could not be found.",
+      }, { status: 422 });
+    }
+    return NextResponse.json({
+      error: "Server error while creating employee. Please try again; if this recurs, report it.",
+    }, { status: 500 });
   }
 }
