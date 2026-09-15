@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
+import { headers } from "next/headers";
 import { Source_Serif_4, Inter } from "next/font/google";
 import "./globals.css";
 import { getActiveBranding } from "@/lib/branding";
@@ -110,18 +111,36 @@ const THEME_BOOTSTRAP_JS = `
   })();
 `;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+// v-slice-1-followup-3 (2026-09-15) — CSP nonce is now applied to the
+// two inline scripts this layout emits (theme bootstrap + SW register).
+//
+// Root cause of the Payroll Submit-for-Approval UX blocker:
+//   `src/middleware.ts` sets a per-request Content-Security-Policy of
+//   `script-src 'self' 'nonce-<n>'`. Neither inline script here was
+//   receiving the nonce, so both were rejected by CSP in the browser.
+//   That prevented React hydration from completing, which in turn
+//   prevented Next.js 14 App Router `<form action={serverAction}>`
+//   from binding — clicks appeared to do nothing because the client
+//   had no handler to intercept them.
+//
+// The nonce is forwarded on every request via `x-nonce` (see
+// `middleware.ts`), so RootLayout reads it via `headers()` and
+// applies it to both `<script>` tags. RootLayout is now `async` for
+// the same reason `generateMetadata` above is `async`.
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const nonce = headers().get("x-nonce") ?? undefined;
   return (
     <html lang="en" className={`${sourceSerif.variable} ${inter.variable}`}>
       <head>
         <script
+          nonce={nonce}
           // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_JS }}
         />
       </head>
       <body>
         {children}
-        <Script id="sw-register" strategy="afterInteractive">
+        <Script id="sw-register" strategy="afterInteractive" nonce={nonce}>
           {/*
             Sprint 1 acceptance correction — service worker is
             registered in PRODUCTION only.

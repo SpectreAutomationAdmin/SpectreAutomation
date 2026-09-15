@@ -193,16 +193,37 @@ export interface PayrollAdminOverviewProps {
   returnToPrep?: ReturnControls | null;
   submit?: SubmitControls | null;
   post?: PostControls | null;
+  // v-slice-1-followup-3 (2026-09-15) §9 — founder-readable banner
+  // surfaced by the Submit / Return / Discard server actions via
+  // `?err=<message>` or `?ok=<message>` query params. Rendered at the
+  // top of the overview so failures are impossible to miss.
+  actionBanner?: { tone: "error" | "success"; text: string } | null;
 }
 
 export default function PayrollAdminOverview({
   view, clubId = "", currentUserId = null,
   prepare = null, freeze = null, adjustments = null, recurring = null, review = null,
   calculate = null, discard = null, returnToPrep = null, submit = null, post = null,
+  actionBanner = null,
 }: PayrollAdminOverviewProps) {
   return (
     <div className="w-full" data-testid="payroll-admin-surface">
       <Header view={view} prepare={prepare} />
+      {actionBanner ? (
+        <div className="px-8 mt-2">
+          <div
+            role={actionBanner.tone === "error" ? "alert" : "status"}
+            data-testid={actionBanner.tone === "error" ? "payroll-admin-error-banner" : "payroll-admin-success-banner"}
+            className={
+              actionBanner.tone === "error"
+                ? "rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+                : "rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+            }
+          >
+            {actionBanner.text}
+          </div>
+        </div>
+      ) : null}
       <KpiStrip view={view} />
       <div className="px-8 mt-1 grid grid-cols-[minmax(0,1fr)_320px] gap-3">
         <Workspace view={view} prepare={prepare} freeze={freeze} adjustments={adjustments} recurring={recurring} review={review} returnToPrep={returnToPrep} />

@@ -50,6 +50,10 @@ interface PageProps {
     page?: string;
     pageSize?: string;
     tab?: string;
+    // v-slice-1-followup-3 (2026-09-15) §9 — founder-readable
+    // banner for Submit / Return / Discard failures + successes.
+    err?: string;
+    ok?: string;
   };
 }
 
@@ -132,6 +136,13 @@ export default async function PayrollAdminOverviewPage({ searchParams }: PagePro
         action: postPayrollAction,
         canPost: hasPermission(principal, clubId, "payroll:post"),
       }}
+      actionBanner={
+        searchParams?.err
+          ? { tone: "error", text: searchParams.err }
+          : searchParams?.ok
+          ? { tone: "success", text: searchParams.ok }
+          : null
+      }
     />
   );
 }
