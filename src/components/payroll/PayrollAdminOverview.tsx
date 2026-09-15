@@ -2125,11 +2125,14 @@ function ActionsCard({ view, calculate, discard, returnToPrep, submit, post, clu
         })()}
 
         {/* Payroll Consolidation (2026-09-14) — Discard Prepared Payroll.
-            Secondary/destructive treatment per §5: never comparable in
-            prominence to Calculate Payroll. PREPARED-only; the server
-            service (`discardPreparedPayrollBatch`) is authoritative and
-            hard-fails any other state even if this UI ever misfires. */}
-        {batchStatus === "PREPARED" && discard?.canDiscard && view.batch && view.payPeriod && (
+            Secondary/destructive treatment: never comparable in prominence
+            to Calculate Payroll. Widened 2026-09-15 (v399 Slice-1 followup
+            #2 §5) to also cover DRAFT batches — a DRAFT batch is a Prepare
+            whose blockers left it uncalculatable, so the same Discard →
+            re-Prepare recovery path applies. The server service
+            (`discardPreparedPayrollBatch`) is authoritative and hard-fails
+            any state outside {DRAFT, PREPARED}. */}
+        {(batchStatus === "PREPARED" || batchStatus === "DRAFT") && discard?.canDiscard && view.batch && view.payPeriod && (
           <DiscardPreparedPayrollAction
             action={discard.action}
             payPeriodId={view.payPeriod.id}

@@ -29,6 +29,11 @@ export const dynamic = "force-dynamic";
 const ALLOWED_FIELDS = new Set<string>([
   "firstName", "middleName", "lastName", "preferredName",
   "email", "personalEmail", "phone", "mobilePhone",
+  // v399 Slice-1 followup #2 (2026-09-15) §2 — DOB is now admin-editable
+  // via the Basic Details panel. The canonical `updateEmployee` service
+  // has always accepted this field; adding it to the PATCH allow-list
+  // wires the client editor through.
+  "dateOfBirth",
   "homeAddressLine1", "homeAddressLine2", "homeCity",
   "homeProvince", "homePostalCode", "homeCountry",
   "departmentId", "positionId",
@@ -70,6 +75,9 @@ export async function PATCH(
       personalEmail: updated.personalEmail ?? null,
       phone: updated.phone ?? null,
       mobilePhone: updated.mobilePhone ?? null,
+      // §2 — echo DOB back as an ISO string so the client can rerender
+      // the row without a full page reload.
+      dateOfBirth: updated.dateOfBirth ? updated.dateOfBirth.toISOString() : null,
       homeAddressLine1: updated.homeAddressLine1 ?? null,
       homeAddressLine2: updated.homeAddressLine2 ?? null,
       homeCity: updated.homeCity ?? null,

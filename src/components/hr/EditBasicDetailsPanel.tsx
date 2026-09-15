@@ -18,12 +18,31 @@ interface BasicDetailsPayload {
   preferredName: string | null;
   personalEmail: string | null;
   mobilePhone: string | null;
+  // v399 Slice-1 followup #2 (2026-09-15) §2 — DOB is a civil date.
+  // Wire format is the same ISO string used elsewhere on the profile.
+  // The form itself edits YYYY-MM-DD; the wire value is normalized on
+  // save to the same UTC-midnight civil-date form onboarding writes.
+  dateOfBirth: string | null;
   homeAddressLine1: string | null;
   homeAddressLine2: string | null;
   homeCity: string | null;
   homeProvince: string | null;
   homePostalCode: string | null;
   homeCountry: string | null;
+}
+
+// Convert an ISO string (Employee.dateOfBirth serialized as
+// 1993-09-04T00:00:00.000Z) into a YYYY-MM-DD value for the `<input
+// type="date">`. Reads UTC components so a civil-date DOB never
+// appears one day off for viewers west of UTC.
+function isoToInputDate(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export default function EditBasicDetailsPanel({
@@ -34,7 +53,13 @@ export default function EditBasicDetailsPanel({
   initial: BasicDetailsPayload;
 }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState<BasicDetailsPayload>(initial);
+  // DOB comes in from the server as an ISO string; the input expects
+  // YYYY-MM-DD. Normalize at construction and on cancel-reset.
+  const normalized: BasicDetailsPayload = {
+    ...initial,
+    dateOfBirth: initial.dateOfBirth ? isoToInputDate(initial.dateOfBirth) : null,
+  };
+  const [form, setForm] = useState<BasicDetailsPayload>(normalized);
   const [pending, startTransition] = useTransition();
   const [banner, setBanner] = useState<{ tone: "success" | "error"; text: string } | null>(null);
 
@@ -56,6 +81,8 @@ export default function EditBasicDetailsPanel({
           preferredName: nullIfEmpty(form.preferredName),
           personalEmail: nullIfEmpty(form.personalEmail),
           mobilePhone: nullIfEmpty(form.mobilePhone),
+          // §2 — DOB flows as YYYY-MM-DD or null; the service normalizes.
+          dateOfBirth: nullIfEmpty(form.dateOfBirth),
           homeAddressLine1: nullIfEmpty(form.homeAddressLine1),
           homeAddressLine2: nullIfEmpty(form.homeAddressLine2),
           homeCity: nullIfEmpty(form.homeCity),
@@ -117,6 +144,9 @@ export default function EditBasicDetailsPanel({
         <Field label="Preferred name" value={form.preferredName ?? ""} onChange={(v) => update("preferredName", v)} testId="edit-preferredName" />
         <Field label="Personal email" value={form.personalEmail ?? ""} onChange={(v) => update("personalEmail", v)} type="email" testId="edit-personalEmail" />
         <Field label="Mobile phone" value={form.mobilePhone ?? ""} onChange={(v) => update("mobilePhone", v)} type="tel" testId="edit-mobilePhone" />
+        {/* §2 — canonical DOB. Input type=date returns YYYY-MM-DD which
+            the update service normalizes to UTC-midnight civil date. */}
+        <Field label="Date of birth" value={form.dateOfBirth ?? ""} onChange={(v) => update("dateOfBirth", v)} type="date" testId="edit-dateOfBirth" />
       </div>
       <h4 style={{ marginTop: 16, marginBottom: 8, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5, color: "#6b6357" }}>
         Home address
@@ -148,7 +178,7 @@ export default function EditBasicDetailsPanel({
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
         <button
           type="button"
-          onClick={() => { setOpen(false); setForm(initial); setBanner(null); }}
+          onClick={() => { setOpen(false); setForm(normalized); setBanner(null); }}
           disabled={pending}
           style={{ padding: "6px 14px", fontSize: 13, border: "1px solid #d0c9bd", background: "transparent", borderRadius: 4, cursor: "pointer" }}
           data-testid="employee-edit-basic-details-cancel"

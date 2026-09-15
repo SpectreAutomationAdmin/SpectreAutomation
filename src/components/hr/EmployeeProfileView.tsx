@@ -218,6 +218,23 @@ function formatDate(iso: string | null | undefined): string {
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 
+// v399 Slice-1 followup #2 (2026-09-15) §2 — civil-date renderer for
+// values stored as UTC midnight per the payroll civil-date convention
+// (Employee.dateOfBirth etc.). Reading with the local-time renderer
+// above would shift the day backward for any viewer west of UTC. This
+// helper reads UTC components so the rendered day is always the day
+// the value was captured as.
+function formatCivilDate(iso: string | null | undefined): string {
+  if (!iso) return "Not provided";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Not provided";
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth(); // 0-based
+  const day = d.getUTCDate();
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${monthNames[m]} ${day}, ${y}`;
+}
+
 function initials(first: string | null, last: string | null): string {
   const a = (first ?? "").trim().charAt(0);
   const b = (last ?? "").trim().charAt(0);
@@ -333,6 +350,12 @@ export default function EmployeeProfileView(props: Props) {
                         preferredName: employee.preferredName,
                         personalEmail: employee.personalEmail,
                         mobilePhone: employee.mobilePhone,
+                        // v399 Slice-1 followup #2 (2026-09-15) §2 — DOB is now editable via
+                        // Basic Details so an authorized admin can correct a legacy or
+                        // pre-onboarding blank without a script. Written as YYYY-MM-DD
+                        // civil-date; the update service applies the same UTC-midnight
+                        // convention onboarding uses.
+                        dateOfBirth: employee.dateOfBirth,
                         homeAddressLine1: employee.homeAddressLine1,
                         homeAddressLine2: employee.homeAddressLine2,
                         homeCity: employee.homeCity,
@@ -348,6 +371,15 @@ export default function EmployeeProfileView(props: Props) {
                   <PersonRow label="Middle name" value={employee.middleName} />
                   <PersonRow label="Legal last name" value={employee.lastName} />
                   <PersonRow label="Preferred name" value={employee.preferredName} />
+                  {/* v399 Slice-1 followup #2 (2026-09-15) §2 — canonical DOB display.
+                      Uses formatCivilDate (UTC components) so a DOB stored at
+                      UTC midnight never renders as the previous day for viewers
+                      west of UTC. */}
+                  <PersonRow
+                    label="Date of birth"
+                    value={employee.dateOfBirth ? formatCivilDate(employee.dateOfBirth) : null}
+                    raw
+                  />
                   <PersonRow label="Personal email" value={employee.personalEmail} kind="email" />
                   <PersonRow label="Mobile" value={employee.mobilePhone ?? employee.phone} kind="phone" />
                   {employee.email && <PersonRow label="Work email" value={employee.email} kind="email" />}
@@ -444,7 +476,20 @@ export default function EmployeeProfileView(props: Props) {
                 <dl className="spectre-person-grid">
                   <PersonRow label="Lifecycle" value={humanize(employee.employeeLifecycle)} raw />
                   <PersonRow label="Onboarding" value={humanize(employee.onboardingState)} raw />
-                  <PersonRow label="Payroll readiness" value={humanize(employee.payrollReadiness)} raw />
+                  {/*
+                    v399 Slice-1 followup #2 (2026-09-15) §4 — the legacy
+                    Employee.payrollReadiness column is orphaned (no code path
+                    writes it, so it displays "NOT_READY" for every real
+                    employee including those whose SIN/TD1/DOB/banking are
+                    all canonically present). The founder's directive is to
+                    NOT collapse distinct readiness signals into one
+                    ambiguous boolean. Honest per-signal readiness is
+                    already surfaced on the Payroll tab and inside the
+                    Prepare Payroll snapshot exceptions. This row is
+                    intentionally removed rather than replaced with a
+                    computed value here — Payroll-tab readiness is the
+                    authoritative surface.
+                  */}
                 </dl>
                 {canInvite && currentSession && (
                   <div className="spectre-person-section-actions">

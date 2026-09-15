@@ -1118,33 +1118,58 @@ export async function voidPayrollBatch(
 }
 
 /**
- * Discard-Prepared-Payroll hotfix (2026-09-14) — Payroll Admin's founder-
- * facing action to abandon a PREPARED batch and return to a state from
- * which Prepare can be run again after source corrections.
+ * Discard-Prepared-Payroll hotfix (2026-09-14; DRAFT eligibility widened
+ * 2026-09-15 per v399 Slice-1 followup #2 §5-10) — Payroll Admin's
+ * founder-facing action to abandon an uncalculated batch and return to
+ * a state from which Prepare can be run again after source corrections.
  *
- * Founder-facing terminology is "Discard Prepared Payroll" (§2). The
- * internal canonical state is VOIDED — one lifecycle sink; no second
- * competing cancellation mechanism (§2). The distinction matters
- * because "Void" implies reversal of processed payroll — this action
- * is exclusive to PREPARED batches which have not been calculated,
- * submitted, approved, posted, or paid.
+ * Founder-facing terminology is "Discard Prepared Payroll". The internal
+ * canonical state is VOIDED — one lifecycle sink; no second competing
+ * cancellation mechanism. The distinction matters because "Void" implies
+ * reversal of processed payroll — this action is exclusive to batches
+ * that have NOT been calculated, submitted, approved, posted, or paid.
+ *
+ * Eligibility (widened 2026-09-15):
+ *   * DRAFT     — prepare produced blockers; batch has snapshot rows +
+ *                 exception rows but preparedAt is null. Legitimate to
+ *                 discard so that fresh Prepare can capture corrected
+ *                 canonical facts. This is Chris's exact case after
+ *                 completing onboarding — his DRAFT batch was frozen
+ *                 from the pre-onboarding facts.
+ *   * PREPARED  — prepare produced zero blockers; batch has preparedAt.
+ *                 Legitimate to discard so that source corrections
+ *                 (compensation, department, banking verification) can
+ *                 be re-snapshotted.
+ *
+ * Refused states:
+ *   * CALCULATED, SUBMITTED_FOR_APPROVAL, APPROVED, POSTED — these have
+ *     downstream payroll evidence. Use the appropriate lifecycle action
+ *     for those states (reject / return, void-with-reason, or a manual
+ *     accounting reversal — never this button).
  *
  * Strict guards (§9):
- *   * batch.status === "PREPARED" — hard fail on DRAFT / CALCULATED /
+ *   * batch.status in {DRAFT, PREPARED} — hard fail on CALCULATED /
  *     SUBMITTED_FOR_APPROVAL / APPROVED / POSTED with a specific error.
  *   * idempotent on VOIDED — a second call returns success without side
  *     effects (satisfies §18 item 12 double-discard).
- *   * per-batch CAS via `where: { id, status: "PREPARED" }` inside the
- *     update — two concurrent discards land only one flip.
+ *   * per-batch CAS via `where: { id, status: { in: [...] } }` inside
+ *     the update — two concurrent discards land only one flip.
  *
  * Side effects (§10-12):
  *   * releases approved-time reservations (consumedByBatchId → null) so
  *     the replacement Prepare can consume the same entries.
  *   * retains PayrollBatchEmployee / exceptions / snapshots as historical
  *     audit evidence attached to the discarded batch — nothing hard-deleted.
- *   * emits `payroll.batch.discard` audit event (§17) distinct from the
- *     general `payroll.batch.void` audit for clean lifecycle timeline.
+ *   * emits `payroll.batch.discard` audit event distinct from the
+ *     general `payroll.batch.void` audit for a clean lifecycle timeline;
+ *     the audit `before.status` records whether the batch was DRAFT or
+ *     PREPARED at the moment of discard.
  */
+
+// v399 Slice-1 followup #2 (2026-09-15) — batches eligible for
+// founder-facing Discard. Both are pre-calculation.
+const DISCARD_ELIGIBLE_STATES = ["DRAFT", "PREPARED"] as const;
+
 export async function discardPreparedPayrollBatch(
   principal: Principal,
   clubId: string,
@@ -1164,22 +1189,23 @@ export async function discardPreparedPayrollBatch(
   if (batch.status === "VOIDED") {
     return { batchId: batch.id, releasedTimeEntryCount: 0 };
   }
-  // Strict founder guard — this action is EXCLUSIVELY for PREPARED.
-  if (batch.status !== "PREPARED") {
+  // Founder guard — this action is EXCLUSIVELY for uncalculated batches.
+  if (!(DISCARD_ELIGIBLE_STATES as readonly string[]).includes(batch.status)) {
     throw new ValidationError([
       { path: "status",
-        message: `Discard Prepared Payroll is only available for PREPARED batches (this batch is ${batch.status}). Use the appropriate lifecycle action for the current state.` },
+        message: `Discard Prepared Payroll is only available for DRAFT or PREPARED batches (this batch is ${batch.status}). Use the appropriate lifecycle action for the current state.` },
     ]);
   }
 
+  const priorStatus = batch.status;
   const { released } = await prisma.$transaction(async (tx) => {
     const rel = await tx.payrollApprovedTimeEntry.updateMany({
       where: { clubId, consumedByBatchId: batch.id },
       data: { consumedByBatchId: null, consumedByBatchEmployeeId: null },
     });
-    // CAS on `status: "PREPARED"` — two concurrent discards land only once.
+    // CAS on the eligible states — two concurrent discards land only once.
     const updated = await tx.payrollBatch.updateMany({
-      where: { id: batch.id, status: "PREPARED" },
+      where: { id: batch.id, status: { in: [...DISCARD_ELIGIBLE_STATES] } },
       data: {
         status: "VOIDED",
         voidedAt: new Date(),
@@ -1202,7 +1228,7 @@ export async function discardPreparedPayrollBatch(
     entityType: ENTITY,
     entityId: batch.id,
     clubId,
-    before: { status: "PREPARED" },
+    before: { status: priorStatus },
     after: {
       status: "VOIDED",
       releasedTimeEntryCount: released,
