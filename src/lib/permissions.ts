@@ -587,7 +587,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
   PAYROLL_ADMIN: [
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read",
-    "payroll:timesheets:approve", "payroll:run", "payroll:approve",
+    "payroll:timesheets:approve", "payroll:run",
     // Payroll-3A — PAYROLL_ADMIN prepares + edits + submits payroll
     // batches, owns pay-group + config administration. Does NOT
     // approve or post — those are Controller-only.
@@ -596,6 +596,18 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // is also the actor who posts. Split-role rationale: Payroll
     // Admin owns preparation + submission; Controller owns
     // independent approval + accounting execution.
+    //
+    // Payroll role-governance hardening (2026-09-15, v-slice-1-followup-4):
+    // PAYROLL_ADMIN also LOSES `payroll:approve`. The role-comment
+    // above always said "Does NOT approve or post", but the grants
+    // list still carried `payroll:approve`. That was a governance
+    // hole — a Payroll Admin B could approve a payroll that Payroll
+    // Admin A submitted (server-side same-actor SoD refuses only the
+    // submitter themselves). Removing the grant closes the hole at
+    // the role capability layer. Same-actor SoD in approve-and-post.ts
+    // remains in place as defense-in-depth for legitimate multi-role
+    // holders (e.g. someone with both PAYROLL_ADMIN + CONTROLLER).
+    // `payroll:return` was NEVER on PAYROLL_ADMIN — no change needed.
     "payroll:prepare", "payroll:edit", "payroll:submit",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
