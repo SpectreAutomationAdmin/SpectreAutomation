@@ -30,7 +30,7 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { ConflictError, NotFoundError, ValidationError } from "../errors";
+import { AppError, ConflictError, NotFoundError, ValidationError } from "../errors";
 import { assertSensitiveActionAllowed } from "../posting-guard";
 
 const INVITATION_ENTITY = "EmployeeOnboardingInvitation";
@@ -42,32 +42,54 @@ const COLLISION_RETRY_LIMIT = 3;
 // ---------------------------------------------------------------------------
 // Typed errors — the HR-2 route uses these to render specific 4xx pages
 // without leaking whether a token existed at all.
+//
+// 2026-09-14 — these extend `AppError` so the /hr/onboarding/[token] server
+// action's `if (isAppError(err)) redirect(errRedirectUrl(...))` gate catches
+// them and renders a graceful `?err=<safeMessage>` banner instead of a 500
+// crash. The founder saw exactly that crash after a self-start route issued
+// an invitation without provisioning an EmployeeOnboardingSession row.
 // ---------------------------------------------------------------------------
-export class InvitationNotFoundError extends Error {
-  readonly code = "INVITATION_NOT_FOUND";
+export class InvitationNotFoundError extends AppError {
   constructor() {
-    super("Invitation not found");
+    super(
+      "INVITATION_NOT_FOUND",
+      "Invitation not found",
+      404,
+      "This invitation link is no longer available. Please contact your Club for a new one.",
+    );
     this.name = "InvitationNotFoundError";
   }
 }
-export class InvitationExpiredError extends Error {
-  readonly code = "INVITATION_EXPIRED";
+export class InvitationExpiredError extends AppError {
   constructor() {
-    super("Invitation has expired");
+    super(
+      "INVITATION_EXPIRED",
+      "Invitation has expired",
+      410,
+      "This invitation has expired. Please contact your Club for a new one.",
+    );
     this.name = "InvitationExpiredError";
   }
 }
-export class InvitationRevokedError extends Error {
-  readonly code = "INVITATION_REVOKED";
+export class InvitationRevokedError extends AppError {
   constructor() {
-    super("Invitation has been revoked");
+    super(
+      "INVITATION_REVOKED",
+      "Invitation has been revoked",
+      410,
+      "This invitation is no longer active. Please contact your Club for a new one.",
+    );
     this.name = "InvitationRevokedError";
   }
 }
-export class InvitationAlreadyRedeemedError extends Error {
-  readonly code = "INVITATION_ALREADY_REDEEMED";
+export class InvitationAlreadyRedeemedError extends AppError {
   constructor() {
-    super("Invitation has already been redeemed");
+    super(
+      "INVITATION_ALREADY_REDEEMED",
+      "Invitation has already been redeemed",
+      409,
+      "This invitation has already been used. If you need to continue, please contact your Club.",
+    );
     this.name = "InvitationAlreadyRedeemedError";
   }
 }

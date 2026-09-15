@@ -68,36 +68,56 @@ export default async function SelfStartOnboardingPage() {
 
   const employeeId = profile.employeeId;
 
-  // If the linked Employee already has a resumable session, we do NOT
-  // issue a new invitation — instead we route the founder into the
-  // existing flow. (This branch is preventative — Chris on staging has
-  // no session yet, but future callers may.)
+  // 2026-09-14 fix — the self-start route MUST ensure an
+  // `EmployeeOnboardingSession` exists BEFORE it issues the invitation.
+  //
+  // Root cause of the "Begin onboarding" 500 crash (Fly digest
+  // 3544159346, InvitationRevokedError): the earlier version of this
+  // route created only the invitation. When the founder subsequently
+  // clicked "Begin onboarding", `acquireInvitationContext` did a
+  // `findFirst EmployeeOnboardingSession { employeeId, clubId }`,
+  // returned null, and threw `InvitationRevokedError`. Because that
+  // error class did NOT extend `AppError` (also fixed today), the
+  // server action's `isAppError` gate did not catch it and Next.js
+  // surfaced a 500 to the browser.
+  //
+  // The fix has two parts, both required for defense-in-depth:
+  //   (a) here: never issue an invitation for an employee that has no
+  //       resumable session. Provision one first, atomically, in the
+  //       same transaction as the invitation issuance.
+  //   (b) invitations.ts: the four Invitation*Error classes now
+  //       extend AppError, so any *future* variant of this crash
+  //       degrades to a graceful `?err=<message>` banner rather than
+  //       a page-level 500.
+  //
+  // Idempotency: if a resumable session ALREADY exists we reuse it —
+  // do not create a duplicate. If a prior invitation is still active
+  // we supersede it as part of the fresh issuance (the standard
+  // resend semantic), so the newly-generated raw token is the only
+  // one the browser sees. This matches the founder's stated
+  // requirement that self-start be idempotent on retry.
   const existingSession = await prisma.employeeOnboardingSession.findFirst({
     where: { employeeId, clubId },
     orderBy: { startedAt: "desc" },
-    select: { state: true },
+    select: { id: true, state: true },
   });
-  if (existingSession && RESUMABLE_STATES.has(existingSession.state)) {
-    // The founder's cookie may not carry the session yet, so we still
-    // issue a fresh invitation to stamp the cookie. But we avoid
-    // re-issuing when a valid non-expired invitation already exists.
-    const activeInvitation = await prisma.employeeOnboardingInvitation.findFirst({
-      where: {
-        employeeId,
+
+  if (!existingSession || !RESUMABLE_STATES.has(existingSession.state)) {
+    // No resumable session — create one in DRAFT. `initiatedByUserId`
+    // is the acting principal (the founder in the self-start case).
+    // The state stays DRAFT until the first real employee action
+    // inside About You transitions it to IN_PROGRESS.
+    await prisma.employeeOnboardingSession.create({
+      data: {
         clubId,
-        expiresAt: { gt: new Date() },
-        revokedAt: null,
+        employeeId,
+        initiatedByUserId: principal.id,
+        state: "DRAFT",
       },
-      orderBy: { createdAt: "desc" },
-      select: { id: true },
     });
-    if (activeInvitation) {
-      // Fall through to fresh issuance rather than trying to reuse a
-      // hashed token we can't retrieve — the token is only handed back
-      // at issuance time.
-    }
   }
 
+  // Now that a resumable session is guaranteed, issue the invitation.
   let issued;
   try {
     issued = await issueInvitation(principal, employeeId, { ttlHours: 24 });
