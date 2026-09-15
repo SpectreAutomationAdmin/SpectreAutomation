@@ -528,15 +528,26 @@ export async function supersedeInvitation(
 // ---------------------------------------------------------------------------
 // Reissue — orchestrator for the HR-2B.3.1 §5 resend-invitation flow.
 //
-// Rules (founder brief §5 + §5.1 + §5.2):
-//   • Active session (DRAFT / INVITED / IN_PROGRESS) + no active
-//     invitation → issue a fresh one.
+// Rules (founder brief §5 + §5.1 + §5.2; updated 2026-09-15 per
+// v399-followup DRAFT hardening):
+//   • Active session (INVITED / IN_PROGRESS) + no active invitation →
+//     issue a fresh one.
 //   • Active session + prior invitation still open (not revoked, not
 //     redeemed) → supersede that invitation, issue a fresh one.
 //   • Active session + prior invitation already redeemed → supersede
 //     it (same DB column, distinct action string), issue a fresh one.
 //     The employee's session + all their onboarding responses /
 //     acknowledgements / corrections are UNTOUCHED.
+//   • DRAFT session → REFUSED. A DRAFT session has never sent an
+//     invitation; "reissue" is a resend, not a first-send. The first
+//     send must go through the canonical state-machine transition
+//     `transitionSession(→ INVITED)`, which atomically moves the
+//     session state AND issues the invitation. This refusal is the
+//     regression guard against the exact class of bug that produced
+//     Chris's "Cannot transition session from DRAFT to SUBMITTED via
+//     employee actor" failure: any consumer that reaches for reissue
+//     on a DRAFT session would leave the state machine unadvanced,
+//     causing the same silent-then-terminal Submit refusal downstream.
 //   • Terminal session (SUBMITTED / APPROVED / REJECTED / REVOKED) →
 //     `ConflictError` — resend is a no-op on a finished onboarding.
 //
@@ -547,7 +558,10 @@ export async function supersedeInvitation(
 // `sendInvitationEmail` themselves with the returned `rawToken`.
 // ---------------------------------------------------------------------------
 
-const REISSUE_ELIGIBLE_STATES = ["DRAFT", "INVITED", "IN_PROGRESS"] as const;
+// DRAFT is DELIBERATELY excluded — see block comment above.
+const REISSUE_ELIGIBLE_STATES = ["INVITED", "IN_PROGRESS"] as const;
+const REISSUE_DRAFT_REFUSAL_MESSAGE =
+  "Cannot resend invitation for a DRAFT session — this session has never been invited. Use transitionSession(→INVITED) to atomically move the session state and issue the first invitation.";
 
 export async function reissueInvitation(
   principal: Principal,
@@ -578,6 +592,9 @@ export async function reissueInvitation(
     throw new ConflictError(
       "No onboarding session exists for this employee — create one first.",
     );
+  }
+  if (session.state === "DRAFT") {
+    throw new ConflictError(REISSUE_DRAFT_REFUSAL_MESSAGE);
   }
   if (!(REISSUE_ELIGIBLE_STATES as readonly string[]).includes(session.state)) {
     throw new ConflictError(

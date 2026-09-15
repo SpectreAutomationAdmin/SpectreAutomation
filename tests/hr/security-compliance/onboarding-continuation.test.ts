@@ -34,8 +34,19 @@ import { makeHrFixture } from "./_helpers";
 const IP_HASH = createHash("sha256").update("test|salt", "utf8").digest("hex");
 const SYNTHETIC_SIN = "046 454 286";
 
+// Scheduling Foundation · Phase C (2026-09-07) — HOURLY employees
+// route through /hr/onboarding/availability BEFORE Payroll/SIN. This
+// suite's subject is the PAYROLL continuation cascade, not availability
+// routing (which is covered end-to-end in tests/scheduling/onboarding-
+// availability.test.ts: hourly→availability, salaried→SIN, saved-
+// profile-signal, tenant isolation). Every fixture here therefore uses
+// SALARY compensationType to isolate the payroll routing from the
+// availability step and keep each test focused on its actual subject.
 async function actorForFixture(name = "Continuation") {
-  const { club, employee, clubAdmin } = await makeHrFixture(`${name} ${Math.random().toString(36).slice(2, 6)}`);
+  const { club, employee, clubAdmin } = await makeHrFixture(
+    `${name} ${Math.random().toString(36).slice(2, 6)}`,
+    { compensationType: "SALARY" },
+  );
   const session = await createSession(clubAdmin, employee.id);
   const result = await transitionSession(clubAdmin, session.id, "INVITED", { actorSource: "STAFF" });
   const ctx = await acquireInvitationContext(result.invitation!.rawToken, { ipHash: IP_HASH });

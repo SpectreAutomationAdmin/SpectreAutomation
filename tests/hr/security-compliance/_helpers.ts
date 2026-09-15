@@ -24,6 +24,13 @@ export interface HrFixture {
 
 export async function makeEmployee(clubId: string, opts?: {
   firstName?: string; lastName?: string; email?: string;
+  // Scheduling Foundation · Phase C (2026-09-07) — HOURLY employees
+  // route through the availability step before payroll. Suites that
+  // are testing payroll routing (rather than availability routing)
+  // should pass "SALARY" here to keep the availability step out of
+  // scope. Availability routing is covered by tests/scheduling/
+  // onboarding-availability.test.ts.
+  compensationType?: "HOURLY" | "SALARY";
 }) {
   const employeeNumber = "E-" + Math.floor(Math.random() * 1_000_000);
   return prisma.employee.create({
@@ -33,7 +40,7 @@ export async function makeEmployee(clubId: string, opts?: {
       firstName: opts?.firstName ?? "Test",
       lastName: opts?.lastName ?? "Employee",
       email: opts?.email ?? `e${Date.now()}_${Math.floor(Math.random() * 10000)}@example.com`,
-      compensationType: "HOURLY",
+      compensationType: opts?.compensationType ?? "HOURLY",
       payRate: 20,
       status: "ACTIVE",
     },
@@ -45,9 +52,16 @@ async function makePrincipal(email: string, role: RoleKey, clubId: string): Prom
   return principalFor(email);
 }
 
-export async function makeHrFixture(clubName = "Nightingale HR Club"): Promise<HrFixture> {
+export async function makeHrFixture(
+  clubName = "Nightingale HR Club",
+  opts?: { compensationType?: "HOURLY" | "SALARY" },
+): Promise<HrFixture> {
   const club = await makeClub(clubName);
-  const employee = await makeEmployee(club.id, { firstName: "River", lastName: "Sensitive" });
+  const employee = await makeEmployee(club.id, {
+    firstName: "River",
+    lastName: "Sensitive",
+    compensationType: opts?.compensationType,
+  });
   const payrollAdmin = await makePrincipal(
     `payroll-${Date.now()}-${Math.random().toString(36).slice(2)}@example.com`,
     "PAYROLL_ADMIN",
