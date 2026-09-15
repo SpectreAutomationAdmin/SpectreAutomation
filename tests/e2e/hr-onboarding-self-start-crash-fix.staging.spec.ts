@@ -53,14 +53,44 @@ test("self-start route + Begin onboarding no longer crashes with a 500", async (
   });
   await page.waitForTimeout(3000);
 
-  // The route redirects to /hr/onboarding/<token> (or /hr/onboarding/
-  // expired for a truly terminal state — either is a graceful outcome).
+  // The route may redirect to any of:
+  //   - /hr/onboarding/<token>   (resumable session, fresh magic link)
+  //   - /hr/onboarding/expired   (truly-terminal invitation state)
+  //   - /app/admin?self-onboarding=terminal-state&state=<X>
+  //       (session already SUBMITTED / APPROVED / REJECTED / REVOKED —
+  //        self-start correctly refuses to reopen a completed session;
+  //        this is a POST-FIX healthy outcome, added 2026-09-15 after
+  //        the follow-up spec drove Chris's session to SUBMITTED)
+  // Any of these is a graceful outcome. What must NOT happen is a
+  // 500 page or a null.digest crash.
   const postSelfStartUrl = page.url();
-  expect(postSelfStartUrl).toContain("/hr/onboarding");
+  const graceful =
+    postSelfStartUrl.includes("/hr/onboarding") ||
+    postSelfStartUrl.includes("/app/admin?self-onboarding=");
+  expect(
+    graceful,
+    `Self-start should redirect to onboarding or the terminal-state admin hint. Got: ${postSelfStartUrl}`,
+  ).toBe(true);
   await page.screenshot({
     path: path.join(OUT, "01-self-start-redirected.png"),
     fullPage: false,
   });
+
+  // If we were redirected to the admin terminal-state hint, the
+  // session is done and there's no "Begin onboarding" to click.
+  // That's a pass on the crash-fix invariant.
+  if (postSelfStartUrl.includes("/app/admin?self-onboarding=terminal-state")) {
+    expect(
+      badResponses.length,
+      `No 5xx doc responses. Got: ${JSON.stringify(badResponses)}`,
+    ).toBe(0);
+    expect(
+      pageErrors.filter((e) => /Cannot read|digest/i.test(e)).length,
+      `No null.digest crash. pageErrors: ${JSON.stringify(pageErrors)}`,
+    ).toBe(0);
+    await ctx.close();
+    return;
+  }
 
   // B. Confirm we're on the welcome page with a Begin onboarding button.
   // The button is data-testid="hr-onboarding-begin".
