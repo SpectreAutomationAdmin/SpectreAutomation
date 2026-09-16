@@ -49,6 +49,28 @@ export default function GlProfileEditor(props: {
 
   const complete = FIELDS.every((f) => profile[f.key] != null);
 
+  // Phase 3 follow-up (2026-09-16) — flag any current type mismatch
+  // (e.g. employerEiExpenseAccountId set to a LIABILITY account) so
+  // the Controller sees the misconfiguration directly on the profile
+  // editor. The same rule is enforced at save time (PATCH refuses)
+  // and at Post time (readiness blocker), but showing it here saves
+  // a round-trip.
+  const acctById = new Map(props.accounts.map((a) => [a.id, a]));
+  const typeIssues: Array<{ field: string; label: string; expected: string; actual: string; accountNumber: string; accountName: string }> = [];
+  for (const f of FIELDS) {
+    const id = profile[f.key];
+    if (!id) continue;
+    const a = acctById.get(id);
+    if (!a) continue;
+    if (a.type !== f.type) {
+      typeIssues.push({
+        field: f.key, label: f.label,
+        expected: f.type, actual: a.type,
+        accountNumber: a.accountNumber, accountName: a.name,
+      });
+    }
+  }
+
   async function save() {
     // Refuse to save when incomplete — server does the same, but this
     // avoids a round-trip.
@@ -91,6 +113,31 @@ export default function GlProfileEditor(props: {
           ? "Payroll GL setup: Ready — all 8 statutory + clearing accounts are configured."
           : "Payroll GL setup: Action required — every statutory + clearing account must be assigned before payroll can post."}
       </div>
+
+      {typeIssues.length > 0 ? (
+        <div
+          className="mb-3 rounded-lg border px-3 py-2 text-xs"
+          style={{
+            background: "#fef2f2",
+            borderColor: "#fecaca",
+            color: "#7f1d1d",
+          }}
+          data-testid="gl-profile-type-issues"
+        >
+          <p className="font-semibold">Payroll GL setup: {typeIssues.length} account-type issue{typeIssues.length === 1 ? "" : "s"}</p>
+          <ul className="mt-1 list-disc pl-5">
+            {typeIssues.map((i) => (
+              <li key={i.field} data-testid={`gl-profile-type-issue-${i.field}`}>
+                <span className="font-medium">{i.label}</span> is set to
+                {" "}
+                <span className="font-mono">{i.accountNumber} — {i.accountName}</span>
+                {" "}
+                which is a <span className="font-mono">{i.actual}</span> account. This field requires <span className="font-mono">{i.expected}</span>. Payroll cannot post until this is corrected.
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {FIELDS.map((f) => (

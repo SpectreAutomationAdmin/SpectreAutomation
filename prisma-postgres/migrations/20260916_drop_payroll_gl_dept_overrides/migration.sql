@@ -1,0 +1,26 @@
+-- Phase 3 follow-up (2026-09-16) — corrective migration.
+--
+-- The 2026-09-15 migration `20260915_payroll_gl_dept_overrides` added a
+-- `PayrollGlDepartmentOverride` table to hold per-department payroll
+-- expense-account overrides. After the founder-mandated architecture
+-- audit determined that Spectre's canonical accounting model already
+-- supports natural-account + department-dimension posting via
+-- `JournalEntryLine.departmentId`, that separate table is superfluous
+-- and has been dropped here.
+--
+-- Data safety: the staging PayrollGlDepartmentOverride table was empty
+-- when this migration was written (no Coulee Ridge or fixture rows
+-- were ever configured through the deprecated Section 7 UI, per the
+-- Phase 3 v1 checkpoint). DROP TABLE is therefore data-safe. If
+-- production ever had rows (it did not — production remained
+-- untouched by Phase 3), a data-preservation migration would be
+-- required first; this migration is authorised only against a table
+-- known to be empty.
+--
+-- Historical POSTED payroll journals (the Sep 13–26 founder batch
+-- and the legacy 3F fixture) are UNAFFECTED — they hold
+-- `JournalEntryLine.accountId` at post time and never referenced the
+-- override table. Dropping the table cannot alter any historical
+-- accounting record.
+
+DROP TABLE IF EXISTS "PayrollGlDepartmentOverride";

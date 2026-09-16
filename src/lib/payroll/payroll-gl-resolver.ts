@@ -1,11 +1,31 @@
-// Phase 3 (2026-09-15) — Departmental Payroll Accounting.
+// Phase 3 (2026-09-15, follow-up 2026-09-16) — Departmental Payroll
+// Accounting via Spectre's canonical natural-account + department
+// dimension model.
 //
-// Single canonical resolver for the payroll GL journal. Consumed by
-// BOTH `previewPayrollJournal` (read-side preview shown in the Post
-// confirmation UI) AND `postPayrollBatch` (commit-side draft that
-// becomes the persisted JournalEntry). This is deliberate: the
-// founder rule for Phase 3 is that preview and post must produce
-// byte-identical account resolution, so they MUST share this module.
+// -------------------------------------------------------------------
+// ARCHITECTURE
+// -------------------------------------------------------------------
+// Spectre's General Ledger already stores department as a first-class
+// dimension on every `JournalEntryLine.departmentId`. Financial
+// reporting (`incomeStatementByDepartment`, `trialBalance`, department
+// filters on `accountBalances`) reads that dimension via
+// `line.departmentId ?? account.defaultDepartmentId`.
+//
+// The correct payroll accounting architecture is therefore:
+//
+//   NATURAL ACCOUNT (from PayrollGlAccountingProfile / component snapshot)
+//   +
+//   FROZEN EMPLOYEE DEPARTMENT (dimension on the journal line)
+//
+// This eliminates the need for a separate natural account per
+// department: Salaries & Wages $6,000 can appear on one journal line
+// per department dimension, all pointing at the same natural account.
+// Departmental financial statements will attribute correctly through
+// the existing incomeStatementByDepartment pipeline.
+//
+// The previous PayrollGlDepartmentOverride table (Phase 3 v1) has been
+// dropped; see the corrective migration
+// `20260916_drop_payroll_gl_dept_overrides`.
 //
 // -------------------------------------------------------------------
 // FROZEN-DEPARTMENT RULE
@@ -13,14 +33,11 @@
 // The frozen department for each employee is read from
 // `PayrollBatchEmployee.sourceFactsJson.assignments[]`, choosing the
 // assignment with `role === "PRIMARY"` when present and the first
-// assignment otherwise. This matches how the overview view picks
-// the display department (see `src/lib/payroll/overview-view.ts`).
+// assignment otherwise. Matches the overview view's picker.
 //
 // The frozen department is SNAPSHOT at Prepare time. This resolver
-// NEVER reads the LIVE Employee.departmentId or the LIVE
-// EmployeeEmploymentAssignment. Changing an employee's HR department
-// AFTER a batch is prepared CANNOT alter its journal — the assignment
-// snapshot inside `sourceFactsJson` is authoritative.
+// NEVER reads the LIVE Employee.departmentId. Changing an employee's
+// HR department AFTER a batch is prepared CANNOT alter its journal.
 //
 // -------------------------------------------------------------------
 // RESOLUTION PRECEDENCE (documented + tested)
@@ -28,44 +45,42 @@
 // A. Per-component snapshot accounts (`expenseAccountIdSnapshot` +
 //    `liabilityAccountIdSnapshot` on PayrollBatchComponentSnapshot)
 //    ALWAYS win when present. These are already frozen at snapshot
-//    time and represent the component's own configured accounts —
-//    they are ORTHOGONAL to the departmental resolver below.
+//    time and represent the component's own configured natural
+//    account. The frozen department is attached as the dimension.
 //
 // B. Base salary / wage expense (the "residual" gross-minus-cash-
-//    components amount):
-//      1. `PayrollGlDepartmentOverride.salaryExpenseAccountId` for
-//         the employee's frozen department, when that override row
-//         exists AND the field is non-null.
-//      2. Otherwise the global `PayrollGlAccountingProfile.salaryExpenseAccountId`.
+//    components amount) posts to
+//    `PayrollGlAccountingProfile.salaryExpenseAccountId` with the
+//    frozen department dimension.
 //
-// C. Employer CPP expense + employer EI expense: same rule as B,
-//    keyed on the respective override field.
+// C. Employer CPP + CPP2 expense posts to
+//    `PayrollGlAccountingProfile.employerCppExpenseAccountId` with
+//    the frozen department dimension.
 //
-// D. Payroll LIABILITIES (net pay payable, CPP payable, EI payable,
+// D. Employer EI expense posts to
+//    `PayrollGlAccountingProfile.employerEiExpenseAccountId` with
+//    the frozen department dimension.
+//
+// E. Payroll LIABILITIES (net pay payable, CPP payable, EI payable,
 //    federal tax payable, provincial tax payable): ALWAYS the global
-//    profile. No per-department override. Central remittance to CRA
-//    is the norm; Phase 3 deliberately does not fragment these.
+//    profile with NO department dimension (departmentId = null).
+//    Central remittance to CRA is the norm; Phase 3 deliberately
+//    keeps these Club-wide.
 //
 // -------------------------------------------------------------------
 // JOURNAL AGGREGATION
 // -------------------------------------------------------------------
-// Employees whose frozen department resolves to the same expense
-// account (either because they share a department, or because their
-// departments both fall through to the global default) aggregate
-// into ONE debit line. Employees in departments that resolve to
-// different accounts stay on separate lines. The founder rule:
-// "must NOT collapse into one generic Salary/Wage Expense line if
-// the departments resolve to different accounts."
+// Journal lines are keyed by the (accountId, departmentId) PAIR.
+// Two employees in the SAME department + same natural account
+// aggregate into ONE line. Two employees in DIFFERENT departments
+// (same natural account) produce TWO lines, differing only in the
+// departmentId dimension — the founder-mandated separation.
 //
-// The journal always balances to the cent. If any employee is
-// missing a resolvable account (no override, no global default, or
-// referenced Account inactive), the resolver returns a readiness
-// blocker instead of writing a broken journal.
+// Central liabilities (departmentId=null) always aggregate into
+// single Club-wide lines.
 
 import { Prisma } from "@prisma/client";
 import { componentRequiresExpense, componentRequiresLiability } from "./gl-readiness";
-// Re-export so callers (approve-and-post, payroll-journal-preview) can
-// keep importing the canonical helpers from the resolver module.
 export { componentRequiresExpense, componentRequiresLiability };
 
 // -------------------------------------------------------------------
@@ -83,21 +98,14 @@ export interface GlProfileSnapshot {
   provincialTaxPayableAccountId: string;
 }
 
-export interface GlDepartmentOverrideSnapshot {
-  departmentId:                  string;
-  salaryExpenseAccountId:        string | null;
-  employerCppExpenseAccountId:   string | null;
-  employerEiExpenseAccountId:    string | null;
-}
-
 export interface BatchEmployeeAmounts {
   batchEmployeeId:               string;
   employeeId:                    string;
   displayName:                   string;
-  // Frozen at Prepare time. Null when the employee has no assignment
-  // (e.g. legacy import) — in that case, the resolver falls through
-  // to the global profile with no override applied. `null` is safe;
-  // resolver behaviour is identical to a department with no override.
+  /** Frozen at Prepare time. Null when the employee has no
+   *  assignment; the resolver posts the expense with a null
+   *  departmentId dimension (which reporting attributes to
+   *  Account.defaultDepartmentId or "Unassigned"). */
   frozenDepartmentId:            string | null;
   grossPay:                      Prisma.Decimal;
   netPay:                        Prisma.Decimal;
@@ -109,14 +117,17 @@ export interface BatchEmployeeAmounts {
   employerCppCombined:           Prisma.Decimal;
   employerCpp2:                  Prisma.Decimal;
   employerEi:                    Prisma.Decimal;
-  // Sum of the EMPLOYEE-side INCREASES_NET_PAY component amounts
-  // ATTRIBUTED TO THIS EMPLOYEE (cash allowances / one-time cash
-  // bonuses). Subtracted from this employee's residual salary
-  // expense so the same dollars aren't posted twice.
+  /** Sum of EMPLOYEE-side INCREASES_NET_PAY component amounts
+   *  ATTRIBUTED TO THIS EMPLOYEE. Subtracted from this employee's
+   *  residual salary expense so the same dollars aren't posted
+   *  twice. */
   componentCashInGross:          Prisma.Decimal;
 }
 
 export interface ComponentSnapshotForResolver {
+  /** Batch-employee this snapshot belongs to. Used to look up the
+   *  frozen department for the component's line. */
+  batchEmployeeId:               string | null;
   componentCode:                 string;
   displayName:                   string;
   side:                          string; // EMPLOYEE | EMPLOYER
@@ -130,20 +141,21 @@ export interface ComponentSnapshotForResolver {
 
 export interface ResolvedJournalLine {
   accountId:                     string;
+  /** Department dimension. Null for centralized liability lines
+   *  and for component expense/liability lines when no employee
+   *  is attributable. */
+  departmentId:                  string | null;
   debit:                         Prisma.Decimal | null;
   credit:                        Prisma.Decimal | null;
   description:                   string;
-  // Phase 3 traceability — every debit tagged with the frozen
-  // department(s) that funded it. Empty for centralized liabilities
-  // and for component-driven debits (which are already labelled by
-  // component in the description).
-  departmentIds:                 string[];
+  /** For traceability: the list of every employee whose amounts
+   *  contributed to this line. Empty for central liabilities. */
+  employeeIds:                   string[];
 }
 
 export interface ResolveJournalInput {
   label:                         string;
   profile:                       GlProfileSnapshot;
-  departmentOverrides:           GlDepartmentOverrideSnapshot[];
   employees:                     BatchEmployeeAmounts[];
   components:                    ComponentSnapshotForResolver[];
 }
@@ -156,120 +168,112 @@ export interface ResolveJournalResult {
 }
 
 // -------------------------------------------------------------------
-// Helpers exported for gl-readiness + testing
-// -------------------------------------------------------------------
-
-/** The three expense fields on a per-department override that can be
- *  overridden. Kept in one place so readiness + UI + resolver align. */
-export const OVERRIDABLE_EXPENSE_FIELDS = [
-  "salaryExpenseAccountId",
-  "employerCppExpenseAccountId",
-  "employerEiExpenseAccountId",
-] as const;
-export type OverridableExpenseField = typeof OVERRIDABLE_EXPENSE_FIELDS[number];
-
-/** Resolve one of the three per-department expense mappings.
- *  Returns the override account id when configured; otherwise the
- *  global profile default. */
-export function resolveDepartmentExpenseAccount(
-  profile: GlProfileSnapshot,
-  overrides: GlDepartmentOverrideSnapshot[],
-  frozenDepartmentId: string | null,
-  field: OverridableExpenseField,
-): { accountId: string; source: "OVERRIDE" | "GLOBAL" } {
-  if (frozenDepartmentId) {
-    const ov = overrides.find((o) => o.departmentId === frozenDepartmentId);
-    if (ov && ov[field] != null) {
-      return { accountId: ov[field] as string, source: "OVERRIDE" };
-    }
-  }
-  return { accountId: profile[field], source: "GLOBAL" };
-}
-
-// -------------------------------------------------------------------
-// Main resolver
+// Internals
 // -------------------------------------------------------------------
 
 interface Bucket {
   total:         Prisma.Decimal;
   descriptions:  string[];
-  departmentIds: Set<string>;
+  employeeIds:   Set<string>;
 }
 
 const ZERO = new Prisma.Decimal(0);
+const BUCKET_KEY_NONE = "__null__";
+const bucketKey = (accountId: string, departmentId: string | null): string =>
+  `${accountId}␟${departmentId ?? BUCKET_KEY_NONE}`;
+const parseBucketKey = (key: string): { accountId: string; departmentId: string | null } => {
+  const [accountId, dept] = key.split("␟");
+  return {
+    accountId,
+    departmentId: dept === BUCKET_KEY_NONE ? null : dept,
+  };
+};
 
-function addToBucket(m: Map<string, Bucket>, accountId: string, amount: Prisma.Decimal, description: string, departmentId: string | null): void {
+function addToBucket(
+  m: Map<string, Bucket>,
+  accountId: string,
+  departmentId: string | null,
+  amount: Prisma.Decimal,
+  description: string,
+  employeeId: string | null,
+): void {
   if (amount.isZero()) return;
-  const b = m.get(accountId);
+  const k = bucketKey(accountId, departmentId);
+  const b = m.get(k);
   if (b) {
     b.total = b.total.plus(amount);
     if (!b.descriptions.includes(description)) b.descriptions.push(description);
-    if (departmentId) b.departmentIds.add(departmentId);
+    if (employeeId) b.employeeIds.add(employeeId);
   } else {
-    m.set(accountId, {
+    m.set(k, {
       total: amount,
       descriptions: [description],
-      departmentIds: departmentId ? new Set([departmentId]) : new Set(),
+      employeeIds: employeeId ? new Set([employeeId]) : new Set(),
     });
   }
 }
 
-/**
- * Build the canonical payroll GL journal from frozen batch facts.
- * See the file header for the resolution precedence + aggregation
- * rules. This function is PURE — no DB access, no side effects.
- */
-export function resolvePayrollJournal(input: ResolveJournalInput): ResolveJournalResult {
-  const { label, profile, departmentOverrides, employees, components } = input;
+// -------------------------------------------------------------------
+// Main resolver — natural account + department dimension
+// -------------------------------------------------------------------
 
-  const debitBuckets = new Map<string, Bucket>();
+export function resolvePayrollJournal(input: ResolveJournalInput): ResolveJournalResult {
+  const { label, profile, employees, components } = input;
+
+  // Employee -> frozen department, for component attribution.
+  const deptByBatchEmployeeId = new Map<string, string | null>(
+    employees.map((e) => [e.batchEmployeeId, e.frozenDepartmentId]),
+  );
+  const empIdByBatchEmployeeId = new Map<string, string>(
+    employees.map((e) => [e.batchEmployeeId, e.employeeId]),
+  );
+
+  const debitBuckets  = new Map<string, Bucket>();
   const creditBuckets = new Map<string, Bucket>();
 
   // --------------------------------------------------------------
-  // A. Aggregate per-component debits + credits — frozen at snapshot
-  //    time, no per-department override applied.
+  // A. Component snapshots — natural account from snapshot,
+  //    department dimension from the owning batch employee.
   // --------------------------------------------------------------
   for (const s of components) {
     if (s.resolvedAmount == null || s.resolvedAmount.isZero()) continue;
     const amt = s.resolvedAmount;
     const src = `${s.displayName} (${s.componentCode})`;
+    const dept = s.batchEmployeeId ? (deptByBatchEmployeeId.get(s.batchEmployeeId) ?? null) : null;
+    const empId = s.batchEmployeeId ? (empIdByBatchEmployeeId.get(s.batchEmployeeId) ?? null) : null;
     if (componentRequiresExpense(s) && s.expenseAccountIdSnapshot) {
-      addToBucket(debitBuckets, s.expenseAccountIdSnapshot, amt, src, null);
+      addToBucket(debitBuckets, s.expenseAccountIdSnapshot, dept, amt, src, empId);
     }
     if (componentRequiresLiability(s) && s.liabilityAccountIdSnapshot) {
-      addToBucket(creditBuckets, s.liabilityAccountIdSnapshot, amt, src, null);
+      // Component-driven liabilities (e.g. RRSP-EE payable) keep the
+      // department dimension too — the payable IS attributable to
+      // the employee whose deduction created it, and departmental
+      // reporting for liability aging + remittance benefits.
+      addToBucket(creditBuckets, s.liabilityAccountIdSnapshot, dept, amt, src, empId);
     }
   }
 
   // --------------------------------------------------------------
-  // B. Aggregate PER-EMPLOYEE per-DEPARTMENT expense buckets for
-  //    the residual salary + employer CPP + employer EI.
+  // B. Per-employee residual salary + employer CPP + employer EI.
+  //    Same natural account for every employee; department
+  //    dimension is the frozen dept.
   // --------------------------------------------------------------
   for (const e of employees) {
     const residualSalary = e.grossPay.minus(e.componentCashInGross);
     if (!residualSalary.isZero()) {
-      const r = resolveDepartmentExpenseAccount(
-        profile, departmentOverrides, e.frozenDepartmentId, "salaryExpenseAccountId",
-      );
-      addToBucket(debitBuckets, r.accountId, residualSalary, `${label} — regular salary expense`, e.frozenDepartmentId);
+      addToBucket(debitBuckets, profile.salaryExpenseAccountId, e.frozenDepartmentId, residualSalary, `${label} — regular salary expense`, e.employeeId);
     }
     const erCpp = e.employerCppCombined.plus(e.employerCpp2);
     if (!erCpp.isZero()) {
-      const r = resolveDepartmentExpenseAccount(
-        profile, departmentOverrides, e.frozenDepartmentId, "employerCppExpenseAccountId",
-      );
-      addToBucket(debitBuckets, r.accountId, erCpp, `${label} — employer CPP expense`, e.frozenDepartmentId);
+      addToBucket(debitBuckets, profile.employerCppExpenseAccountId, e.frozenDepartmentId, erCpp, `${label} — employer CPP expense`, e.employeeId);
     }
     if (!e.employerEi.isZero()) {
-      const r = resolveDepartmentExpenseAccount(
-        profile, departmentOverrides, e.frozenDepartmentId, "employerEiExpenseAccountId",
-      );
-      addToBucket(debitBuckets, r.accountId, e.employerEi, `${label} — employer EI expense`, e.frozenDepartmentId);
+      addToBucket(debitBuckets, profile.employerEiExpenseAccountId, e.frozenDepartmentId, e.employerEi, `${label} — employer EI expense`, e.employeeId);
     }
   }
 
   // --------------------------------------------------------------
-  // C. Aggregate centralized LIABILITY totals (unfragmented).
+  // C. Centralized LIABILITY totals — always Club-wide, no dept.
   // --------------------------------------------------------------
   const totalNetPay  = sumOver(employees, "netPay");
   const totalEeCpp   = sumOver(employees, "deductionCppEeCombined").plus(sumOver(employees, "deductionCpp2Ee"));
@@ -281,33 +285,35 @@ export function resolvePayrollJournal(input: ResolveJournalInput): ResolveJourna
   const cppPayable   = totalEeCpp.plus(totalErCpp);
   const eiPayable    = totalEeEi.plus(totalErEi);
 
-  addToBucket(creditBuckets, profile.netPayPayableAccountId,        totalNetPay,  `${label} — net pay payable`,             null);
-  addToBucket(creditBuckets, profile.cppPayableAccountId,           cppPayable,   `${label} — CPP payable (ee + er)`,       null);
-  addToBucket(creditBuckets, profile.eiPayableAccountId,            eiPayable,    `${label} — EI payable (ee + er)`,        null);
-  addToBucket(creditBuckets, profile.federalTaxPayableAccountId,    totalFedTax,  `${label} — federal income tax payable`,  null);
-  addToBucket(creditBuckets, profile.provincialTaxPayableAccountId, totalProvTax, `${label} — provincial income tax payable`, null);
+  addToBucket(creditBuckets, profile.netPayPayableAccountId,        null, totalNetPay,  `${label} — net pay payable`,             null);
+  addToBucket(creditBuckets, profile.cppPayableAccountId,           null, cppPayable,   `${label} — CPP payable (ee + er)`,       null);
+  addToBucket(creditBuckets, profile.eiPayableAccountId,            null, eiPayable,    `${label} — EI payable (ee + er)`,        null);
+  addToBucket(creditBuckets, profile.federalTaxPayableAccountId,    null, totalFedTax,  `${label} — federal income tax payable`,  null);
+  addToBucket(creditBuckets, profile.provincialTaxPayableAccountId, null, totalProvTax, `${label} — provincial income tax payable`, null);
 
   // --------------------------------------------------------------
   // D. Emit ResolvedJournalLine entries. Debit buckets first
-  //    (sorted by accountId for determinism), then credit buckets.
+  //    (sorted deterministically), then credit buckets.
   // --------------------------------------------------------------
   const lines: ResolvedJournalLine[] = [];
   const emit = (map: Map<string, Bucket>, side: "DEBIT" | "CREDIT") => {
-    const acctIds = Array.from(map.keys()).sort();
-    for (const acctId of acctIds) {
-      const b = map.get(acctId)!;
+    const keys = Array.from(map.keys()).sort();
+    for (const k of keys) {
+      const b = map.get(k)!;
       if (b.total.isZero()) continue;
+      const { accountId, departmentId } = parseBucketKey(k);
       const desc = b.descriptions.length === 1
         ? b.descriptions[0]
         : b.descriptions.length <= 3
           ? b.descriptions.join(" + ")
           : `${b.descriptions.length} sources`;
       lines.push({
-        accountId: acctId,
+        accountId,
+        departmentId,
         debit:  side === "DEBIT"  ? b.total : null,
         credit: side === "CREDIT" ? b.total : null,
         description: desc,
-        departmentIds: Array.from(b.departmentIds).sort(),
+        employeeIds: Array.from(b.employeeIds).sort(),
       });
     }
   };
@@ -332,7 +338,3 @@ function sumOver(rows: BatchEmployeeAmounts[], field: keyof BatchEmployeeAmounts
   }
   return acc;
 }
-
-// Component classifier helpers are re-exported at the top of the
-// file from `./gl-readiness` — resolver, readiness, preview, and
-// posting all consume the same predicate implementations.

@@ -1,11 +1,10 @@
-// Phase 3 (2026-09-15) — DB-backed input assembler for the payroll
-// GL resolver.
+// Phase 3 (2026-09-15, follow-up 2026-09-16) — DB-backed input assembler
+// for the natural-account + department-dimension payroll GL resolver.
 //
 // Loads a batch's PayrollBatchEmployee rows, its PayrollBatchComponentSnapshot
-// rows, the club's PayrollGlAccountingProfile, and the club's
-// PayrollGlDepartmentOverride rows into the pure shapes the resolver
-// consumes. Callers (preview + posting) MUST go through this so both
-// paths see identical inputs.
+// rows, and the club's PayrollGlAccountingProfile into the pure shapes the
+// resolver consumes. Callers (preview + posting) MUST go through this so
+// both paths see identical inputs.
 //
 // This module NEVER reads live HR (`Employee.departmentId` /
 // `EmployeeEmploymentAssignment`) — the frozen department is
@@ -18,7 +17,6 @@ import { parseSourceFactsV1 } from "./source-facts-schema";
 import type {
   BatchEmployeeAmounts,
   ComponentSnapshotForResolver,
-  GlDepartmentOverrideSnapshot,
   GlProfileSnapshot,
 } from "./payroll-gl-resolver";
 
@@ -34,10 +32,6 @@ export function frozenPrimaryDepartmentId(sourceFactsJson: string | null | undef
     const primary = facts.assignments.find((a) => a.role === "PRIMARY") ?? facts.assignments[0] ?? null;
     return primary?.departmentId ?? null;
   } catch {
-    // Malformed source facts must never silently corrupt journal
-    // resolution; treat as unknown department so it falls through to
-    // the global default and the ordinary Prepare-time schema-guard
-    // catches the corruption on the next re-prepare.
     return null;
   }
 }
@@ -51,23 +45,13 @@ export async function loadPayrollGlInputs(
   batchId: string,
 ): Promise<{
   profile: GlProfileSnapshot | null;
-  departmentOverrides: GlDepartmentOverrideSnapshot[];
   employees: BatchEmployeeAmounts[];
   components: ComponentSnapshotForResolver[];
 }> {
-  const [config, overrides, emps, snaps] = await Promise.all([
+  const [config, emps, snaps] = await Promise.all([
     prisma.payrollClubConfig.findUnique({
       where: { clubId },
       include: { glAccountingProfile: true },
-    }),
-    prisma.payrollGlDepartmentOverride.findMany({
-      where: { clubId },
-      select: {
-        departmentId: true,
-        salaryExpenseAccountId: true,
-        employerCppExpenseAccountId: true,
-        employerEiExpenseAccountId: true,
-      },
     }),
     prisma.payrollBatchEmployee.findMany({
       where: { batchId, clubId },
@@ -139,6 +123,7 @@ export async function loadPayrollGlInputs(
   }));
 
   const components: ComponentSnapshotForResolver[] = snaps.map((s) => ({
+    batchEmployeeId: s.batchEmployeeId,
     componentCode: s.componentCode,
     displayName: s.displayName,
     side: s.side,
@@ -150,15 +135,5 @@ export async function loadPayrollGlInputs(
     liabilityAccountIdSnapshot: s.liabilityAccountIdSnapshot,
   }));
 
-  return {
-    profile,
-    departmentOverrides: overrides.map((o) => ({
-      departmentId: o.departmentId,
-      salaryExpenseAccountId: o.salaryExpenseAccountId,
-      employerCppExpenseAccountId: o.employerCppExpenseAccountId,
-      employerEiExpenseAccountId: o.employerEiExpenseAccountId,
-    })),
-    employees,
-    components,
-  };
+  return { profile, employees, components };
 }

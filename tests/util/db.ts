@@ -373,9 +373,6 @@ export async function resetDb() {
     // Payroll-3B-5B (2026-09-15) — implementation declaration FKs into
     // Club; wipe before Club.
     c.payrollImplementationDeclaration.deleteMany(),
-    // Phase 3 (2026-09-15) — department-expense overrides FK into Club
-    // + Department + Account; wipe leaf-first.
-    c.payrollGlDepartmentOverride.deleteMany(),
     // HR-2C Employment (2026-08-24) — Allowances FK into Assignment;
     // Assignment FKs into Employee. Wipe leaf-first.
     c.employeeAllowance.deleteMany(),

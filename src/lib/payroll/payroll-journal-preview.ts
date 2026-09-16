@@ -27,6 +27,12 @@ export interface PayrollJournalPreviewLine {
   lineNumber: number;
   accountNumber: string;
   accountName: string;
+  // Phase 3 follow-up (2026-09-16) — department dimension on the
+  // line. Null for centralized liability lines. Renders as an
+  // additional column so the Controller can see per-department
+  // attribution at a glance before posting.
+  departmentCode: string | null;
+  departmentName: string | null;
   debit: string | null;
   credit: string | null;
   description: string;
@@ -125,21 +131,35 @@ export async function previewPayrollJournal(
 
   const label = `Payroll ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
 
-  // Phase 3 (2026-09-15) — resolve journal through the shared,
-  // department-aware resolver.
+  // Phase 3 follow-up (2026-09-16) — resolve journal through the
+  // shared resolver. Emits one line per (accountId, departmentId)
+  // pair; the department dimension is populated on
+  // JournalEntryLine.departmentId at post time.
   const resolved = resolvePayrollJournal({
     label,
     profile,
-    departmentOverrides: inputs.departmentOverrides,
     employees: inputs.employees,
     components: inputs.components,
   });
 
-  const acctRows = await prisma.account.findMany({
-    where: { id: { in: resolved.lines.map((l) => l.accountId) } },
-    select: { id: true, accountNumber: true, name: true },
-  });
+  const uniqueAccountIds = Array.from(new Set(resolved.lines.map((l) => l.accountId)));
+  const uniqueDeptIds = Array.from(new Set(
+    resolved.lines.map((l) => l.departmentId).filter((v): v is string => v != null),
+  ));
+  const [acctRows, deptRows] = await Promise.all([
+    prisma.account.findMany({
+      where: { id: { in: uniqueAccountIds } },
+      select: { id: true, accountNumber: true, name: true },
+    }),
+    uniqueDeptIds.length > 0
+      ? prisma.department.findMany({
+          where: { id: { in: uniqueDeptIds }, clubId },
+          select: { id: true, code: true, name: true },
+        })
+      : Promise.resolve([]),
+  ]);
   const acctById = new Map(acctRows.map((a) => [a.id, a]));
+  const deptById = new Map(deptRows.map((d) => [d.id, d]));
   const num  = (id: string): string => acctById.get(id)?.accountNumber ?? `?${id}`;
   const name = (id: string): string => acctById.get(id)?.name ?? "(unknown)";
 
@@ -147,6 +167,8 @@ export async function previewPayrollJournal(
     lineNumber: idx + 1,
     accountNumber: num(l.accountId),
     accountName: name(l.accountId),
+    departmentCode: l.departmentId ? (deptById.get(l.departmentId)?.code ?? null) : null,
+    departmentName: l.departmentId ? (deptById.get(l.departmentId)?.name ?? null) : null,
     debit: l.debit != null ? l.debit.toFixed(2) : null,
     credit: l.credit != null ? l.credit.toFixed(2) : null,
     description: l.description,

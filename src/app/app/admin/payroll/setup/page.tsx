@@ -33,10 +33,8 @@ import MembershipEditor from "./MembershipEditor";
 import PayrollCalendarSection from "./PayrollCalendarSection";
 import GlProfileEditor from "./GlProfileEditor";
 import PayrollImplementationEditor from "./PayrollImplementationEditor";
-import DepartmentOverridesEditor from "./DepartmentOverridesEditor";
 import { listAccounts } from "@/lib/accounting/coa";
 import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
-import { listDepartmentOverrides } from "@/lib/payroll/gl-department-overrides";
 import { declareImplementationAction, revokeImplementationAction } from "./_implementation-actions";
 
 export const runtime = "nodejs";
@@ -115,16 +113,6 @@ export default async function PayrollSetupPage({
       // Payroll-3C-6A — global Payroll GL Accounting Profile + tenant CoA.
       prisma.payrollGlAccountingProfile.findUnique({ where: { clubId } }),
       listAccounts(principal, clubId, { includeArchived: false }),
-    ]);
-    // Phase 3 (2026-09-15) — active departments + existing per-department
-    // expense overrides for the departmental payroll editor.
-    const [activeDepartments, deptOverrides] = await Promise.all([
-      prisma.department.findMany({
-        where: { clubId, isActive: true },
-        select: { id: true, code: true, name: true, sortOrder: true },
-        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      }),
-      listDepartmentOverrides(principal, clubId),
     ]);
     // Group periods by pay-group id for the calendar section.
     const initialCalendarByGroup: Record<string, ReturnType<typeof serializePeriod>[]> = {};
@@ -290,7 +278,7 @@ export default async function PayrollSetupPage({
       <SectionHeader
         eyebrow="Section 6"
         title="Payroll GL profile"
-        subtitle="The 8 tenant-wide accounts every payroll journal debits or credits. Set these once for your Chart of Accounts; per-component mappings (Section 6) route specific earnings, benefits, and deductions to more granular accounts."
+        subtitle="The 8 tenant-wide accounts every payroll journal debits or credits — three expense (salary, employer CPP, employer EI) and five liability (net pay payable, CPP, EI, federal + provincial income tax). Departmental attribution is automatic: each journal line carries the employee's frozen department as a dimension, so a single Salary & Wages account posts one line per department. Per-component mappings on individual payroll components (Section 7) route specific earnings, benefits, and deductions to more granular accounts."
       />
       <section
         className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
@@ -316,38 +304,15 @@ export default async function PayrollSetupPage({
         />
       </section>
 
-      {/* Phase 3 (2026-09-15) — Section 7: Department expense overrides.
-          Optional per-department override of the three EXPENSE mappings
-          in Section 6. Unset fields inherit the global default. */}
+      {/* Section 7 — Payroll Components (renumbered by v-slice-1-followup-7,
+          re-renumbered by Phase 3 follow-up: the former "Department
+          expense overrides" section was removed after the departmental
+          accounting audit — departmental attribution now travels on
+          the JournalEntryLine.departmentId dimension, not a per-
+          department natural-account override. See the resolver header
+          in src/lib/payroll/payroll-gl-resolver.ts). */}
       <SectionHeader
         eyebrow="Section 7"
-        title="Department expense overrides"
-        subtitle="Route salary / employer CPP / employer EI expenses to a different account for a specific operating department. Departments that inherit the global default (Section 6) do not need a row here — payroll expense will fall through to the global mapping automatically. Central liabilities (net pay, CPP payable, EI payable, income tax payable) always stay centralized."
-      />
-      <section
-        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
-        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
-        data-testid="payroll-dept-overrides-section"
-      >
-        <DepartmentOverridesEditor
-          clubId={clubId}
-          canWrite={canWrite}
-          departments={activeDepartments.map((d) => ({ id: d.id, code: d.code, name: d.name }))}
-          expenseAccounts={coa
-            .filter((a) => a.isActive && a.type === "EXPENSE")
-            .map((a) => ({ id: a.id, accountNumber: a.accountNumber, name: a.name }))}
-          globalDefaults={{
-            salaryExpenseAccountId:        glProfile?.salaryExpenseAccountId        ?? null,
-            employerCppExpenseAccountId:   glProfile?.employerCppExpenseAccountId   ?? null,
-            employerEiExpenseAccountId:    glProfile?.employerEiExpenseAccountId    ?? null,
-          }}
-          initialOverrides={deptOverrides}
-        />
-      </section>
-
-      {/* Section 8 — Payroll Components (renumbered by Phase 3) */}
-      <SectionHeader
-        eyebrow="Section 8"
         title="Payroll components"
         subtitle="Tenant catalogue of every distinct compensation, benefit, and deduction concept your Club operates. Assign an expense and/or liability account per component so payroll can post to your Chart of Accounts."
       />

@@ -391,7 +391,6 @@ export async function postPayrollBatch(
   const resolved = resolvePayrollJournal({
     label,
     profile,
-    departmentOverrides: inputs.departmentOverrides,
     employees: inputs.employees,
     components: inputs.components,
   });
@@ -402,24 +401,64 @@ export async function postPayrollBatch(
     );
   }
 
-  const acctRows = await prisma.account.findMany({
-    where: { id: { in: resolved.lines.map((l) => l.accountId) } },
-    select: { id: true, accountNumber: true },
-  });
+  // Resolve account IDs to accountNumber + department IDs to
+  // department code so the canonical journal adapter can accept the
+  // draft. `departmentCode` is the adapter's schema key; the adapter
+  // resolves it back to a Department.id and persists on
+  // JournalEntryLine.departmentId.
+  const uniqueAccountIds = Array.from(new Set(resolved.lines.map((l) => l.accountId)));
+  const uniqueDeptIds = Array.from(new Set(
+    resolved.lines.map((l) => l.departmentId).filter((v): v is string => v != null),
+  ));
+  const [acctRows, deptRows] = await Promise.all([
+    prisma.account.findMany({
+      where: { id: { in: uniqueAccountIds } },
+      select: { id: true, accountNumber: true },
+    }),
+    uniqueDeptIds.length > 0
+      ? prisma.department.findMany({
+          where: { id: { in: uniqueDeptIds }, clubId: batch.clubId },
+          select: { id: true, code: true },
+        })
+      : Promise.resolve([]),
+  ]);
   const acctNumberById = new Map(acctRows.map((a) => [a.id, a.accountNumber]));
+  const deptCodeById = new Map(deptRows.map((d) => [d.id, d.code]));
   const num = (id: string): string => {
     const n = acctNumberById.get(id);
     if (!n) throw new ConflictError(`Payroll GL references missing account ${id}.`);
     return n;
   };
-  const lines: Array<{ accountNumber: string; debit?: string; credit?: string; description: string; lineNumber: number }> = resolved.lines.map((l, idx) => {
-    const entry: { accountNumber: string; debit?: string; credit?: string; description: string; lineNumber: number } = {
+  const deptCode = (id: string | null): string | null => {
+    if (id == null) return null;
+    const c = deptCodeById.get(id);
+    if (!c) throw new ConflictError(`Payroll GL references missing department ${id}.`);
+    return c;
+  };
+  const lines: Array<{
+    accountNumber: string;
+    debit?: string;
+    credit?: string;
+    description: string;
+    lineNumber: number;
+    departmentCode?: string | null;
+  }> = resolved.lines.map((l, idx) => {
+    const entry: {
+      accountNumber: string;
+      debit?: string;
+      credit?: string;
+      description: string;
+      lineNumber: number;
+      departmentCode?: string | null;
+    } = {
       lineNumber: idx + 1,
       accountNumber: num(l.accountId),
       description: l.description,
     };
     if (l.debit != null)  entry.debit  = l.debit.toFixed(2);
     if (l.credit != null) entry.credit = l.credit.toFixed(2);
+    const code = deptCode(l.departmentId);
+    if (code) entry.departmentCode = code;
     return entry;
   });
 

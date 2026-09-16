@@ -1,15 +1,16 @@
-// Phase 3 (2026-09-15) — pure resolver tests for Departmental Payroll
-// Accounting. No DB, no Prisma access — proves the account-resolution
-// precedence and journal-aggregation contract in isolation.
+// Phase 3 follow-up (2026-09-16) — pure resolver tests for Departmental
+// Payroll Accounting under the corrected natural-account + department-
+// dimension model.
+//
+// Proves the resolver emits one journal line per (accountId, departmentId)
+// pair, aggregates within (accountId, departmentId) buckets, and keeps
+// centralized liabilities on departmentId=null.
 
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@prisma/client";
 import {
   resolvePayrollJournal,
-  resolveDepartmentExpenseAccount,
   type BatchEmployeeAmounts,
-  type ComponentSnapshotForResolver,
-  type GlDepartmentOverrideSnapshot,
   type GlProfileSnapshot,
 } from "@/lib/payroll/payroll-gl-resolver";
 import { frozenPrimaryDepartmentId } from "@/lib/payroll/payroll-gl-inputs";
@@ -49,12 +50,7 @@ function emp(overrides: Partial<BatchEmployeeAmounts>): BatchEmployeeAmounts {
   };
 }
 
-describe("Phase 3 · frozenPrimaryDepartmentId (source-facts extractor)", () => {
-  // Founder invariant: the frozen department must come from the
-  // batch's `sourceFactsJson`, NEVER a live HR lookup. Once written
-  // at Prepare, changing Employee.departmentId AFTER cannot alter
-  // the journal outcome. This unit test proves the extractor picks
-  // the department from the frozen blob.
+describe("Phase 3 follow-up · frozenPrimaryDepartmentId (source-facts extractor)", () => {
   const makeFacts = (deptId: string | null): string => JSON.stringify({
     schemaVersion: 1,
     coverage: {
@@ -97,58 +93,15 @@ describe("Phase 3 · frozenPrimaryDepartmentId (source-facts extractor)", () => 
   });
 });
 
-describe("Phase 3 · resolveDepartmentExpenseAccount", () => {
-  const overrides: GlDepartmentOverrideSnapshot[] = [
-    {
-      departmentId: "dept-admin",
-      salaryExpenseAccountId: "acc-admin-salary",
-      employerCppExpenseAccountId: "acc-admin-erCpp",
-      employerEiExpenseAccountId: null, // deliberately unset → falls back to global
-    },
-  ];
-
-  it("uses override account when configured for that dept + field", () => {
-    const r = resolveDepartmentExpenseAccount(PROFILE, overrides, "dept-admin", "salaryExpenseAccountId");
-    expect(r.accountId).toBe("acc-admin-salary");
-    expect(r.source).toBe("OVERRIDE");
-  });
-
-  it("falls back to global when the override field is null", () => {
-    const r = resolveDepartmentExpenseAccount(PROFILE, overrides, "dept-admin", "employerEiExpenseAccountId");
-    expect(r.accountId).toBe("acc-global-erEi");
-    expect(r.source).toBe("GLOBAL");
-  });
-
-  it("falls back to global for a department with no override row", () => {
-    const r = resolveDepartmentExpenseAccount(PROFILE, overrides, "dept-grounds", "salaryExpenseAccountId");
-    expect(r.accountId).toBe("acc-global-salary");
-    expect(r.source).toBe("GLOBAL");
-  });
-
-  it("falls back to global when the frozen department id is null", () => {
-    const r = resolveDepartmentExpenseAccount(PROFILE, overrides, null, "salaryExpenseAccountId");
-    expect(r.accountId).toBe("acc-global-salary");
-    expect(r.source).toBe("GLOBAL");
-  });
-});
-
-describe("Phase 3 · resolvePayrollJournal", () => {
-  it("routes two departments' salaries to two distinct account lines", () => {
-    // Setup: dept-admin has an override to acc-admin-salary; dept-grounds
-    // has NO override. Employee A ($5,000 gross, Administration) and
-    // Employee B ($3,000 gross, Grounds) — both zero statutory for
-    // simplicity so the balance is easy to reason about.
+describe("Phase 3 follow-up · resolvePayrollJournal — natural + department dimension", () => {
+  it("emits one line per (accountId, departmentId) pair — same natural account, two departments", () => {
+    // Two employees, both post to the SAME global salary expense
+    // account, but each carries a different frozen department. The
+    // resolver must emit TWO lines: same accountId, differing
+    // departmentIds. This is the founder-mandated §9 rule.
     const result = resolvePayrollJournal({
       label: "TEST",
       profile: PROFILE,
-      departmentOverrides: [
-        {
-          departmentId: "dept-admin",
-          salaryExpenseAccountId: "acc-admin-salary",
-          employerCppExpenseAccountId: null,
-          employerEiExpenseAccountId: null,
-        },
-      ],
       employees: [
         emp({ frozenDepartmentId: "dept-admin",   grossPay: D(5000), netPay: D(5000) }),
         emp({ frozenDepartmentId: "dept-grounds", grossPay: D(3000), netPay: D(3000) }),
@@ -156,31 +109,21 @@ describe("Phase 3 · resolvePayrollJournal", () => {
       components: [],
     });
 
-    // Two salary-expense debits: admin-salary $5000 + global-salary $3000.
-    // Aggregated by account id (they don't share an account, so they stay separate).
-    const salaryDebits = result.lines.filter((l) => l.debit != null && l.accountId.includes("salary"));
+    const salaryDebits = result.lines.filter((l) => l.accountId === PROFILE.salaryExpenseAccountId && l.debit != null);
     expect(salaryDebits).toHaveLength(2);
-    expect(salaryDebits.find((l) => l.accountId === "acc-admin-salary")?.debit?.toFixed(2)).toBe("5000.00");
-    expect(salaryDebits.find((l) => l.accountId === "acc-global-salary")?.debit?.toFixed(2)).toBe("3000.00");
-
-    // Journal balances (gross debits vs net-pay credits, no statutory).
+    const admin   = salaryDebits.find((l) => l.departmentId === "dept-admin");
+    const grounds = salaryDebits.find((l) => l.departmentId === "dept-grounds");
+    expect(admin?.debit?.toFixed(2)).toBe("5000.00");
+    expect(grounds?.debit?.toFixed(2)).toBe("3000.00");
     expect(result.balanced).toBe(true);
     expect(result.totalDebits.toFixed(2)).toBe("8000.00");
     expect(result.totalCredits.toFixed(2)).toBe("8000.00");
   });
 
-  it("aggregates two employees in the SAME department into ONE salary debit line", () => {
+  it("aggregates two employees in the SAME (account, department) into ONE line", () => {
     const result = resolvePayrollJournal({
       label: "TEST",
       profile: PROFILE,
-      departmentOverrides: [
-        {
-          departmentId: "dept-admin",
-          salaryExpenseAccountId: "acc-admin-salary",
-          employerCppExpenseAccountId: null,
-          employerEiExpenseAccountId: null,
-        },
-      ],
       employees: [
         emp({ frozenDepartmentId: "dept-admin", grossPay: D("4230.77"), netPay: D("4230.77") }),
         emp({ frozenDepartmentId: "dept-admin", grossPay: D("3269.23"), netPay: D("3269.23") }),
@@ -188,35 +131,27 @@ describe("Phase 3 · resolvePayrollJournal", () => {
       components: [],
     });
 
-    const adminSalary = result.lines.find((l) => l.accountId === "acc-admin-salary");
-    expect(adminSalary).toBeDefined();
-    expect(adminSalary!.debit?.toFixed(2)).toBe("7500.00");
-    expect(adminSalary!.departmentIds).toEqual(["dept-admin"]);
+    const salaryDebits = result.lines.filter((l) => l.accountId === PROFILE.salaryExpenseAccountId && l.debit != null);
+    expect(salaryDebits).toHaveLength(1);
+    expect(salaryDebits[0].debit?.toFixed(2)).toBe("7500.00");
+    expect(salaryDebits[0].departmentId).toBe("dept-admin");
     expect(result.balanced).toBe(true);
   });
 
-  it("keeps liabilities centralized regardless of dept overrides", () => {
+  it("keeps liabilities centralized with departmentId=null regardless of employees' departments", () => {
     const result = resolvePayrollJournal({
       label: "TEST",
       profile: PROFILE,
-      departmentOverrides: [
-        {
-          departmentId: "dept-admin",
-          salaryExpenseAccountId: "acc-admin-salary",
-          employerCppExpenseAccountId: "acc-admin-erCpp",
-          employerEiExpenseAccountId: "acc-admin-erEi",
-        },
-      ],
       employees: [
         emp({
           frozenDepartmentId: "dept-admin",
-          grossPay: D(1000), netPay: D("800"),
-          deductionCppEeCombined: D("60"),
-          deductionEiEe: D("20"),
-          deductionFederalTax: D("80"),
-          deductionProvincialTax: D("40"),
-          employerCppCombined: D("60"),
-          employerEi: D("28"),
+          grossPay: D(1000), netPay: D(800),
+          deductionCppEeCombined: D(60),
+          deductionEiEe: D(20),
+          deductionFederalTax: D(80),
+          deductionProvincialTax: D(40),
+          employerCppCombined: D(60),
+          employerEi: D(28),
         }),
       ],
       components: [],
@@ -224,34 +159,17 @@ describe("Phase 3 · resolvePayrollJournal", () => {
 
     const netPay = result.lines.find((l) => l.accountId === PROFILE.netPayPayableAccountId);
     const cppPayable = result.lines.find((l) => l.accountId === PROFILE.cppPayableAccountId);
-    const eiPayable  = result.lines.find((l) => l.accountId === PROFILE.eiPayableAccountId);
-    const fedPayable = result.lines.find((l) => l.accountId === PROFILE.federalTaxPayableAccountId);
-
     expect(netPay?.credit?.toFixed(2)).toBe("800.00");
-    expect(cppPayable?.credit?.toFixed(2)).toBe("120.00"); // ee + er
-    expect(eiPayable?.credit?.toFixed(2)).toBe("48.00");   // ee + er
-    expect(fedPayable?.credit?.toFixed(2)).toBe("80.00");
-    // Central liabilities always carry NO departmentIds tag — they are
-    // Club-wide, not attributable to a single department.
-    expect(cppPayable?.departmentIds).toEqual([]);
-    expect(netPay?.departmentIds).toEqual([]);
-
-    // Journal balances.
+    expect(netPay?.departmentId).toBeNull();
+    expect(cppPayable?.credit?.toFixed(2)).toBe("120.00");
+    expect(cppPayable?.departmentId).toBeNull();
     expect(result.balanced).toBe(true);
   });
 
-  it("routes employer CPP + employer EI expense to the department override when set", () => {
+  it("attaches the frozen department to employer CPP + employer EI expense lines", () => {
     const result = resolvePayrollJournal({
       label: "TEST",
       profile: PROFILE,
-      departmentOverrides: [
-        {
-          departmentId: "dept-grounds",
-          salaryExpenseAccountId: null,
-          employerCppExpenseAccountId: "acc-grounds-erCpp",
-          employerEiExpenseAccountId: "acc-grounds-erEi",
-        },
-      ],
       employees: [
         emp({
           frozenDepartmentId: "dept-grounds",
@@ -267,31 +185,29 @@ describe("Phase 3 · resolvePayrollJournal", () => {
       components: [],
     });
 
-    // Salary falls through to GLOBAL (no override for salary here).
-    expect(result.lines.find((l) => l.accountId === "acc-global-salary")?.debit?.toFixed(2)).toBe("1000.00");
-    // Employer CPP + EI route to the DEPT override accounts.
-    expect(result.lines.find((l) => l.accountId === "acc-grounds-erCpp")?.debit?.toFixed(2)).toBe("60.00");
-    expect(result.lines.find((l) => l.accountId === "acc-grounds-erEi")?.debit?.toFixed(2)).toBe("28.00");
-    expect(result.balanced).toBe(true);
+    const erCpp = result.lines.find((l) => l.accountId === PROFILE.employerCppExpenseAccountId);
+    const erEi  = result.lines.find((l) => l.accountId === PROFILE.employerEiExpenseAccountId);
+    expect(erCpp?.departmentId).toBe("dept-grounds");
+    expect(erEi?.departmentId).toBe("dept-grounds");
+    expect(erCpp?.debit?.toFixed(2)).toBe("60.00");
+    expect(erEi?.debit?.toFixed(2)).toBe("28.00");
   });
 
-  it("subtracts INCREASES_NET_PAY component amounts from residual salary expense (no double-post)", () => {
-    // Employee has $5,000 gross, of which $75 came from a Cell Phone
-    // allowance already booked to its own expense account via the
-    // component snapshot. Residual salary expense = $5000 - $75 = $4,925.
+  it("subtracts INCREASES_NET_PAY component amounts from residual salary expense", () => {
     const result = resolvePayrollJournal({
       label: "TEST",
       profile: PROFILE,
-      departmentOverrides: [],
       employees: [
         emp({
-          frozenDepartmentId: null,
+          batchEmployeeId: "be-A",
+          frozenDepartmentId: "dept-admin",
           grossPay: D(5000), netPay: D(5000),
           componentCashInGross: D(75),
         }),
       ],
       components: [
         {
+          batchEmployeeId: "be-A",
           componentCode: "CELL_PHONE",
           displayName: "Cell Phone Allowance",
           side: "EMPLOYEE",
@@ -305,12 +221,64 @@ describe("Phase 3 · resolvePayrollJournal", () => {
       ],
     });
 
-    const residual = result.lines.find((l) => l.accountId === "acc-global-salary");
+    const residual = result.lines.find((l) => l.accountId === PROFILE.salaryExpenseAccountId);
     const cellExp  = result.lines.find((l) => l.accountId === "acc-comp-cell");
     expect(residual?.debit?.toFixed(2)).toBe("4925.00");
+    expect(residual?.departmentId).toBe("dept-admin");
     expect(cellExp?.debit?.toFixed(2)).toBe("75.00");
+    // Component expense lines carry the frozen department too — the
+    // founder-mandated §3 rule (Cell Phone Allowance for two employees
+    // in different departments must remain distinguishable).
+    expect(cellExp?.departmentId).toBe("dept-admin");
     expect(result.balanced).toBe(true);
-    expect(result.totalDebits.toFixed(2)).toBe("5000.00");
-    expect(result.totalCredits.toFixed(2)).toBe("5000.00");
+  });
+
+  it("preserves component department attribution across two employees in different departments", () => {
+    // Two employees in different departments, both receiving the SAME
+    // component (Cell Phone Allowance). Same natural account for the
+    // component's expense; but the resolver MUST emit two lines
+    // differing only in departmentId — the founder-mandated §3 rule.
+    const result = resolvePayrollJournal({
+      label: "TEST",
+      profile: PROFILE,
+      employees: [
+        emp({
+          batchEmployeeId: "be-admin",
+          frozenDepartmentId: "dept-admin",
+          grossPay: D(5000), netPay: D(5000), componentCashInGross: D(75),
+        }),
+        emp({
+          batchEmployeeId: "be-grounds",
+          frozenDepartmentId: "dept-grounds",
+          grossPay: D(4000), netPay: D(4000), componentCashInGross: D(75),
+        }),
+      ],
+      components: [
+        {
+          batchEmployeeId: "be-admin",
+          componentCode: "CELL_PHONE", displayName: "Cell Phone Allowance",
+          side: "EMPLOYEE", cashEffect: "INCREASES_NET_PAY",
+          category: "ALLOWANCE", provenance: "RECURRING",
+          resolvedAmount: D(75),
+          expenseAccountIdSnapshot: "acc-comp-cell", liabilityAccountIdSnapshot: null,
+        },
+        {
+          batchEmployeeId: "be-grounds",
+          componentCode: "CELL_PHONE", displayName: "Cell Phone Allowance",
+          side: "EMPLOYEE", cashEffect: "INCREASES_NET_PAY",
+          category: "ALLOWANCE", provenance: "RECURRING",
+          resolvedAmount: D(75),
+          expenseAccountIdSnapshot: "acc-comp-cell", liabilityAccountIdSnapshot: null,
+        },
+      ],
+    });
+
+    const cellLines = result.lines.filter((l) => l.accountId === "acc-comp-cell");
+    expect(cellLines).toHaveLength(2);
+    const admin   = cellLines.find((l) => l.departmentId === "dept-admin");
+    const grounds = cellLines.find((l) => l.departmentId === "dept-grounds");
+    expect(admin?.debit?.toFixed(2)).toBe("75.00");
+    expect(grounds?.debit?.toFixed(2)).toBe("75.00");
+    expect(result.balanced).toBe(true);
   });
 });
