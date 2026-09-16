@@ -58,6 +58,7 @@ import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
 import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
+  changeRecurringPayrollComponentAction,
 } from "./_recurring-component-actions";
 
 export default async function EmployeeProfilePage({
@@ -659,6 +660,7 @@ export default async function EmployeeProfilePage({
             }))}
             addAction={addRecurringPayrollComponentAction}
             endAction={endRecurringPayrollComponentAction}
+            changeAction={changeRecurringPayrollComponentAction}
           />
         ) : undefined
       }

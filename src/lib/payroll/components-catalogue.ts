@@ -7,11 +7,12 @@
 //
 // Every write is audited. Reads are permission-gated (`payroll:read`).
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, hasPermission, type Principal } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
-import { NotFoundError, ValidationError } from "../errors";
+import { ConflictError, NotFoundError, ValidationError } from "../errors";
 
 const ENTITY = "PayrollComponent";
 const ASSIGNMENT_ENTITY = "EmployeeRecurringPayrollComponent";
@@ -410,6 +411,68 @@ function validateAssignmentInputs(input: UpsertRecurringComponentInput, method: 
   }
 }
 
+// Phase 4 follow-up (2026-09-16) — half-open effective-interval
+// overlap detection.
+//
+// EFFECTIVE-DATE CONVENTION (documented + tested):
+//
+//   Assignments own the half-open interval [effectiveFrom, effectiveTo).
+//   `effectiveTo` is EXCLUSIVE. When `effectiveTo` is null, the assignment
+//   is open-ended (applies indefinitely from `effectiveFrom` onward).
+//
+//   Two intervals overlap iff:
+//     a.effectiveFrom < b.effectiveTo  AND  b.effectiveFrom < a.effectiveTo
+//     (nullable `effectiveTo` treated as +∞ for the comparison)
+//
+// The database has no exclusion constraint (Prisma+SQLite/Postgres would
+// require a raw migration and a custom operator class in Postgres). Instead
+// the write path takes a serializable read-then-write cycle inside a single
+// `$transaction`, which is sufficient given the low-throughput HR editing
+// pattern. Concurrent writes are still individually validated: if two writes
+// race the same [effectiveFrom, effectiveTo) window they'll both see no
+// overlap, both commit, and the Prepare-time guard (see
+// `assertNoOverlappingRecurringComponents`) fails-closed rather than
+// arbitrarily picking one.
+async function assertNoOverlap(
+  tx: Prisma.TransactionClient,
+  args: {
+    clubId: string;
+    employeeId: string;
+    componentId: string;
+    effectiveFrom: Date;
+    effectiveTo: Date | null;
+    excludeAssignmentId?: string;
+  },
+): Promise<void> {
+  // Query every assignment for this (employee, component) and filter in
+  // memory — an alternative to a large `OR` clause that Prisma cannot
+  // translate as tightly on SQLite. Volume per employee is small.
+  const rows = await tx.employeeRecurringPayrollComponent.findMany({
+    where: {
+      clubId: args.clubId,
+      employeeId: args.employeeId,
+      componentId: args.componentId,
+      ...(args.excludeAssignmentId ? { NOT: { id: args.excludeAssignmentId } } : {}),
+    },
+    select: { id: true, effectiveFrom: true, effectiveTo: true },
+  });
+  const aFrom = args.effectiveFrom.getTime();
+  const aTo   = args.effectiveTo == null ? Number.POSITIVE_INFINITY : args.effectiveTo.getTime();
+  for (const r of rows) {
+    const bFrom = r.effectiveFrom.getTime();
+    const bTo   = r.effectiveTo == null ? Number.POSITIVE_INFINITY : r.effectiveTo.getTime();
+    if (aFrom < bTo && bFrom < aTo) {
+      throw new ValidationError([{
+        path: "effectiveFrom",
+        message:
+          `This employee already has a Cell Phone Allowance-style recurring assignment covering the requested interval ` +
+          `(existing ${r.effectiveFrom.toISOString().slice(0, 10)} → ${r.effectiveTo?.toISOString().slice(0, 10) ?? "current"}). ` +
+          `End the existing assignment first, or use the Change flow to schedule a successor.`,
+      }]);
+    }
+  }
+}
+
 export async function createRecurringComponentAssignment(
   principal: Principal, clubId: string, input: UpsertRecurringComponentInput,
 ): Promise<{ id: string }> {
@@ -432,20 +495,31 @@ export async function createRecurringComponentAssignment(
   }
   validateAssignmentInputs(input, component.calculationMethod as CalculationMethod);
 
-  const row = await prisma.employeeRecurringPayrollComponent.create({
-    data: {
+  const row = await prisma.$transaction(async (tx) => {
+    // Overlap check inside the same transaction so a concurrent race is
+    // at least prevented from seeing a partial state of its own write.
+    await assertNoOverlap(tx, {
       clubId,
       employeeId: input.employeeId,
       componentId: input.componentId,
-      amount: input.amount != null ? String(input.amount) : null,
-      percentBps: input.percentBps ?? null,
       effectiveFrom: input.effectiveFrom,
       effectiveTo: input.effectiveTo ?? null,
-      active: input.active ?? true,
-      notes: input.notes ?? null,
-      createdByUserId: principal.id,
-    },
-    select: { id: true },
+    });
+    return tx.employeeRecurringPayrollComponent.create({
+      data: {
+        clubId,
+        employeeId: input.employeeId,
+        componentId: input.componentId,
+        amount: input.amount != null ? String(input.amount) : null,
+        percentBps: input.percentBps ?? null,
+        effectiveFrom: input.effectiveFrom,
+        effectiveTo: input.effectiveTo ?? null,
+        active: input.active ?? true,
+        notes: input.notes ?? null,
+        createdByUserId: principal.id,
+      },
+      select: { id: true },
+    });
   });
 
   await audit(principal, {
@@ -477,6 +551,187 @@ export async function endRecurringComponentAssignment(
     clubId, action: "payroll.component.assign.end", entityType: ASSIGNMENT_ENTITY, entityId: id,
     after: { effectiveTo },
   });
+}
+
+/**
+ * Phase 4 follow-up (2026-09-16) — atomic Change.
+ *
+ * Closes the existing assignment (`predecessorId`) at the successor's
+ * `effectiveFrom` (half-open convention: predecessor.effectiveTo =
+ * successor.effectiveFrom, exclusive) and creates the successor row in
+ * the SAME transaction. If either write fails the transaction rolls
+ * back and the predecessor is unchanged. Overlap protection is applied
+ * to the successor's remaining interval.
+ *
+ * Audits the change with both before + after payloads.
+ */
+export async function changeRecurringComponentAssignment(
+  principal: Principal, clubId: string,
+  predecessorId: string,
+  input: {
+    amount?: string | number | null;
+    percentBps?: number | null;
+    effectiveFrom: Date;
+    notes?: string | null;
+  },
+): Promise<{ predecessorId: string; successorId: string }> {
+  requirePermission(principal, clubId, "payroll:write");
+
+  const predecessor = await prisma.employeeRecurringPayrollComponent.findUnique({
+    where: { id: predecessorId },
+    include: { component: { select: { id: true, code: true, calculationMethod: true, active: true } } },
+  });
+  if (!predecessor) throw new NotFoundError(ASSIGNMENT_ENTITY, predecessorId);
+  assertTenantOwned(predecessor, principal);
+  if (predecessor.clubId !== clubId) throw new NotFoundError(ASSIGNMENT_ENTITY, predecessorId);
+  if (!predecessor.component.active) {
+    throw new ValidationError([{ path: "componentId", message: "Component is inactive; reactivate before scheduling a change." }]);
+  }
+  // Change target must be strictly after the predecessor's start and
+  // strictly before its current end (or unbounded).
+  if (input.effectiveFrom <= predecessor.effectiveFrom) {
+    throw new ValidationError([{
+      path: "effectiveFrom",
+      message: "The change's effectiveFrom must be strictly after the current assignment's effectiveFrom.",
+    }]);
+  }
+  if (predecessor.effectiveTo != null && input.effectiveFrom >= predecessor.effectiveTo) {
+    throw new ValidationError([{
+      path: "effectiveFrom",
+      message: "The change's effectiveFrom must be before the current assignment's end date.",
+    }]);
+  }
+  // Validate the successor input against the component's calculation method.
+  validateAssignmentInputs(
+    {
+      employeeId: predecessor.employeeId,
+      componentId: predecessor.componentId,
+      amount: input.amount ?? null,
+      percentBps: input.percentBps ?? null,
+      effectiveFrom: input.effectiveFrom,
+    },
+    predecessor.component.calculationMethod as CalculationMethod,
+  );
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Overlap for the successor's [effectiveFrom, predecessor.effectiveTo)
+    // interval — MUST exclude the predecessor itself (its impending
+    // close hasn't happened yet).
+    await assertNoOverlap(tx, {
+      clubId,
+      employeeId: predecessor.employeeId,
+      componentId: predecessor.componentId,
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: predecessor.effectiveTo,
+      excludeAssignmentId: predecessor.id,
+    });
+    // Close predecessor.
+    await tx.employeeRecurringPayrollComponent.update({
+      where: { id: predecessor.id },
+      data: { effectiveTo: input.effectiveFrom, active: false },
+    });
+    // Create successor.
+    const successor = await tx.employeeRecurringPayrollComponent.create({
+      data: {
+        clubId,
+        employeeId: predecessor.employeeId,
+        componentId: predecessor.componentId,
+        amount: input.amount != null ? String(input.amount) : null,
+        percentBps: input.percentBps ?? null,
+        effectiveFrom: input.effectiveFrom,
+        effectiveTo: predecessor.effectiveTo,
+        active: true,
+        notes: input.notes ?? null,
+        createdByUserId: principal.id,
+      },
+      select: { id: true },
+    });
+    return { predecessorId: predecessor.id, successorId: successor.id };
+  });
+
+  await audit(principal, {
+    clubId,
+    action: "payroll.component.assign.change",
+    entityType: ASSIGNMENT_ENTITY,
+    entityId: result.successorId,
+    before: {
+      predecessorId: predecessor.id,
+      amount: predecessor.amount != null ? String(predecessor.amount) : null,
+      percentBps: predecessor.percentBps,
+      effectiveFrom: predecessor.effectiveFrom,
+      effectiveTo: predecessor.effectiveTo,
+    },
+    after: {
+      successorId: result.successorId,
+      amount: input.amount ?? null,
+      percentBps: input.percentBps ?? null,
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: predecessor.effectiveTo,
+    },
+  });
+
+  return result;
+}
+
+/**
+ * Phase 4 follow-up (2026-09-16) — Prepare-time deterministic guard.
+ *
+ * For every (employee, component) pair, resolves EXACTLY ONE applicable
+ * assignment as of the given date, or ZERO. If two or more applicable
+ * assignments exist (i.e. legacy corruption where overlap prevention
+ * was bypassed), throws a ConflictError with an actionable message so
+ * Prepare FAILS CLOSED rather than silently picking one.
+ *
+ * Returns a map of `${componentId}` → assignment for the requested
+ * employee. Called from batch-preparation's per-employee snapshotter.
+ */
+export async function resolveApplicableRecurringAssignments(
+  clubId: string,
+  employeeId: string,
+  asOf: Date,
+): Promise<Map<string, {
+  id: string; componentId: string;
+  amount: Prisma.Decimal | null;
+  percentBps: number | null;
+  effectiveFrom: Date; effectiveTo: Date | null;
+}>> {
+  const rows = await prisma.employeeRecurringPayrollComponent.findMany({
+    where: {
+      clubId, employeeId,
+      effectiveFrom: { lte: asOf },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+      active: true,
+      component: { active: true },
+    },
+    select: {
+      id: true, componentId: true, amount: true, percentBps: true,
+      effectiveFrom: true, effectiveTo: true,
+    },
+  });
+  const byComponent = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byComponent.get(r.componentId) ?? [];
+    list.push(r);
+    byComponent.set(r.componentId, list);
+  }
+  const resolved = new Map<string, {
+    id: string; componentId: string;
+    amount: Prisma.Decimal | null;
+    percentBps: number | null;
+    effectiveFrom: Date; effectiveTo: Date | null;
+  }>();
+  for (const [componentId, matches] of byComponent) {
+    if (matches.length > 1) {
+      throw new ConflictError(
+        `Multiple applicable recurring assignments found for employee ${employeeId} + component ${componentId} ` +
+        `as of ${asOf.toISOString().slice(0, 10)} (${matches.length}). ` +
+        `Payroll cannot be prepared while an ambiguous overlap exists. ` +
+        `Resolve on the employee's Payroll → Compensation & Benefits section by ending the wrong row.`,
+      );
+    }
+    resolved.set(componentId, matches[0]);
+  }
+  return resolved;
 }
 
 // ---------------------------------------------------------------------

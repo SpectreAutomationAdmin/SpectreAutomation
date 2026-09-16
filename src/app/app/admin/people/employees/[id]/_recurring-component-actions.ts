@@ -14,6 +14,7 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import {
   createRecurringComponentAssignment,
   endRecurringComponentAssignment,
+  changeRecurringComponentAssignment,
 } from "@/lib/payroll/components-catalogue";
 import { isAppError, ValidationError } from "@/lib/errors";
 
@@ -61,6 +62,34 @@ export async function addRecurringPayrollComponentAction(
     });
     revalidateProfile(employeeId);
     return { ok: true, id: created.id };
+  } catch (e) {
+    return toErr(e);
+  }
+}
+
+export async function changeRecurringPayrollComponentAction(
+  employeeId: string,
+  clubId: string,
+  predecessorId: string,
+  input: {
+    amount: string | null;
+    percentBps: number | null;
+    effectiveFrom: string;
+    notes?: string | null;
+  },
+): Promise<Ok | Err> {
+  try {
+    const p = await requireAdmin();
+    const eff = new Date(input.effectiveFrom + "T00:00:00.000Z");
+    if (Number.isNaN(eff.getTime())) return { ok: false, error: "Effective date is invalid." };
+    const r = await changeRecurringComponentAssignment(p, clubId, predecessorId, {
+      amount: input.amount ?? null,
+      percentBps: input.percentBps ?? null,
+      effectiveFrom: eff,
+      notes: input.notes ?? null,
+    });
+    revalidateProfile(employeeId);
+    return { ok: true, id: r.successorId };
   } catch (e) {
     return toErr(e);
   }

@@ -120,14 +120,17 @@ describe("Phase 4 · Employee Recurring Payroll Component service", () => {
       effectiveFrom: utc(2025, 1, 1),
     });
     await endRecurringComponentAssignment(s.paP, s.club.id, prior.id, utc(2026, 8, 31));
-    // Current active.
-    await createRecurringComponentAssignment(s.paP, s.club.id, {
+    // Current active. Close it at the future assignment's start so
+    // the half-open [from, to) intervals don't overlap.
+    const currentRow = await createRecurringComponentAssignment(s.paP, s.club.id, {
       employeeId: s.employee.id,
       componentId: s.comp.id,
       amount: "75.00",
       effectiveFrom: utc(2026, 9, 1),
+      effectiveTo: utc(2027, 1, 1),
     });
-    // Future upcoming.
+    void currentRow;
+    // Future upcoming — begins the moment the current row ends.
     await createRecurringComponentAssignment(s.paP, s.club.id, {
       employeeId: s.employee.id,
       componentId: s.comp.id,

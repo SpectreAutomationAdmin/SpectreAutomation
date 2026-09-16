@@ -80,6 +80,17 @@ interface Props {
     assignmentId: string,
     effectiveTo: string,
   ) => Promise<ActionResult>;
+  changeAction: (
+    employeeId: string,
+    clubId: string,
+    predecessorId: string,
+    input: {
+      amount: string | null;
+      percentBps: number | null;
+      effectiveFrom: string;
+      notes?: string | null;
+    },
+  ) => Promise<ActionResult>;
 }
 
 function fmtDate(iso: string | null): string {
@@ -158,6 +169,7 @@ export default function EmployeeRecurringComponentsSection(props: Props) {
                 employeeId={props.employeeId}
                 clubId={props.clubId}
                 endAction={props.endAction}
+                changeAction={props.changeAction}
               />
             ))}
           </ul>
@@ -176,6 +188,7 @@ export default function EmployeeRecurringComponentsSection(props: Props) {
                 employeeId={props.employeeId}
                 clubId={props.clubId}
                 endAction={props.endAction}
+                changeAction={props.changeAction}
               />
             ))}
           </ul>
@@ -196,6 +209,7 @@ export default function EmployeeRecurringComponentsSection(props: Props) {
                 employeeId={props.employeeId}
                 clubId={props.clubId}
                 endAction={props.endAction}
+                changeAction={props.changeAction}
               />
             ))}
           </ul>
@@ -215,19 +229,27 @@ export default function EmployeeRecurringComponentsSection(props: Props) {
 }
 
 function RowView({
-  assignment, canWrite, employeeId, clubId, endAction,
+  assignment, canWrite, employeeId, clubId, endAction, changeAction,
 }: {
   assignment: RecurringComponentAssignmentRow;
   canWrite: boolean;
   employeeId: string;
   clubId: string;
   endAction: (employeeId: string, clubId: string, assignmentId: string, effectiveTo: string) => Promise<ActionResult>;
+  changeAction: Props["changeAction"];
 }) {
   const router = useRouter();
   const [showEnd, setShowEnd] = useState(false);
+  const [showChange, setShowChange] = useState(false);
   const [pending, setPending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [endDate, setEndDate] = useState(todayIso());
+  const [changeDate, setChangeDate] = useState(todayIso());
+  const [changeAmount, setChangeAmount] = useState<string>(assignment.amount ?? "");
+  const [changePercent, setChangePercent] = useState<string>(
+    assignment.percentBps != null ? (assignment.percentBps / 100).toFixed(2) : "",
+  );
+  const isPercentRow = assignment.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS";
 
   const amountLabel = assignment.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS"
     ? fmtPercent(assignment.percentBps)
@@ -253,17 +275,28 @@ function RowView({
         </div>
       </div>
       {canWrite ? (
-        <div className="mt-2 flex items-center gap-2">
-          {!showEnd ? (
-            <button
-              type="button"
-              className="text-[12px] text-[#dc2626] hover:underline"
-              onClick={() => setShowEnd(true)}
-              data-testid={`payroll-recurring-end-open-${assignment.id}`}
-            >
-              End assignment
-            </button>
-          ) : (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {!showEnd && !showChange ? (
+            <>
+              <button
+                type="button"
+                className="text-[12px] text-[#1e40af] hover:underline"
+                onClick={() => setShowChange(true)}
+                data-testid={`payroll-recurring-change-open-${assignment.id}`}
+              >
+                Schedule change
+              </button>
+              <button
+                type="button"
+                className="text-[12px] text-[#dc2626] hover:underline"
+                onClick={() => setShowEnd(true)}
+                data-testid={`payroll-recurring-end-open-${assignment.id}`}
+              >
+                End assignment
+              </button>
+            </>
+          ) : null}
+          {showEnd ? (
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -304,9 +337,89 @@ function RowView({
                 Cancel
               </button>
             </form>
-          )}
+          ) : null}
+          {showChange ? (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setPending(true); setErr(null);
+                const parsedPercent = isPercentRow
+                  ? Math.round(Number(changePercent) * 100)
+                  : null;
+                const r = await changeAction(employeeId, clubId, assignment.id, {
+                  amount: isPercentRow ? null : (changeAmount || null),
+                  percentBps: parsedPercent != null && Number.isFinite(parsedPercent) ? parsedPercent : null,
+                  effectiveFrom: changeDate,
+                });
+                setPending(false);
+                if (!r.ok) { setErr(r.error); return; }
+                setShowChange(false);
+                router.refresh();
+              }}
+              className="flex flex-wrap items-center gap-2 rounded-md bg-stone-50 px-2 py-2"
+              data-testid={`payroll-recurring-change-form-${assignment.id}`}
+            >
+              <label className="text-[12px] text-stone-600">
+                Effective from
+                <input
+                  type="date"
+                  required
+                  value={changeDate}
+                  onChange={(e) => setChangeDate(e.target.value)}
+                  className="ml-1 h-7 rounded border border-stone-200 px-1 text-[12px]"
+                  data-testid={`payroll-recurring-change-date-${assignment.id}`}
+                />
+              </label>
+              {isPercentRow ? (
+                <label className="text-[12px] text-stone-600">
+                  New percentage
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    required
+                    value={changePercent}
+                    onChange={(e) => setChangePercent(e.target.value)}
+                    className="ml-1 h-7 w-20 rounded border border-stone-200 px-1 text-[12px]"
+                    data-testid={`payroll-recurring-change-percent-${assignment.id}`}
+                  />
+                  <span className="ml-0.5">%</span>
+                </label>
+              ) : (
+                <label className="text-[12px] text-stone-600">
+                  New amount (CAD)
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    required
+                    value={changeAmount}
+                    onChange={(e) => setChangeAmount(e.target.value)}
+                    className="ml-1 h-7 w-24 rounded border border-stone-200 px-1 text-[12px]"
+                    data-testid={`payroll-recurring-change-amount-${assignment.id}`}
+                  />
+                </label>
+              )}
+              <button
+                type="submit"
+                disabled={pending}
+                className="rounded-md border border-[#1e40af] bg-[#1e40af] px-2 py-1 text-[12px] font-medium text-white hover:bg-[#1e3a8a] disabled:opacity-50"
+                data-testid={`payroll-recurring-change-submit-${assignment.id}`}
+              >
+                {pending ? "Scheduling…" : "Confirm change"}
+              </button>
+              <button
+                type="button"
+                className="text-[12px] text-stone-500"
+                onClick={() => { setShowChange(false); setErr(null); }}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : null}
           {err ? (
-            <span className="text-[11.5px] text-[#8a2f00]" data-testid={`payroll-recurring-end-error-${assignment.id}`}>{err}</span>
+            <span className="text-[11.5px] text-[#8a2f00]" data-testid={`payroll-recurring-err-${assignment.id}`}>{err}</span>
           ) : null}
         </div>
       ) : null}
@@ -395,13 +508,31 @@ function AddForm({
               data-testid="payroll-recurring-add-effective"
             />
           </label>
+          {selected ? (
+            <div
+              className="col-span-full rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-[11.5px]"
+              data-testid="payroll-recurring-add-context"
+            >
+              <p className="font-semibold text-stone-800">{selected.displayName}</p>
+              <p className="mt-0.5 text-stone-600">
+                {selected.category.replace(/_/g, " ").toLowerCase()}
+                {" · "}
+                {selected.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS" ? "percentage of eligible earnings" : "fixed amount"}
+                {" · "}
+                {selected.side === "EMPLOYER" ? "employer contribution" : selected.cashEffect === "INCREASES_NET_PAY" ? "increases net pay" : selected.cashEffect === "DECREASES_NET_PAY" ? "reduces net pay" : "no net-pay effect"}
+              </p>
+              <p className="mt-1 text-stone-500">
+                Statutory treatment (taxable, CPP-pensionable, EI-insurable) and GL accounts are configured on this component in <em>Payroll Settings</em>. This employee assignment only sets the amount and effective date.
+              </p>
+            </div>
+          ) : null}
           {selected && !isPercent ? (
             <label className="text-[12.5px]">
               <span className="mb-0.5 block font-medium text-stone-700">Amount per pay (CAD)</span>
               <input
                 type="number"
                 step="0.01"
-                min="0"
+                min="0.01"
                 required
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
