@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Decimal from "decimal.js";
 import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { upsertPayrollComponent, createRecurringComponentAssignment } from "@/lib/payroll/components-catalogue";
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
@@ -76,6 +77,7 @@ async function seedRichScenario(seed: string) {
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: paU.id, controllerUserId: ctlU.id,
   });
+  await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   // Sam Complex-shaped employee with 7 recurring components.
   const emp = await c.employee.create({

@@ -149,6 +149,7 @@ export async function buildPayStatement(
   principal: Principal,
   clubId: string,
   batchEmployeeId: string,
+  options?: { portalSelf?: boolean },
 ): Promise<PayStatementV2> {
   const row = await prisma.payrollBatchEmployee.findUnique({
     where: { id: batchEmployeeId },
@@ -168,11 +169,18 @@ export async function buildPayStatement(
   assertTenantOwned(row, principal);
   if (row.batch.clubId !== clubId) throw new NotFoundError(ENTITY, batchEmployeeId);
 
-  const isSelf = row.employee.userId === principal.id;
+  // Payroll-3C-5F (2026-09-15) — portal caller ownership was already
+  // proven upstream in buildEmployeePortalPayStatement (batchEmployeeId
+  // belongs to (clubId, employeeId) AND batch is POSTED). The prior
+  // `isSelf = row.employee.userId === principal.id` check assumed every
+  // portal Employee had a linked User row; self-onboarded portal accounts
+  // often do not, which sent that path into requirePermission on a
+  // synthetic role that was not registered — and the paystub crashed.
+  // The explicit portalSelf flag replaces that fragile inference.
+  const isSelf =
+    options?.portalSelf === true ||
+    (row.employee.userId != null && row.employee.userId === principal.id);
   if (!isSelf) requirePermission(principal, clubId, "payroll:read");
-  else if (row.employee.userId !== principal.id) {
-    throw new ForbiddenError("You may only view your own pay statement.");
-  }
 
   const payDate = row.batch.payPeriod.payDate;
 
@@ -474,18 +482,28 @@ export async function buildEmployeePortalPayStatement(
     throw new NotFoundError(ENTITY, args.batchEmployeeId);
   }
 
-  // Construct a synthetic self-principal that satisfies buildPayStatement's
-  // `isSelf` branch (it compares row.employee.userId === principal.id).
-  // Payroll-3C-5B — must also carry a synthetic membership for the
-  // batch's clubId so `assertTenantOwned` (which runs BEFORE the
-  // isSelf branch) accepts the record. Ownership is already proven
-  // above via (be.clubId === args.clubId && be.employeeId === args.employeeId).
-  const selfPrincipal = {
-    id: be.employee.userId ?? "portal-self",
-    memberships: [{ clubId: args.clubId, roleKey: "EMPLOYEE_PORTAL_SELF" }],
-  } as unknown as Principal;
+  // Payroll-3C-5F (2026-09-15) — pass an explicit `portalSelf` bypass
+  // rather than a synthetic role that isn't registered in
+  // ROLE_PERMISSIONS. The ownership guard above already proves this
+  // batchEmployeeId belongs to the portal caller's (clubId, employeeId),
+  // so the payroll:read admin permission is not the correct gate.
+  //
+  // The principal still needs a valid `memberships` entry so
+  // `assertTenantOwned` (which runs BEFORE the portalSelf branch) accepts
+  // the record. Using the caller's employeeId as the synthetic id keeps
+  // the value non-null and deterministic per (club, employee) — the
+  // portalSelf flag is what actually authorises the read.
+  const selfPrincipal: Principal = {
+    id: `portal:${args.employeeId}`,
+    name: "",
+    email: "",
+    status: "ACTIVE",
+    memberships: [{ clubId: args.clubId, roleKey: "MEMBER" }],
+    activeClubId: args.clubId,
+    memberId: null,
+  };
 
-  return buildPayStatement(selfPrincipal, args.clubId, args.batchEmployeeId);
+  return buildPayStatement(selfPrincipal, args.clubId, args.batchEmployeeId, { portalSelf: true });
 }
 
 /**

@@ -44,7 +44,14 @@ export function hasPermission(p: Principal, clubId: string | null, permission: P
   if (isSuperAdmin(p)) return true;
   const roles = rolesAtClub(p, clubId);
   for (const role of roles) {
-    const grants = ROLE_PERMISSIONS[role];
+    // Defensive: an unregistered role key (e.g. a synthetic principal
+    // carrying a role that is not in ROLE_PERMISSIONS) must resolve to
+    // no permissions rather than a runtime TypeError on `.includes()`.
+    // Payroll-3C-5F (2026-09-15) — Chris's paystub was crashing here
+    // with "Cannot read properties of undefined (reading 'includes')"
+    // because the employee-portal synthetic principal carried a role
+    // that had never been registered. Fail closed, not crash.
+    const grants = ROLE_PERMISSIONS[role] ?? [];
     if (grants.includes(permission)) return true;
   }
   return false;
@@ -111,7 +118,7 @@ export async function resolveRecipientsByPermission(
   permission: PermissionKey,
 ): Promise<RecipientRow[]> {
   const rolesGrantingPermission: RoleKey[] = (Object.keys(ROLE_PERMISSIONS) as RoleKey[])
-    .filter((role) => ROLE_PERMISSIONS[role].includes(permission));
+    .filter((role) => (ROLE_PERMISSIONS[role] ?? []).includes(permission));
   if (rolesGrantingPermission.length === 0) return [];
 
   const users = await prisma.user.findMany({

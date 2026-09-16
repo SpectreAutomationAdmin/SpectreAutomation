@@ -45,6 +45,7 @@ import {
   listPostedPayrollHistory,
 } from "@/lib/payroll/pay-statement";
 import { addOneTimeAdjustment } from "@/lib/payroll/adjustments";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { ForbiddenError, NotFoundError } from "@/lib/errors";
 
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
@@ -103,6 +104,11 @@ async function seedBasicScenario(seed: string) {
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: paU.id, controllerUserId: ctlU.id,
   });
+  // Payroll-3B-5B (2026-09-15) — every preparePayrollBatch call now
+  // requires a PayrollImplementationDeclaration for the batch's tax
+  // year. Declare ZERO_OPENING_YTD (no mid-year cutover) so fixtures
+  // that were written before the gate existed continue to work.
+  await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   const empUser = await c.user.create({
     data: {
@@ -627,6 +633,32 @@ describe("Payroll-3C-5B · §16 employee portal authorization", () => {
     await expect(buildEmployeePortalPayStatement({
       clubId: s.club.id, employeeId: s.emp.id, batchEmployeeId: be.id,
     })).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("returns the DTO when Employee.userId is null (regression — synthetic-role crash)", async () => {
+    // Payroll-3C-5F (2026-09-15) regression — pre-fix the portal path
+    // built a self-principal with `roleKey: "EMPLOYEE_PORTAL_SELF"`, a
+    // role that was never registered in ROLE_PERMISSIONS. When
+    // Employee.userId was null (a self-onboarded portal employee with
+    // no linked User row — the shape Chris's staging record ended up
+    // in), the `row.employee.userId === principal.id` self-check
+    // resolved to false, requirePermission ran with the unregistered
+    // role, and the code hit `undefined.includes(permission)` — the
+    // paystub crashed with a 500. The fix passes an explicit
+    // `portalSelf: true` bypass instead of relying on the fragile
+    // userId comparison.
+    const s = await seedBasicScenario("port-nulluser");
+    await postBatch(s, 13);
+    // Detach the User link on the Employee to reproduce Chris's shape.
+    await db().employee.update({ where: { id: s.emp.id }, data: { userId: null } });
+    const be = await db().payrollBatchEmployee.findFirstOrThrow({
+      where: { batch: { payPeriod: { sequenceInYear: 13 } }, employeeId: s.emp.id },
+    });
+    const stmt = await buildEmployeePortalPayStatement({
+      clubId: s.club.id, employeeId: s.emp.id, batchEmployeeId: be.id,
+    });
+    expect(stmt.batchEmployeeId).toBe(be.id);
+    expect(stmt.isPosted).toBe(true);
   });
 });
 

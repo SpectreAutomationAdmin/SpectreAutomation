@@ -370,6 +370,9 @@ export async function resetDb() {
     c.payrollPayPeriod.deleteMany(),
     c.payrollPayGroup.deleteMany(),
     c.payrollClubConfig.deleteMany(),
+    // Payroll-3B-5B (2026-09-15) — implementation declaration FKs into
+    // Club; wipe before Club.
+    c.payrollImplementationDeclaration.deleteMany(),
     // HR-2C Employment (2026-08-24) — Allowances FK into Assignment;
     // Assignment FKs into Employee. Wipe leaf-first.
     c.employeeAllowance.deleteMany(),
