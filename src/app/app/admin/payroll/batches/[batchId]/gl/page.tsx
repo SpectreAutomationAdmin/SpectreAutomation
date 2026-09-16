@@ -73,14 +73,14 @@ export default async function PayrollBatchGlPage({ params }: Props) {
         </Link>
       </header>
 
-      <div className="rounded-lg border" style={{ borderColor: "var(--spectre-border-muted)" }}>
+      <div className="rounded-lg border" style={{ borderColor: "var(--spectre-border-muted)" }} data-testid="payroll-gl-table">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b" style={{ borderColor: "var(--spectre-border-muted)" }}>
               <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide"
                   style={{ color: "var(--spectre-text-muted)" }}>Account</th>
               <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wide"
-                  style={{ color: "var(--spectre-text-muted)" }}>Memo</th>
+                  style={{ color: "var(--spectre-text-muted)" }}>Department</th>
               <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wide"
                   style={{ color: "var(--spectre-text-muted)" }}>Debit</th>
               <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wide"
@@ -88,16 +88,41 @@ export default async function PayrollBatchGlPage({ params }: Props) {
             </tr>
           </thead>
           <tbody>
-            {journal.lines.map((l, i) => (
-              <tr key={l.id ?? i} className="border-b" style={{ borderColor: "var(--spectre-border-muted)" }}>
-                <td className="px-3 py-2">
-                  <div>{l.account?.accountNumber ?? "—"} · {l.account?.name ?? "—"}</div>
-                </td>
-                <td className="px-3 py-2 text-[color:var(--spectre-text-secondary)]">{l.description ?? ""}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{l.debit  ? fmtMoneyAlways(Number(l.debit))  : ""}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{l.credit ? fmtMoneyAlways(Number(l.credit)) : ""}</td>
-              </tr>
-            ))}
+            {journal.lines.map((l, i) => {
+              // Phase 3 follow-up (2026-09-16) — dimensional GL. Every
+              // payroll expense line carries the employee's frozen
+              // department; central liabilities carry `departmentId=null`
+              // and render as "Club-wide" (NOT blank / dash / Unassigned)
+              // so a Controller reads the accounting semantics rather
+              // than the implementation nullability.
+              const isCentralized = l.departmentId == null;
+              const deptDisplay = isCentralized ? "Club-wide" : (l.department?.name ?? l.department?.code ?? "—");
+              return (
+                <tr key={l.id ?? i} className="border-b" style={{ borderColor: "var(--spectre-border-muted)" }}
+                    data-testid={`payroll-gl-row-${i}`}
+                    data-department-code={l.department?.code ?? "CLUB_WIDE"}>
+                  <td className="px-3 py-2">
+                    <div>{l.account?.accountNumber ?? "—"} · {l.account?.name ?? "—"}</div>
+                    {l.description ? (
+                      <div className="mt-0.5 text-[11px]" style={{ color: "var(--spectre-text-secondary)" }}>
+                        {l.description}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2"
+                      style={{ color: isCentralized ? "var(--spectre-text-muted)" : "var(--spectre-text-primary)" }}
+                      data-testid={`payroll-gl-row-${i}-dept`}>
+                    {isCentralized ? (
+                      <span className="italic">Club-wide</span>
+                    ) : (
+                      deptDisplay
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{l.debit  ? fmtMoneyAlways(Number(l.debit))  : ""}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{l.credit ? fmtMoneyAlways(Number(l.credit)) : ""}</td>
+                </tr>
+              );
+            })}
             <tr>
               <td colSpan={2} className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide"
                   style={{ color: "var(--spectre-text-muted)" }}>Totals</td>
