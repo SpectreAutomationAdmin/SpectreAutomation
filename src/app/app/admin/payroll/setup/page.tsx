@@ -32,12 +32,17 @@ import PayGroupsEditor from "./PayGroupsEditor";
 import MembershipEditor from "./MembershipEditor";
 import PayrollCalendarSection from "./PayrollCalendarSection";
 import GlProfileEditor from "./GlProfileEditor";
+import PayrollImplementationEditor from "./PayrollImplementationEditor";
 import { listAccounts } from "@/lib/accounting/coa";
+import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
+import { declareImplementationAction, revokeImplementationAction } from "./_implementation-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export default async function PayrollSetupPage() {
+export default async function PayrollSetupPage({
+  searchParams,
+}: { searchParams?: { implErr?: string; implOk?: string } }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
@@ -45,6 +50,33 @@ export default async function PayrollSetupPage() {
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) redirect("/app/admin");
 
   const currentTaxYear = new Date().getUTCFullYear();
+  const implementationDeclarationRaw = await getImplementationDeclaration(principal, clubId, currentTaxYear);
+  let implementationConfirmedByDisplayName: string | null = null;
+  if (implementationDeclarationRaw?.confirmedByUserId) {
+    const u = await prisma.user.findUnique({
+      where: { id: implementationDeclarationRaw.confirmedByUserId },
+      select: { name: true, email: true },
+    });
+    implementationConfirmedByDisplayName = u ? (u.name || u.email) : null;
+  }
+  const implementationDeclaration = implementationDeclarationRaw
+    ? {
+        id: implementationDeclarationRaw.id,
+        taxYear: implementationDeclarationRaw.taxYear,
+        mode: implementationDeclarationRaw.mode,
+        firstSpectrePayDate: implementationDeclarationRaw.firstSpectrePayDate?.toISOString() ?? null,
+        confirmedAt: implementationDeclarationRaw.confirmedAt?.toISOString() ?? null,
+        confirmedByDisplayName: implementationConfirmedByDisplayName,
+        notes: implementationDeclarationRaw.notes,
+        updatedAt: implementationDeclarationRaw.updatedAt.toISOString(),
+      }
+    : null;
+  const implBanner: { tone: "error" | "success"; text: string } | null =
+    searchParams?.implErr
+      ? { tone: "error", text: searchParams.implErr }
+      : searchParams?.implOk
+      ? { tone: "success", text: searchParams.implOk }
+      : null;
   const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods, glProfile, coa] =
     await Promise.all([
       getPayrollClubConfig(principal, clubId),
@@ -197,9 +229,35 @@ export default async function PayrollSetupPage() {
         />
       </section>
 
-      {/* Section 4 — Payroll Calendar */}
+      {/* v-slice-1-followup-7 (2026-09-15) — Section 4: Payroll Implementation.
+          The Club MUST declare its implementation position (zero-YTD vs
+          mid-year migration) before Prepare/Calculate will run for a
+          given tax year. Placed before Payroll Calendar because
+          calendar rows depend on tax-year definitions. */}
       <SectionHeader
         eyebrow="Section 4"
+        title="Payroll implementation"
+        subtitle="Tell Spectre what came before. Did this Club process payroll from another system earlier in this tax year, or is this the very beginning of payroll for the affected employees? Prepare Payroll refuses until you confirm."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+        data-testid="payroll-implementation-section"
+      >
+        <PayrollImplementationEditor
+          clubId={clubId}
+          canWrite={canWrite}
+          currentTaxYear={currentTaxYear}
+          declaration={implementationDeclaration}
+          declareAction={declareImplementationAction}
+          revokeAction={revokeImplementationAction}
+          banner={implBanner}
+        />
+      </section>
+
+      {/* Section 5 — Payroll Calendar (renumbered from 4 by v-slice-1-followup-7) */}
+      <SectionHeader
+        eyebrow="Section 5"
         title="Payroll calendar"
         subtitle="Generate the schedule of pay periods for each Pay Group. Payroll year is determined by the pay date — a period worked in December but paid in January belongs to the January year."
       />
@@ -216,9 +274,9 @@ export default async function PayrollSetupPage() {
         />
       </section>
 
-      {/* Section 5 — Payroll GL profile (Payroll-3C-6A, 2026-09-05) */}
+      {/* Section 6 — Payroll GL profile (renumbered by v-slice-1-followup-7) */}
       <SectionHeader
-        eyebrow="Section 5"
+        eyebrow="Section 6"
         title="Payroll GL profile"
         subtitle="The 8 tenant-wide accounts every payroll journal debits or credits. Set these once for your Chart of Accounts; per-component mappings (Section 6) route specific earnings, benefits, and deductions to more granular accounts."
       />
@@ -246,9 +304,9 @@ export default async function PayrollSetupPage() {
         />
       </section>
 
-      {/* Section 6 — Payroll Components (Payroll-3C-1, 2026-09-07; edit UI 3C-6A, 2026-09-05) */}
+      {/* Section 7 — Payroll Components (renumbered by v-slice-1-followup-7) */}
       <SectionHeader
-        eyebrow="Section 6"
+        eyebrow="Section 7"
         title="Payroll components"
         subtitle="Tenant catalogue of every distinct compensation, benefit, and deduction concept your Club operates. Assign an expense and/or liability account per component so payroll can post to your Chart of Accounts."
       />

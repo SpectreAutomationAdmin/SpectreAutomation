@@ -470,6 +470,7 @@ model Club {
   employeeAllowances                 EmployeeAllowance[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollClubConfig                  PayrollClubConfig?
+  payrollImplementationDeclarations  PayrollImplementationDeclaration[]
   payrollPayGroups                   PayrollPayGroup[]
   payrollPayGroupMembers             PayrollPayGroupMember[]
   payrollPayPeriods                  PayrollPayPeriod[]
@@ -11942,6 +11943,29 @@ model PayrollClubConfig {
   updatedAt              DateTime @updatedAt
 
   @@index([clubId])
+}
+
+// v-slice-1-followup-7 (2026-09-15) — Payroll implementation cutover.
+// See prisma/schema.prisma for the full block comment. One row per
+// (clubId, taxYear); ZERO_OPENING_YTD or MID_YEAR_MIGRATION;
+// Prepare/Calculate refuses when no confirmed row exists for the
+// batch's tax year, and refuses under MID_YEAR_MIGRATION when any
+// included employee lacks an ACTIVE PayrollOpeningBalance.
+model PayrollImplementationDeclaration {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  taxYear                Int
+  mode                   String   // ZERO_OPENING_YTD | MID_YEAR_MIGRATION
+  firstSpectrePayDate    DateTime?
+  confirmedAt            DateTime?
+  confirmedByUserId      String?
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([clubId, taxYear])
+  @@index([clubId, taxYear])
 }
 
 // Payroll MVP posting (2026-09-05) — Club-scoped mapping from Payroll

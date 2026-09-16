@@ -746,6 +746,32 @@ export async function preparePayrollBatch(
     }]);
   }
 
+  // v-slice-1-followup-7 (2026-09-15) — Payroll implementation gate.
+  // The Club must have EXPLICITLY declared its payroll implementation
+  // position for the batch's tax year before Prepare consumes any
+  // payroll for that year. Spectre must never silently assume zero
+  // prior YTD.
+  //
+  // Absent declaration → BLOCKER surfaced as a ValidationError with a
+  // direct pointer to Payroll Settings → Payroll Implementation.
+  //
+  // Under MID_YEAR_MIGRATION, we do NOT check per-employee ACTIVE
+  // opening balances here (the population isn't resolved yet). That
+  // check happens INSIDE the per-employee snapshot loop below.
+  const period = await prisma.payrollPayPeriod.findFirst({
+    where: { id: payPeriodId, clubId },
+    select: { taxYear: true, payDate: true },
+  });
+  if (!period) throw new NotFoundError("PayrollPayPeriod", payPeriodId);
+  const { readImplementationForCalculation } = await import("./implementation-declaration");
+  const implState = await readImplementationForCalculation(clubId, period.taxYear);
+  if (!implState.hasDeclaration) {
+    throw new ValidationError([{
+      path: "payrollImplementation",
+      message: `Payroll implementation not declared for tax year ${period.taxYear}. Confirm in Payroll Settings → Payroll Implementation before running payroll. Spectre will not assume zero prior year-to-date balances silently.`,
+    }]);
+  }
+
   const pre = await assertPreconditions(clubId, payPeriodId);
 
   // Idempotency: if a non-VOIDED batch already exists for this
@@ -814,7 +840,41 @@ export async function preparePayrollBatch(
   const snapshottedAt = new Date();
   const snapshots: EmployeeSnapshot[] = [];
   for (const m of members) {
-    snapshots.push(await snapshotEmployee(clubId, province, pre.periodStart, pre.periodEnd, m));
+    const snap = await snapshotEmployee(clubId, province, pre.periodStart, pre.periodEnd, m);
+
+    // v-slice-1-followup-7 (2026-09-15) — MID_YEAR_MIGRATION per-employee
+    // opening-balance gate. Under the founder-declared MID_YEAR_MIGRATION
+    // mode, every included employee must have an ACTIVE
+    // `PayrollOpeningBalance` for the batch's tax year. Missing / DRAFT /
+    // VALIDATED are all treated as "not yet consumable" and produce a
+    // BLOCKER exception so the founder can complete opening YTD before
+    // this batch calculates. Legitimate zero YTD is expressed as an
+    // ACTIVE row with all `ytd*` = 0 — this gate does NOT check dollar
+    // amounts, only ACTIVE presence.
+    if (implState.requiresOpeningBalances) {
+      const activeOpening = await prisma.payrollOpeningBalance.findFirst({
+        where: {
+          clubId,
+          employeeId: m.employeeId,
+          taxYear: period.taxYear,
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+      if (!activeOpening) {
+        snap.exceptions.push({
+          severity: "BLOCKER",
+          code: "MISSING_OPENING_YTD",
+          message:
+            `Spectre Payroll is configured as a mid-year implementation for ${period.taxYear}. ` +
+            "Opening year-to-date payroll balances must be activated before payroll can be calculated for this employee.",
+          recommendedAction:
+            "Open Payroll Settings → Opening YTD Balances and activate this employee's opening balance.",
+        });
+      }
+    }
+
+    snapshots.push(snap);
   }
 
   // Payroll 3A hotfix (2026-09-11) — projected salary earnings.

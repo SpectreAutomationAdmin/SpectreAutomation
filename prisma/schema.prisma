@@ -470,6 +470,7 @@ model Club {
   employeeAllowances                 EmployeeAllowance[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollClubConfig                  PayrollClubConfig?
+  payrollImplementationDeclarations  PayrollImplementationDeclaration[]
   payrollPayGroups                   PayrollPayGroup[]
   payrollPayGroupMembers             PayrollPayGroupMember[]
   payrollPayPeriods                  PayrollPayPeriod[]
@@ -11970,6 +11971,59 @@ model PayrollClubConfig {
   updatedAt              DateTime @updatedAt
 
   @@index([clubId])
+}
+
+// v-slice-1-followup-7 (2026-09-15) — Payroll implementation cutover.
+//
+// Every Club that runs Spectre Payroll for a given tax year must make
+// an EXPLICIT declaration about what came before:
+//
+//   ZERO_OPENING_YTD    → No prior same-employer payroll exists in
+//                         this tax year for the affected employees.
+//                         Spectre may assume zero opening YTD without
+//                         requiring per-employee entry.
+//   MID_YEAR_MIGRATION  → Club processed payroll before Spectre in
+//                         this tax year. Each included employee must
+//                         have an ACTIVE `PayrollOpeningBalance` for
+//                         the tax year before Prepare / Calculate.
+//
+// A confirmed row means the Club's implementation position is
+// declared and auditable. Prepare/Calculate reads this row to decide
+// whether the "opening YTD required" blocker fires. Absence of a
+// confirmed row for the batch's tax year is itself a blocker —
+// Spectre must NEVER silently assume zero YTD.
+//
+// One row per (clubId, taxYear). Not per employee — that scope lives
+// on PayrollOpeningBalance already. Distinct row per tax year
+// because a Club might legitimately be MID_YEAR_MIGRATION in year 1
+// and ZERO_OPENING_YTD (i.e. "everything since is Spectre") in the
+// year after cutover.
+model PayrollImplementationDeclaration {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id])
+  // The tax year this declaration governs.
+  taxYear                Int
+  // ZERO_OPENING_YTD | MID_YEAR_MIGRATION
+  mode                   String
+  // First Spectre pay date for this tax year — bookkeeping only for
+  // ZERO_OPENING_YTD; for MID_YEAR_MIGRATION this is also the earliest
+  // date beyond which the aggregator considers Spectre POSTED batches
+  // (the ACTIVE opening balance's throughPayDate takes precedence
+  // when both exist).
+  firstSpectrePayDate    DateTime?
+  // Actor + timestamp of the confirmation. Nullable while the row is
+  // in a "declared but not yet confirmed" state — although the
+  // service currently confirms atomically at write time, the columns
+  // stay nullable for forward compatibility with a two-step flow.
+  confirmedAt            DateTime?
+  confirmedByUserId      String?
+  notes                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([clubId, taxYear])
+  @@index([clubId, taxYear])
 }
 
 // Payroll MVP posting (2026-09-05) — Club-scoped mapping from Payroll

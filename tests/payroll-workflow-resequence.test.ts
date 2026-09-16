@@ -52,6 +52,16 @@ async function seedSalaryOnlyClub() {
   await prisma.payrollClubConfig.create({
     data: { clubId, provinceOfEmployment: "AB", payrollAdminUserId: paId },
   });
+  // v-slice-1-followup-7 (2026-09-15) — Prepare now requires an
+  // explicit implementation declaration. Seed ZERO_OPENING_YTD so
+  // this suite exercises workflow ordering, not the YTD gate.
+  await prisma.payrollImplementationDeclaration.create({
+    data: {
+      clubId, taxYear: 2026, mode: "ZERO_OPENING_YTD",
+      firstSpectrePayDate: utc(2026, 1, 4),
+      confirmedAt: new Date(), confirmedByUserId: paId,
+    },
+  });
 
   const payGroupId = `pg-${Math.random().toString(36).slice(2, 8)}`;
   await prisma.payrollPayGroup.create({
@@ -167,6 +177,14 @@ describe("preparePayrollBatch Approvals gate (v-slice-1-followup-5)", () => {
     await prisma.userClubRole.create({ data: { userId: paId, clubId, roleKey: "PAYROLL_ADMIN" } });
     await prisma.payrollClubConfig.create({
       data: { clubId, provinceOfEmployment: "AB", payrollAdminUserId: paId },
+    });
+    // v-slice-1-followup-7 — Prepare requires implementation declaration.
+    await prisma.payrollImplementationDeclaration.create({
+      data: {
+        clubId, taxYear: 2026, mode: "ZERO_OPENING_YTD",
+        firstSpectrePayDate: utc(2026, 1, 4),
+        confirmedAt: new Date(), confirmedByUserId: paId,
+      },
     });
     await prisma.department.create({
       data: { id: depId, clubId, code: "GROUNDS", name: "Grounds", isActive: true, sortOrder: 0 },

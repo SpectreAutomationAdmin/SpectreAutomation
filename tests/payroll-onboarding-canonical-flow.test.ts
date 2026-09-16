@@ -52,6 +52,14 @@ describe("Onboarding canonical facts → Payroll Prepare (v399 followup #2)", ()
       provinceOfEmployment: "AB",
       payrollAdminUserId: pa.id,
     });
+    // v-slice-1-followup-7 — Prepare requires implementation declaration.
+    await db().payrollImplementationDeclaration.create({
+      data: {
+        clubId: club.id, taxYear: 2026, mode: "ZERO_OPENING_YTD",
+        firstSpectrePayDate: utc(2026, 1, 4),
+        confirmedAt: new Date(), confirmedByUserId: pa.id,
+      },
+    });
 
     // 2. Create the employee via the canonical service — this mirrors the
     //    admin-create path used by the New-Club onboarding first-Super-Admin
