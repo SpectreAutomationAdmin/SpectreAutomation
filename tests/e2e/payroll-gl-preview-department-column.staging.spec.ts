@@ -81,11 +81,12 @@ test("GL preview renders Account | Department | Debit | Credit + Club-wide for c
   await page.waitForTimeout(3000);
   await page.screenshot({ path: path.join(OUT, "02-gl-preview-full.png"), fullPage: true });
 
-  // A. Table renders with the four required columns.
+  // A. Table renders with the four required columns. The header cell
+  //    text is CSS-uppercased so we compare case-insensitively.
   const table = page.locator('[data-testid="payroll-gl-table"]');
   await expect(table).toBeVisible();
   const headers = await table.locator("thead th").allInnerTexts();
-  expect(headers.map((h) => h.trim())).toEqual(["Account", "Department", "Debit", "Credit"]);
+  expect(headers.map((h) => h.trim().toLowerCase())).toEqual(["account", "department", "debit", "credit"]);
 
   // B. Every row's Department cell is populated and no cell reads
   //    an implementation-detail nullability marker.
