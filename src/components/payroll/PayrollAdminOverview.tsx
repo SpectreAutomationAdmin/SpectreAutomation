@@ -632,7 +632,7 @@ function EmployeesTabContent({ view, prepare, review, returnToPrep }: {
           batchId={batchId}
         />
       ) : null}
-      {view.hasBatch && (batchStatus === "CALCULATED" || batchStatus === "SUBMITTED_FOR_APPROVAL" || batchStatus === "APPROVED" || batchStatus === "POSTED") ? (
+      {view.hasBatch && (batchStatus === "CALCULATED" || batchStatus === "SUBMITTED_FOR_APPROVAL" || batchStatus === "APPROVED") ? (
         <CalculatedPayrollReviewBanner
           attestation={calcAtt ?? null}
           batchStatus={batchStatus}
@@ -652,6 +652,7 @@ function EmployeesTabContent({ view, prepare, review, returnToPrep }: {
           submittedAtISO={view.batch?.submittedAt ?? null}
           submittedByDisplayName={view.batch?.submittedByDisplayName ?? null}
           calculationVersion={view.batch?.calculationVersion ?? null}
+          batchId={batchId}
         />
       ) : null}
       {view.hasBatch && batchStatus === "RETURNED_FOR_CORRECTION" ? (
@@ -667,6 +668,14 @@ function EmployeesTabContent({ view, prepare, review, returnToPrep }: {
           approvedAtISO={view.batch?.approvedAt ?? null}
           approvedByDisplayName={view.batch?.approvedByDisplayName ?? null}
           calculationVersion={view.batch?.calculationVersion ?? null}
+          batchId={batchId}
+        />
+      ) : null}
+      {view.hasBatch && batchStatus === "POSTED" ? (
+        <PostedCompletionBanner
+          postedAtISO={view.batch?.postedAt ?? null}
+          glJournalEntryId={view.batch?.glJournalEntryId ?? null}
+          batchId={batchId}
         />
       ) : null}
       <FilterBar view={view} />
@@ -1550,10 +1559,11 @@ function CalculatedPayrollReviewBanner({
 
 // Slice 3E (2026-09-12) — lifecycle banners for SUBMITTED_FOR_APPROVAL,
 // RETURNED_FOR_CORRECTION, and APPROVED.
-function SubmittedForApprovalBanner({ submittedAtISO, submittedByDisplayName, calculationVersion }: {
+function SubmittedForApprovalBanner({ submittedAtISO, submittedByDisplayName, calculationVersion, batchId }: {
   submittedAtISO: string | null;
   submittedByDisplayName: string | null;
   calculationVersion: number | null;
+  batchId: string;
 }) {
   const at = submittedAtISO ? new Date(submittedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
   const v = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
@@ -1572,6 +1582,13 @@ function SubmittedForApprovalBanner({ submittedAtISO, submittedByDisplayName, ca
           </p>
         </div>
       </div>
+      <Link
+        href={`/app/admin/payroll/batches/${batchId}`}
+        className="inline-flex items-center gap-1 rounded-md border border-[#1e40af] px-3 py-1.5 text-[12px] font-semibold text-[#1e40af] hover:bg-[#dbeafe]"
+        data-testid="payroll-admin-submitted-resume-review"
+      >
+        Continue Review <ArrowRight className="h-3 w-3" />
+      </Link>
     </div>
   );
 }
@@ -1606,10 +1623,11 @@ function ReturnedForCorrectionBanner({ returnedAtISO, returnedByDisplayName, ret
   );
 }
 
-function ApprovedBanner({ approvedAtISO, approvedByDisplayName, calculationVersion }: {
+function ApprovedBanner({ approvedAtISO, approvedByDisplayName, calculationVersion, batchId }: {
   approvedAtISO: string | null;
   approvedByDisplayName: string | null;
   calculationVersion: number | null;
+  batchId: string;
 }) {
   const at = approvedAtISO ? new Date(approvedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "";
   const v = calculationVersion != null && calculationVersion > 0 ? ` (v${calculationVersion})` : "";
@@ -1622,11 +1640,69 @@ function ApprovedBanner({ approvedAtISO, approvedByDisplayName, calculationVersi
       <div className="flex items-center gap-3">
         <CheckCircleIcon className="h-4 w-4 text-[#166534]" />
         <div>
-          <p className="text-[12.5px] font-semibold text-stone-800">Approved{v}</p>
+          <p className="text-[12.5px] font-semibold text-stone-800">Approved &mdash; ready to post{v}</p>
           <p className="text-[11.5px] text-stone-500">
-            Approved{approvedByDisplayName ? ` by ${approvedByDisplayName}` : ""}{at ? ` at ${at}` : ""}. Posting is a later slice (3F).
+            Approved{approvedByDisplayName ? ` by ${approvedByDisplayName}` : ""}{at ? ` at ${at}` : ""}. Post to the general ledger to complete this pay run. This is an accounting entry only &mdash; direct-deposit / cheque transmission is a separate step and is not yet enabled.
           </p>
         </div>
+      </div>
+      <Link
+        href={`/app/admin/payroll/batches/${batchId}`}
+        className="inline-flex items-center gap-1 rounded-md border border-[#166534] bg-[#166534] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#14532d]"
+        data-testid="payroll-admin-approved-resume-post"
+      >
+        Continue to Post <ArrowRight className="h-3 w-3" />
+      </Link>
+    </div>
+  );
+}
+
+// Phase 2 (2026-09-15) — Prominent POSTED completion banner. Replaces
+// the previous behaviour where a POSTED batch continued to show the
+// CalculatedPayrollReviewBanner ("Review required"), which read as
+// unfinished even though the batch was fully posted. Signals to the
+// founder that this pay period is CLOSED for further processing, and
+// clarifies the accounting-vs-payment-transmission distinction.
+function PostedCompletionBanner({ postedAtISO, glJournalEntryId, batchId }: {
+  postedAtISO: string | null;
+  glJournalEntryId: string | null;
+  batchId: string;
+}) {
+  const at = postedAtISO
+    ? new Date(postedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })
+    : "";
+  return (
+    <div
+      className="px-6 py-3.5 flex items-center justify-between gap-3 border-b border-stone-100 bg-[#0f172a]"
+      data-testid="payroll-admin-posted-banner"
+      data-state="posted"
+    >
+      <div className="flex items-center gap-3">
+        <CheckCircleIcon className="h-5 w-5 text-[#86efac]" />
+        <div>
+          <p className="text-[13.5px] font-semibold text-white">Payroll posted &mdash; pay period complete</p>
+          <p className="text-[11.5px] text-stone-300">
+            Posted to the general ledger{at ? ` on ${at}` : ""}. This is an accounting entry only. Direct-deposit / cheque transmission is a separate step and is not yet enabled.
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {glJournalEntryId ? (
+          <Link
+            href={`/app/admin/payroll/batches/${batchId}/gl`}
+            className="inline-flex items-center gap-1 rounded-md border border-stone-400 px-3 py-1.5 text-[12px] font-semibold text-stone-100 hover:bg-stone-800"
+            data-testid="payroll-admin-posted-view-gl"
+          >
+            View GL Entry <ArrowRight className="h-3 w-3" />
+          </Link>
+        ) : null}
+        <Link
+          href={`/app/admin/payroll/batches/${batchId}/paystubs`}
+          className="inline-flex items-center gap-1 rounded-md border border-stone-400 px-3 py-1.5 text-[12px] font-semibold text-stone-100 hover:bg-stone-800"
+          data-testid="payroll-admin-posted-view-paystubs"
+        >
+          View Paystubs <ArrowRight className="h-3 w-3" />
+        </Link>
       </div>
     </div>
   );

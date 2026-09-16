@@ -445,7 +445,7 @@ function ApproveAndPostActions({
       if (!res.ok) { setBanner({ tone: "error", text: j.error ?? `Post failed (HTTP ${res.status})` }); return; }
       setBanner({
         tone: "success",
-        text: `Payroll posted. Debits $${j.gl?.totalDebits} = Credits $${j.gl?.totalCredits}. Payment transmission: not yet enabled.`,
+        text: `Payroll posted to the general ledger. Debits ${money(j.gl?.totalDebits)} = Credits ${money(j.gl?.totalCredits)}. This is an accounting entry only — employee payment transmission (direct deposit / cheque run) is a separate step and is not yet enabled.`,
         jeId: j.gl?.journalEntryId, totalDebits: j.gl?.totalDebits, totalCredits: j.gl?.totalCredits,
       });
       router.refresh();
@@ -594,9 +594,9 @@ function ApproveAndPostActions({
               <dt className="font-semibold">Employees</dt>
               <dd className="tabular-nums">{headerContext.employeeCount}</dd>
               <dt className="font-semibold">Gross</dt>
-              <dd className="tabular-nums">${headerContext.grossPay}</dd>
+              <dd className="tabular-nums">{money(headerContext.grossPay)}</dd>
               <dt className="font-semibold">Net</dt>
-              <dd className="tabular-nums">${headerContext.netPay}</dd>
+              <dd className="tabular-nums">{money(headerContext.netPay)}</dd>
               <dt className="font-semibold">Calculation version</dt>
               <dd className="tabular-nums">v{calculationVersion ?? "?"}</dd>
             </dl>

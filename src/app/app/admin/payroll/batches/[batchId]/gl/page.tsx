@@ -10,6 +10,7 @@ import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { getJournal } from "@/lib/accounting/journal";
 import { assertTenantOwned } from "@/lib/services/tenant";
+import { fmtMoneyAlways } from "@/lib/accounting/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,22 +94,22 @@ export default async function PayrollBatchGlPage({ params }: Props) {
                   <div>{l.account?.accountNumber ?? "—"} · {l.account?.name ?? "—"}</div>
                 </td>
                 <td className="px-3 py-2 text-[color:var(--spectre-text-secondary)]">{l.description ?? ""}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{l.debit  ? `$${Number(l.debit).toFixed(2)}`  : ""}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{l.credit ? `$${Number(l.credit).toFixed(2)}` : ""}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{l.debit  ? fmtMoneyAlways(Number(l.debit))  : ""}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{l.credit ? fmtMoneyAlways(Number(l.credit)) : ""}</td>
               </tr>
             ))}
             <tr>
               <td colSpan={2} className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide"
                   style={{ color: "var(--spectre-text-muted)" }}>Totals</td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums">${totalDebits.toFixed(2)}</td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums">${totalCredits.toFixed(2)}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums">{fmtMoneyAlways(totalDebits)}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums">{fmtMoneyAlways(totalCredits)}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <p className="mt-3 text-xs" style={{ color: "var(--spectre-text-muted)" }}>
-        Balanced: debits ${totalDebits.toFixed(2)} = credits ${totalCredits.toFixed(2)}.
+        This is a general-ledger entry only. Debits {fmtMoneyAlways(totalDebits)} = credits {fmtMoneyAlways(totalCredits)}. Employee payment transmission (direct deposit / cheque run) is a separate step and is not yet enabled.
       </p>
     </div>
   );

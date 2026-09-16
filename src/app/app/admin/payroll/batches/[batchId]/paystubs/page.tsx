@@ -17,6 +17,7 @@ import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { prisma } from "@/lib/prisma";
 import { buildPayStatement, type PayStatementV2, type StatementSection } from "@/lib/payroll/pay-statement";
+import { fmtMoneyAlways } from "@/lib/accounting/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -151,7 +152,7 @@ function PayStatementCard({ s }: { s: PayStatementV2 }) {
                 style={{ color: "var(--spectre-text-muted)" }}>Net pay</span>
           <span className="text-lg font-semibold tabular-nums"
                 style={{ color: "var(--spectre-text-primary)" }}
-                data-testid="paystub-net-pay">${s.totals.netPayCurrent}</span>
+                data-testid="paystub-net-pay">{fmtMoneyAlways(s.totals.netPayCurrent)}</span>
         </div>
       </div>
 
@@ -186,17 +187,17 @@ function StatementSectionBlock({ section }: { section: StatementSection }) {
                 ) : null}
               </td>
               <td className="py-0.5 pr-2 text-right tabular-nums"
-                  style={{ color: "var(--spectre-text-primary)" }}>${l.current}</td>
+                  style={{ color: "var(--spectre-text-primary)" }}>{fmtMoneyAlways(l.current)}</td>
               <td className="py-0.5 text-right tabular-nums"
-                  style={{ color: "var(--spectre-text-secondary)" }}>${l.ytd}</td>
+                  style={{ color: "var(--spectre-text-secondary)" }}>{fmtMoneyAlways(l.ytd)}</td>
             </tr>
           ))}
           <tr className="border-t" style={{ borderColor: "var(--spectre-border-muted)" }}>
             <td className="pt-1 text-[color:var(--spectre-text-secondary)] font-semibold">Section total</td>
             <td className="pt-1 pr-2 text-right font-semibold tabular-nums"
-                style={{ color: "var(--spectre-text-primary)" }}>${section.currentTotal}</td>
+                style={{ color: "var(--spectre-text-primary)" }}>{fmtMoneyAlways(section.currentTotal)}</td>
             <td className="pt-1 text-right font-semibold tabular-nums"
-                style={{ color: "var(--spectre-text-secondary)" }}>${section.ytdTotal}</td>
+                style={{ color: "var(--spectre-text-secondary)" }}>{fmtMoneyAlways(section.ytdTotal)}</td>
           </tr>
         </tbody>
       </table>
@@ -226,8 +227,8 @@ function BaseRow({ label, current, ytd }: { label: string; current: string; ytd:
   return (
     <tr>
       <td className="py-0.5 text-[color:var(--spectre-text-secondary)]">{label}</td>
-      <td className="py-0.5 pr-2 text-right tabular-nums">${current}</td>
-      <td className="py-0.5 text-right tabular-nums" style={{ color: "var(--spectre-text-secondary)" }}>${ytd}</td>
+      <td className="py-0.5 pr-2 text-right tabular-nums">{fmtMoneyAlways(current)}</td>
+      <td className="py-0.5 text-right tabular-nums" style={{ color: "var(--spectre-text-secondary)" }}>{fmtMoneyAlways(ytd)}</td>
     </tr>
   );
 }
@@ -237,7 +238,7 @@ function TotalRow({ label, current, ytd }: { label: string; current: string; ytd
     <div className="flex items-baseline justify-between text-xs">
       <span style={{ color: "var(--spectre-text-secondary)" }}>{label}</span>
       <span className="tabular-nums" style={{ color: "var(--spectre-text-primary)" }}>
-        ${current} <span className="ml-2" style={{ color: "var(--spectre-text-secondary)" }}>${ytd} YTD</span>
+        {fmtMoneyAlways(current)} <span className="ml-2" style={{ color: "var(--spectre-text-secondary)" }}>{fmtMoneyAlways(ytd)} YTD</span>
       </span>
     </div>
   );

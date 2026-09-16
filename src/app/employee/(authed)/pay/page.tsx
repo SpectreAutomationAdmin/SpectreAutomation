@@ -9,6 +9,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import { listEmployeePostedPayStatements } from "@/lib/payroll/pay-statement";
+import { fmtMoneyAlways } from "@/lib/accounting/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,8 +64,8 @@ export default async function EmployeePortalPayPage() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-sm tabular-nums text-club-ink">Net ${s.netPay}</div>
-                  <div className="text-[10px] text-stone-500 tabular-nums">Gross ${s.grossPay}</div>
+                  <div className="text-sm tabular-nums text-club-ink">Net {fmtMoneyAlways(s.netPay)}</div>
+                  <div className="text-[10px] text-stone-500 tabular-nums">Gross {fmtMoneyAlways(s.grossPay)}</div>
                 </div>
               </Link>
             </li>

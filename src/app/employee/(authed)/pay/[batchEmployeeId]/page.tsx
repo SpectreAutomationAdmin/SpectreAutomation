@@ -15,6 +15,7 @@ import {
   type PayStatementV2, type StatementSection,
 } from "@/lib/payroll/pay-statement";
 import { NotFoundError, ForbiddenError } from "@/lib/errors";
+import { fmtMoneyAlways } from "@/lib/accounting/format";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -78,7 +79,7 @@ export default async function EmployeePortalPayStatement({ params }: Props) {
         <div className="mt-3 flex items-baseline justify-between border-t border-stone-200 pt-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-stone-500">Net pay</span>
           <span className="text-2xl font-semibold tabular-nums text-club-ink" data-testid="portal-pay-net">
-            ${statement.totals.netPayCurrent}
+            {fmtMoneyAlways(statement.totals.netPayCurrent)}
           </span>
         </div>
       </section>
@@ -109,14 +110,14 @@ function PortalSection({ section }: { section: StatementSection }) {
                   </span>
                 ) : null}
               </td>
-              <td className="py-1 pr-3 text-right tabular-nums text-club-ink">${l.current}</td>
-              <td className="py-1 text-right tabular-nums text-stone-500">${l.ytd}</td>
+              <td className="py-1 pr-3 text-right tabular-nums text-club-ink">{fmtMoneyAlways(l.current)}</td>
+              <td className="py-1 text-right tabular-nums text-stone-500">{fmtMoneyAlways(l.ytd)}</td>
             </tr>
           ))}
           <tr className="border-t border-stone-200">
             <td className="pt-1 font-semibold text-stone-700">Section total</td>
-            <td className="pt-1 pr-3 text-right font-semibold tabular-nums text-club-ink">${section.currentTotal}</td>
-            <td className="pt-1 text-right font-semibold tabular-nums text-stone-500">${section.ytdTotal}</td>
+            <td className="pt-1 pr-3 text-right font-semibold tabular-nums text-club-ink">{fmtMoneyAlways(section.currentTotal)}</td>
+            <td className="pt-1 text-right font-semibold tabular-nums text-stone-500">{fmtMoneyAlways(section.ytdTotal)}</td>
           </tr>
         </tbody>
       </table>
@@ -144,8 +145,8 @@ function BaseRow({ label, current, ytd }: { label: string; current: string; ytd:
   return (
     <tr>
       <td className="py-0.5 text-stone-700">{label}</td>
-      <td className="py-0.5 pr-3 text-right tabular-nums">${current}</td>
-      <td className="py-0.5 text-right tabular-nums text-stone-500">${ytd}</td>
+      <td className="py-0.5 pr-3 text-right tabular-nums">{fmtMoneyAlways(current)}</td>
+      <td className="py-0.5 text-right tabular-nums text-stone-500">{fmtMoneyAlways(ytd)}</td>
     </tr>
   );
 }
@@ -155,7 +156,7 @@ function PortalTotal({ label, current, ytd }: { label: string; current: string; 
     <div className="flex items-baseline justify-between text-sm">
       <span className="text-stone-600">{label}</span>
       <span className="tabular-nums text-club-ink">
-        ${current} <span className="ml-3 text-xs text-stone-500">${ytd} YTD</span>
+        {fmtMoneyAlways(current)} <span className="ml-3 text-xs text-stone-500">{fmtMoneyAlways(ytd)} YTD</span>
       </span>
     </div>
   );

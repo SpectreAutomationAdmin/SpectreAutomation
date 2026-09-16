@@ -67,6 +67,9 @@ export interface PayrollOverviewBatchRef {
   returnedByDisplayName?: string | null;
   returnReason?: string | null;
   calculationVersion?: number | null;
+  // Phase 2 (2026-09-15) — expose GL journal entry ref so the POSTED
+  // completion banner can offer a direct "View GL Entry" deep link.
+  glJournalEntryId?: string | null;
 }
 export interface PayrollOverviewEmployeeRow {
   batchEmployeeId: string;
@@ -866,6 +869,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         id: true, status: true, sequence: true, calculationVersion: true,
         preparedAt: true, calculatedAt: true, submittedAt: true, submittedByUserId: true,
         approvedAt: true, approvedByUserId: true, postedAt: true,
+        glJournalEntryId: true,
       },
     }),
     prisma.payrollBatchEmployee.findMany({
@@ -966,6 +970,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     returnedAt: returnActivity?.createdAt?.toISOString() ?? null,
     returnedByDisplayName: returnActivity?.actorUserId ? (auxNameById.get(returnActivity.actorUserId) ?? null) : null,
     returnReason: returnActivity?.note?.replace(/^Returned for correction:\s*/i, "") ?? null,
+    glJournalEntryId: batchRow.glJournalEntryId ?? null,
   } : null;
 
   // ---- Enrich employees with department (from sourceFactsJson primary assignment) ----
