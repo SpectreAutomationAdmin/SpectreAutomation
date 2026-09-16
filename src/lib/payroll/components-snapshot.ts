@@ -28,6 +28,10 @@
 import { prisma } from "../prisma";
 import type { Prisma as PrismaTypes } from "@prisma/client";
 import { findLibraryRule, type StatutoryRuleVariant } from "./statutory-library";
+// Phase 4 follow-up (2026-09-16) — canonical Prepare-time fail-closed
+// guard for ambiguous overlapping assignments. See
+// `resolveApplicableRecurringAssignments` in components-catalogue.ts.
+import { resolveApplicableRecurringAssignmentsWithComponent } from "./components-catalogue";
 
 // Payroll-3C-3C (2026-09-09) — resolve + freeze SPECTRE_LIBRARY
 // provenance for the snapshot. Returns empty fields when the
@@ -113,18 +117,23 @@ export async function snapshotEmployeeComponentsForBatch(
   // instant OF the period. §8 documented above.
   const asOf = new Date(input.periodEnd.getTime() - 1);
 
-  const assignments = await c.employeeRecurringPayrollComponent.findMany({
-    where: {
-      clubId: input.clubId,
-      employeeId: input.employeeId,
-      active: true,
-      effectiveFrom: { lte: asOf },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
-      component: { active: true },
-    },
-    include: { component: true },
-    orderBy: [{ effectiveFrom: "asc" }],
-  });
+  // Phase 4 follow-up (2026-09-16) — canonical Prepare-time
+  // fail-closed guard. Delegates to
+  // `resolveApplicableRecurringAssignmentsWithComponent`, which
+  //   1. issues the SAME query the legacy path used, and
+  //   2. throws a ConflictError if two applicable rows share a
+  //      componentId — Prepare halts and the ambiguity surfaces
+  //      as a payroll blocker rather than an arbitrary silent pick.
+  // The canonical resolver is the ONE definition of "applicable
+  // recurring assignment" — the write-path overlap check
+  // (`assertNoOverlap`) and this read-path guard share the same
+  // half-open-interval + component-active semantics.
+  const assignments = await resolveApplicableRecurringAssignmentsWithComponent(
+    input.clubId,
+    input.employeeId,
+    asOf,
+    { tx: c as PrismaTypes.TransactionClient },
+  );
 
   const warnings: ComponentSnapshotResult["warnings"] = [];
   let written = 0;

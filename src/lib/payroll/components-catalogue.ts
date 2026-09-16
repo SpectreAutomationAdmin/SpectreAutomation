@@ -683,19 +683,32 @@ export async function changeRecurringComponentAssignment(
  * Prepare FAILS CLOSED rather than silently picking one.
  *
  * Returns a map of `${componentId}` → assignment for the requested
- * employee. Called from batch-preparation's per-employee snapshotter.
+ * employee. Called from batch-preparation's per-employee snapshotter
+ * via the `resolveApplicableRecurringAssignmentsWithComponent` variant.
+ *
+ * APPLICABILITY DATE CONVENTION:
+ *   The `asOf` argument is the exact instant used to test each
+ *   assignment's half-open interval `[effectiveFrom, effectiveTo)`.
+ *   The snapshotter passes `payPeriod.periodEnd − 1ms` (the last
+ *   instant of the pay period), matching the legacy
+ *   `snapshotEmployeeComponentsForBatch` rule. A future assignment
+ *   whose `effectiveFrom = periodEnd` is exclusive of that instant
+ *   (half-open) and correctly does NOT apply to the batch whose
+ *   period ends at that boundary — it applies to the NEXT period.
  */
 export async function resolveApplicableRecurringAssignments(
   clubId: string,
   employeeId: string,
   asOf: Date,
+  opts?: { tx?: Prisma.TransactionClient },
 ): Promise<Map<string, {
   id: string; componentId: string;
   amount: Prisma.Decimal | null;
   percentBps: number | null;
   effectiveFrom: Date; effectiveTo: Date | null;
 }>> {
-  const rows = await prisma.employeeRecurringPayrollComponent.findMany({
+  const c = opts?.tx ?? prisma;
+  const rows = await c.employeeRecurringPayrollComponent.findMany({
     where: {
       clubId, employeeId,
       effectiveFrom: { lte: asOf },
@@ -732,6 +745,60 @@ export async function resolveApplicableRecurringAssignments(
     resolved.set(componentId, matches[0]);
   }
   return resolved;
+}
+
+/**
+ * Phase 4 follow-up (2026-09-16) — hydrated variant of
+ * `resolveApplicableRecurringAssignments`.
+ *
+ * Same fail-closed contract, but returns the full
+ * `EmployeeRecurringPayrollComponent` row with the `component`
+ * relation already included. Consumed by
+ * `snapshotEmployeeComponentsForBatch` so the Prepare path takes
+ * the SAME query + the SAME duplicate-detection semantics as the
+ * lightweight resolver — no drift, no arbitrary silent selection.
+ *
+ * Runs INSIDE the caller's transaction when `opts.tx` is supplied.
+ */
+export async function resolveApplicableRecurringAssignmentsWithComponent(
+  clubId: string,
+  employeeId: string,
+  asOf: Date,
+  opts?: { tx?: Prisma.TransactionClient },
+): Promise<Array<Prisma.EmployeeRecurringPayrollComponentGetPayload<{ include: { component: true } }>>> {
+  const c = opts?.tx ?? prisma;
+  const rows = await c.employeeRecurringPayrollComponent.findMany({
+    where: {
+      clubId, employeeId,
+      effectiveFrom: { lte: asOf },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+      active: true,
+      component: { active: true },
+    },
+    include: { component: true },
+    orderBy: [{ effectiveFrom: "asc" }],
+  });
+  // Same fail-closed duplicate detection as the lightweight resolver
+  // above. If two applicable rows share a componentId, Prepare must
+  // NOT silently pick one — throw a ConflictError so preparation halts
+  // and the ambiguity is surfaced.
+  const byComponent = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byComponent.get(r.componentId) ?? [];
+    list.push(r);
+    byComponent.set(r.componentId, list);
+  }
+  for (const [componentId, matches] of byComponent) {
+    if (matches.length > 1) {
+      throw new ConflictError(
+        `Multiple applicable recurring assignments found for employee ${employeeId} + component ${componentId} ` +
+        `as of ${asOf.toISOString().slice(0, 10)} (${matches.length}). ` +
+        `Payroll cannot be prepared while an ambiguous overlap exists. ` +
+        `Resolve on the employee's Payroll → Compensation & Benefits section by ending the wrong row.`,
+      );
+    }
+  }
+  return rows;
 }
 
 // ---------------------------------------------------------------------

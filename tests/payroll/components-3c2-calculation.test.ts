@@ -15,6 +15,7 @@ import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { calculatePayrollBatch } from "@/lib/payroll/calculation-execute";
 import { seedCanadaAlbertaPackages2026 } from "@/lib/payroll/statutory/seed-ca-ab-2026";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { snapshotEmployeeComponentsForBatch, batchHasComponentSnapshots } from "@/lib/payroll/components-snapshot";
 import { postPayrollBatch, approvePayrollBatch } from "@/lib/payroll/approve-and-post";
 import { ConflictError } from "@/lib/errors";
@@ -79,6 +80,11 @@ async function baseline(name: string, annualSalary = "120000"): Promise<Scenario
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: ctl.id,
   });
+  // v-slice-1-followup-7 (2026-09-15) — Prepare-time gate requires
+  // an implementation declaration for the batch's tax year. Legacy
+  // 3C-2 fixture predates this gate; seed a ZERO_OPENING_YTD row so
+  // Prepare doesn't refuse before running.
+  await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   const c = db();
   const emp = await c.employee.create({
