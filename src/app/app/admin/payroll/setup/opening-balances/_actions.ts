@@ -19,10 +19,7 @@ import {
   type OpeningBalanceFields,
   type PriorPayrollKind,
 } from "@/lib/payroll/opening-balance";
-import {
-  importOpeningBalancesFromCsv,
-  OPENING_BALANCE_CSV_HEADERS,
-} from "@/lib/payroll/opening-balance-import";
+import { importOpeningBalancesFromCsv } from "@/lib/payroll/opening-balance-import";
 import { isAppError, ValidationError } from "@/lib/errors";
 
 async function context() {
@@ -227,8 +224,9 @@ export async function importOpeningBalancesCsvAction(formData: FormData): Promis
   }
 }
 
-/** Static CSV template download exposed as a server action so the
- *  founder gets the exact headers the importer expects. Rendered as a
- *  route in _template-route.ts (not here — routes cannot live inside
- *  server-action files). We export the header list for the download. */
-export const OPENING_BALANCE_CSV_TEMPLATE_HEADERS = OPENING_BALANCE_CSV_HEADERS;
+// Static CSV template download is exposed at
+// /app/admin/payroll/setup/opening-balances/template (see template/route.ts).
+// The route sources its header list directly from opening-balance-import.ts
+// (OPENING_BALANCE_CSV_HEADERS) so template + importer stay in lockstep.
+// A "use server" file cannot export non-async members (Next.js constraint),
+// so no re-export lives here.
