@@ -1635,52 +1635,109 @@ function ApprovedBanner({ approvedAtISO, approvedByDisplayName, calculationVersi
 // Slice 3D (2026-09-12) — Return-to-Preparation control. Uses a
 // details/summary for the inline reason prompt so the confirmation
 // stays inside the Employees tab shell (no modal, no route change).
+// v-slice-1-followup-6 (2026-09-15) — Return-to-Preparation confirmation
+// converted from clipped inline dropdown to modal dialog. See the
+// SubmitForApprovalConfirmation comment above for the rationale. The
+// Reason input remains required (blank refused by HTML5 `required`
+// AND the server-side action). Domain semantics unchanged.
 function ReturnToPreparationButton({ action, payPeriodId, payGroupId, batchId }: {
   action: (fd: FormData) => Promise<void>;
   payPeriodId: string;
   payGroupId: string;
   batchId: string;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="relative" data-testid="payroll-admin-return-to-prep">
-      <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3 py-1 text-[12.5px] text-stone-700">
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="payroll-admin-return-to-prep"
+        className="inline-flex items-center gap-1 rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3 py-1 text-[12.5px] text-stone-700"
+      >
         <RefreshIcon className="h-3.5 w-3.5" /> Return to Preparation
-      </summary>
-      <div className="absolute right-0 top-full mt-1 z-10 w-[380px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-return-to-prep-panel">
-        <form action={action} className="space-y-2">
-          <input type="hidden" name="payPeriodId" value={payPeriodId} />
-          <input type="hidden" name="payGroupId" value={payGroupId} />
-          <input type="hidden" name="batchId" value={batchId} />
-          <p className="text-[12px] text-stone-700 font-medium">Return this payroll to Preparation?</p>
-          <p className="text-[11.5px] text-stone-500 leading-snug">
-            The current calculation will no longer be the active result. Payroll must be
-            calculated again before it can be submitted.
-          </p>
-          <p className="text-[11.5px] text-stone-500 leading-snug">
-            <span className="font-semibold text-stone-700">This run retains the inputs captured when it was prepared.</span>{" "}
-            Use this to add or remove a one-time adjustment before recalculating. If an employee&rsquo;s
-            HR record (compensation, TD1, assignment) has changed, this payroll run must be
-            <span className="whitespace-nowrap"> voided</span> and prepared again to use the updated setup.
-          </p>
-          <div>
-            <label htmlFor="ret-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
-            <input
-              id="ret-reason"
-              name="reason"
-              type="text"
-              required
-              maxLength={240}
-              placeholder="e.g. adding a one-time bonus"
-              data-testid="payroll-admin-return-to-prep-reason"
-              className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
-            />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payroll-admin-return-to-prep-title"
+          data-testid="payroll-admin-return-to-prep-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 8, maxWidth: 520, width: "100%",
+            margin: "0 16px", padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+          }}>
+            <h2 id="payroll-admin-return-to-prep-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Return payroll to Preparation?
+            </h2>
+            <p style={{ margin: "12px 0 12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              The current calculation will be invalidated and this payroll will return to the
+              editable preparation state. Payroll must be calculated again before it can be
+              submitted.
+            </p>
+            <p style={{ margin: "0 0 16px 0", fontSize: 13, lineHeight: 1.55, color: "#57534e" }}>
+              <span style={{ fontWeight: 600, color: "#292524" }}>This run retains the inputs captured when it was prepared.</span>
+              {" "}Use this to add or remove a one-time adjustment before recalculating. If an employee&rsquo;s
+              HR record (compensation, TD1, assignment) has changed, this payroll run must be
+              voided and prepared again to use the updated setup.
+            </p>
+            <form action={action} style={{ display: "block" }}>
+              <input type="hidden" name="payPeriodId" value={payPeriodId} />
+              <input type="hidden" name="payGroupId" value={payGroupId} />
+              <input type="hidden" name="batchId" value={batchId} />
+              <label
+                htmlFor="ret-reason"
+                style={{ display: "block", fontSize: 13, fontWeight: 500, color: "#57534e", marginBottom: 4 }}
+              >
+                Reason <span style={{ color: "#b91c1c" }}>*</span>
+              </label>
+              <input
+                id="ret-reason"
+                name="reason"
+                type="text"
+                required
+                maxLength={240}
+                placeholder="e.g. adding a one-time bonus"
+                data-testid="payroll-admin-return-to-prep-reason"
+                style={{
+                  width: "100%", height: 36, padding: "0 10px", fontSize: 14,
+                  border: "1px solid #d0c9bd", borderRadius: 4, background: "white",
+                }}
+              />
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  data-testid="payroll-admin-return-to-prep-cancel"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "1px solid #d0c9bd",
+                    background: "transparent", borderRadius: 4, cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  data-testid="payroll-admin-return-to-prep-submit"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "none",
+                    background: "#dc2626", color: "white", borderRadius: 4, cursor: "pointer", fontWeight: 500,
+                  }}
+                >
+                  Return to Preparation
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button type="submit" data-testid="payroll-admin-return-to-prep-submit" className="inline-flex items-center gap-1 rounded-md bg-[#dc2626] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#b91c1c]">Return to Preparation</button>
-          </div>
-        </form>
-      </div>
-    </details>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2299,6 +2356,19 @@ function SubmitForApprovalButton() {
 // The primary Submit button opens a details panel showing the
 // summary; the form action only fires from the confirm button
 // inside the panel.
+// v-slice-1-followup-6 (2026-09-15) — Submit-for-Approval confirmation.
+//
+// Previously used `<details><summary>` with an `absolute`-positioned
+// dropdown panel (w-[360px]) inside the 320-px right-sidebar Payroll
+// Actions card. Ancestor clip + narrow column caused the panel body
+// to render outside the visible card — the founder could not see or
+// interact with the confirm CTA. Same class of defect on Return and
+// Post below.
+//
+// Now uses the same `position: fixed; inset: 0` modal pattern the
+// working Discard Prepared Payroll action already uses — impossible
+// to be clipped by any ancestor. Server action, form fields, and
+// button behavior are unchanged.
 function SubmitForApprovalConfirmation({
   action, payPeriodId, payGroupId, batchId, summary, grossPayDisplay, warningCount,
 }: {
@@ -2310,46 +2380,98 @@ function SubmitForApprovalConfirmation({
   grossPayDisplay: string;
   warningCount: number;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="relative" data-testid="payroll-admin-submit-for-approval">
-      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md bg-[#1e40af] text-white hover:bg-[#1e3a8a] px-3.5 py-1.5 text-[13px] font-medium">
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="payroll-admin-submit-for-approval"
+        className="w-full inline-flex items-center justify-between rounded-md bg-[#1e40af] text-white hover:bg-[#1e3a8a] px-3.5 py-1.5 text-[13px] font-medium"
+      >
         <span className="inline-flex items-center gap-2"><ArrowRight className="h-4 w-4" /> Submit for Approval</span>
         <ArrowRight className="h-3.5 w-3.5" />
-      </summary>
-      <div className="absolute right-0 top-full mt-1 z-10 w-[360px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-submit-confirm-panel">
-        <p className="text-[12.5px] font-semibold text-stone-800">Submit calculated payroll?</p>
-        <p className="text-[11.5px] text-stone-500 leading-snug mt-1">
-          This sends the current calculated payroll to the Controller for final approval. Payroll
-          cannot be edited while it is awaiting approval.
-        </p>
-        <dl className="mt-2 grid grid-cols-2 gap-y-1 text-[12px] text-stone-700">
-          <dt className="font-semibold">Employees</dt>
-          <dd className="tabular-nums">{summary?.employeeCount ?? "—"}</dd>
-          <dt className="font-semibold">Gross</dt>
-          <dd className="tabular-nums">{summary?.grossPayDisplay ?? grossPayDisplay}</dd>
-          <dt className="font-semibold">Deductions</dt>
-          <dd className="tabular-nums">{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
-          <dt className="font-semibold">Net</dt>
-          <dd className="tabular-nums">{summary?.netPayDisplay ?? "—"}</dd>
-          <dt className="font-semibold">Employer</dt>
-          <dd className="tabular-nums">{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
-          <dt className="font-semibold">Total cost</dt>
-          <dd className="tabular-nums">{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
-          <dt className="font-semibold">Warnings</dt>
-          <dd className="tabular-nums">{warningCount}</dd>
-          <dt className="font-semibold">Calc version</dt>
-          <dd className="tabular-nums">v{summary?.calculationVersion ?? "?"}</dd>
-        </dl>
-        <form action={action} className="mt-2">
-          <input type="hidden" name="payPeriodId" value={payPeriodId} />
-          <input type="hidden" name="payGroupId" value={payGroupId} />
-          <input type="hidden" name="batchId" value={batchId} />
-          <div className="flex items-center justify-end gap-2">
-            <SubmitForApprovalButton />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payroll-admin-submit-title"
+          data-testid="payroll-admin-submit-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 8, maxWidth: 520, width: "100%",
+            margin: "0 16px", padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+          }}>
+            <h2 id="payroll-admin-submit-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Submit payroll for Controller approval?
+            </h2>
+            <p style={{ margin: "12px 0 12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              This sends the current calculated payroll to the designated Controller for final approval.
+              Payroll cannot be edited while it is awaiting approval.
+            </p>
+            <dl style={{ margin: "0 0 16px 0", fontSize: 13, color: "#44403c" }} data-testid="payroll-admin-submit-summary">
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Employees</dt>
+                <dd style={{ margin: 0 }}>{summary?.employeeCount ?? "—"}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Gross pay</dt>
+                <dd style={{ margin: 0 }}>{summary?.grossPayDisplay ?? grossPayDisplay}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Employee deductions</dt>
+                <dd style={{ margin: 0 }}>{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Net pay</dt>
+                <dd style={{ margin: 0 }}>{summary?.netPayDisplay ?? "—"}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Employer contributions</dt>
+                <dd style={{ margin: 0 }}>{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Total employer cost</dt>
+                <dd style={{ margin: 0 }}>{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Warnings remaining</dt>
+                <dd style={{ margin: 0 }}>{warningCount}</dd>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <dt style={{ minWidth: 160, color: "#78716c" }}>Calculation version</dt>
+                <dd style={{ margin: 0 }}>v{summary?.calculationVersion ?? "?"}</dd>
+              </div>
+            </dl>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                data-testid="payroll-admin-submit-cancel"
+                style={{
+                  padding: "8px 16px", fontSize: 14, border: "1px solid #d0c9bd",
+                  background: "transparent", borderRadius: 4, cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <form action={action} style={{ display: "inline" }}>
+                <input type="hidden" name="payPeriodId" value={payPeriodId} />
+                <input type="hidden" name="payGroupId" value={payGroupId} />
+                <input type="hidden" name="batchId" value={batchId} />
+                <SubmitForApprovalButton />
+              </form>
+            </div>
           </div>
-        </form>
-      </div>
-    </details>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2407,6 +2529,10 @@ function PostSoDStatusButton() {
 // fetched from the canonical preview endpoint. Only the inner
 // Confirm & Post button submits the form; the primary button just
 // opens the panel.
+// v-slice-1-followup-6 (2026-09-15) — Post Payroll confirmation
+// converted from clipped inline dropdown to modal dialog. See the
+// SubmitForApprovalConfirmation comment above for the rationale.
+// GL journal preview + totals + form action unchanged.
 function PostPayrollConfirmation({
   action, payPeriodId, payGroupId, batchId,
   summary, approvedByDisplayName, approvedAtISO, calculationVersion,
@@ -2422,44 +2548,81 @@ function PostPayrollConfirmation({
   calculationVersion: number | null;
   previewUrl: string;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="relative" data-testid="payroll-admin-post-payroll">
-      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md bg-[#0f5f3f] text-white hover:bg-[#0d4f34] px-3.5 py-1.5 text-[13px] font-medium">
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="payroll-admin-post-payroll"
+        className="w-full inline-flex items-center justify-between rounded-md bg-[#0f5f3f] text-white hover:bg-[#0d4f34] px-3.5 py-1.5 text-[13px] font-medium"
+      >
         <span className="inline-flex items-center gap-2"><CalcIcon className="h-4 w-4" /> Post Payroll</span>
         <ArrowRight className="h-3.5 w-3.5" />
-      </summary>
-      <div className="absolute right-0 top-full mt-1 z-10 w-[440px] max-h-[560px] overflow-auto rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-post-confirm-panel">
-        <p className="text-[12.5px] font-semibold text-stone-800">Post approved payroll to the GL?</p>
-        <p className="text-[11.5px] text-stone-500 leading-snug mt-1">
-          Posting will finalize this payroll and create the accounting journal.
-          This action does not transmit employee payments or submit government
-          remittances.
-        </p>
-        <div className="mt-2 rounded border border-stone-200 bg-[#fbfaf7] px-2 py-1.5">
-          <p className="text-[11px] font-semibold text-stone-700 mb-0.5">Payroll totals</p>
-          <dl className="grid grid-cols-2 gap-y-0.5 text-[11.5px] text-stone-700">
-            <dt>Employees</dt>       <dd className="tabular-nums">{summary?.employeeCount ?? "—"}</dd>
-            <dt>Gross</dt>           <dd className="tabular-nums">{summary?.grossPayDisplay ?? "—"}</dd>
-            <dt>Employee ded.</dt>   <dd className="tabular-nums">{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
-            <dt>Net</dt>             <dd className="tabular-nums">{summary?.netPayDisplay ?? "—"}</dd>
-            <dt>Employer contrib.</dt><dd className="tabular-nums">{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
-            <dt>Total cost</dt>      <dd className="tabular-nums">{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
-            <dt>Calc version</dt>    <dd className="tabular-nums">v{calculationVersion ?? "?"}</dd>
-            <dt>Approved by</dt>     <dd>{approvedByDisplayName ?? "—"}</dd>
-            <dt>Approved at</dt>     <dd>{approvedAtISO ? new Date(approvedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "—"}</dd>
-          </dl>
-        </div>
-        <PostJournalPreview previewUrl={previewUrl} />
-        <form action={action} className="mt-2">
-          <input type="hidden" name="payPeriodId" value={payPeriodId} />
-          <input type="hidden" name="payGroupId" value={payGroupId} />
-          <input type="hidden" name="batchId" value={batchId} />
-          <div className="flex items-center justify-end">
-            <PostPayrollSubmitButton />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payroll-admin-post-title"
+          data-testid="payroll-admin-post-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 8, maxWidth: 560, width: "100%",
+            margin: "0 16px", padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+            maxHeight: "85vh", overflowY: "auto",
+          }}>
+            <h2 id="payroll-admin-post-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Post approved payroll to the GL?
+            </h2>
+            <p style={{ margin: "12px 0 12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              Posting will finalize this payroll and create the accounting journal.
+              This action does not transmit employee payments or submit government
+              remittances.
+            </p>
+            <div style={{ margin: "0 0 12px 0", padding: 10, border: "1px solid #e7e5e4", background: "#fbfaf7", borderRadius: 4 }}>
+              <p style={{ margin: "0 0 6px 0", fontSize: 11, fontWeight: 600, color: "#57534e", textTransform: "uppercase", letterSpacing: 0.4 }}>Payroll totals</p>
+              <dl style={{ margin: 0, fontSize: 13, color: "#44403c", display: "grid", gridTemplateColumns: "160px 1fr", rowGap: 4 }}>
+                <dt style={{ color: "#78716c" }}>Employees</dt>       <dd style={{ margin: 0 }}>{summary?.employeeCount ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Gross</dt>           <dd style={{ margin: 0 }}>{summary?.grossPayDisplay ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Employee ded.</dt>   <dd style={{ margin: 0 }}>{summary?.totalEmployeeDeductionsDisplay ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Net</dt>             <dd style={{ margin: 0 }}>{summary?.netPayDisplay ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Employer contrib.</dt><dd style={{ margin: 0 }}>{summary?.totalEmployerContributionsDisplay ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Total cost</dt>      <dd style={{ margin: 0 }}>{summary?.totalEmployerPayrollCostDisplay ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Calc version</dt>    <dd style={{ margin: 0 }}>v{calculationVersion ?? "?"}</dd>
+                <dt style={{ color: "#78716c" }}>Approved by</dt>     <dd style={{ margin: 0 }}>{approvedByDisplayName ?? "—"}</dd>
+                <dt style={{ color: "#78716c" }}>Approved at</dt>     <dd style={{ margin: 0 }}>{approvedAtISO ? new Date(approvedAtISO).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "—"}</dd>
+              </dl>
+            </div>
+            <PostJournalPreview previewUrl={previewUrl} />
+            <form action={action} style={{ marginTop: 16 }}>
+              <input type="hidden" name="payPeriodId" value={payPeriodId} />
+              <input type="hidden" name="payGroupId" value={payGroupId} />
+              <input type="hidden" name="batchId" value={batchId} />
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  data-testid="payroll-admin-post-cancel"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "1px solid #d0c9bd",
+                    background: "transparent", borderRadius: 4, cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <PostPayrollSubmitButton />
+              </div>
+            </form>
           </div>
-        </form>
-      </div>
-    </details>
+        </div>
+      )}
+    </>
   );
 }
 
