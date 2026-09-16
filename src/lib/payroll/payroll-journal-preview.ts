@@ -18,8 +18,8 @@ import { prisma } from "../prisma";
 import { requirePermission, type Principal } from "../rbac";
 import { ConflictError, NotFoundError } from "../errors";
 import { assertTenantOwned } from "../services/tenant";
-import { Prisma } from "@prisma/client";
-import { componentRequiresExpense, componentRequiresLiability } from "./gl-readiness";
+import { resolvePayrollJournal } from "./payroll-gl-resolver";
+import { loadPayrollGlInputs } from "./payroll-gl-inputs";
 
 const PAYROLL_ENTITY = "PayrollBatch";
 
@@ -78,12 +78,10 @@ export async function previewPayrollJournal(
   const { evaluatePayrollGlReadiness } = await import("./gl-readiness");
   const readiness = await evaluatePayrollGlReadiness(principal, clubId, batchId);
 
-  // Load profile + employees + snapshots (identical to postPayrollBatch).
-  const config = await prisma.payrollClubConfig.findUnique({
-    where: { clubId },
-    include: { glAccountingProfile: true },
-  });
-  const profile = config?.glAccountingProfile;
+  // Phase 3 (2026-09-15) — load resolver inputs through the shared
+  // input assembler so preview + posting see identical facts.
+  const inputs = await loadPayrollGlInputs(clubId, batchId);
+  const profile = inputs.profile;
   if (!profile) {
     return {
       batchId, status: batch.status,
@@ -125,133 +123,37 @@ export async function previewPayrollJournal(
     };
   }
 
-  const emps = await prisma.payrollBatchEmployee.findMany({
-    where: { batchId, clubId },
-    select: {
-      id: true, employeeId: true,
-      grossPay: true, netPay: true,
-      deductionCppEeCombined: true, deductionCpp2Ee: true,
-      deductionEiEe: true,
-      deductionFederalTax: true, deductionProvincialTax: true,
-      employerCppCombined: true, employerCpp2: true,
-      employerEi: true,
-    },
-  });
-  const sumDec = (rows: Array<Record<string, unknown>>, field: string): Prisma.Decimal => {
-    let acc = new Prisma.Decimal(0);
-    for (const r of rows) {
-      const v = r[field];
-      if (v == null) continue;
-      acc = acc.plus(v as Prisma.Decimal);
-    }
-    return acc;
-  };
-  const gross      = sumDec(emps, "grossPay");
-  const netPay     = sumDec(emps, "netPay");
-  const eeCpp      = sumDec(emps, "deductionCppEeCombined").plus(sumDec(emps, "deductionCpp2Ee"));
-  const eeEi       = sumDec(emps, "deductionEiEe");
-  const fedTax     = sumDec(emps, "deductionFederalTax");
-  const provTax    = sumDec(emps, "deductionProvincialTax");
-  const erCpp      = sumDec(emps, "employerCppCombined").plus(sumDec(emps, "employerCpp2"));
-  const erEi       = sumDec(emps, "employerEi");
-  const cppPayable = eeCpp.plus(erCpp);
-  const eiPayable  = eeEi.plus(erEi);
+  const label = `Payroll ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
 
-  const snaps = await prisma.payrollBatchComponentSnapshot.findMany({
-    where: { batchId, clubId },
-    select: {
-      componentCode: true, displayName: true,
-      side: true, cashEffect: true, category: true, provenance: true,
-      resolvedAmount: true,
-      expenseAccountIdSnapshot: true, liabilityAccountIdSnapshot: true,
-    },
+  // Phase 3 (2026-09-15) — resolve journal through the shared,
+  // department-aware resolver.
+  const resolved = resolvePayrollJournal({
+    label,
+    profile,
+    departmentOverrides: inputs.departmentOverrides,
+    employees: inputs.employees,
+    components: inputs.components,
   });
 
-  interface Bucket { total: Prisma.Decimal; sources: string[] }
-  const debitBuckets  = new Map<string, Bucket>();
-  const creditBuckets = new Map<string, Bucket>();
-  const addBucket = (m: Map<string, Bucket>, acctId: string, amt: Prisma.Decimal, src: string) => {
-    const b = m.get(acctId);
-    if (b) {
-      b.total = b.total.plus(amt);
-      if (!b.sources.includes(src)) b.sources.push(src);
-    } else {
-      m.set(acctId, { total: amt, sources: [src] });
-    }
-  };
-  let componentCashInGross = new Prisma.Decimal(0);
-  for (const s of snaps) {
-    if (s.resolvedAmount == null || (s.resolvedAmount as Prisma.Decimal).isZero()) continue;
-    const amt = s.resolvedAmount as Prisma.Decimal;
-    const src = `${s.displayName} (${s.componentCode})`;
-    if (componentRequiresExpense(s) && s.expenseAccountIdSnapshot) {
-      addBucket(debitBuckets, s.expenseAccountIdSnapshot, amt, src);
-    }
-    if (componentRequiresLiability(s) && s.liabilityAccountIdSnapshot) {
-      addBucket(creditBuckets, s.liabilityAccountIdSnapshot, amt, src);
-    }
-    if (s.side === "EMPLOYEE" && s.cashEffect === "INCREASES_NET_PAY") {
-      componentCashInGross = componentCashInGross.plus(amt);
-    }
-  }
-  const residualSalaryExpense = gross.minus(componentCashInGross);
-
-  const componentAcctIds = new Set<string>();
-  for (const id of debitBuckets.keys())  componentAcctIds.add(id);
-  for (const id of creditBuckets.keys()) componentAcctIds.add(id);
-  const accountIds = [
-    profile.salaryExpenseAccountId, profile.employerCppExpenseAccountId, profile.employerEiExpenseAccountId,
-    profile.netPayPayableAccountId, profile.cppPayableAccountId, profile.eiPayableAccountId,
-    profile.federalTaxPayableAccountId, profile.provincialTaxPayableAccountId,
-    ...componentAcctIds,
-  ];
   const acctRows = await prisma.account.findMany({
-    where: { id: { in: accountIds } },
+    where: { id: { in: resolved.lines.map((l) => l.accountId) } },
     select: { id: true, accountNumber: true, name: true },
   });
   const acctById = new Map(acctRows.map((a) => [a.id, a]));
   const num  = (id: string): string => acctById.get(id)?.accountNumber ?? `?${id}`;
   const name = (id: string): string => acctById.get(id)?.name ?? "(unknown)";
 
-  const lines: PayrollJournalPreviewLine[] = [];
-  let ln = 1;
-  const addDebit = (accountId: string, amount: Prisma.Decimal, description: string) => {
-    if (amount.isZero()) return;
-    lines.push({
-      lineNumber: ln++,
-      accountNumber: num(accountId), accountName: name(accountId),
-      debit: amount.toFixed(2), credit: null, description,
-    });
-  };
-  const addCredit = (accountId: string, amount: Prisma.Decimal, description: string) => {
-    if (amount.isZero()) return;
-    lines.push({
-      lineNumber: ln++,
-      accountNumber: num(accountId), accountName: name(accountId),
-      debit: null, credit: amount.toFixed(2), description,
-    });
-  };
-  const label = `Payroll ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
+  const lines: PayrollJournalPreviewLine[] = resolved.lines.map((l, idx) => ({
+    lineNumber: idx + 1,
+    accountNumber: num(l.accountId),
+    accountName: name(l.accountId),
+    debit: l.debit != null ? l.debit.toFixed(2) : null,
+    credit: l.credit != null ? l.credit.toFixed(2) : null,
+    description: l.description,
+  }));
 
-  addDebit(profile.salaryExpenseAccountId,       residualSalaryExpense, `${label} — regular salary expense`);
-  addDebit(profile.employerCppExpenseAccountId,  erCpp,   `${label} — employer CPP expense`);
-  addDebit(profile.employerEiExpenseAccountId,   erEi,    `${label} — employer EI expense`);
-  for (const [acctId, b] of debitBuckets) {
-    const sources = b.sources.length <= 3 ? b.sources.join(" + ") : `${b.sources.length} components`;
-    addDebit(acctId, b.total, `${label} — ${sources}`);
-  }
-  for (const [acctId, b] of creditBuckets) {
-    const sources = b.sources.length <= 3 ? b.sources.join(" + ") : `${b.sources.length} components`;
-    addCredit(acctId, b.total, `${label} — ${sources} payable`);
-  }
-  addCredit(profile.netPayPayableAccountId,        netPay,     `${label} — net pay payable`);
-  addCredit(profile.cppPayableAccountId,           cppPayable, `${label} — CPP payable (ee + er)`);
-  addCredit(profile.eiPayableAccountId,            eiPayable,  `${label} — EI payable (ee + er)`);
-  addCredit(profile.federalTaxPayableAccountId,    fedTax,     `${label} — federal income tax payable`);
-  addCredit(profile.provincialTaxPayableAccountId, provTax,    `${label} — provincial income tax payable`);
-
-  const debitTotal  = lines.reduce((s, l) => s.plus(l.debit  ?? "0"), new Prisma.Decimal(0));
-  const creditTotal = lines.reduce((s, l) => s.plus(l.credit ?? "0"), new Prisma.Decimal(0));
+  const debitTotal  = resolved.totalDebits;
+  const creditTotal = resolved.totalCredits;
   const diffCents = Math.round(Number(debitTotal.minus(creditTotal).toFixed(2)) * 100);
 
   return {

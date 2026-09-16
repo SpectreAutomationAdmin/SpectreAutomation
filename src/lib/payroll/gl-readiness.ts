@@ -159,6 +159,30 @@ export async function evaluatePayrollGlReadiness(
     requireField("provincialTaxPayableAccountId",  profile.provincialTaxPayableAccountId);
   }
 
+  // ---------- Phase 3 (2026-09-15) — Departmental expense overrides ----------
+  //
+  // A Club may configure per-department overrides that redirect
+  // salary / employer CPP / employer EI expense to a different
+  // account than the global default. Every non-null override account
+  // is validated for tenant ownership, active status, and correct
+  // type (must be EXPENSE) — the resolver's fallback-to-global path
+  // only fires when the override field is null, so a mis-configured
+  // stale override CAN produce a bad journal line unless we catch
+  // it here.
+  const deptOverrides = await prisma.payrollGlDepartmentOverride.findMany({
+    where: { clubId },
+    select: {
+      salaryExpenseAccountId: true,
+      employerCppExpenseAccountId: true,
+      employerEiExpenseAccountId: true,
+    },
+  });
+  for (const ov of deptOverrides) {
+    if (ov.salaryExpenseAccountId)      accountIdsToCheck.push({ id: ov.salaryExpenseAccountId,      usedBy: "dept-override.salaryExpenseAccountId" });
+    if (ov.employerCppExpenseAccountId) accountIdsToCheck.push({ id: ov.employerCppExpenseAccountId, usedBy: "dept-override.employerCppExpenseAccountId" });
+    if (ov.employerEiExpenseAccountId)  accountIdsToCheck.push({ id: ov.employerEiExpenseAccountId,  usedBy: "dept-override.employerEiExpenseAccountId" });
+  }
+
   // ---------- Component snapshots ----------
   const snaps = await prisma.payrollBatchComponentSnapshot.findMany({
     where: { batchId },
@@ -262,6 +286,7 @@ export async function evaluatePayrollGlReadiness(
       const expected =
         usedBy.endsWith(".expense") || usedBy === "global.salaryExpenseAccountId"
           || usedBy === "global.employerCppExpenseAccountId" || usedBy === "global.employerEiExpenseAccountId"
+          || usedBy.startsWith("dept-override.")
           ? "EXPENSE"
           : usedBy.endsWith(".liability") || usedBy.startsWith("global.")
             ? "LIABILITY"

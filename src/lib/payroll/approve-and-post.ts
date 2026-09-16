@@ -38,7 +38,8 @@ import { assertPostingAllowed } from "../posting-guard";
 import { createPostedFromAdapter } from "../accounting/journal";
 import type { JournalSource } from "../accounting/types";
 import { Prisma } from "@prisma/client";
-import { componentRequiresExpense, componentRequiresLiability } from "./gl-readiness";
+import { resolvePayrollJournal } from "./payroll-gl-resolver";
+import { loadPayrollGlInputs } from "./payroll-gl-inputs";
 
 const PAYROLL_ENTITY = "PayrollBatch";
 const FINAL_APPROVAL_ORIGIN_KIND = "PAYROLL_FINAL_APPROVAL";
@@ -372,125 +373,37 @@ export async function postPayrollBatch(
     );
   }
 
-  // Resolve the GL profile.
-  const config = await prisma.payrollClubConfig.findUnique({
-    where: { clubId: batch.clubId },
-    include: { glAccountingProfile: true },
-  });
-  const profile = config?.glAccountingProfile;
+  // Phase 3 (2026-09-15) — load resolver inputs through the shared
+  // input assembler so preview + posting see identical facts +
+  // per-department overrides. See src/lib/payroll/payroll-gl-resolver.ts.
+  const inputs = await loadPayrollGlInputs(batch.clubId, batch.id);
+  const profile = inputs.profile;
   if (!profile) {
     throw new ConflictError(
       "This Club has no PayrollGlAccountingProfile configured. Payroll cannot post to the GL until account mapping is in place.",
     );
   }
-  // Payroll-3C-6 — account resolution moved BELOW the component
-  // aggregation so the same lookup batch covers global + component
-  // accounts in one query. See below.
-
-  // Aggregate per-employee statutory columns.
-  const emps = await prisma.payrollBatchEmployee.findMany({
-    where: { batchId: batch.id },
-    select: {
-      id: true, employeeId: true,
-      grossPay: true, netPay: true,
-      deductionCppEeCombined: true, deductionCpp2Ee: true,
-      deductionEiEe: true,
-      deductionFederalTax: true, deductionProvincialTax: true,
-      employerCppCombined: true, employerCpp2: true,
-      employerEi: true,
-    },
-  });
-  if (emps.length === 0) {
+  if (inputs.employees.length === 0) {
     throw new ConflictError("Cannot post an empty batch — no employees calculated.");
   }
-  const gross      = sumDec(emps, "grossPay");
-  const netPay     = sumDec(emps, "netPay");
-  const eeCpp      = sumDec(emps, "deductionCppEeCombined").plus(sumDec(emps, "deductionCpp2Ee"));
-  const eeEi       = sumDec(emps, "deductionEiEe");
-  const fedTax     = sumDec(emps, "deductionFederalTax");
-  const provTax    = sumDec(emps, "deductionProvincialTax");
-  const erCpp      = sumDec(emps, "employerCppCombined").plus(sumDec(emps, "employerCpp2"));
-  const erEi       = sumDec(emps, "employerEi");
-  const cppPayable = eeCpp.plus(erCpp);
-  const eiPayable  = eeEi.plus(erEi);
 
-  // Payroll-3C-6 — component snapshots. Aggregated by
-  // (accountId × direction) so RRSP EE + RRSP ER credit ONE line
-  // when they share a liability account (§28), employer benefit
-  // expenses roll up to fewer lines, etc. Component contribution
-  // to gross is deducted from the residual salary-expense line so
-  // cash allowances aren't double-posted (§9 / §84).
-  const snaps = await prisma.payrollBatchComponentSnapshot.findMany({
-    where: { batchId: batch.id },
-    select: {
-      componentCode: true, displayName: true,
-      side: true, cashEffect: true, category: true, provenance: true,
-      resolvedAmount: true,
-      expenseAccountIdSnapshot: true, liabilityAccountIdSnapshot: true,
-    },
+  const label = `Payroll ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
+  const resolved = resolvePayrollJournal({
+    label,
+    profile,
+    departmentOverrides: inputs.departmentOverrides,
+    employees: inputs.employees,
+    components: inputs.components,
   });
-
-  // Aggregation buckets keyed by accountId with a running total +
-  // source-composition list for the journal description.
-  interface Bucket { total: Prisma.Decimal; sources: string[] }
-  const debitBuckets  = new Map<string, Bucket>();
-  const creditBuckets = new Map<string, Bucket>();
-  const addBucket = (m: Map<string, Bucket>, acctId: string, amt: Prisma.Decimal, src: string) => {
-    const b = m.get(acctId);
-    if (b) {
-      b.total = b.total.plus(amt);
-      if (!b.sources.includes(src)) b.sources.push(src);
-    } else {
-      m.set(acctId, { total: amt, sources: [src] });
-    }
-  };
-
-  // Total cash amount that components have already contributed to
-  // `grossPay`. Deducted from the residual salary-expense debit so
-  // Cell Phone / one-time bonus don't post twice (once via their
-  // own expense account and once via the salary account).
-  let componentCashInGross = new Prisma.Decimal(0);
-
-  for (const s of snaps) {
-    if (s.resolvedAmount == null || (s.resolvedAmount as Prisma.Decimal).isZero()) continue;
-    const amt = s.resolvedAmount as Prisma.Decimal;
-    const src = `${s.displayName} (${s.componentCode})`;
-    const requiresExpense   = componentRequiresExpense(s);
-    const requiresLiability = componentRequiresLiability(s);
-
-    if (requiresExpense && s.expenseAccountIdSnapshot) {
-      addBucket(debitBuckets, s.expenseAccountIdSnapshot, amt, src);
-    }
-    if (requiresLiability && s.liabilityAccountIdSnapshot) {
-      addBucket(creditBuckets, s.liabilityAccountIdSnapshot, amt, src);
-    }
-
-    // Cash-effect components (Cell Phone, one-time cash bonus,
-    // reimbursement) increase gross already; remember to subtract
-    // from residual salary expense.
-    if (s.side === "EMPLOYEE" && s.cashEffect === "INCREASES_NET_PAY") {
-      componentCashInGross = componentCashInGross.plus(amt);
-    }
+  if (!resolved.balanced) {
+    throw new ConflictError(
+      `Payroll GL draft does not balance (D=${resolved.totalDebits.toFixed(2)}, C=${resolved.totalCredits.toFixed(2)}, Δ=${resolved.totalDebits.minus(resolved.totalCredits).toFixed(2)}). ` +
+      `Statutory column math must reconcile before posting.`,
+    );
   }
 
-  // Residual salary expense = grossPay - Σ (cash-effect component amounts).
-  // This is the base-salary / hourly-earnings piece that has no
-  // component snapshot.
-  const residualSalaryExpense = gross.minus(componentCashInGross);
-
-  // Now resolve every account id we'll reference (global + component)
-  // to accountNumber for the journal adapter's schema.
-  const componentAcctIds = new Set<string>();
-  for (const id of debitBuckets.keys())  componentAcctIds.add(id);
-  for (const id of creditBuckets.keys()) componentAcctIds.add(id);
-  const accountIds = [
-    profile.salaryExpenseAccountId, profile.employerCppExpenseAccountId, profile.employerEiExpenseAccountId,
-    profile.netPayPayableAccountId, profile.cppPayableAccountId, profile.eiPayableAccountId,
-    profile.federalTaxPayableAccountId, profile.provincialTaxPayableAccountId,
-    ...componentAcctIds,
-  ];
   const acctRows = await prisma.account.findMany({
-    where: { id: { in: accountIds } },
+    where: { id: { in: resolved.lines.map((l) => l.accountId) } },
     select: { id: true, accountNumber: true },
   });
   const acctNumberById = new Map(acctRows.map((a) => [a.id, a.accountNumber]));
@@ -499,52 +412,16 @@ export async function postPayrollBatch(
     if (!n) throw new ConflictError(`Payroll GL references missing account ${id}.`);
     return n;
   };
-
-  // Draft the journal.
-  const lines: Array<{ accountNumber: string; debit?: string; credit?: string; description: string; lineNumber: number }> = [];
-  let ln = 1;
-  const addDebit  = (accountId: string, amount: Prisma.Decimal, description: string) => {
-    if (amount.isZero()) return;
-    lines.push({ lineNumber: ln++, accountNumber: num(accountId), debit: amount.toFixed(2), description });
-  };
-  const addCredit = (accountId: string, amount: Prisma.Decimal, description: string) => {
-    if (amount.isZero()) return;
-    lines.push({ lineNumber: ln++, accountNumber: num(accountId), credit: amount.toFixed(2), description });
-  };
-  const label = `Payroll ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
-
-  // Statutory / global lines (always present)
-  addDebit(profile.salaryExpenseAccountId,       residualSalaryExpense, `${label} — regular salary expense`);
-  addDebit(profile.employerCppExpenseAccountId,  erCpp,   `${label} — employer CPP expense`);
-  addDebit(profile.employerEiExpenseAccountId,   erEi,    `${label} — employer EI expense`);
-
-  // Component debit aggregation (cash allowances + employer benefits)
-  for (const [acctId, b] of debitBuckets) {
-    const sources = b.sources.length <= 3 ? b.sources.join(" + ") : `${b.sources.length} components`;
-    addDebit(acctId, b.total, `${label} — ${sources}`);
-  }
-  // Component credit aggregation (employee deductions + employer benefit payables)
-  for (const [acctId, b] of creditBuckets) {
-    const sources = b.sources.length <= 3 ? b.sources.join(" + ") : `${b.sources.length} components`;
-    addCredit(acctId, b.total, `${label} — ${sources} payable`);
-  }
-
-  addCredit(profile.netPayPayableAccountId,      netPay,  `${label} — net pay payable`);
-  addCredit(profile.cppPayableAccountId,         cppPayable, `${label} — CPP payable (ee + er)`);
-  addCredit(profile.eiPayableAccountId,          eiPayable,  `${label} — EI payable (ee + er)`);
-  addCredit(profile.federalTaxPayableAccountId,  fedTax,  `${label} — federal income tax payable`);
-  addCredit(profile.provincialTaxPayableAccountId, provTax, `${label} — provincial income tax payable`);
-
-  // Balance check BEFORE we call the GL — catch drift early with a
-  // clear error rather than tripping the accounting layer's own guard.
-  const debitTotal  = lines.reduce((s, l) => s.plus(l.debit ?? "0"), new Prisma.Decimal(0));
-  const creditTotal = lines.reduce((s, l) => s.plus(l.credit ?? "0"), new Prisma.Decimal(0));
-  if (!debitTotal.equals(creditTotal)) {
-    throw new ConflictError(
-      `Payroll GL draft does not balance (D=${debitTotal.toFixed(2)}, C=${creditTotal.toFixed(2)}, Δ=${debitTotal.minus(creditTotal).toFixed(2)}). ` +
-      `Statutory column math must reconcile before posting.`,
-    );
-  }
+  const lines: Array<{ accountNumber: string; debit?: string; credit?: string; description: string; lineNumber: number }> = resolved.lines.map((l, idx) => {
+    const entry: { accountNumber: string; debit?: string; credit?: string; description: string; lineNumber: number } = {
+      lineNumber: idx + 1,
+      accountNumber: num(l.accountId),
+      description: l.description,
+    };
+    if (l.debit != null)  entry.debit  = l.debit.toFixed(2);
+    if (l.credit != null) entry.credit = l.credit.toFixed(2);
+    return entry;
+  });
 
   // Payroll-3C-6B (2026-09-05) — one transaction for the whole post.
   //
@@ -659,16 +536,16 @@ export async function postPayrollBatch(
       status: "POSTED",
       postedAt: now,
       journalEntryId: entry.id,
-      totalDebits: debitTotal.toFixed(2),
-      totalCredits: creditTotal.toFixed(2),
+      totalDebits: resolved.totalDebits.toFixed(2),
+      totalCredits: resolved.totalCredits.toFixed(2),
     },
   });
 
   return {
     batch: posted,
     journalEntryId: entry.id,
-    totalDebits: debitTotal.toFixed(2),
-    totalCredits: creditTotal.toFixed(2),
+    totalDebits: resolved.totalDebits.toFixed(2),
+    totalCredits: resolved.totalCredits.toFixed(2),
   };
 }
 

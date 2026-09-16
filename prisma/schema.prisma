@@ -492,6 +492,8 @@ model Club {
   employeeCppElections               EmployeeCppElection[]
   employeeCppDisabilities            EmployeeCppDisability[]
   payrollGlAccountingProfile         PayrollGlAccountingProfile?
+  // Phase 3 (2026-09-15) — Departmental Payroll Accounting.
+  payrollGlDepartmentOverrides       PayrollGlDepartmentOverride[]
   // Payroll-3C-1 (2026-09-07) — tenant-scoped Payroll Component catalogue
   // + per-Employee recurring assignments.
   payrollComponents                  PayrollComponent[]
@@ -2133,6 +2135,9 @@ model Department {
   shiftTemplates          ShiftTemplate[]                 @relation("DepartmentShiftTemplates")
   shifts                  Shift[]                         @relation("DepartmentShifts")
 
+  // Phase 3 (2026-09-15) — Departmental Payroll Accounting overrides.
+  payrollGlOverrides      PayrollGlDepartmentOverride[]   @relation("PayrollGlDeptOverrideDept")
+
   @@unique([clubId, code])
   @@index([clubId, isActive])
 }
@@ -2337,6 +2342,10 @@ model Account {
   // Payroll-3C-6 (2026-09-05) — component-aware GL back-relations.
   payrollComponentExpenseAccount   PayrollComponent[] @relation("PayrollComponentExpenseAccount")
   payrollComponentLiabilityAccount PayrollComponent[] @relation("PayrollComponentLiabilityAccount")
+  // Phase 3 (2026-09-15) — Departmental Payroll Accounting overrides.
+  payrollGlDeptSalaryExpense       PayrollGlDepartmentOverride[] @relation("PayrollGlDeptSalaryExpense")
+  payrollGlDeptEmployerCppExpense  PayrollGlDepartmentOverride[] @relation("PayrollGlDeptEmployerCppExpense")
+  payrollGlDeptEmployerEiExpense   PayrollGlDepartmentOverride[] @relation("PayrollGlDeptEmployerEiExpense")
 
   @@unique([clubId, accountNumber])
   @@index([clubId, isActive])
@@ -12068,6 +12077,49 @@ model PayrollGlAccountingProfile {
   updatedAt                       DateTime @updatedAt
 
   clubConfigs                     PayrollClubConfig[]
+}
+
+// Phase 3 (2026-09-15) — Departmental Payroll Accounting.
+//
+// Per-department override of the three EXPENSE mappings on
+// PayrollGlAccountingProfile:
+//   * salary / wage expense
+//   * employer CPP expense
+//   * employer EI expense
+//
+// Central payroll LIABILITIES (net pay, CPP payable, EI payable, federal
+// tax payable, provincial tax payable) intentionally stay centralized
+// and do not have per-department overrides — a Club Controller
+// typically remits CPP + EI + income tax to CRA from a single Club-level
+// payable account, and the payroll resolver mirrors that.
+//
+// Each override field is OPTIONAL. An unset override falls back to the
+// global PayrollGlAccountingProfile mapping for that expense type. This
+// lets a Club configure only the departments where the override is
+// desired (e.g. Administration + Grounds) while every other department
+// inherits the global default.
+//
+// The unique (clubId, departmentId) constraint guarantees at most one
+// override row per department. Deletion of the Department cascades this
+// row away (payroll historicals hold Account IDs at post time and are
+// not affected by later override deletion).
+model PayrollGlDepartmentOverride {
+  id                              String     @id @default(cuid())
+  clubId                          String
+  club                            Club       @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  departmentId                    String
+  department                      Department @relation("PayrollGlDeptOverrideDept", fields: [departmentId], references: [id], onDelete: Cascade)
+  salaryExpenseAccountId          String?
+  salaryExpenseAccount            Account?   @relation("PayrollGlDeptSalaryExpense", fields: [salaryExpenseAccountId], references: [id])
+  employerCppExpenseAccountId     String?
+  employerCppExpenseAccount       Account?   @relation("PayrollGlDeptEmployerCppExpense", fields: [employerCppExpenseAccountId], references: [id])
+  employerEiExpenseAccountId      String?
+  employerEiExpenseAccount        Account?   @relation("PayrollGlDeptEmployerEiExpense", fields: [employerEiExpenseAccountId], references: [id])
+  createdAt                       DateTime   @default(now())
+  updatedAt                       DateTime   @updatedAt
+
+  @@unique([clubId, departmentId])
+  @@index([clubId])
 }
 
 // A pay group is the scheduling + membership boundary for payroll
