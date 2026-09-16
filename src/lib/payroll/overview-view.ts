@@ -490,12 +490,21 @@ function approvalStateLabel(state: DepartmentApprovalState): string {
 }
 
 function baseWorkflow(): PayrollOverviewWorkflowStep[] {
-  // Payroll Admin Slice 3B: only steps 1-3 have real state. Steps
-  // 4-8 remain "pending" until their slice owns them.
+  // v-slice-1-followup-5 (2026-09-15) — canonical workflow order.
+  //
+  // Department Head approval of source time MUST precede Prepare
+  // (per the founder-accepted business governance). Approvals is
+  // Step 1; Prepare consumes the approved time state into a frozen
+  // batch at Step 2. Steps 3-8 follow the canonical downstream chain.
+  //
+  // Salaried-only pay periods auto-complete Step 1 (scopeCount === 0)
+  // so Prepare is immediately available. Hourly periods with
+  // outstanding department approvals leave Step 1 as `current` and
+  // Prepare is refused at both the UI and server layers.
   return [
-    { n: 1, label: "Prepare",         sub: "",              state: "current" },
-    { n: 2, label: "Review",          sub: "Exceptions",    state: "pending" },
-    { n: 3, label: "Approvals",       sub: "(Dept. Heads)", state: "pending" },
+    { n: 1, label: "Approvals",       sub: "(Dept. Heads)", state: "current" },
+    { n: 2, label: "Prepare",         sub: "",              state: "pending" },
+    { n: 3, label: "Review",          sub: "Exceptions",    state: "pending" },
     { n: 4, label: "Calculate",       sub: "Payroll",       state: "pending" },
     { n: 5, label: "Review & Adjust", sub: "",              state: "pending" },
     { n: 6, label: "Submit",          sub: "for Approval",  state: "pending" },
@@ -791,7 +800,19 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         payrollFrozenScopeCount: r.payrollFrozenScopeCount,
       },
       employeeTable: emptyEmployeeTable(page, pageSize),
-      workflow: baseWorkflow(),
+      // v-slice-1-followup-5 — pre-Prepare workflow states.
+      // Step 1 (Approvals) is `done` when the pay period has no
+      // reviewable department scope (salary-only) OR every scope
+      // is approved AND all source time is materialised. Otherwise
+      // it stays `current` and Step 2 (Prepare) remains `pending`
+      // so the UI honestly signals what must happen before Prepare.
+      workflow: (() => {
+        const wf = baseWorkflow();
+        const preBatchApprovalsDone = r.allDepartmentApproved && r.allImported;
+        wf[0] = { ...wf[0]!, state: preBatchApprovalsDone ? "done" : "current" };
+        wf[1] = { ...wf[1]!, state: preBatchApprovalsDone ? "current" : "pending" };
+        return wf;
+      })(),
       checklist: noBatchChecklist,
       exceptions: [],
       approvals: approvalsPreBatch,
@@ -1139,23 +1160,27 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const approvalsCompleteCount = readiness.departmentApprovedScopeCount;
   const approvalsRequiredCount = readiness.scopeCount;
 
-  // ---- Slice 3B (acceptance-hotfix rev): workflow tracker ----
+  // v-slice-1-followup-5 (2026-09-15) — workflow indices under the new
+  // canonical order (Approvals=Step 1 index 0, Prepare=Step 2 index 1,
+  // Review Exceptions=Step 3 index 2). Semantics unchanged; only the
+  // slot each signal lands in moved.
   //
-  // Step 3 now honours the full reconciliation: it is `done` ONLY
-  // when every reviewable department has been Manager-approved AND
-  // frozen (readiness.allApproved), AND no unmaterialised source
-  // time remains (readiness.allImported). This prevents the prior
-  // false-positive where Step 3 auto-completed just because
-  // getDepartmentApprovalStatus returned empty on an unfrozen
-  // period.
+  // Step 1 (Approvals, index 0) is `done` when every reviewable
+  // department has been Manager-approved AND no unmaterialised
+  // source time remains. Salary-only periods (scopeCount === 0)
+  // auto-complete this step because `allDepartmentApproved` is
+  // vacuously true and `allImported` is also true.
+  //
+  // Step 2 (Prepare, index 1) is `done` once the batch exists (this
+  // block only runs after activeBatch is confirmed present).
+  //
+  // Step 3 (Review Exceptions, index 2) is `done` when no unresolved
+  // BLOCKERs remain on the batch.
   const workflow = baseWorkflow();
-  workflow[0] = { ...workflow[0]!, state: "done" };
-  workflow[1] = { ...workflow[1]!, state: blockerCount === 0 ? "done" : "current" };
-  //   Step 3 is titled "Approvals (Dept. Heads)" — it completes on
-  //   the DEPARTMENT-APPROVAL gate. Payroll-Admin Freeze is a SEPARATE
-  //   prerequisite that gates Calculate (Step 4) separately, not Step 3.
   const approvalsDone = readiness.allDepartmentApproved && readiness.allImported;
-  workflow[2] = { ...workflow[2]!, state: approvalsDone ? "done" : "current" };
+  workflow[0] = { ...workflow[0]!, state: approvalsDone ? "done" : "current" };
+  workflow[1] = { ...workflow[1]!, state: "done" };
+  workflow[2] = { ...workflow[2]!, state: blockerCount === 0 ? "done" : "current" };
   // Payroll 3D (2026-09-12) — Steps 4/5/6 semantics (§28).
   //   Step 4 (Calculate) is `done` once the batch has reached
   //     CALCULATED at least once (batchRow.calculatedAt != null).

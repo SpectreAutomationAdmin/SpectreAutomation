@@ -717,6 +717,35 @@ export async function preparePayrollBatch(
   requirePermission(principal, clubId, "payroll:run");
   await assertPostingAllowed(principal, clubId, "payroll.batch.prepare", ENTITY, payPeriodId);
 
+  // v-slice-1-followup-5 (2026-09-15) — canonical Step 1 gate.
+  // Department Head approval of source time PRECEDES Prepare. When
+  // the pay period has reviewable department scopes with outstanding
+  // approvals, refuse Prepare here so the workflow order actually
+  // reflects the founder-accepted governance. Salary-only periods
+  // (no employees with time in the period) have scopeCount === 0
+  // and skip this gate — Prepare proceeds immediately.
+  //
+  // `getTimeReadiness` reads `PayrollDepartmentTimeApproval` (keyed
+  // by `(clubId, payPeriodId, departmentId)`) — that model already
+  // supports pre-Prepare approval by design. No schema change
+  // required.
+  const readiness = await import("./time-readiness")
+    .then((mod) => mod.getTimeReadiness(principal, clubId, payPeriodId));
+  if (readiness.scopeCount > 0 && !readiness.allDepartmentApproved) {
+    const outstanding = readiness.scopes
+      .filter((s) => s.state !== "APPROVED_UNFROZEN" && s.state !== "FROZEN")
+      .map((s) => s.departmentName || s.departmentCode)
+      .join(", ");
+    throw new ValidationError([{
+      path: "departmentApprovals",
+      message: `Cannot prepare payroll: ${readiness.departmentPendingScopeCount} department${
+        readiness.departmentPendingScopeCount === 1 ? "" : "s"
+      } still need${
+        readiness.departmentPendingScopeCount === 1 ? "s" : ""
+      } manager approval for this pay period${outstanding ? ` (${outstanding})` : ""}. Route through the Approvals step first.`,
+    }]);
+  }
+
   const pre = await assertPreconditions(clubId, payPeriodId);
 
   // Idempotency: if a non-VOIDED batch already exists for this
