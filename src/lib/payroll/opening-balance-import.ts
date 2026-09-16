@@ -115,7 +115,7 @@ export async function importOpeningBalancesFromCsv(
     sourceFilename?: string;
   },
 ): Promise<OpeningBalanceImportResult> {
-  requirePermission(principal, clubId, "payroll:run");
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
   await assertPostingAllowed(principal, clubId, "payroll.opening-balance.import", ENTITY, `taxYear:${input.taxYear}`);
 
   if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {

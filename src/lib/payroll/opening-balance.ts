@@ -229,7 +229,7 @@ export async function createDraftOpeningBalance(
   clubId: string,
   input: CreateDraftOpeningBalanceInput,
 ): Promise<OpeningBalanceView> {
-  requirePermission(principal, clubId, "payroll:run");
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
   await assertPostingAllowed(principal, clubId, "payroll.opening-balance.draft", ENTITY, input.employeeId);
   await assertTenantEmployee(clubId, input.employeeId);
   assertValidNumerics(input.values);
@@ -341,7 +341,7 @@ export async function validateOpeningBalance(
   clubId: string,
   id: string,
 ): Promise<OpeningBalanceView> {
-  requirePermission(principal, clubId, "payroll:run");
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
   const row = await prisma.payrollOpeningBalance.findFirst({ where: { id, clubId } });
   if (!row) throw new NotFoundError(ENTITY, id);
   if (row.status !== "DRAFT") {
@@ -389,7 +389,7 @@ export async function activateOpeningBalance(
   clubId: string,
   id: string,
 ): Promise<OpeningBalanceView> {
-  requirePermission(principal, clubId, "payroll:run");
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
   await assertPostingAllowed(principal, clubId, "payroll.opening-balance.activate", ENTITY, id);
 
   const row = await prisma.payrollOpeningBalance.findFirst({ where: { id, clubId } });

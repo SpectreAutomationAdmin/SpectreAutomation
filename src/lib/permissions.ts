@@ -112,6 +112,10 @@ export const PERMISSIONS = {
   "payroll:paygroup:write":    { name: "Create / update payroll pay groups + periods", category: "PAYROLL" },
   "payroll:config:read":       { name: "Read Club payroll configuration", category: "PAYROLL" },
   "payroll:config:write":      { name: "Update Club payroll configuration", category: "PAYROLL" },
+  // v-slice-1-followup-8 (2026-09-16) — least-privilege split for
+  // opening-balance entry. Controller reads (payroll:read); only
+  // PAYROLL_ADMIN + CLUB_ADMIN + SUPER_ADMIN carry the write grant.
+  "payroll:opening-balance:write": { name: "Enter / validate / activate opening YTD balances", category: "PAYROLL" },
 
   // Events / private events
   "events:read":               { name: "View events",                   category: "EVENTS" },
@@ -348,6 +352,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void", "payroll:post",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
+    "payroll:opening-balance:write",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -611,6 +616,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:prepare", "payroll:edit", "payroll:submit",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
+    "payroll:opening-balance:write",
     "reports:operating",
     // HR-1 — PAYROLL_ADMIN is the reveal-tier role: SIN reveal,
     // banking reveal, tax reveal all live here (audited via
