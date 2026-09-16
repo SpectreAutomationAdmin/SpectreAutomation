@@ -52,6 +52,13 @@ import SendPasswordResetButton from "@/components/hr/SendPasswordResetButton";
 import { sendPortalPasswordResetAction } from "./_password-reset-actions";
 // Payroll-3D-1A — Timekeeping method admin control.
 import TimekeepingPanel from "./TimekeepingPanel";
+// Phase 4 (2026-09-16) — Recurring payroll component assignments.
+import EmployeeRecurringComponentsSection from "@/components/hr/EmployeeRecurringComponentsSection";
+import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
+import {
+  addRecurringPayrollComponentAction,
+  endRecurringPayrollComponentAction,
+} from "./_recurring-component-actions";
 
 export default async function EmployeeProfilePage({
   params, searchParams,
@@ -100,6 +107,9 @@ export default async function EmployeeProfilePage({
     principal, profile.clubId, "hr:training:compliance:read",
   );
   const canAssignTraining = hasPermission(principal, profile.clubId, "hr:training:assign");
+  // Phase 4 (2026-09-16) — Recurring payroll component assignments.
+  const canReadPayrollRecurring = hasPermission(principal, profile.clubId, "payroll:read");
+  const canWritePayrollRecurring = hasPermission(principal, profile.clubId, "payroll:write");
 
   const [
     employmentPeriods,
@@ -113,6 +123,8 @@ export default async function EmployeeProfilePage({
     bankingMasked,
     taxProfileMasked,
     taxReadiness,
+    payrollComponentCatalogue,
+    recurringComponentAssignments,
   ] = await Promise.all([
     canReadEmployment ? listEmploymentPeriods(principal, profile.id) : Promise.resolve([]),
     canReadDocuments ? listEmployeeDocuments(principal, profile.id) : Promise.resolve([]),
@@ -154,6 +166,22 @@ export default async function EmployeeProfilePage({
     // ungates the read from onboarding-permission (payroll:read is enough
     // to see the payroll tab; the tax profile is not extra-sensitive here).
     (await import("@/lib/hr/tax-readiness")).getEmployeeTaxReadiness(profile.clubId, profile.id),
+    // Phase 4 — active PayrollComponents catalogue (Add-flow picker).
+    // The service defaults to active-only when includeInactive is
+    // omitted, which is exactly what the Add form should show.
+    canReadPayrollRecurring
+      ? listPayrollComponents(principal, profile.clubId)
+      : Promise.resolve([]),
+    // Phase 4 — every recurring assignment for this employee (active +
+    // upcoming + historical). Read directly from prisma; the service
+    // layer's list returns only active-as-of.
+    canReadPayrollRecurring
+      ? prisma.employeeRecurringPayrollComponent.findMany({
+          where: { clubId: profile.clubId, employeeId: profile.id },
+          include: { component: true },
+          orderBy: [{ effectiveFrom: "desc" }],
+        })
+      : Promise.resolve([]),
   ]);
 
   // HR-2C Employment (2026-08-24) — Employment tab data.
@@ -593,6 +621,44 @@ export default async function EmployeeProfilePage({
             canAssign={canAssignTraining}
             publishableCourses={publishableCourses}
             assignAction={assignTrainingCourseAction.bind(null, profile.id)}
+          />
+        ) : undefined
+      }
+      payrollCompensationSection={
+        canReadPayrollRecurring ? (
+          <EmployeeRecurringComponentsSection
+            employeeId={profile.id}
+            clubId={profile.clubId}
+            canWrite={canWritePayrollRecurring}
+            catalogue={payrollComponentCatalogue.map((c) => ({
+              id: c.id,
+              code: c.code,
+              displayName: c.displayName,
+              category: c.category,
+              side: c.side,
+              cashEffect: c.cashEffect,
+              calculationMethod: c.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
+              displaySection: c.displaySection,
+            }))}
+            assignments={recurringComponentAssignments.map((a) => ({
+              id: a.id,
+              componentId: a.componentId,
+              componentCode: a.component.code,
+              componentDisplayName: a.component.displayName,
+              componentCategory: a.component.category,
+              componentSide: a.component.side,
+              cashEffect: a.component.cashEffect,
+              calculationMethod: a.component.calculationMethod,
+              displaySection: a.component.displaySection,
+              amount: a.amount != null ? String(a.amount) : null,
+              percentBps: a.percentBps,
+              effectiveFrom: a.effectiveFrom.toISOString(),
+              effectiveTo: a.effectiveTo?.toISOString() ?? null,
+              active: a.active,
+              notes: a.notes,
+            }))}
+            addAction={addRecurringPayrollComponentAction}
+            endAction={endRecurringPayrollComponentAction}
           />
         ) : undefined
       }

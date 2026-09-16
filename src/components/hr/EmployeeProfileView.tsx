@@ -186,6 +186,12 @@ interface Props {
    *  passes the fully-constructed section; this component just slots it
    *  in place so the tab rail + tab-switch chrome stays here. */
   employmentSection?: React.ReactNode;
+  /** Phase 4 (2026-09-16) — Optional Payroll tab slot for the
+   *  Compensation & Benefits section (recurring earnings, allowances,
+   *  deductions). Rendered below the SIN / Direct Deposit / TD1 grid,
+   *  still inside the Payroll tab. Reuses the canonical Payroll-3C-1
+   *  EmployeeRecurringPayrollComponent architecture. */
+  payrollCompensationSection?: React.ReactNode;
   /** HR-2C B5 (2026-08-28) — Optional Training tab slot. Rendered when
    *  the caller holds `hr:training:compliance:read`. When omitted the
    *  Training tab itself is hidden from the tab rail so an
@@ -247,7 +253,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, payrollCompensationSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -669,6 +675,8 @@ export default function EmployeeProfileView(props: Props) {
               </div>
             </div>
           </div>
+
+          {payrollCompensationSection}
         </section>
       )}
 
