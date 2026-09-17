@@ -517,15 +517,16 @@ describe("Payroll-3C-2 · component-carrying batch full lifecycle", () => {
     await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
     expect(await batchHasComponentSnapshots(prep.batchId)).toBe(true);
 
-    // Full governance lifecycle:
+    // Full governance lifecycle (pre-Phase-5 restoration, 2026-09-16):
     //   PA attests the calculated-payroll review (required precondition for Submit).
     //   PA submits (payroll:submit).
-    //   Controller approves (payroll:approve).
-    //   Controller posts (payroll:post; same actor as approver — no SoD violation since PA is not the approver/poster).
+    //   Controller INDEPENDENTLY approves (payroll:approve; submitter ≠ approver enforced).
+    //   PA resumes execution and posts (payroll:post — restored to PAYROLL_ADMIN).
+    // Controller does NOT hold payroll:post any longer.
     await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
     await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.controllerP, prep.batchId);
-    const posted = await postPayrollBatch(s.controllerP, prep.batchId);
+    const posted = await postPayrollBatch(s.paP, prep.batchId);
     expect(posted.journalEntryId).toBeTruthy();
     const je = await c.journalEntry.findUnique({
       where: { id: posted.journalEntryId },

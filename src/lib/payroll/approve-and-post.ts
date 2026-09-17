@@ -235,12 +235,17 @@ export async function approvePayrollBatch(
     await resolveFinal(batch.clubId, batch.id, principal.id,
       `Payroll approved by Controller — batch ${batch.id} at calculationVersion ${batch.calculationVersion}.`);
 
-    // Payroll two-person governance (2026-09-13, superseding 3F §7):
-    // Ready-to-Post routes to the Controller who approved, not to the
-    // Payroll Admin. Fall back to the configured club controller if,
-    // for any reason, the approver's principal id is unavailable.
+    // Pre-Phase-5 governance restoration (2026-09-16):
+    // Ready-to-Post routes to the Payroll Admin — the same actor who
+    // prepared + submitted the payroll. Fallback to the batch's
+    // recorded submitter, then the Controller (approver), so a
+    // misconfiguration cannot leave the card ownerless.
     const cfg = await prisma.payrollClubConfig.findUnique({ where: { clubId: batch.clubId } });
-    const posterUserId = principal.id ?? cfg?.controllerUserId;
+    const posterUserId =
+      cfg?.payrollAdminUserId ??
+      batch.submittedByUserId ??
+      cfg?.controllerUserId ??
+      principal.id;
     if (posterUserId) {
       const period = await prisma.payrollPayPeriod.findFirst({
         where: { id: batch.payPeriodId, clubId: batch.clubId },
@@ -277,8 +282,6 @@ export async function approvePayrollBatch(
         `Post payroll → ${reviewUrl}`;
       await materialiseReadyToPostItem({
         clubId: batch.clubId, batchId: batch.id,
-        // Retained parameter name for source compatibility; the value
-        // is the Controller-poster user id (see helper JSDoc).
         payrollAdminUserId: posterUserId,
         subject: `Payroll Approved — Ready to Post · ${dateLabel}`,
         preview,

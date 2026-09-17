@@ -106,6 +106,7 @@ describe("Phase 3 follow-up · DB-backed component + frozen-department regressio
     const club = await makeClub("Component-Dept-Test");
     const submitter = await makeUser({ email: "pa.comp@t.test", clubId: club.id, role: "PAYROLL_ADMIN" });
     const controller = await makeUser({ email: "ctl.comp@t.test", clubId: club.id, role: "CONTROLLER" });
+    const submitterP = await principalFor("pa.comp@t.test");
     const controllerP = await principalFor("ctl.comp@t.test");
 
     const depts = await seedDepts(club.id);
@@ -346,7 +347,7 @@ describe("Phase 3 follow-up · DB-backed component + frozen-department regressio
       expect(Number(l.debit)).toBe(75);
     }
 
-    const posted = await postPayrollBatch(controllerP, batch.id);
+    const posted = await postPayrollBatch(submitterP, batch.id);
     expect(posted.journalEntryId).toBeTruthy();
 
     const je = await c.journalEntry.findUnique({

@@ -276,7 +276,7 @@ describe("Phase 3 follow-up · §14 frozen-department DB-backed regression", () 
     expect(preview.lines.every((l) => l.departmentCode !== "EVENTS")).toBe(true);
 
     // Post!
-    const posted = await postPayrollBatch(controllerP, batch.id);
+    const posted = await postPayrollBatch(submitterP, batch.id);
     expect(posted.journalEntryId).toBeTruthy();
 
     // Step 6 — read back the POSTED journal entry + lines.
@@ -346,7 +346,7 @@ describe("Phase 3 follow-up · §14 frozen-department DB-backed regression", () 
     }
 
     // Step 8 — a second post is refused as idempotent.
-    const secondPost = await postPayrollBatch(controllerP, batch.id);
+    const secondPost = await postPayrollBatch(submitterP, batch.id);
     expect(secondPost.journalEntryId).toBe(posted.journalEntryId);
 
     // Step 9 — a subsequent live-HR mutation cannot alter the posted
@@ -384,6 +384,6 @@ describe("Phase 3 follow-up · §14 frozen-department DB-backed regression", () 
         algorithmVersion: "spectre-payroll-test-1",
       },
     });
-    await expect(postPayrollBatch(controllerP, badBatch.id)).rejects.toBeInstanceOf(ConflictError);
+    await expect(postPayrollBatch(submitterP, badBatch.id)).rejects.toBeInstanceOf(ConflictError);
   });
 });

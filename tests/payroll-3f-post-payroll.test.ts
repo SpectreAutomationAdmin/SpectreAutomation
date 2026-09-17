@@ -205,23 +205,23 @@ describe("Payroll 3F — Post Payroll (§51-55)", () => {
   // submits, CONTROLLER approves + posts. Matches the intended
   // organizational workflow. Assertions cover A ≠ B, approved==posted
   // by the same Controller, and a single balanced JournalEntry.
-  it("golden two-person: PA(A) submits, Controller(B) approves + posts", async () => {
+  // Pre-Phase-5 governance restoration (2026-09-16): the intended
+  // operating model is PA submits → Controller approves → PA posts.
+  it("golden three-step: PA(A) submits, Controller(B) approves, PA(A) posts", async () => {
     const s = await seedApprovedBatch({
       clubName: "Post Club Golden", submitterEmail: "pa.g@t.test", approverEmail: "ctrl.g@t.test",
     });
-    // Controller B has payroll:approve + payroll:return + payroll:post
-    // via the two-person governance restore; approve was performed in
-    // seedApprovedBatch. Now B posts.
-    const posted = await postPayrollBatch(s.approverP, s.batch.id);
+    // Controller B has payroll:approve; approval was performed in
+    // seedApprovedBatch. Payroll Admin A holds payroll:post and
+    // resumes execution to post the approved batch.
+    const posted = await postPayrollBatch(s.submitterP, s.batch.id);
     const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
     expect(b.status).toBe("POSTED");
     expect(b.submittedByUserId).toBe(s.submitter.id);
     expect(b.approvedByUserId).toBe(s.approver.id);
-    expect(b.postedByUserId).toBe(s.approver.id);
-    expect(s.submitter.id).not.toBe(s.approver.id);
-    expect(b.approvedByUserId).toBe(b.postedByUserId);
+    expect(b.postedByUserId).toBe(s.submitter.id);   // PA posts
+    expect(s.submitter.id).not.toBe(s.approver.id);  // submitter ≠ approver (SoD)
     expect(b.glJournalEntryId).toBe(posted.journalEntryId);
-    // JournalEntry balances.
     expect(Number(posted.totalDebits)).toBeCloseTo(Number(posted.totalCredits), 2);
   });
 
@@ -272,18 +272,25 @@ describe("Payroll 3F — Post Payroll (§51-55)", () => {
 
   // Two-person governance regression: PAYROLL_ADMIN no longer holds
   // payroll:post. A pure PAYROLL_ADMIN cannot post; RBAC refuses.
-  it("PAYROLL_ADMIN cannot post — permission refused", async () => {
+  // Pre-Phase-5 (2026-09-16) inverted: PAYROLL_ADMIN now HOLDS
+  // `payroll:post` and may post an APPROVED batch. Verified here
+  // that any Payroll Admin (not just the submitter) can execute
+  // the accounting posting after independent Controller approval —
+  // no additional Payroll-Admin-side SoD; the approver was distinct.
+  it("PAYROLL_ADMIN CAN post an APPROVED batch (payroll:post grant restored)", async () => {
     const s = await seedApprovedBatch({
       clubName: "Post Club PA", submitterEmail: "sub.pa@t.test", approverEmail: "ctrl.pa@t.test",
     });
-    // A distinct PAYROLL_ADMIN who did not submit this batch.
-    const pa = await makeUser({ email: "another.pa@t.test", clubId: s.club.id, role: "PAYROLL_ADMIN" });
+    // Distinct Payroll Admin (not the submitter). Still authorised
+    // to post because payroll:post is a role capability, not a
+    // per-actor SoD constraint.
+    await makeUser({ email: "another.pa@t.test", clubId: s.club.id, role: "PAYROLL_ADMIN" });
     const paP = await principalFor("another.pa@t.test");
-    await expect(postPayrollBatch(paP, s.batch.id))
-      .rejects.toThrow(/permission|payroll:post|forbidden/i);
+    const posted = await postPayrollBatch(paP, s.batch.id);
+    expect(posted.journalEntryId).toBeTruthy();
     const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
-    expect(b.status).toBe("APPROVED");
-    expect(b.glJournalEntryId).toBeNull();
+    expect(b.status).toBe("POSTED");
+    expect(b.glJournalEntryId).toBe(posted.journalEntryId);
   });
 
   it("§54 missing GL mapping: Post refuses; batch stays APPROVED; no JournalEntry", async () => {
@@ -338,10 +345,11 @@ describe("Payroll 3F — Post Payroll (§51-55)", () => {
     });
     expect(origin).not.toBeNull();
     expect(origin!.workIntakeItem.status).toBe("OPEN");
-    // Two-person governance (2026-09-13): the Ready-to-Post card is
-    // owned by the Controller who approved, not the Payroll Admin who
-    // submitted.
-    expect(origin!.workIntakeItem.ownerUserId).toBe(s.approver.id);
+    // Pre-Phase-5 governance restoration (2026-09-16): the Ready-to-Post
+    // card is owned by the Payroll Admin — the same actor who prepared,
+    // calculated, and submitted the payroll. (The 2026-09-13 rule
+    // routing this to the Controller has been rescinded.)
+    expect(origin!.workIntakeItem.ownerUserId).toBe(s.submitter.id);
     // Post the batch as a Club Admin distinct from the submitter.
     const poster = await makeUser({ email: "poster.f@t.test", clubId: s.club.id, role: "CLUB_ADMIN" });
     const posterP = await principalFor("poster.f@t.test");

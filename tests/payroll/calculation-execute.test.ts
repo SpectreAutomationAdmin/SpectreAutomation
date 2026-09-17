@@ -278,20 +278,26 @@ describe("Payroll-3B-5B-2c — atomic rollback on readiness BLOCKER (§37)", () 
 // Work Intake idempotency
 // ---------------------------------------------------------------------------
 
-describe("Payroll-3B-5B-2c — WI idempotency + calculationVersion increment (§39, §43)", () => {
+describe("Payroll-3B-5B-2c — calculationVersion increments on recalculate (§39, §43, updated 2026-09-16)", () => {
   beforeEach(async () => { await resetDb(); await seedRbac(); });
 
-  it("recalculation refreshes the SAME PAYROLL_FINAL_APPROVAL card + increments calculationVersion", async () => {
+  // Payroll-3E acceptance hotfix moved the PAYROLL_FINAL_APPROVAL card
+  // materialisation from Calculate to Submit. Recalculating a CALCULATED
+  // batch increments `calculationVersion` but does NOT create or reopen
+  // any Controller Work Intake — that happens only when the Payroll
+  // Admin submits the new version.
+  it("recalculation increments calculationVersion; NO PAYROLL_FINAL_APPROVAL card is created at Calculate", async () => {
     const s = await pdocScenario(utc(2026, 3, 14));
     const r1 = await calculatePayrollBatch(s.paP, s.club.id, s.prepared.batchId);
     expect(r1.calculationVersion).toBe(1);
+    expect(r1.finalApprovalWorkIntakeItemId).toBeNull();
     const r2 = await calculatePayrollBatch(s.paP, s.club.id, s.prepared.batchId);
     expect(r2.calculationVersion).toBe(2);
-    expect(r2.finalApprovalWorkIntakeItemId).toBe(r1.finalApprovalWorkIntakeItemId);   // same card
+    expect(r2.finalApprovalWorkIntakeItemId).toBeNull();
     const count = await db().workIntakeItem.count({
-      where: { clubId: s.club.id, workSubtype: "PAYROLL_FINAL_APPROVAL", status: "OPEN" },
+      where: { clubId: s.club.id, workSubtype: "PAYROLL_FINAL_APPROVAL" },
     });
-    expect(count).toBe(1);
+    expect(count).toBe(0);
   });
 });
 
@@ -299,12 +305,15 @@ describe("Payroll-3B-5B-2c — WI idempotency + calculationVersion increment (§
 // Missing controller — do NOT invent one
 // ---------------------------------------------------------------------------
 
-describe("Payroll-3B-5B-2c — Controller-config gap (§40)", () => {
+describe("Payroll-3B-5B-2c — Controller-config gap (§40, updated 2026-09-16)", () => {
   beforeEach(async () => { await resetDb(); await seedRbac(); });
 
-  it("PayrollClubConfig.controllerUserId not set → CALCULATED persists but WI is NOT materialised", async () => {
+  // Payroll-3E acceptance hotfix moved the Controller PAYROLL_FINAL_APPROVAL
+  // handoff from Calculate to Submit. Calculate now emits no WI at all;
+  // the Controller pre-flight check runs at `submitPayrollBatch` and
+  // refuses the transition before any state changes.
+  it("Calculate persists without WI regardless of controller config; Submit refuses when Controller absent", async () => {
     const s = await pdocScenario(utc(2026, 3, 14));
-    // Clear the controller assignment on the club config.
     await db().payrollClubConfig.update({
       where: { clubId: s.club.id }, data: { controllerUserId: null },
     });
@@ -312,12 +321,11 @@ describe("Payroll-3B-5B-2c — Controller-config gap (§40)", () => {
     expect(r.persisted).toBe(true);
     expect(r.lifecycleStatus).toBe("CALCULATED");
     expect(r.finalApprovalWorkIntakeItemId).toBeNull();
-    expect(r.finalApprovalOwnerUserId).toBeNull();
-    // Explicit audit event fired for the gap.
-    const gapAudit = await db().auditLog.findFirst({
-      where: { entityId: r.batchId, action: "payroll.batch.calculate.controller-gap" },
+    // No WI at all — the handoff lives at Submit now.
+    const wiCount = await db().workIntakeItem.count({
+      where: { clubId: s.club.id, workSubtype: "PAYROLL_FINAL_APPROVAL" },
     });
-    expect(gapAudit).not.toBeNull();
+    expect(wiCount).toBe(0);
   });
 });
 

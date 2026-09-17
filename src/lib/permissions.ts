@@ -478,15 +478,18 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
-    // Payroll two-person governance (2026-09-13, superseding 3F §7):
-    // Controller regains `payroll:post`. The authoritative model is
-    // Payroll Admin submits → Controller approves + posts. The prior
-    // 3F "Controller approves / Payroll Admin posts" split has been
-    // rescinded because it forced a third human without added
-    // accounting-control value. Controller still does NOT gain
-    // prepare/edit/submit/void grants, and does NOT gain SIN/banking
-    // reveal via payroll approval per §31.
-    "payroll:post",
+    // Pre-Phase-5 governance restoration (2026-09-16): Controller
+    // LOSES `payroll:post`. The authoritative model is now:
+    //   Payroll Admin: Prepare → Calculate → Review & Adjust → Submit
+    //   Controller:    independent financial Approve
+    //   Payroll Admin: Post approved payroll to GL
+    // Posting is an accounting-execution step; requiring a third human
+    // merely to click Post after independent Controller approval added
+    // no accounting-control value and forced impractical workflows in
+    // a two-person Club finance team. The critical SoD boundary
+    // (submitter ≠ approver) is enforced in `approvePayrollBatch`.
+    // Controller keeps `payroll:approve` and `payroll:return` and is
+    // the ONLY role that can perform an independent approval.
     "payroll:paygroup:read", "payroll:config:read",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
@@ -595,25 +598,28 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:timesheets:approve", "payroll:run",
     // Payroll-3A — PAYROLL_ADMIN prepares + edits + submits payroll
     // batches, owns pay-group + config administration. Does NOT
-    // approve or post — those are Controller-only.
-    // Payroll two-person governance (2026-09-13, superseding 3F §7):
-    // PAYROLL_ADMIN LOSES `payroll:post`. The Controller who approves
-    // is also the actor who posts. Split-role rationale: Payroll
-    // Admin owns preparation + submission; Controller owns
-    // independent approval + accounting execution.
+    // approve (Controller-only).
     //
     // Payroll role-governance hardening (2026-09-15, v-slice-1-followup-4):
-    // PAYROLL_ADMIN also LOSES `payroll:approve`. The role-comment
-    // above always said "Does NOT approve or post", but the grants
-    // list still carried `payroll:approve`. That was a governance
-    // hole — a Payroll Admin B could approve a payroll that Payroll
-    // Admin A submitted (server-side same-actor SoD refuses only the
-    // submitter themselves). Removing the grant closes the hole at
-    // the role capability layer. Same-actor SoD in approve-and-post.ts
-    // remains in place as defense-in-depth for legitimate multi-role
-    // holders (e.g. someone with both PAYROLL_ADMIN + CONTROLLER).
-    // `payroll:return` was NEVER on PAYROLL_ADMIN — no change needed.
-    "payroll:prepare", "payroll:edit", "payroll:submit",
+    // PAYROLL_ADMIN LOSES `payroll:approve`. Same-actor SoD in
+    // approve-and-post.ts remains as defense-in-depth for legitimate
+    // multi-role holders (e.g. someone with both PAYROLL_ADMIN +
+    // CONTROLLER). `payroll:return` was NEVER on PAYROLL_ADMIN.
+    //
+    // Pre-Phase-5 governance restoration (2026-09-16): PAYROLL_ADMIN
+    // REGAINS `payroll:post`. The intended operating model is:
+    //   Payroll Admin: Prepare → Calculate → Review & Adjust → Submit
+    //   Controller:    independent Approve
+    //   Payroll Admin: Post approved payroll to the GL
+    // Requiring a third human merely to click Post added no
+    // accounting-control value. The critical SoD is submitter ≠
+    // approver (enforced in `approvePayrollBatch`); a Payroll Admin
+    // MAY post AFTER an independent Controller has approved the exact
+    // frozen calculationVersion/fingerprint. Posting an unapproved
+    // batch is refused by `postPayrollBatch`'s status guard, and
+    // posting a batch whose calculationVersion no longer matches the
+    // approved fingerprint would require re-submit + re-approve first.
+    "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:post",
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "payroll:opening-balance:write",
