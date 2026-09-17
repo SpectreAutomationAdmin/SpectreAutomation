@@ -51,63 +51,66 @@ describe("Payroll-3B-2 — pay-period generation", () => {
   // Pure calendar builder — no DB, tests civil-date arithmetic directly.
   // ---------------------------------------------------------------------
 
-  it("SEMI_MONTHLY 2026 with offset=5 → 24 periods (prior-Dec-16 pickup exactly offsets current-Dec-16 spill)", () => {
+  it("SEMI_MONTHLY 2026 → 24 periods, payDate on 15th / LAST calendar day (weekend-earlier), offset IGNORED", () => {
+    // Phase 5 (2026-09-17) canonical semi-monthly semantics.
+    // `payDateOffsetDays` is deliberately non-zero here to prove that
+    // SEMI_MONTHLY IGNORES the offset — pay dates are pegged to the
+    // 15th and LAST calendar day of the month, weekend-shifted earlier.
     const rows = buildCalendar({
       payFrequency: "SEMI_MONTHLY",
       payDateOffsetDays: 5,
       calendarAnchorDate: null,
       taxYear: 2026,
     });
-    // Tax-year-follows-payDate: the Dec-16-2025 → Jan-1-2026 half
-    // pays Jan 6 2026 (in 2026) but the Dec-16-2026 → Jan-1-2027 half
-    // pays Jan 6 2027 (in 2027). Net = 24 rows.
     expect(rows.length).toBe(24);
-    // rows[0] is Dec-16-2025 → Jan-1-2026, pay Jan 6 2026.
-    expect(rows[0]!.periodStart.getTime()).toBe(utc(2025, 12, 16).getTime());
-    expect(rows[0]!.periodEnd.getTime()).toBe(utc(2026, 1, 1).getTime());
-    expect(rows[0]!.payDate.getTime()).toBe(utc(2026, 1, 6).getTime());
+    // rows[0] = Jan 1 → Jan 16, payDate Jan 15 (Thu 2026, no shift).
+    expect(rows[0]!.periodStart.getTime()).toBe(utc(2026, 1, 1).getTime());
+    expect(rows[0]!.periodEnd.getTime()).toBe(utc(2026, 1, 16).getTime());
+    expect(rows[0]!.payDate.getTime()).toBe(utc(2026, 1, 15).getTime());
     expect(rows[0]!.sequenceInYear).toBe(1);
     expect(rows[0]!.taxYear).toBe(2026);
-    // rows[1] is the first in-2026 period: Jan 1 → Jan 16, pay Jan 21.
-    expect(rows[1]!.periodStart.getTime()).toBe(utc(2026, 1, 1).getTime());
-    expect(rows[1]!.periodEnd.getTime()).toBe(utc(2026, 1, 16).getTime());
-    expect(rows[1]!.payDate.getTime()).toBe(utc(2026, 1, 21).getTime());
-    // Last period: Dec 1 → Dec 16 2026 pays Dec 21 2026 — still in 2026.
-    expect(rows[23]!.periodStart.getTime()).toBe(utc(2026, 12, 1).getTime());
-    expect(rows[23]!.periodEnd.getTime()).toBe(utc(2026, 12, 16).getTime());
-    expect(rows[23]!.payDate.getTime()).toBe(utc(2026, 12, 21).getTime());
+    // rows[1] = Jan 16 → Feb 1, payDate Jan 31 → Sat → Jan 30 (Fri).
+    expect(rows[1]!.periodStart.getTime()).toBe(utc(2026, 1, 16).getTime());
+    expect(rows[1]!.periodEnd.getTime()).toBe(utc(2026, 2, 1).getTime());
+    expect(rows[1]!.payDate.getTime()).toBe(utc(2026, 1, 30).getTime());
+    // rows[23] = Dec 16 → Jan 1 2027, payDate Dec 31 2026 (Thu, no shift).
+    expect(rows[23]!.periodStart.getTime()).toBe(utc(2026, 12, 16).getTime());
+    expect(rows[23]!.periodEnd.getTime()).toBe(utc(2027, 1, 1).getTime());
+    expect(rows[23]!.payDate.getTime()).toBe(utc(2026, 12, 31).getTime());
   });
 
-  it("SEMI_MONTHLY tax-year-follows-payDate — Dec-16 period paying Jan 2 belongs to next year", () => {
-    // Use offset=17 so the Dec-16→Jan-1 (excl) period pays Jan-18 next year.
-    // Simpler: offset=1 → Dec-16→Jan-1 period pays Jan-2 next year.
+  it("SEMI_MONTHLY 15th / LAST rule — payDates stay within their own month across year boundaries", () => {
+    // Under the Phase 5 rule, weekend-earlier shift keeps every payDate
+    // inside its own calendar month. Dec-second-half always pays in Dec.
+    // Therefore each year's calendar contains exactly the 24 rows for
+    // that year — no prior-Dec pickup, no spill.
     const y2026 = buildCalendar({
       payFrequency: "SEMI_MONTHLY",
       payDateOffsetDays: 1,
       calendarAnchorDate: null,
       taxYear: 2026,
     });
-    // Only ONE row in 2026 should have a periodStart in December 2026
-    // — the Dec 1 → Dec 16 half. The Dec 16 → Jan 1 half's payDate
-    // lands in Jan 2027 and therefore belongs to the 2027 tax year.
+    expect(y2026.length).toBe(24);
     const dec = y2026.filter(
       (r) => r.periodStart.getUTCMonth() === 11 && r.periodStart.getUTCFullYear() === 2026,
     );
-    expect(dec.length).toBe(1);
-    expect(dec[0]!.periodStart.getTime()).toBe(utc(2026, 12, 1).getTime());
-    expect(dec[0]!.payDate.getTime()).toBe(utc(2026, 12, 17).getTime());
-    // And that missing Dec-16→Jan-1 period shows up in 2027's calendar
-    // as its first period.
+    expect(dec.length).toBe(2);
+    // Dec 1 → Dec 16 pays Dec 15 (Tue 2026, no shift).
+    expect(dec[0]!.payDate.getTime()).toBe(utc(2026, 12, 15).getTime());
+    // Dec 16 → Jan 1 2027 pays Dec 31 (Thu 2026, no shift).
+    expect(dec[1]!.payDate.getTime()).toBe(utc(2026, 12, 31).getTime());
+
     const y2027 = buildCalendar({
       payFrequency: "SEMI_MONTHLY",
       payDateOffsetDays: 1,
       calendarAnchorDate: null,
       taxYear: 2027,
     });
-    expect(y2027[0]!.periodStart.getTime()).toBe(utc(2026, 12, 16).getTime());
-    expect(y2027[0]!.periodEnd.getTime()).toBe(utc(2027, 1, 1).getTime());
-    expect(y2027[0]!.payDate.getTime()).toBe(utc(2027, 1, 2).getTime());
-    expect(y2027[0]!.taxYear).toBe(2027);
+    expect(y2027.length).toBe(24);
+    // 2027's first row is Jan 1 → Jan 16, payDate Jan 15 2027 (Fri, no shift).
+    expect(y2027[0]!.periodStart.getTime()).toBe(utc(2027, 1, 1).getTime());
+    expect(y2027[0]!.periodEnd.getTime()).toBe(utc(2027, 1, 16).getTime());
+    expect(y2027[0]!.payDate.getTime()).toBe(utc(2027, 1, 15).getTime());
   });
 
   it("MONTHLY tax year — 12 rows with prior-Dec pickup replacing current-Dec spill", () => {

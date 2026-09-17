@@ -129,33 +129,11 @@ function ArrowRight({ className = "" }: { className?: string }) {
 }
 
 /* ============================================================
-   Workflow — derived from batch status.
+   Workflow — the canonical 8-step order lives in
+   `src/lib/payroll/overview-view.ts::baseWorkflow` and is threaded
+   into this component via `view.workflow`. Do NOT re-derive it here.
    ============================================================ */
 type WorkflowState = "done" | "current" | "pending";
-function deriveWorkflow(batchStatus: string | null | undefined): Array<{ n: number; label: string; sub: string; state: WorkflowState }> {
-  const status = batchStatus ?? "PRE_PREPARE";
-  const map: Record<string, [WorkflowState, WorkflowState, WorkflowState, WorkflowState, WorkflowState, WorkflowState, WorkflowState, WorkflowState]> = {
-    PRE_PREPARE:              ["current", "pending", "pending", "pending", "pending", "pending", "pending", "pending"],
-    DRAFT:                    ["done", "current", "pending", "pending", "pending", "pending", "pending", "pending"],
-    PREPARED:                 ["done", "done", "current", "pending", "pending", "pending", "pending", "pending"],
-    CALCULATED:               ["done", "done", "done", "done", "current", "pending", "pending", "pending"],
-    SUBMITTED_FOR_APPROVAL:   ["done", "done", "done", "done", "done", "done", "current", "pending"],
-    APPROVED:                 ["done", "done", "done", "done", "done", "done", "done", "current"],
-    POSTED:                   ["done", "done", "done", "done", "done", "done", "done", "done"],
-    VOIDED:                   ["current", "pending", "pending", "pending", "pending", "pending", "pending", "pending"],
-  };
-  const st = map[status] ?? map.PRE_PREPARE;
-  return [
-    { n: 1, label: "Prepare",           sub: "",              state: st[0] },
-    { n: 2, label: "Review",            sub: "Exceptions",    state: st[1] },
-    { n: 3, label: "Approvals",         sub: "(Dept. Heads)", state: st[2] },
-    { n: 4, label: "Calculate",         sub: "Payroll",       state: st[3] },
-    { n: 5, label: "Review & Adjust",   sub: "",              state: st[4] },
-    { n: 6, label: "Submit",            sub: "for Approval",  state: st[5] },
-    { n: 7, label: "Approved",          sub: "(Controller)",  state: st[6] },
-    { n: 8, label: "Posted",            sub: "Complete",      state: st[7] },
-  ];
-}
 
 const STATUS_LABELS: Record<string, string> = {
   PRE_PREPARE:              "No batch yet",

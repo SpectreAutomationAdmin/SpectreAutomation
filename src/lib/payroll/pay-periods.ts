@@ -28,6 +28,7 @@ import { requirePermission, type Principal } from "../rbac";
 import { assertPostingAllowed } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import type { PayFrequency } from "./club-config";
+import { semiMonthlyPayday } from "./semi-monthly-payday";
 
 const ENTITY = "PayrollPayPeriod";
 
@@ -208,17 +209,24 @@ export function buildCalendar(spec: CalendarSpec): GeneratedPeriod[] {
   }
 
   if (payFrequency === "SEMI_MONTHLY") {
+    // Phase 5 (2026-09-17) — canonical Spectre semi-monthly:
+    //   • Period 1 of each month = [1st, 16th)  → payDate = 15th (weekend → preceding Fri)
+    //   • Period 2 of each month = [16th, 1st-of-next) → payDate = LAST calendar day
+    //     of the current month (weekend → preceding Fri)
+    // `payDateOffsetDays` is intentionally IGNORED for SEMI_MONTHLY. The
+    // offset semantics (payDate = periodEnd + N days) is a WEEKLY /
+    // BIWEEKLY concept. Semi-monthly paydates are pegged to specific
+    // calendar days per the founder-approved product model. Cutoff lead
+    // days are handled separately at cutoff read-time via
+    // `PayrollClubConfig.payrollCutoffLeadDays`.
     const out: GeneratedPeriod[] = [];
     for (let m = 0; m < 12; m++) {
-      // First half: [Y-m-01, Y-m-16)  — periodEnd 16 exclusive
       const s1 = new Date(Date.UTC(taxYear, m, 1));
       const e1 = new Date(Date.UTC(taxYear, m, 16));
-      // Second half: [Y-m-16, Y-(m+1)-01) — periodEnd = 1st of next month exclusive
       const s2 = new Date(Date.UTC(taxYear, m, 16));
       const e2 = new Date(Date.UTC(taxYear, m + 1, 1));
-      const pay1 = addDays(e1, payDateOffsetDays);
-      const pay2 = addDays(e2, payDateOffsetDays);
-      // Only include periods whose payDate is in the requested year.
+      const pay1 = semiMonthlyPayday(taxYear, m, "FIRST_HALF");
+      const pay2 = semiMonthlyPayday(taxYear, m, "SECOND_HALF");
       if (pay1.getUTCFullYear() === taxYear) {
         out.push({ sequenceInYear: 0, taxYear, periodStart: s1, periodEnd: e1, payDate: pay1 });
       }
@@ -226,33 +234,9 @@ export function buildCalendar(spec: CalendarSpec): GeneratedPeriod[] {
         out.push({ sequenceInYear: 0, taxYear, periodStart: s2, periodEnd: e2, payDate: pay2 });
       }
     }
-    // Also pick up December-half periods from taxYear-1 that PAY in taxYear.
-    for (const m of [11]) {
-      const s2Prev = new Date(Date.UTC(taxYear - 1, m, 16));
-      const e2Prev = new Date(Date.UTC(taxYear, 0, 1));
-      const pay2Prev = addDays(e2Prev, payDateOffsetDays);
-      if (pay2Prev.getUTCFullYear() === taxYear) {
-        out.unshift({
-          sequenceInYear: 0,
-          taxYear,
-          periodStart: s2Prev,
-          periodEnd: e2Prev,
-          payDate: pay2Prev,
-        });
-      }
-      const s1Prev = new Date(Date.UTC(taxYear - 1, m, 1));
-      const e1Prev = new Date(Date.UTC(taxYear - 1, m, 16));
-      const pay1Prev = addDays(e1Prev, payDateOffsetDays);
-      if (pay1Prev.getUTCFullYear() === taxYear) {
-        out.unshift({
-          sequenceInYear: 0,
-          taxYear,
-          periodStart: s1Prev,
-          periodEnd: e1Prev,
-          payDate: pay1Prev,
-        });
-      }
-    }
+    // Weekend-earlier keeps every payDate within its own month, so no
+    // prior-year Dec-half pickup is required — Dec 31 (weekend-adjusted
+    // earlier) never crosses into the next taxYear.
     out.sort((a, b) => a.payDate.getTime() - b.payDate.getTime());
     for (let i = 0; i < out.length; i++) out[i]!.sequenceInYear = i + 1;
     return out;

@@ -309,12 +309,12 @@ const EMPLOYEE_ROWS: EmployeeRow[] = [
 ];
 
 const WORKFLOW = [
-  { n: 1, label: "Prepare",  sub: "Sep 7 – 13",   state: "done" as const },
-  { n: 2, label: "Review",   sub: "Exceptions",    state: "current" as const },
-  { n: 3, label: "Approvals", sub: "(Dept. Heads)", state: "pending" as const },
+  { n: 1, label: "Approvals", sub: "(Dept. Heads)", state: "done" as const },
+  { n: 2, label: "Prepare",  sub: "Sep 7 – 13",    state: "done" as const },
+  { n: 3, label: "Review",   sub: "Exceptions",     state: "current" as const },
   { n: 4, label: "Calculate", sub: "Payroll",       state: "pending" as const },
-  { n: 5, label: "Review & Adjust", sub: "", state: "pending" as const },
-  { n: 6, label: "Submit",  sub: "for Approval",    state: "pending" as const },
+  { n: 5, label: "Review & Adjust", sub: "",        state: "pending" as const },
+  { n: 6, label: "Submit",   sub: "for Approval",   state: "pending" as const },
   { n: 7, label: "Approved", sub: "(Controller)",   state: "pending" as const },
   { n: 8, label: "Posted",   sub: "Complete",       state: "pending" as const },
 ];
