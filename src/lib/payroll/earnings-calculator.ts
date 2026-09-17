@@ -184,7 +184,18 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
   // portion (e.g. vacation-pay carve-outs) are OUT OF MVP scope —
   // if a carve-out is needed a future slice adds explicit fields.
   // Readiness has already rejected UNSUPPORTED_EARNING_TYPE rows.
-  const earningTotals = sum(earningRows.map((r) => toDecimal(r.quantity).times(toDecimal(r.rate))));
+  // Payroll (2026-09-16) — split earning rows into REGULAR (contribute
+  // to the REGULAR_EARNINGS_ONLY basis) and NON-REGULAR (bonuses,
+  // commissions — count as CASH but not REGULAR). Prepare persists
+  // the annualised salary as a SALARY earning row, so the calculator's
+  // `regularEarnings` MUST count SALARY/REGULAR/OVERTIME rows or the
+  // PERCENT_OF_ELIGIBLE_EARNINGS × REGULAR_EARNINGS_ONLY basis
+  // resolves to $0 for every salaried employee.
+  const REGULAR_EARNING_TYPES = new Set(["SALARY", "REGULAR", "OVERTIME"]);
+  const regularEarningRows = earningRows.filter((r) => REGULAR_EARNING_TYPES.has(r.earningType));
+  const otherEarningRows   = earningRows.filter((r) => !REGULAR_EARNING_TYPES.has(r.earningType));
+  const regularFromRows = sum(regularEarningRows.map((r) => toDecimal(r.quantity).times(toDecimal(r.rate))));
+  const otherFromRows   = sum(otherEarningRows  .map((r) => toDecimal(r.quantity).times(toDecimal(r.rate))));
   for (const row of earningRows) {
     const amt = toDecimal(row.quantity).times(toDecimal(row.rate));
     lines.push({ source: "EARNING_ROW", label: row.earningType, amount: amt });
@@ -282,8 +293,16 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
 
   // Compute the pre-percent cash and regular-earnings baselines
   // used by Pass 2's eligibleBase resolution (§7-8).
-  const regularEarnings = salaryDerived.plus(hourlyDerived);
-  const cashPrePercent  = regularEarnings.plus(earningTotals).plus(allowanceGross).plus(componentCashAdds);
+  //
+  // REGULAR_EARNINGS = derived (salary/hourly) + persisted SALARY /
+  //                    REGULAR / OVERTIME earning rows. This is what
+  //                    PERCENT_OF_ELIGIBLE_EARNINGS × REGULAR_EARNINGS_ONLY
+  //                    computes against.
+  // CASH_EARNINGS    = REGULAR_EARNINGS + non-regular earning rows
+  //                    (BONUS, COMMISSION, etc.) + cash allowances +
+  //                    INCREASES_NET_PAY component adds.
+  const regularEarnings = salaryDerived.plus(hourlyDerived).plus(regularFromRows);
+  const cashPrePercent  = regularEarnings.plus(otherFromRows).plus(allowanceGross).plus(componentCashAdds);
 
   // Pass 2 — PERCENT_OF_ELIGIBLE_EARNINGS. Percentage components
   // resolve against the pre-declared eligible base and never against
@@ -309,11 +328,11 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
   // Cash earnings = base + INCREASES_NET_PAY component adds.
   // DECREASES_NET_PAY do NOT reduce cash earnings — they land on the
   // net-pay side later.
-  const cashBaseline = gross.plus(regularEarnings).plus(earningTotals).plus(allowanceGross);
+  const cashBaseline = gross.plus(regularEarnings).plus(otherFromRows).plus(allowanceGross);
   const cashEarnings = nonNegative(cashBaseline.plus(componentCashAdds));
 
   // Three independent statutory bases with directional composition.
-  const baseAdd = regularEarnings.plus(earningTotals);
+  const baseAdd = regularEarnings.plus(otherFromRows);
   const rawTaxable     = taxable.plus(baseAdd).plus(allowanceTax).plus(componentTaxAdd).minus(componentTaxSub);
   const rawPensionable = pensionable.plus(baseAdd).plus(allowancePen).plus(componentPenAdd).minus(componentPenSub);
   const rawInsurable   = insurable.plus(baseAdd).plus(allowanceIns).plus(componentInsAdd).minus(componentInsSub);

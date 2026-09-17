@@ -20,6 +20,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { orchestratePayrollReviewHandoff } from "@/lib/payroll/orchestration";
 import { calculatePayrollBatch } from "@/lib/payroll/calculation-execute";
@@ -82,6 +83,7 @@ async function pdocScenario(payDate: Date, tax: TaxOpts = {}) {
     payrollAdminUserId: pa.id,
     controllerUserId:   controller.id,
   });
+  await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
   const emp = await db().employee.create({
     data: {
       clubId: club.id, firstName: "Sal", lastName: "Aried",
@@ -473,6 +475,7 @@ describe("Payroll-3B-5B-2c CORRECTION — negative net BLOCKS the whole batch at
     await upsertPayrollClubConfig(adminP, club.id, {
       provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: controller.id,
     });
+    await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
     async function makeSalariedEmp(number: string, additionalFederalTax: string) {
       const emp = await db().employee.create({

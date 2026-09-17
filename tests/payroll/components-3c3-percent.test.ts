@@ -13,6 +13,7 @@ import {
   type EarningsCalcResult,
 } from "@/lib/payroll/earnings-calculator";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { upsertPayrollComponent, createRecurringComponentAssignment } from "@/lib/payroll/components-catalogue";
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
@@ -320,6 +321,7 @@ describe("Payroll-3C-3 · percent snapshot immutability + persistence", () => {
     await upsertPayrollClubConfig(adminP, club.id, {
       provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: ctl.id,
     });
+    await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
     const emp = await c.employee.create({
       data: {

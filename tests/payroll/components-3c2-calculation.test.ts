@@ -18,6 +18,8 @@ import { seedCanadaAlbertaPackages2026 } from "@/lib/payroll/statutory/seed-ca-a
 import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { snapshotEmployeeComponentsForBatch, batchHasComponentSnapshots } from "@/lib/payroll/components-snapshot";
 import { postPayrollBatch, approvePayrollBatch } from "@/lib/payroll/approve-and-post";
+import { submitPayrollBatch } from "@/lib/payroll/submit-payroll-batch";
+import { attestBatchReview } from "@/lib/payroll/batch-review";
 import { ConflictError } from "@/lib/errors";
 
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
@@ -433,12 +435,20 @@ describe("Payroll-3C-2 · snapshot service tenant isolation", () => {
 });
 
 // -------------------------------------------------------------------
-// H · GL post block — safety when snapshots present
+// H · GL post lifecycle — supersedes the 3C-2 "post refused when
+//     component snapshots exist" rule. As of Phase 3, batches with
+//     component snapshots ARE supported through the canonical natural-
+//     account + frozen-department GL resolver, so the old refusal is
+//     no longer the intended behaviour. Instead prove the full
+//     lifecycle for a batch that carries a component snapshot:
+//       Prepare → Calculate → Submit → Approve → Post
+//     with segregation of duties enforced (PA submits, Controller
+//     approves + posts).
 // -------------------------------------------------------------------
-describe("Payroll-3C-2 · GL post block when component snapshots exist", () => {
+describe("Payroll-3C-2 · component-carrying batch full lifecycle", () => {
   beforeEach(async () => { await resetDb(); await seedRbac(); });
 
-  it("postPayrollBatch refuses when batch has any component snapshots", async () => {
+  it("Prepare → Calculate → Submit → Approve → Post succeeds when batch carries a component snapshot", async () => {
     const s = await baseline("Gl A");
     const comp = await upsertPayrollComponent(s.adminP, s.club.id, {
       code: "TAX_BEN", displayName: "Test Benefit",
@@ -451,10 +461,78 @@ describe("Payroll-3C-2 · GL post block when component snapshots exist", () => {
       employeeId: s.emp.id, componentId: comp.id,
       amount: "10.00", effectiveFrom: utc(2020, 1, 1),
     });
+    // Also configure the club's global GL profile so the posting
+    // resolver has natural accounts to route the journal through.
+    const c = db();
+    const acct = async (n: string, name: string, type: "EXPENSE" | "LIABILITY") => c.account.create({
+      data: {
+        clubId: s.club.id, accountNumber: n, name, type,
+        normalBalance: type === "EXPENSE" ? "DEBIT" : "CREDIT",
+        isActive: true, allowManualPosting: false,
+      },
+    });
+    const salary   = await acct("6000", "Salaries & Wages",       "EXPENSE");
+    const erCpp    = await acct("6010", "Employer CPP Expense",   "EXPENSE");
+    const erEi     = await acct("6020", "Employer EI Expense",    "EXPENSE");
+    const netpay   = await acct("2100", "Net Pay Payable",        "LIABILITY");
+    const cppPay   = await acct("2110", "CPP Payable",            "LIABILITY");
+    const eiPay    = await acct("2120", "EI Payable",             "LIABILITY");
+    const fedPay   = await acct("2130", "Federal Tax Payable",    "LIABILITY");
+    const provPay  = await acct("2140", "AB Tax Payable",         "LIABILITY");
+    const benExp   = await acct("6200", "Taxable Benefit Expense","EXPENSE");
+    const benLiab  = await acct("2200", "Taxable Benefit Payable","LIABILITY");
+    const profile = await c.payrollGlAccountingProfile.create({
+      data: {
+        clubId: s.club.id,
+        salaryExpenseAccountId:        salary.id,
+        employerCppExpenseAccountId:   erCpp.id,
+        employerEiExpenseAccountId:    erEi.id,
+        netPayPayableAccountId:        netpay.id,
+        cppPayableAccountId:           cppPay.id,
+        eiPayableAccountId:            eiPay.id,
+        federalTaxPayableAccountId:    fedPay.id,
+        provincialTaxPayableAccountId: provPay.id,
+      },
+    });
+    await c.payrollClubConfig.update({
+      where: { clubId: s.club.id },
+      data: { glAccountingProfileId: profile.id },
+    });
+    // Bind the taxable-benefit component's GL mapping so the readiness
+    // check accepts it. Also close a fiscal year around the pay date.
+    await c.payrollComponent.update({
+      where: { id: comp.id },
+      data: { expenseAccountId: benExp.id, liabilityAccountId: benLiab.id },
+    });
+    const fy = await c.fiscalYear.create({
+      data: { clubId: s.club.id, label: "FY2026",
+        startDate: utc(2026, 1, 1), endDate: utc(2026, 12, 31), status: "OPEN" },
+    });
+    await c.fiscalPeriod.create({
+      data: { clubId: s.club.id, fiscalYearId: fy.id, label: "FY2026-M09",
+        startDate: utc(2026, 9, 1), endDate: utc(2026, 9, 30), sequence: 9, status: "OPEN" },
+    });
+
     const prep = await preparePayrollBatch(s.paP, s.club.id, s.payPeriodId);
     await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
     expect(await batchHasComponentSnapshots(prep.batchId)).toBe(true);
+
+    // Full governance lifecycle:
+    //   PA attests the calculated-payroll review (required precondition for Submit).
+    //   PA submits (payroll:submit).
+    //   Controller approves (payroll:approve).
+    //   Controller posts (payroll:post; same actor as approver — no SoD violation since PA is not the approver/poster).
+    await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.controllerP, prep.batchId);
-    await expect(postPayrollBatch(s.controllerP, prep.batchId)).rejects.toBeInstanceOf(ConflictError);
+    const posted = await postPayrollBatch(s.controllerP, prep.batchId);
+    expect(posted.journalEntryId).toBeTruthy();
+    const je = await c.journalEntry.findUnique({
+      where: { id: posted.journalEntryId },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(je?.status).toBe("POSTED");
+    // The component's frozen expense account MUST appear on the posted journal.
+    expect(je!.lines.some((l) => l.account.accountNumber === "6200")).toBe(true);
   });
 });
