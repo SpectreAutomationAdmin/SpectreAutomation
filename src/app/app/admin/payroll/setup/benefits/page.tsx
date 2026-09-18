@@ -14,7 +14,12 @@ import { getActiveClubId } from "@/lib/active-club";
 import { listBenefitPlans } from "@/lib/payroll/benefit-plans";
 import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
 import BenefitPlansEditor from "./BenefitPlansEditor";
-import { createBenefitPlanAction, endBenefitPlanAction } from "./_actions";
+import {
+  createBenefitPlanAction,
+  endBenefitPlanAction,
+  updatePlanMetadataAction,
+  changePlanConfigAction,
+} from "./_actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -108,6 +113,8 @@ export default async function PayrollBenefitsSettingsPage({
         components={componentOptions}
         createAction={createBenefitPlanAction}
         endAction={endBenefitPlanAction}
+        updateMetadataAction={updatePlanMetadataAction}
+        changeConfigAction={changePlanConfigAction}
       />
     </div>
   );

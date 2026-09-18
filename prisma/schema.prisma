@@ -13159,6 +13159,16 @@ model PayrollBenefitPlan {
   employerMatchBps       Int?
   employerMatchCapBps    Int?
   notes                  String?
+  // Slice C final UI acceptance (2026-09-18) — effective-dated Change
+  // Plan. When a plan's payroll-affecting configuration is changed, the
+  // previous configuration is retained as a historical row and a NEW
+  // successor row is inserted. `predecessorPlanId` links the successor
+  // back to the row it replaced so the founder can see the lineage.
+  // Metadata-only edits (name / description / providerName / notes) do
+  // NOT create a successor — they update in place.
+  predecessorPlanId      String?
+  predecessor            PayrollBenefitPlan?  @relation("PayrollBenefitPlanSuccession", fields: [predecessorPlanId], references: [id])
+  successors             PayrollBenefitPlan[] @relation("PayrollBenefitPlanSuccession")
   createdByUserId        String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -13167,6 +13177,7 @@ model PayrollBenefitPlan {
 
   @@unique([clubId, code])
   @@index([clubId, kind, active])
+  @@index([predecessorPlanId])
 }
 
 // Slice C (2026-09-18) — per-employee enrolment in a PayrollBenefitPlan.

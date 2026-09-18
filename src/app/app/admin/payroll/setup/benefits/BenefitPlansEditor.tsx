@@ -23,6 +23,8 @@ interface PlanRow {
   employerComponentId: string | null;
   defaultElectionKind: string;
   eligibleEarningsBasis: string | null;
+  predecessorPlanId: string | null;
+  notes: string | null;
 }
 interface ComponentOption {
   id: string;
@@ -102,12 +104,15 @@ export default function BenefitPlansEditor(props: {
   components: ComponentOption[];
   createAction: (form: FormData) => Promise<void>;
   endAction: (form: FormData) => Promise<void>;
+  updateMetadataAction: (form: FormData) => Promise<void>;
+  changeConfigAction: (form: FormData) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [kind, setKind] = useState<"LTD" | "HEALTH_DENTAL">("LTD");
   const [electionKind, setElectionKind] = useState<"FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS">("FIXED_AMOUNT");
   const [employeeComponentId, setEmployeeComponentId] = useState<string>("");
   const [employerComponentId, setEmployerComponentId] = useState<string>("");
+  const [changingId, setChangingId] = useState<string | null>(null);
 
   const activePlans = useMemo(() => props.plans.filter((p) => p.active), [props.plans]);
   const historicalPlans = useMemo(() => props.plans.filter((p) => !p.active), [props.plans]);
@@ -184,21 +189,31 @@ export default function BenefitPlansEditor(props: {
                     </Td>
                     <Td>
                       {props.canWrite && (
-                        <form action={props.endAction}>
-                          <input type="hidden" name="planId" value={p.id} />
+                        <div className="flex items-center gap-2">
                           <button
-                            type="submit"
+                            type="button"
                             className="btn btn-secondary btn-sm"
-                            data-testid={`benefit-plan-end-${p.id}`}
-                            onClick={(e) => {
-                              if (!confirm(`End plan "${p.name}"? Existing enrolments continue to be honoured historically; new enrolments cannot be created after End.`)) {
-                                e.preventDefault();
-                              }
-                            }}
+                            data-testid={`benefit-plan-change-btn-${p.id}`}
+                            onClick={() => setChangingId(p.id === changingId ? null : p.id)}
                           >
-                            End plan
+                            Change
                           </button>
-                        </form>
+                          <form action={props.endAction}>
+                            <input type="hidden" name="planId" value={p.id} />
+                            <button
+                              type="submit"
+                              className="btn btn-secondary btn-sm"
+                              data-testid={`benefit-plan-end-${p.id}`}
+                              onClick={(e) => {
+                                if (!confirm(`End plan "${p.name}"? Existing enrolments continue to be honoured historically; new enrolments cannot be created after End.`)) {
+                                  e.preventDefault();
+                                }
+                              }}
+                            >
+                              End plan
+                            </button>
+                          </form>
+                        </div>
                       )}
                     </Td>
                   </tr>
@@ -209,18 +224,43 @@ export default function BenefitPlansEditor(props: {
         </div>
       )}
 
+      {changingId && props.canWrite && (() => {
+        const p = props.plans.find((r) => r.id === changingId);
+        if (!p) return null;
+        const currentEE = props.components.find((c) => c.id === p.employeeComponentId) ?? null;
+        const currentER = props.components.find((c) => c.id === p.employerComponentId) ?? null;
+        return (
+          <ChangePlanForm
+            plan={p}
+            currentEmployeeComponent={currentEE}
+            currentEmployerComponent={currentER}
+            components={props.components}
+            updateMetadataAction={props.updateMetadataAction}
+            changeConfigAction={props.changeConfigAction}
+            onClose={() => setChangingId(null)}
+          />
+        );
+      })()}
+
       {historicalPlans.length > 0 && (
         <details className="mt-4" data-testid="benefits-history-disclosure">
           <summary className="cursor-pointer text-xs text-stone-500">
             Ended / historical plans ({historicalPlans.length})
           </summary>
           <ul className="mt-2 space-y-1 text-xs text-stone-600">
-            {historicalPlans.map((p) => (
-              <li key={p.id}>
-                {KIND_LABEL[p.kind] ?? p.kind} — {p.name} · ended{" "}
-                {p.effectiveToIso ? fmtCivil(p.effectiveToIso) : "—"}
-              </li>
-            ))}
+            {historicalPlans.map((p) => {
+              const successor = props.plans.find((s) => s.predecessorPlanId === p.id) ?? null;
+              return (
+                <li key={p.id}>
+                  {KIND_LABEL[p.kind] ?? p.kind} — {p.name}
+                  {" · "}
+                  {fmtCivil(p.effectiveFromIso)} – {p.effectiveToIso ? fmtCivil(p.effectiveToIso) : "open"}
+                  {successor && (
+                    <span className="text-stone-500"> · replaced by <span className="font-mono">{successor.code}</span></span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}
@@ -379,6 +419,188 @@ export default function BenefitPlansEditor(props: {
           </form>
         </div>
       )}
+    </div>
+  );
+}
+
+function ChangePlanForm(props: {
+  plan: PlanRow;
+  currentEmployeeComponent: ComponentOption | null;
+  currentEmployerComponent: ComponentOption | null;
+  components: ComponentOption[];
+  updateMetadataAction: (form: FormData) => Promise<void>;
+  changeConfigAction: (form: FormData) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [nextEmployeeId, setNextEmployeeId] = useState<string>(props.plan.employeeComponentId ?? "");
+  const [nextEmployerId, setNextEmployerId] = useState<string>(props.plan.employerComponentId ?? "");
+  const nextEE = props.components.find((c) => c.side === "EMPLOYEE" && c.id === nextEmployeeId) ?? null;
+  const nextER = props.components.find((c) => c.side === "EMPLOYER" && c.id === nextEmployerId) ?? null;
+  const eeChoices = props.components.filter((c) => c.side === "EMPLOYEE");
+  const erChoices = props.components.filter((c) => c.side === "EMPLOYER");
+
+  const configWillChange =
+    nextEmployeeId !== (props.plan.employeeComponentId ?? "") ||
+    nextEmployerId !== (props.plan.employerComponentId ?? "");
+
+  return (
+    <div
+      className="mt-6 rounded-spectre-panel border p-spectre-6"
+      style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+      data-testid={`benefits-change-form-${props.plan.id}`}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-spectre-h3 font-semibold text-stone-900">Change plan — {props.plan.name}</h2>
+          <p className="mt-1 text-[11px] text-stone-500">
+            Metadata edits (name / provider / description / notes) update in place. Component /
+            election changes create an <strong>effective-dated successor</strong>: the current
+            configuration is preserved as history, and enrolments are migrated to the new plan at
+            the cutover instant. POSTED payroll is never mutated.
+          </p>
+        </div>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={props.onClose}>Close</button>
+      </div>
+
+      <hr className="my-4" style={{ borderColor: "var(--spectre-border-muted)" }} />
+
+      {/* Metadata form — in-place, always safe */}
+      <form action={props.updateMetadataAction} className="space-y-3" data-testid={`benefits-change-metadata-form-${props.plan.id}`}>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-stone-500">Metadata (safe, in-place)</div>
+        <input type="hidden" name="planId" value={props.plan.id} />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor={`change-name-${props.plan.id}`}>Plan name</Label>
+            <input id={`change-name-${props.plan.id}`} name="name" defaultValue={props.plan.name}
+                   className="mt-1 w-full rounded border px-2 py-1 text-sm" />
+          </div>
+          <div>
+            <Label htmlFor={`change-provider-${props.plan.id}`}>Provider</Label>
+            <input id={`change-provider-${props.plan.id}`} name="providerName" defaultValue={props.plan.providerName ?? ""}
+                   className="mt-1 w-full rounded border px-2 py-1 text-sm" />
+          </div>
+          <div className="md:col-span-2">
+            <Label htmlFor={`change-desc-${props.plan.id}`}>Description</Label>
+            <input id={`change-desc-${props.plan.id}`} name="description" defaultValue={props.plan.description ?? ""}
+                   className="mt-1 w-full rounded border px-2 py-1 text-sm" />
+          </div>
+          <div className="md:col-span-2">
+            <Label htmlFor={`change-notes-${props.plan.id}`}>Notes</Label>
+            <input id={`change-notes-${props.plan.id}`} name="notes" defaultValue={props.plan.notes ?? ""}
+                   className="mt-1 w-full rounded border px-2 py-1 text-sm" />
+          </div>
+        </div>
+        <button type="submit" className="btn btn-secondary btn-sm" data-testid={`benefits-change-metadata-submit-${props.plan.id}`}>
+          Save metadata
+        </button>
+      </form>
+
+      <hr className="my-4" style={{ borderColor: "var(--spectre-border-muted)" }} />
+
+      {/* Configuration form — creates successor at cutover */}
+      <form action={props.changeConfigAction} className="space-y-3" data-testid={`benefits-change-config-form-${props.plan.id}`}>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-stone-500">
+          Payroll configuration (effective-dated · creates successor)
+        </div>
+        <input type="hidden" name="planId" value={props.plan.id} />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor={`change-cutover-${props.plan.id}`}>Effective from (cutover date)</Label>
+            <input id={`change-cutover-${props.plan.id}`} name="cutover" type="date" required
+                   className="mt-1 w-full rounded border px-2 py-1 text-sm"
+                   data-testid={`benefits-change-cutover-${props.plan.id}`} />
+            <p className="mt-1 text-[10px] text-stone-500">
+              Must be after {fmtCivil(props.plan.effectiveFromIso)}. Existing enrolments are ended
+              at this date on the current plan and re-opened on the new plan with the same
+              election.
+            </p>
+          </div>
+          <div>
+            <Label htmlFor={`change-defaultElection-${props.plan.id}`}>Default election</Label>
+            <select id={`change-defaultElection-${props.plan.id}`} name="defaultElectionKind"
+                    defaultValue={props.plan.defaultElectionKind}
+                    className="mt-1 w-full rounded border px-2 py-1 text-sm">
+              <option value="FIXED_AMOUNT">{ELECTION_LABEL.FIXED_AMOUNT}</option>
+              <option value="PERCENT_OF_ELIGIBLE_EARNINGS">{ELECTION_LABEL.PERCENT_OF_ELIGIBLE_EARNINGS}</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor={`change-ee-${props.plan.id}`}>Employee payroll component</Label>
+            <select
+              id={`change-ee-${props.plan.id}`}
+              name="employeeComponentId"
+              value={nextEmployeeId}
+              onChange={(e) => setNextEmployeeId(e.target.value)}
+              className="mt-1 w-full rounded border px-2 py-1 text-sm"
+              data-testid={`benefits-change-ee-${props.plan.id}`}
+            >
+              <option value="">— none —</option>
+              {eeChoices.map((c) => (
+                <option key={c.id} value={c.id}>{c.displayName} · {humanCash(c.cashEffect)}</option>
+              ))}
+            </select>
+            {props.currentEmployeeComponent && (
+              <div className="mt-2 text-[11px]">
+                <div className="text-stone-500">Currently:</div>
+                <div className="text-stone-800">{props.currentEmployeeComponent.displayName}</div>
+              </div>
+            )}
+            {nextEE && nextEE.id !== props.plan.employeeComponentId && (
+              <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2">
+                <div className="text-[11px] font-semibold text-amber-800">New employee treatment (at cutover)</div>
+                <ComponentTreatment opt={nextEE} />
+              </div>
+            )}
+          </div>
+          <div>
+            <Label htmlFor={`change-er-${props.plan.id}`}>Employer payroll component</Label>
+            <select
+              id={`change-er-${props.plan.id}`}
+              name="employerComponentId"
+              value={nextEmployerId}
+              onChange={(e) => setNextEmployerId(e.target.value)}
+              className="mt-1 w-full rounded border px-2 py-1 text-sm"
+              data-testid={`benefits-change-er-${props.plan.id}`}
+            >
+              <option value="">— none —</option>
+              {erChoices.map((c) => (
+                <option key={c.id} value={c.id}>{c.displayName} · {humanCash(c.cashEffect)}</option>
+              ))}
+            </select>
+            {props.currentEmployerComponent && (
+              <div className="mt-2 text-[11px]">
+                <div className="text-stone-500">Currently:</div>
+                <div className="text-stone-800">{props.currentEmployerComponent.displayName}</div>
+              </div>
+            )}
+            {nextER && nextER.id !== props.plan.employerComponentId && (
+              <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2">
+                <div className="text-[11px] font-semibold text-amber-800">New employer treatment (at cutover)</div>
+                <ComponentTreatment opt={nextER} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-1">
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            data-testid={`benefits-change-config-submit-${props.plan.id}`}
+            disabled={!configWillChange}
+            title={configWillChange ? undefined : "Select a different component to enable"}
+          >
+            Apply effective-dated change
+          </button>
+          <span className="ml-3 text-[10px] text-stone-500">
+            Historical plan is preserved; new plan takes effect at the cutover.
+          </span>
+        </div>
+      </form>
     </div>
   );
 }

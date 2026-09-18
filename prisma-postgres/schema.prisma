@@ -13028,6 +13028,11 @@ model PayrollBenefitPlan {
   employerMatchBps       Int?
   employerMatchCapBps    Int?
   notes                  String?
+  // Slice C final UI acceptance (2026-09-18) — effective-dated Change
+  // Plan successor lineage.
+  predecessorPlanId      String?
+  predecessor            PayrollBenefitPlan?  @relation("PayrollBenefitPlanSuccession", fields: [predecessorPlanId], references: [id])
+  successors             PayrollBenefitPlan[] @relation("PayrollBenefitPlanSuccession")
   createdByUserId        String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -13036,6 +13041,7 @@ model PayrollBenefitPlan {
 
   @@unique([clubId, code])
   @@index([clubId, kind, active])
+  @@index([predecessorPlanId])
 }
 
 // Slice C (2026-09-18) — per-employee benefit-plan enrolment.
