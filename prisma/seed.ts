@@ -31,6 +31,28 @@ async function main() {
   console.log("Seeding Spectre Automation demo data…");
 
   // ---------------------------------------------------------------
+  // Phase 5 hygiene (2026-09-17) — refuse to run against a database
+  // that contains a founder-review tenant. `prisma db seed` performs
+  // a large `deleteMany` cascade below to guarantee an idempotent
+  // reseed of the demo fixtures; running that against staging would
+  // destroy the Coulee Ridge founder configuration (SEMI_MONTHLY
+  // cutover, posted batches, journal entries, etc.). Detect the
+  // founder-review flag and abort BEFORE any writes.
+  // ---------------------------------------------------------------
+  const founderReviewCount = await prisma.club.count({
+    where: { stagingDataMode: "FOUNDER_REVIEW" },
+  });
+  if (founderReviewCount > 0 && !process.env.SPECTRE_SEED_ALLOW_FOUNDER_DB) {
+    throw new Error(
+      "REFUSED: this database contains a FOUNDER_REVIEW tenant. `prisma db seed` " +
+        "wipes and recreates demo fixtures — running it here would destroy the " +
+        "founder configuration. If you truly intend to wipe founder data, set " +
+        "SPECTRE_SEED_ALLOW_FOUNDER_DB=1 in the environment. NEVER set that " +
+        "against staging or production.",
+    );
+  }
+
+  // ---------------------------------------------------------------
   // Wipe (idempotent reseed)
   // ---------------------------------------------------------------
   // Phase 11 — first.

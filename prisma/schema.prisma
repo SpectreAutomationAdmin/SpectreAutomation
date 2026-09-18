@@ -3675,6 +3675,16 @@ model Employee {
   department             Department?       @relation("EmployeeDepartment", fields: [departmentId], references: [id])
   positionId             String?
   position               EmployeePosition? @relation(fields: [positionId], references: [id])
+  // Phase 5 (2026-09-17) §13 — Original Club hire date. The human's
+  // real first day with THIS employer, which may predate Spectre by
+  // years for a migrated employee (Chris joined in 2019, Spectre
+  // onboarded her in 2026 → hireDate = 2019). Distinct from
+  // `activatedAt` (Spectre system activation moment) and from
+  // `expectedStartDate` (pre-hire admin input on Add-Employee).
+  // NULL only when the original hire date is unknown — the CSV
+  // importer already populates it correctly for migrated employees.
+  // Pay-group auto-assign explicitly PREFERS `activatedAt` over this
+  // field so backdated hire dates do not backdate payroll membership.
   hireDate               DateTime?
   // Payroll-3B-5B-1a (2026-08-31) — canonical Employee date of birth.
   // Civil date; stored as UTC midnight per the Payroll civil-date
@@ -3686,6 +3696,13 @@ model Employee {
   dateOfBirth            DateTime?
   // HR-1 — pre-hire lifecycle.
   expectedStartDate      DateTime?
+  // HR-1 + Phase 5 (2026-09-17) §13 — Spectre system activation moment.
+  // Written exactly once by `onboarding-approve-activate.ts` when the
+  // admin approves the employee's onboarding submission. NEVER the
+  // employee's original hire date — see `hireDate` above for that.
+  // Pay-group auto-assign uses this ahead of `hireDate` so a migrated
+  // employee's pay-group membership does not backdate to before
+  // Spectre existed.
   activatedAt            DateTime?
   terminationDate        DateTime?
   // Payroll-3B-5B-1 (2026-08-31) — canonical termination reason.

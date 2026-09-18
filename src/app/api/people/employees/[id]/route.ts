@@ -38,6 +38,11 @@ const ALLOWED_FIELDS = new Set<string>([
   "homeProvince", "homePostalCode", "homeCountry",
   "departmentId", "positionId",
   "expectedStartDate", "employmentType",
+  // Phase 5 (2026-09-17) §14 — Employee.hireDate is the ORIGINAL Club
+  // hire date (may predate Spectre for a migrated employee). Editing
+  // it is an authorised HR correction; the canonical `updateEmployee`
+  // service already accepts it and audits the write.
+  "hireDate",
 ]);
 
 export async function PATCH(

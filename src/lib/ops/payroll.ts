@@ -189,67 +189,26 @@ export async function approveTimesheet(principal: Principal, timesheetId: string
 }
 
 // ----- Payroll run --------------------------------------------------------
-// Computes a run from approved timesheets in the period. Stores per-employee
-// lines with gross/net/taxes/benefits; the deduction calculator is pluggable.
+// LEGACY LOCKED (Phase 5, 2026-09-17). This function historically computed
+// per-employee payroll lines from approved timesheets using a hard-coded
+// `rate / 26` biweekly assumption for salaried employees and a flat 22 %
+// tax withholding placeholder. Both are unsafe under Spectre's supported
+// multi-frequency payroll model (WEEKLY / BIWEEKLY / SEMI_MONTHLY / MONTHLY)
+// and neither reflects real CRA T4127 statutory withholding.
 //
-// For Phase 5 we ship a deliberately simple deduction model: a flat 22% tax
-// withholding placeholder. Real CRA tax tables are wired in Phase 7 via the
-// payroll provider adapter.
-const FLAT_TAX_RATE = 0.22;
+// The canonical payroll path is `src/lib/payroll/*` (`preparePayrollBatch`,
+// `calculatePayrollBatch`, `postPayrollBatch`). Nothing in the app imports
+// this function today (grep-verified). Rather than delete it and lose the
+// audit trail of what used to live here, we throw on any invocation so a
+// future accidental call fails loudly with a clear message.
 
-export async function buildRun(principal: Principal, clubId: string, periodId: string) {
-  requirePermission(principal, clubId, "payroll:run");
-  const period = await prisma.payrollPeriod.findUnique({ where: { id: periodId } });
-  if (!period || period.clubId !== clubId) throw new NotFoundError("PayrollPeriod", periodId);
-  if (period.status === "POSTED") throw new ConflictError("Period already posted");
-
-  // Approved timesheets only.
-  const timesheets = await prisma.timesheet.findMany({
-    where: { clubId, periodId, status: "APPROVED" },
-    include: { employee: { include: { department: true } }, entries: true },
-  });
-  if (timesheets.length === 0) throw new ConflictError("No approved timesheets in period");
-
-  const runNumber = await nextRunNumber(clubId);
-  const run = await prisma.payrollRun.create({
-    data: {
-      clubId, periodId, runNumber, status: "DRAFT", createdByUserId: principal.id,
-    },
-  });
-
-  let totalGross = 0, totalTax = 0, totalNet = 0;
-  for (const ts of timesheets) {
-    const reg = ts.entries.filter((e) => e.kind === "REGULAR").reduce((s, e) => s + Number(e.totalHours.toString()), 0);
-    const ot = ts.entries.filter((e) => e.kind === "OVERTIME").reduce((s, e) => s + Number(e.totalHours.toString()), 0);
-    const rate = Number(ts.employee.payRate.toString());
-    const gross = ts.employee.compensationType === "SALARY"
-      ? rate / 26 // assume bi-weekly periods; configurable later
-      : Math.round((reg * rate + ot * rate * 1.5) * 100) / 100;
-    const tax = Math.round(gross * FLAT_TAX_RATE * 100) / 100;
-    const net = Math.round((gross - tax) * 100) / 100;
-    totalGross += gross; totalTax += tax; totalNet += net;
-    await prisma.payrollLine.create({
-      data: {
-        clubId, runId: run.id, employeeId: ts.employeeId,
-        departmentId: ts.employee.departmentId,
-        regularHours: reg, overtimeHours: ot,
-        grossPay: gross, taxes: tax, netPay: net,
-        deductionsJson: JSON.stringify({ flatTaxRate: FLAT_TAX_RATE }),
-      },
-    });
-  }
-  const updated = await prisma.payrollRun.update({
-    where: { id: run.id },
-    data: { totalGross, totalNet, totalTaxes: totalTax, totalEmployerCost: totalGross },
-  });
-  await audit(principal, { action: "payroll.run.build", entityType: "PayrollRun", entityId: run.id, clubId, after: { runNumber, totalGross, totalNet } });
-  return updated;
-}
-
-async function nextRunNumber(clubId: string): Promise<string> {
-  const year = new Date().getFullYear();
-  const count = await prisma.payrollRun.count({ where: { clubId, createdAt: { gte: new Date(year, 0, 1) } } });
-  return `PR-${year}-${(count + 1).toString().padStart(4, "0")}`;
+export async function buildRun(_principal: Principal, _clubId: string, _periodId: string) {
+  throw new ConflictError(
+    "Legacy ops.buildRun() is disabled. Use the canonical payroll pipeline " +
+      "(src/lib/payroll/preparePayrollBatch → calculatePayrollBatch → postPayrollBatch). " +
+      "The legacy path assumed BIWEEKLY /26 salary math and a flat 22% tax withholding — " +
+      "both unsafe under Spectre's multi-frequency payroll model.",
+  );
 }
 
 // Post a payroll run: writes the JE and flips status to POSTED.

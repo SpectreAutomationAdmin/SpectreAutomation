@@ -41,8 +41,19 @@ export type PayGroupAutoAssignOutcome =
   | { status: "SKIPPED_NO_EFFECTIVE_FROM" };
 
 /** Documented deterministic hierarchy for the membership start date.
- *  Higher priority = earlier in this enum. */
+ *  Higher priority = earlier in this enum.
+ *
+ *  Phase 5 (2026-09-17) — `EMPLOYEE_HIRE_DATE` is DELIBERATELY NOT the
+ *  first candidate. `Employee.hireDate` is the ORIGINAL Club hire date,
+ *  which may predate Spectre by years for a migrated employee. Using
+ *  it here would backdate their pay-group membership (and every payroll
+ *  batch's coverage math) to before Spectre existed. The Spectre
+ *  activation moment is captured by `Employee.activatedAt` and used
+ *  ahead of the hire date; the hire date is retained here as a
+ *  legitimate fallback for the CSV-imported employees that never went
+ *  through Spectre onboarding (activatedAt = null). */
 export type EffectiveFromSource =
+  | "EMPLOYEE_ACTIVATED_AT"
   | "EMPLOYEE_HIRE_DATE"
   | "EARLIEST_ACTIVE_EMPLOYMENT_ASSIGNMENT"
   | "EARLIEST_ACTIVE_COMPENSATION"
@@ -50,17 +61,24 @@ export type EffectiveFromSource =
 
 /**
  * Resolve the membership effective-from date for a newly-activated
- * employee, following §2's authoritative hierarchy:
+ * employee, following §2's authoritative hierarchy (post Phase 5,
+ * 2026-09-17):
  *
- *   1. Employee.hireDate                                         (if non-null)
- *   2. earliest active EmployeeEmploymentAssignment.effectiveFrom (if any)
- *   3. earliest active EmployeeCompensation.effectiveFrom        (if any)
- *   4. activation moment (`now`)                                 (fallback)
+ *   1. Employee.activatedAt                                      (Spectre activation moment)
+ *   2. Employee.hireDate                                         (original hire date — fallback)
+ *   3. earliest active EmployeeEmploymentAssignment.effectiveFrom (if any)
+ *   4. earliest active EmployeeCompensation.effectiveFrom        (if any)
+ *   5. activation moment (`now`)                                 (fallback)
  *
- * Returns null only when every candidate resolves to null — meaning
- * the employee has no assignment, no compensation, no hire-date, and
- * the caller did not supply `now` (never happens because callers
- * always pass a Date).
+ * `activatedAt` beats `hireDate` because `hireDate` is the ORIGINAL
+ * Club hire date and may predate Spectre. Backdating a pay-group
+ * membership to a pre-Spectre date would corrupt payroll batch
+ * coverage math. `hireDate` is kept in the hierarchy so CSV-imported
+ * employees (who never went through Spectre onboarding and therefore
+ * have `activatedAt = null`) still resolve to a sensible date.
+ *
+ * Returns null only when every candidate resolves to null — never
+ * reached in practice because callers always pass a `now` Date.
  */
 export async function resolveMembershipEffectiveFrom(
   employeeId: string,
@@ -68,8 +86,11 @@ export async function resolveMembershipEffectiveFrom(
 ): Promise<{ effectiveFrom: Date; source: EffectiveFromSource } | null> {
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: { hireDate: true },
+    select: { hireDate: true, activatedAt: true },
   });
+  if (employee?.activatedAt) {
+    return { effectiveFrom: employee.activatedAt, source: "EMPLOYEE_ACTIVATED_AT" };
+  }
   if (employee?.hireDate) {
     return { effectiveFrom: employee.hireDate, source: "EMPLOYEE_HIRE_DATE" };
   }

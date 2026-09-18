@@ -40,7 +40,10 @@ async function seedClub(): Promise<string> {
   });
   return id;
 }
-async function seedEmployee(clubId: string, opts: { hireDate?: Date | null; lifecycle?: string } = {}): Promise<string> {
+async function seedEmployee(
+  clubId: string,
+  opts: { hireDate?: Date | null; lifecycle?: string; activatedAt?: Date | null } = {},
+): Promise<string> {
   const id = `test-emp-${Math.random().toString(36).slice(2, 10)}`;
   await prisma.employee.create({
     data: {
@@ -50,6 +53,7 @@ async function seedEmployee(clubId: string, opts: { hireDate?: Date | null; life
       lastName: id.slice(-6),
       employeeLifecycle: opts.lifecycle ?? "ACTIVE",
       hireDate: opts.hireDate ?? null,
+      activatedAt: opts.activatedAt ?? null,
     },
   });
   return id;
@@ -116,6 +120,36 @@ describe("resolveMembershipEffectiveFrom (§2 authoritative hierarchy)", () => {
     const res = await resolveMembershipEffectiveFrom(empId, now);
     expect(res?.source).toBe("ACTIVATION_NOW");
     expect(res?.effectiveFrom.toISOString()).toBe(now.toISOString());
+    await cleanupClub(clubId);
+  });
+
+  // Phase 5 (2026-09-17) §15 regression — a migrated employee with both
+  // a pre-Spectre `hireDate` AND a Spectre `activatedAt` MUST resolve
+  // to `activatedAt`. Backdating the pay-group membership to the
+  // pre-Spectre date would corrupt payroll batch coverage math.
+  it("prefers Employee.activatedAt over Employee.hireDate for migrated employees", async () => {
+    const empId = await seedEmployee(clubId, {
+      hireDate: new Date("2019-05-01"),          // original Club hire date
+      activatedAt: new Date("2026-09-17"),       // Spectre activation moment
+    });
+    await seedAssignment(empId, clubId, new Date("2019-05-01"));
+    const res = await resolveMembershipEffectiveFrom(empId, new Date());
+    expect(res?.source).toBe("EMPLOYEE_ACTIVATED_AT");
+    expect(res?.effectiveFrom.toISOString().slice(0, 10)).toBe("2026-09-17");
+    await cleanupClub(clubId);
+  });
+
+  it("original hire date + Spectre activation date coexist and both round-trip", async () => {
+    const empId = await seedEmployee(clubId, {
+      hireDate: new Date("2019-05-01"),
+      activatedAt: new Date("2026-09-17"),
+    });
+    const emp = await prisma.employee.findUnique({
+      where: { id: empId },
+      select: { hireDate: true, activatedAt: true },
+    });
+    expect(emp?.hireDate?.toISOString().slice(0, 10)).toBe("2019-05-01");
+    expect(emp?.activatedAt?.toISOString().slice(0, 10)).toBe("2026-09-17");
     await cleanupClub(clubId);
   });
 });

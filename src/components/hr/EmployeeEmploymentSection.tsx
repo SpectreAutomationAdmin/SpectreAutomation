@@ -266,7 +266,6 @@ export default function EmployeeEmploymentSection(props: Props) {
     .filter((c) => c.assignmentId === null)
     .find((c) => c.effectiveTo === null) ?? null;
   const compHistoryEmployeeWide = props.compensationHistory.filter((c) => c.assignmentId === null);
-  const activeAllowances = props.allowances.filter((a) => a.isCurrent);
 
   return (
     <section className="spectre-person-body" data-testid="employee-tab-body-employment">
@@ -371,37 +370,13 @@ export default function EmployeeEmploymentSection(props: Props) {
         </div>
       )}
 
-      {/* Allowances */}
-      {props.canReadAllowance && (
-        <div className="spectre-person-section" data-testid="employment-allowances-section">
-          <div className="spectre-person-section-head">
-            <h3 className="spectre-person-eyebrow">Recurring allowances</h3>
-          </div>
-          {activeAllowances.length === 0 ? (
-            <p className="text-sm text-stone-500 mt-2" data-testid="employment-allowances-empty">
-              No active allowances.
-            </p>
-          ) : (
-            <ul className="mt-2 space-y-2">
-              {activeAllowances.map((a) => (
-                <AllowanceRowView
-                  key={a.id}
-                  employeeId={props.employeeId}
-                  allowance={a}
-                  canWrite={props.canWriteAllowance}
-                  endAllowance={props.actions.endAllowance}
-                />
-              ))}
-            </ul>
-          )}
-          {props.canWriteAllowance && (
-            <AddAllowanceForm
-              employeeId={props.employeeId}
-              addAllowance={props.actions.addAllowance}
-            />
-          )}
-        </div>
-      )}
+      {/* Phase 5 (2026-09-17) — the Employment-tab "Recurring allowances"
+          editor has been removed. The canonical Compensation & Benefits
+          surface lives on the Payroll tab, backed by
+          EmployeeRecurringPayrollComponent (Phase 4 architecture).
+          Legacy `EmployeeAllowance` rows remain in the database and
+          continue to snapshot into `PayrollBatchAllowanceSnapshot` for
+          historical batches; no data was mutated. */}
 
       {/* Historical assignments (collapsed) */}
       {historical.length > 0 && (
