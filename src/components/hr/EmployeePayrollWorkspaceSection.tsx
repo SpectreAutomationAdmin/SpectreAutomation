@@ -117,6 +117,9 @@ export interface EmployeePayrollWorkspaceProps {
   // Slice B (2026-09-18) — pre-rendered One-Time Earnings section. When
   // present, REPLACES the intentional empty-state placeholder.
   oneTimeEarningsSection?: React.ReactNode;
+  // Slice C (2026-09-18) — pre-rendered Benefits & Deductions section.
+  // When present, REPLACES the Slice-A empty-state placeholder.
+  benefitsDeductionsSection?: React.ReactNode;
 }
 
 const monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -225,6 +228,7 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
     federalTd1Panel,
     provincialTd1Panel,
     oneTimeEarningsSection,
+    benefitsDeductionsSection,
   } = props;
 
   const [editingHire, setEditingHire] = useState(false);
@@ -369,15 +373,16 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
       {/* ============================================================
           F. BENEFITS & DEDUCTIONS
           ============================================================ */}
-      <div className="spectre-person-section" data-testid="payroll-benefits-deductions">
-        <div className="spectre-person-section-head">
-          <h3 className="spectre-person-eyebrow">Benefits &amp; Deductions</h3>
+      {benefitsDeductionsSection ? (
+        benefitsDeductionsSection
+      ) : (
+        <div className="spectre-person-section" data-testid="payroll-benefits-deductions">
+          <div className="spectre-person-section-head">
+            <h3 className="spectre-person-eyebrow">Benefits &amp; Deductions</h3>
+          </div>
+          <p className="mt-2 text-sm text-stone-500">No active benefits or recurring deductions.</p>
         </div>
-        <p className="mt-2 text-sm text-stone-500">No active benefits or recurring deductions.</p>
-        <p className="mt-1 text-xs text-stone-400">
-          Long-term disability and health-benefits enrolment will land in a later slice.
-        </p>
-      </div>
+      )}
 
       {/* ============================================================
           G. RETIREMENT

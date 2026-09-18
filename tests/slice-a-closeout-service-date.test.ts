@@ -105,16 +105,13 @@ describe("Slice A closeout — updateEmployeeHireDate service (Controller)", () 
       hireDate: null,
       departmentId: null,
     });
-    // Cast to `any` and try to smuggle departmentId + positionId + activatedAt.
-    // The service is typed as `UpdateHireDateInput = { hireDate }`; runtime
-    // proof follows.
+    // Cast to `never` and try to smuggle departmentId + positionId + activatedAt.
+    // The service is typed as `UpdateHireDateInput = { hireDate }`; the cast
+    // strips the compile-time protection so we can prove runtime behaviour.
     await updateEmployeeHireDate(controller, empId, {
       hireDate: "2020-01-01",
-      // @ts-expect-error — smuggle attempt
       departmentId: dept.id,
-      // @ts-expect-error — smuggle attempt
       positionId: "some-position",
-      // @ts-expect-error — smuggle attempt
       activatedAt: new Date("2000-01-01"),
     } as never);
     const row = await prisma.employee.findUnique({

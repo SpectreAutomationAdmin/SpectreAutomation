@@ -267,21 +267,13 @@ describe("Phase 5 — Payroll", () => {
     await payroll.submitTimesheet(p, ts.id);
     await payroll.approveTimesheet(p, ts.id);
 
-    const run = await payroll.buildRun(p, club.id, period.id);
-    expect(Number(run.totalGross.toString())).toBeGreaterThan(0);
-
-    const posted = await payroll.postRun(p, run.id);
-    expect(posted.postedJournalEntryId).toBeTruthy();
-
-    const sums = await sumJournalLines(posted.postedJournalEntryId!);
-    expect(sums.debit).toBeCloseTo(sums.credit, 2);
-
-    // Credit side hits 2030 + 2040.
-    const credits = sums.lines.filter((l) => Number(l.credit.toString()) > 0);
-    const acctNumbers = await Promise.all(credits.map((l) => db().account.findUnique({ where: { id: l.accountId } })));
-    const codes = acctNumbers.map((a) => a?.accountNumber);
-    expect(codes).toContain("2030");
-    expect(codes).toContain("2040");
+    // Phase 5 (2026-09-17) — legacy `buildRun` disabled (assumed
+    // BIWEEKLY /26 salary math + a flat 22% tax placeholder). The
+    // canonical payroll pipeline (`preparePayrollBatch` → …) is the
+    // supported path — see the Slice B full-pipeline regression at
+    // tests/slice-b-full-pipeline-scheduled-bonus.test.ts. This
+    // assertion now proves the legacy path fails loudly.
+    await expect(payroll.buildRun(p, club.id, period.id)).rejects.toThrow(/Legacy ops\.buildRun/);
   });
 });
 

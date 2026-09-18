@@ -134,6 +134,10 @@ export interface PayrollIntegrationFixture {
   /** Optional Bonus catalogue component + its dedicated expense account. */
   bonus?: { id: string; code: string; expenseAccountId: string };
   cellPhone?: { id: string; code: string };
+  /** Slice C — LTD benefit plan + enrolment (employee premium). */
+  ltdPlan?: { planId: string; employeeComponentId: string; employeeExpenseAccountId: string; enrolmentId: string };
+  /** Slice C — Health/Dental benefit plan + enrolment (employer premium, non-cash taxable). */
+  healthPlan?: { planId: string; employerComponentId: string; employerExpenseAccountId: string; enrolmentId: string };
 }
 
 export interface CreateFixtureOpts {
@@ -141,6 +145,12 @@ export interface CreateFixtureOpts {
   annualSalary?: string;
   cellPhoneAmount?: string;
   bonusAmount?: string;      // if omitted, no bonus scheduled
+  /** Slice C — LTD plan + employee-premium enrolment. */
+  ltd?: { employeeMonthlyPremium: string };
+  /** Slice C — Health/Dental plan + employer-premium enrolment.
+   *  Fixture configures it as a non-cash taxable benefit — this is
+   *  FIXTURE CONFIGURATION, not a hard-coded rule about Health plans. */
+  healthDental?: { employerMonthlyPremium: string };
   /** Which SM period sequence to target (default 18 = Sep 16 → Oct 1). */
   targetSequence?: number;
 }
@@ -289,6 +299,93 @@ export async function createPayrollIntegrationFixture(
     bonus = { id: b.id, code: b.code, expenseAccountId: bonusExpense.id };
   }
 
+  // Slice C — LTD benefit plan (employee premium as a post-tax
+  // deduction, per FIXTURE CONFIGURATION). Component semantics:
+  // EMPLOYEE_DEDUCTION + DECREASES_NET_PAY + all statutory effects NONE.
+  let ltdPlan: PayrollIntegrationFixture["ltdPlan"];
+  if (opts.ltd) {
+    // Employee post-tax deduction: credited to a payable (liability),
+    // not an employer expense. The `expenseAccountId` is retained (kept
+    // as a mirror of the audit's founder-neutral pattern) so the LTD
+    // line still shows an accountable debit on the preview.
+    const ltdExpense = await acct(club.id, "5150", "LTD Employee Premium Expense", "EXPENSE");
+    const ltdLiab = await acct(club.id, "2150", "LTD Employee Payable", "LIABILITY");
+    const ltdComp = await c.payrollComponent.create({
+      data: {
+        clubId: club.id, code: "LTD_EE", displayName: "LTD Employee Premium",
+        category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE",
+        cashEffect: "DECREASES_NET_PAY",
+        taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+        calculationMethod: "FIXED_AMOUNT", displaySection: "DEDUCTIONS",
+        usage: "RECURRING",
+        expenseAccountId: ltdExpense.id,
+        liabilityAccountId: ltdLiab.id,
+      },
+    });
+    const { createBenefitPlan } = await import("@/lib/payroll/benefit-plans");
+    const { enrolEmployeeInBenefitPlan } = await import("@/lib/payroll/benefit-enrolments");
+    const plan = await createBenefitPlan(adminP, club.id, {
+      kind: "LTD", code: "LTD_FIXTURE", name: "LTD Standard (Fixture)",
+      description: "Fixture-configured LTD plan for integration testing",
+      effectiveFrom: utc(2020, 1, 1),
+      employeeComponentId: ltdComp.id,
+      defaultElectionKind: "FIXED_AMOUNT",
+    });
+    const enrolment = await enrolEmployeeInBenefitPlan(adminP, club.id, {
+      employeeId: emp.id, planId: plan.id,
+      effectiveFrom: utc(2020, 1, 1),
+      electionKind: "FIXED_AMOUNT",
+      amount: opts.ltd.employeeMonthlyPremium,
+      notes: "Fixture enrolment",
+    });
+    ltdPlan = {
+      planId: plan.id,
+      employeeComponentId: ltdComp.id,
+      employeeExpenseAccountId: ltdExpense.id,
+      enrolmentId: enrolment.id,
+    };
+  }
+
+  // Slice C — Health/Dental benefit plan (employer premium as a
+  // non-cash taxable benefit, per FIXTURE CONFIGURATION — not a hard-
+  // coded rule about Health plans). Component semantics: TAXABLE_BENEFIT
+  // + EMPLOYER + NO_NET_PAY_EFFECT + taxableEffect=ADD.
+  let healthPlan: PayrollIntegrationFixture["healthPlan"];
+  if (opts.healthDental) {
+    const healthExpense = await acct(club.id, "5160", "Employer Health Premium Expense", "EXPENSE");
+    const healthLiab = await acct(club.id, "2160", "Health Benefit Liability", "LIABILITY");
+    const healthComp = await c.payrollComponent.create({
+      data: {
+        clubId: club.id, code: "HEALTH_ER", displayName: "Employer Health Premium",
+        category: "TAXABLE_BENEFIT", side: "EMPLOYER",
+        cashEffect: "NO_NET_PAY_EFFECT",
+        taxableEffect: "ADD", cppPensionableEffect: "ADD", eiInsurableEffect: "NONE",
+        calculationMethod: "FIXED_AMOUNT", displaySection: "BENEFITS",
+        usage: "RECURRING", expenseAccountId: healthExpense.id, liabilityAccountId: healthLiab.id,
+      },
+    });
+    const { createBenefitPlan } = await import("@/lib/payroll/benefit-plans");
+    const { enrolEmployeeInBenefitPlan } = await import("@/lib/payroll/benefit-enrolments");
+    const plan = await createBenefitPlan(adminP, club.id, {
+      kind: "HEALTH_DENTAL", code: "HEALTH_FIXTURE", name: "Group Health (Fixture)",
+      effectiveFrom: utc(2020, 1, 1),
+      employerComponentId: healthComp.id,
+      defaultElectionKind: "FIXED_AMOUNT",
+    });
+    const enrolment = await enrolEmployeeInBenefitPlan(adminP, club.id, {
+      employeeId: emp.id, planId: plan.id,
+      effectiveFrom: utc(2020, 1, 1),
+      electionKind: "FIXED_AMOUNT",
+      amount: opts.healthDental.employerMonthlyPremium,
+    });
+    healthPlan = {
+      planId: plan.id,
+      employerComponentId: healthComp.id,
+      employerExpenseAccountId: healthExpense.id,
+      enrolmentId: enrolment.id,
+    };
+  }
+
   // Fiscal year + month covering the payDate — Post writes to
   // JournalEntry which requires an OPEN fiscal period.
   await seedFiscalYearMonth(club.id, pp.payDate);
@@ -302,6 +399,6 @@ export async function createPayrollIntegrationFixture(
     payGroupId: pg.id, payPeriodId: pp.id,
     periodStart: pp.periodStart, periodEnd: pp.periodEnd, payDate: pp.payDate,
     glProfile: { id: profile.id, salaryExpenseAccountId: salaryExpense.id },
-    bonus, cellPhone,
+    bonus, cellPhone, ltdPlan, healthPlan,
   };
 }

@@ -379,6 +379,144 @@ export async function snapshotEmployeeComponentsForBatch(
     written += 1;
   }
 
+  // -------------------------------------------------------------------
+  // Slice C (2026-09-18) — Pass 3: benefit-plan enrolments.
+  // Resolve every ACTIVE enrolment applicable at `asOf`, then freeze
+  // one snapshot per linked payroll component (employee side +
+  // employer side). Fail-closed on ambiguous overlap +
+  // invalid/inactive linked component. Idempotent on
+  // (batchEmployeeId, sourceEnrolmentId, sourceComponentId) so
+  // re-Prepare updates in place.
+  // -------------------------------------------------------------------
+  const { resolveApplicableEnrolmentsAtPrepare } = await import("./benefit-enrolments");
+  const enrolments = await resolveApplicableEnrolmentsAtPrepare(
+    input.clubId, input.employeeId, asOf, c as PrismaTypes.TransactionClient,
+  );
+  for (const e of enrolments) {
+    const plan = e.plan;
+    if (!plan.active) {
+      throw new ValidationError([{
+        path: `benefitPlan[${plan.id}].active`,
+        message: `Enrolment ${e.id} references inactive plan ${plan.code}.`,
+      }]);
+    }
+    // Which sides does this plan freeze? Employee, employer, or both.
+    const sides: Array<{ side: "EMPLOYEE" | "EMPLOYER"; componentId: string }> = [];
+    if (plan.employeeComponentId) sides.push({ side: "EMPLOYEE", componentId: plan.employeeComponentId });
+    if (plan.employerComponentId) sides.push({ side: "EMPLOYER", componentId: plan.employerComponentId });
+    if (sides.length === 0) {
+      throw new ValidationError([{
+        path: `benefitPlan[${plan.id}]`,
+        message: `Plan ${plan.code} has neither employee nor employer component configured.`,
+      }]);
+    }
+    for (const { componentId } of sides) {
+      const comp = await c.payrollComponent.findFirst({ where: { id: componentId, clubId: input.clubId } });
+      if (!comp) {
+        throw new ValidationError([{
+          path: `benefitPlan[${plan.id}].component[${componentId}]`,
+          message: `Linked component ${componentId} not found for plan ${plan.code}.`,
+        }]);
+      }
+      if (!comp.active) {
+        throw new ValidationError([{
+          path: `benefitPlan[${plan.id}].component[${comp.code}]`,
+          message: `Linked component ${comp.code} on plan ${plan.code} is inactive. Reactivate or reconfigure the plan before Prepare.`,
+        }]);
+      }
+      // Resolve the amount / percentBps for this side.
+      let resolvedAmount: PrismaTypes.Decimal | null = null;
+      let sourcePercentBps: number | null = null;
+      if (comp.calculationMethod === "FIXED_AMOUNT") {
+        if (e.electionKind === "FIXED_AMOUNT") {
+          if (e.amount == null) {
+            throw new ValidationError([{
+              path: `enrolment[${e.id}].amount`,
+              message: `Enrolment ${e.id} declares FIXED_AMOUNT election but has no amount.`,
+            }]);
+          }
+          resolvedAmount = e.amount;
+        } else {
+          // Plan election is percent but component wants fixed — mismatch.
+          throw new ValidationError([{
+            path: `enrolment[${e.id}]`,
+            message: `Enrolment ${e.id} uses PERCENT election but linked component ${comp.code} is FIXED_AMOUNT.`,
+          }]);
+        }
+      } else if (comp.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS") {
+        if (e.electionKind !== "PERCENT_OF_ELIGIBLE_EARNINGS" || e.percentBps == null) {
+          throw new ValidationError([{
+            path: `enrolment[${e.id}].percentBps`,
+            message: `Percent enrolment ${e.id} missing percentBps for linked percent component ${comp.code}.`,
+          }]);
+        }
+        sourcePercentBps = e.percentBps;
+        // resolvedAmount stays null — calculator populates it from
+        // eligibleEarningsBase (existing Payroll-3C-3 path).
+      } else {
+        throw new ValidationError([{
+          path: `component[${comp.code}].calculationMethod`,
+          message: `Component ${comp.code} has unsupported calculationMethod ${comp.calculationMethod} for benefit enrolments.`,
+        }]);
+      }
+
+      const frozen = {
+        componentCode: comp.code, displayName: comp.displayName,
+        category: comp.category, side: comp.side,
+        displaySection: comp.displaySection, displayOrder: comp.displayOrder,
+        cashEffect: comp.cashEffect,
+        taxableEffect:        comp.taxableEffect,
+        cppPensionableEffect: comp.cppPensionableEffect,
+        eiInsurableEffect:    comp.eiInsurableEffect,
+        calculationMethod: comp.calculationMethod,
+        eligibleEarningsBase: comp.eligibleEarningsBase,
+        eligibleEarningsAmount: null,
+        statutoryTreatmentSource: comp.statutoryTreatmentSource,
+        ...frozenRuleProvenance(comp, asOf),
+        taxFormulaDeductionType: comp.taxFormulaDeductionType ?? null,
+        resolvedAmount,
+        sourcePercentBps,
+        sourceEffectiveFrom: e.effectiveFrom,
+        sourceEffectiveTo:   e.effectiveTo,
+        warningCode: null as string | null,
+        warningMessage: null as string | null,
+        provenance: "BENEFIT_ENROLMENT" as const,
+        enteredByUserId: e.enteredByUserId,
+        reason: `Benefit plan ${plan.code}`,
+        expenseAccountIdSnapshot:   comp.expenseAccountId   ?? null,
+        liabilityAccountIdSnapshot: comp.liabilityAccountId ?? null,
+      };
+
+      // Idempotency: find existing snapshot for this (batchEmployeeId,
+      // sourceEnrolmentId, sourceComponentId) tuple — a single enrolment
+      // may have written two snapshots (one per side) on a prior Prepare.
+      const existing = await c.payrollBatchComponentSnapshot.findFirst({
+        where: {
+          batchEmployeeId: input.batchEmployeeId,
+          sourceEnrolmentId: e.id,
+          sourceComponentId: comp.id,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        await c.payrollBatchComponentSnapshot.update({ where: { id: existing.id }, data: frozen });
+      } else {
+        await c.payrollBatchComponentSnapshot.create({
+          data: {
+            club:            { connect: { id: input.clubId } },
+            batch:           { connect: { id: input.batchId } },
+            batchEmployee:   { connect: { id: input.batchEmployeeId } },
+            employee:        { connect: { id: input.employeeId } },
+            sourceComponent: { connect: { id: comp.id } },
+            sourceEnrolment: { connect: { id: e.id } },
+            ...frozen,
+          },
+        });
+      }
+      written += 1;
+    }
+  }
+
   return { written, warnings };
 }
 

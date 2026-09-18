@@ -345,6 +345,11 @@ export async function resetDb() {
     // into PayrollComponent + PayrollPayPeriod + PayrollBatch +
     // PayrollBatchComponentSnapshot; wipe before all of them.
     c.payrollScheduledOneTimeEarning.deleteMany(),
+    // Slice C (2026-09-18) — benefit enrolments + plans FK into
+    // PayrollComponent + Employee + PayrollBatchComponentSnapshot;
+    // wipe enrolments before plans (which FK into components).
+    c.employeeBenefitPlanEnrolment.deleteMany(),
+    c.payrollBenefitPlan.deleteMany(),
     // Payroll-3C-2 (2026-09-07) — Component snapshots FK into batch +
     // component + assignment; wipe before all three.
     c.payrollBatchComponentSnapshot.deleteMany(),

@@ -499,6 +499,9 @@ model Club {
   payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   payrollScheduledOneTimeEarnings    PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — Club-level benefit plans + employee enrolments.
+  payrollBenefitPlans                PayrollBenefitPlan[]
+  employeeBenefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
   // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
   payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
@@ -3783,6 +3786,8 @@ model Employee {
   payrollBatchComponentSnapshots PayrollBatchComponentSnapshot[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   scheduledOneTimeEarnings   PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — benefit-plan enrolments.
+  benefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -12954,6 +12959,9 @@ model PayrollComponent {
   openingBalanceRows PayrollOpeningBalanceComponent[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   scheduledOneTimeEarnings PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — Club-level benefit plans.
+  benefitPlansAsEmployee PayrollBenefitPlan[] @relation("PayrollBenefitPlanEmployeeComponent")
+  benefitPlansAsEmployer PayrollBenefitPlan[] @relation("PayrollBenefitPlanEmployerComponent")
 
   @@unique([clubId, code])
   @@index([clubId, category, active])
@@ -12995,6 +13003,68 @@ model PayrollScheduledOneTimeEarning {
   @@unique([clubId, employeeId, payPeriodId, componentId])
   @@index([clubId, payPeriodId, status])
   @@index([clubId, employeeId, status])
+}
+
+// Slice C (2026-09-18) — Club-level benefit plan.
+// See prisma/schema.prisma for the full doc block.
+model PayrollBenefitPlan {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  kind                   String
+  code                   String
+  name                   String
+  description            String?
+  providerName           String?
+  active                 Boolean  @default(true)
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  employeeComponentId    String?
+  employeeComponent      PayrollComponent? @relation("PayrollBenefitPlanEmployeeComponent", fields: [employeeComponentId], references: [id])
+  employerComponentId    String?
+  employerComponent      PayrollComponent? @relation("PayrollBenefitPlanEmployerComponent", fields: [employerComponentId], references: [id])
+  defaultElectionKind    String   @default("FIXED_AMOUNT")
+  eligibleEarningsBasis  String?
+  employerMatchBps       Int?
+  employerMatchCapBps    Int?
+  notes                  String?
+  createdByUserId        String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  enrolments             EmployeeBenefitPlanEnrolment[]
+
+  @@unique([clubId, code])
+  @@index([clubId, kind, active])
+}
+
+// Slice C (2026-09-18) — per-employee benefit-plan enrolment.
+model EmployeeBenefitPlanEnrolment {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  planId            String
+  plan              PayrollBenefitPlan @relation(fields: [planId], references: [id])
+  status            String   @default("ACTIVE")
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  electionKind      String
+  amount            Decimal?
+  percentBps        Int?
+  notes             String?
+  enteredByUserId   String?
+  changedByUserId   String?
+  endedByUserId     String?
+  endReason         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  snapshots         PayrollBatchComponentSnapshot[]
+
+  @@index([clubId, employeeId, planId, effectiveFrom])
+  @@index([clubId, planId, status])
 }
 
 // Per-Employee recurring assignment of a Payroll Component.
@@ -13082,6 +13152,9 @@ model PayrollBatchComponentSnapshot {
   sourceAssignment      EmployeeRecurringPayrollComponent? @relation(fields: [sourceAssignmentId], references: [id])
   // Slice B (2026-09-18) — pre-batch scheduled one-time earning link.
   sourceScheduledEarning  PayrollScheduledOneTimeEarning? @relation("SnapshotSourceScheduledEarning")
+  // Slice C (2026-09-18) — benefit-enrolment provenance (non-unique).
+  sourceEnrolmentId       String?
+  sourceEnrolment         EmployeeBenefitPlanEnrolment? @relation(fields: [sourceEnrolmentId], references: [id])
   // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
   //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
   //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.

@@ -67,6 +67,9 @@ import {
   scheduleOneTimeEarningAction,
   cancelOneTimeEarningAction,
 } from "./_scheduled-earning-actions";
+// Slice C (2026-09-18) — benefit plan enrolments.
+import BenefitsDeductionsSection from "@/components/hr/BenefitsDeductionsSection";
+import { listEnrolmentsForEmployee } from "@/lib/payroll/benefit-enrolments";
 import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
@@ -417,6 +420,11 @@ export default async function EmployeeProfilePage({
   ]);
 
   const currentCompensation = compensationHistory.find((c) => c.effectiveTo === null) ?? null;
+
+  // Slice C (2026-09-18) — benefit enrolments for this employee.
+  const benefitEnrolments = canReadPayrollRecurring
+    ? await listEnrolmentsForEmployee(principal, profile.clubId, profile.id).catch(() => [])
+    : [];
 
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings data.
   // Load the employee's history + eligible one-time components +
@@ -803,7 +811,7 @@ export default async function EmployeeProfilePage({
             }
             payroll={{
               sinAccessible: canReadSin,
-              sinMasked: sinMasked?.sinMasked ?? null,
+              sinMasked: sinMasked ?? null,
               bankingAccessible: canReadBanking,
               bankingMasked: bankingMasked
                 ? {
@@ -863,6 +871,22 @@ export default async function EmployeeProfilePage({
                 : null
             }
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
+            benefitsDeductionsSection={
+              <BenefitsDeductionsSection
+                rows={benefitEnrolments.map((r) => ({
+                  id: r.id,
+                  planCode: r.planCode,
+                  planName: r.planName,
+                  planKind: r.planKind,
+                  status: r.status,
+                  electionKind: r.electionKind,
+                  amount: r.amount,
+                  percentBps: r.percentBps,
+                  effectiveFromIso: r.effectiveFromIso,
+                  effectiveToIso: r.effectiveToIso,
+                }))}
+              />
+            }
             oneTimeEarningsSection={
               <OneTimeEarningsSection
                 clubId={profile.clubId}

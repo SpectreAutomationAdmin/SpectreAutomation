@@ -499,6 +499,9 @@ model Club {
   payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   payrollScheduledOneTimeEarnings    PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — Club-level benefit plans + employee enrolments.
+  payrollBenefitPlans                PayrollBenefitPlan[]
+  employeeBenefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
   // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
   payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
@@ -3828,6 +3831,8 @@ model Employee {
   payrollBatchComponentSnapshots PayrollBatchComponentSnapshot[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   scheduledOneTimeEarnings   PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — benefit-plan enrolments.
+  benefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -13037,6 +13042,11 @@ model PayrollComponent {
   openingBalanceRows PayrollOpeningBalanceComponent[]
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
   scheduledOneTimeEarnings PayrollScheduledOneTimeEarning[]
+  // Slice C (2026-09-18) — Club-level benefit plans linked to this
+  // component. A plan may reference this component on its employee
+  // side, employer side, or both (via separate FKs on the plan).
+  benefitPlansAsEmployee PayrollBenefitPlan[] @relation("PayrollBenefitPlanEmployeeComponent")
+  benefitPlansAsEmployer PayrollBenefitPlan[] @relation("PayrollBenefitPlanEmployerComponent")
 
   @@unique([clubId, code])
   @@index([clubId, category, active])
@@ -13095,6 +13105,103 @@ model PayrollScheduledOneTimeEarning {
   @@unique([clubId, employeeId, payPeriodId, componentId])
   @@index([clubId, payPeriodId, status])
   @@index([clubId, employeeId, status])
+}
+
+// Slice C (2026-09-18) — Club-level benefit plan (LTD, Health/Dental, and
+// Slice-D-forward RRSP). The plan itself carries NO statutory / accounting
+// configuration — those live on the linked PayrollComponents. The plan is
+// the durable Club arrangement (kind + name + effective window + provider
+// + default election shape + optional employer-match parameters for RRSP);
+// enrolments (see PayrollBenefitPlanEnrolment) attach employees to it.
+//
+// Spectre executes CONFIGURED semantics — never infers tax law from the
+// word "LTD" or "Health." A Club that funds LTD as pre-tax vs post-tax
+// simply configures its linked employee component (taxableEffect,
+// cppPensionableEffect, eiInsurableEffect, cashEffect) accordingly.
+model PayrollBenefitPlan {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  club                   Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // LTD | HEALTH_DENTAL | RRSP  (RRSP is defined here for Slice D
+  // forward-compatibility; Slice C ships LTD + HEALTH_DENTAL only —
+  // the Employee → Payroll → Retirement UI keeps its "not configured"
+  // pill until Slice D wires enrolment.)
+  kind                   String
+  code                   String   // Club-unique slug (e.g. "LTD_STANDARD")
+  name                   String   // Human-readable (e.g. "Standard LTD plan")
+  description            String?
+  providerName           String?
+  active                 Boolean  @default(true)
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  // Linked PayrollComponents — the plan's payroll consequences.
+  // Nullable because some plans may only have one side (e.g. an
+  // employer-only Health plan carries no employee-side component).
+  employeeComponentId    String?
+  employeeComponent      PayrollComponent? @relation("PayrollBenefitPlanEmployeeComponent", fields: [employeeComponentId], references: [id])
+  employerComponentId    String?
+  employerComponent      PayrollComponent? @relation("PayrollBenefitPlanEmployerComponent", fields: [employerComponentId], references: [id])
+  // Default election shape for new enrolments. Each enrolment may
+  // override with its own electionKind at write time.
+  //   FIXED_AMOUNT                 — enrolment.amount required
+  //   PERCENT_OF_ELIGIBLE_EARNINGS — enrolment.percentBps required
+  defaultElectionKind    String   @default("FIXED_AMOUNT")
+  // For PERCENT_OF_ELIGIBLE_EARNINGS elections: which earnings base
+  // the percentage applies to. Mirrors PayrollComponent.
+  //   REGULAR_EARNINGS_ONLY | CASH_EARNINGS
+  eligibleEarningsBasis  String?
+  // Slice-D-forward (RRSP employer match). Nullable for LTD /
+  // HEALTH_DENTAL. When set:
+  //   employerMatchBps      — basis points of employee contribution
+  //                           that the employer matches (10000 = 100%).
+  //   employerMatchCapBps   — basis points of eligible earnings that
+  //                           bounds the employer match.
+  employerMatchBps       Int?
+  employerMatchCapBps    Int?
+  notes                  String?
+  createdByUserId        String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  enrolments             EmployeeBenefitPlanEnrolment[]
+
+  @@unique([clubId, code])
+  @@index([clubId, kind, active])
+}
+
+// Slice C (2026-09-18) — per-employee enrolment in a PayrollBenefitPlan.
+// Half-open [effectiveFrom, effectiveTo). Overlap prevention is enforced
+// at the service layer with the same fail-closed pattern used by
+// EmployeeRecurringPayrollComponent. History is preserved via ENDED
+// rows (never edited in place).
+model EmployeeBenefitPlanEnrolment {
+  id                String   @id @default(cuid())
+  clubId            String
+  club              Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId        String
+  employee          Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  planId            String
+  plan              PayrollBenefitPlan @relation(fields: [planId], references: [id])
+  // ACTIVE | ENDED   (ended enrolments preserved for audit + Prepare-time exclusion)
+  status            String   @default("ACTIVE")
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  // Election — one of amount / percentBps is populated per electionKind.
+  electionKind      String   // FIXED_AMOUNT | PERCENT_OF_ELIGIBLE_EARNINGS
+  amount            Decimal?
+  percentBps        Int?
+  notes             String?
+  enteredByUserId   String?
+  changedByUserId   String?
+  endedByUserId     String?
+  endReason         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  snapshots         PayrollBatchComponentSnapshot[]
+
+  @@index([clubId, employeeId, planId, effectiveFrom])
+  @@index([clubId, planId, status])
 }
 
 // Per-Employee recurring assignment of a Payroll Component.
@@ -13187,9 +13294,15 @@ model PayrollBatchComponentSnapshot {
   // scheduled earning; the scheduled earning row also carries a
   // back-pointer via `PayrollScheduledOneTimeEarning.appliedSnapshotId`.
   sourceScheduledEarning  PayrollScheduledOneTimeEarning? @relation("SnapshotSourceScheduledEarning")
+  // Slice C (2026-09-18) — benefit-enrolment provenance. A single
+  // enrolment may produce two snapshots (employee + employer side)
+  // so the FK is non-unique.
+  sourceEnrolmentId       String?
+  sourceEnrolment         EmployeeBenefitPlanEnrolment? @relation(fields: [sourceEnrolmentId], references: [id])
   // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
   //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
   //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.
+  //   BENEFIT_ENROLMENT           — frozen from an EmployeeBenefitPlanEnrolment at prep (Slice C).
   // Future values: LEGACY_ALLOWANCE (once EmployeeAllowance migrates)
   // and SYSTEM_GENERATED (retro pay, corrections).
   provenance            String  @default("RECURRING_EMPLOYEE_SETUP")
