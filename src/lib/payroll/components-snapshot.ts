@@ -274,6 +274,29 @@ export async function snapshotEmployeeComponentsForBatch(
       continue;
     }
     const comp = s.component;
+    // Slice B closeout (2026-09-18) §12 — fail-closed if the live
+    // component has become invalid for one-time use between SCHEDULE
+    // and Prepare. Silent drop / misclassification is forbidden.
+    // The scheduling service enforces these at write time; re-verify
+    // at Prepare in case the catalogue row was edited afterwards.
+    if (!comp.active) {
+      throw new Error(
+        `Scheduled one-time earning ${comp.code} references an inactive component. ` +
+          `Reactivate the component in Payroll Settings or cancel the scheduled earning before Prepare.`,
+      );
+    }
+    if (comp.usage !== "ONE_TIME" && comp.usage !== "BOTH") {
+      throw new Error(
+        `Scheduled one-time earning ${comp.code} references a component whose usage is now ${comp.usage}. ` +
+          `Restore usage to ONE_TIME or BOTH, or cancel the scheduled earning before Prepare.`,
+      );
+    }
+    if (comp.side !== "EMPLOYEE" || comp.cashEffect !== "INCREASES_NET_PAY") {
+      throw new Error(
+        `Scheduled one-time earning ${comp.code} references a component that is no longer a valid employee cash earning ` +
+          `(side=${comp.side}, cashEffect=${comp.cashEffect}). Cancel the scheduled earning or restore the component.`,
+      );
+    }
     // FIXED_AMOUNT only in Slice B — the scheduling service enforces
     // this at write time, but re-verify at snapshot time for defence.
     if (comp.calculationMethod !== "FIXED_AMOUNT") {

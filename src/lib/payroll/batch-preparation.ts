@@ -1183,6 +1183,21 @@ export async function voidPayrollBatch(
       where: { clubId, consumedByBatchId: batch.id },
       data: { consumedByBatchId: null, consumedByBatchEmployeeId: null },
     });
+    // Slice B closeout (2026-09-18) — reset any PayrollScheduledOneTimeEarning
+    // rows that were APPLIED to THIS batch back to SCHEDULED so a
+    // replacement Prepare re-picks them up. Defence in depth: the
+    // outer guard already refuses to void APPROVED or POSTED, so a
+    // POSTED source cannot reach this reset path. Atomic with the
+    // status flip.
+    await tx.payrollScheduledOneTimeEarning.updateMany({
+      where: { appliedToBatchId: batch.id, status: "APPLIED" },
+      data: {
+        status: "SCHEDULED",
+        appliedAt: null,
+        appliedToBatchId: null,
+        appliedSnapshotId: null,
+      },
+    });
     await tx.payrollBatch.update({
       where: { id: batch.id },
       data: {
@@ -1310,6 +1325,21 @@ export async function discardPreparedPayrollBatch(
         { path: "status", message: "Batch was concurrently discarded — no changes applied." },
       ]);
     }
+    // Slice B closeout (2026-09-18) — reset APPLIED scheduled one-time
+    // earnings for this discarded batch so a replacement Prepare
+    // re-picks them up. Only fires when the CAS above actually flipped
+    // the batch (updated.count === 1). DISCARD_ELIGIBLE_STATES is
+    // DRAFT | PREPARED; APPROVED / POSTED reach this point only via
+    // the never-branch, so POSTED scheduled earnings cannot be reset.
+    await tx.payrollScheduledOneTimeEarning.updateMany({
+      where: { appliedToBatchId: batch.id, status: "APPLIED" },
+      data: {
+        status: "SCHEDULED",
+        appliedAt: null,
+        appliedToBatchId: null,
+        appliedSnapshotId: null,
+      },
+    });
     return { released: rel.count };
   });
 
