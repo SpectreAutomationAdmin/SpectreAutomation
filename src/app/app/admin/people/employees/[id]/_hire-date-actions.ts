@@ -1,16 +1,22 @@
 "use server";
-// Slice A (2026-09-18) — Server action for editing an employee's
-// Original Hire Date. Routes through the canonical `updateEmployee`
-// service (audit + tenant guards + permission checks live there).
-// Never edits `activatedAt` (Spectre system record).
+// Slice A closeout (2026-09-18) — Original Hire Date correction.
+//
+// Routes through the DEDICATED `updateEmployeeHireDate` service which
+// enforces the narrow `hr:service-date:write` permission. This action
+// does NOT accept any field other than `hireDate`; the service refuses
+// to write anything else.
+//
+// The generic `updateEmployee` service still supports hireDate for the
+// HR-tier callers who hold `hr:employee:write`; this dedicated path is
+// the finance-tier (Controller / Payroll Admin) entry point.
 
 import { revalidatePath } from "next/cache";
 import { getCurrentPrincipal } from "@/lib/services/principal";
-import { updateEmployee } from "@/lib/hr/employees";
+import { updateEmployeeHireDate } from "@/lib/hr/service-date";
 import { isAppError } from "@/lib/errors";
 
 export interface UpdateHireDateInput {
-  hireDate: string | null; // ISO string or null
+  hireDate: string | null; // ISO string, YYYY-MM-DD, or null
 }
 
 export async function updateOriginalHireDateAction(
@@ -20,15 +26,13 @@ export async function updateOriginalHireDateAction(
   const principal = await getCurrentPrincipal();
   if (!principal) return { ok: false, error: "Authentication required" };
   try {
-    const updated = await updateEmployee(principal, employeeId, {
+    const result = await updateEmployeeHireDate(principal, employeeId, {
       hireDate: input.hireDate,
-    } as never);
+    });
     revalidatePath(`/app/admin/people/employees/${employeeId}`);
     return {
       ok: true,
-      hireDate: updated.hireDate instanceof Date
-        ? updated.hireDate.toISOString()
-        : (updated.hireDate as string | null | undefined) ?? null,
+      hireDate: result.hireDate ? result.hireDate.toISOString() : null,
     };
   } catch (err) {
     if (isAppError(err)) return { ok: false, error: err.message };

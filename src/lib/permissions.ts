@@ -116,6 +116,15 @@ export const PERMISSIONS = {
   // opening-balance entry. Controller reads (payroll:read); only
   // PAYROLL_ADMIN + CLUB_ADMIN + SUPER_ADMIN carry the write grant.
   "payroll:opening-balance:write": { name: "Enter / validate / activate opening YTD balances", category: "PAYROLL" },
+  // Slice A closeout (2026-09-18) — narrow permission for correcting
+  // the employee's Original Hire Date. Distinct from hr:employment:write
+  // (which allows department / position / reports-to / employment-type
+  // mutations). Granted to CONTROLLER + PAYROLL_ADMIN + CLUB_ADMIN +
+  // SUPER_ADMIN. Enforced by the dedicated `updateEmployeeHireDate`
+  // service — the generic hr:employment:write path also accepts hireDate
+  // mutation for HR-tier callers, but service-date correction from the
+  // finance-tier UI routes through the narrow permission only.
+  "hr:service-date:write": { name: "Correct original hire / service date", category: "HR" },
 
   // Events / private events
   "events:read":               { name: "View events",                   category: "EVENTS" },
@@ -387,6 +396,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "hr:emergency:read", "hr:emergency:write",
     "hr:onboarding:read", "hr:onboarding:invite", "hr:onboarding:approve", "hr:onboarding:revoke",
     "hr:onboarding_questions:read", "hr:onboarding_questions:write",
+    // Slice A closeout (2026-09-18) — narrow service-date correction.
+    "hr:service-date:write",
     // HR-2C: full Safety & Training authority.
     "hr:training:read", "hr:training:write", "hr:training:publish",
     "hr:training:assign", "hr:training:compliance:read",
@@ -483,6 +494,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // Controller-financial territory. Adding the narrow write grant
     // only; nothing else in Controller's role changes.
     "payroll:opening-balance:write",
+    // Slice A closeout (2026-09-18) §1 — Controller must be able to
+    // correct Original Hire Date. Narrow: does NOT grant department /
+    // position / reports-to / employment-type / termination mutation.
+    "hr:service-date:write",
     // Pre-Phase-5 governance restoration (2026-09-16): Controller
     // LOSES `payroll:post`. The authoritative model is now:
     //   Payroll Admin: Prepare → Calculate → Review & Adjust → Submit
@@ -628,6 +643,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "payroll:opening-balance:write",
+    // Slice A closeout (2026-09-18) — narrow service-date correction.
+    "hr:service-date:write",
     "reports:operating",
     // HR-1 — PAYROLL_ADMIN is the reveal-tier role: SIN reveal,
     // banking reveal, tax reveal all live here (audited via

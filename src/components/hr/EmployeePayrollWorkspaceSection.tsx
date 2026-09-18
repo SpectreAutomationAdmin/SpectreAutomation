@@ -46,7 +46,34 @@ type CompensationRow = {
   effectiveTo: string | null;
 };
 
-type OpeningBalanceStatus = "DRAFT" | "READY" | "ACTIVE" | "SUPERSEDED" | string;
+type OpeningBalanceStatus = "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED" | string;
+
+// Slice A closeout (2026-09-18) §5 — strongly typed Opening YTD DTO,
+// mapped 1:1 to `OpeningBalanceFields` from `opening-balance.ts`. No
+// `as unknown as` guessing; every field named here maps to an actual
+// canonical column on `PayrollOpeningBalance`. See prisma/schema.prisma
+// lines 12389-12409 for the source-of-truth definitions.
+export interface OpeningYtdValues {
+  // Earnings
+  ytdGrossEarnings: string;
+  ytdTaxableEarnings: string;
+  ytdPensionableEarnings: string;
+  ytdInsurableEarnings: string;
+  // Employee deductions
+  ytdCppEE_Base: string;
+  ytdCppEE_FirstAdd: string;
+  ytdCppEE: string;      // combined base + first-additional (T4 Box 16 aggregate)
+  ytdCpp2EE: string;
+  ytdEiEE: string;
+  ytdFederalTax: string;
+  ytdProvincialTax: string;
+  // Employer contributions
+  ytdCppER_Base: string;
+  ytdCppER_FirstAdd: string;
+  ytdCppER: string;      // combined base + first-additional
+  ytdCpp2ER: string;
+  ytdEiER: string;
+}
 
 export interface EmployeePayrollWorkspaceProps {
   employeeId: string;
@@ -75,15 +102,8 @@ export interface EmployeePayrollWorkspaceProps {
     taxYear: number;
     status: OpeningBalanceStatus;
     throughPayDateIso: string | null;
-    ytdGross: MoneyString | null;
-    ytdTaxable: MoneyString | null;
-    ytdPensionable: MoneyString | null;
-    ytdInsurable: MoneyString | null;
-    ytdCppEE: MoneyString | null;
-    ytdEiEE: MoneyString | null;
-    ytdFederalTax: MoneyString | null;
-    ytdProvincialTax: MoneyString | null;
     priorPayrollKind: string | null;
+    values: OpeningYtdValues;
   } | null;
   actions: {
     updateOriginalHireDate: (
@@ -498,18 +518,27 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
                     </span>
                   )}
                 </div>
-                <div className="mt-3 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-xs">
+                <div
+                  className="mt-3 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-xs"
+                  data-testid="opening-ytd-values"
+                >
                   <div className="col-span-2 mt-1 text-[10px] uppercase tracking-wide text-stone-400">Earnings</div>
-                  <span className="text-stone-500">Gross</span>       <span className="font-mono">{formatMoney(openingBalance.ytdGross)}</span>
-                  <span className="text-stone-500">Taxable</span>     <span className="font-mono">{formatMoney(openingBalance.ytdTaxable)}</span>
-                  <span className="text-stone-500">Pensionable</span> <span className="font-mono">{formatMoney(openingBalance.ytdPensionable)}</span>
-                  <span className="text-stone-500">Insurable</span>   <span className="font-mono">{formatMoney(openingBalance.ytdInsurable)}</span>
+                  <span className="text-stone-500">Gross</span>       <span className="font-mono" data-testid="ytd-gross-earnings">{formatMoney(openingBalance.values.ytdGrossEarnings)}</span>
+                  <span className="text-stone-500">Taxable</span>     <span className="font-mono" data-testid="ytd-taxable-earnings">{formatMoney(openingBalance.values.ytdTaxableEarnings)}</span>
+                  <span className="text-stone-500">Pensionable</span> <span className="font-mono" data-testid="ytd-pensionable-earnings">{formatMoney(openingBalance.values.ytdPensionableEarnings)}</span>
+                  <span className="text-stone-500">Insurable</span>   <span className="font-mono" data-testid="ytd-insurable-earnings">{formatMoney(openingBalance.values.ytdInsurableEarnings)}</span>
 
                   <div className="col-span-2 mt-2 text-[10px] uppercase tracking-wide text-stone-400">Employee deductions</div>
-                  <span className="text-stone-500">CPP</span>         <span className="font-mono">{formatMoney(openingBalance.ytdCppEE)}</span>
-                  <span className="text-stone-500">EI</span>          <span className="font-mono">{formatMoney(openingBalance.ytdEiEE)}</span>
-                  <span className="text-stone-500">Federal tax</span> <span className="font-mono">{formatMoney(openingBalance.ytdFederalTax)}</span>
-                  <span className="text-stone-500">Provincial tax</span> <span className="font-mono">{formatMoney(openingBalance.ytdProvincialTax)}</span>
+                  <span className="text-stone-500">CPP (Box 16)</span>          <span className="font-mono" data-testid="ytd-cpp-ee">{formatMoney(openingBalance.values.ytdCppEE)}</span>
+                  <span className="text-stone-500">CPP2 (Box 16A)</span>        <span className="font-mono" data-testid="ytd-cpp2-ee">{formatMoney(openingBalance.values.ytdCpp2EE)}</span>
+                  <span className="text-stone-500">EI (Box 18)</span>           <span className="font-mono" data-testid="ytd-ei-ee">{formatMoney(openingBalance.values.ytdEiEE)}</span>
+                  <span className="text-stone-500">Federal tax</span>           <span className="font-mono" data-testid="ytd-federal-tax">{formatMoney(openingBalance.values.ytdFederalTax)}</span>
+                  <span className="text-stone-500">Provincial tax</span>        <span className="font-mono" data-testid="ytd-provincial-tax">{formatMoney(openingBalance.values.ytdProvincialTax)}</span>
+
+                  <div className="col-span-2 mt-2 text-[10px] uppercase tracking-wide text-stone-400">Employer contributions</div>
+                  <span className="text-stone-500">Employer CPP</span>          <span className="font-mono" data-testid="ytd-cpp-er">{formatMoney(openingBalance.values.ytdCppER)}</span>
+                  <span className="text-stone-500">Employer CPP2</span>         <span className="font-mono" data-testid="ytd-cpp2-er">{formatMoney(openingBalance.values.ytdCpp2ER)}</span>
+                  <span className="text-stone-500">Employer EI</span>           <span className="font-mono" data-testid="ytd-ei-er">{formatMoney(openingBalance.values.ytdEiER)}</span>
                 </div>
                 <a
                   href={`/app/admin/payroll/opening-balances?employeeId=${employeeId}`}

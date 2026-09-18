@@ -405,7 +405,7 @@ export default async function EmployeeProfilePage({
       ? getImplementationDeclaration(principal, profile.clubId, currentTaxYear).catch(() => null)
       : Promise.resolve(null),
     canReadPayrollRecurring
-      ? getActiveOpeningBalance(principal, profile.clubId, profile.id, currentTaxYear).catch(() => null)
+      ? getActiveOpeningBalance(profile.clubId, profile.id, currentTaxYear).catch(() => null)
       : Promise.resolve(null),
   ]);
 
@@ -772,32 +772,14 @@ export default async function EmployeeProfilePage({
                     throughPayDateIso: activeOpeningBalance.throughPayDate
                       ? new Date(activeOpeningBalance.throughPayDate).toISOString()
                       : null,
-                    ytdGross: (activeOpeningBalance as unknown as { ytdGrossEarnings?: unknown }).ytdGrossEarnings != null
-                      ? String((activeOpeningBalance as unknown as { ytdGrossEarnings: unknown }).ytdGrossEarnings)
-                      : null,
-                    ytdTaxable: (activeOpeningBalance as unknown as { ytdTaxableEarnings?: unknown }).ytdTaxableEarnings != null
-                      ? String((activeOpeningBalance as unknown as { ytdTaxableEarnings: unknown }).ytdTaxableEarnings)
-                      : null,
-                    ytdPensionable: (activeOpeningBalance as unknown as { ytdPensionableEarnings?: unknown }).ytdPensionableEarnings != null
-                      ? String((activeOpeningBalance as unknown as { ytdPensionableEarnings: unknown }).ytdPensionableEarnings)
-                      : null,
-                    ytdInsurable: (activeOpeningBalance as unknown as { ytdInsurableEarnings?: unknown }).ytdInsurableEarnings != null
-                      ? String((activeOpeningBalance as unknown as { ytdInsurableEarnings: unknown }).ytdInsurableEarnings)
-                      : null,
-                    ytdCppEE: (activeOpeningBalance as unknown as { ytdCppEE?: unknown }).ytdCppEE != null
-                      ? String((activeOpeningBalance as unknown as { ytdCppEE: unknown }).ytdCppEE)
-                      : null,
-                    ytdEiEE: (activeOpeningBalance as unknown as { ytdEiEE?: unknown }).ytdEiEE != null
-                      ? String((activeOpeningBalance as unknown as { ytdEiEE: unknown }).ytdEiEE)
-                      : null,
-                    ytdFederalTax: (activeOpeningBalance as unknown as { ytdFederalTax?: unknown }).ytdFederalTax != null
-                      ? String((activeOpeningBalance as unknown as { ytdFederalTax: unknown }).ytdFederalTax)
-                      : null,
-                    ytdProvincialTax: (activeOpeningBalance as unknown as { ytdProvincialTax?: unknown }).ytdProvincialTax != null
-                      ? String((activeOpeningBalance as unknown as { ytdProvincialTax: unknown }).ytdProvincialTax)
-                      : null,
-                    priorPayrollKind:
-                      (activeOpeningBalance as unknown as { priorPayrollKind?: string | null }).priorPayrollKind ?? null,
+                    priorPayrollKind: activeOpeningBalance.priorPayrollKind ?? null,
+                    // Slice A closeout (2026-09-18) §5 — canonical
+                    // OpeningBalanceFields DTO passed through 1:1. No
+                    // guessing, no `as unknown as`. The service returns
+                    // `values` typed as `OpeningBalanceFields` and the
+                    // workspace types its prop as `OpeningYtdValues`
+                    // (identical shape).
+                    values: activeOpeningBalance.values,
                   }
                 : null
             }

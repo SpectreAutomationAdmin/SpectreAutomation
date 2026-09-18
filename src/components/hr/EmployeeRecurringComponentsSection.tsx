@@ -145,10 +145,10 @@ export default function EmployeeRecurringComponentsSection(props: Props) {
   return (
     <div className="spectre-person-section mt-6" data-testid="payroll-recurring-components-section">
       <div className="spectre-person-section-head">
-        <h3 className="spectre-person-eyebrow">Compensation &amp; Benefits</h3>
+        <h3 className="spectre-person-eyebrow">Recurring Earnings</h3>
       </div>
       <p className="mt-1 text-xs text-stone-500">
-        Recurring earnings, allowances, and deductions defined in the Club's Payroll Components catalogue.
+        Recurring earnings and deductions defined in the Club's Payroll Components catalogue.
         Amounts and effective dates are set here; statutory treatment and GL accounts are defined by each
         component in <em>Payroll Settings → Payroll components</em>.
       </p>
