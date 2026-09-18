@@ -1047,6 +1047,7 @@ export async function preparePayrollBatch(
         batchId: batch.id,
         batchEmployeeId: be.id,
         employeeId: s.employeeId,
+        payPeriodId: pre.payPeriodId,
         periodStart: pre.periodStart,
         periodEnd: pre.periodEnd,
       }, tx);

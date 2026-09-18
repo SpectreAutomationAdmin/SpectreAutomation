@@ -341,6 +341,10 @@ export async function resetDb() {
     c.shiftAssignment.deleteMany(),
     c.shift.deleteMany(),
     c.shiftTemplate.deleteMany(),
+    // Slice B (2026-09-18) — pre-batch scheduled one-time earnings FK
+    // into PayrollComponent + PayrollPayPeriod + PayrollBatch +
+    // PayrollBatchComponentSnapshot; wipe before all of them.
+    c.payrollScheduledOneTimeEarning.deleteMany(),
     // Payroll-3C-2 (2026-09-07) — Component snapshots FK into batch +
     // component + assignment; wipe before all three.
     c.payrollBatchComponentSnapshot.deleteMany(),

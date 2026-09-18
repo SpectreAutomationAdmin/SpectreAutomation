@@ -60,6 +60,13 @@ import EmployeePayrollWorkspaceSection from "@/components/hr/EmployeePayrollWork
 import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
 import { getActiveOpeningBalance } from "@/lib/payroll/opening-balance";
 import { updateOriginalHireDateAction } from "./_hire-date-actions";
+// Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
+import OneTimeEarningsSection from "@/components/hr/OneTimeEarningsSection";
+import { listOneTimeEarningsForEmployee } from "@/lib/payroll/scheduled-one-time-earning";
+import {
+  scheduleOneTimeEarningAction,
+  cancelOneTimeEarningAction,
+} from "./_scheduled-earning-actions";
 import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
@@ -411,6 +418,76 @@ export default async function EmployeeProfilePage({
 
   const currentCompensation = compensationHistory.find((c) => c.effectiveTo === null) ?? null;
 
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings data.
+  // Load the employee's history + eligible one-time components +
+  // eligible future/open pay periods for their active pay group.
+  const [oneTimeEarnings, oneTimeEligibleComponents, eligiblePayPeriods] = await Promise.all([
+    canReadPayrollRecurring
+      ? listOneTimeEarningsForEmployee(principal, profile.clubId, profile.id).catch(() => [])
+      : Promise.resolve([]),
+    canReadPayrollRecurring
+      ? prisma.payrollComponent.findMany({
+          where: {
+            clubId: profile.clubId,
+            active: true,
+            usage: { in: ["ONE_TIME", "BOTH"] },
+            side: "EMPLOYEE",
+            cashEffect: "INCREASES_NET_PAY",
+            calculationMethod: "FIXED_AMOUNT",
+          },
+          select: { id: true, code: true, displayName: true },
+          orderBy: { displayName: "asc" },
+        })
+      : Promise.resolve([]),
+    canReadPayrollRecurring && activePayGroupMembership?.payGroupId
+      ? prisma.payrollPayPeriod.findMany({
+          where: {
+            clubId: profile.clubId,
+            payGroupId: activePayGroupMembership.payGroupId,
+            periodEnd: { gte: new Date() },
+            NOT: { batches: { some: { status: "POSTED" } } },
+          },
+          select: { id: true, periodStart: true, periodEnd: true, payDate: true },
+          orderBy: { payDate: "asc" },
+          take: 12,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const nowTs = Date.now();
+  const monthShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const fmtCivil = (d: Date) => {
+    const y = d.getUTCFullYear(); const m = d.getUTCMonth(); const day = d.getUTCDate();
+    return `${monthShort[m]} ${day}, ${y}`;
+  };
+  const payPeriodOptions = eligiblePayPeriods.map((p) => {
+    // Display inclusive end (periodEnd is exclusive in schema).
+    const inclusiveEnd = new Date(p.periodEnd.getTime() - 86_400_000);
+    const label = `${fmtCivil(p.periodStart)} – ${fmtCivil(inclusiveEnd)} — Pay ${fmtCivil(p.payDate)}`;
+    const isCurrent = p.periodStart.getTime() <= nowTs && p.periodEnd.getTime() > nowTs;
+    return { id: p.id, label, payDateIso: p.payDate.toISOString(), isCurrent };
+  });
+  const oneTimeRows = oneTimeEarnings.map((r) => {
+    const p = eligiblePayPeriods.find((x) => x.id === r.payPeriodId);
+    const label = p
+      ? `${fmtCivil(p.periodStart)} – ${fmtCivil(new Date(p.periodEnd.getTime() - 86_400_000))} · Pay ${fmtCivil(p.payDate)}`
+      : "—";
+    return {
+      id: r.id,
+      componentId: r.componentId,
+      componentCode: r.componentCode,
+      componentDisplayName: r.componentDisplayName,
+      amount: r.amount,
+      reason: r.reason,
+      status: r.status,
+      payPeriodId: r.payPeriodId,
+      payPeriodLabel: label,
+      createdAt: r.createdAt,
+      appliedAt: r.appliedAt,
+      cancelledAt: r.cancelledAt,
+    };
+  });
+
   return (
     <EmployeeProfileView
       employee={{
@@ -669,7 +746,9 @@ export default async function EmployeeProfilePage({
             employeeId={profile.id}
             clubId={profile.clubId}
             canWrite={canWritePayrollRecurring}
-            catalogue={payrollComponentCatalogue.map((c) => ({
+            catalogue={payrollComponentCatalogue
+              .filter((c) => (c as unknown as { usage?: string }).usage !== "ONE_TIME")
+              .map((c) => ({
               id: c.id,
               code: c.code,
               displayName: c.displayName,
@@ -784,6 +863,20 @@ export default async function EmployeeProfilePage({
                 : null
             }
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
+            oneTimeEarningsSection={
+              <OneTimeEarningsSection
+                clubId={profile.clubId}
+                employeeId={profile.id}
+                canWrite={canWritePayrollRecurring}
+                rows={oneTimeRows}
+                eligibleComponents={oneTimeEligibleComponents}
+                payPeriodOptions={payPeriodOptions}
+                actions={{
+                  schedule: scheduleOneTimeEarningAction,
+                  cancel: cancelOneTimeEarningAction,
+                }}
+              />
+            }
             federalTd1Panel={
               canReadTax
                 ? taxReadiness?.federal?.ready
@@ -803,7 +896,9 @@ export default async function EmployeeProfilePage({
                 employeeId={profile.id}
                 clubId={profile.clubId}
                 canWrite={canWritePayrollRecurring}
-                catalogue={payrollComponentCatalogue.map((c) => ({
+                catalogue={payrollComponentCatalogue
+              .filter((c) => (c as unknown as { usage?: string }).usage !== "ONE_TIME")
+              .map((c) => ({
                   id: c.id,
                   code: c.code,
                   displayName: c.displayName,

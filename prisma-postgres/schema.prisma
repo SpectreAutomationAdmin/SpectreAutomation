@@ -497,6 +497,8 @@ model Club {
   payrollComponents                  PayrollComponent[]
   employeeRecurringPayrollComponents EmployeeRecurringPayrollComponent[]
   payrollBatchComponentSnapshots     PayrollBatchComponentSnapshot[]
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
+  payrollScheduledOneTimeEarnings    PayrollScheduledOneTimeEarning[]
   // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
   payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
@@ -3779,6 +3781,8 @@ model Employee {
   recurringPayrollComponents EmployeeRecurringPayrollComponent[]
   // Payroll-3C-2 (2026-09-07) — batch component snapshots.
   payrollBatchComponentSnapshots PayrollBatchComponentSnapshot[]
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
+  scheduledOneTimeEarnings   PayrollScheduledOneTimeEarning[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -12100,6 +12104,8 @@ model PayrollPayPeriod {
   // Payroll-3D-4 back-relations.
   timeAdjustments         PayrollTimeAdjustment[] @relation("PayPeriodTimeAdjustments")
   targetOfTimeAdjustments PayrollTimeAdjustment[] @relation("PayPeriodTargetTimeAdjustments")
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings targeting this period.
+  scheduledOneTimeEarnings PayrollScheduledOneTimeEarning[] @relation("PayPeriodScheduledOneTimeEarnings")
 
   @@unique([clubId, payGroupId, taxYear, sequenceInYear])
   @@unique([clubId, payGroupId, periodStart])
@@ -12183,6 +12189,8 @@ model PayrollBatch {
   // Payroll-3C-acceptance (2026-09-12) — governance review
   // attestations, one row per (batch, dimension, attestation).
   reviewAttestations    PayrollBatchReviewAttestation[]
+  // Slice B (2026-09-18) — scheduled one-time earnings frozen into this batch.
+  appliedScheduledOneTimeEarnings PayrollScheduledOneTimeEarning[] @relation("BatchAppliedScheduledEarnings")
 
   @@unique([clubId, payGroupId, payPeriodId, sequence])
   @@index([clubId, status])
@@ -12930,6 +12938,10 @@ model PayrollComponent {
   displaySection  String
   displayOrder    Int      @default(0)
   active          Boolean  @default(true)
+  // Slice B (2026-09-18) — usage classifier: which employee-facing
+  // scheduling flow may reference this catalogue row.
+  //   RECURRING | ONE_TIME | BOTH  (defaults to RECURRING).
+  usage           String   @default("RECURRING")
   notes           String?
   createdByUserId String?
   createdAt       DateTime @default(now())
@@ -12940,9 +12952,49 @@ model PayrollComponent {
   batchSnapshots PayrollBatchComponentSnapshot[]
   // Payroll-3C-5 (2026-09-09) — per-component opening YTD rows.
   openingBalanceRows PayrollOpeningBalanceComponent[]
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
+  scheduledOneTimeEarnings PayrollScheduledOneTimeEarning[]
 
   @@unique([clubId, code])
   @@index([clubId, category, active])
+}
+
+// Slice B (2026-09-18) — pre-batch scheduled one-time earning
+// (e.g. Performance Bonus for a specific future pay period). Exists
+// BEFORE any PayrollBatch. At Prepare time the snapshotter reads
+// SCHEDULED rows for the pay period and freezes each into a
+// PayrollBatchComponentSnapshot with provenance =
+// "ONE_TIME_PAYROLL_ADJUSTMENT" and source = this row.
+model PayrollScheduledOneTimeEarning {
+  id               String   @id @default(cuid())
+  clubId           String
+  club             Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payPeriodId      String
+  payPeriod        PayrollPayPeriod @relation("PayPeriodScheduledOneTimeEarnings", fields: [payPeriodId], references: [id])
+  componentId      String
+  component        PayrollComponent @relation(fields: [componentId], references: [id])
+  amount           Decimal
+  currency         String?
+  reason           String
+  notes            String?
+  status           String   @default("SCHEDULED")
+  appliedAt        DateTime?
+  appliedToBatchId String?
+  appliedToBatch   PayrollBatch? @relation("BatchAppliedScheduledEarnings", fields: [appliedToBatchId], references: [id])
+  appliedSnapshotId String? @unique
+  appliedSnapshot   PayrollBatchComponentSnapshot? @relation("SnapshotSourceScheduledEarning", fields: [appliedSnapshotId], references: [id])
+  cancelledAt        DateTime?
+  cancelledByUserId  String?
+  cancelledReason    String?
+  enteredByUserId  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([clubId, employeeId, payPeriodId, componentId])
+  @@index([clubId, payPeriodId, status])
+  @@index([clubId, employeeId, status])
 }
 
 // Per-Employee recurring assignment of a Payroll Component.
@@ -13028,6 +13080,8 @@ model PayrollBatchComponentSnapshot {
   // EmployeeRecurringPayrollComponent. See `provenance` below.
   sourceAssignmentId    String?
   sourceAssignment      EmployeeRecurringPayrollComponent? @relation(fields: [sourceAssignmentId], references: [id])
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earning link.
+  sourceScheduledEarning  PayrollScheduledOneTimeEarning? @relation("SnapshotSourceScheduledEarning")
   // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
   //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
   //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.

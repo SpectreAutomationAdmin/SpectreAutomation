@@ -83,6 +83,7 @@ export interface ComponentSnapshotInput {
   batchId:         string;
   batchEmployeeId: string;
   employeeId:      string;
+  payPeriodId:     string;   // Slice B — required for scheduled one-time earning lookup.
   periodStart:     Date;
   periodEnd:       Date;  // EXCLUSIVE (schema half-open)
 }
@@ -241,6 +242,107 @@ export async function snapshotEmployeeComponentsForBatch(
           sourceComponentId: comp.id,
           sourceAssignmentId: a.id,
           ...frozen,
+        },
+      });
+    }
+    written += 1;
+  }
+
+  // -------------------------------------------------------------------
+  // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
+  // Second pass: freeze every SCHEDULED PayrollScheduledOneTimeEarning
+  // for (clubId, employeeId, payPeriodId) into a component snapshot
+  // with provenance ONE_TIME_PAYROLL_ADJUSTMENT + source link, then
+  // flip the source row to APPLIED. Idempotent: retry Prepare finds
+  // the same row APPLIED with a matching snapshot and updates the
+  // snapshot in place instead of duplicating.
+  // -------------------------------------------------------------------
+  const scheduledRows = await c.payrollScheduledOneTimeEarning.findMany({
+    where: {
+      clubId: input.clubId,
+      employeeId: input.employeeId,
+      payPeriodId: input.payPeriodId,
+      status: { in: ["SCHEDULED", "APPLIED"] },
+    },
+    include: { component: true },
+  });
+  for (const s of scheduledRows) {
+    // Ignore APPLIED rows already frozen into a DIFFERENT batch — that
+    // batch owns them. This slice only re-picks rows either still
+    // SCHEDULED or APPLIED to THIS batch (idempotent re-Prepare).
+    if (s.status === "APPLIED" && s.appliedToBatchId != null && s.appliedToBatchId !== input.batchId) {
+      continue;
+    }
+    const comp = s.component;
+    // FIXED_AMOUNT only in Slice B — the scheduling service enforces
+    // this at write time, but re-verify at snapshot time for defence.
+    if (comp.calculationMethod !== "FIXED_AMOUNT") {
+      warnings.push({
+        componentCode: comp.code,
+        code: "SCHEDULED_ONE_TIME_UNSUPPORTED_METHOD",
+        message: `Scheduled one-time earning ${comp.code} has unsupported calculationMethod ${comp.calculationMethod}.`,
+      });
+      continue;
+    }
+    const frozen = {
+      componentCode: comp.code, displayName: comp.displayName,
+      category: comp.category, side: comp.side,
+      displaySection: comp.displaySection, displayOrder: comp.displayOrder,
+      cashEffect: comp.cashEffect,
+      taxableEffect:        comp.taxableEffect,
+      cppPensionableEffect: comp.cppPensionableEffect,
+      eiInsurableEffect:    comp.eiInsurableEffect,
+      calculationMethod: comp.calculationMethod,
+      eligibleEarningsBase: comp.eligibleEarningsBase,
+      eligibleEarningsAmount: null,
+      statutoryTreatmentSource: comp.statutoryTreatmentSource,
+      ...frozenRuleProvenance(comp, asOf),
+      taxFormulaDeductionType: comp.taxFormulaDeductionType ?? null,
+      resolvedAmount: s.amount,
+      sourcePercentBps: null,
+      // schema requires sourceEffectiveFrom; for one-time earnings we
+      // use the pay-period start as a reasonable civil-date anchor.
+      sourceEffectiveFrom: input.periodStart,
+      sourceEffectiveTo:   null,
+      warningCode: null as string | null,
+      warningMessage: null as string | null,
+      provenance: "ONE_TIME_PAYROLL_ADJUSTMENT" as const,
+      enteredByUserId: s.enteredByUserId,
+      reason: s.reason,
+      expenseAccountIdSnapshot:   comp.expenseAccountId   ?? null,
+      liabilityAccountIdSnapshot: comp.liabilityAccountId ?? null,
+    };
+    // Idempotency for one-time snapshots — find existing snapshot by
+    // sourceScheduledEarningId back-pointer if the source row is
+    // already APPLIED. Otherwise create a new snapshot + APPLY source.
+    let snapshotId: string;
+    if (s.status === "APPLIED" && s.appliedSnapshotId) {
+      await c.payrollBatchComponentSnapshot.update({
+        where: { id: s.appliedSnapshotId },
+        data: frozen,
+      });
+      snapshotId = s.appliedSnapshotId;
+    } else {
+      const created = await c.payrollBatchComponentSnapshot.create({
+        data: {
+          club:            { connect: { id: input.clubId } },
+          batch:           { connect: { id: input.batchId } },
+          batchEmployee:   { connect: { id: input.batchEmployeeId } },
+          employee:        { connect: { id: input.employeeId } },
+          sourceComponent: { connect: { id: comp.id } },
+          // sourceAssignmentId intentionally omitted for one-time
+          // snapshots (null by default; no recurring assignment).
+          ...frozen,
+        },
+      });
+      snapshotId = created.id;
+      await c.payrollScheduledOneTimeEarning.update({
+        where: { id: s.id },
+        data: {
+          status: "APPLIED",
+          appliedAt: new Date(),
+          appliedToBatchId: input.batchId,
+          appliedSnapshotId: snapshotId,
         },
       });
     }

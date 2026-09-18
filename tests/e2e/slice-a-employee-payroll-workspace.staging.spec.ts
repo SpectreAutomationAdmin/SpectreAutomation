@@ -36,17 +36,23 @@ test.describe("Slice A — Employee Payroll workspace", () => {
     await page.screenshot({ path: path.join(OUT, "1b-chris-payroll-full.png"), fullPage: true });
 
     const bodyText = await page.locator("body").innerText();
-    // All eight canonical section headings must appear.
+    // All eight canonical section headings must appear. Slice A
+    // closeout §9 removed the legacy "Compensation & Benefits" nested
+    // heading; Recurring Earnings is the only accepted label.
     const requiredHeadings = [
       /Payroll Status/i,
       /Tax\s*&\s*Payment/i,
       /Base Compensation/i,
-      /(Recurring Earnings|Compensation\s*&\s*Benefits)/i, // legacy tolerance
+      /Recurring Earnings/i,
       /One-Time Earnings/i,
       /Benefits\s*&\s*Deductions/i,
       /Retirement/i,
       /Implementation\s*&\s*YTD/i,
     ];
+    // Nested legacy heading must NOT appear anywhere on the page.
+    expect(bodyText, "legacy 'Compensation & Benefits' heading must be removed").not.toMatch(
+      /Compensation\s*&\s*Benefits/i,
+    );
     for (const h of requiredHeadings) {
       expect(bodyText, `Expected heading ${h}`).toMatch(h);
     }
