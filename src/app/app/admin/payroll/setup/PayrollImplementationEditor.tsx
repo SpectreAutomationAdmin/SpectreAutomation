@@ -107,8 +107,8 @@ export default function PayrollImplementationEditor(props: Props) {
             {isMidYear
               ? "Mid-year migration"
               : isZero
-                ? "Zero prior YTD"
-                : "Not declared"}
+                ? "Beginning-of-year (no prior payroll YTD)"
+                : "Not configured"}
           </span>
         </div>
         <p style={{ margin: "6px 0 0 0", fontSize: 13, color: "#44403c", lineHeight: 1.55 }}>
@@ -175,7 +175,7 @@ export default function PayrollImplementationEditor(props: Props) {
                 data-testid="payroll-implementation-mode-zero"
               />
               <span>
-                <span style={{ fontWeight: 500 }}>Zero prior YTD</span>{" "}
+                <span style={{ fontWeight: 500 }}>Beginning-of-year — no prior payroll YTD</span>{" "}
                 <span style={{ color: "#78716c" }}>
                   — no payroll amounts exist for this employer earlier in the {currentTaxYear} tax year.
                 </span>
@@ -191,7 +191,7 @@ export default function PayrollImplementationEditor(props: Props) {
                 data-testid="payroll-implementation-mode-midyear"
               />
               <span>
-                <span style={{ fontWeight: 500 }}>Transitioning from another payroll system</span>{" "}
+                <span style={{ fontWeight: 500 }}>Mid-year migration</span>{" "}
                 <span style={{ color: "#78716c" }}>
                   — this Club processed payroll before Spectre in {currentTaxYear}. Opening YTD balances required.
                 </span>

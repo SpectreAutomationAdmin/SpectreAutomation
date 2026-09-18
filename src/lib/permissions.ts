@@ -478,6 +478,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:read", "payroll:write",
     "payroll:employees:manage", "payroll:timesheets:read", "payroll:timesheets:approve",
     "payroll:run", "payroll:approve", "payroll:return",
+    // Slice A (2026-09-18) §10 — Controller must be able to maintain
+    // employee opening YTD (implementation cutover data). This is
+    // Controller-financial territory. Adding the narrow write grant
+    // only; nothing else in Controller's role changes.
+    "payroll:opening-balance:write",
     // Pre-Phase-5 governance restoration (2026-09-16): Controller
     // LOSES `payroll:post`. The authoritative model is now:
     //   Payroll Admin: Prepare → Calculate → Review & Adjust → Submit

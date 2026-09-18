@@ -240,6 +240,7 @@ export default async function PayrollSetupPage({
         subtitle="Tell Spectre what came before. Did this Club process payroll from another system earlier in this tax year, or is this the very beginning of payroll for the affected employees? Prepare Payroll refuses until you confirm."
       />
       <section
+        id="payroll-implementation"
         className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
         style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
         data-testid="payroll-implementation-section"

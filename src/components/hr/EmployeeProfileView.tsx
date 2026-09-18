@@ -192,6 +192,13 @@ interface Props {
    *  still inside the Payroll tab. Reuses the canonical Payroll-3C-1
    *  EmployeeRecurringPayrollComponent architecture. */
   payrollCompensationSection?: React.ReactNode;
+  /** Slice A (2026-09-18) — Canonical Payroll-tab workspace. When
+   *  provided, REPLACES the entire legacy Payroll tab body (SIN /
+   *  Direct Deposit / TD1 grid + payrollCompensationSection) with the
+   *  new 8-section IA: Payroll Status · Tax & Payment · Base
+   *  Compensation · Recurring Earnings · One-Time Earnings · Benefits
+   *  & Deductions · Retirement · Implementation & YTD. */
+  payrollWorkspaceSection?: React.ReactNode;
   /** HR-2C B5 (2026-08-28) — Optional Training tab slot. Rendered when
    *  the caller holds `hr:training:compliance:read`. When omitted the
    *  Training tab itself is hidden from the tab rail so an
@@ -253,7 +260,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, payrollCompensationSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, payrollCompensationSection, payrollWorkspaceSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -599,7 +606,8 @@ export default function EmployeeProfileView(props: Props) {
         )
       )}
 
-      {tab === "payroll" && (
+      {tab === "payroll" && payrollWorkspaceSection}
+      {tab === "payroll" && !payrollWorkspaceSection && (
         <section className="spectre-person-body" data-testid="employee-tab-body-payroll">
           <h2 className="spectre-person-section-title">Payroll</h2>
 

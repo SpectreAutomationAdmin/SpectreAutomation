@@ -55,6 +55,11 @@ import TimekeepingPanel from "./TimekeepingPanel";
 // Phase 4 (2026-09-16) — Recurring payroll component assignments.
 import EmployeeRecurringComponentsSection from "@/components/hr/EmployeeRecurringComponentsSection";
 import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
+// Slice A (2026-09-18) — Canonical Payroll-tab workspace.
+import EmployeePayrollWorkspaceSection from "@/components/hr/EmployeePayrollWorkspaceSection";
+import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
+import { getActiveOpeningBalance } from "@/lib/payroll/opening-balance";
+import { updateOriginalHireDateAction } from "./_hire-date-actions";
 import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
@@ -373,6 +378,39 @@ export default async function EmployeeProfilePage({
     ? await getOnboardingApprovalReadiness(principal, profile.id)
     : null;
 
+  // Slice A (2026-09-18) — canonical Payroll-tab workspace data.
+  const currentTaxYear = new Date().getUTCFullYear();
+  const canReadPayrollConfig = hasPermission(principal, profile.clubId, "payroll:config:read");
+  const [
+    activePayGroupMembership,
+    implementationDeclaration,
+    activeOpeningBalance,
+  ] = await Promise.all([
+    canReadPayrollRecurring
+      ? prisma.payrollPayGroupMember.findFirst({
+          where: {
+            clubId: profile.clubId,
+            employeeId: profile.id,
+            effectiveTo: null,
+          },
+          include: {
+            payGroup: {
+              select: { id: true, code: true, name: true, payFrequency: true, active: true },
+            },
+          },
+          orderBy: { effectiveFrom: "desc" },
+        })
+      : Promise.resolve(null),
+    canReadPayrollConfig
+      ? getImplementationDeclaration(principal, profile.clubId, currentTaxYear).catch(() => null)
+      : Promise.resolve(null),
+    canReadPayrollRecurring
+      ? getActiveOpeningBalance(principal, profile.clubId, profile.id, currentTaxYear).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
+  const currentCompensation = compensationHistory.find((c) => c.effectiveTo === null) ?? null;
+
   return (
     <EmployeeProfileView
       employee={{
@@ -661,6 +699,160 @@ export default async function EmployeeProfilePage({
             addAction={addRecurringPayrollComponentAction}
             endAction={endRecurringPayrollComponentAction}
             changeAction={changeRecurringPayrollComponentAction}
+          />
+        ) : undefined
+      }
+      payrollWorkspaceSection={
+        canReadPayrollRecurring ? (
+          <EmployeePayrollWorkspaceSection
+            employeeId={profile.id}
+            employeeNumber={profile.employeeNumber}
+            employeeStatus={profile.status ?? "ACTIVE"}
+            employeeName={`${profile.preferredName ?? profile.firstName} ${profile.lastName}`}
+            originalHireDateIso={profile.hireDate ? new Date(profile.hireDate).toISOString() : null}
+            spectreActivatedAtIso={profile.activatedAt ? new Date(profile.activatedAt).toISOString() : null}
+            canEditHireDate={canWriteEmployment}
+            payGroup={
+              activePayGroupMembership?.payGroup
+                ? {
+                    id: activePayGroupMembership.payGroup.id,
+                    code: activePayGroupMembership.payGroup.code,
+                    name: activePayGroupMembership.payGroup.name,
+                    payFrequency: activePayGroupMembership.payGroup.payFrequency,
+                  }
+                : null
+            }
+            payroll={{
+              sinAccessible: canReadSin,
+              sinMasked: sinMasked?.sinMasked ?? null,
+              bankingAccessible: canReadBanking,
+              bankingMasked: bankingMasked
+                ? {
+                    holderName: bankingMasked.holderName ?? "",
+                    accountMasked: bankingMasked.accountMasked ?? "",
+                    status: bankingMasked.status ?? "",
+                  }
+                : null,
+              taxAccessible: canReadTax,
+              taxProfileMasked: taxProfileMasked
+                ? { province: taxProfileMasked.province ?? null }
+                : null,
+              federal: taxReadiness?.federal ?? null,
+              provincial: taxReadiness?.provincial ?? null,
+            } as never}
+            currentCompensation={
+              currentCompensation
+                ? {
+                    id: currentCompensation.id,
+                    cadence: currentCompensation.cadence,
+                    rate: currentCompensation.rate.toString(),
+                    currency: currentCompensation.currency ?? null,
+                    effectiveFrom: currentCompensation.effectiveFrom.toISOString(),
+                    effectiveTo: currentCompensation.effectiveTo?.toISOString() ?? null,
+                  }
+                : null
+            }
+            compensationHistoryCount={compensationHistory.length}
+            implementationDeclaration={
+              implementationDeclaration
+                ? {
+                    taxYear: implementationDeclaration.taxYear,
+                    mode: implementationDeclaration.mode,
+                    firstSpectrePayDateIso:
+                      implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null,
+                  }
+                : null
+            }
+            openingBalance={
+              activeOpeningBalance
+                ? {
+                    id: activeOpeningBalance.id,
+                    taxYear: activeOpeningBalance.taxYear,
+                    status: activeOpeningBalance.status,
+                    throughPayDateIso: activeOpeningBalance.throughPayDate
+                      ? new Date(activeOpeningBalance.throughPayDate).toISOString()
+                      : null,
+                    ytdGross: (activeOpeningBalance as unknown as { ytdGrossEarnings?: unknown }).ytdGrossEarnings != null
+                      ? String((activeOpeningBalance as unknown as { ytdGrossEarnings: unknown }).ytdGrossEarnings)
+                      : null,
+                    ytdTaxable: (activeOpeningBalance as unknown as { ytdTaxableEarnings?: unknown }).ytdTaxableEarnings != null
+                      ? String((activeOpeningBalance as unknown as { ytdTaxableEarnings: unknown }).ytdTaxableEarnings)
+                      : null,
+                    ytdPensionable: (activeOpeningBalance as unknown as { ytdPensionableEarnings?: unknown }).ytdPensionableEarnings != null
+                      ? String((activeOpeningBalance as unknown as { ytdPensionableEarnings: unknown }).ytdPensionableEarnings)
+                      : null,
+                    ytdInsurable: (activeOpeningBalance as unknown as { ytdInsurableEarnings?: unknown }).ytdInsurableEarnings != null
+                      ? String((activeOpeningBalance as unknown as { ytdInsurableEarnings: unknown }).ytdInsurableEarnings)
+                      : null,
+                    ytdCppEE: (activeOpeningBalance as unknown as { ytdCppEE?: unknown }).ytdCppEE != null
+                      ? String((activeOpeningBalance as unknown as { ytdCppEE: unknown }).ytdCppEE)
+                      : null,
+                    ytdEiEE: (activeOpeningBalance as unknown as { ytdEiEE?: unknown }).ytdEiEE != null
+                      ? String((activeOpeningBalance as unknown as { ytdEiEE: unknown }).ytdEiEE)
+                      : null,
+                    ytdFederalTax: (activeOpeningBalance as unknown as { ytdFederalTax?: unknown }).ytdFederalTax != null
+                      ? String((activeOpeningBalance as unknown as { ytdFederalTax: unknown }).ytdFederalTax)
+                      : null,
+                    ytdProvincialTax: (activeOpeningBalance as unknown as { ytdProvincialTax?: unknown }).ytdProvincialTax != null
+                      ? String((activeOpeningBalance as unknown as { ytdProvincialTax: unknown }).ytdProvincialTax)
+                      : null,
+                    priorPayrollKind:
+                      (activeOpeningBalance as unknown as { priorPayrollKind?: string | null }).priorPayrollKind ?? null,
+                  }
+                : null
+            }
+            actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
+            federalTd1Panel={
+              canReadTax
+                ? taxReadiness?.federal?.ready
+                  ? <p className="text-sm text-stone-900">Completed{taxReadiness.federalCompletedAt ? ` ${new Date(taxReadiness.federalCompletedAt).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" })}` : ""}</p>
+                  : <p className="text-sm text-stone-500">Not yet completed</p>
+                : <p className="text-xs text-stone-500">Requires Payroll Admin access</p>
+            }
+            provincialTd1Panel={
+              canReadTax
+                ? taxReadiness?.provincial?.ready
+                  ? <p className="text-sm text-stone-900">Completed{taxReadiness.provincialCompletedAt ? ` ${new Date(taxReadiness.provincialCompletedAt).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" })}` : ""}</p>
+                  : <p className="text-sm text-stone-500">Not yet completed</p>
+                : <p className="text-xs text-stone-500">Requires Payroll Admin access</p>
+            }
+            recurringComponentsSection={
+              <EmployeeRecurringComponentsSection
+                employeeId={profile.id}
+                clubId={profile.clubId}
+                canWrite={canWritePayrollRecurring}
+                catalogue={payrollComponentCatalogue.map((c) => ({
+                  id: c.id,
+                  code: c.code,
+                  displayName: c.displayName,
+                  category: c.category,
+                  side: c.side,
+                  cashEffect: c.cashEffect,
+                  calculationMethod: c.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
+                  displaySection: c.displaySection,
+                }))}
+                assignments={recurringComponentAssignments.map((a) => ({
+                  id: a.id,
+                  componentId: a.componentId,
+                  componentCode: a.component.code,
+                  componentDisplayName: a.component.displayName,
+                  componentCategory: a.component.category,
+                  componentSide: a.component.side,
+                  cashEffect: a.component.cashEffect,
+                  calculationMethod: a.component.calculationMethod,
+                  displaySection: a.component.displaySection,
+                  amount: a.amount != null ? String(a.amount) : null,
+                  percentBps: a.percentBps,
+                  effectiveFrom: a.effectiveFrom.toISOString(),
+                  effectiveTo: a.effectiveTo?.toISOString() ?? null,
+                  active: a.active,
+                  notes: a.notes,
+                }))}
+                addAction={addRecurringPayrollComponentAction}
+                endAction={endRecurringPayrollComponentAction}
+                changeAction={changeRecurringPayrollComponentAction}
+              />
+            }
           />
         ) : undefined
       }
