@@ -17,7 +17,21 @@ import {
 import { snapshotEmployeeComponentsForBatch } from "@/lib/payroll/components-snapshot";
 import { voidPayrollBatch, discardPreparedPayrollBatch } from "@/lib/payroll/batch-preparation";
 import { buildPayStatement } from "@/lib/payroll/pay-statement";
+import { ValidationError } from "@/lib/errors";
 import { Prisma } from "@prisma/client";
+
+async function expectValidationErrorContaining(promise: Promise<unknown>, matcher: RegExp) {
+  try {
+    await promise;
+    throw new Error("expected ValidationError but the promise fulfilled");
+  } catch (err) {
+    if (!(err instanceof ValidationError)) throw err;
+    const combined = err.issues.map((i) => `${i.path}: ${i.message}`).join(" | ");
+    if (!matcher.test(combined)) {
+      throw new Error(`ValidationError issues did not match ${matcher}: ${combined}`);
+    }
+  }
+}
 
 async function seedTestEmployee(clubId: string, payGroupId: string) {
   const id = `test-emp-${Math.random().toString(36).slice(2, 10)}`;
@@ -223,10 +237,13 @@ describe("Slice B closeout — invalid component at Prepare-time (fail-closed)",
     // Deactivate the component after scheduling.
     await prisma.payrollComponent.update({ where: { id: bonus.id }, data: { active: false } });
     const { batch, be } = await seedBatchAndEmployee(club.id, pg.id, pp.id, empId);
-    await expect(snapshotEmployeeComponentsForBatch({
-      clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
-      payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
-    })).rejects.toThrow(/inactive component/i);
+    await expectValidationErrorContaining(
+      snapshotEmployeeComponentsForBatch({
+        clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
+        payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
+      }),
+      /inactive component/i,
+    );
   });
 
   it("R. component usage flipped from ONE_TIME to RECURRING before Prepare → snapshotter throws", async () => {
@@ -237,10 +254,13 @@ describe("Slice B closeout — invalid component at Prepare-time (fail-closed)",
     });
     await prisma.payrollComponent.update({ where: { id: bonus.id }, data: { usage: "RECURRING" } });
     const { batch, be } = await seedBatchAndEmployee(club.id, pg.id, pp.id, empId);
-    await expect(snapshotEmployeeComponentsForBatch({
-      clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
-      payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
-    })).rejects.toThrow(/usage is now RECURRING/i);
+    await expectValidationErrorContaining(
+      snapshotEmployeeComponentsForBatch({
+        clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
+        payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
+      }),
+      /usage is now RECURRING/i,
+    );
   });
 
   it("component side/cashEffect changed to invalid → snapshotter throws", async () => {
@@ -253,10 +273,13 @@ describe("Slice B closeout — invalid component at Prepare-time (fail-closed)",
       where: { id: bonus.id }, data: { side: "EMPLOYER", cashEffect: "NO_NET_PAY_EFFECT" },
     });
     const { batch, be } = await seedBatchAndEmployee(club.id, pg.id, pp.id, empId);
-    await expect(snapshotEmployeeComponentsForBatch({
-      clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
-      payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
-    })).rejects.toThrow(/no longer a valid employee cash earning/i);
+    await expectValidationErrorContaining(
+      snapshotEmployeeComponentsForBatch({
+        clubId: club.id, batchId: batch.id, batchEmployeeId: be.id, employeeId: empId,
+        payPeriodId: pp.id, periodStart: pp.periodStart, periodEnd: pp.periodEnd,
+      }),
+      /no longer a valid employee cash earning/i,
+    );
   });
 });
 

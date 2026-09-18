@@ -27,6 +27,7 @@
 
 import { prisma } from "../prisma";
 import type { Prisma as PrismaTypes } from "@prisma/client";
+import { ValidationError } from "../errors";
 import { findLibraryRule, type StatutoryRuleVariant } from "./statutory-library";
 // Phase 4 follow-up (2026-09-16) — canonical Prepare-time fail-closed
 // guard for ambiguous overlapping assignments. See
@@ -280,22 +281,28 @@ export async function snapshotEmployeeComponentsForBatch(
     // The scheduling service enforces these at write time; re-verify
     // at Prepare in case the catalogue row was edited afterwards.
     if (!comp.active) {
-      throw new Error(
-        `Scheduled one-time earning ${comp.code} references an inactive component. ` +
+      throw new ValidationError([{
+        path: `scheduledOneTimeEarning[${s.id}].componentId`,
+        message:
+          `Scheduled one-time earning ${comp.code} references an inactive component. ` +
           `Reactivate the component in Payroll Settings or cancel the scheduled earning before Prepare.`,
-      );
+      }]);
     }
     if (comp.usage !== "ONE_TIME" && comp.usage !== "BOTH") {
-      throw new Error(
-        `Scheduled one-time earning ${comp.code} references a component whose usage is now ${comp.usage}. ` +
+      throw new ValidationError([{
+        path: `scheduledOneTimeEarning[${s.id}].componentId`,
+        message:
+          `Scheduled one-time earning ${comp.code} references a component whose usage is now ${comp.usage}. ` +
           `Restore usage to ONE_TIME or BOTH, or cancel the scheduled earning before Prepare.`,
-      );
+      }]);
     }
     if (comp.side !== "EMPLOYEE" || comp.cashEffect !== "INCREASES_NET_PAY") {
-      throw new Error(
-        `Scheduled one-time earning ${comp.code} references a component that is no longer a valid employee cash earning ` +
+      throw new ValidationError([{
+        path: `scheduledOneTimeEarning[${s.id}].componentId`,
+        message:
+          `Scheduled one-time earning ${comp.code} references a component that is no longer a valid employee cash earning ` +
           `(side=${comp.side}, cashEffect=${comp.cashEffect}). Cancel the scheduled earning or restore the component.`,
-      );
+      }]);
     }
     // FIXED_AMOUNT only in Slice B — the scheduling service enforces
     // this at write time, but re-verify at snapshot time for defence.
