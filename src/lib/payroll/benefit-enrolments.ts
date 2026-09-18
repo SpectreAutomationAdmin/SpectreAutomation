@@ -152,7 +152,7 @@ export async function enrolEmployeeInBenefitPlan(
   clubId: string,
   input: EnrolInput,
 ): Promise<EnrolmentView> {
-  requirePermission(principal, clubId, "payroll:write");
+  requirePermission(principal, clubId, "payroll:benefit_enrolment:write");
   await assertPostingAllowed(principal, clubId, "payroll.benefit_enrolment.enrol", ENTITY, input.employeeId);
 
   const plan = await loadPlanOrThrow(clubId, input.planId);
@@ -210,7 +210,7 @@ export async function endEnrolment(
   enrolmentId: string,
   input: { effectiveTo: Date | string; endReason?: string | null },
 ): Promise<EnrolmentView> {
-  requirePermission(principal, clubId, "payroll:write");
+  requirePermission(principal, clubId, "payroll:benefit_enrolment:write");
   const row = await prisma.employeeBenefitPlanEnrolment.findFirst({
     where: { id: enrolmentId, clubId },
     include: { plan: { select: { code: true, name: true, kind: true } } },
@@ -259,7 +259,7 @@ export async function changeEnrolment(
   clubId: string,
   input: ChangeEnrolmentInput,
 ): Promise<EnrolmentView> {
-  requirePermission(principal, clubId, "payroll:write");
+  requirePermission(principal, clubId, "payroll:benefit_enrolment:write");
   const existing = await prisma.employeeBenefitPlanEnrolment.findFirst({
     where: { id: input.enrolmentId, clubId },
     include: { plan: true },

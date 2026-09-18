@@ -25,6 +25,20 @@ const KINDS: readonly BenefitPlanKind[] = ["LTD", "HEALTH_DENTAL", "RRSP"];
 export type ElectionKind = "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS";
 const ELECTION_KINDS: readonly ElectionKind[] = ["FIXED_AMOUNT", "PERCENT_OF_ELIGIBLE_EARNINGS"];
 
+// Slice C closeout (2026-09-18) §17-18 — `eligibleEarningsBasis` is the
+// PLAN's payroll-period earnings basis used to compute an employee percent
+// election (and, for RRSP in Slice D, an employer match). It is NOT a
+// contribution-room ceiling and does NOT represent a CRA RRSP deduction
+// limit, YTD contribution-room, or any other regulatory maximum. Any future
+// enforcement of an annual RRSP contribution limit will consume a
+// separately-sourced field (not this one).
+//
+//   REGULAR_EARNINGS_ONLY — regular salary / hourly earnings only. Excludes
+//                           bonuses, allowances, taxable benefits. Typical
+//                           RRSP match basis.
+//   CASH_EARNINGS         — sum of cash-effect INCREASES_NET_PAY component
+//                           amounts (regular + additional earnings + cash
+//                           allowances). Broader base.
 export type EligibleEarningsBasis = "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS";
 const BASES: readonly EligibleEarningsBasis[] = ["REGULAR_EARNINGS_ONLY", "CASH_EARNINGS"];
 

@@ -334,6 +334,30 @@ export default async function PayrollSetupPage({
           Open Payroll components →
         </a>
       </section>
+
+      {/* Section 8 — Benefit plans (Slice C closeout 2026-09-18) */}
+      <SectionHeader
+        eyebrow="Section 8"
+        title="Benefit plans"
+        subtitle="Configure the Club's Long-Term Disability and Health & Dental plans. Each plan links to one or two Payroll components — the components carry the tax, pensionable, insurable, and GL treatment. RRSP plans arrive in a later slice."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+        data-testid="payroll-benefits-section"
+      >
+        <p className="mb-2 text-sm" style={{ color: "var(--spectre-text-secondary)" }}>
+          View, create, and end Club benefit plans. Enrolments are managed per employee under
+          Employee → Payroll → Benefits &amp; Deductions.
+        </p>
+        <a
+          href="/app/admin/payroll/setup/benefits"
+          className="btn btn-secondary btn-sm"
+          data-testid="payroll-benefits-link"
+        >
+          Open Benefit plans →
+        </a>
+      </section>
     </div>
   );
 }

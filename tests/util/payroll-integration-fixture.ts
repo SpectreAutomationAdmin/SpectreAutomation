@@ -116,6 +116,14 @@ async function seedSemiMonthlyCalendar(clubId: string, payGroupId: string) {
 export interface PayrollIntegrationFixture {
   club: { id: string; slug: string; name: string };
   clubId: string;
+  // Slice C closeout (2026-09-18) §22 — reusable fixture default SoD:
+  //   adminP       → CLUB_ADMIN (broad-override, plan config)
+  //   paP          → PAYROLL_ADMIN (Prepare / Calc / Submit / Post)
+  //   controllerP  → CONTROLLER (independent Approve / Return only)
+  //   posterP      → alias of `paP`. PA is the poster. Retained as a named
+  //                  seam so tests read intent ("post as poster") clearly.
+  // Historical: prior fixture created a separate CLUB_ADMIN poster. That
+  // conflated Post authority with role-elevation. Removed 2026-09-18.
   adminP: Awaited<ReturnType<typeof principalFor>>;
   paP: Awaited<ReturnType<typeof principalFor>>;
   controllerP: Awaited<ReturnType<typeof principalFor>>;
@@ -178,11 +186,13 @@ export async function createPayrollIntegrationFixture(
   const admin = await makeUser({ email: `admin.${club.id}@t.test`, role: "CLUB_ADMIN", clubId: club.id });
   const pa    = await makeUser({ email: `pa.${club.id}@t.test`,    role: "PAYROLL_ADMIN", clubId: club.id });
   const ctl   = await makeUser({ email: `ctl.${club.id}@t.test`,   role: "CONTROLLER",    clubId: club.id });
-  const poster = await makeUser({ email: `poster.${club.id}@t.test`, role: "CLUB_ADMIN", clubId: club.id });
   const adminP = await principalFor(admin.email);
   const paP    = await principalFor(pa.email);
   const controllerP = await principalFor(ctl.email);
-  const posterP = await principalFor(poster.email);
+  // Slice C closeout (2026-09-18) §22 — PA is the poster. Retain a named
+  // alias so tests remain readable.
+  const posterP = paP;
+  const poster = pa;
 
   const { profile, salaryExpense } = await seedGlProfileAccounts(club.id);
 

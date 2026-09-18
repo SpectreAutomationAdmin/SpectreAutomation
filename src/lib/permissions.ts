@@ -125,6 +125,13 @@ export const PERMISSIONS = {
   // mutation for HR-tier callers, but service-date correction from the
   // finance-tier UI routes through the narrow permission only.
   "hr:service-date:write": { name: "Correct original hire / service date", category: "HR" },
+  // Slice C closeout (2026-09-18) §15 — narrow grant for enrol / change /
+  // end of an employee benefit enrolment. Controller carries this so
+  // benefit-plan maintenance for a single employee is not blocked on the
+  // Payroll Admin, without leaking `payroll:write` (which covers batches,
+  // scheduled earnings, and recurring-component maintenance). Enforced
+  // by `enrolEmployeeInBenefitPlan`, `changeEnrolment`, `endEnrolment`.
+  "payroll:benefit_enrolment:write": { name: "Enrol / change / end an employee benefit enrolment", category: "PAYROLL" },
 
   // Events / private events
   "events:read":               { name: "View events",                   category: "EVENTS" },
@@ -362,6 +369,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "payroll:opening-balance:write",
+    // Slice C closeout (2026-09-18) §15.
+    "payroll:benefit_enrolment:write",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -498,6 +507,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // correct Original Hire Date. Narrow: does NOT grant department /
     // position / reports-to / employment-type / termination mutation.
     "hr:service-date:write",
+    // Slice C closeout (2026-09-18) §15 — Controller may enrol / change /
+    // end an employee benefit enrolment WITHOUT gaining payroll:write
+    // (batches / scheduled earnings / recurring-component maintenance).
+    "payroll:benefit_enrolment:write",
     // Pre-Phase-5 governance restoration (2026-09-16): Controller
     // LOSES `payroll:post`. The authoritative model is now:
     //   Payroll Admin: Prepare → Calculate → Review & Adjust → Submit
@@ -645,6 +658,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:opening-balance:write",
     // Slice A closeout (2026-09-18) — narrow service-date correction.
     "hr:service-date:write",
+    // Slice C closeout (2026-09-18) §15.
+    "payroll:benefit_enrolment:write",
     "reports:operating",
     // HR-1 — PAYROLL_ADMIN is the reveal-tier role: SIN reveal,
     // banking reveal, tax reveal all live here (audited via

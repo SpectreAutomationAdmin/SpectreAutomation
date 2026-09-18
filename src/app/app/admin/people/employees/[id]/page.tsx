@@ -70,6 +70,12 @@ import {
 // Slice C (2026-09-18) — benefit plan enrolments.
 import BenefitsDeductionsSection from "@/components/hr/BenefitsDeductionsSection";
 import { listEnrolmentsForEmployee } from "@/lib/payroll/benefit-enrolments";
+import { listBenefitPlans } from "@/lib/payroll/benefit-plans";
+import {
+  enrolAction as benefitsEnrolAction,
+  changeAction as benefitsChangeAction,
+  endAction as benefitsEndAction,
+} from "./_benefit-actions";
 import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
@@ -80,12 +86,16 @@ export default async function EmployeeProfilePage({
   params, searchParams,
 }: {
   params: { id: string };
-  searchParams?: Promise<{ tab?: string }>;
+  searchParams?: Promise<{ tab?: string; benefitsOk?: string; benefitsErr?: string }>;
 }) {
   const principal = await getCurrentPrincipal();
   if (!principal) redirect("/login");
-  const sp = (await (searchParams ?? Promise.resolve({}))) as { tab?: string };
+  const sp = (await (searchParams ?? Promise.resolve({}))) as { tab?: string; benefitsOk?: string; benefitsErr?: string };
   const defaultTab = sp.tab?.trim() || undefined;
+  const benefitsBanner: { tone: "success" | "error"; text: string } | null =
+    sp.benefitsOk ? { tone: "success", text: sp.benefitsOk }
+    : sp.benefitsErr ? { tone: "error", text: sp.benefitsErr }
+    : null;
 
   let profile: Awaited<ReturnType<typeof getEmployee>>;
   try {
@@ -425,6 +435,13 @@ export default async function EmployeeProfilePage({
   const benefitEnrolments = canReadPayrollRecurring
     ? await listEnrolmentsForEmployee(principal, profile.clubId, profile.id).catch(() => [])
     : [];
+  // Slice C closeout (2026-09-18) — Club-active benefit plans the founder
+  // can enrol this employee into. Only active plans are offered; the
+  // service further filters overlap at the plan level.
+  const activeBenefitPlans = canReadPayrollRecurring
+    ? await listBenefitPlans(principal, profile.clubId).catch(() => [])
+    : [];
+  const canWriteBenefitEnrolment = hasPermission(principal, profile.clubId, "payroll:benefit_enrolment:write");
 
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings data.
   // Load the employee's history + eligible one-time components +
@@ -873,8 +890,10 @@ export default async function EmployeeProfilePage({
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
             benefitsDeductionsSection={
               <BenefitsDeductionsSection
+                employeeId={profile.id}
                 rows={benefitEnrolments.map((r) => ({
                   id: r.id,
+                  planId: r.planId,
                   planCode: r.planCode,
                   planName: r.planName,
                   planKind: r.planKind,
@@ -885,6 +904,20 @@ export default async function EmployeeProfilePage({
                   effectiveFromIso: r.effectiveFromIso,
                   effectiveToIso: r.effectiveToIso,
                 }))}
+                planChoices={activeBenefitPlans.map((p) => ({
+                  id: p.id,
+                  code: p.code,
+                  name: p.name,
+                  kind: p.kind,
+                  defaultElectionKind: p.defaultElectionKind,
+                  effectiveFromIso: p.effectiveFromIso,
+                  effectiveToIso: p.effectiveToIso,
+                }))}
+                canWrite={canWriteBenefitEnrolment}
+                enrolAction={benefitsEnrolAction}
+                changeAction={benefitsChangeAction}
+                endAction={benefitsEndAction}
+                banner={benefitsBanner}
               />
             }
             oneTimeEarningsSection={
