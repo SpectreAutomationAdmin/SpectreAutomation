@@ -59,7 +59,12 @@ function assertStagingUrl() {
   if (/localhost|127\.0\.0\.1|(^|\/)dev\.db/i.test(url)) {
     throw new Error("Refusing to run — DATABASE_URL points at a local database.");
   }
-  const staging = /flycast|\.internal|\.fly\.dev|spectre-staging|staging-/i.test(url);
+  // Known staging host signals — the Fly-internal ones AND the Neon
+  // primary staging cluster (ep-delicate-band-aj3vxkxu-pooler) documented
+  // in reference_staging_infra. Localhost / prod is already refused above.
+  const staging =
+    /flycast|\.internal|\.fly\.dev|spectre-staging|staging-/i.test(url) ||
+    /ep-delicate-band-aj3vxkxu-pooler\.c-3\.us-east-2\.aws\.neon\.tech/i.test(url);
   if (!staging) {
     throw new Error(
       "Refusing to run — DATABASE_URL does not match any known staging host pattern.",
