@@ -387,21 +387,18 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
       {/* ============================================================
           G. RETIREMENT
           ============================================================ */}
+      {/* Slice D closeout (2026-09-19) — the Retirement summary now
+          simply routes the reader to Benefits & Deductions above. RRSP
+          enrolments live in the canonical benefits catalogue with all
+          the other durable Club arrangements. */}
       <div className="spectre-person-section" data-testid="payroll-retirement">
         <div className="spectre-person-section-head">
           <h3 className="spectre-person-eyebrow">Retirement</h3>
         </div>
-        <DL>
-          <Row label="RRSP">
-            <span className="text-stone-500">Not enrolled</span>
-          </Row>
-          <Row label="Club plan">
-            <span className="text-stone-500">Not configured</span>
-          </Row>
-        </DL>
-        <p className="mt-2 text-xs text-stone-400">
-          A dedicated RRSP plan model with employer matching lands in a later slice. Manual
-          pairing of two independent recurring components is intentionally not offered here.
+        <p className="mt-1 text-xs text-stone-500">
+          Any RRSP enrolment appears in <em>Benefits &amp; Deductions</em> above alongside LTD and
+          Health &amp; Dental. Configure RRSP plans in{" "}
+          <em>Payroll Settings → Benefit plans</em>.
         </p>
       </div>
 
