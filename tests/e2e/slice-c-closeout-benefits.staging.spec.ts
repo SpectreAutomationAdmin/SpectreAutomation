@@ -23,9 +23,17 @@
 // Enrol, Change, End) capture the form STATE, not a submitted mutation.
 
 import { test, expect } from "@playwright/test";
-import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
+import { loginAsFounder, loginAs, stagingCredsAvailable } from "./_lib/staging-auth";
 
 const VIEWPORT = { width: 1440, height: 900 };
+
+// Slice C final UI acceptance — synthetic staging fixture credentials.
+// Provisioned by scripts/slice-c-staging-screenshot-fixture.mjs --setup.
+const FIXTURE_ADMIN_EMAIL = "slice-c-benefits-test-admin@fixture.spectre.test";
+const FIXTURE_ADMIN_PASSWORD =
+  process.env.SPECTRE_FIXTURE_ADMIN_PASSWORD ?? "SliceC-Benefits-Fixture-2026!";
+const FIXTURE_EMPLOYEE_ID = "cmu7mh066000lc4uixx7u0e6a";
+const FIXTURE_LTD_PLAN_ID = "cmu7mh02q000hc4uiopd8ibwh";
 
 test.describe("Slice C closeout — Benefits UI screenshots (staging)", () => {
   test.beforeAll(() => {
@@ -130,6 +138,88 @@ test.describe("Slice C closeout — Benefits UI screenshots (staging)", () => {
     // an enrolled synthetic employee, deferred: creating such a synthetic
     // fixture on the FOUNDER_REVIEW-mode staging tenant is out of scope
     // for this closeout — proven interactively via targeted vitest specs.
+  });
+
+  test("08–12 · Active + Change + End + History via synthetic fixture", async ({ context }) => {
+    // Log in as the synthetic fixture admin (NEVER touches Chris/Marc).
+    const page = await loginAs(context, FIXTURE_ADMIN_EMAIL, FIXTURE_ADMIN_PASSWORD, {
+      landing: `/app/admin/people/employees/${FIXTURE_EMPLOYEE_ID}?tab=payroll`,
+    });
+    await page.setViewportSize(VIEWPORT);
+    await page.waitForLoadState("networkidle");
+
+    const benefits = page.getByTestId("payroll-benefits-deductions-slice-c");
+    await expect(benefits).toBeVisible({ timeout: 15_000 });
+    await benefits.scrollIntoViewIfNeeded();
+
+    // 08 · Active LTD (first active enrolment)
+    const actives = page.locator('[data-testid^="benefit-enrolment-active-"]');
+    await expect(actives.first()).toBeVisible();
+    await page.screenshot({ path: "test-results/slice-c-closeout/08-active-ltd-enrolment.png", fullPage: true });
+
+    // 09 · Active Health/Dental (both actives visible in fullpage; also crop only)
+    const activeCount = await actives.count();
+    if (activeCount >= 2) {
+      await actives.nth(1).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "test-results/slice-c-closeout/09-active-health-enrolment.png", fullPage: true });
+    }
+
+    // 10 · Change enrolment form open
+    await actives.first().scrollIntoViewIfNeeded();
+    const changeBtn = page.locator('[data-testid^="benefit-change-btn-"]').first();
+    await changeBtn.click();
+    const changeForm = page.locator('[data-testid^="benefits-change-form-"]').first();
+    await expect(changeForm).toBeVisible();
+    await page.screenshot({ path: "test-results/slice-c-closeout/10-change-enrolment-form.png", fullPage: true });
+
+    // Reset — click Cancel on the change form
+    await changeForm.getByRole("button", { name: /^Cancel$/ }).click();
+
+    // 11 · End enrolment form open
+    const endBtn = page.locator('[data-testid^="benefit-end-btn-"]').first();
+    await endBtn.click();
+    const endForm = page.locator('[data-testid^="benefits-end-form-"]').first();
+    await expect(endForm).toBeVisible();
+    await page.screenshot({ path: "test-results/slice-c-closeout/11-end-enrolment-form.png", fullPage: true });
+    await endForm.getByRole("button", { name: /^Cancel$/ }).click();
+
+    // 12 · History disclosure — synthetic fixture provisioned an ENDED enrolment
+    const hist = page.getByTestId("benefits-history-disclosure");
+    if (await hist.isVisible().catch(() => false)) {
+      await hist.evaluate((el: HTMLDetailsElement) => { el.open = true; });
+      await hist.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "test-results/slice-c-closeout/12-history-upcoming-state.png", fullPage: true });
+    }
+  });
+
+  test("15–16 · Change Benefit Plan editor + successor lineage in Settings", async ({ context }) => {
+    const page = await loginAs(context, FIXTURE_ADMIN_EMAIL, FIXTURE_ADMIN_PASSWORD, {
+      landing: "/app/admin/payroll/setup/benefits",
+    });
+    await page.setViewportSize(VIEWPORT);
+    await expect(page.getByTestId("payroll-benefits-settings-page")).toBeVisible({ timeout: 15_000 });
+
+    // 15 · Change Benefit Plan editor open on the LTD fixture plan
+    const changeBtn = page.getByTestId(`benefit-plan-change-btn-${FIXTURE_LTD_PLAN_ID}`);
+    if (await changeBtn.isVisible().catch(() => false)) {
+      await changeBtn.click();
+      const editor = page.getByTestId(`benefits-change-form-${FIXTURE_LTD_PLAN_ID}`);
+      await expect(editor).toBeVisible();
+      await editor.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: "test-results/slice-c-closeout/15-change-plan-editor.png", fullPage: true });
+    }
+
+    // 16 · Historical lineage row — only renders after at least one Change
+    // has landed. If the fixture setup ran Change before this shot fires,
+    // the historical disclosure shows "replaced by <code>". Otherwise
+    // this shot is captured against the empty history state.
+    const hist = page.getByTestId("benefits-history-disclosure");
+    if (await hist.isVisible().catch(() => false)) {
+      await hist.evaluate((el: HTMLDetailsElement) => { el.open = true; });
+      await page.screenshot({ path: "test-results/slice-c-closeout/16-plan-history-lineage.png", fullPage: true });
+    } else {
+      await page.screenshot({ path: "test-results/slice-c-closeout/16-plan-history-empty.png", fullPage: true });
+    }
   });
 
   test("14 · Chris payroll workspace read-only (founder-data preservation)", async ({ context }) => {
