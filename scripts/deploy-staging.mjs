@@ -45,7 +45,7 @@ const HEALTH_URL = "https://staging.spectreautomation.com/api/health";
 // child process emits nothing to stdout/stderr for that window, we
 // terminate it with a classified BUILD_TIMEOUT / EXPORT_TIMEOUT / etc.
 const STAGE_TIMEOUTS_MS = {
-  overall:        30 * 60_000, // 30 min hard ceiling
+  overall:        60 * 60_000, // 60 min hard ceiling. flyctl deploy internally re-runs a Docker build after the initial push (to produce the release-machine image), so a single flyctl invocation touches BUILD twice. 30 min was too tight for this pattern on Windows Docker Desktop.
   buildIdleKill:  10 * 60_000, // 10 min no output during compile
   exportIdleKill: 15 * 60_000, // 15 min. Buildkit's "unpacking to registry.fly.io/..." step is silent for 8+ min on Windows Docker Desktop even when progressing. Was 8 min; two attempts hit exactly 484s of silence on that sub-step. 15 min gives it real slack while keeping the overall ceiling meaningful.
   pushIdleKill:    6 * 60_000, // 6 min no output during registry push
