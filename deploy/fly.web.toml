@@ -73,7 +73,10 @@ kill_timeout = 30
   SPECTRE_PLATFORM_HOST = "staging.spectreautomation.com"
 
 [processes]
-  app = "npm run start"
+  # DRH-1 (2026-09-19) — standalone bundle exposes its own server.js at
+  # /app/server.js. `npm run start` (→ `next start`) is not present in
+  # the standalone runtime; `node server.js` is the correct entry.
+  app = "node server.js"
 
 [http_service]
   internal_port = 3000

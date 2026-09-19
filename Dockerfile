@@ -13,11 +13,19 @@
 #   • The release_command in fly.web.toml runs `prisma migrate deploy`
 #     against the SAME Postgres schema so the migrations applied to
 #     Neon exactly match the client generated here.
-#   • devDeps are installed in production because `prisma` + `tsx` are
-#     devDependencies and we need them at release + runtime respectively.
-#     No `--omit=dev`. The image is a few MB larger; the alternative
-#     is to promote both to `dependencies` which is invasive to
-#     package.json for a minor size win.
+#
+# DRH-1 (2026-09-19) — Next.js standalone output.
+#   • next.config.js now sets `output: "standalone"`. The builder
+#     stage's `next build` produces `.next/standalone/` containing a
+#     traced-minimum node_modules plus a `server.js` entry.
+#   • The runner stage COPIES ONLY the standalone bundle + static +
+#     public + Prisma runtime + Prisma CLI (for release_command) +
+#     prisma-postgres migrations. It no longer ships the entire
+#     builder-stage node_modules — the largest, slowest layer in the
+#     old design and the one that stalled buildkit's export step for
+#     40+ minutes on Windows Docker Desktop.
+#   • Runtime CMD is `node server.js` (the standalone bundle's own
+#     entry), not `next start` on top of the full framework.
 
 # ---- deps stage ----
 FROM node:20-alpine AS deps
@@ -33,63 +41,65 @@ RUN apk add --no-cache libc6-compat openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-# Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) — heap
-# ceilings must be split per RUN because they compete for the same
-# 4 GB container budget on Fly's shared-cpu-2x builder:
-#   * prisma generate: modest heap; 2 GB is generous. Setting it
-#     too high (3840) had V8 pre-reserve enough address space that
-#     the OS OOM-killed the compile step for the prisma engine.
-#   * next build: memory-heavy "Collecting page data" phase. 3840
-#     is safe once tsc/eslint are disabled (see next.config.js).
-# NODE_OPTIONS at the ENV level would apply to BOTH steps and one
-# of them always loses, so we inline it per RUN.
-#
-# Payroll-3B-5B-3A (2026-09-01) — the Postgres schema grew past
-# ~11k lines during the 3B-5B-* series and Fly's remote builder
-# now SIGKILLs `prisma generate` at every heap setting we tried
-# (1536, 2048, 2560, 2880 MB — deterministic ~17s in every case,
-# reproducible with `--recreate-builder` and `--depot`). The
-# process is being killed by the container cgroup, not by V8 —
-# lowering the heap does not help. A separate infra ticket needs
-# to bump the Fly remote builder VM size; this file remains at
-# the last-known-safe 2560 MB value for when that lands.
+# Heap ceilings split per RUN (see original commentary above).
 RUN NODE_OPTIONS="--max-old-space-size=2560" \
     npx prisma generate --schema prisma-postgres/schema.prisma
-# Build-only placeholders. Next.js 14's "Collecting page data" phase
-# evaluates every route module, which transitively imports src/lib/env.ts
-# and runs Zod validation at module load. DATABASE_URL and
-# SPECTRE_SESSION_SECRET are runtime Fly secrets — absent during build.
-# These placeholders are scoped to THIS RUN command only (not `ENV`),
-# so they are NOT baked into any image layer and are NOT visible at
-# runtime. The real Fly secrets are injected by the platform when the
-# container starts and re-parsed by env.ts at process boot.
 RUN NODE_OPTIONS="--max-old-space-size=3840" \
     DATABASE_URL="postgresql://build:build@build.invalid:5432/build_placeholder?sslmode=require" \
     SPECTRE_SESSION_SECRET="build-time-placeholder-32-chars-min-abcdefghijk" \
     npm run build
 
-# ---- runner stage ----
+# ---- runner stage (DRH-1 slim runtime) ----
 FROM node:20-alpine AS runner
 WORKDIR /app
 RUN apk add --no-cache libc6-compat openssl curl
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-# Create non-root user.
 RUN addgroup --system --gid 1001 spectre && adduser --system --uid 1001 --ingroup spectre spectre
 
+# Public assets (served statically by the standalone server).
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=spectre:spectre /app/.next ./.next
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma-postgres ./prisma-postgres
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+
+# Standalone bundle: server.js + traced-minimum node_modules.
+# The bundle already declares its own package.json so `node server.js`
+# resolves everything internally.
+COPY --from=builder --chown=spectre:spectre /app/.next/standalone ./
+COPY --from=builder --chown=spectre:spectre /app/.next/static ./.next/static
+
+# Prisma runtime — the generated client under node_modules/.prisma and
+# @prisma/client is USED by every server route. Next.js standalone
+# should include these automatically via tracing, but we copy them
+# explicitly to guarantee they are present even if a tracing gap
+# appears in a future minor of Next.js.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=spectre:spectre /app/node_modules/@prisma ./node_modules/@prisma
+
+# Prisma CLI — required by fly.web.toml's release_command
+# (`npx prisma migrate deploy`). Not traced (nothing imports the CLI).
+COPY --from=builder --chown=spectre:spectre /app/node_modules/prisma ./node_modules/prisma
+
+# Postgres migrations + schema — read by prisma migrate deploy at
+# release time. Never accessed by the running server.
+COPY --from=builder --chown=spectre:spectre /app/prisma-postgres ./prisma-postgres
+
 # One-shot maintenance scripts (backfills, verification helpers).
 # Bundled so `flyctl ssh console --command 'node /app/scripts/...'`
 # has them without a separate SFTP hop. Read-only at runtime;
 # nothing on the serving path imports from here.
-COPY --from=builder /app/scripts ./scripts
+COPY --from=builder --chown=spectre:spectre /app/scripts ./scripts
+
+# tsx — some maintenance scripts under /app/scripts are TypeScript and
+# invoked ad-hoc via `npx tsx`. Ship the CLI so on-call debugging keeps
+# working. tsx is small (~50 MB) relative to the bundle.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/tsx ./node_modules/tsx
+COPY --from=builder --chown=spectre:spectre /app/node_modules/esbuild ./node_modules/esbuild
+COPY --from=builder --chown=spectre:spectre /app/node_modules/get-tsconfig ./node_modules/get-tsconfig
+COPY --from=builder --chown=spectre:spectre /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
 USER spectre
 EXPOSE 3000
@@ -97,4 +107,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
 
-CMD ["node_modules/.bin/next", "start"]
+# Standalone bundle exposes its own server.js at repo root.
+CMD ["node", "server.js"]

@@ -12,7 +12,7 @@ prisma/test.db*
 *.log
 .DS_Store
 coverage
-# Sprint 2 Step 8 — trim build context. test-results/ is ~383 MB of
+# Sprint 2 Step 8 — trim build context. test-results/ is ~500 MB of
 # Playwright screenshots + traces from local dev runs; never needed in
 # the production image.
 #
@@ -26,3 +26,15 @@ scripts/*.spec.ts
 .vscode
 *.md
 !README.md
+# DRH-1 (2026-09-19) — additional exclusions. None of these are
+# referenced by runtime routes or the build.
+scratchpad
+mobile
+nav-audit.out
+tsconfig.tsbuildinfo
+docker-compose.yml
+# Standalone output makes the build's own .next unnecessary in the
+# context, but the Dockerfile builder does its own `next build` so
+# this only matters when Docker is invoked from a machine that has
+# already built locally.
+

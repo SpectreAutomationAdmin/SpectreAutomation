@@ -17,6 +17,8 @@
     "fixture:staging-time-attendance": "tsx scripts/payroll-staging-ta-fixture.ts",
     "seed:scheduling-templates": "tsx scripts/scheduling-seed-shift-templates.ts",
     "db:reset": "prisma db push --force-reset && tsx prisma/seed.ts",
+    "deploy:staging": "node scripts/deploy-staging.mjs",
+    "deploy:staging:diag": "node scripts/deploy-staging.mjs --diag",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:targeted": "vitest run --changed",
