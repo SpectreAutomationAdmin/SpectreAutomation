@@ -481,8 +481,9 @@ async function payrollReady() {
     config = await prisma.payrollClubConfig.create({
       data: {
         clubId: club.id,
+        enabled: true,
         country: "CA", provinceOfEmployment: "AB",
-        payFrequency: "SEMI_MONTHLY", paymentMethod: "DIRECT_DEPOSIT",
+        defaultPayFrequency: "SEMI_MONTHLY", defaultPaymentMethod: "DIRECT_DEPOSIT",
         payrollAdminUserId: pa.id,
         controllerUserId: controller.id,
         glAccountingProfileId: glProfile.id,
