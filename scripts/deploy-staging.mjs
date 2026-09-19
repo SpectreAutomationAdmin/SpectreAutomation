@@ -47,7 +47,7 @@ const HEALTH_URL = "https://staging.spectreautomation.com/api/health";
 const STAGE_TIMEOUTS_MS = {
   overall:        30 * 60_000, // 30 min hard ceiling
   buildIdleKill:  10 * 60_000, // 10 min no output during compile
-  exportIdleKill:  8 * 60_000, // 8 min no output during buildkit export (the historical stall point)
+  exportIdleKill: 15 * 60_000, // 15 min. Buildkit's "unpacking to registry.fly.io/..." step is silent for 8+ min on Windows Docker Desktop even when progressing. Was 8 min; two attempts hit exactly 484s of silence on that sub-step. 15 min gives it real slack while keeping the overall ceiling meaningful.
   pushIdleKill:    6 * 60_000, // 6 min no output during registry push
   releaseIdleKill: 3 * 60_000, // 3 min no output for release_command
   rolloutIdleKill: 5 * 60_000, // 5 min for machine rollout
