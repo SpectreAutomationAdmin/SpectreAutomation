@@ -146,6 +146,14 @@ export interface PayrollIntegrationFixture {
   ltdPlan?: { planId: string; employeeComponentId: string; employeeExpenseAccountId: string; enrolmentId: string };
   /** Slice C — Health/Dental benefit plan + enrolment (employer premium, non-cash taxable). */
   healthPlan?: { planId: string; employerComponentId: string; employerExpenseAccountId: string; enrolmentId: string };
+  /** Slice F — extra HOURLY employee with approved time entries producing OT. */
+  hourly?: {
+    employeeId: string;
+    assignmentId: string;
+    compensationId: string;
+    hourlyRate: string;
+    approvedTimeEntries: Array<{ id: string; workDate: Date; hours: string }>;
+  };
   /** Slice D — RRSP benefit plan + enrolment (employee % election with employer match/cap). */
   rrspPlan?: {
     planId: string;
@@ -173,6 +181,17 @@ export interface CreateFixtureOpts {
    *  Fixture configures it as a non-cash taxable benefit — this is
    *  FIXTURE CONFIGURATION, not a hard-coded rule about Health plans. */
   healthDental?: { employerMonthlyPremium: string };
+  /** Slice F — provision an additional HOURLY employee + approved time
+   *  entries producing OVERTIME under the Alberta ES default policy.
+   *  Provide a list of civil days with hours; the fixture creates a
+   *  scope-approved PayrollApprovedTimeEntry for each. */
+  hourlyEmployee?: {
+    firstName?: string;
+    lastName?: string;
+    hourlyRate: string;
+    /** approvedTime entries — one per day. `hours` is Decimal-string. */
+    approvedTime: Array<{ workDate: Date; hours: string }>;
+  };
   /** Slice D — RRSP plan + employee % election + employer match/cap.
    *  Both components are PERCENT_OF_ELIGIBLE_EARNINGS. Fixture is
    *  configured post-tax (all statutory effects NONE on both sides) —
@@ -492,6 +511,86 @@ export async function createPayrollIntegrationFixture(
     };
   }
 
+  // Slice F (2026-09-19) — additional HOURLY employee producing OT.
+  // Salaried default fixture employee remains for pipeline continuity;
+  // this hourly employee is provisioned as a SEPARATE population row.
+  let hourly: PayrollIntegrationFixture["hourly"];
+  if (opts.hourlyEmployee) {
+    const hEmpEmail = `hourly.${club.id}@t.test`;
+    const hEmp = await c.employee.create({
+      data: {
+        clubId: club.id,
+        firstName: opts.hourlyEmployee.firstName ?? "SliceF",
+        lastName:  opts.hourlyEmployee.lastName  ?? "HourlyOT",
+        email: hEmpEmail, hireDate: utc(2020, 1, 1),
+        dateOfBirth: utc(1990, 5, 12),
+        status: "ACTIVE", employeeNumber: `H-${club.id.slice(-6)}`,
+        employeeLifecycle: "ACTIVE", compensationType: "HOURLY",
+        homeProvince: "AB", departmentId: department.id,
+      },
+    });
+    const hAssn = await c.employeeEmploymentAssignment.create({
+      data: {
+        clubId: club.id, employeeId: hEmp.id, role: "PRIMARY",
+        employmentType: "FULL_TIME", effectiveFrom: utc(2020, 1, 1),
+        departmentId: department.id,
+      },
+    });
+    const hComp = await c.employeeCompensation.create({
+      data: {
+        clubId: club.id, employeeId: hEmp.id, assignmentId: hAssn.id,
+        cadence: "HOURLY", rate: opts.hourlyEmployee.hourlyRate, currency: "CAD",
+        effectiveFrom: utc(2020, 1, 1),
+      },
+    });
+    await writeEncryptedTd1Claims({
+      clubId: club.id, employeeId: hEmp.id, effectiveFrom: utc(2020, 1, 1),
+      province: "AB", td1FormVersion: "2026-01",
+      federalClaim: "16452.00", provincialClaim: "22769.00",
+    });
+    await c.payrollPayGroupMember.create({
+      data: { clubId: club.id, payGroupId: pg.id, employeeId: hEmp.id, effectiveFrom: utc(2020, 1, 1) },
+    });
+    // Create a PayrollDepartmentTimeApproval row that pre-approves the
+    // pay period's scope so the approved-time rows are consumable at
+    // Prepare. Simpler shortcut for the test: create rows directly as
+    // approvalState=APPROVED with `approvedByUserId` set.
+    const approvedTimeCreated: Array<{ id: string; workDate: Date; hours: string }> = [];
+    for (const t of opts.hourlyEmployee.approvedTime) {
+      const row = await c.payrollApprovedTimeEntry.create({
+        data: {
+          clubId: club.id, employeeId: hEmp.id,
+          employmentAssignmentId: hAssn.id,
+          workDate: t.workDate,
+          hours: t.hours,
+          approvalState: "APPROVED",
+          approvedByUserId: pa.id,
+          approvedAt: new Date(),
+          earningClassification: "REGULAR",
+        },
+      });
+      approvedTimeCreated.push({ id: row.id, workDate: row.workDate, hours: row.hours.toString() });
+    }
+    // Prepare requires PayrollDepartmentTimeApproval for every
+    // department that has approved-time entries INSIDE the period.
+    // Null approvedRevision + null approvedScopeVersion is the legacy
+    // 3D-2 compat path and passes preparation's currency gate.
+    await c.payrollDepartmentTimeApproval.create({
+      data: {
+        clubId: club.id, payPeriodId: pp.id, departmentId: department.id,
+        state: "APPROVED", approvedAt: new Date(),
+        approvedByUserId: pa.id,
+      },
+    });
+    hourly = {
+      employeeId: hEmp.id,
+      assignmentId: hAssn.id,
+      compensationId: hComp.id,
+      hourlyRate: opts.hourlyEmployee.hourlyRate,
+      approvedTimeEntries: approvedTimeCreated,
+    };
+  }
+
   // Fiscal year + month covering the payDate — Post writes to
   // JournalEntry which requires an OPEN fiscal period.
   await seedFiscalYearMonth(club.id, pp.payDate);
@@ -505,6 +604,6 @@ export async function createPayrollIntegrationFixture(
     payGroupId: pg.id, payPeriodId: pp.id,
     periodStart: pp.periodStart, periodEnd: pp.periodEnd, payDate: pp.payDate,
     glProfile: { id: profile.id, salaryExpenseAccountId: salaryExpense.id },
-    bonus, cellPhone, ltdPlan, healthPlan, rrspPlan,
+    bonus, cellPhone, ltdPlan, healthPlan, rrspPlan, hourly,
   };
 }

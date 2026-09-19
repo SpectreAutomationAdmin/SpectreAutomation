@@ -120,6 +120,17 @@ export interface EmployeePayrollWorkspaceProps {
   // Slice C (2026-09-18) — pre-rendered Benefits & Deductions section.
   // When present, REPLACES the Slice-A empty-state placeholder.
   benefitsDeductionsSection?: React.ReactNode;
+  // Slice F (2026-09-19) §36 — overtime policy status. Rendered inline
+  // in Base Compensation when the employee is HOURLY. Only surfaces
+  // fail-closed information; the actual policy multiplier / thresholds
+  // live under Payroll Settings.
+  overtimePolicy?: {
+    /** Employee overtime policy state. */
+    employeeState: "STANDARD" | "EXEMPT" | "AGREEMENT_REQUIRED" | "AVERAGING_REQUIRED" | string;
+    /** The Club's currently-configured statutory policy kind, or null
+     *  when no PayrollClubConfig exists yet. */
+    clubPolicyKind: string | null;
+  };
 }
 
 const monthNamesShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -206,6 +217,94 @@ function Pill({ tone, children }: { tone: "ok" | "warn" | "neutral"; children: R
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold tracking-wide uppercase ${cls}`}>
       {children}
     </span>
+  );
+}
+
+// Slice F (2026-09-19) §36 — Overtime treatment row for hourly employees.
+// Communicates state without implying only one policy will ever exist.
+function OvertimePolicyRow({
+  state,
+  clubPolicyKind,
+}: {
+  state: string;
+  clubPolicyKind: string | null;
+}) {
+  const clubPolicyLabel =
+    clubPolicyKind === "ALBERTA_DEFAULT_ES"
+      ? "Alberta ES default (8 / 44 greater-of, 1.5×)"
+      : clubPolicyKind ?? "not configured";
+  let heading: string;
+  let body: string;
+  let tone: "ok" | "warn" | "neutral";
+  let testId: string;
+  switch (state) {
+    case "STANDARD":
+      heading = "Standard — Club statutory policy applies";
+      body = `Overtime is calculated under the Club's configured statutory policy: ${clubPolicyLabel}. Approved hours are classified per pay period; overtime hours are posted as a separate earnings line.`;
+      tone = "ok";
+      testId = "payroll-overtime-policy-standard";
+      break;
+    case "EXEMPT":
+      heading = "Statutorily exempt";
+      body = "This role is exempt from statutory overtime under the applicable jurisdiction. All approved hours are paid at the regular rate.";
+      tone = "neutral";
+      testId = "payroll-overtime-policy-exempt";
+      break;
+    case "AGREEMENT_REQUIRED":
+      heading = "Overtime agreement — awaiting configuration";
+      body = "This employee is flagged for a written overtime agreement (banked hours or time-off in lieu). Prepare Payroll will refuse to calculate for this employee until the agreement is declared. Configure the arrangement in Payroll Settings, or revert to STANDARD before Prepare.";
+      tone = "warn";
+      testId = "payroll-overtime-policy-agreement-required";
+      break;
+    case "AVERAGING_REQUIRED":
+      heading = "Averaging arrangement — awaiting configuration";
+      body = "This employee is flagged for an hours-of-work averaging arrangement (HWAA). Prepare Payroll will refuse to calculate for this employee until the arrangement is declared. Configure the HWAA in Payroll Settings, or revert to STANDARD before Prepare.";
+      tone = "warn";
+      testId = "payroll-overtime-policy-averaging-required";
+      break;
+    default:
+      heading = `Overtime policy: ${state}`;
+      body = "This overtime treatment is unrecognised by the payroll engine. Prepare Payroll will refuse to calculate until the state is normalised.";
+      tone = "warn";
+      testId = "payroll-overtime-policy-unknown";
+  }
+  const toneStyle: React.CSSProperties =
+    tone === "ok"
+      ? { background: "var(--spectre-accent-soft, #edf2ec)", color: "var(--spectre-accent, #2f5832)" }
+      : tone === "warn"
+      ? { background: "#fef3c7", color: "#78350f" }
+      : { background: "#f5f5f4", color: "#57534e" };
+  return (
+    <div
+      className="mt-5 rounded border p-4 text-sm"
+      style={{
+        background: "var(--spectre-surface-muted, #faf7f2)",
+        borderColor: "var(--spectre-border-hairline)",
+      }}
+      data-testid={testId}
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <span
+          className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+          style={{ color: "var(--spectre-text-muted)" }}
+        >
+          Overtime treatment
+        </span>
+        <span
+          className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+          style={toneStyle}
+          data-testid="payroll-overtime-policy-badge"
+        >
+          {state.replace(/_/g, " ").toLowerCase()}
+        </span>
+      </div>
+      <div className="font-semibold" style={{ color: "var(--spectre-text-primary)" }}>
+        {heading}
+      </div>
+      <p className="mt-1" style={{ color: "var(--spectre-text-secondary)" }}>
+        {body}
+      </p>
+    </div>
   );
 }
 
@@ -347,6 +446,16 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
         ) : (
           <p className="mt-3 text-sm text-stone-500">No compensation record on file.</p>
         )}
+        {/* Slice F (2026-09-19) §36 — Overtime treatment. Rendered ONLY
+            for hourly compensation. Communicates the employee's current
+            policy state and the fail-closed architecture without
+            implying "Alberta default" is the only ever-supported rule. */}
+        {props.overtimePolicy && currentCompensation?.cadence === "HOURLY" ? (
+          <OvertimePolicyRow
+            state={props.overtimePolicy.employeeState}
+            clubPolicyKind={props.overtimePolicy.clubPolicyKind}
+          />
+        ) : null}
       </div>
 
       {/* ============================================================

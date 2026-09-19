@@ -3694,6 +3694,9 @@ model Employee {
   onboardingState        String            @default("DRAFT")
   payrollReadiness       String            @default("NOT_READY")
   compensationType       String            @default("HOURLY")
+  // Slice F (2026-09-19) — overtime policy state. See sqlite twin.
+  //   STANDARD | EXEMPT | AGREEMENT_REQUIRED | AVERAGING_REQUIRED
+  overtimePolicyState    String            @default("STANDARD")
   // Payroll-3D-1 (2026-09-05) — Timekeeping method.
   //   NO_TIME_ENTRY_REQUIRED — default; typical salaried employee.
   //   CLOCK_REQUIRED         — employee must use Clock In / Clock Out.
@@ -11950,6 +11953,12 @@ model PayrollClubConfig {
   // src/lib/payroll/cutoff.ts) is applied at read time — a founder
   // does not need to configure this to opt-in.
   payrollCutoffLeadDays  Int?
+  // Slice F (2026-09-19) — Alberta ESA overtime policy. See sqlite twin.
+  overtimePolicyKind             String  @default("ALBERTA_DEFAULT_ES")
+  overtimeDailyThresholdHours    Decimal @default(8.0)
+  overtimeWeeklyThresholdHours   Decimal @default(44.0)
+  overtimeMultiplier             Decimal @default(1.5)
+  workweekStartDow               Int     @default(0)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
@@ -12515,6 +12524,14 @@ model PayrollBatchEmployee {
   // note. Historical name freeze for payroll documents.
   firstNameSnapshot       String?
   lastNameSnapshot        String?
+  // Slice F (2026-09-19) — hourly overtime freeze. See sqlite twin.
+  regularHoursSnapshot          Decimal?
+  overtimeHoursSnapshot         Decimal?
+  hourlyBaseRateSnapshot        Decimal?
+  overtimeMultiplierSnapshot    Decimal?
+  overtimeRateSnapshot          Decimal?
+  overtimePolicyKindSnapshot    String?
+  workweekStartDowSnapshot      Int?
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?

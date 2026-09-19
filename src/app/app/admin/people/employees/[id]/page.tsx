@@ -431,6 +431,30 @@ export default async function EmployeeProfilePage({
 
   const currentCompensation = compensationHistory.find((c) => c.effectiveTo === null) ?? null;
 
+  // Slice F (2026-09-19) §36 — overtime policy view. Reads the
+  // Employee's overtimePolicyState + the Club's currently-configured
+  // overtimePolicyKind. Neither is sensitive; both are safe under
+  // payroll:read. Passed as-is to the workspace, which renders the
+  // fail-closed-aware treatment card next to Base Compensation.
+  const overtimePolicyView = canReadPayrollRecurring
+    ? await (async () => {
+        const [employeeRow, clubConfigRow] = await Promise.all([
+          prisma.employee.findUnique({
+            where: { id: profile.id },
+            select: { overtimePolicyState: true },
+          }),
+          prisma.payrollClubConfig.findUnique({
+            where: { clubId: profile.clubId },
+            select: { overtimePolicyKind: true },
+          }),
+        ]);
+        return {
+          employeeState: employeeRow?.overtimePolicyState ?? "STANDARD",
+          clubPolicyKind: clubConfigRow?.overtimePolicyKind ?? null,
+        };
+      })()
+    : undefined;
+
   // Slice C (2026-09-18) — benefit enrolments for this employee.
   const benefitEnrolments = canReadPayrollRecurring
     ? await listEnrolmentsForEmployee(principal, profile.clubId, profile.id).catch(() => [])
@@ -888,6 +912,7 @@ export default async function EmployeeProfilePage({
                 : null
             }
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
+            overtimePolicy={overtimePolicyView}
             benefitsDeductionsSection={
               <BenefitsDeductionsSection
                 employeeId={profile.id}

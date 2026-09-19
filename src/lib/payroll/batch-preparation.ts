@@ -20,7 +20,7 @@
 //   • Exceptions: PayrollBatchException rows with severity
 //     BLOCKER / WARNING / INFO.
 
-import type { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
@@ -346,6 +346,14 @@ interface EmployeeSnapshot {
   // so a later legal-name change does not rewrite historical artefacts.
   firstNameSnapshot: string;
   lastNameSnapshot: string;
+  // Slice F (2026-09-19) — hourly overtime snapshot. NULL for salaried.
+  regularHoursSnapshot: string | null;
+  overtimeHoursSnapshot: string | null;
+  hourlyBaseRateSnapshot: string | null;
+  overtimeMultiplierSnapshot: string | null;
+  overtimeRateSnapshot: string | null;
+  overtimePolicyKindSnapshot: string | null;
+  workweekStartDowSnapshot: number | null;
   exceptions: Array<{ severity: ExceptionSeverity; code: string; message: string; recommendedAction?: string }>;
 }
 
@@ -434,9 +442,19 @@ async function snapshotEmployee(
   // cases; this flag is just a hint for the review UI.
   const salaried = compensations.some((c) => (c.cadence ?? "").toUpperCase() === "SALARY");
 
-  // Approved unconsumed time for this employee falling in the period.
-  // Payroll-3D-4 — also exclude superseded (stale-freeze) rows so the
-  // §32 unconsumed-stale case doesn't leak into batch consumption.
+  // Slice F (2026-09-19) — fetch approved time for the FULL surrounding
+  // workweek window, not just the pay-period window. The overtime
+  // classifier needs complete workweek context (Alberta ES 8/44
+  // greater-of rule) to allocate across cross-period workweeks
+  // correctly. Filter by period after classification.
+  const { surroundingWorkweekBounds } = await import("./overtime-classifier");
+  // Resolve the workweek anchor. Read PayrollClubConfig for the policy.
+  const clubConfigForWorkweek = await prisma.payrollClubConfig.findFirst({
+    where: { clubId },
+    select: { workweekStartDow: true, overtimePolicyKind: true, overtimeDailyThresholdHours: true, overtimeWeeklyThresholdHours: true, overtimeMultiplier: true },
+  });
+  const workweekStartDow = clubConfigForWorkweek?.workweekStartDow ?? 0;
+  const { fetchStart, fetchEnd } = surroundingWorkweekBounds(periodStart, periodEnd, workweekStartDow);
   const approvedTime = await prisma.payrollApprovedTimeEntry.findMany({
     where: {
       clubId,
@@ -444,18 +462,107 @@ async function snapshotEmployee(
       approvalState: "APPROVED",
       consumedByBatchId: null,
       supersededByApprovedTimeEntryId: null,
-      workDate: { gte: periodStart, lt: periodEnd },
+      workDate: { gte: fetchStart, lt: fetchEnd },
     },
     select: { id: true, hours: true, workDate: true },
   });
+  // Slice F — filter to pay-period-only for the legacy scalar snapshot
+  // (kept for backward compatibility with the calculator's coarse hourly
+  // path). The Slice F classifier below consumes the FULL workweek set.
+  const approvedTimeInPeriod = approvedTime.filter(
+    (e) => e.workDate.getTime() >= periodStart.getTime() && e.workDate.getTime() < periodEnd.getTime(),
+  );
   let approvedHours: Decimal | null = null;
   const approvedTimeEntryIds: string[] = [];
-  if (approvedTime.length > 0) {
-    approvedTimeEntryIds.push(...approvedTime.map((e) => e.id));
+  if (approvedTimeInPeriod.length > 0) {
+    approvedTimeEntryIds.push(...approvedTimeInPeriod.map((e) => e.id));
     // Sum via arithmetic (Prisma Decimal — safe to Number for hours).
     let sumCents = 0n;
-    for (const e of approvedTime) sumCents += BigInt(Math.round(Number(e.hours.toString()) * 10_000));
+    for (const e of approvedTimeInPeriod) sumCents += BigInt(Math.round(Number(e.hours.toString()) * 10_000));
     approvedHours = { toString: () => (Number(sumCents) / 10_000).toFixed(4) } as unknown as Decimal;
+  }
+  // ------------------------------------------------------------------
+  // Slice F (2026-09-19) — Alberta ES overtime classification.
+  //
+  // Apply to HOURLY employees only. Salaried employees are exempt from
+  // hourly OT (their earning is a period-fraction of annual salary).
+  //
+  // Policy state gate (§7, §17-19):
+  //   STANDARD             → engine applies the Club default policy.
+  //   EXEMPT               → skip classification (no OT).
+  //   AGREEMENT_REQUIRED   → BLOCKER; Slice F does not calculate under
+  //                          overtime agreements.
+  //   AVERAGING_REQUIRED   → BLOCKER; Slice F does not calculate under
+  //                          averaging arrangements.
+  //
+  // If Club has no PayrollClubConfig row (or the policy kind is not
+  // ALBERTA_DEFAULT_ES) for a STANDARD hourly employee: BLOCKER.
+  // ------------------------------------------------------------------
+  let regularHoursSnapshot: string | null = null;
+  let overtimeHoursSnapshot: string | null = null;
+  let hourlyBaseRateSnapshot: string | null = null;
+  let overtimeMultiplierSnapshot: string | null = null;
+  let overtimeRateSnapshot: string | null = null;
+  let overtimePolicyKindSnapshot: string | null = null;
+  let workweekStartDowSnapshot: number | null = null;
+  const isHourly = compensations.some(
+    (c) => (c.cadence ?? "").toUpperCase() !== "SALARY",
+  ) && !salaried;
+  if (isHourly) {
+    const policyState = (member.employee as unknown as { overtimePolicyState?: string }).overtimePolicyState ?? "STANDARD";
+    if (policyState === "AGREEMENT_REQUIRED" || policyState === "AVERAGING_REQUIRED") {
+      exceptions.push({
+        severity: "BLOCKER",
+        code: "OVERTIME_POLICY_UNSUPPORTED",
+        message:
+          `Employee overtime policy state ${policyState} is not yet supported by the Spectre payroll engine. ` +
+          "Payroll cannot silently calculate under a special arrangement.",
+        recommendedAction:
+          "Configure the arrangement in Payroll Settings, OR revert the employee to STANDARD before Prepare.",
+      });
+    } else if (policyState === "STANDARD") {
+      // Fail-closed if the Club has no explicit ALBERTA_DEFAULT_ES policy.
+      if (!clubConfigForWorkweek || clubConfigForWorkweek.overtimePolicyKind !== "ALBERTA_DEFAULT_ES") {
+        exceptions.push({
+          severity: "BLOCKER",
+          code: "OVERTIME_POLICY_REQUIRED",
+          message:
+            "The Club has no supported overtime policy configured. Alberta ESA default (8/44 greater-of, 1.5×, Sunday-anchored workweek) is the only policy Slice F supports.",
+          recommendedAction:
+            "Configure the Alberta ES default overtime policy in Payroll Settings, OR mark this employee EXEMPT if statutorily exempt.",
+        });
+      } else {
+        // Classify.
+        const { classifyForPayPeriod } = await import("./overtime-classifier");
+        const policy = {
+          kind: "ALBERTA_DEFAULT_ES" as const,
+          dailyThresholdHours: new Decimal(clubConfigForWorkweek.overtimeDailyThresholdHours.toString()),
+          weeklyThresholdHours: new Decimal(clubConfigForWorkweek.overtimeWeeklyThresholdHours.toString()),
+          multiplier: new Decimal(clubConfigForWorkweek.overtimeMultiplier.toString()),
+          workweekStartDow,
+        };
+        const cls = classifyForPayPeriod(
+          approvedTime.map((e) => ({ id: e.id, workDate: e.workDate, hours: new Decimal(e.hours.toString()) })),
+          periodStart, periodEnd, policy,
+        );
+        regularHoursSnapshot  = cls.regularHours.toFixed(4);
+        overtimeHoursSnapshot = cls.overtimeHours.toFixed(4);
+        overtimePolicyKindSnapshot = "ALBERTA_DEFAULT_ES";
+        workweekStartDowSnapshot   = workweekStartDow;
+        // Freeze base rate + multiplier + derived OT rate for the
+        // FIRST hourly compensation covering the period.
+        const firstHourly = compensations.find((c) => (c.cadence ?? "").toUpperCase() !== "SALARY");
+        if (firstHourly) {
+          const baseRate = new Decimal(firstHourly.rate.toString());
+          const mult = policy.multiplier;
+          const otRate = baseRate.times(mult);
+          hourlyBaseRateSnapshot     = baseRate.toFixed(4);
+          overtimeMultiplierSnapshot = mult.toFixed(4);
+          overtimeRateSnapshot       = otRate.toFixed(4);
+        }
+      }
+    }
+    // EXEMPT → no snapshot, no blocker (paid as regular via legacy path).
   }
 
   // Slice E (2026-09-19) §17 — emit NO_APPROVED_HOURS_FOR_HOURLY. The
@@ -464,10 +571,9 @@ async function snapshotEmployee(
   // calculate to $0. Now fires BLOCKER unless the Payroll Admin has
   // explicitly recorded a `PayrollZeroHoursAcknowledgement` for this
   // batch × employee (leave / no shifts / seasonal / other).
-  const compensationsForCadence = compensations;
-  const isHourly = compensationsForCadence.some(
-    (c) => (c.cadence ?? "").toUpperCase() !== "SALARY",
-  ) && !compensationsForCadence.some((c) => (c.cadence ?? "").toUpperCase() === "SALARY");
+  // (Slice E) — isHourly already computed above (§17 zero-hours block
+  // reused it after Slice F refactored the cadence check into `isHourly`
+  // earlier in this function). Re-use the same boolean here.
   const hoursSumNumeric = approvedHours ? Number(approvedHours.toString()) : 0;
   if (isHourly && hoursSumNumeric === 0) {
     let acknowledged = false;
@@ -739,6 +845,14 @@ async function snapshotEmployee(
     // NULL is also legal, but frozen empty strings are clearer).
     firstNameSnapshot: (member.employee.firstName ?? "").trim(),
     lastNameSnapshot:  (member.employee.lastName  ?? "").trim(),
+    // Slice F — hourly overtime freeze.
+    regularHoursSnapshot,
+    overtimeHoursSnapshot,
+    hourlyBaseRateSnapshot,
+    overtimeMultiplierSnapshot,
+    overtimeRateSnapshot,
+    overtimePolicyKindSnapshot,
+    workweekStartDowSnapshot,
     exceptions,
   };
 }
@@ -1021,6 +1135,14 @@ export async function preparePayrollBatch(
           // Slice E closeout — freeze display identity.
           firstNameSnapshot: s.firstNameSnapshot,
           lastNameSnapshot:  s.lastNameSnapshot,
+          // Slice F — hourly overtime freeze.
+          regularHoursSnapshot:       s.regularHoursSnapshot,
+          overtimeHoursSnapshot:      s.overtimeHoursSnapshot,
+          hourlyBaseRateSnapshot:     s.hourlyBaseRateSnapshot,
+          overtimeMultiplierSnapshot: s.overtimeMultiplierSnapshot,
+          overtimeRateSnapshot:       s.overtimeRateSnapshot,
+          overtimePolicyKindSnapshot: s.overtimePolicyKindSnapshot,
+          workweekStartDowSnapshot:   s.workweekStartDowSnapshot,
           status: s.exceptions.some((e) => e.severity === "BLOCKER") ? "ERRORED" : "INCLUDED",
         },
       });
@@ -1043,6 +1165,46 @@ export async function preparePayrollBatch(
               quantity: "1",
               rate: periodSalary.toString(),
               description: "Salary (annual / P) — projected at Prepare",
+            },
+          });
+        }
+      }
+
+      // Slice F (2026-09-19) — hourly REGULAR + OVERTIME frozen earning
+      // rows. Persist per-hour rate + quantity so the earnings
+      // calculator's `earningRows` path consumes them directly and the
+      // downstream Register / PayStatement / GL Preview render distinct
+      // lines. Salaried employees do not enter this branch.
+      if (!s.salaried && s.hourlyBaseRateSnapshot != null && s.regularHoursSnapshot != null) {
+        const regHours = s.regularHoursSnapshot;
+        if (Number(regHours) > 0) {
+          await tx.payrollBatchEarning.create({
+            data: {
+              clubId,
+              batchId: batch.id,
+              batchEmployeeId: be.id,
+              employeeId: s.employeeId,
+              earningType: "REGULAR",
+              rateSource: "HOURLY_APPROVED_TIME",
+              quantity: regHours,
+              rate: s.hourlyBaseRateSnapshot,
+              description: `Regular (${regHours} hrs × ${s.hourlyBaseRateSnapshot})`,
+            },
+          });
+        }
+        const otHours = s.overtimeHoursSnapshot ?? "0";
+        if (Number(otHours) > 0 && s.overtimeRateSnapshot != null) {
+          await tx.payrollBatchEarning.create({
+            data: {
+              clubId,
+              batchId: batch.id,
+              batchEmployeeId: be.id,
+              employeeId: s.employeeId,
+              earningType: "OVERTIME",
+              rateSource: "HOURLY_APPROVED_TIME",
+              quantity: otHours,
+              rate: s.overtimeRateSnapshot,
+              description: `Overtime (${otHours} hrs × ${s.overtimeRateSnapshot} @ ${s.overtimeMultiplierSnapshot}×)`,
             },
           });
         }

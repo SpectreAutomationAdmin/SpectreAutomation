@@ -3731,6 +3731,21 @@ model Employee {
   onboardingState        String            @default("DRAFT")
   payrollReadiness       String            @default("NOT_READY")
   compensationType       String            @default("HOURLY")
+  // Slice F (2026-09-19) — overtime policy state. Enum:
+  //   STANDARD             — engine applies the Club's default policy
+  //                          (ALBERTA_DEFAULT_ES ships in Slice F).
+  //   EXEMPT               — statutory exempt occupation per Alberta ES
+  //                          Reg 2013/014 (managers, salespersons on
+  //                          commission, certain professionals, etc.).
+  //   AGREEMENT_REQUIRED   — employee is on an overtime agreement /
+  //                          time-off-in-lieu / averaging arrangement.
+  //                          Slice F does NOT calculate under agreements;
+  //                          fail-closed with OVERTIME_POLICY_REQUIRED.
+  //   AVERAGING_REQUIRED   — employee is on a formal averaging
+  //                          arrangement. Fail-closed same way.
+  // SALARIED employees ignore this — overtime does not apply. Default
+  // STANDARD so existing employees are engine-ready without founder edit.
+  overtimePolicyState    String            @default("STANDARD")
   // Payroll-3D-1 (2026-09-05) — Timekeeping method.
   //   NO_TIME_ENTRY_REQUIRED — default; typical salaried employee.
   //   CLOCK_REQUIRED         — employee must use Clock In / Clock Out.
@@ -11995,6 +12010,21 @@ model PayrollClubConfig {
   // src/lib/payroll/cutoff.ts) is applied at read time — a founder
   // does not need to configure this to opt-in.
   payrollCutoffLeadDays  Int?
+  // Slice F (2026-09-19) — overtime policy. Defaults to Alberta ESA
+  // per authoritative research: daily threshold 8 h; weekly 44 h;
+  // "greater of" rule; multiplier 1.5×; workweek starts Sunday (0).
+  // Alberta ESA lets the employer define the workweek; Slice F ships
+  // Sunday-anchored as the default.
+  // Kind is an enum so extending to other provinces / averaging /
+  // agreements does not require another schema change. Only
+  // ALBERTA_DEFAULT_ES is supported by the Slice F engine — any other
+  // value on an included hourly employee triggers a fail-closed
+  // OVERTIME_POLICY_REQUIRED blocker.
+  overtimePolicyKind             String  @default("ALBERTA_DEFAULT_ES")
+  overtimeDailyThresholdHours    Decimal @default(8.0)
+  overtimeWeeklyThresholdHours   Decimal @default(44.0)
+  overtimeMultiplier             Decimal @default(1.5)
+  workweekStartDow               Int     @default(0)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
@@ -12618,6 +12648,31 @@ model PayrollBatchEmployee {
   // those remain behind their existing reveal-audited access paths.
   firstNameSnapshot       String?
   lastNameSnapshot        String?
+  // Slice F (2026-09-19) — hourly overtime freeze. Populated at Prepare
+  // by the overtime classifier for hourly employees whose
+  // overtimePolicyState = STANDARD. NULL for salaried employees and for
+  // hourly employees whose policy state fails closed (a batch that
+  // reaches CALCULATED with these columns null on an hourly line means
+  // the calculator wrote earnings via the legacy scalar approvedHours
+  // path — Slice F engine refuses to enter Calculate in that state).
+  //
+  //   regularHoursSnapshot        — approved payable REGULAR hours in the period.
+  //   overtimeHoursSnapshot       — allocated OVERTIME hours (Alberta ES
+  //                                 "greater-of" rule; cross-period-workweek
+  //                                 aware).
+  //   hourlyBaseRateSnapshot      — frozen compensation.rate at Prepare time.
+  //   overtimeMultiplierSnapshot  — frozen policy multiplier.
+  //   overtimeRateSnapshot        — round(base × multiplier, HALF_UP cents)
+  //                                 for display / re-derivation.
+  //   overtimePolicyKindSnapshot  — the policy applied (e.g. ALBERTA_DEFAULT_ES).
+  //   workweekStartDowSnapshot    — the workweek anchor used by the classifier.
+  regularHoursSnapshot          Decimal?
+  overtimeHoursSnapshot         Decimal?
+  hourlyBaseRateSnapshot        Decimal?
+  overtimeMultiplierSnapshot    Decimal?
+  overtimeRateSnapshot          Decimal?
+  overtimePolicyKindSnapshot    String?
+  workweekStartDowSnapshot      Int?
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?

@@ -183,7 +183,7 @@ export default async function PayrollRegisterPage({ params }: Props) {
         <table className="w-full text-xs" data-testid="payroll-register-table">
           <thead className="bg-stone-50">
             <tr className="border-b" style={{ borderColor: "var(--spectre-border-muted)" }}>
-              {["Employee", "Dept", "Type", "Regular", "Other", "Taxable Benefits", "Gross",
+              {["Employee", "Dept", "Type", "Reg Hrs", "OT Hrs", "Regular", "Overtime", "Other", "Taxable Benefits", "Gross",
                 "CPP", "CPP2", "EI", "Fed Tax", "Prov Tax", "Other Ded", "RRSP EE", "Net Pay",
                 "ER CPP", "ER CPP2", "ER EI", "ER Benefits", "RRSP ER", "Total ER Cost"]
                 .map((h) => <th key={h} className="text-right px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.04em] text-stone-600">{h}</th>)}
@@ -198,7 +198,10 @@ export default async function PayrollRegisterPage({ params }: Props) {
                 </td>
                 <td className="text-left px-2 py-1.5">{r.departmentCode}</td>
                 <td className="text-left px-2 py-1.5">{r.payTypeLabel}</td>
+                <td className="text-right px-2 py-1.5 font-mono">{Number(r.regularHours) > 0 ? Number(r.regularHours).toFixed(2) : "—"}</td>
+                <td className="text-right px-2 py-1.5 font-mono" data-testid={`register-overtime-hours-${r.batchEmployeeId}`}>{Number(r.overtimeHours) > 0 ? Number(r.overtimeHours).toFixed(2) : "—"}</td>
                 <td className="text-right px-2 py-1.5 font-mono">{usd(r.regularEarnings)}</td>
+                <td className="text-right px-2 py-1.5 font-mono" data-testid={`register-overtime-earnings-${r.batchEmployeeId}`}>{Number(r.overtimeEarnings) > 0 ? usd(r.overtimeEarnings) : "—"}</td>
                 <td className="text-right px-2 py-1.5 font-mono">{usd(r.otherEarnings)}</td>
                 <td className="text-right px-2 py-1.5 font-mono">{usd(r.taxableBenefits)}</td>
                 <td className="text-right px-2 py-1.5 font-mono font-semibold">{usd(r.grossCashEarnings)}</td>
@@ -222,7 +225,10 @@ export default async function PayrollRegisterPage({ params }: Props) {
           <tfoot className="bg-stone-100 font-semibold" data-testid="payroll-register-totals">
             <tr>
               <td className="text-left px-2 py-2" colSpan={3}>TOTALS · {reg.employees.length} employee{reg.employees.length === 1 ? "" : "s"}</td>
+              <td className="text-right px-2 py-2 font-mono">{Number(reg.totals.regularHours).toFixed(2)}</td>
+              <td className="text-right px-2 py-2 font-mono" data-testid="register-totals-overtime-hours">{Number(reg.totals.overtimeHours).toFixed(2)}</td>
               <td className="text-right px-2 py-2 font-mono">{usd(reg.totals.regularEarnings)}</td>
+              <td className="text-right px-2 py-2 font-mono" data-testid="register-totals-overtime-earnings">{usd(reg.totals.overtimeEarnings)}</td>
               <td className="text-right px-2 py-2 font-mono">{usd(reg.totals.otherEarnings)}</td>
               <td className="text-right px-2 py-2 font-mono">{usd(reg.totals.taxableBenefits)}</td>
               <td className="text-right px-2 py-2 font-mono">{usd(reg.totals.grossCashEarnings)}</td>

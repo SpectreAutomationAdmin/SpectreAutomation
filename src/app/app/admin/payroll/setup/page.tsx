@@ -33,6 +33,7 @@ import MembershipEditor from "./MembershipEditor";
 import PayrollCalendarSection from "./PayrollCalendarSection";
 import GlProfileEditor from "./GlProfileEditor";
 import PayrollImplementationEditor from "./PayrollImplementationEditor";
+import OvertimePolicySection from "./OvertimePolicySection";
 import { listAccounts } from "@/lib/accounting/coa";
 import { buildFirstPayrollReadiness } from "@/lib/payroll/first-payroll-readiness";
 import FirstPayrollReadinessPanel from "@/components/payroll/FirstPayrollReadinessPanel";
@@ -79,7 +80,7 @@ export default async function PayrollSetupPage({
       : searchParams?.implOk
       ? { tone: "success", text: searchParams.implOk }
       : null;
-  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods, glProfile, coa] =
+  const [config, preconditions, payGroups, memberships, club, candidateAdmins, candidateControllers, employees, currentYearPeriods, glProfile, coa, overtimePolicyRow] =
     await Promise.all([
       getPayrollClubConfig(principal, clubId),
       checkPayrollActivationPreconditions(clubId),
@@ -115,7 +116,29 @@ export default async function PayrollSetupPage({
       // Payroll-3C-6A — global Payroll GL Accounting Profile + tenant CoA.
       prisma.payrollGlAccountingProfile.findUnique({ where: { clubId } }),
       listAccounts(principal, clubId, { includeArchived: false }),
+      // Slice F (2026-09-19) §37 — overtime policy display. Reads the
+      // canonical PayrollClubConfig columns directly; the view layer
+      // never exposed OT fields.
+      prisma.payrollClubConfig.findUnique({
+        where: { clubId },
+        select: {
+          overtimePolicyKind: true,
+          overtimeDailyThresholdHours: true,
+          overtimeWeeklyThresholdHours: true,
+          overtimeMultiplier: true,
+          workweekStartDow: true,
+        },
+      }),
     ]);
+    const overtimePolicyDisplay = overtimePolicyRow
+      ? {
+          overtimePolicyKind: overtimePolicyRow.overtimePolicyKind,
+          overtimeDailyThresholdHours: overtimePolicyRow.overtimeDailyThresholdHours.toString(),
+          overtimeWeeklyThresholdHours: overtimePolicyRow.overtimeWeeklyThresholdHours.toString(),
+          overtimeMultiplier: overtimePolicyRow.overtimeMultiplier.toString(),
+          workweekStartDow: overtimePolicyRow.workweekStartDow,
+        }
+      : null;
     // Group periods by pay-group id for the calendar section.
     const initialCalendarByGroup: Record<string, ReturnType<typeof serializePeriod>[]> = {};
     for (const p of currentYearPeriods) {
@@ -340,9 +363,17 @@ export default async function PayrollSetupPage({
         </a>
       </section>
 
-      {/* Section 8 — Benefit plans (Slice C closeout 2026-09-18) */}
+      {/* Section 8 — Overtime policy (Slice F, 2026-09-19) */}
       <SectionHeader
         eyebrow="Section 8"
+        title="Overtime policy"
+        subtitle="The statutory overtime rule Spectre applies to every hourly employee on this Club's payroll. Special arrangements (statutory exempt roles, overtime agreements, averaging) are declared per-employee under Employee → Payroll — Prepare refuses to calculate under an unsupported arrangement until it is declared."
+      />
+      <OvertimePolicySection policy={overtimePolicyDisplay} />
+
+      {/* Section 9 — Benefit plans (Slice C closeout 2026-09-18) */}
+      <SectionHeader
+        eyebrow="Section 9"
         title="Benefit plans"
         subtitle="Configure the Club's Long-Term Disability and Health & Dental plans. Each plan links to one or two Payroll components — the components carry the tax, pensionable, insurable, and GL treatment. RRSP plans arrive in a later slice."
       />

@@ -28,7 +28,12 @@ export interface RegisterEmployeeRow {
   departmentCode: string;            // frozen from the batch's department dimension
   departmentName: string;
   payTypeLabel: string;              // "Salary" | "Hourly" | "Mixed"
-  regularEarnings: string;           // "4583.33"
+  // Slice F (2026-09-19) — hourly regular / overtime split.
+  regularHours: string;              // "80.0000" — hourly employees only; "0.0000" for salary
+  overtimeHours: string;             // "5.0000"
+  overtimeRate: string;              // "33.7500"
+  overtimeEarnings: string;          // "168.75"
+  regularEarnings: string;           // salaried period base OR hourly regular = regularHours × baseRate. Includes REGULAR earning rows only (excludes OVERTIME)
   otherEarnings: string;             // additional-earning + bonus one-time
   taxableBenefits: string;           // employer non-cash taxable
   grossCashEarnings: string;         // net-pay-side gross
@@ -49,6 +54,9 @@ export interface RegisterEmployeeRow {
 }
 
 export interface RegisterTotals {
+  regularHours: string;
+  overtimeHours: string;
+  overtimeEarnings: string;
   regularEarnings: string;
   otherEarnings: string;
   taxableBenefits: string;
@@ -250,7 +258,18 @@ export async function buildPayrollRegister(
     }
 
     const gross = toDec2(be.grossPay);
-    const regular = Math.max(0, gross - otherEarnings);
+    // Slice F — hourly overtime split (frozen at Prepare).
+    const regularHoursNum   = be.regularHoursSnapshot   ? Number(be.regularHoursSnapshot.toString())   : 0;
+    const overtimeHoursNum  = be.overtimeHoursSnapshot  ? Number(be.overtimeHoursSnapshot.toString())  : 0;
+    const baseRateNum       = be.hourlyBaseRateSnapshot ? Number(be.hourlyBaseRateSnapshot.toString()) : 0;
+    const overtimeRateNum   = be.overtimeRateSnapshot   ? Number(be.overtimeRateSnapshot.toString())   : 0;
+    const overtimeEarnings  = overtimeHoursNum * overtimeRateNum;
+    const hourlyRegularEarnings = regularHoursNum * baseRateNum;
+    // For salaried employees hourlyRegularEarnings === 0. Use hourly
+    // regular when the batch employee is hourly, else use gross-minus-other.
+    const regular = (overtimeHoursNum > 0 || regularHoursNum > 0)
+      ? hourlyRegularEarnings
+      : Math.max(0, gross - otherEarnings - overtimeEarnings);
     const cpp = toDec2(be.deductionCppEeCombined);
     const cpp2 = toDec2(be.deductionCpp2Ee);
     const ei = toDec2(be.deductionEiEe);
@@ -269,7 +288,11 @@ export async function buildPayrollRegister(
       employeeName: empName,
       departmentCode: be.employee?.department?.code ?? "",
       departmentName: be.employee?.department?.name ?? "",
-      payTypeLabel: payType,
+      payTypeLabel: overtimeHoursNum > 0 || regularHoursNum > 0 ? "Hourly" : payType,
+      regularHours: regularHoursNum.toFixed(4),
+      overtimeHours: overtimeHoursNum.toFixed(4),
+      overtimeRate: overtimeRateNum.toFixed(4),
+      overtimeEarnings: fmt2(overtimeEarnings),
       regularEarnings: fmt2(regular),
       otherEarnings: fmt2(otherEarnings),
       taxableBenefits: fmt2(taxableBenefits),
@@ -292,6 +315,9 @@ export async function buildPayrollRegister(
   });
 
   const totals: RegisterTotals = {
+    regularHours:             addStr(...rows.map((r) => r.regularHours)),
+    overtimeHours:            addStr(...rows.map((r) => r.overtimeHours)),
+    overtimeEarnings:         addStr(...rows.map((r) => r.overtimeEarnings)),
     regularEarnings:          addStr(...rows.map((r) => r.regularEarnings)),
     otherEarnings:            addStr(...rows.map((r) => r.otherEarnings)),
     taxableBenefits:          addStr(...rows.map((r) => r.taxableBenefits)),

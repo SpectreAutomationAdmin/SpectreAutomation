@@ -716,6 +716,62 @@ async function payrollReady() {
     log("enrolled hourly employee in pay group");
   }
 
+  // Slice F (2026-09-19) — approved time producing genuine overtime for
+  // pay period seq 20 (Oct 16 → Nov 1, payDate Oct 30). 5 workdays × 10
+  // hours = 50 hours total: workweek Oct 18 (Sun) - Oct 24 (Sat) entirely
+  // inside the period, with 10hr/day producing 10 daily-OT hours and 6
+  // weekly-OT hours (weekly total 50 exceeds 44 by 6). Greater-of rule
+  // yields 10 OT hours, 40 regular hours.
+  const SLICE_F_SEQ = 20;
+  const slicefPeriod = await prisma.payrollPayPeriod.findFirst({
+    where: { clubId: club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: SLICE_F_SEQ },
+  });
+  if (slicefPeriod) {
+    const workDates = [
+      new Date(Date.UTC(2026, 9, 19)), // Mon
+      new Date(Date.UTC(2026, 9, 20)), // Tue
+      new Date(Date.UTC(2026, 9, 21)), // Wed
+      new Date(Date.UTC(2026, 9, 22)), // Thu
+      new Date(Date.UTC(2026, 9, 23)), // Fri
+    ];
+    const hourlyAssignment = await prisma.employeeEmploymentAssignment.findFirstOrThrow({
+      where: { clubId: club.id, employeeId: hourly.id, role: "PRIMARY" },
+    });
+    for (const wd of workDates) {
+      const existing = await prisma.payrollApprovedTimeEntry.findFirst({
+        where: { clubId: club.id, employeeId: hourly.id, workDate: wd },
+      });
+      if (!existing) {
+        await prisma.payrollApprovedTimeEntry.create({
+          data: {
+            clubId: club.id, employeeId: hourly.id,
+            employmentAssignmentId: hourlyAssignment.id,
+            workDate: wd, hours: "10",
+            approvalState: "APPROVED",
+            approvedByUserId: pa.id, approvedAt: new Date(),
+            earningClassification: "REGULAR",
+          },
+        });
+      }
+    }
+    const dtaExists = await prisma.payrollDepartmentTimeApproval.findFirst({
+      where: { clubId: club.id, payPeriodId: slicefPeriod.id, departmentId: dept.id },
+    });
+    if (!dtaExists) {
+      await prisma.payrollDepartmentTimeApproval.create({
+        data: {
+          clubId: club.id, payPeriodId: slicefPeriod.id, departmentId: dept.id,
+          state: "APPROVED", approvedAt: new Date(),
+          approvedByUserId: pa.id,
+        },
+      });
+      log(`created department time approval for period seq ${SLICE_F_SEQ}`);
+    }
+    log(`slice-F approved time: 5 × 10hr = 50 hours for period seq ${SLICE_F_SEQ}`);
+  } else {
+    log(`(slice-F) pay period seq ${SLICE_F_SEQ} not found — skipping OT approved time seed`);
+  }
+
   log("--- PAYROLL-READY COMPLETE ---");
   log(`employeeId    = ${employee.id}`);
   log(`hourlyEmployeeId = ${hourly.id}`);
@@ -723,8 +779,10 @@ async function payrollReady() {
   log(`controllerEmail = ${CONTROLLER_EMAIL}`);
   log(`payGroupId    = ${pg.id}`);
   log("");
-  log("Trigger the pipeline by calling (as the fixture admin):");
+  log("Trigger the Slice D pipeline (salaried) by calling (as the fixture admin):");
   log(`  POST /api/dev/slice-d-pipeline?clubSlug=${CLUB_SLUG}&seq=18`);
+  log("Trigger the Slice F pipeline (hourly + OT) by calling:");
+  log(`  POST /api/dev/slice-f-pipeline?clubSlug=${CLUB_SLUG}&seq=${SLICE_F_SEQ}`);
 }
 
 // ---------------------------------------------------------------------
