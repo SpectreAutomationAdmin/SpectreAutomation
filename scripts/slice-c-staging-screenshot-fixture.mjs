@@ -217,6 +217,11 @@ async function setup() {
   const ltdLiab  = await findOrCreateAccount(club.id, "2150", "LTD Employee Payable",         "LIABILITY");
   const hcExp    = await findOrCreateAccount(club.id, "5160", "Employer Health Premium Expense", "EXPENSE");
   const hcLiab   = await findOrCreateAccount(club.id, "2160", "Health Benefit Liability",     "LIABILITY");
+  // Slice D — RRSP accounts.
+  const rrspEeExp  = await findOrCreateAccount(club.id, "5170", "RRSP Employee Contribution Expense", "EXPENSE");
+  const rrspEeLiab = await findOrCreateAccount(club.id, "2170", "RRSP Employee Payable",              "LIABILITY");
+  const rrspErExp  = await findOrCreateAccount(club.id, "5180", "RRSP Employer Match Expense",        "EXPENSE");
+  const rrspErLiab = await findOrCreateAccount(club.id, "2180", "RRSP Employer Payable",              "LIABILITY");
 
   const ltdComp = await findOrCreateComponent(club.id, {
     code: "LTD_EE", displayName: "LTD Employee Premium",
@@ -263,6 +268,43 @@ async function setup() {
     eligibleEarningsBasis: null,
   }, admin.id);
 
+  // Slice D — RRSP components + plan (percent + employer match).
+  const rrspEeComp = await findOrCreateComponent(club.id, {
+    code: "RRSP_EE", displayName: "RRSP Employee Contribution",
+    category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE",
+    cashEffect: "DECREASES_NET_PAY",
+    taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+    calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+    eligibleEarningsBase: "REGULAR_EARNINGS_ONLY",
+    displaySection: "DEDUCTIONS", usage: "RECURRING",
+    expenseAccountId: rrspEeExp.id, liabilityAccountId: rrspEeLiab.id,
+    active: true,
+  });
+  const rrspErComp = await findOrCreateComponent(club.id, {
+    code: "RRSP_ER", displayName: "RRSP Employer Match",
+    category: "EMPLOYER_CONTRIBUTION", side: "EMPLOYER",
+    cashEffect: "NO_NET_PAY_EFFECT",
+    taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+    calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+    eligibleEarningsBase: "REGULAR_EARNINGS_ONLY",
+    displaySection: "BENEFITS", usage: "RECURRING",
+    expenseAccountId: rrspErExp.id, liabilityAccountId: rrspErLiab.id,
+    active: true,
+  });
+  const rrspPlan = await findOrCreatePlan(club.id, {
+    kind: "RRSP", code: "RRSP_FIXTURE",
+    name: `${FIXTURE_TAG} — Group RRSP`,
+    description: "Fixture RRSP plan (100% match, 3% cap).",
+    effectiveFrom: new Date(Date.UTC(2020, 0, 1)),
+    effectiveTo: null,
+    employeeComponentId: rrspEeComp.id,
+    employerComponentId: rrspErComp.id,
+    defaultElectionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+    eligibleEarningsBasis: "REGULAR_EARNINGS_ONLY",
+    employerMatchBps: 10000,    // 100%
+    employerMatchCapBps: 300,   //   3%
+  }, admin.id);
+
   const employee = await findOrCreateEmployee(club.id);
 
   // ACTIVE LTD enrolment (2024-01-01, open-ended)
@@ -287,6 +329,15 @@ async function setup() {
     effectiveTo: new Date(Date.UTC(2024, 0, 1)),
     electionKind: "FIXED_AMOUNT", amount: "35.00",
     status: "ENDED",
+  }, admin.id);
+
+  // Slice D — ACTIVE RRSP enrolment at 5% election.
+  await findOrCreateEnrolment(club.id, employee.id, rrspPlan.id, {
+    effectiveFrom: new Date(Date.UTC(2024, 0, 1)),
+    effectiveTo: null,
+    electionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+    amount: null, percentBps: 500,
+    status: "ACTIVE",
   }, admin.id);
 
   log("--- SETUP COMPLETE ---");
