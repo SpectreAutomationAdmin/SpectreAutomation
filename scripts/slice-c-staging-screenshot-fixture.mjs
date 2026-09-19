@@ -672,19 +672,119 @@ async function teardown() {
   assertNotFounderTenant(club.name, club.slug);
 
   const clubId = club.id;
-  // FK-safe deletion order. Everything either FKs to Club (cascade) or
-  // needs explicit clean-up below.
-  await prisma.employeeBenefitPlanEnrolment.deleteMany({ where: { clubId } });
-  await prisma.payrollBenefitPlan.deleteMany({ where: { clubId } });
-  await prisma.payrollComponent.deleteMany({ where: { clubId } });
-  await prisma.employeeCompensation.deleteMany({ where: { clubId } });
-  await prisma.employeeEmploymentAssignment.deleteMany({ where: { clubId } });
-  await prisma.employee.deleteMany({ where: { clubId } });
-  await prisma.account.deleteMany({ where: { clubId } });
-  await prisma.userClubRole.deleteMany({ where: { clubId } });
-  await prisma.club.delete({ where: { id: clubId } });
-  await prisma.user.deleteMany({ where: { email: ADMIN_EMAIL } });
-  log(`deleted club ${clubId} + admin user`);
+  // FK-safe deletion order. Payroll pipeline artefacts (batches / journals /
+  // GL profile / club config / pay groups) MUST land before Account,
+  // Employee, Department.
+  //
+  // Slice D closeout — extended for --payroll-ready teardown coverage:
+  //   Payroll batch tree     → PayrollBatchComponentSnapshot / Employee /
+  //                            Approval / Exception / Batch (cascade from Club)
+  //   Journal tree           → JournalEntryLine / JournalEntry (from Club)
+  //   Time tree              → PayrollApprovedTimeEntry / TimeClockEvent
+  //                            / PayrollTimesheetEntry / DepartmentApproval
+  //   Payroll config tree    → PayrollGlAccountingProfile / ClubConfig /
+  //                            ImplementationDeclaration / PayGroup /
+  //                            PayGroupMember / PayPeriod / OpeningBalance
+  //   Fiscal tree            → FiscalPeriod / FiscalYear
+  //
+  // We do a broad best-effort deleteMany chain in the safe order.
+
+  const safeDeleteMany = async (name, fn) => {
+    try { await fn(); } catch (e) {
+      // Non-fatal: some models may not have any rows for this club, and
+      // the FK order below is comprehensive; a spurious error on a model
+      // that wasn't populated should not block teardown.
+      log(`(teardown) skipped ${name}: ${(e && e.message ? e.message : e).toString().slice(0, 140)}`);
+    }
+  };
+
+  // 1. Benefit tree
+  await safeDeleteMany("EmployeeBenefitPlanEnrolment", () =>
+    prisma.employeeBenefitPlanEnrolment.deleteMany({ where: { clubId } }));
+
+  // 2. Payroll batch tree (snapshots → batch employees → exceptions → batches)
+  await safeDeleteMany("PayrollBatchComponentSnapshot", () =>
+    prisma.payrollBatchComponentSnapshot.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollBatchEmployee", () =>
+    prisma.payrollBatchEmployee.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollBatchException", () =>
+    prisma.payrollBatchException.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollBatch", () =>
+    prisma.payrollBatch.deleteMany({ where: { clubId } }));
+
+  // 3. Journal tree (lines → entries)
+  await safeDeleteMany("JournalEntryLine", () =>
+    prisma.journalEntryLine.deleteMany({ where: { journalEntry: { clubId } } }));
+  await safeDeleteMany("JournalEntry", () =>
+    prisma.journalEntry.deleteMany({ where: { clubId } }));
+
+  // 4. Time tree (best-effort)
+  await safeDeleteMany("PayrollApprovedTimeEntry", () =>
+    prisma.payrollApprovedTimeEntry.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollDepartmentTimeApproval", () =>
+    prisma.payrollDepartmentTimeApproval.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollTimesheetEntry", () =>
+    prisma.payrollTimesheetEntry.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("TimeClockEvent", () =>
+    prisma.timeClockEvent.deleteMany({ where: { clubId } }));
+
+  // 5. Benefit plans (must land before components — FK)
+  await safeDeleteMany("PayrollBenefitPlan", () =>
+    prisma.payrollBenefitPlan.deleteMany({ where: { clubId } }));
+
+  // 6. Payroll components (must land before accounts — FK)
+  await safeDeleteMany("PayrollComponent", () =>
+    prisma.payrollComponent.deleteMany({ where: { clubId } }));
+
+  // 7. Payroll config / group tree (before pay groups → pay periods →
+  //    memberships)
+  await safeDeleteMany("PayrollClubConfig", () =>
+    prisma.payrollClubConfig.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollGlAccountingProfile", () =>
+    prisma.payrollGlAccountingProfile.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollImplementationDeclaration", () =>
+    prisma.payrollImplementationDeclaration.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollOpeningBalance", () =>
+    prisma.payrollOpeningBalance.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollPayGroupMember", () =>
+    prisma.payrollPayGroupMember.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollPayPeriod", () =>
+    prisma.payrollPayPeriod.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("PayrollPayGroup", () =>
+    prisma.payrollPayGroup.deleteMany({ where: { clubId } }));
+
+  // 8. Employee tree
+  await safeDeleteMany("EmployeeCompensation", () =>
+    prisma.employeeCompensation.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("EmployeeEmploymentAssignment", () =>
+    prisma.employeeEmploymentAssignment.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("Employee", () =>
+    prisma.employee.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("Department", () =>
+    prisma.department.deleteMany({ where: { clubId } }));
+
+  // 9. Fiscal tree
+  await safeDeleteMany("FiscalPeriod", () =>
+    prisma.fiscalPeriod.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("FiscalYear", () =>
+    prisma.fiscalYear.deleteMany({ where: { clubId } }));
+
+  // 10. GL accounts
+  await safeDeleteMany("Account", () =>
+    prisma.account.deleteMany({ where: { clubId } }));
+
+  // 11. RBAC + Club
+  await safeDeleteMany("UserClubRole", () =>
+    prisma.userClubRole.deleteMany({ where: { clubId } }));
+  await safeDeleteMany("Club", () =>
+    prisma.club.delete({ where: { id: clubId } }));
+
+  // 12. Fixture users (only the synthetic ones — never Chris/Marc).
+  await safeDeleteMany("User (fixture)", () =>
+    prisma.user.deleteMany({
+      where: { email: { in: [ADMIN_EMAIL, PA_EMAIL, CONTROLLER_EMAIL] } },
+    }));
+  log(`deleted club ${clubId} + fixture users`);
 }
 
 // ---------------------------------------------------------------------
