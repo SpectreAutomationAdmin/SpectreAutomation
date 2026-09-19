@@ -64,6 +64,21 @@ export default async function PayrollReviewPage({ params }: Props) {
           >
             ← Payroll processing
           </Link>
+          {/* Slice E §7-8 — Payroll Register is the primary batch-level
+              review artefact for both PA and Controller. */}
+          <Link
+            href={`/app/admin/payroll/batches/${params.batchId}/register`}
+            className="btn btn-primary btn-sm"
+            data-testid="payroll-review-view-register"
+          >
+            View Payroll Register →
+          </Link>
+          <Link
+            href={`/app/admin/payroll/batches/${params.batchId}/paystubs`}
+            className="btn btn-secondary btn-sm"
+          >
+            Pay statements
+          </Link>
         </nav>
       </header>
 

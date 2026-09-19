@@ -12,6 +12,11 @@ import { requirePermission, type Principal } from "../rbac";
 import { assertPostingAllowed } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import { ALLOWED_PAY_FREQUENCIES, type PayFrequency } from "./club-config";
+import {
+  PAY_DATE_ADJUSTMENTS,
+  assertKnownPolicy,
+  type PayDateAdjustment,
+} from "./pay-date-policy";
 
 const ENTITY = "PayrollPayGroup";
 
@@ -28,6 +33,7 @@ export interface PayGroupView {
   active: boolean;
   payDateOffsetDays: number;
   calendarAnchorDate: Date | null;
+  payDateAdjustment: PayDateAdjustment;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -43,6 +49,7 @@ interface PayGroupRow {
   active: boolean;
   payDateOffsetDays: number;
   calendarAnchorDate: Date | null;
+  payDateAdjustment: string;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -61,6 +68,7 @@ function projectRow(row: PayGroupRow, memberCount: number): PayGroupView {
     active: row.active,
     payDateOffsetDays: row.payDateOffsetDays,
     calendarAnchorDate: row.calendarAnchorDate,
+    payDateAdjustment: assertKnownPolicy(row.payDateAdjustment ?? "PREVIOUS_BUSINESS_DAY"),
     notes: row.notes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -186,6 +194,10 @@ export interface CreatePayGroupInput {
    *  generation time). The service snaps the supplied Date to UTC
    *  midnight so it represents a civil calendar day. */
   calendarAnchorDate?: Date | null;
+  /** Slice E (2026-09-19) — weekend/holiday pay-date shift policy.
+   *  Defaults to PREVIOUS_BUSINESS_DAY so callers that don't supply
+   *  it still get the pre-Slice-E behaviour. */
+  payDateAdjustment?: PayDateAdjustment;
   notes?: string | null;
   active?: boolean;
 }
@@ -218,6 +230,10 @@ export async function createPayGroup(
       ))
     : null;
 
+  const payDateAdjustment = assertKnownPolicy(input.payDateAdjustment ?? "PREVIOUS_BUSINESS_DAY");
+  if (!(PAY_DATE_ADJUSTMENTS as readonly string[]).includes(payDateAdjustment)) {
+    throw new ValidationError([{ path: "payDateAdjustment", message: `must be one of ${PAY_DATE_ADJUSTMENTS.join(", ")}` }]);
+  }
   const row = await prisma.payrollPayGroup.create({
     data: {
       clubId,
@@ -226,6 +242,7 @@ export async function createPayGroup(
       payFrequency,
       payDateOffsetDays,
       calendarAnchorDate,
+      payDateAdjustment,
       notes: input.notes?.trim() || null,
       active: input.active ?? true,
       createdByUserId: principal.id,
@@ -246,6 +263,10 @@ export interface UpdatePayGroupInput {
   payFrequency?: PayFrequency;
   payDateOffsetDays?: number;
   calendarAnchorDate?: Date | null;
+  /** Slice E (2026-09-19) — see CreatePayGroupInput. Prospective only:
+   *  changing this does NOT rewrite historical rows in `PayrollPayPeriod`.
+   *  Newly generated periods consume the new policy. */
+  payDateAdjustment?: PayDateAdjustment;
   notes?: string | null;
   active?: boolean;
 }
@@ -305,12 +326,14 @@ export async function updatePayGroup(
     payFrequency?: string;
     payDateOffsetDays?: number;
     calendarAnchorDate?: Date | null;
+    payDateAdjustment?: string;
     notes?: string | null;
     active?: boolean;
   } = {};
   if (input.name !== undefined) patch.name = validateName(input.name);
   if (input.payFrequency !== undefined) patch.payFrequency = validatePayFrequency(input.payFrequency);
   if (input.payDateOffsetDays !== undefined) patch.payDateOffsetDays = validatePayDateOffset(input.payDateOffsetDays);
+  if (input.payDateAdjustment !== undefined) patch.payDateAdjustment = assertKnownPolicy(input.payDateAdjustment);
   if (input.calendarAnchorDate !== undefined) {
     patch.calendarAnchorDate = input.calendarAnchorDate
       ? new Date(Date.UTC(

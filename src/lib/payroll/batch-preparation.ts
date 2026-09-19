@@ -350,6 +350,10 @@ async function snapshotEmployee(
   periodStart: Date,
   periodEnd: Date,
   member: Awaited<ReturnType<typeof resolvePopulation>>[number],
+  // Slice E (2026-09-19) — batchId threaded so the snapshot can look
+  // up existing PayrollZeroHoursAcknowledgement rows for this batch.
+  // Nullable for backward compat with any test that stubs the fn.
+  batchId?: string,
 ): Promise<EmployeeSnapshot> {
   const employeeId = member.employee.id;
   const exceptions: EmployeeSnapshot["exceptions"] = [];
@@ -447,6 +451,39 @@ async function snapshotEmployee(
     let sumCents = 0n;
     for (const e of approvedTime) sumCents += BigInt(Math.round(Number(e.hours.toString()) * 10_000));
     approvedHours = { toString: () => (Number(sumCents) / 10_000).toFixed(4) } as unknown as Decimal;
+  }
+
+  // Slice E (2026-09-19) §17 — emit NO_APPROVED_HOURS_FOR_HOURLY. The
+  // audit found this blocker was declared but never fired; a live
+  // hourly employee with zero approved payable hours would silently
+  // calculate to $0. Now fires BLOCKER unless the Payroll Admin has
+  // explicitly recorded a `PayrollZeroHoursAcknowledgement` for this
+  // batch × employee (leave / no shifts / seasonal / other).
+  const compensationsForCadence = compensations;
+  const isHourly = compensationsForCadence.some(
+    (c) => (c.cadence ?? "").toUpperCase() !== "SALARY",
+  ) && !compensationsForCadence.some((c) => (c.cadence ?? "").toUpperCase() === "SALARY");
+  const hoursSumNumeric = approvedHours ? Number(approvedHours.toString()) : 0;
+  if (isHourly && hoursSumNumeric === 0) {
+    let acknowledged = false;
+    if (batchId) {
+      const ack = await prisma.payrollZeroHoursAcknowledgement.findFirst({
+        where: { clubId, batchId, employeeId },
+        select: { id: true },
+      });
+      acknowledged = ack != null;
+    }
+    if (!acknowledged) {
+      exceptions.push({
+        severity: "BLOCKER",
+        code: "NO_APPROVED_HOURS_FOR_HOURLY",
+        message:
+          "Hourly employee has no approved payable hours for this pay period. " +
+          "Approve time, or acknowledge zero hours expected (with reason) to proceed.",
+        recommendedAction:
+          "Return to Department Approvals to approve the employee's hours, OR acknowledge zero hours expected under Payroll Review with a reason.",
+      });
+    }
   }
 
   // Allowances intersecting the period.
@@ -840,6 +877,13 @@ export async function preparePayrollBatch(
   const snapshottedAt = new Date();
   const snapshots: EmployeeSnapshot[] = [];
   for (const m of members) {
+    // Slice E — batchId is intentionally omitted here: the batch has
+    // not yet been created (that happens inside the transaction below).
+    // The zero-hours-ack lookup inside snapshotEmployee therefore skips
+    // and the NO_APPROVED_HOURS_FOR_HOURLY blocker fires on the FIRST
+    // Prepare unconditionally. The PA acknowledges from the batch review
+    // workspace (which also resolves the exception row directly), so
+    // the blocker is cleared without needing a Re-Prepare.
     const snap = await snapshotEmployee(clubId, province, pre.periodStart, pre.periodEnd, m);
 
     // v-slice-1-followup-7 (2026-09-15) — MID_YEAR_MIGRATION per-employee

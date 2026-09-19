@@ -29,6 +29,7 @@ export async function PATCH(
       name: body.name,
       payFrequency: body.payFrequency as PayFrequency | undefined,
       payDateOffsetDays: body.payDateOffsetDays,
+      payDateAdjustment: body.payDateAdjustment,
       notes: body.notes,
       active: body.active,
     });

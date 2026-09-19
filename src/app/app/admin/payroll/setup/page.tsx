@@ -34,6 +34,8 @@ import PayrollCalendarSection from "./PayrollCalendarSection";
 import GlProfileEditor from "./GlProfileEditor";
 import PayrollImplementationEditor from "./PayrollImplementationEditor";
 import { listAccounts } from "@/lib/accounting/coa";
+import { buildFirstPayrollReadiness } from "@/lib/payroll/first-payroll-readiness";
+import FirstPayrollReadinessPanel from "@/components/payroll/FirstPayrollReadinessPanel";
 import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
 import { declareImplementationAction, revokeImplementationAction } from "./_implementation-actions";
 
@@ -156,6 +158,9 @@ export default async function PayrollSetupPage({
           employee belongs to. This page covers configuration only — it does not run payroll.
         </p>
       </header>
+
+      {/* Slice E (2026-09-19) §24 — First-payroll readiness panel */}
+      <FirstPayrollReadinessPanel readiness={await buildFirstPayrollReadiness(principal, clubId, currentTaxYear)} />
 
       {/* Section 1 — Payroll Configuration */}
       <SectionHeader

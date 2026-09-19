@@ -36,6 +36,8 @@ export default function PayGroupsEditor({
   const [newFreq, setNewFreq] = useState<PayFrequency>("BIWEEKLY");
   const [newOffset, setNewOffset] = useState(5);
   const [newAnchor, setNewAnchor] = useState("");
+  const [newAdjustment, setNewAdjustment] =
+    useState<"NONE" | "PREVIOUS_BUSINESS_DAY" | "NEXT_BUSINESS_DAY">("PREVIOUS_BUSINESS_DAY");
 
   const api = useCallback((path: string) => `/api/clubs/${clubId}/payroll/pay-groups${path}`, [clubId]);
 
@@ -59,6 +61,7 @@ export default function PayGroupsEditor({
           payFrequency: newFreq,
           payDateOffsetDays: newOffset,
           calendarAnchorDate: newAnchor ? new Date(newAnchor).toISOString() : null,
+          payDateAdjustment: newAdjustment,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -207,6 +210,33 @@ export default function PayGroupsEditor({
                 </span>
               </label>
             )}
+            {/* Slice E §23 — pay-date adjustment policy */}
+            <fieldset className="md:col-span-2 mt-1" data-testid="pay-groups-new-adjustment">
+              <legend className="text-club-ink text-sm">
+                When a scheduled pay date falls on a weekend:
+              </legend>
+              <div className="mt-2 space-y-1 text-sm">
+                {[
+                  { v: "NONE",                  t: "Keep the scheduled date" },
+                  { v: "PREVIOUS_BUSINESS_DAY", t: "Pay on the previous weekday" },
+                  { v: "NEXT_BUSINESS_DAY",     t: "Pay on the next weekday" },
+                ].map((o) => (
+                  <label key={o.v} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="pay-groups-new-pay-adjust"
+                      value={o.v}
+                      checked={newAdjustment === o.v}
+                      onChange={() => setNewAdjustment(o.v as typeof newAdjustment)}
+                    />
+                    <span>{o.t}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-stone-500">
+                Statutory-holiday adjustment is not yet automated. Only weekend shifts are honoured.
+              </p>
+            </fieldset>
           </div>
           <div className="flex items-center gap-2">
             <button

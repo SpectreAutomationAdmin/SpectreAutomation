@@ -502,6 +502,7 @@ model Club {
   // Slice C (2026-09-18) — Club-level benefit plans + employee enrolments.
   payrollBenefitPlans                PayrollBenefitPlan[]
   employeeBenefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
+  payrollZeroHoursAcknowledgements   PayrollZeroHoursAcknowledgement[]
   // Payroll-3C-5 (2026-09-09) — per-Component opening balances.
   payrollOpeningBalanceComponents    PayrollOpeningBalanceComponent[]
 
@@ -3788,6 +3789,7 @@ model Employee {
   scheduledOneTimeEarnings   PayrollScheduledOneTimeEarning[]
   // Slice C (2026-09-18) — benefit-plan enrolments.
   benefitPlanEnrolments      EmployeeBenefitPlanEnrolment[]
+  payrollZeroHoursAcknowledgements PayrollZeroHoursAcknowledgement[]
   // Payroll-3A (2026-08-28) — canonical payroll foundation.
   payrollBatchEmployees      PayrollBatchEmployee[]
   payrollBatchEarnings       PayrollBatchEarning[]
@@ -12045,6 +12047,9 @@ model PayrollPayGroup {
   // frequency requires an anchor and none is set. SEMI_MONTHLY and
   // MONTHLY are anchor-agnostic (calendar-rule driven).
   calendarAnchorDate DateTime?
+  // Slice E (2026-09-19) — see the sqlite twin for the full note.
+  //   NONE | PREVIOUS_BUSINESS_DAY | NEXT_BUSINESS_DAY
+  payDateAdjustment String   @default("PREVIOUS_BUSINESS_DAY")
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -12185,6 +12190,7 @@ model PayrollBatch {
   updatedAt     DateTime @updatedAt
 
   employees             PayrollBatchEmployee[]
+  zeroHoursAcknowledgements PayrollZeroHoursAcknowledgement[]
   earnings              PayrollBatchEarning[]
   deductions            PayrollBatchDeduction[]
   allowanceSnapshots    PayrollBatchAllowanceSnapshot[]
@@ -12232,6 +12238,26 @@ model PayrollBatchException {
   @@index([clubId, batchId])
   @@index([batchId, severity])
   @@index([batchEmployeeId, severity])
+}
+
+// Slice E (2026-09-19) — see sqlite twin for the full note.
+model PayrollZeroHoursAcknowledgement {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  batchId              String
+  batch                PayrollBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchEmployeeId      String
+  batchEmployee        PayrollBatchEmployee @relation(fields: [batchEmployeeId], references: [id], onDelete: Cascade)
+  employeeId           String
+  employee             Employee @relation(fields: [employeeId], references: [id])
+  reason               String
+  reasonDetail         String?
+  acknowledgedByUserId String
+  acknowledgedAt       DateTime @default(now())
+
+  @@unique([batchEmployeeId])
+  @@index([clubId, batchId])
 }
 
 // ---------------------------------------------------------------------------
@@ -12567,6 +12593,7 @@ model PayrollBatchEmployee {
   // Payroll-3C-2 (2026-09-07) — component snapshots.
   componentSnapshots PayrollBatchComponentSnapshot[]
   exceptions         PayrollBatchException[]
+  zeroHoursAcknowledgement PayrollZeroHoursAcknowledgement?
 
   @@unique([batchId, employeeId])
   @@index([clubId, batchId])

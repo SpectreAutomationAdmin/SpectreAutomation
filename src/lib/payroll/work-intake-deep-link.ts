@@ -14,6 +14,10 @@ export type PayrollWorkSubtype =
   | "PAYROLL_ADMIN_PROCESSING"
   | "PAYROLL_REVIEW"
   | "PAYROLL_FINAL_APPROVAL"
+  // Slice E (2026-09-19) §15-16 — deep-links for the two remaining
+  // Payroll Admin post-Controller cards. Both carry referenceId=batchId.
+  | "PAYROLL_READY_TO_POST"
+  | "PAYROLL_RETURNED_FOR_CORRECTION"
   // Payroll-3D-3 — manager timesheet approval scope + config-gap card.
   | "TIMESHEET_APPROVAL"
   | "TIMESHEET_APPROVAL_CONFIG_GAP";
@@ -49,6 +53,22 @@ export function resolvePayrollWorkIntakeDeepLink(
       return {
         href:  `/app/admin/payroll/process?batchId=${encodeURIComponent(referenceId)}`,
         label: "Open payroll processing",
+      };
+    case "PAYROLL_READY_TO_POST":
+      // Slice E §15 — Ready-to-Post fires for the Payroll Admin after
+      // Controller approval. Send them directly to the batch review
+      // page (which surfaces the Post button + View Register).
+      return {
+        href:  `/app/admin/payroll/batches/${encodeURIComponent(referenceId)}`,
+        label: "Post approved payroll",
+      };
+    case "PAYROLL_RETURNED_FOR_CORRECTION":
+      // Slice E §16 — Returned-for-Correction fires for the Payroll
+      // Admin when the Controller returns the batch. Land on the batch
+      // page so the return reason + returned-by are visible.
+      return {
+        href:  `/app/admin/payroll/batches/${encodeURIComponent(referenceId)}?returned=1`,
+        label: "Review Controller feedback",
       };
     case "PAYROLL_ADMIN_PROCESSING":
       // PAYROLL_ADMIN_PROCESSING originates from a pay period — referenceId

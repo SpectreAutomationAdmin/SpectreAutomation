@@ -4,12 +4,17 @@
 // Product model per founder:
 //   First scheduled payday  = 15th of the month.
 //   Second scheduled payday = LAST calendar day of the month.
-//   If the scheduled payday lands on Saturday or Sunday, it moves
-//   EARLIER to the immediately preceding Friday. (Later movement
-//   is not supported for semi-monthly.)
 //
-// Holiday handling is NOT implemented here — recommendation is that
-// holidays follow the same "earlier to preceding banking day" rule
+// Slice E (2026-09-19) — the previously hard-coded "earlier-Friday"
+// weekend shift is now founder-configured per pay group via
+// `PayrollPayGroup.payDateAdjustment`. `weekendAdjustedPayday` and
+// the no-arg `semiMonthlyPayday` remain (they default to
+// PREVIOUS_BUSINESS_DAY so historical callers keep the legacy
+// behaviour), but callers with access to the pay group should use the
+// policy-aware forms below.
+//
+// Statutory holiday awareness is NOT implemented here — recommendation
+// is that holidays follow the same "earlier / next business day" rule
 // after a banking-calendar helper ships. Currently only weekend
 // adjustment is applied.
 //
@@ -18,6 +23,11 @@
 // employee-facing pay-period boundaries are SEPARATE concepts —
 // the pay period always displays the compensation window
 // (1st–15th / 16th–EOM), not the cutoff.
+
+import {
+  applyPayDateAdjustment,
+  type PayDateAdjustment,
+} from "./pay-date-policy";
 
 const DAY_MS = 86_400_000;
 
@@ -34,21 +44,31 @@ export function rawScheduledSemiMonthlyPayday(
   return new Date(Date.UTC(year, monthIndex0 + 1, 0));
 }
 
-/** Move earlier to preceding Friday when landing on Sat/Sun. */
+/** LEGACY — earlier-Friday only. Equivalent to
+ *  applyPayDateAdjustment(raw, "PREVIOUS_BUSINESS_DAY"). Kept for
+ *  backward compat; prefer the policy-aware form. */
 export function weekendAdjustedPayday(raw: Date): Date {
-  const dow = raw.getUTCDay(); // 0=Sun, 6=Sat
-  if (dow === 6) return new Date(raw.getTime() - 1 * DAY_MS); // Sat → Fri
-  if (dow === 0) return new Date(raw.getTime() - 2 * DAY_MS); // Sun → Fri
-  return raw;
+  return applyPayDateAdjustment(raw, "PREVIOUS_BUSINESS_DAY");
 }
 
-/** Canonical semi-monthly payday: 15th / EOM adjusted for weekend. */
+/** LEGACY — 15th / EOM adjusted with earlier-Friday. Kept for
+ *  backward compat; prefer `semiMonthlyPaydayWithPolicy`. */
 export function semiMonthlyPayday(
   year: number,
   monthIndex0: number,
   half: "FIRST_HALF" | "SECOND_HALF",
 ): Date {
-  return weekendAdjustedPayday(rawScheduledSemiMonthlyPayday(year, monthIndex0, half));
+  return semiMonthlyPaydayWithPolicy(year, monthIndex0, half, "PREVIOUS_BUSINESS_DAY");
+}
+
+/** Canonical policy-aware semi-monthly payday. */
+export function semiMonthlyPaydayWithPolicy(
+  year: number,
+  monthIndex0: number,
+  half: "FIRST_HALF" | "SECOND_HALF",
+  policy: PayDateAdjustment,
+): Date {
+  return applyPayDateAdjustment(rawScheduledSemiMonthlyPayday(year, monthIndex0, half), policy);
 }
 
 /** Payroll cutoff = payDate − N calendar days (MVP semantics). */
@@ -88,13 +108,14 @@ export interface SemiMonthlyPeriodRow {
 export function generateSemiMonthlySchedule(
   year: number,
   leadCalendarDays: number,
+  policy: PayDateAdjustment = "PREVIOUS_BUSINESS_DAY",
 ): SemiMonthlyPeriodRow[] {
   const rows: SemiMonthlyPeriodRow[] = [];
   for (let m = 0; m < 12; m++) {
     for (const half of ["FIRST_HALF", "SECOND_HALF"] as const) {
       const seq = m * 2 + (half === "FIRST_HALF" ? 1 : 2);
       const { periodStart, periodEnd } = semiMonthlyPeriod(year, m, half);
-      const payDate = semiMonthlyPayday(year, m, half);
+      const payDate = semiMonthlyPaydayWithPolicy(year, m, half, policy);
       rows.push({
         seq, periodStart, periodEnd, payDate,
         payrollCutoff: payrollCutoff(payDate, leadCalendarDays),

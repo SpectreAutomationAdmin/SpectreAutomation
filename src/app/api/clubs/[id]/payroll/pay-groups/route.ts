@@ -32,6 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       name: body.name,
       payFrequency: body.payFrequency as PayFrequency,
       payDateOffsetDays: body.payDateOffsetDays,
+      payDateAdjustment: body.payDateAdjustment,
       notes: body.notes,
       active: body.active,
     });

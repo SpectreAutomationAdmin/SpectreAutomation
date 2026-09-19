@@ -28,7 +28,8 @@ import { requirePermission, type Principal } from "../rbac";
 import { assertPostingAllowed } from "../posting-guard";
 import { ValidationError, NotFoundError } from "../errors";
 import type { PayFrequency } from "./club-config";
-import { semiMonthlyPayday } from "./semi-monthly-payday";
+import { semiMonthlyPaydayWithPolicy } from "./semi-monthly-payday";
+import { assertKnownPolicy, type PayDateAdjustment } from "./pay-date-policy";
 
 const ENTITY = "PayrollPayPeriod";
 
@@ -134,6 +135,10 @@ interface CalendarSpec {
   payDateOffsetDays: number;
   calendarAnchorDate: Date | null;
   taxYear: number;
+  // Slice E (2026-09-19) — pay-date adjustment policy (per pay group).
+  // Default preserves the pre-Slice-E hard-coded behaviour so any caller
+  // that does not pass a policy still gets earlier-Friday.
+  payDateAdjustment?: PayDateAdjustment;
 }
 
 /**
@@ -155,6 +160,7 @@ interface CalendarSpec {
  */
 export function buildCalendar(spec: CalendarSpec): GeneratedPeriod[] {
   const { payFrequency, payDateOffsetDays, calendarAnchorDate, taxYear } = spec;
+  const policy = assertKnownPolicy(spec.payDateAdjustment ?? "PREVIOUS_BUSINESS_DAY");
 
   const yearStart = new Date(Date.UTC(taxYear, 0, 1));
   const yearAfter = new Date(Date.UTC(taxYear + 1, 0, 1));
@@ -225,8 +231,8 @@ export function buildCalendar(spec: CalendarSpec): GeneratedPeriod[] {
       const e1 = new Date(Date.UTC(taxYear, m, 16));
       const s2 = new Date(Date.UTC(taxYear, m, 16));
       const e2 = new Date(Date.UTC(taxYear, m + 1, 1));
-      const pay1 = semiMonthlyPayday(taxYear, m, "FIRST_HALF");
-      const pay2 = semiMonthlyPayday(taxYear, m, "SECOND_HALF");
+      const pay1 = semiMonthlyPaydayWithPolicy(taxYear, m, "FIRST_HALF", policy);
+      const pay2 = semiMonthlyPaydayWithPolicy(taxYear, m, "SECOND_HALF", policy);
       if (pay1.getUTCFullYear() === taxYear) {
         out.push({ sequenceInYear: 0, taxYear, periodStart: s1, periodEnd: e1, payDate: pay1 });
       }
@@ -311,6 +317,7 @@ export async function previewPayPeriods(
     payFrequency: grp.payFrequency as PayFrequency,
     payDateOffsetDays: grp.payDateOffsetDays,
     calendarAnchorDate: grp.calendarAnchorDate ?? null,
+    payDateAdjustment: grp.payDateAdjustment as PayDateAdjustment,
     taxYear,
   });
 }
@@ -372,6 +379,7 @@ export async function generatePayPeriods(
     payFrequency: grp.payFrequency as PayFrequency,
     payDateOffsetDays: grp.payDateOffsetDays,
     calendarAnchorDate: grp.calendarAnchorDate ?? null,
+    payDateAdjustment: grp.payDateAdjustment as PayDateAdjustment,
     taxYear,
   });
 
