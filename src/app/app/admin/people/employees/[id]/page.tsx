@@ -891,19 +891,24 @@ export default async function EmployeeProfilePage({
             benefitsDeductionsSection={
               <BenefitsDeductionsSection
                 employeeId={profile.id}
-                rows={benefitEnrolments.map((r) => ({
-                  id: r.id,
-                  planId: r.planId,
-                  planCode: r.planCode,
-                  planName: r.planName,
-                  planKind: r.planKind,
-                  status: r.status,
-                  electionKind: r.electionKind,
-                  amount: r.amount,
-                  percentBps: r.percentBps,
-                  effectiveFromIso: r.effectiveFromIso,
-                  effectiveToIso: r.effectiveToIso,
-                }))}
+                rows={benefitEnrolments.map((r) => {
+                  const plan = activeBenefitPlans.find((p) => p.id === r.planId) ?? null;
+                  return {
+                    id: r.id,
+                    planId: r.planId,
+                    planCode: r.planCode,
+                    planName: r.planName,
+                    planKind: r.planKind,
+                    status: r.status,
+                    electionKind: r.electionKind,
+                    amount: r.amount,
+                    percentBps: r.percentBps,
+                    effectiveFromIso: r.effectiveFromIso,
+                    effectiveToIso: r.effectiveToIso,
+                    employerMatchBps: plan?.employerMatchBps ?? null,
+                    employerMatchCapBps: plan?.employerMatchCapBps ?? null,
+                  };
+                })}
                 planChoices={activeBenefitPlans.map((p) => ({
                   id: p.id,
                   code: p.code,
@@ -912,6 +917,8 @@ export default async function EmployeeProfilePage({
                   defaultElectionKind: p.defaultElectionKind,
                   effectiveFromIso: p.effectiveFromIso,
                   effectiveToIso: p.effectiveToIso,
+                  employerMatchBps: p.employerMatchBps ?? null,
+                  employerMatchCapBps: p.employerMatchCapBps ?? null,
                 }))}
                 canWrite={canWriteBenefitEnrolment}
                 enrolAction={benefitsEnrolAction}

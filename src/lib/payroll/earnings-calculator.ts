@@ -65,6 +65,15 @@ export interface ComponentSnapshotLike {
   // Payroll-3C-3 — percent only.
   eligibleEarningsBase: "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS" | null;
   sourcePercentBps:  number | null;
+  // Slice D (2026-09-19) — RRSP employer match. Populated ONLY on
+  // employer-side snapshots of a matched benefit plan (see the
+  // snapshotter for the write-side note). NULL on every non-RRSP
+  // snapshot. When set, the calculator does NOT use the standard
+  // percent-of-eligible-earnings path — it computes the capped
+  // dollar-level match against the sibling employee snapshot.
+  sourceEnrolmentId?: string | null;
+  matchBps?:          number | null;
+  matchCapBps?:       number | null;
 }
 
 export interface EarningsCalcInput {
@@ -307,8 +316,14 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
   // Pass 2 — PERCENT_OF_ELIGIBLE_EARNINGS. Percentage components
   // resolve against the pre-declared eligible base and never against
   // each other.
+  //
+  // Slice D (2026-09-19) — the EMPLOYER side of a matched benefit plan
+  // (matchBps != null) is deferred to Pass 3 below. The plan-carried
+  // employee election % on that snapshot is *provenance*, not the
+  // effective employer contribution rate. Skip here.
   for (const cs of componentSnapshots) {
     if (cs.calculationMethod !== "PERCENT_OF_ELIGIBLE_EARNINGS") continue;
+    if (cs.matchBps != null) continue;
     if (cs.sourcePercentBps == null || cs.eligibleEarningsBase == null) continue;
     const eligible = cs.eligibleEarningsBase === "REGULAR_EARNINGS_ONLY"
       ? regularEarnings
@@ -322,6 +337,56 @@ export function calculateEarnings(input: EarningsCalcInput): EarningsCalcResult 
       code: cs.code, percentBps: cs.sourcePercentBps,
       eligibleBase: cs.eligibleEarningsBase,
       eligibleAmount: eligibleR, resolvedAmount: amountR,
+    });
+  }
+
+  // Slice D Pass 3 — RRSP employer match (capped).
+  //
+  //   C   = employee_contribution (from Pass 2, HALF_UP to cents)
+  //   U   = round(C × matchBps    / 10000, HALF_UP)
+  //   CAP = round(E × matchCapBps / 10000, HALF_UP)
+  //   ER  = min(U, CAP)
+  //
+  // Every field is Decimal; no JS Number arithmetic. C is looked up
+  // by the sibling employee snapshot's Pass-2 resolution — sharing
+  // sourceEnrolmentId with the current employer snapshot. If the
+  // employee side is missing (only-employer plan) C = 0 and ER = 0.
+  const percentByEnrolment = new Map<string, { resolved: Decimal; eligible: Decimal }>();
+  for (const cs of componentSnapshots) {
+    if (
+      cs.side === "EMPLOYEE" &&
+      cs.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS" &&
+      cs.sourceEnrolmentId
+    ) {
+      const pr = percentResolutions.find((r) => r.code === cs.code);
+      if (pr) percentByEnrolment.set(cs.sourceEnrolmentId, { resolved: pr.resolvedAmount, eligible: pr.eligibleAmount });
+    }
+  }
+  for (const cs of componentSnapshots) {
+    if (cs.side !== "EMPLOYER") continue;
+    if (cs.calculationMethod !== "PERCENT_OF_ELIGIBLE_EARNINGS") continue;
+    if (cs.matchBps == null) continue;
+    if (cs.eligibleEarningsBase == null) continue;
+    const sibling = cs.sourceEnrolmentId ? percentByEnrolment.get(cs.sourceEnrolmentId) : undefined;
+    // If the employee side was not enrolled (or election was 0), the
+    // employer match is 0.
+    const C = sibling?.resolved ?? new Decimal(0);
+    const E = sibling?.eligible
+      ?? roundCentsHalfUp(nonNegative(
+        cs.eligibleEarningsBase === "REGULAR_EARNINGS_ONLY" ? regularEarnings : cashPrePercent,
+      ));
+    const matchBpsDec = new Decimal(cs.matchBps).div(10000);
+    const capBpsDec   = new Decimal(cs.matchCapBps ?? 0).div(10000);
+    const uncapped = roundCentsHalfUp(C.times(matchBpsDec));
+    const cap      = roundCentsHalfUp(E.times(capBpsDec));
+    const ER = uncapped.lt(cap) ? uncapped : cap;
+    applyFixed(cs, ER);
+    lines.push({ source: "COMPONENT_PERCENT", label: cs.code, amount: ER });
+    // Surface as a percent-resolution so the review DTO can render it.
+    percentResolutions.push({
+      code: cs.code, percentBps: cs.sourcePercentBps ?? 0,
+      eligibleBase: cs.eligibleEarningsBase,
+      eligibleAmount: E, resolvedAmount: ER,
     });
   }
 

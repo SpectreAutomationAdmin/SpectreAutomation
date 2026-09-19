@@ -173,6 +173,11 @@ export async function calculatePayrollBatch(
       resolvedAmount: cs.resolvedAmount ? cs.resolvedAmount.toString() : null,
       eligibleEarningsBase: cs.eligibleEarningsBase as "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS" | null,
       sourcePercentBps: cs.sourcePercentBps ?? null,
+      // Slice D — RRSP employer-match provenance. Sibling matching is
+      // done in the earnings calculator by `sourceEnrolmentId`.
+      sourceEnrolmentId: cs.sourceEnrolmentId ?? null,
+      matchBps:          cs.matchBps ?? null,
+      matchCapBps:       cs.matchCapBps ?? null,
     }));
 
     const earnings = calculateEarnings({

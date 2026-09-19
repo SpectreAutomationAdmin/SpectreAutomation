@@ -460,6 +460,19 @@ export async function snapshotEmployeeComponentsForBatch(
         }]);
       }
 
+      // Slice D (2026-09-19) — RRSP employer-match provenance.
+      // Freeze plan.employerMatchBps + plan.employerMatchCapBps on the
+      // EMPLOYER-side snapshot when the plan carries an employer match
+      // configuration. The calculator later reads these to compute the
+      // capped match against the sibling EMPLOYEE snapshot's frozen
+      // employee contribution. Employee-side snapshot never carries
+      // match provenance; NULL on every non-RRSP snapshot.
+      const isEmployerSideOfMatchedPlan =
+        comp.side === "EMPLOYER" &&
+        plan.employerMatchBps != null;
+      const matchBps    = isEmployerSideOfMatchedPlan ? plan.employerMatchBps    : null;
+      const matchCapBps = isEmployerSideOfMatchedPlan ? plan.employerMatchCapBps : null;
+
       const frozen = {
         componentCode: comp.code, displayName: comp.displayName,
         category: comp.category, side: comp.side,
@@ -476,6 +489,8 @@ export async function snapshotEmployeeComponentsForBatch(
         taxFormulaDeductionType: comp.taxFormulaDeductionType ?? null,
         resolvedAmount,
         sourcePercentBps,
+        matchBps,
+        matchCapBps,
         sourceEffectiveFrom: e.effectiveFrom,
         sourceEffectiveTo:   e.effectiveTo,
         warningCode: null as string | null,

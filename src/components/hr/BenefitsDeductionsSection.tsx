@@ -21,6 +21,9 @@ export interface BenefitEnrolmentRow {
   percentBps: number | null;
   effectiveFromIso: string;
   effectiveToIso: string | null;
+  // Slice D — RRSP plan match/cap surfaced onto the row for display.
+  employerMatchBps: number | null;
+  employerMatchCapBps: number | null;
 }
 export interface PlanChoice {
   id: string;
@@ -30,6 +33,9 @@ export interface PlanChoice {
   defaultElectionKind: "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS";
   effectiveFromIso: string;
   effectiveToIso: string | null;
+  // Slice D — RRSP employer match preview (nullable for non-RRSP).
+  employerMatchBps: number | null;
+  employerMatchCapBps: number | null;
 }
 
 export interface BenefitsDeductionsSectionProps {
@@ -153,9 +159,27 @@ export default function BenefitsDeductionsSection(props: BenefitsDeductionsSecti
               </div>
               <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-xs">
                 <dt className="text-stone-500">
-                  {r.electionKind === "FIXED_AMOUNT" ? "Employee premium" : "Employee election"}
+                  {r.planKind === "RRSP"
+                    ? "Employee contribution"
+                    : r.electionKind === "FIXED_AMOUNT" ? "Employee premium" : "Employee election"}
                 </dt>
                 <dd className="text-stone-900">{humanElection(r)}</dd>
+                {r.planKind === "RRSP" && r.employerMatchBps != null && (
+                  <>
+                    <dt className="text-stone-500">Employer match</dt>
+                    <dd className="text-stone-900">
+                      {(r.employerMatchBps / 100).toFixed(2)}% of employee contribution
+                    </dd>
+                  </>
+                )}
+                {r.planKind === "RRSP" && r.employerMatchCapBps != null && (
+                  <>
+                    <dt className="text-stone-500">Employer maximum</dt>
+                    <dd className="text-stone-900">
+                      {(r.employerMatchCapBps / 100).toFixed(2)}% of eligible earnings
+                    </dd>
+                  </>
+                )}
                 <dt className="text-stone-500">Effective</dt>
                 <dd className="text-stone-900">
                   {fmtCivil(r.effectiveFromIso)}
@@ -260,6 +284,7 @@ function EnrolForm(props: {
   const [planId, setPlanId] = useState<string>(props.plans[0]?.id ?? "");
   const selected = props.plans.find((p) => p.id === planId);
   const isPercent = selected?.defaultElectionKind === "PERCENT_OF_ELIGIBLE_EARNINGS";
+  const isRrsp = selected?.kind === "RRSP";
   return (
     <form
       action={props.action}
@@ -293,6 +318,19 @@ function EnrolForm(props: {
             </select>
           )}
           <input type="hidden" name="electionKind" value={selected?.defaultElectionKind ?? "FIXED_AMOUNT"} />
+          {isRrsp && selected && (
+            <div
+              className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-[11px] text-emerald-900"
+              data-testid="benefits-enrol-rrsp-plan-summary"
+            >
+              <strong>Club match:</strong>{" "}
+              {selected.employerMatchBps != null ? (selected.employerMatchBps / 100).toFixed(2) : "—"}%
+              of employee contribution ·{" "}
+              <strong>maximum</strong>{" "}
+              {selected.employerMatchCapBps != null ? (selected.employerMatchCapBps / 100).toFixed(2) : "—"}%
+              of eligible earnings.
+            </div>
+          )}
         </div>
         <div>
           <label className="text-[11px] font-semibold uppercase tracking-[0.04em] text-stone-600">Effective date</label>

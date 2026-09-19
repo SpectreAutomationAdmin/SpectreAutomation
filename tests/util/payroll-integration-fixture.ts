@@ -146,6 +146,20 @@ export interface PayrollIntegrationFixture {
   ltdPlan?: { planId: string; employeeComponentId: string; employeeExpenseAccountId: string; enrolmentId: string };
   /** Slice C — Health/Dental benefit plan + enrolment (employer premium, non-cash taxable). */
   healthPlan?: { planId: string; employerComponentId: string; employerExpenseAccountId: string; enrolmentId: string };
+  /** Slice D — RRSP benefit plan + enrolment (employee % election with employer match/cap). */
+  rrspPlan?: {
+    planId: string;
+    employeeComponentId: string;
+    employerComponentId: string;
+    employeeExpenseAccountId: string;
+    employeeLiabilityAccountId: string;
+    employerExpenseAccountId: string;
+    employerLiabilityAccountId: string;
+    enrolmentId: string;
+    employerMatchBps: number;
+    employerMatchCapBps: number;
+    employeePercentBps: number;
+  };
 }
 
 export interface CreateFixtureOpts {
@@ -159,6 +173,17 @@ export interface CreateFixtureOpts {
    *  Fixture configures it as a non-cash taxable benefit — this is
    *  FIXTURE CONFIGURATION, not a hard-coded rule about Health plans. */
   healthDental?: { employerMonthlyPremium: string };
+  /** Slice D — RRSP plan + employee % election + employer match/cap.
+   *  Both components are PERCENT_OF_ELIGIBLE_EARNINGS. Fixture is
+   *  configured post-tax (all statutory effects NONE on both sides) —
+   *  this is FIXTURE CONFIGURATION; Spectre honours the frozen
+   *  PayrollComponent semantics, not plan.kind. */
+  rrsp?: {
+    employeePercent: number;   // human %, e.g. 5 = 5%
+    employerMatchPercent: number;
+    employerCapPercent: number;
+    eligibleEarningsBasis?: "REGULAR_EARNINGS_ONLY" | "CASH_EARNINGS";
+  };
   /** Which SM period sequence to target (default 18 = Sep 16 → Oct 1). */
   targetSequence?: number;
 }
@@ -396,6 +421,77 @@ export async function createPayrollIntegrationFixture(
     };
   }
 
+  // Slice D — RRSP benefit plan with percent employee election +
+  // employer match/cap. Both components configured POST-TAX (all
+  // statutory effects NONE) per fixture configuration — Spectre
+  // executes what the linked components declare, not plan.kind.
+  let rrspPlan: PayrollIntegrationFixture["rrspPlan"];
+  if (opts.rrsp) {
+    const eeExpense = await acct(club.id, "5170", "RRSP Employee Contribution Expense", "EXPENSE");
+    const eeLiab    = await acct(club.id, "2170", "RRSP Employee Payable",              "LIABILITY");
+    const erExpense = await acct(club.id, "5180", "RRSP Employer Match Expense",        "EXPENSE");
+    const erLiab    = await acct(club.id, "2180", "RRSP Employer Payable",              "LIABILITY");
+    const eeComp = await c.payrollComponent.create({
+      data: {
+        clubId: club.id, code: "RRSP_EE", displayName: "RRSP Employee Contribution",
+        category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE",
+        cashEffect: "DECREASES_NET_PAY",
+        taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+        calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+        eligibleEarningsBase: opts.rrsp.eligibleEarningsBasis ?? "REGULAR_EARNINGS_ONLY",
+        displaySection: "DEDUCTIONS", usage: "RECURRING",
+        expenseAccountId: eeExpense.id, liabilityAccountId: eeLiab.id,
+      },
+    });
+    const erComp = await c.payrollComponent.create({
+      data: {
+        clubId: club.id, code: "RRSP_ER", displayName: "RRSP Employer Match",
+        category: "EMPLOYER_CONTRIBUTION", side: "EMPLOYER",
+        cashEffect: "NO_NET_PAY_EFFECT",
+        taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+        calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+        eligibleEarningsBase: opts.rrsp.eligibleEarningsBasis ?? "REGULAR_EARNINGS_ONLY",
+        displaySection: "BENEFITS", usage: "RECURRING",
+        expenseAccountId: erExpense.id, liabilityAccountId: erLiab.id,
+      },
+    });
+    const { createBenefitPlan } = await import("@/lib/payroll/benefit-plans");
+    const { enrolEmployeeInBenefitPlan } = await import("@/lib/payroll/benefit-enrolments");
+    const employerMatchBps    = Math.round(opts.rrsp.employerMatchPercent * 100);
+    const employerMatchCapBps = Math.round(opts.rrsp.employerCapPercent   * 100);
+    const employeePercentBps  = Math.round(opts.rrsp.employeePercent      * 100);
+    const plan = await createBenefitPlan(adminP, club.id, {
+      kind: "RRSP", code: "RRSP_FIXTURE", name: "RRSP Standard (Fixture)",
+      description: "Fixture RRSP plan for Slice D integration testing",
+      effectiveFrom: utc(2020, 1, 1),
+      employeeComponentId: eeComp.id,
+      employerComponentId: erComp.id,
+      defaultElectionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+      eligibleEarningsBasis: opts.rrsp.eligibleEarningsBasis ?? "REGULAR_EARNINGS_ONLY",
+      employerMatchBps,
+      employerMatchCapBps,
+    });
+    const enrolment = await enrolEmployeeInBenefitPlan(adminP, club.id, {
+      employeeId: emp.id, planId: plan.id,
+      effectiveFrom: utc(2020, 1, 1),
+      electionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+      percentBps: employeePercentBps,
+    });
+    rrspPlan = {
+      planId: plan.id,
+      employeeComponentId: eeComp.id,
+      employerComponentId: erComp.id,
+      employeeExpenseAccountId: eeExpense.id,
+      employeeLiabilityAccountId: eeLiab.id,
+      employerExpenseAccountId: erExpense.id,
+      employerLiabilityAccountId: erLiab.id,
+      enrolmentId: enrolment.id,
+      employerMatchBps,
+      employerMatchCapBps,
+      employeePercentBps,
+    };
+  }
+
   // Fiscal year + month covering the payDate — Post writes to
   // JournalEntry which requires an OPEN fiscal period.
   await seedFiscalYearMonth(club.id, pp.payDate);
@@ -409,6 +505,6 @@ export async function createPayrollIntegrationFixture(
     payGroupId: pg.id, payPeriodId: pp.id,
     periodStart: pp.periodStart, periodEnd: pp.periodEnd, payDate: pp.payDate,
     glProfile: { id: profile.id, salaryExpenseAccountId: salaryExpense.id },
-    bonus, cellPhone, ltdPlan, healthPlan,
+    bonus, cellPhone, ltdPlan, healthPlan, rrspPlan,
   };
 }

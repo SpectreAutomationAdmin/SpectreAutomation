@@ -158,6 +158,62 @@ export async function createBenefitPlan(
   if (input.employeeComponentId) await assertComponentExists(clubId, input.employeeComponentId, "employeeComponentId");
   if (input.employerComponentId) await assertComponentExists(clubId, input.employerComponentId, "employerComponentId");
 
+  // Slice D (2026-09-19) — RRSP-specific validation. Fail-closed rather
+  // than silently defaulting. §5 requires BOTH an employee-deduction
+  // side (DECREASES_NET_PAY) and an employer-contribution side
+  // (NO_NET_PAY_EFFECT), plus explicit match + cap. No hard-coding of
+  // statutory treatment from plan.kind — the linked components remain
+  // canonical for cashEffect / tax / pensionable / insurable / GL.
+  if (input.kind === "RRSP") {
+    if (!input.employeeComponentId || !input.employerComponentId) {
+      throw new ValidationError([{
+        path: "employeeComponentId|employerComponentId",
+        message: "An RRSP plan requires BOTH an employee-deduction component and an employer-contribution component.",
+      }]);
+    }
+    const ee = await prisma.payrollComponent.findFirstOrThrow({ where: { id: input.employeeComponentId, clubId } });
+    const er = await prisma.payrollComponent.findFirstOrThrow({ where: { id: input.employerComponentId, clubId } });
+    if (ee.side !== "EMPLOYEE" || ee.cashEffect !== "DECREASES_NET_PAY") {
+      throw new ValidationError([{
+        path: "employeeComponentId",
+        message: `Employee component ${ee.code} must be side=EMPLOYEE and cashEffect=DECREASES_NET_PAY (got side=${ee.side}, cashEffect=${ee.cashEffect}).`,
+      }]);
+    }
+    if (er.side !== "EMPLOYER" || er.cashEffect !== "NO_NET_PAY_EFFECT") {
+      throw new ValidationError([{
+        path: "employerComponentId",
+        message: `Employer component ${er.code} must be side=EMPLOYER and cashEffect=NO_NET_PAY_EFFECT (got side=${er.side}, cashEffect=${er.cashEffect}).`,
+      }]);
+    }
+    if (electionKind !== "PERCENT_OF_ELIGIBLE_EARNINGS") {
+      throw new ValidationError([{
+        path: "defaultElectionKind",
+        message: "RRSP plans require defaultElectionKind = PERCENT_OF_ELIGIBLE_EARNINGS.",
+      }]);
+    }
+    if (input.employerMatchBps == null || !Number.isInteger(input.employerMatchBps) || input.employerMatchBps < 0) {
+      throw new ValidationError([{
+        path: "employerMatchBps",
+        message: "RRSP plans require a non-negative integer employerMatchBps (10000 = 100% match).",
+      }]);
+    }
+    if (input.employerMatchCapBps == null || !Number.isInteger(input.employerMatchCapBps) || input.employerMatchCapBps < 0) {
+      throw new ValidationError([{
+        path: "employerMatchCapBps",
+        message: "RRSP plans require a non-negative integer employerMatchCapBps (cap as % of eligible earnings).",
+      }]);
+    }
+    // Both must be PERCENT_OF_ELIGIBLE_EARNINGS calculators — the
+    // sibling matching logic relies on this in the earnings pass.
+    if (ee.calculationMethod !== "PERCENT_OF_ELIGIBLE_EARNINGS" ||
+        er.calculationMethod !== "PERCENT_OF_ELIGIBLE_EARNINGS") {
+      throw new ValidationError([{
+        path: "employeeComponentId|employerComponentId",
+        message: "Both linked RRSP components must have calculationMethod = PERCENT_OF_ELIGIBLE_EARNINGS.",
+      }]);
+    }
+  }
+
   const effectiveFrom = toDate(input.effectiveFrom);
   const effectiveTo = input.effectiveTo ? toDate(input.effectiveTo) : null;
   if (effectiveTo && effectiveTo <= effectiveFrom) {

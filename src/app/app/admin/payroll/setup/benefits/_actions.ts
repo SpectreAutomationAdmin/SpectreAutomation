@@ -62,6 +62,17 @@ export async function createBenefitPlanAction(form: FormData): Promise<void> {
   const employerComponentId = orNull(form.get("employerComponentId"));
   const defaultElectionKind = (toStr(form.get("defaultElectionKind")) || "FIXED_AMOUNT") as ElectionKind;
   const eligibleEarningsBasisRaw = orNull(form.get("eligibleEarningsBasis"));
+  // Slice D — human decimal % from the form → integer bps for storage.
+  // The founder never sees basis-points; the input reads "5.00" and
+  // becomes 500 here.
+  const parsePercentToBps = (raw: string | null): number | null => {
+    if (raw == null) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n * 100);
+  };
+  const employerMatchBps    = parsePercentToBps(orNull(form.get("employerMatchPct")));
+  const employerMatchCapBps = parsePercentToBps(orNull(form.get("employerMatchCapPct")));
 
   try {
     await createBenefitPlan(principal, clubId, {
@@ -73,6 +84,8 @@ export async function createBenefitPlanAction(form: FormData): Promise<void> {
       employerComponentId,
       defaultElectionKind,
       eligibleEarningsBasis: eligibleEarningsBasisRaw as EligibleEarningsBasis | null,
+      employerMatchBps,
+      employerMatchCapBps,
     });
   } catch (e) {
     const err = encodeURIComponent(toErrorMessage(e));

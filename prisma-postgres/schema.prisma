@@ -13161,6 +13161,10 @@ model PayrollBatchComponentSnapshot {
   // Slice C (2026-09-18) — benefit-enrolment provenance (non-unique).
   sourceEnrolmentId       String?
   sourceEnrolment         EmployeeBenefitPlanEnrolment? @relation(fields: [sourceEnrolmentId], references: [id])
+  // Slice D (2026-09-19) — RRSP employer match provenance. NULL on
+  // every non-RRSP snapshot. See the sqlite twin for the full note.
+  matchBps                Int?
+  matchCapBps             Int?
   // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
   //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
   //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.

@@ -13310,6 +13310,18 @@ model PayrollBatchComponentSnapshot {
   // so the FK is non-unique.
   sourceEnrolmentId       String?
   sourceEnrolment         EmployeeBenefitPlanEnrolment? @relation(fields: [sourceEnrolmentId], references: [id])
+  // Slice D (2026-09-19) — RRSP employer match provenance. Populated
+  // ONLY on the EMPLOYER-side snapshot of an RRSP-shaped enrolment
+  // (plan carries both employee + employer components AND the plan's
+  // employerMatchBps is set). Frozen so an auditor can reproduce
+  //   employer_amount = min(
+  //     round(employee_contribution * matchBps / 10000, HALF_UP),
+  //     round(eligible_earnings   * matchCapBps / 10000, HALF_UP)
+  //   )
+  // without re-reading the live plan. NULL for every non-RRSP snapshot
+  // (LTD, Health, one-time earnings, recurring components).
+  matchBps                Int?
+  matchCapBps             Int?
   // Payroll-3C-4 (2026-09-09) — where this snapshot came from.
   //   RECURRING_EMPLOYEE_SETUP    — frozen from an EmployeeRecurringPayrollComponent at prep.
   //   ONE_TIME_PAYROLL_ADJUSTMENT — added by Payroll Admin during preparation.

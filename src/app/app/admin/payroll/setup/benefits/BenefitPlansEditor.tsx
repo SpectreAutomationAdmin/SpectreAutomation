@@ -25,6 +25,8 @@ interface PlanRow {
   eligibleEarningsBasis: string | null;
   predecessorPlanId: string | null;
   notes: string | null;
+  employerMatchBps: number | null;
+  employerMatchCapBps: number | null;
 }
 interface ComponentOption {
   id: string;
@@ -108,7 +110,7 @@ export default function BenefitPlansEditor(props: {
   changeConfigAction: (form: FormData) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
-  const [kind, setKind] = useState<"LTD" | "HEALTH_DENTAL">("LTD");
+  const [kind, setKind] = useState<"LTD" | "HEALTH_DENTAL" | "RRSP">("LTD");
   const [electionKind, setElectionKind] = useState<"FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS">("FIXED_AMOUNT");
   const [employeeComponentId, setEmployeeComponentId] = useState<string>("");
   const [employerComponentId, setEmployerComponentId] = useState<string>("");
@@ -180,7 +182,14 @@ export default function BenefitPlansEditor(props: {
                       <div className="font-medium text-stone-900">{p.name}</div>
                       <div className="text-[11px] text-stone-500">{p.code}</div>
                     </Td>
-                    <Td>{KIND_LABEL[p.kind] ?? p.kind}</Td>
+                    <Td>
+                      <div>{KIND_LABEL[p.kind] ?? p.kind}</div>
+                      {p.kind === "RRSP" && p.employerMatchBps != null && p.employerMatchCapBps != null && (
+                        <div className="text-[11px] text-stone-500" data-testid={`benefit-plan-match-summary-${p.id}`}>
+                          Match {(p.employerMatchBps / 100).toFixed(2)}% · Cap {(p.employerMatchCapBps / 100).toFixed(2)}%
+                        </div>
+                      )}
+                    </Td>
                     <Td>{ee ? (<><div>{ee.displayName}</div><div className="text-[11px] text-stone-500">{humanCash(ee.cashEffect)}</div></>) : <span className="text-stone-400">—</span>}</Td>
                     <Td>{er ? (<><div>{er.displayName}</div><div className="text-[11px] text-stone-500">{humanCash(er.cashEffect)}</div></>) : <span className="text-stone-400">—</span>}</Td>
                     <Td>
@@ -281,13 +290,18 @@ export default function BenefitPlansEditor(props: {
                   name="kind"
                   required
                   value={kind}
-                  onChange={(e) => setKind(e.target.value as "LTD" | "HEALTH_DENTAL")}
+                  onChange={(e) => {
+                    const next = e.target.value as "LTD" | "HEALTH_DENTAL" | "RRSP";
+                    setKind(next);
+                    // RRSP is percent-based by construction.
+                    if (next === "RRSP") setElectionKind("PERCENT_OF_ELIGIBLE_EARNINGS");
+                  }}
                   className="mt-1 w-full rounded border px-2 py-1 text-sm"
                   data-testid="benefits-form-kind"
                 >
                   <option value="LTD">Long-Term Disability</option>
                   <option value="HEALTH_DENTAL">Health &amp; Dental</option>
-                  <option value="RRSP" disabled>RRSP — coming in RRSP configuration slice</option>
+                  <option value="RRSP">RRSP (with employer match)</option>
                 </select>
               </div>
               <div>
@@ -349,6 +363,60 @@ export default function BenefitPlansEditor(props: {
                 </div>
               )}
             </div>
+
+            {kind === "RRSP" && (
+              <div
+                className="rounded border border-emerald-200 bg-emerald-50 p-3"
+                data-testid="benefits-form-rrsp-section"
+              >
+                <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-emerald-900">
+                  RRSP employer match
+                </div>
+                <p className="mt-1 text-[11px] text-emerald-900/80">
+                  <strong>Employee contribution.</strong> The employee chooses a percentage of eligible earnings each pay period.<br />
+                  <strong>Employer match.</strong> The Club contributes a percentage of the employee's contribution.<br />
+                  <strong>Employer maximum.</strong> The Club's contribution cannot exceed this percentage of eligible earnings.
+                </p>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="employerMatchPct">Employer match rate</Label>
+                    <div className="mt-1 flex items-center gap-1">
+                      <input
+                        id="employerMatchPct"
+                        name="employerMatchPct"
+                        type="number" step="0.01" min="0" max="500"
+                        required={kind === "RRSP"}
+                        placeholder="100.00"
+                        className="w-full rounded border px-2 py-1 text-sm"
+                        data-testid="benefits-form-employer-match"
+                      />
+                      <span className="text-sm text-emerald-900">%</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-emerald-900/70">Of the employee contribution.</p>
+                  </div>
+                  <div>
+                    <Label htmlFor="employerMatchCapPct">Employer maximum</Label>
+                    <div className="mt-1 flex items-center gap-1">
+                      <input
+                        id="employerMatchCapPct"
+                        name="employerMatchCapPct"
+                        type="number" step="0.01" min="0" max="100"
+                        required={kind === "RRSP"}
+                        placeholder="3.00"
+                        className="w-full rounded border px-2 py-1 text-sm"
+                        data-testid="benefits-form-employer-cap"
+                      />
+                      <span className="text-sm text-emerald-900">%</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-emerald-900/70">Of eligible earnings.</p>
+                  </div>
+                </div>
+                <p className="mt-2 text-[10px] text-emerald-900/70">
+                  Employees choose their own contribution % when enrolling. Contribution-room / CRA
+                  RRSP limits are NOT enforced here — this is the payroll-period contribution rule.
+                </p>
+              </div>
+            )}
 
             <hr className="my-2" style={{ borderColor: "var(--spectre-border-muted)" }} />
 
