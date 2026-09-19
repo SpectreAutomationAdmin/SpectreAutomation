@@ -12511,6 +12511,10 @@ model PayrollBatchEmployee {
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
+  // Slice E closeout (2026-09-19) — see the sqlite twin for the full
+  // note. Historical name freeze for payroll documents.
+  firstNameSnapshot       String?
+  lastNameSnapshot        String?
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?

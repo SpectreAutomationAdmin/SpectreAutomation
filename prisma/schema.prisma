@@ -12603,6 +12603,21 @@ model PayrollBatchEmployee {
   employmentEndInPeriod   DateTime?
   approvedHoursSnapshot   Decimal?
   sourceFactsJson         String?
+  // Slice E closeout (2026-09-19) — historical identity snapshot for
+  // payroll documents (Payroll Register, PayStatement V2, PDF, CSV).
+  //
+  // Employee financial values on this row are already frozen at
+  // Prepare/Calculate — the audit found that the DISPLAY NAME was
+  // still read live from Employee.firstName/lastName, so a legal-name
+  // change AFTER Post would silently rewrite historical payroll
+  // artefacts. These two fields freeze the display identity used on
+  // this batch. Written by `snapshotEmployee` at Prepare-time; NEVER
+  // written by Calculate or Post. Legacy batches pre-dating this slice
+  // are left NULL and callers fall back to live Employee.first/lastName
+  // for those rows only. Do NOT snapshot SIN, banking, or TD1 here —
+  // those remain behind their existing reveal-audited access paths.
+  firstNameSnapshot       String?
+  lastNameSnapshot        String?
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
   coverageStart           DateTime?

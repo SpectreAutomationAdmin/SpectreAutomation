@@ -9,6 +9,10 @@ import { getCurrentPrincipal } from "@/lib/services/principal";
 import { hasPermission } from "@/lib/rbac";
 import { getActiveClubId } from "@/lib/active-club";
 import { buildPayrollRegister } from "@/lib/payroll/payroll-register";
+import { prisma } from "@/lib/prisma";
+import { ConflictError } from "@/lib/errors";
+import ZeroHoursAckPanel from "@/components/payroll/ZeroHoursAckPanel";
+import { acknowledgeZeroHoursAction } from "../_zero-hours-actions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +36,99 @@ export default async function PayrollRegisterPage({ params }: Props) {
   const principal = await getCurrentPrincipal();
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) redirect("/app/admin");
 
-  const reg = await buildPayrollRegister(principal, clubId, params.batchId);
+  // Slice E closeout §1 — PREPARED batches refuse register generation
+  // fail-closed. Catch the ConflictError and render a founder-friendly
+  // "available after Calculate" surface instead of a 500.
+  //
+  // BUT still surface any NO_APPROVED_HOURS_FOR_HOURLY blockers on the
+  // review page — the ack form (below) works even before Calculate so
+  // the founder can resolve the blocker without re-Preparing.
+  const zeroHoursBlockers = await prisma.payrollBatchException.findMany({
+    where: {
+      clubId,
+      batchId: params.batchId,
+      code: "NO_APPROVED_HOURS_FOR_HOURLY",
+      severity: "BLOCKER",
+      resolvedAt: null,
+    },
+    include: {
+      batchEmployee: {
+        select: {
+          id: true,
+          firstNameSnapshot: true,
+          lastNameSnapshot: true,
+          employee: { select: { firstName: true, lastName: true, employeeNumber: true } },
+        },
+      },
+    },
+  });
+  const ackRows = zeroHoursBlockers
+    .filter((e) => e.batchEmployee != null)
+    .map((e) => {
+      const be = e.batchEmployee!;
+      const first = be.firstNameSnapshot ?? be.employee?.firstName ?? "";
+      const last  = be.lastNameSnapshot  ?? be.employee?.lastName  ?? "";
+      return {
+        batchEmployeeId: be.id,
+        employeeName: `${last}, ${first}`.replace(/^, |, $/g, "").trim() || "(unknown)",
+        employeeNumber: be.employee?.employeeNumber ?? null,
+      };
+    });
+
+  let reg: Awaited<ReturnType<typeof buildPayrollRegister>>;
+  try {
+    reg = await buildPayrollRegister(principal, clubId, params.batchId);
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      const batch = await prisma.payrollBatch.findFirst({
+        where: { id: params.batchId, clubId },
+        select: { status: true },
+      });
+      return (
+        <div className="max-w-[800px]" data-testid="payroll-register-prepared-gate">
+          <header className="mb-spectre-6">
+            <div
+              className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+              style={{ color: "var(--spectre-text-muted)" }}
+            >
+              Finance · Payroll · Register
+            </div>
+            <h1 className="mt-1 text-spectre-h1 font-semibold" style={{ color: "var(--spectre-text-primary)" }}>
+              Payroll Register available after Calculate Payroll
+            </h1>
+            <p className="mt-3 text-spectre-body" style={{ color: "var(--spectre-text-secondary)" }}>
+              This payroll batch is currently in <strong>{batch?.status ?? "DRAFT"}</strong>. A payroll register
+              summarises calculated statutory deductions, net pay, employer contributions, and reconciles to
+              the GL preview — none of which exist until the batch has been calculated. Rendering a register
+              at this stage would present an uncalculated payroll as final.
+            </p>
+            <p className="mt-2 text-spectre-body" style={{ color: "var(--spectre-text-secondary)" }}>
+              Return to the payroll review, resolve any preparation blockers, then run <strong>Calculate
+              Payroll</strong>. The register becomes available immediately.
+            </p>
+            <nav className="mt-4 flex gap-3 text-sm">
+              <Link
+                href={`/app/admin/payroll/batches/${params.batchId}`}
+                className="btn btn-primary btn-sm"
+                data-testid="payroll-register-prepared-return"
+              >
+                Return to payroll review
+              </Link>
+            </nav>
+          </header>
+          {/* Slice E closeout — zero-hours blockers still resolvable pre-Calculate. */}
+          {ackRows.length > 0 && (
+            <ZeroHoursAckPanel
+              batchId={params.batchId}
+              rows={ackRows}
+              action={acknowledgeZeroHoursAction}
+            />
+          )}
+        </div>
+      );
+    }
+    throw err;
+  }
 
   const stateLabel = reg.statePosted
     ? "POSTED — IMMUTABLE"
@@ -71,6 +167,16 @@ export default async function PayrollRegisterPage({ params }: Props) {
           <a href={`/api/pay/register/csv/${params.batchId}`} className="btn btn-secondary btn-sm" data-testid="register-csv-link">Download CSV</a>
         </nav>
       </header>
+
+      {/* Slice E closeout — zero-hours ack panel (only shown if there
+          are unresolved NO_APPROVED_HOURS_FOR_HOURLY blockers). */}
+      {ackRows.length > 0 && (
+        <ZeroHoursAckPanel
+          batchId={params.batchId}
+          rows={ackRows}
+          action={acknowledgeZeroHoursAction}
+        />
+      )}
 
       {/* Employees table */}
       <div className="overflow-x-auto rounded-lg border" style={{ borderColor: "var(--spectre-border-muted)" }}>

@@ -649,8 +649,76 @@ async function payrollReady() {
     }
   }
 
+  // Slice E closeout §6 — additional synthetic HOURLY employee at ZERO
+  // approved hours. Used by the acceptance spec to exercise the
+  // NO_APPROVED_HOURS_FOR_HOURLY blocker + acknowledgement flow.
+  const HOURLY_EMPLOYEE_EMAIL = "slice-e-hourly-zero-hours@fixture.spectre.test";
+  const HOURLY_EMPLOYEE_NUMBER = "SE-ZH-01";
+  let hourly = await prisma.employee.findFirst({
+    where: { clubId: club.id, email: HOURLY_EMPLOYEE_EMAIL },
+  });
+  if (!hourly) {
+    hourly = await prisma.employee.create({
+      data: {
+        clubId: club.id,
+        firstName: "SliceE",
+        lastName: "HourlyZeroHours",
+        email: HOURLY_EMPLOYEE_EMAIL,
+        hireDate: new Date(Date.UTC(2022, 5, 1)),
+        dateOfBirth: new Date(Date.UTC(1995, 3, 20)),
+        status: "ACTIVE",
+        employeeNumber: HOURLY_EMPLOYEE_NUMBER,
+        employeeLifecycle: "ACTIVE",
+        compensationType: "HOURLY",
+        homeProvince: "AB",
+        departmentId: dept.id,
+      },
+    });
+    log(`created hourly employee ${hourly.id}`);
+  }
+  const hourlyAssn = await prisma.employeeEmploymentAssignment.findFirst({
+    where: { clubId: club.id, employeeId: hourly.id, role: "PRIMARY" },
+  });
+  if (!hourlyAssn) {
+    await prisma.employeeEmploymentAssignment.create({
+      data: {
+        clubId: club.id, employeeId: hourly.id, role: "PRIMARY",
+        employmentType: "PART_TIME",
+        effectiveFrom: new Date(Date.UTC(2022, 5, 1)),
+        departmentId: dept.id,
+      },
+    });
+    log("created hourly assignment");
+  }
+  const hourlyComp = await prisma.employeeCompensation.findFirst({
+    where: { clubId: club.id, employeeId: hourly.id },
+  });
+  if (!hourlyComp) {
+    await prisma.employeeCompensation.create({
+      data: {
+        clubId: club.id, employeeId: hourly.id,
+        cadence: "HOURLY", rate: "22.50", currency: "CAD",
+        effectiveFrom: new Date(Date.UTC(2022, 5, 1)),
+      },
+    });
+    log("created hourly compensation ($22.50/hr)");
+  }
+  const hourlyMember = await prisma.payrollPayGroupMember.findFirst({
+    where: { clubId: club.id, payGroupId: pg.id, employeeId: hourly.id },
+  });
+  if (!hourlyMember) {
+    await prisma.payrollPayGroupMember.create({
+      data: {
+        clubId: club.id, payGroupId: pg.id, employeeId: hourly.id,
+        effectiveFrom: new Date(Date.UTC(2022, 5, 1)),
+      },
+    });
+    log("enrolled hourly employee in pay group");
+  }
+
   log("--- PAYROLL-READY COMPLETE ---");
   log(`employeeId    = ${employee.id}`);
+  log(`hourlyEmployeeId = ${hourly.id}`);
   log(`paEmail       = ${PA_EMAIL}`);
   log(`controllerEmail = ${CONTROLLER_EMAIL}`);
   log(`payGroupId    = ${pg.id}`);

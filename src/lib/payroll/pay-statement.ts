@@ -354,7 +354,10 @@ export async function buildPayStatement(
     header: {
       clubName:      row.batch.club.name,
       employeeId:    row.employeeId,
-      employeeName:  `${row.employee.firstName} ${row.employee.lastName}`.trim(),
+      // Slice E closeout §3 — use frozen historical identity when
+      // available; fall back to live Employee.first/lastName for
+      // legacy batches that pre-date the snapshot.
+      employeeName:  `${row.firstNameSnapshot ?? row.employee.firstName} ${row.lastNameSnapshot ?? row.employee.lastName}`.trim(),
       employeeNumber: row.employee.employeeNumber,
       payGroupName:  row.batch.payPeriod.payGroup?.name ?? row.batch.payPeriod.payGroup?.code ?? "",
       payFrequency:  row.batch.payPeriod.payGroup?.payFrequency ?? null,

@@ -22,7 +22,15 @@ export async function GET(_req: Request, { params }: Ctx) {
   if (!principal || !hasPermission(principal, clubId, "payroll:read")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  const reg = await buildPayrollRegister(principal, clubId, params.batchId);
+  let reg;
+  try {
+    reg = await buildPayrollRegister(principal, clubId, params.batchId);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("available after Calculate")) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
+    throw err;
+  }
   const pdf = await renderPayrollRegisterPdf(reg);
   const fileName = `payroll-register-${new Date(reg.payPeriod.payDateIso).toISOString().slice(0, 10)}${reg.statePosted ? "-posted" : ""}.pdf`;
   return new NextResponse(new Uint8Array(pdf), {

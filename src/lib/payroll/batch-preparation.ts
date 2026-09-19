@@ -341,6 +341,11 @@ interface EmployeeSnapshot {
   federalTd1Ready: boolean;
   provincialTd1Ready: boolean;
   compensationReady: boolean;
+  // Slice E closeout (2026-09-19) — historical identity snapshot for
+  // payroll documents (Register, PayStatement, PDF, CSV). Frozen here
+  // so a later legal-name change does not rewrite historical artefacts.
+  firstNameSnapshot: string;
+  lastNameSnapshot: string;
   exceptions: Array<{ severity: ExceptionSeverity; code: string; message: string; recommendedAction?: string }>;
 }
 
@@ -727,6 +732,13 @@ async function snapshotEmployee(
     federalTd1Ready,
     provincialTd1Ready,
     compensationReady,
+    // Slice E closeout — freeze the display name for historical payroll
+    // documents. If Employee.firstName / lastName are ever nullable in
+    // some future schema variant, fall back to empty string so the
+    // snapshot column stays non-null (schema declares it as String? so
+    // NULL is also legal, but frozen empty strings are clearer).
+    firstNameSnapshot: (member.employee.firstName ?? "").trim(),
+    lastNameSnapshot:  (member.employee.lastName  ?? "").trim(),
     exceptions,
   };
 }
@@ -1006,6 +1018,9 @@ export async function preparePayrollBatch(
           federalTd1Ready: s.federalTd1Ready,
           provincialTd1Ready: s.provincialTd1Ready,
           compensationReady: s.compensationReady,
+          // Slice E closeout — freeze display identity.
+          firstNameSnapshot: s.firstNameSnapshot,
+          lastNameSnapshot:  s.lastNameSnapshot,
           status: s.exceptions.some((e) => e.severity === "BLOCKER") ? "ERRORED" : "INCLUDED",
         },
       });

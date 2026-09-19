@@ -11,6 +11,7 @@
 
 import { prisma } from "../prisma";
 import { requirePermission, type Principal } from "../rbac";
+import { ConflictError } from "../errors";
 import { previewPayrollJournal } from "./payroll-journal-preview";
 
 export type RegisterState =
@@ -146,6 +147,19 @@ export async function buildPayrollRegister(
   const batch = await prisma.payrollBatch.findFirstOrThrow({
     where: { id: batchId, clubId },
   });
+  // Slice E closeout §1 — the canonical final Payroll Register is only
+  // available once the batch has actually been calculated. PREPARED /
+  // DRAFT batches have no net pay, no statutory deductions, no GL
+  // preview — rendering them as a "register" would misrepresent an
+  // uncalculated payroll as final. Refuse fail-closed with a
+  // ConflictError; the founder-facing surface catches this and shows
+  // "Payroll Register available after Calculate Payroll."
+  if (batch.status === "DRAFT" || batch.status === "PREPARED") {
+    throw new ConflictError(
+      "Payroll Register available after Calculate Payroll. " +
+      "A PREPARED batch has no calculated deductions, net pay, or GL preview.",
+    );
+  }
   const club = await prisma.club.findUniqueOrThrow({ where: { id: clubId }, select: { name: true } });
   const payPeriod = await prisma.payrollPayPeriod.findUniqueOrThrow({
     where: { id: batch.payPeriodId },
@@ -175,7 +189,13 @@ export async function buildPayrollRegister(
 
   // Register rows.
   const rows: RegisterEmployeeRow[] = employees.map((be) => {
-    const empName = be.employee ? `${be.employee.lastName ?? ""}, ${be.employee.firstName ?? ""}`.replace(/^, |, $/g, "") : "(unknown)";
+    // Slice E closeout §2 — historical identity uses the frozen
+    // firstNameSnapshot/lastNameSnapshot when populated (new batches
+    // from Slice E onward), else falls back to live Employee.first/lastName
+    // (legacy batches that pre-date this slice; documented compat).
+    const first = be.firstNameSnapshot ?? be.employee?.firstName ?? "";
+    const last  = be.lastNameSnapshot  ?? be.employee?.lastName  ?? "";
+    const empName = `${last}, ${first}`.replace(/^, |, $/g, "").trim() || "(unknown)";
     // Compensation cadence isn't frozen on PayrollBatchEmployee directly;
     // approximate by whether the batch employee has any salary earning row.
     // Salary — hourly split: use `salariedFullPeriod` snapshot if present.
@@ -316,16 +336,24 @@ export async function buildPayrollRegister(
       .filter((e) => e.severity === "BLOCKER" && e.resolvedAt == null)
       .map((e) => ({
         code: e.code, message: e.message,
-        employeeName: e.batchEmployee?.employee
-          ? `${e.batchEmployee.employee.lastName ?? ""}, ${e.batchEmployee.employee.firstName ?? ""}`.replace(/^, |, $/g, "")
+        employeeName: e.batchEmployee
+          ? (() => {
+              const f = e.batchEmployee!.firstNameSnapshot ?? e.batchEmployee!.employee?.firstName ?? "";
+              const l = e.batchEmployee!.lastNameSnapshot  ?? e.batchEmployee!.employee?.lastName  ?? "";
+              return `${l}, ${f}`.replace(/^, |, $/g, "").trim() || null;
+            })()
           : null,
       })),
     warnings: exceptions
       .filter((e) => e.severity === "WARNING")
       .map((e) => ({
         code: e.code, message: e.message,
-        employeeName: e.batchEmployee?.employee
-          ? `${e.batchEmployee.employee.lastName ?? ""}, ${e.batchEmployee.employee.firstName ?? ""}`.replace(/^, |, $/g, "")
+        employeeName: e.batchEmployee
+          ? (() => {
+              const f = e.batchEmployee!.firstNameSnapshot ?? e.batchEmployee!.employee?.firstName ?? "";
+              const l = e.batchEmployee!.lastNameSnapshot  ?? e.batchEmployee!.employee?.lastName  ?? "";
+              return `${l}, ${f}`.replace(/^, |, $/g, "").trim() || null;
+            })()
           : null,
       })),
   };
