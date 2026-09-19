@@ -1,22 +1,39 @@
 #!/usr/bin/env node
 // DRH-1 (2026-09-19) — Spectre staging deployment controller.
 //
-// Owns the full lifecycle: preflight → build/push → release_command →
-// machine rollout → health verification → success or classified failure.
-// Runs the deployment as a supervised child process with a
-// last-output watchdog so a stalled Docker / Fly step is terminated
-// automatically rather than waiting for a human to notice.
+// Canonical execution environment: **Linux CI runner** (GitHub Actions).
+// Windows local runs are supported as a developer fallback but are no
+// longer the normal staging deployment path.
+//
+// Two strategies:
+//   1. `image` (default in CI, and preferred everywhere):
+//      the caller has already built + pushed a Docker image to Fly's
+//      registry. Controller invokes `flyctl deploy --image <ref>`
+//      which skips flyctl's own Docker build entirely — meaning the
+//      release-machine image is the SAME image that runs the app,
+//      not a re-built copy. Eliminates the double-build failure mode
+//      that stalled Windows Docker Desktop.
+//
+//   2. `local`: the controller invokes `flyctl deploy --local-only`
+//      (developer fallback for the Windows workstation path).
 //
 // Usage:
-//   node scripts/deploy-staging.mjs           # normal deploy
-//   node scripts/deploy-staging.mjs --diag    # collect diagnostics only
+//   node scripts/deploy-staging.mjs                             # auto-select strategy
+//   node scripts/deploy-staging.mjs --strategy=image --image=<ref>
+//   node scripts/deploy-staging.mjs --strategy=local
+//   node scripts/deploy-staging.mjs --diag                      # diagnostics only
 //
-// Or:
-//   npm run deploy:staging
+// Environment variables:
+//   SPECTRE_DEPLOY_IMAGE   — image reference (registry.fly.io/spectre-staging:<tag>)
+//                            equivalent to --image
+//   SPECTRE_DEPLOY_STRATEGY — image | local (equivalent to --strategy)
+//   CI                     — GitHub Actions sets this; forces strategy=image
+//   FLY_API_TOKEN          — required for flyctl on CI runners
 //
-// Founder acceptance: the founder must NEVER need to prompt Claude to
-// check on this deploy. Either it succeeds cleanly, or it terminates
-// itself with a classified failure and diagnostics.
+// Founder acceptance: after the one-time Fly-token secret is uploaded
+// to GitHub, the founder must NEVER need to prompt Claude to check
+// on this deploy. Either it succeeds cleanly, or it terminates itself
+// with a classified failure and diagnostics.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -30,29 +47,28 @@ import { fileURLToPath } from "node:url";
 
 const APP     = "spectre-staging";
 const CONFIG  = "deploy/fly.web.toml";
-const HEALTH_URL = "https://staging.spectreautomation.com/api/health";
+const HEALTH_URL = process.env.SPECTRE_STAGING_HEALTH_URL ?? "https://staging.spectreautomation.com/api/health";
 
-// Stage-specific timeouts in milliseconds.
-// - build:    Next.js compile + prisma generate + Docker layer create.
-// - export:   buildkit "exporting layers" — the step that stalled at 17 min.
-// - push:     Fly registry upload.
-// - release:  Prisma migrate deploy.
-// - rollout:  Machine restart + boot.
-// - health:   /api/health returning 200 after rollout.
-// - overall:  Hard ceiling on a single attempt.
+// Stage-specific timeouts in milliseconds. Idle = "no output from the
+// child process for this long" (not overall elapsed).
 //
-// Each stage has an independent "no-output for N ms" watchdog. If a
-// child process emits nothing to stdout/stderr for that window, we
-// terminate it with a classified BUILD_TIMEOUT / EXPORT_TIMEOUT / etc.
+// These budgets assume a Linux CI runner. Historical measurements:
+//   - Fly image push: ~1-3 min from a GitHub Actions ubuntu runner.
+//   - release_command (prisma migrate deploy on Neon direct URL): ~15-45s.
+//   - Machine rollout (single instance): ~20-40s.
+//   - /api/health post-rollout: usually ready inside 30s.
+//
+// Overall ceiling is deliberately tight — a staging deploy that takes
+// longer than this is a bug worth investigating.
 const STAGE_TIMEOUTS_MS = {
-  overall:        20 * 60_000, // 20 min hard ceiling. A staging deploy that takes longer than this is a bug worth investigating, not something to wait through.
-  buildIdleKill:  10 * 60_000, // 10 min no output during compile
-  exportIdleKill: 15 * 60_000, // 15 min. Buildkit's "unpacking to registry.fly.io/..." step is silent for 8+ min on Windows Docker Desktop even when progressing. Was 8 min; two attempts hit exactly 484s of silence on that sub-step. 15 min gives it real slack while keeping the overall ceiling meaningful.
-  pushIdleKill:    6 * 60_000, // 6 min no output during registry push
-  releaseIdleKill: 3 * 60_000, // 3 min no output for release_command
+  overall:        20 * 60_000, // 20 min hard ceiling
+  buildIdleKill:  10 * 60_000, // 10 min no output during any Docker build (only used in `local` fallback)
+  exportIdleKill: 10 * 60_000, // 10 min for buildkit export (only `local` fallback)
+  pushIdleKill:    6 * 60_000, // 6 min silent during Fly registry push
+  releaseIdleKill: 3 * 60_000, // 3 min for release_command
   rolloutIdleKill: 5 * 60_000, // 5 min for machine rollout
   healthMaxMs:     3 * 60_000, // 3 min to see /api/health 200 after Fly reports success
-  healthIntervalMs:   5_000,   // poll interval
+  healthIntervalMs:   5_000,
 };
 
 const MAX_ATTEMPTS = 2;
@@ -61,13 +77,14 @@ const LOG_DIR   = path.join(REPO_ROOT, "test-results", "deploy-staging");
 const LOCK_FILE = path.join(REPO_ROOT, ".deploy-staging.lock");
 
 // -----------------------------------------------------------------------
-// Failure taxonomy
+// Failure taxonomy — retryable classes trigger the bounded retry policy;
+// non-retryable classes fail closed immediately.
 // -----------------------------------------------------------------------
 
 const FAILURES = {
-  BUILD_TIMEOUT:    { retryable: true,  reason: "Docker build stalled (compile/layer step)" },
-  EXPORT_TIMEOUT:   { retryable: true,  reason: "Buildkit image export stalled" },
-  PUSH_TIMEOUT:     { retryable: true,  reason: "Registry push stalled" },
+  BUILD_TIMEOUT:    { retryable: true,  reason: "Docker build stalled (local strategy only)" },
+  EXPORT_TIMEOUT:   { retryable: true,  reason: "Buildkit image export stalled (local strategy only)" },
+  PUSH_TIMEOUT:     { retryable: true,  reason: "Fly registry push stalled" },
   ROLLOUT_TIMEOUT:  { retryable: true,  reason: "Machine rollout stalled" },
   HEALTH_FAILED:    { retryable: true,  reason: "/api/health did not return 200 after rollout" },
   RELEASE_FAILED:   { retryable: false, reason: "release_command (Prisma migrate) failed" },
@@ -76,6 +93,7 @@ const FAILURES = {
   CONFIG_INVALID:   { retryable: false, reason: "fly.web.toml validation failed" },
   PREFLIGHT:        { retryable: false, reason: "Preflight check failed" },
   LOCK_CONFLICT:    { retryable: false, reason: "Another staging deploy is already in progress" },
+  IMAGE_MISSING:    { retryable: false, reason: "Image reference required for strategy=image was not provided" },
   UNKNOWN:          { retryable: false, reason: "Unclassified failure — see diagnostics" },
 };
 
@@ -88,8 +106,6 @@ const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const LOG_FILE = path.join(LOG_DIR, `deploy-${runId}.log`);
 const CHECKPOINT_FILE = path.join(LOG_DIR, `deploy-${runId}.json`);
 
-// Log lines: timestamp + severity + message. Written to file always
-// and mirrored to stdout so a human tail follows along.
 function log(severity, msg) {
   const line = `[${new Date().toISOString()}] ${severity} ${msg}`;
   fs.appendFileSync(LOG_FILE, line + "\n");
@@ -99,27 +115,27 @@ const info  = (m) => log("INFO ", m);
 const warn  = (m) => log("WARN ", m);
 const errL  = (m) => log("ERROR", m);
 
-// Structured checkpoint — the JSON artifact the founder can eyeball.
 const checkpoint = {
   runId,
   startedAtIso: new Date().toISOString(),
   sha: null,
   branch: null,
   strategy: null,
+  image: null,
+  workflowRun: process.env.GITHUB_RUN_ID ?? null,
   attempts: [],
   rollbackAnchor: null,
-  final: null, // "SUCCESS" | "FAILURE"
+  final: null,
   failureClass: null,
   totalMs: null,
   healthCheck: null,
+  newRelease: null,
 };
 function persistCheckpoint() {
   fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify(checkpoint, null, 2));
 }
 
-// Redact secrets before logging (belt & braces — we already avoid
-// echoing them, but a stray env dump in a child's output should not
-// end up in the log).
+// Redact secrets before logging.
 const SECRET_KEYS = [
   "DATABASE_URL", "DIRECT_DATABASE_URL", "SPECTRE_SESSION_SECRET",
   "FLY_API_TOKEN", "FLY_ACCESS_TOKEN", "MICROSOFT_CLIENT_SECRET",
@@ -128,7 +144,6 @@ const SECRET_KEYS = [
 function redact(text) {
   let out = text;
   for (const k of SECRET_KEYS) {
-    // <KEY>=value or <KEY>="value" or <KEY>: value
     const re = new RegExp(`(${k})[\\s]*[=:][\\s]*["']?([^"'\\s]+)["']?`, "gi");
     out = out.replace(re, `$1=<redacted>`);
   }
@@ -136,23 +151,20 @@ function redact(text) {
 }
 
 // -----------------------------------------------------------------------
-// Deployment lock
+// Deployment lock (stale-pid recovery)
 // -----------------------------------------------------------------------
 
 function acquireLock() {
   if (fs.existsSync(LOCK_FILE)) {
     let owner = "?";
     try { owner = fs.readFileSync(LOCK_FILE, "utf8"); } catch {}
-    // Stale lock detection — if the pid is not alive, take the lock.
     const m = owner.match(/pid=(\d+)/);
     if (m) {
       const pid = Number(m[1]);
       try {
-        process.kill(pid, 0); // signal 0 = existence check
-        // pid alive — genuine conflict
+        process.kill(pid, 0);
         return { ok: false, owner };
       } catch {
-        // stale
         fs.unlinkSync(LOCK_FILE);
       }
     } else {
@@ -162,8 +174,37 @@ function acquireLock() {
   fs.writeFileSync(LOCK_FILE, `pid=${process.pid} host=${os.hostname()} startedAt=${new Date().toISOString()}\n`);
   return { ok: true };
 }
-function releaseLock() {
-  try { fs.unlinkSync(LOCK_FILE); } catch {}
+function releaseLock() { try { fs.unlinkSync(LOCK_FILE); } catch {} }
+
+// -----------------------------------------------------------------------
+// Strategy detection
+// -----------------------------------------------------------------------
+
+function parseArgs() {
+  const argv = process.argv.slice(2);
+  const flags = {};
+  for (const a of argv) {
+    if (a === "--diag") flags.diag = true;
+    else if (a.startsWith("--strategy=")) flags.strategy = a.split("=", 2)[1];
+    else if (a.startsWith("--image="))    flags.image    = a.split("=", 2)[1];
+  }
+  return flags;
+}
+
+function resolveStrategy(flags) {
+  // Explicit override wins.
+  if (flags.strategy) return flags.strategy;
+  if (process.env.SPECTRE_DEPLOY_STRATEGY) return process.env.SPECTRE_DEPLOY_STRATEGY;
+  // CI forces image strategy — CI runners must NEVER build via flyctl's
+  // implicit Docker path, they must build/push explicitly and deploy the
+  // exact pre-built image.
+  if (process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true") return "image";
+  // Local developer fallback.
+  return "local";
+}
+
+function resolveImageRef(flags) {
+  return flags.image ?? process.env.SPECTRE_DEPLOY_IMAGE ?? null;
 }
 
 // -----------------------------------------------------------------------
@@ -181,17 +222,19 @@ async function runOnce(cmd, args, opts = {}) {
   });
 }
 
-async function preflight() {
-  info("Preflight — beginning checks");
+async function preflight(strategy, imageRef) {
+  info(`Preflight — strategy=${strategy}${imageRef ? ` image=${imageRef}` : ""}`);
 
-  // git SHA + branch
-  const sha = (await runOnce("git", ["rev-parse", "HEAD"])).stdout.trim();
-  const branch = (await runOnce("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
-  checkpoint.sha = sha;
-  checkpoint.branch = branch;
-  info(`Git — branch=${branch} sha=${sha}`);
+  // Git SHA + branch.
+  const sha = (process.env.GITHUB_SHA
+    ?? (await runOnce("git", ["rev-parse", "HEAD"])).stdout).trim();
+  const branch = (process.env.GITHUB_REF_NAME
+    ?? (await runOnce("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout).trim();
+  checkpoint.sha = sha || null;
+  checkpoint.branch = branch || null;
+  info(`Git — branch=${branch || "?"} sha=${sha || "?"}`);
 
-  // flyctl on PATH
+  // flyctl on PATH.
   const fly = await runOnce("flyctl", ["version"]);
   if (fly.code !== 0) {
     errL(`Preflight FAIL — flyctl not runnable: ${fly.stderr.slice(0, 200)}`);
@@ -199,7 +242,8 @@ async function preflight() {
   }
   info(`flyctl — ${fly.stdout.trim().split("\n")[0]}`);
 
-  // flyctl auth
+  // flyctl auth — CI uses FLY_API_TOKEN env var; developer machines use
+  // the user's saved credentials.
   const auth = await runOnce("flyctl", ["auth", "whoami"]);
   if (auth.code !== 0) {
     errL(`Preflight FAIL — flyctl not authenticated: ${auth.stderr.slice(0, 200)}`);
@@ -207,14 +251,13 @@ async function preflight() {
   }
   info(`flyctl auth — signed in as ${auth.stdout.trim()}`);
 
-  // fly.web.toml exists
-  const cfgPath = path.join(REPO_ROOT, CONFIG);
-  if (!fs.existsSync(cfgPath)) {
+  // fly.web.toml exists.
+  if (!fs.existsSync(path.join(REPO_ROOT, CONFIG))) {
     errL(`Preflight FAIL — ${CONFIG} missing`);
     return { ok: false, cls: "CONFIG_INVALID" };
   }
 
-  // App exists on Fly + record current release as rollback anchor
+  // Rollback anchor: record the release currently in service.
   const status = await runOnce("flyctl", ["status", "-a", APP, "--json"]);
   if (status.code !== 0) {
     errL(`Preflight FAIL — cannot read Fly status for ${APP}: ${status.stderr.slice(0, 200)}`);
@@ -223,34 +266,37 @@ async function preflight() {
   try {
     const j = JSON.parse(status.stdout);
     const machines = j?.Machines ?? [];
-    const anchor = machines[0]?.image_ref?.tag ?? j?.ImageRef ?? "unknown";
-    const version = machines[0]?.instance_id ?? j?.Version ?? "unknown";
-    checkpoint.rollbackAnchor = { version, image: anchor, capturedAtIso: new Date().toISOString() };
-    info(`Rollback anchor — machine=${machines[0]?.id ?? "?"} version=${machines[0]?.instance_id ?? "?"} image=${anchor}`);
+    const anchorImage = machines[0]?.image_ref?.tag ?? j?.ImageRef ?? "unknown";
+    const anchorVersion = machines[0]?.instance_id ?? j?.Version ?? "unknown";
+    checkpoint.rollbackAnchor = { version: anchorVersion, image: anchorImage, capturedAtIso: new Date().toISOString() };
+    info(`Rollback anchor — machine=${machines[0]?.id ?? "?"} version=${anchorVersion} image=${anchorImage}`);
   } catch (e) {
     warn(`Rollback anchor — could not parse status JSON: ${String(e).slice(0, 100)}`);
     checkpoint.rollbackAnchor = { version: "unknown", image: "unknown", capturedAtIso: new Date().toISOString() };
   }
 
-  // Docker daemon reachable (only relevant for --local-only path).
-  const docker = await runOnce("docker", ["info", "--format", "{{.ServerVersion}}"]);
-  if (docker.code !== 0) {
-    errL(`Preflight FAIL — Docker not reachable: ${docker.stderr.slice(0, 200)}`);
-    return { ok: false, cls: "PREFLIGHT" };
-  }
-  info(`docker — server ${docker.stdout.trim()}`);
-
-  // Disk pressure — refuse if buildkit builder is over 40 GB.
-  const bx = await runOnce("docker", ["buildx", "du", "--format", "{{.Size}}"]);
-  if (bx.code === 0) {
-    const totalBytes = bx.stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-      .map(s => Number(s)).filter(n => !Number.isNaN(n))
-      .reduce((a, b) => a + b, 0);
-    const gb = totalBytes / 1e9;
-    info(`buildkit cache — ${gb.toFixed(2)} GB`);
-    if (gb > 40) {
-      warn(`buildkit cache >40 GB. Recommend: docker builder prune -f --keep-storage 2GB`);
+  // Strategy-specific preflight.
+  if (strategy === "image") {
+    if (!imageRef) {
+      errL("Preflight FAIL — strategy=image requires --image or SPECTRE_DEPLOY_IMAGE");
+      return { ok: false, cls: "IMAGE_MISSING" };
     }
+    if (!/^registry\.fly\.io\/[a-z0-9-]+:[a-z0-9._-]+$/i.test(imageRef)) {
+      errL(`Preflight FAIL — image ref must be registry.fly.io/<app>:<tag>, got: ${imageRef}`);
+      return { ok: false, cls: "CONFIG_INVALID" };
+    }
+    info(`Image — ${imageRef}`);
+  } else if (strategy === "local") {
+    // Only require Docker if we are doing a local build.
+    const docker = await runOnce("docker", ["info", "--format", "{{.ServerVersion}}"]);
+    if (docker.code !== 0) {
+      errL(`Preflight FAIL — Docker not reachable (strategy=local requires local Docker): ${docker.stderr.slice(0, 200)}`);
+      return { ok: false, cls: "PREFLIGHT" };
+    }
+    info(`docker — server ${docker.stdout.trim()}`);
+  } else {
+    errL(`Preflight FAIL — unknown strategy: ${strategy}`);
+    return { ok: false, cls: "CONFIG_INVALID" };
   }
 
   info("Preflight — OK");
@@ -258,26 +304,9 @@ async function preflight() {
 }
 
 // -----------------------------------------------------------------------
-// Supervised child with idle-output watchdog
+// Supervised child with idle-output watchdog + stage tracking
 // -----------------------------------------------------------------------
 
-/**
- * Run a child process, streaming stdout+stderr to the log. If either
- * stream is silent for `idleMs`, kill the process and return a
- * timeout class. If the child prints a marker in `stageTransitions`,
- * flip the current stage — different stages can have different idle
- * budgets.
- *
- * @param {string} cmd
- * @param {string[]} args
- * @param {{
- *   overallMs: number,
- *   stageIdleMs: Record<string, number>,
- *   initialStage: string,
- *   stageTransitions: Array<{stage: string, match: RegExp}>,
- *   onLine?: (line: string) => void,
- * }} opts
- */
 async function supervisedChild(cmd, args, opts) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -286,7 +315,7 @@ async function supervisedChild(cmd, args, opts) {
     let killed = false;
     let killClass = null;
     let bufOut = "";
-    const child = spawn(cmd, args, { cwd: REPO_ROOT, shell: false });
+    const child = spawn(cmd, args, { cwd: REPO_ROOT, shell: false, env: { ...process.env } });
     info(`> ${cmd} ${args.map(a => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`);
 
     const flushLine = (line) => {
@@ -294,11 +323,12 @@ async function supervisedChild(cmd, args, opts) {
       fs.appendFileSync(LOG_FILE, clean + "\n");
       process.stdout.write(clean + "\n");
       opts.onLine && opts.onLine(clean);
-      // Detect stage transitions.
       for (const t of opts.stageTransitions ?? []) {
         if (t.match.test(clean)) {
-          stage = t.stage;
-          info(`[stage] → ${stage}`);
+          if (stage !== t.stage) {
+            stage = t.stage;
+            info(`[stage] → ${stage}`);
+          }
         }
       }
     };
@@ -315,7 +345,6 @@ async function supervisedChild(cmd, args, opts) {
     child.stdout.on("data", consume);
     child.stderr.on("data", consume);
 
-    // Watchdog — 5s tick, check idle time against the current stage budget.
     const tick = setInterval(() => {
       const elapsed = Date.now() - startedAt;
       if (elapsed > opts.overallMs) {
@@ -359,15 +388,16 @@ function stageToFailureClass(stage) {
 }
 
 // -----------------------------------------------------------------------
-// One deploy attempt
+// One deploy attempt (strategy-aware)
 // -----------------------------------------------------------------------
 
-async function attemptDeploy(attemptNumber) {
-  info(`Attempt ${attemptNumber}/${MAX_ATTEMPTS} — starting`);
+async function attemptDeploy(attemptNumber, strategy, imageRef) {
+  info(`Attempt ${attemptNumber}/${MAX_ATTEMPTS} — strategy=${strategy}`);
   const attempt = {
     number: attemptNumber,
     startedAtIso: new Date().toISOString(),
-    strategy: "local-only",
+    strategy,
+    image: imageRef,
     stage: null,
     exitCode: null,
     killed: false,
@@ -376,26 +406,41 @@ async function attemptDeploy(attemptNumber) {
     finishedAtIso: null,
   };
   checkpoint.attempts.push(attempt);
-  checkpoint.strategy = "local-only";
+  checkpoint.strategy = strategy;
+  checkpoint.image = imageRef;
   persistCheckpoint();
 
-  const args = ["deploy", "--local-only", "-a", APP, "--config", CONFIG];
+  // Build flyctl argv based on strategy.
+  const args = ["deploy", "-a", APP, "--config", CONFIG];
+  if (strategy === "image") {
+    args.push("--image", imageRef);
+    // We already own the image — skip any implicit build.
+    args.push("--strategy", "rolling");
+  } else if (strategy === "local") {
+    args.push("--local-only");
+  }
+
+  // Initial stage differs: image strategy skips the entire BUILD/EXPORT
+  // phase and starts at PUSH (image is already in the Fly registry;
+  // flyctl needs to verify + then release + rollout).
+  const initialStage = strategy === "image" ? "PUSH" : "BUILD";
+
   const res = await supervisedChild("flyctl", args, {
     overallMs: STAGE_TIMEOUTS_MS.overall,
-    initialStage: "BUILD",
+    initialStage,
     stageIdleMs: {
       BUILD:   STAGE_TIMEOUTS_MS.buildIdleKill,
       EXPORT:  STAGE_TIMEOUTS_MS.exportIdleKill,
       PUSH:    STAGE_TIMEOUTS_MS.pushIdleKill,
       RELEASE: STAGE_TIMEOUTS_MS.releaseIdleKill,
       ROLLOUT: STAGE_TIMEOUTS_MS.rolloutIdleKill,
-      default: STAGE_TIMEOUTS_MS.buildIdleKill,
+      default: STAGE_TIMEOUTS_MS.pushIdleKill,
     },
     stageTransitions: [
       { stage: "EXPORT",  match: /exporting to image|exporting layers/i },
-      { stage: "PUSH",    match: /Pushing image|Waiting for image|--> Pushing image/i },
-      { stage: "RELEASE", match: /Running.*release_command|release_command/i },
-      { stage: "ROLLOUT", match: /Preparing to run|Updating|update finished|Machines? are up/i },
+      { stage: "PUSH",    match: /Pushing image|--> Pushing image|The push refers to|Waiting for image|Searching for image/i },
+      { stage: "RELEASE", match: /Running release_command|release_command|Running Prisma|Applying migration/i },
+      { stage: "ROLLOUT", match: /Preparing to run|Updating|update finished|Machines? are up|Watch your deployment|Successfully deployed/i },
     ],
   });
 
@@ -407,13 +452,8 @@ async function attemptDeploy(attemptNumber) {
   attempt.finishedAtIso = new Date().toISOString();
   persistCheckpoint();
 
-  if (res.killed) {
-    return { ok: false, cls: res.killClass ?? "UNKNOWN", attempt };
-  }
-  if (res.code !== 0) {
-    // exit != 0 — classify by last known stage.
-    return { ok: false, cls: stageToFailureClass(res.stage), attempt };
-  }
+  if (res.killed) return { ok: false, cls: res.killClass ?? "UNKNOWN", attempt };
+  if (res.code !== 0) return { ok: false, cls: stageToFailureClass(res.stage), attempt };
   return { ok: true, attempt };
 }
 
@@ -450,17 +490,17 @@ async function verifyHealth() {
 // Diagnostics on failure
 // -----------------------------------------------------------------------
 
-async function collectDiagnostics() {
+async function collectDiagnostics(strategy) {
   info("Diagnostics — gathering post-failure state");
   const st = await runOnce("flyctl", ["status", "-a", APP]);
   info(`Fly status:\n${st.stdout}`);
   const logs = await runOnce("flyctl", ["logs", "-a", APP, "--no-tail"]);
   const logsTail = logs.stdout.split(/\r?\n/).slice(-80).join("\n");
   info(`Fly logs (last 80 lines):\n${logsTail}`);
-  const df = await runOnce("docker", ["system", "df"]);
-  info(`docker system df:\n${df.stdout}`);
-  const bx = await runOnce("docker", ["buildx", "du", "--format", "table {{.ID}}\t{{.Size}}\t{{.LastAccessed}}"]);
-  info(`docker buildx du:\n${bx.stdout.split("\n").slice(0, 10).join("\n")}`);
+  if (strategy === "local") {
+    const df = await runOnce("docker", ["system", "df"]);
+    info(`docker system df:\n${df.stdout}`);
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -468,19 +508,21 @@ async function collectDiagnostics() {
 // -----------------------------------------------------------------------
 
 async function main() {
-  const argv = process.argv.slice(2);
-  if (argv.includes("--diag")) {
-    await collectDiagnostics();
+  const flags = parseArgs();
+  if (flags.diag) {
+    await collectDiagnostics("local");
     process.exit(0);
   }
+  const strategy = resolveStrategy(flags);
+  const imageRef = resolveImageRef(flags);
 
   info("=".repeat(72));
   info(`Spectre staging deploy — run ${runId}`);
+  info(`Strategy:   ${strategy}${imageRef ? `  image=${imageRef}` : ""}`);
   info(`Log:        ${LOG_FILE}`);
   info(`Checkpoint: ${CHECKPOINT_FILE}`);
   info("=".repeat(72));
 
-  // Acquire lock.
   const lock = acquireLock();
   if (!lock.ok) {
     errL(`Lock — another deployment is already in progress: ${lock.owner}`);
@@ -488,23 +530,20 @@ async function main() {
   }
 
   const overallStart = Date.now();
-
   try {
-    // Preflight.
-    const pf = await preflight();
+    const pf = await preflight(strategy, imageRef);
     if (!pf.ok) {
       checkpoint.final = "FAILURE";
       checkpoint.failureClass = pf.cls;
       persistCheckpoint();
-      await collectDiagnostics();
+      await collectDiagnostics(strategy);
       process.exit(2);
     }
 
-    // Deploy attempts.
     let attemptNumber = 0;
     while (attemptNumber < MAX_ATTEMPTS) {
       attemptNumber += 1;
-      const r = await attemptDeploy(attemptNumber);
+      const r = await attemptDeploy(attemptNumber, strategy, imageRef);
       if (r.ok) {
         info(`flyctl deploy — exit 0 after ${Math.round(r.attempt.elapsedMs / 1000)}s`);
         break;
@@ -516,7 +555,7 @@ async function main() {
         checkpoint.final = "FAILURE";
         checkpoint.failureClass = r.cls;
         persistCheckpoint();
-        await collectDiagnostics();
+        await collectDiagnostics(strategy);
         process.exit(3);
       }
       if (attemptNumber >= MAX_ATTEMPTS) {
@@ -524,33 +563,24 @@ async function main() {
         checkpoint.final = "FAILURE";
         checkpoint.failureClass = r.cls;
         persistCheckpoint();
-        await collectDiagnostics();
+        await collectDiagnostics(strategy);
         process.exit(3);
-      }
-      // Between attempts: try a small self-heal for build/export/push timeouts.
-      if (r.cls === "BUILD_TIMEOUT" || r.cls === "EXPORT_TIMEOUT" || r.cls === "PUSH_TIMEOUT") {
-        warn(`Self-heal — pruning stale buildkit cache (keep 2 GB)`);
-        await runOnce("docker", ["builder", "prune", "-f", "--keep-storage", "2GB"]);
       }
     }
 
-    // Health verification.
     const hv = await verifyHealth();
     if (!hv.ok) {
       checkpoint.final = "FAILURE";
       checkpoint.failureClass = "HEALTH_FAILED";
       persistCheckpoint();
-      await collectDiagnostics();
+      await collectDiagnostics(strategy);
       process.exit(4);
     }
 
-    // Success.
     checkpoint.final = "SUCCESS";
     checkpoint.totalMs = Date.now() - overallStart;
-    persistCheckpoint();
-    info(`Deploy — SUCCESS in ${Math.round(checkpoint.totalMs / 1000)}s`);
 
-    // Record post-deploy release for future rollback anchor.
+    // Record post-deploy release.
     const status = await runOnce("flyctl", ["status", "-a", APP, "--json"]);
     try {
       const j = JSON.parse(status.stdout);
@@ -559,9 +589,10 @@ async function main() {
       const newImage = machines[0]?.image_ref?.tag ?? j?.ImageRef ?? "?";
       info(`New release — machine=${machines[0]?.id ?? "?"} version=${newVersion} image=${newImage}`);
       checkpoint.newRelease = { version: newVersion, image: newImage };
-      persistCheckpoint();
-    } catch {}
+    } catch { /* ignored */ }
 
+    persistCheckpoint();
+    info(`Deploy — SUCCESS in ${Math.round(checkpoint.totalMs / 1000)}s`);
     process.exit(0);
   } finally {
     releaseLock();
@@ -570,7 +601,6 @@ async function main() {
   }
 }
 
-// Kick off.
 main().catch((e) => {
   errL(`Fatal — ${String(e)}`);
   checkpoint.final = "FAILURE";

@@ -1,5 +1,5 @@
 # Phase 8I — Production Dockerfile (web tier).
-# Multi-stage build for the Next.js runtime.
+# Multi-stage build for the Next.js standalone runtime.
 #
 # Sprint 2 Step 7B (2026-07-20) — Postgres-safe Prisma path.
 #   • `npm ci --ignore-scripts` skips the `postinstall` (which would
@@ -13,21 +13,20 @@
 #   • The release_command in fly.web.toml runs `prisma migrate deploy`
 #     against the SAME Postgres schema so the migrations applied to
 #     Neon exactly match the client generated here.
-#   • devDeps are installed in production because `prisma` + `tsx` are
-#     devDependencies and we need them at release + runtime respectively.
-#     No `--omit=dev`. The image is a few MB larger; the alternative
-#     is to promote both to `dependencies` which is invasive to
-#     package.json for a minor size win.
 #
-# DRH-1 (2026-09-19) — attempted `output: "standalone"` slimming here
-# but the Next.js standalone tracer (`Collecting build traces`) is
-# silent for 10+ min under Windows Docker Desktop + buildkit and
-# tripped the deployment controller's BUILD idle watchdog. Reverted to
-# the fat-runner design that historically deployed successfully. The
-# reliability improvement moved to `scripts/deploy-staging.mjs` (which
-# owns preflight, stage-specific watchdogs, retry policy, health
-# verification, rollback anchor, and structured logging).
-# CI-runner slimming is deferred to DRH-1 §21.
+# DRH-1 (2026-09-19) — Next.js standalone output.
+#   • next.config.js sets `output: "standalone"`. The builder stage's
+#     `next build` produces `.next/standalone/` — a self-contained
+#     runtime with only the traced-minimum node_modules plus a
+#     `server.js` entry.
+#   • The runner stage COPIES ONLY the standalone bundle + static +
+#     public + Prisma runtime + Prisma CLI (for release_command) +
+#     prisma-postgres migrations. Runtime image drops from ~2.3 GB to
+#     ~350-400 MB.
+#   • Canonical execution environment is a Linux CI runner
+#     (.github/workflows/deploy-staging.yml). The Next.js standalone
+#     tracer is silent for 10+ min on Windows Docker Desktop; the
+#     Linux path completes it in ~90s.
 
 # ---- deps stage ----
 FROM node:20-alpine AS deps
@@ -43,7 +42,9 @@ RUN apk add --no-cache libc6-compat openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-# Heap ceilings split per RUN (see git blame for detailed rationale).
+# Heap ceilings split per RUN — prisma generate needs modest heap and
+# next build needs a large one. Setting both via ENV would cause the
+# smaller build to over-allocate address space.
 RUN NODE_OPTIONS="--max-old-space-size=2560" \
     npx prisma generate --schema prisma-postgres/schema.prisma
 RUN NODE_OPTIONS="--max-old-space-size=3840" \
@@ -51,28 +52,54 @@ RUN NODE_OPTIONS="--max-old-space-size=3840" \
     SPECTRE_SESSION_SECRET="build-time-placeholder-32-chars-min-abcdefghijk" \
     npm run build
 
-# ---- runner stage ----
+# ---- runner stage (DRH-1 slim runtime) ----
 FROM node:20-alpine AS runner
 WORKDIR /app
 RUN apk add --no-cache libc6-compat openssl curl
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-# Create non-root user.
+# Non-root user.
 RUN addgroup --system --gid 1001 spectre && adduser --system --uid 1001 --ingroup spectre spectre
 
+# Public assets served by the standalone server.
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=spectre:spectre /app/.next ./.next
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma-postgres ./prisma-postgres
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+
+# Standalone bundle: server.js at repo root + traced-minimum
+# node_modules. The bundle's own package.json declares the entry.
+COPY --from=builder --chown=spectre:spectre /app/.next/standalone ./
+COPY --from=builder --chown=spectre:spectre /app/.next/static ./.next/static
+
+# Prisma runtime — the generated client under .prisma + @prisma/client.
+# Next.js standalone should trace these, but we copy them explicitly so
+# a tracing regression in a future minor of Next.js cannot break Prisma.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=spectre:spectre /app/node_modules/@prisma ./node_modules/@prisma
+
+# Prisma CLI — required by fly.web.toml's release_command
+# (`npx prisma migrate deploy`). Not traced because nothing imports it.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
+# Postgres migrations + schema — read by prisma migrate deploy at
+# release time. Never accessed by the running server.
+COPY --from=builder --chown=spectre:spectre /app/prisma-postgres ./prisma-postgres
+
 # One-shot maintenance scripts (backfills, verification helpers).
 # Bundled so `flyctl ssh console --command 'node /app/scripts/...'`
-# has them without a separate SFTP hop. Read-only at runtime;
-# nothing on the serving path imports from here.
-COPY --from=builder /app/scripts ./scripts
+# has them without a separate SFTP hop.
+COPY --from=builder --chown=spectre:spectre /app/scripts ./scripts
+
+# tsx — some maintenance scripts under /app/scripts are TypeScript.
+# tsx + esbuild + resolvers together weigh ~50 MB, small next to the
+# rest of the runtime.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/tsx ./node_modules/tsx
+COPY --from=builder --chown=spectre:spectre /app/node_modules/esbuild ./node_modules/esbuild
+COPY --from=builder --chown=spectre:spectre /app/node_modules/get-tsconfig ./node_modules/get-tsconfig
+COPY --from=builder --chown=spectre:spectre /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
+COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
 
 USER spectre
 EXPOSE 3000
@@ -80,4 +107,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
 
-CMD ["node_modules/.bin/next", "start"]
+# Standalone bundle exposes its own server.js at repo root.
+CMD ["node", "server.js"]

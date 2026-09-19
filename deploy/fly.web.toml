@@ -73,10 +73,12 @@ kill_timeout = 30
   SPECTRE_PLATFORM_HOST = "staging.spectreautomation.com"
 
 [processes]
-  # DRH-1 (2026-09-19) — reverted from `node server.js` (standalone
-  # entry) back to `npm run start`. See Dockerfile header + next.config.js
-  # comment for why standalone was rolled back.
-  app = "npm run start"
+  # DRH-1 (2026-09-19) — standalone bundle exposes its own server.js at
+  # /app/server.js. `npm run start` (→ `next start`) is not present in
+  # the standalone runtime; `node server.js` is the correct entry.
+  # The canonical build path is now GitHub Actions (Linux) —
+  # .github/workflows/deploy-staging.yml.
+  app = "node server.js"
 
 [http_service]
   internal_port = 3000

@@ -1,0 +1,203 @@
+# DRH-1 (2026-09-19) — Spectre staging deployment (canonical path).
+#
+# Manual dispatch only (workflow_dispatch). Deploys the caller-selected
+# commit to spectre-staging via the repository-owned deployment
+# controller (scripts/deploy-staging.mjs).
+#
+# Architecture:
+#   1. Checkout the exact requested SHA on a Linux runner.
+#   2. Build the Docker image ONCE on the runner (docker buildx).
+#   3. Push it to Fly's registry with a deterministic tag
+#      (registry.fly.io/spectre-staging:sha-<short-sha>).
+#   4. Invoke the deployment controller with --strategy=image so
+#      flyctl deploys the already-pushed image (no re-build, no
+#      double-image cycle).
+#   5. Controller runs release_command (Prisma migrate) → rollout →
+#      health verification → success or classified failure.
+#   6. On success or failure the controller's JSON checkpoint and
+#      text log are uploaded as workflow artifacts.
+#
+# Production is intentionally NOT reachable from this workflow.
+
+name: Deploy — spectre-staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag, or SHA) to deploy"
+        required: true
+        default: "main"
+        type: string
+      confirm:
+        description: 'Type "deploy" to confirm you intend to update spectre-staging'
+        required: true
+        default: ""
+        type: string
+
+# One staging deploy at a time. Never race Fly releases from CI.
+# `cancel-in-progress: false` because cancelling a mid-migration deploy
+# is not safe — let the current run reach a terminal state.
+concurrency:
+  group: deploy-spectre-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    name: Build + deploy to spectre-staging
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: staging
+
+    steps:
+      - name: Guard — confirm text matches
+        if: github.event.inputs.confirm != 'deploy'
+        run: |
+          echo "::error::Confirmation text was '${{ github.event.inputs.confirm }}' — expected 'deploy'."
+          exit 78
+
+      - name: Checkout ${{ github.event.inputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          # Full history not required; the deploy controller only needs
+          # the top commit's SHA. Shallow clone is faster.
+          fetch-depth: 1
+
+      - name: Record SHA
+        id: sha
+        run: |
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short=12 HEAD)
+          IMAGE_TAG="sha-${SHORT_SHA}"
+          IMAGE_REF="registry.fly.io/spectre-staging:${IMAGE_TAG}"
+          echo "full_sha=${FULL_SHA}"    >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}"  >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}"  >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REF}"  >> "$GITHUB_OUTPUT"
+          echo "::notice::Deploying ${FULL_SHA} → ${IMAGE_REF}"
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Verify flyctl authentication
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::error::FLY_API_TOKEN secret is not set on the staging environment."
+            echo "::error::Founder must run: flyctl tokens create deploy -a spectre-staging"
+            echo "::error::and upload the resulting token to the 'staging' environment as FLY_API_TOKEN."
+            exit 2
+          fi
+          flyctl auth whoami
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Fly registry
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          # Fly's registry accepts the deploy token as the password with
+          # any username. This does NOT print the token.
+          echo "$FLY_API_TOKEN" | docker login registry.fly.io -u x --password-stdin
+
+      - name: Build + push image (single build → single tag → registry)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.sha.outputs.image_ref }}
+          # Deterministic build metadata for provenance.
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.sha.outputs.full_sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+          # Cache is remote-only (GitHub Actions cache). Runs consecutively
+          # will hit cache on the deps + prisma-generate + npm run build
+          # layers, taking a fresh build from ~7-8 min to ~2-3 min.
+          cache-from: type=gha,scope=spectre-staging
+          cache-to: type=gha,mode=max,scope=spectre-staging
+
+      - name: Record pushed image digest
+        id: image
+        env:
+          IMAGE_REF: ${{ steps.sha.outputs.image_ref }}
+        run: |
+          DIGEST=$(docker buildx imagetools inspect "$IMAGE_REF" --format '{{ json .Manifest }}' | jq -r '.digest // "unknown"')
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Pushed image ${IMAGE_REF}@${DIGEST}"
+
+      - name: Deploy via repository-owned controller
+        env:
+          FLY_API_TOKEN:                    ${{ secrets.FLY_API_TOKEN }}
+          CI:                               "true"
+          SPECTRE_DEPLOY_STRATEGY:          "image"
+          SPECTRE_DEPLOY_IMAGE:             ${{ steps.sha.outputs.image_ref }}
+          SPECTRE_STAGING_HEALTH_URL:       "https://staging.spectreautomation.com/api/health"
+          GITHUB_RUN_ID:                    ${{ github.run_id }}
+          GITHUB_SHA:                       ${{ steps.sha.outputs.full_sha }}
+          GITHUB_REF_NAME:                  ${{ github.event.inputs.ref }}
+        run: npm run deploy:staging
+
+      - name: Smoke — public login page reachable
+        if: success()
+        run: |
+          # A public GET / that redirects to /login proves middleware +
+          # routing are alive. Not authenticated — just a liveness check
+          # beyond /api/health.
+          for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -sS -o /tmp/root.html -w "%{http_code}" "https://staging.spectreautomation.com/" || echo "000")
+            case "$HTTP_CODE" in
+              200|301|302|307|308)
+                echo "::notice::Smoke — GET / returned $HTTP_CODE"
+                exit 0
+                ;;
+            esac
+            sleep 10
+          done
+          echo "::error::Smoke — GET / did not return an OK status after 3 attempts"
+          exit 1
+
+      - name: Upload deployment checkpoint + log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-staging-${{ steps.sha.outputs.short_sha }}-${{ github.run_id }}
+          path: test-results/deploy-staging/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ steps.sha.outputs.image_ref }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          FULL_SHA: ${{ steps.sha.outputs.full_sha }}
+        run: |
+          {
+            echo "## Deployment summary"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit SHA | \`${FULL_SHA}\` |"
+            echo "| Image | \`${IMAGE_REF}\` |"
+            echo "| Digest | \`${DIGEST}\` |"
+            echo "| Workflow run | ${{ github.run_id }} |"
+            echo "| Result | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

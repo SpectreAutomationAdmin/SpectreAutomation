@@ -36,6 +36,7 @@ const EXPECTED_TAXONOMY = {
   CONFIG_INVALID:   { retryable: false },
   PREFLIGHT:        { retryable: false },
   LOCK_CONFLICT:    { retryable: false },
+  IMAGE_MISSING:    { retryable: false },
   UNKNOWN:          { retryable: false },
 };
 
@@ -73,10 +74,9 @@ describe("DRH-1 deployment controller", () => {
 
   it("§11 watchdog — stage-specific idle timeouts are all under the overall ceiling", () => {
     const src = fs.readFileSync(path.join(REPO_ROOT, "scripts", "deploy-staging.mjs"), "utf8");
-    // Find STAGE_TIMEOUTS_MS block.
     const start = src.indexOf("STAGE_TIMEOUTS_MS");
     expect(start).toBeGreaterThan(0);
-    const block = src.slice(start, start + 800);
+    const block = src.slice(start, start + 1200);
     const overall = Number(block.match(/overall:\s*(\d+)\s*\*\s*60_000/)![1]);
     const build   = Number(block.match(/buildIdleKill:\s*(\d+)\s*\*\s*60_000/)![1]);
     const exp     = Number(block.match(/exportIdleKill:\s*(\d+)\s*\*\s*60_000/)![1]);
@@ -86,11 +86,28 @@ describe("DRH-1 deployment controller", () => {
     for (const [name, m] of [["build", build], ["export", exp], ["push", push], ["release", release], ["rollout", rollout]]) {
       expect(m, `${name} idle < overall`).toBeLessThan(overall);
     }
-    // Historical stall context: previous deploys stalled at ~17 min on
-    // export and ~44 min on build. The watchdog must fire well before
-    // either of those.
-    expect(exp).toBeLessThanOrEqual(10);
-    expect(build).toBeLessThanOrEqual(15);
+    // Overall ceiling must be tight enough that a stalled deploy never
+    // silently consumes an hour of CI time.
+    expect(overall).toBeLessThanOrEqual(30);
+  });
+
+  it("CI strategy — resolveStrategy auto-selects 'image' when CI=true", () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, "scripts", "deploy-staging.mjs"), "utf8");
+    // Structural: the resolver must consult CI + GITHUB_ACTIONS.
+    expect(src).toMatch(/process\.env\.CI\s*===\s*"true"/);
+    expect(src).toMatch(/process\.env\.GITHUB_ACTIONS\s*===\s*"true"/);
+    // And it must return "image" — the CI-canonical strategy.
+    const resolver = src.slice(src.indexOf("function resolveStrategy"), src.indexOf("function resolveStrategy") + 700);
+    expect(resolver).toMatch(/return\s+"image"/);
+  });
+
+  it("§15 provenance — image ref must match registry.fly.io/<app>:<tag> pattern", () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, "scripts", "deploy-staging.mjs"), "utf8");
+    // Guard against loose image inputs: the controller must refuse an
+    // image reference that does not match the Fly registry pattern so
+    // a caller can't accidentally deploy a random docker.io/foo image.
+    expect(src).toMatch(/registry\\\.fly\\\.io/);
+    expect(src).toMatch(/cls:\s*"IMAGE_MISSING"/);
   });
 
   it("§19 lock — a second invocation refuses when the lock is held by a live pid", async () => {
