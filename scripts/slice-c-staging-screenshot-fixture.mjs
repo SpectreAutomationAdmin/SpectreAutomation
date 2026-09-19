@@ -38,7 +38,11 @@ const CLUB_NAME   = `${FIXTURE_TAG} — Synthetic Club`;
 const EMPLOYEE_FIRST = "SliceC";
 const EMPLOYEE_LAST  = "BenefitsFixture";
 const ADMIN_EMAIL  = "slice-c-benefits-test-admin@fixture.spectre.test";
+const PA_EMAIL     = "slice-c-benefits-test-pa@fixture.spectre.test";
+const CONTROLLER_EMAIL = "slice-c-benefits-test-controller@fixture.spectre.test";
 const ADMIN_PASSWORD = process.env.SPECTRE_FIXTURE_ADMIN_PASSWORD ?? "SliceC-Benefits-Fixture-2026!";
+const PA_PASSWORD    = process.env.SPECTRE_FIXTURE_PA_PASSWORD    ?? "SliceC-PA-Fixture-2026!";
+const CONTROLLER_PASSWORD = process.env.SPECTRE_FIXTURE_CONTROLLER_PASSWORD ?? "SliceC-CT-Fixture-2026!";
 
 function assertStagingUrl() {
   const url =
@@ -131,6 +135,30 @@ async function findOrCreateAdminUser(clubId) {
   if (!roleExists) {
     await prisma.userClubRole.create({ data: { userId: user.id, clubId, roleKey: "CLUB_ADMIN" } });
     log(`granted CLUB_ADMIN on club ${clubId}`);
+  }
+  return user;
+}
+
+async function findOrCreateRoleUser(clubId, email, displayName, roleKey, password) {
+  let user = await prisma.user.findFirst({ where: { email } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        email,
+        name: `${FIXTURE_TAG} ${displayName}`,
+        role: roleKey,
+        passwordHash: await bcrypt.hash(password, 10),
+        status: "ACTIVE",
+      },
+    });
+    log(`created ${roleKey} user ${user.id} (${email})`);
+  }
+  const exists = await prisma.userClubRole.findFirst({
+    where: { userId: user.id, clubId, roleKey },
+  });
+  if (!exists) {
+    await prisma.userClubRole.create({ data: { userId: user.id, clubId, roleKey } });
+    log(`granted ${roleKey} on club ${clubId}`);
   }
   return user;
 }
@@ -340,6 +368,23 @@ async function setup() {
     status: "ACTIVE",
   }, admin.id);
 
+  // Slice D closeout §31 shot 05 — a SECOND RRSP plan the employee is
+  // NOT enrolled in, so the Enrol form's plan picker still offers an
+  // RRSP option once the primary RRSP is already enrolled.
+  await findOrCreatePlan(club.id, {
+    kind: "RRSP", code: "RRSP_ALT_FIXTURE",
+    name: `${FIXTURE_TAG} — Alternate Group RRSP`,
+    description: "Second fixture RRSP plan (for enrol-form screenshot).",
+    effectiveFrom: new Date(Date.UTC(2020, 0, 1)),
+    effectiveTo: null,
+    employeeComponentId: rrspEeComp.id,
+    employerComponentId: rrspErComp.id,
+    defaultElectionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+    eligibleEarningsBasis: "REGULAR_EARNINGS_ONLY",
+    employerMatchBps: 5000,     //  50%
+    employerMatchCapBps: 200,   //   2%
+  }, admin.id);
+
   log("--- SETUP COMPLETE ---");
   log(`clubId       = ${club.id}`);
   log(`clubSlug     = ${club.slug}`);
@@ -350,6 +395,267 @@ async function setup() {
   console.log("");
   console.log("The synthetic admin can log in at https://staging.spectreautomation.com/login");
   console.log(`with ${ADMIN_EMAIL} and the fixture password.`);
+}
+
+// ---------------------------------------------------------------------
+// Slice D visual closeout §31 — payroll-ready extension.
+//
+// After --setup, run --payroll-ready to add every remaining prerequisite
+// for a Prepare → Post cycle against the synthetic tenant:
+//   * PAYROLL_ADMIN + CONTROLLER users on the synthetic club (submitter
+//     ≠ approver is required by service-layer SoD).
+//   * EmployeeEmploymentAssignment (PRIMARY) + Department + EmployeeCompensation
+//     ($110k salary) — satisfies MISSING_ASSIGNMENT + MISSING_COMPENSATION.
+//   * PayrollGlAccountingProfile with the 8 statutory GL accounts.
+//   * PayrollClubConfig (province + PA + Controller + GL profile link).
+//   * PayrollPayGroup + 24 SM 2026 pay periods + pay-group membership.
+//   * Implementation declaration confirmed as ZERO_OPENING_YTD (skips
+//     MISSING_OPENING_YTD blocker).
+//   * FiscalYear 2026 + FiscalPeriod for Sept + Oct (Post targets Sep 30
+//     payDate; second-period Post targets Oct 15).
+//
+// TD1 encrypted claims are NOT written — WARNING-only exceptions
+// (MISSING_FEDERAL_TD1 / _PROVINCIAL_TD1) are acceptable. SIN and banking
+// remain unset — also WARNING-only.
+// ---------------------------------------------------------------------
+
+async function findOrCreateStagingAccount(clubId, number, name, type) {
+  return findOrCreateAccount(clubId, number, name, type);
+}
+
+async function findOrCreateDepartment(clubId, code, name) {
+  let d = await prisma.department.findFirst({ where: { clubId, code } });
+  if (!d) {
+    d = await prisma.department.create({ data: { clubId, code, name } });
+    log(`created department ${code}`);
+  }
+  return d;
+}
+
+async function payrollReady() {
+  log("--- PAYROLL-READY EXTENSION ---");
+  const club = await prisma.club.findFirst({ where: { slug: CLUB_SLUG } });
+  if (!club) throw new Error("Run --setup first — synthetic club not found.");
+  assertNotFounderTenant(club.name, club.slug);
+  const admin = await prisma.user.findFirstOrThrow({ where: { email: ADMIN_EMAIL } });
+  const employee = await prisma.employee.findFirst({
+    where: { clubId: club.id, email: { contains: "@fixture.spectre.test" } },
+  });
+  if (!employee) throw new Error("Run --setup first — synthetic employee not found.");
+
+  // 1. PA + Controller users.
+  const pa = await findOrCreateRoleUser(club.id, PA_EMAIL, "Payroll Admin", "PAYROLL_ADMIN", PA_PASSWORD);
+  const controller = await findOrCreateRoleUser(club.id, CONTROLLER_EMAIL, "Controller", "CONTROLLER", CONTROLLER_PASSWORD);
+
+  // 2. Statutory GL accounts + PayrollGlAccountingProfile.
+  const salaryExpense       = await findOrCreateStagingAccount(club.id, "5100", "Salary Expense",              "EXPENSE");
+  const employerCppExpense  = await findOrCreateStagingAccount(club.id, "5110", "Employer CPP Expense",        "EXPENSE");
+  const employerEiExpense   = await findOrCreateStagingAccount(club.id, "5120", "Employer EI Expense",         "EXPENSE");
+  const netPayPayable       = await findOrCreateStagingAccount(club.id, "2100", "Net Pay Payable",             "LIABILITY");
+  const cppPayable          = await findOrCreateStagingAccount(club.id, "2110", "CPP Payable",                 "LIABILITY");
+  const eiPayable           = await findOrCreateStagingAccount(club.id, "2120", "EI Payable",                  "LIABILITY");
+  const federalTaxPayable   = await findOrCreateStagingAccount(club.id, "2130", "Federal Tax Payable",         "LIABILITY");
+  const provTaxPayable      = await findOrCreateStagingAccount(club.id, "2140", "AB Tax Payable",              "LIABILITY");
+
+  let glProfile = await prisma.payrollGlAccountingProfile.findUnique({ where: { clubId: club.id } });
+  if (!glProfile) {
+    glProfile = await prisma.payrollGlAccountingProfile.create({
+      data: {
+        clubId: club.id,
+        salaryExpenseAccountId: salaryExpense.id,
+        employerCppExpenseAccountId: employerCppExpense.id,
+        employerEiExpenseAccountId: employerEiExpense.id,
+        netPayPayableAccountId: netPayPayable.id,
+        cppPayableAccountId: cppPayable.id,
+        eiPayableAccountId: eiPayable.id,
+        federalTaxPayableAccountId: federalTaxPayable.id,
+        provincialTaxPayableAccountId: provTaxPayable.id,
+      },
+    });
+    log(`created payroll GL profile ${glProfile.id}`);
+  }
+
+  // 3. PayrollClubConfig.
+  let config = await prisma.payrollClubConfig.findFirst({ where: { clubId: club.id } });
+  if (!config) {
+    config = await prisma.payrollClubConfig.create({
+      data: {
+        clubId: club.id,
+        country: "CA", provinceOfEmployment: "AB",
+        payFrequency: "SEMI_MONTHLY", paymentMethod: "DIRECT_DEPOSIT",
+        payrollAdminUserId: pa.id,
+        controllerUserId: controller.id,
+        glAccountingProfileId: glProfile.id,
+      },
+    });
+    log(`created payroll club config`);
+  } else {
+    await prisma.payrollClubConfig.update({
+      where: { id: config.id },
+      data: {
+        payrollAdminUserId: pa.id, controllerUserId: controller.id,
+        glAccountingProfileId: glProfile.id,
+      },
+    });
+  }
+
+  // 4. Department + Assignment + Compensation.
+  const dept = await findOrCreateDepartment(club.id, "ADMIN", "Administration");
+  await prisma.employee.update({ where: { id: employee.id }, data: { departmentId: dept.id } });
+  let assn = await prisma.employeeEmploymentAssignment.findFirst({
+    where: { clubId: club.id, employeeId: employee.id, role: "PRIMARY" },
+  });
+  if (!assn) {
+    assn = await prisma.employeeEmploymentAssignment.create({
+      data: {
+        clubId: club.id, employeeId: employee.id, role: "PRIMARY",
+        employmentType: "FULL_TIME",
+        effectiveFrom: new Date(Date.UTC(2020, 0, 1)),
+        departmentId: dept.id,
+      },
+    });
+    log(`created assignment ${assn.id}`);
+  }
+  const compExists = await prisma.employeeCompensation.findFirst({
+    where: { clubId: club.id, employeeId: employee.id, cadence: "SALARY" },
+  });
+  if (!compExists) {
+    await prisma.employeeCompensation.create({
+      data: {
+        clubId: club.id, employeeId: employee.id, assignmentId: assn.id,
+        cadence: "SALARY", rate: "110000", currency: "CAD",
+        effectiveFrom: new Date(Date.UTC(2020, 0, 1)),
+      },
+    });
+    log(`created compensation (SALARY $110k)`);
+  }
+
+  // 5. PayrollPayGroup + 24 SM pay periods for 2026 + membership.
+  let pg = await prisma.payrollPayGroup.findFirst({ where: { clubId: club.id, code: "SAL-SM" } });
+  if (!pg) {
+    pg = await prisma.payrollPayGroup.create({
+      data: {
+        clubId: club.id, code: "SAL-SM", name: "Salary Semi-Monthly",
+        payFrequency: "SEMI_MONTHLY", payDateOffsetDays: 0,
+        calendarAnchorDate: null, active: true,
+      },
+    });
+    log(`created pay group ${pg.id}`);
+  }
+  const periodCount = await prisma.payrollPayPeriod.count({
+    where: { clubId: club.id, payGroupId: pg.id, taxYear: 2026 },
+  });
+  if (periodCount < 24) {
+    // Generate all 24 in one pass (mirrors payroll-integration-fixture.ts).
+    let seq = 0;
+    for (let m = 0; m < 12; m++) {
+      seq += 1;
+      await prisma.payrollPayPeriod.upsert({
+        where: {
+          clubId_payGroupId_taxYear_sequenceInYear: {
+            clubId: club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: seq,
+          },
+        },
+        create: {
+          clubId: club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: seq,
+          periodStart: new Date(Date.UTC(2026, m, 1)),
+          periodEnd:   new Date(Date.UTC(2026, m, 16)),
+          payDate:     new Date(Date.UTC(2026, m, 15)),
+          status: "OPEN",
+        },
+        update: {},
+      });
+      seq += 1;
+      const lastDay = new Date(Date.UTC(2026, m + 1, 0)).getUTCDate();
+      await prisma.payrollPayPeriod.upsert({
+        where: {
+          clubId_payGroupId_taxYear_sequenceInYear: {
+            clubId: club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: seq,
+          },
+        },
+        create: {
+          clubId: club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: seq,
+          periodStart: new Date(Date.UTC(2026, m, 16)),
+          periodEnd:   new Date(Date.UTC(2026, m + 1, 1)),
+          payDate:     new Date(Date.UTC(2026, m, lastDay)),
+          status: "OPEN",
+        },
+        update: {},
+      });
+    }
+    log(`created 24 SM pay periods for 2026`);
+  }
+  const memberExists = await prisma.payrollPayGroupMember.findFirst({
+    where: { clubId: club.id, payGroupId: pg.id, employeeId: employee.id },
+  });
+  if (!memberExists) {
+    await prisma.payrollPayGroupMember.create({
+      data: {
+        clubId: club.id, payGroupId: pg.id, employeeId: employee.id,
+        effectiveFrom: new Date(Date.UTC(2020, 0, 1)),
+      },
+    });
+    log(`enrolled employee in pay group`);
+  }
+
+  // 6. Implementation declaration — ZERO_OPENING_YTD.
+  const decl = await prisma.payrollImplementationDeclaration.findFirst({
+    where: { clubId: club.id, taxYear: 2026 },
+  });
+  if (!decl || !decl.confirmedAt) {
+    await prisma.payrollImplementationDeclaration.upsert({
+      where: { clubId_taxYear: { clubId: club.id, taxYear: 2026 } },
+      create: {
+        clubId: club.id, taxYear: 2026, mode: "ZERO_OPENING_YTD",
+        confirmedByUserId: pa.id, confirmedAt: new Date(),
+      },
+      update: {
+        mode: "ZERO_OPENING_YTD",
+        confirmedByUserId: pa.id, confirmedAt: new Date(),
+      },
+    });
+    log(`confirmed implementation declaration (ZERO_OPENING_YTD, 2026)`);
+  }
+
+  // 7. FiscalYear 2026 + FiscalPeriods for Sept + Oct.
+  let fy = await prisma.fiscalYear.findFirst({ where: { clubId: club.id, label: "FY2026" } });
+  if (!fy) {
+    fy = await prisma.fiscalYear.create({
+      data: {
+        clubId: club.id, label: "FY2026",
+        startDate: new Date(Date.UTC(2026, 0, 1)),
+        endDate:   new Date(Date.UTC(2026, 11, 31)),
+        status: "OPEN",
+      },
+    });
+    log(`created FY2026`);
+  }
+  for (const m of [9, 10]) {
+    const exists = await prisma.fiscalPeriod.findFirst({
+      where: { clubId: club.id, fiscalYearId: fy.id, sequence: m },
+    });
+    if (!exists) {
+      await prisma.fiscalPeriod.create({
+        data: {
+          clubId: club.id, fiscalYearId: fy.id,
+          label: `FY2026-M${String(m).padStart(2, "0")}`,
+          startDate: new Date(Date.UTC(2026, m - 1, 1)),
+          endDate:   new Date(Date.UTC(2026, m, 0)),
+          sequence: m, status: "OPEN",
+        },
+      });
+      log(`created FY2026-M${String(m).padStart(2, "0")}`);
+    }
+  }
+
+  log("--- PAYROLL-READY COMPLETE ---");
+  log(`employeeId    = ${employee.id}`);
+  log(`paEmail       = ${PA_EMAIL}`);
+  log(`controllerEmail = ${CONTROLLER_EMAIL}`);
+  log(`payGroupId    = ${pg.id}`);
+  log("");
+  log("Trigger the pipeline by calling (as the fixture admin):");
+  log(`  POST /api/dev/slice-d-pipeline?clubSlug=${CLUB_SLUG}&seq=18`);
 }
 
 // ---------------------------------------------------------------------
@@ -385,14 +691,17 @@ async function teardown() {
 // ---------------------------------------------------------------------
 async function main() {
   const args = new Set(process.argv.slice(2));
-  const doSetup = args.has("--setup");
-  const doTeardown = args.has("--teardown");
-  if (doSetup === doTeardown) {
-    console.error("Usage: slice-c-staging-screenshot-fixture.mjs (--setup | --teardown)");
+  const doSetup        = args.has("--setup");
+  const doTeardown     = args.has("--teardown");
+  const doPayrollReady = args.has("--payroll-ready");
+  const chosen = [doSetup, doTeardown, doPayrollReady].filter(Boolean).length;
+  if (chosen !== 1) {
+    console.error("Usage: slice-c-staging-screenshot-fixture.mjs (--setup | --teardown | --payroll-ready)");
     process.exit(2);
   }
   try {
     if (doSetup) await setup();
+    else if (doPayrollReady) await payrollReady();
     else await teardown();
     await prisma.$disconnect();
   } catch (e) {
