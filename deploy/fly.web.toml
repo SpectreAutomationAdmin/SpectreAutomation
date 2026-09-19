@@ -34,7 +34,13 @@ kill_timeout = 30
   # endpoint) so the advisory lock works. Fail-fast if the direct
   # URL is missing — better to abort the deploy than fall back to the
   # pooled URL and hang for 10 minutes on the lock.
-  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" npx prisma migrate deploy --schema prisma-postgres/schema.prisma'"
+  # DRH-1 (2026-09-19) — invoke Prisma via its package build/index.js
+  # directly rather than the .bin/prisma shim. Docker COPY dereferences
+  # symlinks, so the .bin/prisma copy loses its ability to resolve
+  # sibling files (e.g. prisma_schema_build_bg.wasm). Loading via the
+  # package's own build/ directory keeps every relative sibling lookup
+  # correct.
+  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/prisma/build/index.js migrate deploy --schema prisma-postgres/schema.prisma'"
   strategy = "rolling"
 
 [env]

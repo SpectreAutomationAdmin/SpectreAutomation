@@ -78,10 +78,14 @@ COPY --from=builder --chown=spectre:spectre /app/.next/static ./.next/static
 COPY --from=builder --chown=spectre:spectre /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder --chown=spectre:spectre /app/node_modules/@prisma ./node_modules/@prisma
 
-# Prisma CLI — required by fly.web.toml's release_command
-# (`npx prisma migrate deploy`). Not traced because nothing imports it.
+# Prisma CLI — required by fly.web.toml's release_command. Invoked
+# directly as `node /app/node_modules/prisma/build/index.js migrate
+# deploy` so the CLI's own dirname resolves to `prisma/build/` and its
+# sibling files (e.g. prisma_schema_build_bg.wasm) are located
+# correctly. We intentionally do NOT copy `.bin/prisma` because
+# Docker COPY dereferences symlinks and produces a standalone file
+# whose __dirname is `.bin/`, breaking the WASM sibling lookup.
 COPY --from=builder --chown=spectre:spectre /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
 # Postgres migrations + schema — read by prisma migrate deploy at
 # release time. Never accessed by the running server.
