@@ -105,6 +105,13 @@ COPY --from=builder --chown=spectre:spectre /app/node_modules/get-tsconfig ./nod
 COPY --from=builder --chown=spectre:spectre /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
 COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
 
+# bcryptjs — required by the staging synthetic-fixture script
+# (scripts/slice-c-staging-screenshot-fixture.mjs) which is invoked
+# via `flyctl ssh console` on the machine. Server routes import
+# bcryptjs too, so standalone tracing normally includes it — the
+# explicit copy is defensive.
+COPY --from=builder --chown=spectre:spectre /app/node_modules/bcryptjs ./node_modules/bcryptjs
+
 USER spectre
 EXPOSE 3000
 
