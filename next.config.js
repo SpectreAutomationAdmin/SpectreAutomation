@@ -1,18 +1,16 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // DRH-1 (2026-09-19) — standalone output. Next.js traces the runtime
-  // dependency graph and emits a minimal server bundle under
-  // .next/standalone/, cutting the runner image from ~2.3 GB to
-  // ~350 MB. Combined with the runner stage rewrite in Dockerfile,
-  // this eliminates the giant node_modules COPY that stalled Docker
-  // Desktop's export step for 40+ minutes.
+  // DRH-1 (2026-09-19) — `output: "standalone"` was attempted here to
+  // shrink the runner image, but the standalone tracer step
+  // (`Collecting build traces`) is silent for 10+ min inside the
+  // Windows Docker Desktop / buildkit environment and tripped the
+  // deployment controller's BUILD idle watchdog. Reverted. The size
+  // reduction is deferred to the CI-runner path (DRH-1 §21) where a
+  // Linux runner completes the trace in reasonable time.
   //
-  // `serverComponentsExternalPackages` below (pdfkit / fontkit /
-  // exceljs / pptxgenjs) are automatically included by tracing.
-  // Prisma runtime + CLI are added explicitly in the Dockerfile — they
-  // are not traced because no route imports the CLI.
-  output: "standalone",
+  // The deployment controller (`scripts/deploy-staging.mjs`) — which
+  // is the actual reliability improvement — remains in place.
   // Sprint 3 · Phase 4 Slice 5.7B follow-up (2026-08-09) — Slice
   // 5.7B's added modules pushed the "Collecting page data" phase
   // past 3840 MB on Fly's shared-cpu-2x remote builder, causing
