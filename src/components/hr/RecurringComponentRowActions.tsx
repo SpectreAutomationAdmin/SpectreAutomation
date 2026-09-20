@@ -34,6 +34,11 @@ export interface RecurringComponentRow {
   effectiveFromIso: string;
   effectiveToIso: string | null;
   active: boolean;
+  /** FPP-4A (2026-09-20) — whether this assignment has been consumed
+   *  by a PayrollBatchComponentSnapshot yet. When false, "Correct" is
+   *  the appropriate control (edits in place). When true, only
+   *  effective-dated "Change" applies. */
+  isConsumed?: boolean;
 }
 
 export interface RecurringComponentRowActionsProps {
@@ -45,6 +50,20 @@ export interface RecurringComponentRowActionsProps {
     employeeId: string,
     clubId: string,
     predecessorId: string,
+    input: {
+      amount: string | null;
+      percentBps: number | null;
+      effectiveFrom: string;
+      notes?: string | null;
+    },
+  ) => Promise<ActionResult>;
+  /** FPP-4A — correction path for unused assignments. Required alongside
+   *  changeAction; the UI chooses which control to render based on
+   *  row.isConsumed. */
+  correctAction?: (
+    employeeId: string,
+    clubId: string,
+    assignmentId: string,
     input: {
       amount: string | null;
       percentBps: number | null;
@@ -81,6 +100,12 @@ export default function RecurringComponentRowActions(props: RecurringComponentRo
 
   if (!props.canWrite) return null;
 
+  // FPP-4A (2026-09-20) — an unused, still-active assignment gets the
+  // Correct control (edits in place). A consumed assignment gets the
+  // canonical effective-dated Change control instead.
+  const useCorrect =
+    props.correctAction != null && props.row.isConsumed === false && props.row.active;
+
   return (
     <div className="mt-1 flex flex-wrap items-center gap-2">
       {!showChange && !showEnd ? (
@@ -89,9 +114,13 @@ export default function RecurringComponentRowActions(props: RecurringComponentRo
             type="button"
             className="text-[11.5px] font-medium text-[#1e40af] hover:underline"
             onClick={() => { setShowChange(true); setErr(null); }}
-            data-testid={`grid-recurring-change-open-${props.row.id}`}
+            data-testid={
+              useCorrect
+                ? `grid-recurring-correct-open-${props.row.id}`
+                : `grid-recurring-change-open-${props.row.id}`
+            }
           >
-            Change
+            {useCorrect ? "Correct" : "Change"}
           </button>
           <span className="text-stone-300">·</span>
           <button
@@ -114,21 +143,25 @@ export default function RecurringComponentRowActions(props: RecurringComponentRo
             if (isPercent && !changePercent) { setErr("New percentage is required."); return; }
             setPending(true); setErr(null);
             const percentBps = isPercent ? Math.round(Number(changePercent) * 100) : null;
-            const r = await props.changeAction(
-              props.employeeId, props.clubId, props.row.id,
-              {
-                amount: isPercent ? null : (changeAmount || null),
-                percentBps: percentBps != null && Number.isFinite(percentBps) ? percentBps : null,
-                effectiveFrom: changeDate,
-              },
-            );
+            const payload = {
+              amount: isPercent ? null : (changeAmount || null),
+              percentBps: percentBps != null && Number.isFinite(percentBps) ? percentBps : null,
+              effectiveFrom: changeDate,
+            };
+            const r = useCorrect && props.correctAction
+              ? await props.correctAction(props.employeeId, props.clubId, props.row.id, payload)
+              : await props.changeAction(props.employeeId, props.clubId, props.row.id, payload);
             setPending(false);
             if (!r.ok) { setErr(r.error); return; }
             setShowChange(false);
             router.refresh();
           }}
           className="flex flex-wrap items-center gap-2 rounded-md bg-stone-50 px-2 py-1.5"
-          data-testid={`grid-recurring-change-form-${props.row.id}`}
+          data-testid={
+            useCorrect
+              ? `grid-recurring-correct-form-${props.row.id}`
+              : `grid-recurring-change-form-${props.row.id}`
+          }
         >
           <label className="text-[11.5px] text-stone-700">
             Effective from

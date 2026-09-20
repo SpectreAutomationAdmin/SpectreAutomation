@@ -90,6 +90,7 @@ import {
   addRecurringPayrollComponentAction,
   endRecurringPayrollComponentAction,
   changeRecurringPayrollComponentAction,
+  correctRecurringPayrollComponentAction,
 } from "./_recurring-component-actions";
 
 // FPP-1 §2 (2026-09-20) — force dynamic to prevent RSC caching of the
@@ -220,7 +221,11 @@ export default async function EmployeeProfilePage({
     canReadPayrollRecurring
       ? prisma.employeeRecurringPayrollComponent.findMany({
           where: { clubId: profile.clubId, employeeId: profile.id },
-          include: { component: true },
+          include: {
+            component: true,
+            // FPP-4A (2026-09-20) — snapshot count derives isConsumed.
+            _count: { select: { snapshots: true } },
+          },
           orderBy: [{ effectiveFrom: "desc" }],
         })
       : Promise.resolve([]),
@@ -1021,6 +1026,9 @@ export default async function EmployeeProfilePage({
                 effectiveFromIso: a.effectiveFrom.toISOString(),
                 effectiveToIso: a.effectiveTo ? a.effectiveTo.toISOString() : null,
                 active: a.active,
+                // FPP-4A — snapshot count > 0 means the assignment has
+                // been consumed by a batch and only Change may apply.
+                isConsumed: ((a as unknown as { _count?: { snapshots?: number } })._count?.snapshots ?? 0) > 0,
               }))}
             addRecurringHref={`/app/admin/people/employees/${profile.id}?tab=payroll#recurring`}
             recurringAdd={
@@ -1046,6 +1054,7 @@ export default async function EmployeeProfilePage({
                       })),
                     addAction: addRecurringPayrollComponentAction,
                     changeAction: changeRecurringPayrollComponentAction,
+                    correctAction: correctRecurringPayrollComponentAction,
                     endAction: endRecurringPayrollComponentAction,
                   }
                 : undefined

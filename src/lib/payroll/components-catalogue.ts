@@ -561,6 +561,140 @@ export async function createRecurringComponentAssignment(
   return row;
 }
 
+// ---------------------------------------------------------------------
+// FPP-4A (2026-09-20) — Correct an UNUSED recurring assignment in place.
+//
+// A recurring assignment that has never been consumed by a payroll
+// snapshot may still contain setup mistakes (wrong amount, wrong
+// effectiveFrom). The canonical Change flow refuses backward moves
+// because it would need to write predecessor.effectiveTo <
+// predecessor.effectiveFrom.
+//
+// The "Correct" path is a narrow escape hatch: it edits amount /
+// percentBps / effectiveFrom / notes IN PLACE on the same row, but
+// ONLY when every one of the following is true:
+//
+//   1) The assignment has zero PayrollBatchComponentSnapshot rows
+//      (never consumed by Prepare, never posted, never in a batch).
+//   2) The assignment is still active (effectiveTo == null).
+//   3) The assignment belongs to the calling tenant.
+//   4) The proposed new interval does not overlap another active
+//      assignment for the same (employee, component).
+//   5) The proposed amount/percent honours the component's
+//      calculationMethod.
+//
+// Server-side enforced. UI hiding is a UX aid, not a security control.
+// Audit records the before + after values so the correction is
+// discoverable in the audit log.
+// ---------------------------------------------------------------------
+
+export async function correctUnusedRecurringComponentAssignment(
+  principal: Principal, clubId: string, id: string,
+  input: {
+    amount?: string | number | null;
+    percentBps?: number | null;
+    effectiveFrom?: Date;
+    notes?: string | null;
+  },
+): Promise<{ id: string }> {
+  requirePermission(principal, clubId, "payroll:write");
+
+  const row = await prisma.employeeRecurringPayrollComponent.findUnique({
+    where: { id },
+    include: {
+      component: { select: { id: true, calculationMethod: true, code: true, displayName: true } },
+      snapshots: { select: { id: true }, take: 1 },
+    },
+  });
+  if (!row) throw new NotFoundError(ASSIGNMENT_ENTITY, id);
+  assertTenantOwned(row, principal);
+  if (row.clubId !== clubId) throw new NotFoundError(ASSIGNMENT_ENTITY, id);
+
+  if (row.snapshots.length > 0) {
+    throw new ValidationError([{
+      path: "id",
+      message:
+        "This assignment has already been consumed by a payroll batch snapshot. " +
+        "Use the Change flow to schedule an effective-dated update instead of Correct.",
+    }]);
+  }
+  if (row.effectiveTo !== null) {
+    throw new ValidationError([{
+      path: "id",
+      message:
+        "This assignment has already been ended. Correction in place is only allowed on active, unused assignments.",
+    }]);
+  }
+
+  const nextEffectiveFrom = input.effectiveFrom ?? row.effectiveFrom;
+
+  // Validate amount/percent shape against the component's calculationMethod
+  // if either was supplied. If both are null/undefined and the row is
+  // FIXED_AMOUNT, the existing amount stays; if PERCENT, the existing
+  // percentBps stays.
+  const nextAmount = input.amount === undefined ? (row.amount?.toString() ?? null) : input.amount;
+  const nextPercentBps = input.percentBps === undefined ? (row.percentBps ?? null) : input.percentBps;
+  validateAssignmentInputs(
+    {
+      employeeId: row.employeeId,
+      componentId: row.componentId,
+      amount: nextAmount as string | null,
+      percentBps: nextPercentBps ?? null,
+      effectiveFrom: nextEffectiveFrom,
+    } as UpsertRecurringComponentInput,
+    row.component.calculationMethod as CalculationMethod,
+  );
+
+  const before = {
+    amount: row.amount?.toString() ?? null,
+    percentBps: row.percentBps ?? null,
+    effectiveFrom: row.effectiveFrom.toISOString(),
+    notes: row.notes,
+  };
+
+  await prisma.$transaction(async (tx) => {
+    // Re-check overlap under the new interval, excluding this row itself.
+    await assertNoOverlap(tx, {
+      clubId,
+      employeeId: row.employeeId,
+      componentId: row.componentId,
+      effectiveFrom: nextEffectiveFrom,
+      effectiveTo: null,
+      excludeAssignmentId: row.id,
+    });
+    await tx.employeeRecurringPayrollComponent.update({
+      where: { id: row.id },
+      data: {
+        amount: input.amount !== undefined
+          ? (input.amount != null ? String(input.amount) : null)
+          : undefined,
+        percentBps: input.percentBps !== undefined ? input.percentBps : undefined,
+        effectiveFrom: input.effectiveFrom !== undefined ? input.effectiveFrom : undefined,
+        notes: input.notes !== undefined ? input.notes : undefined,
+      },
+    });
+  });
+
+  await audit(principal, {
+    clubId,
+    action: "payroll.component.assign.correct",
+    entityType: ASSIGNMENT_ENTITY,
+    entityId: row.id,
+    before,
+    after: {
+      amount: input.amount !== undefined
+        ? (input.amount != null ? String(input.amount) : null)
+        : before.amount,
+      percentBps: input.percentBps !== undefined ? input.percentBps : before.percentBps,
+      effectiveFrom: nextEffectiveFrom.toISOString(),
+      notes: input.notes !== undefined ? input.notes : before.notes,
+      componentCode: row.component.code,
+    },
+  });
+
+  return { id: row.id };
+}
+
 export async function endRecurringComponentAssignment(
   principal: Principal, clubId: string, id: string, effectiveTo: Date,
 ) {

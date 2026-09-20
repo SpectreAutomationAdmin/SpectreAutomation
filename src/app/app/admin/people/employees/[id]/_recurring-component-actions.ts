@@ -15,6 +15,7 @@ import {
   createRecurringComponentAssignment,
   endRecurringComponentAssignment,
   changeRecurringComponentAssignment,
+  correctUnusedRecurringComponentAssignment,
 } from "@/lib/payroll/components-catalogue";
 import { isAppError, ValidationError } from "@/lib/errors";
 
@@ -90,6 +91,39 @@ export async function changeRecurringPayrollComponentAction(
     });
     revalidateProfile(employeeId);
     return { ok: true, id: r.successorId };
+  } catch (e) {
+    return toErr(e);
+  }
+}
+
+/**
+ * FPP-4A (2026-09-20) — Correct an UNUSED recurring assignment in place.
+ * Only fires the corresponding service; server enforces "never consumed"
+ * (zero snapshots), "still active", tenant, permission, and overlap.
+ */
+export async function correctRecurringPayrollComponentAction(
+  employeeId: string,
+  clubId: string,
+  assignmentId: string,
+  input: {
+    amount: string | null;
+    percentBps: number | null;
+    effectiveFrom: string; // YYYY-MM-DD
+    notes?: string | null;
+  },
+): Promise<Ok | Err> {
+  try {
+    const p = await requireAdmin();
+    const eff = new Date(input.effectiveFrom + "T00:00:00.000Z");
+    if (Number.isNaN(eff.getTime())) return { ok: false, error: "Effective date is invalid." };
+    const r = await correctUnusedRecurringComponentAssignment(p, clubId, assignmentId, {
+      amount: input.amount ?? null,
+      percentBps: input.percentBps ?? null,
+      effectiveFrom: eff,
+      notes: input.notes ?? null,
+    });
+    revalidateProfile(employeeId);
+    return { ok: true, id: r.id };
   } catch (e) {
     return toErr(e);
   }

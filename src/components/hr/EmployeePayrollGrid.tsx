@@ -68,6 +68,10 @@ export interface EmployeePayrollGridProps {
     effectiveFromIso: string;
     effectiveToIso: string | null;
     active: boolean;
+    /** FPP-4A — whether the assignment has already been consumed by a
+     *  PayrollBatchComponentSnapshot. Controls whether the row shows
+     *  Correct (unused) or Change (consumed). */
+    isConsumed?: boolean;
   }>;
   /**
    * Legacy fragment link used before FPP-3. Kept as optional fallback
@@ -100,6 +104,18 @@ export interface EmployeePayrollGridProps {
       employeeId: string,
       clubId: string,
       predecessorId: string,
+      input: {
+        amount: string | null;
+        percentBps: number | null;
+        effectiveFrom: string;
+        notes?: string | null;
+      },
+    ) => Promise<{ ok: true; id?: string } | { ok: false; error: string }>;
+    /** FPP-4A — correct an unused assignment in place. */
+    correctAction?: (
+      employeeId: string,
+      clubId: string,
+      assignmentId: string,
       input: {
         amount: string | null;
         percentBps: number | null;
@@ -390,8 +406,10 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
                                 effectiveFromIso: r.effectiveFromIso,
                                 effectiveToIso: r.effectiveToIso,
                                 active: r.active,
+                                isConsumed: r.isConsumed,
                               }}
                               changeAction={props.recurringAdd.changeAction}
+                              correctAction={props.recurringAdd.correctAction}
                               endAction={props.recurringAdd.endAction}
                             />
                           </td>
