@@ -546,6 +546,22 @@ function MoneyRow({
   );
 }
 
+// FPP-2 (2026-09-20) — short labels used in the compact card grid.
+// The catalogue's full displayName remains authoritative for the
+// component itself; this map only affects rendering inside the
+// workspace's dense per-card row list where a slightly shorter label
+// gives every canonical component one-line legibility at 1440x900.
+const SHORT_LABELS: Record<string, string> = {
+  LTD: "Long Term Disability (LTD)",
+  HEALTH_DENTAL: "Health & Dental",
+  DEPENDENT_LIFE_INSURANCE: "Dependent Life",
+  LIFE_INSURANCE: "Life Insurance",
+  AD_D: "AD&D",
+  CELL_PHONE_ALLOWANCE: "Cell Phone Allowance",
+  RRSP_EE: "RRSP — Employee",
+  RRSP_ER: "RRSP — Employer",
+};
+
 function ComponentRow({
   slot, disabled,
 }: {
@@ -556,10 +572,11 @@ function ComponentRow({
   disabled: boolean;
 }) {
   const hasId = slot.componentId !== "";
+  const label = SHORT_LABELS[slot.code] ?? slot.displayName;
   return (
     <label className="fpp2-ytd-row" data-testid={`opening-ytd-component-${slot.code}-row`}>
       <span className="fpp2-ytd-row-label">
-        {slot.displayName}
+        {label}
         {!slot.active ? <span className="fpp2-ytd-inactive">inactive</span> : null}
       </span>
       {hasId ? (
