@@ -516,6 +516,11 @@ export default async function EmployeeProfilePage({
 
   // FPP-1 — per-Component opening rows for whichever balance we have,
   // and the Club's PayrollComponent catalogue for the "add" picker.
+  console.log("[FPP1-DEBUG] editableOpeningBalance AFTER assignment:", {
+    isNull: editableOpeningBalance == null,
+    status: editableOpeningBalance?.status ?? null,
+    id: editableOpeningBalance?.id ?? null,
+  });
   const [openingComponentRows, openingComponentCatalogue] = await Promise.all([
     editableOpeningBalance && canReadPayrollRecurring
       ? listOpeningComponentBalances(principal, profile.clubId, editableOpeningBalance.id).catch(() => [])

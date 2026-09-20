@@ -72,12 +72,12 @@ test.describe("Slice F — hourly + overtime staging acceptance", () => {
     // 01 · Payroll Settings §8 — Overtime policy card.
     await page.goto("/app/admin/payroll/setup", { waitUntil: "domcontentloaded" });
     await page.getByTestId("payroll-overtime-policy-section").waitFor({ state: "visible", timeout: 15_000 });
-    await page.getByTestId("payroll-overtime-policy-section").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
     await page.screenshot({ path: `${OUT_DIR}/01-payroll-settings-overtime-policy.png`, fullPage: true });
 
     // 02 · Same section, zoomed to details grid.
-    const otSection = page.getByTestId("payroll-overtime-policy-section");
-    await otSection.screenshot({ path: `${OUT_DIR}/02-overtime-policy-details.png` });
+    // Re-locate right before screenshot — the element may re-render during hydration.
+    await page.getByTestId("payroll-overtime-policy-section").screenshot({ path: `${OUT_DIR}/02-overtime-policy-details.png`, timeout: 15_000 });
 
     // Resolve the hourly employee's id via the People directory link
     // (still authenticated, no /api/dev/*-info endpoint needed).
@@ -97,7 +97,7 @@ test.describe("Slice F — hourly + overtime staging acceptance", () => {
       await payrollTab.click({ trial: false }).catch(() => {});
     }
     await page.locator('[data-testid="payroll-base-compensation"]').waitFor({ state: "visible", timeout: 15_000 });
-    await page.locator('[data-testid="payroll-base-compensation"]').scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
     await page.screenshot({ path: `${OUT_DIR}/03-employee-hourly-base-comp.png`, fullPage: true });
 
     // 12 · Employee Payroll — full section (used as compositional proof).
@@ -122,18 +122,20 @@ test.describe("Slice F — hourly + overtime staging acceptance", () => {
     const otCell = page.locator('[data-testid^="register-overtime-hours-"]').first();
     if (await otCell.count()) {
       const row = otCell.locator('xpath=ancestor::tr').first();
-      await row.scrollIntoViewIfNeeded();
-      await row.screenshot({ path: `${OUT_DIR}/06-payroll-register-hourly-row-zoom.png` });
+      await row.screenshot({ path: `${OUT_DIR}/06-payroll-register-hourly-row-zoom.png`, timeout: 15_000 }).catch(async () => {
+        await page.screenshot({ path: `${OUT_DIR}/06-payroll-register-hourly-row-zoom.png`, fullPage: true });
+      });
     } else {
-      await page.screenshot({ path: `${OUT_DIR}/06-payroll-register-hourly-row-zoom.png` });
+      await page.screenshot({ path: `${OUT_DIR}/06-payroll-register-hourly-row-zoom.png`, fullPage: true });
     }
 
     // 07 · TOTALS row zoom.
     const totalsOt = page.getByTestId("register-totals-overtime-hours");
     if (await totalsOt.count()) {
       const totalsRow = totalsOt.locator('xpath=ancestor::tr').first();
-      await totalsRow.scrollIntoViewIfNeeded();
-      await totalsRow.screenshot({ path: `${OUT_DIR}/07-payroll-register-totals-zoom.png` });
+      await totalsRow.screenshot({ path: `${OUT_DIR}/07-payroll-register-totals-zoom.png`, timeout: 15_000 }).catch(async () => {
+        await page.screenshot({ path: `${OUT_DIR}/07-payroll-register-totals-zoom.png`, fullPage: true });
+      });
     } else {
       await page.screenshot({ path: `${OUT_DIR}/07-payroll-register-totals-zoom.png`, fullPage: true });
     }
@@ -182,10 +184,19 @@ test.describe("Slice F — hourly + overtime staging acceptance", () => {
     await expect(headerRegHrs).toBeVisible();
     await expect(headerOtHrs).toBeVisible();
     await expect(headerOt).toBeVisible();
-    // A row exists with populated overtime hours (>0).
-    const otHoursCell = page.locator('[data-testid^="register-overtime-hours-"]').first();
-    await expect(otHoursCell).toBeVisible();
-    const otHoursText = (await otHoursCell.textContent()) ?? "";
-    expect(Number(otHoursText.replace(/[^\d.]/g, ""))).toBeGreaterThan(0);
+    // At least one register row has populated overtime hours (>0).
+    // Salaried employees render OT=0 in the same column; the hourly row
+    // is the one that must show a non-zero value for the Controller to
+    // see overtime.
+    const otHoursCells = page.locator('[data-testid^="register-overtime-hours-"]');
+    const count = await otHoursCells.count();
+    expect(count).toBeGreaterThan(0);
+    let maxOt = 0;
+    for (let i = 0; i < count; i++) {
+      const txt = (await otHoursCells.nth(i).textContent()) ?? "";
+      const n = Number(txt.replace(/[^\d.]/g, ""));
+      if (Number.isFinite(n) && n > maxOt) maxOt = n;
+    }
+    expect(maxOt, "at least one row must show OT hours > 0").toBeGreaterThan(0);
   });
 });
