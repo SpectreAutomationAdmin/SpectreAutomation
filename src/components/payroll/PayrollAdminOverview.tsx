@@ -1499,16 +1499,23 @@ function EmployeeDataReviewBanner({ attestation, action, payPeriodId, payGroupId
   payGroupId: string;
   batchId: string;
 }) {
-  // FPP-4D (2026-09-20) — three-state banner:
-  //   * firstPrepareBaseline: attestation == null → data frozen at
-  //     Prepare, no explicit review required. Green, no button.
-  //   * reviewed: attestation.isCurrent → explicitly attested. Green,
+  // FPP-4D (2026-09-20) — three-state banner. The server's
+  // reviewAttestations array always contains one row per dimension;
+  // `attestedAt == null` on a not-current row is the true first-Prepare
+  // baseline (no attestation row exists in the DB). A stale row has
+  // attestedAt != null AND isCurrent === false.
+  //   * firstPrepareBaseline: attestation missing OR attestedAt null &
+  //     !isCurrent → data frozen at Prepare, no explicit review
+  //     required. Green, no button.
+  //   * reviewed: isCurrent === true → explicitly attested. Green,
   //     no button.
-  //   * stale: attestation != null && !isCurrent → source facts changed
+  //   * stale: attestedAt != null && !isCurrent → source facts changed
   //     via Return-to-Preparation. Amber, Mark Reviewed button.
-  const firstPrepareBaseline = attestation == null;
+  const firstPrepareBaseline =
+    attestation == null || (attestation.attestedAt == null && !attestation.isCurrent);
   const isReviewedByAttestation = attestation != null && attestation.isCurrent === true;
-  const isStale = attestation != null && !attestation.isCurrent;
+  const isStale =
+    attestation != null && attestation.attestedAt != null && !attestation.isCurrent;
   const isOk = firstPrepareBaseline || isReviewedByAttestation;
   const detail = isReviewedByAttestation
     ? (attestation!.attestedByDisplayName
