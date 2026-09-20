@@ -40,6 +40,25 @@ export interface PayrollOverviewPayGroupRef {
   id: string;
   name: string;
   frequencyLabel: string;
+  /** FPP-4C (2026-09-20) — surfaces the underlying pay-group code so
+   *  the UI header can render an unambiguous identity. */
+  code?: string;
+  /** FPP-4C — true when the pay group is INACTIVE. Non-null means the
+   *  URL requested a stale/archived group; the workspace should surface
+   *  a "resume actionable payroll" advisory rather than silently
+   *  showing archived periods. */
+  inactive?: boolean;
+}
+
+/** FPP-4C (2026-09-20) — available active pay groups exposed to the
+ *  workspace header so the founder can switch groups without editing
+ *  the URL directly. */
+export interface PayrollOverviewPayGroupOption {
+  id: string;
+  code: string;
+  name: string;
+  frequencyLabel: string;
+  active: boolean;
 }
 export interface PayrollOverviewPayPeriodRef {
   id: string;
@@ -288,6 +307,10 @@ export type PayrollOverviewTab =
 export interface PayrollOverviewViewModel {
   // context
   payGroup: PayrollOverviewPayGroupRef | null;
+  /** FPP-4C (2026-09-20) — all active pay groups for this Club, sorted
+   *  by code. Empty when only inactive groups exist. Enables the
+   *  workspace header selector. */
+  availablePayGroups: PayrollOverviewPayGroupOption[];
   payPeriod: PayrollOverviewPayPeriodRef | null;
   availablePayPeriods: PayrollOverviewPayPeriodRef[];
   batch: PayrollOverviewBatchRef | null;
@@ -542,15 +565,46 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const pageSize: PayrollOverviewPageSize = normalizePageSize(input.pageSize ?? null);
   const activeTab: PayrollOverviewTab = normalizeTab(input.tab ?? null);
 
-  // Resolve default pay group.
+  // FPP-4C (2026-09-20) — deterministic pay-group selection.
+  //
+  // The pre-hotfix rule (activePayGroups[0] ?? payGroups[0]) had two
+  // failure modes:
+  //   1. Fell back to an INACTIVE group when no active existed —
+  //      silently exposing an archived calendar.
+  //   2. Ordered by `listPayGroups`'s own createdAt-asc sort — not
+  //      the alphabetical order the operator sees in setup.
+  //
+  // Post-hotfix:
+  //   * activePayGroups is sorted by code (asc) so the default is
+  //     deterministic and matches the setup ordering.
+  //   * An explicit URL payGroupId still wins (§4 explicit-URL rule),
+  //     but the returned view flags `inactive: true` when the URL
+  //     resolves to an archived group so the workspace can advise the
+  //     operator instead of silently rendering the wrong calendar.
+  //   * When no explicit URL is set, we ONLY select an active group.
+  //     If no active group exists, the view returns empty rather than
+  //     surfacing an archived one.
   const payGroups = await listPayGroups(principal, clubId);
-  const activePayGroups = payGroups.filter((g) => g.active);
-  const chosenPayGroup =
-    (input.payGroupId && payGroups.find((g) => g.id === input.payGroupId)) ||
-    (activePayGroups[0] ?? payGroups[0] ?? null);
+  const activePayGroups = payGroups
+    .filter((g) => g.active)
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const explicit = input.payGroupId
+    ? payGroups.find((g) => g.id === input.payGroupId) ?? null
+    : null;
+  const chosenPayGroup = explicit ?? activePayGroups[0] ?? null;
+
+  const availablePayGroups: PayrollOverviewPayGroupOption[] = activePayGroups.map((g) => ({
+    id: g.id,
+    code: g.code,
+    name: g.name,
+    frequencyLabel: frequencyLabel(
+      (g as { payFrequency?: string }).payFrequency ?? "",
+    ),
+    active: true,
+  }));
 
   if (!chosenPayGroup) {
-    return emptyOverview(filter, page, pageSize);
+    return { ...emptyOverview(filter, page, pageSize), availablePayGroups };
   }
 
   // Load pay periods for chosen pay group across this + last tax year.
@@ -693,12 +747,15 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const payGroupRef: PayrollOverviewPayGroupRef = {
     id: chosenPayGroup.id,
     name: chosenPayGroup.name,
+    code: chosenPayGroup.code,
     frequencyLabel: frequencyLabel((chosenPayGroup as { payFrequency?: string }).payFrequency ?? ""),
+    inactive: chosenPayGroup.active === false,
   };
 
   if (!chosenPeriod) {
     return {
       payGroup: payGroupRef,
+      availablePayGroups,
       payPeriod: null,
       availablePayPeriods,
       batch: null,
@@ -786,6 +843,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     };
     return {
       payGroup: payGroupRef,
+      availablePayGroups,
       payPeriod: chosenPeriod,
       availablePayPeriods,
       batch: null,
@@ -1609,6 +1667,7 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
 
   return {
     payGroup: payGroupRef,
+    availablePayGroups,
     payPeriod: chosenPeriod,
     availablePayPeriods,
     batch: batchRef,
@@ -1692,7 +1751,7 @@ function emptyEmployeeTable(page: number, pageSize: PayrollOverviewPageSize = DE
 }
 function emptyOverview(filter: PayrollOverviewFilterState, page: number, pageSize: PayrollOverviewPageSize = DEFAULT_PAGE_SIZE as PayrollOverviewPageSize): PayrollOverviewViewModel {
   return {
-    payGroup: null, payPeriod: null, availablePayPeriods: [],
+    payGroup: null, availablePayGroups: [], payPeriod: null, availablePayPeriods: [],
     batch: null, hasBatch: false,
     kpi: emptyKpi(), employeeTable: emptyEmployeeTable(page, pageSize),
     workflow: baseWorkflow(),

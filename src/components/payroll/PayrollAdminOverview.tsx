@@ -240,7 +240,13 @@ function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: Pr
               {badgeText}
             </span>
           </div>
-          <div className="mt-2 text-[13px] text-stone-600 flex items-center gap-8">
+          <div className="mt-2 text-[13px] text-stone-600 flex items-center gap-8 flex-wrap">
+            <span data-testid="payroll-admin-pay-group-line">
+              <span className="font-semibold text-stone-700">Pay Group:</span>&nbsp;
+              {view.payGroup
+                ? `${view.payGroup.code ?? view.payGroup.name} · ${view.payGroup.frequencyLabel}`
+                : "—"}
+            </span>
             <span data-testid="payroll-admin-period-line">
               <span className="font-semibold text-stone-700">Period:</span>&nbsp;
               {view.payPeriod ? periodLongLabel(view.payPeriod) : "—"}
@@ -250,14 +256,28 @@ function Header({ view, prepare }: { view: PayrollOverviewViewModel; prepare: Pr
               {view.payPeriod ? payDateLongLabel(view.payPeriod) : "—"}
             </span>
           </div>
+          {view.payGroup?.inactive ? (
+            <div
+              className="mt-2 inline-block rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-800"
+              role="alert"
+              data-testid="payroll-admin-inactive-pay-group-warning"
+            >
+              This pay group is <strong>archived / inactive</strong>. Its calendar is
+              read-only and cannot accept new payrolls. Switch to an active pay group
+              to prepare payroll.
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
-          {prepare && prepare.canPrepare && !view.hasBatch && view.payPeriod ? (
+          {prepare && prepare.canPrepare && !view.hasBatch && view.payPeriod && !view.payGroup?.inactive ? (
             <form action={prepare.action}>
               <input type="hidden" name="payPeriodId" value={view.payPeriod.id} />
               <input type="hidden" name="payGroupId" value={view.payGroup?.id ?? ""} />
               <PrepareSubmitButton />
             </form>
+          ) : null}
+          {(view.availablePayGroups?.length ?? 0) > 1 || view.payGroup?.inactive ? (
+            <PayGroupPicker view={view} />
           ) : null}
           <ChangePeriodPicker view={view} />
           {/* Payroll/HR Integration hotfix (2026-09-14) §11 — canonical
@@ -317,6 +337,56 @@ function badgeToneFor(status: string | null): string {
 /* ============================================================
    Change Period — URL-driven navigation, no mutation.
    ============================================================ */
+// FPP-4C (2026-09-20) — pay-group selector rendered next to the period
+// picker when more than one active pay group exists (or when the URL
+// resolved to an inactive one). Switching pay groups clears the
+// payPeriodId so the resume algorithm re-picks a period from the new
+// group's calendar, and clears filter/pagination — cross-group state
+// leakage is explicitly wiped.
+function PayGroupPicker({ view }: { view: PayrollOverviewViewModel }) {
+  const router = useRouter();
+  const pathname = usePathname() ?? "/app/admin/payroll";
+  const params = useSearchParams();
+  const options = view.availablePayGroups ?? [];
+  const inactiveSelected = view.payGroup?.inactive === true;
+  function selectGroup(id: string) {
+    const p = new URLSearchParams(params?.toString() ?? "");
+    p.set("payGroupId", id);
+    ["payPeriodId", "q", "department", "employmentType", "status", "page"].forEach((k) => p.delete(k));
+    router.push(`${pathname}?${p.toString()}`);
+  }
+  return (
+    <div className="relative">
+      <label className="sr-only" htmlFor="payroll-admin-pay-group-select">Pay Group</label>
+      <select
+        id="payroll-admin-pay-group-select"
+        data-testid="payroll-admin-change-pay-group"
+        className={`appearance-none inline-flex items-center gap-2 rounded-md border ${
+          inactiveSelected ? "border-amber-300 bg-amber-50" : "border-stone-200 bg-white"
+        } pl-9 pr-8 py-2 text-[13px] text-stone-700 hover:bg-stone-50 min-w-[220px]`}
+        value={view.payGroup?.id ?? ""}
+        onChange={(e) => selectGroup(e.target.value)}
+      >
+        {inactiveSelected && view.payGroup ? (
+          <option value={view.payGroup.id} disabled>
+            {view.payGroup.code ?? view.payGroup.name} · ARCHIVED
+          </option>
+        ) : null}
+        {options.length === 0 ? (
+          <option value="">No active pay group</option>
+        ) : null}
+        {options.map((g) => (
+          <option key={g.id} value={g.id}>
+            {g.code} · {g.frequencyLabel}
+          </option>
+        ))}
+      </select>
+      <UsersRoundIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-500 pointer-events-none" />
+      <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-stone-400 pointer-events-none" />
+    </div>
+  );
+}
+
 function ChangePeriodPicker({ view }: { view: PayrollOverviewViewModel }) {
   const router = useRouter();
   const pathname = usePathname() ?? "/app/admin/payroll";
