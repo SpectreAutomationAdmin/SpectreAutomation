@@ -1395,7 +1395,26 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
   const employeeDataAttestation = reviewStatus.find((r) => r.dimension === "EMPLOYEE_DATA")?.attestation ?? null;
   const oneTimeReviewed        = oneTimeAttestation?.isCurrent === true;
   const recurringReviewed      = recurringAttestation?.isCurrent === true;
-  const employeeDataReviewed   = employeeDataAttestation?.isCurrent === true;
+  // FPP-4D (2026-09-20) — FIRST-PREPARE baseline is implicitly reviewed.
+  //
+  // Payroll-3D freezes sourceFactsJson + salaried + approvedHoursSnapshot
+  // at Prepare and the EMPLOYEE_DATA fingerprint is computed over exactly
+  // those frozen fields. Because they cannot change on a PREPARED batch
+  // (only Return-to-Preparation → re-Prepare can change them, which then
+  // invalidates any prior attestation), there is nothing to review on
+  // first Prepare that the freeze has not already captured. Requiring a
+  // manual attestation for a baseline that the system just produced is
+  // ceremonial, not a control.
+  //
+  // Semantic: EMPLOYEE_DATA is CURRENT unless a stale attestation exists
+  // (attestation != null && !isCurrent) — i.e. a prior review that a
+  // Return-to-Preparation has invalidated. A missing attestation on a
+  // PREPARED batch is the first-Prepare baseline and needs no explicit
+  // sign-off.
+  const employeeDataReviewed   = employeeDataAttestation == null
+    ? true
+    : employeeDataAttestation.isCurrent === true;
+  const employeeDataFirstPrepareBaseline = employeeDataAttestation == null;
   const batchEmployeeCount     = batchEmployees.length;
 
   const fmtAttested = (a: NonNullable<typeof oneTimeAttestation>): string => {
@@ -1430,11 +1449,13 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     done: batchEmployeeCount === 0 || employeeDataReviewed,
     detail: batchEmployeeCount === 0
       ? "No employees in batch"
-      : (employeeDataReviewed
-          ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · ${fmtAttested(employeeDataAttestation!)}`
-          : (employeeDataAttestation
-              ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · review required — data changed since review`
-              : `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · review required`)),
+      : (employeeDataFirstPrepareBaseline
+          // FPP-4D — first-Prepare baseline. Data is frozen at Prepare;
+          // no explicit review required.
+          ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · frozen at Prepare`
+          : (employeeDataReviewed
+              ? `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · ${fmtAttested(employeeDataAttestation!)}`
+              : `${batchEmployeeCount} employee${batchEmployeeCount === 1 ? "" : "s"} · review required — data changed since review`)),
   };
 
   const batchAcceptsAdjustments = activeBatch.status === "PREPARED";

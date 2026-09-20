@@ -428,8 +428,18 @@ function KpiStrip({ view }: { view: PayrollOverviewViewModel }) {
     ? "No batch prepared"
     : `${k.hourlyCount ?? 0} hourly · ${k.salaryCount ?? 0} salary`;
   const adjValue = k.adjustmentsCount == null ? "—" : String(k.adjustmentsCount);
-  const excValue = k.exceptionsCount == null ? "—" : String(k.exceptionsCount);
-  const excIsZero = k.exceptionsCount === 0;
+  // FPP-4D (2026-09-20) — severity-aware KPI:
+  //   * Value shows blocker count (the only actionable severity that
+  //     blocks Calculate).
+  //   * Sub-line shows the full breakdown (blockers · warnings ·
+  //     info) so the operator still sees informational exclusions.
+  //   * Colour red ONLY when blockers > 0. Zero blockers = neutral
+  //     even if warnings/info exist.
+  const blockerCount = k.exceptionsBlockerCount ?? 0;
+  const warningCount = k.exceptionsWarningCount ?? 0;
+  const infoCount    = k.exceptionsInfoCount ?? 0;
+  const excValue = k.exceptionsCount == null ? "—" : String(blockerCount);
+  const excIsZero = k.exceptionsCount === 0 || blockerCount === 0;
   return (
     <section className="px-8 mt-1.5 grid grid-cols-5 gap-4" data-testid="payroll-admin-kpi-strip">
       <KpiCard icon={<UsersRoundIcon className="h-7 w-7" />} iconColor="text-[#3f7042]"
@@ -450,18 +460,22 @@ function KpiStrip({ view }: { view: PayrollOverviewViewModel }) {
         testId="payroll-admin-kpi-adjustments" />
       <KpiCard icon={<AlertTriangleIcon className="h-7 w-7" />}
         iconColor={k.exceptionsCount == null ? "text-stone-400" : (excIsZero ? "text-stone-400" : "text-[#dc2626]")}
-        label="Exceptions" value={excValue}
+        label={blockerCount > 0 ? "Blockers" : "Exceptions"} value={excValue}
         valueColor={k.exceptionsCount == null || excIsZero ? "text-stone-500" : "text-[#dc2626]"}
         subEl={k.exceptionsCount == null
           ? <span className="text-stone-400 text-[11.5px]">No batch prepared</span>
-          : excIsZero
+          : (blockerCount === 0 && warningCount === 0 && infoCount === 0)
             ? <span className="text-stone-500 text-[11.5px]">No open exceptions</span>
             : (
               <span className="inline-flex items-center gap-3">
-                <span className="text-[#dc2626] text-[11.5px]" data-testid="payroll-admin-kpi-exceptions-breakdown">
-                  {(k.exceptionsBlockerCount ?? 0)} blocker{(k.exceptionsBlockerCount ?? 0) === 1 ? "" : "s"}
+                <span
+                  className={blockerCount > 0 ? "text-[#dc2626] text-[11.5px]" : "text-stone-600 text-[11.5px]"}
+                  data-testid="payroll-admin-kpi-exceptions-breakdown"
+                >
+                  {blockerCount} blocker{blockerCount === 1 ? "" : "s"}
                   {" · "}
-                  {(k.exceptionsWarningCount ?? 0)} warning{(k.exceptionsWarningCount ?? 0) === 1 ? "" : "s"}
+                  {warningCount} warning{warningCount === 1 ? "" : "s"}
+                  {infoCount > 0 ? ` · ${infoCount} info` : ""}
                 </span>
                 <ExceptionsKpiViewLink />
               </span>
@@ -1485,36 +1499,45 @@ function EmployeeDataReviewBanner({ attestation, action, payPeriodId, payGroupId
   payGroupId: string;
   batchId: string;
 }) {
-  const isReviewed = attestation?.isCurrent === true;
+  // FPP-4D (2026-09-20) — three-state banner:
+  //   * firstPrepareBaseline: attestation == null → data frozen at
+  //     Prepare, no explicit review required. Green, no button.
+  //   * reviewed: attestation.isCurrent → explicitly attested. Green,
+  //     no button.
+  //   * stale: attestation != null && !isCurrent → source facts changed
+  //     via Return-to-Preparation. Amber, Mark Reviewed button.
+  const firstPrepareBaseline = attestation == null;
+  const isReviewedByAttestation = attestation != null && attestation.isCurrent === true;
   const isStale = attestation != null && !attestation.isCurrent;
-  const detail = isReviewed
+  const isOk = firstPrepareBaseline || isReviewedByAttestation;
+  const detail = isReviewedByAttestation
     ? (attestation!.attestedByDisplayName
         ? `Reviewed by ${attestation!.attestedByDisplayName} at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}`
         : `Reviewed at ${new Date(attestation!.attestedAt!).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}`)
     : (isStale
         ? "Review required — data changed since review"
-        : "Review employee inputs before calculating.");
+        : "Data frozen at Prepare · no explicit review required");
   return (
     <div
       className={
         "px-6 py-2.5 flex items-center justify-between gap-3 border-b border-stone-100 " +
-        (isReviewed ? "bg-[#f0fdf4]" : "bg-[#fffbeb]")
+        (isOk ? "bg-[#f0fdf4]" : "bg-[#fffbeb]")
       }
       data-testid="payroll-admin-employee-data-review-banner"
-      data-state={isReviewed ? "reviewed" : "review-required"}
+      data-state={firstPrepareBaseline ? "frozen-baseline" : (isReviewedByAttestation ? "reviewed" : "review-required")}
     >
       <div className="flex items-center gap-3">
-        {isReviewed
+        {isOk
           ? <CheckCircleIcon className="h-4 w-4 text-[#166534]" />
           : <AlertTriangleIcon className="h-4 w-4 text-[#92400e]" />}
         <div>
           <p className="text-[12.5px] font-semibold text-stone-800">
-            Employee Data · {isReviewed ? "Reviewed" : "Review required"}
+            Employee Data · {firstPrepareBaseline ? "Frozen at Prepare" : (isReviewedByAttestation ? "Reviewed" : "Review required")}
           </p>
           <p className="text-[11.5px] text-stone-500">{detail}</p>
         </div>
       </div>
-      {!isReviewed ? (
+      {isStale ? (
         <MarkReviewedButton
           action={action}
           payPeriodId={payPeriodId}
