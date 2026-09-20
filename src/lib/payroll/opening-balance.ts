@@ -194,6 +194,50 @@ async function assertTenantEmployee(clubId: string, employeeId: string): Promise
   if (!emp) throw new ValidationError([{ path: "employeeId", message: "Employee does not belong to this Club." }]);
 }
 
+/**
+ * FPP-1 (2026-09-20) — mid-year cutover invariant.
+ *
+ * When the Club is in MID_YEAR_MIGRATION mode for `taxYear`, the
+ * opening balance's `throughPayDate` MUST be strictly less than the
+ * declared `firstSpectrePayDate`. `throughPayDate === firstSpectrePayDate`
+ * would double-count the first Spectre payroll (once as history, once as
+ * a POSTED batch). `throughPayDate > firstSpectrePayDate` would either
+ * bury a real Spectre-generated batch inside the "history" bucket or
+ * silently skip it in the aggregator's window.
+ *
+ * Enforced server-side on both draft creation and activation so the
+ * UI cannot bypass by editing values then jumping straight to Activate.
+ * ZERO_OPENING_YTD and clubs with no declaration are exempt (a Club
+ * with no declaration is by definition not in mid-year cutover).
+ */
+async function assertThroughPayDateBeforeFirstSpectrePayDate(
+  clubId: string,
+  taxYear: number,
+  throughPayDate: Date,
+): Promise<void> {
+  const decl = await prisma.payrollImplementationDeclaration.findUnique({
+    where: { clubId_taxYear: { clubId, taxYear } },
+    select: { mode: true, firstSpectrePayDate: true },
+  });
+  if (!decl) return;
+  if (decl.mode !== "MID_YEAR_MIGRATION") return;
+  if (!decl.firstSpectrePayDate) return;
+  const cutover = new Date(throughPayDate);
+  const firstPay = new Date(decl.firstSpectrePayDate);
+  cutover.setUTCHours(0, 0, 0, 0);
+  firstPay.setUTCHours(0, 0, 0, 0);
+  if (cutover.getTime() >= firstPay.getTime()) {
+    throw new ValidationError([
+      {
+        path: "throughPayDate",
+        message:
+          `throughPayDate (${cutover.toISOString().slice(0, 10)}) must be strictly BEFORE the Club's first Spectre pay date (${firstPay.toISOString().slice(0, 10)}). ` +
+          `Enter balances accumulated through the final payroll BEFORE Spectre's first payroll — do not include the first Spectre pay run in the opening YTD.`,
+      },
+    ]);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Draft (import / manual)
 // ---------------------------------------------------------------------------
@@ -255,6 +299,8 @@ export async function createDraftOpeningBalance(
       },
     ]);
   }
+  // FPP-1 (2026-09-20) — mid-year cutover invariant.
+  await assertThroughPayDateBeforeFirstSpectrePayDate(clubId, input.taxYear, input.throughPayDate);
 
   const priorPayrollKind: PriorPayrollKind = input.priorPayrollKind ?? "PRIOR_SYSTEM_SAME_EMPLOYER";
   if (!PRIOR_PAYROLL_KINDS.includes(priorPayrollKind)) {
@@ -347,6 +393,12 @@ export async function validateOpeningBalance(
   if (row.status !== "DRAFT") {
     throw new ValidationError([{ path: "status", message: `Cannot validate; status is ${row.status}.` }]);
   }
+  // FPP-1 (2026-09-20) — re-check mid-year cutover invariant in case
+  // the declaration's firstSpectrePayDate has shifted since the draft
+  // was written.
+  if (row.throughPayDate) {
+    await assertThroughPayDateBeforeFirstSpectrePayDate(clubId, row.taxYear, row.throughPayDate);
+  }
   assertValidNumerics({
     ytdGrossEarnings: row.ytdGrossEarnings.toString(),
     ytdTaxableEarnings: row.ytdTaxableEarnings.toString(),
@@ -396,6 +448,11 @@ export async function activateOpeningBalance(
   if (!row) throw new NotFoundError(ENTITY, id);
   if (row.status !== "VALIDATED" && row.status !== "DRAFT") {
     throw new ValidationError([{ path: "status", message: `Cannot activate; status is ${row.status}.` }]);
+  }
+  // FPP-1 (2026-09-20) — mid-year cutover invariant. Recheck at activation
+  // so a draft cannot slip through when the declaration was tightened.
+  if (row.throughPayDate) {
+    await assertThroughPayDateBeforeFirstSpectrePayDate(clubId, row.taxYear, row.throughPayDate);
   }
 
   const result = await prisma.$transaction(async (tx) => {

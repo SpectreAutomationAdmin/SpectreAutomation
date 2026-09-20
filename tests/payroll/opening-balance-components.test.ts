@@ -229,6 +229,84 @@ describe("FPP-1 — PayrollOpeningBalanceComponent CRUD", () => {
     expect(row?.componentCode).toBe("CELL_PHONE_TB");
   });
 
+  it("throughPayDate strictly BEFORE firstSpectrePayDate is allowed (Aug 31 vs Sep 15)", async () => {
+    const s = await scenario();
+    // Declare the Club in MID_YEAR_MIGRATION with firstSpectrePayDate = Sep 15.
+    await db().payrollImplementationDeclaration.create({
+      data: {
+        clubId: s.clubA.id, taxYear: 2026, mode: "MID_YEAR_MIGRATION",
+        firstSpectrePayDate: d(2026, 9, 15),
+        confirmedAt: new Date(),
+      },
+    });
+    const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
+      employeeId: s.emp.id, taxYear: 2026,
+      throughPayDate: d(2026, 8, 31), // strictly before Sep 15 — allowed
+      values: zeroValues,
+    });
+    expect(draft.status).toBe("DRAFT");
+  });
+
+  it("throughPayDate === firstSpectrePayDate is BLOCKED (double-count risk)", async () => {
+    const s = await scenario();
+    await db().payrollImplementationDeclaration.create({
+      data: {
+        clubId: s.clubA.id, taxYear: 2026, mode: "MID_YEAR_MIGRATION",
+        firstSpectrePayDate: d(2026, 9, 15),
+        confirmedAt: new Date(),
+      },
+    });
+    await expect(
+      createDraftOpeningBalance(s.paP, s.clubA.id, {
+        employeeId: s.emp.id, taxYear: 2026,
+        throughPayDate: d(2026, 9, 15), // equal — refused
+        values: zeroValues,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("throughPayDate AFTER firstSpectrePayDate is BLOCKED", async () => {
+    const s = await scenario();
+    await db().payrollImplementationDeclaration.create({
+      data: {
+        clubId: s.clubA.id, taxYear: 2026, mode: "MID_YEAR_MIGRATION",
+        firstSpectrePayDate: d(2026, 9, 15),
+        confirmedAt: new Date(),
+      },
+    });
+    await expect(
+      createDraftOpeningBalance(s.paP, s.clubA.id, {
+        employeeId: s.emp.id, taxYear: 2026,
+        throughPayDate: d(2026, 9, 30), // strictly after — refused
+        values: zeroValues,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("activateOpeningBalance re-checks the mid-year cutover invariant", async () => {
+    const s = await scenario();
+    // Declare Sep 30 first — draft Aug 31 (valid).
+    await db().payrollImplementationDeclaration.create({
+      data: {
+        clubId: s.clubA.id, taxYear: 2026, mode: "MID_YEAR_MIGRATION",
+        firstSpectrePayDate: d(2026, 9, 30),
+        confirmedAt: new Date(),
+      },
+    });
+    const draft = await createDraftOpeningBalance(s.paP, s.clubA.id, {
+      employeeId: s.emp.id, taxYear: 2026,
+      throughPayDate: d(2026, 8, 31), values: zeroValues,
+    });
+    // Founder tightens the declaration to Aug 15 (before the draft's cutover).
+    await db().payrollImplementationDeclaration.update({
+      where: { clubId_taxYear: { clubId: s.clubA.id, taxYear: 2026 } },
+      data: { firstSpectrePayDate: d(2026, 8, 15) },
+    });
+    await expect(
+      activateOpeningBalance(s.paP, s.clubA.id, draft.id),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
   it("aggregator returns ZERO opening for PRIOR_EMPLOYER (§3B-5B-1b)", async () => {
     const s = await scenario();
     const c = await seedComponent(s.clubA.id, {

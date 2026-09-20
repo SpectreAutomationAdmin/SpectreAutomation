@@ -1105,7 +1105,7 @@ export default async function EmployeeProfilePage({
                   }
                 : null
             }
-            viewYtdDetailsHref={`/app/admin/payroll/history?employeeId=${profile.id}`}
+            viewYtdDetailsHref={`/app/admin/people/employees/${profile.id}/ytd-detail`}
             payrollSettingsHref="/app/admin/payroll/setup"
           />
         ) : undefined

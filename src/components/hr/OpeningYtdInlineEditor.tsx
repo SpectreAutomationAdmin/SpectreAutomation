@@ -107,10 +107,19 @@ export default function OpeningYtdInlineEditor(props: OpeningYtdInlineEditorProp
   const pill = statusPill(props.status);
   const canEdit = props.canWrite && props.status !== "ACTIVE" && props.status !== "SUPERSEDED";
 
-  // Prefill through-pay-date: use existing, else fall back to first Spectre pay date minus 1 day.
+  // Prefill through-pay-date. Per §2 mid-year cutover invariant, must be
+  // STRICTLY less than firstSpectrePayDate — never equal. When we can, we
+  // prefill firstSpectrePayDate minus one day so the founder sees a valid
+  // default.
   const defaultThrough = props.throughPayDateIso
     ? props.throughPayDateIso.slice(0, 10)
-    : (props.firstSpectrePayDateIso ? props.firstSpectrePayDateIso.slice(0, 10) : "");
+    : (props.firstSpectrePayDateIso
+        ? (() => {
+            const d = new Date(props.firstSpectrePayDateIso);
+            d.setUTCDate(d.getUTCDate() - 1);
+            return d.toISOString().slice(0, 10);
+          })()
+        : "");
 
   return (
     <div data-testid="opening-ytd-inline-editor">
@@ -171,8 +180,12 @@ export default function OpeningYtdInlineEditor(props: OpeningYtdInlineEditorProp
                   Opening YTD — {props.taxYear}
                 </h3>
                 <p className="mt-1 text-xs text-stone-600">
-                  Amounts accumulated <em>before</em> Spectre calculates the first Spectre payroll.
-                  Do not include the first Spectre pay run in these totals.
+                  Enter balances accumulated <em>through the final payroll BEFORE Spectre's first payroll</em>.
+                  Do <strong>not</strong> include the first Spectre pay run in these totals; the through-pay-date
+                  must be strictly earlier than the Club's first Spectre pay date
+                  {props.firstSpectrePayDateIso
+                    ? ` (${props.firstSpectrePayDateIso.slice(0, 10)})`
+                    : ""}.
                 </p>
               </div>
               <button

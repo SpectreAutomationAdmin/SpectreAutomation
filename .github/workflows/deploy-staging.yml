@@ -1,8 +1,16 @@
 # DRH-1 (2026-09-19) — Spectre staging deployment (canonical path).
+# FPP-1 (2026-09-20) — added branch-push trigger so the deployment
+# controller does not require a founder click. The FLY_API_TOKEN is
+# app-scoped to `spectre-staging`; production is unreachable regardless
+# of trigger. Only branches under `staging-deploy/**` fire the workflow
+# on push, so ordinary feature branches never wake CI.
 #
-# Manual dispatch only (workflow_dispatch). Deploys the caller-selected
-# commit to spectre-staging via the repository-owned deployment
-# controller (scripts/deploy-staging.mjs).
+# Two triggers, one code path:
+#   1. workflow_dispatch (unchanged) — pick any ref, confirm with 'deploy'.
+#   2. push on `staging-deploy/**` branches — the branch name itself is
+#      the deliberate intent; the workflow deploys the pushed SHA of
+#      that branch. Branch pattern is the ONLY new attack surface and
+#      it can only reach spectre-staging.
 #
 # Architecture:
 #   1. Checkout the exact requested SHA on a Linux runner.
@@ -34,6 +42,14 @@ on:
         required: true
         default: ""
         type: string
+  # FPP-1 (2026-09-20) — non-founder deployment trigger.
+  # Pushing to any branch under `staging-deploy/**` deploys that branch's
+  # tip SHA. Ordinary dev branches never fire this workflow; the branch
+  # namespace itself carries the deliberate intent that would otherwise
+  # come from the manual `confirm: deploy` input.
+  push:
+    branches:
+      - "staging-deploy/**"
 
 # One staging deploy at a time. Never race Fly releases from CI.
 # `cancel-in-progress: false` because cancelling a mid-migration deploy
@@ -54,16 +70,30 @@ jobs:
     environment: staging
 
     steps:
-      - name: Guard — confirm text matches
-        if: github.event.inputs.confirm != 'deploy'
+      # FPP-1 (2026-09-20) — confirm guard only applies to workflow_dispatch.
+      # A push to `staging-deploy/**` is itself the confirmation (namespace-
+      # scoped, deliberate branch selection). See workflow header.
+      - name: Guard — confirm text matches (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm != 'deploy'
         run: |
           echo "::error::Confirmation text was '${{ github.event.inputs.confirm }}' — expected 'deploy'."
           exit 78
 
-      - name: Checkout ${{ github.event.inputs.ref }}
+      - name: Resolve deployment ref
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            REF="${{ github.event.inputs.ref }}"
+          else
+            REF="${{ github.ref_name }}"
+          fi
+          echo "value=${REF}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Trigger=${{ github.event_name }} — resolving ref=${REF}"
+
+      - name: Checkout ${{ steps.ref.outputs.value }}
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ steps.ref.outputs.value }}
           # Full history not required; the deploy controller only needs
           # the top commit's SHA. Shallow clone is faster.
           fetch-depth: 1
@@ -152,7 +182,7 @@ jobs:
           SPECTRE_STAGING_HEALTH_URL:       "https://staging.spectreautomation.com/api/health"
           GITHUB_RUN_ID:                    ${{ github.run_id }}
           GITHUB_SHA:                       ${{ steps.sha.outputs.full_sha }}
-          GITHUB_REF_NAME:                  ${{ github.event.inputs.ref }}
+          GITHUB_REF_NAME:                  ${{ steps.ref.outputs.value }}
         run: npm run deploy:staging
 
       - name: Smoke — public login page reachable
