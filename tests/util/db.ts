@@ -607,45 +607,68 @@ export async function seedSemiMonthlyPayPeriodCalendar(opts: {
   clubId: string;
   payGroupId: string;
   taxYear: number;
+  /**
+   * Pay frequency of the target pay group. Defaults to SEMI_MONTHLY for
+   * backward compatibility with the initial helper signature.
+   */
+  frequency?: "SEMI_MONTHLY" | "BIWEEKLY" | "MONTHLY" | "WEEKLY";
 }): Promise<void> {
   const c = db();
   const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
-  let seq = 0;
-  for (let m = 0; m < 12; m++) {
-    seq += 1;
+  const frequency = opts.frequency ?? "SEMI_MONTHLY";
+
+  async function up(sequenceInYear: number, periodStart: Date, periodEnd: Date, payDate: Date) {
     await c.payrollPayPeriod.upsert({
       where: {
         clubId_payGroupId_taxYear_sequenceInYear: {
-          clubId: opts.clubId, payGroupId: opts.payGroupId, taxYear: opts.taxYear, sequenceInYear: seq,
+          clubId: opts.clubId, payGroupId: opts.payGroupId,
+          taxYear: opts.taxYear, sequenceInYear,
         },
       },
       create: {
         clubId: opts.clubId, payGroupId: opts.payGroupId,
-        taxYear: opts.taxYear, sequenceInYear: seq,
-        periodStart: utc(opts.taxYear, m + 1, 1),
-        periodEnd:   utc(opts.taxYear, m + 1, 16),
-        payDate:     utc(opts.taxYear, m + 1, 16),
+        taxYear: opts.taxYear, sequenceInYear,
+        periodStart, periodEnd, payDate,
         status: "OPEN",
       },
       update: {},
     });
-    seq += 1;
-    await c.payrollPayPeriod.upsert({
-      where: {
-        clubId_payGroupId_taxYear_sequenceInYear: {
-          clubId: opts.clubId, payGroupId: opts.payGroupId, taxYear: opts.taxYear, sequenceInYear: seq,
-        },
-      },
-      create: {
-        clubId: opts.clubId, payGroupId: opts.payGroupId,
-        taxYear: opts.taxYear, sequenceInYear: seq,
-        periodStart: utc(opts.taxYear, m + 1, 16),
-        periodEnd:   utc(opts.taxYear, m + 2, 1),
-        payDate:     utc(opts.taxYear, m + 2, 1),
-        status: "OPEN",
-      },
-      update: {},
-    });
+  }
+
+  if (frequency === "SEMI_MONTHLY") {
+    let seq = 0;
+    for (let m = 0; m < 12; m++) {
+      seq += 1;
+      await up(seq, utc(opts.taxYear, m + 1, 1),  utc(opts.taxYear, m + 1, 16), utc(opts.taxYear, m + 1, 16));
+      seq += 1;
+      await up(seq, utc(opts.taxYear, m + 1, 16), utc(opts.taxYear, m + 2, 1),  utc(opts.taxYear, m + 2, 1));
+    }
+    return;
+  }
+  if (frequency === "BIWEEKLY") {
+    // Anchor on Jan 1 and step 14 days. 26 pay periods in a non-leap year.
+    for (let seq = 1; seq <= 26; seq++) {
+      const start = new Date(Date.UTC(opts.taxYear, 0, 1 + (seq - 1) * 14));
+      const end   = new Date(Date.UTC(opts.taxYear, 0, 1 + seq * 14));
+      const pay   = new Date(Date.UTC(opts.taxYear, 0, 1 + seq * 14));
+      await up(seq, start, end, pay);
+    }
+    return;
+  }
+  if (frequency === "MONTHLY") {
+    for (let seq = 1; seq <= 12; seq++) {
+      await up(seq, utc(opts.taxYear, seq, 1), utc(opts.taxYear, seq + 1, 1), utc(opts.taxYear, seq + 1, 1));
+    }
+    return;
+  }
+  if (frequency === "WEEKLY") {
+    for (let seq = 1; seq <= 52; seq++) {
+      const start = new Date(Date.UTC(opts.taxYear, 0, 1 + (seq - 1) * 7));
+      const end   = new Date(Date.UTC(opts.taxYear, 0, 1 + seq * 7));
+      const pay   = new Date(Date.UTC(opts.taxYear, 0, 1 + seq * 7));
+      await up(seq, start, end, pay);
+    }
+    return;
   }
 }
 

@@ -65,6 +65,8 @@ describe("PAYROLL_FINAL_APPROVAL WI item carries the review URL in its preview",
     });
     // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
     await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+    // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+    await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
     const emp = await db().employee.create({
       data: {
         clubId: club.id, firstName: "Deep", lastName: "Link",
@@ -127,17 +129,17 @@ describe("PAYROLL_FINAL_APPROVAL WI item carries the review URL in its preview",
     });
     const prepared = await preparePayrollBatch(adminP, club.id, pp.id);
     await orchestratePayrollReviewHandoff(adminP, club.id, pp.id, prepared.batchId);
-    const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: prepared.batchId } });
-    await db().payrollBatchEarning.create({
-      data: {
-        clubId: club.id, batchId: prepared.batchId, batchEmployeeId: be.id,
-        employeeId: emp.id, earningType: "SALARY",
-        quantity: "1", rate: "2000.00", rateSource: "MANUAL",
-      },
-    });
-    const r = await calculatePayrollBatch(paP, club.id, prepared.batchId);
-    expect(r.finalApprovalWorkIntakeItemId).not.toBeNull();
-    const wi = await db().workIntakeItem.findUniqueOrThrow({ where: { id: r.finalApprovalWorkIntakeItemId! } });
+    // FPP-1 §1 (2026-09-20) — post-Slice-F Prepare already projects the
+    // SALARY earning; adding a MANUAL SALARY row would double-count.
+    await calculatePayrollBatch(paP, club.id, prepared.batchId);
+    // Payroll-3E (2026-09-12) — PAYROLL_FINAL_APPROVAL WI item is now
+    // created by submitPayrollBatch, not calculatePayrollBatch.
+    const { attestBatchReview } = await import("@/lib/payroll/batch-review");
+    const { submitPayrollBatch } = await import("@/lib/payroll/submit-payroll-batch");
+    await attestBatchReview(paP, club.id, prepared.batchId, "CALCULATED_PAYROLL");
+    const submitResult = await submitPayrollBatch(paP, club.id, prepared.batchId);
+    expect(submitResult.workIntakeItemId).not.toBeNull();
+    const wi = await db().workIntakeItem.findUniqueOrThrow({ where: { id: submitResult.workIntakeItemId! } });
     const preview = wi.displayPreview ?? "";
     expect(preview).toContain("Review payroll →");
     expect(preview).toContain(`/app/admin/payroll/batches/${prepared.batchId}`);

@@ -44,6 +44,8 @@ async function scenario() {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+  await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
 
   async function makeSalariedEmp(number: string, annualSalary: string) {
     const emp = await db().employee.create({
@@ -116,17 +118,10 @@ async function scenario() {
   }
   const prepared = await preparePayrollBatch(adminP, club.id, pp.id);
   await orchestratePayrollReviewHandoff(adminP, club.id, pp.id, prepared.batchId);
-  const bes = await db().payrollBatchEmployee.findMany({ where: { batchId: prepared.batchId } });
-  for (const be of bes) {
-    const rate = be.employeeId === empA.id ? "2000.00" : "3000.00";
-    await db().payrollBatchEarning.create({
-      data: {
-        clubId: club.id, batchId: prepared.batchId, batchEmployeeId: be.id,
-        employeeId: be.employeeId, earningType: "SALARY",
-        quantity: "1", rate, rateSource: "MANUAL",
-      },
-    });
-  }
+  // FPP-1 §1 (2026-09-20) — post-Slice-F Prepare already projects
+  // SALARY_PROJECTION earnings at annualSalary/26 = $2000/$3000.
+  // Adding manual SALARY rows here would double-count the projection.
+  // The calculator consumes the projected earnings directly.
   await calculatePayrollBatch(paP, club.id, prepared.batchId);
 
   return { club, clubB, adminP, paP, ctlP, staffP, empA, empB, prepared };

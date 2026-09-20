@@ -23,6 +23,8 @@ async function payrollScenario() {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+  await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
   return { club, adminP, paP };
 }
 
@@ -119,10 +121,25 @@ describe("Payroll-3B-5B-1a — DOB snapshot + MISSING_DOB blocker", () => {
     const pg = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "PG", name: "PG", payFrequency: "BIWEEKLY", payDateOffsetDays: 5 },
     });
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — seed the full BIWEEKLY calendar first (26
+    // periods). Then upsert the test's Aug 10-24 period at a sequence
+    // that lies inside the calendar.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, frequency: "BIWEEKLY",
+    });
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 17,
+        },
+      },
+      update: {
+        periodStart: utc(2026, 8, 10), periodEnd: utc(2026, 8, 24),
+        payDate: utc(2026, 8, 29),
+      },
+      create: {
         clubId: s.club.id, payGroupId: pg.id,
-        sequenceInYear: 1, taxYear: 2026,
+        sequenceInYear: 17, taxYear: 2026,
         periodStart: utc(2026, 8, 10), periodEnd: utc(2026, 8, 24),
         payDate: utc(2026, 8, 29),
       },

@@ -46,6 +46,8 @@ async function scenario() {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, clubA.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+  await db().payrollClubConfig.updateMany({ where: { clubId: clubA.id }, data: { workweekStartsOn: "SUNDAY" } });
 
   // Two departments with managers.
   const grounds = await db().department.create({
@@ -134,6 +136,10 @@ async function scenario() {
       periodStart: utc(2026, 8, 10), periodEnd: utc(2026, 8, 24),
       payDate: utc(2026, 8, 29),
     },
+  });
+  // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar for preparePayrollBatch.
+  await seedSemiMonthlyPayPeriodCalendar({
+    clubId: clubA.id, payGroupId: payGroup.id, taxYear: 2026, frequency: "BIWEEKLY",
   });
 
   // Both employees are members of this pay group for the period.
@@ -287,11 +293,15 @@ describe("Payroll-3B-4 — batch preparation", () => {
     // annualSalary / periodsPerYear via the same helper.
     expect(Number(salaryRow!.rate)).toBeGreaterThan(0);
     // Hourly employee has NO SALARY earning row.
+    // FPP-1 §1 (2026-09-20) — post-Slice-F prepare projects REGULAR
+    // earnings for hourly employees with approved time. The test's
+    // intent is "no SALARY-projection row" — assert the negation
+    // narrowly on rateSource rather than the row count.
     const hourly = batch!.employees.find((e) => e.employeeId === s.hourlyEmp.id)!;
-    const hourlyEarnings = await db().payrollBatchEarning.count({
-      where: { batchId: result.batchId, batchEmployeeId: hourly.id },
+    const hourlySalaryRow = await db().payrollBatchEarning.count({
+      where: { batchId: result.batchId, batchEmployeeId: hourly.id, rateSource: "SALARY_PROJECTION" },
     });
-    expect(hourlyEarnings).toBe(0);
+    expect(hourlySalaryRow).toBe(0);
   });
 
   // ---- Hourly time attachment -------------------------------------------
@@ -319,12 +329,13 @@ describe("Payroll-3B-4 — batch preparation", () => {
       where: { clubId: s.clubA.id, consumedByBatchId: result.batchId },
     });
     expect(reserved).toBe(2);
-    // Hourly employee has NO earnings — Prepare projects only SALARY
-    // earnings, hourly amounts are still deferred to Calculate.
-    const hourlyEarnings = await db().payrollBatchEarning.count({
-      where: { batchId: result.batchId, batchEmployeeId: hourly.id },
+    // Hourly employee has NO SALARY projection at Prepare — hourly
+    // regular/OT amounts land on the batch as REGULAR earnings (Slice F)
+    // but not as SALARY_PROJECTION rows.
+    const hourlySalaryProjection = await db().payrollBatchEarning.count({
+      where: { batchId: result.batchId, batchEmployeeId: hourly.id, rateSource: "SALARY_PROJECTION" },
     });
-    expect(hourlyEarnings).toBe(0);
+    expect(hourlySalaryProjection).toBe(0);
   });
 
   // ---- 3A hotfix: salary earning projection -----------------------------
@@ -334,8 +345,19 @@ describe("Payroll-3B-4 — batch preparation", () => {
     // Second biweekly period so periodsPerYear count >= 2 for the
     // reconciliation test. Idempotent: the scenario period already
     // exists (Aug 10 – Aug 24).
-    await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — upsert since scenario now pre-seeds full
+    // BIWEEKLY calendar including sequenceInYear 18.
+    await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.clubA.id, payGroupId: s.payGroup.id, taxYear: 2026, sequenceInYear: 18,
+        },
+      },
+      update: {
+        periodStart: utc(2026, 8, 24), periodEnd: utc(2026, 9, 7),
+        payDate: utc(2026, 9, 12),
+      },
+      create: {
         clubId: s.clubA.id, payGroupId: s.payGroup.id,
         sequenceInYear: 18, taxYear: 2026,
         periodStart: utc(2026, 8, 24), periodEnd: utc(2026, 9, 7),
@@ -354,12 +376,14 @@ describe("Payroll-3B-4 — batch preparation", () => {
     const salaryRow = await db().payrollBatchEarning.findFirstOrThrow({
       where: { batchId: result.batchId, batchEmployeeId: salariedBe.id, earningType: "SALARY" },
     });
-    // 2 periods exist in taxYear 2026; annualSalary 72000 → 36000/period.
+    // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar (26 periods) is now
+    // seeded so preparePayrollBatch's calendar-completeness guard accepts.
+    // annualSalary 72000 → 2769.23/period.
     const periodsPerYearInScenario = await db().payrollPayPeriod.count({
       where: { clubId: s.clubA.id, payGroupId: s.payGroup.id, taxYear: 2026 },
     });
-    expect(periodsPerYearInScenario).toBe(2);
-    expect(Number(salaryRow.rate)).toBe(72000 / 2);
+    expect(periodsPerYearInScenario).toBe(26);
+    expect(Number(salaryRow.rate)).toBeCloseTo(72000 / 26, 2);
     expect(salaryRow.rateSource).toBe("SALARY_PROJECTION");
   });
 

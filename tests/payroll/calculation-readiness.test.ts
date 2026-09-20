@@ -75,6 +75,13 @@ async function scenario(opts?: {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, clubA.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout requires the Club's
+  // workweekStartsOn to be configured before hourly Prepare will accept
+  // WORKWEEK_NOT_CONFIGURED clears. Matches the payroll-integration-fixture
+  // pattern (SUNDAY is Alberta's historical convention).
+  await db().payrollClubConfig.updateMany({
+    where: { clubId: clubA.id }, data: { workweekStartsOn: "SUNDAY" },
+  });
 
   const grounds = await db().department.create({
     data: { clubId: clubA.id, code: "GROUNDS", name: "Grounds", sortOrder: 1 },
@@ -200,6 +207,11 @@ async function scenario(opts?: {
       payDate: utc(2026, 8, 29),
     },
   });
+  // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar required by
+  // preparePayrollBatch's calendar-completeness guard.
+  await seedSemiMonthlyPayPeriodCalendar({
+    clubId: clubA.id, payGroupId: payGroup.id, taxYear: 2026, frequency: "BIWEEKLY",
+  });
   await db().payrollPayGroupMember.create({
     data: { clubId: clubA.id, payGroupId: payGroup.id, employeeId: hourlyEmp.id, effectiveFrom: utc(2026, 1, 1) },
   });
@@ -240,7 +252,6 @@ describe("Payroll-3B-5B-2a — calculation readiness contract", () => {
     const s = await scenario({ salariedFullPeriod: true });
     const { batchId } = await prepareGoldenBatch(s);
     const r = await prepareCalculationInput(s.payrollAdminP, s.clubA.id, batchId);
-
     expect(r.ready).toBe(true);
     expect(r.exceptions.filter((e) => e.severity === "BLOCKER")).toEqual([]);
     expect(r.statutoryPackage).not.toBeNull();
@@ -503,8 +514,19 @@ describe("Payroll-3B-5B-2a — full POSTED YTD vector aggregation (§10)", () =>
     const s = await scenario({ salariedFullPeriod: true });
 
     const pg = s.payGroup;
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 — calendar was already seeded by scenario(); upsert here
+    // rather than create-collide on the (clubId, payGroupId, taxYear, sequenceInYear) unique.
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.clubA.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 3,
+        },
+      },
+      update: {
+        periodStart: utc(2026, 2, 1), periodEnd: utc(2026, 2, 14),
+        payDate: utc(2026, 2, 20),
+      },
+      create: {
         clubId: s.clubA.id, payGroupId: pg.id,
         sequenceInYear: 3, taxYear: 2026,
         periodStart: utc(2026, 2, 1), periodEnd: utc(2026, 2, 14),

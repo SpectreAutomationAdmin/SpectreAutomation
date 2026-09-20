@@ -36,6 +36,8 @@ import {
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { calculatePayrollBatch } from "@/lib/payroll/calculation-execute";
+import { attestBatchReview } from "@/lib/payroll/batch-review";
+import { submitPayrollBatch } from "@/lib/payroll/submit-payroll-batch";
 import { approvePayrollBatch, postPayrollBatch } from "@/lib/payroll/approve-and-post";
 import { seedCanadaAlbertaPackages2026 } from "@/lib/payroll/statutory/seed-ca-ab-2026";
 import { addOneTimeAdjustment } from "@/lib/payroll/adjustments";
@@ -278,6 +280,9 @@ async function prepareAndCalculate(s: Scenario): Promise<string> {
   });
   const prep = await preparePayrollBatch(s.paP, s.club.id, pp.id);
   await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
+  // FPP-1 §1 (2026-09-20) — 3E lifecycle: attest + submit before approve.
+  await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+  await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
   await approvePayrollBatch(s.ctlrP, prep.batchId);
   return prep.batchId;
 }
@@ -305,7 +310,7 @@ describe("Payroll-3C-6 · basic batch (no components)", () => {
   it("posts a balanced 8-line journal for a batch with zero component snapshots", async () => {
     const s = await seedScenario("basic");
     const batchId = await prepareAndCalculate(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     expect(posted.totalDebits).toBe(posted.totalCredits);
     const j = await readJournal(posted.journalEntryId);
     // 3 debits (salary, er cpp, er ei) + 5 credits (net, cpp, ei, fed, prov)
@@ -329,7 +334,7 @@ describe("Payroll-3C-6 · regular salary + cash allowance", () => {
       expenseAccountId: s.acct.get("5131")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
     const salary = j.debits.find((l) => l.account.accountNumber === "5100")!;
@@ -361,7 +366,7 @@ describe("Payroll-3C-6 · non-cash taxable benefit", () => {
       liabilityAccountId: s.acct.get("2160")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
     const expLine = j.debits.find((l) => l.account.accountNumber === "5130")!;
@@ -394,7 +399,7 @@ describe("Payroll-3C-6 · employee deduction (RRSP EE / LTD)", () => {
       liabilityAccountId: s.acct.get("2150")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
     const rrspLiab = j.credits.find((l) => l.account.accountNumber === "2150")!;
@@ -423,7 +428,7 @@ describe("Payroll-3C-6 · employer contribution (RRSP ER)", () => {
       liabilityAccountId: s.acct.get("2150")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
     const exp = j.debits.find((l) => l.account.accountNumber === "5132")!;
     const lia = j.credits.find((l) => l.account.accountNumber === "2150")!;
@@ -455,7 +460,7 @@ describe("Payroll-3C-6 · RRSP payable aggregation (EE + ER)", () => {
       liabilityAccountId: s.acct.get("2150")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
     // Exactly ONE credit line on 2150, total = 458.34.
@@ -485,7 +490,7 @@ describe("Payroll-3C-6 · missing mapping fails closed", () => {
     expect(readiness.blockers.some((b) => b.code === "MISSING_COMPONENT_EXPENSE_ACCOUNT")).toBe(true);
     expect(readiness.blockers.some((b) => b.code === "MISSING_COMPONENT_LIABILITY_ACCOUNT")).toBe(true);
 
-    await expect(postPayrollBatch(s.ctlrP, batchId)).rejects.toThrow(/readiness failed/i);
+    await expect(postPayrollBatch(s.paP, batchId)).rejects.toThrow(/readiness failed/i);
 
     // Batch remains APPROVED — no partial posting.
     const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: batchId } });
@@ -566,7 +571,7 @@ describe("Payroll-3C-6 · mapping immutability", () => {
       where: { id: cell.id },
       data: { expenseAccountId: s.acct.get("5133")! }, // switch to bonus expense
     });
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const j = await readJournal(posted.journalEntryId);
     // The debit must still target the ORIGINAL 5131, not the new 5133.
     expect(j.debits.find((l) => l.account.accountNumber === "5131")).toBeDefined();
@@ -583,7 +588,7 @@ describe("Payroll-3C-6 · statutory liabilities aggregate EE + ER", () => {
   it("CPP payable = eeCpp + erCpp, EI payable = eeEi + erEi (single lines each)", async () => {
     const s = await seedScenario("statagg");
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
     const cppLines = j.credits.filter((l) => l.account.accountNumber === "2110");
@@ -624,7 +629,7 @@ describe("Payroll-3C-6 · net pay reconciles to PayrollBatchEmployee.netPay", ()
       liabilityAccountId: s.acct.get("2160")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted  = await postPayrollBatch(s.ctlrP, batchId);
+    const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
     const net = j.credits.find((l) => l.account.accountNumber === "2100")!;
     const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId } });
@@ -647,7 +652,7 @@ describe("Payroll-3C-6 · journal balance + zero-line omission", () => {
       expenseAccountId: s.acct.get("5130")!, liabilityAccountId: s.acct.get("2160")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     expect(posted.totalDebits).toBe(posted.totalCredits);
     // Manually re-sum
     const j = await readJournal(posted.journalEntryId);
@@ -669,7 +674,7 @@ describe("Payroll-3C-6 · journal balance + zero-line omission", () => {
       amount: "37.50", expenseAccountId: s.acct.get("5131")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const j = await readJournal(posted.journalEntryId);
     for (const l of j.entry.lines) {
       const d = new Decimal(String(l.debit));
@@ -689,8 +694,8 @@ describe("Payroll-3C-6 · idempotency + rollback", () => {
   it("posting the same batch twice returns the same journal entry id", async () => {
     const s = await seedScenario("idem");
     const batchId = await prepareAndCalculate(s);
-    const a = await postPayrollBatch(s.ctlrP, batchId);
-    const b = await postPayrollBatch(s.ctlrP, batchId);
+    const a = await postPayrollBatch(s.paP, batchId);
+    const b = await postPayrollBatch(s.paP, batchId);
     expect(a.journalEntryId).toBe(b.journalEntryId);
   });
 
@@ -703,7 +708,7 @@ describe("Payroll-3C-6 · idempotency + rollback", () => {
       // Missing both accounts to trip readiness.
     });
     const batchId = await prepareAndCalculate(s);
-    await expect(postPayrollBatch(s.ctlrP, batchId)).rejects.toThrow();
+    await expect(postPayrollBatch(s.paP, batchId)).rejects.toThrow();
     const batch = await db().payrollBatch.findUniqueOrThrow({ where: { id: batchId } });
     expect(batch.status).toBe("APPROVED");
     expect(batch.glJournalEntryId).toBeNull();
@@ -744,8 +749,11 @@ describe("Payroll-3C-6 · one-time adjustments", () => {
       amount: "500", reason: "Q3 spot bonus",
     });
     await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
+    await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.ctlrP, prep.batchId);
-    const posted = await postPayrollBatch(s.ctlrP, prep.batchId);
+    // Pre-Phase-5 governance restoration (2026-09-16) — PA posts.
+    const posted = await postPayrollBatch(s.paP, prep.batchId);
     const j = await readJournal(posted.journalEntryId);
     const bonusLines = j.debits.filter((l) => l.account.accountNumber === "5133");
     expect(bonusLines.length).toBe(1);
@@ -768,7 +776,7 @@ describe("Payroll-3C-6 · historical journal immutability", () => {
       amount: "37.50", expenseAccountId: s.acct.get("5131")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const before = await readJournal(posted.journalEntryId);
     // Mutate live catalogue.
     await db().payrollComponent.update({
@@ -810,7 +818,7 @@ describe("Payroll-3C-6 · no PII in journal descriptions", () => {
       amount: "37.50", expenseAccountId: s.acct.get("5131")!,
     });
     const batchId = await prepareAndCalculate(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const j = await readJournal(posted.journalEntryId);
     const blob = JSON.stringify(j.entry.lines.map((l) => l.description ?? ""));
     expect(blob).not.toMatch(/\b\d{3}[\s-]?\d{3}[\s-]?\d{3}\b/); // SIN

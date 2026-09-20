@@ -27,6 +27,8 @@ async function baseClubAndAdmin() {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+  await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
   return { club, adminP, paP };
 }
 
@@ -70,12 +72,23 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const pg = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "PG", name: "PG", payFrequency: "BIWEEKLY", payDateOffsetDays: 5 },
     });
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar; upsert the specific target period.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, frequency: "BIWEEKLY",
+    });
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 17,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
+      },
+      create: {
         clubId: s.club.id, payGroupId: pg.id,
-        sequenceInYear: 1, taxYear: 2026,
-        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24),
-        payDate: d(2026, 8, 29),
+        sequenceInYear: 17, taxYear: 2026,
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
       },
     });
     await db().payrollPayGroupMember.create({
@@ -98,12 +111,23 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const pg = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "PG", name: "PG", payFrequency: "BIWEEKLY", payDateOffsetDays: 5 },
     });
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar; upsert the specific target period.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, frequency: "BIWEEKLY",
+    });
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 17,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
+      },
+      create: {
         clubId: s.club.id, payGroupId: pg.id,
-        sequenceInYear: 1, taxYear: 2026,
-        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24),
-        payDate: d(2026, 8, 29),
+        sequenceInYear: 17, taxYear: 2026,
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
       },
     });
     await db().payrollPayGroupMember.create({
@@ -126,12 +150,23 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const pg = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "PG", name: "PG", payFrequency: "BIWEEKLY", payDateOffsetDays: 5 },
     });
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar; upsert the specific target period.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, frequency: "BIWEEKLY",
+    });
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 17,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
+      },
+      create: {
         clubId: s.club.id, payGroupId: pg.id,
-        sequenceInYear: 1, taxYear: 2026,
-        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24),
-        payDate: d(2026, 8, 29),
+        sequenceInYear: 17, taxYear: 2026,
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
       },
     });
     await db().payrollPayGroupMember.create({
@@ -182,17 +217,43 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const groupB = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "GB", name: "Group B", payFrequency: "MONTHLY", payDateOffsetDays: 5 },
     });
-    // Each Group runs its OWN Pay Period for Aug 1 → Aug 31.
-    const periodA = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — full MONTHLY calendars required.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: groupA.id, taxYear: 2026, frequency: "MONTHLY",
+    });
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: groupB.id, taxYear: 2026, frequency: "MONTHLY",
+    });
+    // Each Group runs its OWN Pay Period for Aug 1 → Aug 31. Upsert since
+    // seq=8 already exists in the calendar.
+    const periodA = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: groupA.id, taxYear: 2026, sequenceInYear: 8,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 1), periodEnd: d(2026, 9, 1),
+        payDate: d(2026, 9, 5),
+      },
+      create: {
         clubId: s.club.id, payGroupId: groupA.id,
         sequenceInYear: 8, taxYear: 2026,
         periodStart: d(2026, 8, 1), periodEnd: d(2026, 9, 1),
         payDate: d(2026, 9, 5),
       },
     });
-    const periodB = await db().payrollPayPeriod.create({
-      data: {
+    const periodB = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: groupB.id, taxYear: 2026, sequenceInYear: 8,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 1), periodEnd: d(2026, 9, 1),
+        payDate: d(2026, 9, 5),
+      },
+      create: {
         clubId: s.club.id, payGroupId: groupB.id,
         sequenceInYear: 8, taxYear: 2026,
         periodStart: d(2026, 8, 1), periodEnd: d(2026, 9, 1),
@@ -273,16 +334,40 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const groupB = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "GB", name: "Group B", payFrequency: "MONTHLY", payDateOffsetDays: 5 },
     });
-    const periodA = await db().payrollPayPeriod.create({
-      data: {
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: groupA.id, taxYear: 2026, frequency: "MONTHLY",
+    });
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: groupB.id, taxYear: 2026, frequency: "MONTHLY",
+    });
+    const periodA = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: groupA.id, taxYear: 2026, sequenceInYear: 8,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 1), periodEnd: d(2026, 8, 15),
+        payDate: d(2026, 8, 20),
+      },
+      create: {
         clubId: s.club.id, payGroupId: groupA.id,
         sequenceInYear: 8, taxYear: 2026,
         periodStart: d(2026, 8, 1), periodEnd: d(2026, 8, 15),
         payDate: d(2026, 8, 20),
       },
     });
-    const periodB = await db().payrollPayPeriod.create({
-      data: {
+    const periodB = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: groupB.id, taxYear: 2026, sequenceInYear: 8,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 15), periodEnd: d(2026, 9, 1),
+        payDate: d(2026, 9, 5),
+      },
+      create: {
         clubId: s.club.id, payGroupId: groupB.id,
         sequenceInYear: 8, taxYear: 2026,
         periodStart: d(2026, 8, 15), periodEnd: d(2026, 9, 1),
@@ -328,12 +413,23 @@ describe("Payroll-3B-5A — Pay Group membership coverage", () => {
     const pg = await db().payrollPayGroup.create({
       data: { clubId: s.club.id, code: "PG", name: "PG", payFrequency: "BIWEEKLY", payDateOffsetDays: 5 },
     });
-    const pp = await db().payrollPayPeriod.create({
-      data: {
+    // FPP-1 §1 (2026-09-20) — full BIWEEKLY calendar; upsert the specific target period.
+    await seedSemiMonthlyPayPeriodCalendar({
+      clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, frequency: "BIWEEKLY",
+    });
+    const pp = await db().payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: s.club.id, payGroupId: pg.id, taxYear: 2026, sequenceInYear: 17,
+        },
+      },
+      update: {
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
+      },
+      create: {
         clubId: s.club.id, payGroupId: pg.id,
-        sequenceInYear: 1, taxYear: 2026,
-        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24),
-        payDate: d(2026, 8, 29),
+        sequenceInYear: 17, taxYear: 2026,
+        periodStart: d(2026, 8, 10), periodEnd: d(2026, 8, 24), payDate: d(2026, 8, 29),
       },
     });
     await db().payrollPayGroupMember.create({

@@ -29,6 +29,8 @@ import {
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { calculatePayrollBatch } from "@/lib/payroll/calculation-execute";
+import { attestBatchReview } from "@/lib/payroll/batch-review";
+import { submitPayrollBatch } from "@/lib/payroll/submit-payroll-batch";
 import { approvePayrollBatch, postPayrollBatch } from "@/lib/payroll/approve-and-post";
 import { addOneTimeAdjustment } from "@/lib/payroll/adjustments";
 import { evaluatePayrollGlReadiness } from "@/lib/payroll/gl-readiness";
@@ -163,6 +165,10 @@ async function seedScenario(seed: string): Promise<Scenario> {
   });
   // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
   await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+
+  // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+
+  await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
   const acct = await seedGlAccounts(club.id);
   await seedGlProfile(club.id, acct);
   await ensureFiscalPeriod(club.id, utc(2026, 9, 15));
@@ -224,7 +230,9 @@ async function preparedThenCalcThenApprove(s: Scenario, extra?: (batchId: string
   const prep = await preparePayrollBatch(s.paP, s.club.id, pp.id);
   if (extra) await extra(prep.batchId);
   await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
-  await approvePayrollBatch(s.ctlrP, prep.batchId);
+  await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
+    await approvePayrollBatch(s.ctlrP, prep.batchId);
   return prep.batchId;
 }
 
@@ -272,8 +280,10 @@ describe("Payroll-3C-6A · §13 reimbursement posting", () => {
       amount: "72.40", reason: "Meal reimbursement",
     });
     await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
+    await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.ctlrP, prep.batchId);
-    const posted = await postPayrollBatch(s.ctlrP, prep.batchId);
+    const posted = await postPayrollBatch(s.paP, prep.batchId);
     expect(posted.totalDebits).toBe(posted.totalCredits);
 
     const j = await readJournal(posted.journalEntryId);
@@ -322,8 +332,10 @@ describe("Payroll-3C-6A · §14 one-time employee deduction posting", () => {
       amount: "50", reason: "Equipment purchase",
     });
     await calculatePayrollBatch(s.paP, s.club.id, prep.batchId);
+    await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.ctlrP, prep.batchId);
-    const posted = await postPayrollBatch(s.ctlrP, prep.batchId);
+    const posted = await postPayrollBatch(s.paP, prep.batchId);
     const j = await readJournal(posted.journalEntryId);
 
     const ded = j.credits.find((l) => l.account.accountNumber === "2170");
@@ -366,7 +378,7 @@ describe("Payroll-3C-6A · §15 ACCOUNT_TYPE_MISMATCH blocker", () => {
     const batchId = await preparedThenCalcThenApprove(s);
     const readiness = await evaluatePayrollGlReadiness(s.ctlrP, s.club.id, batchId);
     expect(readiness.blockers.some((b) => b.code === "ACCOUNT_TYPE_MISMATCH")).toBe(true);
-    await expect(postPayrollBatch(s.ctlrP, batchId)).rejects.toThrow(/readiness failed/i);
+    await expect(postPayrollBatch(s.paP, batchId)).rejects.toThrow(/readiness failed/i);
     // Batch remains APPROVED, no journal.
     const b = await db().payrollBatch.findUniqueOrThrow({ where: { id: batchId } });
     expect(b.status).toBe("APPROVED");
@@ -423,7 +435,7 @@ describe("Payroll-3C-6A · §16 CPP2 non-zero aggregation", () => {
         employeeLifecycleAtPrep: "ACTIVE", status: "INCLUDED",
       },
     });
-    const posted = await postPayrollBatch(s.ctlrP, batch.id);
+    const posted = await postPayrollBatch(s.paP, batch.id);
     const j = await readJournal(posted.journalEntryId);
 
     const cppPayable = j.credits.find((l) => l.account.accountNumber === "2110")!;
@@ -489,8 +501,10 @@ describe("Payroll-3C-6A · §17 zero-amount rows omit journal lines", () => {
         earningsTaxable: t, earningsPensionable: p, earningsInsurable: i,
       },
     });
+    await attestBatchReview(s.paP, s.club.id, prep.batchId, "CALCULATED_PAYROLL");
+    await submitPayrollBatch(s.paP, s.club.id, prep.batchId);
     await approvePayrollBatch(s.ctlrP, prep.batchId);
-    const posted = await postPayrollBatch(s.ctlrP, prep.batchId);
+    const posted = await postPayrollBatch(s.paP, prep.batchId);
     const j = await readJournal(posted.journalEntryId);
     // NO 5131 line — zero component omitted.
     expect(j.debits.find((l) => l.account.accountNumber === "5131")).toBeUndefined();
@@ -550,7 +564,7 @@ describe("Payroll-3C-6A · §19 global profile change AFTER post", () => {
   it("mutating PayrollGlAccountingProfile after POST does not rewrite historical JournalEntryLine accounts", async () => {
     const s = await seedScenario("g-after");
     const batchId = await preparedThenCalcThenApprove(s);
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const beforeEntry = await readJournal(posted.journalEntryId);
     // Change the global profile to a different salary expense.
     await db().payrollGlAccountingProfile.update({
@@ -578,7 +592,7 @@ describe("Payroll-3C-6A · §20 global profile change BEFORE post", () => {
       where: { clubId: s.club.id },
       data: { salaryExpenseAccountId: s.acct.get("5199")! },
     });
-    const posted = await postPayrollBatch(s.ctlrP, batchId);
+    const posted = await postPayrollBatch(s.paP, batchId);
     const j = await readJournal(posted.journalEntryId);
     // The salary expense debit is against 5199 now, not 5100.
     expect(j.debits.find((l) => l.account.accountNumber === "5199")).toBeDefined();
@@ -602,7 +616,7 @@ describe("Payroll-3C-6A · §21 atomic rollback on post failure", () => {
       where: { clubId: s.club.id }, data: { glAccountingProfileId: null },
     });
     await db().payrollGlAccountingProfile.delete({ where: { clubId: s.club.id } });
-    await expect(postPayrollBatch(s.ctlrP, batchId)).rejects.toThrow();
+    await expect(postPayrollBatch(s.paP, batchId)).rejects.toThrow();
     // No JournalEntry created for this batch.
     const jeCount = await db().journalEntry.count({
       where: { sourceEntityId: batchId, source: "PAYROLL" },
@@ -632,8 +646,8 @@ describe("Payroll-3C-6A · §22 concurrency + idempotency", () => {
     // postPayrollBatch prove this deterministically.
     const s = await seedScenario("idem");
     const batchId = await preparedThenCalcThenApprove(s);
-    const a = await postPayrollBatch(s.ctlrP, batchId);
-    const b = await postPayrollBatch(s.ctlrP, batchId);
+    const a = await postPayrollBatch(s.paP, batchId);
+    const b = await postPayrollBatch(s.paP, batchId);
     expect(a.journalEntryId).toBe(b.journalEntryId);
     const jeCount = await db().journalEntry.count({
       where: { sourceEntityId: batchId, source: "PAYROLL" },
@@ -656,8 +670,8 @@ describe("Payroll-3C-6A · §22 concurrency + idempotency", () => {
     expect(jeCountBefore).toBe(0);
 
     const results = await Promise.allSettled([
-      postPayrollBatch(s.ctlrP, batchId),
-      postPayrollBatch(s.ctlrP, batchId),
+      postPayrollBatch(s.paP, batchId),
+      postPayrollBatch(s.paP, batchId),
     ]);
     const succeeded = results.filter((r) => r.status === "fulfilled");
     expect(succeeded.length).toBeGreaterThanOrEqual(1);
@@ -688,8 +702,8 @@ describe("Payroll-3C-6A · §22 concurrency + idempotency", () => {
     const s = await seedScenario("concur-lines");
     const batchId = await preparedThenCalcThenApprove(s);
     await Promise.allSettled([
-      postPayrollBatch(s.ctlrP, batchId),
-      postPayrollBatch(s.ctlrP, batchId),
+      postPayrollBatch(s.paP, batchId),
+      postPayrollBatch(s.paP, batchId),
     ]);
     const batch = await db().payrollBatch.findUniqueOrThrow({ where: { id: batchId } });
     // For a basic (no-component) batch: 3 debits + 5 credits = 8 lines.
@@ -724,7 +738,7 @@ describe("Payroll-3C-6A · §22 concurrency + idempotency", () => {
 
     process.env.SPECTRE_PAYROLL_FAULT_INJECT = "AFTER_JE_CREATE";
     try {
-      await expect(postPayrollBatch(s.ctlrP, batchId)).rejects.toThrow(/Injected fault/i);
+      await expect(postPayrollBatch(s.paP, batchId)).rejects.toThrow(/Injected fault/i);
     } finally {
       delete process.env.SPECTRE_PAYROLL_FAULT_INJECT;
     }

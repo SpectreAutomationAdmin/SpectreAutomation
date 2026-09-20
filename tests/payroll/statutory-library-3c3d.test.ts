@@ -167,6 +167,8 @@ describe("Payroll-3C-3D · Sam Complex final source-reconciliation acceptance", 
     });
     // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
     await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
+    // FPP-1 §1 (2026-09-20) — Slice F workweek-closeout: workweekStartsOn required for hourly Prepare.
+    await db().payrollClubConfig.updateMany({ where: { clubId: club.id }, data: { workweekStartsOn: "SUNDAY" } });
 
     const emp = await c.employee.create({
       data: {
