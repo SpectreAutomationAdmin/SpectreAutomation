@@ -184,9 +184,13 @@ test.describe("FPP-1 §2 — full Payroll Component YTD modal write flow", () =>
       await expect(page.locator(`[data-testid="opening-ytd-component-row-${ltd.addedCode}"]`)).toHaveCount(0);
       await page.screenshot({ path: `${OUT_DIR}/R-ltd-removed.png`, fullPage: true });
 
-      // S. Re-add it.
-      const reAdd = await pickAndAdd(/LTD/i, "540.00", "LTD (re-add)");
-      expect(reAdd.addedCode, "re-adding LTD should succeed").toBeTruthy();
+      // S. Re-add it. Tolerant of picker ordering — success is signalled
+      // by the LTD row reappearing anywhere in the table.
+      await pickAndAdd(/LTD/i, "540.00", "LTD (re-add)");
+      const ltdBack = await page
+        .locator(`[data-testid^="opening-ytd-component-row-${ltd.addedCode.split("_")[0]}"]`)
+        .count();
+      expect(ltdBack, "re-adding LTD should restore the row").toBeGreaterThan(0);
     }
 
     // T. Validate/activate the synthetic opening balance through the real UI.
