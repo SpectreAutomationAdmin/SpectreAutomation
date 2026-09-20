@@ -25,7 +25,22 @@ export default defineConfig({
     globalSetup: ["tests/global-setup.ts"],
     testTimeout: 20_000,
     hookTimeout: 20_000,
-    // Tests share a single SQLite DB; serialize to avoid file-lock contention.
-    fileParallelism: false,
+    // FPP-1 §4 (2026-09-20) — per-worker DB isolation. tests/setup.ts
+    // hands each vitest worker its OWN SQLite file at
+    // `prisma/test-workers/w<VITEST_POOL_ID>.db` (copied from the
+    // schema-only template built by tests/global-setup.ts). Turning
+    // fileParallelism on lets workers run in parallel without sharing
+    // a DB, which fixes the cross-file `RolePermission P2003` cascade
+    // documented in the FPP-1 acceptance closeout: one file's leaked
+    // roleKey → the next file's `seedRbac` upsert failing on FK.
+    // Within a worker files still run serially; the DB it owns is
+    // reset+seeded before each test as before.
+    fileParallelism: true,
+    // Keep test-writer complexity low: use vitest's default `forks`
+    // pool with a modest concurrency ceiling. The bottleneck is
+    // SQLite reset/seed cost (~1-3s per file), so 4 workers on
+    // Windows is a comfortable ceiling — higher counts hit
+    // File-System write contention on prisma/test-workers/.
+    maxWorkers: 4,
   },
 });

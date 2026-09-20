@@ -92,6 +92,12 @@ import {
   changeRecurringPayrollComponentAction,
 } from "./_recurring-component-actions";
 
+// FPP-1 §2 (2026-09-20) — force dynamic to prevent RSC caching of the
+// server loader between requests. Without this, Next.js may cache the
+// fallback openingBalance findFirst result and the founder sees stale
+// DRAFT state after saving.
+export const dynamic = "force-dynamic";
+
 export default async function EmployeeProfilePage({
   params, searchParams,
 }: {
@@ -443,50 +449,61 @@ export default async function EmployeeProfilePage({
   // surface the most-recent DRAFT / VALIDATED row so the founder can
   // resume editing (per-component openings especially). The editor's
   // status prop handles all four states.
-  const editableOpeningBalance = activeOpeningBalance
-    ?? (canReadPayrollRecurring
-      ? await prisma.payrollOpeningBalance
-          .findFirst({
-            where: {
-              clubId: profile.clubId,
-              employeeId: profile.id,
-              taxYear: currentTaxYear,
-              status: { in: ["DRAFT", "VALIDATED"] },
-            },
-            orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
-          })
-          .then((row) =>
-            row
-              ? {
-                  id: row.id,
-                  taxYear: row.taxYear,
-                  status: row.status as "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED",
-                  throughPayDate: row.throughPayDate,
-                  priorPayrollKind: row.priorPayrollKind as
-                    "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
-                  values: {
-                    ytdGrossEarnings: row.ytdGrossEarnings.toString(),
-                    ytdTaxableEarnings: row.ytdTaxableEarnings.toString(),
-                    ytdPensionableEarnings: row.ytdPensionableEarnings.toString(),
-                    ytdInsurableEarnings: row.ytdInsurableEarnings.toString(),
-                    ytdCppEE_Base: row.ytdCppEE_Base.toString(),
-                    ytdCppEE_FirstAdd: row.ytdCppEE_FirstAdd.toString(),
-                    ytdCppEE: row.ytdCppEE.toString(),
-                    ytdCpp2EE: row.ytdCpp2EE.toString(),
-                    ytdEiEE: row.ytdEiEE.toString(),
-                    ytdFederalTax: row.ytdFederalTax.toString(),
-                    ytdProvincialTax: row.ytdProvincialTax.toString(),
-                    ytdCppER_Base: row.ytdCppER_Base.toString(),
-                    ytdCppER_FirstAdd: row.ytdCppER_FirstAdd.toString(),
-                    ytdCppER: row.ytdCppER.toString(),
-                    ytdCpp2ER: row.ytdCpp2ER.toString(),
-                    ytdEiER: row.ytdEiER.toString(),
-                  },
-                }
-              : null,
-          )
-          .catch(() => null)
-      : null);
+  let editableOpeningBalance: {
+    id: string;
+    taxYear: number;
+    status: "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED";
+    throughPayDate: Date | null;
+    priorPayrollKind: "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null;
+    values: {
+      ytdGrossEarnings: string; ytdTaxableEarnings: string;
+      ytdPensionableEarnings: string; ytdInsurableEarnings: string;
+      ytdCppEE_Base: string; ytdCppEE_FirstAdd: string; ytdCppEE: string;
+      ytdCpp2EE: string; ytdEiEE: string;
+      ytdFederalTax: string; ytdProvincialTax: string;
+      ytdCppER_Base: string; ytdCppER_FirstAdd: string; ytdCppER: string;
+      ytdCpp2ER: string; ytdEiER: string;
+    };
+  } | null = activeOpeningBalance;
+  if (!editableOpeningBalance && canReadPayrollRecurring) {
+    const draftRow = await prisma.payrollOpeningBalance.findFirst({
+      where: {
+        clubId: profile.clubId,
+        employeeId: profile.id,
+        taxYear: currentTaxYear,
+        status: { in: ["DRAFT", "VALIDATED"] },
+      },
+      orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+    });
+    if (draftRow) {
+      editableOpeningBalance = {
+        id: draftRow.id,
+        taxYear: draftRow.taxYear,
+        status: draftRow.status as "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED",
+        throughPayDate: draftRow.throughPayDate,
+        priorPayrollKind: draftRow.priorPayrollKind as
+          "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
+        values: {
+          ytdGrossEarnings: draftRow.ytdGrossEarnings.toString(),
+          ytdTaxableEarnings: draftRow.ytdTaxableEarnings.toString(),
+          ytdPensionableEarnings: draftRow.ytdPensionableEarnings.toString(),
+          ytdInsurableEarnings: draftRow.ytdInsurableEarnings.toString(),
+          ytdCppEE_Base: draftRow.ytdCppEE_Base.toString(),
+          ytdCppEE_FirstAdd: draftRow.ytdCppEE_FirstAdd.toString(),
+          ytdCppEE: draftRow.ytdCppEE.toString(),
+          ytdCpp2EE: draftRow.ytdCpp2EE.toString(),
+          ytdEiEE: draftRow.ytdEiEE.toString(),
+          ytdFederalTax: draftRow.ytdFederalTax.toString(),
+          ytdProvincialTax: draftRow.ytdProvincialTax.toString(),
+          ytdCppER_Base: draftRow.ytdCppER_Base.toString(),
+          ytdCppER_FirstAdd: draftRow.ytdCppER_FirstAdd.toString(),
+          ytdCppER: draftRow.ytdCppER.toString(),
+          ytdCpp2ER: draftRow.ytdCpp2ER.toString(),
+          ytdEiER: draftRow.ytdEiER.toString(),
+        },
+      };
+    }
+  }
 
   // FPP-1 — per-Component opening rows for whichever balance we have,
   // and the Club's PayrollComponent catalogue for the "add" picker.
