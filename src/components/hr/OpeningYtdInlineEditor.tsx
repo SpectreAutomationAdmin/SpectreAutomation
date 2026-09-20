@@ -376,8 +376,11 @@ function ComponentOpeningsSection(props: {
   const usedCodes = new Set(props.rows.map((r) => r.componentCode));
   const pickable = props.catalogue.filter((c) => !usedCodes.has(c.code));
 
-  const showSection = !!props.openingBalanceId || props.rows.length > 0;
-  if (!showSection) return null;
+  // FPP-1C (2026-09-20) §4/§7 — always render the section so the
+  // founder immediately sees the component-YTD workflow. If no parent
+  // draft exists yet, the founder is guided to save aggregate values
+  // first; component controls appear once a DRAFT is in place.
+  const requiresDraft = !props.openingBalanceId;
 
   return (
     <section className="mt-6 border-t pt-5" data-testid="opening-ytd-components">
@@ -385,14 +388,27 @@ function ComponentOpeningsSection(props: {
         <div>
           <h4 className="text-sm font-semibold text-stone-900">Payroll Component YTD</h4>
           <p className="text-xs text-stone-500">
-            Per-component prior-payroll amounts (RRSP EE/ER, LTD, cell allowance, etc.). Kept
-            separate from the aggregate totals above so pay statements can show "Current + YTD"
-            for each Component the Club has ever posted.
+            Enter year-to-date balances for payroll components carried forward from the
+            prior payroll system — RRSP employee/employer, LTD, cell allowance, health
+            premiums, and any other configured payroll component. These are DETAIL only;
+            they do NOT change the aggregate opening totals above (gross, taxable,
+            statutory deductions, employer contributions). Enter one row per component.
           </p>
         </div>
       </div>
 
-      {props.rows.length > 0 ? (
+      {requiresDraft ? (
+        <div
+          className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+          data-testid="opening-ytd-components-needs-draft"
+        >
+          <strong>Save aggregate values as draft first.</strong> Once the draft exists,
+          this panel switches on and you can add individual payroll component
+          balances (RRSP, LTD, cell allowance, health premiums, and any other
+          configured component) one row at a time. Component detail is separate
+          from the aggregate totals above and never increases them.
+        </div>
+      ) : props.rows.length > 0 ? (
         <table className="w-full text-xs" data-testid="opening-ytd-components-table">
           <thead>
             <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-stone-500">
