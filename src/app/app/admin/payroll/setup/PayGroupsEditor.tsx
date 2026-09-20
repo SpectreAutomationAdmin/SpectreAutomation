@@ -284,8 +284,18 @@ export default function PayGroupsEditor({
                     </span>
                     <span className="font-mono text-xs text-stone-500">{g.code}</span>
                     <span className="text-[11px] text-stone-500">
-                      {FREQ_LABEL[g.payFrequency] ?? g.payFrequency} · pay date +{g.payDateOffsetDays}d ·{" "}
-                      {g.memberCount} employee{g.memberCount === 1 ? "" : "s"} assigned
+                      {FREQ_LABEL[g.payFrequency] ?? g.payFrequency} · pay date +{g.payDateOffsetDays}d
+                      {g.payFrequency === "SEMI_MONTHLY" ? (
+                        <>
+                          {" "}·{" "}
+                          <span data-testid={`pay-group-strategy-${g.id}`}>
+                            {g.periodBoundaryStrategy === "LAGGED_SEMI_MONTHLY"
+                              ? "Lagged (work period ends before pay date)"
+                              : "Calendar (1–15 / 16–EOM)"}
+                          </span>
+                        </>
+                      ) : null}
+                      {" "}· {g.memberCount} employee{g.memberCount === 1 ? "" : "s"} assigned
                     </span>
                   </div>
                   <input

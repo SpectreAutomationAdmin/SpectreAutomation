@@ -130,6 +130,23 @@ interface GeneratedPeriod {
   payDate: Date;
 }
 
+/**
+ * CRPC-1 (2026-09-20) — canonical period-boundary strategies.
+ *
+ *   CALENDAR_SEMI_MONTHLY — Spectre's shipped 1-15 / 16-EOM boundaries paired
+ *                           with 15th / EOM pay dates. Only applies when
+ *                           payFrequency=SEMI_MONTHLY. This is the default
+ *                           for every existing pay group.
+ *   LAGGED_SEMI_MONTHLY   — Coulee-Ridge-style calendar:
+ *                             pay day 15 → work [prev-month day 24, current day  9)
+ *                             pay day EOM → work [current day 9,     current day 24)
+ *                           Only applies when payFrequency=SEMI_MONTHLY.
+ *
+ * WEEKLY / BIWEEKLY / MONTHLY pay groups ignore this field — their period
+ * boundaries are anchor- or calendar-driven and do not admit a lag.
+ */
+export type PeriodBoundaryStrategy = "CALENDAR_SEMI_MONTHLY" | "LAGGED_SEMI_MONTHLY";
+
 interface CalendarSpec {
   payFrequency: PayFrequency;
   payDateOffsetDays: number;
@@ -139,6 +156,9 @@ interface CalendarSpec {
   // Default preserves the pre-Slice-E hard-coded behaviour so any caller
   // that does not pass a policy still gets earlier-Friday.
   payDateAdjustment?: PayDateAdjustment;
+  // CRPC-1 (2026-09-20) — period-boundary strategy (see enum note above).
+  // Undefined = CALENDAR_SEMI_MONTHLY. Ignored for non-SEMI_MONTHLY.
+  periodBoundaryStrategy?: PeriodBoundaryStrategy;
 }
 
 /**
@@ -215,6 +235,36 @@ export function buildCalendar(spec: CalendarSpec): GeneratedPeriod[] {
   }
 
   if (payFrequency === "SEMI_MONTHLY") {
+    const strategy: PeriodBoundaryStrategy = spec.periodBoundaryStrategy ?? "CALENDAR_SEMI_MONTHLY";
+    if (strategy === "LAGGED_SEMI_MONTHLY") {
+      // CRPC-1 (2026-09-20) — lagged semi-monthly boundaries. Pay dates are
+      // still 15th / EOM but the work period is offset backward so completed
+      // time is known before payroll must be finalized:
+      //   pay day 15 of month M → work [day 24 of M-1, day  9 of M)
+      //   pay day EOM of month M → work [day  9 of M,   day 24 of M)
+      // Pay date policy (weekend earlier / next / none) still applies to the
+      // pay dates; the raw 15/EOM anchors are what get adjusted.
+      const out: GeneratedPeriod[] = [];
+      for (let m = 0; m < 12; m++) {
+        // First-half pay: pay=15 of M, work=[24-of-(M-1), 9-of-M)
+        const s1 = new Date(Date.UTC(taxYear, m - 1, 24));
+        const e1 = new Date(Date.UTC(taxYear, m,     9));
+        const pay1 = semiMonthlyPaydayWithPolicy(taxYear, m, "FIRST_HALF", policy);
+        // Second-half pay: pay=EOM of M, work=[9-of-M, 24-of-M)
+        const s2 = new Date(Date.UTC(taxYear, m, 9));
+        const e2 = new Date(Date.UTC(taxYear, m, 24));
+        const pay2 = semiMonthlyPaydayWithPolicy(taxYear, m, "SECOND_HALF", policy);
+        if (pay1.getUTCFullYear() === taxYear) {
+          out.push({ sequenceInYear: 0, taxYear, periodStart: s1, periodEnd: e1, payDate: pay1 });
+        }
+        if (pay2.getUTCFullYear() === taxYear) {
+          out.push({ sequenceInYear: 0, taxYear, periodStart: s2, periodEnd: e2, payDate: pay2 });
+        }
+      }
+      out.sort((a, b) => a.payDate.getTime() - b.payDate.getTime());
+      for (let i = 0; i < out.length; i++) out[i]!.sequenceInYear = i + 1;
+      return out;
+    }
     // Phase 5 (2026-09-17) — canonical Spectre semi-monthly:
     //   • Period 1 of each month = [1st, 16th)  → payDate = 15th (weekend → preceding Fri)
     //   • Period 2 of each month = [16th, 1st-of-next) → payDate = LAST calendar day
@@ -318,6 +368,7 @@ export async function previewPayPeriods(
     payDateOffsetDays: grp.payDateOffsetDays,
     calendarAnchorDate: grp.calendarAnchorDate ?? null,
     payDateAdjustment: grp.payDateAdjustment as PayDateAdjustment,
+    periodBoundaryStrategy: grp.periodBoundaryStrategy as PeriodBoundaryStrategy,
     taxYear,
   });
 }
@@ -380,6 +431,7 @@ export async function generatePayPeriods(
     payDateOffsetDays: grp.payDateOffsetDays,
     calendarAnchorDate: grp.calendarAnchorDate ?? null,
     payDateAdjustment: grp.payDateAdjustment as PayDateAdjustment,
+    periodBoundaryStrategy: grp.periodBoundaryStrategy as PeriodBoundaryStrategy,
     taxYear,
   });
 
@@ -461,4 +513,184 @@ export async function generatePayPeriods(
     firstPayDate: createdRows[0]?.payDate ?? null,
     lastPayDate: createdRows[createdRows.length - 1]?.payDate ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// CRPC-1 (2026-09-20) — historical immutability + explicit period edits.
+//
+// Prior to CRPC-1 the only way to change a pay period's dates was to delete
+// and regenerate the whole year. Coulee Ridge's calendar correction needs
+// a narrower operation: adjust FUTURE, unused periods (typically because
+// the pay group's periodBoundaryStrategy changed) without touching any
+// period that has already been consumed by payroll.
+//
+// A period is "operationally consumed" and IMMUTABLE if:
+//   • its status is CLOSED (advisory locked); OR
+//   • it has any PayrollBatch attached (regardless of batch status); OR
+//   • it has any PayrollDepartmentTimeApproval, PayrollTimesheet,
+//     PayrollTimeAdjustment, PayrollDepartmentTimeScopeState, or
+//     PayrollScheduledOneTimeEarning linked to it.
+//
+// The service refuses updates on immutable periods. It NEVER silently
+// rewrites POSTED payroll history.
+// ---------------------------------------------------------------------------
+
+export interface PayPeriodBoundaryUpdate {
+  periodStart: Date;
+  periodEnd: Date;
+  payDate: Date;
+}
+
+export async function isPayPeriodImmutable(
+  clubId: string,
+  payPeriodId: string,
+): Promise<{ immutable: boolean; reason: string | null }> {
+  const row = await prisma.payrollPayPeriod.findFirst({
+    where: { id: payPeriodId, clubId },
+    select: {
+      status: true,
+      batches: { select: { id: true, status: true } },
+      departmentTimeApprovals: { select: { id: true } },
+      scopeStates: { select: { id: true } },
+      payrollTimesheets: { select: { id: true } },
+      timeAdjustments: { select: { id: true } },
+      scheduledOneTimeEarnings: { select: { id: true } },
+    },
+  });
+  if (!row) return { immutable: true, reason: "Pay period not found" };
+  if (row.status === "CLOSED") return { immutable: true, reason: "Pay period is CLOSED" };
+  if (row.batches.length > 0) {
+    return { immutable: true, reason: `Pay period has ${row.batches.length} attached payroll batch(es)` };
+  }
+  if (row.departmentTimeApprovals.length > 0) {
+    return { immutable: true, reason: `${row.departmentTimeApprovals.length} department time approval(s) linked` };
+  }
+  if (row.scopeStates.length > 0) {
+    return { immutable: true, reason: `${row.scopeStates.length} approval scope state(s) linked` };
+  }
+  if (row.payrollTimesheets.length > 0) {
+    return { immutable: true, reason: `${row.payrollTimesheets.length} timesheet(s) linked` };
+  }
+  if (row.timeAdjustments.length > 0) {
+    return { immutable: true, reason: `${row.timeAdjustments.length} time adjustment(s) linked` };
+  }
+  if (row.scheduledOneTimeEarnings.length > 0) {
+    return { immutable: true, reason: `${row.scheduledOneTimeEarnings.length} scheduled one-time earning(s) linked` };
+  }
+  return { immutable: false, reason: null };
+}
+
+export async function updateFuturePayPeriodBoundaries(
+  principal: Principal,
+  clubId: string,
+  payPeriodId: string,
+  patch: PayPeriodBoundaryUpdate,
+): Promise<PayPeriodView> {
+  requirePermission(principal, clubId, "payroll:write");
+  await assertPostingAllowed(
+    principal, clubId, "payroll.pay-period.update-boundaries", ENTITY, payPeriodId,
+  );
+  const gate = await isPayPeriodImmutable(clubId, payPeriodId);
+  if (gate.immutable) {
+    throw new ValidationError([
+      {
+        path: "payPeriodId",
+        message: `Refusing to rewrite dates on an operationally-consumed pay period: ${gate.reason}. ` +
+                 `Only FUTURE, unused periods may be updated. Generate a new future period instead.`,
+      },
+    ]);
+  }
+  if (patch.periodEnd.getTime() <= patch.periodStart.getTime()) {
+    throw new ValidationError([
+      { path: "periodEnd", message: "periodEnd must be strictly after periodStart (half-open interval)." },
+    ]);
+  }
+  const before = await prisma.payrollPayPeriod.findFirstOrThrow({
+    where: { id: payPeriodId, clubId },
+  });
+  const row = await prisma.payrollPayPeriod.update({
+    where: { id: payPeriodId },
+    data: {
+      periodStart: patch.periodStart,
+      periodEnd: patch.periodEnd,
+      payDate: patch.payDate,
+    },
+  });
+  await audit(principal, {
+    action: "payroll.pay-period.update-boundaries",
+    entityType: ENTITY,
+    entityId: payPeriodId,
+    clubId,
+    before: {
+      periodStart: before.periodStart.toISOString(),
+      periodEnd: before.periodEnd.toISOString(),
+      payDate: before.payDate.toISOString(),
+    },
+    after: {
+      periodStart: patch.periodStart.toISOString(),
+      periodEnd: patch.periodEnd.toISOString(),
+      payDate: patch.payDate.toISOString(),
+    },
+  });
+  return projectRow(row);
+}
+
+/**
+ * CRPC-1 — flip a pay group's `periodBoundaryStrategy`. Refuses if any
+ * pay period under the group is operationally consumed (so historical
+ * evidence stays intact).
+ */
+export async function updatePayGroupPeriodBoundaryStrategy(
+  principal: Principal,
+  clubId: string,
+  payGroupId: string,
+  strategy: PeriodBoundaryStrategy,
+): Promise<void> {
+  requirePermission(principal, clubId, "payroll:write");
+  await assertPostingAllowed(
+    principal, clubId, "payroll.pay-group.update-strategy", ENTITY, payGroupId,
+  );
+  const grp = await prisma.payrollPayGroup.findFirst({ where: { id: payGroupId, clubId } });
+  if (!grp) throw new NotFoundError("PayrollPayGroup", payGroupId);
+  if (grp.payFrequency !== "SEMI_MONTHLY") {
+    throw new ValidationError([
+      {
+        path: "strategy",
+        message: `periodBoundaryStrategy is only meaningful for SEMI_MONTHLY pay groups (this group is ${grp.payFrequency}).`,
+      },
+    ]);
+  }
+  if (strategy !== "CALENDAR_SEMI_MONTHLY" && strategy !== "LAGGED_SEMI_MONTHLY") {
+    throw new ValidationError([
+      { path: "strategy", message: `Unknown periodBoundaryStrategy: ${strategy}` },
+    ]);
+  }
+  const periods = await prisma.payrollPayPeriod.findMany({
+    where: { clubId, payGroupId },
+    select: { id: true },
+  });
+  for (const p of periods) {
+    const gate = await isPayPeriodImmutable(clubId, p.id);
+    if (gate.immutable) {
+      throw new ValidationError([
+        {
+          path: "strategy",
+          message: `Cannot change periodBoundaryStrategy: pay period ${p.id} is operationally consumed (${gate.reason}). ` +
+                   `Historical evidence must not be silently rewritten. Cut over on a fresh pay group or archive the old rows first.`,
+        },
+      ]);
+    }
+  }
+  await prisma.payrollPayGroup.update({
+    where: { id: payGroupId },
+    data: { periodBoundaryStrategy: strategy },
+  });
+  await audit(principal, {
+    action: "payroll.pay-group.update-strategy",
+    entityType: ENTITY,
+    entityId: payGroupId,
+    clubId,
+    before: { periodBoundaryStrategy: grp.periodBoundaryStrategy },
+    after: { periodBoundaryStrategy: strategy },
+  });
 }

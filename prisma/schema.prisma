@@ -12173,6 +12173,22 @@ model PayrollPayGroup {
   // via an intentional default of PREVIOUS_BUSINESS_DAY (matches the
   // former hard-coded shift, so no existing SM calendar drifts).
   payDateAdjustment String   @default("PREVIOUS_BUSINESS_DAY")
+  // CRPC-1 (2026-09-20) — period-boundary strategy for SEMI_MONTHLY.
+  // Payroll pay-frequency (payFrequency above) describes cadence only;
+  // the WORK-PERIOD boundaries relative to a pay date are a separate
+  // concept. Two shipped strategies:
+  //   CALENDAR_SEMI_MONTHLY — Spectre's default 1-15 / 16-EOM boundaries
+  //                          paired with 15th / EOM pay dates. Applies
+  //                          when payFrequency=SEMI_MONTHLY only.
+  //   LAGGED_SEMI_MONTHLY   — Coulee-Ridge-style calendar:
+  //                          pay 15  → work [prev-month day 24, current day  9)
+  //                          pay EOM → work [current day 9,     current day 24)
+  //                          The lag lets department heads see completed time
+  //                          before payroll must be finalized.
+  //
+  // Ignored for WEEKLY / BIWEEKLY / MONTHLY (their period boundaries
+  // are anchor- or calendar-driven and unaffected by this field).
+  periodBoundaryStrategy String @default("CALENDAR_SEMI_MONTHLY")
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())

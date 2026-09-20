@@ -12061,6 +12061,12 @@ model PayrollPayGroup {
   // Slice E (2026-09-19) — see the sqlite twin for the full note.
   //   NONE | PREVIOUS_BUSINESS_DAY | NEXT_BUSINESS_DAY
   payDateAdjustment String   @default("PREVIOUS_BUSINESS_DAY")
+  // CRPC-1 (2026-09-20) — period-boundary strategy for SEMI_MONTHLY.
+  //   CALENDAR_SEMI_MONTHLY (default) — Spectre's 1-15 / 16-EOM shape.
+  //   LAGGED_SEMI_MONTHLY             — pay-15 → [prev-day-24, day-9);
+  //                                     pay-EOM → [day-9, day-24).
+  // Ignored for WEEKLY / BIWEEKLY / MONTHLY. See sqlite twin for full note.
+  periodBoundaryStrategy String @default("CALENDAR_SEMI_MONTHLY")
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())

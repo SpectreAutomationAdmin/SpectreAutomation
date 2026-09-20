@@ -34,6 +34,8 @@ export interface PayGroupView {
   payDateOffsetDays: number;
   calendarAnchorDate: Date | null;
   payDateAdjustment: PayDateAdjustment;
+  // CRPC-1 (2026-09-20) — period-boundary strategy for SEMI_MONTHLY.
+  periodBoundaryStrategy: "CALENDAR_SEMI_MONTHLY" | "LAGGED_SEMI_MONTHLY";
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -50,6 +52,7 @@ interface PayGroupRow {
   payDateOffsetDays: number;
   calendarAnchorDate: Date | null;
   payDateAdjustment: string;
+  periodBoundaryStrategy: string;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -69,6 +72,10 @@ function projectRow(row: PayGroupRow, memberCount: number): PayGroupView {
     payDateOffsetDays: row.payDateOffsetDays,
     calendarAnchorDate: row.calendarAnchorDate,
     payDateAdjustment: assertKnownPolicy(row.payDateAdjustment ?? "PREVIOUS_BUSINESS_DAY"),
+    periodBoundaryStrategy:
+      row.periodBoundaryStrategy === "LAGGED_SEMI_MONTHLY"
+        ? "LAGGED_SEMI_MONTHLY"
+        : "CALENDAR_SEMI_MONTHLY",
     notes: row.notes,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
