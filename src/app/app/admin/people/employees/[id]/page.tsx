@@ -61,7 +61,7 @@ import EmployeePayrollGrid from "@/components/hr/EmployeePayrollGrid";
 import { getEmployeePayrollYtd } from "@/lib/payroll/ytd";
 import OpeningYtdInlineEditor from "@/components/hr/OpeningYtdInlineEditor";
 import {
-  saveEmployeeOpeningYtdDraftAction,
+  saveEmployeeOpeningYtdAtomicAction,
   validateEmployeeOpeningYtdAction,
   activateEmployeeOpeningYtdAction,
   addEmployeeOpeningYtdComponentAction,
@@ -1096,7 +1096,11 @@ export default async function EmployeeProfilePage({
                       active: c.active,
                     })),
                     actions: {
-                      saveDraft: saveEmployeeOpeningYtdDraftAction,
+                      // FPP-2 (2026-09-20) — atomic single-save replaces the
+                      // two-step save-then-add-components legacy flow. Old
+                      // per-component add/remove actions retained for the
+                      // secondary "+ Add another component" flow only.
+                      saveDraft: saveEmployeeOpeningYtdAtomicAction,
                       validate: validateEmployeeOpeningYtdAction,
                       activate: activateEmployeeOpeningYtdAction,
                       addComponent: addEmployeeOpeningYtdComponentAction,

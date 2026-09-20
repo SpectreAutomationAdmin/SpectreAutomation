@@ -23,8 +23,11 @@ import {
   activateOpeningBalance,
   addOpeningComponentBalance,
   removeOpeningComponentBalance,
+  updateOpeningComponentBalance,
+  saveOpeningBalanceWithComponents,
   type OpeningBalanceFields,
   type PriorPayrollKind,
+  type AtomicOpeningComponentEntry,
 } from "@/lib/payroll/opening-balance";
 import { isAppError, ValidationError } from "@/lib/errors";
 
@@ -178,6 +181,113 @@ export async function removeEmployeeOpeningYtdComponentAction(formData: FormData
   }
   revalidatePath(`/app/admin/people/employees/${employeeId}`);
   backToEmployee(employeeId, undefined, "Component opening balance removed.");
+}
+
+/** FPP-2 (2026-09-20) — direct-edit a component YTD amount in place.
+ *  DRAFT-only per §16 lifecycle immutability. */
+export async function updateEmployeeOpeningYtdComponentAction(formData: FormData): Promise<void> {
+  const { principal, clubId } = await context();
+  const employeeId = String(formData.get("employeeId") ?? "").trim();
+  const openingComponentId = String(formData.get("openingComponentId") ?? "").trim();
+  const ytdRaw = String(formData.get("ytdAmount") ?? "").trim();
+  if (!employeeId) redirect("/app/admin");
+  if (!openingComponentId) backToEmployee(employeeId, "Missing openingComponentId.");
+  const ytdAmount = ytdRaw === "" ? "0" : ytdRaw;
+  const n = Number(ytdAmount);
+  if (!Number.isFinite(n) || n < 0) {
+    backToEmployee(employeeId, "Component amount must be a non-negative number.");
+  }
+  try {
+    await updateOpeningComponentBalance(principal, clubId, openingComponentId, { ytdAmount });
+  } catch (err) {
+    if (err instanceof Error && err.message === "NEXT_REDIRECT") throw err;
+    const msg = isAppError(err) ? err.safeMessage : (err as Error).message;
+    backToEmployee(employeeId, `Could not update component: ${msg}`);
+  }
+  revalidatePath(`/app/admin/people/employees/${employeeId}`);
+  backToEmployee(employeeId, undefined, "Component opening balance updated.");
+}
+
+/** FPP-2 (2026-09-20) — atomic single-save of the entire Opening YTD
+ *  position (parent DRAFT + all component amounts) in ONE transaction.
+ *
+ *  Form contract:
+ *    - Aggregate/statutory fields: same 16 fields as saveEmployeeOpeningYtdDraftAction.
+ *    - Component amounts:
+ *        component_<componentId> = "12345.67" | "" (empty = not entered)
+ *    - Meta: employeeId, taxYear, throughPayDate, priorPayrollKind, notes.
+ *
+ *  A blank component field is NOT persisted (no meaningless zero rows).
+ *  A component that previously had an amount and is now blank is REMOVED
+ *  from the draft.
+ */
+export async function saveEmployeeOpeningYtdAtomicAction(formData: FormData): Promise<void> {
+  const { principal, clubId } = await context();
+  const employeeId = String(formData.get("employeeId") ?? "").trim();
+  if (!employeeId) redirect("/app/admin");
+  const taxYearRaw = String(formData.get("taxYear") ?? "").trim();
+  const throughRaw = String(formData.get("throughPayDate") ?? "").trim();
+  const kindRaw = String(formData.get("priorPayrollKind") ?? "PRIOR_SYSTEM_SAME_EMPLOYER").trim();
+  const priorEmployerId = String(formData.get("priorEmployerId") ?? "").trim() || null;
+  const notes = String(formData.get("notes") ?? "").trim() || undefined;
+
+  const taxYear = Number.parseInt(taxYearRaw, 10);
+  if (!Number.isInteger(taxYear)) backToEmployee(employeeId, "Tax year is required.");
+  if (!throughRaw) backToEmployee(employeeId, "Through pay date is required.");
+  const throughPayDate = new Date(throughRaw + "T00:00:00.000Z");
+  if (Number.isNaN(throughPayDate.getTime())) backToEmployee(employeeId, "Through pay date is invalid.");
+  const kind: PriorPayrollKind =
+    ["PRIOR_SYSTEM_SAME_EMPLOYER", "PRIOR_EMPLOYER", "PRIOR_ADJUSTMENT"].includes(kindRaw)
+      ? (kindRaw as PriorPayrollKind)
+      : "PRIOR_SYSTEM_SAME_EMPLOYER";
+
+  const components: AtomicOpeningComponentEntry[] = [];
+  for (const [rawKey, rawVal] of formData.entries()) {
+    if (typeof rawKey !== "string") continue;
+    if (!rawKey.startsWith("component_")) continue;
+    const componentId = rawKey.slice("component_".length);
+    if (!componentId) continue;
+    const raw = String(rawVal ?? "").trim();
+    components.push({ componentId, ytdAmount: raw === "" ? null : raw });
+  }
+
+  try {
+    const values: OpeningBalanceFields = {
+      ytdGrossEarnings:       readAmount(formData, "ytdGrossEarnings"),
+      ytdTaxableEarnings:     readAmount(formData, "ytdTaxableEarnings"),
+      ytdPensionableEarnings: readAmount(formData, "ytdPensionableEarnings"),
+      ytdInsurableEarnings:   readAmount(formData, "ytdInsurableEarnings"),
+      ytdCppEE_Base:          readAmount(formData, "ytdCppEE_Base"),
+      ytdCppEE_FirstAdd:      readAmount(formData, "ytdCppEE_FirstAdd"),
+      ytdCppEE:               readAmount(formData, "ytdCppEE"),
+      ytdCpp2EE:              readAmount(formData, "ytdCpp2EE"),
+      ytdEiEE:                readAmount(formData, "ytdEiEE"),
+      ytdFederalTax:          readAmount(formData, "ytdFederalTax"),
+      ytdProvincialTax:       readAmount(formData, "ytdProvincialTax"),
+      ytdCppER_Base:          readAmount(formData, "ytdCppER_Base"),
+      ytdCppER_FirstAdd:      readAmount(formData, "ytdCppER_FirstAdd"),
+      ytdCppER:               readAmount(formData, "ytdCppER"),
+      ytdCpp2ER:              readAmount(formData, "ytdCpp2ER"),
+      ytdEiER:                readAmount(formData, "ytdEiER"),
+    };
+    await saveOpeningBalanceWithComponents(principal, clubId, {
+      employeeId,
+      taxYear,
+      values,
+      throughPayDate,
+      priorPayrollKind: kind,
+      priorEmployerId,
+      notes,
+      importSource: "MANUAL",
+      components,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "NEXT_REDIRECT") throw err;
+    const msg = isAppError(err) ? err.safeMessage : (err as Error).message;
+    backToEmployee(employeeId, `Could not save opening YTD: ${msg}`);
+  }
+  revalidatePath(`/app/admin/people/employees/${employeeId}`);
+  backToEmployee(employeeId, undefined, "Opening YTD saved.");
 }
 
 /** Activate a VALIDATED/DRAFT → ACTIVE. */

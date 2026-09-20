@@ -760,5 +760,394 @@ export async function listOpeningComponentBalances(
   return rows.map(toComponentView);
 }
 
+// ---------------------------------------------------------------------------
+// FPP-2 (2026-09-20) — direct-edit of a component YTD amount.
+//
+// A payroll administrator MUST be able to change RRSP EE from $3,093.97 to
+// $3,093.79 in place — without removing and re-adding the row. §16 lifecycle
+// immutability is preserved: edits are DRAFT-only. Tenant isolation, decimal
+// validation, and audit are enforced. Nothing about the component's frozen
+// identity fields (code/displayName/category/side/cashEffect) is mutated.
+// ---------------------------------------------------------------------------
+
+export interface UpdateOpeningComponentBalanceInput {
+  ytdAmount: string;
+  ytdQuantity?: string | null;
+  notes?: string | null;
+}
+
+export async function updateOpeningComponentBalance(
+  principal: Principal,
+  clubId: string,
+  openingComponentId: string,
+  input: UpdateOpeningComponentBalanceInput,
+): Promise<OpeningBalanceComponentView> {
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
+
+  const row = await prisma.payrollOpeningBalanceComponent.findFirst({
+    where: { id: openingComponentId, clubId },
+    select: {
+      id: true, openingBalanceId: true, componentCode: true, ytdAmount: true,
+    },
+  });
+  if (!row) throw new NotFoundError(COMPONENT_ENTITY, openingComponentId);
+
+  await assertPostingAllowed(
+    principal,
+    clubId,
+    "payroll.opening-balance.component.update",
+    COMPONENT_ENTITY,
+    row.id,
+  );
+
+  await loadDraftOpeningForComponentEdit(clubId, row.openingBalanceId);
+
+  if (!/^-?\d+(\.\d+)?$/.test(input.ytdAmount)) {
+    throw new ValidationError([
+      { path: "ytdAmount", message: `"${input.ytdAmount}" is not a valid decimal string.` },
+    ]);
+  }
+  if (Number(input.ytdAmount) < 0) {
+    throw new ValidationError([{ path: "ytdAmount", message: "ytdAmount must be zero or positive." }]);
+  }
+
+  if (input.ytdQuantity != null && input.ytdQuantity !== "") {
+    if (!/^-?\d+(\.\d+)?$/.test(input.ytdQuantity)) {
+      throw new ValidationError([
+        { path: "ytdQuantity", message: `"${input.ytdQuantity}" is not a valid decimal string.` },
+      ]);
+    }
+  }
+
+  const before = row.ytdAmount.toString();
+  const updated = await prisma.payrollOpeningBalanceComponent.update({
+    where: { id: row.id },
+    data: {
+      ytdAmount: input.ytdAmount,
+      ytdQuantity:
+        input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
+      notes: input.notes != null ? (input.notes.trim() || null) : undefined,
+    },
+  });
+
+  await audit(principal, {
+    action: "payroll.opening-balance.component.update",
+    entityType: COMPONENT_ENTITY,
+    entityId: row.id,
+    clubId,
+    before: { ytdAmount: before },
+    after: {
+      openingBalanceId: row.openingBalanceId,
+      componentCode: row.componentCode,
+      ytdAmount: input.ytdAmount,
+    },
+  });
+
+  return toComponentView(updated);
+}
+
+// ---------------------------------------------------------------------------
+// FPP-2 (2026-09-20) — atomic save of the entire Opening YTD position.
+//
+// The founder must be able to enter aggregate/statutory values AND per-
+// component YTD amounts in ONE unified form, in either order, and click
+// Save Draft ONCE. This service accepts the whole position and persists
+// it in a single database transaction:
+//
+//   1) Upsert the parent DRAFT PayrollOpeningBalance (create if absent,
+//      refresh if present — same idempotency as createDraftOpeningBalance).
+//   2) For each supplied component entry: upsert the matching
+//      PayrollOpeningBalanceComponent under the parent. A BLANK entry
+//      (amount === "" or unspecified) is NOT persisted — meaningless
+//      zero rows are not created. An entry that goes from populated to
+//      blank REMOVES the row.
+//   3) On any failure the whole thing rolls back — no partial state.
+//
+// DRAFT-only: refuses non-DRAFT parents (existing lifecycle immutability
+// preserved). Never mutates ACTIVE/VALIDATED/SUPERSEDED rows. Only DRAFT
+// parents accept component edits; VALIDATED requires validate step first.
+// ---------------------------------------------------------------------------
+
+export interface AtomicOpeningComponentEntry {
+  /** PayrollComponent.id (tenant-scoped). Required. */
+  componentId: string;
+  /** Empty string / null / undefined means "not entered" — no row will be
+   *  persisted. If a row previously existed for the same code, it is
+   *  DELETED (component amount cleared). */
+  ytdAmount: string | null | undefined;
+  ytdQuantity?: string | null;
+  notes?: string | null;
+}
+
+export interface SaveOpeningBalanceWithComponentsInput {
+  employeeId: string;
+  taxYear: number;
+  values: OpeningBalanceFields;
+  throughPayDate: Date;
+  importSource?: string;
+  notes?: string;
+  priorPayrollKind?: PriorPayrollKind;
+  priorEmployerId?: string | null;
+  components: AtomicOpeningComponentEntry[];
+}
+
+/**
+ * Atomically upsert the parent draft opening balance + its per-component
+ * rows. Returns the (potentially newly-created) parent view and the final
+ * component-view array. Every mutation is inside one Prisma transaction.
+ */
+export async function saveOpeningBalanceWithComponents(
+  principal: Principal,
+  clubId: string,
+  input: SaveOpeningBalanceWithComponentsInput,
+): Promise<{ parent: OpeningBalanceView; components: OpeningBalanceComponentView[] }> {
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
+  await assertPostingAllowed(principal, clubId, "payroll.opening-balance.draft", ENTITY, input.employeeId);
+  await assertTenantEmployee(clubId, input.employeeId);
+  assertValidNumerics(input.values);
+
+  if (!Number.isInteger(input.taxYear) || input.taxYear < 2000 || input.taxYear > 2100) {
+    throw new ValidationError([{ path: "taxYear", message: "Invalid tax year." }]);
+  }
+  if (!(input.throughPayDate instanceof Date) || Number.isNaN(input.throughPayDate.getTime())) {
+    throw new ValidationError([
+      { path: "throughPayDate", message: "throughPayDate is required." },
+    ]);
+  }
+  if (input.throughPayDate.getUTCFullYear() !== input.taxYear) {
+    throw new ValidationError([
+      {
+        path: "throughPayDate",
+        message: `throughPayDate (${input.throughPayDate.toISOString().slice(0, 10)}) must be in the same tax year as taxYear (${input.taxYear}).`,
+      },
+    ]);
+  }
+  await assertThroughPayDateBeforeFirstSpectrePayDate(clubId, input.taxYear, input.throughPayDate);
+
+  const priorPayrollKind: PriorPayrollKind = input.priorPayrollKind ?? "PRIOR_SYSTEM_SAME_EMPLOYER";
+  if (!PRIOR_PAYROLL_KINDS.includes(priorPayrollKind)) {
+    throw new ValidationError([
+      { path: "priorPayrollKind", message: `priorPayrollKind must be one of ${PRIOR_PAYROLL_KINDS.join(", ")}` },
+    ]);
+  }
+  if (priorPayrollKind === "PRIOR_EMPLOYER" && !input.priorEmployerId?.trim()) {
+    throw new ValidationError([
+      { path: "priorEmployerId", message: "priorEmployerId is required when priorPayrollKind is PRIOR_EMPLOYER." },
+    ]);
+  }
+
+  // Validate + normalize component entries. Empty entries are dropped
+  // ("not entered" — the row is either not created or explicitly removed).
+  interface NormalizedEntry {
+    componentId: string;
+    amount: string | null; // null = "delete row if present, do not create"
+    quantity: string | null;
+    notes: string | null;
+  }
+  const normalized: NormalizedEntry[] = [];
+  const seenIds = new Set<string>();
+  for (const raw of input.components ?? []) {
+    const componentId = String(raw.componentId ?? "").trim();
+    if (!componentId) continue;
+    if (seenIds.has(componentId)) {
+      throw new ValidationError([
+        { path: "components", message: `Duplicate componentId "${componentId}" in submission.` },
+      ]);
+    }
+    seenIds.add(componentId);
+    const rawAmt = raw.ytdAmount == null ? "" : String(raw.ytdAmount).trim();
+    let amount: string | null;
+    if (rawAmt === "") {
+      amount = null;
+    } else {
+      if (!/^-?\d+(\.\d+)?$/.test(rawAmt)) {
+        throw new ValidationError([
+          { path: `components.${componentId}.ytdAmount`, message: `"${rawAmt}" is not a valid decimal string.` },
+        ]);
+      }
+      if (Number(rawAmt) < 0) {
+        throw new ValidationError([
+          { path: `components.${componentId}.ytdAmount`, message: "ytdAmount must be zero or positive." },
+        ]);
+      }
+      amount = rawAmt;
+    }
+    let quantity: string | null = null;
+    if (raw.ytdQuantity != null && raw.ytdQuantity !== "") {
+      const q = String(raw.ytdQuantity).trim();
+      if (!/^-?\d+(\.\d+)?$/.test(q)) {
+        throw new ValidationError([
+          { path: `components.${componentId}.ytdQuantity`, message: `"${q}" is not a valid decimal string.` },
+        ]);
+      }
+      quantity = q;
+    }
+    normalized.push({
+      componentId,
+      amount,
+      quantity,
+      notes: raw.notes != null ? String(raw.notes).trim() || null : null,
+    });
+  }
+
+  const decimalData: Record<string, string> = {};
+  for (const f of NUMERIC_FIELDS) decimalData[f] = input.values[f];
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Refuse if a non-DRAFT row already exists for the tuple that isn't
+    // superseded. The parent must be DRAFT (create) OR a DRAFT already
+    // exists (refresh in place). VALIDATED/ACTIVE rows can only be
+    // superseded via the dedicated activation path — that's not this
+    // service's job.
+    const existing = await tx.payrollOpeningBalance.findFirst({
+      where: { clubId, employeeId: input.employeeId, taxYear: input.taxYear, status: "DRAFT" },
+    });
+
+    let parent;
+    if (existing) {
+      parent = await tx.payrollOpeningBalance.update({
+        where: { id: existing.id },
+        data: {
+          ...decimalData,
+          throughPayDate: input.throughPayDate,
+          importSource: input.importSource ?? existing.importSource,
+          notes: input.notes ?? existing.notes,
+          priorPayrollKind,
+          priorEmployerId: input.priorEmployerId ?? existing.priorEmployerId,
+          importedByUserId: principal.id,
+          importedAt: new Date(),
+        },
+      });
+    } else {
+      // Refuse if a non-DRAFT row exists for the tuple — the caller has
+      // to supersede it through the activation path, not silently create a
+      // second parallel row.
+      const nonDraft = await tx.payrollOpeningBalance.findFirst({
+        where: {
+          clubId,
+          employeeId: input.employeeId,
+          taxYear: input.taxYear,
+          status: { in: ["VALIDATED", "ACTIVE"] },
+        },
+        select: { id: true, status: true },
+      });
+      if (nonDraft) {
+        throw new ValidationError([
+          {
+            path: "status",
+            message: `An opening balance for this employee is already ${nonDraft.status}. Use the supersede workflow to correct it.`,
+          },
+        ]);
+      }
+      parent = await tx.payrollOpeningBalance.create({
+        data: {
+          clubId,
+          employeeId: input.employeeId,
+          taxYear: input.taxYear,
+          status: "DRAFT",
+          ...decimalData,
+          throughPayDate: input.throughPayDate,
+          importSource: input.importSource ?? "MANUAL",
+          notes: input.notes ?? null,
+          priorPayrollKind,
+          priorEmployerId: input.priorEmployerId ?? null,
+          importedByUserId: principal.id,
+          importedAt: new Date(),
+        },
+      });
+    }
+
+    // Component upserts. For each supplied entry:
+    //   - amount === null  → delete any existing row for this componentCode.
+    //   - amount === "..." → upsert row (create if absent, update ytdAmount).
+    // Every component's identity (code/name/category/side/cashEffect) is
+    // frozen at the moment of upsert from the current PayrollComponent row.
+    const componentIds = normalized.map((n) => n.componentId);
+    const components = componentIds.length
+      ? await tx.payrollComponent.findMany({
+          where: { id: { in: componentIds }, clubId },
+          select: { id: true, code: true, displayName: true, category: true, side: true, cashEffect: true },
+        })
+      : [];
+    const catalogueById = new Map(components.map((c) => [c.id, c]));
+    for (const n of normalized) {
+      const cat = catalogueById.get(n.componentId);
+      if (!cat) {
+        throw new ValidationError([
+          { path: `components.${n.componentId}`, message: "Component does not belong to this Club." },
+        ]);
+      }
+      const existingRow = await tx.payrollOpeningBalanceComponent.findFirst({
+        where: { openingBalanceId: parent.id, componentCode: cat.code },
+        select: { id: true },
+      });
+      if (n.amount == null) {
+        if (existingRow) {
+          await tx.payrollOpeningBalanceComponent.delete({ where: { id: existingRow.id } });
+        }
+        continue;
+      }
+      if (existingRow) {
+        await tx.payrollOpeningBalanceComponent.update({
+          where: { id: existingRow.id },
+          data: {
+            ytdAmount: n.amount,
+            ytdQuantity: n.quantity,
+            notes: n.notes,
+          },
+        });
+      } else {
+        await tx.payrollOpeningBalanceComponent.create({
+          data: {
+            clubId,
+            openingBalanceId: parent.id,
+            sourceComponentId: cat.id,
+            componentCode: cat.code,
+            displayName: cat.displayName,
+            category: cat.category,
+            side: cat.side,
+            cashEffect: cat.cashEffect,
+            ytdAmount: n.amount,
+            ytdQuantity: n.quantity,
+            notes: n.notes,
+          },
+        });
+      }
+    }
+
+    const finalRows = await tx.payrollOpeningBalanceComponent.findMany({
+      where: { clubId, openingBalanceId: parent.id },
+      orderBy: [{ side: "asc" }, { category: "asc" }, { displayName: "asc" }],
+    });
+
+    return { parent, components: finalRows };
+  });
+
+  await audit(principal, {
+    action: existing_marker(result.parent.createdAt, result.parent.updatedAt),
+    entityType: ENTITY,
+    entityId: result.parent.id,
+    clubId,
+    after: {
+      taxYear: input.taxYear,
+      employeeId: input.employeeId,
+      componentCount: result.components.length,
+    },
+  });
+
+  return {
+    parent: toView(result.parent),
+    components: result.components.map(toComponentView),
+  };
+}
+
+function existing_marker(createdAt: Date, updatedAt: Date): string {
+  const created = createdAt.getTime();
+  const updated = updatedAt.getTime();
+  return created === updated
+    ? "payroll.opening-balance.draft.create-with-components"
+    : "payroll.opening-balance.draft.save-with-components";
+}
+
 export { NUMERIC_FIELDS };
 export type { Decimal };
