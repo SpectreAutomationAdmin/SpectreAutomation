@@ -475,15 +475,6 @@ export default async function EmployeeProfilePage({
       },
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
     });
-    console.log("[FPP1-DEBUG] editableOpeningBalance loader:", {
-      clubId: profile.clubId,
-      employeeId: profile.id,
-      taxYear: currentTaxYear,
-      canReadPayrollRecurring,
-      activeOpeningBalanceExists: activeOpeningBalance != null,
-      foundDraftRow: draftRow != null,
-      draftRowStatus: draftRow?.status ?? null,
-    });
     if (draftRow) {
       editableOpeningBalance = {
         id: draftRow.id,
@@ -516,11 +507,6 @@ export default async function EmployeeProfilePage({
 
   // FPP-1 — per-Component opening rows for whichever balance we have,
   // and the Club's PayrollComponent catalogue for the "add" picker.
-  console.log("[FPP1-DEBUG] editableOpeningBalance AFTER assignment:", {
-    isNull: editableOpeningBalance == null,
-    status: editableOpeningBalance?.status ?? null,
-    id: editableOpeningBalance?.id ?? null,
-  });
   const [openingComponentRows, openingComponentCatalogue] = await Promise.all([
     editableOpeningBalance && canReadPayrollRecurring
       ? listOpeningComponentBalances(principal, profile.clubId, editableOpeningBalance.id).catch(() => [])
@@ -1080,18 +1066,41 @@ export default async function EmployeeProfilePage({
                     taxYear: currentTaxYear,
                     firstSpectrePayDateIso: implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null,
                     canWrite: hasPermission(principal, profile.clubId, "payroll:run"),
-                    status: (activeOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING",
-                    openingBalanceId: activeOpeningBalance?.id ?? null,
-                    throughPayDateIso: activeOpeningBalance?.throughPayDate
-                      ? new Date(activeOpeningBalance.throughPayDate).toISOString()
+                    // FPP-1 §2 — use editableOpeningBalance so a DRAFT
+                    // parent surfaces its status + id + component openings
+                    // in the modal even before activation.
+                    status: (editableOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING",
+                    openingBalanceId: editableOpeningBalance?.id ?? null,
+                    throughPayDateIso: editableOpeningBalance?.throughPayDate
+                      ? new Date(editableOpeningBalance.throughPayDate).toISOString()
                       : null,
-                    priorPayrollKind: (activeOpeningBalance?.priorPayrollKind ?? null) as
+                    priorPayrollKind: (editableOpeningBalance?.priorPayrollKind ?? null) as
                       "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
-                    values: activeOpeningBalance?.values ?? null,
+                    values: editableOpeningBalance?.values ?? null,
+                    componentOpenings: openingComponentRows.map((r) => ({
+                      id: r.id,
+                      componentCode: r.componentCode,
+                      displayName: r.displayName,
+                      category: r.category,
+                      side: r.side,
+                      cashEffect: r.cashEffect,
+                      ytdAmount: r.ytdAmount,
+                    })),
+                    componentCatalogue: openingComponentCatalogue.map((c) => ({
+                      id: c.id,
+                      code: c.code,
+                      displayName: c.displayName,
+                      category: c.category,
+                      side: c.side as "EMPLOYEE" | "EMPLOYER",
+                      cashEffect: c.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+                      active: c.active,
+                    })),
                     actions: {
                       saveDraft: saveEmployeeOpeningYtdDraftAction,
                       validate: validateEmployeeOpeningYtdAction,
                       activate: activateEmployeeOpeningYtdAction,
+                      addComponent: addEmployeeOpeningYtdComponentAction,
+                      removeComponent: removeEmployeeOpeningYtdComponentAction,
                     },
                   }
                 : null
@@ -1231,53 +1240,6 @@ export default async function EmployeeProfilePage({
             }
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
             overtimePolicy={overtimePolicyView}
-            openingYtdEditor={
-              implementationDeclaration?.mode === "MID_YEAR_MIGRATION" ? (
-                <OpeningYtdInlineEditor
-                  employeeId={profile.id}
-                  taxYear={currentTaxYear}
-                  firstSpectrePayDateIso={
-                    implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null
-                  }
-                  canWrite={hasPermission(principal, profile.clubId, "payroll:run")}
-                  status={(editableOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING"}
-                  openingBalanceId={editableOpeningBalance?.id ?? null}
-                  throughPayDateIso={
-                    editableOpeningBalance?.throughPayDate
-                      ? new Date(editableOpeningBalance.throughPayDate).toISOString()
-                      : null
-                  }
-                  priorPayrollKind={(editableOpeningBalance?.priorPayrollKind ?? null) as
-                    "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null}
-                  values={editableOpeningBalance?.values ?? null}
-                  componentOpenings={openingComponentRows.map((r) => ({
-                    id: r.id,
-                    componentCode: r.componentCode,
-                    displayName: r.displayName,
-                    category: r.category,
-                    side: r.side,
-                    cashEffect: r.cashEffect,
-                    ytdAmount: r.ytdAmount,
-                  }))}
-                  componentCatalogue={openingComponentCatalogue.map((c) => ({
-                    id: c.id,
-                    code: c.code,
-                    displayName: c.displayName,
-                    category: c.category,
-                    side: c.side as "EMPLOYEE" | "EMPLOYER",
-                    cashEffect: c.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
-                    active: c.active,
-                  }))}
-                  actions={{
-                    saveDraft: saveEmployeeOpeningYtdDraftAction,
-                    validate: validateEmployeeOpeningYtdAction,
-                    activate: activateEmployeeOpeningYtdAction,
-                    addComponent: addEmployeeOpeningYtdComponentAction,
-                    removeComponent: removeEmployeeOpeningYtdComponentAction,
-                  }}
-                />
-              ) : null
-            }
             benefitsDeductionsSection={
               <BenefitsDeductionsSection
                 employeeId={profile.id}
