@@ -42,6 +42,12 @@ export interface BenefitsDeductionsSectionProps {
   employeeId: string;
   rows: BenefitEnrolmentRow[];
   planChoices: PlanChoice[];
+  /** FPP-4 (2026-09-20) — count of BenefitPlans configured at the
+   *  Club level. When 0, the Enrol form correctly reports "No benefit
+   *  plans configured for this Club yet" and links to Payroll Settings
+   *  instead of the misleading "All plans already have an active
+   *  enrolment for this employee." */
+  clubConfiguredPlanCount?: number;
   canWrite: boolean;
   enrolAction: (form: FormData) => Promise<void>;
   changeAction: (form: FormData) => Promise<void>;
@@ -353,6 +359,7 @@ export default function BenefitsDeductionsSection(props: BenefitsDeductionsSecti
         <EnrolForm
           employeeId={props.employeeId}
           plans={availablePlans}
+          clubConfiguredPlanCount={props.clubConfiguredPlanCount ?? props.planChoices.length}
           action={props.enrolAction}
           onCancel={() => setEnrolling(false)}
         />
@@ -364,6 +371,7 @@ export default function BenefitsDeductionsSection(props: BenefitsDeductionsSecti
 function EnrolForm(props: {
   employeeId: string;
   plans: PlanChoice[];
+  clubConfiguredPlanCount: number;
   action: (form: FormData) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -383,9 +391,22 @@ function EnrolForm(props: {
         <div>
           <label className="text-[11px] font-semibold uppercase tracking-[0.04em] text-stone-600">Plan</label>
           {props.plans.length === 0 ? (
-            <p className="mt-1 text-xs text-stone-500">
-              All configured plans already have an active enrolment for this employee.
-            </p>
+            props.clubConfiguredPlanCount === 0 ? (
+              <p className="mt-1 text-xs text-stone-500" data-testid="benefits-enrol-no-plans-configured">
+                No benefit plans are configured for this Club yet. Configure them in{" "}
+                <a
+                  href="/app/admin/payroll/setup/benefits"
+                  className="text-[#1e40af] hover:underline"
+                >
+                  Payroll Settings → Benefits
+                </a>
+                {" "}before enrolling this employee.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-stone-500" data-testid="benefits-enrol-all-enrolled">
+                All configured plans already have an active enrolment for this employee.
+              </p>
+            )
           ) : (
             <select
               name="planId"

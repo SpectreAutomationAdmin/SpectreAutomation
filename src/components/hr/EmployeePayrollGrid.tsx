@@ -25,6 +25,7 @@ import OpeningYtdInlineEditor, {
 import RecurringComponentAddModal, {
   type RecurringAddComponentChoice,
 } from "./RecurringComponentAddModal";
+import RecurringComponentRowActions from "./RecurringComponentRowActions";
 
 // -------------------------------------------------------------------
 // Types
@@ -59,9 +60,13 @@ export interface EmployeePayrollGridProps {
   recurring: Array<{
     id: string;
     componentDisplayName: string;
+    componentCode: string;
     amount: Money | null;
+    percentBps: number | null;
+    calculationMethod: "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS";
     frequencyLabel: string;
     effectiveFromIso: string;
+    effectiveToIso: string | null;
     active: boolean;
   }>;
   /**
@@ -91,6 +96,23 @@ export interface EmployeePayrollGridProps {
         notes?: string | null;
       },
     ) => Promise<{ ok: true; id?: string } | { ok: false; error: string }>;
+    changeAction: (
+      employeeId: string,
+      clubId: string,
+      predecessorId: string,
+      input: {
+        amount: string | null;
+        percentBps: number | null;
+        effectiveFrom: string;
+        notes?: string | null;
+      },
+    ) => Promise<{ ok: true; id?: string } | { ok: false; error: string }>;
+    endAction: (
+      employeeId: string,
+      clubId: string,
+      assignmentId: string,
+      effectiveTo: string,
+    ) => Promise<{ ok: true; id?: string } | { ok: false; error: string }>;
   };
 
   oneTime: Array<{
@@ -105,6 +127,7 @@ export interface EmployeePayrollGridProps {
   benefits: {
     rows: BenefitEnrolmentRow[];
     planChoices: PlanChoice[];
+    clubConfiguredPlanCount?: number;
     canWrite: boolean;
     enrolAction: (form: FormData) => Promise<void>;
     changeAction: (form: FormData) => Promise<void>;
@@ -333,15 +356,48 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
                 </thead>
                 <tbody>
                   {props.recurring.map((r) => (
-                    <tr key={r.id} className="border-t border-stone-100">
-                      <td className="py-1.5 pr-2 text-stone-900">{r.componentDisplayName}</td>
-                      <td className="py-1.5 pr-2 text-stone-900">{fmtMoney(r.amount)}</td>
-                      <td className="py-1.5 pr-2 text-stone-700">{r.frequencyLabel}</td>
-                      <td className="py-1.5 pr-2 text-stone-700">{fmtCivil(r.effectiveFromIso)}</td>
-                      <td className="py-1.5 pr-2">
-                        <StatusBadge status={r.active ? "ACTIVE" : "ENDED"} />
-                      </td>
-                    </tr>
+                    <>
+                      <tr key={r.id} className="border-t border-stone-100" data-testid={`grid-recurring-row-${r.id}`}>
+                        <td className="py-1.5 pr-2 text-stone-900">{r.componentDisplayName}</td>
+                        <td className="py-1.5 pr-2 text-stone-900">
+                          {r.calculationMethod === "PERCENT_OF_ELIGIBLE_EARNINGS" && r.percentBps != null
+                            ? `${(r.percentBps / 100).toFixed(2)}%`
+                            : fmtMoney(r.amount)}
+                        </td>
+                        <td className="py-1.5 pr-2 text-stone-700">{r.frequencyLabel}</td>
+                        <td className="py-1.5 pr-2 text-stone-700">
+                          {fmtCivil(r.effectiveFromIso)}
+                          {r.effectiveToIso ? ` → ${fmtCivil(r.effectiveToIso)}` : ""}
+                        </td>
+                        <td className="py-1.5 pr-2">
+                          <StatusBadge status={r.active ? "ACTIVE" : "ENDED"} />
+                        </td>
+                      </tr>
+                      {props.recurringAdd && r.active ? (
+                        <tr key={`${r.id}-actions`} className="border-t border-stone-50">
+                          <td colSpan={5} className="pb-2">
+                            <RecurringComponentRowActions
+                              employeeId={props.employeeId}
+                              clubId={props.recurringAdd.clubId}
+                              canWrite={props.recurringAdd.canWrite}
+                              row={{
+                                id: r.id,
+                                componentDisplayName: r.componentDisplayName,
+                                componentCode: r.componentCode,
+                                amount: r.amount,
+                                percentBps: r.percentBps,
+                                calculationMethod: r.calculationMethod,
+                                effectiveFromIso: r.effectiveFromIso,
+                                effectiveToIso: r.effectiveToIso,
+                                active: r.active,
+                              }}
+                              changeAction={props.recurringAdd.changeAction}
+                              endAction={props.recurringAdd.endAction}
+                            />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </>
                   ))}
                 </tbody>
               </table>
@@ -396,6 +452,7 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
               employeeId={props.employeeId}
               rows={props.benefits.rows}
               planChoices={props.benefits.planChoices}
+              clubConfiguredPlanCount={props.benefits.clubConfiguredPlanCount}
               canWrite={props.benefits.canWrite}
               enrolAction={props.benefits.enrolAction}
               changeAction={props.benefits.changeAction}

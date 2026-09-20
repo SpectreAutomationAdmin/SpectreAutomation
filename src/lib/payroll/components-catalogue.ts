@@ -479,13 +479,41 @@ export async function createRecurringComponentAssignment(
   requirePermission(principal, clubId, "payroll:write");
 
   const component = await prisma.payrollComponent.findUnique({
-    where: { id: input.componentId }, select: { id: true, clubId: true, code: true, calculationMethod: true, active: true },
+    where: { id: input.componentId },
+    select: {
+      id: true, clubId: true, code: true, displayName: true,
+      calculationMethod: true, active: true,
+      // FPP-4 (2026-09-20) — ownership rule. A component linked as
+      // employee/employer side on an ACTIVE PayrollBenefitPlan is owned
+      // by that plan's enrolment architecture. Refuse to create a plain
+      // recurring assignment for such a component so the two
+      // architectures cannot silently duplicate a deduction.
+      benefitPlansAsEmployee: {
+        where: { active: true },
+        select: { id: true, code: true, name: true, kind: true },
+      },
+      benefitPlansAsEmployer: {
+        where: { active: true },
+        select: { id: true, code: true, name: true, kind: true },
+      },
+    },
   });
   if (!component || component.clubId !== clubId) {
     throw new ValidationError([{ path: "componentId", message: "Component not found in this club." }]);
   }
   if (!component.active) {
     throw new ValidationError([{ path: "componentId", message: "Component is inactive; reactivate before assigning." }]);
+  }
+  const ownedByPlan =
+    component.benefitPlansAsEmployee[0] ?? component.benefitPlansAsEmployer[0] ?? null;
+  if (ownedByPlan) {
+    throw new ValidationError([{
+      path: "componentId",
+      message:
+        `Component "${component.displayName}" is owned by benefit plan ` +
+        `"${ownedByPlan.name}". Enrol this employee in the plan under ` +
+        `Benefits & Deductions instead of adding a duplicate recurring assignment.`,
+    }]);
   }
   const employee = await prisma.employee.findUnique({
     where: { id: input.employeeId }, select: { id: true, clubId: true, firstName: true, lastName: true },

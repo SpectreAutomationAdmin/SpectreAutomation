@@ -559,6 +559,19 @@ export default async function EmployeeProfilePage({
   const activeBenefitPlans = canReadPayrollRecurring
     ? await listBenefitPlans(principal, profile.clubId).catch(() => [])
     : [];
+  // FPP-4 (2026-09-20) — component-ownership set. Used to filter the
+  // ordinary recurring-component picker: components owned by an active
+  // benefit plan (as either employee or employer side) are exposed
+  // through Benefits & Deductions instead, never as standalone
+  // recurring assignments. Server-side guard in
+  // createRecurringComponentAssignment enforces the same rule.
+  const planOwnedComponentIds = new Set<string>();
+  for (const p of activeBenefitPlans) {
+    if (p.active !== false) {
+      if (p.employeeComponentId) planOwnedComponentIds.add(p.employeeComponentId);
+      if (p.employerComponentId) planOwnedComponentIds.add(p.employerComponentId);
+    }
+  }
   const canWriteBenefitEnrolment = hasPermission(principal, profile.clubId, "payroll:benefit_enrolment:write");
 
   // Slice B (2026-09-18) — pre-batch scheduled one-time earnings data.
@@ -1000,9 +1013,13 @@ export default async function EmployeeProfilePage({
               .map((a) => ({
                 id: a.id,
                 componentDisplayName: a.component.displayName,
+                componentCode: a.component.code,
                 amount: a.amount != null ? String(a.amount) : null,
+                percentBps: a.percentBps ?? null,
+                calculationMethod: a.component.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
                 frequencyLabel: "Per Pay",
                 effectiveFromIso: a.effectiveFrom.toISOString(),
+                effectiveToIso: a.effectiveTo ? a.effectiveTo.toISOString() : null,
                 active: a.active,
               }))}
             addRecurringHref={`/app/admin/people/employees/${profile.id}?tab=payroll#recurring`}
@@ -1014,6 +1031,10 @@ export default async function EmployeeProfilePage({
                     catalogue: payrollComponentCatalogue
                       .filter((c) => (c as unknown as { usage?: string }).usage !== "ONE_TIME")
                       .filter((c) => c.active)
+                      // FPP-4 (2026-09-20) — ownership rule. Exclude any
+                      // component owned by an active benefit plan; those
+                      // are configured through Benefits & Deductions.
+                      .filter((c) => !planOwnedComponentIds.has(c.id))
                       .map((c) => ({
                         id: c.id,
                         code: c.code,
@@ -1024,6 +1045,8 @@ export default async function EmployeeProfilePage({
                         calculationMethod: c.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
                       })),
                     addAction: addRecurringPayrollComponentAction,
+                    changeAction: changeRecurringPayrollComponentAction,
+                    endAction: endRecurringPayrollComponentAction,
                   }
                 : undefined
             }
@@ -1068,6 +1091,10 @@ export default async function EmployeeProfilePage({
                 employerMatchBps: p.employerMatchBps ?? null,
                 employerMatchCapBps: p.employerMatchCapBps ?? null,
               })),
+              // FPP-4 (2026-09-20) — total Club-configured plans (used to
+              // distinguish "no plans configured" from "all plans enrolled"
+              // in the Enrol form).
+              clubConfiguredPlanCount: activeBenefitPlans.length,
               canWrite: canWriteBenefitEnrolment,
               enrolAction: benefitsEnrolAction,
               changeAction: benefitsChangeAction,
