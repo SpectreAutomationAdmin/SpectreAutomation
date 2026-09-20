@@ -57,6 +57,8 @@ import EmployeeRecurringComponentsSection from "@/components/hr/EmployeeRecurrin
 import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
 // Slice A (2026-09-18) — Canonical Payroll-tab workspace.
 import EmployeePayrollWorkspaceSection from "@/components/hr/EmployeePayrollWorkspaceSection";
+import EmployeePayrollGrid from "@/components/hr/EmployeePayrollGrid";
+import { getEmployeePayrollYtd } from "@/lib/payroll/ytd";
 import OpeningYtdInlineEditor from "@/components/hr/OpeningYtdInlineEditor";
 import {
   saveEmployeeOpeningYtdDraftAction,
@@ -509,6 +511,45 @@ export default async function EmployeeProfilePage({
       : Promise.resolve([]),
   ]);
 
+  // EPW-2 (2026-09-20) — per-employee posted payroll history for the
+  // Payroll History card, and the current YTD aggregate for the YTD
+  // Summary card. Per-employee history filters PayrollBatchEmployee by
+  // employeeId + batch.status=POSTED; the top 5 most recent are shown.
+  const employeePayrollHistory = canReadPayrollRecurring
+    ? await prisma.payrollBatchEmployee
+        .findMany({
+          where: { clubId: profile.clubId, employeeId: profile.id, batch: { status: "POSTED" } },
+          select: {
+            id: true, grossPay: true, netPay: true,
+            batch: {
+              select: {
+                id: true, status: true,
+                payPeriod: { select: { payDate: true, periodStart: true, periodEnd: true } },
+              },
+            },
+          },
+          orderBy: [{ batch: { payPeriod: { payDate: "desc" } } }],
+          take: 5,
+        })
+        .catch(() => [])
+    : [];
+  const employeeYtd = canReadPayrollRecurring
+    ? await getEmployeePayrollYtd(profile.clubId, profile.id, new Date()).catch(() => null)
+    : null;
+  const nextPayDate = activePayGroupMembership?.payGroupId
+    ? await prisma.payrollPayPeriod
+        .findFirst({
+          where: {
+            clubId: profile.clubId,
+            payGroupId: activePayGroupMembership.payGroupId,
+            payDate: { gte: new Date() },
+          },
+          orderBy: { payDate: "asc" },
+          select: { payDate: true },
+        })
+        .catch(() => null)
+    : null;
+
   const nowTs = Date.now();
   const monthShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const fmtCivil = (d: Date) => {
@@ -838,6 +879,177 @@ export default async function EmployeeProfilePage({
       }
       payrollWorkspaceSection={
         canReadPayrollRecurring ? (
+          <EmployeePayrollGrid
+            employeeId={profile.id}
+            employeeNumber={profile.employeeNumber}
+            employeeName={`${profile.preferredName ?? profile.firstName} ${profile.lastName}`}
+            employeeStatus={profile.status ?? "ACTIVE"}
+            originalHireDateIso={profile.hireDate ? new Date(profile.hireDate).toISOString() : null}
+            spectreActivatedAtIso={profile.activatedAt ? new Date(profile.activatedAt).toISOString() : null}
+            payGroup={
+              activePayGroupMembership?.payGroup
+                ? {
+                    id: activePayGroupMembership.payGroup.id,
+                    code: activePayGroupMembership.payGroup.code,
+                    name: activePayGroupMembership.payGroup.name,
+                    payFrequency: activePayGroupMembership.payGroup.payFrequency,
+                  }
+                : null
+            }
+            nextPayDateIso={nextPayDate?.payDate ? nextPayDate.payDate.toISOString() : null}
+            currentCompensation={
+              currentCompensation
+                ? {
+                    cadence: currentCompensation.cadence,
+                    rate: currentCompensation.rate.toString(),
+                    effectiveFromIso: currentCompensation.effectiveFrom.toISOString(),
+                  }
+                : null
+            }
+            compensationHistoryCount={compensationHistory.length}
+            compensationEditHref={`/app/admin/people/employees/${profile.id}?tab=employment#compensation`}
+            viewCompensationHistoryHref={`/app/admin/people/employees/${profile.id}?tab=employment#compensation`}
+            recurring={recurringComponentAssignments
+              .filter((a) => a.active)
+              .map((a) => ({
+                id: a.id,
+                componentDisplayName: a.component.displayName,
+                amount: a.amount != null ? String(a.amount) : null,
+                frequencyLabel: "Per Pay",
+                effectiveFromIso: a.effectiveFrom.toISOString(),
+                active: a.active,
+              }))}
+            addRecurringHref={`/app/admin/people/employees/${profile.id}?tab=payroll#recurring`}
+            oneTime={oneTimeRows
+              .filter((r) => r.status !== "CANCELLED")
+              .slice(0, 5)
+              .map((r) => ({
+                id: r.id,
+                componentDisplayName: r.componentDisplayName,
+                amount: String(r.amount ?? "0"),
+                payDateIso: r.payPeriodLabel ?? new Date().toISOString(),
+                status: r.status,
+              }))}
+            addOneTimeHref={`/app/admin/people/employees/${profile.id}?tab=payroll#one-time`}
+            benefits={{
+              rows: benefitEnrolments.map((r) => {
+                const plan = activeBenefitPlans.find((p) => p.id === r.planId) ?? null;
+                return {
+                  id: r.id,
+                  planId: r.planId,
+                  planCode: r.planCode,
+                  planName: r.planName,
+                  planKind: r.planKind,
+                  status: r.status,
+                  electionKind: r.electionKind,
+                  amount: r.amount,
+                  percentBps: r.percentBps,
+                  effectiveFromIso: r.effectiveFromIso,
+                  effectiveToIso: r.effectiveToIso,
+                  employerMatchBps: plan?.employerMatchBps ?? null,
+                  employerMatchCapBps: plan?.employerMatchCapBps ?? null,
+                };
+              }),
+              planChoices: activeBenefitPlans.map((p) => ({
+                id: p.id,
+                code: p.code,
+                name: p.name,
+                kind: p.kind,
+                defaultElectionKind: p.defaultElectionKind,
+                effectiveFromIso: p.effectiveFromIso,
+                effectiveToIso: p.effectiveToIso,
+                employerMatchBps: p.employerMatchBps ?? null,
+                employerMatchCapBps: p.employerMatchCapBps ?? null,
+              })),
+              canWrite: canWriteBenefitEnrolment,
+              enrolAction: benefitsEnrolAction,
+              changeAction: benefitsChangeAction,
+              endAction: benefitsEndAction,
+              banner: benefitsBanner,
+            }}
+            benefitHistoryHref={`/app/admin/people/employees/${profile.id}?tab=payroll#benefit-history`}
+            implementation={{
+              mode: implementationDeclaration?.mode ?? null,
+              firstSpectrePayDateIso: implementationDeclaration?.firstSpectrePayDate?.toISOString() ?? null,
+              taxYear: currentTaxYear,
+            }}
+            openingYtd={
+              implementationDeclaration?.mode === "MID_YEAR_MIGRATION"
+                ? {
+                    employeeId: profile.id,
+                    taxYear: currentTaxYear,
+                    firstSpectrePayDateIso: implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null,
+                    canWrite: hasPermission(principal, profile.clubId, "payroll:run"),
+                    status: (activeOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING",
+                    openingBalanceId: activeOpeningBalance?.id ?? null,
+                    throughPayDateIso: activeOpeningBalance?.throughPayDate
+                      ? new Date(activeOpeningBalance.throughPayDate).toISOString()
+                      : null,
+                    priorPayrollKind: (activeOpeningBalance?.priorPayrollKind ?? null) as
+                      "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
+                    values: activeOpeningBalance?.values ?? null,
+                    actions: {
+                      saveDraft: saveEmployeeOpeningYtdDraftAction,
+                      validate: validateEmployeeOpeningYtdAction,
+                      activate: activateEmployeeOpeningYtdAction,
+                    },
+                  }
+                : null
+            }
+            history={employeePayrollHistory.map((h) => ({
+              id: h.id,
+              payDateIso: h.batch.payPeriod.payDate.toISOString(),
+              periodStartIso: h.batch.payPeriod.periodStart.toISOString(),
+              periodEndInclusiveIso: new Date(h.batch.payPeriod.periodEnd.getTime() - 86_400_000).toISOString(),
+              grossPay: String(h.grossPay ?? "0"),
+              netPay: String(h.netPay ?? "0"),
+              status: h.batch.status,
+              href: `/app/admin/payroll/batches/${h.batch.id}/paystubs`,
+            }))}
+            viewAllPayrollHref="/app/admin/payroll/history"
+            ytd={
+              employeeYtd
+                ? {
+                    asOfIso: new Date().toISOString(),
+                    values: {
+                      ytdGrossEarnings:   employeeYtd.ytdGrossEarnings,
+                      ytdTaxableEarnings: employeeYtd.ytdTaxableEarnings,
+                      ytdCppEE:           employeeYtd.ytdCppEE,
+                      ytdEiEE:            employeeYtd.ytdEiEE,
+                      ytdFederalTax:      employeeYtd.ytdFederalTax,
+                      ytdProvincialTax:   employeeYtd.ytdProvincialTax,
+                      ytdRrspEE:          null,
+                      ytdOtherDeductions: (
+                        Number(employeeYtd.ytdCppEE ?? 0)
+                        + Number(employeeYtd.ytdEiEE ?? 0)
+                        + Number(employeeYtd.ytdFederalTax ?? 0)
+                        + Number(employeeYtd.ytdProvincialTax ?? 0)
+                      ).toFixed(2),
+                      ytdNetPay: (
+                        Number(employeeYtd.ytdGrossEarnings ?? 0)
+                        - Number(employeeYtd.ytdCppEE ?? 0)
+                        - Number(employeeYtd.ytdEiEE ?? 0)
+                        - Number(employeeYtd.ytdFederalTax ?? 0)
+                        - Number(employeeYtd.ytdProvincialTax ?? 0)
+                      ).toFixed(2),
+                    },
+                  }
+                : null
+            }
+            viewYtdDetailsHref={`/app/admin/payroll/history?employeeId=${profile.id}`}
+            payrollSettingsHref="/app/admin/payroll/setup"
+          />
+        ) : undefined
+      }
+      defaultTab={defaultTab}
+    />
+  );
+}
+
+/* Preserved legacy invocation (unused after EPW-2 grid swap). Kept
+   commented so a future diff clearly shows the delta.
+{
+        canReadPayrollRecurring ? (
           <EmployeePayrollWorkspaceSection
             employeeId={profile.id}
             employeeNumber={profile.employeeNumber}
@@ -1059,3 +1271,4 @@ export default async function EmployeeProfilePage({
     />
   );
 }
+*/
