@@ -1,8 +1,9 @@
 // Payroll-3B-5B-3A — Payroll Review DTO tests.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { orchestratePayrollReviewHandoff } from "@/lib/payroll/orchestration";
 import { calculatePayrollBatch } from "@/lib/payroll/calculation-execute";
@@ -41,6 +42,8 @@ async function scenario() {
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: controller.id,
   });
+  // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+  await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   async function makeSalariedEmp(number: string, annualSalary: string) {
     const emp = await db().employee.create({

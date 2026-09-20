@@ -148,6 +148,44 @@ async function apply(club) {
     },
   });
   log(`APPLY OK — clubId=${club.id} taxYear=2026 mode=${decl.mode} firstSpectrePayDate=${decl.firstSpectrePayDate?.toISOString().slice(0, 10)}`);
+
+  // FPP-1 §3 (2026-09-20) — ensure the synthetic Slice-C catalogue has a
+  // Cell Phone Allowance component so the browser acceptance walk can
+  // exercise all five FPP-1 acceptance components deterministically:
+  // Cell Phone / RRSP EE / RRSP ER / LTD / Health & Dental.
+  const CELL_CODE = "CELL_PHONE_ALLOWANCE";
+  const existing = await p.payrollComponent.findFirst({
+    where: { clubId: club.id, code: CELL_CODE },
+    select: { id: true, active: true },
+  });
+  if (existing) {
+    log(`Cell Phone Allowance component already present (id=${existing.id}, active=${existing.active}). No change.`);
+  } else {
+    const cell = await p.payrollComponent.create({
+      data: {
+        clubId: club.id,
+        code: CELL_CODE,
+        displayName: "Cell Phone Allowance",
+        description: "Monthly cell phone allowance — non-cash taxable benefit.",
+        category: "ALLOWANCE",
+        side: "EMPLOYEE",
+        cashEffect: "INCREASES_NET_PAY",
+        // Same statutory treatment as the fixture-integration test's
+        // Cell Phone Allowance: adds to taxable/pensionable bases, NOT
+        // to EI insurable (canonical Canadian allowance semantics).
+        taxableEffect: "ADD",
+        cppPensionableEffect: "ADD",
+        eiInsurableEffect: "NONE",
+        calculationMethod: "FIXED_AMOUNT",
+        statutoryTreatmentSource: "CUSTOM",
+        displaySection: "EARNINGS",
+        displayOrder: 30,
+        usage: "BOTH",
+        active: true,
+      },
+    });
+    log(`Seeded Cell Phone Allowance component (id=${cell.id}).`);
+  }
 }
 
 async function revert(club) {
@@ -156,29 +194,55 @@ async function revert(club) {
     select: { id: true },
   });
   const empIds = emps.map((e) => e.id);
-  const activeOpenings = await p.payrollOpeningBalance.count({
-    where: { employeeId: { in: empIds }, taxYear: 2026, status: "ACTIVE" },
+
+  // Defence in depth #1 — refuse if any protected employee id somehow
+  // ended up in the synthetic club (should be impossible; still checked).
+  for (const e of emps) {
+    if (PROTECTED_EMPLOYEE_IDS.has(e.id)) {
+      bail(`Synthetic club unexpectedly contains a PROTECTED employee (${e.id}). Aborting revert.`);
+    }
+  }
+
+  // FPP-1 §4 (2026-09-20) — fixture-provenance-aware cleanup. This is
+  // TEST DATA created by this fixture's own --apply plus its browser
+  // acceptance spec (fpp1-opening-ytd-components.staging.spec.ts) —
+  // NOT a founder-authored artefact. We may safely remove:
+  //   - opening balances (any status) whose parent declaration on the
+  //     synthetic tenant is stamped with NOTES_PREFIX
+  //   - component openings under those opening balances (cascade)
+  // ACTIVE openings on any OTHER tenant remain immutable — application
+  // code (opening-balance.ts) is unchanged.
+  const decl = await p.payrollImplementationDeclaration.findUnique({
+    where: { clubId_taxYear: { clubId: club.id, taxYear: 2026 } },
+    select: { notes: true },
   });
-  if (activeOpenings > 0) {
+  const isFixtureOwned = (decl?.notes ?? "").startsWith(NOTES_PREFIX);
+  if (!isFixtureOwned) {
     bail(
-      `${activeOpenings} ACTIVE opening balance(s) exist for synthetic employees. ` +
-        `--revert refuses to remove founder-authored artefacts. Deactivate them first via the app UI.`,
+      `Declaration on ${club.id} is not fixture-owned ` +
+        `(notes="${(decl?.notes ?? "").slice(0, 40)}"). Refusing to revert.`,
     );
   }
-  // Delete DRAFT/VALIDATED openings created during acceptance. Component
-  // openings cascade via onDelete: Cascade in the schema.
-  const drafts = await p.payrollOpeningBalance.findMany({
-    where: { employeeId: { in: empIds }, taxYear: 2026, status: { in: ["DRAFT", "VALIDATED"] } },
-    select: { id: true },
+
+  const allOpenings = await p.payrollOpeningBalance.findMany({
+    where: { employeeId: { in: empIds }, taxYear: 2026 },
+    select: { id: true, status: true },
   });
-  if (drafts.length > 0) {
+  if (allOpenings.length > 0) {
+    const activeCount = allOpenings.filter((o) => o.status === "ACTIVE").length;
+    log(
+      `Deleting ${allOpenings.length} fixture-owned opening balance(s) on synthetic ` +
+        `employees (of which ${activeCount} ACTIVE). Component rows cascade.`,
+    );
     await p.payrollOpeningBalance.deleteMany({
-      where: { id: { in: drafts.map((d) => d.id) } },
+      where: { id: { in: allOpenings.map((o) => o.id) } },
     });
-    log(`Deleted ${drafts.length} DRAFT/VALIDATED opening balance(s) on synthetic employees.`);
+  } else {
+    log(`No opening balances to remove.`);
   }
+
   const notes = `${NOTES_PREFIX} reverted to ZERO_OPENING_YTD at ${new Date().toISOString()}`;
-  const decl = await p.payrollImplementationDeclaration.upsert({
+  const updated = await p.payrollImplementationDeclaration.upsert({
     where: { clubId_taxYear: { clubId: club.id, taxYear: 2026 } },
     create: {
       clubId: club.id,
@@ -195,7 +259,7 @@ async function revert(club) {
       notes,
     },
   });
-  log(`REVERT OK — clubId=${club.id} taxYear=2026 mode=${decl.mode}`);
+  log(`REVERT OK — clubId=${club.id} taxYear=2026 mode=${updated.mode}`);
 }
 
 (async () => {

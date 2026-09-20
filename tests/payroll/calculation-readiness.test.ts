@@ -6,8 +6,9 @@
 // here; readiness is a pure assessment.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { createTimeEntry } from "@/lib/payroll/approved-time";
 import {
   approveDepartmentTime,
@@ -72,6 +73,8 @@ async function scenario(opts?: {
     payrollAdminUserId: payrollAdmin.id,
     controllerUserId: controller.id,
   });
+  // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+  await declareImplementation(adminP, clubA.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   const grounds = await db().department.create({
     data: { clubId: clubA.id, code: "GROUNDS", name: "Grounds", sortOrder: 1 },
@@ -573,6 +576,8 @@ describe("Payroll-3B-5B-2a — additional-tax persistence contract (§11)", () =
       provinceOfEmployment: "AB",
       payrollAdminUserId: admin.id,
     });
+    // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+    await declareImplementation(await principalFor(admin.email), club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
     const emp = await db().employee.create({
       data: { clubId: club.id, firstName: "T", lastName: "T", email: "t@t.a.test", hireDate: utc(2026, 1, 1), status: "ACTIVE", employeeNumber: "E-T-1" },
     });

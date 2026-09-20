@@ -28,8 +28,9 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import Decimal from "decimal.js";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { upsertPayrollComponent, createRecurringComponentAssignment } from "@/lib/payroll/components-catalogue";
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
@@ -88,6 +89,8 @@ describe("Payroll-3C-3 · Sam Complex acceptance (structural, pre-statutory)", (
     await upsertPayrollClubConfig(adminP, club.id, {
       provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: ctl.id,
     });
+    // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+    await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
     // Sam — $110,000 annual, semi-monthly.
     const emp = await c.employee.create({

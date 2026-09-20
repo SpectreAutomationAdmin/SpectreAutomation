@@ -26,8 +26,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Decimal from "decimal.js";
 import {
   db, resetDb, seedRbac, makeClub, makeUser, principalFor,
+  seedSemiMonthlyPayPeriodCalendar,
 } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import {
   upsertPayrollComponent, createRecurringComponentAssignment,
 } from "@/lib/payroll/components-catalogue";
@@ -175,6 +177,8 @@ async function seedScenario(seed: string): Promise<Scenario> {
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: paU.id, controllerUserId: ctlU.id,
   });
+  // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+  await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   const acct = await seedGlAccounts(club.id);
   await seedGlProfile(club.id, acct);
@@ -221,6 +225,10 @@ async function seedScenario(seed: string): Promise<Scenario> {
       payDate: utc(2026, 9, 15), status: "OPEN",
     },
   });
+
+  // FPP-1 §1 (2026-09-20) — full pay-period calendar required by preparePayrollBatch.
+
+  await seedSemiMonthlyPayPeriodCalendar({ clubId: club.id, payGroupId: pg.id, taxYear: 2026 });
   await c.payrollPayGroupMember.create({
     data: { clubId: club.id, payGroupId: pg.id, employeeId: emp.id, effectiveFrom: utc(2020, 1, 1) },
   });

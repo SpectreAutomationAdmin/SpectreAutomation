@@ -2,10 +2,11 @@
 // payroll snapshot immutability, MISSING_DATE_OF_BIRTH blocker.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { ValidationError } from "@/lib/errors";
 import { createEmployee, updateEmployee } from "@/lib/hr/employees";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { preparePayrollBatch, getPreparedBatch } from "@/lib/payroll/batch-preparation";
 
 const utc = (y: number, m: number, day: number) => new Date(Date.UTC(y, m - 1, day));
@@ -20,6 +21,8 @@ async function payrollScenario() {
     provinceOfEmployment: "AB",
     payrollAdminUserId: pa.id,
   });
+  // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+  await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
   return { club, adminP, paP };
 }
 

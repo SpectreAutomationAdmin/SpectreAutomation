@@ -2,9 +2,10 @@
 // Also covers the 3B-3 first-pass Work Intake linkage fix.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { ValidationError } from "@/lib/errors";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { createTimeEntry } from "@/lib/payroll/approved-time";
 import {
   approveDepartmentTime,
@@ -43,6 +44,8 @@ async function scenario() {
     payrollAdminUserId: payrollAdmin.id,
     controllerUserId: controller.id,
   });
+  // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+  await declareImplementation(adminP, clubA.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   // Two departments with managers.
   const grounds = await db().department.create({

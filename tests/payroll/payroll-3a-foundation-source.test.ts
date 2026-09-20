@@ -166,20 +166,23 @@ describe("Payroll-3A · canonical permission separation-of-duties (§28 + §31)"
     }
   });
 
-  it("Payroll two-person governance (2026-09-13) — CONTROLLER holds approve/return/POST + read-only; NO prepare/edit/submit/void/write", () => {
+  it("Pre-Phase-5 governance restoration (2026-09-16) — CONTROLLER holds approve/return + read-only; NO prepare/edit/submit/void/post/write", () => {
+    // Per commented rationale in src/lib/permissions.ts §PAYROLL_ADMIN:
+    //   Pre-Phase-5 governance restoration (2026-09-16) — PAYROLL_ADMIN
+    //   REGAINS `payroll:post`. Controller performs the independent
+    //   approval; Payroll Admin posts the approved payroll to the GL.
+    // The critical SoD is submitter ≠ approver, not approver = poster.
     const grants = ROLE_PERMISSIONS.CONTROLLER as readonly string[];
     expect(grants).toContain("payroll:read");
     expect(grants).toContain("payroll:approve");
     expect(grants).toContain("payroll:return");
-    expect(grants).toContain("payroll:post"); // restored
     expect(grants).toContain("payroll:paygroup:read");
     expect(grants).toContain("payroll:config:read");
-    // Separation of duties — Controller does NOT prepare / edit /
-    // submit / void payroll batches, and NEVER writes pay groups or
-    // config. Controller approves AND posts (superseding the 3F
-    // "Payroll Admin posts" split).
+    // Controller does NOT prepare / edit / submit / void batches, does
+    // NOT post (Payroll Admin holds payroll:post post-2026-09-16), and
+    // NEVER writes pay groups or config.
     for (const banned of [
-      "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void",
+      "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:void", "payroll:post",
       "payroll:paygroup:write", "payroll:config:write",
     ]) {
       expect(grants, `CONTROLLER must NOT hold ${banned}`).not.toContain(banned);
@@ -196,19 +199,21 @@ describe("Payroll-3A · canonical permission separation-of-duties (§28 + §31)"
     }
   });
 
-  it("Payroll two-person governance (2026-09-13) — PAYROLL_ADMIN holds prepare/edit/submit + paygroup + config writes; NO post/void", () => {
-    // Two-person governance: PAYROLL_ADMIN loses payroll:post. The
-    // Controller who approves is also the poster. Void is still
-    // Club-Admin-only.
+  it("Pre-Phase-5 governance restoration (2026-09-16) — PAYROLL_ADMIN holds prepare/edit/submit/POST + paygroup + config writes; NO void", () => {
+    // Per commented rationale in src/lib/permissions.ts §PAYROLL_ADMIN:
+    //   Pre-Phase-5 governance restoration (2026-09-16) — PAYROLL_ADMIN
+    //   REGAINS `payroll:post`. Payroll Admin posts the approved
+    //   payroll to the GL after Controller approves. Void is still
+    //   CLUB_ADMIN-only.
     const grants = ROLE_PERMISSIONS.PAYROLL_ADMIN as readonly string[];
     for (const required of [
-      "payroll:prepare", "payroll:edit", "payroll:submit",
+      "payroll:prepare", "payroll:edit", "payroll:submit", "payroll:post",
       "payroll:paygroup:read", "payroll:paygroup:write",
       "payroll:config:read", "payroll:config:write",
     ]) {
       expect(grants, `PAYROLL_ADMIN must hold ${required}`).toContain(required);
     }
-    for (const banned of ["payroll:post", "payroll:void"]) {
+    for (const banned of ["payroll:void"]) {
       expect(grants, `PAYROLL_ADMIN must NOT hold ${banned}`).not.toContain(banned);
     }
   });

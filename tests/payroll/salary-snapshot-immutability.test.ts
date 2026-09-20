@@ -13,10 +13,11 @@
 // VOID → change source → PREPARE replacement.
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
+import { db, resetDb, seedRbac, makeClub, makeUser, principalFor , seedSemiMonthlyPayPeriodCalendar } from "../util/db";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
 import { parseSourceFactsV1 } from "@/lib/payroll/source-facts-schema";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 
 const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
@@ -59,6 +60,8 @@ describe("Salary snapshot immutability", () => {
       provinceOfEmployment: "AB",
       payrollAdminUserId: pa.id, controllerUserId: ctl.id,
     });
+    // FPP-1 §1 (2026-09-20) — declare implementation so preparePayrollBatch is admissible.
+    await declareImplementation(adminP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
     // Salaried employee with $120k annual, active from 2020.
     const emp = await c.employee.create({

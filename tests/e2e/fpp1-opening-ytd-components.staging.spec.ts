@@ -122,6 +122,17 @@ test.describe("FPP-1 §2 — full Payroll Component YTD modal write flow", () =>
       await page.locator('[data-testid="opening-ytd-modal"]').waitFor({ state: "visible", timeout: 10_000 });
     }
 
+    async function readRowCodes(): Promise<string[]> {
+      const rows = await page.locator('[data-testid^="opening-ytd-component-row-"]').all();
+      const codes: string[] = [];
+      for (const r of rows) {
+        const testid = await r.getAttribute("data-testid");
+        if (!testid) continue;
+        codes.push(testid.replace("opening-ytd-component-row-", ""));
+      }
+      return codes;
+    }
+
     async function pickAndAdd(match: RegExp, amount: string, label: string) {
       const options = await page
         .locator('[data-testid="opening-ytd-component-picker"] option')
@@ -130,29 +141,38 @@ test.describe("FPP-1 §2 — full Payroll Component YTD modal write flow", () =>
         .locator('[data-testid="opening-ytd-component-picker"] option')
         .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).value));
       const idx = options.findIndex((t) => match.test(t));
-      if (idx < 0) return { addedCode: null as string | null, label };
+      if (idx < 0) {
+        return { addedCode: null as string | null, label, matchedText: null as string | null };
+      }
       const value = values[idx];
+      const matchedText = options[idx];
+      const before = new Set(await readRowCodes());
       await page.locator('[data-testid="opening-ytd-component-picker"]').selectOption(value);
       await page.locator('[data-testid="opening-ytd-component-amount"]').fill(amount);
       await page.locator('[data-testid="opening-ytd-component-add"]').click();
       await page.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => {});
       await reopenEditor();
-      // Read back which code got added by finding the last row.
-      const rows = await page.locator('[data-testid^="opening-ytd-component-row-"]').all();
-      let addedCode: string | null = null;
-      for (const r of rows) {
-        const testid = await r.getAttribute("data-testid");
-        if (!testid) continue;
-        addedCode = testid.replace("opening-ytd-component-row-", "");
-      }
-      return { addedCode, label };
+      const after = await readRowCodes();
+      const newlyAdded = after.filter((c) => !before.has(c));
+      const addedCode = newlyAdded[0] ?? null;
+      return { addedCode, label, matchedText };
     }
 
+    // K–O. FPP-1 §3 (2026-09-20) — all five acceptance components must
+    // exist in the synthetic catalogue and be exercised deterministically.
+    // scripts/fpp1-synthetic-midyear-fixture.mjs's --apply seeds
+    // CELL_PHONE_ALLOWANCE alongside the RRSP EE/ER, LTD, HEALTH_ER
+    // rows the Slice-C benefits fixture already provisions.
     const cell   = await pickAndAdd(/cell.?phone|allowance/i,  "500.00", "Cell Phone");
+    expect(cell.addedCode, "Cell Phone Allowance MUST be present in the synthetic catalogue").toBeTruthy();
     const rrspEE = await pickAndAdd(/RRSP.*(EE|Employee)/i,    "2000.00", "RRSP Employee");
+    expect(rrspEE.addedCode, "RRSP Employee Contribution MUST be present").toBeTruthy();
     const rrspER = await pickAndAdd(/RRSP.*(ER|Employer|Match)/i, "1200.00", "RRSP Employer");
+    expect(rrspER.addedCode, "RRSP Employer Match MUST be present").toBeTruthy();
     const ltd    = await pickAndAdd(/LTD/i,                    "540.00",  "LTD");
+    expect(ltd.addedCode, "LTD MUST be present").toBeTruthy();
     const health = await pickAndAdd(/health|dental/i,          "990.00",  "Health & Dental");
+    expect(health.addedCode, "Health & Dental MUST be present").toBeTruthy();
     await page.screenshot({ path: `${OUT_DIR}/KLMNO-five-components-added.png`, fullPage: true });
 
     // P. RRSP EE and RRSP ER render as separate rows with correct classification.

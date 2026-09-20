@@ -21,6 +21,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Decimal from "decimal.js";
 import { db, resetDb, seedRbac, makeClub, makeUser, principalFor } from "../util/db";
 import { upsertPayrollClubConfig } from "@/lib/payroll/club-config";
+import { declareImplementation } from "@/lib/payroll/implementation-declaration";
 import { upsertPayrollComponent, createRecurringComponentAssignment } from "@/lib/payroll/components-catalogue";
 import { writeEncryptedTd1Claims } from "@/lib/hr/td1-secure-write";
 import { preparePayrollBatch } from "@/lib/payroll/batch-preparation";
@@ -80,6 +81,10 @@ async function seedSemiMonthlySalaryScenario(opts: { seed: string; annualSalary?
   await upsertPayrollClubConfig(adminP, club.id, {
     provinceOfEmployment: "AB", payrollAdminUserId: pa.id, controllerUserId: ctl.id,
   });
+  // Payroll-3F pre-run gate: the 3C-4 scenarios simulate a Club with no
+  // prior payroll — ZERO_OPENING_YTD is the correct mode. All Sam Complex
+  // assertions expect a clean CPP/EI/tax ledger at period 17.
+  await declareImplementation(paP, club.id, { taxYear: 2026, mode: "ZERO_OPENING_YTD" });
 
   const annual = opts.annualSalary ?? "110000";
   const emp = await c.employee.create({

@@ -590,6 +590,65 @@ export async function seedRbac() {
   });
 }
 
+/**
+ * FPP-1 §1 (2026-09-20) — canonical helper for tests that need a full
+ * pay-period calendar for a given tax year.
+ *
+ * `preparePayrollBatch` guards against premature payroll by requiring the
+ * full pay-period calendar for the requested year to be seeded before it
+ * will accept a batch (`resolvePeriodsPerYearFromCalendar` throws
+ * `PayPeriodCalendarIncompleteError` when a SEMI_MONTHLY pay group has
+ * < 24 periods, etc.). Older test fixtures seeded ONE pay period only —
+ * this helper backfills the full 24-period semi-monthly calendar in the
+ * canonical shape (period covers [day-1 → day-15] or [day-16 → 1st of next]
+ * with payDate = periodEnd). Deterministic + idempotent.
+ */
+export async function seedSemiMonthlyPayPeriodCalendar(opts: {
+  clubId: string;
+  payGroupId: string;
+  taxYear: number;
+}): Promise<void> {
+  const c = db();
+  const utc = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d));
+  let seq = 0;
+  for (let m = 0; m < 12; m++) {
+    seq += 1;
+    await c.payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: opts.clubId, payGroupId: opts.payGroupId, taxYear: opts.taxYear, sequenceInYear: seq,
+        },
+      },
+      create: {
+        clubId: opts.clubId, payGroupId: opts.payGroupId,
+        taxYear: opts.taxYear, sequenceInYear: seq,
+        periodStart: utc(opts.taxYear, m + 1, 1),
+        periodEnd:   utc(opts.taxYear, m + 1, 16),
+        payDate:     utc(opts.taxYear, m + 1, 16),
+        status: "OPEN",
+      },
+      update: {},
+    });
+    seq += 1;
+    await c.payrollPayPeriod.upsert({
+      where: {
+        clubId_payGroupId_taxYear_sequenceInYear: {
+          clubId: opts.clubId, payGroupId: opts.payGroupId, taxYear: opts.taxYear, sequenceInYear: seq,
+        },
+      },
+      create: {
+        clubId: opts.clubId, payGroupId: opts.payGroupId,
+        taxYear: opts.taxYear, sequenceInYear: seq,
+        periodStart: utc(opts.taxYear, m + 1, 16),
+        periodEnd:   utc(opts.taxYear, m + 2, 1),
+        payDate:     utc(opts.taxYear, m + 2, 1),
+        status: "OPEN",
+      },
+      update: {},
+    });
+  }
+}
+
 export async function makeClub(name: string) {
   const c = db();
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
