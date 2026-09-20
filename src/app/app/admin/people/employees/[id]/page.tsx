@@ -1006,6 +1006,27 @@ export default async function EmployeeProfilePage({
                 active: a.active,
               }))}
             addRecurringHref={`/app/admin/people/employees/${profile.id}?tab=payroll#recurring`}
+            recurringAdd={
+              canReadPayrollRecurring
+                ? {
+                    clubId: profile.clubId,
+                    canWrite: canWritePayrollRecurring,
+                    catalogue: payrollComponentCatalogue
+                      .filter((c) => (c as unknown as { usage?: string }).usage !== "ONE_TIME")
+                      .filter((c) => c.active)
+                      .map((c) => ({
+                        id: c.id,
+                        code: c.code,
+                        displayName: c.displayName,
+                        category: c.category,
+                        side: c.side,
+                        cashEffect: c.cashEffect,
+                        calculationMethod: c.calculationMethod as "FIXED_AMOUNT" | "PERCENT_OF_ELIGIBLE_EARNINGS",
+                      })),
+                    addAction: addRecurringPayrollComponentAction,
+                  }
+                : undefined
+            }
             oneTime={oneTimeRows
               .filter((r) => r.status !== "CANCELLED")
               .slice(0, 5)

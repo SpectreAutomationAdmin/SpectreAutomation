@@ -22,6 +22,9 @@ import BenefitsDeductionsSection, {
 import OpeningYtdInlineEditor, {
   type OpeningYtdInlineEditorProps,
 } from "./OpeningYtdInlineEditor";
+import RecurringComponentAddModal, {
+  type RecurringAddComponentChoice,
+} from "./RecurringComponentAddModal";
 
 // -------------------------------------------------------------------
 // Types
@@ -61,7 +64,34 @@ export interface EmployeePayrollGridProps {
     effectiveFromIso: string;
     active: boolean;
   }>;
-  addRecurringHref: string;
+  /**
+   * Legacy fragment link used before FPP-3. Kept as optional fallback
+   * when `recurringAdd` is not provided.
+   */
+  addRecurringHref?: string;
+  /**
+   * FPP-3 (2026-09-20) — recurring-component ADD hotfix. Replaces the
+   * dead `addRecurringHref` fragment link with a modal that reuses the
+   * canonical addRecurringPayrollComponentAction service action. When
+   * present, the grid renders the functional Add Component modal; when
+   * absent, the grid falls back to a disabled label.
+   */
+  recurringAdd?: {
+    clubId: string;
+    canWrite: boolean;
+    catalogue: RecurringAddComponentChoice[];
+    addAction: (
+      employeeId: string,
+      clubId: string,
+      input: {
+        componentId: string;
+        amount: string | null;
+        percentBps: number | null;
+        effectiveFrom: string;
+        notes?: string | null;
+      },
+    ) => Promise<{ ok: true; id?: string } | { ok: false; error: string }>;
+  };
 
   oneTime: Array<{
     id: string;
@@ -274,7 +304,19 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
           <Card
             testId="grid-recurring"
             title={<span>2. Recurring Earnings &amp; Deductions</span>}
-            actions={<SmallLink href={props.addRecurringHref} testId="grid-recurring-add">+ Add Component</SmallLink>}
+            actions={
+              props.recurringAdd ? (
+                <RecurringComponentAddModal
+                  employeeId={props.employeeId}
+                  clubId={props.recurringAdd.clubId}
+                  canWrite={props.recurringAdd.canWrite}
+                  catalogue={props.recurringAdd.catalogue}
+                  addAction={props.recurringAdd.addAction}
+                />
+              ) : props.addRecurringHref ? (
+                <SmallLink href={props.addRecurringHref} testId="grid-recurring-add">+ Add Component</SmallLink>
+              ) : null
+            }
           >
             {props.recurring.length === 0 ? (
               <p className="text-xs text-stone-500">No active recurring components.</p>
