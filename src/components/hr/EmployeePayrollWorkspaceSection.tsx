@@ -124,6 +124,11 @@ export interface EmployeePayrollWorkspaceProps {
   // in Base Compensation when the employee is HOURLY. Only surfaces
   // fail-closed information; the actual policy multiplier / thresholds
   // live under Payroll Settings.
+  // EPW-1 hotfix (2026-09-20) — pre-rendered inline Opening YTD editor.
+  // Replaces the outbound anchor that used to link to
+  // /app/admin/payroll/opening-balances?employeeId=... (404). When
+  // provided, rendered inside Implementation & YTD.
+  openingYtdEditor?: React.ReactNode;
   overtimePolicy?: {
     /** Employee overtime policy state. */
     employeeState: "STANDARD" | "EXEMPT" | "AGREEMENT_REQUIRED" | "AVERAGING_REQUIRED" | string;
@@ -656,30 +661,22 @@ export default function EmployeePayrollWorkspaceSection(props: EmployeePayrollWo
                   <span className="text-stone-500">Employer CPP2</span>         <span className="font-mono" data-testid="ytd-cpp2-er">{formatMoney(openingBalance.values.ytdCpp2ER)}</span>
                   <span className="text-stone-500">Employer EI</span>           <span className="font-mono" data-testid="ytd-ei-er">{formatMoney(openingBalance.values.ytdEiER)}</span>
                 </div>
-                <a
-                  href={`/app/admin/payroll/opening-balances?employeeId=${employeeId}`}
-                  className="mt-3 inline-block text-xs text-blue-700 hover:underline"
-                  data-testid="opening-ytd-manage-link"
-                >
-                  {openingBalance.status === "ACTIVE" ? "View / correct →" : "Edit opening YTD →"}
-                </a>
+                {props.openingYtdEditor ? (
+                  <div className="mt-3" data-testid="opening-ytd-editor-slot">{props.openingYtdEditor}</div>
+                ) : null}
                 <p className="mt-2 text-[10px] text-stone-400">
                   Values are the opening YTD entered for migration from the prior payroll system.
                 </p>
               </div>
             ) : (
               <div className="mt-2">
-                <Pill tone="warn">Not started</Pill>
                 <p className="mt-2 text-xs text-stone-500">
-                  The Club is on Mid-year migration. This employee needs opening YTD entered.
+                  The Club is on Mid-year migration. This employee needs opening YTD entered
+                  (amounts accumulated before Spectre calculates the first Spectre payroll).
                 </p>
-                <a
-                  href={`/app/admin/payroll/opening-balances?employeeId=${employeeId}`}
-                  className="mt-2 inline-block text-xs text-blue-700 hover:underline"
-                  data-testid="opening-ytd-set-link"
-                >
-                  Set opening YTD →
-                </a>
+                {props.openingYtdEditor ? (
+                  <div className="mt-3" data-testid="opening-ytd-editor-slot">{props.openingYtdEditor}</div>
+                ) : null}
               </div>
             )
           ) : implementationDeclaration?.mode === "ZERO_OPENING_YTD" ? (

@@ -57,6 +57,12 @@ import EmployeeRecurringComponentsSection from "@/components/hr/EmployeeRecurrin
 import { listPayrollComponents } from "@/lib/payroll/components-catalogue";
 // Slice A (2026-09-18) — Canonical Payroll-tab workspace.
 import EmployeePayrollWorkspaceSection from "@/components/hr/EmployeePayrollWorkspaceSection";
+import OpeningYtdInlineEditor from "@/components/hr/OpeningYtdInlineEditor";
+import {
+  saveEmployeeOpeningYtdDraftAction,
+  validateEmployeeOpeningYtdAction,
+  activateEmployeeOpeningYtdAction,
+} from "./_opening-ytd-actions";
 import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
 import { getActiveOpeningBalance } from "@/lib/payroll/opening-balance";
 import { updateOriginalHireDateAction } from "./_hire-date-actions";
@@ -913,6 +919,33 @@ export default async function EmployeeProfilePage({
             }
             actions={{ updateOriginalHireDate: updateOriginalHireDateAction }}
             overtimePolicy={overtimePolicyView}
+            openingYtdEditor={
+              implementationDeclaration?.mode === "MID_YEAR_MIGRATION" ? (
+                <OpeningYtdInlineEditor
+                  employeeId={profile.id}
+                  taxYear={currentTaxYear}
+                  firstSpectrePayDateIso={
+                    implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null
+                  }
+                  canWrite={hasPermission(principal, profile.clubId, "payroll:run")}
+                  status={(activeOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING"}
+                  openingBalanceId={activeOpeningBalance?.id ?? null}
+                  throughPayDateIso={
+                    activeOpeningBalance?.throughPayDate
+                      ? new Date(activeOpeningBalance.throughPayDate).toISOString()
+                      : null
+                  }
+                  priorPayrollKind={(activeOpeningBalance?.priorPayrollKind ?? null) as
+                    "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null}
+                  values={activeOpeningBalance?.values ?? null}
+                  actions={{
+                    saveDraft: saveEmployeeOpeningYtdDraftAction,
+                    validate: validateEmployeeOpeningYtdAction,
+                    activate: activateEmployeeOpeningYtdAction,
+                  }}
+                />
+              ) : null
+            }
             benefitsDeductionsSection={
               <BenefitsDeductionsSection
                 employeeId={profile.id}
