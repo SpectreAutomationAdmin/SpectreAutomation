@@ -467,5 +467,241 @@ export function zeroDecimalString(): string {
   return "0";
 }
 
+// ---------------------------------------------------------------------------
+// FPP-1 (2026-09-19) — PayrollOpeningBalanceComponent CRUD.
+//
+// The Payroll-3C-5 model already exists (schema.prisma) plus the
+// getEmployeeComponentYtd aggregator (component-ytd.ts). What was
+// missing is the founder-facing service to add / remove / list per-
+// Component opening rows against a DRAFT parent PayrollOpeningBalance.
+//
+// Rules (mirrors §16 of the opening-balance brief):
+//   1) Parent must be DRAFT — VALIDATED/ACTIVE/SUPERSEDED refuse.
+//   2) Row is a frozen snapshot of PayrollComponent identity at insert
+//      time (code / displayName / category / side / cashEffect).
+//   3) @@unique([openingBalanceId, componentCode]) prevents duplicates;
+//      the DB error is remapped to a friendly ValidationError.
+//   4) Historically-inactive components MAY still be picked (§15) —
+//      opening balances are HISTORY, not a live catalogue.
+//   5) Audit every mutation.
+// ---------------------------------------------------------------------------
+
+export interface OpeningBalanceComponentView {
+  id: string;
+  clubId: string;
+  openingBalanceId: string;
+  sourceComponentId: string | null;
+  componentCode: string;
+  displayName: string;
+  category: string;
+  side: "EMPLOYEE" | "EMPLOYER";
+  cashEffect: "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
+  ytdAmount: string;
+  ytdQuantity: string | null;
+  notes: string | null;
+  createdAt: Date;
+}
+
+const COMPONENT_ENTITY = "PayrollOpeningBalanceComponent";
+
+function toComponentView(
+  row: NonNullable<Awaited<ReturnType<typeof prisma.payrollOpeningBalanceComponent.findFirst>>>,
+): OpeningBalanceComponentView {
+  return {
+    id: row.id,
+    clubId: row.clubId,
+    openingBalanceId: row.openingBalanceId,
+    sourceComponentId: row.sourceComponentId,
+    componentCode: row.componentCode,
+    displayName: row.displayName,
+    category: row.category,
+    side: row.side as OpeningBalanceComponentView["side"],
+    cashEffect: row.cashEffect as OpeningBalanceComponentView["cashEffect"],
+    ytdAmount: row.ytdAmount.toString(),
+    ytdQuantity: row.ytdQuantity != null ? row.ytdQuantity.toString() : null,
+    notes: row.notes,
+    createdAt: row.createdAt,
+  };
+}
+
+async function loadDraftOpeningForComponentEdit(clubId: string, openingBalanceId: string) {
+  const parent = await prisma.payrollOpeningBalance.findFirst({
+    where: { id: openingBalanceId, clubId },
+    select: { id: true, status: true },
+  });
+  if (!parent) throw new NotFoundError(ENTITY, openingBalanceId);
+  if (parent.status !== "DRAFT") {
+    throw new ValidationError([
+      {
+        path: "openingBalanceId",
+        message: `Cannot edit component openings on a ${parent.status.toLowerCase()} opening balance. Only DRAFT parents accept component edits.`,
+      },
+    ]);
+  }
+  return parent;
+}
+
+export interface AddOpeningComponentBalanceInput {
+  openingBalanceId: string;
+  componentId: string;
+  ytdAmount: string;
+  ytdQuantity?: string | null;
+  notes?: string | null;
+}
+
+export async function addOpeningComponentBalance(
+  principal: Principal,
+  clubId: string,
+  input: AddOpeningComponentBalanceInput,
+): Promise<OpeningBalanceComponentView> {
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
+  await assertPostingAllowed(
+    principal,
+    clubId,
+    "payroll.opening-balance.component.create",
+    COMPONENT_ENTITY,
+    input.openingBalanceId,
+  );
+
+  await loadDraftOpeningForComponentEdit(clubId, input.openingBalanceId);
+
+  const componentId = String(input.componentId ?? "").trim();
+  if (!componentId) {
+    throw new ValidationError([{ path: "componentId", message: "componentId is required." }]);
+  }
+
+  if (!/^-?\d+(\.\d+)?$/.test(input.ytdAmount)) {
+    throw new ValidationError([
+      { path: "ytdAmount", message: `"${input.ytdAmount}" is not a valid decimal string.` },
+    ]);
+  }
+  if (Number(input.ytdAmount) < 0) {
+    throw new ValidationError([{ path: "ytdAmount", message: "ytdAmount must be zero or positive." }]);
+  }
+
+  if (input.ytdQuantity != null && input.ytdQuantity !== "") {
+    if (!/^-?\d+(\.\d+)?$/.test(input.ytdQuantity)) {
+      throw new ValidationError([
+        { path: "ytdQuantity", message: `"${input.ytdQuantity}" is not a valid decimal string.` },
+      ]);
+    }
+  }
+
+  const component = await prisma.payrollComponent.findFirst({
+    where: { id: componentId, clubId },
+    select: {
+      id: true, code: true, displayName: true, category: true,
+      side: true, cashEffect: true, active: true,
+    },
+  });
+  if (!component) {
+    throw new ValidationError([
+      { path: "componentId", message: "Component does not belong to this Club." },
+    ]);
+  }
+  // §15 — inactive components are still selectable for HISTORICAL opening
+  // balances. No refusal here.
+
+  const dupe = await prisma.payrollOpeningBalanceComponent.findFirst({
+    where: { openingBalanceId: input.openingBalanceId, componentCode: component.code },
+    select: { id: true },
+  });
+  if (dupe) {
+    throw new ValidationError([
+      {
+        path: "componentId",
+        message: `Component "${component.code}" already has an opening balance on this row. Remove it first to change the amount.`,
+      },
+    ]);
+  }
+
+  const row = await prisma.payrollOpeningBalanceComponent.create({
+    data: {
+      clubId,
+      openingBalanceId: input.openingBalanceId,
+      sourceComponentId: component.id,
+      componentCode: component.code,
+      displayName: component.displayName,
+      category: component.category,
+      side: component.side,
+      cashEffect: component.cashEffect,
+      ytdAmount: input.ytdAmount,
+      ytdQuantity:
+        input.ytdQuantity != null && input.ytdQuantity !== "" ? input.ytdQuantity : null,
+      notes: input.notes?.trim() || null,
+    },
+  });
+
+  await audit(principal, {
+    action: "payroll.opening-balance.component.create",
+    entityType: COMPONENT_ENTITY,
+    entityId: row.id,
+    clubId,
+    after: {
+      openingBalanceId: input.openingBalanceId,
+      componentCode: component.code,
+      ytdAmount: input.ytdAmount,
+    },
+  });
+
+  return toComponentView(row);
+}
+
+export async function removeOpeningComponentBalance(
+  principal: Principal,
+  clubId: string,
+  openingComponentId: string,
+): Promise<void> {
+  requirePermission(principal, clubId, "payroll:opening-balance:write");
+
+  const row = await prisma.payrollOpeningBalanceComponent.findFirst({
+    where: { id: openingComponentId, clubId },
+    select: { id: true, openingBalanceId: true, componentCode: true, ytdAmount: true },
+  });
+  if (!row) throw new NotFoundError(COMPONENT_ENTITY, openingComponentId);
+
+  await assertPostingAllowed(
+    principal,
+    clubId,
+    "payroll.opening-balance.component.delete",
+    COMPONENT_ENTITY,
+    row.id,
+  );
+
+  await loadDraftOpeningForComponentEdit(clubId, row.openingBalanceId);
+
+  await prisma.payrollOpeningBalanceComponent.delete({ where: { id: row.id } });
+
+  await audit(principal, {
+    action: "payroll.opening-balance.component.delete",
+    entityType: COMPONENT_ENTITY,
+    entityId: row.id,
+    clubId,
+    before: {
+      openingBalanceId: row.openingBalanceId,
+      componentCode: row.componentCode,
+      ytdAmount: row.ytdAmount.toString(),
+    },
+  });
+}
+
+export async function listOpeningComponentBalances(
+  principal: Principal,
+  clubId: string,
+  openingBalanceId: string,
+): Promise<OpeningBalanceComponentView[]> {
+  requirePermission(principal, clubId, "payroll:read");
+  const parent = await prisma.payrollOpeningBalance.findFirst({
+    where: { id: openingBalanceId, clubId },
+    select: { id: true },
+  });
+  if (!parent) throw new NotFoundError(ENTITY, openingBalanceId);
+  const rows = await prisma.payrollOpeningBalanceComponent.findMany({
+    where: { clubId, openingBalanceId },
+    orderBy: [{ side: "asc" }, { category: "asc" }, { displayName: "asc" }],
+  });
+  return rows.map(toComponentView);
+}
+
 export { NUMERIC_FIELDS };
 export type { Decimal };

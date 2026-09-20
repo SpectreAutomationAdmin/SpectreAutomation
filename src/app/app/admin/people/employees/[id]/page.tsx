@@ -64,9 +64,11 @@ import {
   saveEmployeeOpeningYtdDraftAction,
   validateEmployeeOpeningYtdAction,
   activateEmployeeOpeningYtdAction,
+  addEmployeeOpeningYtdComponentAction,
+  removeEmployeeOpeningYtdComponentAction,
 } from "./_opening-ytd-actions";
 import { getImplementationDeclaration } from "@/lib/payroll/implementation-declaration";
-import { getActiveOpeningBalance } from "@/lib/payroll/opening-balance";
+import { getActiveOpeningBalance, listOpeningComponentBalances } from "@/lib/payroll/opening-balance";
 import { updateOriginalHireDateAction } from "./_hire-date-actions";
 // Slice B (2026-09-18) — pre-batch scheduled one-time earnings.
 import OneTimeEarningsSection from "@/components/hr/OneTimeEarningsSection";
@@ -435,6 +437,73 @@ export default async function EmployeeProfilePage({
     canReadPayrollRecurring
       ? getActiveOpeningBalance(profile.clubId, profile.id, currentTaxYear).catch(() => null)
       : Promise.resolve(null),
+  ]);
+
+  // FPP-1 (2026-09-19) §9 — if there is no ACTIVE opening balance yet,
+  // surface the most-recent DRAFT / VALIDATED row so the founder can
+  // resume editing (per-component openings especially). The editor's
+  // status prop handles all four states.
+  const editableOpeningBalance = activeOpeningBalance
+    ?? (canReadPayrollRecurring
+      ? await prisma.payrollOpeningBalance
+          .findFirst({
+            where: {
+              clubId: profile.clubId,
+              employeeId: profile.id,
+              taxYear: currentTaxYear,
+              status: { in: ["DRAFT", "VALIDATED"] },
+            },
+            orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
+          })
+          .then((row) =>
+            row
+              ? {
+                  id: row.id,
+                  taxYear: row.taxYear,
+                  status: row.status as "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED",
+                  throughPayDate: row.throughPayDate,
+                  priorPayrollKind: row.priorPayrollKind as
+                    "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
+                  values: {
+                    ytdGrossEarnings: row.ytdGrossEarnings.toString(),
+                    ytdTaxableEarnings: row.ytdTaxableEarnings.toString(),
+                    ytdPensionableEarnings: row.ytdPensionableEarnings.toString(),
+                    ytdInsurableEarnings: row.ytdInsurableEarnings.toString(),
+                    ytdCppEE_Base: row.ytdCppEE_Base.toString(),
+                    ytdCppEE_FirstAdd: row.ytdCppEE_FirstAdd.toString(),
+                    ytdCppEE: row.ytdCppEE.toString(),
+                    ytdCpp2EE: row.ytdCpp2EE.toString(),
+                    ytdEiEE: row.ytdEiEE.toString(),
+                    ytdFederalTax: row.ytdFederalTax.toString(),
+                    ytdProvincialTax: row.ytdProvincialTax.toString(),
+                    ytdCppER_Base: row.ytdCppER_Base.toString(),
+                    ytdCppER_FirstAdd: row.ytdCppER_FirstAdd.toString(),
+                    ytdCppER: row.ytdCppER.toString(),
+                    ytdCpp2ER: row.ytdCpp2ER.toString(),
+                    ytdEiER: row.ytdEiER.toString(),
+                  },
+                }
+              : null,
+          )
+          .catch(() => null)
+      : null);
+
+  // FPP-1 — per-Component opening rows for whichever balance we have,
+  // and the Club's PayrollComponent catalogue for the "add" picker.
+  const [openingComponentRows, openingComponentCatalogue] = await Promise.all([
+    editableOpeningBalance && canReadPayrollRecurring
+      ? listOpeningComponentBalances(principal, profile.clubId, editableOpeningBalance.id).catch(() => [])
+      : Promise.resolve([]),
+    canReadPayrollRecurring
+      ? prisma.payrollComponent.findMany({
+          where: { clubId: profile.clubId },
+          select: {
+            id: true, code: true, displayName: true, category: true,
+            side: true, cashEffect: true, active: true,
+          },
+          orderBy: [{ side: "asc" }, { category: "asc" }, { displayName: "asc" }],
+        })
+      : Promise.resolve([]),
   ]);
 
   const currentCompensation = compensationHistory.find((c) => c.effectiveTo === null) ?? null;
@@ -1140,20 +1209,40 @@ export default async function EmployeeProfilePage({
                     implementationDeclaration.firstSpectrePayDate?.toISOString() ?? null
                   }
                   canWrite={hasPermission(principal, profile.clubId, "payroll:run")}
-                  status={(activeOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING"}
-                  openingBalanceId={activeOpeningBalance?.id ?? null}
+                  status={(editableOpeningBalance?.status as "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED") ?? "MISSING"}
+                  openingBalanceId={editableOpeningBalance?.id ?? null}
                   throughPayDateIso={
-                    activeOpeningBalance?.throughPayDate
-                      ? new Date(activeOpeningBalance.throughPayDate).toISOString()
+                    editableOpeningBalance?.throughPayDate
+                      ? new Date(editableOpeningBalance.throughPayDate).toISOString()
                       : null
                   }
-                  priorPayrollKind={(activeOpeningBalance?.priorPayrollKind ?? null) as
+                  priorPayrollKind={(editableOpeningBalance?.priorPayrollKind ?? null) as
                     "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null}
-                  values={activeOpeningBalance?.values ?? null}
+                  values={editableOpeningBalance?.values ?? null}
+                  componentOpenings={openingComponentRows.map((r) => ({
+                    id: r.id,
+                    componentCode: r.componentCode,
+                    displayName: r.displayName,
+                    category: r.category,
+                    side: r.side,
+                    cashEffect: r.cashEffect,
+                    ytdAmount: r.ytdAmount,
+                  }))}
+                  componentCatalogue={openingComponentCatalogue.map((c) => ({
+                    id: c.id,
+                    code: c.code,
+                    displayName: c.displayName,
+                    category: c.category,
+                    side: c.side as "EMPLOYEE" | "EMPLOYER",
+                    cashEffect: c.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+                    active: c.active,
+                  }))}
                   actions={{
                     saveDraft: saveEmployeeOpeningYtdDraftAction,
                     validate: validateEmployeeOpeningYtdAction,
                     activate: activateEmployeeOpeningYtdAction,
+                    addComponent: addEmployeeOpeningYtdComponentAction,
+                    removeComponent: removeEmployeeOpeningYtdComponentAction,
                   }}
                 />
               ) : null

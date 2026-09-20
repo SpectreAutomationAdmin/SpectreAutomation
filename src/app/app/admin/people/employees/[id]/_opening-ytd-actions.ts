@@ -21,6 +21,8 @@ import {
   createDraftOpeningBalance,
   validateOpeningBalance,
   activateOpeningBalance,
+  addOpeningComponentBalance,
+  removeOpeningComponentBalance,
   type OpeningBalanceFields,
   type PriorPayrollKind,
 } from "@/lib/payroll/opening-balance";
@@ -125,6 +127,57 @@ export async function validateEmployeeOpeningYtdAction(formData: FormData): Prom
   }
   revalidatePath(`/app/admin/people/employees/${employeeId}`);
   backToEmployee(employeeId, undefined, "Opening YTD marked Ready.");
+}
+
+/** FPP-1 (2026-09-19) — add a per-Component opening balance to a DRAFT
+ *  opening YTD row. Redirects back to the employee page. */
+export async function addEmployeeOpeningYtdComponentAction(formData: FormData): Promise<void> {
+  const { principal, clubId } = await context();
+  const employeeId = String(formData.get("employeeId") ?? "").trim();
+  const openingBalanceId = String(formData.get("openingBalanceId") ?? "").trim();
+  const componentId = String(formData.get("componentId") ?? "").trim();
+  const ytdRaw = String(formData.get("ytdAmount") ?? "").trim();
+  const notesRaw = String(formData.get("notes") ?? "").trim() || null;
+  if (!employeeId) redirect("/app/admin");
+  if (!openingBalanceId) backToEmployee(employeeId, "Missing openingBalanceId.");
+  if (!componentId) backToEmployee(employeeId, "Pick a component before adding.");
+  const ytdAmount = ytdRaw === "" ? "0" : ytdRaw;
+  const n = Number(ytdAmount);
+  if (!Number.isFinite(n) || n < 0) {
+    backToEmployee(employeeId, "Component amount must be a non-negative number.");
+  }
+  try {
+    await addOpeningComponentBalance(principal, clubId, {
+      openingBalanceId,
+      componentId,
+      ytdAmount,
+      notes: notesRaw,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "NEXT_REDIRECT") throw err;
+    const msg = isAppError(err) ? err.safeMessage : (err as Error).message;
+    backToEmployee(employeeId, `Could not add component: ${msg}`);
+  }
+  revalidatePath(`/app/admin/people/employees/${employeeId}`);
+  backToEmployee(employeeId, undefined, "Component opening balance added.");
+}
+
+/** FPP-1 — remove a per-Component opening balance from a DRAFT opening YTD row. */
+export async function removeEmployeeOpeningYtdComponentAction(formData: FormData): Promise<void> {
+  const { principal, clubId } = await context();
+  const employeeId = String(formData.get("employeeId") ?? "").trim();
+  const openingComponentId = String(formData.get("openingComponentId") ?? "").trim();
+  if (!employeeId) redirect("/app/admin");
+  if (!openingComponentId) backToEmployee(employeeId, "Missing openingComponentId.");
+  try {
+    await removeOpeningComponentBalance(principal, clubId, openingComponentId);
+  } catch (err) {
+    if (err instanceof Error && err.message === "NEXT_REDIRECT") throw err;
+    const msg = isAppError(err) ? err.safeMessage : (err as Error).message;
+    backToEmployee(employeeId, `Could not remove component: ${msg}`);
+  }
+  revalidatePath(`/app/admin/people/employees/${employeeId}`);
+  backToEmployee(employeeId, undefined, "Component opening balance removed.");
 }
 
 /** Activate a VALIDATED/DRAFT → ACTIVE. */

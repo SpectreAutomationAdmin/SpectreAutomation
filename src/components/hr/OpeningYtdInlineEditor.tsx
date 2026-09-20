@@ -18,6 +18,28 @@ import { useState } from "react";
 type Status = "MISSING" | "DRAFT" | "VALIDATED" | "ACTIVE" | "SUPERSEDED";
 type PriorPayrollKind = "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT";
 
+// FPP-1 (2026-09-19) §9 — per-Component opening YTD row shown under
+// the aggregate 16 fields. Editing is DRAFT-only per §16 lifecycle
+// immutability.
+export interface OpeningYtdComponentOpening {
+  id: string;
+  componentCode: string;
+  displayName: string;
+  category: string;
+  side: "EMPLOYEE" | "EMPLOYER";
+  cashEffect: "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
+  ytdAmount: string;
+}
+export interface OpeningYtdComponentChoice {
+  id: string;
+  code: string;
+  displayName: string;
+  category: string;
+  side: "EMPLOYEE" | "EMPLOYER";
+  cashEffect: "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
+  active: boolean;
+}
+
 export interface OpeningYtdInlineEditorProps {
   employeeId: string;
   taxYear: number;
@@ -49,7 +71,11 @@ export interface OpeningYtdInlineEditorProps {
     saveDraft: (form: FormData) => Promise<void>;
     validate: (form: FormData) => Promise<void>;
     activate: (form: FormData) => Promise<void>;
+    addComponent?: (form: FormData) => Promise<void>;
+    removeComponent?: (form: FormData) => Promise<void>;
   };
+  componentOpenings?: OpeningYtdComponentOpening[];
+  componentCatalogue?: OpeningYtdComponentChoice[];
 }
 
 const KIND_LABELS: Record<PriorPayrollKind, string> = {
@@ -302,10 +328,172 @@ export default function OpeningYtdInlineEditor(props: OpeningYtdInlineEditorProp
                 </button>
               </div>
             </form>
+
+            <ComponentOpeningsSection
+              employeeId={props.employeeId}
+              openingBalanceId={props.openingBalanceId}
+              status={props.status}
+              canWrite={props.canWrite}
+              rows={props.componentOpenings ?? []}
+              catalogue={props.componentCatalogue ?? []}
+              addAction={props.actions.addComponent}
+              removeAction={props.actions.removeComponent}
+            />
           </div>
         </div>
       ) : null}
     </div>
+  );
+}
+
+function ComponentOpeningsSection(props: {
+  employeeId: string;
+  openingBalanceId: string | null;
+  status: Status;
+  canWrite: boolean;
+  rows: OpeningYtdComponentOpening[];
+  catalogue: OpeningYtdComponentChoice[];
+  addAction?: (fd: FormData) => Promise<void>;
+  removeAction?: (fd: FormData) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const canEditComponents =
+    props.canWrite && props.status === "DRAFT" && !!props.openingBalanceId
+    && !!props.addAction && !!props.removeAction;
+  const usedCodes = new Set(props.rows.map((r) => r.componentCode));
+  const pickable = props.catalogue.filter((c) => !usedCodes.has(c.code));
+
+  const showSection = !!props.openingBalanceId || props.rows.length > 0;
+  if (!showSection) return null;
+
+  return (
+    <section className="mt-6 border-t pt-5" data-testid="opening-ytd-components">
+      <div className="mb-2 flex items-baseline justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-stone-900">Payroll Component YTD</h4>
+          <p className="text-xs text-stone-500">
+            Per-component prior-payroll amounts (RRSP EE/ER, LTD, cell allowance, etc.). Kept
+            separate from the aggregate totals above so pay statements can show "Current + YTD"
+            for each Component the Club has ever posted.
+          </p>
+        </div>
+      </div>
+
+      {props.rows.length > 0 ? (
+        <table className="w-full text-xs" data-testid="opening-ytd-components-table">
+          <thead>
+            <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+              <th className="pb-1">Component</th>
+              <th className="pb-1">Classification</th>
+              <th className="pb-1 text-right">Opening YTD</th>
+              <th className="pb-1" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200">
+            {props.rows.map((r) => (
+              <tr key={r.id} data-testid={`opening-ytd-component-row-${r.componentCode}`}>
+                <td className="py-1.5">
+                  <div className="font-medium text-stone-900">{r.displayName}</div>
+                  <div className="font-mono text-[10px] text-stone-500">{r.componentCode}</div>
+                </td>
+                <td className="py-1.5 text-stone-600">
+                  {r.side === "EMPLOYEE" ? "Employee" : "Employer"} · {r.category}
+                </td>
+                <td className="py-1.5 text-right font-mono">{fmtMoney(r.ytdAmount)}</td>
+                <td className="py-1.5 text-right">
+                  {canEditComponents ? (
+                    <button
+                      type="button"
+                      className="text-xs text-red-700 hover:underline"
+                      disabled={pending}
+                      onClick={async () => {
+                        if (!confirm(`Remove opening YTD for ${r.displayName}?`)) return;
+                        const fd = new FormData();
+                        fd.set("employeeId", props.employeeId);
+                        fd.set("openingComponentId", r.id);
+                        setPending(true);
+                        try { await props.removeAction!(fd); } finally { setPending(false); }
+                      }}
+                      data-testid={`opening-ytd-component-remove-${r.componentCode}`}
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="text-xs text-stone-500 italic">
+          No component-level opening balances yet.
+        </p>
+      )}
+
+      {canEditComponents ? (
+        pickable.length > 0 ? (
+          <form
+            action={async (fd) => {
+              setPending(true);
+              try { await props.addAction!(fd); } finally { setPending(false); }
+            }}
+            className="mt-3 flex flex-wrap items-end gap-2"
+            data-testid="opening-ytd-component-add-form"
+          >
+            <input type="hidden" name="employeeId" value={props.employeeId} />
+            <input type="hidden" name="openingBalanceId" value={props.openingBalanceId!} />
+            <label className="block text-xs">
+              <span className="mb-1 block font-semibold text-stone-700">Component</span>
+              <select
+                name="componentId"
+                required
+                className="rounded border border-stone-300 px-2 py-1.5 text-sm"
+                data-testid="opening-ytd-component-picker"
+                defaultValue=""
+              >
+                <option value="" disabled>Select…</option>
+                {pickable.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.displayName} ({c.code}) — {c.side === "EMPLOYEE" ? "EE" : "ER"}
+                    {c.active ? "" : " · inactive"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs">
+              <span className="mb-1 block font-semibold text-stone-700">YTD amount</span>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                min="0"
+                name="ytdAmount"
+                required
+                placeholder="0.00"
+                className="w-32 rounded border border-stone-300 px-2 py-1.5 text-right font-mono text-sm"
+                data-testid="opening-ytd-component-amount"
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={pending}
+              data-testid="opening-ytd-component-add"
+            >
+              + Add
+            </button>
+          </form>
+        ) : (
+          <p className="mt-3 text-xs text-stone-500 italic">
+            Every catalogued component already has an opening amount.
+          </p>
+        )
+      ) : props.status !== "DRAFT" && props.openingBalanceId ? (
+        <p className="mt-3 text-xs text-stone-500 italic">
+          Component openings can only be edited while the parent opening balance is a draft.
+        </p>
+      ) : null}
+    </section>
   );
 }
 
