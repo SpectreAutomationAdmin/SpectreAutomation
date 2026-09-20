@@ -1077,6 +1077,7 @@ export default async function EmployeeProfilePage({
                     priorPayrollKind: (editableOpeningBalance?.priorPayrollKind ?? null) as
                       "PRIOR_SYSTEM_SAME_EMPLOYER" | "PRIOR_EMPLOYER" | "PRIOR_ADJUSTMENT" | null,
                     values: editableOpeningBalance?.values ?? null,
+                    workspaceHref: `/app/admin/people/employees/${profile.id}/opening-ytd`,
                     componentOpenings: openingComponentRows.map((r) => ({
                       id: r.id,
                       componentCode: r.componentCode,

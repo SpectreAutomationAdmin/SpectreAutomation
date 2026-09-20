@@ -59,6 +59,11 @@ export interface OpeningYtdInlineEditorProps {
   openingBalanceId: string | null;
   throughPayDateIso: string | null;
   priorPayrollKind: PriorPayrollKind | null;
+  /** FPP-2 (2026-09-20) — the "Set / Edit opening YTD" button now
+   *  navigates to the dedicated workspace page instead of opening a
+   *  modal. When present, entry buttons render as anchors to this URL.
+   *  Left optional for backward compatibility. */
+  workspaceHref?: string;
   values: {
     ytdGrossEarnings: string;
     ytdTaxableEarnings: string;
@@ -169,24 +174,44 @@ export default function OpeningYtdInlineEditor(props: OpeningYtdInlineEditorProp
           {pill.label}
         </span>
         {canEdit ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setOpen(true)}
-            data-testid="opening-ytd-open-editor"
-          >
-            {props.status === "MISSING" ? "Set opening YTD" : "Edit opening YTD"}
-          </button>
+          props.workspaceHref ? (
+            <a
+              href={props.workspaceHref}
+              className="btn btn-secondary btn-sm"
+              data-testid="opening-ytd-open-editor"
+            >
+              {props.status === "MISSING" ? "Set opening YTD" : "Edit opening YTD"}
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setOpen(true)}
+              data-testid="opening-ytd-open-editor"
+            >
+              {props.status === "MISSING" ? "Set opening YTD" : "Edit opening YTD"}
+            </button>
+          )
         ) : null}
         {props.status === "ACTIVE" ? (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => setOpen(true)}
-            data-testid="opening-ytd-view-values"
-          >
-            View values
-          </button>
+          props.workspaceHref ? (
+            <a
+              href={props.workspaceHref}
+              className="btn btn-secondary btn-sm"
+              data-testid="opening-ytd-view-values"
+            >
+              View values
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setOpen(true)}
+              data-testid="opening-ytd-view-values"
+            >
+              View values
+            </button>
+          )
         ) : null}
       </div>
 
