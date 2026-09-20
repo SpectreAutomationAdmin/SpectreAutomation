@@ -76,6 +76,12 @@ export interface ReviewBatchTotals {
     cppER:            string;
     cpp2ER:           string;
     eiER:             string;
+    /** FPP-5 (2026-09-20) — employee-side DECREASES_NET_PAY component
+     *  deductions (LTD, RRSP EE, etc.). Distinct from statutory. */
+    componentDeductions?: string;
+    /** FPP-5 — employer-side non-statutory contributions (AD&D, Life,
+     *  Dep Life, RRSP ER, Health & Dental). */
+    employerBenefits?:    string;
   };
 }
 
@@ -290,6 +296,19 @@ export async function getBatchReview(
         orderBy: [{ employee: { lastName: "asc" } }, { employee: { firstName: "asc" } }],
       },
       exceptions: { where: { batchEmployeeId: null } },
+      // FPP-5 (2026-09-20) — batch-level componentSnapshots feed the
+      // authoritative reconciliation. Employee-side DECREASES_NET_PAY
+      // components (LTD, RRSP EE) are part of the batch's total
+      // employee deductions; employer-side NO_NET_PAY_EFFECT components
+      // (AD&D, Life, Dep Life, RRSP ER) are part of the batch's total
+      // employer contributions. Prior to this hotfix the reconciliation
+      // used the sum of statutory-only columns and mis-reported both.
+      componentSnapshots: {
+        select: {
+          side: true, cashEffect: true, resolvedAmount: true,
+          componentCode: true,
+        },
+      },
     },
   });
   if (!batch) throw new NotFoundError(ENTITY, batchId);
@@ -341,9 +360,39 @@ export async function getBatchReview(
   const cpp2ER_D  = sum(batch.employees.map((e) => toDecimal(e.employerCpp2 ?? 0)));
   const eiER_D    = sum(batch.employees.map((e) => toDecimal(e.employerEi ?? 0)));
 
-  const employeeDeductionsD = cppEE_D.plus(cpp2EE_D).plus(eiEE_D)
-    .plus(fedD).plus(provD).plus(addFedD).plus(addProvD);
-  const employerContributionsD = cppER_D.plus(cpp2ER_D).plus(eiER_D);
+  // FPP-5 (2026-09-20) — canonical employee deductions = the persisted
+  // authoritative `totalEmployeeDeductions` on each batch employee. That
+  // column already sums statutory (CPP + CPP2 + EI + Federal + Prov +
+  // Additional) AND every batch componentSnapshot with
+  // side === EMPLOYEE && cashEffect === DECREASES_NET_PAY (LTD, RRSP EE).
+  // Using it directly aligns the reconciliation with each employee's
+  // persisted netPay derivation and eliminates the $257.28 delta the
+  // founder observed on Chris's Sep 15 batch.
+  const totalEmpDedD = sum(batch.employees.map((e) => toDecimal(e.totalEmployeeDeductions ?? 0)));
+
+  // FPP-5 — component-level deduction breakdown. Employee-side snapshots
+  // with cashEffect DECREASES_NET_PAY (LTD, RRSP EE) appear here so the
+  // review workspace can show the full deduction decomposition instead
+  // of hiding them under "additional".
+  const employeeComponentDeductionsD = sum(
+    batch.componentSnapshots
+      .filter((cs) => cs.side === "EMPLOYEE" && cs.cashEffect === "DECREASES_NET_PAY")
+      .map((cs) => toDecimal(cs.resolvedAmount ?? 0)),
+  );
+
+  const employeeDeductionsD = totalEmpDedD;
+
+  // FPP-5 — employer contributions = employer CPP + CPP2 + EI PLUS every
+  // employer-side componentSnapshot (AD&D, Life Insurance, Dependent
+  // Life, RRSP ER, Health & Dental). This aligns with the definition
+  // "everything the employer pays over and above the employee's gross"
+  // that the Total Employer Cost KPI implies.
+  const employerBenefitsD = sum(
+    batch.componentSnapshots
+      .filter((cs) => cs.side === "EMPLOYER")
+      .map((cs) => toDecimal(cs.resolvedAmount ?? 0)),
+  );
+  const employerContributionsD = cppER_D.plus(cpp2ER_D).plus(eiER_D).plus(employerBenefitsD);
 
   const reconciliationLhs = roundCentsHalfUp(grossD.minus(employeeDeductionsD));
   const reconciliationRhs = roundCentsHalfUp(netD);
@@ -371,6 +420,12 @@ export async function getBatchReview(
       cppER:         toCentString(cppER_D),
       cpp2ER:        toCentString(cpp2ER_D),
       eiER:          toCentString(eiER_D),
+      /** FPP-5 — employee-side DECREASES_NET_PAY components (LTD, RRSP
+       *  EE). Distinct from additionalTax. */
+      componentDeductions: toCentString(employeeComponentDeductionsD),
+      /** FPP-5 — employer-side non-statutory components (AD&D, Life,
+       *  Dependent Life, RRSP ER, Health & Dental). */
+      employerBenefits:    toCentString(employerBenefitsD),
     },
   };
 

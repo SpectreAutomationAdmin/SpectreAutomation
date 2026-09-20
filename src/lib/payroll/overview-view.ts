@@ -473,8 +473,12 @@ function fmtShortMonthDayYear(iso: string): string {
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return iso;
   return `${MONTH_SHORT_SRV[m - 1]} ${d}, ${y}`;
 }
-function fmtPeriodLabel(startISO: string, endISO: string): string {
-  return `${fmtShortMonthDayYear(startISO)} – ${fmtShortMonthDayYear(endISO)}`;
+function fmtPeriodLabel(startISO: string, endExclusiveISO: string): string {
+  // FPP-5 (2026-09-20) — period picker displays the inclusive last day.
+  const d = new Date(endExclusiveISO);
+  d.setUTCDate(d.getUTCDate() - 1);
+  const inclusiveISO = d.toISOString().slice(0, 10);
+  return `${fmtShortMonthDayYear(startISO)} – ${fmtShortMonthDayYear(inclusiveISO)}`;
 }
 function fmtHoursDecimal(n: number): string {
   return n.toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1800,7 +1804,17 @@ export function payDateLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string
   return fmtLongCalendarDate(payPeriod.payDateISO);
 }
 export function periodLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return `${fmtLongCalendarDate(payPeriod.periodStartISO)} – ${fmtLongCalendarDate(payPeriod.periodEndISO)}`;
+  // FPP-5 (2026-09-20) — display the inclusive last operational day
+  // (periodEnd - 1) so the founder sees "Aug 24, 2026 – Sep 8, 2026"
+  // even though the canonical half-open interval remains [start, end).
+  // Never mutate the stored periodEndISO — subtract only at the
+  // presentation layer.
+  return `${fmtLongCalendarDate(payPeriod.periodStartISO)} – ${fmtLongCalendarDate(subtractOneDayIso(payPeriod.periodEndISO))}`;
+}
+function subtractOneDayIso(iso: string): string {
+  const d = new Date(iso);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 const WEEKDAY_SHORT_SRV = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function fmtLongCalendarDate(iso: string): string {
