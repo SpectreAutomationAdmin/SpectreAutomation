@@ -7,7 +7,7 @@
 // side (Employee / Employer) and show a compact treatment readout so the
 // founder can see the frozen semantics that will apply on Prepare.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 interface PlanRow {
   id: string;
@@ -119,17 +119,53 @@ export default function BenefitPlansEditor(props: {
   const activePlans = useMemo(() => props.plans.filter((p) => p.active), [props.plans]);
   const historicalPlans = useMemo(() => props.plans.filter((p) => !p.active), [props.plans]);
 
+  // FPP-4B (2026-09-20) — surface only components whose live
+  // calculationMethod matches the plan's electionKind. The server-side
+  // guard (both linked components must match) is still authoritative;
+  // this UI filter simply prevents the founder from picking an
+  // incompatible option in the first place.
   const employeeChoices = useMemo(
-    () => props.components.filter((c) => c.side === "EMPLOYEE"),
-    [props.components],
+    () =>
+      props.components.filter(
+        (c) => c.side === "EMPLOYEE" && c.calculationMethod === electionKind,
+      ),
+    [props.components, electionKind],
   );
   const employerChoices = useMemo(
-    () => props.components.filter((c) => c.side === "EMPLOYER"),
-    [props.components],
+    () =>
+      props.components.filter(
+        (c) => c.side === "EMPLOYER" && c.calculationMethod === electionKind,
+      ),
+    [props.components, electionKind],
   );
+
+  // Reset picked components when the electionKind changes so a stale
+  // FIXED_AMOUNT id can never survive a switch to PERCENT.
+  useEffect(() => {
+    setEmployeeComponentId("");
+    setEmployerComponentId("");
+  }, [electionKind]);
 
   const selectedEmployee = employeeChoices.find((c) => c.id === employeeComponentId) ?? null;
   const selectedEmployer = employerChoices.find((c) => c.id === employerComponentId) ?? null;
+
+  // Advisory count of components on the correct side but incompatible
+  // with the current electionKind — surfaces when zero compatible
+  // choices exist so the founder is guided to Payroll Settings.
+  const incompatibleEmployeeCount = useMemo(
+    () =>
+      props.components.filter(
+        (c) => c.side === "EMPLOYEE" && c.calculationMethod !== electionKind,
+      ).length,
+    [props.components, electionKind],
+  );
+  const incompatibleEmployerCount = useMemo(
+    () =>
+      props.components.filter(
+        (c) => c.side === "EMPLOYER" && c.calculationMethod !== electionKind,
+      ).length,
+    [props.components, electionKind],
+  );
 
   return (
     <div>
@@ -441,6 +477,24 @@ export default function BenefitPlansEditor(props: {
                     </option>
                   ))}
                 </select>
+                {employeeChoices.length === 0 && incompatibleEmployeeCount > 0 ? (
+                  <p
+                    className="mt-1 text-[11px] text-amber-800"
+                    data-testid="benefits-form-employee-incompat"
+                  >
+                    No employee-side components with{" "}
+                    <em>{ELECTION_LABEL[electionKind]}</em> are configured. Existing
+                    employee components use a different calculation method; adjust the
+                    matching component in{" "}
+                    <a
+                      href="/app/admin/payroll/setup/components"
+                      className="text-[#1e40af] hover:underline"
+                    >
+                      Payroll Settings → Payroll components
+                    </a>
+                    {" "}or switch this plan's election type.
+                  </p>
+                ) : null}
                 {selectedEmployee && <ComponentTreatment opt={selectedEmployee} />}
               </div>
               <div>
@@ -463,6 +517,24 @@ export default function BenefitPlansEditor(props: {
                     </option>
                   ))}
                 </select>
+                {employerChoices.length === 0 && incompatibleEmployerCount > 0 ? (
+                  <p
+                    className="mt-1 text-[11px] text-amber-800"
+                    data-testid="benefits-form-employer-incompat"
+                  >
+                    No employer-side components with{" "}
+                    <em>{ELECTION_LABEL[electionKind]}</em> are configured. Existing
+                    employer components use a different calculation method; adjust the
+                    matching component in{" "}
+                    <a
+                      href="/app/admin/payroll/setup/components"
+                      className="text-[#1e40af] hover:underline"
+                    >
+                      Payroll Settings → Payroll components
+                    </a>
+                    {" "}or switch this plan's election type.
+                  </p>
+                ) : null}
                 {selectedEmployer && <ComponentTreatment opt={selectedEmployer} />}
               </div>
             </div>
