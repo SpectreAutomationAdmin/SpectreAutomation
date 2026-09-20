@@ -241,7 +241,7 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
 
       {/* Row 1 — 3 columns */}
       <div className="grid grid-cols-12 gap-4">
-        <div className="col-span-4">
+        <div className="col-span-3">
           <Card
             testId="grid-base-compensation"
             title={<span>1. Base Compensation</span>}
@@ -270,7 +270,7 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
           </Card>
         </div>
 
-        <div className="col-span-5">
+        <div className="col-span-5" data-recurring-slot>
           <Card
             testId="grid-recurring"
             title={<span>2. Recurring Earnings &amp; Deductions</span>}
@@ -307,10 +307,10 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
           </Card>
         </div>
 
-        <div className="col-span-3">
+        <div className="col-span-4">
           <Card
             testId="grid-one-time"
-            title={<span>3. One-Time Earnings</span>}
+            title={<span className="whitespace-nowrap">3. One-Time Earnings</span>}
             actions={<SmallLink href={props.addOneTimeHref} testId="grid-one-time-add">+ Add One-Time</SmallLink>}
           >
             {props.oneTime.length === 0 ? (
@@ -359,6 +359,7 @@ export default function EmployeePayrollGrid(props: EmployeePayrollGridProps) {
               changeAction={props.benefits.changeAction}
               endAction={props.benefits.endAction}
               banner={props.benefits.banner}
+              compact
             />
             <div className="mt-3">
               <SmallLink href={props.benefitHistoryHref} testId="grid-benefit-history">

@@ -47,6 +47,12 @@ export interface BenefitsDeductionsSectionProps {
   changeAction: (form: FormData) => Promise<void>;
   endAction: (form: FormData) => Promise<void>;
   banner: { tone: "success" | "error"; text: string } | null;
+  /** EPW-2 (2026-09-20) — compact layout for the founder-approved
+   *  Employee Payroll grid. When true, drops the section header/eyebrow
+   *  and renders active enrolments as a single dense table row per
+   *  plan instead of a full-width card per plan. Enrol / Change / End
+   *  drawers are unchanged. */
+  compact?: boolean;
 }
 
 function fmtCivil(iso: string): string {
@@ -109,20 +115,42 @@ export default function BenefitsDeductionsSection(props: BenefitsDeductionsSecti
   }, [active, upcoming, props.planChoices]);
 
   return (
-    <div className="spectre-person-section mt-6" id="benefits" data-testid="payroll-benefits-deductions-slice-c">
-      <div className="spectre-person-section-head flex items-center justify-between">
-        <h3 className="spectre-person-eyebrow">Benefits &amp; Deductions</h3>
-        {props.canWrite && !enrolling && (
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            data-testid="benefits-enrol-btn"
-            onClick={() => setEnrolling(true)}
-          >
-            + Enrol in benefit
-          </button>
-        )}
-      </div>
+    <div
+      className={props.compact ? "" : "spectre-person-section mt-6"}
+      id="benefits"
+      data-testid="payroll-benefits-deductions-slice-c"
+    >
+      {!props.compact ? (
+        <div className="spectre-person-section-head flex items-center justify-between">
+          <h3 className="spectre-person-eyebrow">Benefits &amp; Deductions</h3>
+          {props.canWrite && !enrolling && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              data-testid="benefits-enrol-btn"
+              onClick={() => setEnrolling(true)}
+            >
+              + Enrol in benefit
+            </button>
+          )}
+        </div>
+      ) : (
+        // Compact variant renders the header from the parent Card;
+        // still expose an inline enrol trigger so the founder can add
+        // a benefit without navigating away.
+        props.canWrite && !enrolling && (
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              data-testid="benefits-enrol-btn"
+              onClick={() => setEnrolling(true)}
+            >
+              + Enrol in benefit
+            </button>
+          </div>
+        )
+      )}
 
       {props.banner && (
         <div
@@ -143,7 +171,65 @@ export default function BenefitsDeductionsSection(props: BenefitsDeductionsSecti
         <p className="mt-3 text-sm text-stone-500">No active benefits.</p>
       )}
 
-      {active.length > 0 && (
+      {props.compact && active.length > 0 && (
+        <table className="w-full text-[12px]" data-testid="benefits-active-table">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-wide text-stone-500">
+              <th className="py-1 pr-2 font-medium">Benefit Type</th>
+              <th className="py-1 pr-2 font-medium">Plan</th>
+              <th className="py-1 pr-2 font-medium">Employee Election</th>
+              <th className="py-1 pr-2 font-medium">Employer Contribution</th>
+              <th className="py-1 pr-2 font-medium">Effective</th>
+              <th className="py-1 pr-2 font-medium">Status</th>
+              <th className="py-1 pl-2 font-medium text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {active.map((r) => {
+              const emp = r.planKind === "RRSP" && r.employerMatchBps != null
+                ? `${(r.employerMatchBps / 100).toFixed(2)}%${r.employerMatchCapBps != null ? ` up to ${(r.employerMatchCapBps / 100).toFixed(2)}%` : ""}`
+                : "—";
+              return (
+                <tr key={r.id} className="border-t border-stone-100" data-testid={`benefit-enrolment-active-${r.id}`}>
+                  <td className="py-1.5 pr-2 text-stone-900">{humanKind(r.planKind)}</td>
+                  <td className="py-1.5 pr-2 text-stone-700">{r.planName}</td>
+                  <td className="py-1.5 pr-2 text-stone-900">{humanElection(r)}</td>
+                  <td className="py-1.5 pr-2 text-stone-900">{emp}</td>
+                  <td className="py-1.5 pr-2 text-stone-700">{fmtCivil(r.effectiveFromIso)}</td>
+                  <td className="py-1.5 pr-2">
+                    <Pill tone="ok">Active</Pill>
+                  </td>
+                  <td className="py-1.5 pl-2 text-right">
+                    {props.canWrite ? (
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          className="text-[11px] text-[#2f5832] hover:underline"
+                          onClick={() => setChangingId(r.id)}
+                          data-testid={`benefit-change-${r.id}`}
+                        >
+                          Change
+                        </button>
+                        <span className="text-stone-300">·</span>
+                        <button
+                          type="button"
+                          className="text-[11px] text-[#2f5832] hover:underline"
+                          onClick={() => setEndingId(r.id)}
+                          data-testid={`benefit-end-${r.id}`}
+                        >
+                          End
+                        </button>
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {!props.compact && active.length > 0 && (
         <div className="mt-3 space-y-3">
           {active.map((r) => (
             <div
