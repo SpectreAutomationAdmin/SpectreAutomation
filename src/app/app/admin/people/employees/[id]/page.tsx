@@ -475,6 +475,15 @@ export default async function EmployeeProfilePage({
       },
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
     });
+    console.log("[FPP1-DEBUG] editableOpeningBalance loader:", {
+      clubId: profile.clubId,
+      employeeId: profile.id,
+      taxYear: currentTaxYear,
+      canReadPayrollRecurring,
+      activeOpeningBalanceExists: activeOpeningBalance != null,
+      foundDraftRow: draftRow != null,
+      draftRowStatus: draftRow?.status ?? null,
+    });
     if (draftRow) {
       editableOpeningBalance = {
         id: draftRow.id,
