@@ -53,7 +53,11 @@ function payDateLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
   return fmtCalendarDate(payPeriod.payDateISO);
 }
 function periodLongLabel(payPeriod: PayrollOverviewPayPeriodRef): string {
-  return `${fmtCalendarDate(payPeriod.periodStartISO)} – ${fmtCalendarDate(payPeriod.periodEndISO)}`;
+  // FPP-5 (2026-09-20) — display the inclusive last operational day
+  // (periodEnd - 1) even though the stored periodEnd remains exclusive.
+  const d = new Date(payPeriod.periodEndISO);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return `${fmtCalendarDate(payPeriod.periodStartISO)} – ${fmtCalendarDate(d.toISOString().slice(0, 10))}`;
 }
 
 /* Inline SVGs — same set as the approved shell. */
