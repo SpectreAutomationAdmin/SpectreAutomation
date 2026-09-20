@@ -34,12 +34,42 @@ import { Decimal } from "./statutory/decimal-money";
 
 export type OvertimePolicyKind = "ALBERTA_DEFAULT_ES";
 
+/**
+ * Statutory OT rules. Owned by the province / jurisdiction. Does NOT
+ * carry a workweek anchor — the workweek is a CLUB choice, not part
+ * of the statutory rule set (Slice F workweek-closeout, 2026-09-19).
+ */
 export interface OvertimePolicyConfig {
   kind: OvertimePolicyKind;
   dailyThresholdHours: Decimal;
   weeklyThresholdHours: Decimal;
   multiplier: Decimal;
-  workweekStartDow: number;   // 0 = Sunday .. 6 = Saturday
+}
+
+/** Durable day-of-week naming. Stored on `PayrollClubConfig.workweekStartsOn`. */
+export type WorkweekStartsOn =
+  | "SUNDAY" | "MONDAY" | "TUESDAY" | "WEDNESDAY"
+  | "THURSDAY" | "FRIDAY" | "SATURDAY";
+
+const DOW_NUM: Record<WorkweekStartsOn, number> = {
+  SUNDAY: 0, MONDAY: 1, TUESDAY: 2, WEDNESDAY: 3,
+  THURSDAY: 4, FRIDAY: 5, SATURDAY: 6,
+};
+
+/** Map durable name → JS Date-compatible 0..6 integer. Throws on unknown. */
+export function workweekStartsOnToDow(name: WorkweekStartsOn | string): number {
+  const n = (name ?? "").toString().toUpperCase();
+  if (!(n in DOW_NUM)) {
+    throw new Error(`Unknown workweekStartsOn value: ${name}. Expected SUNDAY..SATURDAY.`);
+  }
+  return DOW_NUM[n as WorkweekStartsOn];
+}
+
+/** Inverse map — used to display the workweek label consistently. */
+export function dowToWorkweekStartsOn(dow: number): WorkweekStartsOn {
+  const entry = Object.entries(DOW_NUM).find(([, v]) => v === dow);
+  if (!entry) throw new Error(`Workweek DOW out of range 0..6: ${dow}`);
+  return entry[0] as WorkweekStartsOn;
 }
 
 export interface ApprovedTimeEntryLike {
@@ -93,6 +123,7 @@ function groupByCivilDate(entries: ApprovedTimeEntryLike[]): Map<number, Approve
 export function classifyWorkweek(
   entriesInWorkweek: ApprovedTimeEntryLike[],
   policy: OvertimePolicyConfig,
+  workweekStartDow: number,
 ): WorkweekClassification {
   if (entriesInWorkweek.length === 0) {
     // Empty workweek — return a stub for callers that must produce a
@@ -107,7 +138,7 @@ export function classifyWorkweek(
     };
   }
   // Determine workweek boundaries from any entry (all belong to the same week).
-  const workweekStart = workweekStartFor(entriesInWorkweek[0]!.workDate, policy.workweekStartDow);
+  const workweekStart = workweekStartFor(entriesInWorkweek[0]!.workDate, workweekStartDow);
   const workweekEnd = new Date(workweekStart.getTime() + 7 * 86_400_000);
 
   const dailyMap = groupByCivilDate(entriesInWorkweek);
@@ -187,6 +218,7 @@ export function classifyForPayPeriod(
   payPeriodStart: Date,      // inclusive UTC midnight
   payPeriodEnd: Date,        // exclusive UTC midnight
   policy: OvertimePolicyConfig,
+  workweekStartDow: number,
 ): {
   regularHours: Decimal;
   overtimeHours: Decimal;
@@ -195,7 +227,7 @@ export function classifyForPayPeriod(
   // Group entries by workweek.
   const workweekBuckets = new Map<number, ApprovedTimeEntryLike[]>();
   for (const e of entries) {
-    const wwStart = workweekStartFor(e.workDate, policy.workweekStartDow);
+    const wwStart = workweekStartFor(e.workDate, workweekStartDow);
     const key = wwStart.getTime();
     const list = workweekBuckets.get(key) ?? [];
     list.push(e);
@@ -206,7 +238,7 @@ export function classifyForPayPeriod(
   let regular = new Decimal(0);
   let overtime = new Decimal(0);
   for (const [, weekEntries] of workweekBuckets.entries()) {
-    const wc = classifyWorkweek(weekEntries, policy);
+    const wc = classifyWorkweek(weekEntries, policy, workweekStartDow);
     workweeks.push(wc);
     // Sum days that fall inside the pay period.
     for (const d of wc.days) {

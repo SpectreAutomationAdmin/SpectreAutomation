@@ -157,3 +157,143 @@ describe("Slice F — hourly + overtime full pipeline", () => {
     expect(Number(beHourly.approvedHoursSnapshot!.toString())).toBeCloseTo(20, 2);
   });
 });
+
+// Slice F workweek-closeout (2026-09-19) — proves the workweek boundary
+// is a Club-owned concept, is frozen with the batch snapshot, and that a
+// later live-config change to the Club workweek cannot mutate history.
+describe("Slice F workweek-closeout — workweek as Club concept", () => {
+  beforeEach(async () => { await resetDb(); await seedRbac(); });
+
+  it("Fail-closed: hourly Prepare emits WORKWEEK_NOT_CONFIGURED when workweekStartsOn is NULL", async () => {
+    const s = await createPayrollIntegrationFixture({
+      clubName: "SliceF workweek fail-closed",
+      hourlyEmployee: {
+        hourlyRate: "22.50",
+        approvedTime: [
+          { workDate: utc(2026, 9, 21), hours: "10" },
+          { workDate: utc(2026, 9, 22), hours: "10" },
+        ],
+      },
+    });
+    // Clear the workweekStartsOn the fixture set (fixture defaults to SUNDAY);
+    // force Prepare to face a missing workweek.
+    await prisma.payrollClubConfig.updateMany({
+      where: { clubId: s.clubId }, data: { workweekStartsOn: null },
+    });
+    const prep = await preparePayrollBatch(s.paP, s.clubId, s.payPeriodId);
+    const exceptions = await prisma.payrollBatchException.findMany({
+      where: { batchId: prep.batchId, employeeId: s.hourly!.employeeId, severity: "BLOCKER" },
+      select: { code: true },
+    });
+    expect(exceptions.map(e => e.code)).toContain("WORKWEEK_NOT_CONFIGURED");
+    // Employee must NOT have overtime snapshot computed under a missing workweek.
+    const be = await prisma.payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: prep.batchId, employeeId: s.hourly!.employeeId },
+      select: { regularHoursSnapshot: true, overtimeHoursSnapshot: true, workweekStartsOnSnapshot: true },
+    });
+    expect(be.regularHoursSnapshot).toBeNull();
+    expect(be.overtimeHoursSnapshot).toBeNull();
+    expect(be.workweekStartsOnSnapshot).toBeNull();
+  });
+
+  it("Monday-anchored Prepare: same 5 workdays produce the same 40 reg + 10 OT (full workweek Mon-Fri)", async () => {
+    // Mon Sep 21 through Fri Sep 25 is a FULL workweek [Mon 9/21, Mon 9/28)
+    // under Monday-anchored config. Same 50h shape as the §11 canonical.
+    const s = await createPayrollIntegrationFixture({
+      clubName: "SliceF workweek Monday-anchored",
+      hourlyEmployee: {
+        hourlyRate: "22.50",
+        approvedTime: [
+          { workDate: utc(2026, 9, 21), hours: "10" },
+          { workDate: utc(2026, 9, 22), hours: "10" },
+          { workDate: utc(2026, 9, 23), hours: "10" },
+          { workDate: utc(2026, 9, 24), hours: "10" },
+          { workDate: utc(2026, 9, 25), hours: "10" },
+        ],
+      },
+    });
+    await prisma.payrollClubConfig.updateMany({
+      where: { clubId: s.clubId }, data: { workweekStartsOn: "MONDAY" },
+    });
+    const prep = await preparePayrollBatch(s.paP, s.clubId, s.payPeriodId);
+    const be = await prisma.payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: prep.batchId, employeeId: s.hourly!.employeeId },
+    });
+    expect(Number(be.regularHoursSnapshot!.toString())).toBeCloseTo(40, 2);
+    expect(Number(be.overtimeHoursSnapshot!.toString())).toBeCloseTo(10, 2);
+    expect(be.workweekStartsOnSnapshot).toBe("MONDAY");
+    expect(be.workweekStartDowSnapshot).toBe(1);
+  });
+
+  it("Mutation-immunity: change workweek AFTER Prepare — existing snapshot is unchanged, next Prepare uses new workweek", async () => {
+    // Prepare batch A under Sunday-anchored workweek.
+    const s = await createPayrollIntegrationFixture({
+      clubName: "SliceF workweek mutation-immunity",
+      hourlyEmployee: {
+        hourlyRate: "22.50",
+        approvedTime: [
+          { workDate: utc(2026, 9, 21), hours: "10" },
+          { workDate: utc(2026, 9, 22), hours: "10" },
+          { workDate: utc(2026, 9, 23), hours: "10" },
+          { workDate: utc(2026, 9, 24), hours: "10" },
+          { workDate: utc(2026, 9, 25), hours: "10" },
+        ],
+      },
+    });
+    const prepA = await preparePayrollBatch(s.paP, s.clubId, s.payPeriodId);
+    const beA = await prisma.payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: prepA.batchId, employeeId: s.hourly!.employeeId },
+    });
+    expect(beA.workweekStartsOnSnapshot).toBe("SUNDAY");
+    const originalReg = beA.regularHoursSnapshot!.toString();
+    const originalOt  = beA.overtimeHoursSnapshot!.toString();
+    // Live-mutate the Club's workweek to MONDAY.
+    await prisma.payrollClubConfig.updateMany({
+      where: { clubId: s.clubId }, data: { workweekStartsOn: "MONDAY" },
+    });
+    // Re-read the existing batch employee. Snapshot must be untouched.
+    const beAAgain = await prisma.payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: prepA.batchId, employeeId: s.hourly!.employeeId },
+    });
+    expect(beAAgain.workweekStartsOnSnapshot).toBe("SUNDAY");
+    expect(beAAgain.workweekStartDowSnapshot).toBe(0);
+    expect(beAAgain.regularHoursSnapshot!.toString()).toBe(originalReg);
+    expect(beAAgain.overtimeHoursSnapshot!.toString()).toBe(originalOt);
+    // A FUTURE Prepare on a different pay period uses the NEW Monday workweek.
+    // The default fixture creates period 18 (Sep 16 → Oct 1). Use period 20
+    // (Oct 16 → Nov 1) as a fresh unbatched period.
+    const period20 = await prisma.payrollPayPeriod.findFirstOrThrow({
+      where: { clubId: s.clubId, sequenceInYear: 20, taxYear: 2026 },
+    });
+    // Seed the department time approval for period 20 + a workweek's worth of
+    // approved time (Mon Oct 19 - Fri Oct 23).
+    await prisma.payrollDepartmentTimeApproval.create({
+      data: {
+        clubId: s.clubId, payPeriodId: period20.id, departmentId: s.department.id,
+        state: "APPROVED", approvedAt: new Date(),
+        approvedByUserId: s.paUser.id,
+      },
+    });
+    const hourlyAssn = await prisma.employeeEmploymentAssignment.findFirstOrThrow({
+      where: { clubId: s.clubId, employeeId: s.hourly!.employeeId, role: "PRIMARY" },
+    });
+    for (const wd of [utc(2026, 10, 19), utc(2026, 10, 20), utc(2026, 10, 21), utc(2026, 10, 22), utc(2026, 10, 23)]) {
+      await prisma.payrollApprovedTimeEntry.create({
+        data: {
+          clubId: s.clubId, employeeId: s.hourly!.employeeId,
+          employmentAssignmentId: hourlyAssn.id,
+          workDate: wd, hours: "10",
+          approvalState: "APPROVED",
+          approvedByUserId: s.paUser.id, approvedAt: new Date(),
+          earningClassification: "REGULAR",
+        },
+      });
+    }
+    const prepB = await preparePayrollBatch(s.paP, s.clubId, period20.id);
+    const beB = await prisma.payrollBatchEmployee.findFirstOrThrow({
+      where: { batchId: prepB.batchId, employeeId: s.hourly!.employeeId },
+    });
+    expect(beB.workweekStartsOnSnapshot).toBe("MONDAY");
+    expect(beB.workweekStartDowSnapshot).toBe(1);
+  });
+});

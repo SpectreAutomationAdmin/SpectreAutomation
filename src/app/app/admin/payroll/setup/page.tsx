@@ -34,6 +34,7 @@ import PayrollCalendarSection from "./PayrollCalendarSection";
 import GlProfileEditor from "./GlProfileEditor";
 import PayrollImplementationEditor from "./PayrollImplementationEditor";
 import OvertimePolicySection from "./OvertimePolicySection";
+import WorkweekSection from "./WorkweekSection";
 import { listAccounts } from "@/lib/accounting/coa";
 import { buildFirstPayrollReadiness } from "@/lib/payroll/first-payroll-readiness";
 import FirstPayrollReadinessPanel from "@/components/payroll/FirstPayrollReadinessPanel";
@@ -126,7 +127,7 @@ export default async function PayrollSetupPage({
           overtimeDailyThresholdHours: true,
           overtimeWeeklyThresholdHours: true,
           overtimeMultiplier: true,
-          workweekStartDow: true,
+          workweekStartsOn: true,
         },
       }),
     ]);
@@ -136,9 +137,10 @@ export default async function PayrollSetupPage({
           overtimeDailyThresholdHours: overtimePolicyRow.overtimeDailyThresholdHours.toString(),
           overtimeWeeklyThresholdHours: overtimePolicyRow.overtimeWeeklyThresholdHours.toString(),
           overtimeMultiplier: overtimePolicyRow.overtimeMultiplier.toString(),
-          workweekStartDow: overtimePolicyRow.workweekStartDow,
         }
       : null;
+    const workweekStartsOnDisplay =
+      (overtimePolicyRow as unknown as { workweekStartsOn: string | null } | null)?.workweekStartsOn ?? null;
     // Group periods by pay-group id for the calendar section.
     const initialCalendarByGroup: Record<string, ReturnType<typeof serializePeriod>[]> = {};
     for (const p of currentYearPeriods) {
@@ -363,7 +365,10 @@ export default async function PayrollSetupPage({
         </a>
       </section>
 
-      {/* Section 8 — Overtime policy (Slice F, 2026-09-19) */}
+      {/* Section 8 — Overtime policy (Slice F, 2026-09-19).
+          Slice F workweek-closeout (2026-09-19): OT rules and workweek
+          are now separate concepts. The OT policy owns the statutory
+          rules; Section 9 (Workweek) owns the Club-chosen boundary. */}
       <SectionHeader
         eyebrow="Section 8"
         title="Overtime policy"
@@ -371,9 +376,17 @@ export default async function PayrollSetupPage({
       />
       <OvertimePolicySection policy={overtimePolicyDisplay} />
 
-      {/* Section 9 — Benefit plans (Slice C closeout 2026-09-18) */}
+      {/* Section 9 — Workweek (Slice F workweek-closeout, 2026-09-19) */}
       <SectionHeader
         eyebrow="Section 9"
+        title="Workweek"
+        subtitle="The Club's payroll workweek boundary. Alberta ES defines the OT rules; the workweek anchor is a separate employer choice — Prepare fails-closed until it is set."
+      />
+      <WorkweekSection workweekStartsOn={workweekStartsOnDisplay} />
+
+      {/* Section 10 — Benefit plans (Slice C closeout 2026-09-18) */}
+      <SectionHeader
+        eyebrow="Section 10"
         title="Benefit plans"
         subtitle="Configure the Club's Long-Term Disability and Health & Dental plans. Each plan links to one or two Payroll components — the components carry the tax, pensionable, insurable, and GL treatment. RRSP plans arrive in a later slice."
       />

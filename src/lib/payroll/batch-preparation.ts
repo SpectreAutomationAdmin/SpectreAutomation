@@ -354,6 +354,7 @@ interface EmployeeSnapshot {
   overtimeRateSnapshot: string | null;
   overtimePolicyKindSnapshot: string | null;
   workweekStartDowSnapshot: number | null;
+  workweekStartsOnSnapshot: string | null;
   exceptions: Array<{ severity: ExceptionSeverity; code: string; message: string; recommendedAction?: string }>;
 }
 
@@ -447,13 +448,32 @@ async function snapshotEmployee(
   // classifier needs complete workweek context (Alberta ES 8/44
   // greater-of rule) to allocate across cross-period workweeks
   // correctly. Filter by period after classification.
-  const { surroundingWorkweekBounds } = await import("./overtime-classifier");
-  // Resolve the workweek anchor. Read PayrollClubConfig for the policy.
+  const { surroundingWorkweekBounds, workweekStartsOnToDow } = await import("./overtime-classifier");
+  // Slice F workweek-closeout (2026-09-19) — the CLUB workweek is
+  // distinct from the statutory OT policy. Read both. `workweekStartsOn`
+  // is the durable name; it is nullable so an unconfigured Club will
+  // fail-close when its hourly employees reach the OT block below.
+  //
+  // Legacy note: `workweekStartDow` is still selected for backward
+  // compat with rows written before the closeout migration, but the
+  // classifier ONLY consumes the value derived from `workweekStartsOn`
+  // when present. Fresh Prepares always freeze BOTH names into the
+  // batch snapshot for provenance.
   const clubConfigForWorkweek = await prisma.payrollClubConfig.findFirst({
     where: { clubId },
-    select: { workweekStartDow: true, overtimePolicyKind: true, overtimeDailyThresholdHours: true, overtimeWeeklyThresholdHours: true, overtimeMultiplier: true },
+    select: {
+      workweekStartsOn: true,
+      workweekStartDow: true,
+      overtimePolicyKind: true,
+      overtimeDailyThresholdHours: true,
+      overtimeWeeklyThresholdHours: true,
+      overtimeMultiplier: true,
+    },
   });
-  const workweekStartDow = clubConfigForWorkweek?.workweekStartDow ?? 0;
+  const workweekStartsOn = clubConfigForWorkweek?.workweekStartsOn ?? null;
+  const workweekStartDow = workweekStartsOn
+    ? workweekStartsOnToDow(workweekStartsOn)
+    : (clubConfigForWorkweek?.workweekStartDow ?? 0);
   const { fetchStart, fetchEnd } = surroundingWorkweekBounds(periodStart, periodEnd, workweekStartDow);
   const approvedTime = await prisma.payrollApprovedTimeEntry.findMany({
     where: {
@@ -505,6 +525,7 @@ async function snapshotEmployee(
   let overtimeRateSnapshot: string | null = null;
   let overtimePolicyKindSnapshot: string | null = null;
   let workweekStartDowSnapshot: number | null = null;
+  let workweekStartsOnSnapshot: string | null = null;
   const isHourly = compensations.some(
     (c) => (c.cadence ?? "").toUpperCase() !== "SALARY",
   ) && !salaried;
@@ -527,9 +548,22 @@ async function snapshotEmployee(
           severity: "BLOCKER",
           code: "OVERTIME_POLICY_REQUIRED",
           message:
-            "The Club has no supported overtime policy configured. Alberta ESA default (8/44 greater-of, 1.5×, Sunday-anchored workweek) is the only policy Slice F supports.",
+            "The Club has no supported overtime-rules policy configured. Alberta ESA default (8/44 greater-of, 1.5×) is the only policy Slice F supports.",
           recommendedAction:
             "Configure the Alberta ES default overtime policy in Payroll Settings, OR mark this employee EXEMPT if statutorily exempt.",
+        });
+      } else if (!workweekStartsOn) {
+        // Slice F workweek-closeout (2026-09-19) — a Club must explicitly
+        // declare its workweek boundary. The Alberta ES rule set does NOT
+        // mandate Sunday; that's an employer choice. Refuse to Prepare
+        // rather than silently defaulting.
+        exceptions.push({
+          severity: "BLOCKER",
+          code: "WORKWEEK_NOT_CONFIGURED",
+          message:
+            "The Club's payroll workweek boundary is not configured. Alberta ES does not mandate a start day — the employer must choose one, and Spectre refuses to silently default to Sunday.",
+          recommendedAction:
+            "Set the Club workweek in Payroll Settings → Workweek before preparing an hourly payroll.",
         });
       } else {
         // Classify.
@@ -539,16 +573,16 @@ async function snapshotEmployee(
           dailyThresholdHours: new Decimal(clubConfigForWorkweek.overtimeDailyThresholdHours.toString()),
           weeklyThresholdHours: new Decimal(clubConfigForWorkweek.overtimeWeeklyThresholdHours.toString()),
           multiplier: new Decimal(clubConfigForWorkweek.overtimeMultiplier.toString()),
-          workweekStartDow,
         };
         const cls = classifyForPayPeriod(
           approvedTime.map((e) => ({ id: e.id, workDate: e.workDate, hours: new Decimal(e.hours.toString()) })),
-          periodStart, periodEnd, policy,
+          periodStart, periodEnd, policy, workweekStartDow,
         );
         regularHoursSnapshot  = cls.regularHours.toFixed(4);
         overtimeHoursSnapshot = cls.overtimeHours.toFixed(4);
         overtimePolicyKindSnapshot = "ALBERTA_DEFAULT_ES";
         workweekStartDowSnapshot   = workweekStartDow;
+        workweekStartsOnSnapshot   = workweekStartsOn;
         // Freeze base rate + multiplier + derived OT rate for the
         // FIRST hourly compensation covering the period.
         const firstHourly = compensations.find((c) => (c.cadence ?? "").toUpperCase() !== "SALARY");
@@ -853,6 +887,7 @@ async function snapshotEmployee(
     overtimeRateSnapshot,
     overtimePolicyKindSnapshot,
     workweekStartDowSnapshot,
+    workweekStartsOnSnapshot,
     exceptions,
   };
 }
@@ -1143,6 +1178,7 @@ export async function preparePayrollBatch(
           overtimeRateSnapshot:       s.overtimeRateSnapshot,
           overtimePolicyKindSnapshot: s.overtimePolicyKindSnapshot,
           workweekStartDowSnapshot:   s.workweekStartDowSnapshot,
+          workweekStartsOnSnapshot:   s.workweekStartsOnSnapshot,
           status: s.exceptions.some((e) => e.severity === "BLOCKER") ? "ERRORED" : "INCLUDED",
         },
       });

@@ -1,27 +1,23 @@
-// Slice F (2026-09-19) — Payroll Settings §9. Overtime policy card.
+// Slice F (2026-09-19) — Payroll Settings §8: Overtime policy card.
+//
+// Slice F workweek-closeout (2026-09-19): SPLIT out the workweek anchor.
+// The OT policy owns the statutory rules; the CLUB owns the workweek
+// boundary. Alberta ES defines the "greater-of 8/44 at 1.5×" — it does
+// NOT mandate a start day. See `WorkweekSection` for the sibling card.
 //
 // Read-only for now: the Spectre payroll engine supports the Alberta
-// Employment Standards Act default (8/44 greater-of, 1.5×, Sunday-
-// anchored workweek) as the ONLY calculable policy. Special
-// arrangements (EXEMPT / AGREEMENT_REQUIRED / AVERAGING_REQUIRED) are
-// declared on the Employee record and fail-closed at Prepare so
-// payroll cannot silently miscalculate under an unsupported rule.
-//
-// A dropdown suggesting the founder can switch to a different policy
-// would misrepresent the fail-closed architecture; the card
-// deliberately reads as "this is the policy — everything else is
-// declared per-employee upstream." Additional statutory jurisdictions
-// arrive in a later slice.
+// Employment Standards Act default (8/44 greater-of, 1.5×) as the ONLY
+// calculable overtime-rules policy. Special arrangements
+// (EXEMPT / AGREEMENT_REQUIRED / AVERAGING_REQUIRED) are declared on the
+// Employee record and fail-closed at Prepare so payroll cannot silently
+// miscalculate under an unsupported rule.
 
 interface OvertimePolicyDisplay {
   overtimePolicyKind: string;
   overtimeDailyThresholdHours: string;
   overtimeWeeklyThresholdHours: string;
   overtimeMultiplier: string;
-  workweekStartDow: number;
 }
-
-const DOW_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export default function OvertimePolicySection({
   policy,
@@ -54,8 +50,16 @@ export default function OvertimePolicySection({
                 data-testid="ot-policy-kind"
               >
                 {policy.overtimePolicyKind === "ALBERTA_DEFAULT_ES"
-                  ? "Alberta ES default (8 / 44 greater-of, 1.5×)"
+                  ? "Alberta Employment Standards default"
                   : policy.overtimePolicyKind}
+              </div>
+              <div
+                className="mt-1 text-sm"
+                style={{ color: "var(--spectre-text-secondary)" }}
+              >
+                {policy.overtimePolicyKind === "ALBERTA_DEFAULT_ES"
+                  ? "Greater-of daily/weekly OT at 1.5×"
+                  : null}
               </div>
             </div>
             <span
@@ -70,7 +74,7 @@ export default function OvertimePolicySection({
             </span>
           </div>
 
-          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-testid="ot-policy-details">
+          <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3" data-testid="ot-policy-details">
             <div>
               <dt className="text-[11px] font-semibold uppercase tracking-[0.06em]"
                   style={{ color: "var(--spectre-text-muted)" }}>
@@ -102,17 +106,6 @@ export default function OvertimePolicySection({
                   style={{ color: "var(--spectre-text-primary)" }}
                   data-testid="ot-policy-multiplier">
                 {policy.overtimeMultiplier}×
-              </dd>
-            </div>
-            <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.06em]"
-                  style={{ color: "var(--spectre-text-muted)" }}>
-                Workweek anchor
-              </dt>
-              <dd className="mt-1 text-base"
-                  style={{ color: "var(--spectre-text-primary)" }}
-                  data-testid="ot-policy-workweek">
-                {DOW_LABELS[policy.workweekStartDow] ?? `DOW ${policy.workweekStartDow}`}
               </dd>
             </div>
           </dl>

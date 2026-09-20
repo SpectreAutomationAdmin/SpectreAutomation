@@ -246,7 +246,12 @@ export async function createPayrollIntegrationFixture(
     controllerUserId: ctl.id,
   });
   await c.payrollClubConfig.updateMany({
-    where: { clubId: club.id }, data: { glAccountingProfileId: profile.id },
+    where: { clubId: club.id },
+    // Slice F workweek-closeout (2026-09-19) — the test fixture seeds
+    // an explicit workweekStartsOn so hourly Prepare doesn't fail-close
+    // on WORKWEEK_NOT_CONFIGURED. Default SUNDAY (matches Alberta's
+    // historical convention and the 40/10 reference acceptance results).
+    data: { glAccountingProfileId: profile.id, workweekStartsOn: "SUNDAY" },
   });
 
   await declareImplementation(paP, club.id, {

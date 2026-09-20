@@ -12024,6 +12024,17 @@ model PayrollClubConfig {
   overtimeDailyThresholdHours    Decimal @default(8.0)
   overtimeWeeklyThresholdHours   Decimal @default(44.0)
   overtimeMultiplier             Decimal @default(1.5)
+  // Slice F workweek-closeout (2026-09-19) — CLUB-owned concept,
+  // separate from ALBERTA_DEFAULT_ES. Alberta ES defines the OT rules;
+  // the workweek anchor is the employer's choice. Durable string
+  // representation ("SUNDAY"..."SATURDAY") so the value is
+  // unambiguous across schemas, exports, and audit logs.
+  // NULLABLE by design: an hourly payroll refuses to Prepare until
+  // the Club has explicitly configured its workweek — no silent
+  // Sunday default. The legacy `workweekStartDow` Int column is
+  // kept only for schema-migration compatibility and is no longer
+  // read by any code path.
+  workweekStartsOn               String?
   workweekStartDow               Int     @default(0)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -12672,6 +12683,10 @@ model PayrollBatchEmployee {
   overtimeMultiplierSnapshot    Decimal?
   overtimeRateSnapshot          Decimal?
   overtimePolicyKindSnapshot    String?
+  // Slice F workweek-closeout (2026-09-19) — freeze the workweek
+  // provenance separately from the OT policy so a later Club-level
+  // workweek change cannot rewrite historical payroll classification.
+  workweekStartsOnSnapshot      String?
   workweekStartDowSnapshot      Int?
   membershipEffectiveFrom DateTime?
   membershipEffectiveTo   DateTime?
