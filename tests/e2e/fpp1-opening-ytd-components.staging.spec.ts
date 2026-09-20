@@ -74,6 +74,11 @@ test.describe("FPP-1 §2 — full Payroll Component YTD modal write flow", () =>
     const modalBody = (await page.getByTestId("opening-ytd-modal").textContent()) ?? "";
     expect(modalBody, "modal copy should state 'BEFORE Spectre's first payroll'").toMatch(/before spectre.?s first payroll/i);
 
+    // FPP-1C — the Payroll Component YTD section MUST be visible immediately
+    // (not gated on a prior draft) with a clear "save draft first" hint.
+    await expect(page.getByTestId("opening-ytd-components")).toBeVisible();
+    await expect(page.getByTestId("opening-ytd-components-needs-draft")).toBeVisible();
+
     // F. Enter a valid throughPayDate preceding firstSpectrePayDate (Oct 15 → Sep 30 works).
     const throughInput = page.locator('[data-testid="opening-ytd-through-pay-date"]');
     await throughInput.fill("2026-09-30");
