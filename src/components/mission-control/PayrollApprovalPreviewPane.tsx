@@ -174,7 +174,6 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
         <div className="spectre-mc-preview-head-titles">
           <h2 className="spectre-mc-preview-title">Payroll Approval</h2>
           <div className="spectre-mc-preview-sub">
-            <span className="k">Pay Period:</span>
             <span className="v">{preview.period.rangeLabel}</span>
           </div>
           <div className="spectre-mc-preview-club">{preview.clubDisplayName}</div>
