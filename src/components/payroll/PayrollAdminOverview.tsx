@@ -2263,6 +2263,29 @@ function ActionsCard({ view, calculate, discard, returnToPrep, submit, post, clu
       <div className="px-5 pt-2.5 pb-1.5">
         <h2 className="font-semibold text-[15px] text-stone-900">Payroll Actions</h2>
       </div>
+      {/* FPP-5B (2026-09-21) — post-Return-to-Preparation callout. When
+          the batch is at PREPARED but was previously CALCULATED (i.e.
+          calculationVersion > 0 AND calculatedAt is now null), the
+          founder's next-step intent is usually to re-freeze the latest
+          payroll configuration. Surface Discard → Prepare as the
+          suggested path directly in the Actions card so no one has to
+          hunt for it. */}
+      {batchStatus === "PREPARED"
+        && (view.batch?.calculationVersion ?? 0) > 0
+        && view.batch?.calculatedAt == null ? (
+        <div
+          className="mx-4 mt-1 mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"
+          role="note"
+          data-testid="payroll-admin-post-return-callout"
+        >
+          <p className="font-semibold">Payroll returned to preparation</p>
+          <p className="mt-0.5 text-amber-800">
+            The calculated results have been invalidated. <strong>Calculate Payroll</strong> below
+            recalculates using the frozen snapshots. To re-freeze the latest live payroll
+            configuration first, use <em>Discard Prepared Payroll</em>, then <em>Prepare Payroll</em>.
+          </p>
+        </div>
+      ) : null}
       <div className="px-4 pb-2.5 space-y-1.5">
         <TabNavigateBtn tone="primary" testId="payroll-admin-actions-resolve-exceptions"
           icon={<AlertTriangleIcon className="h-4 w-4" />}
@@ -3009,47 +3032,115 @@ function CalculateDisabledButton({ readiness, batchStatus }: {
   );
 }
 
+// FPP-5B (2026-09-21) — Return-to-Preparation is now a proper modal
+// confirmation (not a floating <details> dropdown). The prior UX made
+// the payroll-lifecycle dead-end that the founder observed: clicking
+// the button opened a small floating panel that could be cut off, the
+// reason field was easy to miss, and no server mutation occurred if
+// the user didn't submit the inner form. The modal pattern matches
+// SubmitForApproval and DiscardPreparedPayroll — clear intent, clear
+// primary action, clear next step on success.
 function ReturnToPreparationSidebarButton({ action, payPeriodId, payGroupId, batchId }: {
   action: (fd: FormData) => Promise<void>;
   payPeriodId: string;
   payGroupId: string;
   batchId: string;
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="relative" data-testid="payroll-admin-actions-return-to-prep">
-      <summary className="list-none cursor-pointer w-full inline-flex items-center justify-between rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3.5 py-1.5 text-[13px] font-medium text-stone-700">
-        <span className="inline-flex items-center gap-2"><RefreshIcon className="h-4 w-4 text-stone-500" /> Return to Preparation</span>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-testid="payroll-admin-actions-return-to-prep"
+        className="w-full inline-flex items-center justify-between rounded-md border border-stone-300 bg-white hover:bg-stone-50 px-3.5 py-1.5 text-[13px] font-medium text-stone-700"
+      >
+        <span className="inline-flex items-center gap-2">
+          <RefreshIcon className="h-4 w-4 text-stone-500" /> Return to Preparation
+        </span>
         <ArrowRight className="h-3.5 w-3.5" />
-      </summary>
-      <div className="absolute right-0 top-full mt-1 z-10 w-[300px] rounded-md border border-stone-200 bg-white shadow-lg p-3" data-testid="payroll-admin-actions-return-to-prep-panel">
-        <form action={action} className="space-y-2">
-          <input type="hidden" name="payPeriodId" value={payPeriodId} />
-          <input type="hidden" name="payGroupId" value={payGroupId} />
-          <input type="hidden" name="batchId" value={batchId} />
-          <p className="text-[11.5px] text-stone-500 leading-snug">
-            Reopens this run for a batch-local change (add/remove a one-time adjustment,
-            re-review). The frozen inputs captured at Prepare are kept — void and prepare
-            again if an employee&rsquo;s HR record has changed.
-          </p>
-          <div>
-            <label htmlFor="ret-side-reason" className="text-[11.5px] text-stone-600 font-medium">Reason</label>
-            <input
-              id="ret-side-reason"
-              name="reason"
-              type="text"
-              required
-              maxLength={240}
-              placeholder="e.g. adding a one-time bonus"
-              data-testid="payroll-admin-actions-return-to-prep-reason"
-              className="w-full mt-0.5 h-8 rounded border border-stone-200 text-[12.5px] px-2"
-            />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="return-to-prep-title"
+          data-testid="payroll-admin-return-to-prep-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 8, maxWidth: 520, width: "100%",
+            margin: "0 16px", padding: 24, boxShadow: "0 20px 40px rgba(0,0,0,0.15)",
+          }}>
+            <h2 id="return-to-prep-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#1c1917" }}>
+              Return this payroll to preparation?
+            </h2>
+            <p style={{ margin: "12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
+              This payroll moves back to <strong>Prepared</strong>. Calculated results become
+              invalidated, but the batch history (calculation version, frozen inputs, audit
+              trail) is preserved.
+            </p>
+            <p style={{ margin: "0 0 16px 0", fontSize: 13, lineHeight: 1.55, color: "#44403c" }}>
+              <strong>Next step:</strong> to re-freeze the latest payroll configuration (updated
+              components, rates, TD1, etc.) before Calculate, click <em>Discard Prepared Payroll</em>
+              and then <em>Prepare Payroll</em> once returned. If you only need to re-review the
+              existing frozen inputs, Calculate directly.
+            </p>
+            <form action={action} className="space-y-2">
+              <input type="hidden" name="payPeriodId" value={payPeriodId} />
+              <input type="hidden" name="payGroupId" value={payGroupId} />
+              <input type="hidden" name="batchId" value={batchId} />
+              <div style={{ marginBottom: 16 }}>
+                <label htmlFor="return-to-prep-reason" style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#57534e", marginBottom: 4 }}>
+                  Reason <span style={{ color: "#b91c1c" }}>*</span>
+                </label>
+                <input
+                  id="return-to-prep-reason"
+                  name="reason"
+                  type="text"
+                  required
+                  maxLength={240}
+                  placeholder="e.g. re-freezing snapshots after RRSP config change"
+                  data-testid="payroll-admin-return-to-prep-reason"
+                  style={{
+                    width: "100%", height: 36, padding: "0 10px",
+                    border: "1px solid #d0c9bd", borderRadius: 4, fontSize: 13,
+                  }}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  data-testid="payroll-admin-return-to-prep-cancel"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "1px solid #d0c9bd",
+                    background: "transparent", borderRadius: 4, cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  data-testid="payroll-admin-return-to-prep-confirm"
+                  style={{
+                    padding: "8px 16px", fontSize: 14, border: "none",
+                    background: "#dc2626", color: "white", borderRadius: 4, cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  Return to Preparation
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="flex items-center justify-end">
-            <button type="submit" data-testid="payroll-admin-actions-return-to-prep-submit" className="inline-flex items-center gap-1 rounded-md bg-[#dc2626] text-white px-3 py-1.5 text-[12.5px] font-medium hover:bg-[#b91c1c]">Return to Preparation</button>
-          </div>
-        </form>
-      </div>
-    </details>
+        </div>
+      )}
+    </>
   );
 }
 function DisabledBtn({ tone, icon, label }: { tone?: "primary"; icon: ReactNode; label: string }) {
