@@ -1123,23 +1123,17 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   @media (max-width: 1279px) {
     .spectre-mc-grid { grid-template-columns: minmax(0, 1fr); }
   }
-  /* FPP-6A (2026-09-21) — open state: compressed feed + fixed-width
-     compact preview + right-gutter + rail. At 1440×900 the workspace
-     lands ~1088px of usable width after the left navigation; the
-     preview is constrained to 300px so its right edge aligns with
-     the RIGHT edge of the "Ready for approval" KPI card above
-     (measured at x≈972.59). Col 3 is `minmax(0, 1fr)` — the
-     intentional gutter that separates preview from rail; the rail
-     is pinned to col 4 by an explicit `grid-column` on
-     `.spectre-mc-rail`. */
+  /* FPP-6B (2026-09-21) — open state: the main Mission Control
+     workspace (feed + preview) splits 50/50; the persistent right
+     rail keeps its existing 336px width. Grid becomes:
+       feed 1fr | preview 1fr | rail 336px
+     with the standard `--spectre-space-6` gap between each column.
+     At 1440×900 (workspace 1088px, rail 336px, 2 gaps 24px each)
+     each 1fr resolves to (1088 − 336 − 48) / 2 = 352px, so feed
+     and preview are visibly a matched pair either side of the
+     inner gutter. */
   .spectre-mc-grid--with-preview {
-    grid-template-columns: 330px 300px minmax(0, 1fr) 336px;
-  }
-  .spectre-mc-grid--with-preview > .spectre-mc-rail { grid-column: 4; }
-  @media (max-width: 1439px) {
-    .spectre-mc-grid--with-preview {
-      grid-template-columns: 300px 288px minmax(0, 1fr) 320px;
-    }
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 336px;
   }
   @media (max-width: 1279px) {
     /* Below the two-column breakpoint the preview stacks under the
@@ -1148,7 +1142,6 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     .spectre-mc-grid--with-preview {
       grid-template-columns: minmax(0, 1fr);
     }
-    .spectre-mc-grid--with-preview > .spectre-mc-rail { grid-column: auto; }
   }
 
   /* FPP-6 — selected work card treatment. Subtle left accent + faint
@@ -1159,16 +1152,17 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     box-shadow: 0 1px 3px rgba(109, 40, 217, 0.08);
   }
 
-  /* --- FPP-6 Preview pane (FPP-6A refined) ---------------------
-     Compact 300px pane. Padding + gap tightened so the whole
-     master-detail preview fits within a single 1440×900 viewport
-     without excessive scroll. */
+  /* --- FPP-6 Preview pane (FPP-6B — 50/50 workspace) ----------
+     At 1440×900 the preview is one half of the pre-rail workspace
+     (~352px). Padding and inter-section gap relaxed so the pane
+     breathes at the wider width. Section-level typography stays
+     compact so the reference's editorial density is preserved. */
   .spectre-mc-preview {
     background: var(--spectre-surface, #fff);
     border: 1px solid var(--spectre-border-muted, #e7e5e4);
     border-radius: 10px;
-    padding: 16px 16px 16px;
-    display: flex; flex-direction: column; gap: 10px;
+    padding: 20px 22px 22px;
+    display: flex; flex-direction: column; gap: 14px;
     min-width: 0;
   }
   .spectre-mc-preview-head {
@@ -1186,10 +1180,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     color: var(--spectre-text-primary, #1c1917); letter-spacing: -0.005em;
   }
   .spectre-mc-preview-sub {
-    margin-top: 3px; font-size: 12px; color: var(--spectre-text-secondary, #57534e);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-top: 4px; font-size: 12.5px; color: var(--spectre-text-secondary, #57534e);
+    display: flex; gap: 5px; align-items: baseline;
   }
-  .spectre-mc-preview-sub .k { font-weight: 600; margin-right: 4px; }
+  .spectre-mc-preview-sub .k { font-weight: 600; }
   .spectre-mc-preview-sub .v { font-weight: 500; }
   .spectre-mc-preview-club {
     font-size: 11.5px; color: var(--spectre-text-muted, #78716c); margin-top: 2px;
@@ -1222,10 +1216,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-preview-pill--priority { background: #dcfce7; color: #166534; }
 
   .spectre-mc-preview-meta {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-    padding: 10px 12px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    padding: 12px 14px;
     border: 1px solid var(--spectre-border-muted, #e7e5e4);
-    border-radius: 6px; background: #fafaf9;
+    border-radius: 8px; background: #fafaf9;
   }
   .spectre-mc-preview-meta .cell .k {
     font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
@@ -1233,12 +1227,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     text-transform: uppercase; margin-bottom: 3px;
   }
   .spectre-mc-preview-meta .cell .v {
-    font-size: 12.5px; font-weight: 600; color: var(--spectre-text-primary, #1c1917);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 13px; font-weight: 600; color: var(--spectre-text-primary, #1c1917);
   }
   .spectre-mc-preview-meta .cell .sub {
-    font-size: 11px; color: var(--spectre-text-secondary, #57534e); margin-top: 1px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 11.5px; color: var(--spectre-text-secondary, #57534e); margin-top: 1px;
   }
 
   .spectre-mc-preview-section { }
@@ -1249,18 +1241,18 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
 
   .spectre-mc-preview-summary {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 8px 8px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
   }
   .spectre-mc-preview-summary .cell {
-    padding: 8px 10px; border: 1px solid var(--spectre-border-muted, #e7e5e4);
-    border-radius: 6px; background: #fff;
+    padding: 10px 12px; border: 1px solid var(--spectre-border-muted, #e7e5e4);
+    border-radius: 8px; background: #fff;
   }
   .spectre-mc-preview-summary .cell .k {
-    font-size: 10.5px; color: var(--spectre-text-muted, #78716c);
+    font-size: 11px; color: var(--spectre-text-muted, #78716c);
     font-weight: 600; letter-spacing: 0.02em; margin-bottom: 2px;
   }
   .spectre-mc-preview-summary .cell .v {
-    font-size: 14px; font-weight: 700; color: var(--spectre-text-primary, #1c1917);
+    font-size: 15px; font-weight: 700; color: var(--spectre-text-primary, #1c1917);
     font-variant-numeric: tabular-nums;
   }
 
