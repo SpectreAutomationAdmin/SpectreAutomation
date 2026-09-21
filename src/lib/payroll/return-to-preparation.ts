@@ -1,9 +1,44 @@
-// Payroll Admin Slice 3D (2026-09-12) — Return to Preparation.
+// FPP-5C (2026-09-21) — Return to Preparation semantic correction.
 //
-// Safely transitions CALCULATED → PREPARED so a Payroll Admin can
-// correct a BATCH-LOCAL input that was discovered post-Calculate
-// (§24-25). This is the ONLY sanctioned path for editing a CALCULATED
-// batch — silent-edit of a calculated payroll is forbidden.
+// PRIOR SEMANTIC (Payroll-3D Option A): transitions CALCULATED → PREPARED
+// in place, preserving frozen snapshots. If a subsequent Calculate ran
+// against the SAME frozen snapshots the outputs would be identical —
+// live config changes did NOT flow into the next calculation. To pick
+// up live changes the operator additionally had to click Discard →
+// Prepare. Three actions to express what founders considered ONE
+// action.
+//
+// CORRECTED SEMANTIC: Return to Preparation now means "withdraw this
+// calculated payroll and require a fresh Prepare against the current
+// live configuration." Implementation:
+//   * Batch status → VOIDED (same terminal-audit path as Discard).
+//   * `calculatedAt`, `calculationVersion`, calculated columns and
+//     every componentSnapshot / sourceFactsJson row are LEFT UNCHANGED
+//     — the VOIDED batch remains fully auditable as the historical
+//     record of calculation version 1.
+//   * Approved time entries + APPLIED one-time earnings are released
+//     the same way `discardPreparedPayrollBatch` releases them, so
+//     the next Prepare can consume them.
+//   * `preparePayrollBatch` filters out VOIDED batches when it
+//     searches for an existing (Club, PayGroup, PayPeriod) → the next
+//     Prepare freely creates a NEW batch at sequence + 1, freezing the
+//     current live catalogue (statutory flags, RRSP tax treatment,
+//     component setup, TD1, compensation, membership).
+//   * The workspace `hasBatch` derives from non-VOIDED batches only,
+//     so the header's "Prepare Payroll" button becomes primary
+//     immediately.
+//
+// Historical calculation auditability: the VOIDED batch persists in
+// full — status, calculatedAt, calculationVersion, algorithmVersion,
+// packageChecksum, every batchEmployee's gross/net/deduction columns,
+// every componentSnapshot's frozen amount and statutory flag. Nothing
+// is deleted. Later slices can expose "Prior calculations" surfaces
+// against VOIDED batches for the same (payGroup, payPeriod).
+//
+// Callers must update expectations: the returned `nextStatus` is now
+// `"VOIDED"`, not `"PREPARED"`. A subsequent Prepare on the same period
+// creates a fresh batch — it is not the same batch returned to a
+// new lifecycle state.
 //
 // FROZEN-BATCH CONTRACT (Payroll 3D acceptance hotfix, 2026-09-12 §10-14):
 //
@@ -74,9 +109,16 @@ const ENTITY = "PayrollBatch";
 export interface ReturnToPreparationResult {
   batchId: string;
   priorStatus: "CALCULATED" | "RETURNED_FOR_CORRECTION";
-  nextStatus:  "PREPARED";
+  /** FPP-5C — the returned batch is voided; a fresh Prepare must
+   *  create a NEW batch for the same (Club, PayGroup, PayPeriod). */
+  nextStatus: "VOIDED";
+  /** Preserved from the voided batch for downstream audit surfaces. */
   calculationVersion: number;
+  /** Attestations invalidated for this batch by the void. */
   invalidatedAttestationCount: number;
+  /** PayrollApprovedTimeEntry rows released back to the pool so the
+   *  next Prepare can consume them. */
+  releasedTimeEntryCount: number;
 }
 
 export async function returnBatchToPreparation(
@@ -93,10 +135,13 @@ export async function returnBatchToPreparation(
     select: { id: true, status: true, calculationVersion: true },
   });
   if (!batch) throw new NotFoundError(ENTITY, batchId);
-  // Payroll 3E (2026-09-12): accepts CALCULATED (Payroll Admin
-  // self-service, from 3D) and RETURNED_FOR_CORRECTION (Payroll Admin
-  // reopening a Controller-returned batch for a batch-local edit).
-  // Refuses SUBMITTED_FOR_APPROVAL — the Controller must Return first.
+  // Accepts CALCULATED (Payroll Admin self-service after Calculate) and
+  // RETURNED_FOR_CORRECTION (Payroll Admin reopening a Controller-returned
+  // batch). Refuses SUBMITTED_FOR_APPROVAL — the Controller must Return
+  // first. Refuses APPROVED / POSTED / VOIDED / DRAFT / PREPARED —
+  // wrong lifecycle stage (PREPARED users click Discard for a similar
+  // outcome; DRAFT preparation had blockers and is discarded, not
+  // returned).
   if (batch.status !== "CALCULATED" && batch.status !== "RETURNED_FOR_CORRECTION") {
     throw new ValidationError([{
       path: "status",
@@ -109,34 +154,64 @@ export async function returnBatchToPreparation(
   }
 
   const now = new Date();
-  const invalidated = await prisma.$transaction(async (tx) => {
+  const { invalidated, released } = await prisma.$transaction(async (tx) => {
+    // Release approved time entries the batch was holding so the next
+    // Prepare can consume them.
+    const rel = await tx.payrollApprovedTimeEntry.updateMany({
+      where: { clubId, consumedByBatchId: batch.id },
+      data: { consumedByBatchId: null, consumedByBatchEmployeeId: null },
+    });
+    // Reset APPLIED one-time earnings so a fresh Prepare re-picks them up.
+    await tx.payrollScheduledOneTimeEarning.updateMany({
+      where: { appliedToBatchId: batch.id, status: "APPLIED" },
+      data: {
+        status: "SCHEDULED",
+        appliedAt: null,
+        appliedToBatchId: null,
+        appliedSnapshotId: null,
+      },
+    });
+    // Void the batch. calculatedAt / calculationVersion / calculated
+    // columns / componentSnapshots / sourceFactsJson are LEFT
+    // UNCHANGED — the VOIDED row remains the historical audit record.
     await tx.payrollBatch.update({
       where: { id: batchId },
-      data: { status: "PREPARED", calculatedAt: null },
+      data: {
+        status: "VOIDED",
+        voidedAt: now,
+        voidedByUserId: principal.id,
+        voidReason: trimmed,
+      },
     });
+    // Invalidate the CALCULATED_PAYROLL attestation so an operator
+    // reading the void row later sees the reason recorded on the
+    // attestation trail as well as the audit event.
     const count = await invalidateAttestationForBatchDimension(
       tx, clubId, batchId, "CALCULATED_PAYROLL", "payroll.batch.return-to-preparation",
     );
-    return count;
+    return { invalidated: count, released: rel.count };
   });
 
   await audit(principal, {
     action: "payroll.batch.return-to-preparation",
     entityType: ENTITY, entityId: batchId, clubId,
+    before: { status: batch.status, calculationVersion: batch.calculationVersion },
     after: {
       priorStatus: batch.status,
-      nextStatus: "PREPARED",
-      calculationVersion: batch.calculationVersion,
+      nextStatus: "VOIDED",
+      calculationVersion: batch.calculationVersion, // preserved on the voided row
       reason: trimmed,
-      invalidatedAt: now.toISOString(),
+      voidedAt: now.toISOString(),
+      releasedTimeEntryCount: released,
     },
   });
 
   return {
     batchId,
     priorStatus: batch.status as "CALCULATED" | "RETURNED_FOR_CORRECTION",
-    nextStatus: "PREPARED",
+    nextStatus: "VOIDED",
     calculationVersion: batch.calculationVersion,
     invalidatedAttestationCount: invalidated,
+    releasedTimeEntryCount: released,
   };
 }

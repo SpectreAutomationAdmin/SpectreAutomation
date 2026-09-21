@@ -2263,29 +2263,11 @@ function ActionsCard({ view, calculate, discard, returnToPrep, submit, post, clu
       <div className="px-5 pt-2.5 pb-1.5">
         <h2 className="font-semibold text-[15px] text-stone-900">Payroll Actions</h2>
       </div>
-      {/* FPP-5B (2026-09-21) — post-Return-to-Preparation callout. When
-          the batch is at PREPARED but was previously CALCULATED (i.e.
-          calculationVersion > 0 AND calculatedAt is now null), the
-          founder's next-step intent is usually to re-freeze the latest
-          payroll configuration. Surface Discard → Prepare as the
-          suggested path directly in the Actions card so no one has to
-          hunt for it. */}
-      {batchStatus === "PREPARED"
-        && (view.batch?.calculationVersion ?? 0) > 0
-        && view.batch?.calculatedAt == null ? (
-        <div
-          className="mx-4 mt-1 mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900"
-          role="note"
-          data-testid="payroll-admin-post-return-callout"
-        >
-          <p className="font-semibold">Payroll returned to preparation</p>
-          <p className="mt-0.5 text-amber-800">
-            The calculated results have been invalidated. <strong>Calculate Payroll</strong> below
-            recalculates using the frozen snapshots. To re-freeze the latest live payroll
-            configuration first, use <em>Discard Prepared Payroll</em>, then <em>Prepare Payroll</em>.
-          </p>
-        </div>
-      ) : null}
+      {/* FPP-5C (2026-09-21) — the post-return callout previously
+          added in FPP-5B is no longer reachable: Return to Preparation
+          now voids the batch, so the workspace transitions to the
+          "no active batch for this period" state and the header's
+          Prepare Payroll button becomes primary automatically. */}
       <div className="px-4 pb-2.5 space-y-1.5">
         <TabNavigateBtn tone="primary" testId="payroll-admin-actions-resolve-exceptions"
           icon={<AlertTriangleIcon className="h-4 w-4" />}
@@ -3080,15 +3062,12 @@ function ReturnToPreparationSidebarButton({ action, payPeriodId, payGroupId, bat
               Return this payroll to preparation?
             </h2>
             <p style={{ margin: "12px 0", fontSize: 14, lineHeight: 1.55, color: "#44403c" }}>
-              This payroll moves back to <strong>Prepared</strong>. Calculated results become
-              invalidated, but the batch history (calculation version, frozen inputs, audit
-              trail) is preserved.
+              The current calculation will be withdrawn and the payroll will need to be prepared
+              again. Preparing again freezes the latest payroll configuration, employee data and
+              eligible payroll components.
             </p>
             <p style={{ margin: "0 0 16px 0", fontSize: 13, lineHeight: 1.55, color: "#44403c" }}>
-              <strong>Next step:</strong> to re-freeze the latest payroll configuration (updated
-              components, rates, TD1, etc.) before Calculate, click <em>Discard Prepared Payroll</em>
-              and then <em>Prepare Payroll</em> once returned. If you only need to re-review the
-              existing frozen inputs, Calculate directly.
+              The previous calculation remains available in the audit history.
             </p>
             <form action={action} className="space-y-2">
               <input type="hidden" name="payPeriodId" value={payPeriodId} />

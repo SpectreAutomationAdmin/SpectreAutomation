@@ -71,16 +71,20 @@ describe("FPP-5B — Return-to-Preparation lifecycle", () => {
     await seedRbac();
   });
 
-  it("CALCULATED → PREPARED; calculatedAt cleared; calculationVersion preserved", async () => {
+  it("CALCULATED → VOIDED (FPP-5C); calculationVersion + calculated columns preserved for audit", async () => {
     const s = await scenario();
     const r = await returnBatchToPreparation(s.paP, s.club.id, s.batch.id, "test");
     expect(r.priorStatus).toBe("CALCULATED");
-    expect(r.nextStatus).toBe("PREPARED");
+    // FPP-5C: return-to-preparation now voids the batch so a fresh
+    // Prepare is required. The next-status contract accordingly is
+    // "VOIDED", not "PREPARED".
+    expect(r.nextStatus).toBe("VOIDED");
     expect(r.calculationVersion).toBe(1); // preserved
 
     const after = await db().payrollBatch.findUniqueOrThrow({ where: { id: s.batch.id } });
-    expect(after.status).toBe("PREPARED");
-    expect(after.calculatedAt).toBeNull();
+    expect(after.status).toBe("VOIDED");
+    // Calculated columns preserved as historical audit evidence.
+    expect(after.calculatedAt).not.toBeNull();
     expect(after.calculationVersion).toBe(1);
     // Batch employee calculated columns are UNCHANGED by return-to-prep
     const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: s.batch.id } });
