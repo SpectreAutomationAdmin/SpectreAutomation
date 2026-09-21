@@ -62,6 +62,11 @@ export interface PayrollApprovalPreview {
     submittedAtIso: string;
     // Pre-formatted, submitter's timestamp label: "Sep 20, 2026 · 7:48 PM".
     submittedAtLabel: string;
+    // FPP-6A (2026-09-21) — split date/time so the compact 300px
+    // metadata cell can render each on its own line without
+    // mid-string wrapping.
+    submittedDateLabel: string;
+    submittedTimeLabel: string;
     roleLabel: string;
   };
   totals: {
@@ -280,6 +285,8 @@ export async function loadPayrollApprovalPreview(
       displayName: submitter?.name ?? null,
       submittedAtIso: submittedAt.toISOString(),
       submittedAtLabel,
+      submittedDateLabel: dLabel,
+      submittedTimeLabel: tLabel,
       roleLabel: "Payroll Administrator",
     },
     totals: {
