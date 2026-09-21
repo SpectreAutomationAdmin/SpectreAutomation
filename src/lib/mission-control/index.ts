@@ -211,6 +211,33 @@ export type PayrollWorkIntakeCard =
       workIntakeItemId: string;
       departmentName: string | null;
       deepLink: { href: string; label: string } | null;
+    }
+  // FPP-6 (2026-09-21) — Controller final-approval card. Materialised
+  // atomically by submitPayrollBatch (see src/lib/payroll/submit-payroll-batch.ts)
+  // and bound to a submitted PayrollBatch via WorkIntakeOrigin
+  // (kind PAYROLL_FINAL_APPROVAL, role PRIMARY, referenceId = batch id).
+  // The compact card in the feed is the click target; the rich preview
+  // opens in the workspace preview pane and is fed by
+  // loadPayrollApprovalPreview() from componentSnapshots + frozen
+  // employees — the card projection here carries only what is needed
+  // to render the compressed feed row.
+  | {
+      kind: "final-approval";
+      workIntakeItemId: string;
+      batchId: string;
+      periodStartIso: string;
+      periodEndInclusiveIso: string;
+      payDateIso: string;
+      payGroupCode: string;
+      payGroupName: string;
+      submittedAtIso: string;
+      submittedByDisplayName: string | null;
+      employeeCount: number;
+      grossPayDisplay: string;
+      netPayDisplay: string;
+      calculationVersion: number;
+      packageChecksumShort: string;
+      deepLink: { href: string; label: string } | null;
     };
 
 export type BriefingCounts = {

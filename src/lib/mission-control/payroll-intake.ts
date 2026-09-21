@@ -142,9 +142,86 @@ async function buildPayrollCardProjection(args: {
       return buildCorrectionGapCard({ clubId, workIntakeItemId, referenceId: origin.referenceId, deep });
     case "PAYROLL_TIMESHEET_APPROVAL_CONFIG_GAP":
       return buildScopeGapCard({ clubId, workIntakeItemId, referenceId: origin.referenceId, deep });
+    // FPP-6 (2026-09-21) — Controller final-approval card. `referenceId`
+    // is the submitted PayrollBatch id. All values below come from the
+    // frozen submitted batch, never from the live component catalogue
+    // or from a later re-calc.
+    case "PAYROLL_FINAL_APPROVAL":
+      return buildFinalApprovalCard({ clubId, workIntakeItemId, batchId: origin.referenceId, deep });
     default:
       return null;
   }
+}
+
+// -------------------------------------------------------------------
+// Final-approval card (FPP-6, 2026-09-21) — compressed feed projection.
+// The rich preview pane consumes a different DTO
+// (loadPayrollApprovalPreview) — this projection carries only the
+// values the compressed feed row needs to render.
+// -------------------------------------------------------------------
+
+async function buildFinalApprovalCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  batchId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const batch = await prisma.payrollBatch.findFirst({
+    where: { id: args.batchId, clubId: args.clubId },
+    select: {
+      id: true,
+      calculationVersion: true,
+      packageChecksum: true,
+      submittedAt: true,
+      submittedByUserId: true,
+      payGroup: { select: { code: true, name: true } },
+      payPeriod: { select: { periodStart: true, periodEnd: true, payDate: true } },
+      employees: { select: { grossPay: true, netPay: true } },
+    },
+  });
+  if (!batch || !batch.submittedAt) return null;
+
+  const submitter = batch.submittedByUserId
+    ? await prisma.user.findFirst({
+        where: { id: batch.submittedByUserId },
+        select: { name: true },
+      })
+    : null;
+
+  // periodEnd is stored as the half-open upper bound. The inclusive
+  // last-day of the period is periodEnd - 1 day. See periodLongLabel
+  // in overview-view.ts for the same convention (FPP-5 fix).
+  const inclusive = new Date(batch.payPeriod.periodEnd.getTime() - 24 * 60 * 60 * 1000);
+
+  const grossCents = batch.employees.reduce(
+    (s, e) => s + Math.round(Number(e.grossPay ?? 0) * 100),
+    0,
+  );
+  const netCents = batch.employees.reduce(
+    (s, e) => s + Math.round(Number(e.netPay ?? 0) * 100),
+    0,
+  );
+  const fmtMoney = (cents: number) =>
+    `$${(cents / 100).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return {
+    kind: "final-approval",
+    workIntakeItemId: args.workIntakeItemId,
+    batchId: batch.id,
+    periodStartIso: batch.payPeriod.periodStart.toISOString(),
+    periodEndInclusiveIso: inclusive.toISOString(),
+    payDateIso: batch.payPeriod.payDate.toISOString(),
+    payGroupCode: batch.payGroup.code,
+    payGroupName: batch.payGroup.name,
+    submittedAtIso: batch.submittedAt.toISOString(),
+    submittedByDisplayName: submitter?.name ?? null,
+    employeeCount: batch.employees.length,
+    grossPayDisplay: fmtMoney(grossCents),
+    netPayDisplay: fmtMoney(netCents),
+    calculationVersion: batch.calculationVersion,
+    packageChecksumShort: batch.packageChecksum ? batch.packageChecksum.slice(0, 12) : "",
+    deepLink: args.deep,
+  };
 }
 
 // -------------------------------------------------------------------

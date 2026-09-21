@@ -26,6 +26,7 @@ import { useRouter } from "next/navigation";
 import type { WorkItem, PayrollWorkIntakeCard } from "@/lib/mission-control";
 import type { WorkIntakeActionResult } from "@/lib/work-intake/action-dispatcher";
 import { invokeMissionControlWorkIntakeAction } from "@/app/app/admin/_work-intake-actions";
+import { useWorkspacePreview } from "./WorkspacePreviewContext";
 
 interface Props {
   item: WorkItem;
@@ -59,7 +60,69 @@ export default function PayrollActionCard({ item }: Props) {
       return <CorrectionGapCard item={item} card={card} />;
     case "scope-gap":
       return <ScopeGapCard item={item} card={card} />;
+    // FPP-6 (2026-09-21) — Controller final-approval card. Clicking
+    // selects the item into the Mission Control workspace preview
+    // pane instead of expanding inline.
+    case "final-approval":
+      return <FinalApprovalCard item={item} card={card} />;
   }
+}
+
+// -------------------------------------------------------------------
+// FPP-6 — Final-approval compressed feed row.
+// -------------------------------------------------------------------
+
+function FinalApprovalCard(props: {
+  item: WorkItem;
+  card: Extract<PayrollWorkIntakeCard, { kind: "final-approval" }>;
+}) {
+  const { item, card } = props;
+  const { selectWorkItem, isSelected } = useWorkspacePreview();
+  const selected = isSelected(card.workIntakeItemId);
+
+  function shortMonthDay(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  function longMonthDayYear(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  }
+  const rangeLabel = `${shortMonthDay(card.periodStartIso)} – ${longMonthDayYear(card.periodEndInclusiveIso)}`;
+
+  return (
+    <article
+      className={`spectre-mc-item ${item.state}${selected ? " spectre-mc-item--selected" : ""}`}
+      data-testid={`payroll-final-approval-card-${card.workIntakeItemId}`}
+      data-selected={selected ? "true" : "false"}
+      role="button"
+      tabIndex={0}
+      onClick={() => selectWorkItem(card.workIntakeItemId)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectWorkItem(card.workIntakeItemId);
+        }
+      }}
+    >
+      <CardHeader
+        state={item.state}
+        eyebrow="Payroll · Controller approval"
+        pillLabel="Ready for approval"
+        idTag={item.idTag}
+        timestampLabel={item.timestampLabel}
+      />
+      <h3>Payroll for Controller Approval</h3>
+      <div className="spectre-mc-sender">
+        <span className="from">{rangeLabel}</span>
+        <span className="sep">·</span>
+        <span>{card.payGroupCode}</span>
+      </div>
+      <div className="spectre-mc-work">
+        {card.employeeCount} employee{card.employeeCount === 1 ? "" : "s"} · Net {card.netPayDisplay}
+      </div>
+    </article>
+  );
 }
 
 // -------------------------------------------------------------------

@@ -32,6 +32,10 @@ import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusP
 import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
 import { WorkFeedActiveProvider } from "@/components/mission-control/WorkFeedActiveContext";
 import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
+import { WorkspacePreviewProvider } from "@/components/mission-control/WorkspacePreviewContext";
+import WorkspaceLayoutSwitcher from "@/components/mission-control/WorkspaceLayoutSwitcher";
+import PayrollApprovalPreviewPane from "@/components/mission-control/PayrollApprovalPreviewPane";
+import { loadPayrollApprovalPreview, type PayrollApprovalPreview } from "@/lib/mission-control/payroll-approval-preview";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
 import { greetingWordForInstant } from "@/lib/mission-control/local-time";
@@ -41,7 +45,7 @@ export const dynamic = "force-dynamic";
 export default async function MissionControlPage({
   searchParams,
 }: {
-  searchParams?: { view?: string };
+  searchParams?: { view?: string; workItem?: string };
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -60,6 +64,23 @@ export default async function MissionControlPage({
   const view: "active" | "history" = searchParams?.view === "history" ? "history" : "active";
 
   const snapshot = await loadMissionControlSnapshot(principal, clubId, { feedFilter: view });
+
+  // FPP-6 (2026-09-21) — Workspace preview state. When `?workItem=<id>`
+  // is present and resolves to a PAYROLL_FINAL_APPROVAL WI item the
+  // current user owns, we pre-load the preview DTO server-side so the
+  // pane opens immediately (including on direct refresh / deep link).
+  // If the loader rejects (not found, cross-tenant, not a payroll
+  // approval), we silently render the closed state — never leak the
+  // param.
+  let payrollApprovalPreview: PayrollApprovalPreview | null = null;
+  const selectedWorkItemId = searchParams?.workItem?.trim() || null;
+  if (selectedWorkItemId) {
+    try {
+      payrollApprovalPreview = await loadPayrollApprovalPreview(principal, clubId, selectedWorkItemId);
+    } catch {
+      payrollApprovalPreview = null;
+    }
+  }
   const connectPrompt = await loadMissionControlConnectPromptSpec({ principal, clubId });
   // Sprint 3 · Checkpoint 15M — Feed Synced header pill (replaces
   // the removed "Connected accounts" sidebar entry).
@@ -181,7 +202,12 @@ export default async function MissionControlPage({
       </section>
 
       {/* Feed + rail --------------------------------------------- */}
-      <div className="spectre-mc-grid">
+      {/* FPP-6 (2026-09-21) — workspace preview provider owns the
+          selectedWorkItemId URL state; layout switcher toggles the
+          `spectre-mc-grid--with-preview` modifier that drives the
+          CSS grid-template-columns transition. */}
+      <WorkspacePreviewProvider>
+      <WorkspaceLayoutSwitcher>
         <section>
           <div className="spectre-mc-feed-head">
             {/* Sprint 3 · Checkpoint 16H §1 — visible feed header
@@ -279,6 +305,17 @@ export default async function MissionControlPage({
           )}
         </section>
 
+        {/* FPP-6 preview slot — renders only when a payroll-approval
+            preview loaded server-side. Positioned between the feed
+            and the rail so the right rail (Today's Position /
+            Executive Insight / Today's Commitments) is preserved. */}
+        {payrollApprovalPreview ? (
+          <PayrollApprovalPreviewPane
+            preview={payrollApprovalPreview}
+            currentUserId={user.id}
+          />
+        ) : null}
+
         <aside className="spectre-mc-rail" aria-label="Executive rail">
           {/* Today's Position -------------------------------------- */}
           <section className="spectre-mc-rail-card">
@@ -329,7 +366,8 @@ export default async function MissionControlPage({
               concept. Real Outlook events + Spectre-proposed deadlines. */}
           <TodaysCommitments data={snapshot.todaysCommitments} />
         </aside>
-      </div>
+      </WorkspaceLayoutSwitcher>
+      </WorkspacePreviewProvider>
     </div>
   );
 }

@@ -1114,10 +1114,236 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-grid {
     display: grid; grid-template-columns: minmax(0, 1fr) 336px;
     gap: var(--spectre-space-6); align-items: start;
+    /* FPP-6 (2026-09-21) — smooth transition between the two-column
+       closed state and the three-column open state. The
+       grid-template-columns swap is what compresses the feed and
+       makes room for the preview pane. */
+    transition: grid-template-columns 220ms ease-out;
   }
   @media (max-width: 1279px) {
     .spectre-mc-grid { grid-template-columns: minmax(0, 1fr); }
   }
+  /* FPP-6 — open state: compressed feed + preview + rail.
+     At 1440-wide the workspace lands ~1160px of usable width after
+     the left navigation; 330px feed + preview + 336px rail leaves
+     a comfortable preview column of ~490px (~62% of center).       */
+  .spectre-mc-grid--with-preview {
+    grid-template-columns: 330px minmax(0, 1fr) 336px;
+  }
+  @media (max-width: 1439px) {
+    .spectre-mc-grid--with-preview {
+      grid-template-columns: 300px minmax(0, 1fr) 320px;
+    }
+  }
+  @media (max-width: 1279px) {
+    /* Below the two-column breakpoint the preview stacks under the
+       feed rather than compress. Keeps the interaction usable and
+       the right rail visible on narrower monitors. */
+    .spectre-mc-grid--with-preview {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* FPP-6 — selected work card treatment. Subtle left accent + faint
+     background, matching the restrained Spectre selection language. */
+  .spectre-mc-item--selected {
+    background: #fbf5ff;
+    border-left-color: #6d28d9 !important;
+    box-shadow: 0 1px 3px rgba(109, 40, 217, 0.08);
+  }
+
+  /* --- FPP-6 Preview pane ------------------------------------- */
+  .spectre-mc-preview {
+    background: var(--spectre-surface, #fff);
+    border: 1px solid var(--spectre-border-muted, #e7e5e4);
+    border-radius: 10px;
+    padding: 20px 22px 22px;
+    display: flex; flex-direction: column; gap: 14px;
+    min-width: 0;
+  }
+  .spectre-mc-preview-head {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 12px; align-items: start;
+  }
+  .spectre-mc-preview-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .spectre-mc-preview-head-titles { min-width: 0; }
+  .spectre-mc-preview-title {
+    font-size: 16px; font-weight: 700; margin: 0;
+    color: var(--spectre-text-primary, #1c1917); letter-spacing: -0.005em;
+  }
+  .spectre-mc-preview-sub {
+    margin-top: 4px; font-size: 12.5px; color: var(--spectre-text-secondary, #57534e);
+    display: flex; gap: 5px; align-items: baseline;
+  }
+  .spectre-mc-preview-sub .k { font-weight: 600; }
+  .spectre-mc-preview-club {
+    font-size: 12px; color: var(--spectre-text-muted, #78716c); margin-top: 2px;
+  }
+  .spectre-mc-preview-head-actions { display: flex; gap: 8px; }
+  .spectre-mc-preview-open-full,
+  .spectre-mc-preview-close {
+    width: 26px; height: 26px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--spectre-text-secondary, #57534e);
+    background: transparent; border: 1px solid transparent;
+    cursor: pointer; text-decoration: none;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  .spectre-mc-preview-open-full:hover,
+  .spectre-mc-preview-close:hover {
+    background: #f5f5f4;
+    color: var(--spectre-text-primary, #1c1917);
+    border-color: var(--spectre-border-muted, #e7e5e4);
+  }
+
+  .spectre-mc-preview-pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .spectre-mc-preview-pill {
+    font-size: 11px; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px;
+    letter-spacing: 0.01em;
+  }
+  .spectre-mc-preview-pill--approval { background: #ede9fe; color: #5b21b6; }
+  .spectre-mc-preview-pill--priority { background: #dcfce7; color: #166534; }
+
+  .spectre-mc-preview-meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--spectre-border-muted, #e7e5e4);
+    border-radius: 8px; background: #fafaf9;
+  }
+  .spectre-mc-preview-meta .cell .k {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em;
+    color: var(--spectre-text-muted, #78716c);
+    text-transform: uppercase; margin-bottom: 3px;
+  }
+  .spectre-mc-preview-meta .cell .v {
+    font-size: 13px; font-weight: 600; color: var(--spectre-text-primary, #1c1917);
+  }
+  .spectre-mc-preview-meta .cell .sub {
+    font-size: 11.5px; color: var(--spectre-text-secondary, #57534e); margin-top: 1px;
+  }
+
+  .spectre-mc-preview-section { }
+  .spectre-mc-preview-section-title {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--spectre-text-muted, #78716c);
+    margin-bottom: 8px;
+  }
+
+  .spectre-mc-preview-summary {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px;
+  }
+  .spectre-mc-preview-summary .cell {
+    padding: 10px 12px; border: 1px solid var(--spectre-border-muted, #e7e5e4);
+    border-radius: 8px; background: #fff;
+  }
+  .spectre-mc-preview-summary .cell .k {
+    font-size: 11px; color: var(--spectre-text-muted, #78716c);
+    font-weight: 600; letter-spacing: 0.02em; margin-bottom: 2px;
+  }
+  .spectre-mc-preview-summary .cell .v {
+    font-size: 15px; font-weight: 700; color: var(--spectre-text-primary, #1c1917);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .spectre-mc-preview-body {
+    font-size: 12.5px; line-height: 1.55;
+    color: var(--spectre-text-secondary, #57534e); margin: 0;
+  }
+  .spectre-mc-preview-body-muted {
+    font-size: 12px; color: var(--spectre-text-muted, #78716c);
+    font-style: italic; margin: 4px 0 0;
+  }
+  .spectre-mc-preview-fullreview { margin-top: 6px; }
+  .spectre-mc-preview-fullreview a {
+    font-size: 12.5px; font-weight: 600; color: #1e40af;
+    text-decoration: none;
+  }
+  .spectre-mc-preview-fullreview a:hover { text-decoration: underline; }
+
+  .spectre-mc-preview-checks {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .spectre-mc-preview-checks li {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px; color: var(--spectre-text-primary, #1c1917);
+  }
+
+  .spectre-mc-preview-insights {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .spectre-mc-preview-insights li {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 12.5px; line-height: 1.5;
+    color: var(--spectre-text-secondary, #57534e);
+  }
+  .spectre-mc-preview-insights .dot {
+    width: 6px; height: 6px; border-radius: 999px; flex: 0 0 6px;
+    background: #78716c; margin-top: 6px;
+  }
+  .spectre-mc-preview-insights .dot[data-tone="positive"] { background: #16a34a; }
+  .spectre-mc-preview-insights .dot[data-tone="warning"]  { background: #d97706; }
+
+  .spectre-mc-preview-provenance {
+    font-size: 10.5px; color: var(--spectre-text-muted, #78716c);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding-top: 8px; border-top: 1px dashed var(--spectre-border-muted, #e7e5e4);
+  }
+
+  .spectre-mc-preview-message {
+    padding: 8px 12px; border-radius: 6px; font-size: 12.5px;
+  }
+  .spectre-mc-preview-message--success { background: #f0fdf4; color: #166534; }
+  .spectre-mc-preview-message--error   { background: #fef2f2; color: #b91c1c; }
+  .spectre-mc-preview-message--info    { background: #eff6ff; color: #1e40af; }
+
+  .spectre-mc-preview-actions,
+  .spectre-mc-preview-return-form .actions {
+    display: flex; gap: 10px; justify-content: flex-end;
+    padding-top: 10px;
+    border-top: 1px solid var(--spectre-border-muted, #e7e5e4);
+  }
+
+  .spectre-mc-preview-return-form {
+    display: flex; flex-direction: column; gap: 6px;
+    padding-top: 10px;
+    border-top: 1px solid var(--spectre-border-muted, #e7e5e4);
+  }
+  .spectre-mc-preview-return-form .k {
+    font-size: 11.5px; color: var(--spectre-text-muted, #78716c);
+    font-weight: 600;
+  }
+  .spectre-mc-preview-return-form textarea {
+    width: 100%; resize: vertical; min-height: 44px;
+    padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--spectre-border-muted, #e7e5e4);
+    font-size: 12.5px; font-family: inherit;
+    background: #fff;
+  }
+
+  /* FPP-6 — Spectre buttons (light variants matching Mission Control) */
+  .spectre-btn {
+    padding: 7px 14px; font-size: 12.5px; font-weight: 600;
+    border-radius: 6px; cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  .spectre-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .spectre-btn--secondary {
+    background: #fff; color: var(--spectre-text-primary, #1c1917);
+    border-color: var(--spectre-border-muted, #e7e5e4);
+  }
+  .spectre-btn--secondary:not(:disabled):hover { background: #f5f5f4; }
+  .spectre-btn--primary {
+    background: #0f5f3f; color: #fff; border-color: #0f5f3f;
+  }
+  .spectre-btn--primary:not(:disabled):hover { background: #0c4f34; border-color: #0c4f34; }
 
   /* --- Feed header --------------------------------------------- */
   .spectre-mc-feed-head {
