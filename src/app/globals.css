@@ -1110,18 +1110,49 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-briefing .cell.judgment .v { color: var(--spectre-status-warning); }
   .spectre-mc-briefing .cell .s { font-size: 11.5px; color: var(--spectre-text-muted); font-weight: 500; }
 
-  /* --- Two-column grid: feed + executive rail ------------------- */
+  /* --- Two-column grid: feed + executive rail (FPP-6C rows) -----
+     FPP-6C (2026-09-21) — two rows:
+       row 1 (auto) — the feed header + its View / History controls
+       row 2 (1fr) — the feed body + the preview
+     The feed-head spans `grid-column: 1 / -2` so its right edge sits
+     at the same X in closed (2-col) and open (3-col) states,
+     anchoring the controls. The rail spans both rows so its top Y
+     is unchanged. Preview is placed in row 2 so its top aligns with
+     the first work-card in the feed body — master-detail visual pair. */
   .spectre-mc-grid {
     display: grid; grid-template-columns: minmax(0, 1fr) 336px;
+    grid-template-rows: auto minmax(0, 1fr);
     gap: var(--spectre-space-6); align-items: start;
-    /* FPP-6 (2026-09-21) — smooth transition between the two-column
-       closed state and the three-column open state. The
-       grid-template-columns swap is what compresses the feed and
-       makes room for the preview pane. */
-    transition: grid-template-columns 220ms ease-out;
+    transition: grid-template-columns 220ms cubic-bezier(0.2, 0.0, 0.0, 1.0);
+  }
+  .spectre-mc-grid > .spectre-mc-feed-head {
+    grid-column: 1 / -2;
+    grid-row: 1;
+  }
+  .spectre-mc-grid > .spectre-mc-feed-body {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+  .spectre-mc-grid > .spectre-mc-preview {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .spectre-mc-grid > .spectre-mc-rail {
+    grid-column: -2 / -1;
+    grid-row: 1 / -1;
   }
   @media (max-width: 1279px) {
     .spectre-mc-grid { grid-template-columns: minmax(0, 1fr); }
+    .spectre-mc-grid > .spectre-mc-feed-head { grid-column: 1; }
+    .spectre-mc-grid > .spectre-mc-rail { grid-column: 1; grid-row: auto; }
+  }
+  /* Respect prefers-reduced-motion — no width transition, no
+     preview enter animation. Users retain the layout change but
+     without motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .spectre-mc-grid { transition: none; }
+    .spectre-mc-preview { animation: none !important; }
   }
   /* FPP-6B (2026-09-21) — open state: the main Mission Control
      workspace (feed + preview) splits 50/50; the persistent right
@@ -1152,11 +1183,13 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     box-shadow: 0 1px 3px rgba(109, 40, 217, 0.08);
   }
 
-  /* --- FPP-6 Preview pane (FPP-6B — 50/50 workspace) ----------
+  /* --- FPP-6 Preview pane (FPP-6C motion polish) --------------
      At 1440×900 the preview is one half of the pre-rail workspace
      (~352px). Padding and inter-section gap relaxed so the pane
-     breathes at the wider width. Section-level typography stays
-     compact so the reference's editorial density is preserved. */
+     breathes at the wider width. Enters with a coordinated
+     fade-in + short horizontal slide that matches the grid's
+     column-width transition, giving the impression that the feed
+     compresses to make room for the preview. */
   .spectre-mc-preview {
     background: var(--spectre-surface, #fff);
     border: 1px solid var(--spectre-border-muted, #e7e5e4);
@@ -1164,6 +1197,12 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     padding: 20px 22px 22px;
     display: flex; flex-direction: column; gap: 14px;
     min-width: 0;
+    animation: spectre-mc-preview-enter 240ms cubic-bezier(0.2, 0.0, 0.0, 1.0) both;
+    will-change: opacity, transform;
+  }
+  @keyframes spectre-mc-preview-enter {
+    from { opacity: 0; transform: translateX(10px); }
+    to   { opacity: 1; transform: translateX(0); }
   }
   .spectre-mc-preview-head {
     display: grid;

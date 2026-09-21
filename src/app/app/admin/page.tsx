@@ -208,36 +208,36 @@ export default async function MissionControlPage({
           CSS grid-template-columns transition. */}
       <WorkspacePreviewProvider>
       <WorkspaceLayoutSwitcher>
-        <section>
-          <div className="spectre-mc-feed-head">
-            {/* Sprint 3 · Checkpoint 16H §1 — visible feed header
-                renamed "Work intake" → "Work Intake Feed". Internal
-                types/models keep the WorkIntakeItem name. */}
-            <h2>
-              Work Intake Feed
-              <span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span>
-            </h2>
-            <div className="controls">
-              {/* Sprint 3 Checkpoint 15I — Active / Completed toggle.
-                  Server-rendered — the loader re-projects based on
-                  ?view=history. */}
-              <Link
-                href="/app/admin"
-                className={`spectre-mc-chip${view === "active" ? " on" : ""}`}
-                data-testid="feed-view-active"
-              >
-                <span className="k">View:</span><span className="v">Active</span>
-              </Link>
-              <Link
-                href="/app/admin?view=history"
-                className={`spectre-mc-chip${view === "history" ? " on" : ""}`}
-                data-testid="feed-view-history"
-              >
-                <span>Completed history</span>
-              </Link>
-            </div>
+        {/* FPP-6C (2026-09-21) — feed-head is lifted OUT of the feed
+            section into a direct grid child. In both closed and open
+            state its right edge sits at grid line -2 (i.e. the column
+            immediately before the right rail), so "View: Active" +
+            "Completed history" stay at the same X coordinate whether
+            the preview is open or closed. The feed-body + preview
+            occupy grid-row 2, so their top borders align exactly. */}
+        <div className="spectre-mc-feed-head">
+          <h2>
+            Work Intake Feed
+            <span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span>
+          </h2>
+          <div className="controls">
+            <Link
+              href="/app/admin"
+              className={`spectre-mc-chip${view === "active" ? " on" : ""}`}
+              data-testid="feed-view-active"
+            >
+              <span className="k">View:</span><span className="v">Active</span>
+            </Link>
+            <Link
+              href="/app/admin?view=history"
+              className={`spectre-mc-chip${view === "history" ? " on" : ""}`}
+              data-testid="feed-view-history"
+            >
+              <span>Completed history</span>
+            </Link>
           </div>
-
+        </div>
+        <section className="spectre-mc-feed-body">
           {snapshot.workItems.length === 0 ? (
             <div className="spectre-mc-item" style={{ padding: "20px 24px", borderLeftColor: "var(--spectre-status-success)" }}>
               <div className="spectre-mc-item-head">

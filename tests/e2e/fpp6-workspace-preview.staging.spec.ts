@@ -44,20 +44,14 @@ test.describe("FPP-6 workspace preview — closed + open + preservation", () => 
     await expect(summary).toContainText("Sep 15, 2026");
     await expect(summary).toContainText("$4,620.83");
     await expect(summary).toContainText("$3,037.33");
-    // Review checks (no direct-deposit fabrication).
-    const checks = page.getByTestId("preview-review-checks");
-    await expect(checks).toContainText("Payroll calculation reviewed");
-    await expect(checks).toContainText("Statutory deductions calculated");
-    await expect(checks).toContainText("Payroll reconciliation balanced");
-    await expect(checks).toContainText("Frozen payroll inputs preserved");
-    await expect(checks).not.toContainText(/direct deposit/i);
+    // FPP-6C: Review checklist + technical provenance footer removed
+    // from the compact executive preview. Confirm they are gone.
+    await expect(page.getByTestId("preview-review-checks")).toHaveCount(0);
+    await expect(page.getByTestId("preview-provenance")).toHaveCount(0);
     // Executive Insights — factual, not fabricated.
     const insights = page.getByTestId("preview-executive-insights");
     await expect(insights).toContainText(/1 employee.*\$4,620\.83/);
     await expect(insights).not.toContainText(/budget|prior period|department.+overtime/i);
-    // Provenance line names the frozen calculation package.
-    await expect(page.getByTestId("preview-provenance")).toContainText(/Calculation v1/);
-    await expect(page.getByTestId("preview-provenance")).toContainText(/spectre-payroll-3c3d7-v2/);
     // Executive rail still visible — not covered.
     await expect(page.getByRole("complementary", { name: /Executive rail/i })).toBeVisible();
     await page.screenshot({ path: "test-results/fpp6-open-1440x900.png", fullPage: false });

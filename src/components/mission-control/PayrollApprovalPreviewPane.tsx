@@ -269,34 +269,21 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
         )}
       </div>
 
-      {/* Review checks ---------------------------------------------- */}
-      <div className="spectre-mc-preview-section">
-        <div className="spectre-mc-preview-section-title">Review</div>
-        <ul className="spectre-mc-preview-checks" data-testid="preview-review-checks">
-          {preview.reviewChecks.map((c) => (
-            <li key={c.label}>
-              <ChecklistCheck />
-              <span>{c.label}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* FPP-6C (2026-09-21) — the standing Review checklist and the
+          Calculation / package / algorithmVersion provenance footer
+          are removed from this compact executive-facing preview. The
+          checklist is duplicated in the full Payroll Review workspace;
+          the provenance identifiers remain on the loader's DTO and in
+          the frozen batch record (calculationVersion / packageChecksum /
+          algorithmVersion / WorkIntakeOrigin binding) for audit — they
+          simply no longer render here. */}
 
-      {/* Full-Review — FPP-6A: reduced visual prominence. Sits
-          between the executive information and the approval controls
-          as a subordinate drill-down link. */}
+      {/* Full-Review link ------------------------------------------ */}
       <div className="spectre-mc-preview-fullreview">
         <Link href={preview.fullReviewHref} data-testid="preview-full-review-link">
           View Full Payroll Review
           <span aria-hidden="true"> →</span>
         </Link>
-      </div>
-
-      {/* Provenance footnote ---------------------------------------- */}
-      <div className="spectre-mc-preview-provenance" data-testid="preview-provenance">
-        Calculation v{preview.calculationVersion}
-        {preview.packageChecksumShort ? ` · package ${preview.packageChecksumShort}…` : ""}
-        {preview.algorithmVersion ? ` · ${preview.algorithmVersion}` : ""}
       </div>
 
       {/* Message ---------------------------------------------------- */}
