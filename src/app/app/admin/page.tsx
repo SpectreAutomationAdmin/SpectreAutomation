@@ -35,7 +35,9 @@ import TodaysCommitments from "@/components/mission-control/TodaysCommitments";
 import { WorkspacePreviewProvider } from "@/components/mission-control/WorkspacePreviewContext";
 import WorkspaceLayoutSwitcher from "@/components/mission-control/WorkspaceLayoutSwitcher";
 import PayrollApprovalPreviewPane from "@/components/mission-control/PayrollApprovalPreviewPane";
+import PayrollPostingPreviewPane from "@/components/mission-control/PayrollPostingPreviewPane";
 import { loadPayrollApprovalPreview, type PayrollApprovalPreview } from "@/lib/mission-control/payroll-approval-preview";
+import { loadPayrollPostingPreview, type PayrollPostingPreview } from "@/lib/mission-control/payroll-posting-preview";
 import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { computeTimelineMarkers } from "@/lib/mission-control/timeline-markers";
 import { greetingWordForInstant } from "@/lib/mission-control/local-time";
@@ -73,12 +75,28 @@ export default async function MissionControlPage({
   // approval), we silently render the closed state — never leak the
   // param.
   let payrollApprovalPreview: PayrollApprovalPreview | null = null;
+  let payrollPostingPreview: PayrollPostingPreview | null = null;
   const selectedWorkItemId = searchParams?.workItem?.trim() || null;
   if (selectedWorkItemId) {
-    try {
-      payrollApprovalPreview = await loadPayrollApprovalPreview(principal, clubId, selectedWorkItemId);
-    } catch {
-      payrollApprovalPreview = null;
+    // Look up the WI subtype so we know which preview loader to call.
+    // FPP-8 (2026-09-21) — extends the FPP-6 dispatch to include the
+    // Payroll Admin's PAYROLL_READY_TO_POST posting preview.
+    const wi = await prisma.workIntakeItem.findFirst({
+      where: { id: selectedWorkItemId, clubId },
+      select: { workSubtype: true },
+    });
+    if (wi?.workSubtype === "PAYROLL_FINAL_APPROVAL") {
+      try {
+        payrollApprovalPreview = await loadPayrollApprovalPreview(principal, clubId, selectedWorkItemId);
+      } catch {
+        payrollApprovalPreview = null;
+      }
+    } else if (wi?.workSubtype === "PAYROLL_READY_TO_POST") {
+      try {
+        payrollPostingPreview = await loadPayrollPostingPreview(principal, clubId, selectedWorkItemId);
+      } catch {
+        payrollPostingPreview = null;
+      }
     }
   }
   const connectPrompt = await loadMissionControlConnectPromptSpec({ principal, clubId });
@@ -312,6 +330,11 @@ export default async function MissionControlPage({
         {payrollApprovalPreview ? (
           <PayrollApprovalPreviewPane
             preview={payrollApprovalPreview}
+            currentUserId={user.id}
+          />
+        ) : payrollPostingPreview ? (
+          <PayrollPostingPreviewPane
+            preview={payrollPostingPreview}
             currentUserId={user.id}
           />
         ) : null}

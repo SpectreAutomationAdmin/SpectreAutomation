@@ -65,7 +65,70 @@ export default function PayrollActionCard({ item }: Props) {
     // pane instead of expanding inline.
     case "final-approval":
       return <FinalApprovalCard item={item} card={card} />;
+    // FPP-8 (2026-09-21) — Payroll Admin ready-to-post card. Same
+    // master/detail selection contract as final-approval; clicking
+    // selects it into the workspace preview which renders the
+    // PayrollPostingPreviewPane.
+    case "ready-to-post":
+      return <ReadyToPostCard item={item} card={card} />;
   }
+}
+
+// -------------------------------------------------------------------
+// FPP-8 — Ready-to-post compressed feed row (Payroll Admin).
+// -------------------------------------------------------------------
+
+function ReadyToPostCard(props: {
+  item: WorkItem;
+  card: Extract<PayrollWorkIntakeCard, { kind: "ready-to-post" }>;
+}) {
+  const { item, card } = props;
+  const { selectWorkItem, isSelected } = useWorkspacePreview();
+  const selected = isSelected(card.workIntakeItemId);
+
+  function shortMonthDay(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", timeZone: "UTC" });
+  }
+  function longMonthDayYear(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  }
+  const rangeLabel = `${shortMonthDay(card.periodStartIso)} – ${longMonthDayYear(card.periodEndInclusiveIso)}`;
+
+  return (
+    <article
+      className={`spectre-mc-item ${item.state}${selected ? " spectre-mc-item--selected" : ""}`}
+      data-testid={`payroll-ready-to-post-card-${card.workIntakeItemId}`}
+      data-selected={selected ? "true" : "false"}
+      role="button"
+      tabIndex={0}
+      onClick={() => selectWorkItem(card.workIntakeItemId)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectWorkItem(card.workIntakeItemId);
+        }
+      }}
+    >
+      <CardHeader
+        state={item.state}
+        eyebrow="Payroll · Ready to post"
+        pillLabel="Ready to post"
+        idTag={item.idTag}
+        timestampLabel={item.timestampLabel}
+      />
+      <h3>Payroll Approved — Ready to Post</h3>
+      <div className="spectre-mc-sender">
+        <span className="from">{rangeLabel}</span>
+        <span className="sep">·</span>
+        <span>{card.payGroupCode}</span>
+      </div>
+      <div className="spectre-mc-work">
+        {card.employeeCount} employee{card.employeeCount === 1 ? "" : "s"} · Net {card.netPayDisplay}
+      </div>
+    </article>
+  );
 }
 
 // -------------------------------------------------------------------

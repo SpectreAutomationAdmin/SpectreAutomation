@@ -238,6 +238,31 @@ export type PayrollWorkIntakeCard =
       calculationVersion: number;
       packageChecksumShort: string;
       deepLink: { href: string; label: string } | null;
+    }
+  // FPP-8 (2026-09-21) — Payroll Admin ready-to-post card. Materialised
+  // atomically by approvePayrollBatch after the Controller approval,
+  // bound to the APPROVED PayrollBatch via WorkIntakeOrigin (kind
+  // PAYROLL_READY_TO_POST, role PRIMARY, referenceId = batch id). Feed
+  // row is a toggle target; the rich posting preview opens in the
+  // workspace preview pane and is fed by loadPayrollPostingPreview()
+  // from the frozen approved batch + the canonical GL journal preview.
+  | {
+      kind: "ready-to-post";
+      workIntakeItemId: string;
+      batchId: string;
+      periodStartIso: string;
+      periodEndInclusiveIso: string;
+      payDateIso: string;
+      payGroupCode: string;
+      payGroupName: string;
+      approvedAtIso: string;
+      approvedByDisplayName: string | null;
+      employeeCount: number;
+      grossPayDisplay: string;
+      netPayDisplay: string;
+      calculationVersion: number;
+      packageChecksumShort: string;
+      deepLink: { href: string; label: string } | null;
     };
 
 export type BriefingCounts = {

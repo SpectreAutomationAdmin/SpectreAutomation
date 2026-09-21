@@ -148,9 +148,80 @@ async function buildPayrollCardProjection(args: {
     // or from a later re-calc.
     case "PAYROLL_FINAL_APPROVAL":
       return buildFinalApprovalCard({ clubId, workIntakeItemId, batchId: origin.referenceId, deep });
+    // FPP-8 (2026-09-21) — Payroll Admin ready-to-post card.
+    // `referenceId` is the APPROVED PayrollBatch id.
+    case "PAYROLL_READY_TO_POST":
+      return buildReadyToPostCard({ clubId, workIntakeItemId, batchId: origin.referenceId, deep });
     default:
       return null;
   }
+}
+
+// -------------------------------------------------------------------
+// Ready-to-post card (FPP-8, 2026-09-21) — compressed feed projection
+// for the Payroll Admin. The rich posting-preview pane consumes
+// loadPayrollPostingPreview() — this projection carries only what the
+// compressed feed row needs.
+// -------------------------------------------------------------------
+
+async function buildReadyToPostCard(args: {
+  clubId: string;
+  workIntakeItemId: string;
+  batchId: string;
+  deep: { href: string; label: string } | null;
+}): Promise<PayrollWorkIntakeCard | null> {
+  const batch = await prisma.payrollBatch.findFirst({
+    where: { id: args.batchId, clubId: args.clubId },
+    select: {
+      id: true,
+      calculationVersion: true,
+      packageChecksum: true,
+      approvedAt: true,
+      approvedByUserId: true,
+      payGroup: { select: { code: true, name: true } },
+      payPeriod: { select: { periodStart: true, periodEnd: true, payDate: true } },
+      employees: { select: { grossPay: true, netPay: true } },
+    },
+  });
+  if (!batch || !batch.approvedAt) return null;
+
+  const approver = batch.approvedByUserId
+    ? await prisma.user.findFirst({
+        where: { id: batch.approvedByUserId },
+        select: { name: true },
+      })
+    : null;
+
+  const inclusive = new Date(batch.payPeriod.periodEnd.getTime() - 24 * 60 * 60 * 1000);
+  const grossCents = batch.employees.reduce(
+    (s, e) => s + Math.round(Number(e.grossPay ?? 0) * 100),
+    0,
+  );
+  const netCents = batch.employees.reduce(
+    (s, e) => s + Math.round(Number(e.netPay ?? 0) * 100),
+    0,
+  );
+  const fmtMoney = (cents: number) =>
+    `$${(cents / 100).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return {
+    kind: "ready-to-post",
+    workIntakeItemId: args.workIntakeItemId,
+    batchId: batch.id,
+    periodStartIso: batch.payPeriod.periodStart.toISOString(),
+    periodEndInclusiveIso: inclusive.toISOString(),
+    payDateIso: batch.payPeriod.payDate.toISOString(),
+    payGroupCode: batch.payGroup.code,
+    payGroupName: batch.payGroup.name,
+    approvedAtIso: batch.approvedAt.toISOString(),
+    approvedByDisplayName: approver?.name ?? null,
+    employeeCount: batch.employees.length,
+    grossPayDisplay: fmtMoney(grossCents),
+    netPayDisplay: fmtMoney(netCents),
+    calculationVersion: batch.calculationVersion,
+    packageChecksumShort: batch.packageChecksum ? batch.packageChecksum.slice(0, 12) : "",
+    deepLink: args.deep,
+  };
 }
 
 // -------------------------------------------------------------------
