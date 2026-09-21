@@ -355,7 +355,18 @@ describe("Payroll-3C-6 · regular salary + cash allowance", () => {
 describe("Payroll-3C-6 · non-cash taxable benefit", () => {
   beforeEach(async () => { await resetDb(); await seedRbac(); });
 
-  it("employer life insurance debits benefits expense, credits benefits payable, does NOT touch net pay", async () => {
+  it("employer life insurance (TAXABLE_BENEFIT) does NOT produce a payroll GL line, does NOT touch net pay", async () => {
+    // FPP-8A (2026-09-21) — semantic correction. TAXABLE_BENEFIT
+    // components carry the T4-reportable VALUATION of an
+    // employer-paid benefit for statutory tax/pension/EI purposes.
+    // The insurance premium the club actually pays is booked
+    // separately through AP when the provider invoices; booking the
+    // valuation as an equal-dollar payroll expense would double-count
+    // the cost. TAXABLE_BENEFIT components therefore produce NO
+    // payroll journal line, regardless of any expense/liability
+    // mapping that may be configured on the live component (the
+    // configuration is preserved for future non-TB usage of the
+    // account, not applied to this journal).
     const s = await seedScenario("life");
     await addComponent(s, {
       code: "LIFE_ER", displayName: "Employer Life", section: "BENEFITS",
@@ -369,10 +380,9 @@ describe("Payroll-3C-6 · non-cash taxable benefit", () => {
     const posted  = await postPayrollBatch(s.paP, batchId);
     const j       = await readJournal(posted.journalEntryId);
 
-    const expLine = j.debits.find((l) => l.account.accountNumber === "5130")!;
-    const liaLine = j.credits.find((l) => l.account.accountNumber === "2160")!;
-    expect(new Decimal(String(expLine.debit)).toFixed(2)).toBe("20.93");
-    expect(new Decimal(String(liaLine.credit)).toFixed(2)).toBe("20.93");
+    // No benefits-expense debit, no benefits-liability credit.
+    expect(j.debits.find((l) => l.account.accountNumber === "5130")).toBeUndefined();
+    expect(j.credits.find((l) => l.account.accountNumber === "2160")).toBeUndefined();
 
     // Net pay is UNCHANGED by the non-cash TB — employee cash unaffected.
     // Salary residual line remains = grossPay (no cash-component subtract).

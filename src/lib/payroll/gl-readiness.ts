@@ -79,10 +79,23 @@ export interface PayrollGlReadinessResult {
 //   EMPLOYEE + INCREASES_NET_PAY     → expense only (cash allowance / reimbursement)
 //   EMPLOYEE + REGULAR_EARNING       → expense only (base salary path)
 //   * anything else                   → no requirement (unusual)
+//
+// FPP-8A (2026-09-21) — TAXABLE_BENEFIT semantic exception:
+//   Components in the TAXABLE_BENEFIT category (e.g. AD&D, Life
+//   Insurance, Dependent Life Insurance) carry the T4-reportable
+//   VALUATION of an employer-paid benefit. The valuation is used by
+//   the payroll calculator to include the benefit in taxable /
+//   pensionable / insurable remuneration; it is NOT the club's
+//   actual insurance premium. The premium is booked separately
+//   through AP when the provider invoices the club. Booking the
+//   valuation as an equal-dollar payroll expense would double-count
+//   the cost. TAXABLE_BENEFIT snapshots therefore require NEITHER
+//   an expense nor a liability GL mapping in the payroll journal.
 // -------------------------------------------------------------------
 export function componentRequiresExpense(snap: {
   side: string; cashEffect: string; category: string;
 }): boolean {
+  if (snap.category === "TAXABLE_BENEFIT") return false;
   if (snap.side === "EMPLOYER") return true;
   if (snap.side === "EMPLOYEE" && snap.cashEffect === "INCREASES_NET_PAY") return true;
   return false;
@@ -90,6 +103,7 @@ export function componentRequiresExpense(snap: {
 export function componentRequiresLiability(snap: {
   side: string; cashEffect: string; category: string;
 }): boolean {
+  if (snap.category === "TAXABLE_BENEFIT") return false;
   if (snap.side === "EMPLOYER" && snap.cashEffect === "NO_NET_PAY_EFFECT") return true;
   if (snap.side === "EMPLOYEE" && snap.cashEffect === "DECREASES_NET_PAY") return true;
   return false;
@@ -167,6 +181,10 @@ export async function evaluatePayrollGlReadiness(
   // are the sole gate for expense mapping type + activation.
 
   // ---------- Component snapshots ----------
+  // FPP-8A (2026-09-21) — include the live PayrollComponent's account
+  // mapping so a snapshot whose fields were null at Prepare time can
+  // fall back to the currently-configured live account. This matches
+  // the fallback in payroll-gl-inputs.ts so readiness + resolver agree.
   const snaps = await prisma.payrollBatchComponentSnapshot.findMany({
     where: { batchId },
     select: {
@@ -174,6 +192,7 @@ export async function evaluatePayrollGlReadiness(
       side: true, cashEffect: true, category: true,
       resolvedAmount: true, warningCode: true, batchEmployeeId: true,
       expenseAccountIdSnapshot: true, liabilityAccountIdSnapshot: true,
+      sourceComponent: { select: { expenseAccountId: true, liabilityAccountId: true } },
     },
   });
 
@@ -193,8 +212,11 @@ export async function evaluatePayrollGlReadiness(
       }
       continue;
     }
+    // FPP-8A — effective account = snapshot ?? live catalogue.
+    const effectiveExpenseId  = s.expenseAccountIdSnapshot  ?? s.sourceComponent?.expenseAccountId  ?? null;
+    const effectiveLiabilityId = s.liabilityAccountIdSnapshot ?? s.sourceComponent?.liabilityAccountId ?? null;
     if (componentRequiresExpense(s)) {
-      if (!s.expenseAccountIdSnapshot) {
+      if (!effectiveExpenseId) {
         blockers.push({
           code: "MISSING_COMPONENT_EXPENSE_ACCOUNT",
           componentCode: s.componentCode, displayName: s.displayName,
@@ -203,13 +225,13 @@ export async function evaluatePayrollGlReadiness(
         missingExpense += 1;
       } else {
         accountIdsToCheck.push({
-          id: s.expenseAccountIdSnapshot,
+          id: effectiveExpenseId,
           usedBy: `component.${s.componentCode}.expense`,
         });
       }
     }
     if (componentRequiresLiability(s)) {
-      if (!s.liabilityAccountIdSnapshot) {
+      if (!effectiveLiabilityId) {
         blockers.push({
           code: "MISSING_COMPONENT_LIABILITY_ACCOUNT",
           componentCode: s.componentCode, displayName: s.displayName,
@@ -218,7 +240,7 @@ export async function evaluatePayrollGlReadiness(
         missingLiability += 1;
       } else {
         accountIdsToCheck.push({
-          id: s.liabilityAccountIdSnapshot,
+          id: effectiveLiabilityId,
           usedBy: `component.${s.componentCode}.liability`,
         });
       }

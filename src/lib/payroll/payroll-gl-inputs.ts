@@ -67,6 +67,13 @@ export async function loadPayrollGlInputs(
         employee: { select: { firstName: true, lastName: true } },
       },
     }),
+    // FPP-8A (2026-09-21) — include the live PayrollComponent's
+    // account mapping so we can fall back to it when the frozen
+    // snapshot fields are null. A snapshot field is null when the
+    // batch was prepared BEFORE the tenant configured the mapping.
+    // Immutability is preserved for snapshots that HAVE populated
+    // fields; the fallback only fires for pre-configuration batches
+    // and never overwrites an existing snapshot value.
     prisma.payrollBatchComponentSnapshot.findMany({
       where: { batchId, clubId },
       select: {
@@ -75,6 +82,7 @@ export async function loadPayrollGlInputs(
         side: true, cashEffect: true, category: true, provenance: true,
         resolvedAmount: true,
         expenseAccountIdSnapshot: true, liabilityAccountIdSnapshot: true,
+        sourceComponent: { select: { expenseAccountId: true, liabilityAccountId: true } },
       },
     }),
   ]);
@@ -131,8 +139,11 @@ export async function loadPayrollGlInputs(
     category: s.category,
     provenance: s.provenance,
     resolvedAmount: s.resolvedAmount as Prisma.Decimal | null,
-    expenseAccountIdSnapshot: s.expenseAccountIdSnapshot,
-    liabilityAccountIdSnapshot: s.liabilityAccountIdSnapshot,
+    // FPP-8A — snapshot preferred, live fallback only when null (see
+    // the query comment above). Once posted, the JE is bound to the
+    // account IDs that were live at that moment and never re-resolved.
+    expenseAccountIdSnapshot: s.expenseAccountIdSnapshot ?? s.sourceComponent?.expenseAccountId ?? null,
+    liabilityAccountIdSnapshot: s.liabilityAccountIdSnapshot ?? s.sourceComponent?.liabilityAccountId ?? null,
   }));
 
   return { profile, employees, components };
