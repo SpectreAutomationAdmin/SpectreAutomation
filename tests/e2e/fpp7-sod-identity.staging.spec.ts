@@ -62,11 +62,12 @@ test.describe("FPP-7 SoD — Chris (Controller) session", () => {
     await expect(approve).toBeEnabled();
     // Self-submitter hint MUST NOT render for Chris.
     await expect(page.getByTestId("preview-not-actionable")).toHaveCount(0);
-    // FPP-6 regression: frozen totals still bind.
+    // FPP-6 regression: primary summary bindings (FPP-6A: Gross + Net
+    // in the 2×2 grid; Employee Deductions / Employer Contributions
+    // moved out of the compact preview).
     const summary = page.getByTestId("preview-summary");
     await expect(summary).toContainText("$4,620.83");
     await expect(summary).toContainText("$3,037.33");
-    await expect(summary).toContainText("$639.96");
     await page.screenshot({ path: "test-results/fpp7-chris-preview-1440x900.png", fullPage: false });
     // Explicitly DO NOT click Approve — the founder completes that
     // action personally on the accepted staging batch.

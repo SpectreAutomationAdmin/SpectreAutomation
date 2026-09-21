@@ -36,14 +36,14 @@ test.describe("FPP-6 workspace preview — closed + open + preservation", () => 
     await expect(workspace).toHaveAttribute("data-preview-open", "true");
     const preview = page.getByTestId("payroll-approval-preview");
     await expect(preview).toBeVisible({ timeout: 15_000 });
-    // Frozen submitted totals.
+    // Frozen submitted totals. FPP-6A: primary summary is a 2×2 grid
+    // of Employees / Pay Date / Gross / Net; Employee Deductions and
+    // Employer Contributions live in the full Payroll Review workspace.
     const summary = page.getByTestId("preview-summary");
     await expect(summary).toContainText("1");
     await expect(summary).toContainText("Sep 15, 2026");
     await expect(summary).toContainText("$4,620.83");
-    await expect(summary).toContainText("$1,583.50");
     await expect(summary).toContainText("$3,037.33");
-    await expect(summary).toContainText("$639.96");
     // Review checks (no direct-deposit fabrication).
     const checks = page.getByTestId("preview-review-checks");
     await expect(checks).toContainText("Payroll calculation reviewed");

@@ -221,9 +221,12 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
         </div>
       </div>
 
-      {/* Payroll summary --------------------------------------------- */}
+      {/* Payroll summary — FPP-6A: 2×2 with Employees, Pay Date,
+          Gross, Net. Employee Deductions + Employer Contributions
+          are secondary review information and live only in the full
+          Payroll Review workspace (per §7 of the FPP-6A brief). */}
       <div className="spectre-mc-preview-section">
-        <div className="spectre-mc-preview-section-title">Payroll summary</div>
+        <div className="spectre-mc-preview-section-title">Summary</div>
         <div className="spectre-mc-preview-summary" data-testid="preview-summary">
           <div className="cell">
             <div className="k">Employees</div>
@@ -238,50 +241,16 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
             <div className="v tabular-nums">{preview.totals.grossPayDisplay}</div>
           </div>
           <div className="cell">
-            <div className="k">Employee Deductions</div>
-            <div className="v tabular-nums">{preview.totals.employeeDeductionsDisplay}</div>
-          </div>
-          <div className="cell">
             <div className="k">Net Payroll</div>
             <div className="v tabular-nums">{preview.totals.netPayDisplay}</div>
           </div>
-          <div className="cell">
-            <div className="k">Employer Contributions</div>
-            <div className="v tabular-nums">{preview.totals.employerContributionsDisplay}</div>
-          </div>
         </div>
       </div>
 
-      {/* Details paragraph + Full-Review link ------------------------ */}
-      <div className="spectre-mc-preview-section">
-        <div className="spectre-mc-preview-section-title">Details</div>
-        <p className="spectre-mc-preview-body">
-          The payroll for the period {preview.period.rangeLabel} is ready for your final approval.
-          It was submitted by {preview.submitter.displayName ?? "Payroll Administrator"} and reconciles
-          {preview.reconciliation.reconciles ? " to the cent." : ` with a difference of ${(preview.reconciliation.differenceCents / 100).toFixed(2)}.`}
-        </p>
-        <div className="spectre-mc-preview-fullreview">
-          <Link href={preview.fullReviewHref} data-testid="preview-full-review-link">
-            View Full Payroll Review
-            <span aria-hidden="true"> →</span>
-          </Link>
-        </div>
-      </div>
-
-      {/* Review checks ---------------------------------------------- */}
-      <div className="spectre-mc-preview-section">
-        <div className="spectre-mc-preview-section-title">Review</div>
-        <ul className="spectre-mc-preview-checks" data-testid="preview-review-checks">
-          {preview.reviewChecks.map((c) => (
-            <li key={c.label}>
-              <ChecklistCheck />
-              <span>{c.label}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {/* Executive insights ----------------------------------------- */}
+      {/* Executive Insight — FPP-6A: replaces the previous "Details"
+          heading. Populated ONLY from factual frozen-evidence
+          observations (§8 — no fabricated budget deltas, prior-period
+          comparisons, or departmental causality). */}
       <div className="spectre-mc-preview-section">
         <div className="spectre-mc-preview-section-title">Executive insight</div>
         {preview.executiveInsights.length > 0 ? (
@@ -298,6 +267,29 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
             No analytical observations available for this payroll yet.
           </p>
         )}
+      </div>
+
+      {/* Review checks ---------------------------------------------- */}
+      <div className="spectre-mc-preview-section">
+        <div className="spectre-mc-preview-section-title">Review</div>
+        <ul className="spectre-mc-preview-checks" data-testid="preview-review-checks">
+          {preview.reviewChecks.map((c) => (
+            <li key={c.label}>
+              <ChecklistCheck />
+              <span>{c.label}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Full-Review — FPP-6A: reduced visual prominence. Sits
+          between the executive information and the approval controls
+          as a subordinate drill-down link. */}
+      <div className="spectre-mc-preview-fullreview">
+        <Link href={preview.fullReviewHref} data-testid="preview-full-review-link">
+          View Full Payroll Review
+          <span aria-hidden="true"> →</span>
+        </Link>
       </div>
 
       {/* Provenance footnote ---------------------------------------- */}
