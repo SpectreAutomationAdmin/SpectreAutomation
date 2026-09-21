@@ -21,14 +21,21 @@ interface Props {
 }
 
 export default function WorkspaceLayoutSwitcher({ children, className }: Props) {
-  const { selectedWorkItemId } = useWorkspacePreview();
+  const { selectedWorkItemId, isClosing } = useWorkspacePreview();
+  // FPP-6D — grid stays in the open composition while the preview
+  // is playing its exit animation. The `--closing` modifier gives
+  // the preview element a way to alter its animation state without
+  // affecting the grid tracks.
   const isOpen = !!selectedWorkItemId;
   return (
     <div
-      className={`spectre-mc-grid${isOpen ? " spectre-mc-grid--with-preview" : ""}${
-        className ? " " + className : ""
-      }`}
+      className={
+        `spectre-mc-grid${isOpen ? " spectre-mc-grid--with-preview" : ""}` +
+        `${isClosing ? " spectre-mc-grid--closing" : ""}` +
+        (className ? " " + className : "")
+      }
       data-preview-open={isOpen ? "true" : "false"}
+      data-preview-closing={isClosing ? "true" : "false"}
       data-testid="mission-control-workspace"
     >
       {children}

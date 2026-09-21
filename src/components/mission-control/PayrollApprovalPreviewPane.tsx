@@ -75,7 +75,7 @@ function CloseIcon() {
 
 export default function PayrollApprovalPreviewPane({ preview, currentUserId }: Props) {
   const router = useRouter();
-  const { clearSelection } = useWorkspacePreview();
+  const { clearSelection, isClosing } = useWorkspacePreview();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<null | "approve" | "return">(null);
   const [message, setMessage] = useState<null | { text: string; tone: "info" | "error" | "success" }>(null);
@@ -164,8 +164,9 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
 
   return (
     <section
-      className="spectre-mc-preview"
+      className={`spectre-mc-preview${isClosing ? " spectre-mc-preview--closing" : ""}`}
       data-testid="payroll-approval-preview"
+      data-closing={isClosing ? "true" : "false"}
       aria-label="Payroll approval preview"
     >
       {/* Header ------------------------------------------------------ */}
