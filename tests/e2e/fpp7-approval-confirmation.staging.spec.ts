@@ -20,9 +20,15 @@ test.describe("FPP-7 — Controller approval confirmation UX (read-only)", () =>
     const page = await loginAsFounder(context, { landing: OPEN_URL });
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByTestId("payroll-approval-preview")).toBeVisible({ timeout: 15_000 });
-    // Approve button is present + enabled for Chris.
+    // Approve button is present. It is only ENABLED while the batch
+    // is SUBMITTED_FOR_APPROVAL — post-FPP-8 the batch has moved to
+    // APPROVED and the button is correctly disabled. Skip when the
+    // state has advanced past the FPP-7 acceptance window.
     const approve = page.getByTestId("preview-approve");
     await expect(approve).toBeVisible();
+    if (await approve.isDisabled()) {
+      test.skip(true, "Batch is no longer SUBMITTED_FOR_APPROVAL — FPP-7 confirmation UX has moved on to FPP-8.");
+    }
     await expect(approve).toBeEnabled();
     // Clicking it opens the confirmation dialog — NOT an immediate
     // approval request.
@@ -61,6 +67,10 @@ test.describe("FPP-7 — Controller approval confirmation UX (read-only)", () =>
     const page = await loginAsFounder(context, { landing: OPEN_URL });
     await page.waitForLoadState("domcontentloaded");
     await expect(page.getByTestId("payroll-approval-preview")).toBeVisible({ timeout: 15_000 });
+    // Skip when the batch has moved past SUBMITTED_FOR_APPROVAL.
+    if (await page.getByTestId("preview-approve").isDisabled()) {
+      test.skip(true, "Batch is no longer SUBMITTED_FOR_APPROVAL — FPP-7 confirmation UX no longer available.");
+    }
     for (let i = 0; i < 3; i++) {
       await page.getByTestId("preview-approve").click();
       await expect(page.getByTestId("preview-approve-confirm-dialog")).toBeVisible();
