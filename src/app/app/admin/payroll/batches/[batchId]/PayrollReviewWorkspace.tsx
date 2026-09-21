@@ -777,14 +777,67 @@ function EmployeeDetailPanel({ detail, clubId, batchId, batchStatus, canRun, onC
         </ul>
 
         <h4 className="mt-4 text-sm font-semibold" style={{ color: "var(--spectre-text-primary)" }}>Employer contributions</h4>
-        <ul className="mt-2 space-y-1 text-sm">
-          <li className="flex justify-between gap-3"><span>Employer CPP</span><span className="tabular-nums">{money(detail.employerContributions.cppCombined)}</span></li>
-          <li className="flex justify-between gap-3"><span>Employer CPP2</span><span className="tabular-nums">{money(detail.employerContributions.cpp2)}</span></li>
-          <li className="flex justify-between gap-3"><span>Employer EI</span><span className="tabular-nums">{money(detail.employerContributions.ei)}</span></li>
-          <li className="pt-1 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
-            Employer contributions do NOT reduce employee net pay.
-          </li>
-        </ul>
+        {(() => {
+          // FPP-5D (2026-09-21) — Split the employer contributions
+          // panel into statutory + benefits so the drill-down reconciles
+          // to the batch-level Employer contributions total. The prior
+          // rendering hid RRSP ER / AD&D / Life / Dep Life under
+          // "componentsTotal" that never rolled up here, so the same
+          // employee showed $386.78 while the batch card showed $639.96.
+          const cppCents = Math.round(Number(detail.employerContributions.cppCombined ?? 0) * 100);
+          const cpp2Cents = Math.round(Number(detail.employerContributions.cpp2 ?? 0) * 100);
+          const eiCents = Math.round(Number(detail.employerContributions.ei ?? 0) * 100);
+          const statutoryCents = cppCents + cpp2Cents + eiCents;
+          const employerBenefitLines = detail.componentLines.filter(
+            (c) => c.side === "EMPLOYER" && c.resolvedAmount != null,
+          );
+          const benefitsCents = employerBenefitLines.reduce(
+            (sum, c) => sum + Math.round(Number(c.resolvedAmount!) * 100),
+            0,
+          );
+          const totalCents = statutoryCents + benefitsCents;
+          const centsToFixed = (c: number) => (c / 100).toFixed(2);
+          return (
+            <ul className="mt-2 space-y-1 text-sm" data-testid="employer-contributions-breakdown">
+              <li className="text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: "var(--spectre-text-muted)" }}>
+                Employer statutory contributions
+              </li>
+              <li className="flex justify-between gap-3"><span>Employer CPP</span><span className="tabular-nums">{money(detail.employerContributions.cppCombined)}</span></li>
+              <li className="flex justify-between gap-3"><span>Employer CPP2</span><span className="tabular-nums">{money(detail.employerContributions.cpp2)}</span></li>
+              <li className="flex justify-between gap-3"><span>Employer EI</span><span className="tabular-nums">{money(detail.employerContributions.ei)}</span></li>
+              <li className="flex justify-between gap-3 border-t pt-1 text-xs" style={{ borderColor: "var(--spectre-border-muted)", color: "var(--spectre-text-secondary)" }}>
+                <span>Subtotal — statutory</span><span className="tabular-nums">{money(centsToFixed(statutoryCents))}</span>
+              </li>
+              {employerBenefitLines.length > 0 ? (
+                <>
+                  <li className="mt-2 text-[11px] font-semibold uppercase tracking-[0.06em]" style={{ color: "var(--spectre-text-muted)" }}>
+                    Employer benefits/contributions
+                  </li>
+                  {employerBenefitLines.map((c) => (
+                    <li key={c.id} className="flex justify-between gap-3" data-testid={`employer-benefit-row:${c.code}`}>
+                      <span>{c.displayName}</span>
+                      <span className="tabular-nums">{money(c.resolvedAmount)}</span>
+                    </li>
+                  ))}
+                  <li className="flex justify-between gap-3 border-t pt-1 text-xs" style={{ borderColor: "var(--spectre-border-muted)", color: "var(--spectre-text-secondary)" }}>
+                    <span>Subtotal — benefits</span><span className="tabular-nums">{money(centsToFixed(benefitsCents))}</span>
+                  </li>
+                </>
+              ) : null}
+              <li
+                className="flex justify-between gap-3 border-t pt-1 font-medium"
+                style={{ borderColor: "var(--spectre-border-muted)" }}
+                data-testid="employer-contributions-total"
+              >
+                <span>Total employer contributions</span>
+                <span className="tabular-nums">{money(centsToFixed(totalCents))}</span>
+              </li>
+              <li className="pt-1 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
+                Employer contributions do NOT reduce employee net pay.
+              </li>
+            </ul>
+          );
+        })()}
       </div>
 
       {/* Calculation explanation */}
@@ -800,6 +853,20 @@ function EmployeeDetailPanel({ detail, clubId, batchId, batchStatus, canRun, onC
               <div><b>Federal</b></div>
               <div className="flex justify-between gap-3"><span>Taxable income for pay period</span><span className="tabular-nums">{money(detail.explanation.earnings.earningsTaxable)}</span></div>
               <div className="flex justify-between gap-3"><span>Deductible CPP additional contributions</span><span className="tabular-nums">{money(detail.explanation.cpp.deductibleAdditional)}</span></div>
+              {Number(detail.explanation.rrspFactorF.perPeriod) > 0 ? (
+                <div
+                  className="flex justify-between gap-3"
+                  data-testid="explanation-federal-factor-f"
+                >
+                  <span>RRSP deducted at source (Factor F)</span>
+                  <span className="tabular-nums">
+                    {money(detail.explanation.rrspFactorF.perPeriod)}
+                    <span className="ml-2 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
+                      ({money(detail.explanation.rrspFactorF.annualised)} annualised)
+                    </span>
+                  </span>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-3"><span>Annualised taxable income</span><span className="tabular-nums">{money(detail.explanation.federal.annualisedTaxableIncome)}</span></div>
               <div className="flex justify-between gap-3"><span>Annualised gross employment income</span><span className="tabular-nums">{money(detail.explanation.federal.annualisedGrossEmployment)}</span></div>
               <div className="flex justify-between gap-3">
@@ -814,6 +881,20 @@ function EmployeeDetailPanel({ detail, clubId, batchId, batchStatus, canRun, onC
               <div className="flex justify-between gap-3"><span>Canada Employment Amount credit</span><span className="tabular-nums">{money(detail.explanation.federal.canadaEmploymentAmountCap)}</span></div>
               <div className="flex justify-between gap-3 font-medium"><span>Federal income tax (per pay)</span><span className="tabular-nums">{money(detail.explanation.federal.baseTax)}</span></div>
               <div className="mt-3"><b>Alberta</b></div>
+              {Number(detail.explanation.rrspFactorF.perPeriod) > 0 ? (
+                <div
+                  className="flex justify-between gap-3"
+                  data-testid="explanation-provincial-factor-f"
+                >
+                  <span>RRSP deducted at source (Factor F)</span>
+                  <span className="tabular-nums">
+                    {money(detail.explanation.rrspFactorF.perPeriod)}
+                    <span className="ml-2 text-xs" style={{ color: "var(--spectre-text-secondary)" }}>
+                      ({money(detail.explanation.rrspFactorF.annualised)} annualised)
+                    </span>
+                  </span>
+                </div>
+              ) : null}
               <div className="flex justify-between gap-3"><span>Annualised taxable income</span><span className="tabular-nums">{money(detail.explanation.provincial.annualisedTaxableIncome)}</span></div>
               <div className="flex justify-between gap-3">
                 <span>Alberta TD1 claim used</span>

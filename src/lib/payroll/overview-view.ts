@@ -293,6 +293,14 @@ export interface PayrollOverviewSummary {
     cpp: string;
     cpp2: string;
     ei: string;
+    // FPP-5D (2026-09-21) — Employer-side benefit-plan snapshots
+    // (RRSP ER, AD&D, Life, Dependent Life, Health & Dental). These
+    // are the missing gap between the top-card employer-cost total
+    // and the CPP+CPP2+EI-only breakdown. `total` reconciles the
+    // sum of statutory + benefits with `totalEmployerContributionsDisplay`.
+    benefits: Array<{ code: string; displayName: string; amount: string }>;
+    benefitsTotal: string;
+    total: string;
   };
   departments: PayrollOverviewSummaryDepartmentRow[];
 }
@@ -1602,7 +1610,31 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
     const employerCppCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerCppCombined ?? 0) * 100), 0);
     const employerCpp2Cents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerCpp2 ?? 0) * 100), 0);
     const employerEiCents = batchEmployees.reduce((sum, be) => sum + Math.round(Number(be.employerEi ?? 0) * 100), 0);
-    const employerTotalCents = employerCppCents + employerCpp2Cents + employerEiCents;
+    const employerStatutoryCents = employerCppCents + employerCpp2Cents + employerEiCents;
+
+    // FPP-5D (2026-09-21) — Employer benefit-plan snapshots roll up
+    // into the employer-cost total so the top card matches the
+    // breakdown. Aggregate by componentCode/displayName so the
+    // breakdown surface can render one row per benefit.
+    const employerBenefitsAgg = new Map<string, { code: string; displayName: string; cents: number }>();
+    for (const cs of componentSnapshots) {
+      if (cs.side !== "EMPLOYER") continue;
+      if (cs.resolvedAmount == null) continue;
+      const key = cs.componentCode ?? cs.displayName ?? "";
+      const cents = Math.round(Number(cs.resolvedAmount.toString()) * 100);
+      const bucket = employerBenefitsAgg.get(key) ?? {
+        code: cs.componentCode ?? "",
+        displayName: cs.displayName ?? cs.componentCode ?? "Benefit",
+        cents: 0,
+      };
+      bucket.cents += cents;
+      employerBenefitsAgg.set(key, bucket);
+    }
+    const employerBenefitRows = Array.from(employerBenefitsAgg.values())
+      .filter((b) => b.cents !== 0)
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    const employerBenefitsCents = employerBenefitRows.reduce((sum, b) => sum + b.cents, 0);
+    const employerTotalCents = employerStatutoryCents + employerBenefitsCents;
 
     // Earnings by canonical type from PayrollBatchEarning.quantity * rate.
     const earningsCentsByType = new Map<string, number>();
@@ -1685,6 +1717,13 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
         cpp:  fmtMoney(employerCppCents),
         cpp2: fmtMoney(employerCpp2Cents),
         ei:   fmtMoney(employerEiCents),
+        benefits: employerBenefitRows.map((b) => ({
+          code: b.code,
+          displayName: b.displayName,
+          amount: fmtMoney(b.cents),
+        })),
+        benefitsTotal: fmtMoney(employerBenefitsCents),
+        total: fmtMoney(employerTotalCents),
       },
       departments: departmentRows,
     };
@@ -1704,7 +1743,15 @@ export async function buildPayrollOverview(input: BuildPayrollOverviewInput): Pr
       totalHoursDisplay,
       grossPayDisplay,
       grossPaySemantics,
-      adjustmentsCount: oneTimeAdjustmentCount + recurringSnapshotCount,
+      // FPP-5D (2026-09-21) — Adjustments KPI is one-time only. Recurring
+      // component snapshots (RRSP, LTD, AD&D, Life, Dep Life, Cell Phone)
+      // are frozen recurring assignments — NOT operator-authored
+      // adjustments — so counting them here misled the workspace into
+      // showing "Adjustments 5 One-time" when zero one-time
+      // adjustments existed. Recurring counts remain on the KPI object
+      // (below) as a separate field so the Recurring tab can render them
+      // independently.
+      adjustmentsCount: oneTimeAdjustmentCount,
       oneTimeAdjustmentCount,
       recurringSnapshotCount,
       exceptionsCount: exceptions.length,

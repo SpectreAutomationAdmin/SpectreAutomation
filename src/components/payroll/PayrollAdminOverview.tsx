@@ -1121,11 +1121,22 @@ function SummaryTabContent({ view, review }: {
           ["Additional federal tax",    s.deductions.additionalFederalTax],
           ["Additional provincial tax", s.deductions.additionalProvincialTax],
         ]} />
-        <SummaryBreakdown title="Employer Contributions" testId="payroll-admin-summary-employer-breakdown" rows={[
-          ["Employer CPP",  s.employerContributions.cpp],
-          ["Employer CPP2", s.employerContributions.cpp2],
-          ["Employer EI",   s.employerContributions.ei],
-        ]} />
+        <SummaryBreakdown
+          title="Employer Contributions"
+          testId="payroll-admin-summary-employer-breakdown"
+          rows={[
+            // FPP-5D (2026-09-21) — Employer statutory + benefits +
+            // reconciling total, so the breakdown matches the top
+            // "Employer Contributions" tile to the cent.
+            ["Employer CPP",  s.employerContributions.cpp],
+            ["Employer CPP2", s.employerContributions.cpp2],
+            ["Employer EI",   s.employerContributions.ei],
+            ...s.employerContributions.benefits.map(
+              (b) => [`Employer ${b.displayName}`, b.amount] as [string, string],
+            ),
+          ]}
+          footer={["Total employer contributions", s.employerContributions.total]}
+        />
       </div>
 
       {/* Department breakdown */}
@@ -1188,7 +1199,15 @@ function SummaryTile({ label, value, emphasize = false, testId }: { label: strin
     </div>
   );
 }
-function SummaryBreakdown({ title, rows, testId }: { title: string; rows: Array<[string, string]>; testId?: string }) {
+function SummaryBreakdown({ title, rows, testId, footer }: {
+  title: string;
+  rows: Array<[string, string]>;
+  testId?: string;
+  // FPP-5D (2026-09-21) — Optional total row rendered under a
+  // separator so the breakdown reconciles visibly to a headline
+  // figure (e.g. Employer Contributions = statutory + benefits).
+  footer?: [string, string];
+}) {
   const nonZero = rows.filter(([_, v]) => v !== "$0.00");
   const displayRows = nonZero.length > 0 ? nonZero : rows.slice(0, 1);
   return (
@@ -1205,6 +1224,15 @@ function SummaryBreakdown({ title, rows, testId }: { title: string; rows: Array<
         ))}
         {nonZero.length === 0 ? (
           <li className="text-[11.5px] text-stone-400 italic">no non-zero rows</li>
+        ) : null}
+        {footer ? (
+          <li
+            className="mt-1 flex items-center justify-between border-t border-stone-100 pt-1 font-medium"
+            data-testid={testId ? `${testId}-total` : undefined}
+          >
+            <span className="text-stone-700">{footer[0]}</span>
+            <span className="tabular-nums text-stone-900">{footer[1]}</span>
+          </li>
         ) : null}
       </ul>
     </div>

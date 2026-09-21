@@ -112,6 +112,25 @@ export interface ReviewCalculationExplanation {
   packageVersion:   string | null;
   periodsPerYear:   number | null;
   pensionableMonths: number | null;
+  /**
+   * FPP-5D (2026-09-21) — RRSP Factor F (per T4127): the employee
+   * portion of any component whose `taxFormulaDeductionType` is
+   * RRSP_DEDUCTED_AT_SOURCE reduces the annualised taxable base for
+   * both Federal (`A = P·[TR − F5A − F]`) and Provincial (`A = ...`)
+   * tax formulas. This block exposes the frozen per-period sum from
+   * `PayrollBatchComponentSnapshot` — NOT the live catalogue — so
+   * the review page can show the explicit disclosure line
+   * "RRSP deducted at source (Factor F) $X.XX" under both the
+   * Federal and Provincial sections.
+   *
+   * Provenance: `PayrollBatchComponentSnapshot` where
+   *   side === "EMPLOYEE" AND taxFormulaDeductionType === "RRSP_DEDUCTED_AT_SOURCE".
+   * Annualised = perPeriod × periodsPerYear.
+   */
+  rrspFactorF: {
+    perPeriod:   string;
+    annualised:  string;
+  };
   earnings: {
     grossPay:            string;
     earningsTaxable:     string;
@@ -515,6 +534,27 @@ export async function getBatchEmployeeReview(
 
   const explanation = sanitizeExplanation(be.calculationExplanationJson);
 
+  // FPP-5D (2026-09-21) — Factor F (RRSP deducted at source) exposure.
+  // Read from the FROZEN batch componentSnapshots on this employee (NOT
+  // the live component catalogue), so the disclosure is proof of what
+  // Calculate actually annualised. See calculation-execute.ts:
+  //   TAX_FORMULA_F_TYPES = new Set(["RRSP_DEDUCTED_AT_SOURCE"]);
+  // which sums employee-side snapshots with that mapping type before
+  // multiplying by periodsPerYear.
+  if (explanation) {
+    const factorFPerPeriodD = be.componentSnapshots
+      .filter((cs) => cs.side === "EMPLOYEE" && cs.taxFormulaDeductionType === "RRSP_DEDUCTED_AT_SOURCE")
+      .reduce((acc, cs) => acc.plus(toDecimal(cs.resolvedAmount ?? 0)), toDecimal(0));
+    const periods = explanation.periodsPerYear ?? 0;
+    const factorFAnnualisedD = periods > 0
+      ? factorFPerPeriodD.times(periods)
+      : toDecimal(0);
+    explanation.rrspFactorF = {
+      perPeriod:  factorFPerPeriodD.toFixed(2),
+      annualised: factorFAnnualisedD.toFixed(2),
+    };
+  }
+
   // Salary derivation explainer — surfaces "annual / P = period"
   // to the Payroll Admin so a $150k salaried employee's $6,250
   // period gross is visibly explained. Non-null only when the
@@ -655,6 +695,13 @@ function sanitizeExplanation(raw: string | null | undefined): ReviewCalculationE
     packageVersion:    j.packageVersion   ?? null,
     periodsPerYear:    typeof j.periodsPerYear === "number" ? j.periodsPerYear : null,
     pensionableMonths: typeof j.pensionableMonths === "number" ? j.pensionableMonths : null,
+    // FPP-5D — populated in getBatchEmployeeReview from componentSnapshots.
+    // Sanitize cannot see the snapshots, so it emits an $0.00 placeholder
+    // that gets overwritten by the caller when Factor F is applicable.
+    rrspFactorF: {
+      perPeriod:  "0.00",
+      annualised: "0.00",
+    },
     earnings: {
       grossPay:            String(j.grossPay ?? "0"),
       earningsTaxable:     String(j.earningsTaxable ?? "0"),
