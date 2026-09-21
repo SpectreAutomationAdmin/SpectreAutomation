@@ -84,20 +84,16 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
 
   const status = preview.batchStatus;
   const isSubmitted = status === "SUBMITTED_FOR_APPROVAL";
-  const isActionable = isSubmitted && preview.workIntakeStatus === "OPEN";
-  const isSelfSubmitted = currentUserId === preview.submitter.displayName
-    ? false
-    : false; // computed below via id, kept for readability
-  // Segregation-of-duties: the current user cannot approve their own
-  // submission. The preview loader does not carry the submitter's user
-  // id (only display name) to avoid leaking the id into the client. The
-  // governance service is authoritative — this UI only hides Approve
-  // when we know for certain the user IS the submitter. When the
-  // submitter's display name matches the current user's display name we
-  // still let the button render; the server refuses if applicable.
-  //
-  // The founder's MVP §4 directive prohibits any workaround.
-  void isSelfSubmitted;
+  // FPP-7 (2026-09-21) — segregation-of-duties UX. The preview DTO
+  // now carries the submitter's user id, so we can accurately hint
+  // the Approve refusal when the current user IS the submitter. The
+  // server-side check in approvePayrollBatch remains the authoritative
+  // enforcement — this only prevents a misleading actionable-CTA
+  // presentation to the submitter (§9 of the FPP-7 brief).
+  const isSelfSubmitted =
+    !!preview.submitter.userId && preview.submitter.userId === currentUserId;
+  const isActionable =
+    isSubmitted && preview.workIntakeStatus === "OPEN" && !isSelfSubmitted;
 
   async function onApprove() {
     if (!isActionable || busy || pending) return;
@@ -384,7 +380,9 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
         <p className="spectre-mc-preview-body-muted" data-testid="preview-not-actionable">
           {status !== "SUBMITTED_FOR_APPROVAL"
             ? `This batch is ${status.replace(/_/g, " ").toLowerCase()} — no controller action is required.`
-            : "This approval item is closed."}
+            : isSelfSubmitted
+              ? "You submitted this payroll. Segregation-of-duties requires an independent Controller to approve it."
+              : "This approval item is closed."}
         </p>
       ) : null}
     </section>

@@ -52,6 +52,12 @@ export interface PayrollApprovalPreview {
     payDateLabel: string;
   };
   submitter: {
+    // FPP-7 (2026-09-21) — surfaces the submitter's user id so the
+    // client pane can pre-disable the Approve button when the
+    // current user IS the submitter (submitter != approver SoD is
+    // ALSO enforced authoritatively by approvePayrollBatch; the
+    // client-side hint is a UX convenience, not a guarantee).
+    userId: string | null;
     displayName: string | null;
     submittedAtIso: string;
     // Pre-formatted, submitter's timestamp label: "Sep 20, 2026 · 7:48 PM".
@@ -270,6 +276,7 @@ export async function loadPayrollApprovalPreview(
       payDateLabel,
     },
     submitter: {
+      userId: batch.submittedByUserId ?? null,
       displayName: submitter?.name ?? null,
       submittedAtIso: submittedAt.toISOString(),
       submittedAtLabel,
