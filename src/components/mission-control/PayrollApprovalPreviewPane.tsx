@@ -81,6 +81,12 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
   const [message, setMessage] = useState<null | { text: string; tone: "info" | "error" | "success" }>(null);
   const [returnNote, setReturnNote] = useState("");
   const [showReturnForm, setShowReturnForm] = useState(false);
+  // FPP-7 (2026-09-21) — Controller approval confirmation dialog.
+  // Clicking Approve Payroll opens this deliberate two-step
+  // confirmation before the approval service is invoked. Cancel
+  // dismisses without any mutation; only the inner Confirm button
+  // POSTs to the approval endpoint.
+  const [showApproveConfirm, setShowApproveConfirm] = useState(false);
 
   const status = preview.batchStatus;
   const isSubmitted = status === "SUBMITTED_FOR_APPROVAL";
@@ -347,12 +353,97 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
           <button
             type="button"
             className="spectre-btn spectre-btn--primary"
-            onClick={onApprove}
+            onClick={() => { setShowApproveConfirm(true); setMessage(null); }}
             disabled={!isActionable || busy !== null}
             data-testid="preview-approve"
           >
             {busy === "approve" ? "Approving…" : "Approve Payroll"}
           </button>
+        </div>
+      )}
+
+      {/* FPP-7 (2026-09-21) — Controller approval confirmation. This
+          modal is the deliberate two-step. Cancel dismisses without
+          mutation. Only the inner Confirm button invokes the
+          approval service. */}
+      {showApproveConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="preview-approve-confirm-title"
+          data-testid="preview-approve-confirm-dialog"
+          style={{
+            position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.42)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowApproveConfirm(false); }}
+        >
+          <div style={{
+            background: "#ffffff", borderRadius: 10, width: "100%", maxWidth: 480,
+            margin: "0 16px", padding: 22, boxShadow: "0 24px 44px rgba(15,23,42,0.18)",
+            maxHeight: "88vh", overflowY: "auto",
+          }}>
+            <h2
+              id="preview-approve-confirm-title"
+              style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1c1917", letterSpacing: -0.005 }}
+            >
+              Approve Payroll
+            </h2>
+            <p style={{ margin: "10px 0 12px 0", fontSize: 13.5, lineHeight: 1.55, color: "#44403c" }}>
+              You are approving the payroll for the period{" "}
+              <strong>{preview.period.rangeLabel}</strong>, pay date{" "}
+              <strong>{preview.period.payDateLabel}</strong>.
+            </p>
+            <div
+              style={{
+                margin: "0 0 12px 0", padding: "10px 12px", border: "1px solid #e7e5e4",
+                background: "#fbfaf7", borderRadius: 6,
+              }}
+              data-testid="preview-approve-confirm-summary"
+            >
+              <dl
+                style={{
+                  margin: 0, fontSize: 12.5, color: "#44403c",
+                  display: "grid", gridTemplateColumns: "auto 1fr", rowGap: 4, columnGap: 12,
+                }}
+              >
+                <dt style={{ color: "#78716c" }}>Employees</dt>
+                <dd style={{ margin: 0, fontVariantNumeric: "tabular-nums" }}>{preview.totals.employeeCount}</dd>
+                <dt style={{ color: "#78716c" }}>Gross payroll</dt>
+                <dd style={{ margin: 0, fontVariantNumeric: "tabular-nums" }}>{preview.totals.grossPayDisplay}</dd>
+                <dt style={{ color: "#78716c" }}>Net payroll</dt>
+                <dd style={{ margin: 0, fontVariantNumeric: "tabular-nums" }}>{preview.totals.netPayDisplay}</dd>
+                <dt style={{ color: "#78716c" }}>Calculation</dt>
+                <dd style={{ margin: 0 }}>v{preview.calculationVersion}</dd>
+              </dl>
+            </div>
+            <p style={{ margin: "0 0 6px 0", fontSize: 12.5, lineHeight: 1.55, color: "#57534e" }}>
+              Once approved, this payroll will be handed back to Payroll Administration for posting.
+            </p>
+            <p style={{ margin: "0 0 14px 0", fontSize: 12.5, lineHeight: 1.55, color: "#57534e" }}>
+              Approval does not transmit employee payments. Payment transmission is currently handled outside Spectre.
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="spectre-btn spectre-btn--secondary"
+                onClick={() => setShowApproveConfirm(false)}
+                disabled={busy === "approve"}
+                data-testid="preview-approve-confirm-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="spectre-btn spectre-btn--primary"
+                onClick={() => { setShowApproveConfirm(false); onApprove(); }}
+                disabled={busy === "approve"}
+                data-testid="preview-approve-confirm-submit"
+              >
+                {busy === "approve" ? "Approving…" : "Approve Payroll"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
