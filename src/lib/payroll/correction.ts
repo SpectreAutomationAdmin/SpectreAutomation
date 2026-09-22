@@ -391,9 +391,13 @@ export async function patchCorrectionEmployeeInputs(
   if (correction.transactionType !== "CORRECTION") {
     throw new ConflictError("Only CORRECTION batches can be patched via this service.");
   }
-  if (correction.status !== "PREPARED" && correction.status !== "CALCULATED") {
+  if (
+    correction.status !== "PREPARED" &&
+    correction.status !== "CALCULATED" &&
+    correction.status !== "RETURNED_FOR_CORRECTION"
+  ) {
     throw new ConflictError(
-      `Correction inputs are only editable in PREPARED or CALCULATED status; current status is ${correction.status}.`,
+      `Correction inputs are only editable in PREPARED, CALCULATED, or RETURNED_FOR_CORRECTION status; current status is ${correction.status}.`,
     );
   }
 
@@ -506,8 +510,10 @@ export async function patchCorrectionEmployeeInputs(
     // Any patch invalidates the previous Calculate — flip the correction
     // back to PREPARED so recalculation is required. Also clear the
     // stale calculationFingerprint (Calculate will write a new one).
+    // Same behavior when patching after Controller RETURN
+    // (RETURNED_FOR_CORRECTION → PREPARED).
     await tx.payrollBatch.updateMany({
-      where: { id: correctionBatchId, status: "CALCULATED" },
+      where: { id: correctionBatchId, status: { in: ["CALCULATED", "RETURNED_FOR_CORRECTION"] } },
       data: { status: "PREPARED", calculatedAt: null, calculationFingerprint: null },
     });
   });

@@ -138,6 +138,23 @@ describe("FPP-9C · multi-input correction patches", () => {
     expect(JSON.parse(be.sourceFactsJson ?? "{}").compensations[0].annualSalary).toBe("88400");
   });
 
+  it("RETURNED_FOR_CORRECTION is editable (Controller return workflow)", async () => {
+    const s = await seedPostedBatch("s2b");
+    const r = await initiateReverseAndCorrect(s.marcP, s.club.id, s.batch.id, "return path");
+    // Simulate the state after Controller RETURN — status=RETURNED_FOR_CORRECTION,
+    // fingerprint still stored from the pre-return Calculate.
+    await db().payrollBatch.update({ where: { id: r.correctionBatchId },
+      data: { status: "RETURNED_FOR_CORRECTION", calculationFingerprint: "cfp-v1-preRetun", calculatedAt: new Date() } });
+    await patchCorrectionEmployeeInputs(s.marcP, s.club.id, r.correctionBatchId, [
+      { employeeId: s.emp.id, kind: "annualSalary", annualSalary: "91234" },
+    ]);
+    const after = await db().payrollBatch.findUniqueOrThrow({ where: { id: r.correctionBatchId } });
+    expect(after.status).toBe("PREPARED");
+    expect(after.calculationFingerprint).toBeNull();
+    const be = await db().payrollBatchEmployee.findFirstOrThrow({ where: { batchId: r.correctionBatchId } });
+    expect(JSON.parse(be.sourceFactsJson ?? "{}").compensations[0].annualSalary).toBe("91234");
+  });
+
   it("allowance ADD / UPDATE / REMOVE mutates sourceFactsJson.allowances", async () => {
     const s = await seedPostedBatch("s3");
     const r = await initiateReverseAndCorrect(s.marcP, s.club.id, s.batch.id, "allowance test");

@@ -12,9 +12,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
-// FPP-9C uses seq 20 (2026-10-16 → 2026-11-01) — distinct from FPP-9A.1
-// (seq 18) and FPP-9B (seq 19).
-const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "cmu5kg3ih000qh4iumj5jwr0p";
+// FPP-9C uses seq 21 (2026-11-01 → 2026-11-16, payDate 2026-11-13) — a fresh
+// empty period after the FPP-9C schema-fix redeploy. Distinct from FPP-9A.1
+// (seq 18), FPP-9B (seq 19), and the first FPP-9C attempt (seq 20).
+const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "cmu5kg3ih000rh4iue25r0uo3";
 const PIPELINE_URL = "/api/dev/fpp9c-acceptance";
 
 function saveJson(name: string, obj: unknown) {
@@ -40,7 +41,7 @@ test.describe("FPP-9C · multi-input correction acceptance", () => {
     }
 
     // Single full run — the pipeline handles all stages internally
-    const resp = await page.request.post(`${base}${PIPELINE_URL}?periodId=${TARGET_PERIOD}&stage=full`);
+    const resp = await page.request.post(`${base}${PIPELINE_URL}?periodId=${TARGET_PERIOD}&stage=full`, { timeout: 480_000 });
     const body = await resp.json();
     saveJson("fpp9c-pipeline-full.json", { status: resp.status(), body });
     expect(resp.status()).toBe(200);
