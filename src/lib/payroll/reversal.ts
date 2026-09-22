@@ -38,6 +38,7 @@ import { Prisma } from "@prisma/client";
 import { requirePermission, type Principal } from "../rbac";
 import { assertPostingAllowed } from "../posting-guard";
 import { audit } from "../audit";
+import { parseYtdSnapshot } from "./ytd-snapshot-schema";
 import { ValidationError, NotFoundError, ConflictError } from "../errors";
 
 const PAYROLL_ENTITY = "PayrollBatch";
@@ -185,6 +186,36 @@ export async function initiatePayrollReversal(
 
     // Copy per-employee rows with amounts negated.
     for (const e of original.employees) {
+      // FPP-8B.1 (2026-09-22, §28-§32) — semantically-correct v2 snapshot for
+      // a REVERSAL. The reversal is the accounting inverse of the original:
+      // it is applied AFTER the original was posted, and its authoritative
+      // effect on component YTD is to move the running YTD back from
+      // "original included" to "original excluded" (undoing the original).
+      //
+      // For each v2 componentYtd entry:
+      //   ytdBefore           := original.ytdIncludingCurrent   (state going INTO the reversal — original already posted)
+      //   currentAmount       := -original.currentAmount         (negated; matches the reversal's own negated componentSnapshot)
+      //   ytdIncludingCurrent := original.ytdBefore              (state AFTER reversal — same as before original was posted)
+      //
+      // Verifies ytdBefore + currentAmount == ytdIncludingCurrent under Decimal.
+      // For v1 snapshots: verbatim copy is still correct (v1 has only PRIOR
+      // aggregate YTD fields — no per-transaction component context).
+      const transformedYtdSnapshotJson = (() => {
+        const parsed = parseYtdSnapshot(e.ytdSnapshotJson);
+        if (!parsed || parsed.schemaVersion !== 2) return e.ytdSnapshotJson;
+        const reversedComponentYtd = parsed.componentYtd.map(c => {
+          const originalBefore = new Prisma.Decimal(c.ytdBefore);
+          const originalCurrent = new Prisma.Decimal(c.currentAmount);
+          const originalIncluding = new Prisma.Decimal(c.ytdIncludingCurrent);
+          return {
+            ...c,
+            ytdBefore:           originalIncluding.toFixed(4),   // state including the original
+            currentAmount:       originalCurrent.neg().toFixed(4),
+            ytdIncludingCurrent: originalBefore.toFixed(4),      // state after undoing the original
+          };
+        });
+        return JSON.stringify({ ...parsed, componentYtd: reversedComponentYtd });
+      })();
       await tx.payrollBatchEmployee.create({
         data: {
           batchId: reversal.id,
@@ -196,7 +227,7 @@ export async function initiatePayrollReversal(
           status: e.status,
           salaried: e.salaried,
           sourceFactsJson: e.sourceFactsJson,
-          ytdSnapshotJson: e.ytdSnapshotJson,
+          ytdSnapshotJson: transformedYtdSnapshotJson,
           approvedHoursSnapshot: negate(e.approvedHoursSnapshot),
           earningsTaxable: negate(e.earningsTaxable),
           earningsPensionable: negate(e.earningsPensionable),

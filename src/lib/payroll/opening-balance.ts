@@ -460,6 +460,32 @@ export async function activateOpeningBalance(
       where: { clubId, employeeId: row.employeeId, taxYear: row.taxYear, status: "ACTIVE" },
     });
     if (active) {
+      // FPP-8B.1 (2026-09-22, §5-§9) — Opening YTD financial evidence is
+      // immutable once a POSTED payroll depends on it. If any POSTED
+      // PayrollBatch exists for (clubId, employeeId, taxYear) with a
+      // payDate > active.throughPayDate, superseding the ACTIVE opening
+      // would retroactively rewrite historical YTD used by that batch.
+      // Refuse the supersede rather than silently corrupting history.
+      const cutover = active.throughPayDate ?? new Date(active.taxYear, 0, 1);
+      const dependantPosted = await tx.payrollBatch.findFirst({
+        where: {
+          clubId,
+          status: "POSTED",
+          employees: { some: { employeeId: row.employeeId } },
+          payPeriod: { taxYear: row.taxYear, payDate: { gt: cutover } },
+        },
+        select: { id: true, payPeriod: { select: { payDate: true } } },
+      });
+      if (dependantPosted) {
+        throw new ValidationError([{
+          path: "openingBalance",
+          message:
+            `Cannot supersede ACTIVE opening balance ${active.id}: POSTED payroll ${dependantPosted.id} ` +
+            `(payDate ${dependantPosted.payPeriod.payDate.toISOString().slice(0,10)}) ` +
+            `already uses this opening as historical YTD input. Historical opening evidence is immutable once ` +
+            `payrolls depend on it. Void the dependant payroll(s) via the reversal/correction workflow first.`,
+        }]);
+      }
       await tx.payrollOpeningBalance.update({
         where: { id: active.id },
         data: {

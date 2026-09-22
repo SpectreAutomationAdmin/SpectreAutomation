@@ -30,6 +30,8 @@ import { ForbiddenError, NotFoundError } from "../errors";
 import { assertTenantOwned } from "../services/tenant";
 import { getEmployeePayrollYtd, type EmployeePayrollYtd } from "./ytd";
 import { getEmployeeComponentYtd, includeCurrentInYtd, type ComponentYtdRow } from "./component-ytd";
+import { parseYtdSnapshot } from "./ytd-snapshot-schema";
+import { Prisma } from "@prisma/client";
 
 const ENTITY = "PayrollBatchEmployee";
 
@@ -188,7 +190,7 @@ export async function buildPayStatement(
   // prior POSTED batch).
   const coarse: EmployeePayrollYtd = await getEmployeePayrollYtd(clubId, row.employeeId, payDate);
   const componentPrior = await getEmployeeComponentYtd(clubId, row.employeeId, payDate);
-  const componentIncl  = includeCurrentInYtd(componentPrior, row.componentSnapshots.map((c) => ({
+  const resolverIncl = includeCurrentInYtd(componentPrior, row.componentSnapshots.map((c) => ({
     sourceComponentId: c.sourceComponentId,
     componentCode:     c.componentCode,
     displayName:       c.displayName,
@@ -197,6 +199,51 @@ export async function buildPayStatement(
     cashEffect:        c.cashEffect,
     resolvedAmount:    c.resolvedAmount,
   })));
+
+  // FPP-8B.1 (2026-09-22, §14 + §22 + §23 + §24) — v2 read policy: if the
+  // batch's frozen ytdSnapshotJson is schemaVersion=2, prefer its
+  // componentYtd for YTD display. This means a historical statement stays
+  // frozen even if opening balance edits later occur (defence-in-depth on
+  // top of the §5-§9 immutability guard). For v1 snapshots, fall back to
+  // the resolver-based inclusive map. Consistency-check every v2 entry:
+  // ytdBefore + currentAmount must equal ytdIncludingCurrent exactly.
+  const componentIncl: Map<string, ComponentYtdRow> = (() => {
+    const snap = parseYtdSnapshot(row.ytdSnapshotJson);
+    if (!snap || snap.schemaVersion !== 2) return resolverIncl;
+    const m = new Map<string, ComponentYtdRow>();
+    for (const e of snap.componentYtd) {
+      const before = new Prisma.Decimal(e.ytdBefore);
+      const current = new Prisma.Decimal(e.currentAmount);
+      const expected = before.plus(current);
+      const stated = new Prisma.Decimal(e.ytdIncludingCurrent);
+      if (!expected.equals(stated)) {
+        throw new Error(
+          `pay-statement integrity: frozen v2 componentYtd for ${e.componentCode} on batch ${batchEmployeeId} ` +
+          `has ytdBefore ${e.ytdBefore} + currentAmount ${e.currentAmount} = ${expected.toFixed(4)}, ` +
+          `but ytdIncludingCurrent=${e.ytdIncludingCurrent}. Refusing to render an inconsistent statement.`,
+        );
+      }
+      m.set(e.componentCode, {
+        sourceComponentId: null,
+        componentCode:     e.componentCode,
+        displayName:       e.displayName,
+        category:          e.category,
+        side:              e.side,
+        cashEffect:        e.cashEffect,
+        ytdAmount:         stated.toFixed(2),
+        provenance: {
+          openingAmount: "0.00",
+          postedAmount:  "0.00",
+          openingSourceId: null,
+          postedBatchIds: [],
+        },
+      });
+    }
+    // Merge in any resolver-side row (e.g. YTD-only components) not
+    // captured by the frozen snapshot, so nothing silently disappears.
+    for (const [k, v] of resolverIncl) if (!m.has(k)) m.set(k, v);
+    return m;
+  })();
 
   // Bucketize component snapshots into UI sections.
   const buckets: Record<StatementSectionKind, StatementLine[]> = {
