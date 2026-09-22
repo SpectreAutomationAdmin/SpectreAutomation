@@ -288,14 +288,23 @@ export async function loadAndComputeFingerprintForBatch(batchId: string): Promis
  * If the batch has no persisted `calculationFingerprint`, compute it from
  * persisted evidence and store it. Never overwrites an existing fingerprint.
  * Returns the current (or newly-stored) fingerprint.
+ *
+ * FPP-9C (2026-09-22, §21) — MISMATCH_LEFT_UNCHANGED now persists a
+ * durable `FingerprintMismatchEvent` row for permanent audit evidence.
+ * The unique constraint (batchId, stored, recomputed) makes repeated
+ * detections idempotent — the same mismatch is not duplicated.
  */
-export async function backfillCalculationFingerprint(batchId: string): Promise<{
+export async function backfillCalculationFingerprint(
+  batchId: string,
+  opts: { detectedByUserId?: string; detectionContext?: string } = {},
+): Promise<{
   fingerprint: string;
   action: "STORED_NEW" | "MATCHED_EXISTING" | "MISMATCH_LEFT_UNCHANGED";
+  mismatchEventId?: string;
 }> {
   const existing = await prisma.payrollBatch.findUniqueOrThrow({
     where: { id: batchId },
-    select: { calculationFingerprint: true },
+    select: { calculationFingerprint: true, clubId: true },
   });
   const { fingerprint } = await loadAndComputeFingerprintForBatch(batchId);
   if (existing.calculationFingerprint == null) {
@@ -309,6 +318,27 @@ export async function backfillCalculationFingerprint(batchId: string): Promise<{
     return { fingerprint, action: "MATCHED_EXISTING" };
   }
   // Mismatch — historical fingerprint disagrees with persisted evidence.
-  // Do NOT overwrite. Surface for investigation.
-  return { fingerprint: existing.calculationFingerprint, action: "MISMATCH_LEFT_UNCHANGED" };
+  // Persist a durable audit row (upsert by unique constraint for
+  // idempotency). Do NOT overwrite the stored fingerprint.
+  const event = await prisma.fingerprintMismatchEvent.upsert({
+    where: {
+      batchId_storedFingerprint_recomputedFingerprint: {
+        batchId,
+        storedFingerprint: existing.calculationFingerprint,
+        recomputedFingerprint: fingerprint,
+      },
+    },
+    update: {},  // idempotent — no-op if we've already recorded this mismatch
+    create: {
+      clubId: existing.clubId,
+      batchId,
+      storedFingerprint: existing.calculationFingerprint,
+      recomputedFingerprint: fingerprint,
+      detectedByUserId: opts.detectedByUserId ?? null,
+      detectionContext: opts.detectionContext ?? "backfill",
+      actionTaken: "HISTORICAL_VALUE_LEFT_UNCHANGED",
+    },
+    select: { id: true },
+  });
+  return { fingerprint: existing.calculationFingerprint, action: "MISMATCH_LEFT_UNCHANGED", mismatchEventId: event.id };
 }

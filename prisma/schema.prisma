@@ -475,6 +475,7 @@ model Club {
   payrollPayGroupMembers             PayrollPayGroupMember[]
   payrollPayPeriods                  PayrollPayPeriod[]
   payrollBatches                     PayrollBatch[]
+  fingerprintMismatchEvents          FingerprintMismatchEvent[]
   payrollBatchEmployees              PayrollBatchEmployee[]
   payrollBatchEarnings               PayrollBatchEarning[]
   payrollBatchDeductions             PayrollBatchDeduction[]
@@ -12325,6 +12326,7 @@ model PayrollBatch {
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
   // FPP-9B.1 (2026-09-22) — calculation fingerprint (mirrors postgres schema).
   calculationFingerprint String?
+  fingerprintMismatches  FingerprintMismatchEvent[]
   // FPP-9A (2026-09-22) — Post-posted payroll reversal foundation.
   //
   // `transactionType` distinguishes a normal payroll from a reversal
@@ -12387,6 +12389,26 @@ model PayrollBatch {
   @@index([reversesPayrollBatchId])
   @@index([correctsPayrollBatchId])
   @@index([pairedReversalBatchId])
+}
+
+// FPP-9C (2026-09-22) — durable integrity mismatch audit (mirrors postgres).
+model FingerprintMismatchEvent {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation(fields: [clubId], references: [id])
+  batchId               String
+  batch                 PayrollBatch @relation(fields: [batchId], references: [id])
+  storedFingerprint     String
+  recomputedFingerprint String
+  detectedAt            DateTime @default(now())
+  detectedByUserId      String?
+  detectionContext      String?
+  actionTaken           String   @default("HISTORICAL_VALUE_LEFT_UNCHANGED")
+  createdAt             DateTime @default(now())
+
+  @@unique([batchId, storedFingerprint, recomputedFingerprint])
+  @@index([clubId, detectedAt])
+  @@index([batchId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation

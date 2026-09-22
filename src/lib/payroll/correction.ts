@@ -179,8 +179,14 @@ export async function initiateReverseAndCorrect(
     // the PA patches inputs (or accepts the seeded state and recalculates
     // to reproduce the original — an edge case for corrections that just
     // resnapshot without changing anything).
+    // FPP-9C (2026-09-22, §7) — historical seeding invariant. Component
+    // snapshots must be copied from the ORIGINAL's frozen state so a
+    // correction can amend "the payroll input that should have existed"
+    // rather than re-resolving from the employee's current profile
+    // (which may have drifted since the original was posted).
+    const newBeIdByEmployeeId = new Map<string, string>();
     for (const e of original.employees) {
-      await tx.payrollBatchEmployee.create({
+      const newBe = await tx.payrollBatchEmployee.create({
         data: {
           batchId: correction.id,
           employeeId: e.employeeId,
@@ -193,6 +199,52 @@ export async function initiateReverseAndCorrect(
           sourceFactsJson: e.sourceFactsJson,
           ytdSnapshotJson: e.ytdSnapshotJson,
           // Reset calculated amounts — Calculate will populate them.
+        },
+      });
+      newBeIdByEmployeeId.set(e.employeeId, newBe.id);
+    }
+    for (const s of original.componentSnapshots) {
+      const newBeId = newBeIdByEmployeeId.get(s.employeeId);
+      if (!newBeId) continue;
+      await tx.payrollBatchComponentSnapshot.create({
+        data: {
+          batchId: correction.id,
+          batchEmployeeId: newBeId,
+          employeeId: s.employeeId,
+          clubId: s.clubId,
+          sourceComponentId: s.sourceComponentId,
+          sourceAssignmentId: s.sourceAssignmentId,
+          componentCode: s.componentCode,
+          displayName: s.displayName,
+          category: s.category,
+          side: s.side,
+          displaySection: s.displaySection,
+          displayOrder: s.displayOrder,
+          cashEffect: s.cashEffect,
+          calculationMethod: s.calculationMethod,
+          resolvedAmount: s.resolvedAmount,
+          sourcePercentBps: s.sourcePercentBps,
+          sourceEffectiveFrom: s.sourceEffectiveFrom,
+          sourceEffectiveTo: s.sourceEffectiveTo,
+          eligibleEarningsBase: s.eligibleEarningsBase,
+          eligibleEarningsAmount: s.eligibleEarningsAmount,
+          taxableEffect: s.taxableEffect,
+          cppPensionableEffect: s.cppPensionableEffect,
+          eiInsurableEffect: s.eiInsurableEffect,
+          statutoryTreatmentSource: s.statutoryTreatmentSource,
+          statutoryRuleKey: s.statutoryRuleKey,
+          statutoryRuleVariant: s.statutoryRuleVariant,
+          statutoryRuleVersion: s.statutoryRuleVersion,
+          statutoryRuleSourceAuthority: s.statutoryRuleSourceAuthority,
+          statutoryRuleSourceTitle: s.statutoryRuleSourceTitle,
+          statutoryRuleSourceReference: s.statutoryRuleSourceReference,
+          provenance: s.provenance,
+          reason: `Correction seed of ${s.componentCode} from original ${originalBatchId}.`,
+          matchBps: s.matchBps,
+          matchCapBps: s.matchCapBps,
+          taxFormulaDeductionType: s.taxFormulaDeductionType,
+          expenseAccountIdSnapshot: s.expenseAccountIdSnapshot,
+          liabilityAccountIdSnapshot: s.liabilityAccountIdSnapshot,
         },
       });
     }
@@ -235,39 +287,57 @@ export async function initiateReverseAndCorrect(
   };
 }
 
-// FPP-9B.1 (2026-09-22) — extensible correction-input patch shape.
+// FPP-9C (2026-09-22) — correction-input patch shape (multi-input).
 //
-// Discriminated union so future patch types can be added additively
-// without redesigning the correction chain. Each patch names the
-// employee and one specific correction to apply to the correction
-// batch's frozen sourceFactsJson (or, in future, its scheduled earnings
-// / component snapshots / benefit enrolments — those slots are
-// reserved but not implemented in this slice).
+// Discriminated union of supported correction inputs, each with an
+// explicit ADD | UPDATE | REMOVE operation where applicable. Extends
+// the FPP-9B annualSalary-only MVP.
 //
-// Currently supported: annualSalary. Additional variants ("allowance",
-// "one-time-earning", "deduction", "benefit") should be added here as
-// their own discriminated members without breaking existing callers.
+//   annualSalary   — UPDATE only (operation implicit). Patches the
+//                     correction batch's sourceFactsJson.compensations[0].
+//                     No ADD/REMOVE — an employee always has one
+//                     compensation snapshot per correction employee row.
+//
+//   allowance      — ADD | UPDATE | REMOVE. Backed by
+//                     PayrollBatchAllowanceSnapshot on the correction
+//                     batch (parallel to the snapshot the original had).
+//                     Identified by allowanceType string; amount is a
+//                     dollar Decimal.
+//
+//   oneTimeEarning — ADD | UPDATE | REMOVE. Backed by a
+//                     PayrollBatchComponentSnapshot with provenance =
+//                     ONE_TIME_PAYROLL_ADJUSTMENT, category = EARNING,
+//                     cashEffect = ADD. Identified by componentCode +
+//                     employeeId.
+//
+//   deduction      — ADD | UPDATE | REMOVE. Backed by a
+//                     PayrollBatchComponentSnapshot with provenance =
+//                     ONE_TIME_PAYROLL_ADJUSTMENT, category =
+//                     DEDUCTION, cashEffect = SUBTRACT. Identified by
+//                     componentCode + employeeId.
+//
+// The correction service applies these directly to the correction
+// batch's frozen state. The calculator then re-runs on the modified
+// state. Nothing on the ORIGINAL is touched.
+
 export type CorrectionInputPatch =
   | { employeeId: string; kind: "annualSalary"; annualSalary: string }
-  // Back-compat shorthand for the FPP-9B initial API: `{ employeeId,
-  // annualSalary }` without `kind`. Normalised internally into the
-  // `kind: "annualSalary"` variant. New callers should include `kind`
-  // explicitly.
-  | { employeeId: string; annualSalary: string; kind?: undefined }
-  // Reserved-not-yet-implemented slots — declaring them here makes the
-  // extensibility explicit AND makes exhaustive-switch checks fail at
-  // compile time when a new variant is added below.
-  | { employeeId: string; kind: "allowance"; allowanceType: string; amount: string }
-  | { employeeId: string; kind: "oneTimeEarning"; componentCode: string; amount: string }
-  | { employeeId: string; kind: "deduction"; componentCode: string; amount: string };
+  | { employeeId: string; annualSalary: string; kind?: undefined }  // legacy shorthand
+  | { employeeId: string; kind: "allowance"; operation: "ADD" | "UPDATE" | "REMOVE";
+      allowanceType: string; amount?: string }
+  | { employeeId: string; kind: "oneTimeEarning"; operation: "ADD" | "UPDATE" | "REMOVE";
+      componentCode: string; displayName?: string; amount?: string }
+  | { employeeId: string; kind: "deduction"; operation: "ADD" | "UPDATE" | "REMOVE";
+      componentCode: string; displayName?: string; amount?: string };
 
-function normalisePatch(p: CorrectionInputPatch): { employeeId: string; kind: "annualSalary"; annualSalary: string } {
-  // FPP-9B.1 MVP supports ONLY the annualSalary variant. New variants
-  // above are reserved surface for future slices — normalisePatch will
-  // throw a clear error if invoked with them so we don't silently
-  // accept an unimplemented patch shape.
+type NormalisedPatch =
+  | { employeeId: string; kind: "annualSalary"; annualSalary: string }
+  | { employeeId: string; kind: "allowance"; operation: "ADD" | "UPDATE" | "REMOVE"; allowanceType: string; amount?: string }
+  | { employeeId: string; kind: "oneTimeEarning"; operation: "ADD" | "UPDATE" | "REMOVE"; componentCode: string; displayName?: string; amount?: string }
+  | { employeeId: string; kind: "deduction"; operation: "ADD" | "UPDATE" | "REMOVE"; componentCode: string; displayName?: string; amount?: string };
+
+function normalisePatch(p: CorrectionInputPatch): NormalisedPatch {
   if ((p as { kind?: string }).kind == null) {
-    // Back-compat: legacy `{ employeeId, annualSalary }` shape.
     if ("annualSalary" in p && typeof p.annualSalary === "string") {
       return { employeeId: p.employeeId, kind: "annualSalary", annualSalary: p.annualSalary };
     }
@@ -276,10 +346,26 @@ function normalisePatch(p: CorrectionInputPatch): { employeeId: string; kind: "a
   if (p.kind === "annualSalary") {
     return { employeeId: p.employeeId, kind: "annualSalary", annualSalary: p.annualSalary };
   }
-  throw new ValidationError([{
-    path: "kind",
-    message: `Correction patch kind "${p.kind}" is reserved but not yet implemented in FPP-9B.1. Add support in patchCorrectionEmployeeInputs before using.`,
-  }]);
+  if (p.kind === "allowance") {
+    if (!p.operation || !["ADD","UPDATE","REMOVE"].includes(p.operation)) {
+      throw new ValidationError([{ path: "operation", message: `allowance patch requires operation ADD|UPDATE|REMOVE` }]);
+    }
+    if ((p.operation === "ADD" || p.operation === "UPDATE") && !p.amount) {
+      throw new ValidationError([{ path: "amount", message: `allowance ${p.operation} requires amount` }]);
+    }
+    return { employeeId: p.employeeId, kind: "allowance", operation: p.operation, allowanceType: p.allowanceType, amount: p.amount };
+  }
+  if (p.kind === "oneTimeEarning" || p.kind === "deduction") {
+    if (!p.operation || !["ADD","UPDATE","REMOVE"].includes(p.operation)) {
+      throw new ValidationError([{ path: "operation", message: `${p.kind} patch requires operation ADD|UPDATE|REMOVE` }]);
+    }
+    if ((p.operation === "ADD" || p.operation === "UPDATE") && !p.amount) {
+      throw new ValidationError([{ path: "amount", message: `${p.kind} ${p.operation} requires amount` }]);
+    }
+    return { employeeId: p.employeeId, kind: p.kind, operation: p.operation,
+      componentCode: p.componentCode, displayName: p.displayName, amount: p.amount };
+  }
+  throw new ValidationError([{ path: "kind", message: `Unknown correction patch kind: ${(p as { kind?: string }).kind}` }]);
 }
 
 /**
@@ -317,25 +403,93 @@ export async function patchCorrectionEmployeeInputs(
       const patch = normalisePatch(rawPatch);
       const be = await tx.payrollBatchEmployee.findFirst({
         where: { batchId: correctionBatchId, employeeId: patch.employeeId },
-        select: { id: true, sourceFactsJson: true },
+        select: { id: true, clubId: true, sourceFactsJson: true },
       });
       if (!be) {
         throw new ValidationError([{ path: "employeeId", message: `Employee ${patch.employeeId} is not on this correction batch.` }]);
       }
       const facts = typeof be.sourceFactsJson === "string" ? JSON.parse(be.sourceFactsJson) : (be.sourceFactsJson ?? {});
+
       if (patch.kind === "annualSalary") {
         if (!Array.isArray(facts.compensations) || facts.compensations.length === 0) {
           throw new ValidationError([{ path: "compensations", message: `Employee ${patch.employeeId} has no compensation snapshot to patch.` }]);
         }
-        new Prisma.Decimal(patch.annualSalary); // validate parseable decimal
+        new Prisma.Decimal(patch.annualSalary);
         facts.compensations[0] = { ...facts.compensations[0], annualSalary: patch.annualSalary };
+        await tx.payrollBatchEmployee.update({
+          where: { id: be.id },
+          data: { sourceFactsJson: JSON.stringify(facts) },
+        });
+      } else if (patch.kind === "allowance") {
+        // Allowances are stored inside sourceFactsJson.allowances[]. Each
+        // entry is {allowanceType, amount}. Correction seeded them from
+        // original at initiate time.
+        if (!Array.isArray(facts.allowances)) facts.allowances = [];
+        const idx = facts.allowances.findIndex((a: { allowanceType?: string }) => a.allowanceType === patch.allowanceType);
+        if (patch.operation === "REMOVE") {
+          if (idx < 0) throw new ValidationError([{ path: "allowanceType", message: `Allowance ${patch.allowanceType} not present on the correction — cannot REMOVE.` }]);
+          facts.allowances.splice(idx, 1);
+        } else if (patch.operation === "ADD") {
+          if (idx >= 0) throw new ValidationError([{ path: "allowanceType", message: `Allowance ${patch.allowanceType} already present on the correction — use UPDATE instead of ADD.` }]);
+          new Prisma.Decimal(patch.amount!);
+          facts.allowances.push({ allowanceType: patch.allowanceType, amount: patch.amount });
+        } else if (patch.operation === "UPDATE") {
+          if (idx < 0) throw new ValidationError([{ path: "allowanceType", message: `Allowance ${patch.allowanceType} not present on the correction — use ADD instead of UPDATE.` }]);
+          new Prisma.Decimal(patch.amount!);
+          facts.allowances[idx] = { ...facts.allowances[idx], amount: patch.amount };
+        }
+        await tx.payrollBatchEmployee.update({
+          where: { id: be.id },
+          data: { sourceFactsJson: JSON.stringify(facts) },
+        });
+      } else if (patch.kind === "oneTimeEarning" || patch.kind === "deduction") {
+        // One-time earnings + deductions are stored as
+        // PayrollBatchComponentSnapshot rows on the correction batch,
+        // with provenance = ONE_TIME_PAYROLL_ADJUSTMENT.
+        const isEarning = patch.kind === "oneTimeEarning";
+        const category = isEarning ? "EARNING" : "DEDUCTION";
+        const cashEffect = isEarning ? "ADD" : "SUBTRACT";
+        const side = isEarning ? "EMPLOYER" : "EMPLOYEE";
+        const existing = await tx.payrollBatchComponentSnapshot.findFirst({
+          where: { batchId: correctionBatchId, batchEmployeeId: be.id, componentCode: patch.componentCode },
+          select: { id: true, provenance: true },
+        });
+        if (patch.operation === "REMOVE") {
+          if (!existing) throw new ValidationError([{ path: "componentCode", message: `Component ${patch.componentCode} not present on the correction — cannot REMOVE.` }]);
+          await tx.payrollBatchComponentSnapshot.delete({ where: { id: existing.id } });
+        } else if (patch.operation === "ADD") {
+          if (existing) throw new ValidationError([{ path: "componentCode", message: `Component ${patch.componentCode} already present on the correction — use UPDATE instead of ADD.` }]);
+          new Prisma.Decimal(patch.amount!);
+          // For ADD we need a sourceComponentId. Resolve it from the club's
+          // PayrollComponent registry by componentCode.
+          const comp = await tx.payrollComponent.findFirst({
+            where: { clubId: be.clubId, code: patch.componentCode },
+            select: { id: true, displayName: true, category: true, side: true, cashEffect: true },
+          });
+          if (!comp) throw new ValidationError([{ path: "componentCode", message: `PayrollComponent ${patch.componentCode} not defined on this Club — define it before adding to a correction.` }]);
+          await tx.payrollBatchComponentSnapshot.create({
+            data: {
+              batchId: correctionBatchId, batchEmployeeId: be.id, employeeId: patch.employeeId,
+              clubId: be.clubId, sourceComponentId: comp.id, sourceAssignmentId: null,
+              componentCode: patch.componentCode, displayName: patch.displayName ?? comp.displayName,
+              category: comp.category ?? category, side: comp.side ?? side,
+              displaySection: category, displayOrder: 999,
+              cashEffect: comp.cashEffect ?? cashEffect, calculationMethod: "FIXED_AMOUNT",
+              provenance: "ONE_TIME_PAYROLL_ADJUSTMENT", enteredByUserId: principal.id,
+              reason: `Correction ${patch.operation} of ${patch.componentCode} on batch ${correctionBatchId}.`,
+              resolvedAmount: new Prisma.Decimal(patch.amount!),
+              sourceEffectiveFrom: new Date(),
+            },
+          });
+        } else if (patch.operation === "UPDATE") {
+          if (!existing) throw new ValidationError([{ path: "componentCode", message: `Component ${patch.componentCode} not present on the correction — use ADD instead of UPDATE.` }]);
+          new Prisma.Decimal(patch.amount!);
+          await tx.payrollBatchComponentSnapshot.update({
+            where: { id: existing.id },
+            data: { resolvedAmount: new Prisma.Decimal(patch.amount!) },
+          });
+        }
       }
-      await tx.payrollBatchEmployee.update({
-        where: { id: be.id },
-        data: {
-          sourceFactsJson: JSON.stringify(facts),
-        },
-      });
       patchedCount++;
     }
     // Any patch invalidates the previous Calculate — flip the correction
