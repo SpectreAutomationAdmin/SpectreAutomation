@@ -20,6 +20,7 @@ import { useMemo, useState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import type { PayrollOverviewViewModel, PayrollOverviewPayPeriodRef } from "@/lib/payroll/overview-view";
 import ReversePostedPayrollButton from "./ReversePostedPayrollButton";
+import ReverseAndCorrectPayrollButton from "./ReverseAndCorrectPayrollButton";
 
 // Payroll 3A date-boundary hotfix (2026-09-11) — timezone-agnostic
 // calendar-date formatting for payroll period dates.
@@ -1819,6 +1820,7 @@ function PostedCompletionBanner({ postedAtISO, glJournalEntryId, batchId }: {
             requires a reversal reason, then delegates to the FPP-9A
             reversal service. */}
         <ReversePostedPayrollButton batchId={batchId} />
+        <ReverseAndCorrectPayrollButton batchId={batchId} />
       </div>
     </div>
   );

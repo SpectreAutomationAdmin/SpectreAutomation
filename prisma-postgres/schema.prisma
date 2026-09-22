@@ -12208,6 +12208,21 @@ model PayrollBatch {
   reverses              PayrollBatch?  @relation("PayrollBatchReversal", fields: [reversesPayrollBatchId], references: [id])
   reversedBy            PayrollBatch[] @relation("PayrollBatchReversal")
   reversalReason        String?
+  // FPP-9B (2026-09-22) — Reverse & Correct chain. A CORRECTION batch
+  // is a THIRD immutable payroll transaction that replaces the original.
+  // Chain: ORIGINAL (STANDARD) → REVERSAL → CORRECTION. Original +
+  // Reversal = 0; Original + Reversal + Correction = Correction. All
+  // three transactions remain immutable once posted. `correctsPayrollBatchId`
+  // points at the ORIGINAL; `pairedReversalBatchId` points at the REVERSAL
+  // that goes with this correction. Post-time gate refuses to post a
+  // CORRECTION until its paired reversal is POSTED.
+  correctsPayrollBatchId String?
+  corrects               PayrollBatch?  @relation("PayrollBatchCorrection", fields: [correctsPayrollBatchId], references: [id])
+  correctedBy            PayrollBatch[] @relation("PayrollBatchCorrection")
+  pairedReversalBatchId  String?
+  pairedReversal         PayrollBatch?  @relation("PayrollBatchCorrectionReversal", fields: [pairedReversalBatchId], references: [id])
+  pairedCorrection       PayrollBatch[] @relation("PayrollBatchCorrectionReversal")
+  correctionReason       String?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -12232,6 +12247,8 @@ model PayrollBatch {
   @@index([clubId, payPeriodId])
   @@index([statutoryPackageId])
   @@index([reversesPayrollBatchId])
+  @@index([correctsPayrollBatchId])
+  @@index([pairedReversalBatchId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation

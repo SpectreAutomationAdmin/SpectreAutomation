@@ -351,6 +351,15 @@ export async function postPayrollBatch(
     );
   }
 
+  // FPP-9B (2026-09-22) — CORRECTION batches may only post after their
+  // paired REVERSAL has already been POSTED. This preserves the accounting
+  // chain: Original → Reversal → Correction. Posting the correction before
+  // the reversal would leave "Original + Correction" — an incoherent state.
+  if (batch.transactionType === "CORRECTION") {
+    const { assertCorrectionCanPost } = await import("./correction");
+    await assertCorrectionCanPost(batch.id);
+  }
+
   // Payroll two-person governance (2026-09-13, superseding 3F §25):
   // the SUBMITTER cannot approve their own payroll (that check remains
   // in approvePayrollBatch), but the APPROVER is free to also post it.
