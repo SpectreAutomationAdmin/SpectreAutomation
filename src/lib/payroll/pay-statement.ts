@@ -235,13 +235,17 @@ export async function buildPayStatement(
   }
 
   // Component snapshots.
+  // FPP-8B (§6, §19) — componentCode is the stable identity join key.
+  // Track which componentCodes we've rendered so we can emit YTD-only
+  // rows for components that have opening / history but no current
+  // period activity (§20).
+  const renderedComponentCodes = new Set<string>();
   for (const c of row.componentSnapshots) {
     if (c.resolvedAmount == null) continue;
     const current = money(c.resolvedAmount);
-    const ytdRow: ComponentYtdRow | undefined = componentIncl.get(
-      c.sourceComponentId ?? `code:${c.componentCode}`,
-    );
+    const ytdRow: ComponentYtdRow | undefined = componentIncl.get(c.componentCode);
     const ytd = ytdRow ? ytdRow.ytdAmount : current;
+    renderedComponentCodes.add(c.componentCode);
     const isOneTime = c.provenance === "ONE_TIME_PAYROLL_ADJUSTMENT";
 
     const line: StatementLine = {
@@ -280,6 +284,36 @@ export async function buildPayStatement(
       // Non-cash EMPLOYEE-side with no clear taxable-benefit tag —
       // land under Employer Benefits & Contributions rather than
       // silently disappear.
+      buckets.EMPLOYER_CONTRIBUTIONS.push(line);
+    }
+  }
+
+  // FPP-8B (§20) — YTD-only rows. A component that carries opening YTD
+  // or POSTED history but has NO current-period activity on this batch
+  // must still appear on the statement so the employee sees the YTD
+  // balance. Render at current="0.00" ytd=<historical>.
+  for (const [componentCode, ytdRow] of componentIncl) {
+    if (renderedComponentCodes.has(componentCode)) continue;
+    if (Number(ytdRow.ytdAmount) === 0) continue;
+    const line: StatementLine = {
+      key: stableKey(componentCode, "component-ytd-only"),
+      label: ytdRow.displayName,
+      current: "0.00",
+      ytd:     ytdRow.ytdAmount,
+      isOneTime: false,
+      displayOrder: 900,  // Sort YTD-only rows after normal current-period rows in each bucket.
+    };
+    if (ytdRow.side === "EMPLOYER") {
+      buckets.EMPLOYER_CONTRIBUTIONS.push(line);
+    } else if (ytdRow.category === "REIMBURSEMENT") {
+      buckets.REIMBURSEMENTS.push(line);
+    } else if (ytdRow.cashEffect === "DECREASES_NET_PAY") {
+      buckets.OTHER_DEDUCTIONS.push(line);
+    } else if (ytdRow.cashEffect === "NO_NET_PAY_EFFECT" && ytdRow.category === "TAXABLE_BENEFIT") {
+      buckets.TAXABLE_BENEFITS.push(line);
+    } else if (ytdRow.cashEffect === "INCREASES_NET_PAY") {
+      buckets.EARNINGS.push(line);
+    } else {
       buckets.EMPLOYER_CONTRIBUTIONS.push(line);
     }
   }

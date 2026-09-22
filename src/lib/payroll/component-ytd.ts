@@ -27,7 +27,9 @@ import { prisma } from "../prisma";
 import { getActiveOpeningBalance } from "./opening-balance";
 
 export interface ComponentYtdRow {
-  /** Stable identity — prefer sourceComponentId, else componentCode. */
+  /** Stable identity — componentCode is the domain-unique key on
+   *  PayrollComponent (@@unique([clubId, code])). sourceComponentId is
+   *  informational only. */
   sourceComponentId: string | null;
   componentCode:     string;
   displayName:       string;
@@ -36,6 +38,13 @@ export interface ComponentYtdRow {
   cashEffect:        "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT";
   /** Sum of opening YTD + all POSTED batch-snapshot resolvedAmounts. */
   ytdAmount:         string;
+  /** FPP-8B (§33) — provenance for audit / debugging. */
+  provenance: {
+    openingAmount:   string;  // contribution from opening balance
+    postedAmount:    string;  // contribution from POSTED history
+    openingSourceId: string | null;
+    postedBatchIds:  string[];
+  };
 }
 
 export interface EmployeeComponentYtd {
@@ -61,8 +70,19 @@ function addStr(a: string, b: string | number | Decimal | null | undefined): str
   return (Number(a) + Number(toStr(b))).toFixed(4);
 }
 
-function keyFor(sourceComponentId: string | null | undefined, componentCode: string): string {
-  return sourceComponentId ?? `code:${componentCode}`;
+// FPP-8B (2026-09-22, §6) — component identity is `componentCode`.
+// PayrollComponent enforces @@unique([clubId, code]) so a componentCode
+// unambiguously identifies a component within a club. Every historical
+// evidence row (opening + batch snapshot) freezes the code.
+//
+// The previous keying strategy `sourceComponentId ?? \`code:${componentCode}\``
+// produced DIFFERENT keys when opening rows had a null sourceComponentId
+// (imported before the club's PayrollComponent registry was built) and
+// batch snapshots later carried a resolved id — silently splitting the
+// employee's YTD between two keys and hiding opening YTD on the pay
+// statement. FPP-8B keys by componentCode alone.
+function keyFor(_sourceComponentId: string | null | undefined, componentCode: string): string {
+  return componentCode;
 }
 
 /**
@@ -117,6 +137,12 @@ export async function getEmployeeComponentYtd(
         side:              r.side as "EMPLOYEE" | "EMPLOYER",
         cashEffect:        r.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
         ytdAmount:         toStr(r.ytdAmount),
+        provenance: {
+          openingAmount:   toStr(r.ytdAmount),
+          postedAmount:    "0",
+          openingSourceId: openingId,
+          postedBatchIds:  [],
+        },
       });
     }
   }
@@ -153,6 +179,16 @@ export async function getEmployeeComponentYtd(
     const existing = byKey.get(k);
     if (existing) {
       existing.ytdAmount = addStr(existing.ytdAmount, r.resolvedAmount);
+      existing.provenance.postedAmount = addStr(existing.provenance.postedAmount, r.resolvedAmount);
+      if (!existing.provenance.postedBatchIds.includes(r.batchId)) {
+        existing.provenance.postedBatchIds.push(r.batchId);
+      }
+      // If the opening carried a null sourceComponentId, and the POSTED
+      // history now carries a resolved id, adopt the resolved id on the
+      // combined row so downstream consumers can navigate to the component.
+      if (existing.sourceComponentId == null && r.sourceComponentId != null) {
+        existing.sourceComponentId = r.sourceComponentId;
+      }
     } else {
       byKey.set(k, {
         sourceComponentId: r.sourceComponentId,
@@ -162,6 +198,12 @@ export async function getEmployeeComponentYtd(
         side:              r.side as "EMPLOYEE" | "EMPLOYER",
         cashEffect:        r.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
         ytdAmount:         toStr(r.resolvedAmount),
+        provenance: {
+          openingAmount:   "0",
+          postedAmount:    toStr(r.resolvedAmount),
+          openingSourceId: openingId,
+          postedBatchIds:  [r.batchId],
+        },
       });
     }
   }
@@ -170,6 +212,8 @@ export async function getEmployeeComponentYtd(
   // preserve fixed-4 accumulation until the last step.
   for (const [, row] of byKey) {
     row.ytdAmount = Number(row.ytdAmount).toFixed(2);
+    row.provenance.openingAmount = Number(row.provenance.openingAmount).toFixed(2);
+    row.provenance.postedAmount  = Number(row.provenance.postedAmount).toFixed(2);
   }
 
   return {
@@ -194,7 +238,7 @@ export function includeCurrentInYtd(
   }>,
 ): Map<string, ComponentYtdRow> {
   const combined = new Map<string, ComponentYtdRow>();
-  for (const [k, v] of prior.byKey) combined.set(k, { ...v, ytdAmount: v.ytdAmount });
+  for (const [k, v] of prior.byKey) combined.set(k, { ...v, provenance: { ...v.provenance, postedBatchIds: [...v.provenance.postedBatchIds] }, ytdAmount: v.ytdAmount });
   for (const s of currentSnapshots) {
     if (s.resolvedAmount == null) continue;
     const k = keyFor(s.sourceComponentId, s.componentCode);
@@ -210,6 +254,12 @@ export function includeCurrentInYtd(
         side: s.side as "EMPLOYEE" | "EMPLOYER",
         cashEffect: s.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
         ytdAmount: Number(toStr(s.resolvedAmount)).toFixed(2),
+        provenance: {
+          openingAmount: "0.00",
+          postedAmount:  "0.00",
+          openingSourceId: null,
+          postedBatchIds: [],
+        },
       });
     }
   }

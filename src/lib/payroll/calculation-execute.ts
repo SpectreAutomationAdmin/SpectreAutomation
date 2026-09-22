@@ -36,7 +36,8 @@ import { calculateFederalTax } from "./statutory/federal-tax-calculator";
 import { calculateAlbertaTax } from "./statutory/alberta-tax-calculator";
 import { toCentString, toDecimal, nonNegative, roundCentsHalfUp, Decimal } from "./statutory/decimal-money";
 import { DEFAULT_TAX_FACTS_V1 } from "./source-facts-schema";
-import type { YtdSnapshotV1 } from "./ytd-snapshot-schema";
+import type { YtdSnapshotV2, YtdComponentEntry } from "./ytd-snapshot-schema";
+import { getEmployeeComponentYtd } from "./component-ytd";
 
 const ENTITY = "PayrollBatch";
 // Payroll-3C-3D.7 (2026-09-09) — production adopts the CRA projected
@@ -393,14 +394,61 @@ export async function calculatePayrollBatch(
     const totalEmployer = employerCpp.combined.plus(employerCpp2.amount).plus(ei.employer)
       .plus(earnings.employerContributionsFromComponents);
 
-    const ytdSnapshot: YtdSnapshotV1 = {
-      schemaVersion: 1,
+    // FPP-8B (2026-09-22) — schema v2 adds per-component YTD context.
+    // Resolve the prior component YTD (BEFORE this pay) then augment
+    // with the current payroll's per-component amounts so the snapshot
+    // captures a complete YTD picture. Sorted by componentCode for
+    // deterministic canonical JSON hashing.
+    const priorComponentYtd = await getEmployeeComponentYtd(readiness.clubId, be.employeeId, readiness.payDate);
+    const currentComponentByCode = new Map<string, { amount: Decimal; snap: typeof be.componentSnapshots[number] }>();
+    for (const cs of be.componentSnapshots) {
+      if (cs.resolvedAmount == null) continue;
+      const pr = earnings.percentResolutions.find((p) => p.code === cs.componentCode);
+      const amt = pr ? pr.resolvedAmount : toDecimal(cs.resolvedAmount.toString());
+      currentComponentByCode.set(cs.componentCode, { amount: amt, snap: cs });
+    }
+    const componentYtdEntries: YtdComponentEntry[] = [];
+    const seenCodes = new Set<string>();
+    for (const [code, prior] of priorComponentYtd.byKey) {
+      const cur = currentComponentByCode.get(code);
+      const before = new Decimal(prior.ytdAmount);
+      const currentAmount = cur ? cur.amount : new Decimal(0);
+      componentYtdEntries.push({
+        componentCode:       code,
+        displayName:         cur?.snap.displayName ?? prior.displayName,
+        category:            cur?.snap.category ?? prior.category,
+        side:                (cur?.snap.side ?? prior.side) as "EMPLOYEE" | "EMPLOYER",
+        cashEffect:          (cur?.snap.cashEffect ?? prior.cashEffect) as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+        ytdBefore:           before.toFixed(4),
+        currentAmount:       currentAmount.toFixed(4),
+        ytdIncludingCurrent: before.plus(currentAmount).toFixed(4),
+      });
+      seenCodes.add(code);
+    }
+    for (const [code, cur] of currentComponentByCode) {
+      if (seenCodes.has(code)) continue;
+      componentYtdEntries.push({
+        componentCode:       code,
+        displayName:         cur.snap.displayName,
+        category:            cur.snap.category,
+        side:                cur.snap.side as "EMPLOYEE" | "EMPLOYER",
+        cashEffect:          cur.snap.cashEffect as "INCREASES_NET_PAY" | "DECREASES_NET_PAY" | "NO_NET_PAY_EFFECT",
+        ytdBefore:           "0.0000",
+        currentAmount:       cur.amount.toFixed(4),
+        ytdIncludingCurrent: cur.amount.toFixed(4),
+      });
+    }
+    componentYtdEntries.sort((a, b) => a.componentCode.localeCompare(b.componentCode));
+
+    const ytdSnapshot: YtdSnapshotV2 = {
+      schemaVersion: 2,
       asOfPayDate:   readiness.payDate.toISOString(),
       taxYear:       readiness.taxYear,
       sources: {
         openingBalanceId:               emp.ytd.sources.openingBalanceId,
         openingBalancePriorPayrollKind: emp.ytd.sources.openingBalancePriorPayrollKind,
         postedBatchIds:                 emp.ytd.sources.postedBatchIds,
+        componentSourceRefs:            priorComponentYtd.sources.postedBatchIds,
       },
       ytdGrossEarnings:       emp.ytd.ytdGrossEarnings,
       ytdTaxableEarnings:     emp.ytd.ytdTaxableEarnings,
@@ -418,6 +466,7 @@ export async function calculatePayrollBatch(
       ytdCppER:               emp.ytd.ytdCppER,
       ytdCpp2ER:              emp.ytd.ytdCpp2ER,
       ytdEiER:                emp.ytd.ytdEiER,
+      componentYtd:           componentYtdEntries,
     };
 
     // Calculation-explanation snapshot (§35, §36) — every T4127
