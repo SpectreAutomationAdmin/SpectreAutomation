@@ -128,11 +128,16 @@ export async function POST(req: NextRequest) {
       { employeeId: MARC_EMPLOYEE_ID, kind: "annualSalary", annualSalary: "88400" },
     ];
     // Best-effort — try ADD but tolerate failures where the component isn't defined on the club.
+    // deduction targets RRSP_EE which IS seeded on Coulee (EMPLOYEE_DEDUCTION category).
+    // oneTimeEarning targets ONE_TIME_BONUS which is NOT seeded — expected to be refused
+    // with the "PayrollComponent … not defined on this Club" guard.
     const optionalPatches: CorrectionInputPatch[] = [
       { employeeId: MARC_EMPLOYEE_ID, kind: "oneTimeEarning", operation: "ADD",
         componentCode: "ONE_TIME_BONUS", displayName: "Missed Bonus", amount: "500.00" },
       { employeeId: MARC_EMPLOYEE_ID, kind: "allowance", operation: "ADD",
         allowanceType: "CELL_PHONE", amount: "25.00" },
+      { employeeId: MARC_EMPLOYEE_ID, kind: "deduction", operation: "ADD",
+        componentCode: "RRSP_EE", displayName: "RRSP — Employee", amount: "15.00" },
     ];
     const patchStatus: any = { annualSalary: false, oneTimeEarning: false, allowance: false, deduction: false };
     if ((await prisma.payrollBatch.findUnique({ where: { id: correctionBatchId }, select: { status: true } }))?.status !== "POSTED") {
@@ -140,15 +145,18 @@ export async function POST(req: NextRequest) {
       try {
         await patchCorrectionEmployeeInputs(marcP, club.id, correctionBatchId, [patches[0]]);
         patchStatus.annualSalary = true;
-      } catch (e) { patchStatus.annualSalaryError = (e as Error).message; }
+      } catch (e) {
+        const err = e as { message?: string; issues?: Array<{ path: string; message: string }> };
+        patchStatus.annualSalaryError = err.issues?.[0]?.message ?? err.message;
+      }
       for (const p of optionalPatches) {
+        const kind = String((p as { kind?: string }).kind ?? "unknown");
         try {
           await patchCorrectionEmployeeInputs(marcP, club.id, correctionBatchId, [p]);
-          const label = p.kind === "oneTimeEarning" ? "oneTimeEarning" : "allowance";
-          patchStatus[label] = true;
+          patchStatus[kind] = true;
         } catch (e) {
-          const label = (p as { kind: string }).kind;
-          patchStatus[`${label}Skipped`] = (e as Error).message.slice(0, 240);
+          const err = e as { message?: string; issues?: Array<{ path: string; message: string }> };
+          patchStatus[`${kind}Skipped`] = (err.issues?.[0]?.message ?? err.message ?? "").slice(0, 240);
         }
       }
     }
