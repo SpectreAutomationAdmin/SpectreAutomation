@@ -251,6 +251,14 @@ export async function POST(req: NextRequest) {
     if (!targetPeriodId) {
       return refuse("Missing required query param: periodId (target CRGCC-SM period).", 400);
     }
+    // `stage` controls where to stop: baseline | initiate | approve | post | full (default).
+    // full = run entire pipeline end-to-end including idempotency retry.
+    const stage = (url.searchParams.get("stage") ?? "full").toLowerCase();
+    const validStages = new Set(["baseline", "initiate", "approve", "post", "full"]);
+    if (!validStages.has(stage)) {
+      return refuse(`Invalid stage=${stage}. Must be one of: baseline, initiate, approve, post, full.`, 400);
+    }
+    (evidence.guards as Record<string, unknown>).stage = stage;
 
     // Load principals via loadPrincipalByEmail (SoD chain).
     const marcP = await loadPrincipalByEmail(MARC_PA_EMAIL);
@@ -265,32 +273,52 @@ export async function POST(req: NextRequest) {
     if (!period) {
       return refuse(`Period ${targetPeriodId} not found on Coulee Ridge / CRGCC-SM.`, 404);
     }
-    const existing = await prisma.payrollBatch.findFirst({
-      where: { clubId: COULEE_CLUB_ID, payPeriodId: period.id },
-      select: { id: true, status: true, transactionType: true },
+    // Detect existing STANDARD baseline on this period — resume friendly.
+    // The stage-based orchestration below advances an in-progress period
+    // through the pipeline. Refuse only if we cannot find a legitimate
+    // FPP-9A.1 baseline (i.e. non-STANDARD or an unrelated batch).
+    const existingBaseline = await prisma.payrollBatch.findFirst({
+      where: {
+        clubId: COULEE_CLUB_ID,
+        payPeriodId: period.id,
+        transactionType: "STANDARD",
+      },
+      select: { id: true, status: true, transactionType: true, notes: true },
     });
-    if (existing) {
-      return refuse(`Period ${period.id} already has batch ${existing.id} (${existing.status}) — refusing.`);
-    }
-    evidence.guards = { ...evidence.guards as Record<string, unknown>, targetPeriod: period };
+    evidence.guards = { ...evidence.guards as Record<string, unknown>, targetPeriod: period, existingBaseline };
 
     // ── Gate 6: sanity: capture founder + Chris integrity BEFORE any writes
     evidence.integrity = { before: await snapshotFounderIntegrity() };
 
-    // ── PHASE 1: BASELINE payroll (real lifecycle)
-    const prep = await preparePayrollBatch(marcP, club.id, period.id);
-    const calc = await calculatePayrollBatch(marcP, club.id, prep.batchId);
-    if (calc.lifecycleStatus !== "CALCULATED") {
-      return NextResponse.json({
-        ok: false, phase: "calculate",
-        error: "Calculation did not reach CALCULATED.",
-        calcResult: calc, evidence,
-      }, { status: 500 });
+    // ── PHASE 1: BASELINE payroll (real lifecycle). Resume-friendly.
+    let baselineBatchId: string;
+    let baselinePosted: { journalEntryId: string } = { journalEntryId: "" };
+    if (existingBaseline && existingBaseline.status === "POSTED") {
+      // Baseline already exists in POSTED — reuse.
+      baselineBatchId = existingBaseline.id;
+      const b = await prisma.payrollBatch.findUniqueOrThrow({
+        where: { id: baselineBatchId }, select: { glJournalEntryId: true },
+      });
+      baselinePosted = { journalEntryId: b.glJournalEntryId! };
+    } else {
+      const prep = await preparePayrollBatch(marcP, club.id, period.id);
+      const calc = await calculatePayrollBatch(marcP, club.id, prep.batchId);
+      if (calc.lifecycleStatus !== "CALCULATED") {
+        return NextResponse.json({
+          ok: false, phase: "calculate",
+          error: "Calculation did not reach CALCULATED.",
+          calcResult: calc, evidence,
+        }, { status: 500 });
+      }
+      await attestBatchReview(marcP, club.id, prep.batchId, "CALCULATED_PAYROLL");
+      await submitPayrollBatch(marcP, club.id, prep.batchId);
+      await approvePayrollBatch(chrisP, prep.batchId);
+      const posted = await postPayrollBatch(marcP, prep.batchId);
+      baselineBatchId = prep.batchId;
+      baselinePosted = posted;
     }
-    await attestBatchReview(marcP, club.id, prep.batchId, "CALCULATED_PAYROLL");
-    await submitPayrollBatch(marcP, club.id, prep.batchId);
-    await approvePayrollBatch(chrisP, prep.batchId);
-    const posted = await postPayrollBatch(marcP, prep.batchId);
+    const posted = baselinePosted;
+    const prep = { batchId: baselineBatchId };
 
     // Baseline evidence
     const baselineBatch = await prisma.payrollBatch.findUnique({
@@ -338,10 +366,32 @@ export async function POST(req: NextRequest) {
       ytdAfterBaseline,
     };
 
-    // ── PHASE 2: REVERSAL — initiate
-    const initResult = await initiatePayrollReversal(
-      marcP, club.id, prep.batchId, "FPP-9A acceptance test",
-    );
+    // Stage gate — return after baseline?
+    if (stage === "baseline") {
+      evidence.finishedAt = new Date().toISOString();
+      return NextResponse.json({ ok: true, stoppedAtStage: "baseline", evidence });
+    }
+
+    // ── PHASE 2: REVERSAL — initiate (resume-friendly)
+    let initResult: { reversalBatchId: string; originalBatchId: string; workIntakeItemId: string; calculationVersion: number; totalGrossNegatedDisplay: string; totalNetNegatedDisplay: string };
+    const existingReversal = await prisma.payrollBatch.findFirst({
+      where: { clubId: COULEE_CLUB_ID, reversesPayrollBatchId: prep.batchId, transactionType: "REVERSAL", status: { notIn: ["VOIDED", "RETURNED_FOR_CORRECTION"] } },
+      select: { id: true, status: true },
+    });
+    if (existingReversal) {
+      initResult = {
+        reversalBatchId: existingReversal.id,
+        originalBatchId: prep.batchId,
+        workIntakeItemId: "resumed",
+        calculationVersion: 1,
+        totalGrossNegatedDisplay: "",
+        totalNetNegatedDisplay: "",
+      };
+    } else {
+      initResult = await initiatePayrollReversal(
+        marcP, club.id, prep.batchId, "FPP-9A acceptance test",
+      );
+    }
     const reversalBatchAfterInit = await prisma.payrollBatch.findUnique({
       where: { id: initResult.reversalBatchId },
       select: {
@@ -377,8 +427,20 @@ export async function POST(req: NextRequest) {
         : null,
     };
 
-    // ── PHASE 3: REVERSAL — approve (as Chris the Controller)
-    await approvePayrollBatch(chrisP, initResult.reversalBatchId);
+    // Stage gate — return after initiate?
+    if (stage === "initiate") {
+      evidence.reversal = { initResult, stateAfterInit };
+      evidence.finishedAt = new Date().toISOString();
+      return NextResponse.json({ ok: true, stoppedAtStage: "initiate", evidence });
+    }
+
+    // ── PHASE 3: REVERSAL — approve (as Chris the Controller). Resume-friendly.
+    const revNow = await prisma.payrollBatch.findUnique({
+      where: { id: initResult.reversalBatchId }, select: { status: true },
+    });
+    if (revNow?.status === "SUBMITTED_FOR_APPROVAL") {
+      await approvePayrollBatch(chrisP, initResult.reversalBatchId);
+    }
     const stateAfterApprove = {
       reversalBatch: await prisma.payrollBatch.findUnique({
         where: { id: initResult.reversalBatchId },
@@ -397,8 +459,23 @@ export async function POST(req: NextRequest) {
         : null,
     };
 
-    // ── PHASE 4: REVERSAL — post (as Marc the Payroll Admin)
-    const revPosted = await postPayrollBatch(marcP, initResult.reversalBatchId);
+    // Stage gate — return after approve?
+    if (stage === "approve") {
+      evidence.reversal = { initResult, stateAfterInit, stateAfterApprove };
+      evidence.finishedAt = new Date().toISOString();
+      return NextResponse.json({ ok: true, stoppedAtStage: "approve", evidence });
+    }
+
+    // ── PHASE 4: REVERSAL — post (as Marc the Payroll Admin). Resume-friendly.
+    const revBeforePost = await prisma.payrollBatch.findUnique({
+      where: { id: initResult.reversalBatchId }, select: { status: true, glJournalEntryId: true },
+    });
+    let revPosted: { journalEntryId: string };
+    if (revBeforePost?.status === "POSTED" && revBeforePost.glJournalEntryId) {
+      revPosted = { journalEntryId: revBeforePost.glJournalEntryId };
+    } else {
+      revPosted = await postPayrollBatch(marcP, initResult.reversalBatchId);
+    }
     const revJE = await loadJournalLines(revPosted.journalEntryId);
 
     const stateAfterPost = {
@@ -425,7 +502,14 @@ export async function POST(req: NextRequest) {
         : null,
     };
 
-    // ── PHASE 5: IDEMPOTENCY — repeat post
+    // Stage gate — return after post but skip idempotency?
+    if (stage === "post") {
+      evidence.reversal = { initResult, stateAfterInit, stateAfterApprove, stateAfterPost };
+      evidence.finishedAt = new Date().toISOString();
+      return NextResponse.json({ ok: true, stoppedAtStage: "post", evidence });
+    }
+
+    // ── PHASE 5: IDEMPOTENCY — repeat post (stage=full only)
     let idempotencyOutcome: string;
     let idempotencyResult: any = null;
     try {
