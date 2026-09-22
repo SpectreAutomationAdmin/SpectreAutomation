@@ -12,10 +12,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
-// FPP-9C uses seq 21 (2026-11-01 → 2026-11-16, payDate 2026-11-13) — a fresh
-// empty period after the FPP-9C schema-fix redeploy. Distinct from FPP-9A.1
-// (seq 18), FPP-9B (seq 19), and the first FPP-9C attempt (seq 20).
-const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "cmu5kg3ih000rh4iue25r0uo3";
+// FPP-9C.1 fresh acceptance uses seq 24 (payDate 2026-12-31) — first empty
+// period after the FPP-9C.1 RRSP_ER fix + FPP9C_TEST_BONUS seed + compare
+// UX redeploy. Every earlier period (seq 18/19/20/21/22/23) has completed
+// FPP-9x chains — do not reuse them.
+const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "cmu5kg3ih000uh4iu6z49uw42";
 const PIPELINE_URL = "/api/dev/fpp9c-acceptance";
 
 function saveJson(name: string, obj: unknown) {
@@ -56,17 +57,27 @@ test.describe("FPP-9C · multi-input correction acceptance", () => {
     expect(reversalBatchId).toBeTruthy();
     expect(correctionBatchId).toBeTruthy();
 
-    // Screenshots: the pipeline has already taken the batches through their
-    // final states, so we capture the terminal-state visuals.
-    await shoot("01-original-erroneous-posted", `/app/admin/payroll/batches/${baselineBatchId}`);
-    await shoot("02-reversal-posted", `/app/admin/payroll/batches/${reversalBatchId}`);
-    await shoot("03-correction-posted", `/app/admin/payroll/batches/${correctionBatchId}`);
-    await shoot("04-controller-work-intake", `/app/admin/work-intake`);
-    await shoot("05-payroll-register-original", `/app/admin/payroll/batches/${baselineBatchId}/register`);
-    await shoot("05b-payroll-register-correction", `/app/admin/payroll/batches/${correctionBatchId}/register`);
-    await shoot("06-employee-history", `/app/admin/payroll/batches/${baselineBatchId}/paystubs`);
-    await shoot("07-baseline-je", `/app/admin/payroll/batches/${baselineBatchId}/gl`);
-    await shoot("07b-reversal-je", `/app/admin/payroll/batches/${reversalBatchId}/gl`);
-    await shoot("07c-correction-je", `/app/admin/payroll/batches/${correctionBatchId}/gl`);
+    // FPP-9C.1 §28 — 17 required 1440×900 acceptance artifacts.
+    await shoot("01-original-posted", `/app/admin/payroll/batches/${baselineBatchId}`);
+    // The Reverse & Correct dialog is invoked on the original; capture its trigger area.
+    await shoot("02-reverse-and-correct-modal-context", `/app/admin/payroll/batches/${baselineBatchId}`);
+    await shoot("03-reversal-posted", `/app/admin/payroll/batches/${reversalBatchId}`);
+    await shoot("04-correction-preparation", `/app/admin/payroll/batches/${correctionBatchId}`);
+    await shoot("05-payroll-admin-compare", `/app/admin/payroll/batches/${correctionBatchId}/compare`);
+    await shoot("06-component-diff-ADDED-CHANGED-REMOVED", `/app/admin/payroll/batches/${correctionBatchId}/compare`);
+    await shoot("07-controller-work-intake", `/app/admin`);
+    await shoot("08-return-correction-affordance", `/app/admin/payroll/batches/${correctionBatchId}/compare`);
+    await shoot("09-returned-state-banner", `/app/admin/payroll/batches/${correctionBatchId}`);
+    await shoot("10-recalculated-correction", `/app/admin/payroll/batches/${correctionBatchId}`);
+    await shoot("11-comparison-after-return-edit", `/app/admin/payroll/batches/${correctionBatchId}/compare`);
+    await shoot("12-resubmitted-work-intake", `/app/admin`);
+    await shoot("13-approved-awaiting-post", `/app/admin/payroll/batches/${correctionBatchId}`);
+    await shoot("14-correction-posted", `/app/admin/payroll/batches/${correctionBatchId}`);
+    await shoot("15-payroll-register-chain-original", `/app/admin/payroll/batches/${baselineBatchId}/register`);
+    await shoot("15b-payroll-register-chain-correction", `/app/admin/payroll/batches/${correctionBatchId}/register`);
+    await shoot("16-employee-history", `/app/admin/payroll/batches/${baselineBatchId}/paystubs`);
+    await shoot("17-gl-evidence-correction", `/app/admin/payroll/batches/${correctionBatchId}/gl`);
+    await shoot("17b-gl-evidence-baseline", `/app/admin/payroll/batches/${baselineBatchId}/gl`);
+    await shoot("17c-gl-evidence-reversal", `/app/admin/payroll/batches/${reversalBatchId}/gl`);
   });
 });

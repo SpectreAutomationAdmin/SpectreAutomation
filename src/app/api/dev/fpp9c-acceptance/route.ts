@@ -24,6 +24,7 @@ import { approvePayrollBatch, postPayrollBatch } from "@/lib/payroll/approve-and
 import { initiateReverseAndCorrect, patchCorrectionEmployeeInputs, type CorrectionInputPatch } from "@/lib/payroll/correction";
 import { buildCorrectionComparison } from "@/lib/payroll/correction-comparison";
 import { loadPrincipalByEmail } from "@/lib/services/principal-by-email";
+import { upsertPayrollComponent } from "@/lib/payroll/components-catalogue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -122,18 +123,34 @@ export async function POST(req: NextRequest) {
     if (revNow?.status === "APPROVED") await postPayrollBatch(marcP, reversalBatchId);
     (evidence.reversal as Record<string, unknown>).status = "POSTED";
 
+    // FPP-9C.1 (2026-09-22, §8) — Configure a synthetic EARNING component
+    // on Coulee via the normal catalogue service so oneTimeEarning ADD/
+    // UPDATE/REMOVE can be exercised end-to-end on staging. Idempotent.
+    const testBonusUpsert = await upsertPayrollComponent(marcP, club.id, {
+      code: "FPP9C_TEST_BONUS",
+      displayName: "FPP-9C Acceptance Bonus (synthetic)",
+      description: "Synthetic one-time earning used exclusively by the FPP-9C acceptance pipeline.",
+      category: "ADDITIONAL_EARNING",
+      side: "EMPLOYEE",
+      cashEffect: "INCREASES_NET_PAY",
+      taxableEffect: "ADD",
+      cppPensionableEffect: "ADD",
+      eiInsurableEffect: "ADD",
+      calculationMethod: "FIXED_AMOUNT",
+      displaySection: "EARNINGS",
+      displayOrder: 700,
+      active: true,
+    });
+    (evidence.correction as Record<string, unknown>).testBonusUpsert = testBonusUpsert;
+
     // Phase 4 — MULTI-INPUT patches on the correction
-    // Applied to Marc: salary bump + ADD one-time bonus + ADD cell-phone allowance (if not already) + ADD RRSP employee deduction attempt (may be config-dependent)
+    // Applied to Marc: salary bump + ADD one-time bonus + ADD cell-phone allowance + ADD RRSP_EE deduction
     const patches: CorrectionInputPatch[] = [
       { employeeId: MARC_EMPLOYEE_ID, kind: "annualSalary", annualSalary: "88400" },
     ];
-    // Best-effort — try ADD but tolerate failures where the component isn't defined on the club.
-    // deduction targets RRSP_EE which IS seeded on Coulee (EMPLOYEE_DEDUCTION category).
-    // oneTimeEarning targets ONE_TIME_BONUS which is NOT seeded — expected to be refused
-    // with the "PayrollComponent … not defined on this Club" guard.
     const optionalPatches: CorrectionInputPatch[] = [
       { employeeId: MARC_EMPLOYEE_ID, kind: "oneTimeEarning", operation: "ADD",
-        componentCode: "ONE_TIME_BONUS", displayName: "Missed Bonus", amount: "500.00" },
+        componentCode: "FPP9C_TEST_BONUS", displayName: "FPP-9C Acceptance Bonus", amount: "500.00" },
       { employeeId: MARC_EMPLOYEE_ID, kind: "allowance", operation: "ADD",
         allowanceType: "CELL_PHONE", amount: "25.00" },
       { employeeId: MARC_EMPLOYEE_ID, kind: "deduction", operation: "ADD",
@@ -159,6 +176,55 @@ export async function POST(req: NextRequest) {
           patchStatus[`${kind}Skipped`] = (err.issues?.[0]?.message ?? err.message ?? "").slice(0, 240);
         }
       }
+
+      // FPP-9C.1 (§9-§11) — exercise oneTimeEarning UPDATE + REMOVE + re-ADD
+      // and capture per-stage evidence, so the acceptance proves the FULL
+      // ADD/UPDATE/REMOVE lifecycle end-to-end on staging (not only ADD).
+      const otEvidence: any = { addSucceeded: patchStatus.oneTimeEarning === true };
+      if (patchStatus.oneTimeEarning === true) {
+        const bonusAfterAdd = await prisma.payrollBatchComponentSnapshot.findFirst({
+          where: { batchId: correctionBatchId, componentCode: "FPP9C_TEST_BONUS" },
+          select: { id: true, resolvedAmount: true, provenance: true },
+        });
+        otEvidence.afterAdd = {
+          present: !!bonusAfterAdd,
+          resolvedAmount: bonusAfterAdd?.resolvedAmount?.toFixed(2) ?? null,
+          provenance: bonusAfterAdd?.provenance ?? null,
+        };
+        try {
+          await patchCorrectionEmployeeInputs(marcP, club.id, correctionBatchId, [
+            { employeeId: MARC_EMPLOYEE_ID, kind: "oneTimeEarning", operation: "UPDATE",
+              componentCode: "FPP9C_TEST_BONUS", amount: "750.00" },
+          ]);
+          const afterUpdate = await prisma.payrollBatchComponentSnapshot.findFirst({
+            where: { batchId: correctionBatchId, componentCode: "FPP9C_TEST_BONUS" },
+            select: { resolvedAmount: true },
+          });
+          otEvidence.afterUpdate = { resolvedAmount: afterUpdate?.resolvedAmount?.toFixed(2) ?? null };
+          otEvidence.updateSucceeded = afterUpdate?.resolvedAmount?.toFixed(2) === "750.00";
+        } catch (e) { otEvidence.updateError = (e as Error).message?.slice(0, 240); }
+        try {
+          await patchCorrectionEmployeeInputs(marcP, club.id, correctionBatchId, [
+            { employeeId: MARC_EMPLOYEE_ID, kind: "oneTimeEarning", operation: "REMOVE",
+              componentCode: "FPP9C_TEST_BONUS" },
+          ]);
+          const afterRemove = await prisma.payrollBatchComponentSnapshot.findFirst({
+            where: { batchId: correctionBatchId, componentCode: "FPP9C_TEST_BONUS" },
+            select: { id: true },
+          });
+          otEvidence.afterRemove = { present: !!afterRemove };
+          otEvidence.removeSucceeded = !afterRemove;
+        } catch (e) { otEvidence.removeError = (e as Error).message?.slice(0, 240); }
+        // Re-ADD so the final calculation includes a bonus for the acceptance run.
+        try {
+          await patchCorrectionEmployeeInputs(marcP, club.id, correctionBatchId, [
+            { employeeId: MARC_EMPLOYEE_ID, kind: "oneTimeEarning", operation: "ADD",
+              componentCode: "FPP9C_TEST_BONUS", displayName: "FPP-9C Acceptance Bonus", amount: "500.00" },
+          ]);
+          otEvidence.reAddSucceeded = true;
+        } catch (e) { otEvidence.reAddError = (e as Error).message?.slice(0, 240); }
+      }
+      (evidence.correction as Record<string, unknown>).oneTimeEarningLifecycle = otEvidence;
     }
     (evidence.correction as Record<string, unknown>).patchStatus = patchStatus;
 

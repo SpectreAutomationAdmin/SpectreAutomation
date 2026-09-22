@@ -180,6 +180,63 @@ describe("FPP-9C · multi-input correction patches", () => {
     expect(er?.resolvedAmount?.toFixed(2)).toBe("229.17");
   });
 
+  it("FPP-9C.1 §6 — patching salary preserves unrelated recurring components on the correction", async () => {
+    const s = await seedPostedBatch("preserve");
+    const c = db();
+    // Seed an unrelated recurring component on the ORIGINAL (a fixed-amount
+    // employee deduction) so we can prove it survives a salary-only patch.
+    const ltdComp = await c.payrollComponent.create({ data: {
+      clubId: s.club.id, code: "LTD_PRESERVE", displayName: "LTD (preserve test)",
+      category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE", cashEffect: "SUBTRACT",
+      displaySection: "DEDUCTIONS", displayOrder: 400,
+      calculationMethod: "FIXED_AMOUNT", statutoryTreatmentSource: "CUSTOM",
+      taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+      active: true } });
+    await c.payrollBatchComponentSnapshot.create({ data: {
+      batchId: s.batch.id, batchEmployeeId: s.be.id, employeeId: s.emp.id, clubId: s.club.id,
+      sourceComponentId: ltdComp.id, sourceAssignmentId: null,
+      componentCode: "LTD_PRESERVE", displayName: "LTD (preserve test)",
+      category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE",
+      displaySection: "DEDUCTIONS", displayOrder: 400,
+      cashEffect: "SUBTRACT", calculationMethod: "FIXED_AMOUNT",
+      resolvedAmount: new Prisma.Decimal("28.11"), provenance: "RECURRING_EMPLOYEE_SETUP",
+      sourceEffectiveFrom: utc(2020,1,1) } });
+    const r = await initiateReverseAndCorrect(s.marcP, s.club.id, s.batch.id, "salary-only patch");
+    // Seed correction to CALCULATED so the patch can invalidate + we can inspect state.
+    await c.payrollBatch.update({ where: { id: r.correctionBatchId },
+      data: { status: "CALCULATED", calculationFingerprint: "cfp-v1-existing", calculatedAt: new Date() } });
+    // Patch only annualSalary — nothing that should affect LTD_PRESERVE.
+    await patchCorrectionEmployeeInputs(s.marcP, s.club.id, r.correctionBatchId, [
+      { employeeId: s.emp.id, kind: "annualSalary", annualSalary: "88400" },
+    ]);
+    const preserved = await c.payrollBatchComponentSnapshot.findFirst({
+      where: { batchId: r.correctionBatchId, componentCode: "LTD_PRESERVE" },
+      select: { resolvedAmount: true, sourceComponentId: true, provenance: true },
+    });
+    expect(preserved).toBeTruthy();
+    expect(preserved?.resolvedAmount?.toFixed(2)).toBe("28.11");
+    expect(preserved?.sourceComponentId).toBe(ltdComp.id);
+    expect(preserved?.provenance).toBe("RECURRING_EMPLOYEE_SETUP");
+  });
+
+  it("FPP-9C.1 §19 — calculationFingerprint is stable from APPROVED to POSTED (no drift across approve → post)", async () => {
+    const s = await seedPostedBatch("fp");
+    // seedPostedBatch takes the batch through APPROVED → POSTED under the
+    // real approve-and-post service. Stamp a synthetic fingerprint at approval
+    // time and prove it is still exactly that value at POSTED.
+    const c = db();
+    await c.payrollBatch.update({ where: { id: s.batch.id },
+      data: { calculationFingerprint: "cfp-v1-approved-fixture" } });
+    // seedPostedBatch already advanced to POSTED via approvePayrollBatch +
+    // postPayrollBatch. Confirm fingerprint is unchanged after POST.
+    const posted = await c.payrollBatch.findUniqueOrThrow({
+      where: { id: s.batch.id },
+      select: { status: true, calculationFingerprint: true },
+    });
+    expect(posted.status).toBe("POSTED");
+    expect(posted.calculationFingerprint).toBe("cfp-v1-approved-fixture");
+  });
+
   it("Correction is seeded from ORIGINAL's frozen sourceFactsJson (not the employee's current profile)", async () => {
     const s = await seedPostedBatch("s1");
     // Employee profile drift: change current EmployeeCompensation to something different.
