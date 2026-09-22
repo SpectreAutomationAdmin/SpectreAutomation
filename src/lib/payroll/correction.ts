@@ -487,7 +487,10 @@ export async function patchCorrectionEmployeeInputs(
           // PayrollComponent registry by componentCode.
           const comp = await tx.payrollComponent.findFirst({
             where: { clubId: be.clubId, code: patch.componentCode },
-            select: { id: true, displayName: true, category: true, side: true, cashEffect: true },
+            select: {
+              id: true, displayName: true, category: true, side: true, cashEffect: true,
+              expenseAccountId: true, liabilityAccountId: true,
+            },
           });
           if (!comp) throw new ValidationError([{ path: "componentCode", message: `PayrollComponent ${patch.componentCode} not defined on this Club — define it before adding to a correction.` }]);
           await tx.payrollBatchComponentSnapshot.create({
@@ -502,6 +505,13 @@ export async function patchCorrectionEmployeeInputs(
               reason: `Correction ${patch.operation} of ${patch.componentCode} on batch ${correctionBatchId}.`,
               resolvedAmount: new Prisma.Decimal(patch.amount!),
               sourceEffectiveFrom: new Date(),
+              // FPP-9C.1 — snapshot the component's GL mapping so the post-time
+              // GL-readiness guard has the account bindings it needs. Without
+              // these, a correction that ADDs a new one-time earning/deduction
+              // whose parent PayrollComponent carries GL mappings will fail
+              // Payroll GL readiness with MISSING_COMPONENT_EXPENSE_ACCOUNT.
+              expenseAccountIdSnapshot: comp.expenseAccountId ?? null,
+              liabilityAccountIdSnapshot: comp.liabilityAccountId ?? null,
             },
           });
         } else if (patch.operation === "UPDATE") {

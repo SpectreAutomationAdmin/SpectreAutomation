@@ -12,11 +12,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
 
-// FPP-9C.1 fresh acceptance uses seq 24 (payDate 2026-12-31) — first empty
-// period after the FPP-9C.1 RRSP_ER fix + FPP9C_TEST_BONUS seed + compare
-// UX redeploy. Every earlier period (seq 18/19/20/21/22/23) has completed
-// FPP-9x chains — do not reuse them.
-const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "cmu5kg3ih000uh4iu6z49uw42";
+// FPP-9C.1 fresh acceptance uses the next empty CRGCC-SM period after the
+// GL-snapshot fix (patches copy expense/liability account bindings onto
+// PayrollBatchComponentSnapshot). Set via FPP9C_TARGET_PERIOD env or the
+// hardcoded default; every earlier period has residual FPP-9x state.
+const TARGET_PERIOD = process.env.FPP9C_TARGET_PERIOD ?? "";
 const PIPELINE_URL = "/api/dev/fpp9c-acceptance";
 
 function saveJson(name: string, obj: unknown) {
