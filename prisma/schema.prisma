@@ -12323,6 +12323,33 @@ model PayrollBatch {
   // Once set, further attempts to post the batch are refused (§32 idempotency).
   glJournalEntryId      String?    @unique
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
+  // FPP-9A (2026-09-22) — Post-posted payroll reversal foundation.
+  //
+  // `transactionType` distinguishes a normal payroll from a reversal
+  // of a previously POSTED payroll. Normal payrolls default to
+  // "STANDARD"; a reversal batch carries "REVERSAL" and a durable
+  // link back to the batch it reverses.
+  //
+  // A reversal batch is derived from the frozen original at initiate
+  // time — its per-employee amounts + component snapshots are the
+  // exact negation of the original. It enters the accepted governance
+  // lifecycle at CALCULATED (skipping Prepare/Calculate — the
+  // amounts are already frozen from the original), passes through
+  // SUBMITTED_FOR_APPROVAL → APPROVED → POSTED using the same
+  // Controller-approves / Payroll-Admin-posts model. Posting a
+  // REVERSAL creates a new JournalEntry that is the exact inverse
+  // of the original journal (debits ↔ credits swapped). The
+  // original PayrollBatch, its calculation snapshot, its journal,
+  // and its approval history are NEVER mutated.
+  //
+  // Values: "STANDARD" | "REVERSAL". Stored as a string for schema
+  // compatibility with SQLite dev + Postgres prod without a new
+  // enum type.
+  transactionType       String     @default("STANDARD")
+  reversesPayrollBatchId String?
+  reverses              PayrollBatch?  @relation("PayrollBatchReversal", fields: [reversesPayrollBatchId], references: [id])
+  reversedBy            PayrollBatch[] @relation("PayrollBatchReversal")
+  reversalReason        String?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -12347,6 +12374,7 @@ model PayrollBatch {
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
   @@index([statutoryPackageId])
+  @@index([reversesPayrollBatchId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation

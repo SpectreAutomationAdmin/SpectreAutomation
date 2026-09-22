@@ -361,6 +361,142 @@ export async function postPayrollBatch(
   // independent approval; posting sits with the Controller who
   // already validated the payroll.
 
+  // FPP-9A (2026-09-22) — REVERSAL branch. A batch of
+  // transactionType="REVERSAL" is posted by deriving its journal as
+  // the exact inverse of the ORIGINAL batch's journal (debit ↔
+  // credit swap on each line, same account + department). This
+  // sidesteps the readiness + resolver pipeline — the original was
+  // already ready when it posted, and the resolver would need to
+  // handle negative amounts, which is unnecessarily complex. The
+  // resulting journal balances by construction (sum of debits =
+  // sum of credits, because the original journal balanced).
+  if (batch.transactionType === "REVERSAL") {
+    if (!batch.reversesPayrollBatchId) {
+      throw new ConflictError("Reversal batch is missing reversesPayrollBatchId — cannot post.");
+    }
+    const original = await prisma.payrollBatch.findUnique({
+      where: { id: batch.reversesPayrollBatchId },
+      select: { id: true, clubId: true, status: true, glJournalEntryId: true },
+    });
+    if (!original) throw new ConflictError("Reversal target batch not found.");
+    if (original.clubId !== batch.clubId) throw new ConflictError("Reversal target batch belongs to a different Club.");
+    if (original.status !== "POSTED" || !original.glJournalEntryId) {
+      throw new ConflictError(`Cannot post reversal — original batch ${original.id} is ${original.status} without a journal.`);
+    }
+    const originalLines = await prisma.journalEntryLine.findMany({
+      where: { journalEntryId: original.glJournalEntryId },
+      include: {
+        account: { select: { id: true, accountNumber: true } },
+        department: { select: { id: true, code: true } },
+      },
+      orderBy: { lineNumber: "asc" },
+    });
+    if (originalLines.length === 0) {
+      throw new ConflictError("Original journal has no lines to reverse.");
+    }
+    // Build the reversal `lines[]` — swap debit ↔ credit on each line.
+    const label = `Payroll REVERSAL ${batch.payGroup.code} ${batch.payPeriod.periodStart.toISOString().slice(0, 10)} → ${batch.payPeriod.payDate.toISOString().slice(0, 10)}`;
+    const lines: Array<{
+      accountNumber: string;
+      debit?: string;
+      credit?: string;
+      description: string;
+      lineNumber: number;
+      departmentCode?: string | null;
+    }> = originalLines.map((l, idx) => {
+      const entry: {
+        accountNumber: string;
+        debit?: string;
+        credit?: string;
+        description: string;
+        lineNumber: number;
+        departmentCode?: string | null;
+      } = {
+        lineNumber: idx + 1,
+        accountNumber: l.account.accountNumber,
+        description: `Reversal of "${l.description}" (batch ${original.id.slice(-8)})`,
+      };
+      // Swap sides.
+      if (l.debit != null && !new Prisma.Decimal(l.debit).isZero()) {
+        entry.credit = new Prisma.Decimal(l.debit).toFixed(2);
+      }
+      if (l.credit != null && !new Prisma.Decimal(l.credit).isZero()) {
+        entry.debit = new Prisma.Decimal(l.credit).toFixed(2);
+      }
+      if (l.department?.code) entry.departmentCode = l.department.code;
+      return entry;
+    });
+    // Atomic post — same shape as the STANDARD path below.
+    const now = new Date();
+    const txResult = await prisma.$transaction(async (tx) => {
+      const acquired = await tx.payrollBatch.updateMany({
+        where: { id: batch.id, status: "APPROVED", glJournalEntryId: null },
+        data: { status: "POSTED", postedAt: now, postedByUserId: principal.id },
+      });
+      if (acquired.count === 0) {
+        const current = await tx.payrollBatch.findUnique({ where: { id: batch.id } });
+        if (current?.status === "POSTED" && current.glJournalEntryId) {
+          return { batch: current, journalEntryId: current.glJournalEntryId, existing: true as const };
+        }
+        throw new ConflictError(
+          `Concurrent post race on reversal: batch is ${current?.status ?? "unknown"} without a journal — retry.`,
+        );
+      }
+      const entry = await createPostedFromAdapter(
+        principal, batch.clubId,
+        {
+          entryDate: batch.payPeriod.payDate.toISOString(),
+          description: `${label} — reverses batch ${original.id.slice(-8)} (JE ${original.glJournalEntryId?.slice(-8)})`,
+          memo: `Auto-generated reversal from PayrollBatch ${batch.id} — reverses ${original.id}`,
+          lines,
+        },
+        {
+          source: "PAYROLL" as JournalSource,
+          sourceEntityType: PAYROLL_ENTITY,
+          sourceEntityId: batch.id,
+        },
+        tx,
+      );
+      const linked = await tx.payrollBatch.update({
+        where: { id: batch.id },
+        data: { glJournalEntryId: entry.id },
+      });
+      return { batch: linked, journalEntryId: entry.id, existing: false as const };
+    }, { timeout: 30_000, maxWait: 10_000 });
+
+    const posted = txResult.batch;
+    const reversalEntry = { id: txResult.journalEntryId };
+    // Close both Work Intake items (Final approval + Ready to Post) if open.
+    try {
+      const { resolveFinalApprovalItem: resolveFinal, resolveReadyToPostItem } = await import("./controller-work-intake");
+      await resolveFinal(batch.clubId, batch.id, principal.id,
+        `Payroll reversal posted — new journal ${reversalEntry.id} reverses ${original.glJournalEntryId}.`);
+      await resolveReadyToPostItem(batch.clubId, batch.id, principal.id,
+        `Payroll reversal posted — new journal ${reversalEntry.id} reverses ${original.glJournalEntryId}.`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[payroll reversal post] WI resolution failed", err);
+    }
+    const totals = await totalsForResponse(batch.clubId, reversalEntry.id);
+    await audit(principal, {
+      clubId: batch.clubId,
+      action: "payroll.reversal.post",
+      entityType: PAYROLL_ENTITY,
+      entityId: batch.id,
+      before: { status: "APPROVED" },
+      after: {
+        status: "POSTED",
+        postedAt: now,
+        journalEntryId: reversalEntry.id,
+        reversesPayrollBatchId: original.id,
+        reversesJournalEntryId: original.glJournalEntryId,
+        totalDebits: totals.totalDebits,
+        totalCredits: totals.totalCredits,
+      },
+    });
+    return { batch: posted, journalEntryId: reversalEntry.id, ...totals };
+  }
+
   // Payroll-3C-6 (2026-09-05) — component-aware GL readiness check.
   // Runs BEFORE any journal drafting so component-carrying batches
   // fail loudly (with actionable blocker codes) instead of silently

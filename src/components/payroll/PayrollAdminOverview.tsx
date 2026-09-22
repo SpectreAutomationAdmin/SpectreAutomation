@@ -19,6 +19,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useMemo, useState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import type { PayrollOverviewViewModel, PayrollOverviewPayPeriodRef } from "@/lib/payroll/overview-view";
+import ReversePostedPayrollButton from "./ReversePostedPayrollButton";
 
 // Payroll 3A date-boundary hotfix (2026-09-11) — timezone-agnostic
 // calendar-date formatting for payroll period dates.
@@ -1813,6 +1814,11 @@ function PostedCompletionBanner({ postedAtISO, glJournalEntryId, batchId }: {
         >
           View Paystubs <ArrowRight className="h-3 w-3" />
         </Link>
+        {/* FPP-9A (2026-09-22) — Reverse Posted Payroll. Controlled
+            accounting action; NEVER a delete/edit. Opens a modal that
+            requires a reversal reason, then delegates to the FPP-9A
+            reversal service. */}
+        <ReversePostedPayrollButton batchId={batchId} />
       </div>
     </div>
   );

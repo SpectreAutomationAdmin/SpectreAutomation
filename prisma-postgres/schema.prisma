@@ -12201,6 +12201,13 @@ model PayrollBatch {
   // Once set, further attempts to post the batch are refused (§32 idempotency).
   glJournalEntryId      String?    @unique
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
+  // FPP-9A (2026-09-22) — Post-posted payroll reversal foundation.
+  // See prisma/schema.prisma for the full comment block.
+  transactionType       String     @default("STANDARD")
+  reversesPayrollBatchId String?
+  reverses              PayrollBatch?  @relation("PayrollBatchReversal", fields: [reversesPayrollBatchId], references: [id])
+  reversedBy            PayrollBatch[] @relation("PayrollBatchReversal")
+  reversalReason        String?
   notes         String?
   createdByUserId String?
   createdAt     DateTime @default(now())
@@ -12224,6 +12231,7 @@ model PayrollBatch {
   @@index([clubId, status])
   @@index([clubId, payPeriodId])
   @@index([statutoryPackageId])
+  @@index([reversesPayrollBatchId])
 }
 
 // Payroll-3B-4 (2026-08-29) — structural readiness / preparation
