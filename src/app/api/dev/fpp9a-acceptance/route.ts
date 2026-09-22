@@ -234,9 +234,14 @@ export async function POST(req: NextRequest) {
     const caller = await getCurrentPrincipal();
     if (!caller) return refuse("Unauthenticated.", 401);
 
-    // ── Gate 3: caller must be Marc (designated PA on Coulee Ridge)
-    if (caller.email !== MARC_PA_EMAIL) {
-      return refuse(`Only ${MARC_PA_EMAIL} may invoke this endpoint (caller=${caller.email}).`);
+    // ── Gate 3: caller must be a trusted actor on Coulee Ridge —
+    // either the designated Payroll Admin (Marc) or the designated
+    // Controller (Chris). The endpoint uses INTERNAL principals loaded
+    // via loadPrincipalByEmail for the actual PA/Controller actions,
+    // so calling as either is safe. This lets the founder's staging
+    // credentials (Chris) drive the acceptance end-to-end.
+    if (caller.email !== MARC_PA_EMAIL && caller.email !== CHRIS_CONTROLLER_EMAIL) {
+      return refuse(`Only ${MARC_PA_EMAIL} or ${CHRIS_CONTROLLER_EMAIL} may invoke this endpoint (caller=${caller.email}).`);
     }
 
     // ── Gate 4: target club must be Coulee Ridge
