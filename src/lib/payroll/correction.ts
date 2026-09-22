@@ -432,7 +432,18 @@ export async function patchCorrectionEmployeeInputs(
         } else if (patch.operation === "ADD") {
           if (idx >= 0) throw new ValidationError([{ path: "allowanceType", message: `Allowance ${patch.allowanceType} already present on the correction — use UPDATE instead of ADD.` }]);
           new Prisma.Decimal(patch.amount!);
-          facts.allowances.push({ allowanceType: patch.allowanceType, amount: patch.amount });
+          // FPP-9C source-facts schema requires the full SourceFactsAllowanceV1
+          // shape — id, assignmentId, frequency, taxable, effectiveFrom, effectiveTo.
+          facts.allowances.push({
+            id: `correction-add-${patch.allowanceType}-${Date.now()}`,
+            assignmentId: null,
+            allowanceType: patch.allowanceType,
+            amount: patch.amount,
+            frequency: "PER_PAY_PERIOD",
+            taxable: true,
+            effectiveFrom: new Date().toISOString(),
+            effectiveTo: null,
+          });
         } else if (patch.operation === "UPDATE") {
           if (idx < 0) throw new ValidationError([{ path: "allowanceType", message: `Allowance ${patch.allowanceType} not present on the correction — use ADD instead of UPDATE.` }]);
           new Prisma.Decimal(patch.amount!);
