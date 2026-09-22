@@ -126,6 +126,12 @@ export async function POST(req: NextRequest) {
     // FPP-9C.1 (2026-09-22, §8) — Configure a synthetic EARNING component
     // on Coulee via the normal catalogue service so oneTimeEarning ADD/
     // UPDATE/REMOVE can be exercised end-to-end on staging. Idempotent.
+    // Maps to the same salary-expense account used by the tenant's Payroll
+    // GL profile so the GL-readiness guard is satisfied at post time.
+    const glProfile = await prisma.payrollGlAccountingProfile.findFirst({
+      where: { clubId: club.id },
+      select: { salaryExpenseAccountId: true },
+    });
     const testBonusUpsert = await upsertPayrollComponent(marcP, club.id, {
       code: "FPP9C_TEST_BONUS",
       displayName: "FPP-9C Acceptance Bonus (synthetic)",
@@ -140,6 +146,7 @@ export async function POST(req: NextRequest) {
       displaySection: "EARNINGS",
       displayOrder: 700,
       active: true,
+      expenseAccountId: glProfile?.salaryExpenseAccountId ?? null,
     });
     (evidence.correction as Record<string, unknown>).testBonusUpsert = testBonusUpsert;
 
