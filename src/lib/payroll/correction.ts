@@ -214,6 +214,14 @@ export async function initiateReverseAndCorrect(
           clubId: s.clubId,
           sourceComponentId: s.sourceComponentId,
           sourceAssignmentId: s.sourceAssignmentId,
+          // FPP-9C.1 (2026-09-22, §2/§3) — preserve sourceEnrolmentId so
+          // the correction Calculate can pair employer-match RRSP_ER (and
+          // any other benefit-enrolment PERCENT component) to its sibling
+          // employee snapshot. Without this the sibling lookup in
+          // earnings-calculator Pass 3 fails and the match resolves to $0,
+          // silently dropping the employer contribution from the correction.
+          sourceEnrolmentId: s.sourceEnrolmentId,
+          enteredByUserId: s.enteredByUserId,
           componentCode: s.componentCode,
           displayName: s.displayName,
           category: s.category,

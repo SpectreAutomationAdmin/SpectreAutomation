@@ -31,6 +31,13 @@ export default async function PayrollReviewPage({ params }: Props) {
 
   const review = await getBatchReview(principal, clubId, params.batchId);
   const club   = await prisma.club.findFirst({ where: { id: clubId }, select: { name: true } });
+  // FPP-9C.1 — surface the dedicated comparison link only for CORRECTION batches.
+  const batchTx = await prisma.payrollBatch.findFirst({
+    where: { id: params.batchId, clubId },
+    select: { transactionType: true, status: true },
+  });
+  const isCorrection = batchTx?.transactionType === "CORRECTION";
+  const isReturned = batchTx?.status === "RETURNED_FOR_CORRECTION";
 
   return (
     <div className="max-w-[1200px]" data-testid="payroll-review-page">
@@ -79,7 +86,31 @@ export default async function PayrollReviewPage({ params }: Props) {
           >
             Pay statements
           </Link>
+          {isCorrection && (
+            <Link
+              href={`/app/admin/payroll/batches/${params.batchId}/compare`}
+              className="btn btn-primary btn-sm"
+              data-testid="payroll-review-view-comparison"
+            >
+              Original vs Corrected vs Change →
+            </Link>
+          )}
         </nav>
+        {isReturned && isCorrection && (
+          <div
+            className="mt-4 p-3 border rounded"
+            style={{ borderColor: "var(--spectre-border, #E7E1D2)", background: "var(--spectre-surface-elevated, #FBF7EE)" }}
+            data-testid="banner-review-returned"
+          >
+            <div className="text-[10px] uppercase tracking-[0.06em] font-medium"
+                 style={{ color: "var(--spectre-text-muted)" }}>Correction returned for revision</div>
+            <p className="mt-0.5 text-sm" style={{ color: "var(--spectre-text-primary)" }}>
+              The Controller has returned this correction. The original payroll remains reversed;
+              no corrected replacement payroll is currently posted. Edit the correction inputs
+              and re-submit for approval.
+            </p>
+          </div>
+        )}
       </header>
 
       <PayrollReviewWorkspace clubId={clubId} review={review} currentUserId={user?.id ?? null} />

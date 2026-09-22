@@ -214,6 +214,18 @@ export default function PayrollApprovalPreviewPane({ preview, currentUserId }: P
         </span>
       </div>
 
+      {preview.isCorrection && preview.correctionCompareHref && (
+        <div className="spectre-mc-preview-section" data-testid="preview-correction-link">
+          <div className="spectre-mc-preview-section-title">Correction</div>
+          <p style={{ fontSize: 13, marginTop: 4 }}>
+            This batch corrects a previously posted payroll.{" "}
+            <Link href={preview.correctionCompareHref} data-testid="preview-open-comparison" style={{ textDecoration: "underline" }}>
+              Review the Original vs Corrected vs Change comparison →
+            </Link>
+          </p>
+        </div>
+      )}
+
       {/* Metadata cards ---------------------------------------------- */}
       <div className="spectre-mc-preview-meta">
         <div className="cell">

@@ -102,6 +102,12 @@ export interface PayrollApprovalPreview {
     differenceCents: number;
   };
   fullReviewHref: string;
+  // FPP-9C.1 (2026-09-22, §15) — when the batch is a CORRECTION the
+  // Controller's approval preview also carries a direct link to the
+  // canonical Original vs Corrected vs Change surface so the Controller
+  // never approves without seeing what changed.
+  correctionCompareHref: string | null;
+  isCorrection: boolean;
   clubDisplayName: string;
 }
 
@@ -306,6 +312,10 @@ export async function loadPayrollApprovalPreview(
     exceptions: { blockingCount: blockerCount, warningCount, infoCount },
     reconciliation: { reconciles, differenceCents },
     fullReviewHref: `/app/admin/payroll/batches/${batch.id}`,
+    correctionCompareHref: batch.transactionType === "CORRECTION"
+      ? `/app/admin/payroll/batches/${batch.id}/compare`
+      : null,
+    isCorrection: batch.transactionType === "CORRECTION",
     clubDisplayName: batch.club?.name ?? "",
   };
 }

@@ -111,6 +111,75 @@ async function seedPostedBatch(suffix: string) {
 describe("FPP-9C · multi-input correction patches", () => {
   beforeEach(async () => { await resetDb(); await seedRbac(); });
 
+  it("FPP-9C.1 §2/§3 — initiateReverseAndCorrect preserves sourceEnrolmentId on copied componentSnapshots", async () => {
+    // Reproduces the RRSP_ER $229.17 -> $0.00 defect fix. Without sourceEnrolmentId,
+    // the earnings calculator's Pass-3 employer-match sibling lookup fails and the
+    // employer benefit contribution silently drops to $0 on the correction.
+    const s = await seedPostedBatch("srsp");
+    // Seed matched benefit-enrolment snapshots on the ORIGINAL: RRSP_EE + RRSP_ER
+    // sharing sourceEnrolmentId. matchBps on the ER side is what makes it a match.
+    const c = db();
+    const eeComp = await c.payrollComponent.create({ data: {
+      clubId: s.club.id, code: "RRSP_EE_TEST", displayName: "RRSP — Employee (test)",
+      category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE", cashEffect: "SUBTRACT",
+      displaySection: "DEDUCTIONS", displayOrder: 300,
+      calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS", statutoryTreatmentSource: "CUSTOM",
+      taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+      active: true } });
+    const erComp = await c.payrollComponent.create({ data: {
+      clubId: s.club.id, code: "RRSP_ER_TEST", displayName: "RRSP — Employer (test)",
+      category: "EMPLOYER_CONTRIBUTION", side: "EMPLOYER", cashEffect: "NO_EFFECT",
+      displaySection: "EMPLOYER", displayOrder: 400,
+      calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS", statutoryTreatmentSource: "CUSTOM",
+      taxableEffect: "NONE", cppPensionableEffect: "NONE", eiInsurableEffect: "NONE",
+      active: true } });
+    const plan = await c.payrollBenefitPlan.create({ data: {
+      clubId: s.club.id, kind: "RRSP", code: "RRSP-TEST", name: "RRSP Test Plan",
+      active: true, effectiveFrom: utc(2020,1,1),
+      employeeComponentId: eeComp.id, employerComponentId: erComp.id,
+      defaultElectionKind: "PERCENT_OF_ELIGIBLE_EARNINGS", eligibleEarningsBasis: "REGULAR_EARNINGS_ONLY",
+      employerMatchBps: 10000, employerMatchCapBps: 500 } });
+    const enrol = await c.employeeBenefitPlanEnrolment.create({ data: {
+      clubId: s.club.id, employeeId: s.emp.id, planId: plan.id,
+      electionKind: "PERCENT_OF_ELIGIBLE_EARNINGS",
+      effectiveFrom: utc(2020,1,1), percentBps: 500 } });
+    // Stamp EE + ER snapshots on the ORIGINAL, both tied to enrol.id.
+    await c.payrollBatchComponentSnapshot.createMany({ data: [
+      { batchId: s.batch.id, batchEmployeeId: s.be.id, employeeId: s.emp.id, clubId: s.club.id,
+        sourceComponentId: eeComp.id, sourceAssignmentId: null, sourceEnrolmentId: enrol.id,
+        componentCode: "RRSP_EE_TEST", displayName: eeComp.displayName,
+        category: "EMPLOYEE_DEDUCTION", side: "EMPLOYEE", displaySection: "DEDUCTIONS", displayOrder: 300,
+        cashEffect: "SUBTRACT", calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+        sourcePercentBps: 500, eligibleEarningsBase: "REGULAR_EARNINGS_ONLY",
+        resolvedAmount: new Prisma.Decimal("229.17"), provenance: "BENEFIT_ENROLMENT",
+        sourceEffectiveFrom: utc(2020,1,1) },
+      { batchId: s.batch.id, batchEmployeeId: s.be.id, employeeId: s.emp.id, clubId: s.club.id,
+        sourceComponentId: erComp.id, sourceAssignmentId: null, sourceEnrolmentId: enrol.id,
+        componentCode: "RRSP_ER_TEST", displayName: erComp.displayName,
+        category: "EMPLOYER_CONTRIBUTION", side: "EMPLOYER", displaySection: "EMPLOYER", displayOrder: 400,
+        cashEffect: "NO_EFFECT", calculationMethod: "PERCENT_OF_ELIGIBLE_EARNINGS",
+        matchBps: 10000, matchCapBps: 500, eligibleEarningsBase: "REGULAR_EARNINGS_ONLY",
+        resolvedAmount: new Prisma.Decimal("229.17"), provenance: "BENEFIT_ENROLMENT",
+        sourceEffectiveFrom: utc(2020,1,1) },
+    ] });
+    const r = await initiateReverseAndCorrect(s.marcP, s.club.id, s.batch.id, "rrsp seed preservation");
+    const corrSnaps = await c.payrollBatchComponentSnapshot.findMany({
+      where: { batchId: r.correctionBatchId },
+      select: { componentCode: true, sourceEnrolmentId: true, resolvedAmount: true, matchBps: true, sourcePercentBps: true },
+      orderBy: { componentCode: "asc" },
+    });
+    const ee = corrSnaps.find(x => x.componentCode === "RRSP_EE_TEST");
+    const er = corrSnaps.find(x => x.componentCode === "RRSP_ER_TEST");
+    // Both snapshots must be copied AND both must carry sourceEnrolmentId so the
+    // correction Calculate can pair the employer-match sibling to the employee side.
+    expect(ee?.sourceEnrolmentId).toBe(enrol.id);
+    expect(er?.sourceEnrolmentId).toBe(enrol.id);
+    expect(ee?.sourcePercentBps).toBe(500);
+    expect(er?.matchBps).toBe(10000);
+    // The seed also carries the frozen $229.17 employer contribution.
+    expect(er?.resolvedAmount?.toFixed(2)).toBe("229.17");
+  });
+
   it("Correction is seeded from ORIGINAL's frozen sourceFactsJson (not the employee's current profile)", async () => {
     const s = await seedPostedBatch("s1");
     // Employee profile drift: change current EmployeeCompensation to something different.
