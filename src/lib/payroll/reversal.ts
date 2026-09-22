@@ -276,6 +276,26 @@ export async function initiatePayrollReversal(
       });
     }
 
+    // FPP-9A.1 (2026-09-22) — Concurrency guard. Two initiations that
+    // BOTH pass the pre-transaction `alreadyReversedActive` check will
+    // BOTH reach create; without this post-create verification each
+    // transaction would independently succeed, yielding two active
+    // reversals for the same original. Re-count active reversals INSIDE
+    // this transaction and throw if the invariant is broken — the throw
+    // rolls back this transaction, leaving only the racer that committed
+    // first. Works on both SQLite and Postgres.
+    const activeReversalCount = await tx.payrollBatch.count({
+      where: {
+        reversesPayrollBatchId: original.id,
+        status: { notIn: ["VOIDED", "RETURNED_FOR_CORRECTION"] },
+      },
+    });
+    if (activeReversalCount > 1) {
+      throw new ConflictError(
+        `Concurrent reversal initiation detected for ${original.id} — another reversal already exists. Retry.`,
+      );
+    }
+
     // Materialise the Controller final-approval Work Intake item.
     const cfg = await tx.payrollClubConfig.findUnique({ where: { clubId } });
     const controllerUserId = cfg?.controllerUserId;
