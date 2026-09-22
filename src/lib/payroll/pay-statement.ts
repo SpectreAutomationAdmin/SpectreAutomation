@@ -29,7 +29,12 @@ import { requirePermission, type Principal } from "../rbac";
 import { ForbiddenError, NotFoundError } from "../errors";
 import { assertTenantOwned } from "../services/tenant";
 import { getEmployeePayrollYtd, type EmployeePayrollYtd } from "./ytd";
-import { getEmployeeComponentYtd, includeCurrentInYtd, type ComponentYtdRow } from "./component-ytd";
+import {
+  getEmployeeComponentYtd,
+  getEmployeeComponentYtdThroughBatch,
+  includeCurrentInYtd,
+  type ComponentYtdRow,
+} from "./component-ytd";
 import { parseYtdSnapshot } from "./ytd-snapshot-schema";
 import { Prisma } from "@prisma/client";
 
@@ -186,63 +191,95 @@ export async function buildPayStatement(
 
   const payDate = row.batch.payPeriod.payDate;
 
-  // Coarse + component YTD BEFORE this batch (history through the
-  // prior POSTED batch).
+  // Coarse YTD BEFORE this batch (still date-based — aggregate YTD is
+  // ordering-insensitive at same-date granularity per FPP-3B semantics).
   const coarse: EmployeePayrollYtd = await getEmployeePayrollYtd(clubId, row.employeeId, payDate);
-  const componentPrior = await getEmployeeComponentYtd(clubId, row.employeeId, payDate);
-  const resolverIncl = includeCurrentInYtd(componentPrior, row.componentSnapshots.map((c) => ({
-    sourceComponentId: c.sourceComponentId,
-    componentCode:     c.componentCode,
-    displayName:       c.displayName,
-    category:          c.category,
-    side:              c.side,
-    cashEffect:        c.cashEffect,
-    resolvedAmount:    c.resolvedAmount,
-  })));
 
-  // FPP-8B.1 (2026-09-22, §14 + §22 + §23 + §24) — v2 read policy: if the
-  // batch's frozen ytdSnapshotJson is schemaVersion=2, prefer its
-  // componentYtd for YTD display. This means a historical statement stays
-  // frozen even if opening balance edits later occur (defence-in-depth on
-  // top of the §5-§9 immutability guard). For v1 snapshots, fall back to
-  // the resolver-based inclusive map. Consistency-check every v2 entry:
-  // ytdBefore + currentAmount must equal ytdIncludingCurrent exactly.
-  const componentIncl: Map<string, ComponentYtdRow> = (() => {
-    const snap = parseYtdSnapshot(row.ytdSnapshotJson);
-    if (!snap || snap.schemaVersion !== 2) return resolverIncl;
-    const m = new Map<string, ComponentYtdRow>();
-    for (const e of snap.componentYtd) {
-      const before = new Prisma.Decimal(e.ytdBefore);
-      const current = new Prisma.Decimal(e.currentAmount);
-      const expected = before.plus(current);
-      const stated = new Prisma.Decimal(e.ytdIncludingCurrent);
-      if (!expected.equals(stated)) {
-        throw new Error(
-          `pay-statement integrity: frozen v2 componentYtd for ${e.componentCode} on batch ${batchEmployeeId} ` +
-          `has ytdBefore ${e.ytdBefore} + currentAmount ${e.currentAmount} = ${expected.toFixed(4)}, ` +
-          `but ytdIncludingCurrent=${e.ytdIncludingCurrent}. Refusing to render an inconsistent statement.`,
-        );
+  // FPP-8B.2 (2026-09-22, §2-§4) — read hierarchy for component YTD:
+  //   1. schemaVersion=2  → prefer the batch's own frozen componentYtd
+  //      (defense in depth on top of Opening YTD immutability).
+  //   2. POSTED v1        → getEmployeeComponentYtdThroughBatch — resolves
+  //      component YTD through this exact historical transaction with the
+  //      canonical (payDate, transactionType, postedAt, id) ordering. A
+  //      same-date STANDARD/REVERSAL/CORRECTION chain returns the correct
+  //      state for each transaction.
+  //   3. non-POSTED v1    → date-based getEmployeeComponentYtd +
+  //      includeCurrentInYtd (this batch isn't yet in POSTED history, so
+  //      the through-batch resolver wouldn't include it).
+  //
+  // Any resolver-side row not captured by the frozen v2 snapshot (e.g. a
+  // YTD-only component with opening balance but no current activity) is
+  // merged in from the resolver path so nothing silently disappears.
+  const isPosted = row.batch.status === "POSTED";
+  const snap = parseYtdSnapshot(row.ytdSnapshotJson);
+
+  const componentIncl: Map<string, ComponentYtdRow> = await (async (): Promise<Map<string, ComponentYtdRow>> => {
+    // Path 1 — v2 frozen read.
+    if (snap && snap.schemaVersion === 2) {
+      const m = new Map<string, ComponentYtdRow>();
+      for (const e of snap.componentYtd) {
+        const before = new Prisma.Decimal(e.ytdBefore);
+        const current = new Prisma.Decimal(e.currentAmount);
+        const expected = before.plus(current);
+        const stated = new Prisma.Decimal(e.ytdIncludingCurrent);
+        if (!expected.equals(stated)) {
+          throw new Error(
+            `pay-statement integrity: frozen v2 componentYtd for ${e.componentCode} on batch ${batchEmployeeId} ` +
+            `has ytdBefore ${e.ytdBefore} + currentAmount ${e.currentAmount} = ${expected.toFixed(4)}, ` +
+            `but ytdIncludingCurrent=${e.ytdIncludingCurrent}. Refusing to render an inconsistent statement.`,
+          );
+        }
+        m.set(e.componentCode, {
+          sourceComponentId: null,
+          componentCode:     e.componentCode,
+          displayName:       e.displayName,
+          category:          e.category,
+          side:              e.side,
+          cashEffect:        e.cashEffect,
+          ytdAmount:         stated.toFixed(2),
+          provenance: {
+            openingAmount: "0.00",
+            postedAmount:  "0.00",
+            openingSourceId: null,
+            postedBatchIds: [],
+          },
+        });
       }
-      m.set(e.componentCode, {
-        sourceComponentId: null,
-        componentCode:     e.componentCode,
-        displayName:       e.displayName,
-        category:          e.category,
-        side:              e.side,
-        cashEffect:        e.cashEffect,
-        ytdAmount:         stated.toFixed(2),
-        provenance: {
-          openingAmount: "0.00",
-          postedAmount:  "0.00",
-          openingSourceId: null,
-          postedBatchIds: [],
-        },
-      });
+      // Merge in a resolver-side YTD-only row (opening balance without a
+      // current-period snapshot on this batch) if the frozen snapshot
+      // didn't already capture that componentCode. Resolver uses the
+      // date-based prior + includeCurrentInYtd so it stays consistent
+      // with the v2 caller-facing surface for anything the frozen snapshot
+      // legitimately omitted.
+      const priorForV2Merge = await getEmployeeComponentYtd(clubId, row.employeeId, payDate);
+      const resolverFallback = includeCurrentInYtd(priorForV2Merge, row.componentSnapshots.map((c) => ({
+        sourceComponentId: c.sourceComponentId,
+        componentCode:     c.componentCode,
+        displayName:       c.displayName,
+        category:          c.category,
+        side:              c.side,
+        cashEffect:        c.cashEffect,
+        resolvedAmount:    c.resolvedAmount,
+      })));
+      for (const [k, v] of resolverFallback) if (!m.has(k)) m.set(k, v);
+      return m;
     }
-    // Merge in any resolver-side row (e.g. YTD-only components) not
-    // captured by the frozen snapshot, so nothing silently disappears.
-    for (const [k, v] of resolverIncl) if (!m.has(k)) m.set(k, v);
-    return m;
+    // Path 2 — POSTED v1: transaction-scoped historical read.
+    if (isPosted) {
+      const through = await getEmployeeComponentYtdThroughBatch(clubId, row.employeeId, row.batchId);
+      return through.byKey;
+    }
+    // Path 3 — non-POSTED v1: date-based prior + this batch's own snapshots.
+    const prior = await getEmployeeComponentYtd(clubId, row.employeeId, payDate);
+    return includeCurrentInYtd(prior, row.componentSnapshots.map((c) => ({
+      sourceComponentId: c.sourceComponentId,
+      componentCode:     c.componentCode,
+      displayName:       c.displayName,
+      category:          c.category,
+      side:              c.side,
+      cashEffect:        c.cashEffect,
+      resolvedAmount:    c.resolvedAmount,
+    })));
   })();
 
   // Bucketize component snapshots into UI sections.

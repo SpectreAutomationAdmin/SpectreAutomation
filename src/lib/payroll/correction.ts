@@ -197,7 +197,33 @@ export async function initiateReverseAndCorrect(
           status: e.status,
           salaried: e.salaried,
           sourceFactsJson: e.sourceFactsJson,
-          ytdSnapshotJson: e.ytdSnapshotJson,
+          // FPP-8B.2 (2026-09-22, §8-§10) — do NOT copy the ORIGINAL's
+          // v2 componentYtd into the correction seed. In PREPARED state
+          // the correction has no calculated YTD context of its own; a
+          // verbatim copy would masquerade as finalized calculated
+          // evidence for THIS transaction while actually describing the
+          // original. Calculate rewrites ytdSnapshotJson with a fresh
+          // v2 shape before the correction ever reaches CALCULATED.
+          //
+          // Strip the seed to a downgraded v1 shape (preserving only
+          // "safe" prior aggregate context that the review-DTO needs
+          // like openingBalancePriorPayrollKind). Legacy v1 originals
+          // copy verbatim (nothing to strip). Null/invalid also passes
+          // through unchanged.
+          ytdSnapshotJson: (() => {
+            if (!e.ytdSnapshotJson) return null;
+            let parsed: unknown;
+            try { parsed = JSON.parse(e.ytdSnapshotJson); }
+            catch { return e.ytdSnapshotJson; }
+            const j = parsed as Record<string, unknown> | null;
+            if (!j || j.schemaVersion !== 2) return e.ytdSnapshotJson;
+            const { componentYtd, ...rest } = j as { componentYtd?: unknown; sources?: Record<string, unknown> } & Record<string, unknown>;
+            void componentYtd;
+            const sources = (rest.sources ?? {}) as Record<string, unknown>;
+            const { componentSourceRefs, ...restSources } = sources;
+            void componentSourceRefs;
+            return JSON.stringify({ ...rest, schemaVersion: 1, sources: restSources });
+          })(),
           // Reset calculated amounts — Calculate will populate them.
         },
       });

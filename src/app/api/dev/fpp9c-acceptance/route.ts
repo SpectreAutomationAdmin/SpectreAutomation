@@ -70,26 +70,16 @@ export async function POST(req: NextRequest) {
     (evidence.guards as Record<string, unknown>).stage = stage;
 
     // Phase 1 — synthetic erroneous baseline
-    // FPP-8B.1 (§15-§20) — a stale non-POSTED baseline on the target period
-    // (e.g. a PREPARED batch left over from a prior failed run) blocks a
-    // fresh Prepare. When `?cleanup=1` is passed, discard the stale batch
-    // and its snapshots so a fresh v2 acceptance can proceed.
-    const cleanupFlag = url.searchParams.get("cleanup") === "1";
-    let existingBaseline = await prisma.payrollBatch.findFirst({
+    // FPP-8B.2 (§27) — the FPP-8B.1 ?cleanup=1 flag has been retired.
+    // It was single-purpose (discarding a stale PREPARED baseline for a
+    // fresh v2 attempt) and served its purpose. If a stale non-POSTED
+    // baseline blocks a fresh Prepare, the correct action is to
+    // investigate why and either finish or void the stale batch through
+    // canonical services, not to add an HTTP-exposed delete surface.
+    const existingBaseline = await prisma.payrollBatch.findFirst({
       where: { clubId: COULEE_CLUB_ID, payPeriodId: period.id, transactionType: "STANDARD" },
       select: { id: true, status: true },
     });
-    if (cleanupFlag && existingBaseline && existingBaseline.status !== "POSTED") {
-      const staleId = existingBaseline.id;
-      await prisma.$transaction(async (tx) => {
-        await tx.payrollBatchComponentSnapshot.deleteMany({ where: { batchId: staleId } });
-        await tx.payrollBatchException.deleteMany({ where: { batchId: staleId } });
-        await tx.payrollBatchEmployee.deleteMany({ where: { batchId: staleId } });
-        await tx.payrollBatch.delete({ where: { id: staleId } });
-      });
-      (evidence.guards as Record<string, unknown>).cleanupDiscardedBatchId = staleId;
-      existingBaseline = null;
-    }
     let baselineBatchId: string;
     if (existingBaseline && existingBaseline.status === "POSTED") {
       baselineBatchId = existingBaseline.id;
