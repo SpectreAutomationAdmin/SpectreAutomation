@@ -235,14 +235,51 @@ export async function initiateReverseAndCorrect(
   };
 }
 
-export interface CorrectionInputPatch {
-  employeeId: string;
-  // FPP-9B MVP supports patching the annualSalary on the batchEmployee's
-  // sourceFactsJson.compensations[0] entry. This is the input shape used
-  // in the acceptance scenario ("employee should have received a higher
-  // salary"). Additional patch shapes can be added additively later
-  // without breaking the existing contract.
-  annualSalary?: string;
+// FPP-9B.1 (2026-09-22) — extensible correction-input patch shape.
+//
+// Discriminated union so future patch types can be added additively
+// without redesigning the correction chain. Each patch names the
+// employee and one specific correction to apply to the correction
+// batch's frozen sourceFactsJson (or, in future, its scheduled earnings
+// / component snapshots / benefit enrolments — those slots are
+// reserved but not implemented in this slice).
+//
+// Currently supported: annualSalary. Additional variants ("allowance",
+// "one-time-earning", "deduction", "benefit") should be added here as
+// their own discriminated members without breaking existing callers.
+export type CorrectionInputPatch =
+  | { employeeId: string; kind: "annualSalary"; annualSalary: string }
+  // Back-compat shorthand for the FPP-9B initial API: `{ employeeId,
+  // annualSalary }` without `kind`. Normalised internally into the
+  // `kind: "annualSalary"` variant. New callers should include `kind`
+  // explicitly.
+  | { employeeId: string; annualSalary: string; kind?: undefined }
+  // Reserved-not-yet-implemented slots — declaring them here makes the
+  // extensibility explicit AND makes exhaustive-switch checks fail at
+  // compile time when a new variant is added below.
+  | { employeeId: string; kind: "allowance"; allowanceType: string; amount: string }
+  | { employeeId: string; kind: "oneTimeEarning"; componentCode: string; amount: string }
+  | { employeeId: string; kind: "deduction"; componentCode: string; amount: string };
+
+function normalisePatch(p: CorrectionInputPatch): { employeeId: string; kind: "annualSalary"; annualSalary: string } {
+  // FPP-9B.1 MVP supports ONLY the annualSalary variant. New variants
+  // above are reserved surface for future slices — normalisePatch will
+  // throw a clear error if invoked with them so we don't silently
+  // accept an unimplemented patch shape.
+  if ((p as { kind?: string }).kind == null) {
+    // Back-compat: legacy `{ employeeId, annualSalary }` shape.
+    if ("annualSalary" in p && typeof p.annualSalary === "string") {
+      return { employeeId: p.employeeId, kind: "annualSalary", annualSalary: p.annualSalary };
+    }
+    throw new ValidationError([{ path: "kind", message: "Patch shape missing 'kind' discriminator." }]);
+  }
+  if (p.kind === "annualSalary") {
+    return { employeeId: p.employeeId, kind: "annualSalary", annualSalary: p.annualSalary };
+  }
+  throw new ValidationError([{
+    path: "kind",
+    message: `Correction patch kind "${p.kind}" is reserved but not yet implemented in FPP-9B.1. Add support in patchCorrectionEmployeeInputs before using.`,
+  }]);
 }
 
 /**
@@ -276,7 +313,8 @@ export async function patchCorrectionEmployeeInputs(
 
   let patchedCount = 0;
   await prisma.$transaction(async (tx) => {
-    for (const patch of patches) {
+    for (const rawPatch of patches) {
+      const patch = normalisePatch(rawPatch);
       const be = await tx.payrollBatchEmployee.findFirst({
         where: { batchId: correctionBatchId, employeeId: patch.employeeId },
         select: { id: true, sourceFactsJson: true },
@@ -285,29 +323,27 @@ export async function patchCorrectionEmployeeInputs(
         throw new ValidationError([{ path: "employeeId", message: `Employee ${patch.employeeId} is not on this correction batch.` }]);
       }
       const facts = typeof be.sourceFactsJson === "string" ? JSON.parse(be.sourceFactsJson) : (be.sourceFactsJson ?? {});
-      if (patch.annualSalary != null) {
+      if (patch.kind === "annualSalary") {
         if (!Array.isArray(facts.compensations) || facts.compensations.length === 0) {
           throw new ValidationError([{ path: "compensations", message: `Employee ${patch.employeeId} has no compensation snapshot to patch.` }]);
         }
-        // Verify the amount parses as a valid decimal.
-        new Prisma.Decimal(patch.annualSalary);
+        new Prisma.Decimal(patch.annualSalary); // validate parseable decimal
         facts.compensations[0] = { ...facts.compensations[0], annualSalary: patch.annualSalary };
       }
       await tx.payrollBatchEmployee.update({
         where: { id: be.id },
         data: {
           sourceFactsJson: JSON.stringify(facts),
-          // Any patch invalidates the previous Calculate — flip the
-          // correction back to PREPARED so recalculation is required.
         },
       });
       patchedCount++;
     }
-    // If the correction was CALCULATED, revert it to PREPARED — the PA
-    // must recalculate before submitting.
+    // Any patch invalidates the previous Calculate — flip the correction
+    // back to PREPARED so recalculation is required. Also clear the
+    // stale calculationFingerprint (Calculate will write a new one).
     await tx.payrollBatch.updateMany({
       where: { id: correctionBatchId, status: "CALCULATED" },
-      data: { status: "PREPARED", calculatedAt: null },
+      data: { status: "PREPARED", calculatedAt: null, calculationFingerprint: null },
     });
   });
 

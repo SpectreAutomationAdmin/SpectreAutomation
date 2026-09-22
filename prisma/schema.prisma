@@ -12323,6 +12323,8 @@ model PayrollBatch {
   // Once set, further attempts to post the batch are refused (§32 idempotency).
   glJournalEntryId      String?    @unique
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
+  // FPP-9B.1 (2026-09-22) — calculation fingerprint (mirrors postgres schema).
+  calculationFingerprint String?
   // FPP-9A (2026-09-22) — Post-posted payroll reversal foundation.
   //
   // `transactionType` distinguishes a normal payroll from a reversal

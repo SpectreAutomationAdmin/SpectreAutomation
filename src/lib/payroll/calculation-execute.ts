@@ -597,6 +597,25 @@ export async function calculatePayrollBatch(
     throw new CalculateConcurrencyConflictError(batchId, expectedStatus, expectedVersion);
   }
 
+  // FPP-9B.1 (2026-09-22) — compute + persist the calculation fingerprint
+  // from the just-persisted state. Distinct from packageChecksum
+  // (statutory package identity). If a subsequent recalculate produces
+  // materially different results, this value changes. Idempotent
+  // recalculation with identical inputs produces the same fingerprint.
+  try {
+    const { loadAndComputeFingerprintForBatch } = await import("./calculation-fingerprint");
+    const { fingerprint } = await loadAndComputeFingerprintForBatch(batchId);
+    await prisma.payrollBatch.update({
+      where: { id: batchId },
+      data: { calculationFingerprint: fingerprint },
+    });
+  } catch (err) {
+    // Fingerprint failure never blocks the calculation lifecycle. The
+    // fingerprint can be lazily backfilled later.
+    // eslint-disable-next-line no-console
+    console.warn("[calculate] failed to persist calculationFingerprint", err);
+  }
+
   // Payroll Admin Slice 3E (2026-09-12) — the Controller
   // PAYROLL_FINAL_APPROVAL handoff has moved to `submitPayrollBatch`.
   // Calculate NO LONGER creates the Controller Work Intake card,

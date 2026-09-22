@@ -12201,6 +12201,27 @@ model PayrollBatch {
   // Once set, further attempts to post the batch are refused (§32 idempotency).
   glJournalEntryId      String?    @unique
   glJournalEntry        JournalEntry? @relation("PayrollBatchGL", fields: [glJournalEntryId], references: [id])
+  // FPP-9B.1 (2026-09-22) — calculation fingerprint. Deterministic SHA-256
+  // over the canonical frozen payroll calculation state (see
+  // `src/lib/payroll/calculation-fingerprint.ts` for exact coverage).
+  //
+  // DISTINCT FROM `packageChecksum`:
+  //   packageChecksum        = identity of the STATUTORY package that
+  //                             produced the calculation (CRA T4127 tables
+  //                             + algorithm version). Two payrolls that
+  //                             legitimately use the same package share
+  //                             the same value.
+  //   calculationFingerprint = identity of the exact frozen payroll
+  //                             calculation. Two payrolls with different
+  //                             inputs or outputs produce different
+  //                             fingerprints even when the package is
+  //                             identical.
+  //
+  // Nullable for backward compatibility with pre-FPP-9B.1 rows; every
+  // new POSTED batch (STANDARD / REVERSAL / CORRECTION) writes this at
+  // Calculate/POST time. Historical rows may be lazily backfilled from
+  // persisted immutable evidence via `backfillCalculationFingerprint`.
+  calculationFingerprint String?
   // FPP-9A (2026-09-22) — Post-posted payroll reversal foundation.
   // See prisma/schema.prisma for the full comment block.
   transactionType       String     @default("STANDARD")

@@ -357,6 +357,21 @@ export async function initiatePayrollReversal(
     };
   });
 
+  // FPP-9B.1 (2026-09-22) — compute + persist calculation fingerprint
+  // for the reversal batch. Distinct from packageChecksum. Reversal has
+  // its own fingerprint reflecting the frozen negated state.
+  try {
+    const { loadAndComputeFingerprintForBatch } = await import("./calculation-fingerprint");
+    const { fingerprint } = await loadAndComputeFingerprintForBatch(result.reversalBatchId);
+    await prisma.payrollBatch.update({
+      where: { id: result.reversalBatchId },
+      data: { calculationFingerprint: fingerprint },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[reversal.initiate] failed to persist calculationFingerprint", err);
+  }
+
   await audit(principal, {
     clubId,
     action: "payroll.reversal.initiate",
