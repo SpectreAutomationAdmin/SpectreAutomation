@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getActiveBranding } from "@/lib/branding";
+import { PlatformHomeV2 } from "@/components/marketing/PlatformHomeV2";
 
 // Root page resolves branding from the request Host header via
 // getActiveBranding() and reads from Prisma. It must run per-request;
@@ -19,7 +20,11 @@ export default async function Root() {
   const branding = await getActiveBranding();
   if (branding.mode === "unknown") redirect("/unknown-domain");
   if (branding.mode === "club") return <ClubHome />;
-  return <PlatformHome />;
+  // WEB-1 (2026-09-22) — editorial marketing homepage replaces the earlier
+  // minimal PlatformHome. Kept in the same file only for the host-based
+  // routing decision above; the actual composition lives in
+  // src/components/marketing/PlatformHomeV2.tsx.
+  return <PlatformHomeV2 />;
 }
 
 // ---------------------------------------------------------------------------

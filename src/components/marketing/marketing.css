@@ -1,0 +1,419 @@
+/* Spectre Marketing — WEB-1 design foundation (2026-09-22).
+ *
+ * Scoped under .spectre-marketing so the authenticated app (spectre-* shell)
+ * and club-public surfaces are unaffected.
+ *
+ * Two deliberately contrasting layers per §6:
+ *   BRAND     — warm ivory / parchment, editorial serif, subtle grain, deep
+ *               negative space, restrained brass. Frames the message.
+ *   PRODUCT   — razor-sharp, no grain, precise typography, the actual
+ *               Spectre application language surrounded by the brand frame.
+ */
+
+/* Global overflow safety — no marketing surface may scroll horizontally. */
+.spectre-marketing, .spectre-marketing * { min-width: 0; }
+.spectre-marketing { overflow-x: clip; }
+
+.spectre-marketing {
+  /* ---- Colour tokens ---- */
+  --mkt-ivory:        #F4EFE3;
+  --mkt-parchment:    #E9E1CE;
+  --mkt-ivory-warm:   #F9F5EA;
+  --mkt-canvas:       #F4EFE3;   /* default page canvas */
+  --mkt-ink:          #1A1E1A;
+  --mkt-ink-soft:     #2B2F2B;
+  --mkt-slate:        #262A28;
+  --mkt-slate-deep:   #191C1A;
+  --mkt-text:         #1A1E1A;
+  --mkt-text-muted:   #64615A;
+  --mkt-text-subtle:  #8C8A83;
+  --mkt-text-inverse: #EFE9DC;
+  --mkt-brass:        #A08658;
+  --mkt-brass-soft:   #C7B489;
+  --mkt-rule:         rgba(26, 30, 26, 0.14);
+  --mkt-rule-strong:  rgba(26, 30, 26, 0.32);
+  --mkt-rule-dark:    rgba(239, 233, 220, 0.18);
+  --mkt-rule-dark-strong: rgba(239, 233, 220, 0.42);
+
+  /* ---- Type scale ---- */
+  --mkt-serif: var(--font-source-serif-4), "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --mkt-sans:  var(--font-inter), Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
+
+  /* ---- Layout ---- */
+  --mkt-page-max: 84rem;
+  --mkt-editorial-max: 72rem;
+  --mkt-prose-max: 40rem;
+  --mkt-gutter-mobile: 1.25rem;
+  --mkt-gutter-desktop: 3.5rem;
+  --mkt-section-y: clamp(5rem, 8.5vw, 9rem);
+  --mkt-section-y-tight: clamp(3rem, 5vw, 5rem);
+
+  /* ---- Motion ---- */
+  --mkt-ease-out: cubic-bezier(0.2, 0.7, 0.15, 1);
+  --mkt-dur-slow: 720ms;
+  --mkt-dur-med:  420ms;
+  --mkt-dur-fast: 240ms;
+
+  color: var(--mkt-text);
+  background: var(--mkt-canvas);
+  font-family: var(--mkt-sans);
+  font-feature-settings: "ss01", "cv11";
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- Section surfaces ---- */
+.spectre-marketing .mkt-surface-ivory      { background: var(--mkt-ivory);      color: var(--mkt-text); }
+.spectre-marketing .mkt-surface-warm       { background: var(--mkt-ivory-warm); color: var(--mkt-text); }
+.spectre-marketing .mkt-surface-parchment  { background: var(--mkt-parchment);  color: var(--mkt-text); }
+.spectre-marketing .mkt-surface-slate      { background: var(--mkt-slate);      color: var(--mkt-text-inverse); }
+.spectre-marketing .mkt-surface-slate-deep { background: var(--mkt-slate-deep); color: var(--mkt-text-inverse); }
+.spectre-marketing .mkt-surface-ink        { background: var(--mkt-ink);        color: var(--mkt-text-inverse); }
+.spectre-marketing .mkt-surface-slate .mkt-text-muted,
+.spectre-marketing .mkt-surface-slate-deep .mkt-text-muted,
+.spectre-marketing .mkt-surface-ink .mkt-text-muted   { color: #B5B0A2; }
+.spectre-marketing .mkt-surface-slate hr,
+.spectre-marketing .mkt-surface-slate-deep hr,
+.spectre-marketing .mkt-surface-ink hr                 { border-color: var(--mkt-rule-dark); }
+
+/* ---- Editorial typography ---- */
+.spectre-marketing .mkt-display {
+  font-family: var(--mkt-serif);
+  font-weight: 400;
+  letter-spacing: -0.018em;
+  line-height: 1.05;
+  font-size: clamp(2.25rem, 6.5vw, 5.75rem);
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+.spectre-marketing .mkt-display-lg {
+  font-family: var(--mkt-serif);
+  font-weight: 400;
+  letter-spacing: -0.022em;
+  line-height: 1;
+  /* Mobile lower bound sized so no long single word overflows a 390px viewport
+   * minus 2.5rem gutter (≈350px). "disappear." at 2.5rem ≈ 260px — safe. */
+  font-size: clamp(2.5rem, 8vw, 7.5rem);
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+.spectre-marketing .mkt-headline {
+  font-family: var(--mkt-serif);
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  line-height: 1.1;
+  font-size: clamp(1.75rem, 4vw, 3.25rem);
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+.spectre-marketing .mkt-subhead {
+  font-family: var(--mkt-serif);
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  line-height: 1.15;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  text-wrap: balance;
+}
+.spectre-marketing .mkt-lede {
+  font-family: var(--mkt-sans);
+  font-weight: 400;
+  font-size: clamp(1.0625rem, 1.15vw, 1.25rem);
+  line-height: 1.55;
+  color: var(--mkt-text-muted);
+  max-width: 34em;
+}
+.spectre-marketing .mkt-body {
+  font-family: var(--mkt-sans);
+  font-weight: 400;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--mkt-text-muted);
+  max-width: 34em;
+}
+.spectre-marketing .mkt-italic {
+  font-family: var(--mkt-serif);
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* Eyebrow (SPECTRE / AUTOMATION, section labels) */
+.spectre-marketing .mkt-eyebrow {
+  font-family: var(--mkt-sans);
+  font-weight: 500;
+  font-size: 0.6875rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--mkt-brass);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.spectre-marketing .mkt-surface-slate .mkt-eyebrow,
+.spectre-marketing .mkt-surface-slate-deep .mkt-eyebrow,
+.spectre-marketing .mkt-surface-ink .mkt-eyebrow { color: var(--mkt-brass-soft); }
+
+.spectre-marketing .mkt-eyebrow::before {
+  content: "";
+  width: 1.75rem;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+/* Row of side letters — matches Spectre wordmark treatment */
+.spectre-marketing .mkt-wordmark {
+  font-family: var(--mkt-sans);
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--mkt-text);
+}
+.spectre-marketing .mkt-surface-slate .mkt-wordmark,
+.spectre-marketing .mkt-surface-slate-deep .mkt-wordmark,
+.spectre-marketing .mkt-surface-ink .mkt-wordmark {
+  color: var(--mkt-text-inverse);
+}
+.spectre-marketing .mkt-wordmark-divider {
+  display: inline-block;
+  margin: 0 0.6rem;
+  opacity: 0.35;
+}
+
+/* ---- Layout containers ---- */
+.spectre-marketing .mkt-container {
+  width: 100%;
+  max-width: var(--mkt-page-max);
+  margin: 0 auto;
+  padding-inline: var(--mkt-gutter-mobile);
+}
+@media (min-width: 720px) {
+  .spectre-marketing .mkt-container { padding-inline: 2rem; }
+}
+@media (min-width: 1024px) {
+  .spectre-marketing .mkt-container { padding-inline: var(--mkt-gutter-desktop); }
+}
+.spectre-marketing .mkt-editorial {
+  width: 100%;
+  max-width: var(--mkt-editorial-max);
+  margin: 0 auto;
+  padding-inline: var(--mkt-gutter-mobile);
+}
+@media (min-width: 720px)  { .spectre-marketing .mkt-editorial { padding-inline: 2rem; } }
+@media (min-width: 1024px) { .spectre-marketing .mkt-editorial { padding-inline: var(--mkt-gutter-desktop); } }
+
+/* ---- Grain / paper texture ---- */
+/*
+ * Warm-paper grain (§25). Rendered as an SVG `feTurbulence` data URI so it
+ * costs zero network requests + adapts to any container size. Set via a
+ * pseudo-element on any .mkt-grain surface so the underlying content
+ * remains pointer-clean (non-interactive). Two flavours:
+ *   .mkt-grain-warm  — light-canvas paper texture
+ *   .mkt-grain-dark  — dark-surface film texture
+ * Intensity is controlled via --mkt-grain-alpha (default subtle).
+ */
+.spectre-marketing .mkt-grain,
+.spectre-marketing .mkt-grain-warm,
+.spectre-marketing .mkt-grain-dark {
+  position: relative;
+  isolation: isolate;
+}
+.spectre-marketing .mkt-grain-warm::before,
+.spectre-marketing .mkt-grain-dark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.12  0 0 0 0 0.10  0 0 0 0 0.08  0 0 0 0.55 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  background-size: 240px 240px;
+  opacity: var(--mkt-grain-alpha, 0.10);
+  mix-blend-mode: multiply;
+}
+.spectre-marketing .mkt-grain-dark::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.90  0 0 0 0 0.88  0 0 0 0 0.80  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  opacity: var(--mkt-grain-alpha, 0.06);
+  mix-blend-mode: screen;
+}
+.spectre-marketing .mkt-grain-warm > *,
+.spectre-marketing .mkt-grain-dark > * { position: relative; z-index: 1; }
+
+/* IMPORTANT (§6) — product frames must not carry grain. */
+.spectre-marketing .mkt-product-frame,
+.spectre-marketing .mkt-product-frame * {
+  filter: none !important;
+  mix-blend-mode: normal !important;
+}
+.spectre-marketing .mkt-product-frame::before { content: none !important; }
+
+/* ---- Rules ---- */
+.spectre-marketing .mkt-rule {
+  border: 0;
+  border-top: 1px solid var(--mkt-rule);
+  margin: 0;
+}
+
+/* ---- Buttons ---- */
+.spectre-marketing .mkt-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.9rem 1.5rem;
+  border-radius: 2px;
+  font-family: var(--mkt-sans);
+  font-weight: 500;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform var(--mkt-dur-fast) var(--mkt-ease-out),
+              background var(--mkt-dur-fast) var(--mkt-ease-out),
+              color var(--mkt-dur-fast) var(--mkt-ease-out);
+}
+.spectre-marketing .mkt-cta-primary {
+  background: var(--mkt-ink);
+  color: var(--mkt-text-inverse);
+  border: 1px solid var(--mkt-ink);
+}
+.spectre-marketing .mkt-cta-primary:hover { transform: translateY(-1px); background: #000; }
+.spectre-marketing .mkt-cta-secondary {
+  background: transparent;
+  color: var(--mkt-text);
+  border: 1px solid var(--mkt-rule-strong);
+}
+.spectre-marketing .mkt-cta-secondary:hover { border-color: var(--mkt-ink); }
+.spectre-marketing .mkt-surface-slate .mkt-cta-secondary,
+.spectre-marketing .mkt-surface-slate-deep .mkt-cta-secondary,
+.spectre-marketing .mkt-surface-ink .mkt-cta-secondary {
+  color: var(--mkt-text-inverse);
+  border-color: var(--mkt-rule-dark-strong);
+}
+.spectre-marketing .mkt-cta-secondary:hover {
+  border-color: currentColor;
+}
+.spectre-marketing .mkt-cta-primary:focus-visible,
+.spectre-marketing .mkt-cta-secondary:focus-visible {
+  outline: 2px solid var(--mkt-brass);
+  outline-offset: 3px;
+}
+.spectre-marketing .mkt-cta-arrow {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  transition: transform var(--mkt-dur-fast) var(--mkt-ease-out);
+}
+.spectre-marketing .mkt-cta:hover .mkt-cta-arrow { transform: translateX(3px); }
+
+/* ---- Product frame (razor-sharp bezel around product screens) ---- */
+.spectre-marketing .mkt-product-frame {
+  background: #FBFAF6;
+  border: 1px solid var(--mkt-rule-strong);
+  border-radius: 6px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 24px 60px -30px rgba(0, 0, 0, 0.35),
+    0 8px 20px -12px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+.spectre-marketing .mkt-product-chrome {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--mkt-rule);
+  background: #F1EDE3;
+}
+.spectre-marketing .mkt-product-chrome-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: rgba(26, 30, 26, 0.16);
+}
+.spectre-marketing .mkt-product-chrome-url {
+  margin-left: 0.65rem;
+  font-family: var(--mkt-sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: var(--mkt-text-muted);
+}
+
+/* ---- Connected-Ops row layout ---- */
+.spectre-marketing .mkt-connected-row {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+  align-items: baseline;
+}
+@media (min-width: 768px) {
+  .spectre-marketing .mkt-connected-row {
+    grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+    gap: 2rem;
+  }
+}
+.spectre-marketing .mkt-connected-headline {
+  font-family: var(--mkt-serif);
+  font-size: clamp(1.05rem, 1.9vw, 1.6rem);
+  color: #EFE9DC;
+  letter-spacing: -0.008em;
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+
+/* ---- Footer grid ---- */
+.spectre-marketing .mkt-footer-grid {
+  display: grid;
+  gap: 3rem;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 768px) {
+  .spectre-marketing .mkt-footer-grid {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 3.5rem;
+  }
+}
+
+/* ---- Intelligence step list ---- */
+.spectre-marketing .mkt-steps {
+  display: grid;
+  gap: 1.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 768px) {
+  .spectre-marketing .mkt-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .spectre-marketing .mkt-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2rem; }
+}
+
+/* ---- Reveal-on-scroll (respects reduced motion) ---- */
+.spectre-marketing .mkt-reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity var(--mkt-dur-slow) var(--mkt-ease-out),
+              transform var(--mkt-dur-slow) var(--mkt-ease-out);
+}
+.spectre-marketing .mkt-reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spectre-marketing .mkt-reveal { opacity: 1; transform: none; transition: none; }
+  .spectre-marketing .mkt-cta:hover { transform: none; }
+}
+
+/* ---- Fade word for "Software should disappear" moment ---- */
+.spectre-marketing .mkt-fadeword {
+  transition: opacity var(--mkt-dur-slow) var(--mkt-ease-out),
+              letter-spacing var(--mkt-dur-slow) var(--mkt-ease-out),
+              filter var(--mkt-dur-slow) var(--mkt-ease-out);
+}
+.spectre-marketing .mkt-fadeword.is-receded {
+  opacity: 0.08;
+  letter-spacing: 0.06em;
+  filter: blur(2px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .spectre-marketing .mkt-fadeword { opacity: 0.35; filter: none; letter-spacing: normal; transition: none; }
+}
