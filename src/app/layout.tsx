@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { headers } from "next/headers";
-import { Source_Serif_4, Inter } from "next/font/google";
+import { Source_Serif_4, Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { getActiveBranding } from "@/lib/branding";
 
@@ -29,6 +29,18 @@ const inter = Inter({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   variable: "--font-inter",
+  display: "swap",
+});
+
+// WEB-1B (2026-09-23) — Playfair Display for the Framer editorial hero
+// serif. High-contrast transitional face matches the Framer reference
+// aesthetic (vertical stress, distinctive italic). Loaded once at root
+// under --font-playfair; only marketing surfaces reference it.
+const playfair = Playfair_Display({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  style: ["normal", "italic"],
+  variable: "--font-playfair",
   display: "swap",
 });
 
@@ -130,7 +142,7 @@ const THEME_BOOTSTRAP_JS = `
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const nonce = headers().get("x-nonce") ?? undefined;
   return (
-    <html lang="en" className={`${sourceSerif.variable} ${inter.variable}`}>
+    <html lang="en" className={`${sourceSerif.variable} ${inter.variable} ${playfair.variable}`}>
       <head>
         <script
           nonce={nonce}
