@@ -32,7 +32,7 @@
 
   --w1b-page-max: 1360px;
   --w1b-gutter:   clamp(1.25rem, 2.5vw, 2.75rem);
-  --w1b-section-y: clamp(6rem, 10vw, 11rem);
+  --w1b-section-y: clamp(4rem, 6.5vw, 7rem);
 
   background: var(--w1b-dark);
   color: var(--w1b-white);
@@ -234,7 +234,49 @@
   text-transform: uppercase;
   color: #8B8672;
 }
+.spectre-web1b .w1b-mc-sidebar-active {
+  color: var(--w1b-white) !important;
+  border-left: 2px solid var(--w1b-brass);
+  padding-left: 0.6rem;
+  margin-left: -0.75rem;
+}
 .spectre-web1b .w1b-mc-main { padding: 1.75rem; }
+.spectre-web1b .w1b-mc-tenant {
+  font-family: var(--w1b-sans);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--w1b-white);
+  line-height: 1.35;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--w1b-rule);
+  margin-bottom: 1.5rem;
+}
+.spectre-web1b .w1b-mc-greeting-row {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.spectre-web1b .w1b-mc-date {
+  font-family: var(--w1b-sans);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #8B8672;
+  margin-bottom: 0.5rem;
+}
+.spectre-web1b .w1b-mc-greeting {
+  font-family: var(--w1b-serif);
+  font-weight: 400;
+  font-size: 1.55rem;
+  color: var(--w1b-white);
+  letter-spacing: -0.005em;
+}
+.spectre-web1b .w1b-mc-status {
+  font-family: var(--w1b-sans);
+  font-size: 0.78rem;
+  color: #8B8672;
+  white-space: nowrap;
+}
 .spectre-web1b .w1b-mc-callout {
   border: 1px solid var(--w1b-rule);
   border-left: 3px solid var(--w1b-brass);
@@ -308,12 +350,12 @@
 }
 .spectre-web1b .w1b-intel-row {
   display: grid;
-  grid-template-columns: 3.5rem 8.5rem 1fr;
+  grid-template-columns: 3rem 11rem 1fr;
   gap: 1rem; align-items: center;
-  padding: 1rem 1.25rem;
+  padding: 1.15rem 1.35rem;
   border-bottom: 1px solid var(--w1b-rule-i);
   font-family: var(--w1b-sans);
-  font-size: 0.88rem;
+  font-size: 0.9rem;
 }
 .spectre-web1b .w1b-intel-row:last-child { border-bottom: 0; }
 .spectre-web1b .w1b-intel-row-num { color: #7A7461; font-variant-numeric: tabular-nums; }

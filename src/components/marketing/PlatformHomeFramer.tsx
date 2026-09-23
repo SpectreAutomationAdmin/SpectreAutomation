@@ -111,6 +111,7 @@ function MissionControl() {
         <W1bReveal delayMs={220}>
           <div className="w1b-mc-frame">
             <div className="w1b-mc-sidebar">
+              <span className="w1b-mc-sidebar-active">Mission Control</span>
               <span>Work Intake</span>
               <span>Approvals</span>
               <span>Finance</span>
@@ -118,11 +119,19 @@ function MissionControl() {
               <span>Members</span>
             </div>
             <div className="w1b-mc-main">
+              <div className="w1b-mc-tenant">HILLSBOROUGH<br />COUNTRY CLUB</div>
+              <div className="w1b-mc-greeting-row">
+                <div>
+                  <div className="w1b-mc-date">MONDAY, SEPTEMBER 22</div>
+                  <div className="w1b-mc-greeting">Good morning, Alex.</div>
+                </div>
+                <div className="w1b-mc-status">17:42 &nbsp;&bull;&nbsp; All systems current</div>
+              </div>
               <div className="w1b-mc-callout">
                 <div>
                   <div className="w1b-mc-callout-eyebrow">REQUIRES YOUR JUDGMENT</div>
                   <div className="w1b-mc-callout-title">
-                    Capital invoice: fairway irrigation controls · $42,680
+                    Capital invoice: fairway irrigation controls &nbsp;&bull;&nbsp; $42,680
                   </div>
                 </div>
                 <a href="#confidence" className="w1b-mc-callout-review">
@@ -151,11 +160,9 @@ function MissionControl() {
 
 /* 4 · INTELLIGENCE ---------------------------------------------------- */
 const INTEL_STEPS: Array<[string, string, string]> = [
-  ["01", "INVOICE RECEIVED",     "Irrigation Systems Ltd. · PDF · $42,680"],
-  ["02", "CONTEXT RECOGNIZED",   "Vendor matched · Asset purchase identified"],
-  ["03", "GL PREPARED",          "Suggested coding · Fairway Infrastructure"],
-  ["04", "EXCEPTIONS FLAGGED",   "One line differs from prior capital purchases"],
-  ["05", "RECOMMENDATION READY", "Awaiting Controller approval"],
+  ["01", "INVOICE RECEIVED",   "Irrigation Systems Ltd. • PDF • $42,680"],
+  ["02", "CONTEXT RECOGNIZED", "Vendor matched • Asset purchase identified"],
+  ["03", "READY FOR REVIEW",   "Capitalize to Fairway Infrastructure • Review rationale →"],
 ];
 
 function Intelligence() {
@@ -169,7 +176,7 @@ function Intelligence() {
             </W1bReveal>
             <W1bReveal delayMs={80}>
               <h2 className="w1b-display" style={{ maxWidth: "16ch" }}>
-                A colleague who notices what you don&rsquo;t.
+                A colleague who notices what you might not.
               </h2>
             </W1bReveal>
             <W1bReveal delayMs={160}>
@@ -286,7 +293,7 @@ function Confidence() {
             <W1bReveal delayMs={160}>
               <p className="w1b-body" style={{ marginTop: "2rem" }}>
                 Every important screen answers the same questions: What am I looking at? Why does
-                it matter? What should I do next? What happens if I do it?
+                it matter? What should I do next? And what happens if I do it?
               </p>
             </W1bReveal>
           </div>
