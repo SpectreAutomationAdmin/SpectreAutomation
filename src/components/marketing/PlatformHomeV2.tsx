@@ -18,6 +18,7 @@ import { Wordmark } from "./Wordmark";
 import { Reveal } from "./Reveal";
 import { DisappearMoment } from "./DisappearMoment";
 import { MissionControlMock } from "./MissionControlMock";
+import { HeroCinematic } from "./HeroCinematic";
 
 /* ---- Small inline SVG arrow used by CTAs ---- */
 function Arrow() {
@@ -76,45 +77,59 @@ function HeroPlate() {
   );
 }
 
-/* ---- 1 · HERO ---- */
-function Hero() {
+/* Retained SVG fallback plate is no longer used — HeroCinematic supersedes it. */
+
+/* ---- Club Identity heritage plate (architectural SVG detail) ----
+ * A tight architectural crop: warm dawn light through a mullioned window,
+ * brass frame, subtle grain. Reads as an "architectural feature" without
+ * depending on external photography. Aspect 5 / 4.
+ */
+function ClubHeritagePlate() {
   return (
-    <section className="mkt-surface-ivory mkt-grain-warm" style={{ "--mkt-grain-alpha": 0.06 } as React.CSSProperties}>
-      <div style={{ position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", inset: 0 }}>
-          <HeroPlate />
-        </div>
-        <div className="mkt-container" style={{ position: "relative", paddingBlock: "clamp(9rem, 15vw, 13rem)" }}>
-          <Reveal>
-            <div className="mkt-eyebrow" style={{ marginBottom: "2.5rem" }}>
-              <Wordmark variant="eyebrow" />
-            </div>
-          </Reveal>
-          <Reveal delayMs={80}>
-            <h1 className="mkt-display-lg" style={{ maxWidth: "18ch", margin: 0 }}>
-              The Operating System for <span className="mkt-italic">Private Clubs.</span>
-            </h1>
-          </Reveal>
-          <Reveal delayMs={160}>
-            <p className="mkt-lede" style={{ marginTop: "2rem" }}>
-              Spectre quietly connects the people, information and workflows behind an exceptional
-              private club so the team can spend less time operating software and more time
-              running the club.
-            </p>
-          </Reveal>
-          <Reveal delayMs={220}>
-            <div style={{ marginTop: "2.75rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-              <a href="#final" className="mkt-cta mkt-cta-primary">
-                Request a Demonstration <Arrow />
-              </a>
-              <a href="#mission-control" className="mkt-cta mkt-cta-secondary">
-                Explore Spectre
-              </a>
-            </div>
-          </Reveal>
-        </div>
-      </div>
-    </section>
+    <div className="mkt-photo-tile" style={{ aspectRatio: "5 / 4" }}>
+      <svg viewBox="0 0 800 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true"
+           style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+        <defs>
+          <linearGradient id="clubField" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#1F2320" />
+            <stop offset="100%" stopColor="#0E100D" />
+          </linearGradient>
+          <linearGradient id="warmGlass" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#F7DFA5" stopOpacity="0.85" />
+            <stop offset="60%"  stopColor="#C79E5C" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#5B4A19" stopOpacity="0.15" />
+          </linearGradient>
+          <linearGradient id="brassBar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor="#C7B489" />
+            <stop offset="100%" stopColor="#8E7548" />
+          </linearGradient>
+        </defs>
+        <rect width="800" height="640" fill="url(#clubField)" />
+        {/* central mullioned window */}
+        <g transform="translate(180 90)">
+          <rect x="0" y="0" width="440" height="440" fill="url(#warmGlass)" />
+          {/* mullions */}
+          {[110, 220, 330].map((x) => (
+            <line key={x} x1={x} y1="0" x2={x} y2="440" stroke="#1A1C18" strokeWidth="4" opacity="0.85" />
+          ))}
+          {[110, 220, 330].map((y) => (
+            <line key={y} x1="0" y1={y} x2="440" y2={y} stroke="#1A1C18" strokeWidth="4" opacity="0.85" />
+          ))}
+          {/* frame */}
+          <rect x="-6" y="-6" width="452" height="452" fill="none" stroke="#A08658" strokeOpacity="0.7" strokeWidth="2" />
+        </g>
+        {/* brass horizon rail beneath window */}
+        <rect x="140" y="548" width="520" height="4" fill="url(#brassBar)" opacity="0.7" />
+        {/* faint plaque suggestion */}
+        <g transform="translate(320 590)" opacity="0.55">
+          <text x="80" y="0" textAnchor="middle" fontFamily="Source Serif 4, Georgia, serif"
+                fontSize="9" letterSpacing="3.2" fill="#A08658">
+            COULEE · RIDGE
+          </text>
+        </g>
+      </svg>
+      <div className="mkt-photo-caption">Coulee Ridge · demonstration tenant</div>
+    </div>
   );
 }
 
@@ -463,31 +478,31 @@ function ClubIdentity() {
             </div>
           </Reveal>
           <Reveal delayMs={120}>
-            {/* A tenant plaque — synthetic Coulee Ridge demonstration. */}
-            <div className="mkt-product-frame" style={{ padding: "3rem 2.5rem", background: "#F1EDE3" }}>
-              <div style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.65rem", letterSpacing: "0.22em", textTransform: "uppercase", color: "#8C8A83", fontWeight: 500 }}>
-                Tenant · Coulee Ridge
-              </div>
-              <div style={{
-                fontFamily: "var(--mkt-serif)",
-                fontSize: "clamp(2rem, 4vw, 2.75rem)",
-                color: "#1A1E1A",
-                letterSpacing: "-0.015em",
-                lineHeight: 1.05,
-                marginTop: "0.75rem",
-              }}>
-                Coulee Ridge Golf &amp; Country Club
-              </div>
-              <div style={{ marginTop: "1.25rem", display: "inline-flex", alignItems: "center", gap: "0.75rem" }}>
-                <span style={{ width: "0.75rem", height: "0.75rem", background: "#2F5832", borderRadius: "50%" }} aria-hidden="true" />
-                <span style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.85rem", color: "#64615A" }}>
-                  Restrained accent · club heritage green
-                </span>
-              </div>
-              <hr className="mkt-rule" style={{ margin: "1.75rem 0" }} />
-              <div style={{ fontFamily: "var(--mkt-serif)", fontStyle: "italic", color: "#64615A", fontSize: "0.95rem", lineHeight: 1.5 }}>
-                Members since 1927.<br />
-                Weekend lunch service resumes at eleven.
+            {/* Two-layer composition: architectural SVG detail above,
+             *  synthetic Coulee Ridge tenant identity below — the operating
+             *  system frames the club's identity, never replaces it. */}
+            <div>
+              <ClubHeritagePlate />
+              <div className="mkt-product-frame" style={{ padding: "2rem 2.25rem", background: "#F1EDE3", marginTop: "-0.75rem", borderTop: 0 }}>
+                <div style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.65rem", letterSpacing: "0.22em", textTransform: "uppercase", color: "#8C8A83", fontWeight: 500 }}>
+                  Tenant identity
+                </div>
+                <div style={{
+                  fontFamily: "var(--mkt-serif)",
+                  fontSize: "clamp(1.6rem, 3vw, 2.1rem)",
+                  color: "#1A1E1A",
+                  letterSpacing: "-0.012em",
+                  lineHeight: 1.05,
+                  marginTop: "0.5rem",
+                }}>
+                  Coulee Ridge Golf &amp; Country Club
+                </div>
+                <div style={{ marginTop: "1rem", display: "inline-flex", alignItems: "center", gap: "0.75rem" }}>
+                  <span style={{ width: "0.7rem", height: "0.7rem", background: "#2F5832", borderRadius: "50%" }} aria-hidden="true" />
+                  <span style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.82rem", color: "#64615A" }}>
+                    Restrained accent · club heritage green
+                  </span>
+                </div>
               </div>
             </div>
           </Reveal>
@@ -622,7 +637,7 @@ export function PlatformHomeV2() {
   return (
     <main className="spectre-marketing" data-web1="platform-home">
       <MarketingNav />
-      <Hero />
+      <HeroCinematic />
       <DisappearMoment />
       <MissionControl />
       <Intelligence />

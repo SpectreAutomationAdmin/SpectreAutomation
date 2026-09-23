@@ -14,15 +14,21 @@ interface Row {
   status: "action" | "attention" | "watch" | "info";
 }
 
+// WEB-1A §11 — mission control frame reflects the actual Spectre payroll
+// workflow: Department Head → Payroll Admin (prepare + submit) → Controller
+// (final approval) → Payroll Admin (post). The morning view here belongs
+// to the CONTROLLER — that's the role whose morning includes a payroll
+// approval waiting for their signature. Marc (Payroll Admin) submits;
+// Chris (Controller) approves; then Marc posts.
 const NOW: Row[] = [
-  { time: "07:42", kind: "Approval",  actor: "Marc Maldiney",  title: "Payroll · Semi-monthly",           detail: "$18,428.16 · 12 employees · calc v2 · ready for your review", status: "action" },
-  { time: "07:31", kind: "Exception", actor: "AP",              title: "Cintas — May service",              detail: "Vendor recognised · GL suggested · one line differs from prior period",  status: "attention" },
-  { time: "07:20", kind: "Signal",    actor: "AR",              title: "Collections — early trend",         detail: "House 4 · balance drifted 22 days · pattern change vs prior quarters",   status: "watch" },
+  { time: "07:42", kind: "Approval",  actor: "from Marc — Payroll Admin", title: "Payroll · Semi-monthly",            detail: "$18,428.16 · 12 employees · calc v2 · submitted for Controller approval", status: "action" },
+  { time: "07:31", kind: "Exception", actor: "AP · Marc",                  title: "Turfmaster — May irrigation service", detail: "Vendor recognised · GL suggested · one line differs from prior period",   status: "attention" },
+  { time: "07:20", kind: "Signal",    actor: "AR",                         title: "Collections — early trend",          detail: "One account · balance drifted 22 days · pattern change vs prior quarters", status: "watch" },
 ];
 
 const LATER: Row[] = [
-  { time: "10:15", kind: "Meeting",    actor: "Finance",         title: "Committee packet — May",           detail: "Board reporting draft ready — commentary reconciled to KPIs",           status: "info"  },
-  { time: "13:00", kind: "Onboarding", actor: "HR",              title: "Rebecca Chen — Turn week 1",       detail: "Documents complete · payroll enrolment prepared for Marc's review",      status: "info"  },
+  { time: "10:15", kind: "Meeting",    actor: "Finance Committee",    title: "Committee packet — draft ready",   detail: "Reporting draft reconciled to KPIs · commentary generated from posted data",         status: "info"  },
+  { time: "13:00", kind: "Onboarding", actor: "HR · new hire",         title: "First-day file complete",          detail: "Documents complete · payroll enrolment prepared — ready for Marc to include next run", status: "info"  },
 ];
 
 function StatusChip({ status }: { status: Row["status"] }) {
@@ -96,10 +102,10 @@ export function MissionControlMock() {
       <div style={{ background: "#FBFAF6" }}>
         <div style={{ padding: "1.5rem 1.5rem 0.4rem" }}>
           <div style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.62rem", letterSpacing: "0.22em", textTransform: "uppercase", color: "#8C8A83", fontWeight: 500 }}>
-            Coulee Ridge — Tuesday, September 22
+            Coulee Ridge — Controller · Tuesday morning
           </div>
           <div style={{ fontFamily: "var(--font-source-serif-4), Georgia, serif", fontSize: "1.6rem", color: "#1A1E1A", marginTop: "0.35rem", letterSpacing: "-0.01em" }}>
-            Good morning, Marc.
+            Good morning, Chris.
           </div>
           <div style={{ fontFamily: "var(--mkt-sans)", fontSize: "0.86rem", color: "#64615A", marginTop: "0.2rem" }}>
             One approval, one exception, one signal. Everything else is on track.

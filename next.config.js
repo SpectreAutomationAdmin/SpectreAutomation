@@ -41,6 +41,16 @@ const nextConfig = {
   experimental: {
     serverComponentsExternalPackages: ["pdfkit", "fontkit", "exceljs", "pptxgenjs"],
   },
+  // WEB-1A (2026-09-22) — allow Unsplash CDN for marketing photography.
+  // Unsplash's license permits commercial use without attribution
+  // (https://unsplash.com/license). Only images explicitly referenced by
+  // photo id in src/components/marketing/** are used; no user upload
+  // path or dynamic import from Unsplash exists.
+  images: {
+    remotePatterns: [
+      { protocol: "https", hostname: "images.unsplash.com" },
+    ],
+  },
 };
 
 module.exports = nextConfig;

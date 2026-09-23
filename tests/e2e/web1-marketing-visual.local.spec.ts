@@ -35,6 +35,15 @@ test.describe("WEB-1 · marketing homepage visual QA", () => {
     await page.locator("#mission-control").scrollIntoViewIfNeeded();
     await page.waitForTimeout(400);
     await page.screenshot({ path: "test-results/web1-desktop-1440-mission-control.png", fullPage: false });
+    await page.locator("#disappear").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "test-results/web1-desktop-1440-disappear.png", fullPage: false });
+    await page.locator("#club-identity").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: "test-results/web1-desktop-1440-club-identity.png", fullPage: false });
+    await page.locator("#final").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: "test-results/web1-desktop-1440-final.png", fullPage: false });
     // No horizontal overflow.
     const overflow = await page.evaluate(() => {
       const html = document.documentElement;
@@ -72,6 +81,9 @@ test.describe("WEB-1 · marketing homepage visual QA", () => {
     );
     await page.waitForTimeout(500);
     await page.screenshot({ path: "test-results/web1-mobile-390.png", fullPage: true });
+    // Mobile hero-only crop (viewport shot).
+    await page.locator("body").evaluate((b) => b.scrollTo(0, 0));
+    await page.screenshot({ path: "test-results/web1-mobile-390-hero.png", fullPage: false });
     // Mobile nav sheet open.
     await page.locator("header button").first().click();
     await page.waitForTimeout(300);

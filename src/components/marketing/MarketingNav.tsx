@@ -40,14 +40,18 @@ export function MarketingNav() {
       <header
         className={`fixed inset-x-0 top-0 z-40 transition-[background,border-color,backdrop-filter] duration-300`}
         style={{
-          background: scrolled ? "rgba(244, 239, 227, 0.85)" : "transparent",
+          // At scroll-top the hero is DARK — nav sits over it in ivory.
+          // Once scrolled past 12px the sticky nav becomes a warm ivory
+          // pane with a hairline rule, so the copy switches to ink.
+          background: scrolled ? "rgba(244, 239, 227, 0.88)" : "transparent",
           borderBottom: scrolled ? "1px solid rgba(26,30,26,0.08)" : "1px solid transparent",
-          backdropFilter: scrolled ? "saturate(140%) blur(8px)" : "none",
+          backdropFilter: scrolled ? "saturate(140%) blur(10px)" : "none",
         }}
       >
         <div className="mkt-container flex items-center justify-between" style={{ paddingBlock: "1.15rem" }}>
-          <Link href="/" aria-label="Spectre Automation home">
-            <Wordmark />
+          <Link href="/" aria-label="Spectre Automation home"
+                style={{ color: scrolled ? "var(--mkt-text)" : "#EFE9DC" }}>
+            <Wordmark className={scrolled ? undefined : "mkt-wordmark-inverse"} />
           </Link>
           <nav className="hidden md:flex items-center" aria-label="Main">
             <ul className="flex items-center gap-8">
@@ -56,7 +60,11 @@ export function MarketingNav() {
                   <a
                     href={l.href}
                     className="mkt-body"
-                    style={{ color: "var(--mkt-text)", fontSize: "0.86rem", letterSpacing: "0.02em" }}
+                    style={{
+                      color: scrolled ? "var(--mkt-text)" : "#D9D3C2",
+                      fontSize: "0.86rem",
+                      letterSpacing: "0.02em",
+                    }}
                   >
                     {l.label}
                   </a>
@@ -65,7 +73,17 @@ export function MarketingNav() {
             </ul>
           </nav>
           <div className="hidden md:flex items-center">
-            <a href="#final" className="mkt-cta mkt-cta-primary" style={{ padding: "0.6rem 1.1rem", fontSize: "0.82rem" }}>
+            <a
+              href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration"
+              className="mkt-cta mkt-cta-primary"
+              style={{
+                padding: "0.6rem 1.1rem",
+                fontSize: "0.82rem",
+                background: scrolled ? "var(--mkt-ink)" : "#EFE9DC",
+                color: scrolled ? "var(--mkt-text-inverse)" : "#1A1E1A",
+                borderColor: scrolled ? "var(--mkt-ink)" : "#EFE9DC",
+              }}
+            >
               Request a Demonstration
             </a>
           </div>
@@ -77,10 +95,10 @@ export function MarketingNav() {
             onClick={() => setOpen((v) => !v)}
             style={{
               background: "transparent",
-              border: "1px solid var(--mkt-rule-strong)",
+              border: `1px solid ${scrolled ? "var(--mkt-rule-strong)" : "rgba(239, 233, 220, 0.5)"}`,
               padding: "0.5rem 0.85rem",
               borderRadius: "2px",
-              color: "var(--mkt-text)",
+              color: scrolled ? "var(--mkt-text)" : "#EFE9DC",
               fontFamily: "var(--mkt-sans)",
               fontSize: "0.75rem",
               letterSpacing: "0.14em",
