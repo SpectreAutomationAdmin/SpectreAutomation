@@ -25,8 +25,17 @@ function ArrowRight({ size = 12, className }: { size?: number; className?: strin
 /* 1 · HERO ------------------------------------------------------------ */
 function Hero() {
   return (
-    <section className="w1b-dark w1b-hero">
-      <div className="w1b-container">
+    <section className="w1b-dark w1b-hero w1b-hero-photo">
+      <img
+        src="/marketing/photography/spectre-hero-club-flag.jpg"
+        alt="Golf flag framed by trees on a shaded course"
+        className="w1b-hero-photo-img"
+        loading="eager"
+        fetchPriority="high"
+        decoding="async"
+      />
+      <div className="w1b-hero-photo-scrim" aria-hidden="true" />
+      <div className="w1b-container w1b-hero-inner-wrap">
         <W1bReveal>
           <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
             SPECTRE / AUTOMATION
@@ -250,15 +259,27 @@ function ConnectedOps() {
   return (
     <section id="connected" className="w1b-cream w1b-section">
       <div className="w1b-container">
-        <W1bReveal>
-          <div className="w1b-eyebrow">PURPOSE-BUILT CLUB OPERATIONS</div>
-        </W1bReveal>
-        <W1bReveal delayMs={80}>
-          <h2 className="w1b-display" style={{ maxWidth: "22ch" }}>
-            One operating system. Every part of the club.
-          </h2>
-        </W1bReveal>
-        <W1bReveal delayMs={140}>
+        <div className="w1b-ops-header">
+          <div>
+            <W1bReveal>
+              <div className="w1b-eyebrow">PURPOSE-BUILT CLUB OPERATIONS</div>
+            </W1bReveal>
+            <W1bReveal delayMs={80}>
+              <h2 className="w1b-display" style={{ maxWidth: "22ch" }}>
+                One operating system. Every part of the club.
+              </h2>
+            </W1bReveal>
+          </div>
+          <W1bReveal delayMs={140} className="w1b-ops-inset">
+            <img
+              src="/marketing/photography/spectre-irons-detail.jpg"
+              alt="Two irons resting on turf"
+              loading="lazy"
+              decoding="async"
+            />
+          </W1bReveal>
+        </div>
+        <W1bReveal delayMs={200}>
           <div className="w1b-ops-grid">
             {OPS.map((g) => (
               <div key={g.label}>
@@ -327,7 +348,15 @@ const CLUB_TILES = [
 
 function ClubIdentity() {
   return (
-    <section id="club-identity" className="w1b-cream w1b-section">
+    <section id="club-identity" className="w1b-cream w1b-section w1b-identity-section">
+      <div className="w1b-identity-band" aria-hidden="true">
+        <img
+          src="/marketing/photography/spectre-course-atmosphere.jpg"
+          alt=""
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
       <div className="w1b-container">
         <W1bReveal>
           <div className="w1b-eyebrow">PRIVATE CLUB IDENTITY</div>
@@ -358,8 +387,15 @@ function ClubIdentity() {
 /* 9 · FINAL ----------------------------------------------------------- */
 function Final() {
   return (
-    <section id="final" className="w1b-dark w1b-final">
-      <div className="w1b-container">
+    <section id="final" className="w1b-dark w1b-final w1b-final-photo">
+      <img
+        src="/marketing/photography/spectre-18-flag.jpg"
+        alt="Red eighteenth-hole flag against the sky"
+        className="w1b-final-photo-img"
+        loading="lazy"
+        decoding="async"
+      />
+      <div className="w1b-container w1b-final-inner">
         <W1bReveal>
           <div className="w1b-eyebrow" style={{ margin: "0 0 2rem" }}>THE RESULT</div>
         </W1bReveal>
