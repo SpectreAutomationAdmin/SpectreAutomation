@@ -12,15 +12,16 @@ const SRC_DIR = path.resolve("public/marketing/photography");
 const OUT_DIR = path.resolve("public/marketing/photography/responsive");
 
 const PLAN = {
-  // WEB-1C.2: 18-flag promoted to hero. The image has heavy 35 mm film grain
-  // which compresses poorly at high quality (grain = high entropy noise).
-  // Since grain IS the aesthetic, we can drop quality substantially — the
-  // eye reads the grain as texture, not artifact. Also emits AVIF for even
-  // better perceptual quality per byte on modern browsers.
-  "spectre-18-flag.jpg":            { widths: [480, 768, 1024, 1440, 1920], jpegQ: 70, webpQ: 62, avifQ: 55 },
-  // WEB-1C.2: tree-framed image moves to Private Club Identity backdrop.
+  // WEB-1C.3: cliffside clubhouse promoted to hero. Landscape composition
+  // needs full width variants. Larger image, wider tonal range — bumped
+  // quality since detail (clubhouse edges, coastline, sky gradient) matters.
+  "spectre-clubhouse.jpg":          { widths: [480, 768, 1024, 1440, 1920, 2560], jpegQ: 82, webpQ: 76, avifQ: 62 },
+  // WEB-1C.2: tree-framed image serves as Private Club Identity backdrop
+  // (kept or removed per WEB-1C.3 §24 decision — implementation retains
+  // the variants either way; MANIFEST records the rendering choice).
   "spectre-hero-club-flag.jpg":     { widths: [480, 768, 1024, 1440, 1920], jpegQ: 78, webpQ: 72 },
-  // Retained for provenance / future use; not rendered on WEB-1C.2 homepage.
+  // Retained for provenance only; NOT rendered on WEB-1C.3 homepage.
+  "spectre-18-flag.jpg":            { widths: [480, 768, 1024, 1440, 1920], jpegQ: 70, webpQ: 62, avifQ: 55 },
   "spectre-course-atmosphere.jpg":  { widths: [320, 480, 640, 800, 1200],   jpegQ: 78, webpQ: 72 },
   "spectre-irons-detail.jpg":       { widths: [200, 320, 480, 640],         jpegQ: 78, webpQ: 72 },
 };

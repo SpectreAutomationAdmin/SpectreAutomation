@@ -196,51 +196,52 @@
   .spectre-web1b .w1b-hero { padding-block: 5rem 8rem; }
 }
 
-/* ---- Hero (WEB-1C.2 — Concept B: editorial asymmetric with red 18 flag)
- * Dark ink field on the left carries typography; right ~46vw is a
- * pristine photograph of the No. 18 flag against pale sky. No scrim,
- * no darkening — the image and the type each get to breathe. The
- * red flag becomes the immediate focal punctuation. */
-.spectre-web1b .w1b-hero-b {
+/* ---- Hero (WEB-1C.3 — Concept A: immersive full-bleed cliffside)
+ * The cliffside clubhouse photograph fills the hero at 100vh.
+ * Typography sits over the darker ocean+cliff quadrant on the
+ * lower-left; a soft feathered gradient darkens exactly where the
+ * copy lives without touching the clubhouse, sky or fairway. */
+.spectre-web1b .w1b-hero-cliff {
   min-height: 100vh;
+  position: relative;
   display: flex;
-  padding-block: 0;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding-block: 6.5rem 4.5rem;
   overflow: hidden;
-}
-.spectre-web1b .w1b-hero-b-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 46vw);
-  min-height: 100vh;
-}
-.spectre-web1b .w1b-hero-b-copy {
-  display: flex; flex-direction: column; justify-content: flex-end;
-  padding: 6.5rem 0 6rem;
   background: var(--w1b-dark);
 }
-.spectre-web1b .w1b-hero-b-copy .w1b-container { margin: 0; max-width: none; }
-.spectre-web1b .w1b-hero-b-photo {
-  position: relative;
-  overflow: hidden;
-  background: #0e100c;
+.spectre-web1b .w1b-hero-cliff-photo {
+  position: absolute; inset: 0; z-index: 0;
 }
-.spectre-web1b .w1b-hero-b-photo picture,
-.spectre-web1b .w1b-hero-b-photo img {
+.spectre-web1b .w1b-hero-cliff-photo picture,
+.spectre-web1b .w1b-hero-cliff-photo img {
   display: block;
   width: 100%; height: 100%;
   object-fit: cover;
-  object-position: center 40%;
+  object-position: 58% center;
 }
+.spectre-web1b .w1b-hero-cliff-scrim {
+  position: absolute; inset: 0; z-index: 1;
+  background:
+    /* localized darkening on the lower-left where copy sits — anchored to
+       the ocean/beach area, feathers out well before the clubhouse */
+    radial-gradient(90% 65% at 6% 100%, rgba(20,23,15,0.82) 0%, rgba(20,23,15,0.45) 42%, rgba(20,23,15,0) 68%),
+    /* subtle top edge so nav wordmark reads over the sky */
+    linear-gradient(180deg, rgba(20,23,15,0.32) 0%, rgba(20,23,15,0) 18%);
+}
+.spectre-web1b .w1b-hero-cliff-inner { position: relative; z-index: 2; }
 @media (max-width: 900px) {
-  .spectre-web1b .w1b-hero-b { min-height: auto; }
-  .spectre-web1b .w1b-hero-b-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: 62vh minmax(0, 1fr);
-    min-height: auto;
+  .spectre-web1b .w1b-hero-cliff { padding-block: 5rem 4rem; }
+  .spectre-web1b .w1b-hero-cliff-photo img { object-position: 65% center; }
+  .spectre-web1b .w1b-hero-cliff-scrim {
+    background:
+      linear-gradient(180deg,
+        rgba(20,23,15,0.42) 0%,
+        rgba(20,23,15,0) 32%,
+        rgba(20,23,15,0.62) 74%,
+        rgba(20,23,15,0.92) 100%);
   }
-  .spectre-web1b .w1b-hero-b-photo { order: 0; }
-  .spectre-web1b .w1b-hero-b-copy { order: 1; padding: 3rem 0 4rem; }
-  .spectre-web1b .w1b-hero-b-photo img { object-position: center 45%; }
 }
 
 .spectre-web1b .w1b-cta-row {
@@ -607,37 +608,9 @@
   text-decoration: none;
 }
 
-/* ---- Editorial photography (WEB-1C.2) ---- */
-
-/* Photo 2 (tree-framed distant flag) — Private Club Identity plate.
- * Photograph sits as a backdrop behind the tenant tiles; tiles overlay
- * with padding + z-index isolation. Reclaimed vertical height in
- * WEB-1C.1 and now recontextualised in WEB-1C.2 with the atmospheric
- * tree-framed image that speaks to "your club. not ours." */
-.spectre-web1b .w1b-identity-plate {
-  position: relative;
-  margin-top: 3rem;
-  padding: clamp(1.25rem, 2.5vw, 2rem);
-  overflow: hidden;
-  isolation: isolate;
-}
-.spectre-web1b .w1b-identity-plate-photo {
-  position: absolute; inset: 0; z-index: 0;
-  overflow: hidden;
-}
-.spectre-web1b .w1b-identity-plate-photo picture,
-.spectre-web1b .w1b-identity-plate-photo img {
-  display: block;
-  width: 100%; height: 100%;
-  object-fit: cover;
-  object-position: center 60%;
-  filter: brightness(0.88) saturate(0.97);
-}
-.spectre-web1b .w1b-identity-plate .w1b-clubs {
-  position: relative;
-  z-index: 1;
-  margin-top: 0;
-}
+/* WEB-1C.3 · Editorial photography reduced to a single rendered image:
+ * the cliffside hero. Every other section returns to the WEB-1B.2
+ * typography-led Framer rhythm. */
 
 /* ---- Reveal ---- */
 .spectre-web1b .w1b-reveal {

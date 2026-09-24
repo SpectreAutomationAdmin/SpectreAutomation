@@ -56,50 +56,47 @@ function ResponsivePhoto(props: {
   );
 }
 
-/* 1 · HERO — WEB-1C.2 · Concept B (editorial asymmetric, red 18 flag) -- */
+/* 1 · HERO — WEB-1C.3 · Concept A · immersive full-bleed cliffside ----- */
 function Hero() {
   return (
-    <section className="w1b-dark w1b-hero w1b-hero-b">
-      <div className="w1b-hero-b-grid">
-        <div className="w1b-hero-b-copy">
-          <div className="w1b-container">
-            <W1bReveal>
-              <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
-                SPECTRE / AUTOMATION
-              </div>
-            </W1bReveal>
-            <W1bReveal delayMs={80}>
-              <h1 className="w1b-display" style={{ maxWidth: "20ch" }}>
-                The Operating System for Private Clubs.
-              </h1>
-            </W1bReveal>
-            <W1bReveal delayMs={160}>
-              <p className="w1b-body" style={{ marginTop: "2rem", maxWidth: "36ch" }}>
-                Spectre quietly connects the people, information and workflows behind an exceptional
-                private club — so your team can spend less time operating software and more time
-                running the club.
-              </p>
-            </W1bReveal>
-            <W1bReveal delayMs={240}>
-              <div className="w1b-cta-row">
-                <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta">
-                  Request a Demonstration
-                </a>
-                <a href="#mission-control" className="w1b-text-link">Explore Spectre</a>
-              </div>
-            </W1bReveal>
+    <section className="w1b-hero w1b-hero-cliff">
+      <div className="w1b-hero-cliff-photo">
+        <ResponsivePhoto
+          base="spectre-clubhouse"
+          widths={[480, 768, 1024, 1440, 1920, 2560]}
+          sizes="100vw"
+          alt="Coastal clubhouse on a cliff above a golf green and Pacific Ocean"
+          eager
+          fetchPriority="high"
+        />
+      </div>
+      <div className="w1b-hero-cliff-scrim" aria-hidden="true" />
+      <div className="w1b-container w1b-hero-cliff-inner">
+        <W1bReveal>
+          <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
+            SPECTRE / AUTOMATION
           </div>
-        </div>
-        <div className="w1b-hero-b-photo">
-          <ResponsivePhoto
-            base="spectre-18-flag"
-            widths={[480, 768, 1024, 1440, 1920]}
-            sizes="(max-width: 900px) 100vw, 46vw"
-            alt="Red eighteenth-hole flag against the sky"
-            eager
-            fetchPriority="high"
-          />
-        </div>
+        </W1bReveal>
+        <W1bReveal delayMs={80}>
+          <h1 className="w1b-display" style={{ maxWidth: "22ch" }}>
+            The Operating System for Private Clubs.
+          </h1>
+        </W1bReveal>
+        <W1bReveal delayMs={160}>
+          <p className="w1b-body" style={{ marginTop: "2rem", maxWidth: "36ch" }}>
+            Spectre quietly connects the people, information and workflows behind an exceptional
+            private club — so your team can spend less time operating software and more time
+            running the club.
+          </p>
+        </W1bReveal>
+        <W1bReveal delayMs={240}>
+          <div className="w1b-cta-row">
+            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta">
+              Request a Demonstration
+            </a>
+            <a href="#mission-control" className="w1b-text-link">Explore Spectre</a>
+          </div>
+        </W1bReveal>
       </div>
     </section>
   );
@@ -390,22 +387,12 @@ function ClubIdentity() {
           </p>
         </W1bReveal>
         <W1bReveal delayMs={220}>
-          <div className="w1b-identity-plate">
-            <div className="w1b-identity-plate-photo" aria-hidden="true">
-              <ResponsivePhoto
-                base="spectre-hero-club-flag"
-                widths={[480, 768, 1024, 1440, 1920]}
-                sizes="(max-width: 900px) 100vw, 1440px"
-                alt=""
-              />
-            </div>
-            <div className="w1b-clubs">
-              {CLUB_TILES.map((t) => (
-                <div key={t.label} className="w1b-club-tile" style={{ background: t.bg }}>
-                  <div>{t.label.split("\n").map((line, i) => <span key={i}>{line}{i === 0 && <br/>}</span>)}</div>
-                </div>
-              ))}
-            </div>
+          <div className="w1b-clubs">
+            {CLUB_TILES.map((t) => (
+              <div key={t.label} className="w1b-club-tile" style={{ background: t.bg }}>
+                <div>{t.label.split("\n").map((line, i) => <span key={i}>{line}{i === 0 && <br/>}</span>)}</div>
+              </div>
+            ))}
           </div>
         </W1bReveal>
       </div>
