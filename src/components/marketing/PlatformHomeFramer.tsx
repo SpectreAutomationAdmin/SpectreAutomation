@@ -56,48 +56,50 @@ function ResponsivePhoto(props: {
   );
 }
 
-/* 1 · HERO ------------------------------------------------------------ */
+/* 1 · HERO — WEB-1C.2 · Concept B (editorial asymmetric, red 18 flag) -- */
 function Hero() {
   return (
-    <section className="w1b-dark w1b-hero w1b-hero-photo">
-      <div className="w1b-hero-photo-frame" aria-hidden="false">
-        <ResponsivePhoto
-          base="spectre-hero-club-flag"
-          widths={[480, 768, 1024, 1440, 1920]}
-          sizes="100vw"
-          alt="Golf flag framed by trees on a shaded course"
-          className="w1b-hero-photo-img"
-          eager
-          fetchPriority="high"
-        />
-      </div>
-      <div className="w1b-hero-photo-scrim" aria-hidden="true" />
-      <div className="w1b-container w1b-hero-inner-wrap">
-        <W1bReveal>
-          <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
-            SPECTRE / AUTOMATION
+    <section className="w1b-dark w1b-hero w1b-hero-b">
+      <div className="w1b-hero-b-grid">
+        <div className="w1b-hero-b-copy">
+          <div className="w1b-container">
+            <W1bReveal>
+              <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
+                SPECTRE / AUTOMATION
+              </div>
+            </W1bReveal>
+            <W1bReveal delayMs={80}>
+              <h1 className="w1b-display" style={{ maxWidth: "20ch" }}>
+                The Operating System for Private Clubs.
+              </h1>
+            </W1bReveal>
+            <W1bReveal delayMs={160}>
+              <p className="w1b-body" style={{ marginTop: "2rem", maxWidth: "36ch" }}>
+                Spectre quietly connects the people, information and workflows behind an exceptional
+                private club — so your team can spend less time operating software and more time
+                running the club.
+              </p>
+            </W1bReveal>
+            <W1bReveal delayMs={240}>
+              <div className="w1b-cta-row">
+                <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta">
+                  Request a Demonstration
+                </a>
+                <a href="#mission-control" className="w1b-text-link">Explore Spectre</a>
+              </div>
+            </W1bReveal>
           </div>
-        </W1bReveal>
-        <W1bReveal delayMs={80}>
-          <h1 className="w1b-display" style={{ maxWidth: "32ch" }}>
-            The Operating System for Private Clubs.
-          </h1>
-        </W1bReveal>
-        <W1bReveal delayMs={160}>
-          <p className="w1b-body" style={{ marginTop: "2rem" }}>
-            Spectre quietly connects the people, information and workflows behind an exceptional
-            private club — so your team can spend less time operating software and more time
-            running the club.
-          </p>
-        </W1bReveal>
-        <W1bReveal delayMs={240}>
-          <div className="w1b-cta-row">
-            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration" className="w1b-pill-cta">
-              Request a Demonstration
-            </a>
-            <a href="#mission-control" className="w1b-text-link">Explore Spectre</a>
-          </div>
-        </W1bReveal>
+        </div>
+        <div className="w1b-hero-b-photo">
+          <ResponsivePhoto
+            base="spectre-18-flag"
+            widths={[480, 768, 1024, 1440, 1920]}
+            sizes="(max-width: 900px) 100vw, 46vw"
+            alt="Red eighteenth-hole flag against the sky"
+            eager
+            fetchPriority="high"
+          />
+        </div>
       </div>
     </section>
   );
@@ -296,27 +298,15 @@ function ConnectedOps() {
   return (
     <section id="connected" className="w1b-cream w1b-section">
       <div className="w1b-container">
-        <div className="w1b-ops-header">
-          <div>
-            <W1bReveal>
-              <div className="w1b-eyebrow">PURPOSE-BUILT CLUB OPERATIONS</div>
-            </W1bReveal>
-            <W1bReveal delayMs={80}>
-              <h2 className="w1b-display" style={{ maxWidth: "22ch" }}>
-                One operating system. Every part of the club.
-              </h2>
-            </W1bReveal>
-          </div>
-          <W1bReveal delayMs={140} className="w1b-ops-inset">
-            <ResponsivePhoto
-              base="spectre-irons-detail"
-              widths={[200, 320, 480, 640]}
-              sizes="(max-width: 520px) 110px, (max-width: 900px) 180px, 320px"
-              alt="Two irons resting on turf"
-            />
-          </W1bReveal>
-        </div>
-        <W1bReveal delayMs={200}>
+        <W1bReveal>
+          <div className="w1b-eyebrow">PURPOSE-BUILT CLUB OPERATIONS</div>
+        </W1bReveal>
+        <W1bReveal delayMs={80}>
+          <h2 className="w1b-display" style={{ maxWidth: "22ch" }}>
+            One operating system. Every part of the club.
+          </h2>
+        </W1bReveal>
+        <W1bReveal delayMs={140}>
           <div className="w1b-ops-grid">
             {OPS.map((g) => (
               <div key={g.label}>
@@ -403,9 +393,9 @@ function ClubIdentity() {
           <div className="w1b-identity-plate">
             <div className="w1b-identity-plate-photo" aria-hidden="true">
               <ResponsivePhoto
-                base="spectre-course-atmosphere"
-                widths={[320, 480, 640, 800, 1200]}
-                sizes="(max-width: 900px) 100vw, 1200px"
+                base="spectre-hero-club-flag"
+                widths={[480, 768, 1024, 1440, 1920]}
+                sizes="(max-width: 900px) 100vw, 1440px"
                 alt=""
               />
             </div>
@@ -426,17 +416,8 @@ function ClubIdentity() {
 /* 9 · FINAL ----------------------------------------------------------- */
 function Final() {
   return (
-    <section id="final" className="w1b-dark w1b-final w1b-final-photo">
-      <div className="w1b-final-photo-frame" aria-hidden="true">
-        <ResponsivePhoto
-          base="spectre-18-flag"
-          widths={[320, 480, 640, 800, 1200]}
-          sizes="(max-width: 900px) 90vw, 60vw"
-          alt=""
-          className="w1b-final-photo-img"
-        />
-      </div>
-      <div className="w1b-container w1b-final-inner">
+    <section id="final" className="w1b-dark w1b-final">
+      <div className="w1b-container">
         <W1bReveal>
           <div className="w1b-eyebrow" style={{ margin: "0 0 2rem" }}>THE RESULT</div>
         </W1bReveal>

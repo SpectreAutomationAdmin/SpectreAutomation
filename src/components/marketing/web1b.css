@@ -196,42 +196,53 @@
   .spectre-web1b .w1b-hero { padding-block: 5rem 8rem; }
 }
 
-/* ---- Hero photograph (WEB-1C / WEB-1C.1) ---- */
-.spectre-web1b .w1b-hero-photo { position: relative; overflow: hidden; }
-.spectre-web1b .w1b-hero-photo-frame {
-  position: absolute; inset: 0; z-index: 0;
-  width: 100%; height: 100%;
+/* ---- Hero (WEB-1C.2 — Concept B: editorial asymmetric with red 18 flag)
+ * Dark ink field on the left carries typography; right ~46vw is a
+ * pristine photograph of the No. 18 flag against pale sky. No scrim,
+ * no darkening — the image and the type each get to breathe. The
+ * red flag becomes the immediate focal punctuation. */
+.spectre-web1b .w1b-hero-b {
+  min-height: 100vh;
+  display: flex;
+  padding-block: 0;
+  overflow: hidden;
 }
-.spectre-web1b .w1b-hero-photo-frame picture,
-.spectre-web1b .w1b-hero-photo-frame .w1b-hero-photo-img {
+.spectre-web1b .w1b-hero-b-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 46vw);
+  min-height: 100vh;
+}
+.spectre-web1b .w1b-hero-b-copy {
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 6.5rem 0 6rem;
+  background: var(--w1b-dark);
+}
+.spectre-web1b .w1b-hero-b-copy .w1b-container { margin: 0; max-width: none; }
+.spectre-web1b .w1b-hero-b-photo {
+  position: relative;
+  overflow: hidden;
+  background: #0e100c;
+}
+.spectre-web1b .w1b-hero-b-photo picture,
+.spectre-web1b .w1b-hero-b-photo img {
   display: block;
   width: 100%; height: 100%;
-}
-.spectre-web1b .w1b-hero-photo-img {
   object-fit: cover;
-  object-position: 62% center;
-  filter: brightness(0.72) contrast(1.02);
+  object-position: center 40%;
 }
 @media (max-width: 900px) {
-  .spectre-web1b .w1b-hero-photo-img {
-    object-position: 55% center;
-    filter: brightness(0.62) contrast(1.02);
+  .spectre-web1b .w1b-hero-b { min-height: auto; }
+  .spectre-web1b .w1b-hero-b-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: 62vh minmax(0, 1fr);
+    min-height: auto;
   }
+  .spectre-web1b .w1b-hero-b-photo { order: 0; }
+  .spectre-web1b .w1b-hero-b-copy { order: 1; padding: 3rem 0 4rem; }
+  .spectre-web1b .w1b-hero-b-photo img { object-position: center 45%; }
 }
-.spectre-web1b .w1b-hero-photo-scrim {
-  position: absolute; inset: 0; z-index: 1;
-  background:
-    linear-gradient(180deg,
-      rgba(20, 23, 15, 0.55) 0%,
-      rgba(20, 23, 15, 0.20) 42%,
-      rgba(20, 23, 15, 0.55) 74%,
-      rgba(20, 23, 15, 0.90) 100%),
-    radial-gradient(120% 80% at 10% 100%, rgba(20, 23, 15, 0.65) 0%, rgba(20, 23, 15, 0) 60%);
-}
-.spectre-web1b .w1b-hero-inner-wrap { position: relative; z-index: 2; }
-.spectre-web1b .w1b-hero-inner {
-  max-width: 60ch;
-}
+
 .spectre-web1b .w1b-cta-row {
   margin-top: 2.25rem;
   display: flex; align-items: center; gap: 1.25rem;
@@ -596,30 +607,13 @@
   text-decoration: none;
 }
 
-/* ---- Editorial photography (WEB-1C) ---- */
+/* ---- Editorial photography (WEB-1C.2) ---- */
 
-/* Photo D — Connected Ops inset (irons on turf) */
-.spectre-web1b .w1b-ops-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
-  gap: 2.5rem; align-items: end;
-}
-.spectre-web1b .w1b-ops-inset img {
-  width: 100%; height: auto; display: block;
-  aspect-ratio: 4 / 5;
-  object-fit: cover;
-  object-position: center 55%;
-}
-@media (max-width: 900px) {
-  .spectre-web1b .w1b-ops-header { grid-template-columns: minmax(0, 1fr) minmax(0, 180px); gap: 1.25rem; }
-}
-@media (max-width: 520px) {
-  .spectre-web1b .w1b-ops-header { grid-template-columns: minmax(0, 1fr) minmax(0, 110px); gap: 0.75rem; }
-}
-
-/* Photo B — Club Identity plate: photograph as backdrop behind tenant tiles
-   (WEB-1C.1 recomposition — reclaims vertical height by removing the
-   standalone band and layering photograph beneath the tile grid.) */
+/* Photo 2 (tree-framed distant flag) — Private Club Identity plate.
+ * Photograph sits as a backdrop behind the tenant tiles; tiles overlay
+ * with padding + z-index isolation. Reclaimed vertical height in
+ * WEB-1C.1 and now recontextualised in WEB-1C.2 with the atmospheric
+ * tree-framed image that speaks to "your club. not ours." */
 .spectre-web1b .w1b-identity-plate {
   position: relative;
   margin-top: 3rem;
@@ -636,46 +630,13 @@
   display: block;
   width: 100%; height: 100%;
   object-fit: cover;
-  object-position: center 55%;
-  filter: brightness(0.78) saturate(0.95);
+  object-position: center 60%;
+  filter: brightness(0.88) saturate(0.97);
 }
 .spectre-web1b .w1b-identity-plate .w1b-clubs {
   position: relative;
   z-index: 1;
   margin-top: 0;
-}
-
-/* Photo C — Result section editorial photograph background */
-.spectre-web1b .w1b-final-photo { position: relative; overflow: hidden; }
-.spectre-web1b .w1b-final-photo-frame {
-  position: absolute;
-  right: -6%; top: 50%; transform: translateY(-50%);
-  height: 118%;
-  width: 60%;
-  z-index: 0;
-  opacity: 0.55;
-  filter: contrast(1.05) saturate(0.95);
-  mask-image: linear-gradient(90deg, transparent 0%, black 22%, black 78%, transparent 100%);
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 22%, black 78%, transparent 100%);
-  pointer-events: none;
-}
-.spectre-web1b .w1b-final-photo-frame picture,
-.spectre-web1b .w1b-final-photo-frame .w1b-final-photo-img {
-  display: block;
-  width: 100%; height: 100%;
-}
-.spectre-web1b .w1b-final-photo-img {
-  object-fit: cover;
-  object-position: center;
-}
-.spectre-web1b .w1b-final-inner { position: relative; z-index: 1; }
-@media (max-width: 900px) {
-  .spectre-web1b .w1b-final-photo-frame {
-    right: -14%;
-    height: 96%;
-    width: 90%;
-    opacity: 0.35;
-  }
 }
 
 /* ---- Reveal ---- */
