@@ -22,18 +22,55 @@ function ArrowRight({ size = 12, className }: { size?: number; className?: strin
   );
 }
 
+/**
+ * Renders a <picture> with a WebP source and a JPEG source, both using
+ * pre-generated responsive variants under /marketing/photography/responsive/.
+ * See scripts/web1c1-generate-responsive.mjs for the build step.
+ */
+function ResponsivePhoto(props: {
+  base: string;                        // e.g. "spectre-hero-club-flag"
+  widths: number[];                    // e.g. [480, 768, 1024, 1440, 1920]
+  sizes: string;                       // e.g. "100vw" or "(max-width: 900px) 100vw, 40vw"
+  alt: string;
+  className?: string;
+  eager?: boolean;
+  fetchPriority?: "high" | "auto" | "low";
+}) {
+  const jpegSrcset = props.widths.map((w) => `/marketing/photography/responsive/${props.base}-${w}.jpg ${w}w`).join(", ");
+  const webpSrcset = props.widths.map((w) => `/marketing/photography/responsive/${props.base}-${w}.webp ${w}w`).join(", ");
+  const fallback = `/marketing/photography/responsive/${props.base}-${props.widths[props.widths.length - 1]}.jpg`;
+  return (
+    <picture>
+      <source type="image/webp" srcSet={webpSrcset} sizes={props.sizes} />
+      <source type="image/jpeg" srcSet={jpegSrcset} sizes={props.sizes} />
+      <img
+        src={fallback}
+        alt={props.alt}
+        className={props.className}
+        loading={props.eager ? "eager" : "lazy"}
+        // eslint-disable-next-line react/no-unknown-property
+        fetchPriority={props.fetchPriority}
+        decoding="async"
+      />
+    </picture>
+  );
+}
+
 /* 1 · HERO ------------------------------------------------------------ */
 function Hero() {
   return (
     <section className="w1b-dark w1b-hero w1b-hero-photo">
-      <img
-        src="/marketing/photography/spectre-hero-club-flag.jpg"
-        alt="Golf flag framed by trees on a shaded course"
-        className="w1b-hero-photo-img"
-        loading="eager"
-        fetchPriority="high"
-        decoding="async"
-      />
+      <div className="w1b-hero-photo-frame" aria-hidden="false">
+        <ResponsivePhoto
+          base="spectre-hero-club-flag"
+          widths={[480, 768, 1024, 1440, 1920]}
+          sizes="100vw"
+          alt="Golf flag framed by trees on a shaded course"
+          className="w1b-hero-photo-img"
+          eager
+          fetchPriority="high"
+        />
+      </div>
       <div className="w1b-hero-photo-scrim" aria-hidden="true" />
       <div className="w1b-container w1b-hero-inner-wrap">
         <W1bReveal>
@@ -271,11 +308,11 @@ function ConnectedOps() {
             </W1bReveal>
           </div>
           <W1bReveal delayMs={140} className="w1b-ops-inset">
-            <img
-              src="/marketing/photography/spectre-irons-detail.jpg"
+            <ResponsivePhoto
+              base="spectre-irons-detail"
+              widths={[200, 320, 480, 640]}
+              sizes="(max-width: 520px) 110px, (max-width: 900px) 180px, 320px"
               alt="Two irons resting on turf"
-              loading="lazy"
-              decoding="async"
             />
           </W1bReveal>
         </div>
@@ -349,14 +386,6 @@ const CLUB_TILES = [
 function ClubIdentity() {
   return (
     <section id="club-identity" className="w1b-cream w1b-section w1b-identity-section">
-      <div className="w1b-identity-band" aria-hidden="true">
-        <img
-          src="/marketing/photography/spectre-course-atmosphere.jpg"
-          alt=""
-          loading="lazy"
-          decoding="async"
-        />
-      </div>
       <div className="w1b-container">
         <W1bReveal>
           <div className="w1b-eyebrow">PRIVATE CLUB IDENTITY</div>
@@ -371,12 +400,22 @@ function ClubIdentity() {
           </p>
         </W1bReveal>
         <W1bReveal delayMs={220}>
-          <div className="w1b-clubs">
-            {CLUB_TILES.map((t) => (
-              <div key={t.label} className="w1b-club-tile" style={{ background: t.bg }}>
-                <div>{t.label.split("\n").map((line, i) => <span key={i}>{line}{i === 0 && <br/>}</span>)}</div>
-              </div>
-            ))}
+          <div className="w1b-identity-plate">
+            <div className="w1b-identity-plate-photo" aria-hidden="true">
+              <ResponsivePhoto
+                base="spectre-course-atmosphere"
+                widths={[320, 480, 640, 800, 1200]}
+                sizes="(max-width: 900px) 100vw, 1200px"
+                alt=""
+              />
+            </div>
+            <div className="w1b-clubs">
+              {CLUB_TILES.map((t) => (
+                <div key={t.label} className="w1b-club-tile" style={{ background: t.bg }}>
+                  <div>{t.label.split("\n").map((line, i) => <span key={i}>{line}{i === 0 && <br/>}</span>)}</div>
+                </div>
+              ))}
+            </div>
           </div>
         </W1bReveal>
       </div>
@@ -388,13 +427,15 @@ function ClubIdentity() {
 function Final() {
   return (
     <section id="final" className="w1b-dark w1b-final w1b-final-photo">
-      <img
-        src="/marketing/photography/spectre-18-flag.jpg"
-        alt="Red eighteenth-hole flag against the sky"
-        className="w1b-final-photo-img"
-        loading="lazy"
-        decoding="async"
-      />
+      <div className="w1b-final-photo-frame" aria-hidden="true">
+        <ResponsivePhoto
+          base="spectre-18-flag"
+          widths={[320, 480, 640, 800, 1200]}
+          sizes="(max-width: 900px) 90vw, 60vw"
+          alt=""
+          className="w1b-final-photo-img"
+        />
+      </div>
       <div className="w1b-container w1b-final-inner">
         <W1bReveal>
           <div className="w1b-eyebrow" style={{ margin: "0 0 2rem" }}>THE RESULT</div>

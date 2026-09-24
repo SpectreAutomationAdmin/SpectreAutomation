@@ -117,5 +117,8 @@
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^4.1.6"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.4"
   }
 }
