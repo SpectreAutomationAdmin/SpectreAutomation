@@ -138,6 +138,21 @@
   font-size: 0.9rem;
   text-decoration: none;
 }
+.spectre-web1b .w1b-nav-actions {
+  display: flex; align-items: center; gap: 1.5rem;
+}
+.spectre-web1b .w1b-nav-login {
+  color: var(--w1b-white);
+  font-family: var(--w1b-sans);
+  font-size: 0.86rem;
+  font-weight: 500;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid transparent;
+  transition: border-color 200ms ease;
+}
+.spectre-web1b .w1b-nav-login:hover { border-bottom-color: var(--w1b-brass); }
 .spectre-web1b .w1b-nav-cta,
 .spectre-web1b .w1b-pill-cta {
   display: inline-flex; align-items: center;
@@ -224,23 +239,54 @@
 .spectre-web1b .w1b-hero-cliff-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
-    /* localized darkening on the lower-left where copy sits — anchored to
-       the ocean/beach area, feathers out well before the clubhouse */
-    radial-gradient(90% 65% at 6% 100%, rgba(20,23,15,0.82) 0%, rgba(20,23,15,0.45) 42%, rgba(20,23,15,0) 68%),
-    /* subtle top edge so nav wordmark reads over the sky */
-    linear-gradient(180deg, rgba(20,23,15,0.32) 0%, rgba(20,23,15,0) 18%);
+    /* WEB-1D · localized darkening under the copy region — deeper at anchor,
+     * extended feather so body copy still sits over a controlled tonal field
+     * even at its rightmost line. The clubhouse (upper-right ~60%+) sees
+     * effectively zero gradient contribution. */
+    radial-gradient(78% 78% at 2% 108%,
+      rgba(20,23,15,0.94) 0%,
+      rgba(20,23,15,0.82) 18%,
+      rgba(20,23,15,0.52) 40%,
+      rgba(20,23,15,0.18) 62%,
+      rgba(20,23,15,0) 78%),
+    /* top edge for nav wordmark */
+    linear-gradient(180deg, rgba(20,23,15,0.38) 0%, rgba(20,23,15,0) 16%);
 }
-.spectre-web1b .w1b-hero-cliff-inner { position: relative; z-index: 2; }
+.spectre-web1b .w1b-hero-cliff-inner {
+  position: relative; z-index: 2;
+  /* WEB-1D · strengthen hero typography contrast without darkening the
+   * image — very subtle text-shadow gives edges enough shadow to survive
+   * mixed brightness backgrounds, still reads as photography not banner. */
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-eyebrow {
+  color: #F0EAD8;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-shadow: 0 1px 8px rgba(20,23,15,0.55);
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-display {
+  color: var(--w1b-white);
+  text-shadow: 0 2px 14px rgba(20,23,15,0.45);
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-body {
+  color: #D8D2C0;
+  text-shadow: 0 1px 6px rgba(20,23,15,0.55);
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
+  color: var(--w1b-white);
+  text-shadow: 0 1px 6px rgba(20,23,15,0.55);
+}
 @media (max-width: 900px) {
   .spectre-web1b .w1b-hero-cliff { padding-block: 5rem 4rem; }
   .spectre-web1b .w1b-hero-cliff-photo img { object-position: 65% center; }
   .spectre-web1b .w1b-hero-cliff-scrim {
     background:
       linear-gradient(180deg,
-        rgba(20,23,15,0.42) 0%,
-        rgba(20,23,15,0) 32%,
-        rgba(20,23,15,0.62) 74%,
-        rgba(20,23,15,0.92) 100%);
+        rgba(20,23,15,0.55) 0%,
+        rgba(20,23,15,0.08) 26%,
+        rgba(20,23,15,0.55) 58%,
+        rgba(20,23,15,0.90) 82%,
+        rgba(20,23,15,0.96) 100%);
   }
 }
 
@@ -591,11 +637,49 @@
   border-top: 1px solid var(--w1b-rule);
   padding-block: 3.5rem;
 }
+.spectre-web1b .w1b-footer-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: clamp(2rem, 5vw, 4rem);
+  align-items: end;
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--w1b-rule);
+}
 .spectre-web1b .w1b-footer-lead {
   font-family: var(--w1b-sans);
   color: var(--w1b-body);
   font-size: 1rem;
-  margin: 1rem 0 2.5rem;
+  margin: 1rem 0 0;
+  max-width: 34em;
+}
+.spectre-web1b .w1b-footer-portals {
+  display: flex; gap: 2.5rem;
+}
+.spectre-web1b .w1b-footer-portal-label {
+  font-family: var(--w1b-sans);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--w1b-brass);
+  margin-bottom: 0.6rem;
+}
+.spectre-web1b .w1b-footer-portal-link {
+  font-family: var(--w1b-sans);
+  color: var(--w1b-white);
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  border-bottom: 1px solid var(--w1b-rule);
+  padding-bottom: 0.2rem;
+  transition: border-color 200ms ease, color 200ms ease;
+}
+.spectre-web1b .w1b-footer-portal-link:hover {
+  border-bottom-color: var(--w1b-brass);
+}
+@media (max-width: 900px) {
+  .spectre-web1b .w1b-footer-top { grid-template-columns: 1fr; gap: 2rem; }
+  .spectre-web1b .w1b-footer-portals { flex-direction: column; gap: 1.5rem; }
 }
 .spectre-web1b .w1b-footer-nav {
   display: flex; gap: 2rem; flex-wrap: wrap;

@@ -439,8 +439,22 @@ function Footer() {
   return (
     <footer className="w1b-dark w1b-footer">
       <div className="w1b-container">
-        <div className="w1b-nav-wordmark">SPECTRE / AUTOMATION</div>
-        <p className="w1b-footer-lead">Built for the people who run exceptional clubs.</p>
+        <div className="w1b-footer-top">
+          <div>
+            <div className="w1b-nav-wordmark">SPECTRE / AUTOMATION</div>
+            <p className="w1b-footer-lead">Built for the people who run exceptional clubs.</p>
+          </div>
+          <div className="w1b-footer-portals">
+            <div>
+              <div className="w1b-footer-portal-label">FOR CLUBS</div>
+              <a href="/login" className="w1b-footer-portal-link">Log in to Spectre</a>
+            </div>
+            <div>
+              <div className="w1b-footer-portal-label">FOR EMPLOYEES</div>
+              <a href="/employee/login" className="w1b-footer-portal-link">Employee Portal</a>
+            </div>
+          </div>
+        </div>
         <ul className="w1b-footer-nav">
           <li><a href="#connected">Product</a></li>
           <li><a href="#final">Company</a></li>

@@ -32,8 +32,11 @@ export function W1bNav() {
                 ))}
               </ul>
             </nav>
-            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration"
-               className="w1b-nav-cta">Request a Demonstration</a>
+            <div className="w1b-nav-actions">
+              <a href="/login" className="w1b-nav-login">Log in</a>
+              <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration"
+                 className="w1b-nav-cta">Request a Demonstration</a>
+            </div>
             <button type="button" className="w1b-nav-menu"
                     onClick={() => setOpen((v) => !v)}
                     aria-expanded={open}
@@ -66,12 +69,19 @@ export function W1bNav() {
                 </li>
               ))}
             </ul>
-            <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration"
-               onClick={() => setOpen(false)}
-               className="w1b-pill-cta"
-               style={{ marginTop: "2rem", display: "inline-flex" }}>
-              Request a Demonstration
-            </a>
+            <div style={{ marginTop: "2rem", display: "flex", flexDirection: "column", gap: "1rem", alignItems: "flex-start" }}>
+              <a href="mailto:hello@spectreautomation.com?subject=Spectre%20Demonstration"
+                 onClick={() => setOpen(false)}
+                 className="w1b-pill-cta">
+                Request a Demonstration
+              </a>
+              <a href="/login"
+                 onClick={() => setOpen(false)}
+                 className="w1b-nav-login"
+                 style={{ fontSize: "1rem" }}>
+                Log in to Spectre
+              </a>
+            </div>
           </div>
         </div>
       )}

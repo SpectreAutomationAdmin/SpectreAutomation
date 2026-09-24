@@ -1,10 +1,11 @@
-// HR-2B.5 §7-9 (2026-08-19) — Employee Portal permanent login.
+// WEB-1D · Employee Portal login — repositioned inside the Spectre auth
+// design system so the portal reads as an extension of the marketing
+// surface without exposing the "Spectre" wordmark to employees.
 //
-// Uses the Club's white-label branding — the word "Spectre" never
-// appears (§7). Login inputs are Employee Number + password. The
-// action re-resolves the Club from the current host so employees
-// on club-scoped domains only ever sign into their own club (§8);
-// rate-limiting + AccountLock live in the service.
+// HR-2B.5 §7-9 semantics preserved:
+//  - §7 white-label brand shielding: club name only, never "Spectre"
+//  - §8 club-scoped auth: server action re-resolves the Club from host
+//  - §9 rate-limit + AccountLock live in the service, unchanged here
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -12,6 +13,8 @@ import { getEmployeePortalPrincipal } from "@/lib/employee-portal-session";
 import { getActiveBranding } from "@/lib/branding";
 import EmployeeLoginForm from "./EmployeeLoginForm";
 import { employeePortalLoginAction } from "../_login-actions";
+import { PortalPicture } from "@/components/marketing/AuthPhoto";
+import "@/components/marketing/auth.css";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,58 +29,72 @@ export default async function EmployeePortalLogin({
 
   const { err, reset } = await searchParams;
   const branding = await getActiveBranding();
-  // §7 + [[feedback_member_brand_shielding]]: the Employee Portal
-  // NEVER shows the "Spectre" wordmark. When the host resolves to
-  // the platform (e.g. staging.spectreautomation.com), fall back to
-  // a neutral label — real clubs deploy at their own domain where
-  // `branding.mode === "club"` and the Club name surfaces.
   const clubName = branding.mode === "club" && branding.wordmark
     ? branding.wordmark
     : "Your Club";
 
   return (
-    <main className="min-h-screen bg-stone-50 flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-md rounded-lg border border-stone-200 bg-white px-8 py-10">
-        <header className="text-center">
-          <p className="text-[11px] uppercase tracking-[0.25em] text-stone-500">
-            {clubName}
-          </p>
-          <h1 className="mt-2 font-serif text-2xl leading-tight text-club-ink">
-            Employee Portal
-          </h1>
-          <p className="mt-1 text-sm text-stone-500">
-            Sign in with your email address.
-          </p>
-        </header>
-
-        {reset && !err && (
-          <div
-            role="status"
-            className="mt-6 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
-            data-testid="employee-login-password-reset-success"
-          >
-            Your password has been updated. Sign in with your email address and
-            your new password.
+    <main className="spectre-auth" data-auth="employee">
+      <div className="auth-shell">
+        {/* Photographic field ------------------------------------------- */}
+        <div className="auth-photo">
+          <PortalPicture />
+          <div className="auth-photo-scrim" aria-hidden="true" />
+          <div className="auth-photo-inner">
+            <Link href="/employee" className="auth-photo-brand" aria-label={`${clubName} home`}>
+              {clubName.toUpperCase()}
+            </Link>
+            <div>
+              <div className="auth-photo-eyebrow">EMPLOYEE PORTAL</div>
+              <h1 className="auth-photo-heading">
+                {`Welcome to ${clubName}.`}
+              </h1>
+              <p className="auth-photo-tag">
+                Sign in with your email address to reach your schedule, pay statements
+                and the tools you use every day.
+              </p>
+            </div>
+            <span aria-hidden="true" />
           </div>
-        )}
-        {err && (
-          <div
-            role="alert"
-            className="mt-6 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-            data-testid="employee-login-error"
-          >
-            {err}
-          </div>
-        )}
-
-        <div className="mt-6">
-          <EmployeeLoginForm action={employeePortalLoginAction} />
         </div>
 
-        <div className="mt-6 text-center text-xs text-stone-500">
-          <Link href="/employee/forgot-password" className="hover:text-stone-800 underline underline-offset-4">
-            Forgot your password?
-          </Link>
+        {/* Form field --------------------------------------------------- */}
+        <div className="auth-form-field">
+          <div className="auth-form-inner">
+            <div className="auth-eyebrow">Sign in</div>
+            <h2 className="auth-heading">Employee Portal</h2>
+            <p className="auth-lead">
+              {`Enter your email address and password. If you have not signed in before, use the invite link we sent you.`}
+            </p>
+
+            {reset && !err && (
+              <div
+                role="status"
+                className="auth-error"
+                style={{
+                  borderColor: "rgba(28, 82, 45, 0.32)",
+                  background: "rgba(28, 82, 45, 0.06)",
+                  color: "#14432a",
+                }}
+                data-testid="employee-login-password-reset-success"
+              >
+                Your password has been updated. Sign in with your email address and your
+                new password.
+              </div>
+            )}
+            {err && (
+              <div className="auth-error" role="alert" data-testid="employee-login-error">
+                {err}
+              </div>
+            )}
+
+            <EmployeeLoginForm action={employeePortalLoginAction} />
+
+            <div className="auth-utility">
+              <Link href="/employee/forgot-password">Forgot your password?</Link>
+              <span className="auth-utility-muted">Not an employee? <Link href="/login">Manager login</Link></span>
+            </div>
+          </div>
         </div>
       </div>
     </main>

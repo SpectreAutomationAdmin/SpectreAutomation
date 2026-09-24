@@ -19,7 +19,7 @@ const PLAN = {
   // WEB-1C.2: tree-framed image serves as Private Club Identity backdrop
   // (kept or removed per WEB-1C.3 §24 decision — implementation retains
   // the variants either way; MANIFEST records the rendering choice).
-  "spectre-hero-club-flag.jpg":     { widths: [480, 768, 1024, 1440, 1920], jpegQ: 78, webpQ: 72 },
+  "spectre-hero-club-flag.jpg":     { widths: [480, 768, 1024, 1440, 1920], jpegQ: 78, webpQ: 72, avifQ: 62 },
   // Retained for provenance only; NOT rendered on WEB-1C.3 homepage.
   "spectre-18-flag.jpg":            { widths: [480, 768, 1024, 1440, 1920], jpegQ: 70, webpQ: 62, avifQ: 55 },
   "spectre-course-atmosphere.jpg":  { widths: [320, 480, 640, 800, 1200],   jpegQ: 78, webpQ: 72 },

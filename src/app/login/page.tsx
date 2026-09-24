@@ -5,6 +5,8 @@ import { getSession, setSession, getCurrentUser } from "@/lib/session";
 import { login } from "@/lib/services/auth";
 import { isAppError } from "@/lib/errors";
 import { getActiveBranding } from "@/lib/branding";
+import { HeroPicture } from "@/components/marketing/AuthPhoto";
+import "@/components/marketing/auth.css";
 
 // Production login: validation, lockout, audit-trail-aware, encrypted cookie.
 // Any failure renders a generic message — we never reveal whether the email
@@ -37,8 +39,6 @@ async function demoLoginAction(formData: FormData) {
   const email = String(formData.get("email") ?? "").toLowerCase();
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) redirect("/login?error=Demo+user+missing");
-  // For demo accounts we know the password. In production this entire route
-  // would not exist.
   try {
     const { userId } = await login({ email, password: "password" });
     await setSession({ userId });
@@ -46,7 +46,7 @@ async function demoLoginAction(formData: FormData) {
     const message = isAppError(err) ? err.safeMessage : "Could not sign in demo user";
     redirect(`/login?error=${encodeURIComponent(message)}`);
   }
-  if (user.role === "MEMBER") redirect("/app/member");
+  if (user!.role === "MEMBER") redirect("/app/member");
   redirect("/app/admin");
 }
 
@@ -74,77 +74,119 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
     : [];
 
   const showSpectreBrand = branding.mode === "platform" || !branding.hidePlatformBrand;
+  const wordmark = branding.wordmark;
+  const isPlatform = branding.mode === "platform";
 
   return (
-    <main className="min-h-screen flex">
-      <div className="flex-1 flex items-center justify-center bg-club-cream px-6 py-12">
-        <div className="w-full max-w-md">
-          <Link href="/" className="text-xs uppercase tracking-[0.3em] text-club-green-700">{branding.wordmark}</Link>
-          <h1 className="mt-2 page-title">Sign in</h1>
-          <p className="mt-2 text-sm text-stone-600">
-            {branding.mode === "club"
-              ? `Welcome back. Sign in to the ${branding.displayName} member portal.`
-              : "Welcome back. Sign in to your club workspace."}
-          </p>
-
-          {searchParams?.error && (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {searchParams.error}
-            </div>
-          )}
-
-          <form action={loginAction} className="mt-8 space-y-4">
-            <input type="hidden" name="next" value={searchParams?.next ?? ""} />
+    <main className="spectre-auth" data-auth="admin">
+      <div className="auth-shell">
+        {/* Photographic field ------------------------------------------- */}
+        <div className="auth-photo">
+          <HeroPicture />
+          <div className="auth-photo-scrim" aria-hidden="true" />
+          <div className="auth-photo-inner">
+            <Link href="/" className="auth-photo-brand" aria-label={`${wordmark} home`}>
+              {showSpectreBrand ? "SPECTRE / AUTOMATION" : wordmark.toUpperCase()}
+            </Link>
             <div>
-              <label className="label">Email</label>
-              <input className="input" type="email" name="email" required autoComplete="email" maxLength={254} />
-            </div>
-            <div>
-              <label className="label">Password</label>
-              <input className="input" type="password" name="password" required autoComplete="current-password" maxLength={256} />
-            </div>
-            <button type="submit" className="btn btn-primary w-full py-2.5">Sign in</button>
-          </form>
-
-          {demos.length > 0 && (
-            <div className="mt-10 border-t border-stone-200 pt-6">
-              <div className="text-xs uppercase tracking-widest text-stone-500 mb-3">Demo quick-access</div>
-              <div className="space-y-2">
-                {demos.map((d) => (
-                  <form key={d.id} action={demoLoginAction}>
-                    <input type="hidden" name="email" value={d.email} />
-                    <button type="submit" className="w-full text-left rounded-md border border-stone-200 px-3 py-2 hover:bg-white">
-                      <div className="text-sm font-medium text-club-ink">{d.name}</div>
-                      <div className="text-xs text-stone-500">{d.email} · {d.role.replace(/_/g, " ")}</div>
-                    </button>
-                  </form>
-                ))}
+              <div className="auth-photo-eyebrow">
+                {isPlatform ? "SPECTRE / AUTOMATION" : "CLUB WORKSPACE"}
               </div>
-              <div className="mt-4 text-xs text-stone-500">All demo accounts use password <code className="font-mono">password</code>.</div>
+              <h1 className="auth-photo-heading">
+                {isPlatform
+                  ? "A quietly powerful platform behind your club’s most memorable experiences."
+                  : `Welcome back to the ${branding.displayName} workspace.`}
+              </h1>
+              {isPlatform && (
+                <p className="auth-photo-tag">
+                  Onboarding. Accounts. Collections. Financing. Events. One operating system,
+                  crafted for premium private clubs.
+                </p>
+              )}
             </div>
-          )}
+            <Link href="/" className="auth-photo-back">&larr; Back to Spectre</Link>
+          </div>
         </div>
-      </div>
 
-      {showSpectreBrand && (
-        <div className="hidden md:flex flex-1 bg-club-green-800 text-white items-center justify-center p-12">
-          <div className="max-w-md">
-            <div className="text-xs uppercase tracking-[0.3em] text-club-green-200">
-              {branding.mode === "club" ? branding.displayName : "Spectre Automation"}
-            </div>
-            <h2 className="mt-4 font-serif text-4xl leading-tight">
-              {branding.mode === "club"
-                ? `Welcome to the ${branding.displayName} member portal.`
-                : "A quietly powerful platform behind your club’s most memorable experiences."}
+        {/* Form field --------------------------------------------------- */}
+        <div className="auth-form-field">
+          <div className="auth-form-inner">
+            <div className="auth-eyebrow">Sign in</div>
+            <h2 className="auth-heading">
+              {isPlatform
+                ? "Welcome back."
+                : `Sign in to ${branding.displayName}.`}
             </h2>
-            {branding.mode === "platform" && (
-              <p className="mt-6 text-club-green-100">
-                Onboarding. Accounts. Collections. Financing. Events. One operating system, crafted for premium private clubs.
-              </p>
+            <p className="auth-lead">
+              {isPlatform
+                ? "Enter the email and password associated with your Spectre workspace."
+                : `Enter the email and password associated with your ${branding.displayName} workspace.`}
+            </p>
+
+            {searchParams?.error && (
+              <div className="auth-error" role="alert">
+                {searchParams.error}
+              </div>
+            )}
+
+            <form action={loginAction} className="auth-form">
+              <input type="hidden" name="next" value={searchParams?.next ?? ""} />
+              <div className="auth-field">
+                <label className="auth-label" htmlFor="admin-login-email">Email</label>
+                <input
+                  id="admin-login-email"
+                  className="auth-input"
+                  type="email"
+                  name="email"
+                  required
+                  autoComplete="email"
+                  maxLength={254}
+                />
+              </div>
+              <div className="auth-field">
+                <label className="auth-label" htmlFor="admin-login-password">Password</label>
+                <input
+                  id="admin-login-password"
+                  className="auth-input"
+                  type="password"
+                  name="password"
+                  required
+                  autoComplete="current-password"
+                  maxLength={256}
+                />
+              </div>
+              <button type="submit" className="auth-submit">Sign in to Spectre</button>
+            </form>
+
+            <div className="auth-utility">
+              <Link href="/employee/login">Employee Portal</Link>
+              <span className="auth-utility-muted">
+                Need access? <a href="mailto:hello@spectreautomation.com?subject=Spectre%20access">Contact us</a>
+              </span>
+            </div>
+
+            {demos.length > 0 && (
+              <div className="auth-demos">
+                <div className="auth-demos-title">Demo quick-access</div>
+                <div>
+                  {demos.map((d) => (
+                    <form key={d.id} action={demoLoginAction}>
+                      <input type="hidden" name="email" value={d.email} />
+                      <button type="submit" className="auth-demo">
+                        <div className="auth-demo-name">{d.name}</div>
+                        <div className="auth-demo-meta">{d.email} &middot; {d.role.replace(/_/g, " ")}</div>
+                      </button>
+                    </form>
+                  ))}
+                </div>
+                <div className="auth-demos-note">
+                  All demo accounts use password <code>password</code>.
+                </div>
+              </div>
             )}
           </div>
         </div>
-      )}
+      </div>
     </main>
   );
 }
