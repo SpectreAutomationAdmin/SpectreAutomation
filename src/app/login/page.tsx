@@ -89,9 +89,6 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
               {showSpectreBrand ? "SPECTRE / AUTOMATION" : wordmark.toUpperCase()}
             </Link>
             <div>
-              <div className="auth-photo-eyebrow">
-                {isPlatform ? "SPECTRE / AUTOMATION" : "CLUB WORKSPACE"}
-              </div>
               <h1 className="auth-photo-heading">
                 {isPlatform
                   ? "A quietly powerful platform behind your club’s most memorable experiences."

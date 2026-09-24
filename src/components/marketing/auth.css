@@ -50,6 +50,20 @@
   object-fit: cover;
   object-position: 58% center;
 }
+/* WEB-1D.1 — admin login uses the red 18 flag (portrait). Position
+ * the flag pole in the middle-right of the panel so its top-of-flag
+ * silhouette anchors the composition and the lower-left quadrant
+ * remains available for the editorial heading + Back to Spectre. */
+.spectre-auth[data-auth="admin"] .auth-photo > picture img,
+.spectre-auth[data-auth="admin"] .auth-photo img {
+  object-position: 62% 20%;
+}
+@media (max-width: 900px) {
+  .spectre-auth[data-auth="admin"] .auth-photo > picture img,
+  .spectre-auth[data-auth="admin"] .auth-photo img {
+    object-position: 65% 25%;
+  }
+}
 .spectre-auth .auth-photo-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
@@ -59,6 +73,38 @@
       rgba(20,23,15,0.20) 60%,
       rgba(20,23,15,0) 82%),
     linear-gradient(180deg, rgba(20,23,15,0.36) 0%, rgba(20,23,15,0) 18%);
+}
+/* WEB-1D.1 — red 18 flag: strengthen the bottom-left field so the
+ * editorial heading + Back link read cleanly over the darker foliage;
+ * strengthen the top edge so the SPECTRE / AUTOMATION wordmark reads
+ * over the pale sky. The flag itself sits above the darkened field
+ * and keeps its full colour. */
+.spectre-auth[data-auth="admin"] .auth-photo-scrim {
+  background:
+    radial-gradient(85% 82% at 4% 108%,
+      rgba(20,23,15,0.92) 0%,
+      rgba(20,23,15,0.72) 22%,
+      rgba(20,23,15,0.38) 48%,
+      rgba(20,23,15,0.12) 68%,
+      rgba(20,23,15,0) 82%),
+    linear-gradient(180deg,
+      rgba(20,23,15,0.55) 0%,
+      rgba(20,23,15,0.15) 14%,
+      rgba(20,23,15,0) 28%);
+}
+/* Also make the admin editorial heading itself carry a slightly
+ * tighter text-shadow so it reads over the flag if it clips into it
+ * at intermediate widths. */
+.spectre-auth[data-auth="admin"] .auth-photo-heading {
+  text-shadow:
+    0 1px 2px rgba(10, 14, 10, 0.82),
+    0 2px 6px rgba(10, 14, 10, 0.42),
+    0 6px 18px rgba(10, 14, 10, 0.20);
+}
+.spectre-auth[data-auth="admin"] .auth-photo-tag {
+  text-shadow:
+    0 1px 2px rgba(10, 14, 10, 0.80),
+    0 2px 6px rgba(10, 14, 10, 0.40);
 }
 .spectre-auth .auth-photo-inner {
   position: absolute; inset: 0; z-index: 2;
