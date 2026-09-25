@@ -41,8 +41,8 @@ export default async function EmployeePortalLogin({
           <PortalPicture />
           <div className="auth-photo-scrim" aria-hidden="true" />
           <div className="auth-photo-inner">
-            <Link href="/employee" className="auth-photo-brand" aria-label={`${clubName} home`}>
-              {clubName.toUpperCase()}
+            <Link href="/employee" className="auth-photo-brand" aria-label="Spectre Automation home">
+              SPECTRE / AUTOMATION
             </Link>
             <div>
               <div className="auth-photo-eyebrow">EMPLOYEE PORTAL</div>
@@ -72,9 +72,9 @@ export default async function EmployeePortalLogin({
                 role="status"
                 className="auth-error"
                 style={{
-                  borderColor: "rgba(28, 82, 45, 0.32)",
-                  background: "rgba(28, 82, 45, 0.06)",
-                  color: "#14432a",
+                  borderColor: "rgba(120, 190, 140, 0.38)",
+                  background: "rgba(28, 82, 45, 0.22)",
+                  color: "#B8E4C6",
                 }}
                 data-testid="employee-login-password-reset-success"
               >

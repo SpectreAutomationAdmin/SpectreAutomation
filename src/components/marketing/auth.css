@@ -166,6 +166,69 @@
   background: rgba(240, 234, 216, 0.10);
   color: var(--w1b-white);
 }
+
+/* WEB-1D.1D — employee authentication field mirrors the accepted
+ * WEB-1D.1C admin dark treatment. Scoped separately under
+ * [data-auth="employee"] so the admin selectors and the frozen admin
+ * page are untouched. Same colour tokens, same values — an exact
+ * mirror to guarantee the two auth surfaces read as one family. */
+.spectre-auth[data-auth="employee"] .auth-form-field {
+  background: #050505;
+  color: var(--w1b-white);
+}
+.spectre-auth[data-auth="employee"] .auth-heading {
+  color: var(--w1b-white);
+}
+.spectre-auth[data-auth="employee"] .auth-lead {
+  color: #C7C0AA;
+}
+.spectre-auth[data-auth="employee"] .auth-label {
+  color: #A9A390;
+}
+.spectre-auth[data-auth="employee"] .auth-input {
+  color: var(--w1b-white);
+  background: transparent;
+  border-bottom-color: rgba(240, 234, 216, 0.32);
+  caret-color: var(--w1b-white);
+}
+.spectre-auth[data-auth="employee"] .auth-input::placeholder {
+  color: rgba(240, 234, 216, 0.38);
+}
+.spectre-auth[data-auth="employee"] .auth-input:focus {
+  border-bottom-color: var(--w1b-brass);
+}
+.spectre-auth[data-auth="employee"] .auth-input:-webkit-autofill,
+.spectre-auth[data-auth="employee"] .auth-input:-webkit-autofill:hover,
+.spectre-auth[data-auth="employee"] .auth-input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #050505 inset;
+  box-shadow: 0 0 0 1000px #050505 inset;
+  -webkit-text-fill-color: var(--w1b-white);
+  caret-color: var(--w1b-white);
+  transition: background-color 9999s ease-out 0s;
+}
+.spectre-auth[data-auth="employee"] .auth-submit {
+  background: var(--w1b-cream);
+  color: var(--w1b-ink);
+  border-color: var(--w1b-cream);
+}
+.spectre-auth[data-auth="employee"] .auth-submit:hover {
+  background: #F0EAD8;
+}
+.spectre-auth[data-auth="employee"] .auth-utility a {
+  color: var(--w1b-white);
+  border-bottom-color: rgba(240, 234, 216, 0.24);
+}
+.spectre-auth[data-auth="employee"] .auth-utility a:hover {
+  border-bottom-color: var(--w1b-brass);
+}
+.spectre-auth[data-auth="employee"] .auth-utility-muted {
+  color: #A9A390;
+}
+.spectre-auth[data-auth="employee"] .auth-error {
+  border-color: rgba(220, 120, 100, 0.42);
+  background: rgba(120, 30, 20, 0.18);
+  color: #F0B8AC;
+}
 .spectre-auth .auth-photo-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
