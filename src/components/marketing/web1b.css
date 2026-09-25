@@ -315,16 +315,74 @@
 
 /* WEB-1D.2 — The hero previously repeated SPECTRE / AUTOMATION as an
  * eyebrow above the headline; that eyebrow is removed from the JSX
- * (redundant with the global header). To keep the remaining copy stack
- * anchored at the same visual altitude — so the headline top lines up
- * with where the eyebrow top used to be, not where the headline top
- * used to be — the inner container carries a compensating margin-bottom
- * equal to the eyebrow's former vertical contribution. Measured on the
- * accepted WEB-1D.1E hero at 1440x900: eyebrow line-height 18.4px +
- * margin-bottom 28px = 46.4px ≈ 2.9rem. Scales cleanly at every
- * viewport because the eyebrow's font-size + margin were both rem-based. */
-.spectre-web1b .w1b-hero-cliff-inner {
-  margin-bottom: 2.9rem;
+ * (redundant with the global header). The WEB-1D.2 rule that added
+ * .w1b-hero-cliff-inner { margin-bottom: 2.9rem } to compensate for
+ * the flex-end anchoring is REPLACED by the WEB-1D.3 stable-anchor
+ * treatment below (which drops flex-end for flex-start with a fixed
+ * padding-top, so the compensating margin is no longer required). */
+
+/* WEB-1D.3 — Spectre Desktop Composition Stability rule.
+ *
+ * PROBLEM: on the WEB-1D.2 accepted baseline the hero used
+ *   .w1b-hero-cliff { min-height: 100vh; justify-content: flex-end;
+ *                     padding-block: 6.5rem 4.5rem }
+ * + .w1b-hero-cliff-inner { margin-bottom: 2.9rem }
+ * which anchored content to the BOTTOM of a viewport-height-scaled
+ * hero. Measured drift on live WEB-1D.2:
+ *
+ *   viewport       headline.top   %hero_h
+ *   1366x768             290       37.8
+ *   1440x900             422       46.9   ← canonical
+ *   1536x864             385       44.6
+ *   1600x900             416       46.2
+ *   1920x1080            590       54.6
+ *   1920x1200            710       59.2
+ *   2560x1440            950       66.0
+ *
+ * Vertical drift 28.2 pp across the desktop matrix (target ≤ 3 pp).
+ *
+ * Horizontal drift was equally bad — .w1b-container { max-width:1360;
+ * margin:0 auto } centred the copy column, so at 2560w the headline
+ * drifted from left:76 (canonical) to left:644 (25.2%).
+ *
+ * FIX (scoped ≥ 901w so mobile stacking behaviour under
+ * @media (max-width: 900px) further down remains untouched):
+ *   1. VERTICAL — flex-start + fixed padding-top = 422px (matches
+ *      canonical 1440x900 headline.top). min() guards short-viewport
+ *      laptops (1366x768) so the CTA row remains above the fold.
+ *   2. HORIZONTAL — drop the centred max-width for the hero's inner
+ *      container. Left-align the container capped at 1440px so
+ *      copy sits at the canonical 76px from the viewport left edge
+ *      at every desktop width.
+ *   3. FONT — headline pinned at 3.75rem (the existing clamp cap),
+ *      eliminating the 45→60 px jump between 1024w and 1440w and
+ *      keeping type at identical scale across the desktop matrix.
+ *   4. NAV — same left-anchored container treatment so the header
+ *      wordmark + actions don't drift toward viewport centre.
+ *
+ * Downstream sections (Philosophy, Mission Control, etc.) continue
+ * to use the existing centred .w1b-container. Downstream drift is
+ * documented, not fixed, in this phase per §26 / §34 of the brief.
+ */
+@media (min-width: 901px) {
+  .spectre-web1b .w1b-hero-cliff {
+    justify-content: flex-start;
+    padding-block: min(422px, calc(100vh - 380px)) 4.5rem;
+  }
+  .spectre-web1b .w1b-hero-cliff-inner {
+    max-width: 1440px;
+    margin-inline: 0 auto;
+    padding-inline: max(var(--w1b-gutter), 76px);
+    margin-bottom: 0;
+  }
+  .spectre-web1b .w1b-hero-cliff-inner .w1b-display {
+    font-size: 3.75rem;
+  }
+  .spectre-web1b .w1b-nav .w1b-container {
+    max-width: 1440px;
+    margin-inline: 0 auto;
+    padding-inline: max(var(--w1b-gutter), 76px);
+  }
 }
 /* WEB-1D.2 — fine near-black glyph-edge definition so ivory hero
  * typography reads crisply where it crosses complex/bright portions of

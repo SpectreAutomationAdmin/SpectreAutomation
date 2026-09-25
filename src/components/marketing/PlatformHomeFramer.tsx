@@ -80,7 +80,12 @@ function Hero() {
          * headline top aligns with the old eyebrow top. */}
         <W1bReveal delayMs={80}>
           <h1 className="w1b-display" style={{ maxWidth: "22ch" }}>
-            The Operating System for Private Clubs.
+            {/* WEB-1D.3 — desktop wrap is intentional: line 1 = "The
+             * Operating System", line 2 = "for Private Clubs.". Screen
+             * readers read the full sentence continuously; the <br />
+             * is purely visual. On narrow mobile widths the natural
+             * per-line wrap may add its own breaks, which is expected. */}
+            The Operating System<br />for Private Clubs.
           </h1>
         </W1bReveal>
         <W1bReveal delayMs={160}>
