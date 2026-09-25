@@ -248,40 +248,13 @@
  * receives effectively zero cloud contribution and remains bright.
  * The top edge keeps a small gradient so the nav wordmark reads.
  */
+/* WEB-1D.3 · Shadow cloud REMOVED. Hero is now clean photograph +
+ * black editorial typography. Scrim element stays in the DOM for
+ * z-index isolation but paints nothing. */
 .spectre-web1b .w1b-hero-cliff-scrim {
   position: absolute; inset: 0; z-index: 1;
-  background:
-    radial-gradient(70vw 52vh at 22% 60%,
-      rgba(8,10,7,0.98) 0%,
-      rgba(8,10,7,0.82) 22%,
-      rgba(8,10,7,0.52) 46%,
-      rgba(8,10,7,0.22) 66%,
-      rgba(8,10,7,0) 86%),
-    radial-gradient(56vw 38vh at 18% 88%,
-      rgba(8,10,7,0.96) 0%,
-      rgba(8,10,7,0.75) 26%,
-      rgba(8,10,7,0.42) 52%,
-      rgba(8,10,7,0.15) 72%,
-      rgba(8,10,7,0) 90%),
-    radial-gradient(34vw 18vh at 15% 46%,
-      rgba(8,10,7,0.92) 0%,
-      rgba(8,10,7,0.62) 34%,
-      rgba(8,10,7,0.28) 62%,
-      rgba(8,10,7,0) 86%),
-    linear-gradient(180deg, rgba(20,23,15,0.48) 0%, rgba(20,23,15,0) 20%);
-}
-@media (max-width: 900px) {
-  .spectre-web1b .w1b-hero-cliff-scrim {
-    background:
-      /* Mobile: one broad soft cloud covering the copy region at bottom */
-      radial-gradient(150vw 62vh at 50% 100%,
-        rgba(8,10,7,0.95) 0%,
-        rgba(8,10,7,0.78) 22%,
-        rgba(8,10,7,0.45) 48%,
-        rgba(8,10,7,0.15) 68%,
-        rgba(8,10,7,0) 84%),
-      linear-gradient(180deg, rgba(20,23,15,0.55) 0%, rgba(20,23,15,0.05) 22%, rgba(20,23,15,0) 34%);
-  }
+  background: transparent;
+  pointer-events: none;
 }
 .spectre-web1b .w1b-hero-cliff-inner {
   position: relative; z-index: 2;
@@ -289,40 +262,32 @@
    * image — very subtle text-shadow gives edges enough shadow to survive
    * mixed brightness backgrounds, still reads as photography not banner. */
 }
-/* WEB-1D.2 · The atmospheric cloud does the primary contrast work.
- * Text-shadow is retained only at a subtle level for letter-edge
- * crispness where the cloud feathers away. Stacked heavy shadow on
- * top of the cloud would make type muddy. */
+/* WEB-1D.3 · Hero typography reversed to Spectre ink. No text-shadow.
+ * The clean cliffside photograph (pale sky, cliff cream, ocean blue-
+ * grey) provides sufficient contrast for dark editorial typography. */
 .spectre-web1b .w1b-hero-cliff-inner .w1b-eyebrow {
-  color: #F0EAD8;
+  color: var(--w1b-ink);
   font-weight: 600;
   letter-spacing: 0.22em;
-  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
+  text-shadow: none;
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-display {
-  color: var(--w1b-white);
-  text-shadow: 0 1px 3px rgba(8, 10, 7, 0.45);
+  color: var(--w1b-ink);
+  text-shadow: none;
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-body {
-  color: #E4DDCA;
-  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
+  color: var(--w1b-ink);
+  text-shadow: none;
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
-  color: var(--w1b-white);
-  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
+  color: var(--w1b-ink);
+  text-shadow: none;
 }
 @media (max-width: 900px) {
   .spectre-web1b .w1b-hero-cliff { padding-block: 5rem 4rem; }
   .spectre-web1b .w1b-hero-cliff-photo img { object-position: 65% center; }
-  .spectre-web1b .w1b-hero-cliff-scrim {
-    background:
-      linear-gradient(180deg,
-        rgba(20,23,15,0.55) 0%,
-        rgba(20,23,15,0.08) 26%,
-        rgba(20,23,15,0.55) 58%,
-        rgba(20,23,15,0.90) 82%,
-        rgba(20,23,15,0.96) 100%);
-  }
+  /* WEB-1D.3 · mobile scrim also removed */
+  .spectre-web1b .w1b-hero-cliff-scrim { background: transparent; }
 }
 
 .spectre-web1b .w1b-cta-row {
