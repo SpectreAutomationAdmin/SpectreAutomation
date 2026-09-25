@@ -236,21 +236,52 @@
   object-fit: cover;
   object-position: 58% center;
 }
+/* WEB-1D.2 — hero shadow cloud.
+ *
+ * The founder asked for a visible black atmospheric cloud behind the
+ * hero copy. Three overlapping soft radial-gradients form one
+ * feathered mass on the left half of the hero:
+ *   1) large field behind the display H1 (biggest ink contribution)
+ *   2) lower field behind the body + CTA
+ *   3) small upper field behind the SPECTRE / AUTOMATION eyebrow
+ * The right half (clubhouse, cliff, cart path, green, flag, sky)
+ * receives effectively zero cloud contribution and remains bright.
+ * The top edge keeps a small gradient so the nav wordmark reads.
+ */
 .spectre-web1b .w1b-hero-cliff-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
-    /* WEB-1D · localized darkening under the copy region — deeper at anchor,
-     * extended feather so body copy still sits over a controlled tonal field
-     * even at its rightmost line. The clubhouse (upper-right ~60%+) sees
-     * effectively zero gradient contribution. */
-    radial-gradient(78% 78% at 2% 108%,
-      rgba(20,23,15,0.94) 0%,
-      rgba(20,23,15,0.82) 18%,
-      rgba(20,23,15,0.52) 40%,
-      rgba(20,23,15,0.18) 62%,
-      rgba(20,23,15,0) 78%),
-    /* top edge for nav wordmark */
-    linear-gradient(180deg, rgba(20,23,15,0.38) 0%, rgba(20,23,15,0) 16%);
+    radial-gradient(70vw 52vh at 22% 60%,
+      rgba(8,10,7,0.98) 0%,
+      rgba(8,10,7,0.82) 22%,
+      rgba(8,10,7,0.52) 46%,
+      rgba(8,10,7,0.22) 66%,
+      rgba(8,10,7,0) 86%),
+    radial-gradient(56vw 38vh at 18% 88%,
+      rgba(8,10,7,0.96) 0%,
+      rgba(8,10,7,0.75) 26%,
+      rgba(8,10,7,0.42) 52%,
+      rgba(8,10,7,0.15) 72%,
+      rgba(8,10,7,0) 90%),
+    radial-gradient(34vw 18vh at 15% 46%,
+      rgba(8,10,7,0.92) 0%,
+      rgba(8,10,7,0.62) 34%,
+      rgba(8,10,7,0.28) 62%,
+      rgba(8,10,7,0) 86%),
+    linear-gradient(180deg, rgba(20,23,15,0.48) 0%, rgba(20,23,15,0) 20%);
+}
+@media (max-width: 900px) {
+  .spectre-web1b .w1b-hero-cliff-scrim {
+    background:
+      /* Mobile: one broad soft cloud covering the copy region at bottom */
+      radial-gradient(150vw 62vh at 50% 100%,
+        rgba(8,10,7,0.95) 0%,
+        rgba(8,10,7,0.78) 22%,
+        rgba(8,10,7,0.45) 48%,
+        rgba(8,10,7,0.15) 68%,
+        rgba(8,10,7,0) 84%),
+      linear-gradient(180deg, rgba(20,23,15,0.55) 0%, rgba(20,23,15,0.05) 22%, rgba(20,23,15,0) 34%);
+  }
 }
 .spectre-web1b .w1b-hero-cliff-inner {
   position: relative; z-index: 2;
@@ -258,40 +289,27 @@
    * image — very subtle text-shadow gives edges enough shadow to survive
    * mixed brightness backgrounds, still reads as photography not banner. */
 }
-/* WEB-1D.1 · layered tight text-shadow for hero typography. The tight
- * 0/1px key gives each letter enough local edge contrast to resolve
- * over mixed brightness backgrounds; the softer 2/6px supports without
- * turning into a visible "drop-shadow effect"; the diffuse 6/18px
- * provides subtle atmospheric anchoring. Same recipe on all four
- * hero elements so the treatment reads as typographic separation, not
- * a graphic effect. */
+/* WEB-1D.2 · The atmospheric cloud does the primary contrast work.
+ * Text-shadow is retained only at a subtle level for letter-edge
+ * crispness where the cloud feathers away. Stacked heavy shadow on
+ * top of the cloud would make type muddy. */
 .spectre-web1b .w1b-hero-cliff-inner .w1b-eyebrow {
   color: #F0EAD8;
   font-weight: 600;
   letter-spacing: 0.22em;
-  text-shadow:
-    0 1px 2px rgba(10, 14, 10, 0.85),
-    0 2px 6px rgba(10, 14, 10, 0.50),
-    0 4px 14px rgba(10, 14, 10, 0.25);
+  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-display {
   color: var(--w1b-white);
-  text-shadow:
-    0 1px 2px rgba(10, 14, 10, 0.72),
-    0 2px 6px rgba(10, 14, 10, 0.40),
-    0 6px 18px rgba(10, 14, 10, 0.20);
+  text-shadow: 0 1px 3px rgba(8, 10, 7, 0.45);
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-body {
   color: #E4DDCA;
-  text-shadow:
-    0 1px 2px rgba(10, 14, 10, 0.80),
-    0 2px 6px rgba(10, 14, 10, 0.40);
+  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
 }
 .spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
   color: var(--w1b-white);
-  text-shadow:
-    0 1px 2px rgba(10, 14, 10, 0.80),
-    0 2px 6px rgba(10, 14, 10, 0.40);
+  text-shadow: 0 1px 2px rgba(8, 10, 7, 0.55);
 }
 @media (max-width: 900px) {
   .spectre-web1b .w1b-hero-cliff { padding-block: 5rem 4rem; }
