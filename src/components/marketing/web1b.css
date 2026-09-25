@@ -520,6 +520,63 @@
     text-shadow: none;
   }
 }
+
+/* WEB-1D.5B — Two focused corrections that leave typography, header
+ * geometry, and hero copy Y untouched.
+ *
+ * 1. SHORT-DESKTOP PHOTO ART DIRECTION.
+ *    The hero copy stack is fixed at X=76, Y=140 across the entire
+ *    desktop matrix (WEB-1D.5A). On tall desktop viewports (900h+)
+ *    the pale sky in the cliffside photograph extends far enough down
+ *    that the paragraph and CTA row read against sky. On short-
+ *    viewport laptops (768h) the same photograph — displayed at the
+ *    same 1.778 aspect as the container — scales down proportionally,
+ *    bringing the cliff/horizon up UNDER the body copy.
+ *
+ *    Founder direction (§4): art-direct the PHOTOGRAPH on short
+ *    desktop, do not shrink the typography. Solution: on short
+ *    desktop only, force the photo container taller than the viewport
+ *    and top-align its image. The parent .w1b-hero-cliff already has
+ *    overflow:hidden so the excess is clipped. Image scales to the
+ *    forced height; cliff Y = 50% × forced height. At 1000px the
+ *    cliff top lands at Y~500 in viewport coords, well below the CTA
+ *    row (Y bottom ~500). Selected from three candidates at 1366×768:
+ *      850  → cliff at Y~425 (paragraph still touches cliff face)
+ *      900  → cliff at Y~450 (paragraph edge still touches)
+ *      1000 → cliff at Y~500 (paragraph fully over sky) ← chosen
+ *      1050 → cliff at Y~525 (over-zooms clubhouse, unnecessary)
+ *    Clipped by `max-height: 800` so tall desktop viewports keep the
+ *    accepted WEB-1D.5A composition unchanged. `bottom: auto` releases
+ *    the inset:0 bottom constraint so `height:1000px` wins.
+ *
+ * 2. HERO CTA INVERSION.
+ *    Only the HERO instance of the pill CTA flips to ink background +
+ *    ivory text so it reads as the primary action within the black
+ *    hero typography. Scoped strictly to `.w1b-hero-cliff-inner
+ *    .w1b-pill-cta` so the shared `.w1b-pill-cta` cream treatment
+ *    (used by the mobile header dialog + downstream sections) is
+ *    unaffected. The HEADER CTA uses `.w1b-nav-cta` — a different
+ *    class — and stays cream (§10).
+ */
+@media (min-width: 901px) and (max-height: 800px) {
+  .spectre-web1b .w1b-hero-cliff-photo {
+    height: 1000px;
+    bottom: auto;
+  }
+  .spectre-web1b .w1b-hero-cliff-photo img {
+    object-position: 58% top;
+  }
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-pill-cta {
+  background: var(--w1b-ink);
+  color: var(--w1b-white);
+  border-color: var(--w1b-ink);
+}
+.spectre-web1b .w1b-hero-cliff-inner .w1b-pill-cta:hover {
+  background: #050505;
+  border-color: #050505;
+}
+
 /* WEB-1D.5 — the WEB-1D.2 fine hero glyph-edge stroke lived here.
  * It made sense only for ivory type over the busy photograph; WEB-1D.5
  * moves the hero copy into the upper-left over pale sky and switches
