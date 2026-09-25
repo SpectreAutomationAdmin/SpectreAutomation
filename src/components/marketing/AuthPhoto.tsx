@@ -15,8 +15,8 @@ interface Props {
   alt?: string;
 }
 
-const RED_FLAG_WIDTHS = [480, 768, 1024, 1440, 1920];
-const TREE_WIDTHS     = [480, 768, 1024, 1440, 1920];
+const BALL_WIDTHS = [480, 768, 1024, 1440, 1920];
+const TREE_WIDTHS = [480, 768, 1024, 1440, 1920];
 
 function pictureFor(base: string, widths: number[], alt: string, className?: string) {
   const jpeg = widths.map((w) => `/marketing/photography/responsive/${base}-${w}.jpg ${w}w`).join(", ");
@@ -37,9 +37,9 @@ function pictureFor(base: string, widths: number[], alt: string, className?: str
 
 export function HeroPicture({ className, alt }: Props = {}) {
   return pictureFor(
-    "spectre-18-flag",
-    RED_FLAG_WIDTHS,
-    alt ?? "Red eighteenth-hole flag against the sky",
+    "spectre-admin-golf-ball",
+    BALL_WIDTHS,
+    alt ?? "Titleist golf ball on a red tee against a black field",
     className,
   );
 }

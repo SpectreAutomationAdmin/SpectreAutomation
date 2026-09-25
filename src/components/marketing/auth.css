@@ -50,55 +50,29 @@
   object-fit: cover;
   object-position: 58% center;
 }
-/* WEB-1D.1A — admin login red 18 flag zoom-out only.
- * The COMPOSITION is unchanged (52/48 split, wordmark top-left,
- * editorial heading, tag, Back link, cream form on the right).
- * ONLY the photograph is pulled back. Two-layer photographic fill:
- *   layer 1 (::before) — same photograph, cover-fit, softly blurred,
- *     slightly scaled — provides seamless full-bleed coverage of the
- *     entire left panel edge-to-edge.
- *   layer 2 (<picture>) — same photograph, contained at natural
- *     portrait aspect, centred at a reduced height so materially
- *     more of the source is visible. The sharp foreground and the
- *     blurred backing are the same image, so the eye reads one
- *     photograph with depth-of-field falloff — not a picture-in-
- *     frame. */
+/* WEB-1D.1B — admin login with the Scott Warman golf-ball photograph.
+ * The COMPOSITION is unchanged from WEB-1D.1 (52/48 split, wordmark
+ * top-left, editorial heading + tag, Back link, cream form on the
+ * right). Simple single-photograph treatment: the source is almost
+ * entirely black, so the container fills the underflow with matching
+ * near-black ink and the image sits right-anchored — cream typography
+ * reads over the natural black field on the left half of the panel,
+ * ball anchors the right half. No blur, no ::before, no filter. */
 .spectre-auth[data-auth="admin"] .auth-photo {
-  background-color: #17190E;
-}
-.spectre-auth[data-auth="admin"] .auth-photo::before {
-  content: "";
-  position: absolute; inset: -6%; z-index: 0;
-  background-image: url('/marketing/photography/responsive/spectre-18-flag-1024.jpg');
-  background-size: cover;
-  background-position: 62% 20%;
-  background-repeat: no-repeat;
-  filter: blur(28px) brightness(0.92) saturate(0.92);
-  pointer-events: none;
-}
-.spectre-auth[data-auth="admin"] .auth-photo > picture {
-  position: absolute; inset: 0; z-index: 1;
-  display: flex; align-items: center; justify-content: center;
-  overflow: hidden;
+  background-color: #050505;
 }
 .spectre-auth[data-auth="admin"] .auth-photo > picture img,
 .spectre-auth[data-auth="admin"] .auth-photo img {
-  width: auto;
-  height: 84vh;
-  max-height: 100%;
-  max-width: 100%;
   object-fit: contain;
-  object-position: center;
+  object-position: right center;
+  height: 78vh;
+  max-height: 100%;
+  width: 100%;
 }
 @media (max-width: 900px) {
-  .spectre-auth[data-auth="admin"] .auth-photo::before {
-    background-position: 65% 25%;
-    filter: blur(22px) brightness(0.92) saturate(0.92);
-  }
   .spectre-auth[data-auth="admin"] .auth-photo > picture img,
   .spectre-auth[data-auth="admin"] .auth-photo img {
-    height: 90vh;
-    max-height: 40vh;
+    object-position: center top;
   }
 }
 .spectre-auth .auth-photo-scrim {
