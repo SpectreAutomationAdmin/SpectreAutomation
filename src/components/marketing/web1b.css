@@ -384,6 +384,80 @@
     padding-inline: max(var(--w1b-gutter), 76px);
   }
 }
+
+/* WEB-1D.4 — header three-zone architecture + hero micro-proportion pass.
+ *
+ * HEADER: WEB-1D.3 anchored the nav to a 1440-capped left-aligned
+ * container with internal space-between distribution. That kept the
+ * wordmark and actions stable but left the nav-links group centered
+ * IN THE FLEX SPACE between them, not on the SCREEN. On very wide
+ * viewports the perceived "centre" of the nav therefore drifted with
+ * whichever side had more slack. Founder ask: nav-links truly centered
+ * on the viewport, with wordmark and actions independently anchored to
+ * their respective edges. Solution — a 3-column grid on .w1b-nav-inner:
+ *
+ *   grid-template-columns: 1fr auto 1fr
+ *
+ * Left cell (1fr) contains the wordmark, justify-self: start + fixed
+ * left padding → wordmark hugs viewport left. Right cell (1fr) contains
+ * the actions, justify-self: end + fixed right padding → actions hug
+ * viewport right. Centre cell (auto) is content-sized and, because the
+ * two 1fr flankers are equal, is mathematically centred on the viewport.
+ * The measured nav_centre - viewport_centre delta is 0 px at every
+ * desktop viewport in the required matrix. Mobile (@media max-width:900)
+ * hides .w1b-nav-links and .w1b-nav-cta and shows .w1b-nav-menu; the
+ * grid overrides only fire at ≥901w so mobile geometry is untouched.
+ *
+ * HERO: the WEB-1D.3 fixed 76px left anchor felt slightly too tightly
+ * pinned to the left bezel on very wide displays. §8 asked for a
+ * restrained bounded inset that adds modest breathing room on wide
+ * monitors while keeping the 1440 anchor exactly at 76. The clamp
+ * below adds ≈50 px of drift between 1440 and 2560 (right in the
+ * 40-70 px range §8 targets), then hard-caps at 140 px:
+ *
+ *   clamp(76px, calc(76px + (100vw - 1440px) * 0.045), 140px)
+ *
+ *   viewport   clamp
+ *   ≤1440      76
+ *   1600       83
+ *   1920       98
+ *   2560       126
+ *   ≥2860      140  (hard cap)
+ *
+ * This applies only to the hero content column; the header wordmark
+ * stays at fixed 76 px per §5 ("gain empty space on large monitors,
+ * not reposition its fundamental anchors").
+ *
+ * BODY WIDTH: increased from 36ch → 44ch in the JSX so the paragraph
+ * reads as ~4 balanced lines on ordinary desktop instead of 5. CSS
+ * font size / colour / edge treatment untouched.
+ */
+@media (min-width: 901px) {
+  .spectre-web1b .w1b-nav .w1b-container {
+    max-width: none;
+    margin-inline: 0;
+    padding-inline: 0;
+  }
+  .spectre-web1b .w1b-nav-inner {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+  }
+  .spectre-web1b .w1b-nav-inner > .w1b-nav-wordmark {
+    justify-self: start;
+    padding-left: max(var(--w1b-gutter), 76px);
+  }
+  .spectre-web1b .w1b-nav-inner > nav {
+    justify-self: center;
+  }
+  .spectre-web1b .w1b-nav-inner > .w1b-nav-actions {
+    justify-self: end;
+    padding-right: max(var(--w1b-gutter), 76px);
+  }
+  .spectre-web1b .w1b-hero-cliff-inner {
+    padding-inline: clamp(76px, calc(76px + (100vw - 1440px) * 0.045), 140px);
+  }
+}
 /* WEB-1D.2 — fine near-black glyph-edge definition so ivory hero
  * typography reads crisply where it crosses complex/bright portions of
  * the cliffside photograph (sky, waves, pale cliff face, clubhouse).

@@ -89,7 +89,11 @@ function Hero() {
           </h1>
         </W1bReveal>
         <W1bReveal delayMs={160}>
-          <p className="w1b-body" style={{ marginTop: "2rem", maxWidth: "36ch" }}>
+          {/* WEB-1D.4 — modestly wider body cap (36ch → 44ch) so the
+           * paragraph reads as ~4 balanced lines on ordinary desktop
+           * instead of a narrow 5-line column, better supporting the
+           * two-line headline. Font, colour, edge treatment unchanged. */}
+          <p className="w1b-body" style={{ marginTop: "2rem", maxWidth: "44ch" }}>
             Spectre quietly connects the people, information and workflows behind an exceptional
             private club — so your team can spend less time operating software and more time
             running the club.
