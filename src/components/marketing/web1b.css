@@ -34,6 +34,14 @@
   --w1b-gutter:   clamp(1.25rem, 2.5vw, 2.75rem);
   --w1b-section-y: clamp(4rem, 6.5vw, 7rem);
 
+  /* WEB-1D.5 — shared design token for the desktop left/right edge.
+   * Consumed by the header wordmark (padding-left), the header actions
+   * (padding-right, symmetric anchor), and the hero copy stack
+   * (padding-inline). Header and hero literally read from the same
+   * value, so their vertical axes cannot drift apart at any desktop
+   * viewport. Change here → both surfaces update in lock-step. */
+  --spectre-desktop-edge: 76px;
+
   background: var(--w1b-dark);
   color: var(--w1b-white);
   font-family: var(--w1b-sans);
@@ -445,17 +453,61 @@
   }
   .spectre-web1b .w1b-nav-inner > .w1b-nav-wordmark {
     justify-self: start;
-    padding-left: max(var(--w1b-gutter), 76px);
+    /* WEB-1D.5 — consume shared token so header and hero share one axis. */
+    padding-left: var(--spectre-desktop-edge);
   }
   .spectre-web1b .w1b-nav-inner > nav {
     justify-self: center;
   }
   .spectre-web1b .w1b-nav-inner > .w1b-nav-actions {
     justify-self: end;
-    padding-right: max(var(--w1b-gutter), 76px);
+    padding-right: var(--spectre-desktop-edge);
   }
+  /* WEB-1D.5 supersedes the WEB-1D.4 hero left-inset clamp: the founder
+   * has explicitly rejected any hero X drift on wider viewports. Hero
+   * copy now shares the exact header wordmark X at every desktop width
+   * by consuming the same --spectre-desktop-edge token. */
   .spectre-web1b .w1b-hero-cliff-inner {
-    padding-inline: clamp(76px, calc(76px + (100vw - 1440px) * 0.045), 140px);
+    padding-inline: var(--spectre-desktop-edge);
+  }
+}
+
+/* WEB-1D.5 — hero copy recomposed into the upper-left of the photograph,
+ * rendered in Spectre marketing ink (--w1b-ink #1A1E17) rather than
+ * ivory. The WEB-1D.2 fine dark-stroke edge treatment was designed to
+ * define cream typography against a busy photograph — it no longer
+ * makes sense on black type, so it is removed here. Black type sits
+ * primarily over the pale sky in the upper-left region of the
+ * clubhouse photograph; the founder explicitly asked for the natural
+ * photograph contrast without any scrim / overlay / shadow / stroke.
+ *
+ * Photograph, typography (family, size, weight, line-height, tracking,
+ * two-line wrap, body width), CTA construction, cream Request-a-
+ * Demonstration button, and all header geometry (WEB-1D.4 three-zone
+ * grid) are frozen — this phase is position + colour only.
+ *
+ * VERTICAL: fixed 220px from top of hero at every desktop viewport.
+ * Chosen from an A/B experiment against LIVE WEB-1D.4:
+ *   A — 220px (chosen)   headline over pale sky, ~140px below header
+ *   B — 260px             ~40px lower; headline drifts into clubhouse
+ * A wins because it keeps the primary headline over pale sky at 1440
+ * and 2560, avoids the visually busy clubhouse where possible, and
+ * leaves substantial uninterrupted photograph beneath the CTAs. Fixed
+ * pixel anchor preserves the WEB-1D.3 composition-stability principle
+ * (same absolute Y regardless of viewport height). No safety valve
+ * required — CTA bottom lands at ~580 which is safely above the
+ * 1366×768 fold. */
+@media (min-width: 901px) {
+  .spectre-web1b .w1b-hero-cliff {
+    justify-content: flex-start;
+    padding-block: 220px 4.5rem;
+  }
+  .spectre-web1b .w1b-hero-cliff-inner .w1b-display,
+  .spectre-web1b .w1b-hero-cliff-inner .w1b-body,
+  .spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
+    color: var(--w1b-ink);
+    -webkit-text-stroke: 0;
+    text-shadow: none;
   }
 }
 /* WEB-1D.2 — fine near-black glyph-edge definition so ivory hero
