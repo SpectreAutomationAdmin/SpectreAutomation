@@ -72,11 +72,12 @@ function Hero() {
       </div>
       <div className="w1b-hero-cliff-scrim" aria-hidden="true" />
       <div className="w1b-container w1b-hero-cliff-inner">
-        <W1bReveal>
-          <div className="w1b-eyebrow" style={{ marginBottom: "1.75rem" }}>
-            SPECTRE / AUTOMATION
-          </div>
-        </W1bReveal>
+        {/* WEB-1D.2 — the SPECTRE / AUTOMATION wordmark already reads in
+         * the global header immediately above the hero. Repeating it as
+         * a hero eyebrow adds hierarchy without adding meaning, so it is
+         * removed here. The remaining hero stack lifts upward by the
+         * eyebrow's former vertical contribution via web1b.css so the
+         * headline top aligns with the old eyebrow top. */}
         <W1bReveal delayMs={80}>
           <h1 className="w1b-display" style={{ maxWidth: "22ch" }}>
             The Operating System for Private Clubs.
