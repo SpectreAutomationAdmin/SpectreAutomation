@@ -75,6 +75,97 @@
     object-position: center top;
   }
 }
+
+/* WEB-1D.1C — admin authentication field flipped to black + ivory.
+ * Scoped to [data-auth="admin"] only so the employee login retains
+ * its cream form. Overrides colour/border tones without touching
+ * layout, geometry, typography size or spacing. Same DOM, same rules
+ * that produce the WEB-1D.1B geometry — only tokens differ. */
+.spectre-auth[data-auth="admin"] .auth-form-field {
+  background: #050505;
+  color: var(--w1b-white);
+}
+.spectre-auth[data-auth="admin"] .auth-heading {
+  color: var(--w1b-white);
+}
+.spectre-auth[data-auth="admin"] .auth-lead {
+  color: #C7C0AA;
+}
+.spectre-auth[data-auth="admin"] .auth-label {
+  color: #A9A390;
+}
+.spectre-auth[data-auth="admin"] .auth-input {
+  color: var(--w1b-white);
+  background: transparent;
+  border-bottom-color: rgba(240, 234, 216, 0.32);
+  caret-color: var(--w1b-white);
+}
+.spectre-auth[data-auth="admin"] .auth-input::placeholder {
+  color: rgba(240, 234, 216, 0.38);
+}
+.spectre-auth[data-auth="admin"] .auth-input:focus {
+  border-bottom-color: var(--w1b-brass);
+}
+/* Chrome autofill would otherwise repaint the field with a pale-blue
+ * inset background. Use a large inset box-shadow of the panel colour
+ * to overpaint that and re-set the text colour via -webkit-text-fill. */
+.spectre-auth[data-auth="admin"] .auth-input:-webkit-autofill,
+.spectre-auth[data-auth="admin"] .auth-input:-webkit-autofill:hover,
+.spectre-auth[data-auth="admin"] .auth-input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #050505 inset;
+  box-shadow: 0 0 0 1000px #050505 inset;
+  -webkit-text-fill-color: var(--w1b-white);
+  caret-color: var(--w1b-white);
+  transition: background-color 9999s ease-out 0s;
+}
+.spectre-auth[data-auth="admin"] .auth-submit {
+  background: var(--w1b-cream);
+  color: var(--w1b-ink);
+  border-color: var(--w1b-cream);
+}
+.spectre-auth[data-auth="admin"] .auth-submit:hover {
+  background: #F0EAD8;
+}
+.spectre-auth[data-auth="admin"] .auth-utility a {
+  color: var(--w1b-white);
+  border-bottom-color: rgba(240, 234, 216, 0.24);
+}
+.spectre-auth[data-auth="admin"] .auth-utility a:hover {
+  border-bottom-color: var(--w1b-brass);
+}
+.spectre-auth[data-auth="admin"] .auth-utility-muted {
+  color: #A9A390;
+}
+/* Error banner over black — soften the red-cream contrast so the
+ * message reads without shouting. */
+.spectre-auth[data-auth="admin"] .auth-error {
+  border-color: rgba(220, 120, 100, 0.42);
+  background: rgba(120, 30, 20, 0.18);
+  color: #F0B8AC;
+}
+/* Demo quick-access panel (platform host only) — dark surface. */
+.spectre-auth[data-auth="admin"] .auth-demos {
+  border-top-color: rgba(240, 234, 216, 0.14);
+}
+.spectre-auth[data-auth="admin"] .auth-demo {
+  background: rgba(240, 234, 216, 0.06);
+  border-color: rgba(240, 234, 216, 0.14);
+  color: var(--w1b-white);
+}
+.spectre-auth[data-auth="admin"] .auth-demo:hover {
+  background: rgba(240, 234, 216, 0.12);
+  border-color: rgba(240, 234, 216, 0.26);
+}
+.spectre-auth[data-auth="admin"] .auth-demo-meta {
+  color: #A9A390;
+}
+.spectre-auth[data-auth="admin"] .auth-demos-note {
+  color: #A9A390;
+}
+.spectre-auth[data-auth="admin"] .auth-demos-note code {
+  background: rgba(240, 234, 216, 0.10);
+  color: var(--w1b-white);
+}
 .spectre-auth .auth-photo-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
