@@ -486,21 +486,27 @@
  * Demonstration button, and all header geometry (WEB-1D.4 three-zone
  * grid) are frozen — this phase is position + colour only.
  *
- * VERTICAL: fixed 220px from top of hero at every desktop viewport.
- * Chosen from an A/B experiment against LIVE WEB-1D.4:
- *   A — 220px (chosen)   headline over pale sky, ~140px below header
- *   B — 260px             ~40px lower; headline drifts into clubhouse
- * A wins because it keeps the primary headline over pale sky at 1440
- * and 2560, avoids the visually busy clubhouse where possible, and
- * leaves substantial uninterrupted photograph beneath the CTAs. Fixed
- * pixel anchor preserves the WEB-1D.3 composition-stability principle
- * (same absolute Y regardless of viewport height). No safety valve
- * required — CTA bottom lands at ~580 which is safely above the
- * 1366×768 fold. */
+ * VERTICAL: fixed 140px from top of hero at every desktop viewport.
+ * Chosen from an A/B/C experiment against LIVE WEB-1D.5:
+ *   A — 140px (chosen)   headline + body substantially over pale sky
+ *   B — 150px            body starts to intersect cliff face
+ *   C — 160px            body significantly over the busy cliff face
+ * Original WEB-1D.5 shipped at 220px; the founder observed that while
+ * the headline sat over sky, the paragraph and CTA fell onto the
+ * cliff. WEB-1D.5A raises the entire stack to 140 so the complete
+ * black typographic composition reads as one coherent block sitting
+ * in the pale upper-left sky region (§3, §10 of the WEB-1D.5A brief).
+ * A wins on the founder's primary visual rule: sky-clearance of the
+ * paragraph. Breathing room below the header is 140 − 71 (header
+ * height) = 69px — editorial, not cramped (§4). Fixed pixel anchor
+ * preserves the WEB-1D.3 composition-stability principle: same
+ * absolute Y at every viewport height; taller monitors reveal more
+ * photograph beneath the composition. CTA bottom lands ~500,
+ * comfortably above the 1366×768 fold. */
 @media (min-width: 901px) {
   .spectre-web1b .w1b-hero-cliff {
     justify-content: flex-start;
-    padding-block: 220px 4.5rem;
+    padding-block: 140px 4.5rem;
   }
   .spectre-web1b .w1b-hero-cliff-inner .w1b-display,
   .spectre-web1b .w1b-hero-cliff-inner .w1b-body,
