@@ -506,7 +506,11 @@
   .spectre-web1b .w1b-hero-cliff-inner .w1b-body,
   .spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
     color: var(--w1b-ink);
-    -webkit-text-stroke: 0;
+    /* Longhand overrides so the WEB-1D.2 shorthand stroke is fully
+     * disabled — shorthand `-webkit-text-stroke: 0` was silently
+     * ignored on some browsers per the live getComputedStyle audit. */
+    -webkit-text-stroke-width: 0;
+    -webkit-text-stroke-color: transparent;
     text-shadow: none;
   }
 }
