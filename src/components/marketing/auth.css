@@ -229,6 +229,45 @@
   background: rgba(120, 30, 20, 0.18);
   color: #F0B8AC;
 }
+/* WEB-1D.1E — dissolve the employee photograph's right edge into the
+ * accepted #050505 authentication field so the centre seam that was
+ * visible in WEB-1D.1D becomes perceptually invisible. Same #050505
+ * destination as the .auth-form-field background above. Scoped strictly
+ * to [data-auth="employee"] so the admin surface receives zero change.
+ * Photograph asset, geometry, object-fit, object-position, layout,
+ * typography, and copy are untouched — this is paint only.
+ *
+ * Winner selected from three side-by-side candidates against LIVE
+ * WEB-1D.1D staging:
+ *   A — final 15% linear   ← winning treatment
+ *   B — final 20% linear
+ *   C — final 28% w/ mid-stop, gentler ramp
+ * A holds ~85% of the photograph visually identical to WEB-1D.1D and
+ * hides the seam entirely; the fade itself is imperceptible because
+ * the photograph's right edge is already dark foliage. */
+.spectre-auth[data-auth="employee"] .auth-photo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(to right,
+    rgba(5, 5, 5, 0) 0%,
+    rgba(5, 5, 5, 0) 85%,
+    #050505 100%);
+}
+/* WEB-1D.1E — at ≤900px the auth-shell stacks the photo above the form,
+ * so the seam that needs blending is horizontal (photo BOTTOM edge into
+ * form TOP edge), not vertical. Same treatment, rotated 90°. Scoped to
+ * employee only. */
+@media (max-width: 900px) {
+  .spectre-auth[data-auth="employee"] .auth-photo::after {
+    background: linear-gradient(to bottom,
+      rgba(5, 5, 5, 0) 0%,
+      rgba(5, 5, 5, 0) 82%,
+      #050505 100%);
+  }
+}
 .spectre-auth .auth-photo-scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
