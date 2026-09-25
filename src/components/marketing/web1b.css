@@ -514,28 +514,13 @@
     text-shadow: none;
   }
 }
-/* WEB-1D.2 — fine near-black glyph-edge definition so ivory hero
- * typography reads crisply where it crosses complex/bright portions of
- * the cliffside photograph (sky, waves, pale cliff face, clubhouse).
- * NOT an outline — the stroke is substantially thinner than 1 CSS pixel
- * so at normal viewing distance the user perceives ivory type that is
- * simply crisper. Photograph is untouched. Existing multi-layer
- * text-shadows remain the primary depth anchor; the sub-pixel stroke
- * only sharpens the glyph perimeter. Ink colour matches the Spectre
- * near-black (#050505) used on the authentication surfaces. Selected
- * from three side-by-side candidates against the LIVE hero:
- *   A — 0.25px headline / 0.20px body   ← winning treatment
- *   B — 0.40px headline / 0.30px body
- *   C — 0.60px headline / 0.40px body
- * A is the lightest treatment that materially improves readability;
- * B and C both cross into perceptible outline territory. */
-.spectre-web1b .w1b-hero-cliff-inner .w1b-display {
-  -webkit-text-stroke: 0.25px rgba(5, 5, 5, 0.85);
-}
-.spectre-web1b .w1b-hero-cliff-inner .w1b-body,
-.spectre-web1b .w1b-hero-cliff-inner .w1b-text-link {
-  -webkit-text-stroke: 0.20px rgba(5, 5, 5, 0.80);
-}
+/* WEB-1D.5 — the WEB-1D.2 fine hero glyph-edge stroke lived here.
+ * It made sense only for ivory type over the busy photograph; WEB-1D.5
+ * moves the hero copy into the upper-left over pale sky and switches
+ * it to Spectre marketing ink, so the stroke is removed entirely and
+ * the natural photograph provides the contrast (§10 of the WEB-1D.5
+ * brief). Retained history is in git; no downstream selector consumes
+ * these rules, so deletion is safe. */
 
 /* ---- Philosophy section ---- */
 .spectre-web1b .w1b-2col {
