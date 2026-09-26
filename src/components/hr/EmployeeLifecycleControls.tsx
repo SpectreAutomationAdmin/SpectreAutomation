@@ -25,6 +25,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { formatCivilDate } from "@/lib/format/civil-date";
 
 export interface EmployeeDeleteEligibility {
   eligible: boolean;
@@ -102,11 +103,7 @@ export default function EmployeeLifecycleControls(props: Props) {
   // available; Archive remains for optional record-hiding.
   // ------------------------------------------------------------------
   if (props.currentLifecycle === "TERMINATED") {
-    const dateStr = props.terminationDate
-      ? new Date(props.terminationDate).toLocaleDateString(undefined, {
-          year: "numeric", month: "long", day: "numeric",
-        })
-      : null;
+    const dateStr = formatCivilDate(props.terminationDate, { month: "long" });
     return (
       <section
         data-testid="employee-lifecycle-terminated"

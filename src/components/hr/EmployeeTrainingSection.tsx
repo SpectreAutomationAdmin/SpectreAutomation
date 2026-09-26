@@ -14,6 +14,7 @@
 
 import type { EmployeeTrainingRecord } from "@/lib/hr/training/compliance";
 import AssignTrainingButton from "./AssignTrainingButton";
+import { formatCivilDate } from "@/lib/format/civil-date";
 
 interface Props {
   record: EmployeeTrainingRecord;
@@ -28,9 +29,13 @@ interface Props {
   >;
 }
 
+// AUTH-3D.CLOSEOUT-FIX (2026-09-26): training completion is a business
+// civil date (what day the requirement was satisfied), not a moment
+// in time. Delegate to the shared UTC-safe renderer so completion
+// stored at UTC midnight reads as the day it was captured for a
+// viewer in any timezone.
 function formatDate(d: Date | null): string {
-  if (!d) return "—";
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return formatCivilDate(d, { fallback: "—" }) ?? "—";
 }
 
 function statusLabel(s: string): { label: string; tone: "emerald" | "amber" | "stone" | "red" } {

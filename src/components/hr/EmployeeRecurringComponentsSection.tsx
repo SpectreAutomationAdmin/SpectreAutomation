@@ -25,6 +25,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { formatCivilDate } from "@/lib/format/civil-date";
 
 export interface RecurringComponentCatalogueOption {
   id: string;
@@ -93,9 +94,12 @@ interface Props {
   ) => Promise<ActionResult>;
 }
 
+// AUTH-3D.CLOSEOUT-FIX (2026-09-26): compensation-component effective
+// dates are business civil dates. Delegate to the shared UTC-safe
+// renderer so an effective-from of "2026-09-26" reads as September 26
+// regardless of the viewer's timezone.
 function fmtDate(iso: string | null): string {
-  if (!iso) return "current";
-  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return formatCivilDate(iso, { fallback: "current" }) ?? "current";
 }
 
 function fmtMoney(amount: string | null): string {

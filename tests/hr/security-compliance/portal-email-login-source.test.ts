@@ -53,10 +53,12 @@ describe("HR mobile-hotfix · portal login is now email-based (source pins)", ()
     expect(loginAction).toMatch(/normaliseLoginEmail/);
   });
 
-  it("login action: neutral failure message covers BOTH not_recognised and ambiguous_across_clubs (same audit shape)", () => {
+  it("login action: neutral failure covers not_recognised, ambiguous_across_clubs, AND ineligible (AUTH-3D.CLOSEOUT-FIX)", () => {
     expect(loginAction).toMatch(/NEUTRAL_LOGIN_FAILURE/);
     // Ambiguous-Club handling is present.
     expect(loginAction).toMatch(/ambiguous_across_clubs/);
+    // AUTH-3D.CLOSEOUT-FIX: ineligible joins the same failure branch.
+    expect(loginAction).toMatch(/result\.kind === "ineligible"/);
     // Audit entity id is the hashed email (never raw email; never
     // discriminates between failure kinds in the caller-visible
     // response).
@@ -66,12 +68,18 @@ describe("HR mobile-hotfix · portal login is now email-based (source pins)", ()
   it("credential service: exports normaliseLoginEmail + verifyPortalPasswordByEmail", () => {
     expect(credService).toMatch(/export function normaliseLoginEmail/);
     expect(credService).toMatch(/export async function verifyPortalPasswordByEmail/);
-    // Result type distinguishes success / not_recognised / ambiguous_across_clubs.
+    // AUTH-3D.CLOSEOUT-FIX: result type now distinguishes four kinds
+    // (success / not_recognised / ambiguous_across_clubs / ineligible).
     expect(credService).toMatch(/kind:\s*"success"/);
     expect(credService).toMatch(/kind:\s*"not_recognised"/);
     expect(credService).toMatch(/kind:\s*"ambiguous_across_clubs"/);
+    expect(credService).toMatch(/kind:\s*"ineligible"/);
     // Bcrypt dummy compare on every failure path — timing discipline.
     expect(credService).toMatch(/DUMMY_HASH/);
+    // AUTH-3D.CLOSEOUT-FIX: eligibility check uses the canonical
+    // isPortalEligible policy — no drift possible with the access
+    // layer's check in getEmployeePortalPrincipal.
+    expect(credService).toMatch(/isPortalEligible/);
   });
 
   it("credential service: preserves AccountLock semantics (5→15min, 10→60min)", () => {

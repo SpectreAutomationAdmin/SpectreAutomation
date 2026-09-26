@@ -241,15 +241,14 @@ function formatDate(iso: string | null | undefined): string {
 // above would shift the day backward for any viewer west of UTC. This
 // helper reads UTC components so the rendered day is always the day
 // the value was captured as.
+// AUTH-3D.CLOSEOUT-FIX (2026-09-26): the local `formatCivilDate` has
+// been extracted to `@/lib/format/civil-date` so every HR/payroll
+// surface renders civil dates through the same canonical helper (no
+// per-file drift). The local wrapper keeps the "Not provided"
+// fallback contract this page relied on.
+import { formatCivilDate as formatCivilDateBase } from "@/lib/format/civil-date";
 function formatCivilDate(iso: string | null | undefined): string {
-  if (!iso) return "Not provided";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "Not provided";
-  const y = d.getUTCFullYear();
-  const m = d.getUTCMonth(); // 0-based
-  const day = d.getUTCDate();
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${monthNames[m]} ${day}, ${y}`;
+  return formatCivilDateBase(iso, { fallback: "Not provided" }) ?? "Not provided";
 }
 
 function initials(first: string | null, last: string | null): string {
@@ -283,7 +282,8 @@ export default function EmployeeProfileView(props: Props) {
     : null;
 
   const startDateIso = employee.expectedStartDate ?? employee.hireDate;
-  const startLabel = startDateIso ? formatDate(startDateIso) : "Not scheduled";
+  // AUTH-3D.CLOSEOUT-FIX: hire/expected-start are civil dates.
+  const startLabel = startDateIso ? formatCivilDate(startDateIso) : "Not scheduled";
   const status = employee.employeeLifecycle.toUpperCase();
 
   return (
@@ -420,7 +420,7 @@ export default function EmployeeProfileView(props: Props) {
                   <PersonRow label="Department" value={department?.name ?? null} />
                   <PersonRow label="Employment type" value={humanize(employee.employmentType)} raw />
                   <PersonRow label="Reports to" value={managerName} />
-                  <PersonRow label="Expected start date" value={employee.expectedStartDate ? formatDate(employee.expectedStartDate) : null} raw />
+                  <PersonRow label="Expected start date" value={employee.expectedStartDate ? formatCivilDate(employee.expectedStartDate) : null} raw />
                   <PersonRow label="Employee number" value={employee.employeeNumber} raw />
                 </dl>
               </div>
@@ -612,8 +612,9 @@ export default function EmployeeProfileView(props: Props) {
                   )}
                   {employmentPeriods.map((p) => (
                     <tr key={p.id}>
-                      <td>{formatDate(p.effectiveFrom)}</td>
-                      <td>{p.effectiveTo ? formatDate(p.effectiveTo) : "current"}</td>
+                      {/* AUTH-3D.CLOSEOUT-FIX: employment-period effective dates are civil. */}
+                      <td>{formatCivilDate(p.effectiveFrom)}</td>
+                      <td>{p.effectiveTo ? formatCivilDate(p.effectiveTo) : "current"}</td>
                       <td className="text-stone-600 text-xs">{humanize(p.employmentType)}</td>
                       <td className="text-stone-600 text-xs">{humanize(p.reason)}</td>
                     </tr>

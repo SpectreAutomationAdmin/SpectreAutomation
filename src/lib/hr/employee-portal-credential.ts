@@ -313,7 +313,16 @@ export type VerifyPortalPasswordByEmailResult =
    *  when no clubId scope was supplied. The caller decides whether
    *  to prompt for a Club chooser or refuse — this service does NOT
    *  silently pick a winner. */
-  | { kind: "ambiguous_across_clubs"; clubIds: string[] };
+  | { kind: "ambiguous_across_clubs"; clubIds: string[] }
+  /** AUTH-3D.CLOSEOUT-FIX (2026-09-26): password matched but the
+   *  employee is not portal-eligible (TERMINATED, INACTIVE, PRE_HIRE,
+   *  etc.). Caller MUST treat this identically to `not_recognised`
+   *  at the user-facing layer — same neutral message, same rate
+   *  limiting — but MAY (and should) differentiate in the internal
+   *  audit stream so a burst of correct-password-for-terminated-
+   *  employee attempts is detectable operationally. NEVER surface
+   *  this distinction outside the process. */
+  | { kind: "ineligible"; employeeId: string; clubId: string };
 
 /**
  * Verify a portal login attempt by canonical email. Preserves the
@@ -359,6 +368,10 @@ export async function verifyPortalPasswordByEmail(
     },
     select: {
       id: true, clubId: true,
+      // AUTH-3D.CLOSEOUT-FIX: status + employeeLifecycle are selected
+      // in the same query so the eligibility check inside a successful
+      // bcrypt branch below adds no extra round-trip (uniform timing).
+      status: true, employeeLifecycle: true,
       portalCredential: {
         select: {
           id: true, passwordHash: true, lockedUntil: true, failedAttemptCount: true,
@@ -404,6 +417,23 @@ export async function verifyPortalPasswordByEmail(
       data: { failedAttemptCount: next, lockedUntil },
     });
     return { kind: "not_recognised" };
+  }
+
+  // AUTH-3D.CLOSEOUT-FIX (2026-09-26): password is correct — but if
+  // the employee is not portal-eligible, we MUST NOT establish a
+  // Session, MUST NOT emit a login-success audit, and MUST NOT reveal
+  // the account state. We reuse the CANONICAL isPortalEligible policy
+  // (deliberately imported from the same module that gates
+  // getEmployeePortalPrincipal) so the login-side check and the
+  // access-side check can never drift.
+  const { isPortalEligible } = await import("@/lib/employee-portal-session");
+  if (!isPortalEligible(employee.status, employee.employeeLifecycle)) {
+    // Do NOT reset failedAttemptCount (that would signal a correct
+    // password to an operator watching counters). Do NOT increment
+    // either (that would eventually lock a credential belonging to
+    // an employee who could theoretically be reactivated). Leave the
+    // counter untouched and return the ineligible shape.
+    return { kind: "ineligible", employeeId: employee.id, clubId: employee.clubId };
   }
 
   await prisma.employeePortalCredential.update({

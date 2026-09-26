@@ -15,6 +15,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { formatCivilDate } from "@/lib/format/civil-date";
 
 // ---------------------------------------------------------------------------
 // Types (mirror the service views, serialised).
@@ -128,9 +129,13 @@ function humaniseEnum(v: string | null | undefined) {
   return v.replace(/_/g, " ").toLowerCase().replace(/(^| )(\w)/g, (_, s, c) => s + c.toUpperCase());
 }
 
-function formatDate(iso: string | null) {
-  if (!iso) return "current";
-  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+// AUTH-3D.CLOSEOUT-FIX (2026-09-26): every field this component
+// formats (compensation/allowance/assignment effective-from / -to) is
+// a business civil date, not a moment in time. Delegate to the
+// shared UTC-safe renderer so a value written as "2026-09-26" reads
+// as September 26 regardless of the viewer's timezone.
+function formatDate(iso: string | null): string {
+  return formatCivilDate(iso, { fallback: "current" }) ?? "current";
 }
 
 function formatMoney(amount: string, cadence: string, currency: string | null) {

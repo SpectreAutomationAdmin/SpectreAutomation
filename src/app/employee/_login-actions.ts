@@ -36,6 +36,7 @@ import {
 import {
   establishEmployeePortalSession,
   destroyEmployeePortalSession,
+  isPortalEligible,
 } from "@/lib/employee-portal-session";
 import { prisma } from "@/lib/prisma";
 import { getEmployeeOnboardingSession } from "@/lib/hr/employee-onboarding-session";
@@ -53,11 +54,16 @@ async function resolveClubForRequest(): Promise<string | null> {
   return branding.clubId ?? null;
 }
 
-// Neutral message used for BOTH "unknown email/password" and
-// "ambiguous across Clubs". Same string keeps the failure branches
-// indistinguishable to the caller.
+// AUTH-3D.CLOSEOUT-FIX (2026-09-26): One neutral message for EVERY
+// enumeration-sensitive failure mode — unknown email, wrong password,
+// ambiguous-across-Clubs, terminated employee, archived employee,
+// inactive employee, pre-hire (not yet activated). The caller MUST
+// route every one of these branches through this single string. The
+// copy is founder-approved and read-tested for the employee-portal
+// tone: it steers the person to their own next step (check + contact
+// manager) without ever confirming whether the account exists.
 const NEUTRAL_LOGIN_FAILURE =
-  "That email and password combination isn't recognised.";
+  "Unable to sign in. Check your email and password, or contact your manager if you need help accessing your account.";
 
 // ---------------------------------------------------------------------------
 // Primary login (email + password)
@@ -94,24 +100,28 @@ export async function employeePortalLoginAction(formData: FormData): Promise<voi
   });
   const ctx = await getRequestContext();
 
-  if (result.kind === "not_recognised" || result.kind === "ambiguous_across_clubs") {
-    // Same audit shape + neutral message for BOTH failure modes so
-    // no enumeration signal leaks between "no such email" vs
-    // "email matched more than one Club" vs "wrong password". The
-    // audit entry uses a hash of the email so a compromised log
-    // stream cannot enumerate valid emails.
+  // AUTH-3D.CLOSEOUT-FIX (2026-09-26): `ineligible` joins the failure
+  // branch and MUST reach the same user-facing response. No Session
+  // is created for an ineligible employee; no login-success audit is
+  // emitted; the failure audit carries `failureKind` so an operator
+  // can still detect a burst of correct-password-for-terminated
+  // attempts, but the discriminator never leaves the process.
+  if (
+    result.kind === "not_recognised" ||
+    result.kind === "ambiguous_across_clubs" ||
+    result.kind === "ineligible"
+  ) {
     await audit(null, {
       action: "employee_portal.login.failure",
       entityType: "EmployeePortalCredential",
       // Entity-id carries only the emailHash — no raw email + no
-      // discrimination between the two failure modes.
+      // discrimination between the failure modes at the entity level.
       entityId: `hash:${hashEmail(email)}`,
       clubId: hostClubId ?? "platform",
       meta: {
         ip: ctx?.ip, userAgent: ctx?.userAgent,
-        // The failure kind IS logged so operators debugging genuine
-        // Club-ambiguity can see it in the audit stream, but never
-        // reaches the browser response.
+        // failureKind is INTERNAL — logged so operators can see the
+        // branch, never surfaced to the browser response.
         failureKind: result.kind,
       },
     });
@@ -176,7 +186,11 @@ export async function handoffFromOnboardingAction(): Promise<void> {
     }),
     prisma.employee.findFirst({
       where: { id: employeeId, clubId },
-      select: { id: true, clubId: true },
+      // AUTH-3D.CLOSEOUT-FIX (2026-09-26): status + employeeLifecycle
+      // are now selected so the same invariant that gates the primary
+      // login (no Session for a portal-ineligible identity) applies
+      // here.
+      select: { id: true, clubId: true, status: true, employeeLifecycle: true },
     }),
   ]);
   // Tenant-triangle check.
@@ -186,6 +200,18 @@ export async function handoffFromOnboardingAction(): Promise<void> {
   if (!credential) redirect("/hr/onboarding/portal-password");
   const terminal = session.state === "SUBMITTED" || session.state === "APPROVED" || session.state === "REJECTED";
   if (!terminal) redirect("/hr/onboarding/session");
+
+  // AUTH-3D.CLOSEOUT-FIX (2026-09-26): enforce the "no Session for a
+  // portal-ineligible identity" invariant here too. A just-Submitted
+  // PRE_HIRE onboarding actor is deliberately not portal-eligible
+  // (only ACTIVE+ACTIVE / ACTIVE+LEAVE are). Do not create a Session
+  // for them — the /employee layout would reject it anyway, and the
+  // DB would accumulate a permanent invalid row. The employee lands
+  // on the Employee Portal login page and, once an admin activates
+  // them, signs in normally through the primary login flow.
+  if (!isPortalEligible(employee.status, employee.employeeLifecycle)) {
+    redirect("/employee/login");
+  }
 
   await establishEmployeePortalSession({ employeeId, clubId });
   await audit(null, {
