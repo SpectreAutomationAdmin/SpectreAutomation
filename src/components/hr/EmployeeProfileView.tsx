@@ -180,6 +180,10 @@ interface Props {
    *  hr:employee:write; the service re-checks. Never renders the
    *  reset URL or the employee's password. */
   credentialActions?: React.ReactNode;
+  /** AUTH-3C (2026-09-26) — Optional admin action to sign the
+   *  employee out on every device. Parent gates on
+   *  hr:employee:write; the AUTH-3B service re-checks. */
+  sessionActions?: React.ReactNode;
   /** HR-2C Employment (2026-08-24) — Optional Employment tab slot. When
    *  provided, replaces the default legacy Employment-history view with
    *  the multi-role + compensation + allowances section. The parent
@@ -260,7 +264,7 @@ function humanize(s: string | null | undefined): string {
 }
 
 export default function EmployeeProfileView(props: Props) {
-  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, employmentSection, payrollCompensationSection, payrollWorkspaceSection, trainingSection, defaultTab } = props;
+  const { employee, department, position, manager, memberLink, employmentPeriods, documents, currentSession, transitions, canInvite, canWritePhoto, canEditBasicDetails, canResendInvitation, priorInvitation, payroll, emergencyContacts, credentials, lifecycleControls, approvalSection, credentialActions, sessionActions, employmentSection, payrollCompensationSection, payrollWorkspaceSection, trainingSection, defaultTab } = props;
   const initialTab: TabKey =
     (TABS as ReadonlyArray<{ key: TabKey }>).some((t) => t.key === defaultTab) &&
     (defaultTab !== "training" || trainingSection !== undefined)
@@ -570,6 +574,21 @@ export default function EmployeeProfileView(props: Props) {
                 email address; the employee chooses their new password.
               </p>
               <div className="mt-3">{credentialActions}</div>
+            </section>
+          )}
+
+          {/* AUTH-3C (2026-09-26) — Sign out on all devices. */}
+          {sessionActions && (
+            <section className="spectre-person-section mt-6" data-testid="portal-signout-admin-section">
+              <div className="spectre-person-section-head">
+                <h3 className="spectre-person-eyebrow">Portal access</h3>
+              </div>
+              <p className="text-xs text-stone-500 mt-1">
+                Signing the employee out on all devices ends their active
+                Spectre browser sessions. Their employment status is not
+                changed &mdash; they can sign in again as usual.
+              </p>
+              <div className="mt-3">{sessionActions}</div>
             </section>
           )}
 

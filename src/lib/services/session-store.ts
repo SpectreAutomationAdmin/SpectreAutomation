@@ -13,7 +13,7 @@
 
 import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import type { Session } from "@prisma/client";
+import type { Prisma, Session } from "@prisma/client";
 
 /** Session surface — matches the string values written to Session.surface. */
 export const SURFACE_ADMIN = "ADMIN";
@@ -308,6 +308,52 @@ export async function revokeAllForEmployee(
     },
   });
   log({ event: "SESSION_REVOKED", surface: SURFACE_EMPLOYEE, employeeId, reason: opts.reason });
+  return res.count;
+}
+
+// ============================================================================
+// AUTH-3B — Transactional revoke variants
+// ============================================================================
+//
+// These accept a Prisma.TransactionClient so callers can compose a business
+// mutation (e.g. Employee.status → TERMINATED) with the corresponding
+// session revocation into a SINGLE atomic transaction: either both commit
+// or both roll back. Prevents the "terminated employee still authenticated"
+// window that would exist if the two writes ran independently and the
+// revoke failed after the mutation succeeded.
+//
+// These do NOT emit their own audit rows. Callers extend their existing
+// event's `meta` with `sessionsRevoked: <count>`.
+
+export async function revokeAllForEmployeeTx(
+  tx: Prisma.TransactionClient,
+  employeeId: string,
+  opts: { revokedBy?: string | null; reason?: string } = {},
+): Promise<number> {
+  const res = await tx.session.updateMany({
+    where: { employeeId, revokedAt: null },
+    data: {
+      revokedAt: new Date(),
+      revokedBy: opts.revokedBy ?? null,
+      revokeReason: opts.reason ?? null,
+    },
+  });
+  return res.count;
+}
+
+export async function revokeAllForUserTx(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  opts: { revokedBy?: string | null; reason?: string } = {},
+): Promise<number> {
+  const res = await tx.session.updateMany({
+    where: { userId, revokedAt: null },
+    data: {
+      revokedAt: new Date(),
+      revokedBy: opts.revokedBy ?? null,
+      revokeReason: opts.reason ?? null,
+    },
+  });
   return res.count;
 }
 

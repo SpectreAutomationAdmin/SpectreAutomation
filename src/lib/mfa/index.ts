@@ -12,6 +12,11 @@ import { prisma } from "../prisma";
 import { audit } from "../audit";
 import { requirePermission, type Principal } from "../rbac";
 import { ConflictError, ForbiddenError, NotFoundError } from "../errors";
+// AUTH-3B (2026-09-26) — MFA enable/disable is a security-posture change:
+// existing ADMIN sessions must be revoked so the user re-authenticates
+// under the new posture (§4 amendment 1). Wired atomically inside the
+// existing $transaction; failure rolls both back.
+import { revokeAllForUserTx } from "../services/session-store";
 
 // ---------------------------------------------------------------------------
 // Base32 (RFC 4648) — needed for TOTP secrets / QR codes.
@@ -124,17 +129,32 @@ export async function completeEnrollment(principal: Principal, code: string) {
     rawCodes.push(randomBytes(5).toString("hex"));
   }
   await prisma.recoveryCode.deleteMany({ where: { userId: principal.id } });
-  await prisma.$transaction([
-    prisma.mfaFactor.update({
+  // AUTH-3B: swap the array-form $transaction for the interactive form
+  // so we can compose an atomic session revoke alongside the MFA
+  // activation. All four writes commit together or none do.
+  const sessionsRevoked = await prisma.$transaction(async (tx) => {
+    await tx.mfaFactor.update({
       where: { id: factor.id },
       data: { status: "ACTIVE", enrolledAt: new Date() },
-    }),
-    prisma.user.update({ where: { id: principal.id }, data: { mfaEnabled: true } }),
-    ...rawCodes.map((code) => prisma.recoveryCode.create({
-      data: { userId: principal.id, codeHash: createHash("sha256").update(code).digest("hex") },
-    })),
-  ]);
-  await audit(principal, { action: "mfa.enroll.complete", entityType: "MfaFactor", entityId: factor.id, after: { recoveryCodes: rawCodes.length } });
+    });
+    await tx.user.update({ where: { id: principal.id }, data: { mfaEnabled: true } });
+    for (const c of rawCodes) {
+      await tx.recoveryCode.create({
+        data: { userId: principal.id, codeHash: createHash("sha256").update(c).digest("hex") },
+      });
+    }
+    return revokeAllForUserTx(tx, principal.id, {
+      revokedBy: principal.id,
+      reason: "mfa-change",
+    });
+  });
+  await audit(principal, {
+    action: "mfa.enroll.complete",
+    entityType: "MfaFactor",
+    entityId: factor.id,
+    after: { recoveryCodes: rawCodes.length },
+    meta: { sessionsRevoked },
+  });
   return { recoveryCodes: rawCodes };
 }
 
@@ -166,12 +186,26 @@ export async function disableMfa(principal: Principal, targetUserId: string, rea
     if (target.clubId) requirePermission(principal, target.clubId, "users:roles:write");
     else throw new ForbiddenError("Only SUPER_ADMIN can reset MFA for users without a primary club");
   }
-  await prisma.$transaction([
-    prisma.mfaFactor.updateMany({ where: { userId: targetUserId }, data: { status: "DISABLED" } }),
-    prisma.recoveryCode.deleteMany({ where: { userId: targetUserId } }),
-    prisma.user.update({ where: { id: targetUserId }, data: { mfaEnabled: false } }),
-  ]);
-  await audit(principal, { action: "mfa.disable", entityType: "User", entityId: targetUserId, after: { reason } });
+  // AUTH-3B: MFA disable is a security-posture change on the TARGET
+  // user; revoke that target user's ADMIN sessions inside the same
+  // $transaction so a partial failure cannot leave MFA disabled
+  // with the target's old sessions still valid.
+  const sessionsRevoked = await prisma.$transaction(async (tx) => {
+    await tx.mfaFactor.updateMany({ where: { userId: targetUserId }, data: { status: "DISABLED" } });
+    await tx.recoveryCode.deleteMany({ where: { userId: targetUserId } });
+    await tx.user.update({ where: { id: targetUserId }, data: { mfaEnabled: false } });
+    return revokeAllForUserTx(tx, targetUserId, {
+      revokedBy: principal.id,
+      reason: "mfa-change",
+    });
+  });
+  await audit(principal, {
+    action: "mfa.disable",
+    entityType: "User",
+    entityId: targetUserId,
+    after: { reason },
+    meta: { sessionsRevoked },
+  });
 }
 
 // ---------------------------------------------------------------------------

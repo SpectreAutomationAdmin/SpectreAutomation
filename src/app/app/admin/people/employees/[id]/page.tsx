@@ -50,6 +50,9 @@ import { approveAndActivateAction } from "./_approve-actions";
 // HR mobile-hotfix (2026-08-26) — admin-initiated portal password reset.
 import SendPasswordResetButton from "@/components/hr/SendPasswordResetButton";
 import { sendPortalPasswordResetAction } from "./_password-reset-actions";
+// AUTH-3C (2026-09-26) — admin-initiated "Sign out on all devices".
+import SignOutEmployeeEverywhereButton from "@/components/hr/SignOutEmployeeEverywhereButton";
+import { signOutEmployeeEverywhereAction } from "./_signout-actions";
 // Payroll-3D-1A — Timekeeping method admin control.
 import TimekeepingPanel from "./TimekeepingPanel";
 // Phase 4 (2026-09-16) — Recurring payroll component assignments.
@@ -853,6 +856,17 @@ export default async function EmployeeProfilePage({
               : `${profile.firstName} ${profile.lastName}`}
             hasPersonalEmail={Boolean(profile.personalEmail)}
             action={sendPortalPasswordResetAction.bind(null, profile.id)}
+          />
+        ) : null
+      }
+      sessionActions={
+        canLifecycle ? (
+          <SignOutEmployeeEverywhereButton
+            employeeId={profile.id}
+            employeeDisplayName={profile.preferredName?.trim()
+              ? `${profile.preferredName} ${profile.lastName}`
+              : `${profile.firstName} ${profile.lastName}`}
+            action={signOutEmployeeEverywhereAction.bind(null, profile.id)}
           />
         ) : null
       }

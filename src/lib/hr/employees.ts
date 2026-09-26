@@ -31,6 +31,11 @@ import { provisionInitialAssignmentIfMissing } from "./employment-assignments";
 import { getSinMasked } from "./sensitive-identity";
 import { getBankAccountMasked } from "./bank-account";
 import { getTaxProfileMasked } from "./tax-profile";
+// AUTH-3B (2026-09-26) — canonical employee-session revocation layer.
+// Terminate + archive atomically revoke the employee's active EMPLOYEE
+// Sessions inside the same $transaction as the lifecycle write so the
+// two writes cannot land partially. See employee-session-revocation.ts.
+import { revokeEmployeeSessionsTx } from "./employee-session-revocation";
 
 const EMPLOYEE_ENTITY = "Employee";
 
@@ -499,13 +504,25 @@ export async function terminateEmployee(
 
   const terminationDate = toOptionalDate(opts.terminationDate ?? new Date(), "terminationDate")!;
 
-  const updated = await prisma.employee.update({
-    where: { id: employeeId },
-    data: {
-      employeeLifecycle: "TERMINATED",
-      status: "TERMINATED",
-      terminationDate,
-    },
+  // AUTH-3B: lifecycle update + session revocation MUST be atomic.
+  // If either fails, both roll back — the "terminated employee with
+  // still-valid session" window is impossible. Audit runs after the
+  // successful commit so a failed audit does not undo the security
+  // work (audit is non-throwing anyway).
+  const { updated, sessionsRevoked } = await prisma.$transaction(async (tx) => {
+    const updated = await tx.employee.update({
+      where: { id: employeeId },
+      data: {
+        employeeLifecycle: "TERMINATED",
+        status: "TERMINATED",
+        terminationDate,
+      },
+    });
+    const sessionsRevoked = await revokeEmployeeSessionsTx(tx, employeeId, {
+      revokedBy: principal.id,
+      reason: "lifecycle:terminate",
+    });
+    return { updated, sessionsRevoked };
   });
 
   await audit(principal, {
@@ -523,7 +540,7 @@ export async function terminateEmployee(
       status: updated.status,
       terminationDate: updated.terminationDate,
     },
-    meta: { reason: opts.reason ?? null },
+    meta: { reason: opts.reason ?? null, sessionsRevoked },
   });
 
   return updated;
@@ -562,9 +579,20 @@ export async function archiveEmployee(
 
   if (employee.employeeLifecycle === "ARCHIVED") return employee;
 
-  const updated = await prisma.employee.update({
-    where: { id: employeeId },
-    data: { employeeLifecycle: "ARCHIVED" },
+  // AUTH-3B: archive is an authority-removal event — the archived
+  // employee must not retain portal access. Lifecycle update + session
+  // revocation land atomically; see terminateEmployee for the same
+  // pattern.
+  const { updated, sessionsRevoked } = await prisma.$transaction(async (tx) => {
+    const updated = await tx.employee.update({
+      where: { id: employeeId },
+      data: { employeeLifecycle: "ARCHIVED" },
+    });
+    const sessionsRevoked = await revokeEmployeeSessionsTx(tx, employeeId, {
+      revokedBy: principal.id,
+      reason: "lifecycle:archive",
+    });
+    return { updated, sessionsRevoked };
   });
 
   await audit(principal, {
@@ -574,7 +602,7 @@ export async function archiveEmployee(
     clubId: employee.clubId,
     before: { employeeLifecycle: employee.employeeLifecycle },
     after: { employeeLifecycle: updated.employeeLifecycle },
-    meta: { reason: opts.reason ?? null },
+    meta: { reason: opts.reason ?? null, sessionsRevoked },
   });
 
   return updated;

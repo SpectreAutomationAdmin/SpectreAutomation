@@ -109,6 +109,7 @@ export default async function TenantUsersPage() {
 
       <TenantUsersClient
         clubId={clubId}
+        currentUserId={principal.id}
         initialUsers={users.map((u) => {
           const orgNode = orgByUserId.get(u.userId);
           return {

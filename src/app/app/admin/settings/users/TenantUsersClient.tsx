@@ -19,6 +19,9 @@ import { useMemo, useState, useTransition } from "react";
 import { ROLE_LABELS, TENANT_ASSIGNABLE_ROLES } from "@/lib/tenant-admin/constants";
 import type { OrgNode } from "@/lib/tenant-admin/org-structure";
 import OrganizationHierarchyTab from "./OrganizationHierarchyTab";
+// AUTH-3C (2026-09-26) — per-user "Sign out on all devices" control.
+import SignOutUserEverywhereButton from "@/components/admin/SignOutUserEverywhereButton";
+import { signOutUserEverywhereAction } from "./_signout-actions";
 
 type TenantUserRow = {
   id: string;
@@ -78,6 +81,7 @@ type Tab = "people" | "invitations" | "organization";
 
 export function TenantUsersClient({
   clubId,
+  currentUserId,
   initialUsers,
   initialInvitations,
   departments,
@@ -88,6 +92,10 @@ export function TenantUsersClient({
   canonicalPositionsFlat,
 }: {
   clubId: string;
+  /** AUTH-3C — the currently authenticated admin's userId. Used to
+   *  render self-revocation copy and to trigger the /login redirect
+   *  after a self-directed Sign out on all devices. */
+  currentUserId: string;
   initialUsers: TenantUserRow[];
   initialInvitations: InvitationRow[];
   departments: DepartmentOption[];
@@ -237,6 +245,7 @@ export function TenantUsersClient({
       {tab === "people" ? (
         <PeopleTab
           users={users}
+          currentUserId={currentUserId}
           positions={positions.filter((p) => p.isActive)}
           departments={departments}
           allProfiles={users}
@@ -295,9 +304,10 @@ export function TenantUsersClient({
 // People tab
 // ---------------------------------------------------------------------
 function PeopleTab({
-  users, positions, departments, allProfiles, onInviteClick, onSaveField, pending,
+  users, currentUserId, positions, departments, allProfiles, onInviteClick, onSaveField, pending,
 }: {
   users: TenantUserRow[];
+  currentUserId: string;
   positions: PositionOption[];
   departments: DepartmentOption[];
   allProfiles: TenantUserRow[];
@@ -336,6 +346,7 @@ function PeopleTab({
             <PersonRow
               key={u.id}
               user={u}
+              currentUserId={currentUserId}
               positions={positions}
               departments={departments}
               allProfiles={allProfiles.filter((p) => p.id !== u.id)}
@@ -350,9 +361,10 @@ function PeopleTab({
 }
 
 function PersonRow({
-  user, positions, departments, allProfiles, onSaveField, pending,
+  user, currentUserId, positions, departments, allProfiles, onSaveField, pending,
 }: {
   user: TenantUserRow;
+  currentUserId: string;
   positions: PositionOption[];
   departments: DepartmentOption[];
   allProfiles: TenantUserRow[];
@@ -510,32 +522,45 @@ function PersonRow({
               </div>
             </div>
           ) : (
-            <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm" style={{ color: "#4a453d" }}>
-              <Field label="Title" value={user.displayTitle ?? user.positionName ?? "—"} testid={`person-title:${user.userId}`} />
-              <Field label="Department" value={user.department?.name ?? "—"} testid={`person-department:${user.userId}`} />
-              <Field label="Reports to" value={manager?.name ?? "—"} testid={`person-manager:${user.userId}`} />
-              <div className="flex items-center gap-1">
-                <span className="text-xs" style={{ color: "#6b6357" }}>Access</span>
-                <div className="flex flex-wrap gap-1">
-                  {user.roleLabels.length ? (
-                    user.roleLabels.map((r) => (
-                      <span
-                        key={r}
-                        className="rounded-full border px-2 py-0.5 text-[11px]"
-                        style={{ borderColor: "#c8b46e", color: "#3f2f00" }}
-                      >{r}</span>
-                    ))
-                  ) : (<span>—</span>)}
+            <>
+              <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm" style={{ color: "#4a453d" }}>
+                <Field label="Title" value={user.displayTitle ?? user.positionName ?? "—"} testid={`person-title:${user.userId}`} />
+                <Field label="Department" value={user.department?.name ?? "—"} testid={`person-department:${user.userId}`} />
+                <Field label="Reports to" value={manager?.name ?? "—"} testid={`person-manager:${user.userId}`} />
+                <div className="flex items-center gap-1">
+                  <span className="text-xs" style={{ color: "#6b6357" }}>Access</span>
+                  <div className="flex flex-wrap gap-1">
+                    {user.roleLabels.length ? (
+                      user.roleLabels.map((r) => (
+                        <span
+                          key={r}
+                          className="rounded-full border px-2 py-0.5 text-[11px]"
+                          style={{ borderColor: "#c8b46e", color: "#3f2f00" }}
+                        >{r}</span>
+                      ))
+                    ) : (<span>—</span>)}
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  className="ml-auto rounded-md border px-3 py-1 text-xs"
+                  style={{ borderColor: "#1e3a2a", color: "#1e3a2a" }}
+                  onClick={() => setEditing(true)}
+                  data-testid={`person-edit-btn:${user.userId}`}
+                >Edit</button>
               </div>
-              <button
-                type="button"
-                className="ml-auto rounded-md border px-3 py-1 text-xs"
-                style={{ borderColor: "#1e3a2a", color: "#1e3a2a" }}
-                onClick={() => setEditing(true)}
-                data-testid={`person-edit-btn:${user.userId}`}
-              >Edit</button>
-            </div>
+              {/* AUTH-3C — per-user Sign out on all devices. Restrained,
+                  paired visually with the Edit action so it reads as
+                  part of the same administrative-control row. */}
+              <div className="mt-2">
+                <SignOutUserEverywhereButton
+                  targetUserId={user.userId}
+                  targetDisplayName={user.name}
+                  isSelf={user.userId === currentUserId}
+                  action={signOutUserEverywhereAction.bind(null, user.userId)}
+                />
+              </div>
+            </>
           )}
         </div>
       </div>

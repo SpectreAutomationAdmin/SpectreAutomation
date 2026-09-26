@@ -40,6 +40,12 @@ import type { Principal } from "../rbac";
 import { requirePermission } from "../rbac";
 import { assertTenantOwned } from "../services/tenant";
 import { normaliseLoginEmail, PORTAL_PASSWORD_MIN, PORTAL_PASSWORD_MAX } from "./employee-portal-credential";
+// AUTH-3B (2026-09-26) — after a successful password rotation, revoke
+// every active EMPLOYEE Session belonging to this employee INSIDE the
+// same $transaction. If revocation fails, the new password is not
+// persisted, so an attacker with the old password cannot exploit a
+// half-finished reset.
+import { revokeEmployeeSessionsTx } from "./employee-session-revocation";
 
 // ---------------------------------------------------------------------------
 // Token helpers
@@ -305,7 +311,7 @@ export async function completePortalPasswordReset(
 
   const passwordHash = await hashPassword(input.password);
 
-  await prisma.$transaction(async (tx) => {
+  const { sessionsRevoked } = await prisma.$transaction(async (tx) => {
     // Rotate the credential row: new hash, clear failed-attempt
     // counter + lockout (successful reset = fresh start).
     await tx.employeePortalCredential.update({
@@ -333,6 +339,15 @@ export async function completePortalPasswordReset(
       },
       data: { consumedAt: now },
     });
+    // AUTH-3B: password rotated → invalidate any browser that was
+    // still holding a bearer authenticated under the OLD credential.
+    // Inside the same transaction so a revoke failure rolls back
+    // the password change too.
+    const sessionsRevoked = await revokeEmployeeSessionsTx(tx, row.employeeId, {
+      revokedBy: null, // employee self-service; no admin actor id
+      reason: "password-reset",
+    });
+    return { sessionsRevoked };
   });
 
   await audit(null, {
@@ -343,6 +358,7 @@ export async function completePortalPasswordReset(
     meta: {
       actorSource: "EMPLOYEE",
       employeeIdTail: row.employeeId.slice(-8),
+      sessionsRevoked,
     },
   });
 
