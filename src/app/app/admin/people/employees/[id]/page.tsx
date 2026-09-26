@@ -319,6 +319,14 @@ export default async function EmployeeProfilePage({
     ? await getDeleteEligibility(principal, profile.id)
     : null;
 
+  // AUTH-3D.RBAC.FIX (2026-09-26) — Portal password (Send password reset)
+  // and Portal access (Sign out on all devices) are ACCOUNT-SECURITY
+  // controls, distinct from employee-record editing/termination. They
+  // now gate on hr:employee:security so senior leadership roles
+  // (Controller, GM) can perform legitimate account-security operations
+  // without gaining write/terminate authority over the employee record.
+  const canEmployeeSecurity = hasPermission(principal, profile.clubId, "hr:employee:security");
+
   // HR-2B.3.1 (2026-08-18) §5 — Resend invitation. The Invite button
   // covers the DRAFT case (never sent yet). Resend covers the "already
   // been in the employee's inbox" cases:
@@ -848,7 +856,8 @@ export default async function EmployeeProfilePage({
         ) : null
       }
       credentialActions={
-        canLifecycle ? (
+        // AUTH-3D.RBAC.FIX — account-security tier, not write/lifecycle.
+        canEmployeeSecurity ? (
           <SendPasswordResetButton
             employeeId={profile.id}
             employeeDisplayName={profile.preferredName?.trim()
@@ -860,7 +869,8 @@ export default async function EmployeeProfilePage({
         ) : null
       }
       sessionActions={
-        canLifecycle ? (
+        // AUTH-3D.RBAC.FIX — account-security tier, not write/lifecycle.
+        canEmployeeSecurity ? (
           <SignOutEmployeeEverywhereButton
             employeeId={profile.id}
             employeeDisplayName={profile.preferredName?.trim()

@@ -40,7 +40,16 @@ kill_timeout = 30
   # sibling files (e.g. prisma_schema_build_bg.wasm). Loading via the
   # package's own build/ directory keeps every relative sibling lookup
   # correct.
-  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/prisma/build/index.js migrate deploy --schema prisma-postgres/schema.prisma'"
+  # AUTH-3D.RBAC.FIX (2026-09-26) — after prisma migrate deploy the
+  # release_command now also projects the code RBAC catalogue
+  # (src/lib/permissions.ts) into the DB Permission / Role /
+  # RolePermission tables via scripts/sync-rbac.ts. hasPermission()
+  # reads the in-code constant at request time so this is a
+  # non-security projection for admin UI + audit; failure to sync
+  # would leave the DB view stale but would NOT weaken authorization.
+  # sync-rbac.ts is idempotent (upsert + prune) and touches only the
+  # three RBAC tables — never User / UserClubRole / Session / Employee.
+  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/prisma/build/index.js migrate deploy --schema prisma-postgres/schema.prisma && DATABASE_URL=\"$DIRECT_DATABASE_URL\" /app/node_modules/.bin/tsx /app/scripts/sync-rbac.ts'"
   strategy = "rolling"
 
 [env]

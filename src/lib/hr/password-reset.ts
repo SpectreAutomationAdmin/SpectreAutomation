@@ -382,7 +382,13 @@ export async function adminSendPortalPasswordReset(
   });
   if (!employee) throw new NotFoundError("Employee", employeeId);
   assertTenantOwned(employee, principal);
-  requirePermission(principal, employee.clubId, "hr:employee:write");
+  // AUTH-3D.RBAC.FIX (2026-09-26) — narrowed from hr:employee:write to
+  // hr:employee:security. Password reset is an account-security action,
+  // not an employee-record edit. Fixes the pre-existing conflation
+  // uncovered during AUTH-3 review; allows senior-leadership roles
+  // (Controller, GM) to issue password resets without also gaining
+  // authority to edit or terminate the employee.
+  requirePermission(principal, employee.clubId, "hr:employee:security");
 
   if (!employee.personalEmail) {
     throw new ValidationError([

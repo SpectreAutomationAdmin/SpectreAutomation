@@ -227,6 +227,15 @@ export const PERMISSIONS = {
   "hr:employee:read":             { name: "Read employee profile",                 category: "HR" },
   "hr:employee:write":            { name: "Create / edit employee profile",        category: "HR" },
   "hr:employee:terminate":        { name: "Terminate an employee",                 category: "HR" },
+  // AUTH-3D.RBAC.FIX (2026-09-26) — Account-security tier, carved out
+  // of hr:employee:write. Holders may reset an employee's portal
+  // password and sign the employee out of Spectre on all devices, but
+  // MAY NOT edit the employee record, archive, terminate, or reveal
+  // any sensitive PII. Follows the existing narrow-security-grant
+  // precedent set by hr:banking:approve / hr:service-date:write /
+  // hr:sin:reveal — one narrow authority, no bundling with unrelated
+  // write authority.
+  "hr:employee:security":         { name: "Employee account security (portal password reset, sign out on all devices)", category: "HR" },
   "hr:employment:read":           { name: "Read employment history",               category: "HR" },
   "hr:employment:write":          { name: "Write employment periods",              category: "HR" },
   "hr:compensation:read":         { name: "Read compensation history",             category: "HR" },
@@ -393,6 +402,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // `hr:onboarding_questions:write` writes.
     "hr:directory:view",
     "hr:employee:read", "hr:employee:write", "hr:employee:terminate",
+    // AUTH-3D.RBAC.FIX — CLUB_ADMIN retains the security-tier grant
+    // explicitly (previously implicit via hr:employee:write).
+    "hr:employee:security",
     "hr:employment:read", "hr:employment:write",
     "hr:compensation:read", "hr:compensation:write", "hr:compensation:approve",
     "hr:allowance:read", "hr:allowance:write",
@@ -458,6 +470,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // close out completed self-onboarding sessions.
     "hr:directory:view",
     "hr:employee:read",
+    // AUTH-3D.RBAC.FIX — GM is a senior leadership-tier role and
+    // legitimately owns account-security decisions at the club (locking
+    // out a compromised employee, issuing a password reset). This grant
+    // does NOT extend to editing employee records, terminating, or
+    // revealing sensitive PII — those remain excluded from GM.
+    "hr:employee:security",
     "hr:employment:read",
     "hr:compensation:read",
     "hr:documents:read",
@@ -545,6 +563,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // those live with PAYROLL_ADMIN. No HR write grants.
     "hr:directory:view",
     "hr:employee:read",
+    // AUTH-3D.RBAC.FIX — Controller/CFO owns account-security for
+    // finance-adjacent staff (lock out a compromised employee, issue
+    // a password reset when someone forgets). Explicitly narrow: does
+    // NOT grant hr:employee:write (edit), hr:employee:terminate,
+    // hr:sin:reveal, hr:banking:reveal, or any additional PII access.
+    "hr:employee:security",
     "hr:compensation:read",
     "hr:documents:read",
     "hr:onboarding:read", "hr:onboarding:approve",

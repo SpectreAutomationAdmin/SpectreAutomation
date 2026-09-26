@@ -95,7 +95,10 @@ export async function revokeEmployeeSessions(input: {
  *   • Target must be loaded from DB via `findUnique`, then guarded
  *     with `assertTenantOwned` so a cross-tenant employeeId cannot
  *     be revoked.
- *   • Principal must hold `hr:employee:write` at the target's tenant.
+ *   • Principal must hold `hr:employee:security` at the target's tenant.
+ *     AUTH-3D.RBAC.FIX (2026-09-26) narrowed this from `hr:employee:write`
+ *     so an operator can lock a compromised employee's browser without
+ *     also gaining authority to edit / archive / terminate that employee.
  *   • Cross-tenant or forged-id attempts throw `NotFoundError` — the
  *     same shape used elsewhere in HR services so response bodies
  *     cannot enumerate whether the id refers to a real employee in
@@ -113,7 +116,7 @@ export async function signOutEmployeeEverywhere(
   });
   if (!employee) throw new NotFoundError("Employee", employeeId);
   assertTenantOwned(employee, principal);
-  requirePermission(principal, employee.clubId, "hr:employee:write");
+  requirePermission(principal, employee.clubId, "hr:employee:security");
 
   const { sessionsRevoked } = await revokeEmployeeSessions({
     actor: principal,

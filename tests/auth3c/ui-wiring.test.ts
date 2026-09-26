@@ -29,14 +29,31 @@ describe("AUTH-3C · Employee-profile wiring", () => {
     expect(profileSrc).toMatch(/signOutEmployeeEverywhereAction\.bind\(null,\s*profile\.id\)/);
   });
 
-  it("Employee button is gated by the same admin capability as the password-reset button", () => {
-    // Both are rendered inside a `canLifecycle ? (…) : null` guard —
-    // asserting the button lives inside a canLifecycle guard ties the
-    // visibility to the existing authorization derivation without
-    // adding a new one.
+  it("Employee button is gated by canEmployeeSecurity (AUTH-3D.RBAC.FIX narrow permission)", () => {
+    // AUTH-3D.RBAC.FIX (2026-09-26): password-reset + sign-out-on-all-
+    // devices are ACCOUNT-SECURITY actions, gated on the new narrow
+    // hr:employee:security permission rather than the broad
+    // hr:employee:write. The button now lives inside a
+    // canEmployeeSecurity ? (…) : null guard.
     const idx = profileSrc.indexOf("<SignOutEmployeeEverywhereButton");
     const preceding = profileSrc.slice(Math.max(0, idx - 300), idx);
-    expect(preceding).toMatch(/canLifecycle\s*\?/);
+    expect(preceding).toMatch(/canEmployeeSecurity\s*\?/);
+    // And confirm the source derives canEmployeeSecurity from the
+    // narrow permission key, not from the write key.
+    expect(profileSrc).toMatch(
+      /canEmployeeSecurity\s*=\s*hasPermission\([^)]*"hr:employee:security"\)/,
+    );
+  });
+
+  it("Delete/Archive lifecycle controls remain gated by hr:employee:write (canLifecycle unchanged)", () => {
+    // AUTH-3D.RBAC.FIX explicitly preserves canLifecycle for the
+    // Delete/Archive slot — record-lifecycle authority must NOT be
+    // widened by the security-tier grant. Prove both derivations
+    // co-exist in the page source.
+    expect(profileSrc).toMatch(
+      /canLifecycle\s*=\s*hasPermission\([^)]*"hr:employee:write"\)/,
+    );
+    expect(profileSrc).toMatch(/canLifecycle\s*&&\s*deleteEligibility/);
   });
 
   it("Server action wraps the AUTH-3B canonical service", () => {

@@ -96,6 +96,15 @@ COPY --from=builder --chown=spectre:spectre /app/prisma-postgres ./prisma-postgr
 # has them without a separate SFTP hop.
 COPY --from=builder --chown=spectre:spectre /app/scripts ./scripts
 
+# AUTH-3D.RBAC.FIX (2026-09-26) — the RBAC catalogue at
+# src/lib/permissions.ts is a zero-import pure-data module. Copied here
+# so /app/scripts/sync-rbac.ts (invoked via tsx by the fly.web.toml
+# release_command after `prisma migrate deploy`) can import it directly
+# and project the code catalogue into Permission / Role / RolePermission
+# rows. hasPermission() reads the in-code constant at request time; the
+# DB projection is for admin UI + audit introspection.
+COPY --from=builder --chown=spectre:spectre /app/src/lib/permissions.ts ./src/lib/permissions.ts
+
 # tsx — some maintenance scripts under /app/scripts are TypeScript.
 # tsx + esbuild + resolvers together weigh ~50 MB, small next to the
 # rest of the runtime.

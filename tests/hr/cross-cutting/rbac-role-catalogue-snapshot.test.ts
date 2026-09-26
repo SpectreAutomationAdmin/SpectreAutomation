@@ -55,7 +55,7 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
     expect(actual).not.toContain("hr:tax:reveal");
   });
 
-  it("GENERAL_MANAGER holds only the read-plus-onboarding-approve subset (+ HR-2C training read/assign/compliance)", () => {
+  it("GENERAL_MANAGER holds the read-plus-onboarding-approve subset + HR-2C training read/assign/compliance + AUTH-3D.RBAC hr:employee:security", () => {
     const expected = [
       "hr:compensation:read",
       "hr:credentials:read",
@@ -63,6 +63,10 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
       "hr:documents:read",
       "hr:emergency:read",
       "hr:employee:read",
+      // AUTH-3D.RBAC.FIX — account-security tier: sign employee out on
+      // all devices + issue password reset. Does NOT include
+      // hr:employee:write or hr:employee:terminate.
+      "hr:employee:security",
       "hr:employment:read",
       "hr:onboarding:approve",
       "hr:onboarding:read",
@@ -75,6 +79,10 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
     ].sort();
     const actual = hrKeysOfRole("GENERAL_MANAGER");
     expect(actual).toEqual(expected);
+    // Explicit negative: GM must NOT hold employee-record write or
+    // termination authority — the security grant is deliberately narrow.
+    expect(actual).not.toContain("hr:employee:write");
+    expect(actual).not.toContain("hr:employee:terminate");
   });
 
   it("PAYROLL_ADMIN holds the reveal-tier + compensation/payroll_profile write bundle (+ HR-2C allowance read/write)", () => {
@@ -102,6 +110,8 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
       "hr:payroll_profile:read",
       "hr:payroll_profile:write",
       "hr:sensitive:read",
+      // Slice A closeout (2026-09-18) — narrow service-date correction.
+      "hr:service-date:write",
       "hr:sin:read",
       "hr:sin:reveal",
       "hr:sin:write",
@@ -113,18 +123,27 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
     expect(actual).toEqual(expected);
   });
 
-  it("CONTROLLER holds only the finance-relevant HR reads — never reveal, never write", () => {
+  it("CONTROLLER holds finance-relevant HR reads + AUTH-3D.RBAC hr:employee:security — never reveal, never edit, never terminate", () => {
     const expected = [
       "hr:compensation:read",
       "hr:directory:view",
       "hr:documents:read",
       "hr:employee:read",
+      // AUTH-3D.RBAC.FIX — narrow account-security grant. Controller/CFO
+      // owns account-security decisions (lock out compromised employee,
+      // issue password reset) WITHOUT gaining hr:employee:write,
+      // hr:employee:terminate, or any PII reveal.
+      "hr:employee:security",
       "hr:onboarding:approve",
       "hr:onboarding:read",
+      // Slice A closeout (2026-09-18) — narrow service-date correction.
+      "hr:service-date:write",
     ].sort();
     const actual = hrKeysOfRole("CONTROLLER");
     expect(actual).toEqual(expected);
     // Reveal / write / approve of sensitive tiers explicitly disallowed.
+    // Also explicitly: hr:employee:write and hr:employee:terminate must
+    // stay OUT — that's the entire point of the narrow security grant.
     for (const banned of [
       "hr:sin:read",
       "hr:sin:reveal",
@@ -138,6 +157,8 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
       "hr:tax:write",
       "hr:compensation:write",
       "hr:payroll_profile:activate",
+      "hr:employee:write",
+      "hr:employee:terminate",
     ]) {
       expect(actual).not.toContain(banned);
     }
@@ -204,5 +225,43 @@ describe("HR-1 cross-cutting · ROLE_PERMISSIONS `hr:*` grants — pinned", () =
     const carriers = roles.filter((r) => (ROLE_PERMISSIONS[r] as string[]).includes("hr:employee:terminate"));
     // CLUB_ADMIN (HR ownership) and SUPER_ADMIN. GM does NOT terminate.
     expect(carriers.sort()).toEqual(["CLUB_ADMIN", "SUPER_ADMIN"].sort());
+  });
+
+  it("hr:employee:security is held ONLY by CLUB_ADMIN + GENERAL_MANAGER + CONTROLLER + SUPER_ADMIN (AUTH-3D.RBAC.FIX)", () => {
+    const roles = Object.keys(ROLE_PERMISSIONS) as RoleKey[];
+    const carriers = roles.filter((r) => (ROLE_PERMISSIONS[r] as string[]).includes("hr:employee:security"));
+    // Founder-approved set: senior club-management/account-administration
+    // roles. Deliberately EXCLUDES PAYROLL_ADMIN — payroll access does
+    // not imply identity/account-security authority.
+    expect(carriers.sort()).toEqual([
+      "CLUB_ADMIN",
+      "CONTROLLER",
+      "GENERAL_MANAGER",
+      "SUPER_ADMIN",
+    ].sort());
+  });
+
+  it("PAYROLL_ADMIN does NOT hold hr:employee:security (least-privilege pin per AUTH-3D.RBAC.FIX §2)", () => {
+    const actual = ROLE_PERMISSIONS["PAYROLL_ADMIN"] as string[];
+    expect(actual).not.toContain("hr:employee:security");
+  });
+
+  it("junior/operational roles do NOT hold hr:employee:security", () => {
+    for (const role of [
+      "FINANCE_ADMIN",
+      "DEPARTMENT_MANAGER",
+      "PRO_SHOP_MANAGER",
+      "F_AND_B_MANAGER",
+      "EVENT_MANAGER",
+      "AUDITOR_READ_ONLY",
+      "BOARD_READ_ONLY",
+      "STAFF",
+      "MEMBER",
+    ] as RoleKey[]) {
+      expect(
+        (ROLE_PERMISSIONS[role] as string[]).includes("hr:employee:security"),
+        `${role} unexpectedly holds hr:employee:security`,
+      ).toBe(false);
+    }
   });
 });
