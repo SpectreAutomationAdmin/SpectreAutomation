@@ -95,6 +95,30 @@ export function middleware(req: NextRequest) {
     }
   }
 
+  // AUTH-2B.2A (2026-09-26) — one-time employee cookie path migration.
+  //
+  // AUTH-2 originally set the employee cookie at Path="/employee" and
+  // AUTH-2B.2 corrected it to Path="/". But a browser that authenticated
+  // under AUTH-2 or AUTH-2B.1 still holds a Path="/employee" variant
+  // that is NOT sent on /api/**, silently 404'ing the hero image,
+  // profile-photo avatar, quick-link downloads, training video, and
+  // pay-statement PDF. New sign-ins would fix themselves; existing
+  // users would be stranded until they re-authenticated.
+  //
+  // Strategy: on every request under /employee/** that carries the
+  // cookie, re-issue the same value at Path="/" and delete the
+  // Path="/employee" variant. Idempotent — once migrated, the re-issue
+  // matches the existing cookie (no-op) and the delete targets a
+  // non-existent cookie (no-op). Runs on the Edge runtime; iron-session
+  // never decodes here — value is treated as opaque bytes. Security
+  // posture: if the value is invalid, findValidSession still fails
+  // closed at the (authed) server-component layer, so no bypass is
+  // introduced.
+  const migrateCookie = url.pathname.startsWith("/employee");
+  const employeeSid = migrateCookie
+    ? req.cookies.get("spectre_employee_session")?.value
+    : undefined;
+
   // Forward nonce + correlation ID via request headers so server components
   // can pick them up.
   const requestHeaders = new Headers(req.headers);
@@ -118,6 +142,27 @@ export function middleware(req: NextRequest) {
   res.headers.set("X-Correlation-Id", correlationId);
   if (!isDev) {
     res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  }
+
+  // AUTH-2B.2A cookie migration — see comment above the read. Two
+  // Set-Cookie headers with the same NAME but different Path attributes
+  // are RFC 6265-legal and browsers treat them as distinct cookies —
+  // but Next.js's res.cookies.set() is a Map keyed by name and the
+  // second call would overwrite the first. Use headers.append instead
+  // so both migration lines make it into the response.
+  if (employeeSid) {
+    const secureAttr = isDev ? "" : "Secure; ";
+    // (1) Re-issue at Path=/ with the SAME opaque value; browser
+    // adds/updates this variant and thereafter sends it on /api/**.
+    res.headers.append(
+      "Set-Cookie",
+      `spectre_employee_session=${employeeSid}; Path=/; Max-Age=${60 * 60 * 24 * 7}; HttpOnly; ${secureAttr}SameSite=Lax`,
+    );
+    // (2) Delete the stale Path=/employee variant.
+    res.headers.append(
+      "Set-Cookie",
+      `spectre_employee_session=; Path=/employee; Max-Age=0; HttpOnly; ${secureAttr}SameSite=Lax`,
+    );
   }
   return res;
 }
