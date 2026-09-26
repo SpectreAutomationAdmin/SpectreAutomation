@@ -6,6 +6,7 @@ import { login } from "@/lib/services/auth";
 import { isAppError } from "@/lib/errors";
 import { getActiveBranding } from "@/lib/branding";
 import { HeroPicture } from "@/components/marketing/AuthPhoto";
+import { AdminSignInButton } from "./AdminSignInButton";
 import "@/components/marketing/auth.css";
 
 // Production login: validation, lockout, audit-trail-aware, encrypted cookie.
@@ -152,7 +153,7 @@ export default async function LoginPage({ searchParams }: { searchParams: { erro
                   maxLength={256}
                 />
               </div>
-              <button type="submit" className="auth-submit">Sign in to Spectre</button>
+              <AdminSignInButton label="Sign in to Spectre" />
             </form>
 
             <div className="auth-utility">

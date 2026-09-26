@@ -68,6 +68,26 @@
   height: 78vh;
   max-height: 100%;
   width: 100%;
+  /* WEB-1D.6 — feather all four edges of the golf-ball photograph into
+   * the surrounding #050505 page black. The image's near-black backdrop
+   * varies subtly from the accepted page black (#050505) on some
+   * monitors — panel technology, gamma, black level — which reveals the
+   * rectangular image boundary. Composing two axis-aligned linear
+   * gradients with `mask-composite: intersect` produces a soft
+   * rounded-rectangle safe zone: the central ~84 % × 84 % (from 8 % to
+   * 92 % on each axis) renders at full opacity so the ball + tee stay
+   * crisp; the outer 8 % on every edge fades to transparent, exposing
+   * the container's #050505 which is guaranteed to match the page.
+   * -webkit- prefixed properties for Safari; standard properties for
+   * everything else. */
+  -webkit-mask-image:
+    linear-gradient(to right,  transparent 0%, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 8%, #000 92%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right,  transparent 0%, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(to bottom, transparent 0%, #000 8%, #000 92%, transparent 100%);
+  mask-composite: intersect;
 }
 @media (max-width: 900px) {
   .spectre-auth[data-auth="admin"] .auth-photo > picture img,
@@ -453,6 +473,56 @@
   letter-spacing: 0.02em;
 }
 .spectre-auth .auth-submit:hover { transform: translateY(-1px); background: #101310; }
+
+/* WEB-1D.6 — pending-state affordance for the Sign in button.
+ * When the form is submitting, the button retains its exact external
+ * geometry (width, height, padding, border, radius, position) and only
+ * the inner content swaps to a small circular progress spinner + the
+ * "Signing in…" label. Disabled attribute prevents duplicate submission
+ * per §14; native disabled dimming is overridden so the button does NOT
+ * look unavailable — it looks working. Colour remains cream + ink for
+ * admin. Hover translate is suppressed while pending so the button does
+ * not visually re-engage. */
+.spectre-auth .auth-submit[aria-busy="true"] {
+  cursor: progress;
+  opacity: 1;
+}
+.spectre-auth .auth-submit[aria-busy="true"]:hover {
+  transform: none;
+}
+.spectre-auth .auth-submit:disabled {
+  opacity: 1;
+}
+.spectre-auth .auth-submit-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  line-height: 1;
+}
+.spectre-auth .auth-submit-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(26, 30, 23, 0.28);
+  border-top-color: var(--w1b-ink);
+  animation: spectre-auth-spin 700ms linear infinite;
+  flex: none;
+}
+@keyframes spectre-auth-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spectre-auth .auth-submit-spinner {
+    animation: none;
+    /* Static three-quarter ring so the loading affordance still reads
+     * without any motion. */
+    border-top-color: var(--w1b-ink);
+    border-right-color: var(--w1b-ink);
+    border-bottom-color: var(--w1b-ink);
+  }
+}
+
 .spectre-auth .auth-utility {
   margin-top: 1.5rem;
   display: flex; justify-content: space-between; align-items: center; gap: 1rem;
