@@ -11,6 +11,43 @@
 // or a neutral fallback. This component is presentation-only.
 
 import { useState } from "react";
+import { useFormStatus } from "react-dom";
+
+// WEB-1D.7 — pending-state submit button for the Employee Portal.
+// Mirrors the WEB-1D.6 admin AdminSignInButton behaviour with an
+// employee-specific normal label ("Sign in", not "Sign in to Spectre").
+// Declared as a nested client component so useFormStatus() reads the
+// pending state of its nearest ancestor <form> (the employee form
+// below). The employee form's server action is unchanged; this only
+// swaps inner content while pending, disables the button to prevent
+// duplicate submission, and sets aria-busy for AT. Prefers-reduced-
+// motion is honoured via the .auth-submit-spinner rule already
+// shipped by WEB-1D.6 in auth.css — no CSS delta this phase.
+// Duplication vs abstraction (§14): the pattern is ~10 lines. A
+// shared component would require refactoring the frozen admin button
+// (WEB-1D.6 §18) for a two-prop saving. The smallest safe change is
+// duplication.
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      className="auth-submit"
+      disabled={pending}
+      aria-busy={pending}
+      data-testid="employee-login-submit"
+    >
+      {pending ? (
+        <span className="auth-submit-pending">
+          <span className="auth-submit-spinner" aria-hidden="true" />
+          <span>Signing in&hellip;</span>
+        </span>
+      ) : (
+        "Sign in"
+      )}
+    </button>
+  );
+}
 
 export default function EmployeeLoginForm({
   action,
@@ -67,13 +104,7 @@ export default function EmployeeLoginForm({
           data-testid="employee-login-password"
         />
       </div>
-      <button
-        type="submit"
-        className="auth-submit"
-        data-testid="employee-login-submit"
-      >
-        Sign in
-      </button>
+      <SubmitButton />
     </form>
   );
 }
