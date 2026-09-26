@@ -49,7 +49,11 @@ kill_timeout = 30
   # would leave the DB view stale but would NOT weaken authorization.
   # sync-rbac.ts is idempotent (upsert + prune) and touches only the
   # three RBAC tables — never User / UserClubRole / Session / Employee.
-  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/prisma/build/index.js migrate deploy --schema prisma-postgres/schema.prisma && DATABASE_URL=\"$DIRECT_DATABASE_URL\" /app/node_modules/.bin/tsx /app/scripts/sync-rbac.ts'"
+  # Invoke tsx via its package entry (dist/cli.mjs) rather than the
+  # .bin/ shim. Docker COPY of .bin/tsx dereferences the symlink and
+  # breaks the sibling-file resolution the tsx CLI needs — same trap
+  # documented above for the Prisma CLI.
+  release_command = "sh -c 'if [ -z \"$DIRECT_DATABASE_URL\" ]; then echo FATAL: DIRECT_DATABASE_URL not set >&2; exit 2; fi; DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/prisma/build/index.js migrate deploy --schema prisma-postgres/schema.prisma && DATABASE_URL=\"$DIRECT_DATABASE_URL\" node /app/node_modules/tsx/dist/cli.mjs /app/scripts/sync-rbac.ts'"
   strategy = "rolling"
 
 [env]
