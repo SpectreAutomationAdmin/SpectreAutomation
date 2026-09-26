@@ -524,6 +524,14 @@ model Club {
 
   // AUTH-2 (2026-09-26) — server-side authoritative Session records.
   authSessions Session[] @relation("SessionClub")
+
+  // PAY-1A (2026-09-26) — Shared Payments infrastructure.
+  bankAccounts          BankAccount[]                @relation("ClubBankAccounts")
+  paymentRuns           PaymentRun[]                 @relation("ClubPaymentRuns")
+  paymentInstructions   PaymentInstruction[]         @relation("ClubPaymentInstructions")
+  paymentDestSnapshots  PaymentDestinationSnapshot[] @relation("ClubPaymentDestSnapshots")
+  paymentAuthorizations PaymentAuthorization[]       @relation("ClubPaymentAuthorizations")
+  paymentEvents         PaymentEvent[]               @relation("ClubPaymentEvents")
 }
 
 // ---------------------------------------------------------------------
@@ -2352,6 +2360,9 @@ model Account {
   payrollComponentExpenseAccount   PayrollComponent[]           @relation("PayrollComponentExpenseAccount")
   payrollComponentLiabilityAccount PayrollComponent[]           @relation("PayrollComponentLiabilityAccount")
 
+  // PAY-1A (2026-09-26) — GL cash account for BankAccount settlement.
+  bankAccounts BankAccount[] @relation("BankAccountGl")
+
   @@unique([clubId, accountNumber])
   @@index([clubId, isActive])
   @@index([clubId, type])
@@ -2537,6 +2548,8 @@ model JournalEntry {
   assetDisposalJE        AssetDisposal[]          @relation("AssetDisposalJE")
   // Phase 7
   posSaleJE              POSSale[]                @relation("POSSaleJE")
+  // PAY-1A (2026-09-26) — cash-settlement JE for a PaymentRun.
+  paymentRunSettlement   PaymentRun[]             @relation("PaymentRunSettlementJE")
 
   @@unique([clubId, entryNumber])
   @@index([clubId, status])
@@ -14210,4 +14223,199 @@ model Session {
   @@index([employeeId, revokedAt])
   @@index([clubId, revokedAt])
   @@index([expiresAt])
+}
+
+// ==========================================================================
+// PAY-1A (2026-09-26) - Shared Payments Infrastructure
+// ==========================================================================
+//
+// Domain: Spectre-controlled Payment Instructions produced by a business
+// workflow (initially Payroll), authorized by a designated authorizer,
+// scheduled, and submitted to a bank-independent Payment Provider.
+//
+// Critical invariants:
+//   - Once AUTHORIZED, a PaymentInstruction material fields must NOT
+//     mutate. Any material change invalidates the authorization; a new
+//     instruction with a new authorization must be issued.
+//   - PaymentInstruction.destinationSnapshotId binds to the SPECIFIC
+//     destination version that was authorized. Employee bank changes
+//     after authorization must NOT redirect the scheduled payment.
+//   - Spectre never holds customer funds; funds flow Club Bank ->
+//     regulated infrastructure -> Recipient Bank.
+//   - Staging can never transmit real money; simulator is the only
+//     available provider. See src/lib/payments/kill-switch.ts.
+// ==========================================================================
+
+// BankAccount - a tenant-owned funding account.
+model BankAccount {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation("ClubBankAccounts", fields: [clubId], references: [id])
+  institutionReference String
+  displayName          String
+  maskedIdentifier     String
+  currency             String   @default("CAD")
+  status               String   @default("ACTIVE")
+  glAccountId          String
+  glAccount            Account  @relation("BankAccountGl", fields: [glAccountId], references: [id])
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  paymentRuns PaymentRun[] @relation("PaymentRunFunding")
+
+  @@index([clubId, status])
+}
+
+// PaymentDestinationSnapshot - IMMUTABLE copy of a recipient's payment
+// destination as it existed at the moment a PaymentInstruction was authorized.
+model PaymentDestinationSnapshot {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation("ClubPaymentDestSnapshots", fields: [clubId], references: [id])
+  recipientType        String
+  recipientId          String
+  sourceModel          String
+  sourceId             String
+  sourceVersion        Int      @default(1)
+  maskedIdentifier     String
+  bankFingerprint      String?
+  institutionSecretRef String
+  transitSecretRef     String
+  accountSecretRef     String
+  currency             String   @default("CAD")
+  capturedAt           DateTime @default(now())
+
+  instructions PaymentInstruction[] @relation("InstructionDestination")
+
+  @@index([clubId, recipientType, recipientId])
+  @@index([clubId, sourceModel, sourceId])
+}
+
+// PaymentRun - grouping abstraction for a set of PaymentInstructions.
+model PaymentRun {
+  id                     String        @id @default(cuid())
+  clubId                 String
+  club                   Club          @relation("ClubPaymentRuns", fields: [clubId], references: [id])
+  runNumber              String
+  sourceType             String
+  sourceId               String?
+  sourceReference        String?
+  fundingBankAccountId   String
+  fundingBankAccount     BankAccount   @relation("PaymentRunFunding", fields: [fundingBankAccountId], references: [id])
+  currency               String        @default("CAD")
+  requestedExecutionDate DateTime
+  totalAmount            Decimal
+  instructionCount       Int           @default(0)
+  status                 String        @default("PREPARED")
+  paymentFingerprint     String?       @unique
+  workIntakeItemId       String?       @unique
+  providerType           String?
+  providerRunReference   String?
+  createdByUserId        String
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+  preparedAt             DateTime?
+  authorizedAt           DateTime?
+  authorizedByUserId     String?
+  scheduledAt            DateTime?
+  submittedAt            DateTime?
+  cancelledAt            DateTime?
+  cancelledByUserId      String?
+  cancelReason           String?
+  fullySettledAt         DateTime?
+  settlementJournalId    String?       @unique
+  settlementJournal      JournalEntry? @relation("PaymentRunSettlementJE", fields: [settlementJournalId], references: [id])
+
+  instructions  PaymentInstruction[]  @relation("InstructionRun")
+  authorization PaymentAuthorization? @relation("PaymentRunAuthorization")
+  events        PaymentEvent[]        @relation("PaymentEventRun")
+
+  @@unique([clubId, runNumber])
+  @@index([clubId, status])
+  @@index([sourceType, sourceId])
+}
+
+// PaymentInstruction - a single Spectre-authorized payment to a single recipient.
+model PaymentInstruction {
+  id                     String                     @id @default(cuid())
+  clubId                 String
+  club                   Club                       @relation("ClubPaymentInstructions", fields: [clubId], references: [id])
+  runId                  String
+  run                    PaymentRun                 @relation("InstructionRun", fields: [runId], references: [id], onDelete: Cascade)
+  sourceType             String
+  sourceId               String?
+  sourceReference        String?
+  recipientType          String
+  recipientId            String
+  amount                 Decimal
+  currency               String                     @default("CAD")
+  destinationSnapshotId  String
+  destinationSnapshot    PaymentDestinationSnapshot @relation("InstructionDestination", fields: [destinationSnapshotId], references: [id])
+  requestedExecutionDate DateTime
+  status                 String                     @default("PREPARED")
+  instructionFingerprint String
+  instructionVersion     Int                        @default(1)
+  providerType           String?
+  providerInstructionId  String?
+  providerReference      String?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+  authorizedAt           DateTime?
+  scheduledAt            DateTime?
+  submittedAt            DateTime?
+  acceptedAt             DateTime?
+  settledAt              DateTime?
+  returnedAt             DateTime?
+  cancelledAt            DateTime?
+  returnCode             String?
+  returnDescription      String?
+
+  events PaymentEvent[] @relation("PaymentEventInstruction")
+
+  @@unique([runId, recipientType, recipientId])
+  @@unique([providerType, providerInstructionId])
+  @@index([clubId, status])
+  @@index([recipientType, recipientId])
+}
+
+// PaymentAuthorization - immutable snapshot frozen at Controller authorization.
+model PaymentAuthorization {
+  id                 String     @id @default(cuid())
+  clubId             String
+  club               Club       @relation("ClubPaymentAuthorizations", fields: [clubId], references: [id])
+  runId              String     @unique
+  run                PaymentRun @relation("PaymentRunAuthorization", fields: [runId], references: [id], onDelete: Cascade)
+  authorizedByUserId String
+  authorizedAt       DateTime   @default(now())
+  paymentFingerprint String
+  snapshotJson       String
+  status             String     @default("ACTIVE")
+  invalidatedAt      DateTime?
+  invalidatedReason  String?
+
+  @@index([clubId])
+}
+
+// PaymentEvent - first-class domain event stream for payment lifecycle.
+model PaymentEvent {
+  id                String              @id @default(cuid())
+  clubId            String
+  club              Club                @relation("ClubPaymentEvents", fields: [clubId], references: [id])
+  runId             String?
+  run               PaymentRun?         @relation("PaymentEventRun", fields: [runId], references: [id], onDelete: Cascade)
+  instructionId     String?
+  instruction       PaymentInstruction? @relation("PaymentEventInstruction", fields: [instructionId], references: [id], onDelete: Cascade)
+  eventType         String
+  previousStatus    String?
+  newStatus         String?
+  actorUserId       String?
+  actorSource       String
+  providerReference String?
+  metaJson          String?
+  createdAt         DateTime            @default(now())
+
+  @@index([clubId, createdAt])
+  @@index([runId, createdAt])
+  @@index([instructionId, createdAt])
+  @@index([eventType])
 }

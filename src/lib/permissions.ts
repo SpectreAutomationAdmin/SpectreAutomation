@@ -116,6 +116,18 @@ export const PERMISSIONS = {
   // opening-balance entry. Controller reads (payroll:read); only
   // PAYROLL_ADMIN + CLUB_ADMIN + SUPER_ADMIN carry the write grant.
   "payroll:opening-balance:write": { name: "Enter / validate / activate opening YTD balances", category: "PAYROLL" },
+  // PAY-1A (2026-09-26) — Shared Payments infrastructure. Distinct
+  // from Payroll approval / posting; payroll POSTING creates
+  // liabilities without moving cash. Payment authorization is a
+  // separate financial event that authorizes Spectre to cause funds
+  // to leave a specific Club funding account for specific recipients.
+  // Maker/checker: payment:prepare and payment:authorize MUST NOT be
+  // held by the same role in the default policy (enforced service-side).
+  "payment:prepare":           { name: "Prepare a payment run + submit for authorization", category: "PAYMENTS" },
+  "payment:authorize":         { name: "Authorize a prepared payment run (Controller-tier)", category: "PAYMENTS" },
+  "payment:cancel":            { name: "Cancel a payment run before external submission",   category: "PAYMENTS" },
+  "payment:read":              { name: "Read payment runs / instructions (masked destinations)", category: "PAYMENTS" },
+  "payment:bank_account:manage": { name: "Manage tenant funding bank accounts (Club-owned)", category: "PAYMENTS" },
   // Slice A closeout (2026-09-18) — narrow permission for correcting
   // the employee's Original Hire Date. Distinct from hr:employment:write
   // (which allows department / position / reports-to / employment-type
@@ -422,6 +434,13 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // HR-2C: full Safety & Training authority.
     "hr:training:read", "hr:training:write", "hr:training:publish",
     "hr:training:assign", "hr:training:compliance:read",
+    // PAY-1A (2026-09-26) — CLUB_ADMIN carries Payments admin authority
+    // (bank-account management + authorize + cancel + read). Does NOT
+    // hold payment:prepare — the SoD "authorizer never self-authorizes"
+    // is enforced regardless of holding both keys, but the default
+    // policy already keeps the maker permission out of this role.
+    "payment:bank_account:manage",
+    "payment:authorize", "payment:cancel", "payment:read",
   ],
 
   GENERAL_MANAGER: [
@@ -542,6 +561,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     // Controller keeps `payroll:approve` and `payroll:return` and is
     // the ONLY role that can perform an independent approval.
     "payroll:paygroup:read", "payroll:config:read",
+    // PAY-1A (2026-09-26) — Controller authorizes payment runs and
+    // can cancel before external submission. MUST NOT hold
+    // payment:prepare (checker ≠ maker enforcement).
+    "payment:authorize", "payment:cancel", "payment:read",
+    "payment:bank_account:manage",
     "assets:read", "assets:manage", "assets:depreciate", "assets:dispose",
     "budget:read", "budget:edit", "budget:approve",
     "reports:operating", "reports:financial", "reports:board",
@@ -680,6 +704,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, PermissionKey[]> = {
     "payroll:paygroup:read", "payroll:paygroup:write",
     "payroll:config:read", "payroll:config:write",
     "payroll:opening-balance:write",
+    // PAY-1A (2026-09-26) — PAYROLL_ADMIN prepares + cancels the
+    // payment run (maker). MUST NOT hold payment:authorize (checker
+    // is Controller). SoD is critical.
+    "payment:prepare", "payment:cancel", "payment:read",
     // Slice A closeout (2026-09-18) — narrow service-date correction.
     "hr:service-date:write",
     // Slice C closeout (2026-09-18) §15.

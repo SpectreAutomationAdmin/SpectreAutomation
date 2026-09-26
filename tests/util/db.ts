@@ -432,6 +432,14 @@ export async function resetDb() {
     c.vendorRiskFlag.deleteMany(),
     c.vendor.deleteMany(),
     c.taxCode.deleteMany(),
+    // PAY-1A (2026-09-26) — Payments tables pin JournalEntry + BankAccount +
+    // Account FKs; wipe them BEFORE Journal + Account + BankAccount.
+    c.paymentEvent.deleteMany(),
+    c.paymentAuthorization.deleteMany(),
+    c.paymentInstruction.deleteMany(),
+    c.paymentRun.deleteMany(),
+    c.paymentDestinationSnapshot.deleteMany(),
+    c.bankAccount.deleteMany(),
     // Phase 3 accounting tables.
     c.journalEntryLine.deleteMany(),
     c.journalAttachment.deleteMany(),
