@@ -11,11 +11,13 @@
 // simulator; it never advances state.
 //
 // Security guards (defense in depth):
-//   1. NODE_ENV must NOT be "production".
-//   2. PAYMENTS_REAL_MONEY_ENABLED must NOT be "true".
-//   3. Only the SIMULATOR provider is affected — a future real
+//   1. PAYMENTS_REAL_MONEY_ENABLED must NOT be "true". This is the
+//      DEFINITIVE staging-vs-real-money signal — Next.js sets
+//      NODE_ENV=production on staging for build optimisation, so
+//      NODE_ENV is NOT a reliable environment discriminator here.
+//   2. Only the SIMULATOR provider is affected — a future real
 //      provider is unreachable through this endpoint.
-//   4. Caller must hold payment:authorize (Controller-tier) — the
+//   3. Caller must hold payment:authorize (Controller-tier) — the
 //      same permission that authorizes real payments.
 //
 // If any guard fails, the route returns 403 with a neutral message.
@@ -35,10 +37,12 @@ const VALID_DIRECTIVES = new Set([
 ]);
 
 export async function POST(req: NextRequest) {
-  // Environment guards.
-  if (process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  }
+  // Environment guard: refuses if real-money capability is on. This
+  // is the definitive signal — NODE_ENV=production on staging is
+  // expected (Next.js build mode) so we do NOT gate on it. The
+  // real-money capability flip is the only distinction that matters:
+  // simulator directives cannot affect real money, and any future
+  // real provider will refuse to construct when this flag is off.
   if (realMoneyEnabled()) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
