@@ -83,12 +83,21 @@ const SESSION_OPTIONS = {
     httpOnly: true,
     sameSite: "lax" as const,
     secure: process.env.NODE_ENV === "production",
-    // AUTH-2 (§6 of the brief): scope the employee cookie to /employee
-    // so it is not sent on marketing / admin paths. Login form POSTs
-    // to /employee/login (covered) and the portal lives under
-    // /employee/(authed)/** (covered). The onboarding handoff also
-    // lives under /employee.
-    path: "/employee",
+    // AUTH-2B.2 (2026-09-26): cookie path restored to "/" from the
+    // AUTH-2 experimental "/employee" narrowing. The narrower path
+    // stopped the browser from sending the cookie on legitimate
+    // cross-path fetches the Employee Portal depends on — the hero
+    // image (/api/clubs/[id]/employee-portal-hero), quick-link file
+    // downloads, profile-photo, tour-completed, training video, pay-
+    // statement PDF, all under /api/*. AUTH-2's real security
+    // boundary is the DB-authoritative Session with surface check +
+    // sha256 tokenHash + fail-closed lookup + revocability
+    // (session-store.findValidSession) — that primary boundary is
+    // unchanged and the surface check refuses an employee cookie on
+    // any admin surface (and vice versa). The httpOnly + sameSite=lax
+    // + secure attributes remain intact so the cookie is not readable
+    // by JS and is not sent on cross-site requests.
+    path: "/",
     maxAge: SEVEN_DAYS_SECONDS,
   },
 };
