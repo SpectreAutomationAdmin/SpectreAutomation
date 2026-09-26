@@ -521,6 +521,9 @@ model Club {
   shiftAssignments                   ShiftAssignment[]            @relation("ClubShiftAssignments")
   shiftOpportunities                 ShiftOpportunity[]           @relation("ClubShiftOpportunities")
   employeeAvailabilityProfiles       EmployeeAvailabilityProfile[] @relation("ClubEmployeeAvailabilityProfiles")
+
+  // AUTH-2 (2026-09-26) — server-side authoritative Session records.
+  authSessions Session[] @relation("SessionClub")
 }
 
 // ---------------------------------------------------------------------
@@ -719,6 +722,10 @@ model User {
 
   // Payroll-3D-3 — department-scoped responsibility back-relations.
   departmentResponsibilities  DepartmentResponsibility[]        @relation("UserDepartmentResponsibilities")
+
+  // AUTH-2 (2026-09-26) — server-side authoritative Session records
+  // that replace the cookie-only session model. See prisma.Session.
+  authSessions Session[] @relation("SessionUser")
 }
 
 // -------------------------------------------------------------------
@@ -3823,6 +3830,9 @@ model Employee {
   offeredShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeOfferedShiftOpportunities")
   claimedShiftOpportunities  ShiftOpportunity[]             @relation("EmployeeClaimedShiftOpportunities")
   availabilityProfiles       EmployeeAvailabilityProfile[]  @relation("EmployeeAvailabilityProfiles")
+
+  // AUTH-2 (2026-09-26) — server-side authoritative Session records.
+  authSessions Session[] @relation("SessionEmployee")
 
   @@unique([clubId, employeeNumber])
   @@index([clubId, status])
@@ -13870,4 +13880,47 @@ model EmployeeAvailabilityRule {
 
   @@unique([availabilityProfileId, weekday, shiftTemplateId])
   @@index([shiftTemplateId, weekday])
+}
+
+// -------------------------------------------------------------------
+// AUTH-2 (2026-09-26) — server-side authoritative Session records.
+// Cookies carry an opaque bearer; the DB stores sha256(bearer) so DB
+// disclosure does not yield reusable browser credentials. See
+// src/lib/services/session-store.ts for the fail-closed lookup path.
+// -------------------------------------------------------------------
+model Session {
+  id           String    @id @default(cuid())
+  // sha256(bearer) — the raw bearer is never persisted.
+  tokenHash    String    @unique
+  // "ADMIN" or "EMPLOYEE" — string not enum for consistency with rest of schema.
+  surface      String
+  // Exactly one of these two is populated depending on `surface`.
+  userId       String?
+  employeeId   String?
+  // Authoritative tenant context established at session creation.
+  // Nullable to accommodate platform-level admin sessions (SUPER_ADMIN
+  // users without a specific tenant); every employee session MUST
+  // carry a non-null clubId (enforced in session-store.ts).
+  clubId       String?
+  // Admin session's active-club selector. Null for EMPLOYEE surface.
+  activeClubId String?
+  // Session lifecycle timestamps.
+  createdAt    DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  revokedBy    String? // userId or "system" or "self"; free-text audit hint.
+  revokeReason String? // logout / password-reset / deactivation / admin-force / expired-sweep / ...
+  // Diagnostic metadata captured at session creation. Never used for auth.
+  uaAtCreate   String?
+  ipAtCreate   String?
+
+  user     User?     @relation("SessionUser", fields: [userId], references: [id], onDelete: Cascade)
+  employee Employee? @relation("SessionEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  club     Club?     @relation("SessionClub", fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([employeeId, revokedAt])
+  @@index([clubId, revokedAt])
+  @@index([expiresAt])
 }
