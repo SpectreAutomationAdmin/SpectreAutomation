@@ -311,13 +311,26 @@ export default async function EmployeeProfilePage({
   // SIN / banking / TD1 remain on their own sensitive-data workflows (§24).
   const canEditBasicDetails = hasPermission(principal, profile.clubId, "hr:employee:write");
 
-  // HR-2B.3.6 (2026-08-19) — Lifecycle controls: Delete vs Archive.
-  // Only surface controls to operators with hr:employee:write; the API
-  // route re-checks so the button never becomes an authority.
+  // HR-2B.3.6 (2026-08-19) — Lifecycle controls: Delete / Archive.
+  // AUTH-3D.TEST-B.UNBLOCK (2026-09-26) — added Terminate as a
+  // first-class action gated on hr:employee:terminate. Only surface
+  // controls to operators with hr:employee:write; the lifecycle route
+  // re-checks the specific per-action permission so buttons never
+  // become authorities.
   const canLifecycle = hasPermission(principal, profile.clubId, "hr:employee:write");
+  const canTerminate = hasPermission(principal, profile.clubId, "hr:employee:terminate");
   const deleteEligibility = canLifecycle
     ? await getDeleteEligibility(principal, profile.id)
     : null;
+
+  // AUTH-3D.TEST-B.UNBLOCK — a TERMINATED or ARCHIVED employee cannot
+  // authenticate to the Employee Portal (lifecycle fail-closed check in
+  // getEmployeePortalPrincipal), so the Portal password + Portal access
+  // sections are hidden for those lifecycles. The UI must not imply
+  // that a terminated employee can simply be signed back in.
+  const employeePortalControlsAvailable =
+    profile.employeeLifecycle !== "TERMINATED" &&
+    profile.employeeLifecycle !== "ARCHIVED";
 
   // AUTH-3D.RBAC.FIX (2026-09-26) — Portal password (Send password reset)
   // and Portal access (Sign out on all devices) are ACCOUNT-SECURITY
@@ -844,6 +857,8 @@ export default async function EmployeeProfilePage({
             employeeName={`${profile.firstName} ${profile.lastName}`}
             eligibility={deleteEligibility}
             currentLifecycle={profile.employeeLifecycle}
+            canTerminate={canTerminate}
+            terminationDate={profile.terminationDate?.toISOString() ?? null}
           />
         ) : null
       }
@@ -857,7 +872,9 @@ export default async function EmployeeProfilePage({
       }
       credentialActions={
         // AUTH-3D.RBAC.FIX — account-security tier, not write/lifecycle.
-        canEmployeeSecurity ? (
+        // AUTH-3D.TEST-B.UNBLOCK — hidden for TERMINATED/ARCHIVED so
+        // the UI doesn't imply the ex-employee can be signed back in.
+        canEmployeeSecurity && employeePortalControlsAvailable ? (
           <SendPasswordResetButton
             employeeId={profile.id}
             employeeDisplayName={profile.preferredName?.trim()
@@ -870,7 +887,9 @@ export default async function EmployeeProfilePage({
       }
       sessionActions={
         // AUTH-3D.RBAC.FIX — account-security tier, not write/lifecycle.
-        canEmployeeSecurity ? (
+        // AUTH-3D.TEST-B.UNBLOCK — hidden for TERMINATED/ARCHIVED so
+        // the UI doesn't imply the ex-employee can be signed out again.
+        canEmployeeSecurity && employeePortalControlsAvailable ? (
           <SignOutEmployeeEverywhereButton
             employeeId={profile.id}
             employeeDisplayName={profile.preferredName?.trim()

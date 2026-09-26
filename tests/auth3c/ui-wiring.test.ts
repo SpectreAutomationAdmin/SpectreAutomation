@@ -33,15 +33,25 @@ describe("AUTH-3C · Employee-profile wiring", () => {
     // AUTH-3D.RBAC.FIX (2026-09-26): password-reset + sign-out-on-all-
     // devices are ACCOUNT-SECURITY actions, gated on the new narrow
     // hr:employee:security permission rather than the broad
-    // hr:employee:write. The button now lives inside a
-    // canEmployeeSecurity ? (…) : null guard.
+    // hr:employee:write.
+    // AUTH-3D.TEST-B.UNBLOCK (2026-09-26): also gated on
+    // employeePortalControlsAvailable so the button doesn't render for
+    // TERMINATED or ARCHIVED employees. Assert BOTH gates precede the
+    // button in the source.
     const idx = profileSrc.indexOf("<SignOutEmployeeEverywhereButton");
-    const preceding = profileSrc.slice(Math.max(0, idx - 300), idx);
-    expect(preceding).toMatch(/canEmployeeSecurity\s*\?/);
+    const preceding = profileSrc.slice(Math.max(0, idx - 600), idx);
+    expect(preceding).toMatch(/canEmployeeSecurity/);
+    expect(preceding).toMatch(/employeePortalControlsAvailable/);
     // And confirm the source derives canEmployeeSecurity from the
     // narrow permission key, not from the write key.
     expect(profileSrc).toMatch(
       /canEmployeeSecurity\s*=\s*hasPermission\([^)]*"hr:employee:security"\)/,
+    );
+    // Assert the TERMINATED/ARCHIVED guard rule that AUTH-3D.TEST-B.UNBLOCK
+    // introduced — Portal-Portal-access sections must not render for
+    // ex-employees.
+    expect(profileSrc).toMatch(
+      /employeePortalControlsAvailable\s*=[\s\S]*?TERMINATED[\s\S]*?ARCHIVED/,
     );
   });
 
