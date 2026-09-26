@@ -498,7 +498,10 @@
   align-items: center;
   justify-content: center;
   gap: 0.55rem;
-  line-height: 1;
+  /* WEB-1D.7 — inherit the .auth-submit line-height (1.6 from
+   * .spectre-auth) so pending-state button height matches normal-state
+   * height exactly. An earlier `line-height: 1` shrunk the pending
+   * button by ~7 px; §22 acceptance is ≤ 1 px. */
 }
 .spectre-auth .auth-submit-spinner {
   width: 14px;
