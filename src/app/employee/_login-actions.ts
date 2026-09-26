@@ -117,7 +117,17 @@ export async function employeePortalLoginAction(formData: FormData): Promise<voi
       // Entity-id carries only the emailHash — no raw email + no
       // discrimination between the failure modes at the entity level.
       entityId: `hash:${hashEmail(email)}`,
-      clubId: hostClubId ?? "platform",
+      // AUTH-3D.AUDIT-HOTFIX (2026-09-26): a platform-host login
+      // attempt is not tenant-scoped, so no valid Club FK exists.
+      // Prior code fabricated the string "platform" here — Postgres
+      // rejected it with `AuditLog_clubId_fkey`, `audit()` swallowed
+      // the error, and no failure audit was persisted for any
+      // platform-host login attempt (unknown email, wrong password,
+      // ambiguous, ineligible). AuditLog.clubId is nullable
+      // (canonical comment: "null = global / Spectre admin actions"),
+      // which is the correct representation for a platform-level
+      // event. See tests/auth3/audit-hotfix-platform-clubid.test.ts.
+      clubId: hostClubId ?? null,
       meta: {
         ip: ctx?.ip, userAgent: ctx?.userAgent,
         // failureKind is INTERNAL — logged so operators can see the

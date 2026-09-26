@@ -24,9 +24,18 @@ describe("HR mobile-hotfix · portal login is now email-based (source pins)", ()
   const portalPwPage   = src("src/app/hr/onboarding/portal-password/page.tsx");
   const completePage   = src("src/app/hr/onboarding/complete/page.tsx");
 
-  it("login page copy: 'Sign in with your email address.' (not employee number)", () => {
-    expect(loginPage).toMatch(/Sign in with your email address\./);
-    expect(loginPage).not.toMatch(/Sign in with your employee number\./);
+  it("login page copy directs employees to email (not employee number)", () => {
+    // AUTH-3D.AUDIT-HOTFIX (2026-09-26): the original pin required the
+    // literal short-sentence copy "Sign in with your email address."
+    // WEB-1D (2026-08-31) evolved the paragraph into flowing prose:
+    // "Sign in with your email address to reach your schedule, pay
+    // statements and the tools you use every day." The intent of the
+    // pin — "portal directs employees to their EMAIL, not their
+    // employee number" — is preserved. Widen to the phrase, drop the
+    // punctuation-anchor. The negative pin remains, so a future
+    // refactor cannot silently reintroduce employee-number copy.
+    expect(loginPage).toMatch(/Sign in with your email address/i);
+    expect(loginPage).not.toMatch(/Sign in with your employee number/i);
   });
 
   it("login form: email input (type=email, autocomplete=username) — no employeeNumber input", () => {
