@@ -108,8 +108,19 @@ COPY --from=builder --chown=spectre:spectre /app/src/lib/permissions.ts ./src/li
 # tsx — some maintenance scripts under /app/scripts are TypeScript.
 # tsx + esbuild + resolvers together weigh ~50 MB, small next to the
 # rest of the runtime.
+#
+# AUTH-3D.RBAC.FIX.PATCH (2026-09-26) — esbuild ships its platform-
+# specific binary via the optionalDependencies mechanism as a separate
+# package `@esbuild/<os>-<arch>`. On the Linux runner that resolves to
+# `@esbuild/linux-x64`. Without the sibling package copied here, tsx
+# fails at first script run with:
+#   Error: The package "@esbuild/linux-x64" could not be found, and
+#   is needed by esbuild.
+# Copy the whole @esbuild scope so future architecture/version shifts
+# don't require another Dockerfile change.
 COPY --from=builder --chown=spectre:spectre /app/node_modules/tsx ./node_modules/tsx
 COPY --from=builder --chown=spectre:spectre /app/node_modules/esbuild ./node_modules/esbuild
+COPY --from=builder --chown=spectre:spectre /app/node_modules/@esbuild ./node_modules/@esbuild
 COPY --from=builder --chown=spectre:spectre /app/node_modules/get-tsconfig ./node_modules/get-tsconfig
 COPY --from=builder --chown=spectre:spectre /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
 COPY --from=builder --chown=spectre:spectre /app/node_modules/.bin/tsx ./node_modules/.bin/tsx
