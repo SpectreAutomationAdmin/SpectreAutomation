@@ -56,19 +56,42 @@ function requiresAuth(pathname: string): boolean {
   return pathname.startsWith("/app");
 }
 
+// AUTH-2 (2026-09-26) — defense-in-depth for the Employee Portal.
+// Edge runtime cannot access Prisma, so this can only be a cookie-
+// presence check; the authoritative Session validation happens in the
+// (authed) server components. Public employee routes are exempted.
+function requiresEmployeeAuth(pathname: string): boolean {
+  if (!pathname.startsWith("/employee")) return false;
+  // Exempt public entry points and the logout handler.
+  if (pathname === "/employee/login") return false;
+  if (pathname === "/employee/forgot-password") return false;
+  if (pathname === "/employee/forgot-password/success") return false;
+  if (pathname.startsWith("/employee/reset-password")) return false;
+  if (pathname === "/employee/logout") return false;
+  return true;
+}
+
 export function middleware(req: NextRequest) {
   const url = req.nextUrl;
   const isDev = process.env.NODE_ENV !== "production";
   const nonce = generateNonce();
   const correlationId = req.headers.get("x-correlation-id") ?? newCorrelationId();
 
-  // Auth gate
+  // Auth gate — admin /app/**
   if (requiresAuth(url.pathname)) {
     const hasCookie = req.cookies.get(process.env.SESSION_COOKIE_NAME ?? "spectre_session");
     if (!hasCookie) {
       const login = new URL("/login", req.url);
       login.searchParams.set("next", url.pathname);
       return NextResponse.redirect(login);
+    }
+  }
+
+  // AUTH-2 auth gate — employee /employee/** (except public routes)
+  if (requiresEmployeeAuth(url.pathname)) {
+    const hasCookie = req.cookies.get("spectre_employee_session");
+    if (!hasCookie) {
+      return NextResponse.redirect(new URL("/employee/login", req.url));
     }
   }
 
