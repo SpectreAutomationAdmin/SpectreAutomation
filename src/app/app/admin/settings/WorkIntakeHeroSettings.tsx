@@ -21,8 +21,9 @@ interface Props {
   clubId: string;
   initialHasImage: boolean;
   initialVersion: string | null;
-  initialFocalX: number; // 0..100
-  initialFocalY: number; // 0..100
+  /** Normalized 0..1 from ClubMedia (HERO_FRAMING_BOUNDS.focalMax = 1). */
+  initialFocalX: number;
+  initialFocalY: number;
 }
 
 export default function WorkIntakeHeroSettings({
@@ -35,8 +36,13 @@ export default function WorkIntakeHeroSettings({
   const router = useRouter();
   const [hasImage, setHasImage] = useState(initialHasImage);
   const [version, setVersion] = useState<string | null>(initialVersion);
-  const [focalX, setFocalX] = useState(initialFocalX);
-  const [focalY, setFocalY] = useState(initialFocalY);
+  // WI-1E — slider state is a 0..100 percentage (UI-friendly). We
+  // multiply by 100 when displaying an initial ClubMedia value (which
+  // is normalized 0..1) and divide by 100 before POSTing so the
+  // server-side clampHeroFraming (bounds 0..1) doesn't collapse every
+  // meaningful value to 1.
+  const [focalX, setFocalX] = useState(initialFocalX * 100);
+  const [focalY, setFocalY] = useState(initialFocalY * 100);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -81,16 +87,18 @@ export default function WorkIntakeHeroSettings({
     }
   }
 
-  async function saveFraming(nextX: number, nextY: number) {
+  async function saveFraming(nextXPct: number, nextYPct: number) {
     if (!hasImage) return;
     setErr(null); setBusy(true);
     try {
+      // WI-1E — normalize 0..100 slider values to the 0..1 bounds
+      // required by clampHeroFraming (HERO_FRAMING_BOUNDS.focalMax = 1).
       const res = await fetch(`/api/clubs/${clubId}/work-intake-hero/framing`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "desktop",
-          desktop: { focalX: nextX, focalY: nextY, zoom: 1 },
+          desktop: { focalX: nextXPct / 100, focalY: nextYPct / 100, zoom: 1 },
         }),
       });
       const body = await res.json().catch(() => ({}));

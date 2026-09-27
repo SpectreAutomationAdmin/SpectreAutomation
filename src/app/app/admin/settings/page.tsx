@@ -260,8 +260,8 @@ export default async function SettingsPage() {
           clubId={club.id}
           initialHasImage={workIntakeHeroMedia !== null}
           initialVersion={workIntakeHeroMedia?.sha256.slice(0, 12) ?? null}
-          initialFocalX={workIntakeHeroFraming?.desktop.focalX ?? 50}
-          initialFocalY={workIntakeHeroFraming?.desktop.focalY ?? 50}
+          initialFocalX={workIntakeHeroFraming?.desktop.focalX ?? 0.5}
+          initialFocalY={workIntakeHeroFraming?.desktop.focalY ?? 0.5}
         />
       </section>
 

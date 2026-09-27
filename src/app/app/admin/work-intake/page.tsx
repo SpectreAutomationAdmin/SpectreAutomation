@@ -39,8 +39,12 @@ export default async function WorkIntakePage() {
     ? {
         kind: "tenant" as const,
         url: `/api/clubs/${clubId}/work-intake-hero?v=${encodeURIComponent(media.sha256 || media.uploadedAt.toISOString())}`,
-        focalX: framing?.desktop.focalX ?? 50,
-        focalY: framing?.desktop.focalY ?? 50,
+        // WI-1E — ClubMedia stores normalized 0..1 focal values.
+        // The hero component uses these as CSS `object-position: X% Y%`,
+        // so multiply by 100 here. Fall back to 50% when framing has
+        // never been saved.
+        focalX: (framing?.desktop.focalX ?? 0.5) * 100,
+        focalY: (framing?.desktop.focalY ?? 0.5) * 100,
         zoom: framing?.desktop.zoom ?? 1,
       }
     : { kind: "default" as const };

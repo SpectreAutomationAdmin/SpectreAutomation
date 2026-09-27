@@ -229,20 +229,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     overflow: hidden;
     word-break: break-word;
   }
-  /* WI-1D — the marketing Wordmark component is used directly in
-     the sidebar. .spectre-sidebar-masthead only carries the color
-     inheritance and font-size floor for the sidebar context. All
-     tracking / slash / weight / uppercase rules come from
-     .mkt-wordmark under the .spectre-marketing scope wrapper in
-     the JSX — unchanged from the marketing site. */
+  /* WI-1E — tight wrapper for the reused .w1b-nav-wordmark. Layout-
+     only (display + line-height); the WEB-1B rule owns the
+     typography (family, weight, size, letter-spacing, color,
+     white-space, text-transform). */
   .spectre-sidebar-masthead {
-    display: inline-flex; align-items: baseline;
-    color: rgba(236, 230, 214, 0.94);
+    display: inline-flex; align-items: center;
     line-height: 1;
-    font-size: 15px;
   }
-  .spectre-sidebar-masthead .mkt-wordmark { font-size: inherit; color: inherit; }
-  .spectre-sidebar-masthead .mkt-wordmark-divider { color: rgba(236, 230, 214, 0.55); }
   /* Phase 4R rev-6 (2026-08-15) — sidebar identity block is pinned
      to the same vertical height as the topbar so the divider beneath
      the product name aligns with the topbar's bottom border. This
@@ -5422,15 +5416,31 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   object-fit: cover; object-position: center 50%;
-  filter: brightness(0.66) saturate(1.02);
+  /* WI-1E §7–§9 — remove the full-banner brightness filter. The
+     photograph now renders at its natural luminosity so the sunset,
+     clubhouse and landscape retain their approved contrast. */
   z-index: 0;
 }
+/* WI-1E §10–§12 — localized right-side contrast only. Left ~60 %
+   of the banner is transparent (photograph reads natural); a
+   subtle transparent-to-dark gradient fades in near the weather /
+   editorial column so the cream text stays legible. No hard edge,
+   no rectangle, no card. */
 .wi-hero-overlay {
   position: absolute; inset: 0;
-  background:
-    linear-gradient(180deg, rgba(20, 15, 10, 0.14) 0%, rgba(20, 15, 10, 0.62) 100%),
-    linear-gradient(90deg, rgba(20, 15, 10, 0.68) 0%, rgba(20, 15, 10, 0.28) 55%, rgba(20, 15, 10, 0.20) 100%);
+  background: linear-gradient(
+    90deg,
+    rgba(20, 15, 10, 0.00) 0%,
+    rgba(20, 15, 10, 0.00) 55%,
+    rgba(20, 15, 10, 0.20) 75%,
+    rgba(20, 15, 10, 0.44) 100%
+  );
   z-index: 1;
+}
+/* Left greeting legibility — extremely subtle localized text shadow
+   only where necessary, NOT a page-wide overlay. */
+.wi-hero-content .wi-hero-primary {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 .wi-hero-content {
   position: relative; z-index: 2;

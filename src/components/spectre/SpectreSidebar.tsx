@@ -16,14 +16,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/ui";
-import { Wordmark } from "@/components/marketing/Wordmark";
-// WI-1D — marketing.css declares .spectre-marketing .mkt-wordmark
-// (0.32 em tracking, weight 500, uppercase, translucent divider).
-// Importing here loads the file into the admin shell bundle so the
-// SAME rules apply inside the .spectre-marketing wrapper without
-// duplicating them. All marketing rules are scoped under
-// .spectre-marketing so nothing else in the admin is affected.
-import "@/components/marketing/marketing.css";
+// WI-1E — the LIVE marketing header wordmark lives in web1b.css:
+//   .spectre-web1b .w1b-nav-wordmark { font-family: var(--w1b-sans);
+//     font-weight: 700; font-size: 0.78rem; letter-spacing: 0.14em;
+//     color: var(--w1b-white); white-space: nowrap; }
+// Both --w1b-sans and --w1b-white are declared on the same
+// `.spectre-web1b` selector (web1b.css lines 19-32). Importing the
+// file loads the rules into the admin shell bundle. We render the
+// wordmark under a TIGHT `<span class="spectre-web1b">` scope so
+// only the wordmark element inherits the WEB-1B tokens — nothing
+// else in the sidebar gets the wider WEB-1B theme.
+import "@/components/marketing/web1b.css";
 import {
   ADMIN_TOP_LEVEL,
   ADMIN_SECTIONS,
@@ -167,18 +170,24 @@ export function SpectreSidebar({
             S
           </div>
         ) : (
-          /* WI-1D — the SAME Wordmark component the marketing site
-             renders in its own header, wrapped in the .spectre-marketing
-             scope so the identical .mkt-wordmark / .mkt-wordmark-divider
-             rules apply (uppercase Inter medium at 0.32 em tracking,
-             translucent slash). No new tracking value; no admin
-             recreation. See src/components/marketing/Wordmark.tsx +
-             src/components/marketing/marketing.css. */
+          /* WI-1E — reuses the LIVE WEB-1B marketing header wordmark.
+             The `<span class="spectre-web1b">` wrapper is a TIGHT
+             scope containing only the wordmark, so:
+               - the marketing .spectre-web1b { --w1b-sans; --w1b-white }
+                 custom properties resolve exactly as they do on the
+                 marketing header;
+               - the .spectre-web1b .w1b-nav-wordmark rule matches;
+               - no other .w1b-* rule matches (no such children exist),
+                 so the wider WEB-1B theme cannot leak into the admin.
+             Literal text 'SPECTRE / AUTOMATION' — verbatim from
+             W1bNav.tsx line 26. */
           <span
-            className="spectre-marketing spectre-sidebar-masthead"
+            className="spectre-web1b spectre-sidebar-masthead"
             data-testid="spectre-sidebar-masthead"
           >
-            <Wordmark />
+            <span className="w1b-nav-wordmark" aria-label="Spectre Automation">
+              SPECTRE / AUTOMATION
+            </span>
           </span>
         )}
       </div>
