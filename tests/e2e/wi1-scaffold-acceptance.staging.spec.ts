@@ -61,14 +61,25 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     const lh = parseFloat(greeting.lineHeight);
     expect(greeting.clientHeight).toBeLessThan(lh * 1.6);
 
-    // WI-1B §11–§12 — hero must touch top chrome + sidebar edge.
+    // WI-1B §11–§12 — hero must touch top chrome + sidebar edge (retained).
     const heroBox = await page.locator(".wi-hero").boundingBox();
     console.log("WI_HERO_BOX:", JSON.stringify(heroBox));
     expect(heroBox).not.toBeNull();
-    if (heroBox) {
-      // shallow panoramic banner (~180 px)
-      expect(heroBox.height).toBeLessThanOrEqual(220);
-      expect(heroBox.height).toBeGreaterThanOrEqual(140);
+
+    // WI-1C §2 — hero BOTTOM must align with the separator immediately
+    // beneath "Reservations tonight" in TODAY'S POSITION. Locate the
+    // row containing that text; its bottom border is the alignment
+    // anchor. Tolerance ± 3 px per §19.
+    const reservationsRow = page.locator(".wi-rail-row", { hasText: /Reservations tonight/i }).first();
+    const rrBox = await reservationsRow.boundingBox();
+    console.log("WI_RESERVATIONS_ROW_BOX:", JSON.stringify(rrBox));
+    expect(rrBox).not.toBeNull();
+
+    if (heroBox && rrBox) {
+      const heroBottom = heroBox.y + heroBox.height;
+      const separatorY = rrBox.y + rrBox.height;
+      console.log("WI_HERO_BOTTOM:", heroBottom, "SEPARATOR_Y:", separatorY, "DELTA:", Math.abs(heroBottom - separatorY));
+      expect(Math.abs(heroBottom - separatorY)).toBeLessThanOrEqual(6);
       // WI-1B §12: hero.left must equal sidebar right edge (288 px).
       expect(Math.abs(heroBox.x - 288)).toBeLessThanOrEqual(4);
       // WI-1B §11: hero.top must equal top-chrome height (64 px).
@@ -79,6 +90,20 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await expect(page.locator(".wi-hero-weather-temp")).toContainText("14°");
     await expect(page.locator(".wi-hero-weather-place")).toContainText(/Calgary/);
     await expect(page.locator(".wi-hero-weather-cond")).toContainText(/Mostly Sunny/);
+
+    // WI-1C §7–§12 — weather + supporting copy must be stacked
+    // vertically, NOT side-by-side. Weather block bottom < supporting
+    // copy top. Divider (::before pseudo) sits between them and is
+    // included in .wi-hero-side flex layout.
+    const weatherBox = await page.locator(".wi-hero-weather").boundingBox();
+    const supportBox = await page.locator(".wi-hero-support").boundingBox();
+    console.log("WI_WEATHER_BOX:", JSON.stringify(weatherBox));
+    console.log("WI_SUPPORT_BOX:", JSON.stringify(supportBox));
+    if (weatherBox && supportBox) {
+      const weatherBottom = weatherBox.y + weatherBox.height;
+      expect(supportBox.y).toBeGreaterThan(weatherBottom);
+    }
+
     await page.locator(".wi-hero").screenshot({ path: "test-results/wi1-02-hero.png" });
   });
 
