@@ -5425,7 +5425,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   position: relative;
   border-radius: 14px;
   overflow: hidden;
-  height: 210px;
+  /* WI-1C — measured on v570: Reservations-tonight row bottom
+     lands at y=289; hero.top pins to top-chrome bottom at y=64;
+     therefore hero.height = 289 - 64 = 225 (± 3 px anchor tolerance
+     per brief §19). */
+  height: 225px;
   background: #1a1712;
   color: #f7f2e6;
 }
