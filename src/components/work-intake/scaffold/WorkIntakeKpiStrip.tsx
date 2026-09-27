@@ -58,6 +58,32 @@ function TrendGlyph({ direction }: { direction: "up" | "down" | "flat" }) {
   );
 }
 
+/** WI-1G — shared card-navigation chevron. Refined two-segment
+ *  right-facing chevron per the accepted design reference:
+ *    - 16 × 16 rendered
+ *    - viewBox 0 0 24 24 · path M9 18 L15 12 L9 6
+ *    - stroke 1.5, round caps + joins
+ *    - currentColor (controlled by .wi-kpi-chevron cool-grey token). */
+function KpiNavChevron() {
+  return (
+    <svg
+      className="wi-kpi-chevron"
+      width="16" height="16" viewBox="0 0 24 24"
+      data-testid="wi-kpi-chevron"
+      aria-hidden="true"
+    >
+      <path
+        d="M9 18 L15 12 L9 6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function WorkIntakeKpiStrip({ cards }: { cards: WiKpi[] }) {
   return (
     <section className="wi-kpi" aria-label="Work overview">
@@ -67,17 +93,7 @@ export default function WorkIntakeKpiStrip({ cards }: { cards: WiKpi[] }) {
             <svg width="20" height="20" viewBox="0 0 20 20">{ICON_PATHS[c.icon]}</svg>
           </div>
           <div className="wi-kpi-value">{c.value}</div>
-          {/* WI-1D §24 — real vector navigation chevron (no ::after
-              CSS pseudo-element). Refined thin stroke, currentColor
-              so the color token in .wi-kpi-chevron controls it. */}
-          <svg
-            className="wi-kpi-chevron"
-            width="12" height="12" viewBox="0 0 12 12"
-            data-testid="wi-kpi-chevron"
-            aria-hidden="true"
-          >
-            <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <KpiNavChevron />
           <div className="wi-kpi-label">{c.label}</div>
           <div className={`wi-kpi-trend wi-kpi-trend--${c.trend.tone}`}>
             <TrendGlyph direction={c.trend.direction} />

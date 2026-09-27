@@ -406,6 +406,50 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     }
     // Chevron is a real SVG (test id present).
     await expect(firstCard.locator("[data-testid='wi-kpi-chevron']")).toBeVisible();
+    // WI-1G — the SVG has fill=none, stroke-linecap=round, stroke-linejoin=round,
+    // width and height >= 14 and <= 18.
+    const chev = firstCard.locator("[data-testid='wi-kpi-chevron']");
+    const chevBox = await chev.boundingBox();
+    console.log("WI_KPI_CHEVRON_BOX:", JSON.stringify(chevBox));
+    if (chevBox) {
+      expect(chevBox.width).toBeGreaterThanOrEqual(14);
+      expect(chevBox.width).toBeLessThanOrEqual(18);
+      expect(chevBox.height).toBeGreaterThanOrEqual(14);
+      expect(chevBox.height).toBeLessThanOrEqual(18);
+    }
+    const path = chev.locator("path").first();
+    const attrs = await path.evaluate((el) => ({
+      fill: el.getAttribute("fill"),
+      stroke: el.getAttribute("stroke"),
+      strokeLinecap: el.getAttribute("stroke-linecap"),
+      strokeLinejoin: el.getAttribute("stroke-linejoin"),
+    }));
+    console.log("WI_KPI_CHEVRON_PATH:", JSON.stringify(attrs));
+    expect(attrs.fill).toBe("none");
+    expect(attrs.stroke).toBeTruthy();
+    expect(attrs.strokeLinecap).toBe("round");
+    expect(attrs.strokeLinejoin).toBe("round");
+    // Exactly 4 KPI navigation chevrons render, all with consistent
+    // right + top insets across the four cards ± 2 px.
+    const chevs = page.locator("[data-testid='wi-kpi-chevron']");
+    await expect(chevs).toHaveCount(4);
+    const cards4 = await page.locator("[data-testid='wi-kpi-card']").all();
+    const insets = await Promise.all(
+      cards4.map(async (c) => {
+        const cBox = await c.boundingBox();
+        const chBox = await c.locator("[data-testid='wi-kpi-chevron']").boundingBox();
+        if (!cBox || !chBox) return null;
+        return {
+          rightInset: (cBox.x + cBox.width) - (chBox.x + chBox.width),
+          topInset: chBox.y - cBox.y,
+        };
+      }),
+    );
+    console.log("WI_KPI_CHEVRON_INSETS:", JSON.stringify(insets));
+    const rightInsets = insets.map((i) => i!.rightInset);
+    const topInsets = insets.map((i) => i!.topInset);
+    expect(Math.max(...rightInsets) - Math.min(...rightInsets)).toBeLessThanOrEqual(2);
+    expect(Math.max(...topInsets) - Math.min(...topInsets)).toBeLessThanOrEqual(2);
     // NUMBER / LABEL / TREND share a common left edge.
     const [vBox, lBox, tBox] = await Promise.all([
       firstCard.locator(".wi-kpi-value").boundingBox(),
