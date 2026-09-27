@@ -16,6 +16,16 @@ const BATCH_A_FILE = "test-results/pay1c1-A-batchId.txt"; // seeded externally b
 test.use({ trace: "off", video: "off", viewport: { width: 1440, height: 900 } });
 test.describe.configure({ mode: "serial" });
 
+// PAY-1C.1 acceptance does its own two-actor login in beforeAll; the
+// staging-authenticated Playwright project's stored auth state adds
+// no coverage AND would trip PAY-1A's single-run-per-batch guard on
+// the re-run. Skip it explicitly.
+test.beforeEach(({}, testInfo) => {
+  if (testInfo.project.name !== "chromium") {
+    testInfo.skip(true, "PAY-1C.1 acceptance is chromium-only");
+  }
+});
+
 // The following batch id must be pre-seeded on staging (Coulee Ridge)
 // as a POSTED, STANDARD batch with ONE INCLUDED employee whose netPay
 // is CAD $150.00. The seed script `scripts/pay1c1-A-seed.mjs` handles
