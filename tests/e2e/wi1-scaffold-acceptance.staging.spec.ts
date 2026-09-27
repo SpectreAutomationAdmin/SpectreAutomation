@@ -1,0 +1,131 @@
+// WI-1 — deployed visual acceptance for the new /app/admin/work-intake
+// scaffold @ 1586×992 (reference native dimension).
+
+import { test, expect } from "@playwright/test";
+import { loginAs } from "./_lib/staging-auth";
+
+const BASE_URL = "https://staging.spectreautomation.com";
+const CTRL_EMAIL = "fixture.controller.3e@spectre.test";
+const FIXTURE_PW = "spectre-3e-fixture";
+const VIEWPORT = { width: 1586, height: 992 };
+
+test.use({ trace: "off", video: "off" });
+test.describe.configure({ mode: "serial" });
+test.beforeEach(({}, testInfo) => {
+  if (testInfo.project.name !== "chromium") {
+    testInfo.skip(true, "WI-1 acceptance runs on chromium project only");
+  }
+});
+
+test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
+  test.setTimeout(120_000);
+
+  test("HEALTH", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await ctx.newPage();
+    const r = await page.request.get(`${BASE_URL}/api/health`);
+    expect(r.ok()).toBeTruthy();
+    await ctx.close();
+  });
+
+  test("Full-page @ 1586×992 · new route exists + scaffold rendered", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-root")).toBeVisible();
+    await page.screenshot({ path: "test-results/wi1-01-full-1586.png", fullPage: false });
+  });
+
+  test("Hero present with editorial serif greeting + FEED SYNCED static pill + weather", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-hero-img")).toBeVisible();
+    await expect(page.locator(".wi-hero-eyebrow")).toContainText(/MONDAY, SEPTEMBER 28/);
+    const greetingStyle = await page.locator(".wi-hero-greeting").evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { family: s.fontFamily, size: s.fontSize };
+    });
+    console.log("WI_GREETING:", JSON.stringify(greetingStyle));
+    expect(greetingStyle.family).toMatch(/Source Serif|Georgia|serif/i);
+    await expect(page.locator(".wi-hero-sync-label")).toContainText(/FEED SYNCED/);
+    await expect(page.locator(".wi-hero-weather-temp")).toContainText("14°");
+    await expect(page.locator(".wi-hero-weather-place")).toContainText(/Calgary/);
+    await expect(page.locator(".wi-hero-weather-cond")).toContainText(/Mostly Sunny/);
+    await expect(page.locator(".wi-hero-support")).toContainText(/details run quietly/);
+    await page.locator(".wi-hero").screenshot({ path: "test-results/wi1-02-hero.png" });
+  });
+
+  test("4 KPI cards with verbatim reference values + trend indicators", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-kpi-card")).toHaveCount(4);
+    const values = await page.locator(".wi-kpi-value").allInnerTexts();
+    expect(values).toEqual(["12", "8", "5", "28"]);
+    await expect(page.getByText("Items need your attention")).toBeVisible();
+    await expect(page.getByText("Items ready for review")).toBeVisible();
+    await expect(page.getByText("Waiting on others")).toBeVisible();
+    await expect(page.getByText("Completed this week")).toBeVisible();
+    await expect(page.getByText(/3 from last week/)).toBeVisible();
+    await expect(page.getByText(/12% from last week/)).toBeVisible();
+    await page.locator(".wi-kpi").screenshot({ path: "test-results/wi1-03-kpi.png" });
+  });
+
+  test("Feed head tabs + Filter + Search", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-feed-tab").nth(0)).toHaveText("My Feed");
+    await expect(page.locator(".wi-feed-tab").nth(1)).toHaveText("AI Insights");
+    await expect(page.locator(".wi-feed-tab").nth(2)).toHaveText("Starred");
+    await expect(page.locator(".wi-feed-tab").nth(3)).toHaveText("Archived");
+    await expect(page.locator(".wi-feed-filter")).toBeVisible();
+    await expect(page.locator(".wi-feed-search input")).toBeVisible();
+  });
+
+  test("6 feed rows with scaffold content", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-feed-row")).toHaveCount(6);
+    await expect(page.getByText(/Capital Invoice.*Fairway irrigation controls/)).toBeVisible();
+    await expect(page.getByText(/Payroll.*3 exceptions require confirmation/)).toBeVisible();
+    await expect(page.getByText(/Credit adjustment approval/)).toBeVisible();
+    await expect(page.getByText(/AP Invoice.*Course maintenance supplies/)).toBeVisible();
+    await expect(page.getByText(/New hire setup.*Assistant Golf Professional/)).toBeVisible();
+    await expect(page.getByText(/Staffing variance.*Carter Wedding/)).toBeVisible();
+    await page.locator(".wi-feed").screenshot({ path: "test-results/wi1-04-feed.png" });
+  });
+
+  test("Right rail with scaffold Today's Position + Executive Insight + Today's Commitments", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    await expect(page.locator(".wi-rail-card")).toHaveCount(3);
+    await expect(page.getByText(/TODAY.?S POSITION/i)).toBeVisible();
+    await expect(page.getByText(/EXECUTIVE INSIGHT/i)).toBeVisible();
+    await expect(page.getByText(/TODAY.?S COMMITMENTS/i)).toBeVisible();
+    await expect(page.getByText(/Member AR is inside the sixty-day policy line/)).toBeVisible();
+    await expect(page.getByText(/No appointments or proposed follow-ups/)).toBeVisible();
+    await page.locator(".wi-rail").screenshot({ path: "test-results/wi1-05-rail.png" });
+  });
+
+  test("Existing Mission Control page still works (regression)", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    // Mission Control still renders — hero + KPI live inside the spectre-mc-* classes.
+    await expect(page.locator(".spectre-mc-hero")).toBeVisible();
+    await expect(page.locator(".spectre-mc-kpi")).toBeVisible();
+    // And the WI-1 scaffold shell does NOT appear on Mission Control.
+    await expect(page.locator(".wi-root")).toHaveCount(0);
+  });
+});
