@@ -143,55 +143,37 @@ export function SpectreSidebar({
           workspace on the same horizontal band. */}
       <div
         className={cn(
-          "spectre-sidebar-identity flex items-center gap-3 px-4 border-b border-[color:var(--spectre-border-hairline)]",
+          "spectre-sidebar-identity flex items-center px-5 border-b border-[color:var(--spectre-border-hairline)]",
           collapsed && "justify-center px-2",
         )}
       >
-        <div
-          aria-hidden="true"
-          className="h-8 w-8 rounded-md flex items-center justify-center text-xs font-semibold shrink-0"
-          style={{
-            background: "var(--spectre-accent)",
-            color: "var(--spectre-text-inverse)",
-          }}
-        >
-          S
-        </div>
-        {!collapsed && (
-          <div className="min-w-0">
-            {/* Phase 4R UI-refinement rev-2 (2026-08-15) — the
-                persistent sidebar identifies the PRODUCT (Spectre
-                Automation), not the current tenant. Both words share
-                the previously-approved eyebrow treatment (uppercase,
-                small, letter-spaced, muted) and stack on two lines
-                so `AUTOMATION` sits directly beneath `SPECTRE`. This
-                intentionally preserves the pre-rev-2 eyebrow
-                elegance while stating the full product name. Tenant
-                identity now lives in the application header rail
-                (see src/components/spectre/HeaderContextRail.tsx).
-                No third line — never "SPECTRE Spectre Automation",
-                never a repeated wordmark. */}
-            <div
-              className="spectre-sidebar-product-name"
-              data-testid="spectre-sidebar-product-name"
-              title="Spectre Automation"
-            >
-              <div
-                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
-                style={{ color: "var(--spectre-text-muted)" }}
-                data-testid="spectre-sidebar-product-name-line-1"
-              >
-                SPECTRE
-              </div>
-              <div
-                className="text-[10px] uppercase tracking-[0.14em] font-semibold leading-[1.2]"
-                style={{ color: "var(--spectre-text-muted)" }}
-                data-testid="spectre-sidebar-product-name-line-2"
-              >
-                AUTOMATION
-              </div>
-            </div>
+        {collapsed ? (
+          <div
+            aria-hidden="true"
+            className="h-8 w-8 rounded-md flex items-center justify-center text-xs font-semibold shrink-0"
+            style={{
+              background: "var(--spectre-accent)",
+              color: "var(--spectre-text-inverse)",
+            }}
+          >
+            S
           </div>
+        ) : (
+          /* WI-1B — marketing-site SPECTRE / AUTOMATION masthead.
+             Same typographic treatment as .mkt-wordmark:
+             uppercase Inter medium at 0.32em tracking with a soft
+             slash divider. No S-tile, no stacked treatment. Reads
+             as a horizontal wordmark on the black sidebar. */
+          <span
+            className="spectre-sidebar-masthead"
+            data-testid="spectre-sidebar-masthead"
+            aria-label="Spectre Automation"
+            title="Spectre Automation"
+          >
+            <span className="spectre-sidebar-masthead-primary">SPECTRE</span>
+            <span className="spectre-sidebar-masthead-divider" aria-hidden="true">/</span>
+            <span className="spectre-sidebar-masthead-secondary">AUTOMATION</span>
+          </span>
         )}
       </div>
 

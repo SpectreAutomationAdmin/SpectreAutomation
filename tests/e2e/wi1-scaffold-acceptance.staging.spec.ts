@@ -61,15 +61,18 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     const lh = parseFloat(greeting.lineHeight);
     expect(greeting.clientHeight).toBeLessThan(lh * 1.6);
 
-    // WI-1A §13 — measure hero geometry.
+    // WI-1B §11–§12 — hero must touch top chrome + sidebar edge.
     const heroBox = await page.locator(".wi-hero").boundingBox();
     console.log("WI_HERO_BOX:", JSON.stringify(heroBox));
     expect(heroBox).not.toBeNull();
     if (heroBox) {
-      // WI-1A §1 — hero must be a shallow panoramic banner. Target
-      // 180 px per CSS; assert bounded well below the prior 495 px.
+      // shallow panoramic banner (~180 px)
       expect(heroBox.height).toBeLessThanOrEqual(220);
       expect(heroBox.height).toBeGreaterThanOrEqual(140);
+      // WI-1B §12: hero.left must equal sidebar right edge (288 px).
+      expect(Math.abs(heroBox.x - 288)).toBeLessThanOrEqual(4);
+      // WI-1B §11: hero.top must equal top-chrome height (64 px).
+      expect(Math.abs(heroBox.y - 64)).toBeLessThanOrEqual(4);
     }
 
     await expect(page.locator(".wi-hero-sync-label")).toContainText(/FEED SYNCED/);
@@ -115,6 +118,25 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await expect(page.getByText("Completed this week")).toBeVisible();
     await expect(page.getByText(/3 from last week/)).toBeVisible();
     await expect(page.getByText(/12% from last week/)).toBeVisible();
+    // WI-1B §2 — cards must be compact editorial tiles, not oversized dashboards.
+    const cardBox = await page.locator(".wi-kpi-card").first().boundingBox();
+    console.log("WI_KPI_CARD_BOX:", JSON.stringify(cardBox));
+    if (cardBox) {
+      expect(cardBox.height).toBeLessThanOrEqual(115);
+      expect(cardBox.height).toBeGreaterThanOrEqual(80);
+    }
+    // WI-1B §3 — each label must remain on ONE line at 1586×992.
+    const wraps = await page.locator(".wi-kpi-label").evaluateAll((els) =>
+      els.map((el) => {
+        const s = getComputedStyle(el);
+        const lh = parseFloat(s.lineHeight);
+        return { text: el.textContent, clientHeight: (el as HTMLElement).offsetHeight, lineHeight: lh };
+      })
+    );
+    console.log("WI_KPI_LABEL_WRAPS:", JSON.stringify(wraps));
+    for (const w of wraps) {
+      expect(w.clientHeight).toBeLessThan(w.lineHeight * 1.6);
+    }
     await page.locator(".wi-kpi").screenshot({ path: "test-results/wi1-03-kpi.png" });
   });
 
@@ -158,6 +180,28 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await expect(page.getByText(/Member AR is inside the sixty-day policy line/)).toBeVisible();
     await expect(page.getByText(/No appointments or proposed follow-ups/)).toBeVisible();
     await page.locator(".wi-rail").screenshot({ path: "test-results/wi1-05-rail.png" });
+  });
+
+  test("WI-1B masthead · SPECTRE / AUTOMATION horizontal wordmark in the sidebar", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const masthead = page.locator("[data-testid='spectre-sidebar-masthead']");
+    await expect(masthead).toBeVisible();
+    await expect(masthead.locator(".spectre-sidebar-masthead-primary")).toHaveText("SPECTRE");
+    await expect(masthead.locator(".spectre-sidebar-masthead-divider")).toHaveText("/");
+    await expect(masthead.locator(".spectre-sidebar-masthead-secondary")).toHaveText("AUTOMATION");
+    const style = await masthead.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { family: s.fontFamily, transform: s.textTransform };
+    });
+    expect(style.transform).toBe("uppercase");
+    expect(style.family).toMatch(/Inter|system-ui|sans-serif/i);
+    // Single line: sum of children widths should not create a wrap.
+    const mastheadHeight = await masthead.evaluate((el) => (el as HTMLElement).offsetHeight);
+    expect(mastheadHeight).toBeLessThan(32);
+    await masthead.screenshot({ path: "test-results/wi1-06-masthead.png" });
   });
 
   test("Existing Mission Control page still works (regression)", async ({ browser }) => {
