@@ -12,6 +12,7 @@ import {
   cancelPaymentRun,
   scheduleAndSubmit,
   pollAndAdvance,
+  retrySubmit,
 } from "@/lib/payments";
 
 export const runtime = "nodejs";
@@ -44,6 +45,10 @@ export async function POST(
       }
       case "submit-to-provider": {
         const r = await scheduleAndSubmit(principal, params.runId);
+        return NextResponse.json(r);
+      }
+      case "retry-submit": {
+        const r = await retrySubmit(principal, params.runId);
         return NextResponse.json(r);
       }
       case "poll": {

@@ -14083,6 +14083,13 @@ model PaymentInstruction {
   cancelledAt                 DateTime?
   returnCode                  String?
   returnDescription           String?
+  // PAY-1A.2 (2026-09-26) — submission-attempt tracking. Incremented
+  // on EVERY provider.submit() invocation (initial + every retry).
+  // The idempotencyKey and PaymentInstruction.id both remain stable
+  // across attempts; only this counter grows. Used for CAS on
+  // concurrent retries and UI display of "attempt N of history".
+  submissionAttempts          Int      @default(0)
+  lastSubmissionAttemptAt     DateTime?
 
   events                      PaymentEvent[] @relation("PaymentEventInstruction")
 

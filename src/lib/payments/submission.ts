@@ -111,6 +111,16 @@ export async function scheduleAndSubmit(
   for (const inst of instructions) {
     const idemKey = idempotencyKeyFor(runId, inst.id);
     try {
+      // PAY-1A.2 — record attempt at start; the increment is atomic
+      // even under concurrent retries via updateMany + CAS on the id.
+      await prisma.paymentInstruction.update({
+        where: { id: inst.id },
+        data: {
+          submissionAttempts: { increment: 1 },
+          lastSubmissionAttemptAt: new Date(),
+        },
+      });
+
       const out = await provider.submit({
         clubId: inst.clubId,
         runId,
@@ -148,14 +158,25 @@ export async function scheduleAndSubmit(
       if (out.status === "REJECTED") rejected++;
       else submitted++;
     } catch (err) {
-      // Provider timeout — leave instruction status untouched;
-      // caller retries with the SAME idempotencyKey.
+      // Provider timeout — ambiguous state. Spectre attempted
+      // transmission but did not receive a provider response. Set the
+      // instruction to SUBMITTING (accurate: attempt made, outcome
+      // unknown) so retry-submit can pick it up. Do NOT revert to
+      // SCHEDULED (that would falsely imply "never submitted").
       timedOut++;
       await prisma.$transaction(async (tx) => {
+        await tx.paymentInstruction.update({
+          where: { id: inst.id },
+          data: {
+            status: "SUBMITTING",
+            // submissionAttempts was already incremented above.
+          },
+        });
         await recordPaymentEvent(
           {
             clubId: inst.clubId, runId, instructionId: inst.id,
             eventType: "PAYMENT_SUBMISSION_STARTED",
+            newStatus: "SUBMITTING",
             actorSource: "PROVIDER",
             meta: { error: (err as Error).message, timedOut: true },
           },
@@ -317,4 +338,225 @@ export async function pollAndAdvance(runId: string, providerType: "SIMULATOR" = 
     });
   }
   return { runId, accepted, settled, returned };
+}
+
+// ------------------------------------------------------------------
+// PAY-1A.2 (2026-09-26) — Retry an ambiguously timed-out submission.
+//
+// Semantics:
+//   - Same PaymentInstruction.id — no new instruction created.
+//   - Same idempotencyKey "run:<runId>:inst:<instructionId>".
+//   - Same PaymentDestinationSnapshot (immutable already).
+//   - Same PaymentAuthorization.paymentFingerprint (re-verified here).
+//   - If the recomputed fingerprint differs from the frozen
+//     authorization, the authorization is INVALIDATED and the retry
+//     is refused — a new authorization is required.
+
+import { paymentFingerprint } from "./fingerprint";
+import { invalidateAuthorization } from "./authorization";
+import type { PaymentRunMaterialFields } from "./types";
+
+export interface RetrySubmitOutcome {
+  runId: string;
+  attemptedInstructions: number;
+  submitted: number;
+  rejected: number;
+  timedOutAgain: number;
+  authorizationInvalidated: boolean;
+}
+
+export async function retrySubmit(
+  principal: Principal,
+  runId: string,
+  providerType: "SIMULATOR" = "SIMULATOR",
+): Promise<RetrySubmitOutcome> {
+  assertPaymentsEnabled();
+  const provider = selectProvider(providerType);
+
+  const run = await prisma.paymentRun.findUnique({
+    where: { id: runId },
+    select: {
+      id: true, clubId: true, status: true, runNumber: true,
+      sourceType: true, sourceId: true,
+      fundingBankAccountId: true, currency: true,
+      requestedExecutionDate: true, totalAmount: true,
+      authorization: { select: { id: true, paymentFingerprint: true, status: true } },
+    },
+  });
+  if (!run) throw new Error("PAY-1A.2: PaymentRun not found.");
+  requirePermission(principal, run.clubId, "payment:prepare");
+
+  if (!run.authorization || run.authorization.status !== "ACTIVE") {
+    throw new Error("PAY-1A.2: run has no ACTIVE authorization — cannot retry.");
+  }
+  if (run.status !== "SUBMITTING") {
+    throw new Error(
+      "PAY-1A.2: retry-submit requires run in SUBMITTING (ambiguous-attempt) state; current=" + run.status + ". " +
+      "Use submit-to-provider for the initial submission.",
+    );
+  }
+
+  // Recompute the payment fingerprint from CURRENT material state.
+  const instructions = await prisma.paymentInstruction.findMany({
+    where: { runId },
+    select: {
+      id: true, clubId: true, amount: true, currency: true,
+      requestedExecutionDate: true, destinationSnapshotId: true,
+      status: true, providerInstructionId: true, providerReference: true,
+      instructionFingerprint: true, recipientType: true, recipientId: true,
+    },
+    orderBy: [{ recipientType: "asc" }, { recipientId: "asc" }],
+  });
+  const runMaterial: PaymentRunMaterialFields = {
+    clubId: run.clubId,
+    runNumber: run.runNumber,
+    sourceType: run.sourceType as PaymentSourceType,
+    sourceId: run.sourceId,
+    fundingBankAccountId: run.fundingBankAccountId,
+    currency: run.currency,
+    requestedExecutionDate: run.requestedExecutionDate.toISOString(),
+    totalAmount: new Prisma.Decimal(run.totalAmount).toFixed(2),
+    instructionFingerprints: instructions.map((i) => i.instructionFingerprint),
+  };
+  const currentFp = paymentFingerprint(runMaterial);
+  if (currentFp !== run.authorization.paymentFingerprint) {
+    await prisma.$transaction(async (tx) => {
+      await invalidateAuthorization(runId, "material-mutation-detected-on-retry", tx);
+    });
+    return {
+      runId, attemptedInstructions: 0, submitted: 0, rejected: 0, timedOutAgain: 0,
+      authorizationInvalidated: true,
+    };
+  }
+
+  const retryable = instructions.filter((i) =>
+    i.status === "SUBMITTING" || i.status === "SCHEDULED"
+  );
+
+  let submitted = 0, rejected = 0, timedOutAgain = 0;
+  for (const inst of retryable) {
+    const idemKey = idempotencyKeyFor(runId, inst.id);
+
+    await prisma.paymentInstruction.update({
+      where: { id: inst.id },
+      data: {
+        submissionAttempts: { increment: 1 },
+        lastSubmissionAttemptAt: new Date(),
+      },
+    });
+
+    try {
+      let providerInstructionId: string | null = inst.providerInstructionId;
+      let providerReference: string | null | undefined = inst.providerReference;
+      let status: "SUBMITTED" | "ACCEPTED" | "REJECTED" = "SUBMITTED";
+      let rejectionCode: string | undefined;
+      let rejectionDescription: string | undefined;
+
+      if (providerInstructionId) {
+        const st = await provider.getStatus(providerInstructionId);
+        providerReference = st.providerReference ?? providerReference;
+        if (st.status === "REJECTED") { status = "REJECTED"; }
+        else if (st.status === "ACCEPTED") { status = "ACCEPTED"; }
+        else if (st.status === "SUBMITTED") { status = "SUBMITTED"; }
+        else if (st.status === "SETTLED") { status = "ACCEPTED"; }
+      } else {
+        const out = await provider.submit({
+          clubId: inst.clubId, runId, instructionId: inst.id,
+          amount: new Prisma.Decimal(inst.amount).toFixed(2),
+          currency: inst.currency,
+          requestedExecutionDate: inst.requestedExecutionDate,
+          idempotencyKey: idemKey,
+          destinationRef: inst.destinationSnapshotId,
+          fundingRef: run.fundingBankAccountId,
+        });
+        providerInstructionId = out.providerInstructionId;
+        providerReference = out.providerReference;
+        if (out.status === "REJECTED") {
+          status = "REJECTED";
+          rejectionCode = out.rejectionCode;
+          rejectionDescription = out.rejectionDescription;
+        } else {
+          status = "SUBMITTED";
+        }
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.paymentInstruction.update({
+          where: { id: inst.id },
+          data: {
+            providerType,
+            providerInstructionId: providerInstructionId!,
+            providerReference: providerReference ?? undefined,
+            submittedAt: inst.status === "SUBMITTING" ? undefined : new Date(),
+            status,
+          },
+        });
+        await recordPaymentEvent(
+          {
+            clubId: inst.clubId, runId, instructionId: inst.id,
+            eventType: status === "REJECTED" ? "PAYMENT_REJECTED" : "PAYMENT_SUBMITTED",
+            previousStatus: inst.status,
+            newStatus: status,
+            actorUserId: principal.id,
+            actorSource: "USER",
+            providerReference: providerReference ?? undefined,
+            meta: {
+              retryAttempt: true,
+              ...(status === "REJECTED"
+                ? { code: rejectionCode, description: rejectionDescription }
+                : {}),
+            },
+          },
+          tx,
+        );
+      });
+      if (status === "REJECTED") rejected++;
+      else submitted++;
+    } catch (err) {
+      timedOutAgain++;
+      await prisma.$transaction(async (tx) => {
+        await recordPaymentEvent(
+          {
+            clubId: inst.clubId, runId, instructionId: inst.id,
+            eventType: "PAYMENT_SUBMISSION_STARTED",
+            actorUserId: principal.id,
+            actorSource: "USER",
+            meta: { retryAttempt: true, error: (err as Error).message, timedOut: true },
+          },
+          tx,
+        );
+      });
+    }
+  }
+
+  const stillPending = await prisma.paymentInstruction.count({
+    where: { runId, status: { in: ["SUBMITTING", "SCHEDULED"] } },
+  });
+  if (stillPending === 0) {
+    await prisma.$transaction(async (tx) => {
+      const cur = await tx.paymentRun.findUniqueOrThrow({ where: { id: runId }, select: { status: true } });
+      if (cur.status === "SUBMITTING") {
+        const okCount = await tx.paymentInstruction.count({
+          where: { runId, status: { in: ["SUBMITTED", "ACCEPTED", "SETTLED"] } },
+        });
+        const target = okCount > 0 ? "SUBMITTED" : "REJECTED";
+        await transitionRunState(
+          runId, "SUBMITTING", target,
+          { userId: principal.id, source: "SYSTEM" },
+          target === "SUBMITTED" ? "PAYMENT_SUBMITTED" : "PAYMENT_REJECTED",
+          tx,
+        );
+        if (target === "SUBMITTED") {
+          await tx.paymentRun.update({ where: { id: runId }, data: { submittedAt: new Date() } });
+        }
+      }
+    });
+  }
+
+  return {
+    runId,
+    attemptedInstructions: retryable.length,
+    submitted, rejected, timedOutAgain,
+    authorizationInvalidated: false,
+  };
 }

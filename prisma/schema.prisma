@@ -14369,6 +14369,9 @@ model PaymentInstruction {
   cancelledAt            DateTime?
   returnCode             String?
   returnDescription      String?
+  // PAY-1A.2 (2026-09-26) — submission-attempt tracking.
+  submissionAttempts      Int       @default(0)
+  lastSubmissionAttemptAt DateTime?
 
   events PaymentEvent[] @relation("PaymentEventInstruction")
 

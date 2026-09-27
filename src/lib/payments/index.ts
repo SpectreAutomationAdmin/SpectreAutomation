@@ -17,6 +17,7 @@ export type {
 export * from "./payroll-source";
 export * from "./authorization";
 export * from "./submission";
+export type { RetrySubmitOutcome } from "./submission";
 export * from "./accounting";
 export { getSimulator, resetSimulator, SimulatorProvider } from "./provider/simulator";
 export { selectProvider } from "./provider/selector";
