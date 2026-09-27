@@ -406,29 +406,71 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     }
     // Chevron is a real SVG (test id present).
     await expect(firstCard.locator("[data-testid='wi-kpi-chevron']")).toBeVisible();
-    // WI-1G — the SVG has fill=none, stroke-linecap=round, stroke-linejoin=round,
-    // width and height >= 14 and <= 18.
+    // WI-1H — the SVG wrapper is 16 × 16 with a MATCHING 16-unit viewBox
+    // so the path visibly fills its viewport. WI-1G's 24-unit viewBox
+    // let the 6-unit path render only ~4 px wide — the source of the
+    // "tiny tick" defect. WI-1H asserts geometry, not just the wrapper.
     const chev = firstCard.locator("[data-testid='wi-kpi-chevron']");
     const chevBox = await chev.boundingBox();
     console.log("WI_KPI_CHEVRON_BOX:", JSON.stringify(chevBox));
     if (chevBox) {
-      expect(chevBox.width).toBeGreaterThanOrEqual(14);
-      expect(chevBox.width).toBeLessThanOrEqual(18);
-      expect(chevBox.height).toBeGreaterThanOrEqual(14);
-      expect(chevBox.height).toBeLessThanOrEqual(18);
+      expect(Math.round(chevBox.width)).toBe(16);
+      expect(Math.round(chevBox.height)).toBe(16);
     }
+    // Wrapper viewBox must be 0 0 16 16 (not 0 0 24 24).
+    const wrapperAttrs = await chev.evaluate((el) => ({
+      viewBox: el.getAttribute("viewBox"),
+      width: el.getAttribute("width"),
+      height: el.getAttribute("height"),
+    }));
+    console.log("WI_KPI_CHEVRON_WRAPPER:", JSON.stringify(wrapperAttrs));
+    expect(wrapperAttrs.viewBox).toBe("0 0 16 16");
+    expect(wrapperAttrs.width).toBe("16");
+    expect(wrapperAttrs.height).toBe("16");
     const path = chev.locator("path").first();
     const attrs = await path.evaluate((el) => ({
+      d: el.getAttribute("d"),
       fill: el.getAttribute("fill"),
       stroke: el.getAttribute("stroke"),
+      strokeWidth: el.getAttribute("stroke-width"),
       strokeLinecap: el.getAttribute("stroke-linecap"),
       strokeLinejoin: el.getAttribute("stroke-linejoin"),
     }));
     console.log("WI_KPI_CHEVRON_PATH:", JSON.stringify(attrs));
+    expect(attrs.d).toBe("M5 2.5L10.5 8L5 13.5");
     expect(attrs.fill).toBe("none");
     expect(attrs.stroke).toBeTruthy();
+    expect(attrs.strokeWidth).toBe("1.4");
     expect(attrs.strokeLinecap).toBe("round");
     expect(attrs.strokeLinejoin).toBe("round");
+    // Visible path bbox proves the glyph fills its viewport (not a
+    // 4-px tick). Expect horizontal span ≥ 5 px, vertical span ≥ 10 px.
+    const pathBBox = await path.evaluate((el) => {
+      const b = (el as SVGGraphicsElement).getBBox();
+      return { width: b.width, height: b.height };
+    });
+    console.log("WI_KPI_CHEVRON_PATH_BBOX:", JSON.stringify(pathBBox));
+    expect(pathBBox.width).toBeGreaterThanOrEqual(5);
+    expect(pathBBox.height).toBeGreaterThanOrEqual(10);
+    // Computed colour must be the muted-slate token, not the paler
+    // WI-1G blue-grey. Expect an rgb() value with all three channels
+    // in the 90..130 range (i.e. #667789 ≈ rgb(102,119,137)).
+    const chevColour = await chev.evaluate((el) =>
+      getComputedStyle(el as Element).color,
+    );
+    console.log("WI_KPI_CHEVRON_COLOR:", chevColour);
+    const rgb = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(chevColour ?? "");
+    if (rgb) {
+      const r = Number(rgb[1]);
+      const g = Number(rgb[2]);
+      const b = Number(rgb[3]);
+      expect(r).toBeGreaterThanOrEqual(90);
+      expect(r).toBeLessThanOrEqual(130);
+      expect(g).toBeGreaterThanOrEqual(90);
+      expect(g).toBeLessThanOrEqual(130);
+      expect(b).toBeGreaterThanOrEqual(90);
+      expect(b).toBeLessThanOrEqual(150);
+    }
     // Exactly 4 KPI navigation chevrons render, all with consistent
     // right + top insets across the four cards ± 2 px.
     const chevs = page.locator("[data-testid='wi-kpi-chevron']");

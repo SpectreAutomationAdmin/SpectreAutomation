@@ -58,24 +58,30 @@ function TrendGlyph({ direction }: { direction: "up" | "down" | "flat" }) {
   );
 }
 
-/** WI-1G — shared card-navigation chevron. Refined two-segment
- *  right-facing chevron per the accepted design reference:
+/** WI-1H — shared card-navigation chevron. Corrected visible geometry
+ *  per the accepted design reference. WI-1G's path lived inside a
+ *  24-unit viewBox but only spanned 6 units horizontally, so the
+ *  rendered chevron was only ~4 px wide — visually a tick, not a
+ *  navigation affordance. WI-1H matches the SVG viewBox to the
+ *  rendered pixel size so the path fills its viewport:
  *    - 16 × 16 rendered
- *    - viewBox 0 0 24 24 · path M9 18 L15 12 L9 6
- *    - stroke 1.5, round caps + joins
- *    - currentColor (controlled by .wi-kpi-chevron cool-grey token). */
+ *    - viewBox 0 0 16 16 · path M5 2.5 L10.5 8 L5 13.5
+ *    - visible horizontal span 5.5 px, vertical span 11 px
+ *    - stroke 1.4, round caps + joins
+ *    - currentColor (controlled by .wi-kpi-chevron muted-slate token). */
 function KpiNavChevron() {
   return (
     <svg
       className="wi-kpi-chevron"
-      width="16" height="16" viewBox="0 0 24 24"
+      width="16" height="16" viewBox="0 0 16 16"
       data-testid="wi-kpi-chevron"
       aria-hidden="true"
+      fill="none"
     >
       <path
-        d="M9 18 L15 12 L9 6"
+        d="M5 2.5L10.5 8L5 13.5"
         stroke="currentColor"
-        strokeWidth="1.5"
+        strokeWidth="1.4"
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"

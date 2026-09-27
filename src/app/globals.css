@@ -5573,10 +5573,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
    token. Absolutely positioned so it never shifts with number
    length or label wrap. Sits in the upper-right, optically
    centered against the number/icon band. */
-:root { --wi-nav-muted: #94a3b8; }
+:root { --wi-nav-muted: #667789; }
 .wi-kpi-card .wi-kpi-chevron {
   position: absolute;
-  top: 22px;
+  top: 20px;
   right: 16px;
   width: 16px; height: 16px;
   color: var(--wi-nav-muted);
