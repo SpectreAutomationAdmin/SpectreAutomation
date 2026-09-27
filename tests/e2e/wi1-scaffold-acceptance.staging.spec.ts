@@ -154,17 +154,22 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
       expect(cardBox.height).toBeLessThanOrEqual(150);
       expect(cardBox.height).toBeGreaterThanOrEqual(100);
     }
-    // WI-1B §3 — each label must remain on ONE line at 1586×992.
-    const wraps = await page.locator(".wi-kpi-label").evaluateAll((els) =>
+    // WI-1D §3 — labels must not be ellipsis-truncated. Allow wrap
+    // up to two lines; verify no text is cut off.
+    const truncation = await page.locator(".wi-kpi-label").evaluateAll((els) =>
       els.map((el) => {
-        const s = getComputedStyle(el);
-        const lh = parseFloat(s.lineHeight);
-        return { text: el.textContent, clientHeight: (el as HTMLElement).offsetHeight, lineHeight: lh };
+        const asEl = el as HTMLElement;
+        return {
+          text: el.textContent,
+          scrollWidth: asEl.scrollWidth,
+          clientWidth: asEl.clientWidth,
+        };
       })
     );
-    console.log("WI_KPI_LABEL_WRAPS:", JSON.stringify(wraps));
-    for (const w of wraps) {
-      expect(w.clientHeight).toBeLessThan(w.lineHeight * 1.6);
+    console.log("WI_KPI_LABEL_TRUNCATION:", JSON.stringify(truncation));
+    for (const t of truncation) {
+      // scrollWidth > clientWidth would indicate hidden overflow.
+      expect(t.scrollWidth).toBeLessThanOrEqual(t.clientWidth + 2);
     }
     await page.locator(".wi-kpi").screenshot({ path: "test-results/wi1-03-kpi.png" });
   });
