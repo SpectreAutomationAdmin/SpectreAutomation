@@ -17,8 +17,10 @@ export default function WorkIntakeScaffold() {
         <div className="wi-main">
           <WorkIntakeHero />
           <WorkIntakeKpiStrip cards={WI_KPIS} />
-          <WorkIntakeFeedHead activeTab="my-feed" />
-          <WorkIntakeFeed rows={WI_FEED_ROWS} />
+          <div className="wi-feed-card">
+            <WorkIntakeFeedHead activeTab="my-feed" />
+            <WorkIntakeFeed rows={WI_FEED_ROWS} />
+          </div>
         </div>
         <aside className="wi-rail" aria-label="Operational rail">
           <WorkIntakeRightRail data={WI_RAIL} />

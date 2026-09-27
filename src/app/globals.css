@@ -5358,83 +5358,85 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   gap: 24px;
   align-items: start;
 }
-.wi-main { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+.wi-main { min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 .wi-rail { display: flex; flex-direction: column; gap: 16px; }
 @media (max-width: 1279px) {
   .wi-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* -- Hero ---------------------------------------------------------------- */
+/* -- Hero (WI-1A shallow panoramic banner) ------------------------------ */
 .wi-hero {
   position: relative;
-  border-radius: 16px;
+  border-radius: 14px;
   overflow: hidden;
-  aspect-ratio: 16 / 7;
-  min-height: 320px;
+  height: 180px;
   background: #1a1712;
   color: #f7f2e6;
 }
 .wi-hero-img {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
-  object-fit: cover; object-position: center 42%;
-  filter: brightness(0.68) saturate(1.02);
+  object-fit: cover; object-position: center 55%;
+  filter: brightness(0.66) saturate(1.02);
   z-index: 0;
 }
 .wi-hero-overlay {
   position: absolute; inset: 0;
   background:
-    linear-gradient(180deg, rgba(20, 15, 10, 0.10) 0%, rgba(20, 15, 10, 0.55) 100%),
-    linear-gradient(90deg, rgba(20, 15, 10, 0.60) 0%, rgba(20, 15, 10, 0.20) 55%, rgba(20, 15, 10, 0.10) 100%);
+    linear-gradient(180deg, rgba(20, 15, 10, 0.14) 0%, rgba(20, 15, 10, 0.62) 100%),
+    linear-gradient(90deg, rgba(20, 15, 10, 0.68) 0%, rgba(20, 15, 10, 0.28) 55%, rgba(20, 15, 10, 0.20) 100%);
   z-index: 1;
 }
 .wi-hero-content {
   position: relative; z-index: 2;
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(200px, 260px);
-  gap: 36px;
-  padding: 44px 48px 36px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: 32px;
+  padding: 24px 36px;
   height: 100%;
 }
-.wi-hero-primary { display: flex; flex-direction: column; justify-content: space-between; min-height: 260px; }
-.wi-hero-eyebrow { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: rgba(247, 242, 230, 0.82); font-weight: 500; margin-bottom: 18px; }
+.wi-hero-primary { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.wi-hero-eyebrow { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(247, 242, 230, 0.82); font-weight: 500; }
 .wi-hero-greeting {
   font-family: var(--wi-serif);
-  font-size: 52px; line-height: 60px; letter-spacing: -0.020em;
-  font-weight: 500; color: #f7f2e6; margin: 0; text-wrap: balance;
-  max-width: 12ch;
+  font-size: 32px; line-height: 38px; letter-spacing: -0.014em;
+  font-weight: 500; color: #f7f2e6; margin: 0;
+  /* WI-1A — must stay on one line per §3. Panoramic hero is wide
+     enough for "Good morning, {name}." at 32 px without wrapping. */
+  white-space: nowrap;
 }
 .wi-hero-subtitle {
-  font-family: var(--wi-serif); font-size: 18px; line-height: 26px;
-  color: rgba(247, 242, 230, 0.90); margin: 14px 0 0; font-weight: 400; text-wrap: balance;
-  max-width: 44ch;
+  font-family: var(--wi-serif); font-size: 14px; line-height: 20px;
+  color: rgba(247, 242, 230, 0.88); margin: 0; font-weight: 400;
 }
 .wi-hero-sync {
-  margin-top: 32px; align-self: flex-start;
+  margin-top: 8px; align-self: flex-start;
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px 6px 10px;
+  padding: 4px 10px 4px 8px;
   border-radius: 999px;
   background: rgba(20, 15, 10, 0.48);
   border: 1px solid rgba(63, 143, 88, 0.85);
   color: #d8f0d8;
-  font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase; font-weight: 600;
+  font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; font-weight: 600;
 }
 .wi-hero-sync-dot { width: 6px; height: 6px; border-radius: 999px; background: #3f8f58; box-shadow: 0 0 0 2px rgba(63, 143, 88, 0.25); }
 .wi-hero-sync-label { color: #d8f0d8; }
-.wi-hero-sync svg { color: #b8d8bd; opacity: 0.9; }
+.wi-hero-sync svg { color: #b8d8bd; opacity: 0.9; width: 10px; height: 10px; }
 
-.wi-hero-side { display: flex; flex-direction: column; align-items: flex-end; text-align: right; gap: 28px; }
-.wi-hero-weather { display: grid; grid-template-columns: auto auto; column-gap: 14px; align-items: center; }
-.wi-hero-weather-icon { grid-row: 1 / span 3; color: rgba(247, 242, 230, 0.90); }
-.wi-hero-weather-temp { font-family: var(--wi-serif); font-size: 40px; line-height: 42px; font-weight: 500; color: #f7f2e6; }
-.wi-hero-weather-place { font-size: 12px; color: rgba(247, 242, 230, 0.78); letter-spacing: 0.02em; }
-.wi-hero-weather-cond { font-size: 12px; color: rgba(247, 242, 230, 0.62); }
+.wi-hero-side { display: flex; flex-direction: row; align-items: flex-start; justify-content: flex-end; gap: 20px; }
+.wi-hero-weather { display: grid; grid-template-columns: auto auto; column-gap: 10px; row-gap: 2px; align-items: center; text-align: right; }
+.wi-hero-weather-icon { grid-row: 1 / span 3; color: rgba(247, 242, 230, 0.90); width: 24px; height: 24px; }
+.wi-hero-weather-icon svg { width: 24px; height: 24px; }
+.wi-hero-weather-temp { font-family: var(--wi-serif); font-size: 28px; line-height: 30px; font-weight: 500; color: #f7f2e6; }
+.wi-hero-weather-place { font-size: 11px; color: rgba(247, 242, 230, 0.78); letter-spacing: 0.02em; }
+.wi-hero-weather-cond { font-size: 11px; color: rgba(247, 242, 230, 0.62); }
 .wi-hero-support {
   font-family: var(--wi-serif);
-  font-size: 13px; line-height: 20px;
-  color: rgba(247, 242, 230, 0.80);
+  font-size: 11px; line-height: 15px;
+  color: rgba(247, 242, 230, 0.72);
   font-style: italic;
-  margin: 0; max-width: 220px;
+  margin: 0; max-width: 150px; text-align: right;
+  align-self: flex-start;
 }
 
 /* -- KPI strip ----------------------------------------------------------- */
@@ -5468,53 +5470,62 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-kpi-trend--attention { color: var(--wi-red); }
 .wi-kpi-trend--neutral { color: var(--wi-ink-3); }
 
-/* -- Feed head ----------------------------------------------------------- */
+/* -- Feed card container (WI-1A) — ONE surface around header + rows ---- */
+.wi-feed-card {
+  background: var(--wi-surface);
+  border: 1px solid var(--wi-hairline);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* -- Feed head (inside .wi-feed-card) ---------------------------------- */
 .wi-feed-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0 4px; border-bottom: 1px solid var(--wi-hairline);
+  padding: 0 20px; border-bottom: 1px solid var(--wi-hairline);
+  background: transparent;
 }
-.wi-feed-tabs { display: flex; gap: 6px; }
+.wi-feed-tabs { display: flex; gap: 6px; align-items: flex-end; }
 .wi-feed-tab {
-  padding: 10px 14px;
-  font-size: 14px; color: var(--wi-ink-3); font-weight: 500; letter-spacing: -0.005em;
+  padding: 14px 12px 12px;
+  font-size: 13px; color: var(--wi-ink-3); font-weight: 500; letter-spacing: -0.005em;
   border: none; border-bottom: 2px solid transparent; background: transparent;
   font-family: inherit; cursor: pointer; margin-bottom: -1px;
 }
 .wi-feed-tab:hover { color: var(--wi-ink); }
 .wi-feed-tab.on { color: var(--wi-ink); border-bottom-color: var(--wi-ink); }
 
-.wi-feed-controls { display: inline-flex; align-items: center; gap: 12px; padding-bottom: 8px; }
+.wi-feed-controls { display: inline-flex; align-items: center; gap: 10px; }
 .wi-feed-filter {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border: 1px solid var(--wi-border); border-radius: 999px;
+  padding: 5px 12px; border: 1px solid var(--wi-border); border-radius: 999px;
   background: transparent; color: var(--wi-ink-2);
   font-family: inherit; font-size: 12px; cursor: pointer;
 }
 .wi-feed-search {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px; background: var(--wi-surface);
+  padding: 5px 12px; background: var(--wi-canvas);
   border: 1px solid var(--wi-hairline); border-radius: 999px;
-  min-width: 240px; color: var(--wi-ink-3);
+  min-width: 220px; color: var(--wi-ink-3);
 }
 .wi-feed-search input {
   border: none; outline: none; background: transparent;
-  font-size: 13px; color: var(--wi-ink); width: 100%; font-family: inherit;
+  font-size: 12px; color: var(--wi-ink); width: 100%; font-family: inherit;
 }
 .wi-feed-search input::placeholder { color: var(--wi-ink-3); }
 
-/* -- Feed rows ----------------------------------------------------------- */
-.wi-feed { display: flex; flex-direction: column; }
+/* -- Feed rows (inside .wi-feed-card) ---------------------------------- */
+.wi-feed { display: flex; flex-direction: column; background: transparent; }
 .wi-feed-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 180px 180px auto;
-  gap: 20px;
+  grid-template-columns: 40px minmax(0, 1fr) 180px 150px auto;
+  gap: 16px;
   align-items: start;
-  padding: 22px 8px 22px 4px;
+  padding: 14px 20px 14px 20px;
   border-bottom: 1px solid var(--wi-hairline);
 }
 .wi-feed-row:last-child { border-bottom: none; }
 .wi-feed-row-icon {
-  width: 40px; height: 40px; border-radius: 999px;
+  width: 36px; height: 36px; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center;
   background: rgba(24, 20, 12, 0.05); color: var(--wi-ink-2);
   margin-top: 2px;
@@ -5522,11 +5533,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-feed-row-body { min-width: 0; }
 .wi-feed-row-title {
   font-family: var(--wi-serif);
-  font-size: 17px; line-height: 24px; font-weight: 500;
-  color: var(--wi-ink); margin: 0 0 4px; letter-spacing: -0.01em;
+  font-size: 15px; line-height: 20px; font-weight: 500;
+  color: var(--wi-ink); margin: 0 0 2px; letter-spacing: -0.008em;
 }
-.wi-feed-row-meta { font-size: 13px; color: var(--wi-ink-2); font-weight: 500; margin-bottom: 8px; }
-.wi-feed-row-desc { font-size: 13px; color: var(--wi-ink-3); line-height: 20px; margin: 0; max-width: 60ch; }
+.wi-feed-row-meta { font-size: 12px; color: var(--wi-ink-2); font-weight: 500; margin-bottom: 4px; }
+.wi-feed-row-desc { font-size: 12px; color: var(--wi-ink-3); line-height: 17px; margin: 0; max-width: 60ch; }
 
 .wi-feed-row-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 2px; }
 .wi-feed-row-time { font-size: 12px; color: var(--wi-ink-3); font-variant-numeric: tabular-nums; }

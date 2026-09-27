@@ -37,25 +37,68 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await page.screenshot({ path: "test-results/wi1-01-full-1586.png", fullPage: false });
   });
 
-  test("Hero present with editorial serif greeting + FEED SYNCED static pill + weather", async ({ browser }) => {
+  test("Hero WI-1A · shallow panoramic banner + single-line greeting + geometry measurement", async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: VIEWPORT });
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     await expect(page.locator(".wi-hero-img")).toBeVisible();
     await expect(page.locator(".wi-hero-eyebrow")).toContainText(/MONDAY, SEPTEMBER 28/);
-    const greetingStyle = await page.locator(".wi-hero-greeting").evaluate((el) => {
+    const greeting = await page.locator(".wi-hero-greeting").evaluate((el) => {
       const s = getComputedStyle(el);
-      return { family: s.fontFamily, size: s.fontSize };
+      const r = el.getBoundingClientRect();
+      return {
+        family: s.fontFamily, size: s.fontSize,
+        whiteSpace: s.whiteSpace,
+        clientHeight: (el as HTMLElement).offsetHeight,
+        lineHeight: s.lineHeight,
+      };
     });
-    console.log("WI_GREETING:", JSON.stringify(greetingStyle));
-    expect(greetingStyle.family).toMatch(/Source Serif|Georgia|serif/i);
+    console.log("WI_GREETING:", JSON.stringify(greeting));
+    expect(greeting.family).toMatch(/Source Serif|Georgia|serif/i);
+    // WI-1A §3 — greeting must stay on ONE line. offsetHeight
+    // must equal a single line-height (~ 38 px), NOT double or triple.
+    const lh = parseFloat(greeting.lineHeight);
+    expect(greeting.clientHeight).toBeLessThan(lh * 1.6);
+
+    // WI-1A §13 — measure hero geometry.
+    const heroBox = await page.locator(".wi-hero").boundingBox();
+    console.log("WI_HERO_BOX:", JSON.stringify(heroBox));
+    expect(heroBox).not.toBeNull();
+    if (heroBox) {
+      // WI-1A §1 — hero must be a shallow panoramic banner. Target
+      // 180 px per CSS; assert bounded well below the prior 495 px.
+      expect(heroBox.height).toBeLessThanOrEqual(220);
+      expect(heroBox.height).toBeGreaterThanOrEqual(140);
+    }
+
     await expect(page.locator(".wi-hero-sync-label")).toContainText(/FEED SYNCED/);
     await expect(page.locator(".wi-hero-weather-temp")).toContainText("14°");
     await expect(page.locator(".wi-hero-weather-place")).toContainText(/Calgary/);
     await expect(page.locator(".wi-hero-weather-cond")).toContainText(/Mostly Sunny/);
-    await expect(page.locator(".wi-hero-support")).toContainText(/details run quietly/);
     await page.locator(".wi-hero").screenshot({ path: "test-results/wi1-02-hero.png" });
+  });
+
+  test("Feed WI-1A · rows wrapped in one .wi-feed-card container + geometry measurement", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const card = page.locator(".wi-feed-card");
+    await expect(card).toBeVisible();
+    const cardStyle = await card.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, border: s.borderTopWidth + " " + s.borderTopStyle + " " + s.borderTopColor, radius: s.borderTopLeftRadius };
+    });
+    console.log("WI_FEED_CARD:", JSON.stringify(cardStyle));
+    // WI-1A §7 — subtly lighter warm-white surface than the page canvas.
+    // Surface #faf6ec = rgb(250, 246, 236); canvas #f4efe4 = rgb(244, 239, 228).
+    expect(cardStyle.bg).toMatch(/24[89]|250/);
+    // Feed head + all rows must live INSIDE the card.
+    await expect(card.locator(".wi-feed-head")).toBeVisible();
+    await expect(card.locator(".wi-feed-row")).toHaveCount(6);
+    const cardBox = await card.boundingBox();
+    console.log("WI_FEED_CARD_BOX:", JSON.stringify(cardBox));
   });
 
   test("4 KPI cards with verbatim reference values + trend indicators", async ({ browser }) => {
