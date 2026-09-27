@@ -221,3 +221,20 @@ export async function readIncidentTimeline(
   });
   return JSON.parse(row.timelineJson) as PaymentIncidentTimelineEntry[];
 }
+
+// PAY-1C.1 — record a containment (or other) action against an
+// existing incident without transitioning its status. The timeline
+// remains APPEND-ONLY. Used by the connection-containment probe
+// action so the incident record reflects which connection was
+// suspended/restored and by whom.
+export async function appendIncidentAction(
+  incidentId: string,
+  entry: { actor: string; event: string; note?: string },
+): Promise<void> {
+  await appendTimeline(incidentId, {
+    ts: new Date().toISOString(),
+    actor: entry.actor,
+    event: entry.event,
+    note: entry.note,
+  });
+}
