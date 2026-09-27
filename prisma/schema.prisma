@@ -526,14 +526,18 @@ model Club {
   authSessions Session[] @relation("SessionClub")
 
   // PAY-1A (2026-09-26) — Shared Payments infrastructure.
-  bankAccounts          BankAccount[]                @relation("ClubBankAccounts")
-  paymentRuns           PaymentRun[]                 @relation("ClubPaymentRuns")
-  paymentInstructions   PaymentInstruction[]         @relation("ClubPaymentInstructions")
-  paymentDestSnapshots  PaymentDestinationSnapshot[] @relation("ClubPaymentDestSnapshots")
-  paymentAuthorizations PaymentAuthorization[]       @relation("ClubPaymentAuthorizations")
-  paymentEvents         PaymentEvent[]               @relation("ClubPaymentEvents")
-  paymentProviderConnections PaymentProviderConnection[] @relation("ClubPaymentProviderConnections")
-  externalPaymentEvents      ExternalPaymentEvent[]      @relation("ClubExternalPaymentEvents")
+  bankAccounts               BankAccount[]                @relation("ClubBankAccounts")
+  paymentRuns                PaymentRun[]                 @relation("ClubPaymentRuns")
+  paymentInstructions        PaymentInstruction[]         @relation("ClubPaymentInstructions")
+  paymentDestSnapshots       PaymentDestinationSnapshot[] @relation("ClubPaymentDestSnapshots")
+  paymentAuthorizations      PaymentAuthorization[]       @relation("ClubPaymentAuthorizations")
+  paymentEvents              PaymentEvent[]               @relation("ClubPaymentEvents")
+  paymentProviderConnections PaymentProviderConnection[]  @relation("ClubPaymentProviderConnections")
+  externalPaymentEvents      ExternalPaymentEvent[]       @relation("ClubExternalPaymentEvents")
+
+  // PAY-1C (2026-09-26) — PSP & Canadian rail readiness.
+  paymentIncidents PaymentIncident[] @relation("ClubPaymentIncidents")
+  paymentLimits    PaymentLimit[]    @relation("ClubPaymentLimits")
 }
 
 // ---------------------------------------------------------------------
@@ -14339,40 +14343,40 @@ model PaymentRun {
 
 // PaymentInstruction - a single Spectre-authorized payment to a single recipient.
 model PaymentInstruction {
-  id                     String                     @id @default(cuid())
-  clubId                 String
-  club                   Club                       @relation("ClubPaymentInstructions", fields: [clubId], references: [id])
-  runId                  String
-  run                    PaymentRun                 @relation("InstructionRun", fields: [runId], references: [id], onDelete: Cascade)
-  sourceType             String
-  sourceId               String?
-  sourceReference        String?
-  recipientType          String
-  recipientId            String
-  amount                 Decimal
-  currency               String                     @default("CAD")
-  destinationSnapshotId  String
-  destinationSnapshot    PaymentDestinationSnapshot @relation("InstructionDestination", fields: [destinationSnapshotId], references: [id])
-  requestedExecutionDate DateTime
-  status                 String                     @default("PREPARED")
-  instructionFingerprint String
-  instructionVersion     Int                        @default(1)
-  providerType           String?
-  providerInstructionId  String?
-  providerReference      String?
-  createdAt              DateTime                   @default(now())
-  updatedAt              DateTime                   @updatedAt
-  authorizedAt           DateTime?
-  scheduledAt            DateTime?
-  submittedAt            DateTime?
-  acceptedAt             DateTime?
-  settledAt              DateTime?
-  returnedAt             DateTime?
-  cancelledAt            DateTime?
-  returnCode             String?
-  returnDescription      String?
+  id                      String                     @id @default(cuid())
+  clubId                  String
+  club                    Club                       @relation("ClubPaymentInstructions", fields: [clubId], references: [id])
+  runId                   String
+  run                     PaymentRun                 @relation("InstructionRun", fields: [runId], references: [id], onDelete: Cascade)
+  sourceType              String
+  sourceId                String?
+  sourceReference         String?
+  recipientType           String
+  recipientId             String
+  amount                  Decimal
+  currency                String                     @default("CAD")
+  destinationSnapshotId   String
+  destinationSnapshot     PaymentDestinationSnapshot @relation("InstructionDestination", fields: [destinationSnapshotId], references: [id])
+  requestedExecutionDate  DateTime
+  status                  String                     @default("PREPARED")
+  instructionFingerprint  String
+  instructionVersion      Int                        @default(1)
+  providerType            String?
+  providerInstructionId   String?
+  providerReference       String?
+  createdAt               DateTime                   @default(now())
+  updatedAt               DateTime                   @updatedAt
+  authorizedAt            DateTime?
+  scheduledAt             DateTime?
+  submittedAt             DateTime?
+  acceptedAt              DateTime?
+  settledAt               DateTime?
+  returnedAt              DateTime?
+  cancelledAt             DateTime?
+  returnCode              String?
+  returnDescription       String?
   // PAY-1A.2 (2026-09-26) — submission-attempt tracking.
-  submissionAttempts      Int       @default(0)
+  submissionAttempts      Int                        @default(0)
   lastSubmissionAttemptAt DateTime?
 
   events PaymentEvent[] @relation("PaymentEventInstruction")
@@ -14448,19 +14452,19 @@ model PaymentEvent {
 //   historical evidence.
 
 model PaymentProviderConnection {
-  id                    String   @id @default(cuid())
-  clubId                String
-  club                  Club     @relation("ClubPaymentProviderConnections", fields: [clubId], references: [id])
-  providerType          String
-  connectionReference   String
-  environment           String   // SIMULATOR | SANDBOX | PRODUCTION
-  status                String   @default("NOT_CONFIGURED") // NOT_CONFIGURED | CONFIGURING | ACTIVE | DEGRADED | SUSPENDED | REVOKED
-  capabilities          String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  clubId              String
+  club                Club     @relation("ClubPaymentProviderConnections", fields: [clubId], references: [id])
+  providerType        String
+  connectionReference String
+  environment         String // SIMULATOR | SANDBOX | PRODUCTION
+  status              String   @default("NOT_CONFIGURED") // NOT_CONFIGURED | CONFIGURING | ACTIVE | DEGRADED | SUSPENDED | REVOKED
+  capabilities        String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  versions              PaymentProviderConnectionVersion[] @relation("ConnectionVersions")
-  externalEvents        ExternalPaymentEvent[]              @relation("ExternalEventConnection")
+  versions       PaymentProviderConnectionVersion[] @relation("ConnectionVersions")
+  externalEvents ExternalPaymentEvent[]             @relation("ExternalEventConnection")
 
   @@unique([clubId, providerType, connectionReference])
   @@index([clubId, status])
@@ -14472,15 +14476,15 @@ model PaymentProviderConnection {
 // touches Prisma. A "rotation" is a new row here + status flip on the
 // parent connection.
 model PaymentProviderConnectionVersion {
-  id                    String   @id @default(cuid())
-  connectionId          String
-  connection            PaymentProviderConnection @relation("ConnectionVersions", fields: [connectionId], references: [id], onDelete: Cascade)
-  version               Int
-  credentialSecretRef   String
-  capabilities          String?
-  activatedAt           DateTime?
-  deactivatedAt         DateTime?
-  createdAt             DateTime @default(now())
+  id                  String                    @id @default(cuid())
+  connectionId        String
+  connection          PaymentProviderConnection @relation("ConnectionVersions", fields: [connectionId], references: [id], onDelete: Cascade)
+  version             Int
+  credentialSecretRef String
+  capabilities        String?
+  activatedAt         DateTime?
+  deactivatedAt       DateTime?
+  createdAt           DateTime                  @default(now())
 
   @@unique([connectionId, version])
   @@index([connectionId, activatedAt])
@@ -14489,28 +14493,28 @@ model PaymentProviderConnectionVersion {
 // ExternalPaymentEvent — normalized provider callback envelope.
 // Verified before any financial-state mutation is allowed.
 model ExternalPaymentEvent {
-  id                    String   @id @default(cuid())
+  id                    String                     @id @default(cuid())
   clubId                String
-  club                  Club     @relation("ClubExternalPaymentEvents", fields: [clubId], references: [id])
+  club                  Club                       @relation("ClubExternalPaymentEvents", fields: [clubId], references: [id])
   connectionId          String?
   connection            PaymentProviderConnection? @relation("ExternalEventConnection", fields: [connectionId], references: [id])
   provider              String
   providerEventId       String
   providerInstructionId String?
   providerReference     String?
-  eventType             String   // SUBMISSION_ACKNOWLEDGED | STATUS_UPDATED | SETTLED | RETURNED | CANCELLED | REJECTED | UNKNOWN
+  eventType             String // SUBMISSION_ACKNOWLEDGED | STATUS_UPDATED | SETTLED | RETURNED | CANCELLED | REJECTED | UNKNOWN
   providerTimestamp     DateTime?
-  status                String?  // normalized ProviderProcessingStatus
+  status                String? // normalized ProviderProcessingStatus
   amount                Decimal?
   currency              String?
   returnCode            String?
   returnDescription     String?
   payloadHash           String
-  rawPayloadReference   String?  // opaque KMS/blob ref — never a raw payload
-  verificationStatus    String   // VERIFIED | UNVERIFIED | FAILED
-  processingStatus      String   @default("PENDING") // PENDING | APPLIED | IGNORED_DUPLICATE | IGNORED_OUT_OF_ORDER | REJECTED_UNVERIFIED | REJECTED_TENANT_MISMATCH | REJECTED_UNKNOWN_STATUS | REJECTED_AMOUNT_MISMATCH | REJECTED_CURRENCY_MISMATCH | REJECTED_REFERENCE_COLLISION
+  rawPayloadReference   String? // opaque KMS/blob ref — never a raw payload
+  verificationStatus    String // VERIFIED | UNVERIFIED | FAILED
+  processingStatus      String                     @default("PENDING") // PENDING | APPLIED | IGNORED_DUPLICATE | IGNORED_OUT_OF_ORDER | REJECTED_UNVERIFIED | REJECTED_TENANT_MISMATCH | REJECTED_UNKNOWN_STATUS | REJECTED_AMOUNT_MISMATCH | REJECTED_CURRENCY_MISMATCH | REJECTED_REFERENCE_COLLISION
   processingNote        String?
-  receivedAt            DateTime @default(now())
+  receivedAt            DateTime                   @default(now())
   processedAt           DateTime?
 
   // Replay protection — a duplicate (providerEventId, provider) is refused.
@@ -14518,4 +14522,109 @@ model ExternalPaymentEvent {
   @@index([clubId, receivedAt])
   @@index([providerInstructionId, receivedAt])
   @@index([processingStatus])
+}
+
+// ==========================================================================
+// PAY-1C (2026-09-26) — PSP & Canadian Rail Readiness.
+// ==========================================================================
+// PAY-1C introduces operational infrastructure that a serious payment
+// operator is expected to run before onboarding to a real financial
+// institution:
+//   - Payment incident architecture (distinct from ordinary exception).
+//   - Rail-neutral limit configuration + fail-closed evaluation.
+//   - Provider adapter certification separate from connection health.
+// None of these connect a real rail. Simulator remains the only wired
+// provider. Real-money capability remains disabled by default.
+
+// PaymentIncident — a Payments-specific operational event distinct from
+// an ordinary exception. A returned payment is not an incident; a
+// provider outage affecting many authorized payments might be. The
+// incident record NEVER mutates linked financial evidence — it exists
+// for reconstruction, containment coordination, and (where relevant)
+// regulatory assessment by humans.
+model PaymentIncident {
+  id                           String    @id @default(cuid())
+  clubId                       String?
+  club                         Club?     @relation("ClubPaymentIncidents", fields: [clubId], references: [id])
+  incidentNumber               String    @unique
+  category                     String // PROVIDER_OUTAGE | WIDESPREAD_SUBMISSION_FAILURE | SUSPECTED_DUPLICATE_EXECUTION | UNAUTHORIZED_ATTEMPT | CREDENTIAL_COMPROMISE | CALLBACK_VERIFICATION_ATTACK | RECONCILIATION_DISCREPANCY | ACCOUNTING_INTEGRITY_FAILURE | CROSS_TENANT_EVENT | DATA_INTEGRITY_EVENT | SETTLEMENT_ANOMALY
+  severity                     String // SEV_1 | SEV_2 | SEV_3 | SEV_4
+  status                       String    @default("DETECTED") // DETECTED | TRIAGED | CONTAINED | INVESTIGATING | RECOVERED | RESOLVED
+  summary                      String
+  detectedAt                   DateTime  @default(now())
+  triagedAt                    DateTime?
+  containedAt                  DateTime?
+  investigatedAt               DateTime?
+  recoveredAt                  DateTime?
+  resolvedAt                   DateTime?
+  detectedByUserId             String?
+  detectedSource               String // AUTOMATED_HEALTH | OPERATOR | CALLBACK_VERIFICATION | RECONCILIATION
+  regulatoryAssessmentRequired Boolean   @default(false)
+  timelineJson                 String // append-only JSON array of { ts, actor, event, note }
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  links PaymentIncidentLink[] @relation("IncidentLinks")
+
+  @@index([clubId, status])
+  @@index([category])
+  @@index([severity])
+  @@index([detectedAt])
+}
+
+// PaymentIncidentLink — bidirectional link between an incident and any
+// affected entity. Reconstruction-only. Never mutates the referenced
+// record.
+model PaymentIncidentLink {
+  id         String          @id @default(cuid())
+  incidentId String
+  incident   PaymentIncident @relation("IncidentLinks", fields: [incidentId], references: [id], onDelete: Cascade)
+  entityType String // TENANT | PROVIDER_CONNECTION | PAYMENT_RUN | PAYMENT_INSTRUCTION | EXTERNAL_EVENT | WORK_INTAKE_ITEM
+  entityId   String
+  createdAt  DateTime        @default(now())
+
+  @@unique([incidentId, entityType, entityId])
+  @@index([entityType, entityId])
+}
+
+// PaymentLimit — provider-neutral configured limit. Evaluation is
+// fail-closed at scheduleAndSubmit boundary. Exceeding a limit MUST
+// NOT mutate the authorized payment — it raises an operational
+// exception and refuses submission until humans revalidate.
+model PaymentLimit {
+  id             String    @id @default(cuid())
+  clubId         String? // null => platform default
+  club           Club?     @relation("ClubPaymentLimits", fields: [clubId], references: [id])
+  providerType   String? // null => any provider
+  kind           String // PER_INSTRUCTION | PER_RUN | DAILY_TENANT_TOTAL | CONNECTION | PAYMENT_TYPE
+  paymentType    String? // PAYROLL | AP | REFUND — narrows PAYMENT_TYPE kind
+  currency       String    @default("CAD")
+  amountLimit    Decimal
+  effectiveFrom  DateTime  @default(now())
+  effectiveUntil DateTime?
+  status         String    @default("ACTIVE") // ACTIVE | RETIRED
+  reason         String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([clubId, kind, status])
+  @@index([providerType, kind])
+}
+
+// PaymentProviderCertification — tracks the readiness state of a
+// PROVIDER ADAPTER (distinct from a per-tenant connection's health).
+// A connection cannot execute in PRODUCTION unless its adapter is
+// PRODUCTION_APPROVED. Simulator is intentionally not eligible.
+model PaymentProviderCertification {
+  id                   String    @id @default(cuid())
+  providerType         String    @unique
+  readiness            String    @default("DEVELOPMENT") // DEVELOPMENT | CONFORMANCE_PASSED | SANDBOX_ACCEPTED | PRODUCTION_APPROVED
+  conformancePassedAt  DateTime?
+  sandboxAcceptedAt    DateTime?
+  productionApprovedAt DateTime?
+  productionApprovedBy String?
+  evidenceJson         String // JSON: which checks passed, when, evidence pointer
+  reason               String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 }

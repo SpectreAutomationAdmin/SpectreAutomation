@@ -30,6 +30,7 @@ import {
   recordInstructionReturn,
 } from "./accounting";
 import type { PaymentSourceType } from "./types";
+import { assertPaymentRunWithinLimits, type LimitPaymentType } from "./limits";
 
 function idempotencyKeyFor(runId: string, instructionId: string): string {
   return `run:${runId}:inst:${instructionId}`;
@@ -65,6 +66,27 @@ export async function scheduleAndSubmit(
   });
   if (!run) throw new Error("PAY-1A: PaymentRun not found.");
   requirePermission(principal, run.clubId, "payment:prepare");
+
+  // PAY-1C/3: fail-closed limit evaluation BEFORE the AUTHORIZED →
+  // SCHEDULED transition. If no limits are configured, this is a
+  // no-op. If a limit is breached, an operational exception is
+  // raised and submission is refused.
+  const runSrc = await prisma.paymentRun.findUniqueOrThrow({
+    where: { id: runId },
+    select: { sourceType: true },
+  });
+  const paymentType: LimitPaymentType | undefined =
+    runSrc.sourceType === "PAYROLL_BATCH"
+      ? "PAYROLL"
+      : runSrc.sourceType === "AP_INVOICE"
+      ? "AP"
+      : undefined;
+  await assertPaymentRunWithinLimits({
+    clubId: run.clubId,
+    providerType,
+    runId,
+    paymentType,
+  });
 
   if (run.status === "AUTHORIZED") {
     await prisma.$transaction(async (tx) => {

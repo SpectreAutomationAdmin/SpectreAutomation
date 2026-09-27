@@ -184,11 +184,46 @@ export async function authorizePaymentRun(
     const instructions = await tx.paymentInstruction.findMany({
       where: { runId },
       select: {
-        instructionFingerprint: true, amount: true, recipientType: true, recipientId: true,
+        id: true, instructionFingerprint: true, amount: true,
+        sourceType: true, sourceId: true,
+        recipientType: true, recipientId: true,
         destinationSnapshotId: true, requestedExecutionDate: true,
+        currency: true,
       },
       orderBy: [{ recipientType: "asc" }, { recipientId: "asc" }],
     });
+
+    // PAY-1C/3: refuse authorization if a duplicate economic payment
+    // already exists for the SAME source business object + recipient +
+    // destination + amount. Recurring legitimate payroll is not
+    // blocked because payrollBatchId (sourceId) differs.
+    for (const inst of instructions) {
+      if (!inst.sourceId) continue;
+      const dupes = await tx.paymentInstruction.findMany({
+        where: {
+          clubId: run.clubId,
+          sourceType: inst.sourceType,
+          sourceId: inst.sourceId,
+          recipientType: inst.recipientType,
+          recipientId: inst.recipientId,
+          destinationSnapshotId: inst.destinationSnapshotId,
+          currency: inst.currency,
+          status: {
+            in: ["AUTHORIZED", "SCHEDULED", "SUBMITTING", "SUBMITTED", "ACCEPTED", "SETTLED"],
+          },
+          runId: { not: runId },
+        },
+        select: { id: true, amount: true, runId: true, status: true },
+      });
+      const conflict = dupes.find((d) =>
+        new Prisma.Decimal(d.amount).equals(new Prisma.Decimal(inst.amount)),
+      );
+      if (conflict) {
+        throw new Error(
+          `PAY-1C: duplicate economic payment refused — same source ${inst.sourceType}/${inst.sourceId} + recipient ${inst.recipientType}/${inst.recipientId} + amount ${inst.amount.toString()} ${inst.currency}. Existing instruction ${conflict.id} on run ${conflict.runId} (status=${conflict.status}).`,
+        );
+      }
+    }
     const runMaterial: PaymentRunMaterialFields = {
       clubId: run.clubId,
       runNumber: run.runNumber,

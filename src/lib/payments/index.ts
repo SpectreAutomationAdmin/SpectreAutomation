@@ -24,3 +24,12 @@ export { selectProvider } from "./provider/selector";
 export * from "./provider/contract";
 export * from "./provider/connection";
 export * from "./external-events";
+export * from "./operational-exceptions";
+
+// PAY-1C (2026-09-26) — PSP & Canadian rail readiness.
+export * from "./incidents";
+export * from "./rail/canonical";
+export * from "./limits";
+export * from "./duplicate-guard";
+export * from "./certification";
+export * from "./production-gate";

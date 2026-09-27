@@ -432,6 +432,13 @@ export async function resetDb() {
     c.vendorRiskFlag.deleteMany(),
     c.vendor.deleteMany(),
     c.taxCode.deleteMany(),
+    // PAY-1C (2026-09-26) — incident / limit / certification tables.
+    // Incident-link before incident; certification + limits FK to
+    // Club or are Club-independent (certification).
+    c.paymentIncidentLink.deleteMany(),
+    c.paymentIncident.deleteMany(),
+    c.paymentLimit.deleteMany(),
+    c.paymentProviderCertification.deleteMany(),
     // PAY-1B (2026-09-27) — provider connection / external event tables
     // pin PaymentProviderConnection which pins Club FK.
     c.externalPaymentEvent.deleteMany(),
