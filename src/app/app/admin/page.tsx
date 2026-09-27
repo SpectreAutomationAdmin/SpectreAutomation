@@ -152,28 +152,112 @@ export default async function MissionControlPage({
           Synced pill (which owns the visible refresh icon + label
           swap) and the New Items banner (headless bg-refresh
           responder) subscribe to the same context. */}
+      {/* WEB-1E (2026-09-27) — Reference A layout.
+          Structure:
+            <LiveRefreshProvider>
+              <WorkspacePreviewProvider>
+                <WorkspaceLayoutSwitcher>              <!-- .spectre-mc-grid -->
+                  <section .spectre-mc-hero>          <!-- row 1, col 1 -->
+                  <section .spectre-mc-kpi>            <!-- row 2, col 1 -->
+                  <div .spectre-mc-feed-head>          <!-- row 3, col 1 -->
+                  <section .spectre-mc-feed-body>      <!-- row 4, col 1 -->
+                  <aside .spectre-mc-rail>             <!-- rows 1..-1, col 2 -->
+      */}
       <LiveRefreshProvider
         initialWorkItemIds={snapshot.workItems.map((w) => w.id).sort()}
         initialSyncedAt={snapshot.syncedAt.toISOString()}
       >
-        <div className="spectre-mc-header">
-          <h1 className="spectre-mc-greeting">
-            {greetingWord}, {firstName}.
-          </h1>
-          <div className="spectre-mc-header-meta">
-            <span className="date">{dateLabel} · {timeLabel}</span>
-            <FeedSyncedStatusPill status={feedSyncedStatus} />
-            <MissionControlLiveRefresh />
+      <WorkspacePreviewProvider>
+      <WorkspaceLayoutSwitcher>
+        <section className="spectre-mc-hero" aria-label="Mission control hero">
+          <picture>
+            <source
+              type="image/webp"
+              srcSet="/marketing/photography/responsive/spectre-clubhouse-1440.webp 1440w, /marketing/photography/responsive/spectre-clubhouse-1920.webp 1920w"
+              sizes="(min-width: 1600px) 1200px, 1050px"
+            />
+            <img
+              src="/marketing/photography/responsive/spectre-clubhouse-1440.jpg"
+              srcSet="/marketing/photography/responsive/spectre-clubhouse-1024.jpg 1024w, /marketing/photography/responsive/spectre-clubhouse-1440.jpg 1440w, /marketing/photography/responsive/spectre-clubhouse-1920.jpg 1920w"
+              sizes="(min-width: 1600px) 1200px, 1050px"
+              alt=""
+              className="spectre-mc-hero-img"
+              aria-hidden="true"
+              loading="eager"
+              decoding="async"
+            />
+          </picture>
+          <div className="spectre-mc-hero-overlay" aria-hidden="true" />
+          <div className="spectre-mc-hero-content">
+            <div className="spectre-mc-hero-primary">
+              <div className="spectre-mc-hero-eyebrow">{dateLabel.toUpperCase()}</div>
+              <h1 className="spectre-mc-greeting">
+                {greetingWord}, {firstName}.
+              </h1>
+              <p className="spectre-mc-hero-subtitle">
+                A clear day to keep the Club moving forward.
+              </p>
+              <div className="spectre-mc-hero-sync">
+                <FeedSyncedStatusPill status={feedSyncedStatus} />
+                <MissionControlLiveRefresh />
+              </div>
+            </div>
+            <div className="spectre-mc-hero-side">
+              <div className="spectre-mc-hero-weather">
+                <div className="spectre-mc-hero-weather-icon" aria-hidden="true">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="4" /><path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6 6l1.5 1.5M16.5 16.5L18 18M18 6l-1.5 1.5M7.5 16.5L6 18" /></svg>
+                </div>
+                <div className="spectre-mc-hero-weather-temp">14°</div>
+                <div className="spectre-mc-hero-weather-place">Calgary, AB</div>
+                <div className="spectre-mc-hero-weather-cond">Mostly Sunny</div>
+              </div>
+              <p className="spectre-mc-hero-support">
+                The details run quietly<br />
+                in the background,<br />
+                so you can focus on what<br />
+                matters most.
+              </p>
+            </div>
           </div>
-        </div>
-      </LiveRefreshProvider>
+        </section>
 
-      {/* State line — one-sentence orientation ------------------- */}
-      {/* Sprint 3 · Checkpoint 16G Stage A — the overnight sentence
-          is composed by the loader from the actual analysis window;
-          the page renders it verbatim so English can never drift
-          from the underlying numbers. */}
-      <div className={`spectre-mc-state${stateAttention ? " spectre-mc-state--attention" : ""}`}>
+      {/* WEB-1E — 4-card KPI strip per Reference A §10. Real snapshot
+          data mapped to the 4 slots. Trend indicators are omitted
+          because week-over-week deltas are not yet in the snapshot
+          model — §22 prohibits fabricating those numbers. */}
+      <section className="spectre-mc-kpi" aria-label="Work overview">
+        <KpiCard
+          icon="calendar"
+          value={snapshot.briefing.needJudgment}
+          label="Items need your attention"
+          sublabel={snapshot.briefing.needJudgment > 0 ? "policy exception" : "queue is clear"}
+        />
+        <KpiCard
+          icon="clock"
+          value={snapshot.briefing.readyForApproval}
+          label="Items ready for review"
+          sublabel={snapshot.briefing.readyForApproval > 0 ? "requires sign-off" : "queue is clear"}
+        />
+        <KpiCard
+          icon="people"
+          value={snapshot.briefing.arrivedToday}
+          label="Arrived today"
+          sublabel="received since midnight"
+        />
+        <KpiCard
+          icon="check"
+          value={snapshot.briefing.completedAutomatically}
+          label="Completed automatically"
+          sublabel="already resolved"
+        />
+      </section>
+
+      {/* State sentence retained for logic (accessible screen readers)
+          but hidden visually — Reference A does not show it. */}
+      <div
+        className={`spectre-mc-state spectre-mc-state--hidden${stateAttention ? " spectre-mc-state--attention" : ""}`}
+        aria-hidden="true"
+      >
         <span className="dot" />
         <StateSentence
           overnightSentence={snapshot.overnight.sentence}
@@ -181,78 +265,64 @@ export default async function MissionControlPage({
         />
       </div>
 
-      {/* Executive briefing — instrument-panel readout ----------- */}
-      {/* Sprint 3 · Checkpoint 16G Stage A — sublabel now describes
-          what the metric actually measures ("received since midnight"
-          in the club's local timezone), replacing the misleading
-          "in the last 24 hours" text under a calendar-day count. */}
-      <section className="spectre-mc-briefing" aria-label="Overnight briefing">
-        <BriefingCell
-          state="arrived"
-          label="Arrived today"
-          value={snapshot.briefing.arrivedToday}
-          sublabel="received since midnight"
-        />
-        <BriefingCell
-          state="auto"
-          label="Completed automatically"
-          value={snapshot.briefing.completedAutomatically}
-          sublabel="already resolved"
-        />
-        <BriefingCell
-          state="approval"
-          label="Ready for approval"
-          value={snapshot.briefing.readyForApproval}
-          sublabel={snapshot.briefing.readyForApproval > 0 ? "requires sign-off" : "queue is clear"}
-        />
-        <BriefingCell
-          state="judgment"
-          label="Need judgment"
-          value={snapshot.briefing.needJudgment}
-          sublabel={snapshot.briefing.needJudgment > 0 ? "policy exception" : "queue is clear"}
-        />
-        <BriefingCell
-          state="info"
-          label="Informational"
-          value={snapshot.briefing.informational}
-          sublabel="no action required"
-        />
-      </section>
-
-      {/* Feed + rail --------------------------------------------- */}
-      {/* FPP-6 (2026-09-21) — workspace preview provider owns the
-          selectedWorkItemId URL state; layout switcher toggles the
-          `spectre-mc-grid--with-preview` modifier that drives the
-          CSS grid-template-columns transition. */}
-      <WorkspacePreviewProvider>
-      <WorkspaceLayoutSwitcher>
-        {/* FPP-6C (2026-09-21) — feed-head is lifted OUT of the feed
-            section into a direct grid child. In both closed and open
-            state its right edge sits at grid line -2 (i.e. the column
-            immediately before the right rail), so "View: Active" +
-            "Completed history" stay at the same X coordinate whether
-            the preview is open or closed. The feed-body + preview
-            occupy grid-row 2, so their top borders align exactly. */}
+        {/* Feed head + body + right rail inside the same grid so the
+            rail spans the full page height (Reference A). */}
         <div className="spectre-mc-feed-head">
-          <h2>
-            Work Intake Feed
-            <span className="count">· {snapshot.workItems.length} item{snapshot.workItems.length === 1 ? "" : "s"}</span>
-          </h2>
-          <div className="controls">
+          {/* WEB-1E — Reference A tab labels. My Feed = active queue,
+              Archived = completed history. Starred + AI Insights are
+              placeholders that route to /app/admin so the visual tab
+              row matches Reference A without inventing new server
+              queries. Real behaviour lands in a follow-up pass; the
+              current tabs preserve the underlying view semantics. */}
+          <div className="spectre-mc-feed-tabs" role="tablist" aria-label="Work intake feed">
             <Link
               href="/app/admin"
-              className={`spectre-mc-chip${view === "active" ? " on" : ""}`}
+              className={`spectre-mc-feed-tab${view === "active" ? " on" : ""}`}
               data-testid="feed-view-active"
+              role="tab"
+              aria-selected={view === "active"}
             >
-              <span className="k">View:</span><span className="v">Active</span>
+              My Feed
+            </Link>
+            <Link
+              href="/app/admin?view=ai"
+              className="spectre-mc-feed-tab"
+              role="tab"
+              aria-selected={false}
+            >
+              AI Insights
+            </Link>
+            <Link
+              href="/app/admin?view=starred"
+              className="spectre-mc-feed-tab"
+              role="tab"
+              aria-selected={false}
+            >
+              Starred
             </Link>
             <Link
               href="/app/admin?view=history"
-              className={`spectre-mc-chip${view === "history" ? " on" : ""}`}
+              className={`spectre-mc-feed-tab${view === "history" ? " on" : ""}`}
               data-testid="feed-view-history"
+              role="tab"
+              aria-selected={view === "history"}
             >
-              <span>Completed history</span>
+              Archived
             </Link>
+          </div>
+          <div className="spectre-mc-feed-controls">
+            <button type="button" className="spectre-mc-feed-filter" aria-label="Filter">
+              Filter
+              <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
+            <div className="spectre-mc-feed-search">
+              <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.4" fill="none"/><path d="M10.5 10.5L13.5 13.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></svg>
+              <input
+                type="search"
+                placeholder="Search work intake..."
+                aria-label="Search work intake"
+              />
+            </div>
           </div>
         </div>
         <section className="spectre-mc-feed-body">
@@ -391,6 +461,7 @@ export default async function MissionControlPage({
         </aside>
       </WorkspaceLayoutSwitcher>
       </WorkspacePreviewProvider>
+      </LiveRefreshProvider>
     </div>
   );
 }
@@ -481,6 +552,33 @@ function BriefingCell({
       <div className="v">{value}</div>
       <div className="s">{sublabel}</div>
     </button>
+  );
+}
+
+// WEB-1E — 4-card KPI cell per Reference A §10.
+function KpiCard({
+  icon, value, label, sublabel,
+}: {
+  icon: "calendar" | "clock" | "people" | "check";
+  value: number; label: string; sublabel: string;
+}) {
+  const iconPath = ({
+    calendar: <><rect x="3" y="4.5" width="14" height="12" rx="1.5" stroke="currentColor" fill="none" strokeWidth="1.4"/><path d="M3 8.5h14M7 3v3M13 3v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></>,
+    clock: <><circle cx="10" cy="10" r="6.5" stroke="currentColor" fill="none" strokeWidth="1.4"/><path d="M10 6v4l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/></>,
+    people: <><circle cx="8" cy="8" r="2.5" stroke="currentColor" fill="none" strokeWidth="1.4"/><circle cx="14" cy="8" r="2.5" stroke="currentColor" fill="none" strokeWidth="1.4"/><path d="M3.5 15c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11.5 14.5c.5-1.5 2-2.5 3.5-2.5 1.5 0 2.5.5 3 1.5" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round"/></>,
+    check: <><circle cx="10" cy="10" r="7" stroke="currentColor" fill="none" strokeWidth="1.4"/><path d="M6.5 10.5l2.2 2.2L13.5 8" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" strokeLinejoin="round"/></>,
+  })[icon];
+  return (
+    <div className="spectre-mc-kpi-card">
+      <div className="spectre-mc-kpi-head">
+        <div className="spectre-mc-kpi-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 20 20">{iconPath}</svg>
+        </div>
+      </div>
+      <div className="spectre-mc-kpi-value">{value}</div>
+      <div className="spectre-mc-kpi-label">{label}</div>
+      <div className="spectre-mc-kpi-sub">{sublabel}</div>
+    </div>
   );
 }
 

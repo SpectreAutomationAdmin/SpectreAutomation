@@ -1074,12 +1074,165 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-mc-greeting {
     /* WEB-1E (2026-09-27) — editorial serif display treatment
        per Reference A. Source Serif 4 is already loaded at the
-       root layout via next/font as --font-source-serif-4. */
+       root layout via next/font as --font-source-serif-4. Inside
+       the hero the greeting sits on cream over dark photography. */
     font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;
-    font-size: 36px; line-height: 44px; letter-spacing: -0.018em;
-    font-weight: 500; color: var(--spectre-text-primary);
+    font-size: 44px; line-height: 52px; letter-spacing: -0.020em;
+    font-weight: 500; color: #f7f2e6;
     text-wrap: balance;
+    margin: 0;
   }
+
+  /* WEB-1E — photographic hero (§7 + §8). Fills the main column
+     under the top chrome. Right rail sits alongside it via the
+     grid at .spectre-mc-grid. */
+  .spectre-mc-hero {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    aspect-ratio: 16 / 7;
+    min-height: 320px;
+    background: #1a1712;
+    color: #f7f2e6;
+    margin-bottom: var(--spectre-space-6);
+  }
+  .spectre-mc-hero-img {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover; object-position: center 40%;
+    filter: brightness(0.72) saturate(1.05);
+    z-index: 0;
+  }
+  .spectre-mc-hero-overlay {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(20, 15, 10, 0.10) 0%, rgba(20, 15, 10, 0.55) 100%),
+      linear-gradient(90deg, rgba(20, 15, 10, 0.55) 0%, rgba(20, 15, 10, 0.15) 55%, rgba(20, 15, 10, 0.10) 100%);
+    z-index: 1;
+  }
+  .spectre-mc-hero-content {
+    position: relative; z-index: 2;
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(200px, 260px);
+    gap: var(--spectre-space-8);
+    padding: 40px 44px 32px;
+    height: 100%;
+  }
+  .spectre-mc-hero-primary {
+    display: flex; flex-direction: column; justify-content: space-between;
+    min-height: 220px;
+  }
+  .spectre-mc-hero-eyebrow {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(247, 242, 230, 0.82); font-weight: 500;
+    margin-bottom: 12px;
+  }
+  .spectre-mc-hero-subtitle {
+    font-family: var(--font-source-serif-4), Georgia, serif;
+    font-size: 17px; line-height: 26px; color: rgba(247, 242, 230, 0.88);
+    margin: 12px 0 0; font-weight: 400; text-wrap: balance;
+    max-width: 44ch;
+  }
+  .spectre-mc-hero-sync {
+    margin-top: auto; display: inline-flex; align-items: center;
+    gap: 8px; padding-top: 20px;
+  }
+  .spectre-mc-hero-side {
+    display: flex; flex-direction: column; align-items: flex-end;
+    text-align: right; gap: 24px;
+  }
+  .spectre-mc-hero-weather {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 0 12px; align-items: center;
+  }
+  .spectre-mc-hero-weather-icon { grid-row: 1 / span 3; color: rgba(247, 242, 230, 0.86); }
+  .spectre-mc-hero-weather-temp { font-family: var(--font-source-serif-4), Georgia, serif; font-size: 36px; line-height: 40px; font-weight: 500; color: #f7f2e6; }
+  .spectre-mc-hero-weather-place { font-size: 12px; color: rgba(247, 242, 230, 0.74); letter-spacing: 0.02em; }
+  .spectre-mc-hero-weather-cond { font-size: 12px; color: rgba(247, 242, 230, 0.6); }
+  .spectre-mc-hero-support {
+    font-family: var(--font-source-serif-4), Georgia, serif;
+    font-size: 13px; line-height: 20px;
+    color: rgba(247, 242, 230, 0.78);
+    margin: 0; font-style: italic;
+    max-width: 220px;
+  }
+
+  /* Hide the legacy state sentence — Reference A does not show it. */
+  .spectre-mc-state--hidden { display: none !important; }
+
+  /* WEB-1E — 4-card KPI strip (§10). Replaces the legacy briefing
+     for the visual language. The old briefing markup remains in the
+     codebase for backward-compatible internal use; this new class is
+     what page.tsx now renders. */
+  .spectre-mc-kpi {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: var(--spectre-space-6);
+  }
+  .spectre-mc-kpi-card {
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: var(--spectre-radius-panel);
+    padding: 20px 22px;
+    display: flex; flex-direction: column; gap: 6px;
+    box-shadow: var(--spectre-shadow-subtle);
+  }
+  .spectre-mc-kpi-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .spectre-mc-kpi-icon {
+    width: 34px; height: 34px; border-radius: 999px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(24, 20, 12, 0.05);
+    color: var(--spectre-text-secondary);
+  }
+  .spectre-mc-kpi-value {
+    font-family: var(--font-source-serif-4), Georgia, serif;
+    font-size: 36px; line-height: 40px; font-weight: 500;
+    color: var(--spectre-text-primary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .spectre-mc-kpi-label { font-size: 13px; color: var(--spectre-text-primary); font-weight: 500; letter-spacing: -0.005em; }
+  .spectre-mc-kpi-sub { font-size: 12px; color: var(--spectre-text-muted); }
+
+  /* WEB-1E — feed head tabs (My Feed / AI Insights / Starred / Archived)
+     + Filter + Search per Reference A §9 / §11. */
+  .spectre-mc-feed-tabs { display: flex; gap: 4px; align-items: center; }
+  .spectre-mc-feed-tab {
+    padding: 8px 14px;
+    font-size: 14px; color: var(--spectre-text-muted); font-weight: 500;
+    border-bottom: 2px solid transparent; text-decoration: none;
+    transition: color var(--spectre-motion-fast) var(--spectre-ease), border-color var(--spectre-motion-fast) var(--spectre-ease);
+    letter-spacing: -0.005em;
+  }
+  .spectre-mc-feed-tab:hover { color: var(--spectre-text-primary); }
+  .spectre-mc-feed-tab.on { color: var(--spectre-text-primary); border-bottom-color: var(--spectre-text-primary); }
+  .spectre-mc-feed-controls { display: flex; align-items: center; gap: 12px; }
+  .spectre-mc-feed-filter {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--spectre-border-default);
+    border-radius: 999px;
+    background: transparent;
+    font-size: 12px; color: var(--spectre-text-secondary);
+    font-family: inherit; cursor: pointer;
+  }
+  .spectre-mc-feed-filter:hover { border-color: var(--spectre-border-strong); color: var(--spectre-text-primary); }
+  .spectre-mc-feed-search {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    background: var(--spectre-surface);
+    border: 1px solid var(--spectre-border-hairline);
+    border-radius: 999px;
+    min-width: 240px;
+  }
+  .spectre-mc-feed-search svg { color: var(--spectre-text-muted); flex-shrink: 0; }
+  .spectre-mc-feed-search input {
+    border: none; outline: none; background: transparent;
+    font-size: 13px; color: var(--spectre-text-primary);
+    width: 100%; font-family: inherit;
+  }
+  .spectre-mc-feed-search input::placeholder { color: var(--spectre-text-muted); }
   .spectre-mc-greeting .club { display: none; }
   .spectre-mc-header-meta {
     display: flex; align-items: center; gap: var(--spectre-space-3);
@@ -1173,18 +1326,28 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     transition: grid-template-columns 220ms cubic-bezier(0.2, 0.0, 0.0, 1.0);
     position: relative;
   }
-  .spectre-mc-grid > .spectre-mc-feed-head {
+  /* WEB-1E — hero + KPI live in the grid so the rail can span the
+     full height alongside them (Reference A). */
+  .spectre-mc-grid > .spectre-mc-hero {
     grid-column: 1 / -2;
     grid-row: 1;
   }
+  .spectre-mc-grid > .spectre-mc-kpi {
+    grid-column: 1 / -2;
+    grid-row: 2;
+  }
+  .spectre-mc-grid > .spectre-mc-feed-head {
+    grid-column: 1 / -2;
+    grid-row: 3;
+  }
   .spectre-mc-grid > .spectre-mc-feed-body {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 4;
     min-width: 0;
   }
   .spectre-mc-grid > .spectre-mc-preview {
     grid-column: 2;
-    grid-row: 2;
+    grid-row: 4;
   }
   .spectre-mc-grid > .spectre-mc-rail {
     grid-column: -2 / -1;
@@ -1192,6 +1355,8 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   }
   @media (max-width: 1279px) {
     .spectre-mc-grid { grid-template-columns: minmax(0, 1fr); }
+    .spectre-mc-grid > .spectre-mc-hero,
+    .spectre-mc-grid > .spectre-mc-kpi,
     .spectre-mc-grid > .spectre-mc-feed-head { grid-column: 1; }
     .spectre-mc-grid > .spectre-mc-rail { grid-column: 1; grid-row: auto; }
   }
@@ -1526,10 +1691,16 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: var(--spectre-space-3);
     padding: 0 var(--spectre-space-1);
+    /* WEB-1E — new feed head with tab row + filter/search. Border-
+       bottom used to sit on the whole row; the tab underline now
+       carries the visual separator. */
+    border-bottom: 1px solid var(--spectre-border-hairline);
+    padding-bottom: 0;
   }
   .spectre-mc-feed-head h2 {
     font-size: 13px; font-weight: 700; letter-spacing: 0.01em;
     color: var(--spectre-text-primary);
+    display: none; /* WEB-1E — tabs replace the label heading */
   }
   .spectre-mc-feed-head h2 .count {
     color: var(--spectre-text-muted); font-weight: 500;
