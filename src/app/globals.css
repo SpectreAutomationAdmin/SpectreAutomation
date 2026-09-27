@@ -4,21 +4,37 @@
     --color-bg: #f8f5ef;
     --color-ink: #1a1f1a;
     /* ================================================================   * Spectre Design Language â€” Phase 1 (Foundation)   *   * The full source of truth for these tokens is   * `docs/design/Spectre Design Language.md`. Every value here is a   * neutral-first surface / border / text / status token. There is no   * green in the shell, no editorial vocabulary, and no glow.   *   * Every `--spectre-*` token is namespaced so it cannot collide with   * the legacy `--color-*` vars, `.card`, `.btn`, `.page-title`, or   * any other surface. The Monthly Reporting Package, the POS lounge,   * the Member Portal, and every un-migrated admin route render   * through their own existing styles â€” untouched by this block.   *   * The LIGHT theme is the default (declared at `:root`). The DARK   * theme is declared under `[data-theme="dark"]` below and overrides   * only the semantic surface / border / text / status tokens â€” no   * duplication of radius, shadow, motion, or typography values.   *   * The theme attribute is stamped on `<html>` by the no-FOUC   * bootstrap script in `src/app/layout.tsx` before hydration.   * ================================================================ */
-  /* --- Surfaces (light default) ---------------------------------- */  --spectre-canvas: #f6f6f8;
-    --spectre-canvas-sunken: #eeeef1;
-    --spectre-surface: #fdfdfd;
-    --spectre-surface-hover: #f4f4f5;
-    --spectre-surface-elevated: #fdfdfe;
-    --spectre-sidebar: #f4f4f6;
-    --spectre-topbar: #fbfbfc;
-    /* --- Borders (light default) ----------------------------------- */  --spectre-border-hairline: rgba(15, 15, 20, 0.06);
-    --spectre-border-default: rgba(15, 15, 20, 0.10);
-    --spectre-border-strong: rgba(15, 15, 20, 0.16);
-    /* --- Text (light default) -------------------------------------- */  --spectre-text-primary: #17181b;
-    --spectre-text-secondary: rgba(23, 24, 27, 0.72);
-    --spectre-text-muted: rgba(23, 24, 27, 0.55);
-    --spectre-text-subtle: rgba(23, 24, 27, 0.38);
-    --spectre-text-inverse: #fdfdfe;
+  /* --- Surfaces (light default) ---------------------------------- */
+    /* WEB-1E (2026-09-27) — approved Spectre visual language shift:
+       warm ivory canvas + editorial cream card surfaces + near-black
+       chrome. Preserves every existing token NAME so downstream
+       pages (~159 admin routes) inherit the palette without code
+       changes. Reporting + POS opt out via their own shell prefixes
+       (AdminShell REPORTING_MODE_PREFIXES / POS_MODE_PREFIXES). */
+    --spectre-canvas: #f4efe4;
+    --spectre-canvas-sunken: #ede7d9;
+    --spectre-surface: #faf6ec;
+    --spectre-surface-hover: #f2ecdd;
+    --spectre-surface-elevated: #fbf7ed;
+    --spectre-sidebar: #17161a;
+    --spectre-topbar: #17161a;
+    /* --- Borders (light default) ----------------------------------- */  --spectre-border-hairline: rgba(24, 20, 12, 0.08);
+    --spectre-border-default: rgba(24, 20, 12, 0.14);
+    --spectre-border-strong: rgba(24, 20, 12, 0.22);
+    /* --- Text (light default) -------------------------------------- */  --spectre-text-primary: #1a1712;
+    --spectre-text-secondary: rgba(26, 23, 18, 0.74);
+    --spectre-text-muted: rgba(26, 23, 18, 0.58);
+    --spectre-text-subtle: rgba(26, 23, 18, 0.40);
+    --spectre-text-inverse: #faf6ec;
+    /* --- Chrome text (light on dark sidebar/topbar) ---------------- */
+    --spectre-chrome-text-primary: #ece6d6;
+    --spectre-chrome-text-secondary: rgba(236, 230, 214, 0.74);
+    --spectre-chrome-text-muted: rgba(236, 230, 214, 0.56);
+    --spectre-chrome-text-subtle: rgba(236, 230, 214, 0.38);
+    --spectre-chrome-border-hairline: rgba(236, 230, 214, 0.10);
+    --spectre-chrome-border-default: rgba(236, 230, 214, 0.16);
+    --spectre-chrome-surface-hover: rgba(236, 230, 214, 0.08);
+    --spectre-chrome-surface-active: rgba(236, 230, 214, 0.14);
     /* --- Status (light default) ------------------------------------ */  --spectre-status-success: #166534;
     --spectre-status-warning: #b45309;
     --spectre-status-error: #b91c1c;
@@ -306,38 +322,59 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   .spectre-nav-section-header[data-contains-active="true"] .spectre-nav-section-icon { opacity: 1; color: var(--spectre-accent); }
 
   /* ================================================================
-   * Payroll Admin Phase 2 (2026-09-10) — founder-authorized dark-navy
-   * sidebar treatment.
+   * WEB-1E (2026-09-27) — approved Spectre visual language.
    *
-   * VISUAL-ONLY change. No modification to `sidebar-nav-data.ts`,
-   * no change to permission gating, accordion behavior, active-route
-   * resolution, section grouping, icon set, or link ordering.
-   *
-   * The override is SCOPED to the `.spectre-sidebar` element and its
-   * descendants: redeclaring the semantic `--spectre-*` tokens inside
-   * that block cascades to nav items, section headers, chevrons, and
-   * the sidebar identity chip only. Every other admin surface — the
-   * topbar, workspace, tables, cards, buttons, dialogs — continues
-   * reading the top-level tokens declared on `:root`.
+   * The sidebar is near-black with a warm undertone (Reference A).
+   * Chrome-scoped token overrides so every nav item, section header,
+   * chevron, and identity chip reads light on dark WITHOUT affecting
+   * the workspace, cards, tables, buttons, dialogs, or the preserved
+   * right rail (which lives OUTSIDE `.spectre-sidebar` and continues
+   * to read the top-level tokens declared on :root).
    * ================================================================ */
   .spectre-sidebar {
-    background-color: #0f172a;
-    --spectre-sidebar:            #0f172a;
-    --spectre-text-primary:       #e5e7eb;
-    --spectre-text-secondary:     rgba(229, 231, 235, 0.78);
-    --spectre-text-muted:         rgba(229, 231, 235, 0.55);
-    --spectre-text-subtle:        rgba(229, 231, 235, 0.38);
-    --spectre-text-inverse:       #0f172a;
-    --spectre-border-hairline:    rgba(255, 255, 255, 0.08);
-    --spectre-border-default:     rgba(255, 255, 255, 0.12);
-    --spectre-surface:            #17202f;
-    --spectre-surface-hover:      #152036;
-    --spectre-surface-elevated:   #1a2540;
-    --spectre-accent:             #1e40af;
-    --spectre-accent-hover:       #1e3a8a;
-    --spectre-accent-soft:        rgba(30, 64, 175, 0.22);
-    --spectre-accent-ring:        rgba(30, 64, 175, 0.30);
+    background-color: #17161a;
+    --spectre-sidebar:            #17161a;
+    --spectre-text-primary:       #ece6d6;
+    --spectre-text-secondary:     rgba(236, 230, 214, 0.74);
+    --spectre-text-muted:         rgba(236, 230, 214, 0.56);
+    --spectre-text-subtle:        rgba(236, 230, 214, 0.38);
+    --spectre-text-inverse:       #17161a;
+    --spectre-border-hairline:    rgba(236, 230, 214, 0.10);
+    --spectre-border-default:     rgba(236, 230, 214, 0.16);
+    --spectre-surface:            #1e1d22;
+    --spectre-surface-hover:      rgba(236, 230, 214, 0.08);
+    --spectre-surface-elevated:   #23222a;
+    --spectre-accent:             #c8a45a;
+    --spectre-accent-hover:       #b8955a;
+    --spectre-accent-soft:        rgba(200, 164, 90, 0.16);
+    --spectre-accent-ring:        rgba(200, 164, 90, 0.30);
     color: var(--spectre-text-primary);
+  }
+  /* Topbar scoped chrome tokens — matches sidebar. */
+  .spectre-topbar {
+    background-color: #17161a;
+    --spectre-topbar:             #17161a;
+    --spectre-text-primary:       #ece6d6;
+    --spectre-text-secondary:     rgba(236, 230, 214, 0.74);
+    --spectre-text-muted:         rgba(236, 230, 214, 0.56);
+    --spectre-text-subtle:        rgba(236, 230, 214, 0.38);
+    --spectre-text-inverse:       #17161a;
+    --spectre-border-hairline:    rgba(236, 230, 214, 0.10);
+    --spectre-border-default:     rgba(236, 230, 214, 0.16);
+    --spectre-surface:            #1e1d22;
+    --spectre-surface-hover:      rgba(236, 230, 214, 0.08);
+    --spectre-surface-elevated:   #23222a;
+    color: var(--spectre-text-primary);
+    border-bottom: 1px solid rgba(236, 230, 214, 0.10);
+  }
+  /* Topbar interactive fields need dark-friendly styling. */
+  .spectre-topbar input,
+  .spectre-topbar [role="combobox"],
+  .spectre-topbar [role="button"] {
+    color: var(--spectre-text-primary);
+  }
+  .spectre-topbar input::placeholder {
+    color: var(--spectre-text-muted);
   }
   /* --- Buttons --------------------------------------------------- */
   .spectre-btn {    display: inline-flex;
@@ -1035,8 +1072,13 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
     gap: var(--spectre-space-6); margin-bottom: var(--spectre-space-4);
   }
   .spectre-mc-greeting {
-    font-size: 22px; line-height: 28px; letter-spacing: -0.014em;
-    font-weight: 600; color: var(--spectre-text-primary);
+    /* WEB-1E (2026-09-27) — editorial serif display treatment
+       per Reference A. Source Serif 4 is already loaded at the
+       root layout via next/font as --font-source-serif-4. */
+    font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;
+    font-size: 36px; line-height: 44px; letter-spacing: -0.018em;
+    font-weight: 500; color: var(--spectre-text-primary);
+    text-wrap: balance;
   }
   .spectre-mc-greeting .club { display: none; }
   .spectre-mc-header-meta {
