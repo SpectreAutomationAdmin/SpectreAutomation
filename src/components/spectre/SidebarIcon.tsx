@@ -20,6 +20,7 @@ import type { CSSProperties } from "react";
 
 export type NavigationIconKey =
   | "mission-control"
+  | "work-intake"
   | "search"
   | "membership"
   | "people"
@@ -71,6 +72,16 @@ export default function SidebarIcon({ name, size = 15, className, style }: Props
         <svg {...common}>
           <circle cx="12" cy="12" r="9" />
           <circle cx="12" cy="12" r="3.5" />
+        </svg>
+      );
+    // WI-1F — inbox/tray glyph. Matches the Variant D icon system:
+    // 24×24 viewbox, currentColor, 1.9 stroke, rounded caps.
+    case "work-intake":
+      return (
+        <svg {...common}>
+          <path d="M4 13.5V19a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 19v-5.5" />
+          <path d="M4 13.5L6 5.5a1.5 1.5 0 0 1 1.5-1.2h9a1.5 1.5 0 0 1 1.5 1.2l2 8" />
+          <path d="M4 13.5h4l1 2h6l1-2h4" />
         </svg>
       );
     // Variant D exact.

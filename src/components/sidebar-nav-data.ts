@@ -34,8 +34,14 @@ export type NavSection = { id: string; label: string; items: NavItem[]; icon?: N
 // removed — the Spectre sidebar already renders a single search
 // affordance at the top of the sidebar (see `SpectreSidebar.tsx`),
 // so surfacing another one under Mission Control was noise.
+// WI-1F (2026-09-27) — Work Intake promoted from a Finance child
+// to a primary top-level item immediately below Mission Control.
+// The route stays /app/admin/work-intake. See scaffold + acceptance
+// tests. Same icon system as Mission Control for equivalent
+// hierarchy per §12–§13.
 export const ADMIN_TOP_LEVEL: NavItem[] = [
   { href: "/app/admin", label: "Mission Control", icon: "mission-control" },
+  { href: "/app/admin/work-intake", label: "Work Intake", icon: "work-intake" },
 ];
 
 // ---------- Admin nav: grouped sections ----------
@@ -77,11 +83,8 @@ export const ADMIN_SECTIONS: NavSection[] = [
     label: "Finance",
     icon: "finance",
     items: [
-      // WI-1 (2026-09-27) — Work Intake scaffold route. Placed first
-      // in the Finance section per the approved reference. The route
-      // renders a new visual scaffold at /app/admin/work-intake and
-      // is intentionally distinct from /app/admin (Mission Control).
-      { href: "/app/admin/work-intake", label: "Work Intake" },
+      // WI-1F (2026-09-27) — Work Intake was promoted to a primary
+      // top-level nav item; removed from the Finance children.
       { href: "/app/admin/finance", label: "Overview", perm: "ar:read" },
       { href: "/app/admin/collections", label: "Collections", perm: ["collections:work", "ar:read"] },
       { href: "/app/admin/financing", label: "Financing", perm: "financing:read" },

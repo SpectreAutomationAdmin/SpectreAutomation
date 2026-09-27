@@ -277,6 +277,82 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await masthead.screenshot({ path: "test-results/wi1-06-masthead.png" });
   });
 
+  test("WI-1F nav · Work Intake is a PRIMARY top-level nav item below Mission Control (not under Finance)", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    // Exactly ONE Work Intake link exists in the sidebar.
+    const workIntakeLinks = page.locator('.spectre-sidebar a[href="/app/admin/work-intake"]');
+    await expect(workIntakeLinks).toHaveCount(1);
+    // Work Intake sits in the primary (unsectioned) nav — immediately
+    // after Mission Control. Take the first two nav-item texts in
+    // the sidebar and assert their order.
+    const allNavItems = page.locator('.spectre-sidebar a.spectre-nav-item');
+    const first = (await allNavItems.nth(0).innerText()).trim();
+    const second = (await allNavItems.nth(1).innerText()).trim();
+    console.log("WI_PRIMARY_NAV:", JSON.stringify({ first, second }));
+    expect(first).toMatch(/Mission Control/);
+    expect(second).toMatch(/Work Intake/);
+    // Work Intake is active on /app/admin/work-intake.
+    const active = page.locator('.spectre-sidebar a.spectre-nav-item--active');
+    await expect(active).toHaveText(/Work Intake/);
+    // Mission Control at /app/admin should be active, Work Intake not.
+    await page.goto(`${BASE_URL}/app/admin`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const activeOnMc = page.locator('.spectre-sidebar a.spectre-nav-item--active');
+    await expect(activeOnMc).toHaveText(/Mission Control/);
+  });
+
+  test("WI-1F hero · weather right-inset mirrors greeting left-inset (± 4 px)", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const heroBox = await page.locator(".wi-hero").boundingBox();
+    const greetingBox = await page.locator(".wi-hero-greeting").boundingBox();
+    // The rightmost VISIBLE weather element (Mostly Sunny is
+    // right-aligned to the same edge as the temperature).
+    const condBox = await page.locator(".wi-hero-weather-cond").boundingBox();
+    const supportBox = await page.locator(".wi-hero-support").boundingBox();
+    console.log("WI_HERO_MIRROR:", JSON.stringify({ hero: heroBox, greeting: greetingBox, cond: condBox, support: supportBox }));
+    if (heroBox && greetingBox && condBox && supportBox) {
+      const leftInset = greetingBox.x - heroBox.x;
+      const weatherRightInset = (heroBox.x + heroBox.width) - (condBox.x + condBox.width);
+      const supportRightInset = (heroBox.x + heroBox.width) - (supportBox.x + supportBox.width);
+      console.log("WI_INSET_DELTA:", { leftInset, weatherRightInset, supportRightInset, weatherDelta: Math.abs(leftInset - weatherRightInset), supportDelta: Math.abs(leftInset - supportRightInset) });
+      expect(Math.abs(leftInset - weatherRightInset)).toBeLessThanOrEqual(4);
+      expect(Math.abs(leftInset - supportRightInset)).toBeLessThanOrEqual(4);
+    }
+  });
+
+  test("WI-1F FEED SYNCED · pinned to lower-left of hero + larger refresh glyph (>= 14 px)", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const heroBox = await page.locator(".wi-hero").boundingBox();
+    const syncBox = await page.locator(".wi-hero-sync").boundingBox();
+    const subtitleBox = await page.locator(".wi-hero-subtitle").boundingBox();
+    const svgBox = await page.locator(".wi-hero-sync svg").boundingBox();
+    console.log("WI_FEED_SYNCED_POS:", JSON.stringify({ hero: heroBox, sync: syncBox, subtitle: subtitleBox, svg: svgBox }));
+    if (heroBox && syncBox && subtitleBox) {
+      // Not directly beneath the subtitle — there must be a clear
+      // vertical gap between the subtitle and FEED SYNCED (>= 24 px).
+      const gap = syncBox.y - (subtitleBox.y + subtitleBox.height);
+      expect(gap).toBeGreaterThan(24);
+      // In the lower half of the hero.
+      const heroMidY = heroBox.y + heroBox.height / 2;
+      expect(syncBox.y).toBeGreaterThanOrEqual(heroMidY);
+      // Left-aligned with greeting/subtitle.
+      expect(Math.abs(syncBox.x - subtitleBox.x)).toBeLessThanOrEqual(4);
+    }
+    if (svgBox) {
+      expect(Math.round(svgBox.width)).toBeGreaterThanOrEqual(14);
+      expect(Math.round(svgBox.height)).toBeGreaterThanOrEqual(14);
+    }
+  });
+
   test("WI-1D FEED SYNCED · no pill (transparent bg, no border) + cream color", async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: VIEWPORT });
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);

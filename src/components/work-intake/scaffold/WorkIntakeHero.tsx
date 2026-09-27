@@ -55,13 +55,14 @@ export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {})
           <h1 className="wi-hero-greeting">Good morning, Chris.</h1>
           <p className="wi-hero-subtitle">A clear day to keep the Club moving forward.</p>
           <div className="wi-hero-sync" aria-label="Feed sync status (scaffold)">
-            <span className="wi-hero-sync-dot" aria-hidden="true" />
             <span className="wi-hero-sync-label">FEED SYNCED</span>
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            {/* WI-1F — larger refresh glyph (15 px) with a heavier
+                1.75 px stroke for legibility over the photograph. */}
+            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
               <path
-                d="M2.5 6.5a4 4 0 0 1 7-2.4M9.5 5.5a4 4 0 0 1-7 2.4M9 3v2.5H6.5M3 9V6.5h2.5"
+                d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5M12 3v3H9M4 13v-3h3"
                 stroke="currentColor"
-                strokeWidth="1.2"
+                strokeWidth="1.75"
                 fill="none"
                 strokeLinecap="round"
                 strokeLinejoin="round"

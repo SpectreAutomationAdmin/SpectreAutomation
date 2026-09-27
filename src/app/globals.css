@@ -5450,7 +5450,9 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   padding: 22px 40px 22px 40px;
   height: 100%;
 }
-.wi-hero-primary { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+/* WI-1F — greeting stack pinned to the top region; FEED SYNCED
+     pinned to the bottom-left of the hero via margin-top: auto. */
+.wi-hero-primary { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; padding-bottom: 4px; height: 100%; }
 .wi-hero-eyebrow { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(247, 242, 230, 0.82); font-weight: 500; }
 .wi-hero-greeting {
   font-family: var(--wi-serif);
@@ -5462,45 +5464,48 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   font-family: var(--wi-serif); font-size: 14px; line-height: 20px;
   color: rgba(247, 242, 230, 0.88); margin: 0; font-weight: 400;
 }
-/* WI-1D — FEED SYNCED restyled per §5–§7:
-     - No pill, no border, no background, no capsule.
-     - Text + refresh icon share the hero cream/off-white color.
-     - Sits directly on the photograph as editorial secondary status. */
+/* WI-1F — FEED SYNCED sits distinctly in the LOWER-LEFT of the
+     hero (bottom-inset ~4px + hero content padding-bottom = 22px
+     for a visually intentional bottom gap). Left-aligned with the
+     greeting via the shared padding-left. No pill; refresh glyph
+     enlarged to 15 px with 1.75 px stroke for legibility. */
 .wi-hero-sync {
-  margin-top: 8px; align-self: flex-start;
+  margin-top: auto; align-self: flex-start;
   display: inline-flex; align-items: center; gap: 8px;
   padding: 0; border: none; background: transparent;
-  color: rgba(247, 242, 230, 0.86);
+  color: rgba(247, 242, 230, 0.90);
   font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; font-weight: 500;
 }
 .wi-hero-sync-dot { display: none; }
 .wi-hero-sync-label { color: inherit; }
-.wi-hero-sync svg { color: inherit; opacity: 0.86; width: 12px; height: 12px; }
+.wi-hero-sync svg { color: inherit; opacity: 0.90; width: 15px; height: 15px; }
 
-/* WI-1D — right hero overlay is one coherent right-aligned column:
-     weather block  →  thin divider  →  editorial supporting copy.
-     Supporting copy sits DIRECTLY BENEATH the weather (same right
-     edge, same left edge), not drifting left of it (§8–§10). */
+/* WI-1F — right hero overlay is one column right-anchored to the
+     hero's right padding edge, mirroring the greeting's inset on
+     the left. Every text element right-aligns so the visible right
+     edge (of "14°", "Mostly Sunny", "matters most.") sits exactly
+     against the hero right inset. */
 .wi-hero-side {
   display: grid; grid-template-columns: 1fr;
-  justify-items: end;
+  justify-items: stretch;
   align-content: center;
   row-gap: 12px;
   padding-top: 4px;
 }
-.wi-hero-side > * { width: 100%; max-width: 210px; }
 .wi-hero-weather {
   display: grid;
   grid-template-columns: auto 1fr;
   column-gap: 12px;
   align-items: center;
+  justify-content: end;
   justify-self: end;
+  text-align: right;
 }
 .wi-hero-weather-icon { grid-row: 1 / span 3; align-self: center; color: rgba(247, 242, 230, 0.92); width: 30px; height: 30px; }
 .wi-hero-weather-icon svg { width: 30px; height: 30px; display: block; }
-.wi-hero-weather-temp { grid-row: 1; grid-column: 2; font-family: var(--wi-serif); font-size: 30px; line-height: 32px; font-weight: 500; color: #f7f2e6; }
-.wi-hero-weather-place { grid-row: 2; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.82); letter-spacing: 0.02em; line-height: 15px; }
-.wi-hero-weather-cond { grid-row: 3; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.62); line-height: 14px; }
+.wi-hero-weather-temp { grid-row: 1; grid-column: 2; font-family: var(--wi-serif); font-size: 30px; line-height: 32px; font-weight: 500; color: #f7f2e6; text-align: right; }
+.wi-hero-weather-place { grid-row: 2; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.82); letter-spacing: 0.02em; line-height: 15px; text-align: right; }
+.wi-hero-weather-cond { grid-row: 3; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.62); line-height: 14px; text-align: right; }
 .wi-hero-side::before {
   /* WI-1C §10 — thin restrained divider between weather and copy. */
   content: "";
@@ -5508,7 +5513,8 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   order: 1;
   height: 1px;
   background: rgba(247, 242, 230, 0.22);
-  width: 100%; max-width: 210px;
+  width: 210px;
+  justify-self: end;
   margin: 0;
 }
 .wi-hero-weather { order: 0; }
@@ -5519,6 +5525,9 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   color: rgba(247, 242, 230, 0.78);
   font-style: italic;
   margin: 0;
+  text-align: right;
+  justify-self: end;
+  max-width: 210px;
 }
 
 /* -- KPI strip (WI-1D approved alignment) ------------------------------- */
