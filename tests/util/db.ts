@@ -432,6 +432,11 @@ export async function resetDb() {
     c.vendorRiskFlag.deleteMany(),
     c.vendor.deleteMany(),
     c.taxCode.deleteMany(),
+    // PAY-1B (2026-09-27) — provider connection / external event tables
+    // pin PaymentProviderConnection which pins Club FK.
+    c.externalPaymentEvent.deleteMany(),
+    c.paymentProviderConnectionVersion.deleteMany(),
+    c.paymentProviderConnection.deleteMany(),
     // PAY-1A (2026-09-26) — Payments tables pin JournalEntry + BankAccount +
     // Account FKs; wipe them BEFORE Journal + Account + BankAccount.
     c.paymentEvent.deleteMany(),

@@ -22,6 +22,7 @@
 // updates and PaymentEvents. Tests that need cross-process persistence
 // can seed the singleton via `resetSimulator`.
 
+import { createHash } from "node:crypto";
 import { assertProviderConstructionAllowed } from "../kill-switch";
 import type {
   PaymentProvider,
@@ -30,6 +31,16 @@ import type {
   ProviderStatusQueryOutcome,
   ProviderCancelOutcome,
 } from "./index";
+import type {
+  PaymentProviderV2,
+  ProviderCapabilities,
+  ProviderSubmissionResultV2,
+  ProviderStatusResultV2,
+  ProviderCancelResultV2,
+  ExternalPaymentEventEnvelope,
+  ExternalPaymentEventType,
+  ProviderProcessingStatus,
+} from "./contract";
 
 // -----------------------------------------------------------------
 // Directive shape — per-instruction control.
@@ -76,8 +87,25 @@ function nextProviderRef(): string {
   return `SIM-PAY-${String(COUNTER).padStart(6, "0")}`;
 }
 
+// PAY-1B/1 — v2 capability declaration. The simulator supports every
+// axis a Canadian rail could exercise so the conformance suite can
+// verify every capability path.
+const SIMULATOR_CAPABILITIES: ProviderCapabilities = {
+  supportsSubmission: true,
+  supportsStatusLookup: true,
+  supportsCancellation: true,
+  supportsAsyncEvents: true,
+  supportsReturns: true,
+  supportsBatchSubmission: false,
+  supportsPerInstructionStatus: true,
+  supportsScheduledExecution: true,
+  supportsRealTimePayments: false,
+  supportsBatchEft: false,
+};
+
 export class SimulatorProvider implements PaymentProvider {
   public readonly providerType = "SIMULATOR";
+  public readonly capabilities = SIMULATOR_CAPABILITIES;
   public readonly movesRealMoney = false;
 
   // Idempotency: idempotencyKey → SimState. Retries return the same row.
@@ -201,4 +229,159 @@ export class SimulatorProvider implements PaymentProvider {
   __submitCallCount(idempotencyKey: string): number {
     return this.byIdemKey.get(idempotencyKey)?.submitCallCount ?? 0;
   }
+}
+
+// -----------------------------------------------------------------
+// PAY-1B/1 (2026-09-27) — v2 facade + verifiable event envelope.
+// -----------------------------------------------------------------
+//
+// The v2 facade exposes the SimulatorProvider through the hardened
+// PAY-1B Provider Contract v2. It reuses the same internal state
+// store so idempotency and outcome directives are shared. Callers
+// that want v2 semantics use `getSimulatorV2()`; the engine continues
+// to use v1 through `getSimulator()`.
+
+function makeSimulatorV2(underlying: SimulatorProvider): PaymentProviderV2 {
+  const provider: PaymentProviderV2 = {
+    providerType: underlying.providerType,
+    movesRealMoney: underlying.movesRealMoney,
+    capabilities: underlying.capabilities,
+
+    async submit(input) {
+      try {
+        const out = await underlying.submit({
+          clubId: input.clubId,
+          runId: input.runId,
+          instructionId: input.instructionId,
+          amount: input.amount,
+          currency: input.currency,
+          requestedExecutionDate: input.requestedExecutionDate,
+          idempotencyKey: input.idempotencyKey,
+          destinationRef: input.destinationRef,
+          fundingRef: input.fundingRef,
+        });
+        const result: ProviderSubmissionResultV2 =
+          out.status === "REJECTED"
+            ? {
+                outcome: "REJECTED",
+                providerInstructionId: out.providerInstructionId,
+                providerReference: out.providerReference,
+                processingStatus: "REJECTED",
+                error: {
+                  category: "INVALID_DESTINATION",
+                  retryable: false,
+                  message: out.rejectionDescription ?? "provider rejected",
+                  providerCode: out.rejectionCode,
+                  providerMessage: out.rejectionDescription,
+                },
+                providerEvidenceRef: undefined,
+              }
+            : {
+                outcome: "ACKNOWLEDGED",
+                providerInstructionId: out.providerInstructionId,
+                providerReference: out.providerReference,
+                processingStatus: "ACCEPTED",
+              };
+        return result;
+      } catch (err) {
+        // v1 threw on TIMEOUT — normalise to UNKNOWN with retryable=true.
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          outcome: "UNKNOWN",
+          error: {
+            category: "TIMEOUT",
+            retryable: true,
+            message,
+          },
+        };
+      }
+    },
+
+    async getStatus(providerInstructionId) {
+      try {
+        const s = await underlying.getStatus(providerInstructionId);
+        const status: ProviderProcessingStatus =
+          s.status === "SUBMITTED" ? "RECEIVED"
+          : s.status === "ACCEPTED" ? "ACCEPTED"
+          : s.status === "SETTLED" ? "SETTLED"
+          : s.status === "RETURNED" ? "RETURNED"
+          : s.status === "REJECTED" ? "REJECTED"
+          : s.status === "CANCELLED" ? "CANCELLED"
+          : "UNKNOWN";
+        return {
+          providerInstructionId: s.providerInstructionId,
+          status,
+          providerReference: s.providerReference,
+          settledAt: s.settledAt,
+          returnedAt: s.returnedAt,
+          returnCode: s.returnCode,
+          returnDescription: s.returnDescription,
+        };
+      } catch (err) {
+        // Adapter must fail safely — never synthesise SETTLED.
+        return {
+          providerInstructionId,
+          status: "UNKNOWN",
+          error: {
+            category: "UNKNOWN",
+            retryable: false,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    },
+
+    async cancel(providerInstructionId, reason) {
+      const v1 = await underlying.cancel(providerInstructionId, reason);
+      const outcome: ProviderCancelResultV2["outcome"] =
+        v1.cancelled ? "ACCEPTED"
+        : v1.reason?.startsWith("provider-final:") ? "TOO_LATE"
+        : v1.reason === "unknown-id" ? "UNKNOWN"
+        : "REJECTED";
+      return {
+        providerInstructionId: v1.providerInstructionId,
+        outcome,
+        providerReference: v1.reason,
+      };
+    },
+
+    async verifyExternalEvent(payload, headers) {
+      // Simulator's synthetic signing scheme:
+      //   header "x-sim-signature" = sha256("SIM-SECRET|" + JSON.stringify(payload))
+      // Real adapters implement their provider's actual scheme; this
+      // is deliberately synthetic and test-only.
+      const raw = JSON.stringify(payload ?? {});
+      const payloadHash = createHash("sha256").update(raw).digest("hex");
+      const expected = createHash("sha256").update("SIM-SECRET|" + raw).digest("hex");
+      const supplied = headers["x-sim-signature"] ?? headers["X-Sim-Signature"] ?? "";
+      const verificationStatus: ExternalPaymentEventEnvelope["verificationStatus"] =
+        supplied === "" ? "UNVERIFIED"
+        : supplied === expected ? "VERIFIED"
+        : "FAILED";
+      const p = (payload ?? {}) as Record<string, unknown>;
+      const eventType: ExternalPaymentEventType =
+        (p.eventType as ExternalPaymentEventType) ?? "UNKNOWN";
+      return {
+        provider: underlying.providerType,
+        providerEventId: (p.providerEventId as string) ?? payloadHash,
+        providerInstructionId: p.providerInstructionId as string | undefined,
+        providerReference: p.providerReference as string | undefined,
+        eventType,
+        providerTimestamp: p.providerTimestamp ? new Date(p.providerTimestamp as string) : undefined,
+        status: p.status as ProviderProcessingStatus | undefined,
+        amount: p.amount as string | undefined,
+        currency: p.currency as string | undefined,
+        returnCode: p.returnCode as string | undefined,
+        returnDescription: p.returnDescription as string | undefined,
+        payloadHash,
+        verificationStatus,
+      };
+    },
+  };
+  return provider;
+}
+
+// Public helpers.
+export function getSimulatorV2(config?: SimulatorConfig): PaymentProviderV2 {
+  return makeSimulatorV2(getSimulator(config));
 }

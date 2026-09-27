@@ -532,6 +532,8 @@ model Club {
   paymentDestSnapshots  PaymentDestinationSnapshot[] @relation("ClubPaymentDestSnapshots")
   paymentAuthorizations PaymentAuthorization[]       @relation("ClubPaymentAuthorizations")
   paymentEvents         PaymentEvent[]               @relation("ClubPaymentEvents")
+  paymentProviderConnections PaymentProviderConnection[] @relation("ClubPaymentProviderConnections")
+  externalPaymentEvents      ExternalPaymentEvent[]      @relation("ClubExternalPaymentEvents")
 }
 
 // ---------------------------------------------------------------------
@@ -14421,4 +14423,99 @@ model PaymentEvent {
   @@index([runId, createdAt])
   @@index([instructionId, createdAt])
   @@index([eventType])
+}
+
+// ==========================================================================
+// PAY-1B (2026-09-27) — Provider Connection boundary.
+// ==========================================================================
+// A PaymentProviderConnection describes HOW a specific tenant reaches a
+// specific provider adapter. It is the ONLY place credential references
+// (KMS secretRefs) live in the domain — never on PaymentRun, never on
+// PaymentInstruction, never on BankAccount, never on tenant-visible
+// configuration.
+//
+// Environment boundary:
+//   SIMULATOR   — the built-in simulator adapter; safe on any env.
+//   SANDBOX     — a synthetic non-production provider environment.
+//   PRODUCTION  — real-money-capable connection; staging structurally
+//                 refuses to construct a provider from one.
+//
+// Rotation model:
+//   PaymentProviderConnectionVersion captures credentialSecretRef +
+//   capabilities at a moment in time. Historical PaymentInstructions
+//   reference the specific version that transported them (via events
+//   / adapter attribution) — rotating credentials never rewrites
+//   historical evidence.
+
+model PaymentProviderConnection {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation("ClubPaymentProviderConnections", fields: [clubId], references: [id])
+  providerType          String
+  connectionReference   String
+  environment           String   // SIMULATOR | SANDBOX | PRODUCTION
+  status                String   @default("NOT_CONFIGURED") // NOT_CONFIGURED | CONFIGURING | ACTIVE | DEGRADED | SUSPENDED | REVOKED
+  capabilities          String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  versions              PaymentProviderConnectionVersion[] @relation("ConnectionVersions")
+  externalEvents        ExternalPaymentEvent[]              @relation("ExternalEventConnection")
+
+  @@unique([clubId, providerType, connectionReference])
+  @@index([clubId, status])
+  @@index([environment])
+}
+
+// Versioned credential reference. `credentialSecretRef` is an opaque
+// pointer into KMS/secret storage; the plaintext credential never
+// touches Prisma. A "rotation" is a new row here + status flip on the
+// parent connection.
+model PaymentProviderConnectionVersion {
+  id                    String   @id @default(cuid())
+  connectionId          String
+  connection            PaymentProviderConnection @relation("ConnectionVersions", fields: [connectionId], references: [id], onDelete: Cascade)
+  version               Int
+  credentialSecretRef   String
+  capabilities          String?
+  activatedAt           DateTime?
+  deactivatedAt         DateTime?
+  createdAt             DateTime @default(now())
+
+  @@unique([connectionId, version])
+  @@index([connectionId, activatedAt])
+}
+
+// ExternalPaymentEvent — normalized provider callback envelope.
+// Verified before any financial-state mutation is allowed.
+model ExternalPaymentEvent {
+  id                    String   @id @default(cuid())
+  clubId                String
+  club                  Club     @relation("ClubExternalPaymentEvents", fields: [clubId], references: [id])
+  connectionId          String?
+  connection            PaymentProviderConnection? @relation("ExternalEventConnection", fields: [connectionId], references: [id])
+  provider              String
+  providerEventId       String
+  providerInstructionId String?
+  providerReference     String?
+  eventType             String   // SUBMISSION_ACKNOWLEDGED | STATUS_UPDATED | SETTLED | RETURNED | CANCELLED | REJECTED | UNKNOWN
+  providerTimestamp     DateTime?
+  status                String?  // normalized ProviderProcessingStatus
+  amount                Decimal?
+  currency              String?
+  returnCode            String?
+  returnDescription     String?
+  payloadHash           String
+  rawPayloadReference   String?  // opaque KMS/blob ref — never a raw payload
+  verificationStatus    String   // VERIFIED | UNVERIFIED | FAILED
+  processingStatus      String   @default("PENDING") // PENDING | APPLIED | IGNORED_DUPLICATE | IGNORED_OUT_OF_ORDER | REJECTED_UNVERIFIED | REJECTED_TENANT_MISMATCH | REJECTED_UNKNOWN_STATUS | REJECTED_AMOUNT_MISMATCH | REJECTED_CURRENCY_MISMATCH | REJECTED_REFERENCE_COLLISION
+  processingNote        String?
+  receivedAt            DateTime @default(now())
+  processedAt           DateTime?
+
+  // Replay protection — a duplicate (providerEventId, provider) is refused.
+  @@unique([provider, providerEventId])
+  @@index([clubId, receivedAt])
+  @@index([providerInstructionId, receivedAt])
+  @@index([processingStatus])
 }
