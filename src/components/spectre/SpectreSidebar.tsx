@@ -17,6 +17,13 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/ui";
 import { Wordmark } from "@/components/marketing/Wordmark";
+// WI-1D — marketing.css declares .spectre-marketing .mkt-wordmark
+// (0.32 em tracking, weight 500, uppercase, translucent divider).
+// Importing here loads the file into the admin shell bundle so the
+// SAME rules apply inside the .spectre-marketing wrapper without
+// duplicating them. All marketing rules are scoped under
+// .spectre-marketing so nothing else in the admin is affected.
+import "@/components/marketing/marketing.css";
 import {
   ADMIN_TOP_LEVEL,
   ADMIN_SECTIONS,

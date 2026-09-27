@@ -143,12 +143,16 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await expect(page.getByText("Completed this week")).toBeVisible();
     await expect(page.getByText(/3 from last week/)).toBeVisible();
     await expect(page.getByText(/12% from last week/)).toBeVisible();
-    // WI-1B §2 — cards must be compact editorial tiles, not oversized dashboards.
+    // WI-1D §22 — cards remain compact editorial tiles. Height
+    // increases modestly from WI-1B/1C after the icon upscale
+    // (30 → 40 px per §22) and grid restructure putting NUMBER,
+    // LABEL and TREND all in column 2 (§21). Tolerance widened
+    // to match the reference proportions post-upscale.
     const cardBox = await page.locator(".wi-kpi-card").first().boundingBox();
     console.log("WI_KPI_CARD_BOX:", JSON.stringify(cardBox));
     if (cardBox) {
-      expect(cardBox.height).toBeLessThanOrEqual(115);
-      expect(cardBox.height).toBeGreaterThanOrEqual(80);
+      expect(cardBox.height).toBeLessThanOrEqual(150);
+      expect(cardBox.height).toBeGreaterThanOrEqual(100);
     }
     // WI-1B §3 — each label must remain on ONE line at 1586×992.
     const wraps = await page.locator(".wi-kpi-label").evaluateAll((els) =>
