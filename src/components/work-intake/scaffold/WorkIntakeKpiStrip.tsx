@@ -36,24 +36,49 @@ const ICON_PATHS: Record<WiKpi["icon"], React.ReactNode> = {
   ),
 };
 
+/** WI-1H — KPI trend indicators.
+ *
+ *  Straight vertical arrows with an explicit shaft + conventional
+ *  arrowhead per the accepted design reference. The prior
+ *  chevron-and-horizontal-bar geometry (M2 3l3 4 3-4M2 7h6) read as
+ *  a compound glyph rather than a directional arrow and was rejected
+ *  by the founder. Each direction now uses two separate paths — shaft
+ *  and head — with matching d strings that acceptance tests assert
+ *  card-by-card.
+ *
+ *  UP  (positive/green tone):
+ *    - shaft: M6 10V2
+ *    - head : M2.75 5.25L6 2L9.25 5.25
+ *  DOWN (negative/red tone):
+ *    - shaft: M6 2V10
+ *    - head : M2.75 6.75L6 10L9.25 6.75
+ *  FLAT (neutral / "No change"):
+ *    - restrained horizontal em-dash (M3 6h6), never a directional
+ *      shape.
+ *
+ *  All wrappers are 12 × 12 with a 12-unit viewBox so the visible
+ *  glyph fills its viewport.
+ */
 function TrendGlyph({ direction }: { direction: "up" | "down" | "flat" }) {
   if (direction === "flat") {
     return (
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M2 5h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" data-testid="wi-kpi-trend-glyph" data-direction="flat">
+        <path d="M3 6h6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       </svg>
     );
   }
   if (direction === "down") {
     return (
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M2 3l3 4 3-4M2 7h6" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" data-testid="wi-kpi-trend-glyph" data-direction="down">
+        <path d="M6 2V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M2.75 6.75L6 10L9.25 6.75" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-      <path d="M2 7l3-4 3 4M2 3h6" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" data-testid="wi-kpi-trend-glyph" data-direction="up">
+      <path d="M6 10V2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M2.75 5.25L6 2L9.25 5.25" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

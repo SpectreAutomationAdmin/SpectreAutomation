@@ -171,6 +171,82 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
       // scrollWidth > clientWidth would indicate hidden overflow.
       expect(t.scrollWidth).toBeLessThanOrEqual(t.clientWidth + 2);
     }
+    // WI-1H — per-card trend arrow geometry. The prior chevron+bar
+    // glyph was rejected; each card now uses a straight vertical shaft
+    // + arrowhead with card-specific d strings.
+    //
+    //   Card 1 (12  · Items need your attention)   = DOWN
+    //   Card 2 ( 8  · Items ready for review)      = UP
+    //   Card 3 ( 5  · Waiting on others · No change) = no directional arrow
+    //   Card 4 (28  · Completed this week)         = UP
+    const UP_SHAFT = "M6 10V2";
+    const UP_HEAD = "M2.75 5.25L6 2L9.25 5.25";
+    const DOWN_SHAFT = "M6 2V10";
+    const DOWN_HEAD = "M2.75 6.75L6 10L9.25 6.75";
+    const trendCards = await page.locator("[data-testid='wi-kpi-card']").all();
+    expect(trendCards.length).toBe(4);
+    const trendGeom = await Promise.all(
+      trendCards.map(async (c) => {
+        const trend = c.locator(".wi-kpi-trend").first();
+        const direction = await trend.locator("svg").getAttribute("data-direction");
+        const ds = await trend.locator("svg path").evaluateAll((els) =>
+          els.map((e) => e.getAttribute("d"))
+        );
+        const box = await trend.locator("svg").boundingBox();
+        return { direction, ds, box };
+      })
+    );
+    console.log("WI_KPI_TREND_GEOM:", JSON.stringify(trendGeom));
+    // Card 1 — DOWN.
+    expect(trendGeom[0].direction).toBe("down");
+    expect(trendGeom[0].ds).toContain(DOWN_SHAFT);
+    expect(trendGeom[0].ds).toContain(DOWN_HEAD);
+    expect(trendGeom[0].ds).not.toContain(UP_SHAFT);
+    expect(trendGeom[0].ds).not.toContain(UP_HEAD);
+    // Card 2 — UP.
+    expect(trendGeom[1].direction).toBe("up");
+    expect(trendGeom[1].ds).toContain(UP_SHAFT);
+    expect(trendGeom[1].ds).toContain(UP_HEAD);
+    expect(trendGeom[1].ds).not.toContain(DOWN_SHAFT);
+    expect(trendGeom[1].ds).not.toContain(DOWN_HEAD);
+    // Card 3 — no directional arrow.
+    expect(trendGeom[2].direction).toBe("flat");
+    expect(trendGeom[2].ds).not.toContain(UP_SHAFT);
+    expect(trendGeom[2].ds).not.toContain(UP_HEAD);
+    expect(trendGeom[2].ds).not.toContain(DOWN_SHAFT);
+    expect(trendGeom[2].ds).not.toContain(DOWN_HEAD);
+    // Card 4 — UP.
+    expect(trendGeom[3].direction).toBe("up");
+    expect(trendGeom[3].ds).toContain(UP_SHAFT);
+    expect(trendGeom[3].ds).toContain(UP_HEAD);
+    expect(trendGeom[3].ds).not.toContain(DOWN_SHAFT);
+    expect(trendGeom[3].ds).not.toContain(DOWN_HEAD);
+    // All wrappers 12 × 12.
+    for (const g of trendGeom) {
+      expect(g.box).not.toBeNull();
+      if (g.box) {
+        expect(Math.round(g.box.width)).toBe(12);
+        expect(Math.round(g.box.height)).toBe(12);
+      }
+    }
+    // Semantic colour: attention (red) for Card 1, positive (green)
+    // for Cards 2 + 4, neutral (muted) for Card 3. Assert only that
+    // the attention row's red channel dominates and the positive
+    // rows' green channel dominates — CSS tokens may evolve.
+    const trendColours = await Promise.all(
+      trendCards.map((c) => c.locator(".wi-kpi-trend").first().evaluate((el) => getComputedStyle(el as Element).color)),
+    );
+    console.log("WI_KPI_TREND_COLORS:", JSON.stringify(trendColours));
+    const parseRgb = (s: string) => {
+      const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(s);
+      return m ? { r: +m[1], g: +m[2], b: +m[3] } : null;
+    };
+    const c1 = parseRgb(trendColours[0]);
+    const c2 = parseRgb(trendColours[1]);
+    const c4 = parseRgb(trendColours[3]);
+    if (c1) expect(c1.r).toBeGreaterThan(c1.g);
+    if (c2) expect(c2.g).toBeGreaterThan(c2.r);
+    if (c4) expect(c4.g).toBeGreaterThan(c4.r);
     await page.locator(".wi-kpi").screenshot({ path: "test-results/wi1-03-kpi.png" });
   });
 
