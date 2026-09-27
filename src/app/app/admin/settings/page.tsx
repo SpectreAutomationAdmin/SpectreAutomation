@@ -7,6 +7,7 @@ import { getActiveClubId } from "@/lib/active-club";
 import { ClubProfileForm, type SaveResult } from "./settings-client";
 import HeroImageUploader from "./HeroImageUploader";
 import HeroFramingEditor from "./HeroFramingEditor";
+import WorkIntakeHeroSettings from "./WorkIntakeHeroSettings";
 import QuickLinksEditor from "./QuickLinksEditor";
 import AnnouncementsEditor from "./AnnouncementsEditor";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
@@ -79,10 +80,12 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const clubId = await getActiveClubId(user);
-  const [club, heroMedia, heroFraming, quickLinks, announcements] = await Promise.all([
+  const [club, heroMedia, heroFraming, workIntakeHeroMedia, workIntakeHeroFraming, quickLinks, announcements] = await Promise.all([
     prisma.club.findUnique({ where: { id: clubId } }),
     getClubMedia(clubId, "employee_portal_hero"),
     getClubMediaFraming(clubId, "employee_portal_hero"),
+    getClubMedia(clubId, "work_intake_hero"),
+    getClubMediaFraming(clubId, "work_intake_hero"),
     listQuickLinks(clubId),
     listAnnouncements(clubId),
   ]);
@@ -233,6 +236,33 @@ export default async function SettingsPage() {
             />
           </div>
         )}
+      </section>
+
+      {/* =========================================================
+          WI-1D (2026-09-27) — Work Intake hero.
+          Tenant admin can substitute the photograph used at
+          /app/admin/work-intake and control its focal position
+          without changing the fixed hero window (WI-1C geometry
+          is preserved). Removing the image restores the Spectre
+          default. Same ClubMedia + focal-point storage as the
+          Employee Portal hero above.
+         ========================================================= */}
+      <SectionHeader
+        eyebrow="Section 2c"
+        title="Work Intake hero"
+        subtitle="Photograph shown across the top of the Work Intake page. Use the sliders to reposition the crop inside the fixed hero window. When empty, the default Spectre clubhouse image is used."
+      />
+      <section
+        className="rounded-spectre-panel border p-spectre-6 mb-spectre-8"
+        style={{ background: "var(--spectre-surface)", borderColor: "var(--spectre-border-hairline)" }}
+      >
+        <WorkIntakeHeroSettings
+          clubId={club.id}
+          initialHasImage={workIntakeHeroMedia !== null}
+          initialVersion={workIntakeHeroMedia?.sha256.slice(0, 12) ?? null}
+          initialFocalX={workIntakeHeroFraming?.desktop.focalX ?? 50}
+          initialFocalY={workIntakeHeroFraming?.desktop.focalY ?? 50}
+        />
       </section>
 
       {/* =========================================================

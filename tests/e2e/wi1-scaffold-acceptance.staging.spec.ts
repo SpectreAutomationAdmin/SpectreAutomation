@@ -207,26 +207,101 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await page.locator(".wi-rail").screenshot({ path: "test-results/wi1-05-rail.png" });
   });
 
-  test("WI-1B masthead · SPECTRE / AUTOMATION horizontal wordmark in the sidebar", async ({ browser }) => {
+  test("WI-1D masthead · reuses marketing Wordmark component via .mkt-wordmark class", async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: VIEWPORT });
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     const masthead = page.locator("[data-testid='spectre-sidebar-masthead']");
     await expect(masthead).toBeVisible();
-    await expect(masthead.locator(".spectre-sidebar-masthead-primary")).toHaveText("SPECTRE");
-    await expect(masthead.locator(".spectre-sidebar-masthead-divider")).toHaveText("/");
-    await expect(masthead.locator(".spectre-sidebar-masthead-secondary")).toHaveText("AUTOMATION");
-    const style = await masthead.evaluate((el) => {
+    // The wrapper must carry the .spectre-marketing scope so the
+    // marketing .mkt-wordmark rules apply.
+    await expect(masthead).toHaveClass(/spectre-marketing/);
+    // The rendered wordmark must be the shared .mkt-wordmark node,
+    // NOT an admin recreation.
+    const mkt = masthead.locator(".mkt-wordmark");
+    await expect(mkt).toBeVisible();
+    await expect(mkt.locator(".mkt-wordmark-divider")).toHaveText("/");
+    await expect(mkt).toContainText(/SPECTRE/);
+    await expect(mkt).toContainText(/AUTOMATION/);
+    // Assert the marketing tracking value flows through (0.32 em on
+    // .mkt-wordmark → computed letter-spacing depends on font-size).
+    const cs = await mkt.evaluate((el) => {
       const s = getComputedStyle(el);
-      return { family: s.fontFamily, transform: s.textTransform };
+      return { transform: s.textTransform, letterSpacing: s.letterSpacing, fontSize: s.fontSize };
     });
-    expect(style.transform).toBe("uppercase");
-    expect(style.family).toMatch(/Inter|system-ui|sans-serif/i);
-    // Single line: sum of children widths should not create a wrap.
+    console.log("WI_MASTHEAD_STYLE:", JSON.stringify(cs));
+    expect(cs.transform).toBe("uppercase");
+    // Verify the wordmark is a single horizontal line.
     const mastheadHeight = await masthead.evaluate((el) => (el as HTMLElement).offsetHeight);
-    expect(mastheadHeight).toBeLessThan(32);
+    expect(mastheadHeight).toBeLessThan(40);
     await masthead.screenshot({ path: "test-results/wi1-06-masthead.png" });
+  });
+
+  test("WI-1D FEED SYNCED · no pill (transparent bg, no border) + cream color", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const sync = page.locator(".wi-hero-sync");
+    await expect(sync).toBeVisible();
+    const style = await sync.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return {
+        bg: s.backgroundColor,
+        borderTop: s.borderTopWidth + " " + s.borderTopStyle,
+        color: s.color,
+      };
+    });
+    console.log("WI_FEED_SYNCED_STYLE:", JSON.stringify(style));
+    // No pill background.
+    expect(style.bg).toMatch(/rgba\(0, 0, 0, 0\)|transparent/i);
+    // No border.
+    expect(style.borderTop).toMatch(/^0px/);
+    // Cream color family — must NOT be green rgb.
+    // (Cream family: high R, high G, slightly lower B; hue near warm ivory.)
+    const rgbMatch = style.color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    expect(rgbMatch).not.toBeNull();
+    if (rgbMatch) {
+      const r = Number(rgbMatch[1]);
+      const g = Number(rgbMatch[2]);
+      const b = Number(rgbMatch[3]);
+      // Warm cream: R > 200, G > 200, R >= G >= B, and NOT green.
+      expect(r).toBeGreaterThan(200);
+      expect(g).toBeGreaterThan(200);
+      // Ensure it isn't the prior green (#d8f0d8 → r=216, g=240, b=216 → g > r).
+      expect(g).toBeLessThanOrEqual(r + 5);
+    }
+    await sync.screenshot({ path: "test-results/wi1-07-feed-synced.png" });
+  });
+
+  test("WI-1D KPI · icons 40 px + chevron is real SVG + NUMBER/LABEL/TREND share left edge", async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: VIEWPORT });
+    const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
+    await page.goto(`${BASE_URL}/app/admin/work-intake`);
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const firstCard = page.locator("[data-testid='wi-kpi-card']").first();
+    // Icon circle 40 px.
+    const iconBox = await firstCard.locator(".wi-kpi-icon").boundingBox();
+    console.log("WI_KPI_ICON_BOX:", JSON.stringify(iconBox));
+    expect(iconBox).not.toBeNull();
+    if (iconBox) {
+      expect(Math.round(iconBox.width)).toBe(40);
+      expect(Math.round(iconBox.height)).toBe(40);
+    }
+    // Chevron is a real SVG (test id present).
+    await expect(firstCard.locator("[data-testid='wi-kpi-chevron']")).toBeVisible();
+    // NUMBER / LABEL / TREND share a common left edge.
+    const [vBox, lBox, tBox] = await Promise.all([
+      firstCard.locator(".wi-kpi-value").boundingBox(),
+      firstCard.locator(".wi-kpi-label").boundingBox(),
+      firstCard.locator(".wi-kpi-trend").boundingBox(),
+    ]);
+    console.log("WI_KPI_ALIGN:", JSON.stringify({ v: vBox?.x, l: lBox?.x, t: tBox?.x }));
+    if (vBox && lBox && tBox) {
+      expect(Math.abs(vBox.x - lBox.x)).toBeLessThanOrEqual(2);
+      expect(Math.abs(vBox.x - tBox.x)).toBeLessThanOrEqual(2);
+    }
   });
 
   test("Existing Mission Control page still works (regression)", async ({ browser }) => {

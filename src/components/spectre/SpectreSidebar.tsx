@@ -16,6 +16,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/ui";
+import { Wordmark } from "@/components/marketing/Wordmark";
 import {
   ADMIN_TOP_LEVEL,
   ADMIN_SECTIONS,
@@ -159,20 +160,18 @@ export function SpectreSidebar({
             S
           </div>
         ) : (
-          /* WI-1B — marketing-site SPECTRE / AUTOMATION masthead.
-             Same typographic treatment as .mkt-wordmark:
-             uppercase Inter medium at 0.32em tracking with a soft
-             slash divider. No S-tile, no stacked treatment. Reads
-             as a horizontal wordmark on the black sidebar. */
+          /* WI-1D — the SAME Wordmark component the marketing site
+             renders in its own header, wrapped in the .spectre-marketing
+             scope so the identical .mkt-wordmark / .mkt-wordmark-divider
+             rules apply (uppercase Inter medium at 0.32 em tracking,
+             translucent slash). No new tracking value; no admin
+             recreation. See src/components/marketing/Wordmark.tsx +
+             src/components/marketing/marketing.css. */
           <span
-            className="spectre-sidebar-masthead"
+            className="spectre-marketing spectre-sidebar-masthead"
             data-testid="spectre-sidebar-masthead"
-            aria-label="Spectre Automation"
-            title="Spectre Automation"
           >
-            <span className="spectre-sidebar-masthead-primary">SPECTRE</span>
-            <span className="spectre-sidebar-masthead-divider" aria-hidden="true">/</span>
-            <span className="spectre-sidebar-masthead-secondary">AUTOMATION</span>
+            <Wordmark />
           </span>
         )}
       </div>

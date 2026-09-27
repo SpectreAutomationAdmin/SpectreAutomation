@@ -34,6 +34,11 @@ import { resolveDocumentStorage } from "../documents/storage";
  *  this set. Add new categories here + the render surface. */
 export const CLUB_MEDIA_CATEGORIES = [
   "employee_portal_hero",
+  // WI-1D (2026-09-27) — Work Intake photographic hero. Same
+  // storage adapter, same focal-point + zoom model, same
+  // tenant-isolation contract as the employee-portal hero. Read
+  // by src/app/app/admin/work-intake/page.tsx.
+  "work_intake_hero",
 ] as const;
 export type ClubMediaCategory = (typeof CLUB_MEDIA_CATEGORIES)[number];
 

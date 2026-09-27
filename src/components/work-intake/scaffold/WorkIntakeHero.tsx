@@ -1,9 +1,35 @@
 // WI-1 — photographic hero (§9 / §10).
 // FEED SYNCED pill is intentionally STATIC per §10 & §18.
+// WI-1D — HeroConfig lets a tenant admin substitute the photograph
+// and control its focal point without changing the fixed hero window.
 
-export default function WorkIntakeHero() {
+export type HeroConfig =
+  | { kind: "default" }
+  | { kind: "tenant"; url: string; focalX: number; focalY: number; zoom: number };
+
+export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {}) {
+  const cfg: HeroConfig = config ?? { kind: "default" };
+  const isTenant = cfg.kind === "tenant";
+  const imgStyle: React.CSSProperties | undefined = isTenant
+    ? {
+        objectPosition: `${cfg.focalX}% ${cfg.focalY}%`,
+        transform: cfg.zoom && cfg.zoom !== 1 ? `scale(${cfg.zoom})` : undefined,
+        transformOrigin: `${cfg.focalX}% ${cfg.focalY}%`,
+      }
+    : undefined;
   return (
     <section className="wi-hero" aria-label="Work Intake hero">
+      {isTenant ? (
+        <img
+          src={cfg.url}
+          alt=""
+          className="wi-hero-img"
+          aria-hidden="true"
+          loading="eager"
+          decoding="async"
+          style={imgStyle}
+        />
+      ) : (
       <picture>
         <source
           type="image/webp"
@@ -21,6 +47,7 @@ export default function WorkIntakeHero() {
           decoding="async"
         />
       </picture>
+      )}
       <div className="wi-hero-overlay" aria-hidden="true" />
       <div className="wi-hero-content">
         <div className="wi-hero-primary">

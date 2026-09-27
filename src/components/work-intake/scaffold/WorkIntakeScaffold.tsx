@@ -3,19 +3,23 @@
 // presentational components. Static scaffold content mirrors the
 // approved reference verbatim. No legacy Work Intake card reuse.
 
-import WorkIntakeHero from "./WorkIntakeHero";
+import WorkIntakeHero, { type HeroConfig } from "./WorkIntakeHero";
 import WorkIntakeKpiStrip from "./WorkIntakeKpiStrip";
 import WorkIntakeFeedHead from "./WorkIntakeFeedHead";
 import WorkIntakeFeed from "./WorkIntakeFeed";
 import WorkIntakeRightRail from "./WorkIntakeRightRail";
 import { WI_FEED_ROWS, WI_KPIS, WI_RAIL } from "./scaffold-data";
 
-export default function WorkIntakeScaffold() {
+interface Props {
+  heroConfig?: HeroConfig;
+}
+
+export default function WorkIntakeScaffold({ heroConfig }: Props = {}) {
   return (
     <div className="wi-root">
       <div className="wi-grid">
         <div className="wi-main">
-          <WorkIntakeHero />
+          <WorkIntakeHero config={heroConfig ?? { kind: "default" }} />
           <WorkIntakeKpiStrip cards={WI_KPIS} />
           <div className="wi-feed-card">
             <WorkIntakeFeedHead activeTab="my-feed" />

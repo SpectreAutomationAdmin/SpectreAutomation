@@ -17,6 +17,8 @@
 
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
+import { getActiveClubId } from "@/lib/active-club";
+import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import WorkIntakeScaffold from "@/components/work-intake/scaffold/WorkIntakeScaffold";
 
 export const dynamic = "force-dynamic";
@@ -25,5 +27,23 @@ export const metadata = { title: "Work Intake" };
 export default async function WorkIntakePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  return <WorkIntakeScaffold />;
+
+  // WI-1D — tenant-scoped Work Intake hero.
+  //   If a `work_intake_hero` ClubMedia row exists → use it + framing.
+  //   Otherwise fall back to the Spectre-shipped clubhouse default.
+  const clubId = await getActiveClubId(user);
+  const media = await getClubMedia(clubId, "work_intake_hero");
+  const framing = media ? await getClubMediaFraming(clubId, "work_intake_hero") : null;
+
+  const heroConfig = media
+    ? {
+        kind: "tenant" as const,
+        url: `/api/clubs/${clubId}/work-intake-hero?v=${encodeURIComponent(media.sha256 || media.uploadedAt.toISOString())}`,
+        focalX: framing?.desktop.focalX ?? 50,
+        focalY: framing?.desktop.focalY ?? 50,
+        zoom: framing?.desktop.zoom ?? 1,
+      }
+    : { kind: "default" as const };
+
+  return <WorkIntakeScaffold heroConfig={heroConfig} />;
 }
