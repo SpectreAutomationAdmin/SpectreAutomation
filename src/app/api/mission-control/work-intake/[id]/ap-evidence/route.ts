@@ -171,6 +171,26 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       warnings: analysis.extraction.warnings,
       hints: analysis.extractionHints,
     },
+    // WI-2B.6 (2026-09-27) — TEMPORARY diagnostic fields. Founder
+    // authorised temporary diagnostic logging in the WI-2B.6 brief
+    // §3. To be removed in a follow-up commit once the runtime data
+    // has been captured for invoice #200824.
+    _wi2b6_canonicalLineItems: analysis.canonicalLineItems?.map((li) => ({
+      role: li.role,
+      description: li.description,
+      quantity: li.quantity != null ? String(li.quantity) : null,
+      unitPrice: li.unitPrice != null ? String(li.unitPrice) : null,
+      extension: li.extension != null ? String(li.extension) : null,
+      page: li.page,
+    })) ?? null,
+    _wi2b6_taxComponents: analysis.taxComponents?.map((c) => ({
+      taxType: c.taxType,
+      level: c.level,
+      rate: c.rate,
+      amount: c.amount != null ? String(c.amount) : null,
+      taxableBase: c.taxableBase != null ? String(c.taxableBase) : null,
+      confidence: c.confidence,
+    })) ?? null,
     vendorResolution: {
       state: analysis.vendor.state,
       candidates: analysis.vendor.candidates.map((c) => ({
