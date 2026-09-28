@@ -51,6 +51,13 @@ export interface WorkIntakeDetail {
       contentType: string;
       sizeBytes: number;
       storageState: string;
+      /** WI-2B.2 — canonical promoted `IngestedDocument.id` for this
+       *  email attachment. Populated when a `sourceKind=EMAIL_ATTACHMENT`
+       *  IngestedDocument row exists with `sourceReferenceId` matching
+       *  this EmailAttachment.id. The review page uses this to hit
+       *  `GET /api/documents/{ingestedDocumentId}/preview` for the
+       *  actual PDF bytes; null when ingest has not run or refused. */
+      ingestedDocumentId: string | null;
     }>;
   } | null;
   activity: Array<{
@@ -103,6 +110,26 @@ export async function loadWorkIntakeDetail(args: {
   const email = intake.emailOrigins[0]?.emailMessage;
   const parsedRecipients = safeParseRecipients(email?.recipientsJson ?? null);
 
+  // WI-2B.2 — resolve each EmailAttachment to its promoted
+  // IngestedDocument (sourceKind=EMAIL_ATTACHMENT / sourceReferenceId=
+  // EmailAttachment.id). Batched, tenant-scoped. Null when ingest
+  // hasn't run for this attachment yet.
+  const attachmentIds = (email?.attachments ?? []).map((a) => a.id);
+  const ingestedByAttachment = new Map<string, string>();
+  if (attachmentIds.length > 0) {
+    const docs = await prisma.ingestedDocument.findMany({
+      where: {
+        clubId: args.clubId,
+        sourceKind: "EMAIL_ATTACHMENT",
+        sourceReferenceId: { in: attachmentIds },
+      },
+      select: { id: true, sourceReferenceId: true },
+    });
+    for (const d of docs) {
+      if (d.sourceReferenceId) ingestedByAttachment.set(d.sourceReferenceId, d.id);
+    }
+  }
+
   return {
     id: intake.id,
     status: intake.status,
@@ -145,6 +172,7 @@ export async function loadWorkIntakeDetail(args: {
             contentType: a.contentType,
             sizeBytes: a.sizeBytes,
             storageState: a.storageState,
+            ingestedDocumentId: ingestedByAttachment.get(a.id) ?? null,
           })),
         }
       : null,

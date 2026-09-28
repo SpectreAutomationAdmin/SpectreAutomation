@@ -63,6 +63,16 @@ export interface ReviewDocumentVM {
   firstAttachmentFilename: string | null;
   webLink: string | null;             // Outlook web link where safe
   bodyPreview: string | null;         // brief text extract
+  /** WI-2B.2 — primary attachment resolved through to its promoted
+   *  IngestedDocument. Null when either no attachment exists, no
+   *  ingest promotion has happened yet, or the first attachment's
+   *  mime type is not application/pdf. The client renders the
+   *  actual PDF from GET /api/documents/{ingestedDocumentId}/preview. */
+  primaryPdf: {
+    ingestedDocumentId: string;
+    filename: string;
+    mimeType: string;
+  } | null;
 }
 
 export interface RealReviewData {
@@ -83,8 +93,17 @@ interface AdapterInput {
 }
 
 /** Present a WorkIntakeItem.status as a compact uppercase eyebrow
- *  string. Domain vocabulary — never a UI-invented word. */
-function statusEyebrow(status: string): string {
+ *  string. Domain vocabulary — never a UI-invented word.
+ *
+ *  WI-2B.2 — when the AP intelligence pipeline has established an
+ *  ACTIONABLE workflowState, the eyebrow reflects that business
+ *  reality rather than the email classifier's provisional label.
+ *  The persisted `status` column is NOT mutated — this is a
+ *  presentation-only override, per Explore-agent-A guidance. */
+function statusEyebrow(status: string, actionableFromAp: boolean): string {
+  if (actionableFromAp && (status === "OPEN" || status === "IN_PROGRESS")) {
+    return "ACTION REQUIRED";
+  }
   switch (status) {
     case "OPEN":          return "INTAKE";
     case "IN_PROGRESS":   return "IN PROGRESS";
@@ -94,6 +113,28 @@ function statusEyebrow(status: string): string {
     case "SUPPRESSED":    return "SUPPRESSED";
     default:              return status.toUpperCase();
   }
+}
+
+/** WI-2B.2 — the set of `invoiceSummary.workflowState` values that
+ *  the AP intelligence pipeline uses to indicate work is required.
+ *  ANALYSIS_PENDING is intentionally excluded (the pipeline hasn't
+ *  yet made a judgment); UNSUPPORTED and READY_FOR_APPROVAL keep
+ *  their own meaning but both still represent actionable work. */
+const ACTIONABLE_AP_WORKFLOW_STATES = new Set([
+  "READY_FOR_APPROVAL",
+  "VENDOR_MATCH_REQUIRED",
+  "MISSING_INFORMATION",
+  "NEEDS_JUDGMENT",
+  "POSSIBLE_DUPLICATE",
+  "CHART_OF_ACCOUNTS_REQUIRED",
+]);
+
+function humanWorkflowState(state: string | undefined | null): string | null {
+  if (!state) return null;
+  return state
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function humanClassification(classification: string | null): string | null {
@@ -138,10 +179,19 @@ function glLabel(
 function metaChips(
   detail: WorkIntakeDetail,
   invoice: ReviewInvoiceVM,
+  actionableFromAp: boolean,
 ): Array<{ label: string; tone: "amber-outline" | "muted" }> {
   const chips: Array<{ label: string; tone: "amber-outline" | "muted" }> = [];
-  const cls = humanClassification(detail.classification);
-  if (cls) chips.push({ label: cls, tone: "amber-outline" });
+  // WI-2B.2 — when AP intelligence has established an actionable
+  // workflow state, its label is the canonical headline. The email
+  // classifier's label falls back to a muted provenance chip so the
+  // original decision remains visible without dominating the header.
+  if (actionableFromAp && invoice.workflowStateLabel) {
+    chips.push({ label: invoice.workflowStateLabel, tone: "amber-outline" });
+  } else {
+    const cls = humanClassification(detail.classification);
+    if (cls) chips.push({ label: cls, tone: "amber-outline" });
+  }
   if (invoice.vendor) chips.push({ label: invoice.vendor, tone: "muted" });
   else if (detail.display.sourceLabel) chips.push({ label: detail.display.sourceLabel, tone: "muted" });
   if (invoice.totalLabel) chips.push({ label: invoice.totalLabel, tone: "muted" });
@@ -172,13 +222,15 @@ function buildInvoice(linked: LinkedIntelligenceForEmail | undefined): ReviewInv
     categoryLabel: s.category?.label ?? s.category?.purposeLabel ?? null,
     glAccountLabel: glLabel(s.category),
     glConfidencePercent: null, // TODO WI-2C: confidence surface
-    workflowStateLabel: s.workflowState
-      ? s.workflowState.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
-      : null,
+    workflowStateLabel: humanWorkflowState(s.workflowState),
   };
 }
 
-function buildContext(detail: WorkIntakeDetail, invoice: ReviewInvoiceVM): ReviewContextRowVM[] {
+function buildContext(
+  detail: WorkIntakeDetail,
+  invoice: ReviewInvoiceVM,
+  actionableFromAp: boolean,
+): ReviewContextRowVM[] {
   const rows: ReviewContextRowVM[] = [];
   if (invoice.vendorMatchState) {
     const stateWord = invoice.vendorMatchState === "MATCHED"
@@ -200,12 +252,25 @@ function buildContext(detail: WorkIntakeDetail, invoice: ReviewInvoiceVM): Revie
       meta: detail.display.sourceLabel,
     });
   }
-  // Classification confidence — always shown for a real record.
-  rows.push({
-    category: "Classification",
-    title: humanClassification(detail.classification) ?? "Not classified",
-    meta: `Confidence: ${detail.classificationConfidenceLabel}`,
-  });
+  // Classification row — WI-2B.2 fix. Presents the AP workflow state
+  // as the canonical classification when actionable, and preserves
+  // the original email classifier decision in the meta line so the
+  // provenance stays visible. No DB write; the persisted
+  // `classification` column is unchanged.
+  const emailClsLabel = humanClassification(detail.classification) ?? "Not classified";
+  if (actionableFromAp && invoice.workflowStateLabel) {
+    rows.push({
+      category: "Classification",
+      title: invoice.workflowStateLabel,
+      meta: `Original classifier: ${emailClsLabel} · confidence ${detail.classificationConfidenceLabel}`,
+    });
+  } else {
+    rows.push({
+      category: "Classification",
+      title: emailClsLabel,
+      meta: `Confidence: ${detail.classificationConfidenceLabel}`,
+    });
+  }
   // Ownership.
   rows.push({
     category: "Assigned To",
@@ -242,12 +307,30 @@ function buildWorkflow(status: string): ReviewWorkflowStageVM[] {
 function buildDocument(detail: WorkIntakeDetail): ReviewDocumentVM {
   const email = detail.email;
   const attachments = email?.attachments ?? [];
+  // WI-2B.2 — surface the first PDF attachment whose ingest has
+  // completed. The client renders it via the existing
+  // `/api/documents/{id}/preview` endpoint (auth-guarded by
+  // loadReadable). Non-PDF or un-ingested attachments fall through
+  // to the placeholder state.
+  const pdfCandidate = attachments.find(
+    (a) =>
+      a.ingestedDocumentId !== null &&
+      a.storageState === "STORED" &&
+      /^application\/pdf(;|$)/i.test(a.contentType),
+  );
   return {
     hasAttachments: attachments.length > 0,
     attachmentCount: attachments.length,
     firstAttachmentFilename: attachments[0]?.filename ?? null,
     webLink: email?.webLink ?? null,
     bodyPreview: email?.bodyTextExtract?.slice(0, 240) ?? null,
+    primaryPdf: pdfCandidate
+      ? {
+          ingestedDocumentId: pdfCandidate.ingestedDocumentId!,
+          filename: pdfCandidate.filename,
+          mimeType: pdfCandidate.contentType,
+        }
+      : null,
   };
 }
 
@@ -281,25 +364,38 @@ function buildSpectre(
 }
 
 /** Compose a real-data review presentation from the canonical detail
- *  and (optional) AP intelligence for AP-classified items. */
+ *  and (optional) AP intelligence for AP-classified items.
+ *
+ *  WI-2B.2 — the persisted `WorkIntakeItem.classification` column
+ *  represents the email classifier's provisional decision at
+ *  message ingest time. When the AP intelligence pipeline (which
+ *  runs downstream once attachments are analysed) has produced an
+ *  actionable `invoiceSummary.workflowState`, the presentation
+ *  layer promotes that state to the headline chip / eyebrow /
+ *  Classification row, while preserving the original classifier
+ *  decision as provenance meta. NO DB write. NO changes to
+ *  reclassifyFromCanonicalAnalysis. */
 export function toRealReviewData({
   detail, linked, clubTimezone, nowIso,
 }: AdapterInput): RealReviewData {
   const invoice = buildInvoice(linked);
+  const actionableFromAp =
+    !!linked?.invoiceSummary?.workflowState &&
+    ACTIONABLE_AP_WORKFLOW_STATES.has(linked.invoiceSummary.workflowState);
   const receivedIso = detail.display.receivedAt || detail.createdAt;
   const detectedLabel = formatFeedTimestamp(receivedIso, clubTimezone, nowIso);
   const header: ReviewHeaderVM = {
-    eyebrow: statusEyebrow(detail.status),
+    eyebrow: statusEyebrow(detail.status, actionableFromAp),
     title: detail.display.subject || detail.display.sender || "Untitled Work Intake",
     detectedAtLabel: detectedLabel ? `Detected ${detectedLabel.toLowerCase()}` : "",
-    metaChips: metaChips(detail, invoice),
+    metaChips: metaChips(detail, invoice, actionableFromAp),
   };
   return {
     workIntakeItemId: detail.id,
     header,
     invoice,
     document: buildDocument(detail),
-    context: buildContext(detail, invoice),
+    context: buildContext(detail, invoice, actionableFromAp),
     workflow: buildWorkflow(detail.status),
     spectre: buildSpectre(detail, linked),
   };

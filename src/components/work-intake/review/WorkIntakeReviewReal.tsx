@@ -12,6 +12,7 @@
 
 import Link from "next/link";
 import type { RealReviewData } from "@/lib/work-intake/review-detail-view-model";
+import DocumentPdfPreview from "./DocumentPdfPreview";
 
 function BackArrow() {
   return (
@@ -163,43 +164,66 @@ function Tabs() {
 
 function DocumentPreview({ data }: { data: RealReviewData }) {
   const d = data.document;
+  const pdf = d.primaryPdf;
   return (
     <div className="wi-review-doc-wrap">
-      <article
-        className="wi-review-doc"
-        aria-label="Work Intake document"
-        style={{ minHeight: 220, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 24 }}
-      >
-        {d.hasAttachments ? (
-          <>
-            <div style={{ fontSize: 32, marginBottom: 8, color: "var(--wi-ink-3)" }}>
-              <DocIcon />
-            </div>
-            <div style={{ fontSize: 12, fontWeight: 500, color: "var(--wi-ink)", marginBottom: 4 }}>
-              {d.firstAttachmentFilename ?? "Attached document"}
-            </div>
-            {d.attachmentCount > 1 && (
-              <div style={{ fontSize: 10, color: "var(--wi-ink-3)" }}>
-                +{d.attachmentCount - 1} more attachment{d.attachmentCount - 1 === 1 ? "" : "s"}
+      {pdf ? (
+        // WI-2B.2 — real PDF served by /api/documents/{id}/preview,
+        // rendered inside the accepted .wi-review-doc viewport via the
+        // blob-fetch pattern (X-Frame-Options: DENY blocks a direct
+        // iframe src=/api/documents/... in Chrome; the middleware CSP
+        // already permits blob: framing).
+        <DocumentPdfPreview
+          ingestedDocumentId={pdf.ingestedDocumentId}
+          filename={pdf.filename}
+        />
+      ) : (
+        <article
+          className="wi-review-doc"
+          aria-label="Work Intake document"
+          style={{ minHeight: 220, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 24 }}
+        >
+          {d.hasAttachments ? (
+            <>
+              <div style={{ fontSize: 32, marginBottom: 8, color: "var(--wi-ink-3)" }}>
+                <DocIcon />
               </div>
-            )}
-            <div style={{ fontSize: 9, color: "var(--wi-ink-3)", marginTop: 12, maxWidth: 240 }}>
-              Full document preview available in the Documents tab (coming soon).
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 32, marginBottom: 8, color: "var(--wi-ink-3)" }}>
-              <DocIcon />
-            </div>
-            <div style={{ fontSize: 11, color: "var(--wi-ink-3)" }}>
-              No document attached to this Work Intake item.
-            </div>
-          </>
-        )}
-      </article>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--wi-ink)", marginBottom: 4 }}>
+                {d.firstAttachmentFilename ?? "Attached document"}
+              </div>
+              {d.attachmentCount > 1 && (
+                <div style={{ fontSize: 10, color: "var(--wi-ink-3)" }}>
+                  +{d.attachmentCount - 1} more attachment{d.attachmentCount - 1 === 1 ? "" : "s"}
+                </div>
+              )}
+              <div style={{ fontSize: 9, color: "var(--wi-ink-3)", marginTop: 12, maxWidth: 240 }}>
+                Attachment is not yet available for inline preview.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 32, marginBottom: 8, color: "var(--wi-ink-3)" }}>
+                <DocIcon />
+              </div>
+              <div style={{ fontSize: 11, color: "var(--wi-ink-3)" }}>
+                No document attached to this Work Intake item.
+              </div>
+            </>
+          )}
+        </article>
+      )}
       <div className="wi-review-doc-toolbar">
-        {d.webLink ? (
+        {pdf ? (
+          <a
+            href={`/api/documents/${encodeURIComponent(pdf.ingestedDocumentId)}/download`}
+            className="wi-review-doc-link"
+            target="_blank"
+            rel="noreferrer"
+            data-testid="wi-review-doc-download"
+          >
+            Open full document
+          </a>
+        ) : d.webLink ? (
           <a href={d.webLink} className="wi-review-doc-link" target="_blank" rel="noreferrer">
             Open in Outlook
           </a>
@@ -208,7 +232,7 @@ function DocumentPreview({ data }: { data: RealReviewData }) {
         )}
         <div className="wi-review-doc-pager">
           <span className="wi-review-doc-page">
-            {d.attachmentCount > 0 ? `1 / ${d.attachmentCount}` : "—"}
+            {pdf ? `1 / ${d.attachmentCount}` : d.attachmentCount > 0 ? `1 / ${d.attachmentCount}` : "—"}
           </span>
         </div>
       </div>
