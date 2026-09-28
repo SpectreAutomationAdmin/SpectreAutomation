@@ -30,17 +30,54 @@ interface AdapterContext {
   nowIso?: string;        // override for tests; defaults to Date.now()
 }
 
-/** Map the canonical WorkItem.state (+ workDomain + status) to the
- *  four presentation buckets used by the accepted feed row.
+/** WI-2C — the set of AP `invoiceSummary.workflowState` values that
+ *  indicate action is required. Mirrors the same set the Review
+ *  page uses in `review-detail-view-model.ts::ACTIONABLE_AP_WORKFLOW_STATES`.
+ *  Kept as a duplicate constant here so this adapter has no dependency
+ *  on the Review view-model (they can evolve independently but MUST
+ *  stay in sync; the unit tests assert exact equality). */
+const ACTIONABLE_AP_WORKFLOW_STATES = new Set([
+  "READY_FOR_APPROVAL",
+  "VENDOR_MATCH_REQUIRED",
+  "MISSING_INFORMATION",
+  "NEEDS_JUDGMENT",
+  "POSSIBLE_DUPLICATE",
+  "CHART_OF_ACCOUNTS_REQUIRED",
+]);
+
+/** WI-2C — has the AP intelligence pipeline resolved this item as
+ *  an actionable invoice? True whenever `linkedIntelligence.invoiceSummary`
+ *  exists AND its workflow state is in the actionable set. This is
+ *  the single source of truth for the WI-2C precedence rule
+ *  (`resolved AP intelligence overrides email classification`). */
+function hasActionableApIntelligence(item: WorkItem): boolean {
+  const state = item.linkedIntelligence?.invoiceSummary?.workflowState;
+  if (!state) return false;
+  return ACTIONABLE_AP_WORKFLOW_STATES.has(state);
+}
+
+/** Map the canonical WorkItem.state (+ workDomain + linked AP
+ *  intelligence) to the presentation buckets used by the accepted
+ *  feed row.
  *
- *  These are the ONLY strings the feed row renders — no UI-only
- *  inference (e.g. title.includes(...)) is allowed. When state or
- *  domain is missing/unknown, we fall through to the neutral FYI
- *  tone rather than fabricating a stronger claim. */
+ *  WI-2C precedence rule: when the AP intelligence pipeline has
+ *  resolved a linked invoice into an actionable workflow state, that
+ *  state overrides the email classifier's provisional state. The
+ *  persisted `WorkIntakeItem.status` is NOT mutated — this is a
+ *  presentation-only override, identical in spirit to the Review
+ *  page's `statusEyebrow` override. */
 function mapStatus(item: WorkItem): { label: string; tone: WiStatusTone } {
   // Judgment items always take precedence — the WorkItem loader has
   // already applied the founder's judgment/approval bucketing rules.
   if (item.state === "judgment") {
+    return { label: "Requires your judgment", tone: "judgment" };
+  }
+  // WI-2C — if the item's persisted state is "info" but the AP
+  // intelligence has resolved an actionable workflow, promote it.
+  // This is the exact defect the founder reported for PAY NOW:
+  // persisted classification stayed INFORMATIONAL, but
+  // invoiceSummary.workflowState = VENDOR_MATCH_REQUIRED.
+  if (item.state === "info" && hasActionableApIntelligence(item)) {
     return { label: "Requires your judgment", tone: "judgment" };
   }
   if (item.state === "approval") {
@@ -62,13 +99,24 @@ function mapStatus(item: WorkItem): { label: string; tone: WiStatusTone } {
 }
 
 /** Map WorkIntakeItem.workDomain to the row-icon vocabulary defined
- *  by the accepted WI-1 feed. Never derive icon from display text. */
+ *  by the accepted WI-1 feed. Never derive icon from display text.
+ *
+ *  WI-2C — the AP invoice glyph is authoritative for EVERY item the
+ *  AP intelligence pipeline has resolved as an invoice, regardless
+ *  of the email classifier's original label. The prior split (based
+ *  on `classification === "AP_INVOICE_REVIEW"`) meant two AP
+ *  invoices in the same feed could get different icons based on
+ *  whether the row happened to be an AP-review child or an email-
+ *  derived parent — semantically incoherent. */
 function mapIcon(item: WorkItem): WiIcon {
   const d = item.workDomain;
   if (d === "ACCOUNTS_PAYABLE") {
-    // The accepted feed uses the "invoice" glyph for AP invoice
-    // reviews (folder/document form) and "ap" for statement/vendor
-    // consolidation reviews (mailbox/inbox form).
+    // WI-2C precedence: resolved AP invoice intelligence wins over
+    // the email classifier. Any item that has `invoiceSummary`
+    // becomes the invoice glyph, so PAY NOW (email-derived) and
+    // "Vendor reports an unpaid invoice" (AP_INVOICE_REVIEW child)
+    // now share the same icon.
+    if (item.linkedIntelligence?.invoiceSummary) return "invoice";
     if (item.classification === "AP_INVOICE_REVIEW") return "invoice";
     return "ap";
   }
@@ -82,26 +130,134 @@ function mapIcon(item: WorkItem): WiIcon {
   return "chart";
 }
 
-/** Compose the row's second-line meta string ("Vendor · $Amount" or
- *  "Sender name"). Never invent an amount when none is present. */
+/** WI-2C — format a Decimal-safe amount + currency string into a
+ *  presentation label (e.g. `$778.16 CAD`). No fabrication when the
+ *  extractor didn't capture either. */
+function formatInvoiceAmount(gross: { amount: string | null; currency: string | null } | undefined): string | null {
+  if (!gross) return null;
+  const { amount, currency } = gross;
+  if (!amount) return null;
+  const parsed = Number(amount);
+  if (Number.isNaN(parsed)) return currency ? `${amount} ${currency}` : amount;
+  const money = `$${parsed.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return currency ? `${money} ${currency}` : money;
+}
+
+/** WI-2C — vendor label from AP intelligence (extracted vendor OR
+ *  matched Spectre vendor), or null when neither is present. */
+function vendorLabel(inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"]): string | null {
+  if (!inv) return null;
+  return inv.extractedVendor?.name ?? inv.vendorMatch?.matchedName ?? null;
+}
+
+/** WI-2C — GL account label (e.g. `6071 – Subscriptions`). */
+function glLabel(inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"]): string | null {
+  if (!inv?.category) return null;
+  const { glAccountNumber, glAccountName } = inv.category;
+  if (glAccountNumber && glAccountName) return `${glAccountNumber} – ${glAccountName}`;
+  return glAccountNumber ?? glAccountName ?? null;
+}
+
+/** Compose the row's second-line meta string.
+ *
+ *  WI-2C — for AP items with resolved intelligence, this becomes
+ *  `Vendor · $Amount CUR · GL number – GL name`. Otherwise falls
+ *  back to the WorkItem loader's own sender/context string. */
 function composeMetaLine(item: WorkItem): string {
-  // Prefer the loader's sender.ctx (which for AP items carries the
-  // vendor + amount) so we don't duplicate the domain's own
-  // presentation logic.
+  const inv = item.linkedIntelligence?.invoiceSummary;
+  if (inv) {
+    const parts: string[] = [];
+    const vendor = vendorLabel(inv);
+    if (vendor) parts.push(vendor);
+    const amt = formatInvoiceAmount(inv.gross);
+    if (amt) parts.push(amt);
+    const gl = glLabel(inv);
+    if (gl) parts.push(gl);
+    if (parts.length > 0) return parts.join(" · ");
+  }
   const parts: string[] = [];
   if (item.sender.from) parts.push(item.sender.from);
   if (item.sender.ctx) parts.push(item.sender.ctx);
   return parts.join(" · ");
 }
 
-/** Compose the row's third-line description. Prefer the domain's own
- *  synopsisText (deterministic invoice-analysis pipeline output);
- *  fall back to the raw work prose. */
+/** WI-2C — invoice-purpose commentary. One concise sentence
+ *  answering "what am I actually paying for?" Composed strictly from
+ *  extractor evidence — vendor + category + top line-item
+ *  descriptions. No fabrication, no invented facts. */
+function composeApPurposeCommentary(
+  inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"],
+): string | null {
+  if (!inv) return null;
+  const vendor = vendorLabel(inv);
+  const categoryLabel = inv.category?.label ?? inv.category?.purposeLabel ?? null;
+  const items = (inv.lineItems ?? []).map((li) => li.description).filter(Boolean).slice(0, 4);
+  if (items.length > 0 && vendor && categoryLabel) {
+    // "Monthly Microsoft subscription for Microsoft 365 Business Standard,
+    //  Microsoft 365 Business Basic, Microsoft 365 Business Premium."
+    const productList = items.length === 1
+      ? items[0]
+      : items.length === 2
+        ? `${items[0]} and ${items[1]}`
+        : `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+    return `${categoryLabel} from ${vendor}: ${productList}.`;
+  }
+  if (vendor && categoryLabel) return `${categoryLabel} from ${vendor}.`;
+  if (items.length > 0) {
+    return `Invoice covers ${items.slice(0, 3).join(", ")}.`;
+  }
+  return null;
+}
+
+/** WI-2C — financial-context commentary. TRUTHFUL: uses only signals
+ *  the extractor already computed. No budget query, no history
+ *  fabrication. */
+function composeApFinancialContext(
+  inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"],
+): string | null {
+  if (!inv) return null;
+  // WI-2C — vendor cadence is the only cross-invoice signal already
+  // computed by the AP intelligence pipeline. `invoiceCadenceThisQuarter`
+  // on ApInvoiceCardIntelligence is `number | null` — the count of
+  // PRIOR invoices from the matched vendor this quarter. It provides
+  // a truthful "this is the Nth invoice this quarter" observation.
+  // Only meaningful when the vendor was matched to a Spectre record.
+  const priorCount = inv.invoiceCadenceThisQuarter;
+  if (typeof priorCount === "number" && priorCount >= 0) {
+    if (priorCount === 0) {
+      return "First invoice from this vendor this quarter.";
+    }
+    const nth = ordinal(priorCount + 1);
+    return `${nth} invoice from this vendor this quarter.`;
+  }
+  const vendorState = inv.vendorMatch?.state;
+  if (vendorState === "NOT_FOUND") {
+    return "First comparable invoice found — no historical comparison available.";
+  }
+  return "Historical comparison not yet available.";
+}
+
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+/** Compose the row's third-line description.
+ *
+ *  WI-2C precedence:
+ *    1. AP purpose commentary (when linkedIntelligence has an invoice)
+ *    2. Domain synopsisText (deterministic invoice-analysis text)
+ *    3. Raw work prose
+ *    4. Domain recommendation */
 function composeDescription(item: WorkItem): string {
+  const inv = item.linkedIntelligence?.invoiceSummary;
+  if (inv) {
+    const purpose = composeApPurposeCommentary(inv);
+    if (purpose) return purpose;
+  }
   if (item.synopsisText) return item.synopsisText;
   if (item.work) return item.work;
-  // A recommendation is a domain-produced suggestion, not chatter —
-  // safe to surface when nothing else is available.
   return item.recommendation ?? "";
 }
 
@@ -163,6 +319,13 @@ function reviewHref(item: WorkItem): string | undefined {
 export function toFeedRow(item: WorkItem, ctx: AdapterContext): WiFeedRow {
   const iso = item.sortTimestamp ?? item.timestamp ?? new Date().toISOString();
   const status = mapStatus(item);
+  const inv = item.linkedIntelligence?.invoiceSummary;
+  // WI-2C — when AP intelligence resolved an invoice, "Review" is
+  // the correct action label regardless of the base state (which may
+  // still say "info" from the email classifier).
+  const treatAsAp = inv != null;
+  const baseIsView = item.state === "info" || item.state === "comm";
+  const actionLabel: "Review" | "View" = baseIsView && !treatAsAp ? "View" : "Review";
   return {
     id: item.id,
     icon: mapIcon(item),
@@ -172,12 +335,9 @@ export function toFeedRow(item: WorkItem, ctx: AdapterContext): WiFeedRow {
     status,
     timestamp: formatFeedTimestamp(iso, ctx.clubTimezone, ctx.nowIso),
     attachments: composeAttachments(item),
-    // Assignee/participant avatars are intentionally omitted in
-    // WI-2B — the WorkIntakeItem domain has a single ownerUserId,
-    // not a participant collection. The row remains valid; the
-    // renderer treats `participants` as optional.
-    actionLabel: item.state === "info" || item.state === "comm" ? "View" : "Review",
+    actionLabel,
     reviewHref: reviewHref(item),
+    financialContext: inv ? composeApFinancialContext(inv) ?? undefined : undefined,
   };
 }
 

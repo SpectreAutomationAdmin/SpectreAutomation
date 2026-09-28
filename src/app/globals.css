@@ -5671,6 +5671,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 .wi-feed-row-meta { font-size: 12px; color: var(--wi-ink-2); font-weight: 500; margin-bottom: 4px; }
 .wi-feed-row-desc { font-size: 12px; color: var(--wi-ink-3); line-height: 17px; margin: 0; max-width: 60ch; }
+/* WI-2C — one-line financial-context observation. Smaller, more
+   muted, italic — reads as intelligence commentary rather than
+   body copy. */
+.wi-feed-row-ctx {
+  font-size: 11px; color: var(--wi-ink-3); line-height: 15px;
+  margin: 4px 0 0; max-width: 60ch; font-style: italic;
+  letter-spacing: -0.001em;
+}
 
 .wi-feed-row-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding-top: 2px; }
 .wi-feed-row-time { font-size: 12px; color: var(--wi-ink-3); font-variant-numeric: tabular-nums; }

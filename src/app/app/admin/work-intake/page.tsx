@@ -20,8 +20,15 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 import { getActiveClubId } from "@/lib/active-club";
+import { prisma } from "@/lib/prisma";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import { loadMissionControlSnapshot } from "@/lib/mission-control";
+import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
+import { greetingWordForInstant } from "@/lib/mission-control/local-time";
+import { getCurrentWeather } from "@/lib/reporting/weather";
+import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
+import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
+import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
 import WorkIntakeScaffold from "@/components/work-intake/scaffold/WorkIntakeScaffold";
 import { toFeedRows } from "@/lib/work-intake/feed-view-model";
 import { toRailData } from "@/lib/work-intake/rail-view-model";
@@ -107,12 +114,69 @@ export default async function WorkIntakePage() {
     commitments: snapshot.todaysCommitments,
   });
 
+  // WI-2C — live banner. Same helpers Mission Control (and the
+  // Employee Portal for weather) already use — no parallel
+  // implementation.
+  const firstName = user.name?.split(" ")[0] ?? "there";
+  const greeting = greetingWordForInstant(snapshot.syncedAt, clubTimezone);
+  const dateLabel = snapshot.syncedAt.toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric",
+    timeZone: clubTimezone,
+  });
+
+  // WI-2C — live weather via the canonical shared weather service.
+  // Coulee Ridge → Drumheller already resolved by the existing
+  // `resolveClubLocation` fingerprint in
+  // src/lib/reporting/weather/club-location.ts. Failure never
+  // blocks the page (§16).
+  const club = await prisma.club.findUnique({
+    where: { id: clubId },
+    select: { name: true, slug: true, address: true, region: true },
+  });
+  const weatherResult = club
+    ? await getCurrentWeather({
+        club: {
+          name: club.name,
+          slug: club.slug,
+          address: club.address,
+          region: club.region,
+        },
+      }).catch(() => null)
+    : null;
+  const weather = weatherResult?.observation ?? null;
+
+  // WI-2C — reuse Mission Control's proven FEED SYNCED / refresh
+  // triad. Same endpoint (/api/mission-control/refresh-mailbox), same
+  // debounce, same silent-revalidation via router.refresh().
+  const feedSyncedStatus = await loadFeedSyncedStatus(clubId, principal.id);
+  const feedSyncedSlot = (
+    <>
+      <FeedSyncedStatusPill status={feedSyncedStatus} />
+      <MissionControlLiveRefresh />
+    </>
+  );
+
+  const workItemIds = snapshot.workItems.map((w) => w.id).sort();
+
   return (
     <WorkIntakeScaffold
       heroConfig={heroConfig}
       rows={rows}
       kpis={kpis}
       rail={rail}
+      dateLabel={dateLabel}
+      greeting={greeting}
+      firstName={firstName}
+      weather={weather}
+      feedSyncedSlot={feedSyncedSlot}
+      refreshProvider={(children) => (
+        <LiveRefreshProvider
+          initialWorkItemIds={workItemIds}
+          initialSyncedAt={snapshot.syncedAt.toISOString()}
+        >
+          {children}
+        </LiveRefreshProvider>
+      )}
     />
   );
 }

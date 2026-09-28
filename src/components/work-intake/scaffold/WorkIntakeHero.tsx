@@ -1,13 +1,46 @@
 // WI-1 — photographic hero (§9 / §10).
-// FEED SYNCED pill is intentionally STATIC per §10 & §18.
-// WI-1D — HeroConfig lets a tenant admin substitute the photograph
-// and control its focal point without changing the fixed hero window.
+// WI-2C (2026-09-28) — hero is now live. Accepts live date label +
+// time-aware greeting + first name + weather observation + feed-sync
+// pill. Existing hero geometry and photograph handling unchanged.
+
+import type { CurrentWeatherObservation } from "@/lib/reporting/weather";
+import WeatherIcon from "@/components/employee/WeatherIcon";
+import type { ReactNode } from "react";
 
 export type HeroConfig =
   | { kind: "default" }
   | { kind: "tenant"; url: string; focalX: number; focalY: number; zoom: number };
 
-export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {}) {
+interface Props {
+  config?: HeroConfig;
+  /** WI-2C — live date label already formatted for the club timezone
+   *  (e.g. "MONDAY, SEPTEMBER 28"). Falls back to the scaffold copy. */
+  dateLabel?: string;
+  /** WI-2C — time-aware greeting from mission-control/local-time
+   *  (e.g. "Good morning"). Falls back to "Good morning". */
+  greeting?: string;
+  /** WI-2C — authenticated user's first name. Falls back to
+   *  "there". */
+  firstName?: string;
+  /** WI-2C — live weather observation for the club location, or
+   *  null when the provider was unavailable. When null, the pill
+   *  quietly hides — weather never blocks the hero from rendering. */
+  weather?: CurrentWeatherObservation | null;
+  /** WI-2C — the FEED SYNCED / refresh region. Server passes the
+   *  Mission Control pill + refresh trigger as ReactNode(s) so the
+   *  hero has no coupling to those client components. When omitted
+   *  the hero renders no sync UI (dev preview only). */
+  feedSyncedSlot?: ReactNode;
+}
+
+export default function WorkIntakeHero({
+  config,
+  dateLabel,
+  greeting,
+  firstName,
+  weather,
+  feedSyncedSlot,
+}: Props = {}) {
   const cfg: HeroConfig = config ?? { kind: "default" };
   const isTenant = cfg.kind === "tenant";
   const imgStyle: React.CSSProperties | undefined = isTenant
@@ -17,6 +50,14 @@ export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {})
         transformOrigin: `${cfg.focalX}% ${cfg.focalY}%`,
       }
     : undefined;
+  const eyebrow = dateLabel && dateLabel.trim().length > 0
+    ? dateLabel.toUpperCase()
+    : "MONDAY, SEPTEMBER 28";
+  const greetingText = `${greeting ?? "Good morning"}, ${firstName ?? "there"}.`;
+  const temperatureText = weather
+    ? `${Math.round(weather.temperature)}°${weather.temperatureUnit === "F" ? "F" : ""}`
+    : null;
+  const conditionText = weather ? conditionLabel(weather.condition, weather.isDay) : null;
   return (
     <section className="wi-hero" aria-label="Work Intake hero">
       {isTenant ? (
@@ -51,39 +92,40 @@ export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {})
       <div className="wi-hero-overlay" aria-hidden="true" />
       <div className="wi-hero-content">
         <div className="wi-hero-primary">
-          <div className="wi-hero-eyebrow">MONDAY, SEPTEMBER 28</div>
-          <h1 className="wi-hero-greeting">Good morning, Chris.</h1>
+          <div className="wi-hero-eyebrow" data-testid="wi-hero-eyebrow">{eyebrow}</div>
+          <h1 className="wi-hero-greeting" data-testid="wi-hero-greeting">{greetingText}</h1>
           <p className="wi-hero-subtitle">A clear day to keep the Club moving forward.</p>
-          <div className="wi-hero-sync" aria-label="Feed sync status (scaffold)">
-            <span className="wi-hero-sync-label">FEED SYNCED</span>
-            {/* WI-1F — larger refresh glyph (15 px) with a heavier
-                1.75 px stroke for legibility over the photograph. */}
-            <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M3 8a5 5 0 0 1 8.5-3.5M13 8a5 5 0 0 1-8.5 3.5M12 3v3H9M4 13v-3h3"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
+          {/* WI-2C — FEED SYNCED slot. The page composes the Mission
+             Control pill + refresh trigger and passes them in. When
+             absent (dev preview), the hero renders no sync UI. */}
+          {feedSyncedSlot && (
+            <div className="wi-hero-sync" data-testid="wi-hero-sync">
+              {feedSyncedSlot}
+            </div>
+          )}
         </div>
         <div className="wi-hero-side">
-          <div className="wi-hero-weather">
-            <svg className="wi-hero-weather-icon" width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.5" />
-              <path
-                d="M12 3v2M12 19v2M5 12H3M21 12h-2M6 6l1.5 1.5M16.5 16.5L18 18M18 6l-1.5 1.5M7.5 16.5L6 18"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-            <div className="wi-hero-weather-temp">14°</div>
-            <div className="wi-hero-weather-place">Calgary, AB</div>
-            <div className="wi-hero-weather-cond">Mostly Sunny</div>
+          <div className="wi-hero-weather" data-testid="wi-hero-weather">
+            {weather ? (
+              <>
+                <div className="wi-hero-weather-icon" style={{ color: "currentColor" }}>
+                  <WeatherIcon condition={weather.condition} isDay={weather.isDay} size={28} />
+                </div>
+                <div className="wi-hero-weather-temp">{temperatureText}</div>
+                <div className="wi-hero-weather-place" data-testid="wi-hero-weather-place">
+                  {weather.locationLabel}
+                </div>
+                {conditionText && (
+                  <div className="wi-hero-weather-cond">{conditionText}</div>
+                )}
+              </>
+            ) : (
+              // Failure state (§16): quiet fallback. Still shows the
+              // location label if we know it; never blocks the hero.
+              <div className="wi-hero-weather-place" data-testid="wi-hero-weather-place">
+                Weather unavailable
+              </div>
+            )}
           </div>
           <p className="wi-hero-support">
             The details run quietly<br />
@@ -95,4 +137,22 @@ export default function WorkIntakeHero({ config }: { config?: HeroConfig } = {})
       </div>
     </section>
   );
+}
+
+/** WI-2C — condition-enum → readable label. Mirrors the sanitized
+ *  vocabulary the shared weather service already emits. Never
+ *  fabricates a value the observation didn't state. */
+function conditionLabel(cond: CurrentWeatherObservation["condition"], isDay: boolean): string {
+  switch (cond) {
+    case "clear":         return isDay ? "Clear" : "Clear (night)";
+    case "partly-cloudy": return "Partly cloudy";
+    case "cloudy":        return "Cloudy";
+    case "fog":           return "Fog";
+    case "drizzle":       return "Drizzle";
+    case "rain":          return "Rain";
+    case "showers":       return "Showers";
+    case "snow":          return "Snow";
+    case "thunderstorm":  return "Thunderstorm";
+    default:              return "";
+  }
 }

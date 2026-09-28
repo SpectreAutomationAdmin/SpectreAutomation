@@ -30,6 +30,13 @@ export interface WiFeedRow {
    *  the review page. Non-linked rows keep the inert `<button>` from
    *  the scaffold. Only row-1 (Capital Invoice) links today. */
   reviewHref?: string;
+  /** WI-2C — one-line financial context observation ("Historical
+   *  comparison not yet available." / "3rd invoice from this vendor
+   *  this quarter." / "First comparable invoice found."). Rendered
+   *  in a muted small type below the description on AP invoice rows.
+   *  Never fabricated: only populated when the extractor already
+   *  emitted vendor cadence or vendor-match signals. */
+  financialContext?: string;
 }
 
 export const WI_FEED_ROWS: WiFeedRow[] = [

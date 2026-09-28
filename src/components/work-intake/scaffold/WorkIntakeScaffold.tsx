@@ -5,6 +5,8 @@
 // and are used only when a caller omits a prop (dev/local-preview
 // convenience only — production pages always pass real data).
 
+import type { ReactNode } from "react";
+import type { CurrentWeatherObservation } from "@/lib/reporting/weather";
 import WorkIntakeHero, { type HeroConfig } from "./WorkIntakeHero";
 import WorkIntakeKpiStrip from "./WorkIntakeKpiStrip";
 import WorkIntakeFeedHead from "./WorkIntakeFeedHead";
@@ -15,25 +17,44 @@ import { WI_FEED_ROWS, WI_KPIS, WI_RAIL } from "./scaffold-data";
 
 interface Props {
   heroConfig?: HeroConfig;
-  /** WI-2B — real feed rows adapted from canonical WorkIntakeItems.
-   *  When omitted, falls back to the WI-1 scaffold fixture (dev-only). */
   rows?: WiFeedRow[];
-  /** WI-2B — real KPI counts computed against canonical WorkIntakeItems. */
   kpis?: WiKpi[];
-  /** WI-2B — right-rail data adapted from the canonical snapshot's
-   *  Position + Insight + TodayCommitments. */
   rail?: WiRailData;
+  /** WI-2C — live banner props. */
+  dateLabel?: string;
+  greeting?: string;
+  firstName?: string;
+  weather?: CurrentWeatherObservation | null;
+  /** WI-2C — Mission Control refresh triad rendered inside the hero
+   *  (FeedSyncedStatusPill + MissionControlLiveRefresh trigger). The
+   *  page composes them so this presentational scaffold stays
+   *  server-safe. */
+  feedSyncedSlot?: ReactNode;
+  /** WI-2C — LiveRefreshProvider wrapper. When present, wraps the
+   *  entire scaffold subtree so nested client components share the
+   *  same refresh context. */
+  refreshProvider?: (children: ReactNode) => ReactNode;
 }
 
-export default function WorkIntakeScaffold({ heroConfig, rows, kpis, rail }: Props = {}) {
+export default function WorkIntakeScaffold({
+  heroConfig, rows, kpis, rail,
+  dateLabel, greeting, firstName, weather, feedSyncedSlot, refreshProvider,
+}: Props = {}) {
   const feedRows = rows ?? WI_FEED_ROWS;
   const kpiCards = kpis ?? WI_KPIS;
   const railData = rail ?? WI_RAIL;
-  return (
+  const body = (
     <div className="wi-root">
       <div className="wi-grid">
         <div className="wi-main">
-          <WorkIntakeHero config={heroConfig ?? { kind: "default" }} />
+          <WorkIntakeHero
+            config={heroConfig ?? { kind: "default" }}
+            dateLabel={dateLabel}
+            greeting={greeting}
+            firstName={firstName}
+            weather={weather}
+            feedSyncedSlot={feedSyncedSlot}
+          />
           <WorkIntakeKpiStrip cards={kpiCards} />
           <div className="wi-feed-card">
             <WorkIntakeFeedHead activeTab="my-feed" />
@@ -46,4 +67,5 @@ export default function WorkIntakeScaffold({ heroConfig, rows, kpis, rail }: Pro
       </div>
     </div>
   );
+  return refreshProvider ? refreshProvider(body) : body;
 }

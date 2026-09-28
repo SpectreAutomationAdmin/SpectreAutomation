@@ -110,7 +110,10 @@ export default function WorkIntakeFeed({ rows }: { rows: WiFeedRow[] }) {
           <div className="wi-feed-row-body">
             <h3 className="wi-feed-row-title">{row.title}</h3>
             <div className="wi-feed-row-meta">{row.metaLine}</div>
-            <p className="wi-feed-row-desc">{row.description}</p>
+            {row.description && <p className="wi-feed-row-desc">{row.description}</p>}
+            {row.financialContext && (
+              <p className="wi-feed-row-ctx" data-testid="wi-feed-row-ctx">{row.financialContext}</p>
+            )}
           </div>
           <div className="wi-feed-row-status">
             <StatusBadge label={row.status.label} tone={row.status.tone} />
