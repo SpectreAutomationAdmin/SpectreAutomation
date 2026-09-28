@@ -23,12 +23,10 @@ import { getActiveClubId } from "@/lib/active-club";
 import { prisma } from "@/lib/prisma";
 import { getClubMedia, getClubMediaFraming } from "@/lib/club/media";
 import { loadMissionControlSnapshot } from "@/lib/mission-control";
-import { loadFeedSyncedStatus } from "@/lib/mission-control/feed-synced-status";
 import { greetingWordForInstant } from "@/lib/mission-control/local-time";
 import { getCurrentWeather } from "@/lib/reporting/weather";
 import { LiveRefreshProvider } from "@/components/mission-control/LiveRefreshContext";
-import FeedSyncedStatusPill from "@/components/mission-control/FeedSyncedStatusPill";
-import MissionControlLiveRefresh from "@/components/mission-control/MissionControlLiveRefresh";
+import WorkIntakeFeedSyncPill from "@/components/work-intake/scaffold/WorkIntakeFeedSyncPill";
 import WorkIntakeScaffold from "@/components/work-intake/scaffold/WorkIntakeScaffold";
 import { toFeedRows } from "@/lib/work-intake/feed-view-model";
 import { toRailData } from "@/lib/work-intake/rail-view-model";
@@ -145,16 +143,12 @@ export default async function WorkIntakePage() {
     : null;
   const weather = weatherResult?.observation ?? null;
 
-  // WI-2C — reuse Mission Control's proven FEED SYNCED / refresh
-  // triad. Same endpoint (/api/mission-control/refresh-mailbox), same
-  // debounce, same silent-revalidation via router.refresh().
-  const feedSyncedStatus = await loadFeedSyncedStatus(clubId, principal.id);
-  const feedSyncedSlot = (
-    <>
-      <FeedSyncedStatusPill status={feedSyncedStatus} />
-      <MissionControlLiveRefresh />
-    </>
-  );
+  // WI-2C.1 — Work Intake-styled FEED SYNCED pill. Uses the SAME
+  // Mission Control refresh functionality via `useLiveRefresh()`
+  // (LiveRefreshProvider below), but presents in the pre-WI-2C
+  // compact hero treatment ("FEED SYNCED  ↻") rather than Mission
+  // Control's larger green capsule. Presentation != functionality.
+  const feedSyncedSlot = <WorkIntakeFeedSyncPill />;
 
   const workItemIds = snapshot.workItems.map((w) => w.id).sort();
 

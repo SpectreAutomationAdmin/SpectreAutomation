@@ -5479,6 +5479,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-hero-sync-dot { display: none; }
 .wi-hero-sync-label { color: inherit; }
 .wi-hero-sync svg { color: inherit; opacity: 0.90; width: 15px; height: 15px; }
+/* WI-2C.1 — the refresh glyph itself is the interactive control.
+   Small, understated, clickable. Hover / active feedback stays
+   subtle to preserve the pre-WI-2C compact treatment. */
+.wi-hero-sync-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px; margin: -2px;
+  background: transparent; border: none; color: inherit;
+  cursor: pointer; opacity: 0.90;
+  transition: opacity 120ms ease-in-out;
+}
+.wi-hero-sync-btn:hover { opacity: 1; }
+.wi-hero-sync-btn:focus-visible { outline: 1px solid rgba(247, 242, 230, 0.5); outline-offset: 2px; border-radius: 2px; }
+.wi-hero-sync-btn:disabled { cursor: default; opacity: 0.70; }
+@keyframes wi-hero-sync-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 /* WI-1F — right hero overlay is one column right-anchored to the
      hero's right padding edge, mirroring the greeting's inset on
@@ -5507,13 +5524,17 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-hero-weather-place { grid-row: 2; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.82); letter-spacing: 0.02em; line-height: 15px; text-align: right; }
 .wi-hero-weather-cond { grid-row: 3; grid-column: 2; font-size: 11px; color: rgba(247, 242, 230, 0.62); line-height: 14px; text-align: right; }
 .wi-hero-side::before {
-  /* WI-1C §10 — thin restrained divider between weather and copy. */
+  /* WI-1C §10 — thin restrained divider between weather and copy.
+     WI-2C.1 — narrowed to belong visually to the weather / quote
+     column only (was 210px which read as a rule extending into the
+     hero composition). Still right-aligned to the same right inset
+     the weather + support quote share. */
   content: "";
   display: block;
   order: 1;
   height: 1px;
   background: rgba(247, 242, 230, 0.22);
-  width: 210px;
+  width: 130px;
   justify-self: end;
   margin: 0;
 }

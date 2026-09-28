@@ -161,8 +161,10 @@ function glLabel(inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummar
 /** Compose the row's second-line meta string.
  *
  *  WI-2C — for AP items with resolved intelligence, this becomes
- *  `Vendor · $Amount CUR · GL number – GL name`. Otherwise falls
- *  back to the WorkItem loader's own sender/context string. */
+ *  `Vendor · $Amount CUR · GL number – GL name`.
+ *  WI-2C.1 — GL is now expressed in the TITLE (`AP Invoice · {category}`),
+ *  so the subtitle line is compact `Vendor · Total` only. Otherwise
+ *  falls back to the WorkItem loader's own sender/context string. */
 function composeMetaLine(item: WorkItem): string {
   const inv = item.linkedIntelligence?.invoiceSummary;
   if (inv) {
@@ -171,14 +173,36 @@ function composeMetaLine(item: WorkItem): string {
     if (vendor) parts.push(vendor);
     const amt = formatInvoiceAmount(inv.gross);
     if (amt) parts.push(amt);
-    const gl = glLabel(inv);
-    if (gl) parts.push(gl);
     if (parts.length > 0) return parts.join(" · ");
   }
   const parts: string[] = [];
   if (item.sender.from) parts.push(item.sender.from);
   if (item.sender.ctx) parts.push(item.sender.ctx);
   return parts.join(" · ");
+}
+
+/** WI-2C.1 — human-readable category token for the AP title.
+ *  Preference order: `category.label` → `category.purposeLabel` →
+ *  `category.glAccountName`. Falls back to null; the title then
+ *  becomes `"AP Invoice"` with no suffix. */
+function apCategoryToken(inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"]): string | null {
+  if (!inv?.category) return null;
+  return inv.category.label ?? inv.category.purposeLabel ?? inv.category.glAccountName ?? null;
+}
+
+/** WI-2C.1 — resolved AP-invoice title. Replaces the email subject
+ *  as the primary title once Spectre has resolved the record as an
+ *  AP invoice. Applies to any record with `linkedIntelligence.invoiceSummary`
+ *  regardless of source (email, upload, AP_INVOICE_REVIEW child).
+ *
+ *  Rule: `AP Invoice · {resolved category}` when the pipeline
+ *  produced a category token; otherwise `AP Invoice`. Original
+ *  email subject remains provenance on the WorkIntakeItem and in
+ *  the Review page's activity trail — never leaked back as the
+ *  operational title. */
+function apResolvedTitle(inv: NonNullable<WorkItem["linkedIntelligence"]>["invoiceSummary"]): string {
+  const token = apCategoryToken(inv);
+  return token ? `AP Invoice · ${token}` : "AP Invoice";
 }
 
 /** WI-2C — invoice-purpose commentary. One concise sentence
@@ -326,10 +350,15 @@ export function toFeedRow(item: WorkItem, ctx: AdapterContext): WiFeedRow {
   const treatAsAp = inv != null;
   const baseIsView = item.state === "info" || item.state === "comm";
   const actionLabel: "Review" | "View" = baseIsView && !treatAsAp ? "View" : "Review";
+  // WI-2C.1 — resolved AP-invoice title override. When the AP
+  // pipeline has produced an invoice, the operational title becomes
+  // `AP Invoice · {category}`, not the email subject. The original
+  // subject stays on the WorkIntakeItem for provenance.
+  const title = inv ? apResolvedTitle(inv) : item.title;
   return {
     id: item.id,
     icon: mapIcon(item),
-    title: item.title,
+    title,
     metaLine: composeMetaLine(item),
     description: composeDescription(item),
     status,

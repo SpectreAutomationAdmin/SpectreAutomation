@@ -11,7 +11,7 @@ import type { LinkedIntelligenceForEmail } from "@/lib/mission-control/intellige
 const ZONE = "America/Edmonton";
 const CTX = { clubTimezone: ZONE, nowIso: "2026-09-28T18:00:00Z" };
 
-function baseItem(overrides: Partial<WorkItem>): WorkItem {
+function baseItem(overrides: Partial<Omit<WorkItem, "classification">> & { classification?: string } = {}): WorkItem {
   return {
     id: "wi_x",
     state: "info",
@@ -26,7 +26,7 @@ function baseItem(overrides: Partial<WorkItem>): WorkItem {
     workDomain: "ACCOUNTS_PAYABLE",
     classification: "INFORMATIONAL",
     ...overrides,
-  } as WorkItem;
+  } as unknown as WorkItem;
 }
 
 function invoiceSummary(overrides: Partial<NonNullable<LinkedIntelligenceForEmail["invoiceSummary"]>> = {}): LinkedIntelligenceForEmail {
@@ -144,10 +144,87 @@ describe("WI-2C — status precedence", () => {
   });
 });
 
-describe("WI-2C — meta line + description", () => {
-  it("AP invoice meta line = vendor · $amount · GL", () => {
+describe("WI-2C.1 — AP title hierarchy", () => {
+  it("resolved AP invoice with category → title 'AP Invoice · {category}'", () => {
+    const row = toFeedRow(
+      baseItem({ title: "PAY NOW", linkedIntelligence: invoiceSummary() }),
+      CTX,
+    );
+    expect(row.title).toBe("AP Invoice · Subscriptions");
+  });
+
+  it("email subject 'PAY NOW' is not used as the AP title once resolved", () => {
+    const row = toFeedRow(
+      baseItem({ title: "PAY NOW", linkedIntelligence: invoiceSummary() }),
+      CTX,
+    );
+    expect(row.title).not.toBe("PAY NOW");
+    expect(row.title).not.toContain("PAY NOW");
+  });
+
+  it("email subject 'Vendor reports an unpaid invoice' is not used as the AP title", () => {
+    const row = toFeedRow(
+      baseItem({
+        title: "Vendor reports an unpaid invoice",
+        linkedIntelligence: invoiceSummary({
+          category: { label: "Telephone & Internet", glAccountNumber: "6072", glAccountName: "Telephone & Internet", capitalState: "OPERATING", source: null, alternates: [] } as never,
+        }),
+      }),
+      CTX,
+    );
+    expect(row.title).toBe("AP Invoice · Telephone & Internet");
+    expect(row.title).not.toContain("Vendor reports");
+  });
+
+  it("category missing but GL name present → uses GL name", () => {
+    const row = toFeedRow(
+      baseItem({
+        title: "PAY NOW",
+        linkedIntelligence: invoiceSummary({
+          category: { label: null, glAccountNumber: "6099", glAccountName: "Miscellaneous", capitalState: "OPERATING", source: null, alternates: [] } as never,
+        }),
+      }),
+      CTX,
+    );
+    expect(row.title).toBe("AP Invoice · Miscellaneous");
+  });
+
+  it("category + GL name missing → title 'AP Invoice'", () => {
+    const row = toFeedRow(
+      baseItem({
+        title: "PAY NOW",
+        linkedIntelligence: invoiceSummary({
+          category: { label: null, glAccountNumber: null, glAccountName: null, capitalState: null, source: null, alternates: [] } as never,
+        }),
+      }),
+      CTX,
+    );
+    expect(row.title).toBe("AP Invoice");
+  });
+
+  it("subtitle drops GL (was `vendor · total · GL`; now `vendor · total`)", () => {
     const row = toFeedRow(baseItem({ linkedIntelligence: invoiceSummary() }), CTX);
-    expect(row.metaLine).toBe("Club Support Inc · $778.16 CAD · 6071 – Subscriptions");
+    expect(row.metaLine).toBe("Club Support Inc · $778.16 CAD");
+    expect(row.metaLine).not.toContain("6071");
+    expect(row.metaLine).not.toContain("Subscriptions");
+  });
+
+  it("non-AP items retain original title", () => {
+    const row = toFeedRow(
+      baseItem({
+        title: "Weekly Update – Week of September 23rd, 2026",
+        workDomain: "GENERAL", classification: "INFORMATIONAL", linkedIntelligence: undefined,
+      }),
+      CTX,
+    );
+    expect(row.title).toBe("Weekly Update – Week of September 23rd, 2026");
+  });
+});
+
+describe("WI-2C — meta line + description", () => {
+  it("AP invoice meta line = vendor · total (WI-2C.1 subtitle rule)", () => {
+    const row = toFeedRow(baseItem({ linkedIntelligence: invoiceSummary() }), CTX);
+    expect(row.metaLine).toBe("Club Support Inc · $778.16 CAD");
   });
 
   it("AP invoice description = concise purpose commentary from real evidence", () => {
