@@ -48,7 +48,12 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 //
 // Bumping this version invalidates every warm apSummaryCache
 // entry — the next projection sees the current analyser output.
-export const EXTRACTION_RULE_VERSION = 8;
+// WI-2B.4 (2026-09-27) — bumped 8 -> 9. The projection now surfaces
+// invoiceDate, dueDate, and lineItems on ApInvoiceCardIntelligence
+// so the Work Intake Review page consumes the same extractor data
+// Mission Control's expanded pane already renders. No change to
+// extractor logic; cached projections must refresh once.
+export const EXTRACTION_RULE_VERSION = 9;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.

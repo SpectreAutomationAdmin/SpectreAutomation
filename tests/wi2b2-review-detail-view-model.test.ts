@@ -51,7 +51,10 @@ function linkedWithWorkflow(state: string | undefined, extra?: Partial<LinkedInt
       extractedVendor: { name: "Club Support Inc" },
       vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
       invoiceNumber: "200824",
+      invoiceDate: null,
+      dueDate: null,
       gross: { amount: "778.16", currency: "CAD" },
+      lineItems: null,
       paymentTerms: null,
       paymentTermsSource: null,
       purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
@@ -254,5 +257,92 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
     });
     const out = toRealReviewData({ detail, linked: undefined, clubTimezone: ZONE });
     expect(out.document.primaryPdf?.ingestedDocumentId).toBe("doc-ap");
+  });
+});
+
+describe("WI-2B.4 — invoice date + due date + line items", () => {
+  function withInvoice(
+    dates: { invoiceDate?: string | null; dueDate?: string | null } = {},
+    lineItems: Array<{ description: string; quantity: string | null; unitCost: string | null; amount: string | null }> | null = null,
+  ): LinkedIntelligenceForEmail {
+    return {
+      apReviewIntakeIds: [],
+      statementReviewIntakeIds: [],
+      attachmentCount: 1,
+      invoiceAttachmentCount: 1,
+      statementAttachmentCount: 0,
+      dominantFacet: "invoice",
+      invoiceSummary: {
+        sender: { name: null, email: null, relationship: "OTHER" },
+        extractedVendor: { name: "Club Support Inc" },
+        vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
+        invoiceNumber: "221007",
+        invoiceDate: dates.invoiceDate ?? null,
+        dueDate: dates.dueDate ?? null,
+        gross: { amount: "707.17", currency: "CAD" },
+        paymentTerms: null,
+        paymentTermsSource: null,
+        purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
+        category: { label: "Subscriptions", glAccountNumber: "6071", glAccountName: "Subscriptions", capitalState: "OPERATING", source: null, alternates: [] },
+        workflowState: "VENDOR_MATCH_REQUIRED" as never,
+        workflowReason: null,
+        lineItems,
+      },
+    } as unknown as LinkedIntelligenceForEmail;
+  }
+
+  it("formats YYYY-MM-DD invoiceDate + dueDate into human labels", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice({ invoiceDate: "2026-07-15", dueDate: "2026-08-14" }),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.invoiceDateLabel).toBe("Jul 15, 2026");
+    expect(out.invoice.dueDateLabel).toBe("Aug 14, 2026");
+  });
+
+  it("leaves invoiceDate/dueDate labels null when the extractor did not capture them", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice({ invoiceDate: null, dueDate: null }),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.invoiceDateLabel).toBeNull();
+    expect(out.invoice.dueDateLabel).toBeNull();
+  });
+
+  it("gracefully returns null for unparseable date strings — no crash, no fabrication", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice({ invoiceDate: "n/a", dueDate: "" }),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.invoiceDateLabel).toBeNull();
+    expect(out.invoice.dueDateLabel).toBeNull();
+  });
+
+  it("passes structured line items through with 1-based indexing", () => {
+    const lines = [
+      { description: "Software subscription — July 2026", quantity: "1", unitCost: "600.00", amount: "600.00" },
+      { description: "Support & maintenance", quantity: "1", unitCost: "107.17", amount: "107.17" },
+    ];
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice({}, lines),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.lineItems).not.toBeNull();
+    expect(out.invoice.lineItems).toHaveLength(2);
+    expect(out.invoice.lineItems![0]).toEqual({ n: 1, description: "Software subscription — July 2026", quantity: "1", unitCost: "600.00", amount: "600.00" });
+    expect(out.invoice.lineItems![1].n).toBe(2);
+  });
+
+  it("returns null lineItems when the extractor produced none — never fabricates", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice({}, null),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.lineItems).toBeNull();
   });
 });

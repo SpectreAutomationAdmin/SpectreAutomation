@@ -34,6 +34,15 @@ export interface ReviewInvoiceVM {
   glAccountLabel: string | null;      // "1630 · Course Improvements"
   glConfidencePercent: number | null;
   workflowStateLabel: string | null;  // e.g. "Ready for approval"
+  /** WI-2B.4 — structured line items from the extractor. Null when
+   *  the pipeline has not yet produced them (analysis pending). */
+  lineItems: Array<{
+    n: number;
+    description: string;
+    quantity: string | null;
+    unitCost: string | null;
+    amount: string | null;
+  }> | null;
 }
 
 export interface ReviewContextRowVM {
@@ -198,7 +207,10 @@ function metaChips(
   return chips;
 }
 
-function buildInvoice(linked: LinkedIntelligenceForEmail | undefined): ReviewInvoiceVM {
+function buildInvoice(
+  linked: LinkedIntelligenceForEmail | undefined,
+  clubTimezone: string,
+): ReviewInvoiceVM {
   const s = linked?.invoiceSummary;
   if (!s) {
     return {
@@ -207,6 +219,7 @@ function buildInvoice(linked: LinkedIntelligenceForEmail | undefined): ReviewInv
       invoiceNumber: null, invoiceDateLabel: null, dueDateLabel: null,
       totalLabel: null, categoryLabel: null, glAccountLabel: null,
       glConfidencePercent: null, workflowStateLabel: null,
+      lineItems: null,
     };
   }
   const vendorMatched = s.vendorMatch?.state === "MATCHED";
@@ -216,14 +229,45 @@ function buildInvoice(linked: LinkedIntelligenceForEmail | undefined): ReviewInv
     vendorMatchState: s.vendorMatch?.state ?? null,
     vendorMatchedName: vendorMatched ? s.vendorMatch.matchedName : null,
     invoiceNumber: s.invoiceNumber ?? null,
-    invoiceDateLabel: null, // not on the summary shape today
-    dueDateLabel: null,
+    // WI-2B.4 — format ISO date strings in the club's IANA zone.
+    invoiceDateLabel: formatIsoDayLabel(s.invoiceDate, clubTimezone),
+    dueDateLabel: formatIsoDayLabel(s.dueDate, clubTimezone),
     totalLabel: totalLabel(s.gross),
     categoryLabel: s.category?.label ?? s.category?.purposeLabel ?? null,
     glAccountLabel: glLabel(s.category),
-    glConfidencePercent: null, // TODO WI-2C: confidence surface
+    glConfidencePercent: null,
     workflowStateLabel: humanWorkflowState(s.workflowState),
+    lineItems: s.lineItems && s.lineItems.length > 0
+      ? s.lineItems.map((li, i) => ({
+          n: i + 1,
+          description: li.description,
+          quantity: li.quantity,
+          unitCost: li.unitCost,
+          amount: li.amount,
+        }))
+      : null,
   };
+}
+
+/** Format an ISO date-like string as "MMM d, yyyy" in the club
+ *  timezone. The extractor may emit `YYYY-MM-DD` or a full ISO
+ *  timestamp; either parses fine. Returns null on empty/unparseable. */
+function formatIsoDayLabel(iso: string | null | undefined, timezone: string): string | null {
+  if (!iso) return null;
+  const trimmed = iso.trim();
+  if (!trimmed) return null;
+  // Bare YYYY-MM-DD is parsed as UTC midnight. That's fine for
+  // date-only display; the timezone parameter only prevents an
+  // off-by-one when a full timestamp lands close to midnight.
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? new Date(trimmed + "T12:00:00Z") : new Date(trimmed);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone, month: "short", day: "numeric", year: "numeric",
+    }).format(d);
+  } catch {
+    return null;
+  }
 }
 
 function buildContext(
@@ -397,7 +441,7 @@ function buildSpectre(
 export function toRealReviewData({
   detail, linked, clubTimezone, nowIso,
 }: AdapterInput): RealReviewData {
-  const invoice = buildInvoice(linked);
+  const invoice = buildInvoice(linked, clubTimezone);
   const actionableFromAp =
     !!linked?.invoiceSummary?.workflowState &&
     ACTIONABLE_AP_WORKFLOW_STATES.has(linked.invoiceSummary.workflowState);

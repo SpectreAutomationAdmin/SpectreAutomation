@@ -69,6 +69,8 @@ function baseApFacts(): ApInvoiceCardIntelligence {
     extractedVendor: { name: "Microsoft Corporation" },
     vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
     invoiceNumber: "E0701097E3",
+    invoiceDate: null, // WI-2B.4 fixture: date not extracted in this preview
+    dueDate: null,
     gross: { amount: "31.29", currency: "CAD" },
     paymentTerms: null,
     paymentTermsSource: null,
@@ -108,6 +110,7 @@ function baseApFacts(): ApInvoiceCardIntelligence {
       codingProposal: { state: "SINGLE", hasCategoryLabel: true, hasAllocations: false },
       postingReadiness: { ready: false, blockerCount: 0 },
     },
+    lineItems: null, // WI-2B.4 fixture — line items not shown in the AP-card fidelity preview
   };
 }
 

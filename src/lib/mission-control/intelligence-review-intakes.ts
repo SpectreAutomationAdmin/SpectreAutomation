@@ -396,6 +396,13 @@ export interface ApInvoiceCardIntelligence {
     matchedVendorId: string | null;
   };
   invoiceNumber: string | null;
+  /** WI-2B.4 (2026-09-27) — invoice-issued date from the extractor
+   *  (ExtractedInvoice.invoiceDate). ISO date string ("YYYY-MM-DD")
+   *  or null when the analyser could not read it. Consumed by the
+   *  Work Intake Review page's Invoice Details pane. */
+  invoiceDate: string | null;
+  /** WI-2B.4 — invoice due date. Same shape / same source. */
+  dueDate: string | null;
   gross: {
     amount: string | null;    // Decimal-safe string
     currency: string | null;  // ISO code
@@ -636,6 +643,16 @@ export interface ApInvoiceCardIntelligence {
   // (gross / category / vendorMatch / …) remain the source of truth
   // for the current rendered card.
   workCardFacts: ApWorkCardFacts;
+  /** WI-2B.4 (2026-09-27) — structured line-item extraction, capped
+   *  at 32 rows to keep the DTO payload small. Consumed by the Work
+   *  Intake Review page's Line Items card. Values are the extractor's
+   *  Decimal-safe strings; the presentation layer formats them. */
+  lineItems: Array<{
+    description: string;
+    quantity: string | null;
+    unitCost: string | null;
+    amount: string | null;
+  }> | null;
 }
 
 // Sprint 3 · Checkpoint 15Z — ApWorkCardFacts (§3 formalisation).
@@ -1386,6 +1403,13 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
       matchedVendorId,
     },
     invoiceNumber: extraction?.invoiceNumber ?? null,
+    // WI-2B.4 (2026-09-27) — invoice date + due date are read
+    // straight off the extractor. Nothing new; the analyser has
+    // captured them from every PDF since Sprint 3. The projection
+    // now surfaces them so the Work Intake Review page can render
+    // Invoice Date / Due Date rows without a second server call.
+    invoiceDate: extraction?.invoiceDate ?? null,
+    dueDate: extraction?.dueDate ?? null,
     // Sprint 3 · Checkpoint 15T — gross amount follows the amount
     // hierarchy: printed total > reconciled > subtotal+tax-credits >
     // line-item sum > null. The printed total is preserved verbatim
@@ -1599,6 +1623,18 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     // read from the analyseResult — no computation, no decision
     // recomputation, no side effects.
     confidenceInputs: buildConfidenceInputs({ analysis, extractedVendorProfile: analysis?.vendorProfile ?? null }),
+    // WI-2B.4 (2026-09-27) — structured line-item projection.
+    // Bounded to 32 rows to keep the DTO payload small. Same 32-row
+    // cap used by /api/mission-control/work-intake/[id]/ap-evidence
+    // for the Variant D expanded pane.
+    lineItems: extraction?.lineItems && extraction.lineItems.length > 0
+      ? extraction.lineItems.slice(0, 32).map((li) => ({
+          description: li.description ?? "",
+          quantity: li.quantity ?? null,
+          unitCost: li.unitCost ?? null,
+          amount: li.amount ?? null,
+        }))
+      : null,
   };
 
   // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission
@@ -1642,6 +1678,8 @@ export function buildPendingInvoiceSummary(args: {
     extractedVendor: { name: null },
     vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
     invoiceNumber: null,
+    invoiceDate: null,           // WI-2B.4
+    dueDate: null,               // WI-2B.4
     gross: { amount: null, currency: null },
     paymentTerms: null,
     paymentTermsSource: null,
@@ -1668,6 +1706,7 @@ export function buildPendingInvoiceSummary(args: {
     unresolvedFindingCount: 0,
     primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
     allocations: null,
+    lineItems: null, // WI-2B.4 — pending; no extraction yet.
     workCardFacts: {
       documentFacts: {
         supplierNamePresent: false,

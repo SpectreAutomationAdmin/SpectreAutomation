@@ -54,9 +54,15 @@ export default function DocumentPdfPreview({ ingestedDocumentId, filename }: Pro
         if (res.status === 404) { setError("Preview not available."); return; }
         if (!res.ok) { setError(`Preview server returned ${res.status}.`); return; }
         const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        currentBlobRef.current = url;
-        setBlobUrl(url);
+        // WI-2B.4 — append PDF Open Parameters fragment so Chromium's
+        // built-in viewer opens page 1 at "Fit page" (whole page
+        // visible; no vertical scroll inside the card) and hides the
+        // built-in toolbar / thumbnail pane. Chromium honours this on
+        // blob: URIs. The fragment is ignored by browsers that don't
+        // support Open Parameters, in which case the default zoom is
+        // applied — never a rendering failure.
+        currentBlobRef.current = URL.createObjectURL(blob);
+        setBlobUrl(currentBlobRef.current + "#view=Fit&toolbar=0&navpanes=0&pagemode=none");
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Preview request failed.");
       } finally {

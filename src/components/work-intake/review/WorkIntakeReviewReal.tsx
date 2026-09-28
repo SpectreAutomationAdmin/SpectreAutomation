@@ -214,12 +214,20 @@ function DocumentPreview({ data }: { data: RealReviewData }) {
       )}
       <div className="wi-review-doc-toolbar">
         {pdf ? (
+          // WI-2B.4 — "Open full document" is a VIEW action. Point
+          // it at /preview (Content-Disposition: inline) so the
+          // browser opens its native PDF viewer in a new tab with
+          // built-in navigation, save + print controls. The
+          // authorization guard is the same as the inline preview
+          // (loadReadable() enforces clubId + WORK_INTAKE_ITEM
+          // evidence link). Download remains available inside the
+          // browser's viewer chrome.
           <a
-            href={`/api/documents/${encodeURIComponent(pdf.ingestedDocumentId)}/download`}
+            href={`/api/documents/${encodeURIComponent(pdf.ingestedDocumentId)}/preview#view=Fit&toolbar=1&navpanes=0`}
             className="wi-review-doc-link"
             target="_blank"
             rel="noreferrer"
-            data-testid="wi-review-doc-download"
+            data-testid="wi-review-doc-open-full"
           >
             Open full document
           </a>
@@ -295,16 +303,54 @@ function InvoiceDetails({ data }: { data: RealReviewData }) {
 }
 
 function LineItems({ data }: { data: RealReviewData }) {
+  // WI-2B.4 — render structured line items directly from the AP
+  // extractor projection. When the analyser produced no rows (rare;
+  // usually only for pending analysis), fall back to the muted
+  // "not yet available" copy without ever fabricating rows.
+  const lines = data.invoice.lineItems;
   return (
     <section className="wi-review-card wi-review-card--lines" aria-label="Line Items">
       <div className="wi-review-card-head wi-review-card-head--split">
         <h2 className="wi-review-card-title">Line Items</h2>
+        {lines && (
+          <div className="wi-review-card-summary">
+            <span>{lines.length} item{lines.length === 1 ? "" : "s"}</span>
+            {data.invoice.totalLabel && (
+              <span className="wi-review-card-summary-total">{data.invoice.totalLabel}</span>
+            )}
+          </div>
+        )}
       </div>
-      <div style={{ padding: "18px 8px", fontSize: 12, color: "var(--wi-ink-3)", fontStyle: "italic" }}>
-        {data.invoice.hasExtraction
-          ? "Line-item extraction not yet available for this record."
-          : "This item does not carry line-item data."}
-      </div>
+      {lines && lines.length > 0 ? (
+        <table className="wi-review-lines" data-testid="wi-review-lines-table">
+          <thead>
+            <tr>
+              <th className="wi-review-lines-idx">#</th>
+              <th>Description</th>
+              <th className="wi-review-lines-num">Qty</th>
+              <th className="wi-review-lines-num">Unit Price</th>
+              <th className="wi-review-lines-num">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lines.map((l) => (
+              <tr key={l.n}>
+                <td className="wi-review-lines-idx">{l.n}</td>
+                <td>{l.description || <span style={{ color: "var(--wi-ink-3)", fontStyle: "italic" }}>Unlabeled line</span>}</td>
+                <td className="wi-review-lines-num">{l.quantity ?? ""}</td>
+                <td className="wi-review-lines-num">{l.unitCost ?? ""}</td>
+                <td className="wi-review-lines-num">{l.amount ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div style={{ padding: "18px 8px", fontSize: 12, color: "var(--wi-ink-3)", fontStyle: "italic" }}>
+          {data.invoice.hasExtraction
+            ? "Line-item extraction not yet available for this record."
+            : "This item does not carry line-item data."}
+        </div>
+      )}
     </section>
   );
 }
