@@ -127,10 +127,34 @@ function composeAttachments(item: WorkItem): WiFeedRow["attachments"] {
   return glyphs;
 }
 
-/** Produce the deterministic review-page href for every real WI. The
- *  route itself performs auth + tenant + existence checks. */
-function reviewHref(item: WorkItem): string {
-  return `/app/admin/work-intake/review/${encodeURIComponent(item.id)}`;
+/** Produce the deterministic detail-page href for a feed item.
+ *
+ *  WI-2B.1 identity-contract fix. The Mission Control snapshot's
+ *  WorkItem DTO uses `id` as a *presentation* key that is loader-
+ *  specific:
+ *     email-intake / ar-intake  → id = "wi_<WorkIntakeItem.id>"
+ *     payroll-intake            → id = "wi-<WorkIntakeItem.id>"
+ *     ap-review-intake          → id = "<WorkIntakeItem.id>"
+ *     loader-only AP invoices   → id = "<APInvoice.id>" (no WI row)
+ *
+ *  The canonical WorkIntakeItem id lives on the DTO as
+ *  `workIntakeItemId` and is set by every loader whose row IS a
+ *  canonical WI. Loader-only projections (pending AP invoices, some
+ *  AR paths) leave it undefined and instead carry a domain-page
+ *  href in the first action.
+ *
+ *  Routing contract (deterministic, no string parsing on the route):
+ *    1. If workIntakeItemId is present → /app/admin/work-intake/review/{workIntakeItemId}
+ *    2. Otherwise, if the first action carries an href → that domain URL
+ *    3. Otherwise, no link — the feed renders an inert button (§10:
+ *       "do not render a Review link that deterministically 404s"). */
+function reviewHref(item: WorkItem): string | undefined {
+  if (item.workIntakeItemId) {
+    return `/app/admin/work-intake/review/${encodeURIComponent(item.workIntakeItemId)}`;
+  }
+  const domainHref = item.actions?.find((a) => a.href)?.href;
+  if (domainHref) return domainHref;
+  return undefined;
 }
 
 /** The canonical adapter. Every real WorkItem produced by the

@@ -127,9 +127,47 @@ describe("toFeedRow — action label + review href", () => {
     expect(toFeedRow(baseItem({ state: "approval" }), CTX).actionLabel).toBe("Review");
   });
 
-  it("reviewHref carries the real WorkIntakeItem id, URL-encoded", () => {
-    const row = toFeedRow(baseItem({ id: "abc/123 xyz" }), CTX);
-    expect(row.reviewHref).toBe("/app/admin/work-intake/review/abc%2F123%20xyz");
+  it("WI-2B.1: reviewHref uses workIntakeItemId, not WorkItem.id (email loader emits wi_ prefix)", () => {
+    // Email/AR loaders set id="wi_<uuid>" and workIntakeItemId="<uuid>".
+    const row = toFeedRow(
+      baseItem({ id: "wi_abc-123", workIntakeItemId: "abc-123" }),
+      CTX,
+    );
+    expect(row.reviewHref).toBe("/app/admin/work-intake/review/abc-123");
+    // The prefixed presentation id must NEVER appear in the URL.
+    expect(row.reviewHref).not.toContain("wi_");
+  });
+
+  it("WI-2B.1: reviewHref URL-encodes special chars in the canonical id", () => {
+    const row = toFeedRow(
+      baseItem({ id: "wi_slash/id", workIntakeItemId: "slash/id x" }),
+      CTX,
+    );
+    expect(row.reviewHref).toBe("/app/admin/work-intake/review/slash%2Fid%20x");
+  });
+
+  it("WI-2B.1: loader-only items fall back to action[0].href (domain page)", () => {
+    // e.g. loadPendingAPInvoiceItems returns id=APInvoice.id with no
+    // workIntakeItemId and an action href pointing to the invoice.
+    const row = toFeedRow(
+      baseItem({
+        id: "invoice-999",
+        workIntakeItemId: undefined,
+        actions: [
+          { key: "approve", label: "Review & approve", kind: "primary", href: "/app/admin/ap/invoices/invoice-999" },
+        ],
+      }),
+      CTX,
+    );
+    expect(row.reviewHref).toBe("/app/admin/ap/invoices/invoice-999");
+  });
+
+  it("WI-2B.1: unroutable items return undefined reviewHref (feed renders inert button)", () => {
+    const row = toFeedRow(
+      baseItem({ id: "orphan", workIntakeItemId: undefined, actions: [] }),
+      CTX,
+    );
+    expect(row.reviewHref).toBeUndefined();
   });
 });
 
