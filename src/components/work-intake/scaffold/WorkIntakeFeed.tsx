@@ -88,6 +88,18 @@ function ParticipantAvatars({ people }: { people: NonNullable<WiFeedRow["partici
 }
 
 export default function WorkIntakeFeed({ rows }: { rows: WiFeedRow[] }) {
+  if (rows.length === 0) {
+    // WI-2B — real tenants may have no active Work Intake. Show an
+    // understated single-line empty state inside the accepted feed
+    // surface (no illustration, no CTA), preserving the card chrome.
+    return (
+      <section className="wi-feed" aria-label="Work intake feed">
+        <div className="wi-feed-empty" data-testid="wi-feed-empty">
+          Nothing needs your attention right now.
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="wi-feed" aria-label="Work intake feed">
       {rows.map((row) => (
