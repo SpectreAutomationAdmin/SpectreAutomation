@@ -38,12 +38,24 @@ test.describe("WI-2A · Work Intake review scaffold @ 1536×1024", () => {
     await expect(page.locator("[data-testid='wi-review-root']")).toBeVisible();
   });
 
-  test("Feed row 1 links here", async ({ browser }) => {
+  test("Feed rows link into the review route (real WI ids, no fixture)", async ({ browser }) => {
+    // WI-2B — the row-1 fixture is gone from production. Any feed
+    // row now carries a real WorkIntakeItem id, and every review-
+    // action link targets /app/admin/work-intake/review/<id>. On a
+    // zero-record tenant the feed shows the empty-state placeholder;
+    // in that case no links exist and this test is vacuously satisfied.
     const ctx = await browser.newContext({ viewport: REF_VIEWPORT });
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
-    const link = page.locator("[data-testid='wi-feed-review-link-row-1']");
-    await expect(link).toHaveAttribute("href", "/app/admin/work-intake/review/row-1");
+    await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
+    const links = await page.locator("a.wi-feed-row-button").all();
+    for (const l of links) {
+      const href = await l.getAttribute("href");
+      expect(href).not.toBeNull();
+      expect(href!).toMatch(/^\/app\/admin\/work-intake\/review\//);
+      // Real WI ids are never the WI-1/WI-2A scaffold slug.
+      expect(href!.endsWith("/row-1")).toBe(false);
+    }
   });
 
   test("Header · back link + INTAKE eyebrow + title + metadata + 3 controls", async ({ browser }) => {
@@ -261,12 +273,17 @@ test.describe("WI-2A · Work Intake review scaffold @ 1536×1024", () => {
   });
 
   test("WI-1 feed still renders (regression)", async ({ browser }) => {
+    // WI-2B — feed is canonical. Root + KPI strip must remain
+    // present; feed content is either real rows or the empty-state
+    // placeholder.
     const ctx = await browser.newContext({ viewport: WI_VIEWPORT });
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
     await expect(page.locator(".wi-root")).toBeVisible();
     await expect(page.locator("[data-testid='wi-kpi-card']")).toHaveCount(4);
-    await expect(page.locator(".wi-feed-row")).toHaveCount(6);
+    const rowCount = await page.locator(".wi-feed-row").count();
+    const emptyCount = await page.locator("[data-testid='wi-feed-empty']").count();
+    expect(rowCount + emptyCount).toBeGreaterThan(0);
   });
 
   test("Mission Control still works (regression)", async ({ browser }) => {

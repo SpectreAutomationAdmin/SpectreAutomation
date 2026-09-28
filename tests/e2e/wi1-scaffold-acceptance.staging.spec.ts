@@ -122,9 +122,17 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     // WI-1A §7 — subtly lighter warm-white surface than the page canvas.
     // Surface #faf6ec = rgb(250, 246, 236); canvas #f4efe4 = rgb(244, 239, 228).
     expect(cardStyle.bg).toMatch(/24[89]|250/);
-    // Feed head + all rows must live INSIDE the card.
+    // Feed head lives INSIDE the card.
     await expect(card.locator(".wi-feed-head")).toBeVisible();
-    await expect(card.locator(".wi-feed-row")).toHaveCount(6);
+    // WI-2B — the feed is now canonical, not the 6-row fixture. On
+    // the tenants used by these acceptance runs it may render either
+    // real rows OR the empty-state placeholder — both are valid.
+    // What we still assert is that the card contains one of the two,
+    // preserving the accepted WI-1A "one container" geometry.
+    const feedRowCount = await card.locator(".wi-feed-row").count();
+    const feedEmptyCount = await card.locator("[data-testid='wi-feed-empty']").count();
+    console.log("WI_FEED_CONTENT:", { rows: feedRowCount, empty: feedEmptyCount });
+    expect(feedRowCount + feedEmptyCount).toBeGreaterThan(0);
     const cardBox = await card.boundingBox();
     console.log("WI_FEED_CARD_BOX:", JSON.stringify(cardBox));
   });
@@ -135,14 +143,16 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
     await expect(page.locator(".wi-kpi-card")).toHaveCount(4);
+    // WI-2B — values are now canonical, not the [12,8,5,28] fixture.
+    // Assert only that every card renders a non-negative integer.
     const values = await page.locator(".wi-kpi-value").allInnerTexts();
-    expect(values).toEqual(["12", "8", "5", "28"]);
+    for (const v of values) expect(v.trim()).toMatch(/^\d+$/);
     await expect(page.getByText("Items need your attention")).toBeVisible();
     await expect(page.getByText("Items ready for review")).toBeVisible();
     await expect(page.getByText("Waiting on others")).toBeVisible();
     await expect(page.getByText("Completed this week")).toBeVisible();
-    await expect(page.getByText(/3 from last week/)).toBeVisible();
-    await expect(page.getByText(/12% from last week/)).toBeVisible();
+    // Fixture trend deltas removed under WI-2B — no historical
+    // comparison data exists yet, so cards honestly show "No change".
     // WI-1D §22 — cards remain compact editorial tiles. Height
     // increases modestly from WI-1B/1C after the icon upscale
     // (30 → 40 px per §22) and grid restructure putting NUMBER,
@@ -179,74 +189,62 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     //   Card 2 ( 8  · Items ready for review)      = UP
     //   Card 3 ( 5  · Waiting on others · No change) = no directional arrow
     //   Card 4 (28  · Completed this week)         = UP
+    // WI-1H trend-arrow geometry — verified per card. Under WI-2B
+    // the DIRECTION of each card depends on real data (or is 'flat'
+    // when no historical comparison exists); the accepted GEOMETRY
+    // (wrapper 12×12, viewBox 0 0 12 12, stroke 1.4, path shapes)
+    // must still hold on every card regardless of direction.
     const UP_SHAFT = "M6 10V2";
     const UP_HEAD = "M2.75 5.25L6 2L9.25 5.25";
     const DOWN_SHAFT = "M6 2V10";
     const DOWN_HEAD = "M2.75 6.75L6 10L9.25 6.75";
+    const FLAT_PATH = "M3 6h6";
     const trendCards = await page.locator("[data-testid='wi-kpi-card']").all();
     expect(trendCards.length).toBe(4);
     const trendGeom = await Promise.all(
       trendCards.map(async (c) => {
         const trend = c.locator(".wi-kpi-trend").first();
-        const direction = await trend.locator("svg").getAttribute("data-direction");
+        const svg = trend.locator("svg");
+        const direction = await svg.getAttribute("data-direction");
         const ds = await trend.locator("svg path").evaluateAll((els) =>
           els.map((e) => e.getAttribute("d"))
         );
-        const box = await trend.locator("svg").boundingBox();
+        const box = await svg.boundingBox();
         return { direction, ds, box };
       })
     );
     console.log("WI_KPI_TREND_GEOM:", JSON.stringify(trendGeom));
-    // Card 1 — DOWN.
-    expect(trendGeom[0].direction).toBe("down");
-    expect(trendGeom[0].ds).toContain(DOWN_SHAFT);
-    expect(trendGeom[0].ds).toContain(DOWN_HEAD);
-    expect(trendGeom[0].ds).not.toContain(UP_SHAFT);
-    expect(trendGeom[0].ds).not.toContain(UP_HEAD);
-    // Card 2 — UP.
-    expect(trendGeom[1].direction).toBe("up");
-    expect(trendGeom[1].ds).toContain(UP_SHAFT);
-    expect(trendGeom[1].ds).toContain(UP_HEAD);
-    expect(trendGeom[1].ds).not.toContain(DOWN_SHAFT);
-    expect(trendGeom[1].ds).not.toContain(DOWN_HEAD);
-    // Card 3 — no directional arrow.
-    expect(trendGeom[2].direction).toBe("flat");
-    expect(trendGeom[2].ds).not.toContain(UP_SHAFT);
-    expect(trendGeom[2].ds).not.toContain(UP_HEAD);
-    expect(trendGeom[2].ds).not.toContain(DOWN_SHAFT);
-    expect(trendGeom[2].ds).not.toContain(DOWN_HEAD);
-    // Card 4 — UP.
-    expect(trendGeom[3].direction).toBe("up");
-    expect(trendGeom[3].ds).toContain(UP_SHAFT);
-    expect(trendGeom[3].ds).toContain(UP_HEAD);
-    expect(trendGeom[3].ds).not.toContain(DOWN_SHAFT);
-    expect(trendGeom[3].ds).not.toContain(DOWN_HEAD);
-    // All wrappers 12 × 12.
+    // Wrapper geometry: 12 × 12 on all four cards.
     for (const g of trendGeom) {
       expect(g.box).not.toBeNull();
       if (g.box) {
         expect(Math.round(g.box.width)).toBe(12);
         expect(Math.round(g.box.height)).toBe(12);
       }
+      expect(["up", "down", "flat"]).toContain(g.direction);
+      // Every rendered path string must be one of the three approved
+      // WI-1H shapes — no legacy chevron+bar compound.
+      for (const d of g.ds) {
+        expect(
+          d === UP_SHAFT || d === UP_HEAD ||
+          d === DOWN_SHAFT || d === DOWN_HEAD ||
+          d === FLAT_PATH,
+        ).toBe(true);
+      }
+      // Directional cards must render BOTH shaft + head; flat renders
+      // only the em-dash (§WI-1H §6).
+      if (g.direction === "up") {
+        expect(g.ds).toContain(UP_SHAFT);
+        expect(g.ds).toContain(UP_HEAD);
+      } else if (g.direction === "down") {
+        expect(g.ds).toContain(DOWN_SHAFT);
+        expect(g.ds).toContain(DOWN_HEAD);
+      } else {
+        expect(g.ds).toContain(FLAT_PATH);
+        expect(g.ds).not.toContain(UP_SHAFT);
+        expect(g.ds).not.toContain(DOWN_SHAFT);
+      }
     }
-    // Semantic colour: attention (red) for Card 1, positive (green)
-    // for Cards 2 + 4, neutral (muted) for Card 3. Assert only that
-    // the attention row's red channel dominates and the positive
-    // rows' green channel dominates — CSS tokens may evolve.
-    const trendColours = await Promise.all(
-      trendCards.map((c) => c.locator(".wi-kpi-trend").first().evaluate((el) => getComputedStyle(el as Element).color)),
-    );
-    console.log("WI_KPI_TREND_COLORS:", JSON.stringify(trendColours));
-    const parseRgb = (s: string) => {
-      const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(s);
-      return m ? { r: +m[1], g: +m[2], b: +m[3] } : null;
-    };
-    const c1 = parseRgb(trendColours[0]);
-    const c2 = parseRgb(trendColours[1]);
-    const c4 = parseRgb(trendColours[3]);
-    if (c1) expect(c1.r).toBeGreaterThan(c1.g);
-    if (c2) expect(c2.g).toBeGreaterThan(c2.r);
-    if (c4) expect(c4.g).toBeGreaterThan(c4.r);
     await page.locator(".wi-kpi").screenshot({ path: "test-results/wi1-03-kpi.png" });
   });
 
@@ -268,13 +266,11 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     const page = await loginAs(ctx, CTRL_EMAIL, FIXTURE_PW);
     await page.goto(`${BASE_URL}/app/admin/work-intake`);
     await page.waitForLoadState("networkidle", { timeout: 15_000 }).catch(() => {});
-    await expect(page.locator(".wi-feed-row")).toHaveCount(6);
-    await expect(page.getByText(/Capital Invoice.*Fairway irrigation controls/)).toBeVisible();
-    await expect(page.getByText(/Payroll.*3 exceptions require confirmation/)).toBeVisible();
-    await expect(page.getByText(/Credit adjustment approval/)).toBeVisible();
-    await expect(page.getByText(/AP Invoice.*Course maintenance supplies/)).toBeVisible();
-    await expect(page.getByText(/New hire setup.*Assistant Golf Professional/)).toBeVisible();
-    await expect(page.getByText(/Staffing variance.*Carter Wedding/)).toBeVisible();
+    // WI-2B — feed is now canonical. Either real feed rows OR the
+    // empty-state placeholder must render inside the feed container.
+    const feedRowCount = await page.locator(".wi-feed-row").count();
+    const feedEmptyCount = await page.locator("[data-testid='wi-feed-empty']").count();
+    expect(feedRowCount + feedEmptyCount).toBeGreaterThan(0);
     await page.locator(".wi-feed").screenshot({ path: "test-results/wi1-04-feed.png" });
   });
 
@@ -287,8 +283,11 @@ test.describe("WI-1 · Work Intake scaffold @ 1586×992", () => {
     await expect(page.getByText(/TODAY.?S POSITION/i)).toBeVisible();
     await expect(page.getByText(/EXECUTIVE INSIGHT/i)).toBeVisible();
     await expect(page.getByText(/TODAY.?S COMMITMENTS/i)).toBeVisible();
-    await expect(page.getByText(/Member AR is inside the sixty-day policy line/)).toBeVisible();
-    await expect(page.getByText(/No appointments or proposed follow-ups/)).toBeVisible();
+    // WI-2B — right-rail Insight body is now the canonical
+    // buildInsight() narrative (not the fixture line). Verify only
+    // that the Insight surface renders SOME non-empty body text.
+    const insightBody = await page.locator(".wi-rail-insight").textContent();
+    expect((insightBody ?? "").trim().length).toBeGreaterThan(0);
     await page.locator(".wi-rail").screenshot({ path: "test-results/wi1-05-rail.png" });
   });
 
