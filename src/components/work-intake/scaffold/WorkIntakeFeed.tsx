@@ -2,6 +2,7 @@
 // Fresh presentational component. NO reuse of EmailIntakeCard /
 // IntelligenceReviewCard / PayrollActionCard / FeedItem.
 
+import Link from "next/link";
 import type { WiFeedRow, WiIcon, WiStatusTone } from "./scaffold-data";
 
 const ROW_ICONS: Record<WiIcon, React.ReactNode> = {
@@ -110,12 +111,25 @@ export default function WorkIntakeFeed({ rows }: { rows: WiFeedRow[] }) {
             {row.participants && <ParticipantAvatars people={row.participants} />}
           </div>
           <div className="wi-feed-row-action">
-            <button type="button" className="wi-feed-row-button">
-              {row.actionLabel}
-              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                <path d="M3 6h6M7 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            {row.reviewHref ? (
+              <Link
+                href={row.reviewHref}
+                className="wi-feed-row-button"
+                data-testid={`wi-feed-review-link-${row.id}`}
+              >
+                {row.actionLabel}
+                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                  <path d="M3 6h6M7 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </Link>
+            ) : (
+              <button type="button" className="wi-feed-row-button">
+                {row.actionLabel}
+                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                  <path d="M3 6h6M7 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
             <button type="button" className="wi-feed-row-overflow" aria-label="More">
               <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
                 <circle cx="3" cy="7" r="1.1" fill="currentColor" />

@@ -26,6 +26,10 @@ export interface WiFeedRow {
   attachments?: { kind: "thumb" | "doc"; count?: number }[];
   participants?: { initials: string; tone?: "green" | "gold" | "neutral" }[];
   actionLabel: "Review" | "View";
+  /** WI-2A — when present, the primary action renders as a link to
+   *  the review page. Non-linked rows keep the inert `<button>` from
+   *  the scaffold. Only row-1 (Capital Invoice) links today. */
+  reviewHref?: string;
 }
 
 export const WI_FEED_ROWS: WiFeedRow[] = [
@@ -39,6 +43,7 @@ export const WI_FEED_ROWS: WiFeedRow[] = [
     timestamp: "Today · 11:24 AM",
     attachments: [{ kind: "thumb" }, { kind: "doc" }, { kind: "doc", count: 2 }],
     actionLabel: "Review",
+    reviewHref: "/app/admin/work-intake/review/row-1",
   },
   {
     id: "row-2",
