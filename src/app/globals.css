@@ -5909,11 +5909,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-tab-count { color: var(--wi-ink-3); font-weight: 400; }
 
 /* ---------- Body layout ---------- */
-.wi-review-body { display: flex; flex-direction: column; gap: 12px; }
+.wi-review-body { display: flex; flex-direction: column; gap: 10px; }
 .wi-review-two-col {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 /* ---------- Card shell ---------- */
@@ -5921,11 +5921,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   background: var(--wi-review-card-bg);
   border: 1px solid var(--wi-review-hairline);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 12px 14px;
 }
 .wi-review-card-head {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 .wi-review-card-head--split { justify-content: space-between; }
 .wi-review-card-title {
@@ -6031,39 +6031,42 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-doc-page { font-size: 12px; color: var(--wi-ink-2); font-variant-numeric: tabular-nums; }
 
 /* Classification pane */
-.wi-review-classify { display: flex; flex-direction: column; gap: 4px; }
+.wi-review-classify { display: flex; flex-direction: column; gap: 1px; }
 .wi-review-doc-meta-row {
-  display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: center;
-  padding: 2px 0;
+  display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px; align-items: center;
+  padding: 1px 0;
+  min-height: 22px;
 }
 .wi-review-doc-meta-label {
   font-size: 11px; color: var(--wi-ink-3); letter-spacing: -0.002em;
 }
 .wi-review-doc-meta-value {
   display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--wi-ink); font-weight: 500;
+  font-size: 12px; color: var(--wi-ink); font-weight: 500; line-height: 16px;
 }
 .wi-review-doc-meta-value--items { color: var(--wi-ink-2); font-weight: 400; }
 .wi-review-doc-meta-sep { color: var(--wi-ink-3); }
 .wi-review-classify-divider {
-  height: 1px; background: var(--wi-review-hairline-soft); margin: 4px 0;
+  height: 1px; background: var(--wi-review-hairline-soft); margin: 3px 0;
 }
 .wi-review-cls-row {
-  display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: center;
-  padding: 2px 0;
+  display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 10px; align-items: center;
+  padding: 1px 0;
+  min-height: 24px;
 }
 .wi-review-cls-label {
   font-size: 11px; color: var(--wi-ink-3); letter-spacing: -0.002em;
 }
 .wi-review-cls-value {
   display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--wi-ink); font-weight: 500;
+  font-size: 12px; color: var(--wi-ink); font-weight: 500; line-height: 16px;
 }
 .wi-review-cls-icon {
-  width: 20px; height: 20px; border-radius: 5px;
+  width: 18px; height: 18px; border-radius: 4px;
   display: inline-flex; align-items: center; justify-content: center;
-  flex: 0 0 20px;
+  flex: 0 0 18px;
 }
+.wi-review-cls-icon svg { width: 15px; height: 15px; }
 .wi-review-cls-icon--vendor      { background: var(--wi-review-cls-vendor-bg);  color: var(--wi-review-cls-vendor-ink); }
 .wi-review-cls-icon--capex       { background: var(--wi-review-cls-purple-bg); color: var(--wi-review-cls-purple-ink); }
 .wi-review-cls-icon--irrigation  { background: var(--wi-review-cls-teal-bg);   color: var(--wi-review-cls-teal-ink); }
@@ -6091,18 +6094,20 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-linklike:hover { color: var(--wi-review-amber); }
 
 /* ---------- Line Items table ---------- */
-.wi-review-lines { width: 100%; border-collapse: collapse; }
+.wi-review-lines { width: 100%; border-collapse: collapse; table-layout: auto; }
 .wi-review-lines th {
   font-size: 10.5px; font-weight: 500; color: var(--wi-ink-3);
-  letter-spacing: -0.002em; text-align: left; padding: 5px 8px;
+  letter-spacing: -0.002em; text-align: left; padding: 4px 6px;
   border-bottom: 1px solid var(--wi-review-hairline);
+  white-space: nowrap;
 }
 .wi-review-lines td {
-  font-size: 12.5px; color: var(--wi-ink); padding: 6px 8px;
+  font-size: 12px; color: var(--wi-ink); padding: 5px 6px;
   border-bottom: 1px solid var(--wi-review-hairline-soft);
+  white-space: nowrap;
 }
 .wi-review-lines tr:last-child td { border-bottom: none; }
-.wi-review-lines-idx { width: 24px; color: var(--wi-ink-3); font-variant-numeric: tabular-nums; }
+.wi-review-lines-idx { width: 20px; color: var(--wi-ink-3); font-variant-numeric: tabular-nums; }
 .wi-review-lines-num { text-align: right; font-variant-numeric: tabular-nums; }
 .wi-review-lines-gl { text-align: right; font-variant-numeric: tabular-nums; color: var(--wi-ink-2); }
 
@@ -6110,9 +6115,9 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-context-list { display: flex; flex-direction: column; }
 .wi-review-context-row {
   display: grid;
-  grid-template-columns: 130px minmax(0, 1fr) auto;
-  gap: 12px; align-items: flex-start;
-  padding: 7px 0;
+  grid-template-columns: 110px minmax(0, 1fr) auto;
+  gap: 10px; align-items: flex-start;
+  padding: 5px 0;
   border-top: 1px solid var(--wi-review-hairline-soft);
 }
 .wi-review-context-row:first-child { border-top: none; padding-top: 0; }
@@ -6122,10 +6127,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-context-body {
   display: flex; align-items: flex-start; gap: 8px;
 }
-.wi-review-check-dot { flex: 0 0 16px; padding-top: 1px; }
+.wi-review-check-dot { flex: 0 0 14px; padding-top: 1px; }
+.wi-review-check-dot svg { width: 14px; height: 14px; }
 .wi-review-context-lines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.wi-review-context-title { font-size: 12.5px; font-weight: 500; color: var(--wi-ink); }
-.wi-review-context-meta { font-size: 11.5px; color: var(--wi-ink-3); }
+.wi-review-context-title { font-size: 12px; font-weight: 500; color: var(--wi-ink); line-height: 16px; }
+.wi-review-context-meta { font-size: 11px; color: var(--wi-ink-3); line-height: 15px; }
 .wi-review-context-action { padding-top: 1px; }
 
 /* ---------- Workflow ---------- */
