@@ -5803,7 +5803,7 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   min-height: calc(100vh - var(--spectre-topbar-h, 64px));
 }
 .wi-review-main {
-  padding: 28px 32px 40px;
+  padding: 20px 32px 28px;
   min-width: 0;
 }
 
@@ -5811,40 +5811,41 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-back {
   display: inline-flex; align-items: center; gap: 6px;
   color: var(--wi-ink-2); text-decoration: none;
-  font-size: 13px; font-weight: 500; margin-bottom: 20px;
+  font-size: 13px; font-weight: 500; margin-bottom: 12px;
 }
 .wi-review-back:hover { color: var(--wi-ink); }
-.wi-review-header { margin-bottom: 20px; }
+.wi-review-header { margin-bottom: 12px; }
 .wi-review-header-row {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) auto;
-  gap: 18px; align-items: flex-start;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 14px; align-items: flex-start;
 }
 .wi-review-header-icon {
-  width: 56px; height: 56px; border-radius: 10px;
+  width: 44px; height: 44px; border-radius: 8px;
   background: var(--wi-review-card-bg);
   border: 1px solid var(--wi-review-hairline);
   display: flex; align-items: center; justify-content: center;
   color: var(--wi-ink-2);
 }
+.wi-review-header-icon svg { width: 24px; height: 24px; }
 .wi-review-header-body { min-width: 0; }
 .wi-review-eyebrow {
   color: var(--wi-review-eyebrow);
-  font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
-  text-transform: uppercase; margin-bottom: 4px;
-  display: inline-block; padding: 3px 8px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; margin-bottom: 3px;
+  display: inline-block; padding: 2px 7px;
   background: rgba(122, 92, 191, 0.08);
   border-radius: 4px;
 }
 .wi-review-title {
   font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;
   font-weight: 500;
-  font-size: 24px; line-height: 30px; letter-spacing: -0.005em;
-  color: var(--wi-ink); margin: 0 0 8px;
+  font-size: 20px; line-height: 26px; letter-spacing: -0.005em;
+  color: var(--wi-ink); margin: 0 0 4px;
 }
 .wi-review-meta {
   display: flex; align-items: center; flex-wrap: wrap;
-  gap: 4px 10px; font-size: 13px; color: var(--wi-ink-3);
+  gap: 3px 8px; font-size: 12px; color: var(--wi-ink-3);
 }
 .wi-review-meta-item { color: var(--wi-ink-3); }
 .wi-review-meta-chip {
@@ -5862,10 +5863,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   color: var(--wi-review-amber);
 }
 .wi-review-header-actions {
-  display: inline-flex; align-items: center; gap: 8px; padding-top: 4px;
+  display: inline-flex; align-items: center; gap: 6px; padding-top: 2px;
 }
 .wi-review-icon-btn {
-  width: 36px; height: 36px;
+  width: 32px; height: 32px;
   border: 1px solid var(--wi-review-hairline);
   background: var(--wi-review-card-bg);
   border-radius: 8px;
@@ -5873,9 +5874,9 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   color: var(--wi-ink-2); cursor: pointer;
 }
 .wi-review-btn {
-  height: 36px; padding: 0 14px; border-radius: 8px;
-  font-size: 13px; font-weight: 500; letter-spacing: -0.005em;
-  cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 12px; border-radius: 8px;
+  font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em;
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--wi-review-hairline);
   background: var(--wi-review-card-bg);
   color: var(--wi-ink);
@@ -5888,15 +5889,15 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 
 /* ---------- Tabs ---------- */
 .wi-review-tabs {
-  display: flex; align-items: flex-end; gap: 26px;
+  display: flex; align-items: flex-end; gap: 24px;
   border-bottom: 1px solid var(--wi-review-hairline);
-  padding: 0 0 0; margin-bottom: 22px;
+  padding: 0 0 0; margin-bottom: 14px;
 }
 .wi-review-tab {
   background: transparent; border: none; cursor: pointer;
   color: var(--wi-ink-2);
   font-size: 13px; font-weight: 500; letter-spacing: -0.005em;
-  padding: 10px 0 12px; margin-bottom: -1px;
+  padding: 6px 0 8px; margin-bottom: -1px;
   border-bottom: 2px solid transparent;
   display: inline-flex; align-items: center; gap: 6px;
 }
@@ -5908,29 +5909,29 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-tab-count { color: var(--wi-ink-3); font-weight: 400; }
 
 /* ---------- Body layout ---------- */
-.wi-review-body { display: flex; flex-direction: column; gap: 20px; }
+.wi-review-body { display: flex; flex-direction: column; gap: 12px; }
 .wi-review-two-col {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  gap: 20px;
+  gap: 12px;
 }
 
 /* ---------- Card shell ---------- */
 .wi-review-card {
   background: var(--wi-review-card-bg);
   border: 1px solid var(--wi-review-hairline);
-  border-radius: 12px;
-  padding: 20px 22px;
+  border-radius: 10px;
+  padding: 14px 16px;
 }
 .wi-review-card-head {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 .wi-review-card-head--split { justify-content: space-between; }
 .wi-review-card-title {
   font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;
   font-weight: 500;
-  font-size: 17px; line-height: 22px; letter-spacing: -0.003em;
+  font-size: 15px; line-height: 20px; letter-spacing: -0.003em;
   color: var(--wi-ink); margin: 0;
 }
 .wi-review-card-summary {
@@ -5945,23 +5946,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-details-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  gap: 24px;
+  gap: 18px;
 }
 .wi-review-details-doc, .wi-review-details-meta { min-width: 0; }
 
 /* Invoice document preview (HTML/CSS scaffold, not a placeholder icon) */
-.wi-review-doc-wrap { display: flex; flex-direction: column; gap: 10px; }
+.wi-review-doc-wrap { display: flex; flex-direction: column; gap: 6px; }
 .wi-review-doc {
   background: #ffffff;
   border: 1px solid var(--wi-review-hairline);
   border-radius: 6px;
-  padding: 18px 20px 16px;
+  padding: 12px 14px 10px;
   font-family: var(--font-inter, Inter, -apple-system, "Segoe UI", system-ui, sans-serif);
-  font-size: 8.5px; line-height: 12px; color: #1a1712;
+  font-size: 8.5px; line-height: 11px; color: #1a1712;
 }
 .wi-review-doc-head {
   display: flex; align-items: flex-start; justify-content: space-between;
-  padding-bottom: 12px; border-bottom: 1px solid #ececec; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 1px solid #ececec; margin-bottom: 8px;
 }
 .wi-review-doc-brand-mark {
   font-weight: 700; font-size: 12px; letter-spacing: 0.06em; color: #17110a;
@@ -5974,7 +5975,7 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 .wi-review-doc-body {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 .wi-review-doc-vendor { font-size: 8.5px; line-height: 12px; color: #17110a; }
 .wi-review-doc-fields {
@@ -5993,10 +5994,10 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 .wi-review-doc-table th {
   font-size: 7px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
-  color: #8a7e64; text-align: left; padding: 4px 6px 4px 0; border-bottom: 1px solid #e0dccf;
+  color: #8a7e64; text-align: left; padding: 3px 6px 3px 0; border-bottom: 1px solid #e0dccf;
 }
 .wi-review-doc-table td {
-  font-size: 8px; padding: 3px 6px 3px 0; color: #17110a; border-bottom: 1px solid #f0ecdf;
+  font-size: 8px; padding: 2px 6px 2px 0; color: #17110a; border-bottom: 1px solid #f0ecdf;
 }
 .wi-review-doc-num { text-align: right; padding-right: 0; }
 .wi-review-doc-totals {
@@ -6030,36 +6031,38 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-doc-page { font-size: 12px; color: var(--wi-ink-2); font-variant-numeric: tabular-nums; }
 
 /* Classification pane */
-.wi-review-classify { display: flex; flex-direction: column; gap: 10px; }
+.wi-review-classify { display: flex; flex-direction: column; gap: 4px; }
 .wi-review-doc-meta-row {
-  display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: center;
+  display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: center;
+  padding: 2px 0;
 }
 .wi-review-doc-meta-label {
   font-size: 11px; color: var(--wi-ink-3); letter-spacing: -0.002em;
 }
 .wi-review-doc-meta-value {
   display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 13px; color: var(--wi-ink); font-weight: 500;
+  font-size: 12.5px; color: var(--wi-ink); font-weight: 500;
 }
 .wi-review-doc-meta-value--items { color: var(--wi-ink-2); font-weight: 400; }
 .wi-review-doc-meta-sep { color: var(--wi-ink-3); }
 .wi-review-classify-divider {
-  height: 1px; background: var(--wi-review-hairline-soft); margin: 6px 0;
+  height: 1px; background: var(--wi-review-hairline-soft); margin: 4px 0;
 }
 .wi-review-cls-row {
-  display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: center;
+  display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; align-items: center;
+  padding: 2px 0;
 }
 .wi-review-cls-label {
   font-size: 11px; color: var(--wi-ink-3); letter-spacing: -0.002em;
 }
 .wi-review-cls-value {
   display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 13px; color: var(--wi-ink); font-weight: 500;
+  font-size: 12.5px; color: var(--wi-ink); font-weight: 500;
 }
 .wi-review-cls-icon {
-  width: 22px; height: 22px; border-radius: 5px;
+  width: 20px; height: 20px; border-radius: 5px;
   display: inline-flex; align-items: center; justify-content: center;
-  flex: 0 0 22px;
+  flex: 0 0 20px;
 }
 .wi-review-cls-icon--vendor      { background: var(--wi-review-cls-vendor-bg);  color: var(--wi-review-cls-vendor-ink); }
 .wi-review-cls-icon--capex       { background: var(--wi-review-cls-purple-bg); color: var(--wi-review-cls-purple-ink); }
@@ -6090,12 +6093,12 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 /* ---------- Line Items table ---------- */
 .wi-review-lines { width: 100%; border-collapse: collapse; }
 .wi-review-lines th {
-  font-size: 11px; font-weight: 500; color: var(--wi-ink-3);
-  letter-spacing: -0.002em; text-align: left; padding: 8px 10px;
+  font-size: 10.5px; font-weight: 500; color: var(--wi-ink-3);
+  letter-spacing: -0.002em; text-align: left; padding: 5px 8px;
   border-bottom: 1px solid var(--wi-review-hairline);
 }
 .wi-review-lines td {
-  font-size: 13px; color: var(--wi-ink); padding: 10px;
+  font-size: 12.5px; color: var(--wi-ink); padding: 6px 8px;
   border-bottom: 1px solid var(--wi-review-hairline-soft);
 }
 .wi-review-lines tr:last-child td { border-bottom: none; }
@@ -6107,36 +6110,36 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-context-list { display: flex; flex-direction: column; }
 .wi-review-context-row {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr) auto;
-  gap: 14px; align-items: flex-start;
-  padding: 12px 0;
+  grid-template-columns: 130px minmax(0, 1fr) auto;
+  gap: 12px; align-items: flex-start;
+  padding: 7px 0;
   border-top: 1px solid var(--wi-review-hairline-soft);
 }
 .wi-review-context-row:first-child { border-top: none; padding-top: 0; }
 .wi-review-context-cat {
-  font-size: 12px; color: var(--wi-ink-3); padding-top: 2px;
+  font-size: 11.5px; color: var(--wi-ink-3); padding-top: 1px;
 }
 .wi-review-context-body {
-  display: flex; align-items: flex-start; gap: 10px;
+  display: flex; align-items: flex-start; gap: 8px;
 }
-.wi-review-check-dot { flex: 0 0 16px; padding-top: 2px; }
-.wi-review-context-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wi-review-context-title { font-size: 13px; font-weight: 500; color: var(--wi-ink); }
-.wi-review-context-meta { font-size: 12px; color: var(--wi-ink-3); }
-.wi-review-context-action { padding-top: 2px; }
+.wi-review-check-dot { flex: 0 0 16px; padding-top: 1px; }
+.wi-review-context-lines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wi-review-context-title { font-size: 12.5px; font-weight: 500; color: var(--wi-ink); }
+.wi-review-context-meta { font-size: 11.5px; color: var(--wi-ink-3); }
+.wi-review-context-action { padding-top: 1px; }
 
 /* ---------- Workflow ---------- */
 .wi-review-flow {
-  list-style: none; margin: 6px 0 0; padding: 0;
+  list-style: none; margin: 4px 0 0; padding: 0;
   display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 0;
 }
 .wi-review-flow-stage {
   position: relative;
-  padding: 4px 12px 0 0;
+  padding: 2px 12px 0 0;
 }
 .wi-review-flow-conn {
-  position: absolute; left: -6px; top: 14px; width: 12px; height: 1px;
+  position: absolute; left: -6px; top: 13px; width: 12px; height: 1px;
   background: var(--wi-review-hairline);
 }
 /* Longer connector between stage circles */
@@ -6144,12 +6147,12 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   left: -24px; width: 48px;
 }
 .wi-review-flow-head {
-  display: inline-flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  display: inline-flex; align-items: center; gap: 8px; margin-bottom: 4px;
 }
 .wi-review-flow-circle {
-  width: 26px; height: 26px; border-radius: 50%;
+  width: 24px; height: 24px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 600;
+  font-size: 11.5px; font-weight: 600;
   border: 1.5px solid var(--wi-review-hairline);
   background: var(--wi-review-card-bg-strong); color: var(--wi-ink-3);
   font-variant-numeric: tabular-nums;
@@ -6161,12 +6164,12 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   background: #cfc5b0; border-color: #cfc5b0; color: #3a3220;
 }
 .wi-review-flow-label {
-  font-size: 13px; font-weight: 500; color: var(--wi-ink);
+  font-size: 12.5px; font-weight: 500; color: var(--wi-ink);
 }
 .wi-review-flow-stage--pending .wi-review-flow-label { color: var(--wi-ink-3); }
 .wi-review-flow-supporting {
-  font-size: 12px; color: var(--wi-ink-3); line-height: 16px;
-  padding-left: 34px;
+  font-size: 11.5px; color: var(--wi-ink-3); line-height: 15px;
+  padding-left: 32px;
 }
 .wi-review-flow-stage--active .wi-review-flow-supporting { color: var(--wi-ink-2); }
 
@@ -6174,8 +6177,8 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-rail {
   background: var(--wi-review-rail-bg);
   border-left: 1px solid var(--wi-review-hairline);
-  padding: 22px 22px 20px;
-  display: flex; flex-direction: column; gap: 20px;
+  padding: 18px 20px 18px;
+  display: flex; flex-direction: column; gap: 14px;
   min-height: calc(100vh - var(--spectre-topbar-h, 64px));
 }
 .wi-review-rail-head {
@@ -6199,22 +6202,22 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   background: var(--wi-review-card-bg-strong);
   border: 1px solid var(--wi-review-hairline);
   border-radius: 10px;
-  padding: 12px 14px;
-  font-size: 13px; line-height: 18px; color: var(--wi-ink);
+  padding: 10px 12px;
+  font-size: 12.5px; line-height: 17px; color: var(--wi-ink);
 }
 .wi-review-rail-lead p { margin: 0; }
-.wi-review-rail-section { display: flex; flex-direction: column; gap: 10px; }
+.wi-review-rail-section { display: flex; flex-direction: column; gap: 8px; }
 .wi-review-rail-section-title {
   font-family: var(--font-source-serif-4), Georgia, Cambria, serif;
-  font-weight: 500; font-size: 14px; margin: 0; color: var(--wi-ink);
+  font-weight: 500; font-size: 13.5px; margin: 0; color: var(--wi-ink);
 }
 .wi-review-insights, .wi-review-recs {
   list-style: none; padding: 0; margin: 0;
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; flex-direction: column; gap: 7px;
 }
 .wi-review-insight, .wi-review-rec {
   display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px;
-  font-size: 13px; line-height: 18px; color: var(--wi-ink);
+  font-size: 12.5px; line-height: 17px; color: var(--wi-ink);
 }
 .wi-review-insight-check { display: inline-flex; padding-top: 1px; }
 .wi-review-rec-icon {
@@ -6227,13 +6230,13 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 .wi-review-rec-icon--gold   { background: #f0e4c9; color: #7d5e1f; }
 .wi-review-rec { grid-template-columns: 22px minmax(0, 1fr); }
 .wi-review-rail-actions {
-  display: flex; flex-direction: column; gap: 8px; margin-top: 6px;
+  display: flex; flex-direction: column; gap: 6px; margin-top: 4px;
 }
 .wi-review-rail-btn {
-  width: 100%; height: 36px; padding: 0 12px;
+  width: 100%; height: 32px; padding: 0 12px;
   border-radius: 8px; border: 1px solid var(--wi-review-hairline);
   background: transparent; color: var(--wi-ink);
-  font-size: 13px; font-weight: 500; cursor: pointer;
+  font-size: 12.5px; font-weight: 500; cursor: pointer;
 }
 .wi-review-rail-btn:hover { background: var(--wi-review-card-bg-strong); }
 
@@ -6243,14 +6246,14 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   background: var(--wi-review-card-bg-strong);
   border: 1px solid var(--wi-review-hairline);
   border-radius: 10px;
-  padding: 12px 44px 12px 14px;
-  min-height: 96px;
+  padding: 10px 42px 10px 12px;
+  min-height: 84px;
 }
 .wi-review-ask-field {
-  width: 100%; min-height: 68px;
+  width: 100%; min-height: 60px;
   border: none; background: transparent; outline: none;
   font: inherit; color: var(--wi-ink); resize: none;
-  font-size: 13px; line-height: 18px;
+  font-size: 12.5px; line-height: 17px;
 }
 .wi-review-ask-field::placeholder { color: var(--wi-ink-3); }
 .wi-review-ask-send {
