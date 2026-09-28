@@ -646,12 +646,26 @@ export interface ApInvoiceCardIntelligence {
   /** WI-2B.4 (2026-09-27) — structured line-item extraction, capped
    *  at 32 rows to keep the DTO payload small. Consumed by the Work
    *  Intake Review page's Line Items card. Values are the extractor's
-   *  Decimal-safe strings; the presentation layer formats them. */
+   *  Decimal-safe strings; the presentation layer formats them.
+   *
+   *  WI-2B.5 (2026-09-27) — now sourced from `canonicalLineItems`
+   *  (role-aware). Only purchase-family roles pass through. Tax
+   *  rows flow into the sibling `tax` field. */
   lineItems: Array<{
     description: string;
     quantity: string | null;
     unitCost: string | null;
     amount: string | null;
+  }> | null;
+  /** WI-2B.5 (2026-09-27) — first-class tax breakdown, one row per
+   *  printed summary-level tax component (GST / HST / PST / QST).
+   *  `label` is the canonical TaxType from the analyser (never
+   *  guessed from arithmetic when the document didn't print it).
+   *  `rate` is a numeric percentage where captured, e.g. 5 for 5%. */
+  tax: Array<{
+    label: string;                // canonical TaxType, e.g. "GST"
+    amount: string | null;        // Decimal-safe string
+    rate: number | null;          // percentage (5 for 5%) or null
   }> | null;
 }
 
@@ -1623,18 +1637,69 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     // read from the analyseResult — no computation, no decision
     // recomputation, no side effects.
     confidenceInputs: buildConfidenceInputs({ analysis, extractedVendorProfile: analysis?.vendorProfile ?? null }),
-    // WI-2B.4 (2026-09-27) — structured line-item projection.
-    // Bounded to 32 rows to keep the DTO payload small. Same 32-row
-    // cap used by /api/mission-control/work-intake/[id]/ap-evidence
-    // for the Variant D expanded pane.
-    lineItems: extraction?.lineItems && extraction.lineItems.length > 0
-      ? extraction.lineItems.slice(0, 32).map((li) => ({
-          description: li.description ?? "",
-          quantity: li.quantity ?? null,
-          unitCost: li.unitCost ?? null,
-          amount: li.amount ?? null,
-        }))
-      : null,
+    // WI-2B.5 (2026-09-27) — role-aware line-item projection.
+    //
+    // WI-2B.4 sourced `extraction.lineItems` directly. That list is
+    // populated by a pure text-regex pass (parse-invoice.ts) that has
+    // no semantic role model, so it kept subtotal / tax / total rows
+    // and often attached unrelated nearby text as their description
+    // (e.g. "MS Office 365 Fees. $741.10" for the subtotal;
+    // "Billing Cycle: April, 2026. 8640-5 $37.06" for GST).
+    //
+    // The extractor separately produces `canonicalLineItems` with
+    // roles: PRIMARY_PURCHASE / SURCHARGE / FREIGHT / CREDIT /
+    // DISCOUNT / INTEREST / PENALTY / TAX / SUMMARY_ROW_REJECTED.
+    // We surface only the purchase-family roles here; TAX rows flow
+    // into the new `tax` field below. When `canonicalLineItems` is
+    // empty (legacy text-only invoices), fall back to the raw list
+    // so those cards don't regress.
+    lineItems: (() => {
+      const canonical = analysis?.canonicalLineItems ?? [];
+      if (canonical.length > 0) {
+        const purchase = canonical.filter((li) =>
+          li.role === "PRIMARY_PURCHASE" ||
+          li.role === "SURCHARGE" ||
+          li.role === "FREIGHT" ||
+          li.role === "CREDIT" ||
+          li.role === "DISCOUNT",
+        );
+        if (purchase.length > 0) {
+          return purchase.slice(0, 32).map((li) => ({
+            description: li.description ?? "",
+            quantity: li.quantity != null ? String(li.quantity) : null,
+            unitCost: li.unitPrice != null ? String(li.unitPrice) : null,
+            amount: li.extension != null ? String(li.extension) : null,
+          }));
+        }
+      }
+      return extraction?.lineItems && extraction.lineItems.length > 0
+        ? extraction.lineItems.slice(0, 32).map((li) => ({
+            description: li.description ?? "",
+            quantity: li.quantity ?? null,
+            unitCost: li.unitCost ?? null,
+            amount: li.amount ?? null,
+          }))
+        : null;
+    })(),
+    // WI-2B.5 (2026-09-27) — first-class tax breakdown, sourced from
+    // the extractor's canonicalEvidence.taxComponents (already
+    // computed; not re-parsed). SUMMARY-level rows are the printed
+    // "GST · $37.06" style tax lines every reviewer expects to see;
+    // LINE-level and GROUP-level components are already reflected in
+    // the purchase rows above and would double-count. Capped at 8
+    // entries for payload size.
+    tax: (() => {
+      const comps = analysis?.taxComponents ?? [];
+      if (comps.length === 0) return null;
+      const summary = comps.filter((c) => c.level === "SUMMARY");
+      const chosen = summary.length > 0 ? summary : comps;
+      const rows = chosen.slice(0, 8).map((c) => ({
+        label: c.taxType,
+        amount: c.amount != null ? String(c.amount) : null,
+        rate: c.rate != null ? Number(c.rate) : null,
+      }));
+      return rows.length > 0 ? rows : null;
+    })(),
   };
 
   // Cache the projection for AP_SUMMARY_TTL_MS. Repeated Mission
@@ -1707,6 +1772,7 @@ export function buildPendingInvoiceSummary(args: {
     primaryAttachment: doc ? { documentId: doc.id, filename: doc.filename } : null,
     allocations: null,
     lineItems: null, // WI-2B.4 — pending; no extraction yet.
+    tax: null,       // WI-2B.5 — pending; no extraction yet.
     workCardFacts: {
       documentFacts: {
         supplierNamePresent: false,

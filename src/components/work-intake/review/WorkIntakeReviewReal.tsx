@@ -166,7 +166,7 @@ function DocumentPreview({ data }: { data: RealReviewData }) {
   const d = data.document;
   const pdf = d.primaryPdf;
   return (
-    <div className="wi-review-doc-wrap">
+    <div className={`wi-review-doc-wrap${pdf ? " wi-review-doc-wrap--pdf" : ""}`}>
       {pdf ? (
         // WI-2B.2 — real PDF served by /api/documents/{id}/preview,
         // rendered inside the accepted .wi-review-doc viewport via the
@@ -303,25 +303,30 @@ function InvoiceDetails({ data }: { data: RealReviewData }) {
 }
 
 function LineItems({ data }: { data: RealReviewData }) {
-  // WI-2B.4 — render structured line items directly from the AP
-  // extractor projection. When the analyser produced no rows (rare;
-  // usually only for pending analysis), fall back to the muted
-  // "not yet available" copy without ever fabricating rows.
-  const lines = data.invoice.lineItems;
+  // WI-2B.5 — render role-aware purchase rows from the extractor
+  // projection, followed by canonical tax rows. Subtotal and Total
+  // are intentionally NOT rendered here — they belong in the
+  // Invoice Details classification pane (Total Amount) and are not
+  // "purchases." No client-side heuristics; row semantics come from
+  // the canonical extractor.
+  const lines = data.invoice.lineItems ?? [];
+  const tax = data.invoice.tax ?? [];
+  const totalRows = lines.length + tax.length;
+  const nextIndexAfterLines = lines.length + 1;
   return (
     <section className="wi-review-card wi-review-card--lines" aria-label="Line Items">
       <div className="wi-review-card-head wi-review-card-head--split">
         <h2 className="wi-review-card-title">Line Items</h2>
-        {lines && (
+        {totalRows > 0 && (
           <div className="wi-review-card-summary">
-            <span>{lines.length} item{lines.length === 1 ? "" : "s"}</span>
+            <span>{totalRows} item{totalRows === 1 ? "" : "s"}</span>
             {data.invoice.totalLabel && (
               <span className="wi-review-card-summary-total">{data.invoice.totalLabel}</span>
             )}
           </div>
         )}
       </div>
-      {lines && lines.length > 0 ? (
+      {totalRows > 0 ? (
         <table className="wi-review-lines" data-testid="wi-review-lines-table">
           <thead>
             <tr>
@@ -334,12 +339,26 @@ function LineItems({ data }: { data: RealReviewData }) {
           </thead>
           <tbody>
             {lines.map((l) => (
-              <tr key={l.n}>
+              <tr key={"line-" + l.n} data-row-role="purchase">
                 <td className="wi-review-lines-idx">{l.n}</td>
                 <td>{l.description || <span style={{ color: "var(--wi-ink-3)", fontStyle: "italic" }}>Unlabeled line</span>}</td>
                 <td className="wi-review-lines-num">{l.quantity ?? ""}</td>
                 <td className="wi-review-lines-num">{l.unitCost ?? ""}</td>
                 <td className="wi-review-lines-num">{l.amount ?? ""}</td>
+              </tr>
+            ))}
+            {tax.map((t, i) => (
+              <tr key={"tax-" + i} data-row-role="tax">
+                <td className="wi-review-lines-idx">{nextIndexAfterLines + i}</td>
+                <td>
+                  <span style={{ fontWeight: 500 }}>{t.label}</span>
+                  {t.rate != null && (
+                    <span style={{ color: "var(--wi-ink-3)", marginLeft: 6 }}>{t.rate}%</span>
+                  )}
+                </td>
+                <td className="wi-review-lines-num">{"—"}</td>
+                <td className="wi-review-lines-num">{"—"}</td>
+                <td className="wi-review-lines-num">{t.amount ?? ""}</td>
               </tr>
             ))}
           </tbody>

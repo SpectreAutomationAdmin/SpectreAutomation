@@ -53,7 +53,11 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 // so the Work Intake Review page consumes the same extractor data
 // Mission Control's expanded pane already renders. No change to
 // extractor logic; cached projections must refresh once.
-export const EXTRACTION_RULE_VERSION = 9;
+// WI-2B.5 (2026-09-27) — bumped 9 -> 10. The projection now sources
+// line items from `canonicalLineItems` (role-aware) and surfaces a
+// first-class `tax` array from `taxComponents`. No extractor
+// changes; cache invalidation only.
+export const EXTRACTION_RULE_VERSION = 10;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.

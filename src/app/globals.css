@@ -5949,12 +5949,36 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 
 /* ---------- Invoice Details ---------- */
+/* WI-2B.5 (2026-09-27) — narrower document column + wider metadata
+   column. The PDF preview is a portrait document; the previous
+   1.05fr / 1fr split made it a landscape frame with heavy black
+   gutters. Fixing the doc column at a portrait width lets the
+   iframe render the invoice legibly, and gives the classification
+   pane the released horizontal space. */
 .wi-review-details-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
 }
 .wi-review-details-doc, .wi-review-details-meta { min-width: 0; }
+/* WI-2B.5 — portrait PDF viewport. Applied only when the doc-wrap
+   wraps a real PDF preview (see DocumentPdfPreview). Aspect ratio
+   matches US Letter (8.5 × 11); actual PDF size still governed by
+   #view=Fit inside the iframe. */
+.wi-review-details-doc .wi-review-doc-wrap--pdf .wi-review-doc {
+  aspect-ratio: 8.5 / 11;
+  min-height: 480px;
+  padding: 0;
+  overflow: hidden;
+  background: #f5f0e4;
+}
+.wi-review-details-doc .wi-review-doc-wrap--pdf .wi-review-doc iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
 
 /* Invoice document preview (HTML/CSS scaffold, not a placeholder icon) */
 .wi-review-doc-wrap { display: flex; flex-direction: column; gap: 6px; }

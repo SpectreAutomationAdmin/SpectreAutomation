@@ -35,13 +35,23 @@ export interface ReviewInvoiceVM {
   glConfidencePercent: number | null;
   workflowStateLabel: string | null;  // e.g. "Ready for approval"
   /** WI-2B.4 — structured line items from the extractor. Null when
-   *  the pipeline has not yet produced them (analysis pending). */
+   *  the pipeline has not yet produced them (analysis pending).
+   *  WI-2B.5 — sourced from role-aware canonicalLineItems; only
+   *  purchase-family roles appear here. */
   lineItems: Array<{
     n: number;
     description: string;
     quantity: string | null;
     unitCost: string | null;
     amount: string | null;
+  }> | null;
+  /** WI-2B.5 — first-class tax rows sourced from the extractor's
+   *  taxComponents. Each row carries its real canonical label (GST /
+   *  HST / PST / QST / …). Null when no tax was detected. */
+  tax: Array<{
+    label: string;
+    amount: string | null;
+    rate: number | null;
   }> | null;
 }
 
@@ -219,7 +229,7 @@ function buildInvoice(
       invoiceNumber: null, invoiceDateLabel: null, dueDateLabel: null,
       totalLabel: null, categoryLabel: null, glAccountLabel: null,
       glConfidencePercent: null, workflowStateLabel: null,
-      lineItems: null,
+      lineItems: null, tax: null,
     };
   }
   const vendorMatched = s.vendorMatch?.state === "MATCHED";
@@ -244,6 +254,13 @@ function buildInvoice(
           quantity: li.quantity,
           unitCost: li.unitCost,
           amount: li.amount,
+        }))
+      : null,
+    tax: s.tax && s.tax.length > 0
+      ? s.tax.map((t) => ({
+          label: t.label,
+          amount: t.amount,
+          rate: t.rate,
         }))
       : null,
   };

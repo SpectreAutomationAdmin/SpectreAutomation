@@ -111,6 +111,7 @@ function baseApFacts(): ApInvoiceCardIntelligence {
       postingReadiness: { ready: false, blockerCount: 0 },
     },
     lineItems: null, // WI-2B.4 fixture — line items not shown in the AP-card fidelity preview
+    tax: null,       // WI-2B.5 fixture — tax breakdown not shown in the AP-card fidelity preview
   };
 }
 

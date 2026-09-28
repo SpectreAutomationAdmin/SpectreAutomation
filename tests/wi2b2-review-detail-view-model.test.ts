@@ -55,6 +55,7 @@ function linkedWithWorkflow(state: string | undefined, extra?: Partial<LinkedInt
       dueDate: null,
       gross: { amount: "778.16", currency: "CAD" },
       lineItems: null,
+      tax: null,
       paymentTerms: null,
       paymentTermsSource: null,
       purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
@@ -264,6 +265,7 @@ describe("WI-2B.4 — invoice date + due date + line items", () => {
   function withInvoice(
     dates: { invoiceDate?: string | null; dueDate?: string | null } = {},
     lineItems: Array<{ description: string; quantity: string | null; unitCost: string | null; amount: string | null }> | null = null,
+    tax: Array<{ label: string; amount: string | null; rate: number | null }> | null = null,
   ): LinkedIntelligenceForEmail {
     return {
       apReviewIntakeIds: [],
@@ -287,6 +289,7 @@ describe("WI-2B.4 — invoice date + due date + line items", () => {
         workflowState: "VENDOR_MATCH_REQUIRED" as never,
         workflowReason: null,
         lineItems,
+        tax,
       },
     } as unknown as LinkedIntelligenceForEmail;
   }
@@ -344,5 +347,96 @@ describe("WI-2B.4 — invoice date + due date + line items", () => {
       clubTimezone: ZONE,
     });
     expect(out.invoice.lineItems).toBeNull();
+  });
+});
+
+describe("WI-2B.5 — tax breakdown + no subtotal/total pollution", () => {
+  function withInvoice(
+    lineItems: Array<{ description: string; quantity: string | null; unitCost: string | null; amount: string | null }> | null,
+    tax: Array<{ label: string; amount: string | null; rate: number | null }> | null,
+  ): LinkedIntelligenceForEmail {
+    return {
+      apReviewIntakeIds: [],
+      statementReviewIntakeIds: [],
+      attachmentCount: 1,
+      invoiceAttachmentCount: 1,
+      statementAttachmentCount: 0,
+      dominantFacet: "invoice",
+      invoiceSummary: {
+        sender: { name: null, email: null, relationship: "OTHER" },
+        extractedVendor: { name: "Club Support Inc" },
+        vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
+        invoiceNumber: "200824",
+        invoiceDate: null, dueDate: null,
+        gross: { amount: "778.16", currency: "CAD" },
+        paymentTerms: null, paymentTermsSource: null,
+        purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
+        category: { label: null, glAccountNumber: null, glAccountName: null, capitalState: null, source: null, alternates: [] },
+        workflowState: "VENDOR_MATCH_REQUIRED" as never,
+        workflowReason: null,
+        lineItems, tax,
+      },
+    } as unknown as LinkedIntelligenceForEmail;
+  }
+
+  it("passes structured tax rows through with real canonical labels", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice(
+        [{ description: "MS Office 365", quantity: "26", unitCost: "17.85", amount: "464.10" }],
+        [{ label: "GST", amount: "37.06", rate: 5 }],
+      ),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.tax).toEqual([{ label: "GST", amount: "37.06", rate: 5 }]);
+  });
+
+  it("supports multiple tax rows (HST/PST/QST coexist without collapsing)", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice(
+        [{ description: "Service", quantity: "1", unitCost: "100.00", amount: "100.00" }],
+        [
+          { label: "GST", amount: "5.00", rate: 5 },
+          { label: "PST", amount: "7.00", rate: 7 },
+        ],
+      ),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.tax).toHaveLength(2);
+    expect(out.invoice.tax![0].label).toBe("GST");
+    expect(out.invoice.tax![1].label).toBe("PST");
+  });
+
+  it("tax is null when no tax was extracted — never invents a row", () => {
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice(
+        [{ description: "Service", quantity: "1", unitCost: "100.00", amount: "100.00" }],
+        null,
+      ),
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.tax).toBeNull();
+  });
+
+  it("preserves purchase rows regardless of whether tax exists", () => {
+    const purchase = [
+      { description: "Item A", quantity: "1", unitCost: "10.00", amount: "10.00" },
+      { description: "Item B", quantity: "2", unitCost: "20.00", amount: "40.00" },
+    ];
+    const withTax = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice(purchase, [{ label: "GST", amount: "2.50", rate: 5 }]),
+      clubTimezone: ZONE,
+    });
+    const withoutTax = toRealReviewData({
+      detail: baseDetail(),
+      linked: withInvoice(purchase, null),
+      clubTimezone: ZONE,
+    });
+    expect(withTax.invoice.lineItems).toHaveLength(2);
+    expect(withoutTax.invoice.lineItems).toHaveLength(2);
+    expect(withTax.invoice.lineItems!.map((l) => l.description)).toEqual(["Item A", "Item B"]);
   });
 });

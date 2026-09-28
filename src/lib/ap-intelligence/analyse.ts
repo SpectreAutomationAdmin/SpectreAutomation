@@ -91,6 +91,7 @@ import { reconstructLineItemTable, type TableReconstructResult } from "./positio
 // Sprint 3 · Phase 4 Slice 5 (2026-08-07) — the ONE line-item authority.
 import { extractCanonicalLineItems } from "./canonical-line-item-extractor";
 import type { CanonicalLineItem } from "./evidence/canonical-line-item";
+import type { StructuredTaxComponent } from "./evidence/tax-components";
 // Sprint 3 · Phase 4 Slice 5.1 (2026-08-08) — page-level trigger
 // evaluation, targeted OCR dispatch, and visual-branding evidence.
 import { evaluateOcrTriggers, OCR_TRIGGER_ENABLED, type OcrTriggerDecision } from "./ocr/ocr-trigger-reasons";
@@ -389,6 +390,19 @@ export interface ApAnalyseResult {
      *  decision + department. Null when insufficient signal. */
     founderFacingCategory: string | null;
   };
+  /** WI-2B.5 (2026-09-27) — role-aware canonical line items,
+   *  produced by the layout-authority path. Purchase rows carry
+   *  role "PRIMARY_PURCHASE" (or SURCHARGE / FREIGHT / CREDIT /
+   *  DISCOUNT); rollups carry role "TAX" or "SUMMARY_ROW_REJECTED".
+   *  Consumers wanting a clean purchase-only list filter by role.
+   *  Pure re-export of `canonicalLineItemsFromLayout` — no new
+   *  logic; the extractor has always produced this. */
+  canonicalLineItems: CanonicalLineItem[];
+  /** WI-2B.5 — structured tax components (GST / HST / PST / QST /
+   *  etc.), with `taxType`, `rate`, `amount`, and `level`
+   *  (LINE | GROUP | SUMMARY | REMITTANCE). Populated from
+   *  parsed.canonicalEvidence.taxComponents. Pure re-export. */
+  taxComponents: StructuredTaxComponent[];
 }
 
 // Sprint 3 · Checkpoint 15Q — decomposed confidence, one dimension
@@ -2796,6 +2810,17 @@ export async function analyseIngestedInvoice(args: ApAnalyseArgs): Promise<ApAna
           : null,
       };
     })(),
+    // WI-2B.5 (2026-09-27) — pure re-exports for the projection
+    // layer. The extractor has always computed these; the projection
+    // needs them to (a) filter purchase-only line items by role and
+    // (b) render tax components with their real semantic label
+    // instead of the raw text-parse row that inherited an unrelated
+    // description.
+    canonicalLineItems: canonicalLineItemsFromLayout,
+    taxComponents: (
+      (parsed.canonicalEvidence as unknown as { taxComponents?: StructuredTaxComponent[] })?.taxComponents
+      ?? []
+    ),
   };
 }
 
