@@ -307,30 +307,49 @@ function buildWorkflow(status: string): ReviewWorkflowStageVM[] {
 function buildDocument(detail: WorkIntakeDetail): ReviewDocumentVM {
   const email = detail.email;
   const attachments = email?.attachments ?? [];
-  // WI-2B.2 — surface the first PDF attachment whose ingest has
-  // completed. The client renders it via the existing
-  // `/api/documents/{id}/preview` endpoint (auth-guarded by
-  // loadReadable). Non-PDF or un-ingested attachments fall through
-  // to the placeholder state.
-  const pdfCandidate = attachments.find(
-    (a) =>
-      a.ingestedDocumentId !== null &&
-      a.storageState === "STORED" &&
-      /^application\/pdf(;|$)/i.test(a.contentType),
-  );
+
+  // WI-2B.3 — primary PDF resolution order:
+  //   1. detail.primaryDocument (from IngestedDocumentEvidenceLink)
+  //      — dedup-safe, matches the AP intelligence / Mission Control
+  //      documents API.
+  //   2. per-attachment ingestedDocumentId + application/pdf mime
+  //      (WI-2B.2 path — kept for fresh promotions that also carry a
+  //      matching sourceReferenceId).
+  //
+  // The storageState guard from WI-2B.2 is removed: EmailAttachment
+  // rows correctly stay METADATA_ONLY when SHA-dedup routes them to
+  // an already-promoted IngestedDocument via the evidence link. The
+  // IngestedDocument itself is `status = "STORED"` — that is what
+  // determines whether bytes are retrievable, not the attachment's
+  // own storageState.
+  let primaryPdf: ReviewDocumentVM["primaryPdf"] = null;
+  if (detail.primaryDocument) {
+    primaryPdf = {
+      ingestedDocumentId: detail.primaryDocument.ingestedDocumentId,
+      filename: detail.primaryDocument.filename,
+      mimeType: detail.primaryDocument.mimeType,
+    };
+  } else {
+    const pdfCandidate = attachments.find(
+      (a) =>
+        a.ingestedDocumentId !== null &&
+        /^application\/pdf(;|$)/i.test(a.contentType),
+    );
+    if (pdfCandidate) {
+      primaryPdf = {
+        ingestedDocumentId: pdfCandidate.ingestedDocumentId!,
+        filename: pdfCandidate.filename,
+        mimeType: pdfCandidate.contentType,
+      };
+    }
+  }
   return {
-    hasAttachments: attachments.length > 0,
+    hasAttachments: attachments.length > 0 || !!detail.primaryDocument,
     attachmentCount: attachments.length,
-    firstAttachmentFilename: attachments[0]?.filename ?? null,
+    firstAttachmentFilename: attachments[0]?.filename ?? detail.primaryDocument?.filename ?? null,
     webLink: email?.webLink ?? null,
     bodyPreview: email?.bodyTextExtract?.slice(0, 240) ?? null,
-    primaryPdf: pdfCandidate
-      ? {
-          ingestedDocumentId: pdfCandidate.ingestedDocumentId!,
-          filename: pdfCandidate.filename,
-          mimeType: pdfCandidate.contentType,
-        }
-      : null,
+    primaryPdf,
   };
 }
 

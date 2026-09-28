@@ -24,6 +24,7 @@ function baseDetail(overrides: Partial<WorkIntakeDetail> = {}): WorkIntakeDetail
     resolvedAt: null,
     createdAt: "2026-09-27T18:00:00Z",
     updatedAt: "2026-09-27T18:00:00Z",
+    primaryDocument: null,
     display: {
       sourceLabel: "Outlook",
       sender: "c.s.turcato@gmail.com",
@@ -208,5 +209,50 @@ describe("WI-2B.2 view-model — PDF passthrough", () => {
     });
     const out = toRealReviewData({ detail, linked: undefined, clubTimezone: ZONE });
     expect(out.document.primaryPdf).toBeNull();
+  });
+
+  it("WI-2B.3: SHA-dedup case — attachment stays METADATA_ONLY, but detail.primaryDocument from evidence link surfaces the PDF", () => {
+    // This is the EXACT PAY NOW scenario. The EmailAttachment on
+    // this arrival is METADATA_ONLY because the same-SHA PDF was
+    // already promoted from an earlier arrival. The canonical
+    // IngestedDocumentEvidenceLink lookup surfaces the promoted
+    // document at the WI level.
+    const detail = baseDetail({
+      primaryDocument: {
+        ingestedDocumentId: "doc-canonical",
+        filename: "200824.pdf",
+        mimeType: "application/pdf",
+        byteLength: 71369,
+      },
+      email: {
+        senderName: "", senderAddress: "", subject: "", recipientsTo: [], recipientsCc: [],
+        receivedAt: "", sentAt: null, bodyHtmlSanitized: null, bodyTextExtract: null,
+        webLink: null, isSoftDeleted: false, mailboxConnectedEmail: "",
+        attachments: [
+          { id: "att-1", filename: "200824.pdf", contentType: "application/pdf", sizeBytes: 71565, storageState: "METADATA_ONLY", ingestedDocumentId: null },
+        ],
+      },
+    });
+    const out = toRealReviewData({ detail, linked: undefined, clubTimezone: ZONE });
+    expect(out.document.primaryPdf).toEqual({
+      ingestedDocumentId: "doc-canonical",
+      filename: "200824.pdf",
+      mimeType: "application/pdf",
+    });
+    expect(out.document.hasAttachments).toBe(true);
+  });
+
+  it("WI-2B.3: primaryDocument works even when no email is attached at all", () => {
+    const detail = baseDetail({
+      primaryDocument: {
+        ingestedDocumentId: "doc-ap",
+        filename: "vendor-invoice.pdf",
+        mimeType: "application/pdf",
+        byteLength: 12345,
+      },
+      email: null,
+    });
+    const out = toRealReviewData({ detail, linked: undefined, clubTimezone: ZONE });
+    expect(out.document.primaryPdf?.ingestedDocumentId).toBe("doc-ap");
   });
 });

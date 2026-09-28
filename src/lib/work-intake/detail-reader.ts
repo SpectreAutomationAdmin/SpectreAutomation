@@ -25,6 +25,20 @@ export interface WorkIntakeDetail {
   resolvedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** WI-2B.3 — the canonical primary PDF document for this Work
+   *  Intake, if one is evidence-linked to it. Sourced via
+   *  IngestedDocumentEvidenceLink (targetKind = WORK_INTAKE_ITEM),
+   *  which is the join Spectre already uses in
+   *  /api/mission-control/work-intake/[id]/documents. Independent of
+   *  EmailAttachment.sourceReferenceId — that join breaks whenever
+   *  the same PDF was seen previously and the promoted IngestedDocument
+   *  row was deduped by SHA to a different EmailAttachment.id. */
+  primaryDocument: {
+    ingestedDocumentId: string;
+    filename: string;
+    mimeType: string;
+    byteLength: number;
+  } | null;
   display: {
     sourceLabel: string;
     sender: string;
@@ -110,10 +124,44 @@ export async function loadWorkIntakeDetail(args: {
   const email = intake.emailOrigins[0]?.emailMessage;
   const parsedRecipients = safeParseRecipients(email?.recipientsJson ?? null);
 
-  // WI-2B.2 — resolve each EmailAttachment to its promoted
-  // IngestedDocument (sourceKind=EMAIL_ATTACHMENT / sourceReferenceId=
-  // EmailAttachment.id). Batched, tenant-scoped. Null when ingest
-  // hasn't run for this attachment yet.
+  // WI-2B.3 — resolve the canonical primary document via
+  // IngestedDocumentEvidenceLink. This is the join Spectre already
+  // uses in /api/mission-control/work-intake/[id]/documents, and it
+  // is robust to SHA-dedup of the promoted IngestedDocument row
+  // (which is why WI-2B.2's `sourceReferenceId = EmailAttachment.id`
+  // join returned nothing on staging for the real PAY NOW record).
+  //
+  // We surface only the FIRST evidence-linked STORED PDF; any
+  // additional documents remain accessible through the existing
+  // documents API.
+  const primaryDocRows = await prisma.ingestedDocumentEvidenceLink.findMany({
+    where: {
+      targetKind: "WORK_INTAKE_ITEM",
+      targetReferenceId: intake.id,
+      ingestedDocument: {
+        clubId: args.clubId,
+        status: "STORED",
+        mimeType: { startsWith: "application/pdf" },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+    take: 1,
+    select: {
+      ingestedDocument: {
+        select: {
+          id: true, mimeType: true, byteLength: true,
+          filename: true, originalFilename: true,
+        },
+      },
+    },
+  });
+  const primaryDoc = primaryDocRows[0]?.ingestedDocument;
+
+  // Best-effort: also resolve per-attachment promoted document id via
+  // both the sourceReferenceId join (fresh promotions) AND the
+  // evidence link back-fill (dedup case). Any attachment matching by
+  // filename to the primary doc inherits its id. Kept for backward
+  // compatibility with earlier consumers.
   const attachmentIds = (email?.attachments ?? []).map((a) => a.id);
   const ingestedByAttachment = new Map<string, string>();
   if (attachmentIds.length > 0) {
@@ -127,6 +175,16 @@ export async function loadWorkIntakeDetail(args: {
     });
     for (const d of docs) {
       if (d.sourceReferenceId) ingestedByAttachment.set(d.sourceReferenceId, d.id);
+    }
+  }
+  if (primaryDoc) {
+    for (const a of email?.attachments ?? []) {
+      if (
+        !ingestedByAttachment.has(a.id) &&
+        (a.filename === primaryDoc.filename || a.filename === primaryDoc.originalFilename)
+      ) {
+        ingestedByAttachment.set(a.id, primaryDoc.id);
+      }
     }
   }
 
@@ -145,6 +203,14 @@ export async function loadWorkIntakeDetail(args: {
     resolvedAt: intake.resolvedAt?.toISOString() ?? null,
     createdAt: intake.createdAt.toISOString(),
     updatedAt: intake.updatedAt.toISOString(),
+    primaryDocument: primaryDoc
+      ? {
+          ingestedDocumentId: primaryDoc.id,
+          filename: primaryDoc.filename ?? primaryDoc.originalFilename ?? "document.pdf",
+          mimeType: primaryDoc.mimeType,
+          byteLength: primaryDoc.byteLength,
+        }
+      : null,
     display: {
       sourceLabel: intake.displaySourceLabel,
       sender: intake.displaySender,
