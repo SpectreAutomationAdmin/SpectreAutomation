@@ -5954,21 +5954,22 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
    1.05fr / 1fr split made it a landscape frame with heavy black
    gutters. Fixing the doc column at a portrait width lets the
    iframe render the invoice legibly, and gives the classification
-   pane the released horizontal space. */
+   pane the released horizontal space.
+   WI-2B.6 (2026-09-27) — widen the doc column (was 280-380 → now
+   420-480) while explicitly preserving height. Height and width
+   are DECOUPLED here — aspect-ratio has been removed. */
 .wi-review-details-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(420px, 480px) minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 .wi-review-details-doc, .wi-review-details-meta { min-width: 0; }
-/* WI-2B.5 — portrait PDF viewport. Applied only when the doc-wrap
-   wraps a real PDF preview (see DocumentPdfPreview). Aspect ratio
-   matches US Letter (8.5 × 11); actual PDF size still governed by
-   #view=Fit inside the iframe. */
+/* WI-2B.6 — PDF viewport. Explicit fixed height (accepted from
+   WI-2B.5) with a wider column. Small neutral gutter around the
+   Letter page is acceptable per the WI-2B.6 brief §14. */
 .wi-review-details-doc .wi-review-doc-wrap--pdf .wi-review-doc {
-  aspect-ratio: 8.5 / 11;
-  min-height: 480px;
+  height: 560px;
   padding: 0;
   overflow: hidden;
   background: #f5f0e4;
@@ -5978,6 +5979,11 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   height: 100%;
   border: none;
   display: block;
+}
+/* Below 900px collapse the doc column onto its own row so the
+   classification pane doesn't get squeezed. */
+@media (max-width: 900px) {
+  .wi-review-details-grid { grid-template-columns: 1fr; }
 }
 
 /* Invoice document preview (HTML/CSS scaffold, not a placeholder icon) */

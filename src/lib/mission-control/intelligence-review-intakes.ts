@@ -60,6 +60,38 @@ import { currentAnalysisVersion } from "@/lib/ap-intelligence/analysis-version";
 // the summariser is O(1) DB read with no re-parse ever. That is a
 // small schema change and belongs to a separate checkpoint.
 const AP_SUMMARY_TTL_MS = 90_000;
+
+// ---------------------------------------------------------------------------
+// WI-2B.6 (2026-09-27) — Decimal-safe reconciliation helpers for
+// the projection layer. We avoid `parseFloat` for currency (loses
+// cents at scale); instead we convert Decimal-safe strings into
+// integer cents and compare with a 1-cent tolerance to absorb the
+// extractor's own rounding variance (which uses similar 0.02
+// tolerance in `validate.ts`).
+// ---------------------------------------------------------------------------
+function decimalStringToCents(s: string | null | undefined): number | null {
+  if (s == null) return null;
+  const trimmed = String(s).trim();
+  if (!trimmed) return null;
+  // Reject anything that isn't a plain decimal number (optional
+  // sign, digits, one decimal point). Prevents accidental
+  // acceptance of things like "$1,234.56" here — the extractor
+  // already emits raw decimal strings.
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return null;
+  const [wholeRaw, fracRaw = ""] = trimmed.split(".");
+  const sign = wholeRaw.startsWith("-") ? -1 : 1;
+  const whole = Math.abs(Number(wholeRaw));
+  if (!Number.isFinite(whole)) return null;
+  const fracPadded = (fracRaw + "00").slice(0, 2);
+  const frac = Number(fracPadded);
+  if (!Number.isFinite(frac)) return null;
+  return sign * (whole * 100 + frac);
+}
+function centsMatch(a: number | null | undefined, b: number | null | undefined, toleranceCents = 1): boolean {
+  if (a == null || b == null) return false;
+  return Math.abs(a - b) <= toleranceCents;
+}
+
 const apSummaryCache = new Map<
   string,
   { at: number; value: LinkedIntelligenceForEmail["invoiceSummary"] }
@@ -1654,15 +1686,39 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
     // empty (legacy text-only invoices), fall back to the raw list
     // so those cards don't regress.
     lineItems: (() => {
+      // WI-2B.6 (2026-09-27) — reconciliation-gated purchase filter.
+      // The role classifier occasionally admits printed subtotal /
+      // tax rows into PRIMARY_PURCHASE when the surrounding text
+      // does not match the summary keyword lexicon (verified on
+      // invoice #200824: "MS Office 365 Fees. $741.10" and
+      // "Billing Cycle: April, 2026. 8640-5 $37.06" both tagged
+      // PRIMARY_PURCHASE by the canonical classifier). We use the
+      // extractor's own reconciled scalars — `extraction.subtotal`,
+      // `extraction.total`, `extraction.taxTotal` — as
+      // Decimal-safe exclusion anchors.
+      const subtotalCents = decimalStringToCents(extraction?.subtotal ?? null);
+      const totalCents = decimalStringToCents(extraction?.total ?? null);
+      const taxTotalCents = decimalStringToCents(extraction?.taxTotal ?? null);
+      const isReconciliationOutlier = (amountStr: string | null): boolean => {
+        const cents = decimalStringToCents(amountStr);
+        if (cents == null) return false;
+        return centsMatch(cents, subtotalCents)
+          || centsMatch(cents, totalCents)
+          || centsMatch(cents, taxTotalCents);
+      };
       const canonical = analysis?.canonicalLineItems ?? [];
       if (canonical.length > 0) {
-        const purchase = canonical.filter((li) =>
-          li.role === "PRIMARY_PURCHASE" ||
-          li.role === "SURCHARGE" ||
-          li.role === "FREIGHT" ||
-          li.role === "CREDIT" ||
-          li.role === "DISCOUNT",
-        );
+        const purchase = canonical.filter((li) => {
+          const roleOk =
+            li.role === "PRIMARY_PURCHASE" ||
+            li.role === "SURCHARGE" ||
+            li.role === "FREIGHT" ||
+            li.role === "CREDIT" ||
+            li.role === "DISCOUNT";
+          if (!roleOk) return false;
+          if (isReconciliationOutlier(li.extension != null ? String(li.extension) : null)) return false;
+          return true;
+        });
         if (purchase.length > 0) {
           return purchase.slice(0, 32).map((li) => ({
             description: li.description ?? "",
@@ -1672,33 +1728,75 @@ async function summariseApIntake(clubId: string, intakeId: string): Promise<Link
           }));
         }
       }
-      return extraction?.lineItems && extraction.lineItems.length > 0
-        ? extraction.lineItems.slice(0, 32).map((li) => ({
+      const raw = extraction?.lineItems ?? [];
+      if (raw.length > 0) {
+        const filtered = raw.filter((li) => !isReconciliationOutlier(li.amount ?? null));
+        if (filtered.length > 0) {
+          return filtered.slice(0, 32).map((li) => ({
             description: li.description ?? "",
             quantity: li.quantity ?? null,
             unitCost: li.unitCost ?? null,
             amount: li.amount ?? null,
-          }))
-        : null;
+          }));
+        }
+      }
+      return null;
     })(),
-    // WI-2B.5 (2026-09-27) — first-class tax breakdown, sourced from
-    // the extractor's canonicalEvidence.taxComponents (already
-    // computed; not re-parsed). SUMMARY-level rows are the printed
-    // "GST · $37.06" style tax lines every reviewer expects to see;
-    // LINE-level and GROUP-level components are already reflected in
-    // the purchase rows above and would double-count. Capped at 8
-    // entries for payload size.
+    // WI-2B.5 (2026-09-27) — first-class tax breakdown from
+    // canonicalEvidence.taxComponents.
+    //
+    // WI-2B.6 (2026-09-27) — reconciliation gate. The extractor
+    // sometimes emits multiple SUMMARY-level components for the
+    // same tax type when OCR concatenates leading digits into the
+    // amount field (verified on #200824: taxComponents contained
+    // both `{taxType: GST, amount: 37.06}` and `{taxType: GST,
+    // amount: 6741.10}` — the second is impossible for a $778.16
+    // invoice). We keep only components whose amount is a plausible
+    // tax value (> 0 AND <= total * 1.02), and among components of
+    // the same taxType we prefer the one matching
+    // `extraction.taxTotal` exactly, then fall back to the highest
+    // confidence.
     tax: (() => {
       const comps = analysis?.taxComponents ?? [];
       if (comps.length === 0) return null;
       const summary = comps.filter((c) => c.level === "SUMMARY");
       const chosen = summary.length > 0 ? summary : comps;
-      const rows = chosen.slice(0, 8).map((c) => ({
-        label: c.taxType,
-        amount: c.amount != null ? String(c.amount) : null,
-        rate: c.rate != null ? Number(c.rate) : null,
-      }));
-      return rows.length > 0 ? rows : null;
+      const totalCentsForTax = decimalStringToCents(extraction?.total ?? null);
+      const taxTotalCentsForTax = decimalStringToCents(extraction?.taxTotal ?? null);
+      // Step 1: drop implausible amounts (<= 0 or > invoice total).
+      const plausible = chosen.filter((c) => {
+        const cents = decimalStringToCents(c.amount != null ? String(c.amount) : null);
+        if (cents == null || cents <= 0) return false;
+        if (totalCentsForTax != null && cents > Math.round(totalCentsForTax * 1.02)) return false;
+        return true;
+      });
+      // Step 2: within each taxType, deduplicate by canonical
+      // identity (rate + tie-breaker). Prefer the component whose
+      // amount matches extraction.taxTotal; else the highest-
+      // confidence component.
+      const byType = new Map<string, typeof plausible>();
+      for (const c of plausible) {
+        const key = c.taxType;
+        const arr = byType.get(key) ?? [];
+        arr.push(c);
+        byType.set(key, arr);
+      }
+      const rows: Array<{ label: string; amount: string | null; rate: number | null }> = [];
+      for (const arr of byType.values()) {
+        const withMatch = taxTotalCentsForTax != null
+          ? arr.find((c) => {
+              const cents = decimalStringToCents(c.amount != null ? String(c.amount) : null);
+              return cents != null && centsMatch(cents, taxTotalCentsForTax);
+            })
+          : undefined;
+        const winner = withMatch ?? arr.slice().sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+        rows.push({
+          label: winner.taxType,
+          amount: winner.amount != null ? String(winner.amount) : null,
+          rate: winner.rate != null ? Number(winner.rate) : null,
+        });
+      }
+      return rows.length > 0 ? rows.slice(0, 8) : null;
     })(),
   };
 

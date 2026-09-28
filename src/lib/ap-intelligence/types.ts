@@ -57,7 +57,12 @@ export type ExtractionState = (typeof EXTRACTION_STATES)[number];
 // line items from `canonicalLineItems` (role-aware) and surfaces a
 // first-class `tax` array from `taxComponents`. No extractor
 // changes; cache invalidation only.
-export const EXTRACTION_RULE_VERSION = 10;
+// WI-2B.6 (2026-09-27) — bumped 10 -> 11. The projection now
+// applies a Decimal-safe reconciliation gate that excludes canonical
+// line items whose amount equals subtotal / total / taxTotal, and
+// deduplicates tax components by taxType keeping the entry matching
+// taxTotal (or highest-confidence otherwise). No extractor changes.
+export const EXTRACTION_RULE_VERSION = 11;
 
 // ---------------------------------------------------------------------------
 // Vendor resolution outcomes.

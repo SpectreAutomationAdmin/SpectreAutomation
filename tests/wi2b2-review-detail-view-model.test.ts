@@ -440,3 +440,63 @@ describe("WI-2B.5 — tax breakdown + no subtotal/total pollution", () => {
     expect(withTax.invoice.lineItems!.map((l) => l.description)).toEqual(["Item A", "Item B"]);
   });
 });
+
+describe("WI-2B.6 view-model — reconciliation-gated payloads", () => {
+  // These tests receive already-projected data (ApInvoiceCardIntelligence),
+  // so they verify that legitimate tax rows survive AND that the
+  // Line Items renderer never grows past the projection payload.
+
+  it("passes projection tax + line items through the Review view-model unchanged", () => {
+    // Simulating the WI-2B.6-fixed projection for invoice #200824.
+    const linked = {
+      apReviewIntakeIds: [],
+      statementReviewIntakeIds: [],
+      attachmentCount: 1,
+      invoiceAttachmentCount: 1,
+      statementAttachmentCount: 0,
+      dominantFacet: "invoice",
+      invoiceSummary: {
+        sender: { name: null, email: null, relationship: "OTHER" },
+        extractedVendor: { name: "Club Support Inc" },
+        vendorMatch: { state: "NOT_FOUND", matchedName: null, matchedVendorId: null },
+        invoiceNumber: "200824",
+        invoiceDate: null, dueDate: null,
+        gross: { amount: "778.16", currency: "CAD" },
+        paymentTerms: null, paymentTermsSource: null,
+        purchaseOrder: { poNumber: null, matchedPoDocumentId: null, variance: null },
+        category: { label: null, glAccountNumber: null, glAccountName: null, capitalState: null, source: null, alternates: [] },
+        workflowState: "VENDOR_MATCH_REQUIRED" as never,
+        workflowReason: null,
+        lineItems: [
+          { description: "Microsoft 365 Business Standard", quantity: "26", unitCost: "17.85", amount: "464.10" },
+          { description: "Microsoft 365 Business Basic", quantity: "5", unitCost: "8.51", amount: "42.55" },
+          { description: "Microsoft 365 Business Premium", quantity: "5", unitCost: "35.76", amount: "178.80" },
+          { description: "Microsoft 365 Visio Plan 2", quantity: "2", unitCost: "21.42", amount: "42.84" },
+          { description: "Microsoft Entra ID P2", quantity: "1", unitCost: "12.81", amount: "12.81" },
+        ],
+        tax: [{ label: "GST", amount: "37.06", rate: 5 }],
+      },
+    } as unknown as LinkedIntelligenceForEmail;
+    const out = toRealReviewData({
+      detail: baseDetail(),
+      linked,
+      clubTimezone: ZONE,
+    });
+    expect(out.invoice.lineItems).toHaveLength(5);
+    expect(out.invoice.lineItems!.map((l) => l.description)).toEqual([
+      "Microsoft 365 Business Standard",
+      "Microsoft 365 Business Basic",
+      "Microsoft 365 Business Premium",
+      "Microsoft 365 Visio Plan 2",
+      "Microsoft Entra ID P2",
+    ]);
+    // No subtotal row (741.10) and no Billing Cycle row (37.06 that
+    // isn't the GST) should appear here.
+    expect(out.invoice.lineItems!.some((l) => l.amount === "741.10")).toBe(false);
+    expect(out.invoice.lineItems!.some((l) => l.description.startsWith("Billing Cycle"))).toBe(false);
+    // Exactly one tax row.
+    expect(out.invoice.tax).toEqual([{ label: "GST", amount: "37.06", rate: 5 }]);
+    // No impossible 6741.10 anywhere.
+    expect(out.invoice.tax!.some((t) => t.amount === "6741.10" || t.amount === "6741.1")).toBe(false);
+  });
+});
