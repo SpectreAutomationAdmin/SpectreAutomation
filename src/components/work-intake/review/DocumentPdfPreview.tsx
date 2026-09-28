@@ -54,15 +54,17 @@ export default function DocumentPdfPreview({ ingestedDocumentId, filename }: Pro
         if (res.status === 404) { setError("Preview not available."); return; }
         if (!res.ok) { setError(`Preview server returned ${res.status}.`); return; }
         const blob = await res.blob();
-        // WI-2B.4 — append PDF Open Parameters fragment so Chromium's
-        // built-in viewer opens page 1 at "Fit page" (whole page
-        // visible; no vertical scroll inside the card) and hides the
-        // built-in toolbar / thumbnail pane. Chromium honours this on
-        // blob: URIs. The fragment is ignored by browsers that don't
-        // support Open Parameters, in which case the default zoom is
-        // applied — never a rendering failure.
+        // WI-2B.4 — PDF Open Parameters fragment so Chromium's built-in
+        // viewer hides the toolbar / navpanes on load. Ignored by
+        // browsers that don't support Open Parameters.
+        //
+        // WI-2B.7 — switched initial view from `Fit` (whole-page-fit,
+        // which left large gray gutters when the viewport aspect
+        // differed from Letter) to `FitH` (fit-to-width). The
+        // invoice now fills the viewport width; internal vertical
+        // scrolling is acceptable per the WI-2B.7 brief §3.
         currentBlobRef.current = URL.createObjectURL(blob);
-        setBlobUrl(currentBlobRef.current + "#view=Fit&toolbar=0&navpanes=0&pagemode=none");
+        setBlobUrl(currentBlobRef.current + "#view=FitH&toolbar=0&navpanes=0&pagemode=none");
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Preview request failed.");
       } finally {

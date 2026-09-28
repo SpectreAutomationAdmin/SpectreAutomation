@@ -5949,25 +5949,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 }
 
 /* ---------- Invoice Details ---------- */
-/* WI-2B.5 (2026-09-27) — narrower document column + wider metadata
-   column. The PDF preview is a portrait document; the previous
-   1.05fr / 1fr split made it a landscape frame with heavy black
-   gutters. Fixing the doc column at a portrait width lets the
-   iframe render the invoice legibly, and gives the classification
-   pane the released horizontal space.
-   WI-2B.6 (2026-09-27) — widen the doc column (was 280-380 → now
-   420-480) while explicitly preserving height. Height and width
-   are DECOUPLED here — aspect-ratio has been removed. */
+/* WI-2B.7 (2026-09-27) — CONSOLIDATED Invoice Details card.
+   Left column: PDF (WI-2B.6 dimensions preserved — ~480 px wide,
+   560 px tall). Right column: an "info" region that stacks
+   metadata + context side-by-side on top and Line Items spanning
+   the full width beneath. Standalone Line Items and Context cards
+   were removed from the main body (§1).
+   WI-2B.5 (2026-09-27) — narrower document column + wider metadata
+   column. WI-2B.6 (2026-09-27) — widen the doc column (was 280-380
+   → now 420-480). Height and width decoupled. */
 .wi-review-details-grid {
   display: grid;
   grid-template-columns: minmax(420px, 480px) minmax(0, 1fr);
-  gap: 20px;
+  gap: 24px;
   align-items: start;
 }
-.wi-review-details-doc, .wi-review-details-meta { min-width: 0; }
-/* WI-2B.6 — PDF viewport. Explicit fixed height (accepted from
-   WI-2B.5) with a wider column. Small neutral gutter around the
-   Letter page is acceptable per the WI-2B.6 brief §14. */
+.wi-review-details-doc, .wi-review-details-info, .wi-review-details-meta { min-width: 0; }
+/* WI-2B.6/2B.7 — PDF viewport. Fixed height (accepted). */
 .wi-review-details-doc .wi-review-doc-wrap--pdf .wi-review-doc {
   height: 560px;
   padding: 0;
@@ -5980,10 +5978,53 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
   border: none;
   display: block;
 }
-/* Below 900px collapse the doc column onto its own row so the
-   classification pane doesn't get squeezed. */
-@media (max-width: 900px) {
+/* WI-2B.7 — right-side info column. Metadata + Context in the
+   upper region (2-col at desktop), Line Items beneath spanning
+   the full right width. */
+.wi-review-details-info {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 20px;
+}
+.wi-review-details-upper {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+.wi-review-details-metadata, .wi-review-details-context { min-width: 0; }
+/* WI-2B.7 — subhead treatment for the inline sections inside the
+   consolidated card. Editorial serif, smaller than the card title
+   (h2), larger than a normal label. NO card chrome (§8). */
+.wi-review-details-subhead {
+  font-family: var(--font-source-serif-4), Georgia, Cambria, "Times New Roman", Times, serif;
+  font-weight: 500;
+  font-size: 13.5px;
+  line-height: 18px;
+  color: var(--wi-ink);
+  margin: 0 0 8px;
+  letter-spacing: -0.003em;
+}
+.wi-review-details-subhead-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wi-review-hairline-soft);
+}
+.wi-review-details-subhead-row .wi-review-details-subhead { margin: 0; }
+.wi-review-details-context { padding-top: 2px; }
+/* WI-2B.7 — responsive collapse. Below 1100px let the PDF and the
+   info column stack vertically (invoice metadata still remains
+   side-by-side with Context on top of Line Items until much
+   narrower). Below 720px collapse the metadata + context row too. */
+@media (max-width: 1100px) {
   .wi-review-details-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .wi-review-details-upper { grid-template-columns: 1fr; }
 }
 
 /* Invoice document preview (HTML/CSS scaffold, not a placeholder icon) */

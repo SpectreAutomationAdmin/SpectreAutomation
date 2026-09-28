@@ -282,41 +282,49 @@ function Classification({ data }: { data: RealReviewData }) {
   );
 }
 
-function InvoiceDetails({ data }: { data: RealReviewData }) {
+// WI-2B.7 — Context rendered as an inline SECTION (no card chrome)
+// inside the consolidated Invoice Details card. Uses the same
+// per-row visual language as the WI-2B.6 standalone Context card
+// (category label + green check + title/meta), but drops the outer
+// .wi-review-card wrapper so the section reads as another column of
+// the same composed card, not a nested card-in-a-card (§8).
+function ContextSection({ data }: { data: RealReviewData }) {
   return (
-    <section className="wi-review-card wi-review-card--details" aria-label="Invoice Details">
-      <div className="wi-review-card-head">
-        <h2 className="wi-review-card-title">
-          {data.invoice.hasExtraction ? "Invoice Details" : "Work Intake Details"}
-        </h2>
+    <div className="wi-review-details-context" aria-label="Context">
+      <h3 className="wi-review-details-subhead">Context</h3>
+      <div className="wi-review-context-list">
+        {data.context.map((row, i) => (
+          <div key={i} className="wi-review-context-row">
+            <div className="wi-review-context-cat">{row.category}</div>
+            <div className="wi-review-context-body">
+              <CheckDot />
+              <div className="wi-review-context-lines">
+                <div className="wi-review-context-title">{row.title}</div>
+                <div className="wi-review-context-meta">{row.meta}</div>
+              </div>
+            </div>
+            <div className="wi-review-context-action" />
+          </div>
+        ))}
       </div>
-      <div className="wi-review-details-grid">
-        <div className="wi-review-details-doc">
-          <DocumentPreview data={data} />
-        </div>
-        <div className="wi-review-details-meta">
-          <Classification data={data} />
-        </div>
-      </div>
-    </section>
+    </div>
   );
 }
 
-function LineItems({ data }: { data: RealReviewData }) {
-  // WI-2B.5 — render role-aware purchase rows from the extractor
-  // projection, followed by canonical tax rows. Subtotal and Total
-  // are intentionally NOT rendered here — they belong in the
-  // Invoice Details classification pane (Total Amount) and are not
-  // "purchases." No client-side heuristics; row semantics come from
-  // the canonical extractor.
+// WI-2B.7 — Line Items rendered as an inline SECTION spanning the
+// combined metadata + context width. Same table + summary head as
+// the WI-2B.6 standalone Line Items card, minus the .wi-review-card
+// wrapper. Freezes the WI-2B.6-accepted data: role-aware purchase
+// rows + canonical tax rows, subtotal/total NEVER become rows.
+function LineItemsSection({ data }: { data: RealReviewData }) {
   const lines = data.invoice.lineItems ?? [];
   const tax = data.invoice.tax ?? [];
   const totalRows = lines.length + tax.length;
   const nextIndexAfterLines = lines.length + 1;
   return (
-    <section className="wi-review-card wi-review-card--lines" aria-label="Line Items">
-      <div className="wi-review-card-head wi-review-card-head--split">
-        <h2 className="wi-review-card-title">Line Items</h2>
+    <div className="wi-review-details-lines" aria-label="Line Items">
+      <div className="wi-review-details-subhead-row">
+        <h3 className="wi-review-details-subhead">Line Items</h3>
         {totalRows > 0 && (
           <div className="wi-review-card-summary">
             <span>{totalRows} item{totalRows === 1 ? "" : "s"}</span>
@@ -370,30 +378,38 @@ function LineItems({ data }: { data: RealReviewData }) {
             : "This item does not carry line-item data."}
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
-function ContextCard({ data }: { data: RealReviewData }) {
+// WI-2B.7 — Consolidated Invoice Details card.
+// Layout:
+//   Left:  PDF (unchanged)
+//   Right: two-column upper (metadata + context) then Line Items
+//          spanning the full right width.
+// The standalone Line Items and Context cards are removed from the
+// main body.
+function InvoiceDetails({ data }: { data: RealReviewData }) {
   return (
-    <section className="wi-review-card wi-review-card--context" aria-label="Context">
+    <section className="wi-review-card wi-review-card--details" aria-label="Invoice Details">
       <div className="wi-review-card-head">
-        <h2 className="wi-review-card-title">Context</h2>
+        <h2 className="wi-review-card-title">
+          {data.invoice.hasExtraction ? "Invoice Details" : "Work Intake Details"}
+        </h2>
       </div>
-      <div className="wi-review-context-list">
-        {data.context.map((row, i) => (
-          <div key={i} className="wi-review-context-row">
-            <div className="wi-review-context-cat">{row.category}</div>
-            <div className="wi-review-context-body">
-              <CheckDot />
-              <div className="wi-review-context-lines">
-                <div className="wi-review-context-title">{row.title}</div>
-                <div className="wi-review-context-meta">{row.meta}</div>
-              </div>
+      <div className="wi-review-details-grid">
+        <div className="wi-review-details-doc">
+          <DocumentPreview data={data} />
+        </div>
+        <div className="wi-review-details-info">
+          <div className="wi-review-details-upper">
+            <div className="wi-review-details-metadata">
+              <Classification data={data} />
             </div>
-            <div className="wi-review-context-action" />
+            <ContextSection data={data} />
           </div>
-        ))}
+          <LineItemsSection data={data} />
+        </div>
       </div>
     </section>
   );
@@ -496,11 +512,10 @@ export default function WorkIntakeReviewReal({ data }: { data: RealReviewData })
           <Header data={data} />
           <Tabs />
           <div className="wi-review-body">
+            {/* WI-2B.7 — Invoice Details now includes Metadata,
+               Context, and Line Items as sections. Standalone
+               Line Items and Context cards were removed. */}
             <InvoiceDetails data={data} />
-            <div className="wi-review-two-col">
-              <LineItems data={data} />
-              <ContextCard data={data} />
-            </div>
             <Workflow data={data} />
           </div>
         </div>
