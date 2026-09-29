@@ -9694,10 +9694,56 @@ model ReportingLedgerBatch {
   openedAt     DateTime  @default(now())
   closedAt     DateTime?
 
+  // TB-RESET-1d.b (2026-09-29) — original uploaded-file identity.
+  // Distinct from ReportingLedgerSnapshot.payloadHash:
+  //   • sourceFileHash — SHA-256 hex of the RAW uploaded bytes
+  //                      (workbook or CSV). Answers "has this exact
+  //                      file already been imported?" and "what
+  //                      file produced batch X?". Deliberately NOT
+  //                      globally unique — the same file could
+  //                      legitimately be imported by two different
+  //                      tenants, and duplicate-file policy is an
+  //                      application-level control in TB-RESET-1d.b.2
+  //                      (not a DB-level uniqueness constraint).
+  //   • ReportingLedgerSnapshot.payloadHash — SHA-256 hex of the
+  //                      NORMALISED snapshot payload (JSON). Answers
+  //                      "is this normalised snapshot bit-identical
+  //                      to a prior one?"
+  // Nullable for legacy batches / pre-1d.b writes.
+  sourceFileHash String?
+
+  // TB-RESET-1d.b — explicit-supersession pointer for the
+  // founder-authorised replacement flow. When founder replaces an
+  // existing committed snapshot for the same effective date, the
+  // OLD batch flips state="rolled-back" and its
+  // `supersededByBatchId` is set to the NEW batch. Preserves the
+  // audit chain across replacements without relying on
+  // "latest capturedAt wins" as an accounting control.
+  //
+  // Self-relation FK (Prisma-navigable): a bad new batch that gets
+  // deleted `SetNull`s the pointer on any old batch it superseded —
+  // the old batch's audit trail survives even if the newer one is
+  // discarded. Not @unique: the DB never assumes "at most one
+  // supersession chain per (clubId, entityKind, asOf)"; that is a
+  // narrower application invariant enforced by 1d.b.2 replace flow.
+  supersededByBatchId String?
+  supersededBy   ReportingLedgerBatch? @relation("ReportingLedgerBatchSupersession", fields: [supersededByBatchId], references: [batchId], onDelete: SetNull)
+  supersedes     ReportingLedgerBatch[] @relation("ReportingLedgerBatchSupersession")
+
+  // TB-RESET-1d.b — who opened this batch. Deliberately kept as a
+  // plain String (no FK to User) to preserve the AuditLog-style
+  // convention already used throughout the codebase for actor
+  // identity: nullable, no cross-tenant referential brittleness,
+  // no cascade concerns when a user is deleted. Application code
+  // resolves the User row when needed.
+  createdByUserId String?
+
   snapshots ReportingLedgerSnapshot[]
 
   @@index([clubId, state])
   @@index([clubId, openedAt])
+  @@index([clubId, sourceFileHash])
+  @@index([supersededByBatchId])
 }
 
 model ReportingLedgerSnapshot {

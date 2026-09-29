@@ -9638,10 +9638,23 @@ model ReportingLedgerBatch {
   openedAt     DateTime  @default(now())
   closedAt     DateTime?
 
+  // TB-RESET-1d.b (2026-09-29) — see prisma/schema.prisma for the
+  // full narrative on sourceFileHash / supersededByBatchId /
+  // createdByUserId semantics + why supersededByBatchId is a
+  // self-relation FK with SetNull on delete, and why createdByUserId
+  // is intentionally NOT an FK to User.
+  sourceFileHash      String?
+  supersededByBatchId String?
+  supersededBy   ReportingLedgerBatch? @relation("ReportingLedgerBatchSupersession", fields: [supersededByBatchId], references: [batchId], onDelete: SetNull)
+  supersedes     ReportingLedgerBatch[] @relation("ReportingLedgerBatchSupersession")
+  createdByUserId String?
+
   snapshots ReportingLedgerSnapshot[]
 
   @@index([clubId, state])
   @@index([clubId, openedAt])
+  @@index([clubId, sourceFileHash])
+  @@index([supersededByBatchId])
 }
 
 model ReportingLedgerSnapshot {
