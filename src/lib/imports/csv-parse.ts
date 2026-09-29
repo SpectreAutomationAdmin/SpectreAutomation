@@ -130,6 +130,22 @@ const COA_HEADER_ALIASES: Record<string, string> = {
   "g/l code": "number",
   "gl code": "number",
   "code": "number",
+  // COA-RESET-1 (2026-09-29) — the founder's Master Chart of
+  // Accounts workbook uses "New Account# for Spectre" as the
+  // authoritative account number column. Also aliases the
+  // informational-only "Old Account# from Jonas" to an ignored
+  // column name so it doesn't collide with `number` (dropped
+  // silently — it's crosswalk-only per founder rule).
+  "new account# for spectre": "number",
+  "new account #": "number",
+  "new account number": "number",
+  "intended spectre account number": "number",
+  "intended account number": "number",
+  "spectre account number": "number",
+  "old account# from jonas": "_ignored_old_jonas_number",
+  "old account #": "_ignored_old_jonas_number",
+  "old jonas account number": "_ignored_old_jonas_number",
+  "jonas account number": "_ignored_old_jonas_number",
   // name
   "name": "name",
   "account name": "name",
