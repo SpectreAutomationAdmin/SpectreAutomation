@@ -127,83 +127,107 @@ async function main() {
     // Because the total delete surface is large + spans many tables,
     // wrap the whole thing in a single transaction with a generous
     // timeout. Prisma's default 5s is too short.
+    // Helper for optional-table deletes (schema drift resilience).
+    const runIfExists = async (tx, name, fn) => {
+      try { const r = await fn(); log("     " + name.padEnd(42) + " →", r.count); }
+      catch (e) { log("     (" + name + " skipped: " + (e?.message ?? String(e)).split("\n")[0] + ")"); }
+    };
+
     await p.$transaction(async (tx) => {
-      // A. JournalEntry side — cascades lines + attachments
-      const jeDeleted = await tx.journalEntry.deleteMany({ where: w });
-      log("  A. journalEntry.deleteMany               →", jeDeleted.count);
+      // FK ORDER: delete every table that HOLDS a *.postedJournalEntryId /
+      // glJournalEntryId / settlementJournalId reference to JournalEntry
+      // BEFORE we can delete JournalEntry itself. Postgres enforces
+      // Restrict semantics on those relations.
+      //
+      // Coulee inventory (from dry-run):
+      //   • PayrollBatch (37 rows, glJournalEntryId)
+      //   • PaymentRun (11 rows, settlementJournalId)
+      //   • APInvoice (1 row, postedJournalEntryId + reversingJournalEntryId)
+      //   • APInvoiceLine (1 row, cascades from APInvoice)
+      //   • PaymentInstruction (12 rows) + PaymentEvent (113 rows)
+      //     + PaymentDestinationSnapshot (12 rows) — no direct JE FK
+      //     but children of PaymentRun (walk them first).
+      //   • VendorPayment (0), PaymentBatchItem (0), PaymentBatch (0)
 
-      // B. AP invoice side
-      const apLineDel = await tx.aPInvoiceLine.deleteMany({ where: w });
-      log("  B. aPInvoiceLine.deleteMany              →", apLineDel.count);
-      const vpDel = await tx.vendorPayment.deleteMany({ where: w });
-      log("     vendorPayment.deleteMany              →", vpDel.count);
-      const apDel = await tx.aPInvoice.deleteMany({ where: w });
-      log("     aPInvoice.deleteMany                  →", apDel.count);
-
-      // C. Payments side (children before parents)
-      const peDel = await tx.paymentEvent.deleteMany({ where: w });
-      log("  C. paymentEvent.deleteMany               →", peDel.count);
-      const pdsDel = await tx.paymentDestinationSnapshot.deleteMany({ where: w });
-      log("     paymentDestinationSnapshot.deleteMany →", pdsDel.count);
-      const piDel = await tx.paymentInstruction.deleteMany({ where: w });
-      log("     paymentInstruction.deleteMany         →", piDel.count);
-      const pbiDel = await tx.paymentBatchItem.deleteMany({ where: w });
-      log("     paymentBatchItem.deleteMany           →", pbiDel.count);
-      const pbDel = await tx.paymentBatch.deleteMany({ where: w });
-      log("     paymentBatch.deleteMany               →", pbDel.count);
-      const prDel = await tx.paymentRun.deleteMany({ where: w });
-      log("     paymentRun.deleteMany                 →", prDel.count);
-
-      // D. Payroll side — walk children before parent so cascade order is deterministic.
-      // Order: nullify parent config pointer, delete batch children,
-      // delete batches, delete components, delete GL profile.
-      // PayrollClubConfig.glAccountingProfileId - nullify.
+      // A. Nullify parent-config pointer to payroll GL profile.
       await tx.payrollClubConfig.updateMany({
         where: { clubId: COULEE, glAccountingProfileId: { not: null } },
         data: { glAccountingProfileId: null },
       });
-      log("  D. payrollClubConfig.glAccountingProfileId nullified");
+      log("  A. payrollClubConfig.glAccountingProfileId cleared");
 
-      // PayrollBatch children — each table has its own FK to the batch.
-      // Use raw catches so a table absent under a given schema branch
-      // doesn't fail the whole run.
-      const runIfExists = async (name, fn) => {
-        try { const r = await fn(); log("     " + name.padEnd(38) + " →", r.count); }
-        catch (e) { log("     (" + name + " skipped: " + (e?.message ?? String(e)).split("\n")[0] + ")"); }
-      };
-      await runIfExists("payrollBatchEarning.deleteMany", () => tx.payrollBatchEarning.deleteMany({ where: w }));
-      await runIfExists("payrollBatchDeduction.deleteMany", () => tx.payrollBatchDeduction.deleteMany({ where: w }));
-      await runIfExists("payrollBatchException.deleteMany", () => tx.payrollBatchException.deleteMany({ where: w }));
-      await runIfExists("payrollBatchAllowanceSnapshot.deleteMany", () => tx.payrollBatchAllowanceSnapshot.deleteMany({ where: w }));
-      await runIfExists("payrollBatchComponentSnapshot.deleteMany", () => tx.payrollBatchComponentSnapshot.deleteMany({ where: w }));
-      await runIfExists("payrollBatchReviewAttestation.deleteMany", () => tx.payrollBatchReviewAttestation.deleteMany({ where: w }));
+      // B. PayrollBatch children → PayrollBatch (releases glJournalEntryId FK).
+      await runIfExists(tx, "payrollBatchEarning.deleteMany",       () => tx.payrollBatchEarning.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchDeduction.deleteMany",     () => tx.payrollBatchDeduction.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchException.deleteMany",     () => tx.payrollBatchException.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchAllowanceSnapshot.deleteMany", () => tx.payrollBatchAllowanceSnapshot.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchComponentSnapshot.deleteMany", () => tx.payrollBatchComponentSnapshot.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchReviewAttestation.deleteMany", () => tx.payrollBatchReviewAttestation.deleteMany({ where: w }));
       const payBatchDel = await tx.payrollBatch.deleteMany({ where: w });
-      log("     payrollBatch.deleteMany                →", payBatchDel.count);
+      log("  B. payrollBatch.deleteMany                →", payBatchDel.count);
+
+      // C. Payments children → PaymentRun (releases settlementJournalId FK).
+      const peDel = await tx.paymentEvent.deleteMany({ where: w });
+      log("  C. paymentEvent.deleteMany                →", peDel.count);
+      const piDel = await tx.paymentInstruction.deleteMany({ where: w });
+      log("     paymentInstruction.deleteMany           →", piDel.count);
+      const pdsDel = await tx.paymentDestinationSnapshot.deleteMany({ where: w });
+      log("     paymentDestinationSnapshot.deleteMany   →", pdsDel.count);
+      const pbiDel = await tx.paymentBatchItem.deleteMany({ where: w });
+      log("     paymentBatchItem.deleteMany             →", pbiDel.count);
+      const pbDel = await tx.paymentBatch.deleteMany({ where: w });
+      log("     paymentBatch.deleteMany                 →", pbDel.count);
+      const prDel = await tx.paymentRun.deleteMany({ where: w });
+      log("     paymentRun.deleteMany                   →", prDel.count);
+
+      // D. AP invoice side (releases APInvoice.postedJournalEntryId + reversingJournalEntryId).
+      const apLineDel = await tx.aPInvoiceLine.deleteMany({ where: w });
+      log("  D. aPInvoiceLine.deleteMany               →", apLineDel.count);
+      const vpDel = await tx.vendorPayment.deleteMany({ where: w });
+      log("     vendorPayment.deleteMany                →", vpDel.count);
+      const apDel = await tx.aPInvoice.deleteMany({ where: w });
+      log("     aPInvoice.deleteMany                    →", apDel.count);
+
+      // E. Additional JE-referencing tables — defensive nullifies for
+      //    any *.postedJournalEntryId fields that MIGHT hold a Coulee
+      //    reference. Coulee inventory showed 0 rows in all of these,
+      //    but a defensive updateMany is cheap.
+      await runIfExists(tx, "posSale.deleteMany",                    () => tx.pOSSale.deleteMany({ where: w }));
+      await runIfExists(tx, "inventoryTransaction.deleteMany",       () => tx.inventoryTransaction.deleteMany({ where: w }));
+      await runIfExists(tx, "inventoryReceiving.deleteMany",         () => tx.inventoryReceiving.deleteMany({ where: w }));
+      await runIfExists(tx, "privateEventDeposit.deleteMany",        () => tx.privateEventDeposit.deleteMany({ where: w }));
+      await runIfExists(tx, "lessonBooking.deleteMany",              () => tx.lessonBooking.deleteMany({ where: w }));
+      await runIfExists(tx, "assetDepreciationEntry.deleteMany",     () => tx.assetDepreciationEntry.deleteMany({ where: w }));
+      await runIfExists(tx, "assetDisposal.deleteMany",              () => tx.assetDisposal.deleteMany({ where: w }));
+      await runIfExists(tx, "capitalAsset.deleteMany",               () => tx.capitalAsset.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollRun.deleteMany",                 () => tx.payrollRun.deleteMany({ where: w }));
+
+      // F. JournalEntry now safe (cascades JournalEntryLine + JournalAttachment).
+      const jeDeleted = await tx.journalEntry.deleteMany({ where: w });
+      log("  F. journalEntry.deleteMany                →", jeDeleted.count);
+
+      // G. Payroll components + GL profile (removes 8 required Account FKs).
       const pcDel = await tx.payrollComponent.deleteMany({ where: w });
-      log("     payrollComponent.deleteMany            →", pcDel.count);
+      log("  G. payrollComponent.deleteMany            →", pcDel.count);
       const pgpDel = await tx.payrollGlAccountingProfile.deleteMany({ where: w });
-      log("     payrollGlAccountingProfile.deleteMany  →", pgpDel.count);
+      log("     payrollGlAccountingProfile.deleteMany   →", pgpDel.count);
 
-      // E. BankAccount — removes glAccountId FK
+      // H. BankAccount — removes glAccountId FK
       const baDel = await tx.bankAccount.deleteMany({ where: w });
-      log("  E. bankAccount.deleteMany                →", baDel.count);
+      log("  H. bankAccount.deleteMany                 →", baDel.count);
 
-      // F. Nullify soft/optional Account references on preserved entities.
+      // I. Nullify soft/optional Account references on preserved entities.
       const venNull = await tx.vendor.updateMany({
         where: { clubId: COULEE, defaultExpenseAccountId: { not: null } },
         data: { defaultExpenseAccountId: null },
       });
-      log("  F. vendor.defaultExpenseAccountId cleared →", venNull.count);
-      const taxNull1 = await tx.taxCode.updateMany({
-        where: { clubId: COULEE, recoverableAccountId: { not: null } },
-        data: { recoverableAccountId: null },
+      log("  I. vendor.defaultExpenseAccountId cleared →", venNull.count);
+      await runIfExists(tx, "taxCode.recoverableAccountId cleared", async () => {
+        return tx.taxCode.updateMany({ where: { clubId: COULEE, recoverableAccountId: { not: null } }, data: { recoverableAccountId: null } });
       });
-      log("     taxCode.recoverableAccountId cleared   →", taxNull1.count);
-      const taxNull2 = await tx.taxCode.updateMany({
-        where: { clubId: COULEE, payableAccountId: { not: null } },
-        data: { payableAccountId: null },
+      await runIfExists(tx, "taxCode.payableAccountId cleared", async () => {
+        return tx.taxCode.updateMany({ where: { clubId: COULEE, payableAccountId: { not: null } }, data: { payableAccountId: null } });
       });
-      log("     taxCode.payableAccountId cleared       →", taxNull2.count);
       const cpNull = await tx.clubProfile.updateMany({
         where: { clubId: COULEE },
         data: {
@@ -219,23 +243,23 @@ async function main() {
       });
       log("     clubProfile default* cleared           →", cpNull.count);
 
-      // G. AccountDepartment M2M
+      // J. AccountDepartment M2M
       const adDel = await tx.accountDepartment.deleteMany({ where: w });
-      log("  G. accountDepartment.deleteMany          →", adDel.count);
+      log("  J. accountDepartment.deleteMany           →", adDel.count);
 
-      // H. Account (FINALLY clear of FKs)
+      // K. Account (FINALLY clear of FKs)
       const acctDel = await tx.account.deleteMany({ where: w });
-      log("  H. account.deleteMany                    →", acctDel.count);
+      log("  K. account.deleteMany                     →", acctDel.count);
 
-      // I. Prior COA ImportBatch — retire (do not delete; ImportBatch
+      // L. Prior COA ImportBatch — retire (do not delete; ImportBatch
       //    is a per-tenant audit surface. Setting status=ARCHIVED
       //    preserves it for history but excludes from active queries.)
       const ibArchived = await tx.importBatch.updateMany({
         where: { clubId: COULEE, domain: "COA", status: { not: "ARCHIVED" } },
         data: { status: "ARCHIVED" },
       });
-      log("  I. importBatch(COA) archived             →", ibArchived.count);
-    }, { timeout: 120000, maxWait: 30000 });
+      log("  L. importBatch(COA) archived              →", ibArchived.count);
+    }, { timeout: 180000, maxWait: 30000 });
 
     const elapsed = Date.now() - before_ts;
     log("");
