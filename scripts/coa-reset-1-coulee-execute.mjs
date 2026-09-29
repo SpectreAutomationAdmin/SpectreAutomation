@@ -206,7 +206,15 @@ async function main() {
       const jeDeleted = await tx.journalEntry.deleteMany({ where: w });
       log("  F. journalEntry.deleteMany                →", jeDeleted.count);
 
-      // G. Payroll components + GL profile (removes 8 required Account FKs).
+      // G. PayrollComponent dependents (Restrict FK holders) BEFORE
+      //    PayrollComponent deletion. Coulee accounting is disposable
+      //    per founder direction; these employee-level payroll
+      //    configuration rows will be re-created after the new COA
+      //    is mapped.
+      await runIfExists(tx, "employeeBenefitPlanEnrolment.deleteMany",  () => tx.employeeBenefitPlanEnrolment.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBenefitPlan.deleteMany",            () => tx.payrollBenefitPlan.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollScheduledOneTimeEarning.deleteMany",() => tx.payrollScheduledOneTimeEarning.deleteMany({ where: w }));
+      await runIfExists(tx, "employeeRecurringPayrollComponent.deleteMany", () => tx.employeeRecurringPayrollComponent.deleteMany({ where: w }));
       const pcDel = await tx.payrollComponent.deleteMany({ where: w });
       log("  G. payrollComponent.deleteMany            →", pcDel.count);
       const pgpDel = await tx.payrollGlAccountingProfile.deleteMany({ where: w });
