@@ -99,7 +99,7 @@ export const KNOWN_HANDLING = new Map([
   ["EmployeeRecurringPayrollComponent.componentId",
     { strategy: "A", reason: "EmployeeRecurringPayrollComponent deleted step G before PayrollComponent step G" }],
   ["PayrollBatchComponentSnapshot.sourceComponentId",
-    { strategy: "A", reason: "PayrollBatchComponentSnapshot cascade-deleted with PayrollBatch step B, before PayrollComponent step G" }],
+    { strategy: "A", reason: "PayrollBatchComponentSnapshot removed by explicit payrollBatchComponentSnapshot.deleteMany in step B2 (before payrollBatch.deleteMany), which is before PayrollComponent.deleteMany in step G" }],
   ["PayrollOpeningBalanceComponent.sourceComponentId",
     { strategy: "A", reason: "PayrollOpeningBalanceComponent deleted step G-1 before PayrollComponent step G" }],
   ["PayrollScheduledOneTimeEarning.componentId",
@@ -108,6 +108,18 @@ export const KNOWN_HANDLING = new Map([
   // === Incoming to PaymentDestinationSnapshot ===
   ["PaymentInstruction.destinationSnapshotId",
     { strategy: "A", reason: "PaymentInstruction deleted step C before PaymentDestinationSnapshot step C" }],
+
+  // === Fixup 3b (2026-09-29) — classifier-only completion for existing safe
+  //     handling that the earlier allowlist did not enumerate. No change to
+  //     the destructive transaction body.
+  //
+  //     Incoming to BankAccount ===
+  ["PaymentRun.fundingBankAccountId",
+    { strategy: "A", reason: "PaymentRun deleted step C before BankAccount step H (both Coulee-scoped deleteMany)" }],
+
+  // === Incoming to EmployeeRecurringPayrollComponent ===
+  ["PayrollBatchComponentSnapshot.sourceAssignmentId",
+    { strategy: "A", reason: "PayrollBatchComponentSnapshot removed by explicit payrollBatchComponentSnapshot.deleteMany in step B2 (before payrollBatch.deleteMany), which is before EmployeeRecurringPayrollComponent.deleteMany in step G" }],
 ]);
 
 // ---------------------------------------------------------------------------

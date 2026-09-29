@@ -242,6 +242,46 @@ describe("COA-RESET-1 · TARGET_TABLES + KNOWN_HANDLING invariants", () => {
       expect(KNOWN_HANDLING.get(key)?.strategy).toBe("A");
     }
   });
+
+  it("Fixup 3b — PaymentRun.fundingBankAccountId classified A with step C→step H ordering", () => {
+    const entry = KNOWN_HANDLING.get("PaymentRun.fundingBankAccountId");
+    expect(entry?.strategy).toBe("A");
+    expect(entry?.reason).toMatch(/PaymentRun deleted step C before BankAccount step H/);
+  });
+
+  it("Fixup 3b — PayrollBatchComponentSnapshot.sourceAssignmentId classified A with explicit-deleteMany reason (NOT cascade)", () => {
+    const entry = KNOWN_HANDLING.get("PayrollBatchComponentSnapshot.sourceAssignmentId");
+    expect(entry?.strategy).toBe("A");
+    // Actual mechanism: explicit tx.payrollBatchComponentSnapshot.deleteMany in step B2.
+    // Must NOT be labelled cascade — the row is removed by the explicit deleteMany,
+    // not by CASCADE from PayrollBatch (that CASCADE would also work but is not what
+    // the code relies on).
+    expect(entry?.reason).toMatch(/explicit payrollBatchComponentSnapshot\.deleteMany in step B2/);
+    expect(entry?.reason).not.toMatch(/cascade/i);
+  });
+
+  it("Fixup 3b — PayrollBatchComponentSnapshot.sourceComponentId reason corrected to explicit-deleteMany (was inaccurately labelled cascade)", () => {
+    const entry = KNOWN_HANDLING.get("PayrollBatchComponentSnapshot.sourceComponentId");
+    expect(entry?.strategy).toBe("A");
+    expect(entry?.reason).toMatch(/explicit payrollBatchComponentSnapshot\.deleteMany in step B2/);
+    expect(entry?.reason).not.toMatch(/cascade/i);
+  });
+
+  it("Fixup 3b invariant — the explicit payrollBatchComponentSnapshot.deleteMany that both entries cite really exists in the execute script BEFORE payrollBatch.deleteMany", () => {
+    const snapDelete = SCRIPT.indexOf("payrollBatchComponentSnapshot.deleteMany");
+    const batchDelete = SCRIPT.indexOf("payrollBatch.deleteMany({ where: w })");
+    expect(snapDelete).toBeGreaterThan(0);
+    expect(batchDelete).toBeGreaterThan(0);
+    expect(snapDelete).toBeLessThan(batchDelete);
+  });
+
+  it("Fixup 3b invariant — paymentRun.deleteMany really precedes bankAccount.deleteMany in the execute script", () => {
+    const pmRun = SCRIPT.indexOf("paymentRun.deleteMany({ where: w })");
+    const bank  = SCRIPT.indexOf("bankAccount.deleteMany({ where: w })");
+    expect(pmRun).toBeGreaterThan(0);
+    expect(bank).toBeGreaterThan(0);
+    expect(pmRun).toBeLessThan(bank);
+  });
 });
 
 describe("COA-RESET-1 · execute script structural invariants", () => {
