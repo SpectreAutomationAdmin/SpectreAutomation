@@ -5,31 +5,42 @@
 // staging; historical fixture accounting records are removed to
 // unblock referential integrity for physical Account deletion.
 //
+// FIXUP 3 (2026-09-29) — comprehensive preflight + newly-covered FKs:
+//   * Embedded pg_constraint walk classifies EVERY RESTRICT / NO ACTION
+//     incoming FK for the tables this reset touches, and ABORTS before
+//     any destructive write if an unhandled live-row FK is found. This
+//     replaces the earlier reactive one-FK-at-a-time discovery loop.
+//   * PayrollBatch self-references (correctsPayrollBatchId,
+//     pairedReversalBatchId, reversesPayrollBatchId) are explicitly
+//     nullified on Coulee rows before payrollBatch.deleteMany. This is
+//     acceptable ONLY because the Coulee payroll history being removed
+//     is disposable fixture history — do NOT generalize.
+//   * PayrollOpeningBalanceComponent (NOACT on PayrollComponent) is
+//     now deleted before PayrollComponent.
+//   * BudgetLine + ForecastLine (RESTRICT on Account) — 0 Coulee rows
+//     today but included so the reset is correct by FK graph, not
+//     accidentally correct by fixture population.
+//   * FingerprintMismatchEvent (RESTRICT on PayrollBatch) — 0 Coulee
+//     rows today, same rationale.
+//   * PayrollZeroHoursAcknowledgement (CASCADE on PayrollBatch) —
+//     0 Coulee rows today, explicit for auditability.
+//
 // SAFETY GATES (in order):
 //   1. Refuses without --commit unless in dry-run mode.
 //   2. Refuses without COA_RESET_1_CONFIRM=COULEE-COA-WIPE for commit.
 //   3. Refuses if club != Coulee Ridge / stagingDataMode != FOUNDER_REVIEW.
-//   4. Refuses if another club has any of the tables being wiped (defense in depth).
+//   4. EMBEDDED PREFLIGHT — walks pg_constraint for the destructive
+//      target set and classifies every RESTRICT / NO ACTION incoming
+//      FK as A / B / C / D. Any unhandled dependency with live rows
+//      aborts the reset before any write.
 //   5. Prints a manifest of every deletion/nullification before executing.
 //
-// FK-SAFE DELETE ORDER — respects Restrict semantics of every
-// enforced foreign key in the Coulee accounting graph:
-//   A. JournalEntry side (parent) — cascades JournalEntryLine + JournalAttachment
-//   B. AP invoice side — APInvoiceLine (cascade), VendorPayment, APInvoice
-//   C. Payments side — PaymentEvent, PaymentDestinationSnapshot,
-//      PaymentInstruction, PaymentBatchItem, PaymentBatch, PaymentRun
-//   D. Payroll side — PayrollBatch children (earnings, deductions,
-//      exceptions, snapshots, attestations), then PayrollBatch,
-//      then PayrollComponent, then PayrollGlAccountingProfile
-//      (removes 8 Account FKs), and nullify PayrollClubConfig.
-//   E. BankAccount — the LEGACY-PAY1A row (removes glAccountId FK)
-//   F. Nullify Vendor.defaultExpenseAccountId,
-//      TaxCode.{recoverableAccountId, payableAccountId},
-//      ClubProfile.default*AccountId
-//   G. AccountDepartment (M2M) — 0 rows on Coulee today
-//   H. Account (finally FK-clear)
-//   I. Prior COA ImportBatch (retire, since retaining would falsely
-//      represent lineage of the new accounting environment per §4)
+// FK PREFLIGHT CLASSIFICATIONS (see KNOWN_HANDLING below):
+//   A. EXPLICITLY DELETED BEFORE TARGET
+//   B. EXPLICITLY NULLIFIED / CLEARED BEFORE TARGET
+//   C. SELF-REFERENCE EXPLICITLY BROKEN
+//   D. ZERO LIVE COULEE ROWS, BUT STRUCTURALLY ACCOUNTED FOR
+//   (CASCADE dependencies are reported as db-handled, not classified.)
 //
 // PRESERVE (never touched):
 //   Club, User, UserClubRole, ClubProfile (structure), ClubFeatures,
@@ -39,17 +50,95 @@
 //   ReportingLedgerBatch/Snapshot (already 0 rows on Coulee).
 
 import { PrismaClient } from "@prisma/client";
+import {
+  TARGET_TABLES,
+  buildPreflightReport,
+  formatPreflightReport,
+} from "./lib/coa-reset-1-preflight.mjs";
 
 const COULEE = "cmrvdeny7000144372ktmmg9c";
 const CONFIRM_TOKEN = "COULEE-COA-WIPE";
 
 const args = process.argv.slice(2);
 const DRY_RUN = !args.includes("--commit");
+const PREFLIGHT_ONLY = args.includes("--preflight-only");
 const CONFIRM = process.env.COA_RESET_1_CONFIRM ?? "";
-const RESET_ACTOR_USER_ID = "cmrvdenz700034437agp7gqs5";
 
 function log(...a) { process.stdout.write(a.join(" ") + "\n"); }
 function assert(cond, msg) { if (!cond) throw new Error("SAFETY: " + msg); }
+
+// TARGET_TABLES + KNOWN_HANDLING are defined in the shared lib
+// (./lib/coa-reset-1-preflight.mjs) so tests can exercise the
+// classifier without loading Prisma / hitting a database.
+
+// ---------------------------------------------------------------------------
+// preflight — pg_constraint walk. Read-only. Fetches the raw FK graph for
+// TARGET_TABLES, attaches JOIN-based Coulee-scoped live-row counts, then
+// hands the rows to the pure `buildPreflightReport()` classifier.
+// ---------------------------------------------------------------------------
+async function preflight(prisma) {
+  const targets = Array.from(TARGET_TABLES);
+  const rawRows = await prisma.$queryRawUnsafe(`
+    SELECT
+      con.conname                                          AS constraint_name,
+      src_tbl.relname                                      AS source_table,
+      (array_agg(src_col.attname ORDER BY u.ord))[1]        AS source_col,
+      tgt_tbl.relname                                      AS target_table,
+      (array_agg(tgt_col.attname ORDER BY u.ord))[1]        AS target_col,
+      CASE con.confdeltype
+        WHEN 'a' THEN 'NO ACTION'
+        WHEN 'r' THEN 'RESTRICT'
+        WHEN 'c' THEN 'CASCADE'
+        WHEN 'n' THEN 'SET NULL'
+        WHEN 'd' THEN 'SET DEFAULT'
+      END                                                  AS on_delete
+    FROM pg_constraint con
+    JOIN pg_class src_tbl  ON src_tbl.oid = con.conrelid
+    JOIN pg_class tgt_tbl  ON tgt_tbl.oid = con.confrelid
+    JOIN LATERAL unnest(con.conkey)  WITH ORDINALITY AS u(k, ord)   ON TRUE
+    JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS f(fk, ord2) ON f.ord2 = u.ord
+    JOIN pg_attribute src_col ON src_col.attrelid = con.conrelid  AND src_col.attnum = u.k
+    JOIN pg_attribute tgt_col ON tgt_col.attrelid = con.confrelid AND tgt_col.attnum = f.fk
+    WHERE con.contype = 'f'
+      AND tgt_tbl.relname = ANY($1::text[])
+    GROUP BY con.conname, src_tbl.relname, tgt_tbl.relname, con.confdeltype
+    ORDER BY tgt_tbl.relname, src_tbl.relname, con.conname
+  `, targets);
+
+  // Attach Coulee-scoped live counts via JOIN through the FK. This proves
+  // tenant ownership through the parent relationship rather than trusting
+  // child.clubId (per founder Point 5).
+  for (const r of rawRows) {
+    if (r.on_delete !== "RESTRICT" && r.on_delete !== "NO ACTION") continue;
+    try {
+      const c = await prisma.$queryRawUnsafe(`
+        SELECT COUNT(*)::int AS n
+        FROM "${r.source_table}" src
+        JOIN "${r.target_table}" tgt ON src."${r.source_col}" = tgt."${r.target_col}"
+        WHERE tgt."clubId" = $1
+          AND src."${r.source_col}" IS NOT NULL
+      `, COULEE);
+      r.live_rows = c[0]?.n ?? 0;
+      r.scope = "join";
+    } catch (e) {
+      // Target lacks clubId — cannot prove scope. Report unfiltered count.
+      const c = await prisma.$queryRawUnsafe(`
+        SELECT COUNT(*)::int AS n
+        FROM "${r.source_table}" src
+        WHERE src."${r.source_col}" IS NOT NULL
+      `);
+      r.live_rows = c[0]?.n ?? 0;
+      r.scope = "unfiltered";
+    }
+  }
+
+  return buildPreflightReport(rawRows);
+}
+
+function printPreflightReport(report) {
+  log("");
+  log(formatPreflightReport(report));
+}
 
 async function main() {
   const p = new PrismaClient();
@@ -59,6 +148,7 @@ async function main() {
     log("COA-RESET-1 — Coulee Ridge accounting reset to Account = 0");
     log("======================================================================");
     log("Mode:              ", DRY_RUN ? "DRY-RUN (no writes)" : "COMMIT");
+    log("Preflight-only:    ", PREFLIGHT_ONLY ? "yes" : "no");
     log("Confirm token env: ", CONFIRM ? "provided" : "MISSING");
     log("Tenant guard:      ", COULEE);
     log("");
@@ -73,7 +163,21 @@ async function main() {
     assert(club.name === "Coulee Ridge Golf & Country Club", `Club name mismatch: ${club.name}`);
     assert(club.stagingDataMode === "FOUNDER_REVIEW", `Refusing: stagingDataMode=${club.stagingDataMode} (must be FOUNDER_REVIEW)`);
     log("Tenant verified:   ", club.name, "(", club.stagingDataMode, ")");
-    log("");
+
+    // ---------- PREFLIGHT ----------
+    const report = await preflight(p);
+    printPreflightReport(report);
+    if (!report.ok) {
+      log("");
+      log("== COA-RESET-1 REFUSED — preflight failed, zero mutation performed ==");
+      process.exit(2);
+    }
+
+    if (PREFLIGHT_ONLY) {
+      log("");
+      log("== --preflight-only mode: exiting without further work ==");
+      return;
+    }
 
     // ---------- MANIFEST ----------
     const w = { clubId: COULEE };
@@ -95,9 +199,24 @@ async function main() {
       paymentInstruction: await p.paymentInstruction.count({ where: w }),
       paymentRun: await p.paymentRun.count({ where: w }),
       payrollBatch: await p.payrollBatch.count({ where: w }),
+      payrollBatchSelfRefNonNull: await p.payrollBatch.count({
+        where: {
+          clubId: COULEE,
+          OR: [
+            { correctsPayrollBatchId: { not: null } },
+            { pairedReversalBatchId: { not: null } },
+            { reversesPayrollBatchId: { not: null } },
+          ],
+        },
+      }),
       payrollComponent: await p.payrollComponent.count({ where: w }),
+      payrollOpeningBalanceComponent: await p.payrollOpeningBalanceComponent.count({ where: w }),
       payrollGlAccountingProfile: await p.payrollGlAccountingProfile.count({ where: w }),
       bankAccount: await p.bankAccount.count({ where: w }),
+      budgetLine: await p.budgetLine.count({ where: w }),
+      forecastLine: await p.forecastLine.count({ where: w }),
+      fingerprintMismatchEvent: await p.fingerprintMismatchEvent.count({ where: w }),
+      payrollZeroHoursAcknowledgement: await p.payrollZeroHoursAcknowledgement.count({ where: w }),
       vendor: await p.vendor.count({ where: w }),
       taxCode: await p.taxCode.count({ where: w }),
       importBatchCoa: await p.importBatch.count({ where: { ...w, domain: "COA" } }),
@@ -109,8 +228,9 @@ async function main() {
       department: await p.department.count({ where: w }),
       workIntakeItem: await p.workIntakeItem.count({ where: w }),
     };
+    log("");
     log("BEFORE — Coulee accounting counts:");
-    for (const [k, v] of Object.entries(before)) log("  " + k.padEnd(32) + " " + v);
+    for (const [k, v] of Object.entries(before)) log("  " + k.padEnd(38) + " " + v);
     log("");
 
     if (DRY_RUN) {
@@ -124,31 +244,12 @@ async function main() {
     log("== COMMIT PHASE — begin transaction ==");
     const before_ts = Date.now();
 
-    // Because the total delete surface is large + spans many tables,
-    // wrap the whole thing in a single transaction with a generous
-    // timeout. Prisma's default 5s is too short.
-    // Helper for optional-table deletes (schema drift resilience).
     const runIfExists = async (tx, name, fn) => {
-      try { const r = await fn(); log("     " + name.padEnd(42) + " →", r.count); }
+      try { const r = await fn(); log("     " + name.padEnd(50) + " →", r?.count ?? "ok"); }
       catch (e) { log("     (" + name + " skipped: " + (e?.message ?? String(e)).split("\n")[0] + ")"); }
     };
 
     await p.$transaction(async (tx) => {
-      // FK ORDER: delete every table that HOLDS a *.postedJournalEntryId /
-      // glJournalEntryId / settlementJournalId reference to JournalEntry
-      // BEFORE we can delete JournalEntry itself. Postgres enforces
-      // Restrict semantics on those relations.
-      //
-      // Coulee inventory (from dry-run):
-      //   • PayrollBatch (37 rows, glJournalEntryId)
-      //   • PaymentRun (11 rows, settlementJournalId)
-      //   • APInvoice (1 row, postedJournalEntryId + reversingJournalEntryId)
-      //   • APInvoiceLine (1 row, cascades from APInvoice)
-      //   • PaymentInstruction (12 rows) + PaymentEvent (113 rows)
-      //     + PaymentDestinationSnapshot (12 rows) — no direct JE FK
-      //     but children of PaymentRun (walk them first).
-      //   • VendorPayment (0), PaymentBatchItem (0), PaymentBatch (0)
-
       // A. Nullify parent-config pointer to payroll GL profile.
       await tx.payrollClubConfig.updateMany({
         where: { clubId: COULEE, glAccountingProfileId: { not: null } },
@@ -156,13 +257,45 @@ async function main() {
       });
       log("  A. payrollClubConfig.glAccountingProfileId cleared");
 
-      // B. PayrollBatch children → PayrollBatch (releases glJournalEntryId FK).
-      await runIfExists(tx, "payrollBatchEarning.deleteMany",       () => tx.payrollBatchEarning.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBatchDeduction.deleteMany",     () => tx.payrollBatchDeduction.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBatchException.deleteMany",     () => tx.payrollBatchException.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBatchAllowanceSnapshot.deleteMany", () => tx.payrollBatchAllowanceSnapshot.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBatchComponentSnapshot.deleteMany", () => tx.payrollBatchComponentSnapshot.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBatchReviewAttestation.deleteMany", () => tx.payrollBatchReviewAttestation.deleteMany({ where: w }));
+      // B0. Schema-shaped early deletes (RESTRICT-into-target, zero rows on
+      //     Coulee today; kept explicit so future fixture population cannot
+      //     silently re-introduce a blocker).
+      await runIfExists(tx, "fingerprintMismatchEvent.deleteMany (Coulee)",
+        () => tx.fingerprintMismatchEvent.deleteMany({ where: w }));
+      await runIfExists(tx, "budgetLine.deleteMany (Coulee)",
+        () => tx.budgetLine.deleteMany({ where: w }));
+      await runIfExists(tx, "forecastLine.deleteMany (Coulee)",
+        () => tx.forecastLine.deleteMany({ where: w }));
+
+      // B1. PayrollBatch self-reference nullify — Coulee-scoped only, and
+      //     ONLY because Coulee payroll history is disposable fixture. Do
+      //     NOT generalize into product payroll deletion.
+      const srCorrects = await tx.payrollBatch.updateMany({
+        where: { clubId: COULEE, correctsPayrollBatchId: { not: null } },
+        data:  { correctsPayrollBatchId: null },
+      });
+      const srPaired = await tx.payrollBatch.updateMany({
+        where: { clubId: COULEE, pairedReversalBatchId: { not: null } },
+        data:  { pairedReversalBatchId: null },
+      });
+      const srReverses = await tx.payrollBatch.updateMany({
+        where: { clubId: COULEE, reversesPayrollBatchId: { not: null } },
+        data:  { reversesPayrollBatchId: null },
+      });
+      log("  B1. payrollBatch self-refs cleared        → corrects=" + srCorrects.count
+          + " paired=" + srPaired.count + " reverses=" + srReverses.count);
+
+      // B2. PayrollBatch children → PayrollBatch.
+      await runIfExists(tx, "payrollBatchEarning.deleteMany",              () => tx.payrollBatchEarning.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchDeduction.deleteMany",            () => tx.payrollBatchDeduction.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchException.deleteMany",            () => tx.payrollBatchException.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchAllowanceSnapshot.deleteMany",    () => tx.payrollBatchAllowanceSnapshot.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchComponentSnapshot.deleteMany",    () => tx.payrollBatchComponentSnapshot.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchReviewAttestation.deleteMany",    () => tx.payrollBatchReviewAttestation.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBatchEmployee.deleteMany (schema-shaped, CASCADE fallback)",
+        () => tx.payrollBatchEmployee.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollZeroHoursAcknowledgement.deleteMany (schema-shaped)",
+        () => tx.payrollZeroHoursAcknowledgement.deleteMany({ where: w }));
       const payBatchDel = await tx.payrollBatch.deleteMany({ where: w });
       log("  B. payrollBatch.deleteMany                →", payBatchDel.count);
 
@@ -180,7 +313,7 @@ async function main() {
       const prDel = await tx.paymentRun.deleteMany({ where: w });
       log("     paymentRun.deleteMany                   →", prDel.count);
 
-      // D. AP invoice side (releases APInvoice.postedJournalEntryId + reversingJournalEntryId).
+      // D. AP invoice side.
       const apLineDel = await tx.aPInvoiceLine.deleteMany({ where: w });
       log("  D. aPInvoiceLine.deleteMany               →", apLineDel.count);
       const vpDel = await tx.vendorPayment.deleteMany({ where: w });
@@ -188,10 +321,7 @@ async function main() {
       const apDel = await tx.aPInvoice.deleteMany({ where: w });
       log("     aPInvoice.deleteMany                    →", apDel.count);
 
-      // E. Additional JE-referencing tables — defensive nullifies for
-      //    any *.postedJournalEntryId fields that MIGHT hold a Coulee
-      //    reference. Coulee inventory showed 0 rows in all of these,
-      //    but a defensive updateMany is cheap.
+      // E. Additional JE-referencing tables — defensive deletes.
       await runIfExists(tx, "posSale.deleteMany",                    () => tx.pOSSale.deleteMany({ where: w }));
       await runIfExists(tx, "inventoryTransaction.deleteMany",       () => tx.inventoryTransaction.deleteMany({ where: w }));
       await runIfExists(tx, "inventoryReceiving.deleteMany",         () => tx.inventoryReceiving.deleteMany({ where: w }));
@@ -206,21 +336,21 @@ async function main() {
       const jeDeleted = await tx.journalEntry.deleteMany({ where: w });
       log("  F. journalEntry.deleteMany                →", jeDeleted.count);
 
-      // G. PayrollComponent dependents (Restrict FK holders) BEFORE
-      //    PayrollComponent deletion. Coulee accounting is disposable
-      //    per founder direction; these employee-level payroll
-      //    configuration rows will be re-created after the new COA
-      //    is mapped.
-      await runIfExists(tx, "employeeBenefitPlanEnrolment.deleteMany",  () => tx.employeeBenefitPlanEnrolment.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollBenefitPlan.deleteMany",            () => tx.payrollBenefitPlan.deleteMany({ where: w }));
-      await runIfExists(tx, "payrollScheduledOneTimeEarning.deleteMany",() => tx.payrollScheduledOneTimeEarning.deleteMany({ where: w }));
-      await runIfExists(tx, "employeeRecurringPayrollComponent.deleteMany", () => tx.employeeRecurringPayrollComponent.deleteMany({ where: w }));
+      // G-1. PayrollOpeningBalanceComponent (NOACT on PayrollComponent).
+      await runIfExists(tx, "payrollOpeningBalanceComponent.deleteMany (Coulee)",
+        () => tx.payrollOpeningBalanceComponent.deleteMany({ where: w }));
+
+      // G. PayrollComponent dependents (Restrict/NoAction) BEFORE PayrollComponent.
+      await runIfExists(tx, "employeeBenefitPlanEnrolment.deleteMany",     () => tx.employeeBenefitPlanEnrolment.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollBenefitPlan.deleteMany",               () => tx.payrollBenefitPlan.deleteMany({ where: w }));
+      await runIfExists(tx, "payrollScheduledOneTimeEarning.deleteMany",   () => tx.payrollScheduledOneTimeEarning.deleteMany({ where: w }));
+      await runIfExists(tx, "employeeRecurringPayrollComponent.deleteMany",() => tx.employeeRecurringPayrollComponent.deleteMany({ where: w }));
       const pcDel = await tx.payrollComponent.deleteMany({ where: w });
       log("  G. payrollComponent.deleteMany            →", pcDel.count);
       const pgpDel = await tx.payrollGlAccountingProfile.deleteMany({ where: w });
       log("     payrollGlAccountingProfile.deleteMany   →", pgpDel.count);
 
-      // H. BankAccount — removes glAccountId FK
+      // H. BankAccount — removes glAccountId FK.
       const baDel = await tx.bankAccount.deleteMany({ where: w });
       log("  H. bankAccount.deleteMany                 →", baDel.count);
 
@@ -251,17 +381,15 @@ async function main() {
       });
       log("     clubProfile default* cleared           →", cpNull.count);
 
-      // J. AccountDepartment M2M
+      // J. AccountDepartment M2M.
       const adDel = await tx.accountDepartment.deleteMany({ where: w });
       log("  J. accountDepartment.deleteMany           →", adDel.count);
 
-      // K. Account (FINALLY clear of FKs)
+      // K. Account (FINALLY clear of FKs).
       const acctDel = await tx.account.deleteMany({ where: w });
       log("  K. account.deleteMany                     →", acctDel.count);
 
-      // L. Prior COA ImportBatch — retire (do not delete; ImportBatch
-      //    is a per-tenant audit surface. Setting status=ARCHIVED
-      //    preserves it for history but excludes from active queries.)
+      // L. Prior COA ImportBatch — archive (do not delete).
       const ibArchived = await tx.importBatch.updateMany({
         where: { clubId: COULEE, domain: "COA", status: { not: "ARCHIVED" } },
         data: { status: "ARCHIVED" },
@@ -282,8 +410,13 @@ async function main() {
       paymentInstruction: await p.paymentInstruction.count({ where: w }),
       paymentRun: await p.paymentRun.count({ where: w }),
       payrollBatch: await p.payrollBatch.count({ where: w }),
+      payrollComponent: await p.payrollComponent.count({ where: w }),
       payrollGlAccountingProfile: await p.payrollGlAccountingProfile.count({ where: w }),
+      payrollOpeningBalanceComponent: await p.payrollOpeningBalanceComponent.count({ where: w }),
       bankAccount: await p.bankAccount.count({ where: w }),
+      budgetLine: await p.budgetLine.count({ where: w }),
+      forecastLine: await p.forecastLine.count({ where: w }),
+      fingerprintMismatchEvent: await p.fingerprintMismatchEvent.count({ where: w }),
       accountCategory: await p.accountCategory.count({ where: w }),
       financialStatementGroup: await p.financialStatementGroup.count({ where: w }),
       department: await p.department.count({ where: w }),
@@ -294,16 +427,19 @@ async function main() {
     };
     log("");
     log("AFTER — Coulee state:");
-    for (const [k, v] of Object.entries(after)) log("  " + k.padEnd(32) + " " + v);
+    for (const [k, v] of Object.entries(after)) log("  " + k.padEnd(36) + " " + v);
     log("");
 
-    // Assertions
     const invariants = [
       ["account = 0", after.account === 0],
       ["journalEntry = 0", after.journalEntry === 0],
       ["journalEntryLine = 0", after.journalEntryLine === 0],
       ["bankAccount = 0", after.bankAccount === 0],
       ["payrollGlAccountingProfile = 0", after.payrollGlAccountingProfile === 0],
+      ["payrollOpeningBalanceComponent = 0", after.payrollOpeningBalanceComponent === 0],
+      ["budgetLine = 0", after.budgetLine === 0],
+      ["forecastLine = 0", after.forecastLine === 0],
+      ["fingerprintMismatchEvent = 0", after.fingerprintMismatchEvent === 0],
       ["accountCategory preserved (> 0)", after.accountCategory > 0],
       ["financialStatementGroup preserved (> 0)", after.financialStatementGroup > 0],
       ["department preserved (> 0)", after.department > 0],
