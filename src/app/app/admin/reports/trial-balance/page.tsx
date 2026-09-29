@@ -22,6 +22,24 @@ export default async function TrialBalancePage({ searchParams }: { searchParams:
         <div>
           <h1 className="page-title">Trial Balance</h1>
           <p className="mt-1 text-stone-500">As of {asOf.toISOString().slice(0, 10)}</p>
+          {tb.source === "AUTHORITATIVE_SNAPSHOT" && tb.provenance ? (
+            <p
+              className="mt-1 text-xs text-stone-500"
+              data-testid="tb-report-source-authoritative"
+            >
+              Source: {tb.provenance.sourceSystem}
+              {tb.provenance.sourceFile ? ` · ${tb.provenance.sourceFile}` : ""}
+              {" · imported "}
+              {tb.provenance.importedAt.toISOString().slice(0, 10)}
+            </p>
+          ) : (
+            <p
+              className="mt-1 text-xs text-stone-500"
+              data-testid="tb-report-source-operational"
+            >
+              Source: Operational ledger (Spectre)
+            </p>
+          )}
         </div>
         <form className="flex items-end gap-2 text-sm">
           <div><label className="label">As of</label><input className="input" type="date" name="asOf" defaultValue={asOf.toISOString().slice(0, 10)} /></div>

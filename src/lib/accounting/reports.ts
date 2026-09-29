@@ -8,6 +8,16 @@ import { prisma } from "../prisma";
 import { accountBalances, hasCommittedRealTrialBalance, type AccountBalance } from "./balance";
 import { sumMoney, toMoney, ZERO } from "./decimal";
 import type { AccountType, FSStatement } from "./types";
+// TB-RESET-1c (2026-09-29) — controller-grade Trial Balance +
+// Balance Sheet route through the authoritative-snapshot precedence
+// resolver. When an EXACT committed `entityKind="trial-balance"`
+// snapshot exists for the club at the requested `asOf` calendar
+// date, its balances win. Otherwise the operational ledger runs as
+// before. Income Statement + IS-by-department deliberately DO NOT
+// route through the resolver yet — the founder's §11 rule bans
+// monthly-movement inference from snapshots until Jonas P&L
+// semantics are established in a later slice.
+import { reportingAccountBalances, type ReportingBalancesProvenance, type ReportingBalanceSource } from "./reporting-balances";
 
 // ---------------------------------------------------------------------------
 // Trial Balance
@@ -25,10 +35,14 @@ export type TrialBalanceResult = {
   totalDebit: Prisma.Decimal;
   totalCredit: Prisma.Decimal;
   isBalanced: boolean;
+  /** TB-RESET-1c — which ledger produced these balances. */
+  source: ReportingBalanceSource;
+  /** Populated only when `source === "AUTHORITATIVE_SNAPSHOT"`. */
+  provenance: ReportingBalancesProvenance | null;
 };
 
 export async function trialBalance(clubId: string, asOf: Date, opts?: { departmentId?: string }): Promise<TrialBalanceResult> {
-  const balances = await accountBalances(clubId, { asOf, departmentId: opts?.departmentId });
+  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf, departmentId: opts?.departmentId });
   const rows: TrialBalanceRow[] = balances
     .filter((b) => !b.debitTotal.equals(b.creditTotal) || !b.debitTotal.isZero())
     .map((b) => {
@@ -49,7 +63,7 @@ export async function trialBalance(clubId: string, asOf: Date, opts?: { departme
   const creditCents = totalCredit.toDecimalPlaces(2);
   const variance = debitCents.minus(creditCents).abs();
   const isBalanced = variance.lte(toMoney("0.01"));
-  return { rows, totalDebit, totalCredit, isBalanced };
+  return { rows, totalDebit, totalCredit, isBalanced, source, provenance };
 }
 
 // ---------------------------------------------------------------------------
@@ -190,11 +204,18 @@ export type BalanceSheetResult = {
   totalEquity: Prisma.Decimal;
   currentYearEarnings: Prisma.Decimal;
   isBalanced: boolean;
+  /** TB-RESET-1c — which ledger produced these balances. Note that
+   *  `currentYearEarnings` is always derived from the operational
+   *  ledger even when the asOf itself matched a snapshot — monthly
+   *  P&L movement inference from snapshots is deferred per §11. */
+  source: ReportingBalanceSource;
+  provenance: ReportingBalancesProvenance | null;
 };
 
 export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceSheetResult> {
   // Asset/Liability/Equity activity up to asOf.
-  const balances = await accountBalances(clubId, { asOf });
+  // TB-RESET-1c — authoritative-snapshot precedence for exact asOf.
+  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf });
   const balancesNonZero = balances.filter((b) => !b.signedBalance.isZero());
 
   const tree = await buildFsTree(clubId, "BALANCE_SHEET", balancesNonZero.filter((b) => ["ASSET", "LIABILITY", "EQUITY"].includes(b.accountType)));
@@ -232,6 +253,8 @@ export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceS
     totalEquity: totalEquityWithEarnings,
     currentYearEarnings,
     isBalanced,
+    source,
+    provenance,
   };
 }
 
