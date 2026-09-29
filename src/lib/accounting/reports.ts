@@ -340,14 +340,17 @@ export async function incomeStatementByDepartment(clubId: string, from: Date, to
   // committed a real Trial Balance import. Same rule as
   // accountBalances(); keeps report classification consistent.
   const excludeDemo = await hasCommittedRealTrialBalance(clubId);
-  // Pull all posted IS lines in the window with department info.
-  // Founder rule 2026-07-01 v14.10 — also pull the account's
-  // `defaultDepartment` so we can fall back to it when the line's
-  // own `departmentId` is null. Journal entries posted by the
-  // v14.3 Opening Trial Balance import never populated the line-
-  // level departmentId; the COA mapping is on the account itself.
-  // Without this fallback, every TB-imported line lands under
-  // "Unassigned" regardless of the imported COA's dept mapping.
+  // DIM-1 (2026-09-29) — authoritative departmental semantics.
+  // The ledger department is `JournalEntryLine.departmentId`. Do
+  // NOT fall back to `Account.defaultDepartmentId` at reporting
+  // time — that CSV-era shortcut (v14.10) let a line whose
+  // `departmentId=NULL` masquerade as belonging to the account's
+  // configured default department, disagreeing with the strict
+  // filter used by `accountBalances()`. Under DIM-1 both surfaces
+  // treat a genuinely-null line as "Unassigned"; if the founder
+  // wants those lines re-attributed she should backfill
+  // `JournalEntryLine.departmentId` explicitly. Fund is treated
+  // symmetrically once fund-reporting ships (DIM-2).
   const rows = await prisma.journalEntryLine.findMany({
     where: {
       clubId,
@@ -359,20 +362,18 @@ export async function incomeStatementByDepartment(clubId: string, from: Date, to
       account: { type: { in: ["REVENUE", "EXPENSE"] } },
     },
     include: {
-      account: { include: { defaultDepartment: true } },
+      account: true,
       department: true,
     },
   });
 
   const byDept = new Map<string, { name: string; revenue: Prisma.Decimal; cogs: Prisma.Decimal; opex: Prisma.Decimal }>();
   for (const r of rows) {
-    // v14.10 — line-level department wins when present; else the
-    // account's defaultDepartment (from the COA import) is used;
-    // else the row lands in "Unassigned" for genuinely-unmapped
-    // accounts (a diagnostic signal, not a default).
-    const effectiveDeptId = r.departmentId ?? r.account.defaultDepartmentId ?? null;
-    const effectiveDeptName =
-      r.department?.name ?? r.account.defaultDepartment?.name ?? "Unassigned";
+    // DIM-1 — line-level department is authoritative; genuinely
+    // NULL lines land in "Unassigned" (a diagnostic signal, not
+    // an inferred default).
+    const effectiveDeptId = r.departmentId ?? null;
+    const effectiveDeptName = r.department?.name ?? "Unassigned";
     const key = effectiveDeptId ?? "__none__";
     const name = effectiveDeptName;
     if (!byDept.has(key)) byDept.set(key, { name, revenue: ZERO, cogs: ZERO, opex: ZERO });

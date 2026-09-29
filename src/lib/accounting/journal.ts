@@ -147,6 +147,11 @@ export async function validateEntry(
     if (!opts?.allowControlAccounts && account.allowManualPosting === false) {
       issues.push({ path: `lines.${i}.accountNumber`, message: `Account ${l.accountNumber} does not allow manual posting (use AR/AP adapter)` });
     }
+    // DIM-1 (2026-09-29) — removed silent account.defaultDepartmentId
+    // fallback. The ledger department is what the caller submitted,
+    // not what the account default hints at. UIs that want to
+    // pre-populate from defaultDepartmentId must do so BEFORE
+    // submitting the posting request.
     let departmentId: string | null = null;
     if (l.departmentCode) {
       const canonical = resolveDeptCode(l.departmentCode);
@@ -160,8 +165,6 @@ export async function validateEntry(
       } else {
         departmentId = d.id;
       }
-    } else if (account.defaultDepartmentId) {
-      departmentId = account.defaultDepartmentId;
     }
     let costCenterId: string | null = null;
     if (l.costCenterCode) {

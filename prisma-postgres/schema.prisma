@@ -105,6 +105,9 @@ model Club {
   accountCategories                AccountCategory[]
   accounts                         Account[]
   accountDepartments               AccountDepartment[]
+  // DIM-1 (2026-09-29) — dimensional accounting foundation.
+  funds                            Fund[]
+  accountFunds                     AccountFund[]
   fiscalYears                      FiscalYear[]
   fiscalPeriods                    FiscalPeriod[]
   journalBatches                   JournalBatch[]
@@ -2286,15 +2289,40 @@ model Account {
   /// migration backfill for legacy rows is idempotent. See
   /// `src/lib/accounting/fund-applicability.ts` for canonical
   /// tokens, parse/serialise helpers, and FS Group defaults.
+  /// DIM-1 (2026-09-29) — legacy Fund Applicability CSV. Retained
+  /// for compatibility during the DIM-1 → DIM-2 migration window.
+  /// The authoritative Fund applicability model is now the
+  /// `funds AccountFund[]` M2M below; new code MUST NOT depend on
+  /// this CSV. See docs/dim-1-legacy-fund-applicability.md (added
+  /// in this slice) for the retirement path.
   fundApplicability   String?
   defaultDepartmentId String?
   defaultDepartment   Department?              @relation(fields: [defaultDepartmentId], references: [id])
+  /// DIM-1 (2026-09-29) — semantics narrowed. `defaultDepartmentId`
+  /// is now a SUGGESTION for UX and automation (COA importer,
+  /// AI classifier). It is NOT an accounting fact; posting paths
+  /// MUST NOT silently promote it into `JournalEntryLine.departmentId`
+  /// when the caller omits department. The ledger department is
+  /// whatever the caller submits.
   /// Many-to-many department assignments. An account like
   /// "Repairs and Maintenance" can apply to ADMIN + GOLF + GROUNDS +
-  /// F&B + Pro Shop at once; `defaultDepartmentId` is kept as the
-  /// "primary" pointer (first assignment) for back-compat with
-  /// callers that expect a single department.
+  /// F&B + Pro Shop at once.
   departments         AccountDepartment[]
+  /// DIM-1 (2026-09-29) — first-class Fund applicability M2M,
+  /// analogous to `departments`. AccountFund answers "which funds
+  /// MAY use this account." JournalEntryLine.fundId answers "which
+  /// fund DID use this account." AccountFund is the authoritative
+  /// applicability model; Account.fundApplicability CSV is legacy.
+  funds               AccountFund[]
+  /// DIM-1 (2026-09-29) — Account dimension policies. Values:
+  ///   REQUIRED       — posting MUST supply this dimension
+  ///   OPTIONAL       — posting MAY supply this dimension
+  ///   NOT_APPLICABLE — posting MUST NOT supply this dimension
+  /// Defaults to OPTIONAL so migration of existing rows is
+  /// backward-compatible. The COA importer + AP predictor should
+  /// propose stricter policies during DIM-2 work.
+  departmentPolicy    String                   @default("OPTIONAL")
+  fundPolicy          String                   @default("OPTIONAL")
   sortOrder           Int                      @default(0)
   createdAt           DateTime                 @default(now())
   updatedAt           DateTime                 @updatedAt
@@ -2379,6 +2407,58 @@ model AccountDepartment {
   @@unique([accountId, departmentId])
   @@index([clubId])
   @@index([departmentId])
+}
+
+// -------------------------------------------------------------------------
+// DIM-1 (2026-09-29) — Fund. First-class dimension.
+// -------------------------------------------------------------------------
+// Fund answers WHICH financial purpose/pool an accounting line
+// belongs to. Extensible per-club: OPERATING + CAPITAL are seeded
+// canonically, but a club can add RESTRICTED / ENDOWMENT /
+// TOURNAMENT / PROJECT-SPECIFIC funds without a schema change.
+model Fund {
+  id        String   @id @default(cuid())
+  clubId    String
+  club      Club     @relation(fields: [clubId], references: [id])
+  key       String
+  name      String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accountFunds   AccountFund[]
+  journalLines   JournalEntryLine[]
+  apInvoiceLines APInvoiceLine[]    @relation("APLineFund")
+  budgetLines    BudgetLine[]       @relation("BudgetLineFund")
+  forecastLines  ForecastLine[]     @relation("ForecastLineFund")
+
+  @@unique([clubId, key])
+  @@index([clubId, isActive])
+}
+
+// -------------------------------------------------------------------------
+// DIM-1 (2026-09-29) — AccountFund. Applicability, analogous to
+// AccountDepartment.
+// -------------------------------------------------------------------------
+// Answers "which funds MAY use this account". A separate table
+// from Account so the (account, fund) pair is a normalised
+// relationship, not a CSV string. Existing `Account.fundApplicability`
+// remains temporarily for backward compatibility; new code MUST
+// prefer this table.
+model AccountFund {
+  id        String   @id @default(cuid())
+  clubId    String
+  club      Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  fundId    String
+  fund      Fund     @relation(fields: [fundId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, fundId])
+  @@index([clubId])
+  @@index([fundId])
 }
 
 // -------------------------------------------------------------------------
@@ -2557,6 +2637,12 @@ model JournalEntryLine {
   account        Account      @relation(fields: [accountId], references: [id])
   departmentId   String?
   department     Department?  @relation(fields: [departmentId], references: [id])
+  // DIM-1 (2026-09-29) — line-level Fund dimension. Nullable
+  // because historical lines predate DIM-1 and because
+  // Account.fundPolicy may be OPTIONAL / NOT_APPLICABLE. FK is
+  // SetNull so future Fund deactivation cannot orphan history.
+  fundId         String?
+  fund           Fund?        @relation(fields: [fundId], references: [id], onDelete: SetNull)
   costCenterId   String?
   costCenter     CostCenter?  @relation(fields: [costCenterId], references: [id])
   debit          Decimal      @default(0)
@@ -2569,6 +2655,8 @@ model JournalEntryLine {
   @@index([accountId])
   @@index([journalEntryId])
   @@index([memberId])
+  @@index([fundId])
+  @@index([departmentId])
 }
 
 // Optional templates for recurring/auto-reversing journals. The runner is Phase 7.
@@ -2939,6 +3027,9 @@ model APInvoiceLine {
   expenseAccount   Account     @relation("APLineExpense", fields: [expenseAccountId], references: [id])
   departmentId     String?
   department       Department? @relation("APLineDepartment", fields: [departmentId], references: [id])
+  // DIM-1 (2026-09-29) — line-level Fund dimension.
+  fundId           String?
+  fund             Fund?       @relation("APLineFund", fields: [fundId], references: [id], onDelete: SetNull)
   costCenterId     String?
   costCenter       CostCenter? @relation("APLineCostCenter", fields: [costCenterId], references: [id])
   description      String?
@@ -4609,6 +4700,9 @@ model BudgetLine {
   account        Account     @relation("BudgetLineAccount", fields: [accountId], references: [id])
   departmentId   String?
   department     Department? @relation("BudgetLineDepartment", fields: [departmentId], references: [id])
+  // DIM-1 (2026-09-29) — line-level Fund dimension.
+  fundId         String?
+  fund           Fund?       @relation("BudgetLineFund", fields: [fundId], references: [id], onDelete: SetNull)
   monthlyAmounts String // JSON [number; 12]
   annualTotal    Decimal     @default(0)
   notes          String?
@@ -4617,6 +4711,7 @@ model BudgetLine {
 
   @@unique([budgetId, accountId, departmentId])
   @@index([clubId, accountId])
+  @@index([fundId])
 }
 
 model BudgetAssumption {
@@ -4665,12 +4760,16 @@ model ForecastLine {
   account        Account     @relation("ForecastLineAccount", fields: [accountId], references: [id])
   departmentId   String?
   department     Department? @relation("ForecastLineDepartment", fields: [departmentId], references: [id])
+  // DIM-1 (2026-09-29) — line-level Fund dimension.
+  fundId         String?
+  fund           Fund?       @relation("ForecastLineFund", fields: [fundId], references: [id], onDelete: SetNull)
   monthlyAmounts String // JSON [number; 12]
   totalAmount    Decimal     @default(0)
   notes          String?
 
   @@unique([forecastId, accountId, departmentId])
   @@index([clubId, accountId])
+  @@index([fundId])
 }
 
 // =========================================================================
@@ -9645,9 +9744,9 @@ model ReportingLedgerBatch {
   // is intentionally NOT an FK to User.
   sourceFileHash      String?
   supersededByBatchId String?
-  supersededBy   ReportingLedgerBatch? @relation("ReportingLedgerBatchSupersession", fields: [supersededByBatchId], references: [batchId], onDelete: SetNull)
-  supersedes     ReportingLedgerBatch[] @relation("ReportingLedgerBatchSupersession")
-  createdByUserId String?
+  supersededBy        ReportingLedgerBatch?  @relation("ReportingLedgerBatchSupersession", fields: [supersededByBatchId], references: [batchId], onDelete: SetNull)
+  supersedes          ReportingLedgerBatch[] @relation("ReportingLedgerBatchSupersession")
+  createdByUserId     String?
 
   snapshots ReportingLedgerSnapshot[]
 

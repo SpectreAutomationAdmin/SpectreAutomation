@@ -41,19 +41,31 @@ import {
   DEFAULT_DEPARTMENTS,
 } from "./coa-template";
 
+// DIM-1 (2026-09-29) — canonical Fund seed. Two entries seeded by
+// default (OPERATING + CAPITAL) so every club can begin posting
+// dimensional accounting immediately. The Fund model is extensible —
+// per-club RESTRICTED / ENDOWMENT / TOURNAMENT / project-specific
+// funds can be added later without a schema change.
+const DEFAULT_FUNDS: ReadonlyArray<{ key: string; name: string; sortOrder: number }> = [
+  { key: "OPERATING", name: "Operating Fund", sortOrder: 10 },
+  { key: "CAPITAL",   name: "Capital Fund",   sortOrder: 20 },
+];
+
 export interface EnsureStandardConfigurationResult {
   clubId: string;
   categoriesInserted: number;
   fsGroupsInserted: number;
   departmentsInserted: number;
+  fundsInserted: number;
   // The exact canonical keys that were newly inserted, for audit.
   insertedCategoryKeys: string[];
   insertedFsGroupKeys: string[];
   insertedDepartmentCodes: string[];
+  insertedFundKeys: string[];
   // Counts BEFORE the ensure ran, for diagnostic clarity.
-  before: { categories: number; fsGroups: number; departments: number };
+  before: { categories: number; fsGroups: number; departments: number; funds: number };
   // Counts AFTER the ensure ran.
-  after: { categories: number; fsGroups: number; departments: number };
+  after: { categories: number; fsGroups: number; departments: number; funds: number };
   // Elapsed ms — mostly for staging log correlation.
   elapsedMs: number;
 }
@@ -74,7 +86,7 @@ export async function ensureStandardAccountingConfiguration(
 
   // Snapshot existing keys BEFORE inserting anything, so we know
   // which canonical entries are missing.
-  const [existingCategories, existingFsGroups, existingDepartments] = await Promise.all([
+  const [existingCategories, existingFsGroups, existingDepartments, existingFunds] = await Promise.all([
     prisma.accountCategory.findMany({
       where: { clubId },
       select: { key: true },
@@ -87,17 +99,25 @@ export async function ensureStandardAccountingConfiguration(
       where: { clubId },
       select: { code: true },
     }),
+    // DIM-1 (2026-09-29) — Fund is per-tenant configuration, seeded
+    // idempotently alongside the rest of the canonical taxonomy.
+    prisma.fund.findMany({
+      where: { clubId },
+      select: { key: true },
+    }),
   ]);
 
   const beforeCounts = {
     categories: existingCategories.length,
     fsGroups: existingFsGroups.length,
     departments: existingDepartments.length,
+    funds: existingFunds.length,
   };
 
   const existingCategoryKeys = new Set(existingCategories.map((c) => c.key));
   const existingFsGroupKeys = new Set(existingFsGroups.map((g) => g.key));
   const existingDepartmentCodes = new Set(existingDepartments.map((d) => d.code));
+  const existingFundKeys = new Set(existingFunds.map((f) => f.key));
 
   // ---- CATEGORIES ------------------------------------------------------
   // No parent-child structure on categories, so we bulk create in
@@ -220,11 +240,33 @@ export async function ensureStandardAccountingConfiguration(
     }
   }
 
+  // ---- FUNDS (DIM-1) ---------------------------------------------------
+  const fundsToInsert = DEFAULT_FUNDS.filter((f) => !existingFundKeys.has(f.key));
+  if (fundsToInsert.length > 0) {
+    try {
+      await prisma.fund.createMany({
+        data: fundsToInsert.map((f) => ({
+          clubId,
+          key: f.key,
+          name: f.name,
+          sortOrder: f.sortOrder,
+          isActive: true,
+        })),
+      });
+    } catch (e) {
+      logger.warn("ensure-standard-accounting.fund_race", {
+        clubId, count: fundsToInsert.length,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // Snapshot AFTER for the return payload — cheap re-count.
-  const [afterCats, afterGroups, afterDepts] = await Promise.all([
+  const [afterCats, afterGroups, afterDepts, afterFunds] = await Promise.all([
     prisma.accountCategory.count({ where: { clubId } }),
     prisma.financialStatementGroup.count({ where: { clubId } }),
     prisma.department.count({ where: { clubId } }),
+    prisma.fund.count({ where: { clubId } }),
   ]);
 
   const result: EnsureStandardConfigurationResult = {
@@ -232,14 +274,17 @@ export async function ensureStandardAccountingConfiguration(
     categoriesInserted: categoriesToInsert.length,
     fsGroupsInserted: rootFsGroups.length + childFsGroups.length,
     departmentsInserted: departmentsToInsert.length,
+    fundsInserted: fundsToInsert.length,
     insertedCategoryKeys: categoriesToInsert.map((c) => c.key),
     insertedFsGroupKeys: fsGroupsToInsert.map((g) => g.key),
     insertedDepartmentCodes: departmentsToInsert.map((d) => d.code),
+    insertedFundKeys: fundsToInsert.map((f) => f.key),
     before: beforeCounts,
     after: {
       categories: afterCats,
       fsGroups: afterGroups,
       departments: afterDepts,
+      funds: afterFunds,
     },
     elapsedMs: Date.now() - startedAt,
   };
@@ -249,12 +294,15 @@ export async function ensureStandardAccountingConfiguration(
     categoriesInserted: result.categoriesInserted,
     fsGroupsInserted: result.fsGroupsInserted,
     departmentsInserted: result.departmentsInserted,
+    fundsInserted: result.fundsInserted,
     beforeCategories: result.before.categories,
     afterCategories: result.after.categories,
     beforeFsGroups: result.before.fsGroups,
     afterFsGroups: result.after.fsGroups,
     beforeDepartments: result.before.departments,
     afterDepartments: result.after.departments,
+    beforeFunds: result.before.funds,
+    afterFunds: result.after.funds,
     elapsedMs: result.elapsedMs,
   });
 

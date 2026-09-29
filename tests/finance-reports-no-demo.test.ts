@@ -368,10 +368,16 @@ describe("v14.10 — Income by Department uses each account's default department
     expect(dept.totalContribution.toFixed(2)).toBe(is.netIncome.toFixed(2));
   });
 
-  it("report-layer fallback: legacy journal lines (departmentId=null) still land under the account's default department", async () => {
-    // This proves the founder's ALREADY-COMMITTED TB — where
-    // pre-v14.10 lines have departmentId=null — is corrected
-    // by the report-layer fallback without a re-import.
+  it("DIM-1 (2026-09-29) — legacy journal lines with departmentId=null land in Unassigned (line-level authoritative, no report-layer fallback)", async () => {
+    // Under DIM-1 the ledger-department rule is:
+    //   JournalEntryLine.departmentId is authoritative.
+    //   A NULL line means "no department attribution" and lands
+    //   in "Unassigned" — the report-time fallback that inferred
+    //   from Account.defaultDepartmentId (v14.10) is deliberately
+    //   removed so `accountBalances()` and `incomeStatementByDepartment`
+    //   agree on the same authoritative population of lines.
+    //   Historical reattribution requires backfilling the line's
+    //   `departmentId` explicitly, not sneaking it in at report time.
     const club = await bootstrapAccountingClub("v14.10-Fallback");
     await ensureFiscalYear(club.id, { startYear: 2026, startMonth: 1 });
     const p = await controllerFor(club.id);
@@ -379,7 +385,9 @@ describe("v14.10 — Income by Department uses each account's default department
     const period = await db().fiscalPeriod.findFirstOrThrow({
       where: { fiscalYear: { clubId: club.id }, startDate: { lte: asOf }, endDate: { gte: asOf } },
     });
-    // 4000 (Membership Dues) has defaultDepartmentCode="ADMIN".
+    // 4000 (Membership Dues) has defaultDepartmentCode="ADMIN" —
+    // under DIM-1 that default is a UX/AI suggestion, NOT a
+    // reporting-time inference source.
     const acct = await db().account.findFirstOrThrow({ where: { clubId: club.id, accountNumber: "4000" } });
     expect(acct.defaultDepartmentId).not.toBeNull();
     // Plant a JE with line.departmentId = null (simulating a
@@ -407,13 +415,13 @@ describe("v14.10 — Income by Department uses each account's default department
       },
     });
     const dept = await incomeStatementByDepartment(club.id, new Date("2026-01-01T00:00:00.000Z"), asOf);
-    // Even though the LINE has no departmentId, the ACCOUNT's
-    // default is ADMIN — the fallback places the row under
-    // "Administration", not Unassigned.
-    const admin = dept.rows.find((r) => r.departmentName === "Administration");
-    expect(admin, "ADMIN row present via fallback").toBeTruthy();
-    expect(Number(admin!.revenue)).toBe(500);
-    expect(dept.rows.some((r) => r.departmentName === "Unassigned")).toBe(false);
+    // DIM-1 — the null-department line lands in "Unassigned",
+    // NOT under Administration.
+    const unassigned = dept.rows.find((r) => r.departmentName === "Unassigned");
+    expect(unassigned, "Unassigned row present for null-dept legacy line").toBeTruthy();
+    expect(Number(unassigned!.revenue)).toBe(500);
+    // And "Administration" is NOT synthesised from the account default.
+    expect(dept.rows.some((r) => r.departmentName === "Administration")).toBe(false);
   });
 
   it("truly unmapped accounts (no line dept AND no account default) still land in Unassigned", async () => {

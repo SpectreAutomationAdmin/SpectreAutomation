@@ -122,13 +122,16 @@ export async function validateAndResolveInvoice(clubId: string, input: InvoiceCr
     if (!account.isActive) {
       issues.push({ path: `lines.${i}.expenseAccountNumber`, message: `Account ${l.expenseAccountNumber} is inactive` });
     }
+    // DIM-1 (2026-09-29) — removed silent account.defaultDepartmentId
+    // fallback. Account.defaultDepartmentId is now a UX/AI suggestion,
+    // not an accounting fact. The invoice's department attribution is
+    // exactly what the caller passed; the AP UI/predictor MUST resolve
+    // its own default before submitting.
     let departmentId: string | null = null;
     if (l.departmentCode) {
       const d = deptByCode.get(l.departmentCode);
       if (!d) issues.push({ path: `lines.${i}.departmentCode`, message: `Unknown department ${l.departmentCode}` });
       else departmentId = d.id;
-    } else if (account.defaultDepartmentId) {
-      departmentId = account.defaultDepartmentId;
     }
     let costCenterId: string | null = null;
     if (l.costCenterCode) {
