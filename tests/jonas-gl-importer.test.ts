@@ -304,18 +304,18 @@ describe("JonasGlImporter — tenant isolation", () => {
     expect(ssMay?.snapshotId).toBe(ssResult.snapshotId);
     expect(phJune?.snapshotId).toBe(phResult.snapshotId);
 
-    // Tenant scoping — Pinehurst has no snapshot at or before May,
+    // Tenant scoping — Pinehurst has no snapshot for May 31,
     // so the May-asOf query for Pinehurst returns null (would have
     // returned Silver Springs's snapshot if the clubId filter
     // leaked).
     expect(await ledger.getTrialBalance(CLUB_PINEHURST, MAY_END)).toBeNull();
-    // Silver Springs has its May snapshot — and the June-asOf
-    // query returns the SAME May snapshot (latest at-or-before
-    // semantic), NOT Pinehurst's June snapshot. Confirms reads
-    // never cross clubs.
-    const ssAtJune = await ledger.getTrialBalance(CLUB_SILVER_SPRINGS, JUNE_END);
-    expect(ssAtJune?.snapshotId).toBe(ssResult.snapshotId);
-    expect(ssAtJune?.clubId).toBe(CLUB_SILVER_SPRINGS);
+    // TB-RESET-1d (2026-09-29) — the exact-asOf-only rule now applies
+    // to trial-balance reads. Silver Springs's May 31 snapshot does
+    // NOT answer a June 30 query. The founder's authority rule (§10
+    // of the 1d brief): "adjacent arbitrary dates must NOT silently
+    // inherit the nearest prior snapshot." Confirms reads never
+    // cross clubs AND never interpolate across dates.
+    expect(await ledger.getTrialBalance(CLUB_SILVER_SPRINGS, JUNE_END)).toBeNull();
 
     // Import history is also scoped.
     expect(importer.history.listForClub(CLUB_SILVER_SPRINGS)).toHaveLength(1);

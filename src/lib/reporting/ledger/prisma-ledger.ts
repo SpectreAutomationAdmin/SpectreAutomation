@@ -287,15 +287,17 @@ export class PrismaReportingLedger
     clubId: string,
     asOf: Date,
   ): Promise<TrialBalanceSnapshot | null> {
-    const persisted = await this.findLatestAsOf<TrialBalanceSnapshot>(
+    // TB-RESET-1d (2026-09-29) — exact-asOf-only for trial-balance
+    // per the founder's authority rule (§10). A May 31 snapshot must
+    // NOT answer a June 15 (or June 30, etc.) query via nearest-prior
+    // interpolation. If no exact match, fall through to live synthesis
+    // (unchanged pre-Jonas-import behaviour for zero-snapshot clubs).
+    const persisted = await this.findExactAsOfCommitted<TrialBalanceSnapshot>(
       clubId,
       "trial-balance",
       asOf,
     );
     if (persisted) return persisted;
-    // v14.11 — live synthesis fallback. Returns null if the club
-    // has no committed real TB, preserving the demo-fallback
-    // behaviour for pre-import clubs.
     return synthesizeTrialBalanceSnapshot(clubId, asOf);
   }
 
@@ -303,7 +305,9 @@ export class PrismaReportingLedger
     clubId: string,
     asOf: Date,
   ): Promise<BalanceSheetSnapshot | null> {
-    const persisted = await this.findLatestAsOf<BalanceSheetSnapshot>(
+    // TB-RESET-1d (2026-09-29) — same exact-asOf rule as
+    // getTrialBalance (Balance Sheet is derived at exact period-end).
+    const persisted = await this.findExactAsOfCommitted<BalanceSheetSnapshot>(
       clubId,
       "balance-sheet",
       asOf,
@@ -485,8 +489,43 @@ export class PrismaReportingLedger
   // Internal — typed helpers
   // -----------------------------------------------------------------
 
+  /** TB-RESET-1d — Find a COMMITTED snapshot whose `asOf` matches the
+   *  requested calendar date EXACTLY (same-day UTC bounds). Used by
+   *  `getTrialBalance` + `getBalanceSheet`; the founder's authority
+   *  rule (§10 of the 1d brief) explicitly forbids nearest-prior
+   *  interpolation for these entity kinds. Returns null when no
+   *  same-day snapshot exists — callers fall through to live
+   *  synthesis. Deterministic latest-wins tie-break on capturedAt +
+   *  createdAt matches `findLatestAsOf` and `reportingBalances`. */
+  private async findExactAsOfCommitted<T extends LedgerSnapshot>(
+    clubId: string,
+    entityKind: T["entityKind"],
+    asOf: Date,
+  ): Promise<T | null> {
+    const d = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate()));
+    const gte = d;
+    const lte = new Date(d.getTime() + 24 * 60 * 60 * 1000 - 1);
+    const row = await this.prisma.reportingLedgerSnapshot.findFirst({
+      where: {
+        clubId,
+        entityKind,
+        batchState: "committed",
+        asOf: { gte, lte },
+      },
+      orderBy: [
+        { capturedAt: "desc" },
+        { createdAt: "desc" },
+      ],
+    });
+    if (!row) return null;
+    return rehydrateSnapshot(row.payloadJson) as T;
+  }
+
   /** Find the most-recent COMMITTED snapshot for an entity at-or-before
-   *  the requested asOf. Returns null if none exists. */
+   *  the requested asOf. Returns null if none exists.
+   *  Preserved for `getArAging` + `getCapitalProjects` (those entity
+   *  kinds retain nearest-prior semantics; only trial-balance +
+   *  balance-sheet were tightened to exact-asOf in TB-RESET-1d). */
   private async findLatestAsOf<T extends LedgerSnapshot>(
     clubId: string,
     entityKind: T["entityKind"],

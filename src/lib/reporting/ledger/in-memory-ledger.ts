@@ -489,15 +489,18 @@ export class InMemoryReportingLedger
 
   /** Point-in-time helpers — one per asOf-bearing entity so the
    *  return type narrows cleanly per kind. */
+  // TB-RESET-1d — exact-asOf-only for trial-balance + balance-sheet.
+  // Mirrors PrismaReportingLedger.findExactAsOfCommitted.
   private findLatestAsOfTrialBalance(
     clubId: string,
     asOf: Date,
   ): TrialBalanceSnapshot | null {
+    const day = sameDayUtcKey(asOf);
     let best: TrialBalanceSnapshot | null = null;
     for (const s of this.committedSnapshotsForClub(clubId)) {
       if (s.entityKind !== "trial-balance") continue;
-      if (s.asOf.getTime() > asOf.getTime()) continue;
-      if (!best || s.asOf.getTime() > best.asOf.getTime()) best = s;
+      if (sameDayUtcKey(s.asOf) !== day) continue;
+      if (!best || s.capturedAt.getTime() > best.capturedAt.getTime()) best = s;
     }
     return best;
   }
@@ -506,11 +509,12 @@ export class InMemoryReportingLedger
     clubId: string,
     asOf: Date,
   ): BalanceSheetSnapshot | null {
+    const day = sameDayUtcKey(asOf);
     let best: BalanceSheetSnapshot | null = null;
     for (const s of this.committedSnapshotsForClub(clubId)) {
       if (s.entityKind !== "balance-sheet") continue;
-      if (s.asOf.getTime() > asOf.getTime()) continue;
-      if (!best || s.asOf.getTime() > best.asOf.getTime()) best = s;
+      if (sameDayUtcKey(s.asOf) !== day) continue;
+      if (!best || s.capturedAt.getTime() > best.capturedAt.getTime()) best = s;
     }
     return best;
   }
@@ -584,4 +588,12 @@ function dateKeyFor(snapshot: LedgerSnapshot): Date {
     case "prior-year":
       return snapshot.periodEnd;
   }
+}
+
+/** TB-RESET-1d — same-day UTC calendar key. Mirrors the same-day
+ *  bounds used by PrismaReportingLedger.findExactAsOfCommitted and
+ *  reporting-balances.ts::sameDayRange so the two backends agree on
+ *  what "the exact asOf date" means. */
+function sameDayUtcKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
