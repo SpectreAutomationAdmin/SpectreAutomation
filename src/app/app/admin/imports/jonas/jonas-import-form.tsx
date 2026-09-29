@@ -1,21 +1,17 @@
 "use client";
 
-// Jonas GL import — client-side state machine.
+// Jonas GL import — client-side workflow.
 //
-// Drives the multi-step workflow:
+// TB-RESET-1d.b.2 (2026-09-29) — final founder-operated import UI.
 //
-//   idle  →  preview-pending  →  preview-ready  →  commit-pending  →  commit-done
+// State machine:
+//   idle → preview-pending → preview-ready → commit-pending → commit-done
 //
-// Server-side parse + reconciliation is the source of truth. The
-// client never trusts its own parse — every state transition goes
-// through a server action so audit, tenancy, and validation live
-// server-side.
-//
-// Reliability over polish: progress indicators are textual; errors
-// are surfaced verbatim; the commit button is disabled when the
-// preview reports problems the operator hasn't acknowledged.
+// Every accounting decision lives server-side; this component only
+// drives the workflow, disables the Commit button until the server's
+// preview says the gates pass, and renders the results.
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -23,82 +19,102 @@ import {
   previewJonasImport,
   type JonasImportCommitResult,
   type JonasImportPreview,
+  type JonasImportPreviewRow,
 } from "./actions";
 
 type Stage = "idle" | "preview-pending" | "preview-ready" | "commit-pending" | "commit-done";
 
 type FormFields = {
+  /** Base64 of the XLSX file, when the user chose one. */
+  xlsxBase64: string;
+  /** Pasted or file-derived CSV text. */
   csv: string;
   filename: string;
-  periodStart: string;
-  periodEnd: string;
-  fiscalYearLabel: string;
-  fiscalPeriodSequence: string;
+  /** Founder-supplied effective date (always required in b.2's UI —
+   *  the pre-fill happens after preview when the server detects one). */
+  effectiveDateOverride: string;
+  entityMismatchAcknowledged: boolean;
+  replaceExistingBatchId: string;
 };
 
-const EMPTY_FIELDS: FormFields = {
+const EMPTY: FormFields = {
+  xlsxBase64: "",
   csv: "",
   filename: "",
-  periodStart: "",
-  periodEnd: "",
-  fiscalYearLabel: "",
-  fiscalPeriodSequence: "",
+  effectiveDateOverride: "",
+  entityMismatchAcknowledged: false,
+  replaceExistingBatchId: "",
 };
+
+function money(n: number): string {
+  return n.toLocaleString("en-US", {
+    style: "currency", currency: "USD",
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+function toBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
 
 function buildFormData(fields: FormFields): FormData {
   const fd = new FormData();
-  fd.set("csv", fields.csv);
-  fd.set("filename", fields.filename || "pasted.csv");
-  fd.set("periodStart", fields.periodStart);
-  fd.set("periodEnd", fields.periodEnd);
-  fd.set("fiscalYearLabel", fields.fiscalYearLabel);
-  fd.set("fiscalPeriodSequence", fields.fiscalPeriodSequence);
+  if (fields.xlsxBase64) fd.set("xlsxBase64", fields.xlsxBase64);
+  if (fields.csv) fd.set("csv", fields.csv);
+  fd.set("filename", fields.filename || "import.csv");
+  fd.set("effectiveDateOverride", fields.effectiveDateOverride);
+  fd.set("entityMismatchAcknowledged", fields.entityMismatchAcknowledged ? "true" : "false");
+  fd.set("replaceExistingBatchId", fields.replaceExistingBatchId);
   return fd;
-}
-
-function formatMoney(amount: number): string {
-  return amount.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-  });
 }
 
 export function JonasImportForm() {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>("idle");
-  const [fields, setFields] = useState<FormFields>(EMPTY_FIELDS);
+  const [fields, setFields] = useState<FormFields>(EMPTY);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [preview, setPreview] = useState<JonasImportPreview | null>(null);
   const [commit, setCommit] = useState<JonasImportCommitResult | null>(null);
+  const [replaceOptIn, setReplaceOptIn] = useState(false);
   const [pending, startTransition] = useTransition();
 
-  // ---- File reader ----
-  function onFileChosen(file: File | null) {
+  function resetPreview() {
+    setStage("idle");
+    setPreview(null);
+    setCommit(null);
+  }
+
+  function updateField<K extends keyof FormFields>(k: K, v: FormFields[K]) {
+    setFields((f) => ({ ...f, [k]: v }));
+    if (stage === "preview-ready") resetPreview();
+  }
+
+  async function onFileChosen(file: File | null) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = typeof reader.result === "string" ? reader.result : "";
-      setFields((f) => ({ ...f, csv: text, filename: file.name }));
-      // Reset downstream state.
-      setStage("idle");
-      setPreview(null);
-      setCommit(null);
-    };
-    reader.readAsText(file);
-  }
-
-  // ---- Field setter ----
-  function updateField<K extends keyof FormFields>(key: K, value: string) {
-    setFields((f) => ({ ...f, [key]: value }));
-    // Any field change invalidates a prior preview.
-    if (stage === "preview-ready") {
-      setStage("idle");
-      setPreview(null);
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".xlsx")) {
+      const buf = await file.arrayBuffer();
+      setFields((f) => ({
+        ...f,
+        xlsxBase64: toBase64(buf),
+        csv: "",
+        filename: file.name,
+      }));
+    } else {
+      const text = await file.text();
+      setFields((f) => ({
+        ...f,
+        xlsxBase64: "",
+        csv: text,
+        filename: file.name,
+      }));
     }
+    resetPreview();
   }
 
-  // ---- Preview action ----
   function onPreview() {
     setSubmitError(null);
     setCommit(null);
@@ -110,463 +126,355 @@ export function JonasImportForm() {
         setStage("idle");
         return;
       }
+      // Pre-fill founder's effective-date field from the detected one
+      // if they haven't set one themselves yet.
+      if (result.status === "ok" && !fields.effectiveDateOverride && result.resolvedDates) {
+        setFields((f) => ({ ...f, effectiveDateOverride: result.resolvedDates!.periodEndIso }));
+      }
       setPreview(result);
       setStage("preview-ready");
     });
   }
 
-  // ---- Commit action ----
   function onCommit() {
     setSubmitError(null);
     setStage("commit-pending");
+    // If preview showed a duplicate period AND founder opted in to
+    // replacement, thread the replace target through.
+    const previewOk = preview?.status === "ok" ? preview : null;
+    const replaceTarget = replaceOptIn && previewOk?.existingSnapshotForPeriod?.batchId
+      ? previewOk.existingSnapshotForPeriod.batchId
+      : "";
+    const fd = buildFormData({ ...fields, replaceExistingBatchId: replaceTarget });
     startTransition(async () => {
-      const result = await commitJonasImport(buildFormData(fields));
+      const result = await commitJonasImport(fd);
       if ("error" in result) {
         setSubmitError(result.error);
         setStage("preview-ready");
         return;
       }
+      if (result.status === "blocked") {
+        setSubmitError(`Commit blocked (${result.code}): ${result.reason}`);
+        setStage("preview-ready");
+        return;
+      }
       setCommit(result);
       setStage("commit-done");
-      // Refresh server-side history rail.
       router.refresh();
     });
   }
 
-  // ---- Reset ----
   function onReset() {
-    setFields(EMPTY_FIELDS);
+    setFields(EMPTY);
     setStage("idle");
     setSubmitError(null);
     setPreview(null);
     setCommit(null);
+    setReplaceOptIn(false);
   }
 
-  // Commit gate.
-  const canCommit =
-    stage === "preview-ready" &&
-    preview?.status === "ok" &&
-    preview.reconciliation.isBalanced &&
-    preview.mappingCoverage.unmapped === 0;
+  const previewOk = preview?.status === "ok" ? preview : null;
+  const commitOk = commit && !("error" in commit) && commit.status === "committed" ? commit : null;
 
+  const canCommit = useMemo(() => {
+    if (stage !== "preview-ready") return false;
+    if (!previewOk) return false;
+    if (!previewOk.reconciliation.isBalanced) return false;
+    if (previewOk.mappingCoverage.unmapped > 0) return false;
+    if (previewOk.mappingCoverage.duplicates > 0) return false;
+    if (previewOk.requiresEffectiveDateSelection && !fields.effectiveDateOverride) return false;
+    if (previewOk.requiresEntityMismatchAcknowledgement && !fields.entityMismatchAcknowledged) return false;
+    if (previewOk.duplicateSourceFileBatch) return false;
+    if (previewOk.existingSnapshotForPeriod && !replaceOptIn) return false;
+    return true;
+  }, [stage, previewOk, fields.effectiveDateOverride, fields.entityMismatchAcknowledged, replaceOptIn]);
+
+  // ---------------------------------------------------------------- render
   return (
     <div className="space-y-4">
       <div className="card card-body" data-testid="jonas-import-inputs">
-        <h2 className="section-title text-lg">New Jonas GL import</h2>
+        <h2 className="section-title text-lg">Import Jonas Trial Balance</h2>
         <p className="mt-1 text-xs text-stone-500">
-          Paste or upload the Jonas trial balance CSV, then preview.
-          Period dates and fiscal-year metadata are read from the Jonas
-          heading and your Club Settings — no manual entry required.
+          Upload the month-end Jonas Trial Balance (XLSX or CSV). Preview
+          runs every accounting control server-side; nothing becomes
+          authoritative until you press <em>Commit</em>.
         </p>
 
-        {/* Jonas-native detected — read-only "Detected period" summary.
-         *  Replaces the four manual date/fiscal inputs entirely. */}
-        {preview?.status === "ok" && preview.inferredDates ? (
-          <div
-            data-testid="jonas-detected-period"
-            className="mt-4 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
-          >
-            <p className="text-[10px] uppercase tracking-[0.18em] text-emerald-800/70">
-              Detected period
-            </p>
-            <p
-              className="mt-1 font-medium"
-              data-testid="jonas-detected-period-summary"
-            >
-              {preview.inferredDates.fiscalYearLabel} · Period{" "}
-              {preview.inferredDates.fiscalPeriodSequence} ·{" "}
-              <span data-testid="jonas-detected-period-start">
-                {preview.inferredDates.periodStartIso}
-              </span>
-              {" "}–{" "}
-              <span data-testid="jonas-detected-period-end">
-                {preview.inferredDates.periodEndIso}
-              </span>
-            </p>
-            <p className="mt-1 text-xs opacity-80">
-              Inferred from the Jonas CSV heading + your club's fiscal-year-end
-              policy in Club Settings.
-            </p>
-          </div>
-        ) : null}
-
-        {/* Non-Jonas (spectre-normalised) preview returned but no
-         *  inferred dates — surface a hint that manual fields are
-         *  needed and auto-open the Advanced panel via its `open`
-         *  attribute below. */}
-        {preview?.status === "ok" && !preview.inferredDates ? (
-          <div
-            data-testid="jonas-manual-required-hint"
-            className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
-          >
-            <p className="font-medium">
-              This CSV is not a Jonas-native trial balance — period dates can't be inferred.
-            </p>
-            <p className="mt-1 text-xs">
-              Fill in the period and fiscal-year fields in <em>Advanced /
-              manual import options</em> below, then preview again.
-            </p>
-          </div>
-        ) : null}
-
-        {/* Advanced / manual import options — collapsed by default.
-         *  Used for spectre-normalised CSVs that lack a Jonas heading.
-         *  Opens automatically when preview returns no inferred dates.
-         *  The four inputs always render in the DOM (so the
-         *  testids resolve for e2e + so React state stays consistent),
-         *  but they're inside a <details> so the founder's primary
-         *  Jonas-native workflow never sees them. */}
-        <details
-          data-testid="jonas-manual-options"
-          className="mt-4 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm"
-          open={
-            preview?.status === "ok" && !preview.inferredDates
-          }
-        >
-          <summary
-            data-testid="jonas-manual-options-summary"
-            className="cursor-pointer text-xs uppercase tracking-[0.18em] text-stone-600"
-          >
-            Advanced / manual import options
-          </summary>
-          <p className="mt-2 text-xs text-stone-500">
-            Only needed for non-Jonas (spectre-normalised) CSVs that don't
-            carry a "Trial Balance for <em>Month, Year</em>" heading.
-            For raw Jonas exports, leave these blank.
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>
-              <label className="block text-xs uppercase text-stone-500">Period start</label>
-              <input
-                type="date"
-                data-testid="field-period-start"
-                value={fields.periodStart}
-                onChange={(e) => updateField("periodStart", e.target.value)}
-                className="input mt-1 text-sm w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-xs uppercase text-stone-500">Period end</label>
-              <input
-                type="date"
-                data-testid="field-period-end"
-                value={fields.periodEnd}
-                onChange={(e) => updateField("periodEnd", e.target.value)}
-                className="input mt-1 text-sm w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-xs uppercase text-stone-500">Fiscal year label</label>
-              <input
-                type="text"
-                placeholder="FY2026"
-                data-testid="field-fiscal-year"
-                value={fields.fiscalYearLabel}
-                onChange={(e) => updateField("fiscalYearLabel", e.target.value)}
-                className="input mt-1 text-sm w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-xs uppercase text-stone-500">Fiscal period (1–12)</label>
-              <input
-                type="number"
-                min={1}
-                max={12}
-                placeholder="5"
-                data-testid="field-fiscal-period"
-                value={fields.fiscalPeriodSequence}
-                onChange={(e) => updateField("fiscalPeriodSequence", e.target.value)}
-                className="input mt-1 text-sm w-full"
-              />
-            </div>
-          </div>
-        </details>
-
+        {/* File upload */}
         <div className="mt-4">
-          <label className="block text-xs uppercase text-stone-500">CSV file</label>
+          <label className="block text-xs uppercase text-stone-500">Source file (XLSX or CSV)</label>
           <input
             type="file"
-            accept=".csv,text/csv"
-            data-testid="field-csv-file"
+            accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            data-testid="field-source-file"
             onChange={(e) => onFileChosen(e.target.files?.[0] ?? null)}
             className="mt-1 text-sm"
           />
           {fields.filename && (
-            <p className="mt-1 text-xs text-stone-500" data-testid="field-csv-filename">
+            <p className="mt-1 text-xs text-stone-500" data-testid="field-source-filename">
               Loaded: {fields.filename}
             </p>
           )}
         </div>
 
+        {/* Effective date — always visible + confirmable */}
         <div className="mt-4">
-          <label className="block text-xs uppercase text-stone-500">
-            …or paste CSV directly (header row required)
-          </label>
+          <label className="block text-xs uppercase text-stone-500">Effective date (period end)</label>
+          <input
+            type="date"
+            data-testid="field-effective-date"
+            value={fields.effectiveDateOverride}
+            onChange={(e) => updateField("effectiveDateOverride", e.target.value)}
+            className="input mt-1 text-sm"
+          />
+          <p className="mt-1 text-xs text-stone-500">
+            Coulee fiscal year end is December 31. The importer resolves
+            fiscal year + period from the date you confirm here.
+          </p>
+        </div>
+
+        {/* Optional: pasted CSV */}
+        <details className="mt-4 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+          <summary className="cursor-pointer text-xs uppercase tracking-[0.18em] text-stone-600">
+            Alternative — paste CSV
+          </summary>
+          <p className="mt-2 text-xs text-stone-500">
+            For quick tests of a Jonas-native CSV export.
+          </p>
           <textarea
-            rows={8}
+            rows={6}
             data-testid="field-csv-textarea"
             value={fields.csv}
             onChange={(e) => updateField("csv", e.target.value)}
-            placeholder="AccountNumber,AccountDescription,PeriodBalance,YTDBalance,FiscalYear,FiscalPeriod
-1010,Cash,180000,2000000,FY2026,5"
-            className="input mt-1 text-xs font-mono w-full"
+            className="input mt-2 text-xs font-mono w-full"
           />
-        </div>
+        </details>
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             className="btn btn-primary"
             data-testid="btn-preview"
-            disabled={pending || !fields.csv.trim()}
+            disabled={pending || (!fields.xlsxBase64 && !fields.csv.trim())}
             onClick={onPreview}
           >
-            {stage === "preview-pending" ? "Validating…" : "Preview"}
+            Preview
           </button>
-          {stage !== "idle" && (
-            <button
-              className="btn btn-secondary"
-              data-testid="btn-reset"
-              disabled={pending}
-              onClick={onReset}
-            >
-              Reset
-            </button>
-          )}
+          <button className="btn btn-secondary" data-testid="btn-reset" onClick={onReset} disabled={pending}>
+            Reset
+          </button>
         </div>
       </div>
 
       {submitError && (
-        <div
-          className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-          data-testid="submit-error"
-        >
-          {submitError}
+        <div className="card card-body border-red-200 bg-red-50" data-testid="jonas-submit-error">
+          <p className="text-sm text-red-800">{submitError}</p>
         </div>
       )}
 
-      {preview && <PreviewPanel preview={preview} onCommit={onCommit} canCommit={canCommit} stage={stage} />}
+      {/* ---- Preview panel ---- */}
+      {previewOk && (
+        <div className="card card-body space-y-4" data-testid="jonas-preview">
+          <h2 className="section-title text-lg">Preview — no authority written yet</h2>
 
-      {commit && <CommitSummary commit={commit} />}
-    </div>
-  );
-}
+          {/* Summary grid */}
+          <dl className="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+            <SummaryRow k="Source file" v={previewOk.sourceFilename} testId="sum-file" />
+            <SummaryRow k="Source system" v="Jonas" />
+            <SummaryRow
+              k="Source entity"
+              v={previewOk.detectedEntity ?? "Not detected in source file"}
+              testId="sum-entity"
+            />
+            <SummaryRow k="Target tenant" v={previewOk.targetTenantName} testId="sum-tenant" />
+            <SummaryRow
+              k="Effective date"
+              v={
+                previewOk.resolvedDates
+                  ? `${previewOk.resolvedDates.periodEndIso} · period ${previewOk.resolvedDates.fiscalPeriodSequence} of ${previewOk.resolvedDates.fiscalYearLabel}`
+                  : "Not detected — select above"
+              }
+              testId="sum-effective-date"
+            />
+            <SummaryRow k="Source-file hash" v={previewOk.sourceFileHash.slice(0, 16) + "…"} testId="sum-hash" />
+            <SummaryRow k="Account count" v={String(previewOk.rowCount)} testId="sum-account-count" />
+            <SummaryRow k="Mapped" v={String(previewOk.mappingCoverage.mapped)} />
+            <SummaryRow k="Unmapped" v={String(previewOk.mappingCoverage.unmapped)} />
+            <SummaryRow k="Description conflicts" v={String(previewOk.mappingCoverage.descriptionConflicts)} />
+            <SummaryRow k="Duplicate account codes" v={String(previewOk.mappingCoverage.duplicates)} />
+            <SummaryRow k="Total Debit" v={money(previewOk.reconciliation.totalDebits)} testId="sum-total-debit" />
+            <SummaryRow k="Total Credit" v={money(previewOk.reconciliation.totalCredits)} testId="sum-total-credit" />
+            <SummaryRow k="Difference" v={money(Math.abs(previewOk.reconciliation.delta))} testId="sum-delta" />
+            <SummaryRow
+              k="Balanced"
+              v={previewOk.reconciliation.isBalanced ? `Yes (≤ $${previewOk.reconciliation.tolerance.toFixed(2)})` : "NO"}
+              testId="sum-balanced"
+            />
+          </dl>
 
-// ---------------------------------------------------------------------------
-// Preview panel
-// ---------------------------------------------------------------------------
+          {/* Warnings/gates */}
+          {previewOk.requiresEffectiveDateSelection && !fields.effectiveDateOverride && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              This file has no reliable effective date. Select one above before committing.
+            </div>
+          )}
 
-function PreviewPanel({
-  preview,
-  canCommit,
-  stage,
-  onCommit,
-}: {
-  preview: JonasImportPreview;
-  canCommit: boolean;
-  stage: Stage;
-  onCommit: () => void;
-}) {
-  if (preview.status === "validation-failed") {
-    return (
-      <div className="card card-body" data-testid="preview-validation-failed">
-        <h2 className="section-title text-lg text-red-700">Validation failed</h2>
-        <p className="mt-1 text-xs text-stone-500">
-          The CSV could not be parsed. Fix the errors below and re-preview.
-        </p>
-        <ul className="mt-3 list-disc pl-5 text-sm text-red-700">
-          {preview.fileErrors.map((e, i) => (
-            <li key={`file-${i}`}>[file:{e.kind}] {e.message}</li>
-          ))}
-          {preview.rowErrors.map((e, i) => (
-            <li key={`row-${i}`}>
-              [line {e.lineNumber}{e.column ? ` · ${e.column}` : ""}] {e.message}
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
+          {previewOk.requiresEntityMismatchAcknowledgement && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="entity-mismatch">
+              <p>
+                <strong>Entity mismatch.</strong> Source workbook identifies{" "}
+                <em>{previewOk.detectedEntity}</em>. Target tenant is{" "}
+                <em>{previewOk.targetTenantName}</em>.
+              </p>
+              <label className="mt-2 flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  data-testid="chk-entity-ack"
+                  checked={fields.entityMismatchAcknowledged}
+                  onChange={(e) => updateField("entityMismatchAcknowledged", e.target.checked)}
+                />
+                I have verified the mismatch and authorise importing this file into {previewOk.targetTenantName}.
+              </label>
+            </div>
+          )}
 
-  const reconciliationOk = preview.reconciliation.isBalanced;
-  const mappingOk = preview.mappingCoverage.unmapped === 0;
+          {previewOk.duplicateSourceFileBatch && (
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="duplicate-file">
+              <strong>Duplicate source file.</strong> An identical file was already committed on{" "}
+              {previewOk.duplicateSourceFileBatch.openedAt.slice(0, 10)} (batch{" "}
+              <code>{previewOk.duplicateSourceFileBatch.batchId.slice(0, 8)}…</code>). Ordinary
+              commit is blocked.
+            </div>
+          )}
 
-  return (
-    <div className="card card-body" data-testid="preview-ok">
-      <div className="flex items-baseline justify-between">
-        <h2 className="section-title text-lg">Preview</h2>
-        <span className="text-xs text-stone-500">No data has been written yet.</span>
-      </div>
+          {previewOk.existingSnapshotForPeriod && (
+            <div className="rounded-md border border-orange-400 bg-orange-50 px-3 py-3 text-sm text-orange-900" data-testid="duplicate-period">
+              <p className="font-semibold">AUTHORITATIVE TRIAL BALANCE ALREADY EXISTS FOR {previewOk.resolvedDates?.periodEndIso ?? "this period"}.</p>
+              <p className="mt-1 text-xs">
+                Existing batch <code>{previewOk.existingSnapshotForPeriod.batchId.slice(0, 8)}…</code> ·
+                snapshot <code>{previewOk.existingSnapshotForPeriod.snapshotId.slice(0, 8)}…</code> ·
+                committed {previewOk.existingSnapshotForPeriod.capturedAt.slice(0, 10)} ·
+                source <em>{previewOk.existingSnapshotForPeriod.sourceFile ?? "unknown"}</em>.
+              </p>
+              <p className="mt-2 text-xs">
+                Ordinary Commit is <strong>blocked</strong>. Replacement is a
+                supervised accounting action: the existing snapshot is
+                marked <em>rolled-back</em>, this new one becomes the
+                authoritative snapshot for {previewOk.resolvedDates?.periodEndIso ?? "this period"},
+                and the audit chain is preserved via <code>supersededByBatchId</code>.
+              </p>
+              <label className="mt-2 flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  data-testid="chk-replace"
+                  checked={replaceOptIn}
+                  onChange={(e) => setReplaceOptIn(e.target.checked)}
+                />
+                Replace Existing Trial Balance — I understand the existing authoritative snapshot will be superseded.
+              </label>
+            </div>
+          )}
 
-      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Rows parsed</dt>
-          <dd data-testid="preview-row-count">{preview.rowCount}</dd>
+          {/* Full account-level preview table */}
+          <div>
+            <h3 className="text-sm font-semibold mt-4">Account preview ({previewOk.rows.length} rows)</h3>
+            <div className="mt-2 max-h-96 overflow-auto border border-stone-200 rounded-md" data-testid="preview-account-table">
+              <table className="table-base text-xs w-full">
+                <thead className="sticky top-0 bg-stone-50 z-10">
+                  <tr>
+                    <th className="w-24 text-left">Account</th>
+                    <th className="text-left">Jonas description</th>
+                    <th className="text-left">Spectre account</th>
+                    <th className="text-right w-28">Debit</th>
+                    <th className="text-right w-28">Credit</th>
+                    <th className="text-left w-24">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {previewOk.rows.map((r) => (
+                    <PreviewRow key={r.lineNumber} row={r} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              className={"btn " + (previewOk.existingSnapshotForPeriod && replaceOptIn ? "btn-danger" : "btn-primary")}
+              data-testid="btn-commit"
+              disabled={!canCommit || pending}
+              onClick={onCommit}
+            >
+              {previewOk.existingSnapshotForPeriod && replaceOptIn ? "Commit REPLACEMENT" : "Commit"}
+            </button>
+            <button className="btn btn-secondary" data-testid="btn-reset" onClick={onReset} disabled={pending}>
+              Reset
+            </button>
+          </div>
         </div>
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Accounts mapped</dt>
-          <dd data-testid="preview-mapped-count">
-            {preview.mappingCoverage.mapped} / {preview.mappingCoverage.mapped + preview.mappingCoverage.unmapped}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Reconciliation</dt>
-          <dd data-testid="preview-reconciliation">
-            {reconciliationOk ? "PASS" : "FAIL"} · Δ {formatMoney(preview.reconciliation.delta)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Total debits</dt>
-          <dd data-testid="preview-total-debits">{formatMoney(preview.reconciliation.totalDebits)}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Total credits</dt>
-          <dd data-testid="preview-total-credits">{formatMoney(preview.reconciliation.totalCredits)}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase text-stone-500">Warnings</dt>
-          <dd>{preview.warnings.length}</dd>
-        </div>
-      </dl>
+      )}
 
-      {preview.unmappedAccounts.length > 0 && (
-        <div
-          className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-          data-testid="preview-unmapped"
-        >
-          <p className="font-medium">
-            {preview.unmappedAccounts.length} account(s) have no mapping rule. Commit is blocked.
-          </p>
-          <ul className="mt-1 list-disc pl-5 text-xs">
-            {preview.unmappedAccounts.slice(0, 10).map((u, i) => (
-              <li key={i}>
-                Line {u.lineNumber} · account {u.accountNumber} · {u.accountDescription}
-              </li>
-            ))}
-            {preview.unmappedAccounts.length > 10 && (
-              <li>…and {preview.unmappedAccounts.length - 10} more.</li>
+      {/* ---- Post-commit receipt ---- */}
+      {commitOk && (
+        <div className="card card-body border-emerald-300 bg-emerald-50" data-testid="jonas-commit-receipt">
+          <h2 className="section-title text-lg text-emerald-900">Trial Balance committed</h2>
+          <dl className="mt-3 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+            <SummaryRow k="Effective date" v={commitOk.periodEndIso} testId="receipt-effective-date" />
+            <SummaryRow k="Batch id" v={commitOk.batchId} testId="receipt-batch-id" />
+            <SummaryRow k="Snapshot id" v={commitOk.snapshotId} testId="receipt-snapshot-id" />
+            <SummaryRow k="Source file" v={commitOk.sourceFile} testId="receipt-source-file" />
+            <SummaryRow k="Source hash" v={commitOk.sourceFileHash} testId="receipt-source-hash" />
+            <SummaryRow k="Account count" v={String(commitOk.rowCount)} testId="receipt-account-count" />
+            <SummaryRow k="Total Debit" v={money(commitOk.totalDebits)} testId="receipt-total-debit" />
+            <SummaryRow k="Total Credit" v={money(commitOk.totalCredits)} testId="receipt-total-credit" />
+            <SummaryRow k="Difference" v={money(Math.abs(commitOk.delta))} testId="receipt-delta" />
+            <SummaryRow k="Committed at" v={commitOk.committedAt.slice(0, 19).replace("T", " ")} testId="receipt-committed-at" />
+            <SummaryRow k="Committed by" v={commitOk.committedByUserId} testId="receipt-committed-by" />
+            {commitOk.supersededBatchId && (
+              <SummaryRow k="Superseded batch" v={commitOk.supersededBatchId} testId="receipt-superseded" />
             )}
-          </ul>
+          </dl>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <a className="btn btn-secondary" href={commitOk.links.trialBalance} data-testid="receipt-link-tb">
+              View Trial Balance
+            </a>
+            <a className="btn btn-secondary" href={commitOk.links.balanceSheet} data-testid="receipt-link-bs">
+              View Balance Sheet
+            </a>
+            <a className="btn btn-secondary" href={commitOk.links.monthlyBoardPackage} data-testid="receipt-link-mbp">
+              View Monthly Board Reporting Package
+            </a>
+          </div>
         </div>
       )}
-
-      {!reconciliationOk && (
-        <div
-          className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700"
-          data-testid="preview-unbalanced"
-        >
-          Trial balance does NOT reconcile. Commit is blocked.
-        </div>
-      )}
-
-      {preview.existingSnapshotForPeriod && (
-        <div
-          className="mt-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-          data-testid="preview-duplicate-warning"
-        >
-          <p className="font-medium">Duplicate-period warning</p>
-          <p className="mt-1 text-xs">
-            A trial-balance snapshot already exists for this club at this period
-            ({preview.existingSnapshotForPeriod.reportingPeriod ?? "—"}, imported{" "}
-            {new Date(preview.existingSnapshotForPeriod.capturedAt).toLocaleString()}
-            {preview.existingSnapshotForPeriod.sourceFile
-              ? ` from ${preview.existingSnapshotForPeriod.sourceFile}`
-              : ""}).
-            A bit-identical re-import will be a no-op. A revised CSV will write
-            a replacement snapshot; the prior snapshot stays for audit.
-          </p>
-        </div>
-      )}
-
-      {preview.warnings.length > 0 && (
-        <details className="mt-4 text-xs text-stone-600">
-          <summary className="cursor-pointer">{preview.warnings.length} parser warning(s)</summary>
-          <ul className="mt-1 list-disc pl-5">
-            {preview.warnings.map((w, i) => (
-              <li key={i}>
-                [line {w.lineNumber}{w.column ? ` · ${w.column}` : ""}] {w.message}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          className="btn btn-primary"
-          data-testid="btn-commit"
-          disabled={!canCommit || stage === "commit-pending"}
-          onClick={onCommit}
-        >
-          {stage === "commit-pending" ? "Importing…" : "Commit import"}
-        </button>
-        <span className="self-center text-xs text-stone-500">
-          {canCommit
-            ? "Click commit to persist this trial balance to the Reporting Ledger."
-            : "Resolve the blockers above to enable commit."}
-        </span>
-      </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Commit summary
-// ---------------------------------------------------------------------------
-
-function CommitSummary({ commit }: { commit: JonasImportCommitResult }) {
-  const isSuccess = commit.status === "succeeded";
-  const isDuplicateNoop = commit.status === "duplicate-no-op";
-  const tone = isSuccess
-    ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-    : isDuplicateNoop
-      ? "border-stone-300 bg-stone-50 text-stone-700"
-      : "border-red-300 bg-red-50 text-red-800";
-
+function SummaryRow({ k, v, testId }: { k: string; v: string; testId?: string }) {
   return (
-    <div className={`card card-body ${tone}`} data-testid="commit-summary">
-      <h2 className="section-title text-lg">
-        Import result: <span data-testid="commit-status">{commit.status.toUpperCase()}</span>
-      </h2>
-      <dl className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
-        <div>
-          <dt className="text-xs uppercase opacity-60">Snapshot ID</dt>
-          <dd className="font-mono text-xs break-all" data-testid="commit-snapshot-id">
-            {commit.snapshotId ?? "—"}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase opacity-60">Batch ID</dt>
-          <dd className="font-mono text-xs break-all" data-testid="commit-batch-id">
-            {commit.batchId || "—"}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase opacity-60">Rows persisted</dt>
-          <dd data-testid="commit-row-count">{commit.rowCount}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase opacity-60">Replaced prior snapshot?</dt>
-          <dd>{commit.replacedCount > 0 ? "Yes" : "No"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase opacity-60">Reconciliation</dt>
-          <dd>
-            {commit.reconciliation.isBalanced ? "PASS" : "FAIL"} · Δ{" "}
-            {formatMoney(commit.reconciliation.delta)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs uppercase opacity-60">Mapping coverage</dt>
-          <dd>
-            {commit.mappingCoverage.mapped} mapped, {commit.mappingCoverage.unmapped} unmapped
-          </dd>
-        </div>
-      </dl>
-      {commit.notes && (
-        <p className="mt-3 text-xs opacity-80" data-testid="commit-notes">
-          {commit.notes}
-        </p>
-      )}
+    <div className="flex justify-between border-b border-stone-100 py-1">
+      <dt className="text-stone-500">{k}</dt>
+      <dd className="text-stone-800 font-mono text-right" data-testid={testId}>{v}</dd>
     </div>
+  );
+}
+
+function PreviewRow({ row }: { row: JonasImportPreviewRow }) {
+  const status = row.mappingStatus;
+  const statusColor =
+    status === "mapped" ? "text-emerald-700"
+    : status === "description-conflict" ? "text-amber-700"
+    : status === "unmapped" ? "text-red-700"
+    : "text-red-700";
+  return (
+    <tr data-testid={`row-${row.accountCode}`}>
+      <td className="font-mono">{row.accountCode}</td>
+      <td>{row.jonasDescription}</td>
+      <td>{row.spectreAccountName ?? <em className="text-red-700">no match</em>}</td>
+      <td className="text-right tabular-nums">{row.debit ? money(row.debit) : ""}</td>
+      <td className="text-right tabular-nums">{row.credit ? money(row.credit) : ""}</td>
+      <td className={statusColor}>{status}</td>
+    </tr>
   );
 }
