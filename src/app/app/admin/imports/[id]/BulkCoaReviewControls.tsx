@@ -334,7 +334,7 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
 
         {/* Contextual bulk toolbar — only when selection > 0 */}
         {anySelected && !props.readOnly && (
-          <div className="flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1">
+          <div data-testid="coa-bulk-toolbar" className="flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1">
             <span className="font-semibold text-amber-800">{selectedRowIds.length} selected</span>
             <BulkMenu label="Department" open={showBulkMenu === "DEPT"} onToggle={() => setShowBulkMenu(showBulkMenu === "DEPT" ? null : "DEPT")}>
               <BulkDeptMenu departments={props.departments}
