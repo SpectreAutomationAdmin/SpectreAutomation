@@ -82,7 +82,7 @@ runAt("COA-UX-2a · Shift-click 1000 → 1051 selects the contiguous visible ran
   //    The contextual bulk toolbar carries data-testid="coa-bulk-toolbar"
   //    and unmounts when nothing is selected — asserting that container
   //    disappears is the least-brittle invariant.
-  const clearBtn = page.getByRole("button", { name: /^Clear$/ }).first();
+  const clearBtn = page.getByTestId("coa-bulk-toolbar").getByRole("button", { name: /^Clear$/ });
   await clearBtn.click();
   await expect(page.getByTestId("coa-bulk-toolbar")).toHaveCount(0);
 
@@ -112,7 +112,7 @@ runAt("COA-UX-2a · reverse direction: Shift-click 1051 → 1000 also selects th
     fullPage: false,
   });
 
-  const clearBtn = page.getByRole("button", { name: /^Clear$/ }).first();
+  const clearBtn = page.getByTestId("coa-bulk-toolbar").getByRole("button", { name: /^Clear$/ });
   await clearBtn.click();
   await expect(page.getByTestId("coa-bulk-toolbar")).toHaveCount(0);
 
@@ -138,7 +138,7 @@ runAt("COA-UX-2a · plain click does NOT extend a prior range — anchor resets 
   const txt = await toolbar.textContent();
   expect(txt).toMatch(/^2 selected/);
 
-  const clearBtn = page.getByRole("button", { name: /^Clear$/ }).first();
+  const clearBtn = page.getByTestId("coa-bulk-toolbar").getByRole("button", { name: /^Clear$/ });
   await clearBtn.click();
   await expect(page.getByTestId("coa-bulk-toolbar")).toHaveCount(0);
 
