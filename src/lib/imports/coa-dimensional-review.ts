@@ -28,6 +28,9 @@ export type CoaReviewInputRow = {
   fundPolicy: DimensionPolicy;
   fundApplicabilityKeys: string[];
   departmentApplicabilityCodes: string[]; // AccountDepartment codes selected in preview; [] when none
+  // DIM-2b (2026-09-29) — review state (optional so existing
+  // callers stay compatible). When undefined treat as `reviewed=false`.
+  reviewed?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -52,6 +55,13 @@ export type CoaDimensionalReviewSummary = {
   /** Number of rows whose departmentPolicy=REQUIRED AND no AccountDepartment applicability. */
   departmentPolicyRequiredWithoutApplicability: number;
 
+  /** DIM-2b (2026-09-29) — operator explicitly reviewed (via edit
+   *  or Mark Reviewed). Distinct from prediction confidence. */
+  rowsReviewed: number;
+  rowsNotReviewed: number;
+  /** Medium-confidence rows the operator has NOT yet reviewed. */
+  mediumConfidenceNotReviewed: number;
+
   /** Rows the founder should see before commit — combines low
    *  confidence, policy/applicability mismatches, and any signal
    *  the review lists flag. */
@@ -72,6 +82,8 @@ export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDi
   let rowsWithoutFundKeys = 0;
   let fundPolicyRequiredWithoutApplicability = 0;
   let departmentPolicyRequiredWithoutApplicability = 0;
+  let rowsReviewed = 0;
+  let mediumConfidenceNotReviewed = 0;
   const attentionSet = new Set<number>();
 
   for (let i = 0; i < rows.length; i++) {
@@ -89,6 +101,9 @@ export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDi
       fundKeysDistribution["(none)"] = (fundKeysDistribution["(none)"] ?? 0) + 1;
     }
 
+    const isReviewed = r.reviewed === true;
+    if (isReviewed) rowsReviewed++;
+
     if (r.fundPolicy === "REQUIRED" && r.fundApplicabilityKeys.length === 0) {
       fundPolicyRequiredWithoutApplicability++;
       attentionSet.add(i);
@@ -97,7 +112,13 @@ export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDi
       departmentPolicyRequiredWithoutApplicability++;
       attentionSet.add(i);
     }
-    if (r.confidence === "low" || r.confidence === "medium") attentionSet.add(i);
+    // Medium-confidence rows require review UNLESS the operator
+    // has explicitly marked them reviewed (Section 8 + Section 9).
+    if (r.confidence === "medium" && !isReviewed) {
+      mediumConfidenceNotReviewed++;
+      attentionSet.add(i);
+    }
+    if (r.confidence === "low") attentionSet.add(i);
   }
 
   return {
@@ -111,6 +132,9 @@ export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDi
     rowsWithoutFundKeys,
     fundPolicyRequiredWithoutApplicability,
     departmentPolicyRequiredWithoutApplicability,
+    rowsReviewed,
+    rowsNotReviewed: rows.length - rowsReviewed,
+    mediumConfidenceNotReviewed,
     rowsRequiringAttention: attentionSet.size,
   };
 }
@@ -270,4 +294,76 @@ export function departmentPolicyRequiredWithoutApplicabilityRows(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// DIM-2b (2026-09-29) — filter primitives.
+// ---------------------------------------------------------------------------
+// Pure, composable predicates the bulk-review UI + tests use to
+// isolate a working subset from the full 562-row batch.
+
+export type CoaReviewFilter = {
+  confidence?: ReadonlyArray<CoaReviewInputRow["confidence"]>;
+  type?: ReadonlyArray<CoaReviewInputRow["type"]>;
+  fsGroupKey?: ReadonlyArray<string>;
+  departmentPolicy?: ReadonlyArray<DimensionPolicy>;
+  fundPolicy?: ReadonlyArray<DimensionPolicy>;
+  /** "NONE" → no AccountDepartment applicability; "SOME" → any applicability. */
+  departmentApplicabilityState?: "NONE" | "SOME";
+  /** "NONE" → no fund keys; "SOME" → any fund keys. */
+  fundApplicabilityState?: "NONE" | "SOME";
+  /** Filter by specific canonical fund key membership. */
+  fundApplicabilityHasKey?: string;
+  /** "REVIEWED" → operator confirmed; "NOT_REVIEWED" → still pending. */
+  reviewState?: "REVIEWED" | "NOT_REVIEWED";
+  /** true → row is in the CAPITAL review candidate set. */
+  capitalReviewCandidate?: boolean;
+  /** Search matches accountNumber OR name (case-insensitive substring). */
+  search?: string;
+};
+
+function isCapitalCandidate(row: CoaReviewInputRow): boolean {
+  // Delegate to capitalReviewCandidates on a single-row slice — the
+  // helper filters out rows already tagged CAPITAL, so the client
+  // can treat "already CAPITAL" as effectively out-of-list.
+  return capitalReviewCandidates([row]).length > 0;
+}
+
+export function filterCoaBatch(
+  rows: ReadonlyArray<CoaReviewInputRow>,
+  filter: CoaReviewFilter,
+): CoaReviewInputRow[] {
+  const q = filter.search?.trim().toLowerCase() ?? "";
+  return rows.filter((r) => {
+    if (filter.confidence && filter.confidence.length > 0 && !filter.confidence.includes(r.confidence)) return false;
+    if (filter.type && filter.type.length > 0 && !filter.type.includes(r.type)) return false;
+    if (filter.fsGroupKey && filter.fsGroupKey.length > 0 && !filter.fsGroupKey.includes(r.fsGroupKey)) return false;
+    if (filter.departmentPolicy && filter.departmentPolicy.length > 0 && !filter.departmentPolicy.includes(r.departmentPolicy)) return false;
+    if (filter.fundPolicy && filter.fundPolicy.length > 0 && !filter.fundPolicy.includes(r.fundPolicy)) return false;
+    if (filter.departmentApplicabilityState) {
+      const hasSome = r.departmentApplicabilityCodes.length > 0;
+      if (filter.departmentApplicabilityState === "NONE" && hasSome) return false;
+      if (filter.departmentApplicabilityState === "SOME" && !hasSome) return false;
+    }
+    if (filter.fundApplicabilityState) {
+      const hasSome = r.fundApplicabilityKeys.length > 0;
+      if (filter.fundApplicabilityState === "NONE" && hasSome) return false;
+      if (filter.fundApplicabilityState === "SOME" && !hasSome) return false;
+    }
+    if (filter.fundApplicabilityHasKey && !r.fundApplicabilityKeys.includes(filter.fundApplicabilityHasKey)) return false;
+    if (filter.reviewState) {
+      const isReviewed = r.reviewed === true;
+      if (filter.reviewState === "REVIEWED" && !isReviewed) return false;
+      if (filter.reviewState === "NOT_REVIEWED" && isReviewed) return false;
+    }
+    if (filter.capitalReviewCandidate !== undefined) {
+      const isCand = isCapitalCandidate(r);
+      if (filter.capitalReviewCandidate && !isCand) return false;
+      if (!filter.capitalReviewCandidate && isCand) return false;
+    }
+    if (q.length > 0) {
+      if (!r.accountNumber.toLowerCase().includes(q) && !r.name.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
 }

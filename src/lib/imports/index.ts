@@ -1566,6 +1566,12 @@ export async function saveCoaRowMappings(
       fundApplicabilityKeys?: string[];
       departmentPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
       fundPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+      // DIM-2b (2026-09-29) — import-preview review workflow bit.
+      // Transient (persisted only in the batch's ImportRow rawJson,
+      // never on Account). Distinct from prediction confidence: a
+      // HIGH-confidence row is not "reviewed" until the operator
+      // explicitly clicks Mark Reviewed or edits the row.
+      reviewed?: boolean;
     }>;
   },
 ) {
@@ -1650,6 +1656,19 @@ export async function saveCoaRowMappings(
     }
     if (m.fundPolicy !== undefined) {
       merged.fundPolicy = m.fundPolicy;
+    }
+    // DIM-2b (2026-09-29) — import-preview review bit. Stored under
+    // `_review` so it stays discoverable but doesn't collide with
+    // the mapping fields. `reviewedAt` records when the operator
+    // confirmed the row for audit purposes.
+    if (m.reviewed !== undefined) {
+      const priorReview = (raw._review ?? {}) as { reviewed?: boolean; reviewedAt?: string };
+      merged._review = {
+        reviewed: m.reviewed,
+        reviewedAt: m.reviewed
+          ? (priorReview.reviewed ? priorReview.reviewedAt : new Date().toISOString())
+          : null,
+      };
     }
     // Drop the legacy singular field if present — the array is now
     // the canonical shape downstream.

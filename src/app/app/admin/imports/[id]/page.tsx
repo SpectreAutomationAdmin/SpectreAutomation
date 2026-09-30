@@ -24,9 +24,13 @@ import { CoaMappingTable, type InitialCoaRow } from "./CoaMappingTable";
 // DIM-2a (2026-09-29) — batch-level dimensional review summary.
 import {
   summariseCoaBatch,
+  capitalReviewCandidates,
   type CoaReviewInputRow,
 } from "@/lib/imports/coa-dimensional-review";
+import { readReviewState } from "@/lib/imports/coa-review-state";
 import type { AccountType } from "@/lib/accounting/types";
+// DIM-2b (2026-09-29) — bulk review controls.
+import { BulkCoaReviewControls, type BulkReviewRow } from "./BulkCoaReviewControls";
 import { CoaReplaceCommitButton } from "./CoaReplaceCommitButton";
 import { CoaErrorsCard } from "./CoaErrorsCard";
 // Founder rule 2026-07-01 v14.20 — flash-cookie sweep must run
@@ -121,6 +125,8 @@ export default async function ImportBatchPage({ params }: { params: { id: string
     // distributions + REQUIRED-without-applicability counts at a
     // glance before commit.
     dim2aSummary: ReturnType<typeof summariseCoaBatch> | null;
+    // DIM-2b (2026-09-29) — bulk review controls row projection.
+    bulkRows: BulkReviewRow[];
   } | null = null;
   if (batch.domain === "COA") {
     const options = await getCoaMappingOptions(batch.clubId);
@@ -216,8 +222,33 @@ export default async function ImportBatchPage({ params }: { params: { id: string
         departmentApplicabilityCodes: normalised.departmentCodes ?? [],
       };
     });
-    const dim2aSummary = summariseCoaBatch(reviewRows);
-    coaPanel = { options, rows, dim2aSummary };
+    // Attach reviewed bit from persisted _review.
+    const reviewRowsWithState: CoaReviewInputRow[] = reviewRows.map((rr, i) => {
+      const raw = parseRawJson(batch.rows[i].rawJson);
+      const state = readReviewState(raw);
+      return { ...rr, reviewed: state.reviewed };
+    });
+    const dim2aSummary = summariseCoaBatch(reviewRowsWithState);
+    // DIM-2b — precompute capital-candidate flags so the client can
+    // filter without re-running the heuristic.
+    const capitalCandidateSet = new Set(
+      capitalReviewCandidates(reviewRowsWithState).map((r) => r.accountNumber),
+    );
+    const bulkRows: BulkReviewRow[] = reviewRowsWithState.map((rr, i) => ({
+      rowId: batch.rows[i].id,
+      accountNumber: rr.accountNumber,
+      name: rr.name,
+      type: rr.type,
+      fsGroupKey: rr.fsGroupKey,
+      confidence: rr.confidence,
+      departmentPolicy: rr.departmentPolicy,
+      fundPolicy: rr.fundPolicy,
+      departmentApplicabilityCodes: rr.departmentApplicabilityCodes,
+      fundApplicabilityKeys: rr.fundApplicabilityKeys,
+      reviewed: rr.reviewed === true,
+      capitalCandidate: capitalCandidateSet.has(rr.accountNumber),
+    }));
+    coaPanel = { options, rows, dim2aSummary, bulkRows };
   }
 
   // COA replacement plan — drives the founder's confirmation
@@ -495,11 +526,28 @@ export default async function ImportBatchPage({ params }: { params: { id: string
                   <ul className="mt-1 text-stone-600">
                     <li>fund REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyRequiredWithoutApplicability}</span></li>
                     <li>dept REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyRequiredWithoutApplicability}</span></li>
+                    <li>medium confidence · not reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.mediumConfidenceNotReviewed}</span></li>
                     <li>rows to review: <span className="tabular-nums font-semibold">{coaPanel.dim2aSummary.rowsRequiringAttention}</span></li>
+                  </ul>
+                </div>
+                <div>
+                  <div className="font-medium text-club-ink">Review state</div>
+                  <ul className="mt-1 text-stone-600">
+                    <li>reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.rowsReviewed}</span></li>
+                    <li>not reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.rowsNotReviewed}</span></li>
                   </ul>
                 </div>
               </div>
             </div>
+          )}
+          {coaPanel && (
+            <BulkCoaReviewControls
+              batchId={batch.id}
+              readOnly={coaReadOnly}
+              rows={coaPanel.bulkRows}
+              departments={coaPanel.options.departments.map((d) => ({ code: d.code, name: d.name }))}
+              funds={coaPanel.options.funds.map((f) => ({ key: f.key, name: f.name }))}
+            />
           )}
           {coaPanel && (
             <CoaMappingTable
