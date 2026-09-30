@@ -27,6 +27,7 @@ import { prisma } from "@/lib/prisma";
 import { isAppError, NotFoundError } from "@/lib/errors";
 import { saveCoaRowMappings } from "@/lib/imports";
 import { normaliseCoaRow } from "@/lib/imports/coa-mapping";
+import { readReviewState } from "@/lib/imports/coa-review-state";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 
 type DimensionPolicy = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE";
@@ -45,6 +46,70 @@ type BulkAction =
 
 function parseJsonSafe<T>(s: string, fallback: T): T {
   try { const p = JSON.parse(s) as T; return p ?? fallback; } catch { return fallback; }
+}
+
+/**
+ * COA-UX-2c (2026-09-30) — §6 material-edit review reset.
+ *
+ * When the operator changes a material classification/policy field
+ * on a row that was previously acknowledged (`reviewed=true`), the
+ * prior acknowledgement is stale: the proposal has changed since
+ * the operator ack'd it. Return the reviewed flag that should be
+ * persisted after this edit:
+ *
+ *   * If `explicitReviewed` is set (e.g. the operator clicked
+ *     "Mark Reviewed" or "Unmark"), honour it exactly. No override.
+ *   * Else if the edit actually changes ≥1 material field on a
+ *     previously-reviewed row → reviewed=false (§6). The founder
+ *     must re-ack.
+ *   * Else → keep the DIM-2a default so a first edit of an
+ *     unreviewed row still implicitly marks it reviewed.
+ *
+ * Material fields (per §6): type, categoryKey, fsGroupKey,
+ * departmentPolicy, departmentApplicabilityCodes, fundPolicy,
+ * fundApplicabilityKeys.
+ */
+export function resolveReviewedAfterMaterialEdit(
+  args: {
+    priorReviewed: boolean;
+    explicitReviewed?: boolean;
+    priorMaterial: {
+      type: string | null;
+      categoryKey: string | null;
+      fsGroupKey: string | null;
+      departmentPolicy: string | null;
+      fundPolicy: string | null;
+      departmentCodes: string[];
+      fundApplicabilityKeys: string[];
+    };
+    nextMaterial: {
+      type: string | null;
+      categoryKey: string | null;
+      fsGroupKey: string | null;
+      departmentPolicy: string | null;
+      fundPolicy: string | null;
+      departmentCodes: string[];
+      fundApplicabilityKeys: string[];
+    };
+  },
+): boolean {
+  if (args.explicitReviewed !== undefined) return args.explicitReviewed;
+  const p = args.priorMaterial;
+  const n = args.nextMaterial;
+  const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const changed =
+    p.type !== n.type ||
+    p.categoryKey !== n.categoryKey ||
+    p.fsGroupKey !== n.fsGroupKey ||
+    p.departmentPolicy !== n.departmentPolicy ||
+    p.fundPolicy !== n.fundPolicy ||
+    !arrEq(p.departmentCodes.slice().sort(), n.departmentCodes.slice().sort()) ||
+    !arrEq(p.fundApplicabilityKeys.slice().sort(), n.fundApplicabilityKeys.slice().sort());
+  if (!changed) return args.priorReviewed;
+  // §6 preferred rule: material change on an already-reviewed row
+  // returns it to NOT REVIEWED. On a not-yet-reviewed row the
+  // existing DIM-2a default applies (edit ⇒ implicit ack).
+  return args.priorReviewed ? false : true;
 }
 
 /**
@@ -90,6 +155,7 @@ export async function applyBulkCoaEditAction(
   const mappings = rows.map((r) => {
     const raw = parseJsonSafe<Record<string, unknown>>(r.rawJson, {});
     const current = normaliseCoaRow(raw);
+    const priorReviewed = readReviewState(raw).reviewed === true;
     // Base mapping preserves every non-touched field.
     const base = {
       rowId: r.id,
@@ -101,6 +167,34 @@ export async function applyBulkCoaEditAction(
       departmentPolicy: current.departmentPolicy ?? undefined,
       fundPolicy: current.fundPolicy ?? undefined,
     } as Parameters<typeof saveCoaRowMappings>[1]["mappings"][number];
+    const priorMaterial = {
+      type: current.type ?? null,
+      categoryKey: current.categoryKey ?? null,
+      fsGroupKey: current.fsGroupKey ?? null,
+      departmentPolicy: (current.departmentPolicy as string | undefined) ?? null,
+      fundPolicy: (current.fundPolicy as string | undefined) ?? null,
+      departmentCodes: current.departmentCodes ?? [],
+      fundApplicabilityKeys: current.fundApplicabilityKeys ?? [],
+    };
+    // Helper: compose the next mapping + resolve reviewed via §6 rules.
+    function withReviewed(next: typeof base, opts: { explicitReviewed?: boolean } = {}) {
+      const nextMaterial = {
+        type: next.type ?? null,
+        categoryKey: next.categoryKey ?? null,
+        fsGroupKey: next.fsGroupKey ?? null,
+        departmentPolicy: (next.departmentPolicy as string | undefined) ?? null,
+        fundPolicy: (next.fundPolicy as string | undefined) ?? null,
+        departmentCodes: next.departmentCodes ?? [],
+        fundApplicabilityKeys: next.fundApplicabilityKeys ?? [],
+      };
+      const reviewed = resolveReviewedAfterMaterialEdit({
+        priorReviewed,
+        explicitReviewed: opts.explicitReviewed,
+        priorMaterial,
+        nextMaterial,
+      });
+      return { ...next, reviewed };
+    }
 
     switch (action.kind) {
       case "SET_DEPARTMENT_APPLICABILITY": {
@@ -111,7 +205,7 @@ export async function applyBulkCoaEditAction(
               ...(current.departmentCodes ?? []),
               ...action.departmentCodes.filter((c) => !priorSet.has(c)),
             ];
-        return { ...base, departmentCodes: next, reviewed: true };
+        return withReviewed({ ...base, departmentCodes: next });
       }
       case "SET_FUND_APPLICABILITY": {
         const priorSet = new Set(current.fundApplicabilityKeys ?? []);
@@ -121,14 +215,14 @@ export async function applyBulkCoaEditAction(
               ...(current.fundApplicabilityKeys ?? []),
               ...action.fundKeys.filter((k) => !priorSet.has(k)),
             ];
-        return { ...base, fundApplicabilityKeys: next, reviewed: true };
+        return withReviewed({ ...base, fundApplicabilityKeys: next });
       }
       case "SET_DEPARTMENT_POLICY":
         // Policy change MUST NOT touch applicability (Section 7 +
         // Section 15). Only the policy field changes.
-        return { ...base, departmentPolicy: action.value, reviewed: true };
+        return withReviewed({ ...base, departmentPolicy: action.value });
       case "SET_FUND_POLICY":
-        return { ...base, fundPolicy: action.value, reviewed: true };
+        return withReviewed({ ...base, fundPolicy: action.value });
       case "SET_CLASSIFICATION": {
         // Each of type / categoryKey / fsGroupKey is independently
         // optional — undefined means "leave alone", null means
@@ -141,9 +235,11 @@ export async function applyBulkCoaEditAction(
         if (action.type !== undefined) next.type = action.type;
         if (action.categoryKey !== undefined) next.categoryKey = action.categoryKey;
         if (action.fsGroupKey !== undefined) next.fsGroupKey = action.fsGroupKey;
-        return { ...next, reviewed: true };
+        return withReviewed(next);
       }
       case "MARK_REVIEWED":
+        // MARK_REVIEWED is an explicit ack — no material change,
+        // reviewed=true regardless of prior.
         return { ...base, reviewed: true };
     }
   });
@@ -219,19 +315,54 @@ export async function applyInspectorEditAction(
 
   const raw = parseJsonSafe<Record<string, unknown>>(row.rawJson, {});
   const current = normaliseCoaRow(raw);
+  const priorReviewed = readReviewState(raw).reviewed === true;
+
+  const nextType = edits.type !== undefined ? edits.type : (current.type ?? null);
+  const nextCategoryKey = edits.categoryKey !== undefined ? edits.categoryKey : (current.categoryKey ?? null);
+  const nextFsGroupKey = edits.fsGroupKey !== undefined ? edits.fsGroupKey : (current.fsGroupKey ?? null);
+  const nextDepartmentCodes = edits.departmentCodes !== undefined ? edits.departmentCodes : (current.departmentCodes ?? []);
+  const nextFundApplicabilityKeys = edits.fundApplicabilityKeys !== undefined ? edits.fundApplicabilityKeys : (current.fundApplicabilityKeys ?? []);
+  const nextDepartmentPolicy = edits.departmentPolicy !== undefined ? edits.departmentPolicy : current.departmentPolicy;
+  const nextFundPolicy = edits.fundPolicy !== undefined ? edits.fundPolicy : current.fundPolicy;
+
+  // COA-UX-2c (2026-09-30) — §6 material-edit review reset. If the
+  // caller explicitly passed `reviewed`, honour it (Mark Reviewed /
+  // Unmark buttons). Otherwise: on a reviewed row whose material
+  // fields actually changed, return to NOT REVIEWED; otherwise
+  // preserve the DIM-2a default (edit ⇒ implicit ack).
+  const resolvedReviewed = resolveReviewedAfterMaterialEdit({
+    priorReviewed,
+    explicitReviewed: edits.reviewed,
+    priorMaterial: {
+      type: current.type ?? null,
+      categoryKey: current.categoryKey ?? null,
+      fsGroupKey: current.fsGroupKey ?? null,
+      departmentPolicy: (current.departmentPolicy as string | undefined) ?? null,
+      fundPolicy: (current.fundPolicy as string | undefined) ?? null,
+      departmentCodes: current.departmentCodes ?? [],
+      fundApplicabilityKeys: current.fundApplicabilityKeys ?? [],
+    },
+    nextMaterial: {
+      type: nextType,
+      categoryKey: nextCategoryKey,
+      fsGroupKey: nextFsGroupKey,
+      departmentPolicy: (nextDepartmentPolicy as string | undefined) ?? null,
+      fundPolicy: (nextFundPolicy as string | undefined) ?? null,
+      departmentCodes: nextDepartmentCodes,
+      fundApplicabilityKeys: nextFundApplicabilityKeys,
+    },
+  });
 
   const merged: Parameters<typeof saveCoaRowMappings>[1]["mappings"][number] = {
     rowId: row.id,
-    type: edits.type !== undefined ? edits.type : (current.type ?? null),
-    categoryKey: edits.categoryKey !== undefined ? edits.categoryKey : (current.categoryKey ?? null),
-    fsGroupKey: edits.fsGroupKey !== undefined ? edits.fsGroupKey : (current.fsGroupKey ?? null),
-    departmentCodes: edits.departmentCodes !== undefined ? edits.departmentCodes : (current.departmentCodes ?? []),
-    fundApplicabilityKeys: edits.fundApplicabilityKeys !== undefined ? edits.fundApplicabilityKeys : (current.fundApplicabilityKeys ?? []),
-    departmentPolicy: edits.departmentPolicy !== undefined ? edits.departmentPolicy : (current.departmentPolicy ?? undefined),
-    fundPolicy: edits.fundPolicy !== undefined ? edits.fundPolicy : (current.fundPolicy ?? undefined),
-    // Default: any Inspector edit implicitly marks the row reviewed.
-    // Passing `reviewed: false` explicitly ("Unmark") overrides.
-    reviewed: edits.reviewed !== undefined ? edits.reviewed : true,
+    type: nextType,
+    categoryKey: nextCategoryKey,
+    fsGroupKey: nextFsGroupKey,
+    departmentCodes: nextDepartmentCodes,
+    fundApplicabilityKeys: nextFundApplicabilityKeys,
+    departmentPolicy: nextDepartmentPolicy,
+    fundPolicy: nextFundPolicy,
+    reviewed: resolvedReviewed,
   };
 
   try {

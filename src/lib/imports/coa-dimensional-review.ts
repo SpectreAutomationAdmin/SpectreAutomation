@@ -68,6 +68,55 @@ export type CoaDimensionalReviewSummary = {
   rowsRequiringAttention: number;
 };
 
+// ---------------------------------------------------------------------------
+// COA-UX-2c (2026-09-30) — Shared review / attention predicates.
+//
+// One authoritative source of truth for "does this row still need
+// founder attention?", consumed by:
+//   * the batch summary ribbon (`summariseCoaBatch`)
+//   * client-side filters in BulkCoaReviewControls
+//   * unit tests that guard the invariant `attention ≤ unreviewed`
+//
+// Attention here is REVIEW attention — advisory signals the operator
+// should look at before committing. It is distinct from BLOCKING
+// validation errors (missing classification, invalid Type→Category,
+// etc.), which are surfaced through the ImportError table and NEVER
+// suppressed by the `reviewed` flag.
+// ---------------------------------------------------------------------------
+
+/** True when the row was explicitly acknowledged by the operator. */
+export function isReviewed(r: Pick<CoaReviewInputRow, "reviewed">): boolean {
+  return r.reviewed === true;
+}
+
+/**
+ * True when the row has at least one advisory condition the founder
+ * should look at. Deliberately DOES NOT consult `reviewed` — that
+ * gate lives in `needsAttention` so the same predicate can power
+ * both the ribbon count (with the gate) and a "why is this row on
+ * the attention list" tooltip (without it).
+ */
+export function hasAttentionCondition(
+  r: Pick<CoaReviewInputRow, "confidence" | "departmentPolicy" | "fundPolicy" | "departmentApplicabilityCodes" | "fundApplicabilityKeys">,
+): boolean {
+  if (r.fundPolicy === "REQUIRED" && r.fundApplicabilityKeys.length === 0) return true;
+  if (r.departmentPolicy === "REQUIRED" && r.departmentApplicabilityCodes.length === 0) return true;
+  if (r.confidence === "medium") return true;
+  if (r.confidence === "low") return true;
+  return false;
+}
+
+/**
+ * The single authoritative "does this row still need the founder's
+ * attention" test. Ribbon count, review filter, and any acceptance
+ * tests MUST call this — never re-implement.
+ *
+ * needsAttention(row) = !isReviewed(row) && hasAttentionCondition(row)
+ */
+export function needsAttention(r: CoaReviewInputRow): boolean {
+  return !isReviewed(r) && hasAttentionCondition(r);
+}
+
 export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDimensionalReviewSummary {
   const typeDistribution: Record<string, number> = {};
   const confidenceDistribution = { high: 0, medium: 0, low: 0 };
@@ -101,24 +150,28 @@ export function summariseCoaBatch(rows: ReadonlyArray<CoaReviewInputRow>): CoaDi
       fundKeysDistribution["(none)"] = (fundKeysDistribution["(none)"] ?? 0) + 1;
     }
 
-    const isReviewed = r.reviewed === true;
-    if (isReviewed) rowsReviewed++;
+    const reviewed = isReviewed(r);
+    if (reviewed) rowsReviewed++;
 
+    // Informational batch-health counters — count ALL rows meeting
+    // the condition regardless of reviewed state. These are NOT the
+    // Attention number; they're the underlying signal population.
     if (r.fundPolicy === "REQUIRED" && r.fundApplicabilityKeys.length === 0) {
       fundPolicyRequiredWithoutApplicability++;
-      attentionSet.add(i);
     }
     if (r.departmentPolicy === "REQUIRED" && r.departmentApplicabilityCodes.length === 0) {
       departmentPolicyRequiredWithoutApplicability++;
-      attentionSet.add(i);
     }
-    // Medium-confidence rows require review UNLESS the operator
-    // has explicitly marked them reviewed (Section 8 + Section 9).
-    if (r.confidence === "medium" && !isReviewed) {
+    if (r.confidence === "medium" && !reviewed) {
       mediumConfidenceNotReviewed++;
-      attentionSet.add(i);
     }
-    if (r.confidence === "low") attentionSet.add(i);
+
+    // COA-UX-2c (2026-09-30) — Attention now represents outstanding
+    // founder-review work: a row contributes ONLY IF it has a real
+    // attention condition AND has NOT yet been reviewed. Marking a
+    // row Reviewed removes it from Attention. Invariant enforced by
+    // tests: `attention ≤ (totalRows − rowsReviewed)`.
+    if (needsAttention(r)) attentionSet.add(i);
   }
 
   return {

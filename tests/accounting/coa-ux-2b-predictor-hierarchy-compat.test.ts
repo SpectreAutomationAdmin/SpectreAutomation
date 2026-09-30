@@ -17,9 +17,9 @@ import {
 describe("COA-UX-2b · predictor ↔ hierarchy compatibility (§12)", () => {
   it("every (fsGroupKey → categoryKey) pair in FS_GROUP_TO_CATEGORY passes isFsGroupValidForCategory", () => {
     for (const [fsGroupKey, categoryKey] of Object.entries(FS_GROUP_TO_CATEGORY)) {
-      expect(isFsGroupValidForCategory(fsGroupKey, categoryKey))
-        .withContext(`${fsGroupKey} → ${categoryKey}`)
-        .toBe(true);
+      const ok = isFsGroupValidForCategory(fsGroupKey, categoryKey);
+      if (!ok) throw new Error(`${fsGroupKey} → ${categoryKey} rejected`);
+      expect(ok).toBe(true);
     }
   });
 
@@ -27,9 +27,8 @@ describe("COA-UX-2b · predictor ↔ hierarchy compatibility (§12)", () => {
     const seen = new Set<string>();
     for (const [_categoryKey, fsGroupKeys] of Object.entries(CATEGORY_TO_FS_GROUPS)) {
       for (const key of fsGroupKeys) {
-        expect(seen.has(key))
-          .withContext(`${key} appears under multiple Categories`)
-          .toBe(false);
+        if (seen.has(key)) throw new Error(`${key} appears under multiple Categories`);
+        expect(seen.has(key)).toBe(false);
         seen.add(key);
       }
     }
@@ -39,10 +38,9 @@ describe("COA-UX-2b · predictor ↔ hierarchy compatibility (§12)", () => {
   it("no orphan Category — every Category the predictor emits has at least one FS Group under it", () => {
     const emittedCategories = new Set(Object.values(FS_GROUP_TO_CATEGORY));
     for (const c of emittedCategories) {
-      expect(CATEGORY_TO_FS_GROUPS[c])
-        .withContext(`Category ${c} has no FS Groups in inverse map`)
-        .toBeTruthy();
-      expect((CATEGORY_TO_FS_GROUPS[c] ?? []).length).toBeGreaterThan(0);
+      const list = CATEGORY_TO_FS_GROUPS[c];
+      if (!list || list.length === 0) throw new Error(`Category ${c} has no FS Groups in inverse map`);
+      expect(list.length).toBeGreaterThan(0);
     }
   });
 });

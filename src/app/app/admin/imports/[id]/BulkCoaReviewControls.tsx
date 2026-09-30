@@ -91,7 +91,10 @@ type FilterState = {
   fundPolicy: DimensionPolicy | "";
   departmentApplicability: "" | "NONE" | "SOME";
   fundApplicability: "" | "NONE" | "OPERATING" | "CAPITAL" | "OPERATING+CAPITAL";
-  reviewState: "" | "REVIEWED" | "NOT_REVIEWED";
+  // COA-UX-2c (2026-09-30) — "ATTENTION" narrows to !reviewed &&
+  // hasAttentionCondition, using the SAME predicate as the ribbon
+  // count so the two can never diverge (§7).
+  reviewState: "" | "REVIEWED" | "NOT_REVIEWED" | "ATTENTION";
   capitalCandidate: "" | "YES" | "NO";
   search: string;
 };
@@ -107,6 +110,30 @@ function parseFilters(sp: URLSearchParams): FilterState {
     capitalCandidate: (sp.get("f_capital") ?? "") as FilterState["capitalCandidate"],
     search: sp.get("f_q") ?? "",
   };
+}
+
+// COA-UX-2c (2026-09-30) — client-side mirror of
+// `hasAttentionCondition` / `needsAttention` from
+// src/lib/imports/coa-dimensional-review.ts, adapted to the
+// BulkReviewRow shape. Structurally identical predicates — the
+// unit tests in tests/accounting/coa-ux-2c-attention-semantics.test.ts
+// guard that the two stay in step.
+export function clientHasAttentionCondition(r: {
+  confidence: Confidence;
+  departmentPolicy: DimensionPolicy;
+  fundPolicy: DimensionPolicy;
+  departmentApplicabilityCodes: string[];
+  fundApplicabilityKeys: string[];
+}): boolean {
+  if (r.fundPolicy === "REQUIRED" && r.fundApplicabilityKeys.length === 0) return true;
+  if (r.departmentPolicy === "REQUIRED" && r.departmentApplicabilityCodes.length === 0) return true;
+  if (r.confidence === "medium") return true;
+  if (r.confidence === "low") return true;
+  return false;
+}
+
+export function clientNeedsAttention(r: BulkReviewRow): boolean {
+  return !r.reviewed && clientHasAttentionCondition(r);
 }
 
 function applyFilter(rows: BulkReviewRow[], f: FilterState): BulkReviewRow[] {
@@ -126,6 +153,9 @@ function applyFilter(rows: BulkReviewRow[], f: FilterState): BulkReviewRow[] {
     }
     if (f.reviewState === "REVIEWED" && !r.reviewed) return false;
     if (f.reviewState === "NOT_REVIEWED" && r.reviewed) return false;
+    // COA-UX-2c (2026-09-30) — Attention filter uses the SAME shared
+    // predicate as the ribbon count so the two never diverge (§7).
+    if (f.reviewState === "ATTENTION" && !clientNeedsAttention(r)) return false;
     if (f.capitalCandidate === "YES" && !r.capitalCandidate) return false;
     if (f.capitalCandidate === "NO" && r.capitalCandidate) return false;
     if (q.length > 0 && !r.accountNumber.toLowerCase().includes(q) && !r.name.toLowerCase().includes(q)) return false;
@@ -357,7 +387,7 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
         <FilterSelect label="FundApp" value={filter.fundApplicability} onChange={(v) => setQueryParam("f_fundapp", v)}
           options={[["", "any"], ["NONE", "NONE"], ["OPERATING", "OP"], ["CAPITAL", "CAP"], ["OPERATING+CAPITAL", "OP+CAP"]]} />
         <FilterSelect label="Review" value={filter.reviewState} onChange={(v) => setQueryParam("f_review", v)}
-          options={[["", "any"], ["NOT_REVIEWED", "needs"], ["REVIEWED", "done"]]} />
+          options={[["", "any"], ["ATTENTION", "attention"], ["NOT_REVIEWED", "needs"], ["REVIEWED", "done"]]} />
         <FilterSelect label="CAP?" value={filter.capitalCandidate} onChange={(v) => setQueryParam("f_capital", v)}
           options={[["", "any"], ["YES", "YES"], ["NO", "NO"]]} />
         <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={clearFilters}>

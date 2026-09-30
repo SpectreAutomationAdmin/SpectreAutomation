@@ -157,34 +157,42 @@ describe("DIM-2b · bulk server action structural invariants (Section 15)", () =
     // spread `...base` (which preserves current applicability) and
     // ONLY override `departmentPolicy`, no departmentCodes /
     // fundApplicabilityKeys.
-    const m = BULK_ACTIONS.match(/case "SET_DEPARTMENT_POLICY":[\s\S]*?return \{ \.\.\.base, departmentPolicy: action\.value, reviewed: true \};/);
+    // COA-UX-2c (2026-09-30): policy actions now go through the
+    // `withReviewed` helper which applies §6 material-edit review
+    // reset instead of unconditionally setting reviewed=true.
+    const m = BULK_ACTIONS.match(/case "SET_DEPARTMENT_POLICY":[\s\S]*?return withReviewed\(\{ \.\.\.base, departmentPolicy: action\.value \}\);/);
     expect(m).toBeTruthy();
-    const m2 = BULK_ACTIONS.match(/case "SET_FUND_POLICY":[\s\S]*?return \{ \.\.\.base, fundPolicy: action\.value, reviewed: true \};/);
+    const m2 = BULK_ACTIONS.match(/case "SET_FUND_POLICY":[\s\S]*?return withReviewed\(\{ \.\.\.base, fundPolicy: action\.value \}\);/);
     expect(m2).toBeTruthy();
   });
   it("applicability actions never touch policy", () => {
-    const m1 = BULK_ACTIONS.match(/case "SET_DEPARTMENT_APPLICABILITY":[\s\S]*?departmentCodes: next[\s\S]*?reviewed: true/);
-    expect(m1).toBeTruthy();
-    // No departmentPolicy override inside SET_DEPARTMENT_APPLICABILITY.
-    const block = BULK_ACTIONS.match(/case "SET_DEPARTMENT_APPLICABILITY":[\s\S]*?return \{ \.\.\.base, departmentCodes: next, reviewed: true \};/);
+    // COA-UX-2c (2026-09-30): applicability actions go through
+    // `withReviewed` (which applies §6 review reset); policy is
+    // still preserved untouched via `base`.
+    const block = BULK_ACTIONS.match(/case "SET_DEPARTMENT_APPLICABILITY":[\s\S]*?return withReviewed\(\{ \.\.\.base, departmentCodes: next \}\);/);
     expect(block).toBeTruthy();
-    expect(block![0]).not.toMatch(/departmentPolicy:/);
-    const block2 = BULK_ACTIONS.match(/case "SET_FUND_APPLICABILITY":[\s\S]*?return \{ \.\.\.base, fundApplicabilityKeys: next, reviewed: true \};/);
+    expect(block![0]).not.toMatch(/departmentPolicy:\s*action/);
+    const block2 = BULK_ACTIONS.match(/case "SET_FUND_APPLICABILITY":[\s\S]*?return withReviewed\(\{ \.\.\.base, fundApplicabilityKeys: next \}\);/);
     expect(block2).toBeTruthy();
-    expect(block2![0]).not.toMatch(/fundPolicy:/);
+    expect(block2![0]).not.toMatch(/fundPolicy:\s*action/);
   });
-  it("bulk actions mark affected rows reviewed", () => {
-    // Every action branch that mutates the row should set reviewed: true.
+  it("bulk actions route reviewed through the §6 review-reset helper (COA-UX-2c)", () => {
+    // Material-changing bulk actions must use `withReviewed(...)`
+    // so a previously-reviewed row goes back to NOT REVIEWED
+    // (§6 preferred rule). Only MARK_REVIEWED is an explicit ack
+    // and sets reviewed=true unconditionally.
     for (const marker of [
       "SET_DEPARTMENT_APPLICABILITY",
       "SET_FUND_APPLICABILITY",
       "SET_DEPARTMENT_POLICY",
       "SET_FUND_POLICY",
-      "MARK_REVIEWED",
+      "SET_CLASSIFICATION",
     ]) {
-      const rx = new RegExp(`case "${marker}":[\\s\\S]*?reviewed: true`);
-      expect(BULK_ACTIONS).toMatch(rx);
+      const rx = new RegExp(`case "${marker}":[\\s\\S]*?withReviewed\\(`);
+      expect(BULK_ACTIONS, `${marker} case must call withReviewed(...)`).toMatch(rx);
     }
+    // MARK_REVIEWED is explicit — stays as `reviewed: true`.
+    expect(BULK_ACTIONS).toMatch(/case "MARK_REVIEWED":[\s\S]*?return \{ \.\.\.base, reviewed: true \};/);
   });
   it("tenant scoping — rowIds must belong to this batch (batchId + id filter)", () => {
     expect(BULK_ACTIONS).toMatch(/prisma\.importRow\.findMany\(\s*\{\s*where:\s*\{\s*batchId,\s*id:\s*\{\s*in:\s*\[\.\.\.rowIds\]\s*\}\s*\}/);

@@ -85,8 +85,16 @@ describe("COA-UX-2 · workspace structural invariants", () => {
     expect(ACT).not.toMatch(/prisma\.accountFund\.(create|createMany)/);
   });
 
-  it("inspector edits default reviewed = true (any explicit change implicitly marks reviewed)", () => {
-    expect(ACT).toMatch(/reviewed: edits\.reviewed !== undefined \? edits\.reviewed : true/);
+  it("COA-UX-2c: inspector edits route reviewed through resolveReviewedAfterMaterialEdit (§6 material-edit review reset)", () => {
+    // COA-UX-2c (2026-09-30): replaced the "any edit ⇒ reviewed=true"
+    // default with §6 semantics — a material edit on a previously
+    // reviewed row returns it to NOT REVIEWED. Explicit reviewed
+    // (Mark Reviewed / Unmark) is still honoured. First-time edits
+    // of an unreviewed row still implicitly mark it reviewed.
+    expect(ACT).toMatch(/resolveReviewedAfterMaterialEdit\(\{/);
+    expect(ACT).toMatch(/const priorReviewed = readReviewState\(raw\)\.reviewed === true;/);
+    expect(ACT).toMatch(/explicitReviewed:\s*edits\.reviewed/);
+    expect(ACT).toMatch(/reviewed:\s*resolvedReviewed/);
   });
 
   it("bulk toolbar is contextual — only rendered when at least one row is checkbox-selected", () => {
