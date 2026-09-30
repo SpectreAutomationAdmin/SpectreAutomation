@@ -36,6 +36,11 @@ type BulkAction =
   | { kind: "SET_FUND_APPLICABILITY"; mode: "REPLACE" | "ADD"; fundKeys: string[] }
   | { kind: "SET_DEPARTMENT_POLICY"; value: DimensionPolicy }
   | { kind: "SET_FUND_POLICY"; value: DimensionPolicy }
+  // COA-UX-2b (2026-09-29) — bulk Classification. Each field is
+  // INDEPENDENTLY optional: the caller sends only what should change.
+  // Applied field-by-field so a Category-only change or FS-Group-only
+  // change doesn't disturb the untouched fields on selected rows.
+  | { kind: "SET_CLASSIFICATION"; type?: string; categoryKey?: string | null; fsGroupKey?: string | null }
   | { kind: "MARK_REVIEWED" };
 
 function parseJsonSafe<T>(s: string, fallback: T): T {
@@ -124,6 +129,20 @@ export async function applyBulkCoaEditAction(
         return { ...base, departmentPolicy: action.value, reviewed: true };
       case "SET_FUND_POLICY":
         return { ...base, fundPolicy: action.value, reviewed: true };
+      case "SET_CLASSIFICATION": {
+        // Each of type / categoryKey / fsGroupKey is independently
+        // optional — undefined means "leave alone", null means
+        // "clear on this row". Cascade invariants (§10) are enforced
+        // client-side before the action fires; here we just persist
+        // exactly what the operator asked for. saveCoaRowMappings +
+        // downstream DIM validation will still reject an incompatible
+        // combination.
+        const next: typeof base = { ...base };
+        if (action.type !== undefined) next.type = action.type;
+        if (action.categoryKey !== undefined) next.categoryKey = action.categoryKey;
+        if (action.fsGroupKey !== undefined) next.fsGroupKey = action.fsGroupKey;
+        return { ...next, reviewed: true };
+      }
       case "MARK_REVIEWED":
         return { ...base, reviewed: true };
     }

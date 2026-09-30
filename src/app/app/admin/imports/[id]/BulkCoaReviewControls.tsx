@@ -20,9 +20,17 @@
 
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { applyBulkCoaEditAction, applyInspectorEditAction } from "./_bulk-coa-actions";
+import {
+  categoryStillValidUnderType,
+  commonAccountType,
+  commonCategoryKey,
+  filterCategoryOptionsByType,
+  filterFsGroupOptionsByCategory,
+  isFsGroupValidForCategory,
+} from "@/lib/imports/classification-hierarchy";
 
 type DimensionPolicy = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE";
 type Confidence = "high" | "medium" | "low";
@@ -202,6 +210,18 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
   // filters), and falls back to a normal toggle if the anchor is
   // no longer visible (e.g. filter changed).
   const [anchorId, setAnchorId] = useState<string | null>(null);
+  // COA-UX-2b (2026-09-29) — capture `shiftKey` on the pointer/keyboard
+  // press so `onChange` can read it. Prior implementation used
+  // `onClick + preventDefault()` on the checkbox, which caused React's
+  // controlled `checked={selected.has(rowId)}` to fall out of sync
+  // with the DOM: the browser toggles `checked` on mouseup, click's
+  // preventDefault reverts it, then React's reconciler sees the
+  // prop value hasn't changed vs. its own last render and skips
+  // writing the attribute back. Standard controlled input pattern
+  // instead: DOM native toggle proceeds, onChange reads the resulting
+  // state, and shiftKey rides in via a ref populated on mousedown /
+  // keydown (both fire strictly BEFORE the change event).
+  const shiftKeyRef = useRef(false);
   const [inspectedId, setInspectedId] = useState<string | null>(props.rows[0]?.rowId ?? null);
   const inspected = useMemo(
     () => props.rows.find((r) => r.rowId === inspectedId) ?? null,
@@ -209,7 +229,7 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
   );
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
-  const [showBulkMenu, setShowBulkMenu] = useState<null | "DEPT" | "FUND" | "POLICY">(null);
+  const [showBulkMenu, setShowBulkMenu] = useState<null | "CLASSIFICATION" | "DEPT" | "FUND" | "POLICY">(null);
 
   function setQueryParam(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -239,6 +259,19 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
 
   const selectedRowIds = useMemo(() => Array.from(selected), [selected]);
   const anySelected = selectedRowIds.length > 0;
+
+  // COA-UX-2b (2026-09-29) — computed selection-level metadata for
+  // the bulk Classification menu. `commonType` is the AccountType
+  // every selected row shares (null when the selection spans
+  // multiple types — §6). `commonCategory` is the CategoryKey they
+  // all share (used to auto-scope FS Group options when the operator
+  // doesn't pick a new Category in the menu).
+  const selectedRows = useMemo(
+    () => props.rows.filter((r) => selected.has(r.rowId)),
+    [props.rows, selected],
+  );
+  const commonType = useMemo(() => commonAccountType(selectedRows), [selectedRows]);
+  const commonCategory = useMemo(() => commonCategoryKey(selectedRows), [selectedRows]);
 
   async function runBulk(action: Parameters<typeof applyBulkCoaEditAction>[2], describeAction: string) {
     if (!anySelected) return;
@@ -336,6 +369,22 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
         {anySelected && !props.readOnly && (
           <div data-testid="coa-bulk-toolbar" className="flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1">
             <span className="font-semibold text-amber-800">{selectedRowIds.length} selected</span>
+            <BulkMenu label="Classification" open={showBulkMenu === "CLASSIFICATION"} onToggle={() => setShowBulkMenu(showBulkMenu === "CLASSIFICATION" ? null : "CLASSIFICATION")}>
+              <BulkClassificationMenu
+                categories={props.categories}
+                fsGroups={props.fsGroups}
+                commonType={commonType}
+                commonCategory={commonCategory}
+                onApply={(edit) => runBulk(
+                  { kind: "SET_CLASSIFICATION", ...edit },
+                  "Set Classification: " + [
+                    edit.type ? `Type → ${edit.type}` : null,
+                    edit.categoryKey ? `Category → ${edit.categoryKey}` : null,
+                    edit.fsGroupKey ? `FS Group → ${edit.fsGroupKey}` : null,
+                  ].filter(Boolean).join(", "),
+                )}
+              />
+            </BulkMenu>
             <BulkMenu label="Department" open={showBulkMenu === "DEPT"} onToggle={() => setShowBulkMenu(showBulkMenu === "DEPT" ? null : "DEPT")}>
               <BulkDeptMenu departments={props.departments}
                 onApply={(codes, mode) => runBulk({ kind: "SET_DEPARTMENT_APPLICABILITY", mode, departmentCodes: codes },
@@ -400,18 +449,13 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
                       type="checkbox"
                       checked={selected.has(r.rowId)}
                       title="Shift-click to select a range"
-                      onClick={(e) => {
-                        // COA-UX-2a — capture `shiftKey` on the click
-                        // event (which fires for mouse AND for
-                        // keyboard spacebar), toggle manually, and
-                        // preventDefault so React's controlled state
-                        // stays in sync with our own selection Set.
-                        e.preventDefault();
-                        const shift = (e as unknown as { shiftKey?: boolean }).shiftKey === true;
-                        const nextChecked = !selected.has(r.rowId);
-                        toggleCheckbox(r.rowId, nextChecked, shift);
+                      onMouseDown={(e) => { shiftKeyRef.current = e.shiftKey; }}
+                      onKeyDown={(e) => { shiftKeyRef.current = e.shiftKey; }}
+                      onChange={(e) => {
+                        const shift = shiftKeyRef.current;
+                        shiftKeyRef.current = false;
+                        toggleCheckbox(r.rowId, e.target.checked, shift);
                       }}
-                      onChange={() => { /* controlled by onClick above */ }}
                     />
                   </td>
                   <td className="px-2 py-1 font-mono tabular-nums">{r.accountNumber}</td>
@@ -457,12 +501,33 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
               <Section title="Classification">
                 <InspectorSelect label="Type" value={inspected.type} disabled={props.readOnly}
                   options={["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"].map((t) => [t, t])}
-                  onChange={(v) => runInspectorEdit({ type: v })} />
+                  onChange={(v) => {
+                    // §10 cascade — clear downstream fields whose
+                    // current value is no longer valid under the new Type.
+                    const edits: Parameters<typeof applyInspectorEditAction>[2] = { type: v };
+                    if (!categoryStillValidUnderType(inspected.categoryKey, v, props.categories)) {
+                      edits.categoryKey = null;
+                      edits.fsGroupKey = null;
+                    } else if (!isFsGroupValidForCategory(inspected.fsGroupKey, inspected.categoryKey)) {
+                      edits.fsGroupKey = null;
+                    }
+                    runInspectorEdit(edits);
+                  }} />
                 <InspectorSelect label="Category" value={inspected.categoryKey} disabled={props.readOnly}
-                  options={[["", "— select —"], ...props.categories.filter((c) => c.accountType === inspected.type).map((c): [string, string] => [c.key, c.name])]}
-                  onChange={(v) => runInspectorEdit({ categoryKey: v || null })} />
+                  options={[["", "— select —"], ...filterCategoryOptionsByType(props.categories, inspected.type).map((c): [string, string] => [c.key, c.name])]}
+                  onChange={(v) => {
+                    // §10 cascade — clear FS Group if it doesn't match the new Category.
+                    const edits: Parameters<typeof applyInspectorEditAction>[2] = { categoryKey: v || null };
+                    if (!isFsGroupValidForCategory(inspected.fsGroupKey, v)) {
+                      edits.fsGroupKey = null;
+                    }
+                    runInspectorEdit(edits);
+                  }} />
                 <InspectorSelect label="FS Group" value={inspected.fsGroupKey} disabled={props.readOnly}
-                  options={[["", "— select —"], ...props.fsGroups.map((g): [string, string] => [g.key, g.name])]}
+                  options={[
+                    ["", "— select —"],
+                    ...filterFsGroupOptionsByCategory(props.fsGroups, inspected.categoryKey).map((g): [string, string] => [g.key, g.name]),
+                  ]}
                   onChange={(v) => runInspectorEdit({ fsGroupKey: v || null })} />
               </Section>
 
@@ -691,6 +756,103 @@ function BulkFundMenu(props: { funds: BulkReviewFund[]; onApply: (keys: string[]
         <label className="inline-flex items-center gap-1"><input type="radio" name="fm" checked={mode === "ADD"} onChange={() => setMode("ADD")}/> ADD</label>
       </div>
       <button type="button" className="w-full rounded bg-club-forest text-white px-2 py-1" onClick={() => props.onApply(Array.from(picked), mode)}>Apply</button>
+    </>
+  );
+}
+
+// COA-UX-2b (2026-09-29) — bulk Classification menu.
+//
+// Each of Type / Category / FS Group is independently optional:
+// leaving a field on "— no change —" means "don't touch this
+// field on the selected rows".
+//
+// Type is always safe to bulk-set. Category + FS Group depend on
+// the selected rows sharing a compatible Type: if `commonType`
+// is null (mixed selection, §6), Category and FS Group are
+// disabled and the menu shows a concise reason.
+//
+// Category options are filtered by common Type (§7). FS Group
+// options are filtered by (a) the Category the operator picked
+// in THIS menu if any, else (b) the Category the selected rows
+// already share, else (c) unfiltered as a last resort.
+function BulkClassificationMenu(props: {
+  categories: BulkReviewCategoryOption[];
+  fsGroups: BulkReviewFsGroupOption[];
+  commonType: string | null;
+  commonCategory: string | null;
+  onApply: (edit: { type?: string; categoryKey?: string | null; fsGroupKey?: string | null }) => void;
+}) {
+  const [typeVal, setTypeVal] = useState<string>("");
+  const [categoryVal, setCategoryVal] = useState<string>("");
+  const [fsGroupVal, setFsGroupVal] = useState<string>("");
+
+  // Effective Type for filtering downstream options: the operator's
+  // pick if any, else what the selection already shares.
+  const effectiveType = typeVal || props.commonType || "";
+  // Effective Category for FS Group filter: operator pick, else shared.
+  const effectiveCategory = categoryVal || props.commonCategory || "";
+
+  const canBulkCategory = props.commonType !== null || typeVal !== "";
+  const canBulkFsGroup = canBulkCategory;
+
+  const categoryOptions = filterCategoryOptionsByType(props.categories, effectiveType);
+  const fsGroupOptions = filterFsGroupOptionsByCategory(props.fsGroups, effectiveCategory);
+
+  function apply() {
+    // Only send fields the operator actually chose.
+    const edit: { type?: string; categoryKey?: string | null; fsGroupKey?: string | null } = {};
+    if (typeVal) edit.type = typeVal;
+    if (categoryVal) edit.categoryKey = categoryVal;
+    if (fsGroupVal) edit.fsGroupKey = fsGroupVal;
+    if (Object.keys(edit).length === 0) return;
+    props.onApply(edit);
+    setTypeVal("");
+    setCategoryVal("");
+    setFsGroupVal("");
+  }
+
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-1">Classification</div>
+      {props.commonType === null && (
+        <div className="mb-2 rounded border border-amber-300 bg-amber-50 px-1.5 py-1 text-[10.5px] text-amber-900">
+          Selected accounts contain multiple Types. Set a Type first, or narrow the selection to one Type, to bulk-change Category / FS Group.
+        </div>
+      )}
+      <label className="mb-2 block">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Type</span>
+        <select className="mt-0.5 w-full rounded border border-stone-300 px-1.5 py-0.5"
+                value={typeVal}
+                onChange={(e) => { setTypeVal(e.target.value); setCategoryVal(""); setFsGroupVal(""); }}>
+          <option value="">— no change{props.commonType ? ` (all ${props.commonType})` : " (mixed)"} —</option>
+          {["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"].map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">Category</span>
+        <select className="mt-0.5 w-full rounded border border-stone-300 px-1.5 py-0.5 disabled:opacity-50"
+                disabled={!canBulkCategory}
+                value={categoryVal}
+                onChange={(e) => { setCategoryVal(e.target.value); setFsGroupVal(""); }}>
+          <option value="">— no change —</option>
+          {categoryOptions.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+        </select>
+      </label>
+      <label className="mb-2 block">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-stone-500">FS Group</span>
+        <select className="mt-0.5 w-full rounded border border-stone-300 px-1.5 py-0.5 disabled:opacity-50"
+                disabled={!canBulkFsGroup}
+                value={fsGroupVal}
+                onChange={(e) => setFsGroupVal(e.target.value)}>
+          <option value="">— no change —</option>
+          {fsGroupOptions.map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
+        </select>
+      </label>
+      <button type="button" className="w-full rounded bg-club-forest text-white px-2 py-1 disabled:opacity-40"
+              disabled={!typeVal && !categoryVal && !fsGroupVal}
+              onClick={apply}>
+        Apply
+      </button>
     </>
   );
 }

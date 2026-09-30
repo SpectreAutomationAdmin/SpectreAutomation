@@ -38,14 +38,28 @@ describe("COA-UX-2 · workspace structural invariants", () => {
   });
 
   it("checkbox drives bulk selection (independent of inspector)", () => {
-    // COA-UX-2a (2026-09-29): checkbox migrated from onChange to
-    // onClick so event.shiftKey is available for range selection.
-    // The two-arg toggleCheckbox(rowId, checked) signature has been
-    // superseded by the three-arg toggleCheckbox(rowId, checked, shiftKey).
-    expect(CTRL).toMatch(/toggleCheckbox\(r\.rowId, nextChecked, shift\)/);
+    // COA-UX-2b (2026-09-29): checkbox uses the standard React
+    // controlled-input pattern (onChange), NOT onClick+preventDefault
+    // which desynced React's checked prop from the DOM. shiftKey is
+    // captured via a ref populated on mousedown/keydown so range
+    // selection still works for mouse AND keyboard.
+    expect(CTRL).toMatch(/toggleCheckbox\(r\.rowId, e\.target\.checked, shift\)/);
     expect(CTRL).toMatch(/function toggleCheckbox\(rowId: string, checked: boolean, shiftKey: boolean\)/);
     expect(CTRL).toMatch(/function selectAllVisible\(\)/);
     expect(CTRL).toMatch(/function clearSelection\(\)/);
+  });
+
+  it("COA-UX-2b: checkbox does NOT call preventDefault (regression guard for visual-state desync)", () => {
+    // Extract only the ROW checkbox JSX block (accounts list <tbody>).
+    // The header "Select All Visible" checkbox and hidden pill
+    // checkboxes elsewhere are exempt from this guard.
+    const rowBlock = CTRL.match(/type="checkbox"\s+checked=\{selected\.has\(r\.rowId\)\}[\s\S]*?\/>/);
+    expect(rowBlock).not.toBeNull();
+    const src = rowBlock ? rowBlock[0] : "";
+    expect(src).not.toMatch(/preventDefault/);
+    expect(src).toMatch(/onMouseDown=\{\(e\)\s*=>\s*\{\s*shiftKeyRef\.current\s*=\s*e\.shiftKey/);
+    expect(src).toMatch(/onKeyDown=\{\(e\)\s*=>\s*\{\s*shiftKeyRef\.current\s*=\s*e\.shiftKey/);
+    expect(src).toMatch(/onChange=\{\(e\)\s*=>\s*\{[\s\S]*?e\.target\.checked/);
   });
 
   it("COA-UX-2a: SHIFT-click range selection is wired via applyCheckboxToggle", () => {
