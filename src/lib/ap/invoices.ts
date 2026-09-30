@@ -27,10 +27,16 @@ import { submitForApproval, getRequestForEntity, isApproved } from "./approvals"
 import { postInvoiceToGl, postInvoiceReversalToGl } from "./ap-events";
 import { detectInvoiceExceptions } from "./exceptions";
 import { assertPostingAllowed } from "../posting-guard";
+// DIM-2 (2026-09-29) — central dimensional validation.
+import { validateManyLineDimensions } from "../accounting/dimensional-validation";
 
 const lineSchema = z.object({
   expenseAccountNumber: z.string().trim().min(1).max(40),
   departmentCode: z.string().trim().max(40).optional().nullable(),
+  // DIM-2 (2026-09-29) — line-level fund. Canonical Fund key
+  // (e.g. "OPERATING", "CAPITAL"). Resolved by the validator +
+  // validated against the account's fundPolicy + AccountFund.
+  fundCode: z.string().trim().max(40).optional().nullable(),
   costCenterCode: z.string().trim().max(40).optional().nullable(),
   description: z.string().trim().max(500).optional().nullable(),
   quantity: z.union([z.number(), z.string()]).optional(),
@@ -93,11 +99,20 @@ export async function validateAndResolveInvoice(clubId: string, input: InvoiceCr
     : [];
   const taxByKey = new Map(taxCodes.map((t) => [t.key, t]));
 
+  // DIM-2 (2026-09-29) — resolve fund keys.
+  const fundCodes = Array.from(new Set(input.lines.map((l) => l.fundCode).filter((x): x is string => !!x)));
+  const funds = fundCodes.length
+    ? await prisma.fund.findMany({ where: { clubId, key: { in: fundCodes.map((s) => s.toUpperCase()) } } })
+    : [];
+  const fundByKey = new Map(funds.map((f) => [f.key, f]));
+
   const issues: Array<{ path: string; message: string }> = [];
   const resolvedLines: Array<{
     lineNumber: number;
     accountId: string;
     departmentId: string | null;
+    // DIM-2 (2026-09-29) — line-level fund attribution.
+    fundId: string | null;
     costCenterId: string | null;
     description: string | null;
     quantity: Prisma.Decimal | null;
@@ -145,6 +160,13 @@ export async function validateAndResolveInvoice(clubId: string, input: InvoiceCr
       if (!tc) issues.push({ path: `lines.${i}.taxCodeKey`, message: `Unknown tax code ${l.taxCodeKey}` });
       else taxCodeId = tc.id;
     }
+    // DIM-2 (2026-09-29) — resolve fund by canonical key (upper-cased).
+    let fundId: string | null = null;
+    if (l.fundCode) {
+      const f = fundByKey.get(l.fundCode.toUpperCase());
+      if (!f) issues.push({ path: `lines.${i}.fundCode`, message: `Unknown fund ${l.fundCode}` });
+      else fundId = f.id;
+    }
     const amount = toMoney(l.amount);
     const taxAmount = toMoney(l.taxAmount);
     if (isNegative(amount)) issues.push({ path: `lines.${i}.amount`, message: "Must be non-negative" });
@@ -154,6 +176,7 @@ export async function validateAndResolveInvoice(clubId: string, input: InvoiceCr
       lineNumber: i + 1,
       accountId: account?.id ?? "",
       departmentId,
+      fundId,
       costCenterId,
       description: l.description ?? null,
       quantity: l.quantity == null ? null : toMoney(l.quantity),
@@ -167,6 +190,25 @@ export async function validateAndResolveInvoice(clubId: string, input: InvoiceCr
   }
 
   if (issues.length) throw new ValidationError(issues, "AP invoice validation failed");
+
+  // DIM-2 (2026-09-29) — central dimensional validation. Same
+  // semantics as Manual JE: enforces Account.departmentPolicy +
+  // Account.fundPolicy + AccountDepartment + AccountFund applicability
+  // + tenant scoping.
+  const dimResults = await validateManyLineDimensions(
+    clubId,
+    resolvedLines.map((l) => ({ accountId: l.accountId, departmentId: l.departmentId, fundId: l.fundId })),
+  );
+  const dimIssues: Array<{ path: string; message: string }> = [];
+  for (let i = 0; i < dimResults.length; i++) {
+    const r = dimResults[i];
+    if (!r.ok) {
+      for (const e of r.errors) {
+        dimIssues.push({ path: `lines.${i}.${e.dimension}`, message: e.message });
+      }
+    }
+  }
+  if (dimIssues.length) throw new ValidationError(dimIssues, "AP invoice dimensional validation failed");
 
   const subtotal = sumMoney(resolvedLines.map((l) => l.amount));
   const taxTotal = sumMoney(resolvedLines.map((l) => l.taxAmount));
@@ -240,6 +282,8 @@ export async function createDraft(principal: Principal, clubId: string, raw: unk
         lineNumber: l.lineNumber,
         expenseAccountId: l.accountId,
         departmentId: l.departmentId,
+        // DIM-2 (2026-09-29) — persist line-level fund.
+        fundId: l.fundId,
         costCenterId: l.costCenterId,
         description: l.description,
         quantity: l.quantity,

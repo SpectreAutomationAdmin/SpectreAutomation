@@ -14,6 +14,8 @@ export type BalanceFilter = {
   from?: Date;
   to?: Date;
   departmentId?: string;
+  // DIM-2 (2026-09-29) — line-level Fund filter.
+  fundId?: string;
   costCenterId?: string;
 };
 
@@ -80,6 +82,11 @@ export async function accountBalances(clubId: string, filter: BalanceFilter = {}
     },
     ...(filter.departmentId ? { departmentId: filter.departmentId } : {}),
     ...(filter.costCenterId ? { costCenterId: filter.costCenterId } : {}),
+    // DIM-2 (2026-09-29) — line-level Fund filter. When absent the
+    // report is consolidated (all funds); when supplied it filters
+    // JournalEntryLine.fundId, keeping semantics symmetric with
+    // the departmentId filter.
+    ...(filter.fundId ? { fundId: filter.fundId } : {}),
   };
 
   // Aggregate per account.

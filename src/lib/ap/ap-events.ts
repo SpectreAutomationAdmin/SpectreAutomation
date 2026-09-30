@@ -45,6 +45,8 @@ export async function postInvoiceToGl(principal: Principal, invoiceId: string) {
   type AdapterLine = {
     accountNumber: string;
     departmentCode?: string | null;
+    // DIM-2 (2026-09-29) — fund propagates AP line → JE line.
+    fundCode?: string | null;
     costCenterCode?: string | null;
     description?: string | null;
     debit?: string;
@@ -57,8 +59,13 @@ export async function postInvoiceToGl(principal: Principal, invoiceId: string) {
   const departments = deptIds.length ? await prisma.department.findMany({ where: { id: { in: deptIds } } }) : [];
   const deptIdToCode = new Map(departments.map((d) => [d.id, d.code]));
 
+  // DIM-2 — resolve fund keys back from ids.
+  const fundIds = inv.lines.map((l) => l.fundId).filter((x): x is string => !!x);
+  const funds = fundIds.length ? await prisma.fund.findMany({ where: { id: { in: fundIds } } }) : [];
+  const fundIdToKey = new Map(funds.map((f) => [f.id, f.key]));
+
   // Aggregate recoverable tax by account to keep the JE compact.
-  const recoverableByAccountNumber = new Map<string, { amount: number; deptCode?: string | null }>();
+  const recoverableByAccountNumber = new Map<string, { amount: number; deptCode?: string | null; fundCode?: string | null }>();
   let totalRecoverable = 0;
 
   for (const l of inv.lines) {
@@ -67,6 +74,7 @@ export async function postInvoiceToGl(principal: Principal, invoiceId: string) {
     const isRecoverable = l.taxCode?.isRecoverable ?? false;
     const recoverableAccount = l.taxCode?.recoverableAccount?.accountNumber ?? null;
     const deptCode = l.departmentId ? (deptIdToCode.get(l.departmentId) ?? null) : null;
+    const fundCode = l.fundId ? (fundIdToKey.get(l.fundId) ?? null) : null;
 
     // Phase 5: inventory and capital lines route to clearing/asset accounts
     // instead of expense. Non-recoverable tax always rolls into whatever the
@@ -90,22 +98,24 @@ export async function postInvoiceToGl(principal: Principal, invoiceId: string) {
       lines.push({
         accountNumber: drAccountNumber,
         departmentCode: deptCode,
+        fundCode,
         description: l.description ?? null,
         debit: drExpense.toFixed(2),
       });
     }
     // Recoverable tax DR.
     if (isRecoverable && recoverableAccount && taxAmount > 0) {
-      const existing = recoverableByAccountNumber.get(recoverableAccount) ?? { amount: 0, deptCode: null };
+      const existing = recoverableByAccountNumber.get(recoverableAccount) ?? { amount: 0, deptCode: null, fundCode: null };
       existing.amount = Math.round((existing.amount + taxAmount) * 100) / 100;
       recoverableByAccountNumber.set(recoverableAccount, existing);
       totalRecoverable = Math.round((totalRecoverable + taxAmount) * 100) / 100;
     }
   }
-  for (const [accountNumber, { amount, deptCode }] of recoverableByAccountNumber.entries()) {
+  for (const [accountNumber, { amount, deptCode, fundCode }] of recoverableByAccountNumber.entries()) {
     lines.push({
       accountNumber,
       departmentCode: deptCode ?? null,
+      fundCode: fundCode ?? null,
       description: "Recoverable tax (ITC)",
       debit: amount.toFixed(2),
     });
@@ -145,10 +155,14 @@ export async function postInvoiceReversalToGl(principal: Principal, invoiceId: s
   if (existing) return existing;
 
   // Build a contra-entry: same lines, swap DR/CR.
-  type AdapterLine = { accountNumber: string; departmentCode?: string | null; description?: string | null; debit?: string; credit?: string };
+  type AdapterLine = { accountNumber: string; departmentCode?: string | null; fundCode?: string | null; description?: string | null; debit?: string; credit?: string };
   const deptIds = inv.lines.map((l) => l.departmentId).filter((x): x is string => !!x);
   const departments = deptIds.length ? await prisma.department.findMany({ where: { id: { in: deptIds } } }) : [];
   const deptIdToCode = new Map(departments.map((d) => [d.id, d.code]));
+  // DIM-2 — fund propagation on the reversal.
+  const fundIds = inv.lines.map((l) => l.fundId).filter((x): x is string => !!x);
+  const funds = fundIds.length ? await prisma.fund.findMany({ where: { id: { in: fundIds } } }) : [];
+  const fundIdToKey = new Map(funds.map((f) => [f.id, f.key]));
 
   const lines: AdapterLine[] = [];
   const recoverableByAccountNumber = new Map<string, number>();
@@ -165,6 +179,7 @@ export async function postInvoiceReversalToGl(principal: Principal, invoiceId: s
       lines.push({
         accountNumber: drAccountNumber,
         departmentCode: l.departmentId ? deptIdToCode.get(l.departmentId) ?? null : null,
+        fundCode: l.fundId ? fundIdToKey.get(l.fundId) ?? null : null,
         description: `Reversal: ${l.description ?? inv.invoiceNumber}`,
         credit: drExpenseOriginal.toFixed(2),
       });

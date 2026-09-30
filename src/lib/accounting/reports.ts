@@ -41,8 +41,9 @@ export type TrialBalanceResult = {
   provenance: ReportingBalancesProvenance | null;
 };
 
-export async function trialBalance(clubId: string, asOf: Date, opts?: { departmentId?: string }): Promise<TrialBalanceResult> {
-  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf, departmentId: opts?.departmentId });
+export async function trialBalance(clubId: string, asOf: Date, opts?: { departmentId?: string; fundId?: string }): Promise<TrialBalanceResult> {
+  // DIM-2 (2026-09-29) — combined Department + Fund filtering.
+  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf, departmentId: opts?.departmentId, fundId: opts?.fundId });
   const rows: TrialBalanceRow[] = balances
     .filter((b) => !b.debitTotal.equals(b.creditTotal) || !b.debitTotal.isZero())
     .map((b) => {
@@ -290,8 +291,9 @@ export type IncomeStatementResult = {
   netIncome: Prisma.Decimal;
 };
 
-export async function incomeStatement(clubId: string, from: Date, to: Date, opts?: { departmentId?: string }): Promise<IncomeStatementResult> {
-  const balances = await accountBalances(clubId, { from, to, departmentId: opts?.departmentId });
+export async function incomeStatement(clubId: string, from: Date, to: Date, opts?: { departmentId?: string; fundId?: string }): Promise<IncomeStatementResult> {
+  // DIM-2 (2026-09-29) — combined Department + Fund filtering.
+  const balances = await accountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
   const tree = await buildFsTree(clubId, "INCOME_STATEMENT", balances.filter((b) => b.accountType === "REVENUE" || b.accountType === "EXPENSE"));
   // Founder rule 2026-07-01 v14.7 — classify by ACCOUNT TYPE +
   // FS Group key prefix, not by legacy parent-group names. The
@@ -315,6 +317,84 @@ export async function incomeStatement(clubId: string, from: Date, to: Date, opts
   const netIncome = grossMargin.minus(totalOpex);
 
   return { from, to, revenue, cogs, opex, totalRevenue, totalCogs, grossMargin, totalOpex, netIncome };
+}
+
+// ---------------------------------------------------------------------------
+// DIM-2 (2026-09-29) — Income Statement by Fund
+// ---------------------------------------------------------------------------
+// Symmetric to `incomeStatementByDepartment`: rolls REVENUE + EXPENSE
+// activity in [from, to) by `JournalEntryLine.fundId`. Lines with
+// `fundId=null` fall in the "Unassigned Fund" bucket — no inference
+// from account.fundApplicability CSV, per DIM-2 Section 8/10.
+export type FundISRow = {
+  fundId: string | null;
+  fundKey: string;
+  revenue: Prisma.Decimal;
+  cogs: Prisma.Decimal;
+  opex: Prisma.Decimal;
+  contribution: Prisma.Decimal;
+};
+
+export async function incomeStatementByFund(clubId: string, from: Date, to: Date): Promise<{
+  rows: FundISRow[];
+  totalRevenue: Prisma.Decimal;
+  totalCogs: Prisma.Decimal;
+  totalOpex: Prisma.Decimal;
+  totalContribution: Prisma.Decimal;
+}> {
+  const excludeDemo = await hasCommittedRealTrialBalance(clubId);
+  const rows = await prisma.journalEntryLine.findMany({
+    where: {
+      clubId,
+      entry: {
+        status: "POSTED",
+        entryDate: { gte: from, lte: to },
+        ...(excludeDemo ? { source: { not: "DEMO" } } : {}),
+      },
+      account: { type: { in: ["REVENUE", "EXPENSE"] } },
+    },
+    include: {
+      account: true,
+      fund: true,
+    },
+  });
+
+  const byFund = new Map<string, { key: string; revenue: Prisma.Decimal; cogs: Prisma.Decimal; opex: Prisma.Decimal }>();
+  for (const r of rows) {
+    // DIM-2 — line-level fundId is authoritative. Never infer from
+    // account.fundApplicability CSV.
+    const key = r.fundId ?? "__none__";
+    const name = r.fund?.key ?? "Unassigned Fund";
+    if (!byFund.has(key)) byFund.set(key, { key: name, revenue: ZERO, cogs: ZERO, opex: ZERO });
+    const bucket = byFund.get(key)!;
+    const debit = toMoney(r.debit as unknown as Prisma.Decimal);
+    const credit = toMoney(r.credit as unknown as Prisma.Decimal);
+    if (r.account.type === "REVENUE") bucket.revenue = bucket.revenue.plus(credit).minus(debit);
+    else if (r.account.fsGroupId) {
+      const fs = await prisma.financialStatementGroup.findUnique({ where: { id: r.account.fsGroupId } });
+      const isCogs = !!fs?.key && (fs.key.startsWith("IS_COGS_") || fs.key === "IS_COGS");
+      if (isCogs) bucket.cogs = bucket.cogs.plus(debit).minus(credit);
+      else bucket.opex = bucket.opex.plus(debit).minus(credit);
+    } else {
+      bucket.opex = bucket.opex.plus(debit).minus(credit);
+    }
+  }
+
+  const result: FundISRow[] = Array.from(byFund.entries()).map(([k, v]) => ({
+    fundId: k === "__none__" ? null : k,
+    fundKey: v.key,
+    revenue: v.revenue,
+    cogs: v.cogs,
+    opex: v.opex,
+    contribution: v.revenue.minus(v.cogs).minus(v.opex),
+  }));
+  result.sort((a, b) => a.fundKey.localeCompare(b.fundKey));
+
+  const totalRevenue = sumMoney(result.map((r) => r.revenue));
+  const totalCogs = sumMoney(result.map((r) => r.cogs));
+  const totalOpex = sumMoney(result.map((r) => r.opex));
+  const totalContribution = totalRevenue.minus(totalCogs).minus(totalOpex);
+  return { rows: result, totalRevenue, totalCogs, totalOpex, totalContribution };
 }
 
 // ---------------------------------------------------------------------------

@@ -127,13 +127,15 @@ function sameDayRange(asOf: Date): { gte: Date; lte: Date } {
 
 export async function reportingBalances(
   clubId: string,
-  filter: { asOf: Date; departmentId?: string; costCenterId?: string } = { asOf: new Date() },
+  filter: { asOf: Date; departmentId?: string; fundId?: string; costCenterId?: string } = { asOf: new Date() },
 ): Promise<ReportingBalancesResult> {
-  // Departmental / cost-centre filters are operational-ledger only —
-  // authoritative snapshots represent tenant-wide period-end totals
-  // and are not shredded by department. When the caller requests a
-  // slice, the operational ledger is the only valid source.
-  const isSlicedRead = filter.departmentId != null || filter.costCenterId != null;
+  // Departmental / fund / cost-centre filters are operational-ledger
+  // only — authoritative snapshots represent tenant-wide period-end
+  // totals and (in DIM-2) are not yet re-shredded per dimension at
+  // read time. When the caller requests a slice, the operational
+  // ledger is the only valid source.
+  const isSlicedRead =
+    filter.departmentId != null || filter.fundId != null || filter.costCenterId != null;
 
   if (!isSlicedRead) {
     const snapshot = await findExactCommittedTbSnapshot(clubId, filter.asOf);
@@ -328,7 +330,10 @@ export async function reportingAccountBalances(
   filter: BalanceFilter = {},
 ): Promise<ReportingAccountBalancesResult> {
   const asOf = filter.asOf ?? new Date();
-  const isSlicedRead = filter.departmentId != null || filter.costCenterId != null || filter.from != null || filter.to != null;
+  // DIM-2 (2026-09-29) — include fund in the sliced-read check so a
+  // fund-scoped Trial Balance never returns the tenant-wide
+  // snapshot totals.
+  const isSlicedRead = filter.departmentId != null || filter.fundId != null || filter.costCenterId != null || filter.from != null || filter.to != null;
   if (!isSlicedRead) {
     const snapshot = await findExactCommittedTbSnapshot(clubId, asOf);
     if (snapshot) {

@@ -25,6 +25,8 @@ import { resolvePostingPeriod } from "./periods";
 import type { JournalSource } from "./types";
 import { assertPostingAllowed } from "../posting-guard";
 import { DEPARTMENT_CODE_ALIASES } from "./coa-template";
+// DIM-2 (2026-09-29) — central dimensional validation.
+import { validateManyLineDimensions } from "./dimensional-validation";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -33,6 +35,11 @@ export const journalLineSchema = z
   .object({
     accountNumber: z.string().trim().min(1).max(40),
     departmentCode: z.string().trim().max(40).optional().nullable(),
+    // DIM-2 (2026-09-29) — line-level fund attribution. Accepts a
+    // per-club canonical Fund key (e.g. "OPERATING", "CAPITAL").
+    // Resolved to fundId by the validator; validated against the
+    // account's fundPolicy + AccountFund applicability set.
+    fundCode: z.string().trim().max(40).optional().nullable(),
     costCenterCode: z.string().trim().max(40).optional().nullable(),
     debit: z.union([z.number(), z.string()]).optional(),
     credit: z.union([z.number(), z.string()]).optional(),
@@ -72,6 +79,8 @@ export type CreateJournalInput = z.infer<typeof createJournalSchema>;
 export type ResolvedLine = {
   accountId: string;
   departmentId: string | null;
+  // DIM-2 (2026-09-29) — line-level fund attribution.
+  fundId: string | null;
   costCenterId: string | null;
   debit: Prisma.Decimal;
   credit: Prisma.Decimal;
@@ -128,6 +137,11 @@ export async function validateEntry(
   const ccs = ccCodes.length ? await prisma.costCenter.findMany({ where: { clubId, code: { in: ccCodes } } }) : [];
   const ccByCode = new Map(ccs.map((c) => [c.code, c]));
 
+  // DIM-2 (2026-09-29) — resolve fund codes for this club.
+  const fundCodes = Array.from(new Set(input.lines.map((l) => l.fundCode).filter((x): x is string => !!x)));
+  const funds = fundCodes.length ? await prisma.fund.findMany({ where: { clubId, key: { in: fundCodes.map((s) => s.toUpperCase()) } } }) : [];
+  const fundByKey = new Map(funds.map((f) => [f.key, f]));
+
   const lines: ResolvedLine[] = [];
   const issues: Array<{ path: string; message: string }> = [];
 
@@ -172,9 +186,17 @@ export async function validateEntry(
       if (!c) issues.push({ path: `lines.${i}.costCenterCode`, message: `Unknown cost center ${l.costCenterCode}` });
       else costCenterId = c.id;
     }
+    // DIM-2 (2026-09-29) — resolve fund by canonical key (upper-cased).
+    let fundId: string | null = null;
+    if (l.fundCode) {
+      const f = fundByKey.get(l.fundCode.toUpperCase());
+      if (!f) issues.push({ path: `lines.${i}.fundCode`, message: `Unknown fund ${l.fundCode}` });
+      else fundId = f.id;
+    }
     lines.push({
       accountId: account?.id ?? "",
       departmentId,
+      fundId,
       costCenterId,
       debit: toMoney(l.debit),
       credit: toMoney(l.credit),
@@ -185,6 +207,26 @@ export async function validateEntry(
   }
 
   if (issues.length) throw new ValidationError(issues, "Journal entry validation failed");
+
+  // DIM-2 (2026-09-29) — centralized dimensional validation.
+  // Runs AFTER local shape checks so the caller sees basic
+  // resolution errors first, but BEFORE the balance check so an
+  // out-of-policy dimension is surfaced regardless of whether the
+  // entry happens to balance.
+  const dimResults = await validateManyLineDimensions(
+    clubId,
+    lines.map((l) => ({ accountId: l.accountId, departmentId: l.departmentId, fundId: l.fundId })),
+  );
+  const dimIssues: Array<{ path: string; message: string }> = [];
+  for (let i = 0; i < dimResults.length; i++) {
+    const r = dimResults[i];
+    if (!r.ok) {
+      for (const e of r.errors) {
+        dimIssues.push({ path: `lines.${i}.${e.dimension}`, message: e.message });
+      }
+    }
+  }
+  if (dimIssues.length) throw new ValidationError(dimIssues, "Journal entry dimensional validation failed");
 
   const totalDebits = sumMoney(lines.map((l) => l.debit));
   const totalCredits = sumMoney(lines.map((l) => l.credit));
@@ -253,6 +295,8 @@ export async function createDraft(principal: Principal, clubId: string, raw: unk
         lineNumber: l.lineNumber,
         accountId: l.accountId,
         departmentId: l.departmentId,
+        // DIM-2 (2026-09-29) — persist line-level fund.
+        fundId: l.fundId,
         costCenterId: l.costCenterId,
         debit: l.debit,
         credit: l.credit,
@@ -522,6 +566,8 @@ export async function createPostedFromAdapter(
         lineNumber: l.lineNumber,
         accountId: l.accountId,
         departmentId: l.departmentId,
+        // DIM-2 (2026-09-29) — persist line-level fund.
+        fundId: l.fundId,
         costCenterId: l.costCenterId,
         debit: l.debit,
         credit: l.credit,

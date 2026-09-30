@@ -123,6 +123,28 @@ export type CoaRowMapping = {
    *  `departmentCode` field is normalised into this array at parse
    *  time so the rest of the code only deals with one shape. */
   departmentCodes?: string[];
+  /**
+   * DIM-2 (2026-09-29) — canonical Fund key applicability
+   * proposal set (e.g. `["OPERATING"]`, `["CAPITAL","OPERATING"]`).
+   * Parsed from the predictor's `fundApplicability` CSV or from
+   * an explicit workbook column; used by the commit path to
+   * reconcile AccountFund rows.
+   */
+  fundApplicabilityKeys?: string[];
+  /**
+   * DIM-2 (2026-09-29) — Account.departmentPolicy proposal.
+   * REQUIRED / OPTIONAL / NOT_APPLICABLE. Predicted or explicit.
+   * The operator may override in the COA preview before commit.
+   */
+  departmentPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+  /** DIM-2 — Account.fundPolicy proposal, same enum. */
+  fundPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+  /**
+   * DIM-2 (2026-09-29) — legacy CSV, dual-write only. New consumers
+   * MUST read `fundApplicabilityKeys` instead. See
+   * `docs/dim-1-legacy-fund-applicability.md`.
+   */
+  fundApplicability?: string | null;
 };
 
 /**
@@ -163,6 +185,37 @@ export function normaliseCoaRow(raw: Record<string, unknown>): CoaRowMapping {
     departmentCodes.push(raw.departmentCode.trim());
   }
 
+  // DIM-2 (2026-09-29) — dimensional policy + fund applicability
+  // normalisation. The commit path uses these to persist
+  // Account.departmentPolicy / fundPolicy and to reconcile
+  // AccountFund rows. Legacy `fundApplicability` CSV is preserved
+  // for dual-write compatibility.
+  const fundKeysFromArray = Array.isArray(raw.fundApplicabilityKeys)
+    ? raw.fundApplicabilityKeys.map((v) => stringOrEmpty(v).trim().toUpperCase()).filter((s) => s.length > 0)
+    : null;
+  const fundApplicabilityCsv = stringOrNull(raw.fundApplicability);
+  const fundApplicabilityKeys = fundKeysFromArray && fundKeysFromArray.length > 0
+    ? Array.from(new Set(fundKeysFromArray)).sort()
+    : fundApplicabilityCsv
+      ? Array.from(new Set(
+          fundApplicabilityCsv.split(/[,;]/).map((s) => s.trim().toUpperCase()).filter((s) => s.length > 0),
+        )).sort()
+      : [];
+
+  const departmentPolicyRaw = stringOrEmpty(raw.departmentPolicy).toUpperCase();
+  const departmentPolicy = (
+    departmentPolicyRaw === "REQUIRED" || departmentPolicyRaw === "OPTIONAL" || departmentPolicyRaw === "NOT_APPLICABLE"
+  )
+    ? (departmentPolicyRaw as "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE")
+    : null;
+
+  const fundPolicyRaw = stringOrEmpty(raw.fundPolicy).toUpperCase();
+  const fundPolicy = (
+    fundPolicyRaw === "REQUIRED" || fundPolicyRaw === "OPTIONAL" || fundPolicyRaw === "NOT_APPLICABLE"
+  )
+    ? (fundPolicyRaw as "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE")
+    : null;
+
   return {
     number,
     name,
@@ -170,6 +223,10 @@ export function normaliseCoaRow(raw: Record<string, unknown>): CoaRowMapping {
     categoryKey: categoryKey ?? null,
     fsGroupKey: fsGroupKey ?? null,
     departmentCodes,
+    fundApplicabilityKeys,
+    departmentPolicy,
+    fundPolicy,
+    fundApplicability: fundApplicabilityCsv,
   };
 }
 
@@ -207,6 +264,15 @@ export type CoaResolvedRow = {
   fsGroupKey: string;
   departmentIds: string[]; // may be empty (department is optional)
   departmentCodes: string[];
+  // DIM-2 (2026-09-29) — dimensional proposals passed through to the
+  // commit path. `explicitDefaultDepartmentId` remains null unless a
+  // future importer surface explicitly names a primary department
+  // (per DIM-2 Section 4: applicability != defaulting).
+  explicitDefaultDepartmentId: string | null;
+  departmentPolicy: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+  fundPolicy: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+  fundApplicabilityKeys: string[];
+  fundApplicability: string | null;
 };
 
 export type CoaResolutionResult =
@@ -327,6 +393,14 @@ export function resolveCoaRow(
       fsGroupKey: fsGroup!.key,
       departmentIds,
       departmentCodes,
+      // DIM-2 (2026-09-29) — DIM-2 fields passed through so the
+      // commit path can persist them on Account without a second
+      // predictor pass.
+      explicitDefaultDepartmentId: null,
+      departmentPolicy: row.departmentPolicy ?? null,
+      fundPolicy: row.fundPolicy ?? null,
+      fundApplicabilityKeys: row.fundApplicabilityKeys ?? [],
+      fundApplicability: row.fundApplicability ?? null,
     },
   };
 }

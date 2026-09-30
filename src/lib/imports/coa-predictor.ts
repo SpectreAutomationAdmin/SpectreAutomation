@@ -37,6 +37,14 @@
 
 import type { AccountType } from "../accounting/types";
 import { defaultFundApplicabilityStringForAccount } from "../accounting/fund-applicability";
+// DIM-2 (2026-09-29) — accounting-semantic policy proposals + fund
+// key parsing. See src/lib/accounting/dimension-policy-prediction.ts.
+import {
+  proposeDepartmentPolicy,
+  proposeFundPolicy,
+  parseFundApplicabilityKeys,
+  type DimensionPolicy,
+} from "../accounting/dimension-policy-prediction";
 
 // Founder rule 2026-07-02 v15.0 — every predicted CoA row carries
 // a Fund Applicability tag derived from its predicted FS Group.
@@ -103,8 +111,31 @@ export type CoaPrediction = {
    * P&L accounts. Import + TB-map surfaces write this value onto
    * the created Account so the reporting engine has fund
    * classification available immediately after import.
+   *
+   * DIM-1 legacy — during DIM-2 → DIM-3 window the importer
+   * DUAL-WRITES this CSV alongside the authoritative
+   * `fundApplicabilityKeys` array (below).
    */
   fundApplicability: string | null;
+  /**
+   * DIM-2 (2026-09-29) — canonical Fund keys parsed from
+   * `fundApplicability`. This is the AUTHORITATIVE applicability
+   * proposal; the importer resolves each key to a tenant-scoped
+   * Fund id and reconciles `AccountFund` rows at commit time.
+   */
+  fundApplicabilityKeys: string[];
+  /**
+   * DIM-2 (2026-09-29) — Account.departmentPolicy proposal.
+   * REQUIRED / OPTIONAL / NOT_APPLICABLE. Predicted from
+   * accounting semantics via `proposeDepartmentPolicy()`. The
+   * operator may override this in the COA import preview.
+   */
+  departmentPolicy: DimensionPolicy;
+  /**
+   * DIM-2 (2026-09-29) — Account.fundPolicy proposal, same
+   * enum, from `proposeFundPolicy()`. Operator-overridable.
+   */
+  fundPolicy: DimensionPolicy;
   confidence: PredictionConfidence;
   source: PredictionSource;
 };
@@ -822,6 +853,10 @@ const DEFAULT_PREDICTION: CoaPrediction = {
   fsGroupKey: "BS_OTHER_ASSETS",
   defaultDepartmentCode: null,
   fundApplicability: null, // ASSET default is BS → no fund tag
+  // DIM-2 (2026-09-29) — default proposal fields for the fallback.
+  fundApplicabilityKeys: [],
+  departmentPolicy: "NOT_APPLICABLE", // BS default → no dept
+  fundPolicy: "NOT_APPLICABLE",       // BS default → no fund
   confidence: "low",
   source: "default",
 };
@@ -888,10 +923,19 @@ function firstKeywordMatch(
   return null;
 }
 
-export function predictCoaRow(
+// DIM-2 (2026-09-29) — the internal predictor still produces the pre-DIM-2
+// shape; `predictCoaRow` below wraps it and augments with `departmentPolicy`,
+// `fundPolicy`, and `fundApplicabilityKeys[]` proposals so no return site
+// inside `_predictCoaRowRaw` had to be edited.
+type _RawPrediction = Omit<
+  CoaPrediction,
+  "departmentPolicy" | "fundPolicy" | "fundApplicabilityKeys"
+>;
+
+function _predictCoaRowRaw(
   row: CoaPredictorInputRow,
   existingByNumber: ReadonlyMap<string, ExistingAccountSnapshot> = new Map(),
-): CoaPrediction {
+): _RawPrediction {
   // Founder rule 2026-06-29 v4 — expand common accounting
   // abbreviations BEFORE keyword matching. The original name in
   // `row.name` is preserved for display; only the prediction
@@ -1094,6 +1138,41 @@ export function predictCoaRow(
 }
 
 /**
+ * DIM-2 (2026-09-29) — public wrapper. Runs the raw per-row
+ * predictor, then augments the result with `departmentPolicy` +
+ * `fundPolicy` proposals + the parsed `fundApplicabilityKeys[]`.
+ *
+ * Consumers (COA import mapping, admin CoA screen, tests) get the
+ * complete DIM-2 shape; every internal `return` inside
+ * `_predictCoaRowRaw` stayed on the pre-DIM-2 shape so the diff
+ * is localised.
+ */
+export function predictCoaRow(
+  row: CoaPredictorInputRow,
+  existingByNumber: ReadonlyMap<string, ExistingAccountSnapshot> = new Map(),
+): CoaPrediction {
+  const raw = _predictCoaRowRaw(row, existingByNumber);
+  return {
+    ...raw,
+    fundApplicabilityKeys: parseFundApplicabilityKeys(raw.fundApplicability),
+    departmentPolicy: proposeDepartmentPolicy({
+      type: raw.type,
+      fsGroupKey: raw.fsGroupKey ?? null,
+      // Import predictions never carry an isHeader flag today; the
+      // preview + downstream logic set that from the row's own
+      // `isHeader` field where present.
+      isHeader: false,
+    }),
+    fundPolicy: proposeFundPolicy({
+      type: raw.type,
+      fsGroupKey: raw.fsGroupKey ?? null,
+      fundApplicability: raw.fundApplicability,
+      isHeader: false,
+    }),
+  };
+}
+
+/**
  * Predict mappings for a whole batch in one call. Runs the pure
  * per-row predictor for every row, then applies a chart-level
  * reasonableness pass that catches implausible mapping outcomes a
@@ -1189,12 +1268,24 @@ function applyChartReasonablenessPass(
   // isn't enough to justify a chart-wide promotion.
   if (!hasMembershipDues && hintIndices.length >= 3) {
     for (const i of hintIndices) {
+      const fundApp = fundForPrediction("REVENUE", "IS_MEMBERSHIP_DUES");
       out[i] = {
         type: "REVENUE",
         categoryKey: "MEMBERSHIP_REVENUE",
         fsGroupKey: "IS_MEMBERSHIP_DUES",
         defaultDepartmentCode: null,
-        fundApplicability: fundForPrediction("REVENUE", "IS_MEMBERSHIP_DUES"),
+        fundApplicability: fundApp,
+        // DIM-2 (2026-09-29) — DIM-2 proposals for the chart-reassessment path.
+        fundApplicabilityKeys: parseFundApplicabilityKeys(fundApp),
+        departmentPolicy: proposeDepartmentPolicy({
+          type: "REVENUE",
+          fsGroupKey: "IS_MEMBERSHIP_DUES",
+        }),
+        fundPolicy: proposeFundPolicy({
+          type: "REVENUE",
+          fsGroupKey: "IS_MEMBERSHIP_DUES",
+          fundApplicability: fundApp,
+        }),
         // A batch-level defensible inference, not a direct per-row
         // match — downgraded to medium so the UI still flags it for
         // review.

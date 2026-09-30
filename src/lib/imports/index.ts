@@ -1202,7 +1202,30 @@ async function commitCoaBatchAsReplacement(
       const departmentIds = Array.isArray(normalized.departmentIds)
         ? normalized.departmentIds.map((v) => String(v)).filter((v) => v.length > 0)
         : [];
-      const primaryDepartmentId = departmentIds[0] ?? null;
+
+      // DIM-2 (2026-09-29) Section 4 — DO NOT auto-populate
+      // defaultDepartmentId from departmentIds[0]. The importer
+      // only sets it when an explicit "Default Department" surface
+      // provides a value.
+      const explicitDefaultDeptId = typeof normalized.explicitDefaultDepartmentId === "string" && normalized.explicitDefaultDepartmentId.length > 0
+        ? String(normalized.explicitDefaultDepartmentId)
+        : null;
+      const departmentPolicyRaw = String(normalized.departmentPolicy ?? "OPTIONAL").toUpperCase();
+      const departmentPolicy = (departmentPolicyRaw === "REQUIRED" || departmentPolicyRaw === "OPTIONAL" || departmentPolicyRaw === "NOT_APPLICABLE")
+        ? departmentPolicyRaw
+        : "OPTIONAL";
+      const fundPolicyRaw = String(normalized.fundPolicy ?? "OPTIONAL").toUpperCase();
+      const fundPolicy = (fundPolicyRaw === "REQUIRED" || fundPolicyRaw === "OPTIONAL" || fundPolicyRaw === "NOT_APPLICABLE")
+        ? fundPolicyRaw
+        : "OPTIONAL";
+      const fundApplicabilityKeys = Array.isArray(normalized.fundApplicabilityKeys)
+        ? normalized.fundApplicabilityKeys.map((v) => String(v).trim().toUpperCase()).filter((s) => s.length > 0)
+        : (typeof normalized.fundApplicability === "string" && normalized.fundApplicability.length > 0
+            ? normalized.fundApplicability.split(/[,;]/).map((s: string) => s.trim().toUpperCase()).filter((s: string) => s.length > 0)
+            : []);
+      const fundApplicabilityCsv = fundApplicabilityKeys.length > 0
+        ? Array.from(new Set(fundApplicabilityKeys)).sort().join(",")
+        : null;
 
       const account = await tx.account.upsert({
         where: { clubId_accountNumber: { clubId: batch.clubId, accountNumber: number } },
@@ -1212,7 +1235,10 @@ async function commitCoaBatchAsReplacement(
           normalBalance,
           categoryId,
           fsGroupId,
-          defaultDepartmentId: primaryDepartmentId,
+          defaultDepartmentId: explicitDefaultDeptId,
+          departmentPolicy,
+          fundPolicy,
+          fundApplicability: fundApplicabilityCsv,
           isActive: true,
           archivedAt: null,
         },
@@ -1224,7 +1250,10 @@ async function commitCoaBatchAsReplacement(
           normalBalance,
           categoryId,
           fsGroupId,
-          defaultDepartmentId: primaryDepartmentId,
+          defaultDepartmentId: explicitDefaultDeptId,
+          departmentPolicy,
+          fundPolicy,
+          fundApplicability: fundApplicabilityCsv,
           isActive: true,
         },
       });
@@ -1241,6 +1270,26 @@ async function commitCoaBatchAsReplacement(
             departmentId,
           })),
         });
+      }
+
+      // DIM-2 — reconcile AccountFund (per-tenant Fund applicability).
+      await tx.accountFund.deleteMany({
+        where: { accountId: account.id, clubId: batch.clubId },
+      });
+      if (fundApplicabilityKeys.length > 0) {
+        const funds = await tx.fund.findMany({
+          where: { clubId: batch.clubId, key: { in: fundApplicabilityKeys } },
+          select: { id: true, key: true },
+        });
+        if (funds.length > 0) {
+          await tx.accountFund.createMany({
+            data: funds.map((f) => ({
+              clubId: batch.clubId,
+              accountId: account.id,
+              fundId: f.id,
+            })),
+          });
+        }
       }
 
       await tx.importRow.update({
@@ -1385,9 +1434,40 @@ async function commitDomainRow(clubId: string, domain: ImportDomain, normalized:
     const departmentIds = Array.isArray(normalized.departmentIds)
       ? normalized.departmentIds.map((v) => String(v)).filter((v) => v.length > 0)
       : [];
-    // First department in the mapping is the "primary" — kept on
-    // Account.defaultDepartmentId for legacy callers.
-    const primaryDepartmentId = departmentIds[0] ?? null;
+
+    // DIM-2 (2026-09-29) Section 4 — Account.defaultDepartmentId is
+    // NOT auto-populated from applicability. It stays NULL unless
+    // the operator supplied an explicit primary through a surface
+    // whose meaning is clearly "Default Department" — which the
+    // current importer does not expose. Applicability != defaulting.
+    const explicitDefaultDeptId = typeof normalized.explicitDefaultDepartmentId === "string" && normalized.explicitDefaultDepartmentId.length > 0
+      ? String(normalized.explicitDefaultDepartmentId)
+      : null;
+
+    // DIM-2 — read dimensional proposals from normalizedJson (set by
+    // saveCoaRowMappings from the predictor's proposals or the
+    // operator's override).
+    const departmentPolicyRaw = String(normalized.departmentPolicy ?? "OPTIONAL").toUpperCase();
+    const departmentPolicy = (departmentPolicyRaw === "REQUIRED" || departmentPolicyRaw === "OPTIONAL" || departmentPolicyRaw === "NOT_APPLICABLE")
+      ? departmentPolicyRaw
+      : "OPTIONAL";
+    const fundPolicyRaw = String(normalized.fundPolicy ?? "OPTIONAL").toUpperCase();
+    const fundPolicy = (fundPolicyRaw === "REQUIRED" || fundPolicyRaw === "OPTIONAL" || fundPolicyRaw === "NOT_APPLICABLE")
+      ? fundPolicyRaw
+      : "OPTIONAL";
+
+    // DIM-2 — dual-write legacy CSV field for backward compatibility
+    // with the 29 legacy consumers documented in
+    // docs/dim-1-legacy-fund-applicability.md. AccountFund rows below
+    // are the authoritative applicability model going forward.
+    const fundApplicabilityKeys = Array.isArray(normalized.fundApplicabilityKeys)
+      ? normalized.fundApplicabilityKeys.map((v) => String(v).trim().toUpperCase()).filter((s) => s.length > 0)
+      : (typeof normalized.fundApplicability === "string" && normalized.fundApplicability.length > 0
+          ? normalized.fundApplicability.split(/[,;]/).map((s: string) => s.trim().toUpperCase()).filter((s: string) => s.length > 0)
+          : []);
+    const fundApplicabilityCsv = fundApplicabilityKeys.length > 0
+      ? Array.from(new Set(fundApplicabilityKeys)).sort().join(",")
+      : null;
 
     const account = await prisma.account.upsert({
       where: { clubId_accountNumber: { clubId, accountNumber: String(normalized.number) } },
@@ -1397,7 +1477,10 @@ async function commitDomainRow(clubId: string, domain: ImportDomain, normalized:
         normalBalance,
         categoryId,
         fsGroupId,
-        defaultDepartmentId: primaryDepartmentId,
+        defaultDepartmentId: explicitDefaultDeptId,
+        departmentPolicy,
+        fundPolicy,
+        fundApplicability: fundApplicabilityCsv,
       },
       create: {
         clubId,
@@ -1407,7 +1490,10 @@ async function commitDomainRow(clubId: string, domain: ImportDomain, normalized:
         normalBalance,
         categoryId,
         fsGroupId,
-        defaultDepartmentId: primaryDepartmentId,
+        defaultDepartmentId: explicitDefaultDeptId,
+        departmentPolicy,
+        fundPolicy,
+        fundApplicability: fundApplicabilityCsv,
         isActive: true,
       },
     });
@@ -1426,6 +1512,31 @@ async function commitDomainRow(clubId: string, domain: ImportDomain, normalized:
           departmentId,
         })),
       });
+    }
+
+    // DIM-2 (2026-09-29) — reconcile AccountFund rows, analogous to
+    // AccountDepartment. Fund keys are resolved to tenant-scoped
+    // Fund ids; unknown keys are ignored here (validateBatch is the
+    // right place to surface them as ImportErrors — that's DIM-2
+    // follow-up work). Cross-tenant is impossible because the
+    // resolver filters `where.clubId = clubId`.
+    await prisma.accountFund.deleteMany({
+      where: { accountId: account.id, clubId },
+    });
+    if (fundApplicabilityKeys.length > 0) {
+      const funds = await prisma.fund.findMany({
+        where: { clubId, key: { in: fundApplicabilityKeys } },
+        select: { id: true, key: true },
+      });
+      if (funds.length > 0) {
+        await prisma.accountFund.createMany({
+          data: funds.map((f) => ({
+            clubId,
+            accountId: account.id,
+            fundId: f.id,
+          })),
+        });
+      }
     }
 
     return { entityType: "Account", entityId: account.id };
@@ -1452,6 +1563,13 @@ export async function saveCoaRowMappings(
       categoryKey: string | null;
       fsGroupKey: string | null;
       departmentCodes: string[];
+      // DIM-2 (2026-09-29) — optional dimensional proposals. When
+      // absent the merged row keeps whatever the predictor stamped
+      // into rawJson; when present they represent the operator's
+      // override of the proposal.
+      fundApplicabilityKeys?: string[];
+      departmentPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
+      fundPolicy?: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
     }>;
   },
 ) {
@@ -1524,6 +1642,19 @@ export async function saveCoaRowMappings(
       fsGroupKey: m.fsGroupKey ?? "",
       departmentCodes: m.departmentCodes.filter((c) => c.trim().length > 0),
     };
+    // DIM-2 (2026-09-29) — dimensional proposals persisted so the
+    // commit path has them without re-invoking the predictor. When
+    // the caller omits a field we leave the previously-stamped
+    // value in place (typically the predictor's proposal).
+    if (m.fundApplicabilityKeys !== undefined) {
+      merged.fundApplicabilityKeys = m.fundApplicabilityKeys;
+    }
+    if (m.departmentPolicy !== undefined) {
+      merged.departmentPolicy = m.departmentPolicy;
+    }
+    if (m.fundPolicy !== undefined) {
+      merged.fundPolicy = m.fundPolicy;
+    }
     // Drop the legacy singular field if present — the array is now
     // the canonical shape downstream.
     delete merged.departmentCode;
@@ -1653,6 +1784,16 @@ export async function applyCoaAutoMapping(
       type: p.type,
       categoryKey: p.categoryKey,
       fsGroupKey: p.fsGroupKey,
+      // DIM-2 (2026-09-29) — dimensional proposals surfaced so the
+      // preview UI can render them and the operator can override
+      // them before commit. The commit path reads these fields from
+      // rawJson to persist departmentPolicy / fundPolicy on Account
+      // and to reconcile AccountFund rows.
+      departmentPolicy: p.departmentPolicy,
+      fundPolicy: p.fundPolicy,
+      fundApplicabilityKeys: p.fundApplicabilityKeys,
+      fundApplicability: p.fundApplicability,
+      defaultDepartmentCode: p.defaultDepartmentCode,
     };
     await prisma.importRow.update({
       where: { id: ir.id },
@@ -1667,9 +1808,16 @@ export async function applyCoaAutoMapping(
       type: predictions[i].type,
       categoryKey: predictions[i].categoryKey,
       fsGroupKey: predictions[i].fsGroupKey,
-      departmentCodes: predictions[i].defaultDepartmentCode
-        ? [predictions[i].defaultDepartmentCode!]
-        : [],
+      // DIM-2 (2026-09-29) — DO NOT auto-populate the Account's
+      // primary department from the predictor's suggestion. Under
+      // DIM-2 Section 4, the Master COA defines natural accounts;
+      // AccountDepartment defines permitted departments;
+      // Account.defaultDepartmentId stays NULL unless an explicit
+      // "primary" was supplied. Applicability != defaulting.
+      departmentCodes: [],
+      fundApplicabilityKeys: predictions[i].fundApplicabilityKeys,
+      departmentPolicy: predictions[i].departmentPolicy,
+      fundPolicy: predictions[i].fundPolicy,
     })),
   });
 
