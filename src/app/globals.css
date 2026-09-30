@@ -2967,6 +2967,13 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
 
   /* Table --------------------------------------------------------- */
   .spectre-dw-table-wrap { flex: 1; overflow: auto; background: var(--spectre-surface); min-height: 0; }
+  /* COA-UI-1 (2026-09-29) — when the table has zero rows the wrap
+     no longer fills the 1fr grid track. It collapses to the height
+     of the empty-state message so the message appears naturally
+     beneath the toolbar rather than floating inside a viewport-tall
+     empty pane. The `data-mode="populated"` path (any non-zero row
+     count) keeps `flex: 1` and the full 562-row scroll behaviour. */
+  .spectre-dw-table-wrap[data-mode="empty"] { flex: 0 0 auto; overflow: visible; }
   table.spectre-dw-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--spectre-text-primary); font-variant-numeric: tabular-nums; }
   table.spectre-dw-table thead th { position: sticky; top: 0; z-index: 3; padding: 8px 12px; background: var(--spectre-canvas-sunken); border-bottom: 1px solid var(--spectre-border-hairline); font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; text-align: left; }
   table.spectre-dw-table thead th.num { text-align: right; }

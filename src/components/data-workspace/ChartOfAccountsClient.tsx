@@ -817,8 +817,17 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
              continuous white strip. */}
         <div className="spectre-dw-body">
           <div className="spectre-dw-main">
-        {/* -------------------------------- TABLE */}
-        <div className="spectre-dw-table-wrap">
+        {/* -------------------------------- TABLE
+             COA-UI-1 (2026-09-29) — when there is no table to render
+             we mark the wrap with `data-mode="empty"` so the flex-fill
+             rule in globals.css collapses it to content height. This
+             stops the empty state from being pushed down inside a
+             viewport-tall pane. The populated branch keeps `flex: 1`
+             and the existing 562-row scroll behaviour. */}
+        <div
+          className="spectre-dw-table-wrap"
+          data-mode={sortedVisibleRows.length === 0 ? "empty" : "populated"}
+        >
           {sortedVisibleRows.length === 0 && searchLC ? (
             <div className="spectre-dw-empty">
               <h3>No accounts match your search.</h3>
