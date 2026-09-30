@@ -54,11 +54,22 @@ export type CoaDepartmentOption = {
   name: string;
 };
 
+// DIM-2a (2026-09-29) — per-club Fund catalog for AccountFund
+// applicability validation. When the operator's mapping proposes
+// a Fund key that is not in this list, the resolver emits an
+// UNKNOWN_FUND ImportError and the row does not commit.
+export type CoaFundOption = {
+  id: string;
+  key: string;
+  name: string;
+};
+
 export type CoaMappingOptions = {
   types: ReadonlyArray<AccountTypeKey>;
   categories: ReadonlyArray<CoaCategoryOption>;
   fsGroups: ReadonlyArray<CoaFsGroupOption>;
   departments: ReadonlyArray<CoaDepartmentOption>;
+  funds: ReadonlyArray<CoaFundOption>;
 };
 
 /**
@@ -67,7 +78,7 @@ export type CoaMappingOptions = {
  * FinancialStatementGroup; departments from Department (active only).
  */
 export async function getCoaMappingOptions(clubId: string): Promise<CoaMappingOptions> {
-  const [categories, fsGroups, departments] = await Promise.all([
+  const [categories, fsGroups, departments, funds] = await Promise.all([
     prisma.accountCategory.findMany({
       where: { clubId },
       orderBy: [{ type: "asc" }, { sortOrder: "asc" }, { name: "asc" }],
@@ -82,6 +93,14 @@ export async function getCoaMappingOptions(clubId: string): Promise<CoaMappingOp
       where: { clubId, isActive: true },
       orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       select: { id: true, code: true, name: true },
+    }),
+    // DIM-2a (2026-09-29) — per-club Fund catalog. Only ACTIVE funds
+    // are eligible for applicability; deactivated funds are not
+    // valid AccountFund targets.
+    prisma.fund.findMany({
+      where: { clubId, isActive: true },
+      orderBy: [{ sortOrder: "asc" }, { key: "asc" }],
+      select: { id: true, key: true, name: true },
     }),
   ]);
 
@@ -105,6 +124,7 @@ export async function getCoaMappingOptions(clubId: string): Promise<CoaMappingOp
       code: d.code,
       name: d.name,
     })),
+    funds: funds.map((f) => ({ id: f.id, key: f.key, name: f.name })),
   };
 }
 
@@ -273,6 +293,11 @@ export type CoaResolvedRow = {
   fundPolicy: "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" | null;
   fundApplicabilityKeys: string[];
   fundApplicability: string | null;
+  // DIM-2a (2026-09-29) — resolved AccountFund ids for the commit
+  // path. Only valid tenant Fund keys make it here; unknown keys
+  // are rejected upstream via UNKNOWN_FUND ImportError so the
+  // commit never silently drops applicability metadata.
+  fundIds: string[];
 };
 
 export type CoaResolutionResult =
@@ -373,6 +398,30 @@ export function resolveCoaRow(
     }
   }
 
+  // DIM-2a (2026-09-29) — resolve AccountFund keys against the
+  // tenant's Fund catalog. Unknown keys emit UNKNOWN_FUND per key
+  // and fail the row so the commit path cannot silently discard
+  // applicability metadata. Section 1 of DIM-2a.
+  const fundIds: string[] = [];
+  const seenFundKeys = new Set<string>();
+  const validFundKeys = new Set<string>();
+  for (const rawKey of row.fundApplicabilityKeys ?? []) {
+    const key = rawKey.trim().toUpperCase();
+    if (key.length === 0 || seenFundKeys.has(key)) continue;
+    seenFundKeys.add(key);
+    const fund = options.funds.find((f) => f.key === key);
+    if (!fund) {
+      errors.push({
+        code: "UNKNOWN_FUND",
+        message: `fund "${key}" is not configured for this club (or is inactive)`,
+        columnName: "fundApplicability",
+      });
+      continue;
+    }
+    fundIds.push(fund.id);
+    validFundKeys.add(fund.key);
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -399,8 +448,15 @@ export function resolveCoaRow(
       explicitDefaultDepartmentId: null,
       departmentPolicy: row.departmentPolicy ?? null,
       fundPolicy: row.fundPolicy ?? null,
-      fundApplicabilityKeys: row.fundApplicabilityKeys ?? [],
-      fundApplicability: row.fundApplicability ?? null,
+      // DIM-2a (2026-09-29) — only fund keys that resolved to an
+      // active tenant Fund make it into the resolved bundle. The
+      // matching `fundIds` array is the commit path's authoritative
+      // AccountFund reconcile source.
+      fundApplicabilityKeys: Array.from(validFundKeys).sort(),
+      fundApplicability: validFundKeys.size > 0
+        ? Array.from(validFundKeys).sort().join(",")
+        : null,
+      fundIds,
     },
   };
 }

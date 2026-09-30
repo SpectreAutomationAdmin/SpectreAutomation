@@ -21,6 +21,12 @@ import {
 import { getCurrentPrincipal } from "@/lib/services/principal";
 
 import { CoaMappingTable, type InitialCoaRow } from "./CoaMappingTable";
+// DIM-2a (2026-09-29) — batch-level dimensional review summary.
+import {
+  summariseCoaBatch,
+  type CoaReviewInputRow,
+} from "@/lib/imports/coa-dimensional-review";
+import type { AccountType } from "@/lib/accounting/types";
 import { CoaReplaceCommitButton } from "./CoaReplaceCommitButton";
 import { CoaErrorsCard } from "./CoaErrorsCard";
 // Founder rule 2026-07-01 v14.20 — flash-cookie sweep must run
@@ -106,7 +112,16 @@ export default async function ImportBatchPage({ params }: { params: { id: string
   // COA-specific: load mapping options + the editable row data the
   // CoaMappingTable consumes. This runs only for COA batches so the
   // other domains pay nothing.
-  let coaPanel: { options: Awaited<ReturnType<typeof getCoaMappingOptions>>; rows: InitialCoaRow[] } | null = null;
+  let coaPanel: {
+    options: Awaited<ReturnType<typeof getCoaMappingOptions>>;
+    rows: InitialCoaRow[];
+    // DIM-2a (2026-09-29) — batch-level dimensional review summary.
+    // Rendered as a summary card above the mapping table so the
+    // founder can see policy + fund applicability + confidence
+    // distributions + REQUIRED-without-applicability counts at a
+    // glance before commit.
+    dim2aSummary: ReturnType<typeof summariseCoaBatch> | null;
+  } | null = null;
   if (batch.domain === "COA") {
     const options = await getCoaMappingOptions(batch.clubId);
     // Group per-row error rows so each ImportRow gets its full
@@ -163,7 +178,46 @@ export default async function ImportBatchPage({ params }: { params: { id: string
         predictionSource: typeof predBlob?.source === "string" ? predBlob.source : null,
       };
     });
-    coaPanel = { options, rows };
+    // DIM-2a (2026-09-29) — compute the batch-level dimensional
+    // review summary from raw._prediction bundles (auto-mapping
+    // stamps departmentPolicy / fundPolicy / fundApplicabilityKeys
+    // there). Consumed by the summary card above the mapping table.
+    const reviewRows: CoaReviewInputRow[] = batch.rows.map((r) => {
+      const raw = parseRawJson(r.rawJson);
+      const normalised = normaliseCoaRow(raw);
+      const pred = (raw._prediction ?? {}) as {
+        type?: string; fsGroupKey?: string;
+        confidence?: string; source?: string;
+        departmentPolicy?: string; fundPolicy?: string;
+        fundApplicabilityKeys?: string[];
+      };
+      const type: AccountType =
+        (["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"] as const).includes(pred.type as never)
+          ? (pred.type as AccountType)
+          : (normalised.type ?? "EXPENSE") as AccountType;
+      const isPolicy = (v: unknown): v is "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" =>
+        v === "REQUIRED" || v === "OPTIONAL" || v === "NOT_APPLICABLE";
+      return {
+        accountNumber: normalised.number,
+        name: normalised.name,
+        type,
+        fsGroupKey: normalised.fsGroupKey ?? pred.fsGroupKey ?? "",
+        confidence: (pred.confidence === "medium" || pred.confidence === "low" || pred.confidence === "high") ? pred.confidence : "high",
+        source: (typeof pred.source === "string" ? pred.source : "default") as CoaReviewInputRow["source"],
+        departmentPolicy: isPolicy(normalised.departmentPolicy)
+          ? normalised.departmentPolicy
+          : (isPolicy(pred.departmentPolicy) ? pred.departmentPolicy : "OPTIONAL"),
+        fundPolicy: isPolicy(normalised.fundPolicy)
+          ? normalised.fundPolicy
+          : (isPolicy(pred.fundPolicy) ? pred.fundPolicy : "OPTIONAL"),
+        fundApplicabilityKeys: normalised.fundApplicabilityKeys && normalised.fundApplicabilityKeys.length > 0
+          ? normalised.fundApplicabilityKeys
+          : (Array.isArray(pred.fundApplicabilityKeys) ? pred.fundApplicabilityKeys : []),
+        departmentApplicabilityCodes: normalised.departmentCodes ?? [],
+      };
+    });
+    const dim2aSummary = summariseCoaBatch(reviewRows);
+    coaPanel = { options, rows, dim2aSummary };
   }
 
   // COA replacement plan — drives the founder's confirmation
@@ -392,6 +446,61 @@ export default async function ImportBatchPage({ params }: { params: { id: string
             }))}
           />
 
+          {coaPanel && coaPanel.dim2aSummary && (
+            /* DIM-2a (2026-09-29) — batch-level dimensional review
+               card. Renders above the CoaMappingTable so the operator
+               sees policy + fund applicability + confidence
+               distributions + attention counters BEFORE reviewing
+               individual rows. Compact — the mapping table remains
+               the primary work surface. */
+            <div className="mt-6 rounded-md border border-stone-200 bg-white p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                Dimensional review summary
+              </div>
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <div className="font-medium text-club-ink">Confidence</div>
+                  <ul className="mt-1 text-stone-600">
+                    <li>high: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.high}</span></li>
+                    <li>medium: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.medium}</span> {coaPanel.dim2aSummary.confidenceDistribution.medium > 0 ? "(review before commit)" : ""}</li>
+                    <li>low: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.low}</span></li>
+                  </ul>
+                </div>
+                <div>
+                  <div className="font-medium text-club-ink">Department Policy</div>
+                  <ul className="mt-1 text-stone-600">
+                    <li>REQUIRED: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.REQUIRED}</span></li>
+                    <li>OPTIONAL: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.OPTIONAL}</span></li>
+                    <li>NOT_APPLICABLE: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.NOT_APPLICABLE}</span></li>
+                  </ul>
+                </div>
+                <div>
+                  <div className="font-medium text-club-ink">Fund Policy</div>
+                  <ul className="mt-1 text-stone-600">
+                    <li>REQUIRED: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.REQUIRED}</span></li>
+                    <li>OPTIONAL: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.OPTIONAL}</span></li>
+                    <li>NOT_APPLICABLE: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.NOT_APPLICABLE}</span></li>
+                  </ul>
+                </div>
+                <div className="md:col-span-2">
+                  <div className="font-medium text-club-ink">Fund applicability keys</div>
+                  <ul className="mt-1 text-stone-600 flex flex-wrap gap-x-4">
+                    {Object.entries(coaPanel.dim2aSummary.fundKeysDistribution).sort((a, b) => b[1] - a[1]).map(([k, n]) => (
+                      <li key={k}>{k}: <span className="tabular-nums">{n}</span></li>
+                    ))}
+                  </ul>
+                </div>
+                <div>
+                  <div className="font-medium text-club-ink">Attention</div>
+                  <ul className="mt-1 text-stone-600">
+                    <li>fund REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyRequiredWithoutApplicability}</span></li>
+                    <li>dept REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyRequiredWithoutApplicability}</span></li>
+                    <li>rows to review: <span className="tabular-nums font-semibold">{coaPanel.dim2aSummary.rowsRequiringAttention}</span></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
           {coaPanel && (
             <CoaMappingTable
               batchId={batch.id}

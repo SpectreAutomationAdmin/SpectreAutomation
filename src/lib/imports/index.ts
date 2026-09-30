@@ -1272,24 +1272,22 @@ async function commitCoaBatchAsReplacement(
         });
       }
 
-      // DIM-2 — reconcile AccountFund (per-tenant Fund applicability).
+      // DIM-2a — reconcile AccountFund using PRE-RESOLVED fund ids
+      // from validateBatch. Unknown keys were blocked upstream.
+      const preResolvedFundIds = Array.isArray(normalized.fundIds)
+        ? normalized.fundIds.map((v) => String(v)).filter((v) => v.length > 0)
+        : [];
       await tx.accountFund.deleteMany({
         where: { accountId: account.id, clubId: batch.clubId },
       });
-      if (fundApplicabilityKeys.length > 0) {
-        const funds = await tx.fund.findMany({
-          where: { clubId: batch.clubId, key: { in: fundApplicabilityKeys } },
-          select: { id: true, key: true },
+      if (preResolvedFundIds.length > 0) {
+        await tx.accountFund.createMany({
+          data: preResolvedFundIds.map((fundId) => ({
+            clubId: batch.clubId,
+            accountId: account.id,
+            fundId,
+          })),
         });
-        if (funds.length > 0) {
-          await tx.accountFund.createMany({
-            data: funds.map((f) => ({
-              clubId: batch.clubId,
-              accountId: account.id,
-              fundId: f.id,
-            })),
-          });
-        }
       }
 
       await tx.importRow.update({
@@ -1514,29 +1512,27 @@ async function commitDomainRow(clubId: string, domain: ImportDomain, normalized:
       });
     }
 
-    // DIM-2 (2026-09-29) — reconcile AccountFund rows, analogous to
-    // AccountDepartment. Fund keys are resolved to tenant-scoped
-    // Fund ids; unknown keys are ignored here (validateBatch is the
-    // right place to surface them as ImportErrors — that's DIM-2
-    // follow-up work). Cross-tenant is impossible because the
-    // resolver filters `where.clubId = clubId`.
+    // DIM-2a (2026-09-29) — reconcile AccountFund rows. Fund ids
+    // are the PRE-RESOLVED array from validateBatch's resolveCoaRow
+    // pass (unknown keys were already blocked with UNKNOWN_FUND
+    // ImportError; a row reaching this commit path is guaranteed
+    // to have every fund key resolved to a valid tenant Fund).
+    // Cross-tenant is impossible because resolveCoaRow filters
+    // against `options.funds`, which is `clubId`-scoped.
+    const preResolvedFundIds = Array.isArray(normalized.fundIds)
+      ? normalized.fundIds.map((v) => String(v)).filter((v) => v.length > 0)
+      : [];
     await prisma.accountFund.deleteMany({
       where: { accountId: account.id, clubId },
     });
-    if (fundApplicabilityKeys.length > 0) {
-      const funds = await prisma.fund.findMany({
-        where: { clubId, key: { in: fundApplicabilityKeys } },
-        select: { id: true, key: true },
+    if (preResolvedFundIds.length > 0) {
+      await prisma.accountFund.createMany({
+        data: preResolvedFundIds.map((fundId) => ({
+          clubId,
+          accountId: account.id,
+          fundId,
+        })),
       });
-      if (funds.length > 0) {
-        await prisma.accountFund.createMany({
-          data: funds.map((f) => ({
-            clubId,
-            accountId: account.id,
-            fundId: f.id,
-          })),
-        });
-      }
     }
 
     return { entityType: "Account", entityId: account.id };

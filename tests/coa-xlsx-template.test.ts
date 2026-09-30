@@ -59,6 +59,7 @@ const OPTIONS: CoaMappingOptions = {
     // Future-fictional entry.
     { id: "d7", code: "AMENITIES", name: "Amenities" },
   ],
+  funds: [],
 };
 
 async function loadGeneratedWorkbook(): Promise<ExcelJS.Workbook> {

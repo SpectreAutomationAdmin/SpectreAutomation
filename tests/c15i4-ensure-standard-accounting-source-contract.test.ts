@@ -42,8 +42,10 @@ describe("ensureStandardAccountingConfiguration — contract", () => {
     expect(ENSURE).toMatch(/insertedCategoryKeys: string\[\]/);
     expect(ENSURE).toMatch(/insertedFsGroupKeys: string\[\]/);
     expect(ENSURE).toMatch(/insertedDepartmentCodes: string\[\]/);
-    expect(ENSURE).toMatch(/before: \{ categories: number; fsGroups: number; departments: number \}/);
-    expect(ENSURE).toMatch(/after: \{ categories: number; fsGroups: number; departments: number \}/);
+    // DIM-1 (2026-09-29) — the before/after shapes now include `funds`.
+    expect(ENSURE).toMatch(/before: \{ categories: number; fsGroups: number; departments: number; funds: number \}/);
+    expect(ENSURE).toMatch(/after: \{ categories: number; fsGroups: number; departments: number; funds: number \}/);
+    expect(ENSURE).toMatch(/insertedFundKeys: string\[\]/);
     expect(ENSURE).toMatch(/elapsedMs: number/);
   });
 
@@ -154,6 +156,7 @@ describe("COA row validator — bootstrap-aware error messaging", () => {
       categories: [],
       fsGroups: [{ id: "g1", key: "BS_CASH_EQUIVALENTS", name: "Cash & equivalents", statement: "BALANCE_SHEET" }],
       departments: [],
+      funds: [],
     };
     const result = resolveCoaRow(
       { number: "1000", name: "Operating Cash", type: "ASSET", categoryKey: "CURRENT_ASSETS", fsGroupKey: "BS_CASH_EQUIVALENTS" },
@@ -176,6 +179,7 @@ describe("COA row validator — bootstrap-aware error messaging", () => {
       categories: [{ id: "c1", key: "CURRENT_ASSETS", name: "Current assets", accountType: "ASSET" }],
       fsGroups: [],
       departments: [],
+      funds: [],
     };
     const result = resolveCoaRow(
       { number: "1000", name: "Operating Cash", type: "ASSET", categoryKey: "CURRENT_ASSETS", fsGroupKey: "BS_CASH_EQUIVALENTS" },
@@ -199,6 +203,7 @@ describe("COA row validator — bootstrap-aware error messaging", () => {
       categories: [{ id: "c1", key: "CURRENT_ASSETS", name: "Current assets", accountType: "ASSET" }],
       fsGroups: [{ id: "g1", key: "BS_CASH_EQUIVALENTS", name: "Cash & equivalents", statement: "BALANCE_SHEET" }],
       departments: [],
+      funds: [],
     };
     const result = resolveCoaRow(
       { number: "1000", name: "Operating Cash", type: "ASSET", categoryKey: "MADE_UP_KEY", fsGroupKey: "MADE_UP_FS" },
@@ -220,6 +225,7 @@ describe("COA row validator — bootstrap-aware error messaging", () => {
       categories: [{ id: "c1", key: "CURRENT_ASSETS", name: "Current assets", accountType: "ASSET" }],
       fsGroups: [{ id: "g1", key: "BS_CASH_EQUIVALENTS", name: "Cash & equivalents", statement: "BALANCE_SHEET" }],
       departments: [],
+      funds: [],
     };
     const result = resolveCoaRow(
       { number: "1000", name: "Operating Cash", type: "ASSET", categoryKey: "CURRENT_ASSETS", fsGroupKey: "BS_CASH_EQUIVALENTS" },

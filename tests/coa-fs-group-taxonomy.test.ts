@@ -280,6 +280,7 @@ describe("Multi-department validation still works with the new codes", () => {
       { id: "d-proshop",  code: "PROSHOP",  name: "Pro Shop" },
       { id: "d-events",   code: "EVENTS",   name: "Events" },
     ],
+    funds: [],
   };
 
   it("accepts an account mapped to five departments using the new codes", () => {
@@ -384,6 +385,7 @@ describe("resolveCoaRow accepts one FS Group across multiple Departments", () =>
       { id: "d-fb",      code: "FB",      name: "Food & Beverage" },
       { id: "d-proshop", code: "PROSHOP", name: "Pro Shop" },
     ],
+    funds: [],
   };
 
   it("validates a single account mapped to one FS group + five departments", () => {
