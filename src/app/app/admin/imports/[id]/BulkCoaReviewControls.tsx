@@ -1,16 +1,28 @@
-// DIM-2b (2026-09-29) — Bulk review controls surrounding the
-// existing CoaMappingTable. Preserves the mapping table; adds a
-// compact filter row + selection + bulk-action bar above.
+// COA-UX-2 (2026-09-29) — Inspector-driven COA import review workspace.
 //
-// State model: query-params drive filters (?f_confidence=medium
-// etc.), client state manages selection, form submissions invoke
-// `applyBulkCoaEditAction`. No parallel commit path.
+// Replaces the DIM-2b permanently-visible bulk block with a two-pane
+// workspace matching the Spectre Data Workspace convention (used on
+// /app/admin/coa). Layout:
+//
+//   [ compact summary strip ]
+//   [ compact filter ribbon ] [ contextual bulk toolbar (only when
+//                                selection > 0) ]
+//   [ compact account list (left)      ] [ Account Inspector (right) ]
+//
+// Row click = inspect one account (single-select inspector target).
+// Checkbox  = include account in a bulk action.
+// The two interactions are independent (COA-UX-2 §9).
+//
+// The old CoaMappingTable is preserved in the page (collapsed into
+// an "Advanced grid" details block) so per-row edits keep working.
+// Editing from the Inspector routes through the SAME server action
+// so there is only one commit path (COA-UX-2 §15).
 
 "use client";
 
-import { useState, useMemo, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { applyBulkCoaEditAction } from "./_bulk-coa-actions";
+import { applyBulkCoaEditAction, applyInspectorEditAction } from "./_bulk-coa-actions";
 
 type DimensionPolicy = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE";
 type Confidence = "high" | "medium" | "low";
@@ -21,6 +33,7 @@ export type BulkReviewRow = {
   name: string;
   type: string;
   fsGroupKey: string;
+  categoryKey: string;
   confidence: Confidence;
   departmentPolicy: DimensionPolicy;
   fundPolicy: DimensionPolicy;
@@ -32,6 +45,26 @@ export type BulkReviewRow = {
 
 export type BulkReviewDepartment = { code: string; name: string };
 export type BulkReviewFund = { key: string; name: string };
+export type BulkReviewCategoryOption = { key: string; name: string; accountType: string };
+export type BulkReviewFsGroupOption = { key: string; name: string; statement: string };
+
+export type BulkReviewSummary = {
+  totalRows: number;
+  confidence: { high: number; medium: number; low: number };
+  departmentPolicy: Record<DimensionPolicy, number>;
+  fundPolicy: Record<DimensionPolicy, number>;
+  fundKeyOperating: number;
+  fundKeyCapital: number;
+  fundKeyBoth: number;
+  fundKeyNone: number;
+  fundPolicyRequiredWithoutApplicability: number;
+  departmentPolicyRequiredWithoutApplicability: number;
+  mediumConfidenceNotReviewed: number;
+  capitalCandidates: number;
+  rowsReviewed: number;
+  rowsNotReviewed: number;
+  rowsRequiringAttention: number;
+};
 
 export type BulkReviewControlsProps = {
   batchId: string;
@@ -39,6 +72,9 @@ export type BulkReviewControlsProps = {
   rows: BulkReviewRow[];
   departments: BulkReviewDepartment[];
   funds: BulkReviewFund[];
+  categories: BulkReviewCategoryOption[];
+  fsGroups: BulkReviewFsGroupOption[];
+  summary: BulkReviewSummary;
 };
 
 type FilterState = {
@@ -52,7 +88,7 @@ type FilterState = {
   search: string;
 };
 
-function parseFilterFromSearchParams(sp: URLSearchParams): FilterState {
+function parseFilters(sp: URLSearchParams): FilterState {
   return {
     confidence: (sp.get("f_conf") ?? "") as FilterState["confidence"],
     departmentPolicy: (sp.get("f_deptpol") ?? "") as FilterState["departmentPolicy"],
@@ -77,8 +113,8 @@ function applyFilter(rows: BulkReviewRow[], f: FilterState): BulkReviewRow[] {
     if (f.fundApplicability === "OPERATING" && !(r.fundApplicabilityKeys.length === 1 && r.fundApplicabilityKeys[0] === "OPERATING")) return false;
     if (f.fundApplicability === "CAPITAL" && !(r.fundApplicabilityKeys.length === 1 && r.fundApplicabilityKeys[0] === "CAPITAL")) return false;
     if (f.fundApplicability === "OPERATING+CAPITAL") {
-      const set = new Set(r.fundApplicabilityKeys);
-      if (!(set.has("OPERATING") && set.has("CAPITAL"))) return false;
+      const s = new Set(r.fundApplicabilityKeys);
+      if (!(s.has("OPERATING") && s.has("CAPITAL"))) return false;
     }
     if (f.reviewState === "REVIEWED" && !r.reviewed) return false;
     if (f.reviewState === "NOT_REVIEWED" && r.reviewed) return false;
@@ -89,21 +125,27 @@ function applyFilter(rows: BulkReviewRow[], f: FilterState): BulkReviewRow[] {
   });
 }
 
+const POLICY_OPTIONS: ReadonlyArray<{ value: DimensionPolicy; label: string }> = [
+  { value: "REQUIRED", label: "REQUIRED" },
+  { value: "OPTIONAL", label: "OPTIONAL" },
+  { value: "NOT_APPLICABLE", label: "NOT APPLICABLE" },
+];
+
 export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const filter = useMemo(() => parseFilters(searchParams), [searchParams]);
+  const visibleRows = useMemo(() => applyFilter(props.rows, filter), [props.rows, filter]);
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [inspectedId, setInspectedId] = useState<string | null>(props.rows[0]?.rowId ?? null);
+  const inspected = useMemo(
+    () => props.rows.find((r) => r.rowId === inspectedId) ?? null,
+    [props.rows, inspectedId],
+  );
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
-
-  const filter = useMemo(
-    () => parseFilterFromSearchParams(searchParams),
-    [searchParams],
-  );
-  const visibleRows = useMemo(
-    () => applyFilter(props.rows, filter),
-    [props.rows, filter],
-  );
+  const [showBulkMenu, setShowBulkMenu] = useState<null | "DEPT" | "FUND" | "POLICY">(null);
 
   function setQueryParam(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -111,14 +153,15 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
     else params.set(key, value);
     router.push(`?${params.toString()}`, { scroll: false });
   }
-
-  function clearAllFilters() {
+  function clearFilters() {
     const params = new URLSearchParams(searchParams.toString());
-    ["f_conf", "f_deptpol", "f_fundpol", "f_deptapp", "f_fundapp", "f_review", "f_capital", "f_q"].forEach((k) => params.delete(k));
+    for (const k of ["f_conf", "f_deptpol", "f_fundpol", "f_deptapp", "f_fundapp", "f_review", "f_capital", "f_q"]) {
+      params.delete(k);
+    }
     router.push(`?${params.toString()}`, { scroll: false });
   }
 
-  function toggleRow(rowId: string, checked: boolean) {
+  function toggleCheckbox(rowId: string, checked: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (checked) next.add(rowId);
@@ -126,10 +169,8 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
       return next;
     });
   }
-  function selectAllVisible() {
-    setSelected(new Set(visibleRows.map((r) => r.rowId)));
-  }
-  function clearSelection() { setSelected(new Set()); }
+  function selectAllVisible() { setSelected(new Set(visibleRows.map((r) => r.rowId))); }
+  function clearSelection() { setSelected(new Set()); setShowBulkMenu(null); }
 
   const selectedRowIds = useMemo(() => Array.from(selected), [selected]);
   const anySelected = selectedRowIds.length > 0;
@@ -145,6 +186,7 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
       if (result.ok) {
         setMessage(`Applied to ${result.rowsAffected} row${result.rowsAffected === 1 ? "" : "s"}.`);
         setSelected(new Set());
+        setShowBulkMenu(null);
       } else {
         setMessage("Bulk action failed: " + result.message);
       }
@@ -152,238 +194,446 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
     });
   }
 
-  // Bulk-action state (form-style pickers).
-  const [applyDeptCodes, setApplyDeptCodes] = useState<Set<string>>(new Set());
-  const [applyDeptMode, setApplyDeptMode] = useState<"REPLACE" | "ADD">("REPLACE");
-  const [applyFundKeys, setApplyFundKeys] = useState<Set<string>>(new Set());
-  const [applyFundMode, setApplyFundMode] = useState<"REPLACE" | "ADD">("REPLACE");
-  const [applyDeptPolicy, setApplyDeptPolicy] = useState<DimensionPolicy>("REQUIRED");
-  const [applyFundPolicy, setApplyFundPolicy] = useState<DimensionPolicy>("REQUIRED");
-
-  function toggleInSet<T>(set: Set<T>, value: T, setter: (s: Set<T>) => void) {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    setter(next);
+  async function runInspectorEdit(edits: Parameters<typeof applyInspectorEditAction>[2]) {
+    if (!inspected) return;
+    startTransition(async () => {
+      const result = await applyInspectorEditAction(props.batchId, inspected.rowId, edits);
+      if (!result.ok) setMessage("Inspector edit failed: " + result.message);
+      else setMessage(null);
+      router.refresh();
+    });
   }
 
-  const inputClass = "rounded border border-stone-300 bg-white px-2 py-1 text-xs text-club-ink";
+  // ── Summary strip (compact — single row) ────────────────────────────────
+  const attention = props.summary.rowsRequiringAttention;
 
   return (
-    <div className="mt-6 rounded-md border border-stone-200 bg-white p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-          Bulk review controls (DIM-2b)
-        </div>
-        <div className="text-xs text-stone-500">
-          {visibleRows.length} of {props.rows.length} rows visible ·{" "}
-          <span className="font-medium">{selectedRowIds.length}</span> selected
-        </div>
+    <div className="mt-6 rounded-md border border-stone-200 bg-white">
+      {/* SUMMARY STRIP */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-stone-200 px-4 py-2 text-[11.5px]">
+        <span className="font-semibold uppercase tracking-wide text-stone-500">Batch</span>
+        <span><span className="text-stone-500">rows</span> <b className="tabular-nums">{props.summary.totalRows}</b></span>
+        <span><span className="text-stone-500">conf</span>{" "}
+          <b className="tabular-nums">H {props.summary.confidence.high}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums text-amber-700">M {props.summary.confidence.medium}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums">L {props.summary.confidence.low}</b>
+        </span>
+        <span><span className="text-stone-500">dept</span>{" "}
+          <b className="tabular-nums">R {props.summary.departmentPolicy.REQUIRED}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums">O {props.summary.departmentPolicy.OPTIONAL}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums">N/A {props.summary.departmentPolicy.NOT_APPLICABLE}</b>
+        </span>
+        <span><span className="text-stone-500">fund</span>{" "}
+          <b className="tabular-nums">R {props.summary.fundPolicy.REQUIRED}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums">O {props.summary.fundPolicy.OPTIONAL}</b>
+          <span className="text-stone-400"> · </span>
+          <b className="tabular-nums">N/A {props.summary.fundPolicy.NOT_APPLICABLE}</b>
+        </span>
+        <span><span className="text-stone-500">CAPITAL cand</span> <b className="tabular-nums">{props.summary.capitalCandidates}</b></span>
+        <span><span className="text-stone-500">reviewed</span> <b className="tabular-nums">{props.summary.rowsReviewed}/{props.summary.totalRows}</b></span>
+        <span className={attention > 0 ? "text-amber-700" : ""}><span className="text-stone-500">attention</span> <b className="tabular-nums">{attention}</b></span>
+      </div>
+
+      {/* FILTER RIBBON + CONTEXTUAL BULK TOOLBAR */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-stone-200 px-4 py-2 text-[11.5px]">
+        <label className="flex items-center gap-1">
+          <span className="text-stone-500">Search</span>
+          <input className="rounded border border-stone-300 bg-white px-1.5 py-0.5 text-[11.5px] w-40"
+                 value={filter.search} onChange={(e) => setQueryParam("f_q", e.target.value)}
+                 placeholder="# or name" />
+        </label>
+        <Divider />
+        <FilterSelect label="Conf" value={filter.confidence} onChange={(v) => setQueryParam("f_conf", v)}
+          options={[["", "any"], ["high", "HIGH"], ["medium", "MEDIUM"], ["low", "LOW"]]} />
+        <FilterSelect label="DeptPol" value={filter.departmentPolicy} onChange={(v) => setQueryParam("f_deptpol", v)}
+          options={[["", "any"], ["REQUIRED", "REQ"], ["OPTIONAL", "OPT"], ["NOT_APPLICABLE", "N/A"]]} />
+        <FilterSelect label="FundPol" value={filter.fundPolicy} onChange={(v) => setQueryParam("f_fundpol", v)}
+          options={[["", "any"], ["REQUIRED", "REQ"], ["OPTIONAL", "OPT"], ["NOT_APPLICABLE", "N/A"]]} />
+        <FilterSelect label="DeptApp" value={filter.departmentApplicability} onChange={(v) => setQueryParam("f_deptapp", v)}
+          options={[["", "any"], ["NONE", "NONE"], ["SOME", "any dept"]]} />
+        <FilterSelect label="FundApp" value={filter.fundApplicability} onChange={(v) => setQueryParam("f_fundapp", v)}
+          options={[["", "any"], ["NONE", "NONE"], ["OPERATING", "OP"], ["CAPITAL", "CAP"], ["OPERATING+CAPITAL", "OP+CAP"]]} />
+        <FilterSelect label="Review" value={filter.reviewState} onChange={(v) => setQueryParam("f_review", v)}
+          options={[["", "any"], ["NOT_REVIEWED", "needs"], ["REVIEWED", "done"]]} />
+        <FilterSelect label="CAP?" value={filter.capitalCandidate} onChange={(v) => setQueryParam("f_capital", v)}
+          options={[["", "any"], ["YES", "YES"], ["NO", "NO"]]} />
+        <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={clearFilters}>
+          Clear
+        </button>
+        <div className="flex-1" />
+
+        {/* Contextual bulk toolbar — only when selection > 0 */}
+        {anySelected && !props.readOnly && (
+          <div className="flex items-center gap-1.5 rounded border border-amber-300 bg-amber-50 px-2 py-1">
+            <span className="font-semibold text-amber-800">{selectedRowIds.length} selected</span>
+            <BulkMenu label="Department" open={showBulkMenu === "DEPT"} onToggle={() => setShowBulkMenu(showBulkMenu === "DEPT" ? null : "DEPT")}>
+              <BulkDeptMenu departments={props.departments}
+                onApply={(codes, mode) => runBulk({ kind: "SET_DEPARTMENT_APPLICABILITY", mode, departmentCodes: codes },
+                  `Set Department Applicability: ${codes.join(", ") || "(empty)"} (${mode})`)} />
+            </BulkMenu>
+            <BulkMenu label="Fund" open={showBulkMenu === "FUND"} onToggle={() => setShowBulkMenu(showBulkMenu === "FUND" ? null : "FUND")}>
+              <BulkFundMenu funds={props.funds}
+                onApply={(keys, mode) => runBulk({ kind: "SET_FUND_APPLICABILITY", mode, fundKeys: keys },
+                  `Set Fund Applicability: ${keys.join(", ") || "(empty)"} (${mode})`)} />
+            </BulkMenu>
+            <BulkMenu label="Policy" open={showBulkMenu === "POLICY"} onToggle={() => setShowBulkMenu(showBulkMenu === "POLICY" ? null : "POLICY")}>
+              <BulkPolicyMenu
+                onDept={(v) => runBulk({ kind: "SET_DEPARTMENT_POLICY", value: v }, `Set Department Policy → ${v}`)}
+                onFund={(v) => runBulk({ kind: "SET_FUND_POLICY", value: v }, `Set Fund Policy → ${v}`)} />
+            </BulkMenu>
+            <button type="button" className="rounded bg-stone-800 text-white px-2 py-0.5 disabled:opacity-40"
+              disabled={isPending}
+              onClick={() => runBulk({ kind: "MARK_REVIEWED" }, "Mark Reviewed")}>
+              Mark Reviewed
+            </button>
+            <button type="button" className="rounded border border-stone-300 bg-white px-2 py-0.5 hover:bg-stone-50" onClick={clearSelection}>
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {message && (
-        <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+        <div className="border-b border-stone-200 px-4 py-1 text-[11.5px] text-emerald-800 bg-emerald-50">
           {message}
         </div>
       )}
 
-      {/* -------- Filters -------- */}
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2 text-xs">
-        <label>Confidence
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.confidence} onChange={(e) => setQueryParam("f_conf", e.target.value)}>
-            <option value="">any</option>
-            <option value="high">HIGH</option>
-            <option value="medium">MEDIUM</option>
-            <option value="low">LOW</option>
-          </select>
-        </label>
-        <label>Department Policy
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.departmentPolicy} onChange={(e) => setQueryParam("f_deptpol", e.target.value)}>
-            <option value="">any</option>
-            <option value="REQUIRED">REQUIRED</option>
-            <option value="OPTIONAL">OPTIONAL</option>
-            <option value="NOT_APPLICABLE">NOT_APPLICABLE</option>
-          </select>
-        </label>
-        <label>Fund Policy
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.fundPolicy} onChange={(e) => setQueryParam("f_fundpol", e.target.value)}>
-            <option value="">any</option>
-            <option value="REQUIRED">REQUIRED</option>
-            <option value="OPTIONAL">OPTIONAL</option>
-            <option value="NOT_APPLICABLE">NOT_APPLICABLE</option>
-          </select>
-        </label>
-        <label>Department Applicability
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.departmentApplicability} onChange={(e) => setQueryParam("f_deptapp", e.target.value)}>
-            <option value="">any</option>
-            <option value="NONE">NONE</option>
-            <option value="SOME">any Department</option>
-          </select>
-        </label>
-        <label>Fund Applicability
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.fundApplicability} onChange={(e) => setQueryParam("f_fundapp", e.target.value)}>
-            <option value="">any</option>
-            <option value="NONE">NONE</option>
-            <option value="OPERATING">OPERATING only</option>
-            <option value="CAPITAL">CAPITAL only</option>
-            <option value="OPERATING+CAPITAL">OPERATING + CAPITAL</option>
-          </select>
-        </label>
-        <label>Review state
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.reviewState} onChange={(e) => setQueryParam("f_review", e.target.value)}>
-            <option value="">any</option>
-            <option value="NOT_REVIEWED">Needs Review</option>
-            <option value="REVIEWED">Reviewed</option>
-          </select>
-        </label>
-        <label>CAPITAL candidate
-          <select className={"mt-0.5 block w-full " + inputClass} value={filter.capitalCandidate} onChange={(e) => setQueryParam("f_capital", e.target.value)}>
-            <option value="">any</option>
-            <option value="YES">YES</option>
-            <option value="NO">NO</option>
-          </select>
-        </label>
-        <label>Search
-          <input className={"mt-0.5 block w-full " + inputClass} type="text" placeholder="account #, name…" value={filter.search} onChange={(e) => setQueryParam("f_q", e.target.value)} />
-        </label>
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-        <button type="button" className="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-50" onClick={clearAllFilters}>Clear filters</button>
-        <button type="button" className="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-50" onClick={selectAllVisible} disabled={visibleRows.length === 0}>Select all visible ({visibleRows.length})</button>
-        <button type="button" className="rounded border border-stone-300 bg-white px-2 py-1 hover:bg-stone-50" onClick={clearSelection} disabled={!anySelected}>Clear selection</button>
-      </div>
-
-      {/* -------- Bulk-action bar -------- */}
-      {!props.readOnly && (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-          <div className="rounded border border-stone-200 p-2">
-            <div className="font-semibold text-club-ink">Set Department Applicability</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">Applicability = which departments MAY use these accounts</div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {props.departments.map((d) => (
-                <label key={d.code} className="inline-flex items-center gap-1">
-                  <input type="checkbox" checked={applyDeptCodes.has(d.code)} onChange={() => toggleInSet(applyDeptCodes, d.code, setApplyDeptCodes)} />
-                  {d.code}
-                </label>
-              ))}
-              <button type="button" className="ml-2 rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={() => setApplyDeptCodes(new Set(props.departments.map((d) => d.code)))}>All Active Departments</button>
-              <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={() => setApplyDeptCodes(new Set())}>None</button>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <label className="inline-flex items-center gap-1"><input type="radio" name="deptmode" checked={applyDeptMode === "REPLACE"} onChange={() => setApplyDeptMode("REPLACE")}/> REPLACE (default)</label>
-              <label className="inline-flex items-center gap-1"><input type="radio" name="deptmode" checked={applyDeptMode === "ADD"} onChange={() => setApplyDeptMode("ADD")}/> ADD</label>
-            </div>
-            <button type="button" className="mt-2 rounded bg-club-forest text-white px-2 py-1 disabled:opacity-40" disabled={isPending || !anySelected} onClick={() => runBulk(
-              { kind: "SET_DEPARTMENT_APPLICABILITY", mode: applyDeptMode, departmentCodes: Array.from(applyDeptCodes) },
-              `Set Department Applicability: ${Array.from(applyDeptCodes).join(", ") || "(empty)"}\nMode: ${applyDeptMode}`,
-            )}>Apply to {selectedRowIds.length} rows</button>
-          </div>
-
-          <div className="rounded border border-stone-200 p-2">
-            <div className="font-semibold text-club-ink">Set Fund Applicability</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">Applicability = which funds MAY use these accounts</div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {props.funds.map((f) => (
-                <label key={f.key} className="inline-flex items-center gap-1">
-                  <input type="checkbox" checked={applyFundKeys.has(f.key)} onChange={() => toggleInSet(applyFundKeys, f.key, setApplyFundKeys)} />
-                  {f.key}
-                </label>
-              ))}
-              <button type="button" className="ml-2 rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={() => setApplyFundKeys(new Set(props.funds.map((f) => f.key)))}>All Active Funds</button>
-              <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5 hover:bg-stone-50" onClick={() => setApplyFundKeys(new Set())}>None</button>
-            </div>
-            <div className="mt-2 flex items-center gap-2">
-              <label className="inline-flex items-center gap-1"><input type="radio" name="fundmode" checked={applyFundMode === "REPLACE"} onChange={() => setApplyFundMode("REPLACE")}/> REPLACE (default)</label>
-              <label className="inline-flex items-center gap-1"><input type="radio" name="fundmode" checked={applyFundMode === "ADD"} onChange={() => setApplyFundMode("ADD")}/> ADD</label>
-            </div>
-            <button type="button" className="mt-2 rounded bg-club-forest text-white px-2 py-1 disabled:opacity-40" disabled={isPending || !anySelected} onClick={() => runBulk(
-              { kind: "SET_FUND_APPLICABILITY", mode: applyFundMode, fundKeys: Array.from(applyFundKeys) },
-              `Set Fund Applicability: ${Array.from(applyFundKeys).join(", ") || "(empty)"}\nMode: ${applyFundMode}`,
-            )}>Apply to {selectedRowIds.length} rows</button>
-          </div>
-
-          <div className="rounded border border-stone-200 p-2">
-            <div className="font-semibold text-club-ink">Set Department Policy</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">Policy = whether the account requires Department attribution (never touches applicability)</div>
-            <div className="mt-2">
-              <select className={inputClass} value={applyDeptPolicy} onChange={(e) => setApplyDeptPolicy(e.target.value as DimensionPolicy)}>
-                <option value="REQUIRED">REQUIRED</option>
-                <option value="OPTIONAL">OPTIONAL</option>
-                <option value="NOT_APPLICABLE">NOT_APPLICABLE</option>
-              </select>
-            </div>
-            <button type="button" className="mt-2 rounded bg-club-forest text-white px-2 py-1 disabled:opacity-40" disabled={isPending || !anySelected} onClick={() => runBulk(
-              { kind: "SET_DEPARTMENT_POLICY", value: applyDeptPolicy },
-              `Set Department Policy → ${applyDeptPolicy}`,
-            )}>Apply to {selectedRowIds.length} rows</button>
-          </div>
-
-          <div className="rounded border border-stone-200 p-2">
-            <div className="font-semibold text-club-ink">Set Fund Policy</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">Policy = whether the account requires Fund attribution (never touches applicability)</div>
-            <div className="mt-2">
-              <select className={inputClass} value={applyFundPolicy} onChange={(e) => setApplyFundPolicy(e.target.value as DimensionPolicy)}>
-                <option value="REQUIRED">REQUIRED</option>
-                <option value="OPTIONAL">OPTIONAL</option>
-                <option value="NOT_APPLICABLE">NOT_APPLICABLE</option>
-              </select>
-            </div>
-            <button type="button" className="mt-2 rounded bg-club-forest text-white px-2 py-1 disabled:opacity-40" disabled={isPending || !anySelected} onClick={() => runBulk(
-              { kind: "SET_FUND_POLICY", value: applyFundPolicy },
-              `Set Fund Policy → ${applyFundPolicy}`,
-            )}>Apply to {selectedRowIds.length} rows</button>
-          </div>
-
-          <div className="rounded border border-stone-200 p-2 md:col-span-2">
-            <div className="font-semibold text-club-ink">Mark Reviewed</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wide text-stone-500">Explicitly accepts the current proposal without changing it.</div>
-            <button type="button" className="mt-2 rounded bg-stone-800 text-white px-2 py-1 disabled:opacity-40" disabled={isPending || !anySelected} onClick={() => runBulk(
-              { kind: "MARK_REVIEWED" },
-              `Mark Reviewed`,
-            )}>Mark {selectedRowIds.length} rows reviewed</button>
-          </div>
-        </div>
-      )}
-
-      {/* -------- Row list (compact — dimensional overview) -------- */}
-      <div className="mt-4 overflow-auto rounded border border-stone-200">
-        <table className="w-full text-xs">
-          <thead className="bg-stone-50 text-stone-500">
-            <tr>
-              <th className="w-8 px-2 py-1 text-left"><input type="checkbox" onChange={(e) => e.target.checked ? selectAllVisible() : clearSelection()} checked={visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.rowId))} /></th>
-              <th className="px-2 py-1 text-left">Number</th>
-              <th className="px-2 py-1 text-left">Name</th>
-              <th className="px-2 py-1 text-left">Conf</th>
-              <th className="px-2 py-1 text-left">Dept Policy</th>
-              <th className="px-2 py-1 text-left">Dept Applic.</th>
-              <th className="px-2 py-1 text-left">Fund Policy</th>
-              <th className="px-2 py-1 text-left">Fund Applic.</th>
-              <th className="px-2 py-1 text-left">Cap?</th>
-              <th className="px-2 py-1 text-left">Reviewed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((r) => (
-              <tr key={r.rowId} className={selected.has(r.rowId) ? "bg-amber-50" : ""}>
-                <td className="px-2 py-1"><input type="checkbox" checked={selected.has(r.rowId)} onChange={(e) => toggleRow(r.rowId, e.target.checked)} /></td>
-                <td className="px-2 py-1 font-mono">{r.accountNumber}</td>
-                <td className="px-2 py-1">{r.name}</td>
-                <td className="px-2 py-1">{r.confidence}</td>
-                <td className="px-2 py-1">{r.departmentPolicy}</td>
-                <td className="px-2 py-1">{r.departmentApplicabilityCodes.join(", ") || "—"}</td>
-                <td className="px-2 py-1">{r.fundPolicy}</td>
-                <td className="px-2 py-1">{r.fundApplicabilityKeys.join(", ") || "—"}</td>
-                <td className="px-2 py-1">{r.capitalCandidate ? "yes" : ""}</td>
-                <td className="px-2 py-1">{r.reviewed ? "✓" : ""}</td>
+      {/* TWO-PANE BODY: LEFT list · RIGHT Inspector */}
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_360px]">
+        {/* LEFT — compact account list */}
+        <div className="max-h-[560px] overflow-auto">
+          <table className="w-full text-[11.5px]">
+            <thead className="sticky top-0 bg-stone-50 text-stone-500">
+              <tr>
+                <th className="w-8 px-2 py-1 text-left">
+                  <input type="checkbox" onChange={(e) => e.target.checked ? selectAllVisible() : clearSelection()}
+                    checked={visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.rowId))} />
+                </th>
+                <th className="px-2 py-1 text-left w-20">#</th>
+                <th className="px-2 py-1 text-left">Name</th>
+                <th className="px-2 py-1 text-left w-16">Type</th>
+                <th className="px-2 py-1 text-left w-40">FS Group</th>
+                <th className="w-8 px-2 py-1 text-center" title="Status">•</th>
               </tr>
-            ))}
-            {visibleRows.length === 0 && (
-              <tr><td className="px-2 py-4 text-center text-stone-400" colSpan={10}>No rows match the current filters.</td></tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {visibleRows.map((r) => (
+                <tr key={r.rowId}
+                    className={
+                      "cursor-pointer border-t border-stone-100 " +
+                      (inspectedId === r.rowId ? "bg-amber-100" : (selected.has(r.rowId) ? "bg-amber-50" : "hover:bg-stone-50"))
+                    }
+                    onClick={() => setInspectedId(r.rowId)}>
+                  <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" checked={selected.has(r.rowId)}
+                      onChange={(e) => toggleCheckbox(r.rowId, e.target.checked)} />
+                  </td>
+                  <td className="px-2 py-1 font-mono tabular-nums">{r.accountNumber}</td>
+                  <td className="px-2 py-1">{r.name}</td>
+                  <td className="px-2 py-1">{r.type}</td>
+                  <td className="px-2 py-1 text-stone-600">{r.fsGroupKey}</td>
+                  <td className="px-2 py-1 text-center" title={statusDotTitle(r)}>
+                    <StatusDot row={r} />
+                  </td>
+                </tr>
+              ))}
+              {visibleRows.length === 0 && (
+                <tr><td className="px-2 py-4 text-center text-stone-400" colSpan={6}>No rows match the current filters.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* RIGHT — Account Inspector */}
+        <aside className="border-l border-stone-200 bg-stone-50 max-h-[560px] overflow-auto">
+          {!inspected ? (
+            <div className="p-6 text-[12px] text-stone-500">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-2">Inspector</div>
+              <p>Click a row to inspect an account.</p>
+            </div>
+          ) : (
+            <div className="p-4 text-[12px] text-stone-700">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-1">Account</div>
+              <div className="flex items-baseline gap-2 mb-3">
+                <span className="font-mono text-[14px] font-bold tabular-nums text-club-ink">{inspected.accountNumber}</span>
+                <span className="text-[13px] font-semibold text-club-ink">{inspected.name}</span>
+              </div>
+              <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span className={"rounded-full border px-1.5 py-0.5 " + (inspected.confidence === "high" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : inspected.confidence === "medium" ? "border-amber-300 bg-amber-50 text-amber-800" : "border-red-300 bg-red-50 text-red-800")}>
+                  {inspected.confidence.toUpperCase()}
+                </span>
+                {inspected.capitalCandidate && <span className="rounded-full border border-stone-300 bg-stone-50 px-1.5 py-0.5">CAPITAL candidate</span>}
+                {inspected.reviewed
+                  ? <span className="rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-emerald-800">Reviewed</span>
+                  : <span className="rounded-full border border-stone-300 bg-white px-1.5 py-0.5">Needs review</span>}
+              </div>
+
+              <Section title="Classification">
+                <InspectorSelect label="Type" value={inspected.type} disabled={props.readOnly}
+                  options={["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"].map((t) => [t, t])}
+                  onChange={(v) => runInspectorEdit({ type: v })} />
+                <InspectorSelect label="Category" value={inspected.categoryKey} disabled={props.readOnly}
+                  options={[["", "— select —"], ...props.categories.filter((c) => c.accountType === inspected.type).map((c): [string, string] => [c.key, c.name])]}
+                  onChange={(v) => runInspectorEdit({ categoryKey: v || null })} />
+                <InspectorSelect label="FS Group" value={inspected.fsGroupKey} disabled={props.readOnly}
+                  options={[["", "— select —"], ...props.fsGroups.map((g): [string, string] => [g.key, g.name])]}
+                  onChange={(v) => runInspectorEdit({ fsGroupKey: v || null })} />
+              </Section>
+
+              <Section title="Department">
+                <InspectorSelect label="Policy" value={inspected.departmentPolicy} disabled={props.readOnly}
+                  helpText="Whether transactions on this account MUST identify a Department"
+                  options={POLICY_OPTIONS.map((o): [string, string] => [o.value, o.label])}
+                  onChange={(v) => runInspectorEdit({ departmentPolicy: v as DimensionPolicy })} />
+                <InspectorMultiCheck label="Applicability" disabled={props.readOnly}
+                  helpText="Which Departments MAY use this account"
+                  values={inspected.departmentApplicabilityCodes}
+                  options={props.departments.map((d) => ({ value: d.code, label: d.code }))}
+                  onChange={(next) => runInspectorEdit({ departmentCodes: next })} />
+              </Section>
+
+              <Section title="Fund">
+                <InspectorSelect label="Policy" value={inspected.fundPolicy} disabled={props.readOnly}
+                  helpText="Whether transactions on this account MUST identify a Fund"
+                  options={POLICY_OPTIONS.map((o): [string, string] => [o.value, o.label])}
+                  onChange={(v) => runInspectorEdit({ fundPolicy: v as DimensionPolicy })} />
+                <InspectorMultiCheck label="Applicability" disabled={props.readOnly}
+                  helpText="Which Funds MAY use this account"
+                  values={inspected.fundApplicabilityKeys}
+                  options={props.funds.map((f) => ({ value: f.key, label: f.key }))}
+                  onChange={(next) => runInspectorEdit({ fundApplicabilityKeys: next })} />
+              </Section>
+
+              <Section title="Review">
+                <div className="mt-2 flex gap-2">
+                  {!props.readOnly && (
+                    <button type="button" className="rounded bg-stone-800 text-white px-2 py-1 text-[11.5px] disabled:opacity-40"
+                      disabled={isPending || inspected.reviewed}
+                      onClick={() => runInspectorEdit({ reviewed: true })}>
+                      Mark Reviewed
+                    </button>
+                  )}
+                  {!props.readOnly && inspected.reviewed && (
+                    <button type="button" className="rounded border border-stone-300 bg-white px-2 py-1 text-[11.5px] hover:bg-stone-50"
+                      disabled={isPending}
+                      onClick={() => runInspectorEdit({ reviewed: false })}>
+                      Unmark
+                    </button>
+                  )}
+                </div>
+              </Section>
+            </div>
+          )}
+        </aside>
       </div>
     </div>
+  );
+}
+
+// ─── Small display + input helpers ─────────────────────────────────────────
+
+function Divider() { return <span className="mx-1 text-stone-300">|</span>; }
+
+function FilterSelect(props: {
+  label: string;
+  value: string;
+  options: ReadonlyArray<readonly [string, string]>;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1">
+      <span className="text-stone-500">{props.label}</span>
+      <select className="rounded border border-stone-300 bg-white px-1.5 py-0.5 text-[11.5px]"
+              value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+        {props.options.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function Section(props: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-4 border-t border-stone-200 pt-3">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-2">{props.title}</div>
+      {props.children}
+    </div>
+  );
+}
+
+function InspectorSelect(props: {
+  label: string;
+  value: string;
+  options: ReadonlyArray<readonly [string, string]>;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  helpText?: string;
+}) {
+  return (
+    <div className="mb-2">
+      <div className="text-[10.5px] font-bold uppercase tracking-wider text-stone-500 mb-0.5">{props.label}</div>
+      {props.helpText && <div className="mb-1 text-[10.5px] text-stone-500">{props.helpText}</div>}
+      <select className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-[12px] disabled:bg-stone-100 disabled:text-stone-500"
+              disabled={props.disabled} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+        {props.options.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function InspectorMultiCheck(props: {
+  label: string;
+  values: string[];
+  options: ReadonlyArray<{ value: string; label: string }>;
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+  helpText?: string;
+}) {
+  const set = new Set(props.values);
+  return (
+    <div className="mb-2">
+      <div className="text-[10.5px] font-bold uppercase tracking-wider text-stone-500 mb-0.5">{props.label}</div>
+      {props.helpText && <div className="mb-1 text-[10.5px] text-stone-500">{props.helpText}</div>}
+      <div className="flex flex-wrap gap-1">
+        {props.options.map((o) => (
+          <label key={o.value} className={"inline-flex items-center gap-1 rounded border px-1.5 py-0.5 " + (set.has(o.value) ? "border-club-ink bg-club-ink text-white" : "border-stone-300 bg-white text-stone-700")}>
+            <input type="checkbox" className="hidden" checked={set.has(o.value)} disabled={props.disabled}
+              onChange={() => {
+                const next = new Set(set);
+                if (next.has(o.value)) next.delete(o.value);
+                else next.add(o.value);
+                props.onChange(Array.from(next));
+              }} />
+            {o.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatusDot({ row }: { row: BulkReviewRow }) {
+  const attention =
+    row.confidence !== "high" && !row.reviewed
+      ? "medium-needs-review"
+      : row.departmentPolicy === "REQUIRED" && row.departmentApplicabilityCodes.length === 0
+      ? "dept-req-no-app"
+      : row.fundPolicy === "REQUIRED" && row.fundApplicabilityKeys.length === 0
+      ? "fund-req-no-app"
+      : row.capitalCandidate && !row.reviewed
+      ? "capital-candidate"
+      : "";
+  if (row.reviewed) return <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />;
+  if (attention) return <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />;
+  return <span className="inline-block w-2 h-2 rounded-full bg-stone-300" />;
+}
+function statusDotTitle(r: BulkReviewRow): string {
+  if (r.reviewed) return "Reviewed";
+  const bits: string[] = [];
+  if (r.confidence !== "high") bits.push(r.confidence + " confidence · needs review");
+  if (r.departmentPolicy === "REQUIRED" && r.departmentApplicabilityCodes.length === 0) bits.push("dept REQUIRED · no applicability");
+  if (r.fundPolicy === "REQUIRED" && r.fundApplicabilityKeys.length === 0) bits.push("fund REQUIRED · no applicability");
+  if (r.capitalCandidate) bits.push("CAPITAL candidate");
+  return bits.length ? bits.join("; ") : "OK";
+}
+
+// ─── Contextual bulk-menu components ────────────────────────────────────
+
+function BulkMenu({ label, open, onToggle, children }: { label: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <div className="relative">
+      <button type="button" className="rounded border border-amber-300 bg-white px-2 py-0.5 hover:bg-amber-100" onClick={onToggle}>
+        {label} ▾
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-10 mt-1 w-72 rounded border border-stone-300 bg-white shadow-lg p-2 text-[11.5px] text-stone-700">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BulkDeptMenu(props: { departments: BulkReviewDepartment[]; onApply: (codes: string[], mode: "REPLACE" | "ADD") => void }) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<"REPLACE" | "ADD">("REPLACE");
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-1">Departments</div>
+      <div className="flex flex-wrap gap-1 mb-2">
+        {props.departments.map((d) => (
+          <label key={d.code} className={"inline-flex items-center gap-1 rounded border px-1.5 py-0.5 cursor-pointer " + (picked.has(d.code) ? "border-club-ink bg-club-ink text-white" : "border-stone-300 bg-white")}>
+            <input type="checkbox" className="hidden" checked={picked.has(d.code)}
+              onChange={() => setPicked((prev) => { const next = new Set(prev); if (next.has(d.code)) next.delete(d.code); else next.add(d.code); return next; })} />
+            {d.code}
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2 mb-2 text-[10.5px]">
+        <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5" onClick={() => setPicked(new Set(props.departments.map((d) => d.code)))}>All Active</button>
+        <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5" onClick={() => setPicked(new Set())}>None</button>
+      </div>
+      <div className="flex items-center gap-2 mb-2">
+        <label className="inline-flex items-center gap-1"><input type="radio" name="dm" checked={mode === "REPLACE"} onChange={() => setMode("REPLACE")}/> REPLACE</label>
+        <label className="inline-flex items-center gap-1"><input type="radio" name="dm" checked={mode === "ADD"} onChange={() => setMode("ADD")}/> ADD</label>
+      </div>
+      <button type="button" className="w-full rounded bg-club-forest text-white px-2 py-1" onClick={() => props.onApply(Array.from(picked), mode)}>Apply</button>
+    </>
+  );
+}
+
+function BulkFundMenu(props: { funds: BulkReviewFund[]; onApply: (keys: string[], mode: "REPLACE" | "ADD") => void }) {
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [mode, setMode] = useState<"REPLACE" | "ADD">("REPLACE");
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-1">Funds</div>
+      <div className="flex flex-wrap gap-1 mb-2">
+        {props.funds.map((f) => (
+          <label key={f.key} className={"inline-flex items-center gap-1 rounded border px-1.5 py-0.5 cursor-pointer " + (picked.has(f.key) ? "border-club-ink bg-club-ink text-white" : "border-stone-300 bg-white")}>
+            <input type="checkbox" className="hidden" checked={picked.has(f.key)}
+              onChange={() => setPicked((prev) => { const next = new Set(prev); if (next.has(f.key)) next.delete(f.key); else next.add(f.key); return next; })} />
+            {f.key}
+          </label>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-2 mb-2 text-[10.5px]">
+        <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5" onClick={() => setPicked(new Set(props.funds.map((f) => f.key)))}>All Active</button>
+        <button type="button" className="rounded border border-stone-300 bg-white px-1.5 py-0.5" onClick={() => setPicked(new Set())}>None</button>
+      </div>
+      <div className="flex items-center gap-2 mb-2">
+        <label className="inline-flex items-center gap-1"><input type="radio" name="fm" checked={mode === "REPLACE"} onChange={() => setMode("REPLACE")}/> REPLACE</label>
+        <label className="inline-flex items-center gap-1"><input type="radio" name="fm" checked={mode === "ADD"} onChange={() => setMode("ADD")}/> ADD</label>
+      </div>
+      <button type="button" className="w-full rounded bg-club-forest text-white px-2 py-1" onClick={() => props.onApply(Array.from(picked), mode)}>Apply</button>
+    </>
+  );
+}
+
+function BulkPolicyMenu(props: { onDept: (v: DimensionPolicy) => void; onFund: (v: DimensionPolicy) => void }) {
+  const [deptVal, setDeptVal] = useState<DimensionPolicy>("REQUIRED");
+  const [fundVal, setFundVal] = useState<DimensionPolicy>("REQUIRED");
+  return (
+    <>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-1">Department Policy</div>
+      <div className="flex items-center gap-2 mb-2">
+        <select className="rounded border border-stone-300 px-1.5 py-0.5" value={deptVal} onChange={(e) => setDeptVal(e.target.value as DimensionPolicy)}>
+          {POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <button type="button" className="rounded bg-club-forest text-white px-2 py-0.5" onClick={() => props.onDept(deptVal)}>Apply</button>
+      </div>
+      <div className="text-[10px] font-bold uppercase tracking-widest text-stone-500 mb-1">Fund Policy</div>
+      <div className="flex items-center gap-2">
+        <select className="rounded border border-stone-300 px-1.5 py-0.5" value={fundVal} onChange={(e) => setFundVal(e.target.value as DimensionPolicy)}>
+          {POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <button type="button" className="rounded bg-club-forest text-white px-2 py-0.5" onClick={() => props.onFund(fundVal)}>Apply</button>
+      </div>
+    </>
   );
 }

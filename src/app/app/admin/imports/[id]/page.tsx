@@ -234,20 +234,25 @@ export default async function ImportBatchPage({ params }: { params: { id: string
     const capitalCandidateSet = new Set(
       capitalReviewCandidates(reviewRowsWithState).map((r) => r.accountNumber),
     );
-    const bulkRows: BulkReviewRow[] = reviewRowsWithState.map((rr, i) => ({
-      rowId: batch.rows[i].id,
-      accountNumber: rr.accountNumber,
-      name: rr.name,
-      type: rr.type,
-      fsGroupKey: rr.fsGroupKey,
-      confidence: rr.confidence,
-      departmentPolicy: rr.departmentPolicy,
-      fundPolicy: rr.fundPolicy,
-      departmentApplicabilityCodes: rr.departmentApplicabilityCodes,
-      fundApplicabilityKeys: rr.fundApplicabilityKeys,
-      reviewed: rr.reviewed === true,
-      capitalCandidate: capitalCandidateSet.has(rr.accountNumber),
-    }));
+    const bulkRows: BulkReviewRow[] = reviewRowsWithState.map((rr, i) => {
+      const raw = parseRawJson(batch.rows[i].rawJson);
+      const norm = normaliseCoaRow(raw);
+      return {
+        rowId: batch.rows[i].id,
+        accountNumber: rr.accountNumber,
+        name: rr.name,
+        type: rr.type,
+        fsGroupKey: rr.fsGroupKey,
+        categoryKey: norm.categoryKey ?? "",
+        confidence: rr.confidence,
+        departmentPolicy: rr.departmentPolicy,
+        fundPolicy: rr.fundPolicy,
+        departmentApplicabilityCodes: rr.departmentApplicabilityCodes,
+        fundApplicabilityKeys: rr.fundApplicabilityKeys,
+        reviewed: rr.reviewed === true,
+        capitalCandidate: capitalCandidateSet.has(rr.accountNumber),
+      };
+    });
     coaPanel = { options, rows, dim2aSummary, bulkRows };
   }
 
@@ -478,84 +483,58 @@ export default async function ImportBatchPage({ params }: { params: { id: string
           />
 
           {coaPanel && coaPanel.dim2aSummary && (
-            /* DIM-2a (2026-09-29) — batch-level dimensional review
-               card. Renders above the CoaMappingTable so the operator
-               sees policy + fund applicability + confidence
-               distributions + attention counters BEFORE reviewing
-               individual rows. Compact — the mapping table remains
-               the primary work surface. */
-            <div className="mt-6 rounded-md border border-stone-200 bg-white p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-                Dimensional review summary
-              </div>
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <div className="font-medium text-club-ink">Confidence</div>
-                  <ul className="mt-1 text-stone-600">
-                    <li>high: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.high}</span></li>
-                    <li>medium: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.medium}</span> {coaPanel.dim2aSummary.confidenceDistribution.medium > 0 ? "(review before commit)" : ""}</li>
-                    <li>low: <span className="tabular-nums">{coaPanel.dim2aSummary.confidenceDistribution.low}</span></li>
-                  </ul>
-                </div>
-                <div>
-                  <div className="font-medium text-club-ink">Department Policy</div>
-                  <ul className="mt-1 text-stone-600">
-                    <li>REQUIRED: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.REQUIRED}</span></li>
-                    <li>OPTIONAL: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.OPTIONAL}</span></li>
-                    <li>NOT_APPLICABLE: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyDistribution.NOT_APPLICABLE}</span></li>
-                  </ul>
-                </div>
-                <div>
-                  <div className="font-medium text-club-ink">Fund Policy</div>
-                  <ul className="mt-1 text-stone-600">
-                    <li>REQUIRED: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.REQUIRED}</span></li>
-                    <li>OPTIONAL: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.OPTIONAL}</span></li>
-                    <li>NOT_APPLICABLE: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyDistribution.NOT_APPLICABLE}</span></li>
-                  </ul>
-                </div>
-                <div className="md:col-span-2">
-                  <div className="font-medium text-club-ink">Fund applicability keys</div>
-                  <ul className="mt-1 text-stone-600 flex flex-wrap gap-x-4">
-                    {Object.entries(coaPanel.dim2aSummary.fundKeysDistribution).sort((a, b) => b[1] - a[1]).map(([k, n]) => (
-                      <li key={k}>{k}: <span className="tabular-nums">{n}</span></li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <div className="font-medium text-club-ink">Attention</div>
-                  <ul className="mt-1 text-stone-600">
-                    <li>fund REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.fundPolicyRequiredWithoutApplicability}</span></li>
-                    <li>dept REQUIRED · no applicability: <span className="tabular-nums">{coaPanel.dim2aSummary.departmentPolicyRequiredWithoutApplicability}</span></li>
-                    <li>medium confidence · not reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.mediumConfidenceNotReviewed}</span></li>
-                    <li>rows to review: <span className="tabular-nums font-semibold">{coaPanel.dim2aSummary.rowsRequiringAttention}</span></li>
-                  </ul>
-                </div>
-                <div>
-                  <div className="font-medium text-club-ink">Review state</div>
-                  <ul className="mt-1 text-stone-600">
-                    <li>reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.rowsReviewed}</span></li>
-                    <li>not reviewed: <span className="tabular-nums">{coaPanel.dim2aSummary.rowsNotReviewed}</span></li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
-          {coaPanel && (
+            /* COA-UX-2 (2026-09-29) — the DIM-2a fat summary card is
+               retired; the dimensional summary strip is now baked
+               into the BulkCoaReviewControls workspace below. This
+               eliminates the duplicate account-review experience the
+               founder flagged in COA-UX-2 §13. */
             <BulkCoaReviewControls
               batchId={batch.id}
               readOnly={coaReadOnly}
               rows={coaPanel.bulkRows}
               departments={coaPanel.options.departments.map((d) => ({ code: d.code, name: d.name }))}
               funds={coaPanel.options.funds.map((f) => ({ key: f.key, name: f.name }))}
+              categories={coaPanel.options.categories.map((c) => ({ key: c.key, name: c.name, accountType: c.accountType }))}
+              fsGroups={coaPanel.options.fsGroups.map((g) => ({ key: g.key, name: g.name, statement: g.statement }))}
+              summary={{
+                totalRows: coaPanel.dim2aSummary.totalRows,
+                confidence: coaPanel.dim2aSummary.confidenceDistribution,
+                departmentPolicy: coaPanel.dim2aSummary.departmentPolicyDistribution,
+                fundPolicy: coaPanel.dim2aSummary.fundPolicyDistribution,
+                fundKeyOperating: coaPanel.dim2aSummary.fundKeysDistribution["OPERATING"] ?? 0,
+                fundKeyCapital: coaPanel.dim2aSummary.fundKeysDistribution["CAPITAL"] ?? 0,
+                fundKeyBoth: coaPanel.dim2aSummary.fundKeysDistribution["CAPITAL,OPERATING"] ?? 0,
+                fundKeyNone: coaPanel.dim2aSummary.fundKeysDistribution["(none)"] ?? 0,
+                fundPolicyRequiredWithoutApplicability: coaPanel.dim2aSummary.fundPolicyRequiredWithoutApplicability,
+                departmentPolicyRequiredWithoutApplicability: coaPanel.dim2aSummary.departmentPolicyRequiredWithoutApplicability,
+                mediumConfidenceNotReviewed: coaPanel.dim2aSummary.mediumConfidenceNotReviewed,
+                capitalCandidates: coaPanel.bulkRows.filter((r) => r.capitalCandidate).length,
+                rowsReviewed: coaPanel.dim2aSummary.rowsReviewed,
+                rowsNotReviewed: coaPanel.dim2aSummary.rowsNotReviewed,
+                rowsRequiringAttention: coaPanel.dim2aSummary.rowsRequiringAttention,
+              }}
             />
           )}
           {coaPanel && (
-            <CoaMappingTable
-              batchId={batch.id}
-              readOnly={coaReadOnly}
-              initialRows={coaPanel.rows}
-              options={coaPanel.options}
-            />
+            /* COA-UX-2 (2026-09-29) — the legacy CoaMappingTable is
+               collapsed into an "Advanced grid" details block below
+               the primary Inspector workspace. It's still fully
+               functional so per-row edits work if the operator
+               prefers the grid view; both surfaces write through
+               the same saveCoaRowMappings pipeline (§13 + §15). */
+            <details className="mt-4 rounded-md border border-stone-200 bg-white">
+              <summary className="cursor-pointer px-4 py-2 text-[11.5px] font-semibold uppercase tracking-wide text-stone-500 hover:bg-stone-50">
+                Advanced grid · full per-row mapping table
+              </summary>
+              <div className="border-t border-stone-200">
+                <CoaMappingTable
+                  batchId={batch.id}
+                  readOnly={coaReadOnly}
+                  initialRows={coaPanel.rows}
+                  options={coaPanel.options}
+                />
+              </div>
+            </details>
           )}
 
           {/* Advanced validation details — Controller-grade

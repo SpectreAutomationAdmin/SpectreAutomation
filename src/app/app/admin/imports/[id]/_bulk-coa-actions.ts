@@ -145,3 +145,89 @@ export async function applyBulkCoaEditAction(
     throw err;
   }
 }
+
+/**
+ * COA-UX-2 (2026-09-29) — single-row Inspector edit action.
+ *
+ * Applies a partial edit to a single ImportRow. Unlike the bulk
+ * action, this one accepts arbitrary field-level edits (Type,
+ * Category, FS Group, Dept/Fund Policy, applicability, reviewed).
+ * It routes through the SAME `saveCoaRowMappings` pipeline, so
+ * tenant scoping, UNKNOWN_FUND blocking, and normal validation
+ * still apply.
+ *
+ * The `reviewed` bit is set to `true` by default on any Inspector
+ * edit (so an edit implicitly marks the row reviewed), unless the
+ * caller explicitly passes `reviewed: false` (i.e. "Unmark").
+ */
+export type InspectorEditInput = {
+  type?: string | null;
+  categoryKey?: string | null;
+  fsGroupKey?: string | null;
+  departmentCodes?: string[];
+  fundApplicabilityKeys?: string[];
+  departmentPolicy?: DimensionPolicy;
+  fundPolicy?: DimensionPolicy;
+  reviewed?: boolean;
+};
+
+export async function applyInspectorEditAction(
+  batchId: string,
+  rowId: string,
+  edits: InspectorEditInput,
+): Promise<
+  | { ok: true }
+  | { ok: false; message: string }
+> {
+  const principal = await getCurrentPrincipal();
+  if (!principal) redirect("/login");
+
+  const batch = await prisma.importBatch.findUnique({
+    where: { id: batchId },
+    select: { id: true, clubId: true, domain: true, status: true },
+  });
+  if (!batch) throw new NotFoundError("ImportBatch", batchId);
+  if (batch.domain !== "COA") return { ok: false, message: "Inspector edit is only valid for COA batches." };
+  if (batch.status === "COMMITTED" || batch.status === "ROLLED_BACK") {
+    return { ok: false, message: `Batch is ${batch.status}; mapping can no longer be edited.` };
+  }
+
+  const row = await prisma.importRow.findFirst({
+    where: { id: rowId, batchId },
+    select: { id: true, rawJson: true },
+  });
+  if (!row) return { ok: false, message: "Row does not belong to this batch." };
+
+  const raw = parseJsonSafe<Record<string, unknown>>(row.rawJson, {});
+  const current = normaliseCoaRow(raw);
+
+  const merged: Parameters<typeof saveCoaRowMappings>[1]["mappings"][number] = {
+    rowId: row.id,
+    type: edits.type !== undefined ? edits.type : (current.type ?? null),
+    categoryKey: edits.categoryKey !== undefined ? edits.categoryKey : (current.categoryKey ?? null),
+    fsGroupKey: edits.fsGroupKey !== undefined ? edits.fsGroupKey : (current.fsGroupKey ?? null),
+    departmentCodes: edits.departmentCodes !== undefined ? edits.departmentCodes : (current.departmentCodes ?? []),
+    fundApplicabilityKeys: edits.fundApplicabilityKeys !== undefined ? edits.fundApplicabilityKeys : (current.fundApplicabilityKeys ?? []),
+    departmentPolicy: edits.departmentPolicy !== undefined ? edits.departmentPolicy : (current.departmentPolicy ?? undefined),
+    fundPolicy: edits.fundPolicy !== undefined ? edits.fundPolicy : (current.fundPolicy ?? undefined),
+    // Default: any Inspector edit implicitly marks the row reviewed.
+    // Passing `reviewed: false` explicitly ("Unmark") overrides.
+    reviewed: edits.reviewed !== undefined ? edits.reviewed : true,
+  };
+
+  try {
+    await saveCoaRowMappings(principal, { batchId, mappings: [merged] });
+    revalidatePath(`/app/admin/imports/${batchId}`);
+    return { ok: true };
+  } catch (err) {
+    if (isAppError(err)) {
+      cookies().set("spectre_import_error", err.safeMessage, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: 30,
+      });
+      return { ok: false, message: err.safeMessage };
+    }
+    throw err;
+  }
+}
