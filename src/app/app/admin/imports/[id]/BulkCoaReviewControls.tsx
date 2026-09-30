@@ -131,6 +131,63 @@ const POLICY_OPTIONS: ReadonlyArray<{ value: DimensionPolicy; label: string }> =
   { value: "NOT_APPLICABLE", label: "NOT APPLICABLE" },
 ];
 
+/**
+ * COA-UX-2a (2026-09-29) — pure range-selection helper for the
+ * checkbox column. Extracted so the 12-case matrix (§12 of the
+ * COA-UX-2a directive) can be unit-tested without a full React
+ * render.
+ *
+ * Semantics:
+ *   * `visibleRowIds` is the CURRENT DISPLAYED order (respects
+ *     filters + search + sort).
+ *   * `shiftKey=false` OR `anchorId=null` OR `anchorId === rowId` OR
+ *     anchor no longer visible → normal single toggle of `rowId`
+ *     (add when `checked=true`, delete when `checked=false`).
+ *   * `shiftKey=true` with a visible anchor → inclusive range over
+ *     the visible-index bounds (direction-safe via Math.min/max).
+ *     Applies SELECT when `checked=true` OR DESELECT when
+ *     `checked=false` to EVERY row in the range.
+ *   * Rows NOT in `visibleRowIds` (hidden by filter) are never
+ *     touched (§3 filtered-view behaviour).
+ */
+export function applyCheckboxToggle(
+  prevSelected: ReadonlySet<string>,
+  input: {
+    rowId: string;
+    checked: boolean;
+    shiftKey: boolean;
+    anchorId: string | null;
+    visibleRowIds: ReadonlyArray<string>;
+  },
+): Set<string> {
+  const { rowId, checked, shiftKey, anchorId, visibleRowIds } = input;
+  const next = new Set(prevSelected);
+
+  if (shiftKey && anchorId !== null && anchorId !== rowId) {
+    const anchorIdx = visibleRowIds.indexOf(anchorId);
+    const targetIdx = visibleRowIds.indexOf(rowId);
+    // §10 — if the anchor is no longer visible (stale after a
+    // filter change) OR the target isn't visible either, fall
+    // through to a normal single toggle. Never compute a range
+    // against a hidden/stale row.
+    if (anchorIdx >= 0 && targetIdx >= 0) {
+      const lo = Math.min(anchorIdx, targetIdx);
+      const hi = Math.max(anchorIdx, targetIdx);
+      for (let i = lo; i <= hi; i++) {
+        const id = visibleRowIds[i];
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    }
+  }
+
+  // Normal single toggle.
+  if (checked) next.add(rowId);
+  else next.delete(rowId);
+  return next;
+}
+
 export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -138,6 +195,13 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
   const visibleRows = useMemo(() => applyFilter(props.rows, filter), [props.rows, filter]);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // COA-UX-2a (2026-09-29) — anchor for Shift-click range selection.
+  // Set on every normal checkbox click; reused when the next click
+  // carries `event.shiftKey`. Direction-safe (min/max on visible
+  // indices), operates on `visibleRows` (current display order after
+  // filters), and falls back to a normal toggle if the anchor is
+  // no longer visible (e.g. filter changed).
+  const [anchorId, setAnchorId] = useState<string | null>(null);
   const [inspectedId, setInspectedId] = useState<string | null>(props.rows[0]?.rowId ?? null);
   const inspected = useMemo(
     () => props.rows.find((r) => r.rowId === inspectedId) ?? null,
@@ -161,16 +225,17 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
     router.push(`?${params.toString()}`, { scroll: false });
   }
 
-  function toggleCheckbox(rowId: string, checked: boolean) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(rowId);
-      else next.delete(rowId);
-      return next;
-    });
+  function toggleCheckbox(rowId: string, checked: boolean, shiftKey: boolean) {
+    setSelected((prev) => applyCheckboxToggle(prev, {
+      rowId, checked, shiftKey, anchorId,
+      visibleRowIds: visibleRows.map((r) => r.rowId),
+    }));
+    // §4 — every checkbox interaction (whether a normal toggle or
+    // a Shift-range) sets the clicked row as the new anchor.
+    setAnchorId(rowId);
   }
   function selectAllVisible() { setSelected(new Set(visibleRows.map((r) => r.rowId))); }
-  function clearSelection() { setSelected(new Set()); setShowBulkMenu(null); }
+  function clearSelection() { setSelected(new Set()); setShowBulkMenu(null); setAnchorId(null); }
 
   const selectedRowIds = useMemo(() => Array.from(selected), [selected]);
   const anySelected = selectedRowIds.length > 0;
@@ -331,8 +396,23 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
                     }
                     onClick={() => setInspectedId(r.rowId)}>
                   <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
-                    <input type="checkbox" checked={selected.has(r.rowId)}
-                      onChange={(e) => toggleCheckbox(r.rowId, e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={selected.has(r.rowId)}
+                      title="Shift-click to select a range"
+                      onClick={(e) => {
+                        // COA-UX-2a — capture `shiftKey` on the click
+                        // event (which fires for mouse AND for
+                        // keyboard spacebar), toggle manually, and
+                        // preventDefault so React's controlled state
+                        // stays in sync with our own selection Set.
+                        e.preventDefault();
+                        const shift = (e as unknown as { shiftKey?: boolean }).shiftKey === true;
+                        const nextChecked = !selected.has(r.rowId);
+                        toggleCheckbox(r.rowId, nextChecked, shift);
+                      }}
+                      onChange={() => { /* controlled by onClick above */ }}
+                    />
                   </td>
                   <td className="px-2 py-1 font-mono tabular-nums">{r.accountNumber}</td>
                   <td className="px-2 py-1">{r.name}</td>

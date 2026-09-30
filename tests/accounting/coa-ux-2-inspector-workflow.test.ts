@@ -38,10 +38,28 @@ describe("COA-UX-2 · workspace structural invariants", () => {
   });
 
   it("checkbox drives bulk selection (independent of inspector)", () => {
-    expect(CTRL).toMatch(/toggleCheckbox\(r\.rowId, e\.target\.checked\)/);
-    expect(CTRL).toMatch(/function toggleCheckbox\(rowId: string, checked: boolean\)/);
+    // COA-UX-2a (2026-09-29): checkbox migrated from onChange to
+    // onClick so event.shiftKey is available for range selection.
+    // The two-arg toggleCheckbox(rowId, checked) signature has been
+    // superseded by the three-arg toggleCheckbox(rowId, checked, shiftKey).
+    expect(CTRL).toMatch(/toggleCheckbox\(r\.rowId, nextChecked, shift\)/);
+    expect(CTRL).toMatch(/function toggleCheckbox\(rowId: string, checked: boolean, shiftKey: boolean\)/);
     expect(CTRL).toMatch(/function selectAllVisible\(\)/);
     expect(CTRL).toMatch(/function clearSelection\(\)/);
+  });
+
+  it("COA-UX-2a: SHIFT-click range selection is wired via applyCheckboxToggle", () => {
+    // The pure helper is exported (tested via
+    // coa-ux-2a-shift-click-range.test.ts) and the component calls
+    // it with the current visibleRows order — so the range respects
+    // filters and current display order, not numeric account order.
+    expect(CTRL).toMatch(/export function applyCheckboxToggle\(/);
+    expect(CTRL).toMatch(/applyCheckboxToggle\(prev, \{[\s\S]*?visibleRowIds: visibleRows\.map/);
+    // Anchor is tracked in local state and reset on plain click,
+    // cleared alongside `selected` on Clear Selection.
+    expect(CTRL).toMatch(/anchorId, setAnchorId/);
+    expect(CTRL).toMatch(/setAnchorId\(rowId\)/);
+    expect(CTRL).toMatch(/setAnchorId\(null\)/);
   });
 
   it("inspector edits route through applyInspectorEditAction (not a duplicate write path)", () => {
