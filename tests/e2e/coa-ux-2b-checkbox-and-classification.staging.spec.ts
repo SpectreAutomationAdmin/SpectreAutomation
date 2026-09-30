@@ -121,12 +121,11 @@ runAt("COA-UX-2b · Inspector — FS Group dropdown filtered by Category (§8) @
   const idx = await rowIndexForAccountCode(page, "1000");
   await page.locator("tbody tr").nth(idx).click();
 
-  const aside = page.locator("aside").first();
-  await expect(aside.getByText("Classification")).toBeVisible();
+  const aside = page.getByTestId("coa-inspector");
+  await expect(aside).toBeVisible();
 
-  // Find the FS Group <select> by its adjacent label.
-  const fsGroupSelect = aside.locator("label:has(span:text-is('FS Group')) select").first();
-  const categorySelect = aside.locator("label:has(span:text-is('Category')) select").first();
+  const categorySelect = aside.getByTestId("inspector-select-category");
+  const fsGroupSelect = aside.getByTestId("inspector-select-fs-group");
 
   // Read FS Group options BEFORE picking a Category (or with the
   // default Category applied). Baseline observation.

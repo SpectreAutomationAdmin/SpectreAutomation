@@ -475,7 +475,7 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
         </div>
 
         {/* RIGHT — Account Inspector */}
-        <aside className="border-l border-stone-200 bg-stone-50 max-h-[560px] overflow-auto">
+        <aside data-testid="coa-inspector" className="border-l border-stone-200 bg-stone-50 max-h-[560px] overflow-auto">
           {!inspected ? (
             <div className="p-6 text-[12px] text-stone-500">
               <div className="text-[10px] font-bold uppercase tracking-widest text-stone-400 mb-2">Inspector</div>
@@ -619,11 +619,14 @@ function InspectorSelect(props: {
   disabled?: boolean;
   helpText?: string;
 }) {
+  // COA-UX-2b test seam — stable selector for staging Playwright.
+  const testId = "inspector-select-" + props.label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return (
     <div className="mb-2">
       <div className="text-[10.5px] font-bold uppercase tracking-wider text-stone-500 mb-0.5">{props.label}</div>
       {props.helpText && <div className="mb-1 text-[10.5px] text-stone-500">{props.helpText}</div>}
-      <select className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-[12px] disabled:bg-stone-100 disabled:text-stone-500"
+      <select data-testid={testId}
+              className="w-full rounded border border-stone-300 bg-white px-2 py-1 text-[12px] disabled:bg-stone-100 disabled:text-stone-500"
               disabled={props.disabled} value={props.value} onChange={(e) => props.onChange(e.target.value)}>
         {props.options.map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
       </select>
