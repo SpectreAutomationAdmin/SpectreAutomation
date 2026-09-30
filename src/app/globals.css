@@ -2974,6 +2974,23 @@ body {  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helv
      empty pane. The `data-mode="populated"` path (any non-zero row
      count) keeps `flex: 1` and the full 562-row scroll behaviour. */
   .spectre-dw-table-wrap[data-mode="empty"] { flex: 0 0 auto; overflow: visible; }
+  /* COA-UI-1b (2026-09-29) — parent-grid correction for TRUE EMPTY
+     (total Account count = 0). The default `.spectre-dw-body { grid-row: -1 }`
+     places the body in an implicit row AFTER the `1fr` last-explicit
+     track, leaving the `1fr` row 4 unoccupied and consuming ~400px+
+     of the viewport as blank ivory between the filter ribbon and
+     the body. When the root carries `data-mode="empty"`, the body
+     auto-flows into the next available track (row 2, right beneath
+     the toolbar) with content-sized height. The Inspector column
+     inside the body follows the same collapse.
+     `data-mode="populated"` is unchanged — the default rules keep
+     the 562-row scroll behaviour + viewport-height usage. Filtered-
+     empty (total > 0, visible = 0) uses `data-mode="populated"` and
+     shows a no-results affordance inside the normal workspace
+     geometry, not the true-empty collapse. */
+  .spectre-dw-root[data-mode="empty"] .spectre-dw-body { grid-row: auto; height: auto; overflow: visible; }
+  .spectre-dw-root[data-mode="empty"] .spectre-dw-main { height: auto; overflow: visible; }
+  .spectre-dw-root[data-mode="empty"] .spectre-dw-inspector-slot { height: auto; overflow: visible; }
   table.spectre-dw-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; color: var(--spectre-text-primary); font-variant-numeric: tabular-nums; }
   table.spectre-dw-table thead th { position: sticky; top: 0; z-index: 3; padding: 8px 12px; background: var(--spectre-canvas-sunken); border-bottom: 1px solid var(--spectre-border-hairline); font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--spectre-text-muted); font-weight: 700; text-align: left; }
   table.spectre-dw-table thead th.num { text-align: right; }

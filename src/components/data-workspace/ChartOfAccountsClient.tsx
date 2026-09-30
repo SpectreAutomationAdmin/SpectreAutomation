@@ -689,7 +689,17 @@ export function ChartOfAccountsClient(props: ChartOfAccountsClientProps) {
   const activeCount = props.activeAccounts;
 
   return (
-    <div className="spectre-dw-root" data-inspector-open={inspectorRow || isBulkInspector ? "true" : "false"}>
+    <div
+      className="spectre-dw-root"
+      data-inspector-open={inspectorRow || isBulkInspector ? "true" : "false"}
+      /* COA-UI-1b (2026-09-29) — `data-mode="empty"` when the tenant
+         has zero accounts (true empty, not filtered-empty). Drives
+         the parent-grid override in globals.css so `.spectre-dw-body`
+         auto-flows directly beneath the filter ribbon instead of
+         being pinned to the `1fr` last-explicit-track (which left a
+         ~400px blank between the ribbon and the body). */
+      data-mode={props.rows.length === 0 ? "empty" : "populated"}
+    >
       {/* Sprint 1 acceptance repair (2026-07-19) — the founder-approved
           concept has one white toolbar spanning the full workspace
           width, with the two-pane split (table + inspector) beginning
