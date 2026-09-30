@@ -16,7 +16,7 @@ import {
   clientHasAttentionCondition,
   clientNeedsAttention,
 } from "../../src/app/app/admin/imports/[id]/BulkCoaReviewControls";
-import { resolveReviewedAfterMaterialEdit } from "../../src/app/app/admin/imports/[id]/_bulk-coa-actions";
+import { resolveReviewedAfterMaterialEdit } from "../../src/lib/imports/coa-review-reset";
 
 function row(overrides: Partial<CoaReviewInputRow> = {}): CoaReviewInputRow {
   return {

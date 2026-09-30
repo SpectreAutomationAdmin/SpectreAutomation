@@ -28,6 +28,7 @@ import { isAppError, NotFoundError } from "@/lib/errors";
 import { saveCoaRowMappings } from "@/lib/imports";
 import { normaliseCoaRow } from "@/lib/imports/coa-mapping";
 import { readReviewState } from "@/lib/imports/coa-review-state";
+import { resolveReviewedAfterMaterialEdit } from "@/lib/imports/coa-review-reset";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 
 type DimensionPolicy = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE";
@@ -46,70 +47,6 @@ type BulkAction =
 
 function parseJsonSafe<T>(s: string, fallback: T): T {
   try { const p = JSON.parse(s) as T; return p ?? fallback; } catch { return fallback; }
-}
-
-/**
- * COA-UX-2c (2026-09-30) — §6 material-edit review reset.
- *
- * When the operator changes a material classification/policy field
- * on a row that was previously acknowledged (`reviewed=true`), the
- * prior acknowledgement is stale: the proposal has changed since
- * the operator ack'd it. Return the reviewed flag that should be
- * persisted after this edit:
- *
- *   * If `explicitReviewed` is set (e.g. the operator clicked
- *     "Mark Reviewed" or "Unmark"), honour it exactly. No override.
- *   * Else if the edit actually changes ≥1 material field on a
- *     previously-reviewed row → reviewed=false (§6). The founder
- *     must re-ack.
- *   * Else → keep the DIM-2a default so a first edit of an
- *     unreviewed row still implicitly marks it reviewed.
- *
- * Material fields (per §6): type, categoryKey, fsGroupKey,
- * departmentPolicy, departmentApplicabilityCodes, fundPolicy,
- * fundApplicabilityKeys.
- */
-export function resolveReviewedAfterMaterialEdit(
-  args: {
-    priorReviewed: boolean;
-    explicitReviewed?: boolean;
-    priorMaterial: {
-      type: string | null;
-      categoryKey: string | null;
-      fsGroupKey: string | null;
-      departmentPolicy: string | null;
-      fundPolicy: string | null;
-      departmentCodes: string[];
-      fundApplicabilityKeys: string[];
-    };
-    nextMaterial: {
-      type: string | null;
-      categoryKey: string | null;
-      fsGroupKey: string | null;
-      departmentPolicy: string | null;
-      fundPolicy: string | null;
-      departmentCodes: string[];
-      fundApplicabilityKeys: string[];
-    };
-  },
-): boolean {
-  if (args.explicitReviewed !== undefined) return args.explicitReviewed;
-  const p = args.priorMaterial;
-  const n = args.nextMaterial;
-  const arrEq = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
-  const changed =
-    p.type !== n.type ||
-    p.categoryKey !== n.categoryKey ||
-    p.fsGroupKey !== n.fsGroupKey ||
-    p.departmentPolicy !== n.departmentPolicy ||
-    p.fundPolicy !== n.fundPolicy ||
-    !arrEq(p.departmentCodes.slice().sort(), n.departmentCodes.slice().sort()) ||
-    !arrEq(p.fundApplicabilityKeys.slice().sort(), n.fundApplicabilityKeys.slice().sort());
-  if (!changed) return args.priorReviewed;
-  // §6 preferred rule: material change on an already-reviewed row
-  // returns it to NOT REVIEWED. On a not-yet-reviewed row the
-  // existing DIM-2a default applies (edit ⇒ implicit ack).
-  return args.priorReviewed ? false : true;
 }
 
 /**
