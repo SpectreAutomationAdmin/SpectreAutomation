@@ -197,10 +197,20 @@ export default async function ImportBatchPage({ params }: { params: { id: string
         departmentPolicy?: string; fundPolicy?: string;
         fundApplicabilityKeys?: string[];
       };
+      // COA-UX-2d (2026-09-30) — §8 FOUNDER EDITS OVERRIDE PREDICTIONS.
+      // The persisted mapping (`normalised.type`, written by
+      // saveCoaRowMappings into raw.type) is authoritative. The
+      // prediction is a proposal only. Previously `pred.type` was
+      // consulted first, which hid the founder's reclassification
+      // of Account 7000 behind the stale EXPENSE prediction and let
+      // the Inspector + left grid misrepresent the saved state.
+      const normalisedType = normalised.type as string | null;
       const type: AccountType =
-        (["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"] as const).includes(pred.type as never)
-          ? (pred.type as AccountType)
-          : (normalised.type ?? "EXPENSE") as AccountType;
+        (["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"] as const).includes(normalisedType as never)
+          ? (normalisedType as AccountType)
+          : (["ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE"] as const).includes(pred.type as never)
+            ? (pred.type as AccountType)
+            : "EXPENSE";
       const isPolicy = (v: unknown): v is "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE" =>
         v === "REQUIRED" || v === "OPTIONAL" || v === "NOT_APPLICABLE";
       return {

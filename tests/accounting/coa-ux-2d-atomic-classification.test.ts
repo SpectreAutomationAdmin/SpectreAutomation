@@ -205,6 +205,21 @@ describe("COA-UX-2d · §15 atomic classification matrix", () => {
   });
 });
 
+describe("COA-UX-2d · §8 FOUNDER EDITS OVERRIDE PREDICTIONS — page.tsx precedence (regression guard)", () => {
+  it("page.tsx picks `normalised.type` (saved mapping) ahead of `pred.type` (prediction)", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const src = fs.readFileSync(path.join(process.cwd(), "src", "app", "app", "admin", "imports", "[id]", "page.tsx"), "utf8");
+    // Guard: the first-arm regex of the ternary MUST test the
+    // normalised value, not pred.type. Prior buggy shape was
+    // `.includes(pred.type as never)` as the first branch.
+    expect(src).toMatch(/includes\(normalisedType as never\)[\s\S]*?normalisedType as AccountType[\s\S]*?includes\(pred\.type as never\)/);
+    // Also assert the comment explicitly cites §8 so future edits
+    // know why the precedence matters.
+    expect(src).toMatch(/COA-UX-2d[\s\S]*?FOUNDER EDITS OVERRIDE PREDICTIONS/);
+  });
+});
+
 describe("COA-UX-2d · getTypeForCategory", () => {
   it("returns the catalog's accountType for a known category key", () => {
     expect(getTypeForCategory("OTHER_REVENUE", CATEGORY_CATALOG)).toBe("REVENUE");
