@@ -181,15 +181,19 @@ export async function POST(req: NextRequest, context: { params: { batchId: strin
     return NextResponse.json({ error: "Not available in production." }, { status: 404 });
   }
   const principal = await requirePrincipal();
-  if (!isSuperAdmin(principal)) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
   const { batchId } = context.params;
   const batch = await prisma.importBatch.findUnique({
     where: { id: batchId },
     select: { clubId: true },
   });
   if (!batch) return NextResponse.json({ error: "Batch not found." }, { status: 404 });
+  // TB-HIST-2b (2026-10-01) — tenant scoping: super-admin OR a
+  // membership on the batch's club. This is a non-destructive
+  // calendar bootstrap (no balances / no transactions / no snapshots),
+  // and the GET on the same route uses the same gate.
+  if (!hasClubAccess(principal, batch.clubId)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => ({})) as { action?: string; years?: number[] };
   if (body.action !== "ensureFiscalYears") {
