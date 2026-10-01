@@ -116,23 +116,38 @@ export function JonasImportForm() {
   }
 
   function onPreview() {
+    // TB-HIST-3 (2026-10-01) — defensive double-submit guard.
+    // startTransition already queues to React's transition manager, but
+    // under the previous shape the button could re-fire in the window
+    // between click and `pending=true` propagating. Short-circuit here.
+    if (pending || stage === "preview-pending") return;
     setSubmitError(null);
     setCommit(null);
     setStage("preview-pending");
     startTransition(async () => {
-      const result = await previewJonasImport(buildFormData(fields));
-      if ("error" in result) {
-        setSubmitError(result.error);
+      try {
+        const result = await previewJonasImport(buildFormData(fields));
+        if ("error" in result) {
+          setSubmitError(result.error);
+          setStage("idle");
+          return;
+        }
+        if (result.status === "ok" && !fields.effectiveDateOverride && result.resolvedDates) {
+          setFields((f) => ({ ...f, effectiveDateOverride: result.resolvedDates!.periodEndIso }));
+        }
+        setPreview(result);
+        setStage("preview-ready");
+      } catch (err) {
+        // TB-HIST-3 — never leave the operator on a silent screen.
+        // A thrown server-action error (payload too large, network
+        // failure, Prisma error inside the action, parser throw not
+        // wrapped by `decodeInput`) now surfaces as an actionable
+        // message so the founder can see WHAT failed instead of
+        // waiting indefinitely at the import form.
+        const message = err instanceof Error ? err.message : String(err);
+        setSubmitError("Preview failed: " + message);
         setStage("idle");
-        return;
       }
-      // Pre-fill founder's effective-date field from the detected one
-      // if they haven't set one themselves yet.
-      if (result.status === "ok" && !fields.effectiveDateOverride && result.resolvedDates) {
-        setFields((f) => ({ ...f, effectiveDateOverride: result.resolvedDates!.periodEndIso }));
-      }
-      setPreview(result);
-      setStage("preview-ready");
     });
   }
 
@@ -250,18 +265,31 @@ export function JonasImportForm() {
           />
         </details>
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
-            className="btn btn-primary"
+            className="btn btn-primary disabled:opacity-60"
             data-testid="btn-preview"
-            disabled={pending || (!fields.xlsxBase64 && !fields.csv.trim())}
+            disabled={pending || stage === "preview-pending" || (!fields.xlsxBase64 && !fields.csv.trim())}
+            aria-busy={stage === "preview-pending" || pending}
             onClick={onPreview}
           >
-            Preview
+            {stage === "preview-pending" ? "Preparing preview…" : "Preview"}
           </button>
           <button className="btn btn-secondary" data-testid="btn-reset" onClick={onReset} disabled={pending}>
             Reset
           </button>
+          {stage === "preview-pending" && (
+            <div
+              role="progressbar"
+              aria-label="Preparing preview"
+              aria-busy="true"
+              aria-valuetext="in progress"
+              data-testid="jonas-preview-progress"
+              className="relative ml-2 h-1 w-40 overflow-hidden rounded bg-stone-200"
+            >
+              <div className="absolute inset-y-0 left-0 w-full animate-pulse bg-club-forest" />
+            </div>
+          )}
         </div>
       </div>
 

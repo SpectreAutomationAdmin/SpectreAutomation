@@ -27,6 +27,26 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  // TB-HIST-3 (2026-10-01) — Jonas XLSX Trial Balance upload.
+  //
+  // Server actions have a 1 MB request-body ceiling by default. The
+  // Jonas-UI import encodes the uploaded XLSX as base64 inside the
+  // FormData payload, which inflates the raw byte count by ~33 %. A
+  // 1 MB default silently rejects a ~750 KB XLSX — the browser gets
+  // no visible error (the server-action transport short-circuits
+  // before the action body runs), the UI's `startTransition` resolves
+  // its promise but with no observable server-side effect, and the
+  // operator sees nothing happen.
+  //
+  // Raise the ceiling to 10 MB — enough for any realistic month-end
+  // Jonas TB (an actual Coulee TB with ~600 account rows is ~70 KB on
+  // disk, ~95 KB base64; the ceiling covers 2 orders of magnitude of
+  // headroom for future tenants / annual-TB imports).
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },
