@@ -56,18 +56,59 @@ export function CoaReplaceCommitButton({ commitAction, plan }: Props) {
     });
   }
 
-  // No existing COA → render a plain commit form, no modal needed.
+  // COA-UX-3 (2026-09-30) — direct-commit path (no existing COA to
+  // replace). Previously this was a plain <form action>, so the
+  // founder saw no indication the import was running. The 562-row
+  // Coulee commit took noticeable time and looked frozen. Now we
+  // intercept the submit and run the server action inside a
+  // transition that drives an indeterminate progress indicator.
+  //
+  // Indeterminate on purpose (§8-9): the server commit is one atomic
+  // transaction with no trustworthy intermediate progress events. We
+  // do not fabricate percentages. The button:
+  //   * disables immediately on first click (§12 double-submit guard)
+  //   * swaps its label to "Importing chart of accounts…"
+  //   * shows a thin, restrained progress bar underneath
+  //
+  // Server-side `commitBatch` is idempotent — status transitions to
+  // COMMITTED under a Prisma transaction and a second call throws
+  // ConflictError, so even if the button briefly becomes clickable
+  // again, no duplicate Accounts can be created.
   if (!plan.requiresConfirmation) {
+    function startCommit() {
+      if (isPending) return;
+      const fd = new FormData();
+      startTransition(async () => {
+        await commitAction(fd);
+      });
+    }
     return (
-      <form action={commitAction} className="flex items-center gap-2">
+      <div className="flex flex-col gap-1" data-testid="coa-commit-direct-wrapper">
         <button
-          type="submit"
-          className="btn btn-primary"
+          type="button"
+          className="btn btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
+          onClick={startCommit}
+          disabled={isPending}
+          aria-busy={isPending}
           data-testid="coa-commit-direct"
         >
-          Complete import
+          {isPending ? "Importing chart of accounts…" : "Complete import"}
         </button>
-      </form>
+        {isPending && (
+          <div
+            role="progressbar"
+            aria-label="Importing chart of accounts"
+            aria-busy="true"
+            aria-valuetext="in progress"
+            className="relative h-1 w-full overflow-hidden rounded bg-stone-200"
+            data-testid="coa-commit-progress"
+          >
+            {/* Restrained indeterminate bar — a steady pulse rather
+                than a fake percentage (§9: no 17/42/83). */}
+            <div className="absolute inset-y-0 left-0 w-full origin-left animate-pulse bg-club-forest" />
+          </div>
+        )}
+      </div>
     );
   }
 

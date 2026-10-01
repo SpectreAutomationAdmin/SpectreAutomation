@@ -20,7 +20,7 @@
 
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { applyBulkCoaEditAction, applyInspectorEditAction } from "./_bulk-coa-actions";
 import {
@@ -39,6 +39,9 @@ type Confidence = "high" | "medium" | "low";
 
 export type BulkReviewRow = {
   rowId: string;
+  // COA-UX-3 (2026-09-30) — original ImportRow.rowNumber so the
+  // workspace can match CoaErrorsCard's row-based jump events.
+  rowNumber: number;
   accountNumber: string;
   name: string;
   type: string;
@@ -85,6 +88,14 @@ export type BulkReviewControlsProps = {
   categories: BulkReviewCategoryOption[];
   fsGroups: BulkReviewFsGroupOption[];
   summary: BulkReviewSummary;
+  // COA-UX-3 (2026-09-30) — ImportRow.rowNumbers for rows that
+  // currently have validation errors (ordered by rowNumber ASC).
+  // Consumed by the window-event listeners that implement §5:
+  // "Next error" → cycles through this list; "jump to row" →
+  // matches on rowNumber. The founder's error/warning navigation
+  // flows through the Inspector workspace, never the removed
+  // Advanced Grid.
+  errorRowNumbers?: number[];
 };
 
 type FilterState = {
@@ -276,6 +287,66 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
     }
     router.push(`?${params.toString()}`, { scroll: false });
   }
+
+  // COA-UX-3 (2026-09-30) — error-navigation listeners.
+  //
+  // CoaErrorsCard fires window CustomEvents on "Next error" and on
+  // clicks within the expanded error list. Previously the retired
+  // CoaMappingTable owned the listener; now the Inspector workspace
+  // does. For each matched row we:
+  //   1. Clear filters that currently hide the row.
+  //   2. Set `inspectedId` so the Inspector shows that account.
+  //   3. Scroll the row into view inside the compact account list.
+  //
+  // Error ordering is driven by `props.errorRowNumbers` (ASC by
+  // rowNumber). The cursor advances every "Next error" invocation.
+  // §14: when zero errors + N warnings exist, callers may send the
+  // same event — the behaviour is identical; the dispatch label is
+  // the only thing the CoaErrorsCard swaps.
+  const errorCursor = useRef(0);
+  function jumpToRowNumber(rowNumber: number) {
+    const row = props.rows.find((r) => r.rowNumber === rowNumber);
+    if (!row) return;
+    // Clear any filter that would currently hide this row so the
+    // operator doesn't have to figure out why the account vanished.
+    const filteredCurrently = applyFilter(props.rows, filter);
+    if (!filteredCurrently.some((r) => r.rowId === row.rowId)) {
+      const params = new URLSearchParams(searchParams.toString());
+      for (const k of ["f_conf", "f_deptpol", "f_fundpol", "f_deptapp", "f_fundapp", "f_review", "f_capital", "f_q"]) {
+        params.delete(k);
+      }
+      router.push(`?${params.toString()}`, { scroll: false });
+    }
+    setInspectedId(row.rowId);
+    // Scroll into view on the next tick so React has rendered the
+    // row (after the setInspectedId / filter clear).
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`tr[data-row-id="${row.rowId}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  useEffect(() => {
+    function onNext() {
+      const list = props.errorRowNumbers ?? [];
+      if (list.length === 0) return;
+      const target = list[errorCursor.current % list.length];
+      errorCursor.current += 1;
+      jumpToRowNumber(target);
+    }
+    function onJumpToRow(e: Event) {
+      const detail = (e as CustomEvent<{ rowNumber?: number }>).detail;
+      if (!detail || typeof detail.rowNumber !== "number") return;
+      jumpToRowNumber(detail.rowNumber);
+    }
+    window.addEventListener("spectre:coa-next-error", onNext);
+    window.addEventListener("spectre:coa-jump-to-row", onJumpToRow);
+    return () => {
+      window.removeEventListener("spectre:coa-next-error", onNext);
+      window.removeEventListener("spectre:coa-jump-to-row", onJumpToRow);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.rows, props.errorRowNumbers, filter, searchParams, router]);
 
   function toggleCheckbox(rowId: string, checked: boolean, shiftKey: boolean) {
     setSelected((prev) => applyCheckboxToggle(prev, {
@@ -471,6 +542,8 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
             <tbody>
               {visibleRows.map((r) => (
                 <tr key={r.rowId}
+                    data-row-id={r.rowId}
+                    data-row-number={r.rowNumber}
                     className={
                       "cursor-pointer border-t border-stone-100 " +
                       (inspectedId === r.rowId ? "bg-amber-100" : (selected.has(r.rowId) ? "bg-amber-50" : "hover:bg-stone-50"))

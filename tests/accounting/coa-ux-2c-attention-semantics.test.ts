@@ -251,6 +251,7 @@ describe("COA-UX-2c · §11.J ribbon + filter share the same predicate", () => {
       departmentPolicy: "NOT_APPLICABLE" as const, fundPolicy: "NOT_APPLICABLE" as const,
       departmentApplicabilityCodes: [], fundApplicabilityKeys: [],
       reviewed: false, capitalCandidate: false,
+      rowNumber: 1,
     };
     const clientResult = clientNeedsAttention(bulkLike);
     const serverInput: CoaReviewInputRow = {

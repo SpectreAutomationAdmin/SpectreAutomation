@@ -112,10 +112,14 @@ describe("COA-UX-2 · workspace structural invariants", () => {
     expect(CTRL).toMatch(/runBulk\(\{ kind: "MARK_REVIEWED" \}, "Mark Reviewed"\)/);
   });
 
-  it("legacy CoaMappingTable is preserved as an Advanced-grid fallback (details/summary collapsed by default)", () => {
-    expect(PAGE).toMatch(/<details className="mt-4 rounded-md border border-stone-200 bg-white">/);
-    expect(PAGE).toMatch(/Advanced grid · full per-row mapping table/);
-    expect(PAGE).toMatch(/<CoaMappingTable[\s\S]*?batchId=\{batch\.id\}[\s\S]*?readOnly=\{coaReadOnly\}/);
+  it("COA-UX-3 (2026-09-30): Advanced grid + Advanced validation details are removed from the COA import detail page (§3-4)", () => {
+    // The founder's consolidated workflow is Inspector + bulk only.
+    // Neither <CoaMappingTable> nor the "Advanced validation details"
+    // disclosure may appear in the rendered page tree.
+    expect(PAGE).not.toMatch(/<CoaMappingTable/);
+    expect(PAGE).not.toMatch(/Advanced grid · full per-row mapping table/);
+    expect(PAGE).not.toMatch(/Advanced validation details/);
+    expect(PAGE).not.toMatch(/data-testid="advanced-validation-details"/);
   });
 
   it("Inspector renders sections: Classification, Department, Fund, Review (each labelled)", () => {

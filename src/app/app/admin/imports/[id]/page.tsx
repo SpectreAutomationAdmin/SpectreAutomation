@@ -20,7 +20,11 @@ import {
 } from "@/lib/imports/coa-mapping";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 
-import { CoaMappingTable, type InitialCoaRow } from "./CoaMappingTable";
+// COA-UX-3 (2026-09-30) — the legacy per-row mapping grid is no
+// longer rendered on the COA import detail page; the Inspector
+// workspace in BulkCoaReviewControls is the single per-row
+// mapping surface. The underlying component file is retained for
+// other callers / future use.
 // DIM-2a (2026-09-29) — batch-level dimensional review summary.
 import {
   summariseCoaBatch,
@@ -113,77 +117,16 @@ export default async function ImportBatchPage({ params }: { params: { id: string
   const success = cookies().get("spectre_import_success")?.value;
   const notice = cookies().get("spectre_import_notice")?.value;
 
-  // COA-specific: load mapping options + the editable row data the
-  // CoaMappingTable consumes. This runs only for COA batches so the
-  // other domains pay nothing.
+  // COA-UX-3 (2026-09-30) — load the Inspector workspace's catalog +
+  // review inputs. The legacy per-row mapping table is no longer
+  // rendered on this page, so we no longer build its row projection.
   let coaPanel: {
     options: Awaited<ReturnType<typeof getCoaMappingOptions>>;
-    rows: InitialCoaRow[];
-    // DIM-2a (2026-09-29) — batch-level dimensional review summary.
-    // Rendered as a summary card above the mapping table so the
-    // founder can see policy + fund applicability + confidence
-    // distributions + REQUIRED-without-applicability counts at a
-    // glance before commit.
     dim2aSummary: ReturnType<typeof summariseCoaBatch> | null;
-    // DIM-2b (2026-09-29) — bulk review controls row projection.
     bulkRows: BulkReviewRow[];
   } | null = null;
   if (batch.domain === "COA") {
     const options = await getCoaMappingOptions(batch.clubId);
-    // Group per-row error rows so each ImportRow gets its full
-    // error list — used by the mapping table to render the inline
-    // error message + the Next-error jump cycle.
-    const errorsByRowNumber = new Map<number, typeof batch.errors>();
-    for (const e of batch.errors) {
-      const list = errorsByRowNumber.get(e.rowNumber) ?? [];
-      list.push(e);
-      errorsByRowNumber.set(e.rowNumber, list);
-    }
-    const rows: InitialCoaRow[] = batch.rows.map((r) => {
-      const raw = parseRawJson(r.rawJson);
-      const normalised = normaliseCoaRow(raw);
-      const errs = errorsByRowNumber.get(r.rowNumber) ?? [];
-      // Founder rule 2026-06-29: each row carries the auto-
-      // mapping engine's confidence + source so the mapping
-      // table can render subtle indicators (amber for medium,
-      // light tint for low). The data lives under `_prediction`
-      // in rawJson, written by `applyCoaAutoMapping` on upload.
-      const rawForPrediction = parseRawJson(r.rawJson);
-      const predBlob = rawForPrediction._prediction as
-        | { confidence?: string; source?: string }
-        | undefined;
-      const predictionConfidence =
-        predBlob?.confidence === "high"
-          ? ("high" as const)
-          : predBlob?.confidence === "medium"
-            ? ("medium" as const)
-            : predBlob?.confidence === "low"
-              ? ("low" as const)
-              : null;
-      return {
-        rowId: r.id,
-        rowNumber: r.rowNumber,
-        number: normalised.number,
-        name: normalised.name,
-        type: normalised.type ?? null,
-        categoryKey: normalised.categoryKey ?? null,
-        fsGroupKey: normalised.fsGroupKey ?? null,
-        departmentCodes: normalised.departmentCodes ?? [],
-        // Server-side validation state — populated when the batch
-        // has been validated. "INVALID" surfaces the row's first
-        // error message in the mapping table; "VALID" or any other
-        // status reads as ready / needs-mapping in the UI.
-        serverStatus: r.status as "PENDING" | "VALID" | "INVALID" | string,
-        errorMessage: r.errorMessage ?? null,
-        errorCodes: errs.map((e) => ({
-          code: e.code,
-          columnName: e.columnName ?? null,
-          message: e.message,
-        })),
-        predictionConfidence,
-        predictionSource: typeof predBlob?.source === "string" ? predBlob.source : null,
-      };
-    });
     // DIM-2a (2026-09-29) — compute the batch-level dimensional
     // review summary from raw._prediction bundles (auto-mapping
     // stamps departmentPolicy / fundPolicy / fundApplicabilityKeys
@@ -249,6 +192,10 @@ export default async function ImportBatchPage({ params }: { params: { id: string
       const norm = normaliseCoaRow(raw);
       return {
         rowId: batch.rows[i].id,
+        // COA-UX-3 (2026-09-30) — original ImportRow.rowNumber so
+        // CoaErrorsCard's row-based jump events (which carry
+        // rowNumber, not rowId) can address this projection.
+        rowNumber: batch.rows[i].rowNumber,
         accountNumber: rr.accountNumber,
         name: rr.name,
         type: rr.type,
@@ -263,8 +210,15 @@ export default async function ImportBatchPage({ params }: { params: { id: string
         capitalCandidate: capitalCandidateSet.has(rr.accountNumber),
       };
     });
-    coaPanel = { options, rows, dim2aSummary, bulkRows };
+    coaPanel = { options, dim2aSummary, bulkRows };
   }
+  // COA-UX-3 (2026-09-30) — rowNumbers that currently have at least
+  // one validation entry (ERROR or WARNING), sorted ASC. Feeds
+  // BulkCoaReviewControls so "Next error" cycles through them.
+  const coaErrorRowNumbers =
+    batch.domain === "COA"
+      ? Array.from(new Set(batch.errors.map((e) => e.rowNumber))).sort((a, b) => a - b)
+      : [];
 
   // COA replacement plan — drives the founder's confirmation
   // modal. Only computed for COA batches in the VALIDATED state
@@ -460,17 +414,15 @@ export default async function ImportBatchPage({ params }: { params: { id: string
         )}
       </div>
 
-      {/* Founder rule 2026-07-15: COA detail page is laid out as
-          a Controller-focused workspace, not a debug surface.
-            • The Errors summary card appears ONLY when there are
-              errors, and ONLY above the mapping table.
-            • The legacy Rows card is removed from the default
-              view — its row-level status is duplicated by the
-              mapping table's per-row Error pill.
-            • The Rows card lives behind an "Advanced validation
-              details" disclosure (collapsed by default) for
-              support / debugging.
-          Non-COA domains keep the original two-card layout. */}
+      {/* COA-UX-3 (2026-09-30) — the COA detail page is a focused
+          Inspector workspace. Only two surfaces render under
+          `isCoa`:
+            • CoaErrorsCard — the single validation surface that
+              owns Next-error / jump-to-row navigation.
+            • BulkCoaReviewControls — the Inspector + bulk editor.
+          The retired debug-grade disclosures ("Advanced grid",
+          "Rows card") have been removed per §3-4. Non-COA domains
+          keep the original two-card layout below. */}
 
       {isCoa ? (
         <>
@@ -497,7 +449,11 @@ export default async function ImportBatchPage({ params }: { params: { id: string
                retired; the dimensional summary strip is now baked
                into the BulkCoaReviewControls workspace below. This
                eliminates the duplicate account-review experience the
-               founder flagged in COA-UX-2 §13. */
+               founder flagged in COA-UX-2 §13.
+               COA-UX-3 (2026-09-30) — this is now the ONLY per-row
+               mapping surface; the retired debug disclosures were
+               removed so classification and error correction happen
+               in a single Inspector workflow (§3-4). */
             <BulkCoaReviewControls
               batchId={batch.id}
               readOnly={coaReadOnly}
@@ -506,6 +462,7 @@ export default async function ImportBatchPage({ params }: { params: { id: string
               funds={coaPanel.options.funds.map((f) => ({ key: f.key, name: f.name }))}
               categories={coaPanel.options.categories.map((c) => ({ key: c.key, name: c.name, accountType: c.accountType }))}
               fsGroups={coaPanel.options.fsGroups.map((g) => ({ key: g.key, name: g.name, statement: g.statement }))}
+              errorRowNumbers={coaErrorRowNumbers}
               summary={{
                 totalRows: coaPanel.dim2aSummary.totalRows,
                 confidence: coaPanel.dim2aSummary.confidenceDistribution,
@@ -525,60 +482,6 @@ export default async function ImportBatchPage({ params }: { params: { id: string
               }}
             />
           )}
-          {coaPanel && (
-            /* COA-UX-2 (2026-09-29) — the legacy CoaMappingTable is
-               collapsed into an "Advanced grid" details block below
-               the primary Inspector workspace. It's still fully
-               functional so per-row edits work if the operator
-               prefers the grid view; both surfaces write through
-               the same saveCoaRowMappings pipeline (§13 + §15). */
-            <details className="mt-4 rounded-md border border-stone-200 bg-white">
-              <summary className="cursor-pointer px-4 py-2 text-[11.5px] font-semibold uppercase tracking-wide text-stone-500 hover:bg-stone-50">
-                Advanced grid · full per-row mapping table
-              </summary>
-              <div className="border-t border-stone-200">
-                <CoaMappingTable
-                  batchId={batch.id}
-                  readOnly={coaReadOnly}
-                  initialRows={coaPanel.rows}
-                  options={coaPanel.options}
-                />
-              </div>
-            </details>
-          )}
-
-          {/* Advanced validation details — Controller-grade
-              surfaces don't normally need this; it's a debug
-              preview of the per-row server status for support
-              triage. Collapsed by default. */}
-          <details
-            className="mt-6 rounded-md border border-stone-200 bg-white"
-            data-testid="advanced-validation-details"
-          >
-            <summary className="cursor-pointer select-none px-4 py-2 text-xs uppercase tracking-wide text-stone-500 hover:text-club-ink">
-              Advanced validation details
-            </summary>
-            <div className="border-t border-stone-200">
-              <div className="px-6 py-3 text-[11px] text-stone-500">
-                {batch.rows.length > 200
-                  ? `Debug preview — showing first 200 of ${batch.rows.length} rows.`
-                  : `${batch.rows.length} rows.`}
-              </div>
-              <table className="table-base">
-                <thead><tr><th>#</th><th>Status</th><th>Created</th><th>Error</th></tr></thead>
-                <tbody>
-                  {batch.rows.slice(0, 200).map((r) => (
-                    <tr key={r.id}>
-                      <td className="text-xs">{r.rowNumber}</td>
-                      <td><Badge status={r.status} /></td>
-                      <td className="text-xs font-mono">{r.createdEntityType ? `${r.createdEntityType}:${r.createdEntityId?.slice(0, 8)}` : "—"}</td>
-                      <td className="text-xs">{r.errorMessage ?? ""}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </details>
         </>
       ) : (
         <>

@@ -69,7 +69,7 @@ export function CoaErrorsCard({ errors }: Props) {
         className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-stone-200"
         data-testid="coa-errors-summary-bar"
       >
-        <div className="flex items-center gap-2 text-sm text-red-700">
+        <div className={"flex items-center gap-2 text-sm " + (hardErrors.length > 0 ? "text-red-700" : "text-amber-700")}>
           <svg
             width="13"
             height="13"
@@ -103,18 +103,35 @@ export function CoaErrorsCard({ errors }: Props) {
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
             aria-controls="coa-errors-detail-list"
-            className="text-xs text-red-700 hover:underline"
+            className={
+              "text-xs hover:underline " +
+              (hardErrors.length > 0 ? "text-red-700" : "text-amber-700")
+            }
             data-testid="coa-errors-toggle"
           >
-            {expanded ? "Hide error details" : "See error details"}
+            {expanded
+              ? hardErrors.length > 0 ? "Hide error details" : "Hide warning details"
+              : hardErrors.length > 0 ? "See error details" : "See warning details"}
           </button>
+          {/* COA-UX-3 (2026-09-30) — §14 label fidelity. When only
+              warnings are present (0 errors + N warnings) the
+              navigation should read "Next warning", not "Next
+              error". The underlying event + listener are unchanged
+              — CoaErrorsCard still dispatches `spectre:coa-next-error`
+              which the Inspector workspace cycles through
+              errorRowNumbers (both ERROR and WARNING rowNumbers). */}
           <button
             type="button"
             onClick={nextError}
-            className="inline-flex items-center gap-1 rounded border border-red-300 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+            className={
+              "inline-flex items-center gap-1 rounded border bg-white px-2.5 py-1 text-xs font-medium " +
+              (hardErrors.length > 0
+                ? "border-red-300 text-red-700 hover:bg-red-50"
+                : "border-amber-300 text-amber-700 hover:bg-amber-50")
+            }
             data-testid="coa-errors-next-error"
           >
-            Next error →
+            {hardErrors.length > 0 ? "Next error →" : "Next warning →"}
           </button>
         </div>
       </div>
