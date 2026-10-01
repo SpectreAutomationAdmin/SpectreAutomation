@@ -24,11 +24,13 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { applyBulkCoaEditAction, applyInspectorEditAction } from "./_bulk-coa-actions";
 import {
+  canonicaliseClassification,
   categoryStillValidUnderType,
   commonAccountType,
   commonCategoryKey,
   filterCategoryOptionsByType,
   filterFsGroupOptionsByCategory,
+  getTypeForCategory,
   isFsGroupValidForCategory,
 } from "@/lib/imports/classification-hierarchy";
 
@@ -546,8 +548,16 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
                 <InspectorSelect label="Category" value={inspected.categoryKey} disabled={props.readOnly}
                   options={[["", "— select —"], ...filterCategoryOptionsByType(props.categories, inspected.type).map((c): [string, string] => [c.key, c.name])]}
                   onChange={(v) => {
-                    // §10 cascade — clear FS Group if it doesn't match the new Category.
-                    const edits: Parameters<typeof applyInspectorEditAction>[2] = { categoryKey: v || null };
+                    // COA-UX-2d atomic classification — a Category change
+                    // ALSO sets Type to whatever this Category belongs to
+                    // in the catalog, and clears FS Group if it no longer
+                    // matches. The server receives one coherent triple
+                    // instead of two separate transient states.
+                    const nextType = getTypeForCategory(v || null, props.categories) ?? inspected.type;
+                    const edits: Parameters<typeof applyInspectorEditAction>[2] = {
+                      type: nextType,
+                      categoryKey: v || null,
+                    };
                     if (!isFsGroupValidForCategory(inspected.fsGroupKey, v)) {
                       edits.fsGroupKey = null;
                     }
@@ -556,9 +566,49 @@ export function BulkCoaReviewControls(props: BulkReviewControlsProps) {
                 <InspectorSelect label="FS Group" value={inspected.fsGroupKey} disabled={props.readOnly}
                   options={[
                     ["", "— select —"],
-                    ...filterFsGroupOptionsByCategory(props.fsGroups, inspected.categoryKey).map((g): [string, string] => [g.key, g.name]),
+                    // COA-UX-2d — show FS Groups valid under the current
+                    // Category. When no Category is set we fall back to
+                    // filtering by Type so the operator can't accidentally
+                    // pick an incompatible group (the Account 7000 defect).
+                    ...filterFsGroupOptionsByCategory(
+                      inspected.categoryKey
+                        ? props.fsGroups
+                        : props.fsGroups.filter((g) => {
+                            // Permissive if we can't resolve a canonical
+                            // category — the group may be a custom one.
+                            // Otherwise require the group's canonical
+                            // category to belong to the current Type.
+                            if (!inspected.type) return true;
+                            const canonical = canonicaliseClassification({ fsGroupKey: g.key }, props.categories);
+                            if (!canonical.type) return true;
+                            return canonical.type === inspected.type;
+                          }),
+                      inspected.categoryKey,
+                    ).map((g): [string, string] => [g.key, g.name]),
                   ]}
-                  onChange={(v) => runInspectorEdit({ fsGroupKey: v || null })} />
+                  onChange={(v) => {
+                    // COA-UX-2d atomic classification — picking an FS Group
+                    // uplifts the hierarchy: Category is derived from the
+                    // predictor's canonical FS_GROUP_TO_CATEGORY, and Type
+                    // is derived from the resolved Category. Any explicit
+                    // founder choice on Type/Category stays authoritative
+                    // (server-side validation catches explicit conflicts).
+                    if (!v) {
+                      runInspectorEdit({ fsGroupKey: null });
+                      return;
+                    }
+                    const canonical = canonicaliseClassification({ fsGroupKey: v }, props.categories);
+                    const edits: Parameters<typeof applyInspectorEditAction>[2] = {
+                      fsGroupKey: v,
+                    };
+                    if (canonical.categoryKey && canonical.categoryKey !== inspected.categoryKey) {
+                      edits.categoryKey = canonical.categoryKey;
+                    }
+                    if (canonical.type && canonical.type !== inspected.type) {
+                      edits.type = canonical.type;
+                    }
+                    runInspectorEdit(edits);
+                  }} />
               </Section>
 
               <Section title="Department">

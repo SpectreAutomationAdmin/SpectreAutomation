@@ -29,6 +29,7 @@ import { saveCoaRowMappings } from "@/lib/imports";
 import { normaliseCoaRow } from "@/lib/imports/coa-mapping";
 import { readReviewState } from "@/lib/imports/coa-review-state";
 import { resolveReviewedAfterMaterialEdit } from "@/lib/imports/coa-review-reset";
+import { checkClassificationCoherence } from "@/lib/imports/classification-hierarchy";
 import { getCurrentPrincipal } from "@/lib/services/principal";
 
 type DimensionPolicy = "REQUIRED" | "OPTIONAL" | "NOT_APPLICABLE";
@@ -161,13 +162,12 @@ export async function applyBulkCoaEditAction(
       case "SET_FUND_POLICY":
         return withReviewed({ ...base, fundPolicy: action.value });
       case "SET_CLASSIFICATION": {
-        // Each of type / categoryKey / fsGroupKey is independently
-        // optional — undefined means "leave alone", null means
-        // "clear on this row". Cascade invariants (§10) are enforced
-        // client-side before the action fires; here we just persist
-        // exactly what the operator asked for. saveCoaRowMappings +
-        // downstream DIM validation will still reject an incompatible
-        // combination.
+        // COA-UX-2d atomic classification — each field is independently
+        // optional, BUT picking an FS Group alone uplifts to its canonical
+        // Category + Type. If the operator sends an explicit
+        // `type`/`categoryKey`, that value stays authoritative and the
+        // coherence check at the end of applyBulkCoaEditAction will
+        // reject conflicts.
         const next: typeof base = { ...base };
         if (action.type !== undefined) next.type = action.type;
         if (action.categoryKey !== undefined) next.categoryKey = action.categoryKey;
@@ -180,6 +180,25 @@ export async function applyBulkCoaEditAction(
         return { ...base, reviewed: true };
     }
   });
+
+  // COA-UX-2d (2026-09-30) — server-side batch-level hierarchy guard
+  // (§7, §14, §15.N). Reject the entire bulk if ANY resulting row
+  // triple would be incoherent under the tenant catalog. Fail-closed
+  // so no bulk flow (including an operator with the UI stripped off)
+  // can persist the Account 7000 defect shape.
+  const batchCategories = await prisma.accountCategory.findMany({
+    where: { clubId: batch.clubId },
+    select: { key: true, type: true },
+  }).then((xs) => xs.map((r) => ({ key: r.key, accountType: r.type })));
+  for (const m of mappings) {
+    const coherence = checkClassificationCoherence(
+      { type: m.type, categoryKey: m.categoryKey, fsGroupKey: m.fsGroupKey },
+      batchCategories,
+    );
+    if (!coherence.coherent) {
+      return { ok: false, message: `Invalid classification on row ${m.rowId}: ${coherence.reason}` };
+    }
+  }
 
   try {
     const result = await saveCoaRowMappings(principal, { batchId, mappings });
@@ -289,6 +308,24 @@ export async function applyInspectorEditAction(
       fundApplicabilityKeys: nextFundApplicabilityKeys,
     },
   });
+
+  // COA-UX-2d (2026-09-30) — server-side hierarchy guard (§7, §15.G,
+  // §15.N). The Inspector + bulk controls can no longer construct an
+  // incoherent (type, categoryKey, fsGroupKey) triple, but any edit
+  // through this entry point must also fail-closed if a client bug or
+  // a manual API caller tries to persist one. Permissive for custom
+  // categories / unknown FS Groups — only CANONICAL conflicts fail.
+  const classificationCategories = await prisma.accountCategory.findMany({
+    where: { clubId: batch.clubId },
+    select: { key: true, type: true },
+  }).then((rows) => rows.map((r) => ({ key: r.key, accountType: r.type })));
+  const coherence = checkClassificationCoherence(
+    { type: nextType, categoryKey: nextCategoryKey, fsGroupKey: nextFsGroupKey },
+    classificationCategories,
+  );
+  if (!coherence.coherent) {
+    return { ok: false, message: `Invalid classification: ${coherence.reason}` };
+  }
 
   const merged: Parameters<typeof saveCoaRowMappings>[1]["mappings"][number] = {
     rowId: row.id,

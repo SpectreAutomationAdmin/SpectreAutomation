@@ -158,3 +158,163 @@ export function commonCategoryKey(rows: ReadonlyArray<{ categoryKey: string }>):
   for (const r of rows) if (r.categoryKey !== first) return null;
   return first || null;
 }
+
+// ---------------------------------------------------------------------------
+// COA-UX-2d (2026-09-30) — Classification uplift + coherence check.
+//
+// §4 of the directive: a founder classification change must result in
+// ONE internally valid persisted mapping. Picking an FS Group that
+// implies a different Type/Category can no longer leave the row in
+// an incoherent state (e.g. Account 7000: EXPENSE + —no Category— +
+// Other Revenue). The Inspector + bulk Classification + server-side
+// save MUST all route through these helpers.
+// ---------------------------------------------------------------------------
+
+/**
+ * Look up the AccountType an AccountCategory key resolves to via
+ * the tenant's category catalog. Returns null for unknown keys.
+ */
+export function getTypeForCategory<T extends { key: string; accountType: string }>(
+  categoryKey: string | null | undefined,
+  catalog: ReadonlyArray<T>,
+): string | null {
+  if (!categoryKey) return null;
+  const row = catalog.find((c) => c.key === categoryKey);
+  return row ? row.accountType : null;
+}
+
+/** The result of a classification coherence check. */
+export type ClassificationCoherence =
+  | { coherent: true }
+  | { coherent: false; reason: string; code: ClassificationViolationCode };
+
+export type ClassificationViolationCode =
+  | "TYPE_CATEGORY_MISMATCH"      // Category.type !== Type
+  | "CATEGORY_FS_GROUP_MISMATCH"  // FS Group's canonical Category !== Category
+  | "FS_GROUP_WITHOUT_CATEGORY"   // FS Group set but Category missing — §3/§4 forbidden combo
+  | "FS_GROUP_WITHOUT_TYPE";      // FS Group set but Type missing
+
+/**
+ * Decide whether a (type, categoryKey, fsGroupKey) triple is internally
+ * valid under the tenant's catalog + the canonical FS Group → Category
+ * mapping. The three fields are allowed to be independently null; the
+ * check is permissive for unknown canonical keys so a club-specific
+ * FS Group doesn't fail validation.
+ */
+export function checkClassificationCoherence<T extends { key: string; accountType: string }>(
+  input: {
+    type: string | null | undefined;
+    categoryKey: string | null | undefined;
+    fsGroupKey: string | null | undefined;
+  },
+  categoryCatalog: ReadonlyArray<T>,
+): ClassificationCoherence {
+  const { type, categoryKey, fsGroupKey } = input;
+
+  // Type ↔ Category (DB-backed via AccountCategory.type).
+  if (type && categoryKey) {
+    const catRow = categoryCatalog.find((c) => c.key === categoryKey);
+    // Unknown category key — treat as permissive (custom category).
+    if (catRow && catRow.accountType !== type) {
+      return {
+        coherent: false,
+        code: "TYPE_CATEGORY_MISMATCH",
+        reason: `Category ${categoryKey} is for ${catRow.accountType}, not ${type}.`,
+      };
+    }
+  }
+
+  // Category ↔ FS Group (code-based via FS_GROUP_TO_CATEGORY constant).
+  if (fsGroupKey && categoryKey) {
+    const mappedCategory = FS_GROUP_TO_CATEGORY[fsGroupKey];
+    if (mappedCategory !== undefined && mappedCategory !== categoryKey) {
+      return {
+        coherent: false,
+        code: "CATEGORY_FS_GROUP_MISMATCH",
+        reason: `FS Group ${fsGroupKey} belongs to ${mappedCategory}, not ${categoryKey}.`,
+      };
+    }
+  }
+
+  // FS Group present but Category missing — §3/§4 explicitly forbids
+  // this as it was the Account 7000 defect shape.
+  if (fsGroupKey && !categoryKey) {
+    const mappedCategory = FS_GROUP_TO_CATEGORY[fsGroupKey];
+    if (mappedCategory !== undefined) {
+      return {
+        coherent: false,
+        code: "FS_GROUP_WITHOUT_CATEGORY",
+        reason: `FS Group ${fsGroupKey} requires Category ${mappedCategory}, but Category is empty.`,
+      };
+    }
+    // Unknown FS Group with no Category — permissive; the operator
+    // may be using a custom club-specific group outside the canonical
+    // mapping. Normal DIM validation at commit time will catch this
+    // if it's actually broken.
+  }
+
+  // FS Group with Category but no Type — also incoherent.
+  if (fsGroupKey && categoryKey && !type) {
+    return {
+      coherent: false,
+      code: "FS_GROUP_WITHOUT_TYPE",
+      reason: `Category ${categoryKey} + FS Group ${fsGroupKey} require a Type, but Type is empty.`,
+    };
+  }
+
+  return { coherent: true };
+}
+
+/**
+ * Canonicalise a (partial) classification by filling in Type and
+ * Category when they can be unambiguously derived from downstream
+ * fields:
+ *
+ *   * FS Group given → Category = FS_GROUP_TO_CATEGORY[fsGroupKey]
+ *   * Category given (or derived) → Type = AccountCategory.type
+ *
+ * Fields the caller sent explicitly are preserved exactly as given
+ * (even if `null`). Only MISSING / UNDEFINED fields are filled in.
+ * This is how the Inspector's "picking an FS Group fills in Type + Category"
+ * atomic UX works without the client having to know the catalog.
+ *
+ * The returned triple is NOT guaranteed to be coherent — a caller
+ * that passes conflicting fields explicitly (e.g. Type=EXPENSE +
+ * FS Group=IS_OTHER_REVENUE) gets its explicit values back; use
+ * `checkClassificationCoherence` next.
+ */
+export function canonicaliseClassification<T extends { key: string; accountType: string }>(
+  input: {
+    type?: string | null;
+    categoryKey?: string | null;
+    fsGroupKey?: string | null;
+  },
+  categoryCatalog: ReadonlyArray<T>,
+): { type: string | null; categoryKey: string | null; fsGroupKey: string | null } {
+  const explicit = {
+    type: input.type === undefined ? undefined : input.type,
+    categoryKey: input.categoryKey === undefined ? undefined : input.categoryKey,
+    fsGroupKey: input.fsGroupKey === undefined ? undefined : input.fsGroupKey,
+  };
+
+  // Derive Category from FS Group when Category wasn't explicitly set.
+  let categoryKey = explicit.categoryKey;
+  if (categoryKey === undefined && explicit.fsGroupKey) {
+    const derived = FS_GROUP_TO_CATEGORY[explicit.fsGroupKey];
+    if (derived !== undefined) categoryKey = derived;
+  }
+
+  // Derive Type from Category (either explicit or just-derived) when
+  // Type wasn't explicitly set.
+  let type = explicit.type;
+  if (type === undefined && categoryKey) {
+    const derived = getTypeForCategory(categoryKey, categoryCatalog);
+    if (derived !== null) type = derived;
+  }
+
+  return {
+    type: type === undefined ? null : type,
+    categoryKey: categoryKey === undefined ? null : categoryKey,
+    fsGroupKey: explicit.fsGroupKey === undefined ? null : explicit.fsGroupKey,
+  };
+}
