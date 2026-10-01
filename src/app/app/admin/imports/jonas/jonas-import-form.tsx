@@ -53,6 +53,18 @@ function money(n: number): string {
   });
 }
 
+// TB-HIST-4 (2026-10-01) — present-tense label for the parser's
+// detected source format. The raw enum values stay in the API; the
+// UI surfaces the operator-friendly phrasing.
+function sourceFormatLabel(f: string): string {
+  switch (f) {
+    case "jonas-native": return "Jonas Native (with period preamble)";
+    case "closing-balance": return "Closing Balance Trial Balance";
+    case "spectre-normalised": return "Spectre Normalised";
+    default: return f;
+  }
+}
+
 function toBase64(buf: ArrayBuffer): string {
   const bytes = new Uint8Array(buf);
   let s = "";
@@ -357,6 +369,15 @@ export function JonasImportForm() {
           <dl className="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
             <SummaryRow k="Source file" v={previewOk.sourceFilename} testId="sum-file" />
             <SummaryRow k="Source system" v="Jonas" />
+            {/* TB-HIST-4 — show the detected source-format path so the
+                operator can confirm the workbook was recognised
+                correctly (Jonas Native / Closing Balance TB /
+                Spectre Normalised). */}
+            <SummaryRow
+              k="Source format"
+              v={sourceFormatLabel(previewOk.detectedFormat)}
+              testId="sum-source-format"
+            />
             <SummaryRow
               k="Source entity"
               v={previewOk.detectedEntity ?? "Not detected in source file"}
@@ -378,6 +399,22 @@ export function JonasImportForm() {
             <SummaryRow k="Unmapped" v={String(previewOk.mappingCoverage.unmapped)} />
             <SummaryRow k="Description conflicts" v={String(previewOk.mappingCoverage.descriptionConflicts)} />
             <SummaryRow k="Duplicate account codes" v={String(previewOk.mappingCoverage.duplicates)} />
+            {/* TB-HIST-4 — dimensional resolution counts. For a
+                four-column closing-balance workbook (no Department
+                column) these show how many accounts REQUIRE a
+                department vs how many are policy-OPTIONAL /
+                NOT_APPLICABLE. Non-zero `missingRequiredDept` blocks
+                the commit. */}
+            <SummaryRow
+              k="Missing REQUIRED department"
+              v={String(previewOk.mappingCoverage.missingRequiredDept)}
+              testId="sum-missing-required-dept"
+            />
+            <SummaryRow
+              k="Unknown department codes"
+              v={String(previewOk.mappingCoverage.unknownDept)}
+              testId="sum-unknown-dept"
+            />
             <SummaryRow k="Total Debit" v={money(previewOk.reconciliation.totalDebits)} testId="sum-total-debit" />
             <SummaryRow k="Total Credit" v={money(previewOk.reconciliation.totalCredits)} testId="sum-total-credit" />
             <SummaryRow k="Difference" v={money(Math.abs(previewOk.reconciliation.delta))} testId="sum-delta" />
@@ -392,6 +429,25 @@ export function JonasImportForm() {
           {previewOk.requiresEffectiveDateSelection && !fields.effectiveDateOverride && (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               This file has no reliable effective date. Select one above before committing.
+            </div>
+          )}
+
+          {/* TB-HIST-4 (2026-10-01) — Format-C (four-column closing-
+              balance) workbook with missing-required departments.
+              Explicit, actionable banner so the operator sees the
+              dimensional resolution gap before scrolling the row
+              table. The commit path blocks on this condition via
+              MISSING_REQUIRED_DEPARTMENT; the Preview surfaces it
+              non-destructively here. */}
+          {previewOk.detectedFormat === "closing-balance" && previewOk.mappingCoverage.missingRequiredDept > 0 && (
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="format-c-missing-dept">
+              <p>
+                <strong>Closing Balance workbook — Department column absent.</strong>{" "}
+                {previewOk.mappingCoverage.missingRequiredDept} account(s) in Coulee&apos;s
+                Chart of Accounts have a <code>departmentPolicy</code> of REQUIRED but
+                the source file provides no Department column. Commit is blocked
+                until the historical department-attribution strategy is decided.
+              </p>
             </div>
           )}
 

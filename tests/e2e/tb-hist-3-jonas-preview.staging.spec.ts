@@ -32,6 +32,9 @@ async function captureCouleeInvariant(page: Page) {
 }
 
 runAt("TB-HIST-3 · Jonas XLSX Preview — pending → result (never silent) + Coulee invariant intact", async ({ browser }) => {
+  // Longer than the project default — upload + server-action +
+  // round-trip to the diagnostic API on staging can take > 60s.
+  test.setTimeout(180_000);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await loginAsFounder(context);
 
@@ -50,8 +53,16 @@ runAt("TB-HIST-3 · Jonas XLSX Preview — pending → result (never silent) + C
   await page.waitForSelector('[data-testid="jonas-import-inputs"]', { timeout: 30_000 });
 
   // --- Upload the synthetic XLSX fixture ---
+  // onFileChosen reads the file as ArrayBuffer async then calls
+  // setFields. In staging we've seen the React re-render lag long
+  // enough that an immediate `expect().toContainText()` races the
+  // setFields propagation — use the locator's built-in retry wait
+  // for the "Loaded: …" paragraph to appear.
   await page.locator('[data-testid="field-source-file"]').setInputFiles(FIXTURE);
-  await expect(page.locator('[data-testid="field-source-filename"]')).toContainText("jonas-april-2026-tb.xlsx");
+  await expect(page.locator('[data-testid="field-source-filename"]')).toContainText(
+    "jonas-april-2026-tb.xlsx",
+    { timeout: 60_000 },
+  );
 
   // --- Explicit effective date so preview doesn't block on resolution ---
   await page.locator('[data-testid="field-effective-date"]').fill("2026-04-30");

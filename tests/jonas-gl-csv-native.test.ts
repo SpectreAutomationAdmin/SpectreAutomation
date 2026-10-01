@@ -205,9 +205,14 @@ describe("parseJonasGlCsv — bad files still surface useful errors", () => {
     expect(result.fileErrors[0].message).toContain("periodbalance");
   });
 
-  it("Jonas-shaped headers but no period heading → falls through (missing-column)", () => {
+  it("Jonas-shaped headers but no period heading AND no fallback → effective-date-required (TB-HIST-4)", () => {
     // Headers look Jonas-like but there's NO "Trial Balance for ..."
-    // preamble — detector requires both signals before normalising.
+    // preamble AND the caller supplied no effective-date fallback.
+    // TB-HIST-4: this is the founder's four-column closing-balance
+    // workbook shape; the parser now surfaces an actionable
+    // "effective-date-required" error instead of the misleading
+    // "missing-column" ("accountnumber, accountdescription, …") that
+    // the pre-TB-HIST-4 parser emitted.
     const csv = [
       '"G/L Account\nCode","G/L Account\nDescription","Closing Bal\nDebit","Closing Bal\nCredit"',
       '1010,"Cash","$100","$0"',
@@ -215,9 +220,8 @@ describe("parseJonasGlCsv — bad files still surface useful errors", () => {
     const result = parseJonasGlCsv(csv);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    // The Jonas-native normalizer didn't trigger (no period heading);
-    // standard parser then reports missing required columns.
-    expect(result.fileErrors[0].kind).toBe("missing-column");
+    expect(result.fileErrors[0].kind).toBe("effective-date-required");
+    expect(result.fileErrors[0].message).toMatch(/Select an effective date/i);
   });
 
   it("empty CSV → empty file error", () => {

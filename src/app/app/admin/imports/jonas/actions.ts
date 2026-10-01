@@ -47,7 +47,11 @@ import {
   DEFAULT_FISCAL_YEAR_END,
   lastDayOfMonthUtc,
 } from "@/lib/reporting/ledger/importers/jonas-fiscal-period";
-import type { JonasHeadingMetadata } from "@/lib/reporting/ledger/importers/jonas-gl-csv";
+import type {
+  JonasGlCsvParseOpts,
+  JonasHeadingMetadata,
+  JonasSourceFormat,
+} from "@/lib/reporting/ledger/importers/jonas-gl-csv";
 import { tallyJonasReconciliation } from "@/lib/reporting/ledger/importers/jonas-reconciliation";
 import {
   computeCsvSourceHash,
@@ -123,6 +127,14 @@ export type JonasImportPreview =
         unmapped: number;
         descriptionConflicts: number;
         duplicates: number;
+        // TB-HIST-4 (2026-10-01) — dimensional resolution counts
+        // surfaced in the preview summary. For the four-column
+        // closing-balance workbook (no Department column) every
+        // row carries department=null; these counts let the operator
+        // see immediately how many accounts REQUIRE a department
+        // vs how many are policy-OPTIONAL/NOT_APPLICABLE.
+        missingRequiredDept: number;
+        unknownDept: number;
       };
       reconciliation: {
         totalDebits: number;
@@ -177,6 +189,10 @@ export type JonasImportPreview =
       /** True when the caller has not yet supplied an effective date
        *  (heading absent AND founder hasn't chosen one on the form). */
       requiresEffectiveDateSelection: boolean;
+      /** TB-HIST-4 — which source-format path produced this preview.
+       *  Surfaced in the preview summary so the operator can confirm
+       *  the parser treated the workbook as expected. */
+      detectedFormat: JonasSourceFormat;
     }
   | {
       status: "validation-failed";
@@ -341,6 +357,39 @@ function toEndOfDayUtc(yyyyMmDd: string): Date | null {
   return new Date(Date.UTC(y, m - 1, d, 23, 59, 59));
 }
 
+// TB-HIST-4 (2026-10-01) — resolve the parser-side fallback for
+// Format C (four-column closing-balance) workbooks. The parser cannot
+// derive fiscal year/period from a header-only workbook; the UI
+// supplies the effective date, and this helper combines it with the
+// club's fiscal-year-end policy so the parser can emit a FY/period-
+// correct CSV in a single pass. Returns null when no override exists
+// — the parser then emits `effective-date-required` so the UI can
+// render an actionable message.
+async function resolveFallbackPeriodEnd(args: {
+  clubId: string;
+  overrideIso: string | null;
+}): Promise<JonasGlCsvParseOpts["fallbackPeriodEnd"] | null> {
+  if (!args.overrideIso) return null;
+  const periodEnd = toEndOfDayUtc(args.overrideIso);
+  if (!periodEnd) return null;
+  const profile = await prisma.clubProfile.findUnique({
+    where: { clubId: args.clubId },
+    select: { fiscalYearEndMonth: true, fiscalYearEndDay: true },
+  });
+  const fyEndMonth = profile?.fiscalYearEndMonth ?? DEFAULT_FISCAL_YEAR_END.month;
+  const fyEndDay = profile?.fiscalYearEndDay ?? DEFAULT_FISCAL_YEAR_END.day;
+  const labels = computeFiscalLabels(periodEnd, fyEndMonth, fyEndDay);
+  return {
+    // Snap to the month-end of the operator's selection — a mid-
+    // month pick still maps to the same calendar month / fiscal
+    // period as the end-of-month statement date.
+    calendarYear: periodEnd.getUTCFullYear(),
+    calendarMonth: periodEnd.getUTCMonth() + 1,
+    fiscalYear: labels.fiscalYearNum,
+    fiscalPeriod: labels.fiscalPeriodNum,
+  };
+}
+
 async function resolveDates(args: {
   clubId: string;
   headingMetadata: JonasHeadingMetadata | null;
@@ -389,7 +438,18 @@ export async function previewJonasImport(
   const decoded = await decodeInput(input);
   if ("error" in decoded) return decoded;
 
-  const parseResult = parseJonasGlCsv(decoded.csv);
+  // TB-HIST-4 — resolve the parser-side fallback BEFORE parsing so the
+  // four-column closing-balance workbook (Format C) can be normalised
+  // in a single pass. For Format A/B the fallback is harmless (parser
+  // ignores it when the preamble is present or the schema is already
+  // spectre-canonical).
+  const parserFallback = await resolveFallbackPeriodEnd({
+    clubId,
+    overrideIso: decoded.effectiveDateOverride,
+  });
+  const parseResult = parseJonasGlCsv(decoded.csv, {
+    fallbackPeriodEnd: parserFallback ?? undefined,
+  });
   if (!parseResult.ok) {
     return {
       status: "validation-failed",
@@ -406,6 +466,9 @@ export async function previewJonasImport(
   let mappedCount = 0;
   let unmappedCount = 0;
   let descriptionConflicts = 0;
+  // TB-HIST-4 — rolled-up dimensional counts for the preview summary.
+  let missingRequiredDeptCount = 0;
+  let unknownDeptCount = 0;
   // TB-HIST-2 (2026-10-01) — dimensional duplicate detection. The row
   // identity for a historical TB snapshot is (accountCode, department,
   // fund). Two rows that share only accountCode but differ on
@@ -487,6 +550,8 @@ export async function previewJonasImport(
     } else {
       departmentStatus = "ok";
     }
+    if (departmentStatus === "missing-required") missingRequiredDeptCount++;
+    if (departmentStatus === "unknown-dept") unknownDeptCount++;
 
     rows.push({
       lineNumber: r.lineNumber,
@@ -716,6 +781,8 @@ export async function previewJonasImport(
       unmapped: unmappedCount,
       descriptionConflicts,
       duplicates: duplicateCodes.size,
+      missingRequiredDept: missingRequiredDeptCount,
+      unknownDept: unknownDeptCount,
     },
     reconciliation: {
       totalDebits: reconciliation.totalDebits,
@@ -735,6 +802,7 @@ export async function previewJonasImport(
     targetTenantName,
     requiresEntityMismatchAcknowledgement,
     requiresEffectiveDateSelection,
+    detectedFormat: parseResult.detectedFormat,
   };
 }
 
@@ -753,7 +821,15 @@ export async function commitJonasImport(
   const decoded = await decodeInput(input);
   if ("error" in decoded) return { error: decoded.error };
 
-  const parseResult = parseJonasGlCsv(decoded.csv);
+  // TB-HIST-4 — mirror previewJonasImport's fallback resolution so a
+  // Format C workbook that preview-validated can also commit.
+  const parserFallback = await resolveFallbackPeriodEnd({
+    clubId,
+    overrideIso: decoded.effectiveDateOverride,
+  });
+  const parseResult = parseJonasGlCsv(decoded.csv, {
+    fallbackPeriodEnd: parserFallback ?? undefined,
+  });
   if (!parseResult.ok) {
     return {
       status: "blocked",

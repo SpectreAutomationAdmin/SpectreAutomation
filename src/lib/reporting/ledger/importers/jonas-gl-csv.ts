@@ -73,16 +73,51 @@ export type JonasGlCsvRowError = {
 
 /** File-level validation error. */
 export type JonasGlCsvFileError = {
-  kind: "missing-header" | "missing-column" | "empty" | "parse-failure";
+  kind:
+    | "missing-header"
+    | "missing-column"
+    | "empty"
+    | "parse-failure"
+    // TB-HIST-4 (2026-10-01) — the four-column "Closing Balance" Jonas
+    // export has no preamble row, so a fiscal year/period cannot be
+    // inferred from the workbook alone. When the caller has not
+    // supplied an effective-date override, the parser emits this error
+    // with an actionable message instead of masking it as a
+    // missing-column failure. The UI's effective-date picker is the
+    // remediation.
+    | "effective-date-required";
   message: string;
   /** Headers seen — populated for missing-column errors. */
   seenHeaders?: string[];
 };
 
+/** Source format recognised by the parser. Returned on the heading
+ *  metadata so the preview can show the operator exactly which schema
+ *  path was taken. */
+export type JonasSourceFormat =
+  /** Full Jonas-native export — 3 preamble rows + 4-column header +
+   *  negative-credit numeric convention + currency strings. Fiscal
+   *  year + period come from the "Trial Balance for <Month>, <Year>"
+   *  preamble line, verbatim. */
+  | "jonas-native"
+  /** Four-column closing-balance Trial Balance — Jonas export WITHOUT
+   *  the preamble line. Columns are "G/L Account Code",
+   *  "G/L Account Description", "Closing Bal Debit", "Closing Bal
+   *  Credit". Fiscal year + period MUST be derived from a caller-
+   *  supplied effective date (`fallbackPeriodEnd`); the workbook
+   *  alone cannot name a period. */
+  | "closing-balance"
+  /** Spectre-canonical schema — AccountNumber, AccountDescription,
+   *  PeriodBalance, YTDBalance, FiscalYear, FiscalPeriod (+ optional
+   *  Debit/Credit/Department/AccountType). Supplied directly by
+   *  tooling that already produces the normalised columns. */
+  | "spectre-normalised";
+
 /** Metadata inferred from a Jonas-native trial-balance heading.
- *  Populated only when the source CSV was the raw Jonas export
- *  (with the "Trial Balance for <Month>, <Year>" preamble). Null
- *  for spectre-normalised inputs that lack a period heading. */
+ *  Populated when the source CSV carried the raw Jonas export
+ *  preamble OR when the caller supplied an effective-date override
+ *  that resolved the four-column closing-balance schema. Null for
+ *  spectre-normalised inputs that need no inference. */
 export type JonasHeadingMetadata = {
   /** Calendar year from the period heading (e.g. 2026). */
   calendarYear: number;
@@ -99,6 +134,30 @@ export type JonasHeadingMetadata = {
    *  treats month and fiscal-period as equivalent; clubs whose FY
    *  doesn't align to the calendar can re-interpret downstream). */
   fiscalPeriod: number;
+  /** Which source-format path produced this metadata. */
+  sourceFormat: JonasSourceFormat;
+};
+
+/** Parse-time options. TB-HIST-4 — a four-column closing-balance
+ *  workbook has no preamble, so the caller must supply the
+ *  effective-date-derived fiscal year/period for the parser to
+ *  normalise it. The caller resolves the club's fiscal-year-end
+ *  policy before invoking the parser; this struct is already
+ *  calendar-year + 1..12 month. */
+export type JonasGlCsvParseOpts = {
+  fallbackPeriodEnd?: {
+    /** Calendar year of the statement date (e.g. 2025 for Dec 31 2025). */
+    calendarYear: number;
+    /** Calendar month 1..12 of the statement date. */
+    calendarMonth: number;
+    /** Fiscal year label integer the parser emits into the CSV's
+     *  `FiscalYear` column. Resolved by the caller from the club's
+     *  fiscal-year-end policy. */
+    fiscalYear: number;
+    /** Fiscal period 1..12 the parser emits into the CSV's
+     *  `FiscalPeriod` column. */
+    fiscalPeriod: number;
+  };
 };
 
 /** Successful parse output. */
@@ -108,9 +167,17 @@ export type JonasGlCsvParseSuccess = {
   /** Per-row warnings (e.g. unrecognised optional columns). */
   warnings: JonasGlCsvRowError[];
   /** Set when the source CSV was a Jonas-native trial-balance
-   *  export (3 preamble rows + multi-line headers). Lets the
-   *  importer derive period dates without operator input. */
+   *  export (3 preamble rows + multi-line headers) OR a four-column
+   *  closing-balance export resolved via `opts.fallbackPeriodEnd`.
+   *  Lets the importer derive period dates without operator input
+   *  on the first path, and confirms the UI-supplied date on the
+   *  second. */
   headingMetadata: JonasHeadingMetadata | null;
+  /** Which source-format path produced this parse. Preserved on
+   *  every successful parse so the preview UI can label it
+   *  explicitly ("Jonas Native" / "Closing Balance Trial Balance" /
+   *  "Spectre Normalised"). */
+  detectedFormat: JonasSourceFormat;
 };
 
 /** Failed parse output. */
@@ -332,42 +399,55 @@ function collapseHeader(cell: string): string {
 }
 
 /**
- * Detect a Jonas-native trial-balance export. Looks for BOTH:
- *   • a "Trial Balance for <Month>, <Year>" line in the preamble
- *     (first ~10 records), and
- *   • a header record containing "g/l account" + "closing bal"
- *     after whitespace collapse.
+ * Detect a Jonas four-column trial-balance export (either Jonas-
+ * native with preamble, or the TB-HIST-4 "Closing Balance" variant
+ * without preamble).
  *
- * Returns the header-record index and the inferred fiscal year +
- * fiscal period, or null when the input isn't Jonas-native.
+ * The header pass is primary: we look for a record containing
+ * "g/l account" + "closing bal" after whitespace collapse. Without
+ * that header the parser treats the input as spectre-canonical and
+ * falls through.
+ *
+ * When the header is present, we then look for a
+ * "Trial Balance for <Month>, <Year>" preamble line to extract the
+ * fiscal year/period. If no preamble is found, the caller must
+ * supply `fallback` (resolved from the UI's effective-date picker);
+ * otherwise detection returns a `"needs-fallback"` sentinel so the
+ * parser can emit an actionable `effective-date-required` error
+ * instead of masquerading as a missing-column failure.
  */
-function detectJonasNativeFormat(records: string[][]): {
-  headerRecordIndex: number;
-  fiscalYear: number;
-  fiscalPeriod: number;
-} | null {
+type JonasFormatDetection =
+  | {
+      kind: "jonas-native";
+      headerRecordIndex: number;
+      calendarYear: number;
+      calendarMonth: number;
+      fiscalYear: number;
+      fiscalPeriod: number;
+    }
+  | {
+      kind: "closing-balance";
+      headerRecordIndex: number;
+      calendarYear: number;
+      calendarMonth: number;
+      fiscalYear: number;
+      fiscalPeriod: number;
+    }
+  | {
+      /** Header matches the four-column schema but no preamble is
+       *  present AND the caller supplied no fallback. Parser emits
+       *  `effective-date-required`. */
+      kind: "needs-fallback";
+      headerRecordIndex: number;
+    };
+
+function detectJonasNativeFormat(
+  records: string[][],
+  fallback?: JonasGlCsvParseOpts["fallbackPeriodEnd"],
+): JonasFormatDetection | null {
   const scanDepth = Math.min(10, records.length);
 
-  // Pass 1 — period heading.
-  let fiscalYear: number | null = null;
-  let fiscalPeriod: number | null = null;
-  for (let i = 0; i < scanDepth; i++) {
-    for (const field of records[i]) {
-      const m = /Trial\s+Balance\s+for\s+([A-Za-z]+)[,\s]+(\d{4})/i.exec(field);
-      if (m) {
-        const fp = monthNameToNumber(m[1]);
-        const fy = Number(m[2]);
-        if (fp !== null && Number.isFinite(fy)) {
-          fiscalPeriod = fp;
-          fiscalYear = fy;
-        }
-        break;
-      }
-    }
-    if (fiscalYear !== null) break;
-  }
-
-  // Pass 2 — header row.
+  // Pass 1 — header row (primary signal).
   let headerRecordIndex = -1;
   for (let i = 0; i < scanDepth; i++) {
     const cells = records[i].map(collapseHeader);
@@ -378,11 +458,62 @@ function detectJonasNativeFormat(records: string[][]): {
       break;
     }
   }
+  if (headerRecordIndex < 0) return null;
 
-  if (headerRecordIndex < 0 || fiscalYear === null || fiscalPeriod === null) {
-    return null;
+  // Pass 2 — "Trial Balance for <Month>, <Year>" preamble. Scan only
+  // records that appear BEFORE the header; a stray "Trial Balance for"
+  // mention in a cell after the header must not override an explicit
+  // caller fallback.
+  let calendarYear: number | null = null;
+  let calendarMonth: number | null = null;
+  for (let i = 0; i < headerRecordIndex; i++) {
+    for (const field of records[i]) {
+      const m = /Trial\s+Balance\s+for\s+([A-Za-z]+)[,\s]+(\d{4})/i.exec(field);
+      if (m) {
+        const fp = monthNameToNumber(m[1]);
+        const fy = Number(m[2]);
+        if (fp !== null && Number.isFinite(fy)) {
+          calendarMonth = fp;
+          calendarYear = fy;
+        }
+        break;
+      }
+    }
+    if (calendarYear !== null) break;
   }
-  return { headerRecordIndex, fiscalYear, fiscalPeriod };
+
+  if (calendarYear !== null && calendarMonth !== null) {
+    // Jonas-native (preamble + header). The parser treats
+    // calendarYear/calendarMonth as the fiscalYear/fiscalPeriod
+    // for CSV emission; the action layer re-derives true fiscal
+    // labels via the club's fiscal-year-end policy before writing
+    // the ledger snapshot.
+    return {
+      kind: "jonas-native",
+      headerRecordIndex,
+      calendarYear,
+      calendarMonth,
+      fiscalYear: calendarYear,
+      fiscalPeriod: calendarMonth,
+    };
+  }
+
+  // TB-HIST-4 — header matches but no preamble. The founder's
+  // workbook (Dec 31 2025 TB.xlsx) is this shape: four columns, no
+  // "Trial Balance for..." line. Resolve FY/period from the UI's
+  // effective-date picker (threaded as `fallback`), or signal the
+  // caller to prompt for one.
+  if (fallback) {
+    return {
+      kind: "closing-balance",
+      headerRecordIndex,
+      calendarYear: fallback.calendarYear,
+      calendarMonth: fallback.calendarMonth,
+      fiscalYear: fallback.fiscalYear,
+      fiscalPeriod: fallback.fiscalPeriod,
+    };
+  }
+  return { kind: "needs-fallback", headerRecordIndex };
 }
 
 /**
@@ -400,24 +531,39 @@ function detectJonasNativeFormat(records: string[][]): {
  *     • debit=$0           credit=$1,481,969.03  → −1,481,969.03
  */
 /** Result of the Jonas-native pre-normalisation step. */
-type JonasNormalisationResult = {
-  /** The spectre-canonical CSV string ready for the standard parser. */
-  normalisedCsv: string;
-  /** Heading metadata captured from the Jonas preamble. */
-  metadata: JonasHeadingMetadata;
-};
+type JonasNormalisationResult =
+  | {
+      ok: true;
+      /** The spectre-canonical CSV string ready for the standard parser. */
+      normalisedCsv: string;
+      /** Heading metadata captured from the Jonas preamble OR
+       *  synthesised from the caller's effective-date fallback. */
+      metadata: JonasHeadingMetadata;
+    }
+  | {
+      /** Four-column header matched but no preamble + no fallback.
+       *  Caller must prompt the operator for an effective date. */
+      ok: false;
+      kind: "needs-fallback";
+    };
 
 function lastDayOfMonthUtcEnd(year: number, month1to12: number): Date {
   // Day 0 of next month = last day of current month, at end-of-day.
   return new Date(Date.UTC(year, month1to12, 0, 23, 59, 59, 999));
 }
 
-function normalizeJonasNativeCsv(csv: string): JonasNormalisationResult | null {
+function normalizeJonasNativeCsv(
+  csv: string,
+  fallback?: JonasGlCsvParseOpts["fallbackPeriodEnd"],
+): JonasNormalisationResult | null {
   const records = parseCsvRecords(csv);
   if (records.length === 0) return null;
 
-  const detection = detectJonasNativeFormat(records);
+  const detection = detectJonasNativeFormat(records, fallback);
   if (!detection) return null;
+  if (detection.kind === "needs-fallback") {
+    return { ok: false, kind: "needs-fallback" };
+  }
 
   const headerCells = records[detection.headerRecordIndex].map(collapseHeader);
   const findIdx = (pattern: RegExp): number =>
@@ -499,13 +645,21 @@ function normalizeJonasNativeCsv(csv: string): JonasNormalisationResult | null {
 
   const normalisedCsv = out.map((r) => r.map(csvQuote).join(",")).join("\n");
   return {
+    ok: true,
     normalisedCsv,
     metadata: {
-      calendarYear: detection.fiscalYear,
-      calendarMonth: detection.fiscalPeriod,
-      periodEndDate: lastDayOfMonthUtcEnd(detection.fiscalYear, detection.fiscalPeriod),
+      // TB-HIST-4 — the "calendar" fields carry the ACTUAL calendar
+      // year/month of the statement date (for the preview UI's
+      // period label). The "fiscal" fields carry the resolved
+      // FY/period labels the parser emits into the CSV; for a
+      // closing-balance file these come from the fallback (resolved
+      // by the caller via the club's fiscal-year-end policy).
+      calendarYear: detection.calendarYear,
+      calendarMonth: detection.calendarMonth,
+      periodEndDate: lastDayOfMonthUtcEnd(detection.calendarYear, detection.calendarMonth),
       fiscalYear: detection.fiscalYear,
       fiscalPeriod: detection.fiscalPeriod,
+      sourceFormat: detection.kind,
     },
   };
 }
@@ -537,22 +691,37 @@ function csvQuote(value: string): string {
  *   5. Return success only when zero file errors AND zero row
  *      errors. Warnings (e.g. unused columns) don't fail.
  */
-export function parseJonasGlCsv(csv: string): JonasGlCsvParseResult {
+export function parseJonasGlCsv(
+  csv: string,
+  opts?: JonasGlCsvParseOpts,
+): JonasGlCsvParseResult {
   const fileErrors: JonasGlCsvFileError[] = [];
   const rowErrors: JonasGlCsvRowError[] = [];
   const warnings: JonasGlCsvRowError[] = [];
 
-  // Pre-process: if this looks like a raw Jonas-native trial-balance
-  // export (3 preamble rows + multi-line headers + currency-string
-  // numerics), normalise it to the spectre-canonical column shape
-  // AND capture the heading metadata (period end, fiscal year/period)
-  // so callers can populate the import form without operator input.
-  // Returns null for any input that doesn't match the Jonas-native
-  // signature — the standard parser then handles it unchanged.
-  const normalisation = normalizeJonasNativeCsv(csv);
-  const csvToParse = normalisation?.normalisedCsv ?? csv;
+  // Pre-process: recognise one of the two four-column Jonas exports —
+  //   (a) full Jonas-native (preamble + header + currency-string numerics)
+  //   (b) TB-HIST-4 closing-balance (header-only, no preamble; needs
+  //       caller to supply fiscal year/period via opts.fallbackPeriodEnd)
+  // Returns null for any input that matches neither — the standard
+  // parser then handles the spectre-canonical shape unchanged.
+  const normalisation = normalizeJonasNativeCsv(csv, opts?.fallbackPeriodEnd);
+  if (normalisation && normalisation.ok === false) {
+    // TB-HIST-4 — four-column header matched but we have no fiscal
+    // year/period source. Emit an actionable file error instead of
+    // falling through and reporting "missing accountnumber,
+    // accountdescription, periodbalance, ytdbalance, fiscalyear,
+    // fiscalperiod" (which hides the real remediation: pick a date).
+    fileErrors.push({
+      kind: "effective-date-required",
+      message:
+        "This workbook is a Jonas Closing-Balance Trial Balance (G/L Account Code · G/L Account Description · Closing Bal Debit · Closing Bal Credit) with no period preamble. Select an effective date (month-end) in the form before clicking Preview.",
+    });
+    return { ok: false, fileErrors, rowErrors };
+  }
+  const csvToParse = normalisation && normalisation.ok ? normalisation.normalisedCsv : csv;
   const headingMetadata: JonasHeadingMetadata | null =
-    normalisation?.metadata ?? null;
+    normalisation && normalisation.ok ? normalisation.metadata : null;
 
   const allLines = csvToParse.split(/\r?\n/);
   // Trim trailing empty lines (typical of CSV files that end with
@@ -730,5 +899,11 @@ export function parseJonasGlCsv(csv: string): JonasGlCsvParseResult {
   if (fileErrors.length > 0 || rowErrors.length > 0) {
     return { ok: false, fileErrors, rowErrors };
   }
-  return { ok: true, rows, warnings, headingMetadata };
+  return {
+    ok: true,
+    rows,
+    warnings,
+    headingMetadata,
+    detectedFormat: headingMetadata?.sourceFormat ?? "spectre-normalised",
+  };
 }
