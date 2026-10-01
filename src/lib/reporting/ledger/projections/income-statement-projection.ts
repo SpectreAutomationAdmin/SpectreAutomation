@@ -264,7 +264,10 @@ export class IncomeStatementProjection {
       amount: number;
     }> = [];
 
-    for (const tbLine of tbCurrent.lines) {
+    // TB-HIST-2 (2026-10-01) — iterate the aggregated map so a
+    // dimensional snapshot (multiple lines per accountCode) yields a
+    // single IS line per account using the SUM of dimensional balances.
+    for (const tbLine of currentLinesByCode.values()) {
       const account = currentAccountsByCode.get(tbLine.accountCode);
       if (!account) continue; // (shouldn't happen — TB invariant)
       if (account.category !== "revenue" && account.category !== "expense") {
@@ -303,6 +306,12 @@ export class IncomeStatementProjection {
         mode: input.mode,
         currentLine: tbLine,
         priorLine: priorLinesByCode?.get(tbLine.accountCode) ?? null,
+        // TB-HIST-2 (2026-10-01) — pass both snapshots' fiscal-year
+        // labels so the current-month branch can detect a fiscal-year
+        // boundary and skip the (wrong) `|current YTD| − |prior YTD|`
+        // subtraction. See `computeAmount` for the exact rule.
+        currentFiscalYearLabel: tbCurrent.fiscalYearLabel,
+        priorFiscalYearLabel: tbPrior?.fiscalYearLabel ?? null,
       });
 
       // Skip zero-amount lines in current-month mode (no activity).
@@ -452,15 +461,50 @@ function indexAccounts(
 function indexLines(
   lines: ReadonlyArray<TrialBalanceLine>,
 ): Map<string, TrialBalanceLine> {
+  // TB-HIST-2 (2026-10-01) — dimensional snapshots may carry
+  // multiple lines per accountCode (one per Department×Fund).
+  // Aggregate them into a single synthetic line per accountCode
+  // so IS consumers that key on accountCode see the consolidated
+  // balance. Non-dimensional snapshots degenerate to one row per
+  // accountCode (unchanged behaviour).
   const m = new Map<string, TrialBalanceLine>();
-  for (const l of lines) m.set(l.accountCode, l);
+  for (const l of lines) {
+    const prev = m.get(l.accountCode);
+    if (!prev) {
+      // Store a shallow copy so later aggregation doesn't mutate the
+      // caller's snapshot payload.
+      m.set(l.accountCode, {
+        accountCode: l.accountCode,
+        debit: l.debit,
+        credit: l.credit,
+        endingBalance: l.endingBalance,
+        // Collapsed to null when the account has dimensional detail
+        // — the aggregated view is not scoped to any single
+        // department or fund.
+        department: null,
+        fund: null,
+      });
+      continue;
+    }
+    prev.debit += l.debit;
+    prev.credit += l.credit;
+    prev.endingBalance += l.endingBalance;
+  }
   return m;
 }
 
-function computeAmount(args: {
+export function computeAmount(args: {
   mode: "ytd" | "current-month";
   currentLine: TrialBalanceLine;
   priorLine: TrialBalanceLine | null;
+  // TB-HIST-2 (2026-10-01) — fiscal-year labels of the two TB
+  // snapshots. When they differ, the prior snapshot represents a
+  // DIFFERENT fiscal year's accumulated YTD and must NOT be
+  // subtracted. Omit (undefined) to preserve the pre-TB-HIST-2
+  // behaviour (used by legacy callers and in-memory tests that
+  // don't model fiscal years).
+  currentFiscalYearLabel?: string;
+  priorFiscalYearLabel?: string | null;
 }): number {
   // TB endingBalance is signed on the account's natural side
   // (positive for natural-side balances). Revenue lines are
@@ -472,8 +516,19 @@ function computeAmount(args: {
   if (args.mode === "ytd" || !args.priorLine) {
     return currentAbs;
   }
+  // TB-HIST-2 §1 — if the prior snapshot belongs to a different
+  // fiscal year, treat the current-month amount as the current
+  // fiscal YTD directly. Subtracting prior-FY YTD from current-FY YTD
+  // produces a large negative at every fiscal-year boundary (defect
+  // B1 identified in TB-HIST-1).
+  const bothLabelsPresent =
+    typeof args.currentFiscalYearLabel === "string" &&
+    typeof args.priorFiscalYearLabel === "string";
+  if (bothLabelsPresent && args.currentFiscalYearLabel !== args.priorFiscalYearLabel) {
+    return currentAbs;
+  }
   const priorAbs = Math.abs(args.priorLine.endingBalance);
-  // Current month = current YTD − prior YTD.
+  // Current month = current YTD − prior YTD (within the same FY).
   return currentAbs - priorAbs;
 }
 

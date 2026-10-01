@@ -329,11 +329,20 @@ describe("TB-RESET-1c · reportingBalances resolver", () => {
     expect(prisma.reportingLedgerSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
-  it("reportingAccountBalances sliced reads (from/to set) never consult snapshots", async () => {
+  it("reportingAccountBalances YTD-slice reads MAY consult snapshots (TB-HIST-2 §11)", async () => {
+    // TB-HIST-2 (2026-10-01) — this gate was tightened by §11. A
+    // period slice (from/to) now attempts the snapshot path and
+    // returns snapshot balances when exact `to` carries a committed
+    // trial-balance snapshot whose `periodStart` equals `from`. When
+    // no matching snapshot exists we still fall back to the
+    // OPERATIONAL_LEDGER source — so this test asserts the gated
+    // fallback instead of the hard abstention.
+    (prisma.reportingLedgerSnapshot.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     (balanceModule.accountBalances as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const r = await reportingAccountBalances(COULEE, { from: new Date("2026-09-01"), to: new Date("2026-09-30") });
     expect(r.source).toBe("OPERATIONAL_LEDGER");
-    expect(prisma.reportingLedgerSnapshot.findFirst).not.toHaveBeenCalled();
+    // The snapshot probe DID happen — this is the behaviour change.
+    expect(prisma.reportingLedgerSnapshot.findFirst).toHaveBeenCalled();
   });
 
   // isAuthoritativeAsOf convenience probe
@@ -386,21 +395,23 @@ describe("TB-RESET-1c · TrialBalanceResult + BalanceSheetResult surface contrac
 // abstention so a future slice cannot silently upgrade this path.
 // ---------------------------------------------------------------------------
 
-describe("TB-RESET-1c · Income Statement deliberately abstains from snapshot precedence (per §11)", () => {
+describe("TB-HIST-2 · Income Statement now routes YTD reads through the snapshot path (per §11)", () => {
   const reportsSource = readFileSync("src/lib/accounting/reports.ts", "utf8");
 
-  it("incomeStatement() still consumes accountBalances directly (per §11 — no monthly-movement inference from snapshots yet)", () => {
-    // Locate the incomeStatement function body and prove it references
-    // `accountBalances` and NOT `reportingAccountBalances`. This locks
-    // in the deferred abstention so a future slice cannot silently
-    // upgrade this path without founder review.
+  it("incomeStatement() reads via reportingAccountBalances when no Dept / Fund filter is applied (TB-HIST-2 §11)", () => {
+    // TB-HIST-2 (2026-10-01) — §11 explicitly brings this report onto
+    // the reporting-ledger architecture. For periods backed by an
+    // exact-date trial-balance snapshot the YTD read is served from
+    // the snapshot payload; scoped filters (Dept / Fund) still use
+    // the operational ledger because the snapshot payload isn't yet
+    // filterable.
     const startIdx = reportsSource.indexOf("export async function incomeStatement(");
     expect(startIdx).toBeGreaterThan(0);
     const bodyEnd = reportsSource.indexOf("\n}\n", startIdx);
     const body = reportsSource.slice(startIdx, bodyEnd);
-    expect(body).toContain("accountBalances(");
-    expect(body).not.toContain("reportingAccountBalances(");
-    expect(body).not.toContain("reportingBalances(");
+    expect(body).toContain("reportingAccountBalances(clubId, { from, to })");
+    // The JEL fallback is still present for scoped reads.
+    expect(body).toContain("accountBalances(clubId, { from, to, departmentId");
   });
 
   it("incomeStatementByDepartment() still consumes accountBalances directly (same deferred rationale)", () => {

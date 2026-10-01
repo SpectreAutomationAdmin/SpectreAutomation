@@ -703,12 +703,37 @@ export type SoAAuxiliaryInputs = {
   };
 };
 
+/**
+ * TB-HIST-2 (2026-10-01) — honest zeroed auxiliary input shape.
+ * Used when a tenant has no Budget importer wired yet; the SoA
+ * renders prior-year / budget variance columns as blank-equivalent
+ * ($0 budget → variance equals actual, but the UI can detect the
+ * zero shape and render "— unavailable —").
+ */
+export const EMPTY_SOA_AUXILIARY_INPUTS: SoAAuxiliaryInputs = {
+  memberRoundsYoyPct: 0,
+  initiationFeesAnnualForecast: 0,
+  budget: {
+    byAccount: {},
+    rollups: {
+      totalOperatingRevenue: { currentMonth: 0, ytd: 0 },
+      totalOperatingExpense: { currentMonth: 0, ytd: 0 },
+      depreciation: { currentMonth: 0, ytd: 0 },
+      totalCapitalIncome: { currentMonth: 0, ytd: 0 },
+      totalCapitalExpense: { currentMonth: 0, ytd: 0 },
+    },
+  },
+};
+
 export async function getStatementOfActivitiesForClub(args: {
   clubId: string;
   clubName: string;
   period: ReportingPeriod;
   ledger: ReportingLedger & ReportingLedgerWriter;
-  auxiliaryInputs: SoAAuxiliaryInputs;
+  // TB-HIST-2 (2026-10-01) — optional on tenants with authoritative
+  // live accounting data. When omitted, callers that depended on
+  // Silver Springs demo auxiliary values see an empty / zero shape.
+  auxiliaryInputs?: SoAAuxiliaryInputs;
   demoFallback?: () => StatementOfActivitiesV2;
 }): Promise<StatementOfActivitiesV2> {
   const snapshots = await resolveIncomeStatementSnapshots({
@@ -874,9 +899,13 @@ export function buildStatementOfActivitiesFromIncomeStatement(args: {
   period: ReportingPeriod;
   currentMonthActual: IncomeStatementSnapshot;
   ytdActual: IncomeStatementSnapshot;
-  auxiliaryInputs: SoAAuxiliaryInputs;
+  // TB-HIST-2 (2026-10-01) — optional; falls back to a zeroed shape
+  // so tenants without a Budget importer render honest "— unavailable
+  // —" variances instead of Silver Springs demo values.
+  auxiliaryInputs?: SoAAuxiliaryInputs;
 }): StatementOfActivitiesV2 {
-  const { ytdActual, currentMonthActual, auxiliaryInputs } = args;
+  const { ytdActual, currentMonthActual } = args;
+  const auxiliaryInputs: SoAAuxiliaryInputs = args.auxiliaryInputs ?? EMPTY_SOA_AUXILIARY_INPUTS;
 
   // -- Operating revenue rows, grouped by department --
   const operatingRows: StatementOfActivitiesV2Row[] = [];

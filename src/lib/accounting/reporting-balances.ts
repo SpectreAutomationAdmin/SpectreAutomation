@@ -324,17 +324,38 @@ export type ReportingAccountBalancesResult = {
 
 /** Same input shape as `accountBalances(clubId, filter)` but routes
  *  through the exact-asOf snapshot precedence rule when the filter
- *  is a plain asOf read (no departmental slice). */
+ *  is a plain asOf read (no departmental slice).
+ *
+ *  TB-HIST-2 (2026-10-01) — fiscal-YTD slice snapshot support. When the
+ *  filter carries `{ from, to }` AND the snapshot at exact `to` carries
+ *  a `periodStart` byte-equal to `from`, we trust the snapshot's own
+ *  period window and return the snapshot's YTD balances. P&L lines in
+ *  a Jonas-style TB snapshot ARE fiscal-YTD by construction, so a
+ *  fiscal-YTD slice read is identical to reading the snapshot directly.
+ *  This is what makes Finance → Income Statement + Balance Sheet
+ *  current-year earnings snapshot-aware without rewiring every caller.
+ */
 export async function reportingAccountBalances(
   clubId: string,
   filter: BalanceFilter = {},
 ): Promise<ReportingAccountBalancesResult> {
-  const asOf = filter.asOf ?? new Date();
-  // DIM-2 (2026-09-29) — include fund in the sliced-read check so a
-  // fund-scoped Trial Balance never returns the tenant-wide
-  // snapshot totals.
-  const isSlicedRead = filter.departmentId != null || filter.fundId != null || filter.costCenterId != null || filter.from != null || filter.to != null;
-  if (!isSlicedRead) {
+  const asOf = filter.asOf ?? filter.to ?? new Date();
+  const hasAsOfOnly =
+    filter.asOf != null &&
+    filter.from == null &&
+    filter.to == null &&
+    filter.departmentId == null &&
+    filter.fundId == null &&
+    filter.costCenterId == null;
+  const hasYtdSliceShape =
+    filter.from != null &&
+    filter.to != null &&
+    filter.asOf == null &&
+    filter.departmentId == null &&
+    filter.fundId == null &&
+    filter.costCenterId == null;
+
+  if (hasAsOfOnly) {
     const snapshot = await findExactCommittedTbSnapshot(clubId, asOf);
     if (snapshot) {
       const result = await normalizeSnapshotToBalances(clubId, asOf, snapshot);
@@ -357,6 +378,48 @@ export async function reportingAccountBalances(
     }
   }
 
+  // TB-HIST-2 YTD-slice path. Jonas snapshots carry both `asOf` (BS
+  // date) and `periodStart`/`periodEnd` (activity window). When the
+  // request's `from` matches the snapshot's `periodStart` AND `to`
+  // matches `asOf` within the same calendar day, the snapshot IS the
+  // YTD figure the caller wants. We can serve the P&L YTD and the
+  // ending BS from the same snapshot payload.
+  if (hasYtdSliceShape) {
+    const snapshot = await findExactCommittedTbSnapshot(clubId, filter.to as Date);
+    if (snapshot) {
+      // Snapshot's periodStart lives on the ReportingLedgerSnapshot
+      // row (not inside payloadJson), so grab it from the record.
+      const periodStart = snapshot.periodStart;
+      if (periodStart !== null && sameDay(periodStart, filter.from as Date)) {
+        const result = await normalizeSnapshotToBalances(clubId, filter.to as Date, snapshot);
+        const balances: AccountBalance[] = result.rows
+          .filter((r) => r.accountId != null && r.accountType != null && r.normalBalance != null)
+          .map((r) => ({
+            accountId: r.accountId as string,
+            accountNumber: r.accountNumber,
+            accountName: r.accountName,
+            accountType: r.accountType as AccountType,
+            normalBalance: r.normalBalance as NormalBalance,
+            debitTotal: r.debitTotal,
+            creditTotal: r.creditTotal,
+            signedBalance: r.signedBalance,
+            naturalBalance: r.naturalBalance,
+            fundApplicability: r.fundApplicability,
+            fsGroupKey: r.fsGroupKey,
+          }));
+        return { balances, source: "AUTHORITATIVE_SNAPSHOT", provenance: result.provenance };
+      }
+    }
+  }
+
   const balances = await accountBalances(clubId, filter);
   return { balances, source: "OPERATIONAL_LEDGER", provenance: null };
+}
+
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
 }

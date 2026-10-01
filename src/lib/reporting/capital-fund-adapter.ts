@@ -115,6 +115,30 @@ export type CapitalFundLedgerBundle = {
   dataSource: "live" | "demo";
 };
 
+/** TB-HIST-2 (2026-10-01) — zeroed auxiliary input for tenants
+ *  without a Budget / Reserve Study / Capital Project importer wired.
+ *  Downstream views render blank-equivalent budget columns and
+ *  "— unavailable —" where applicable. */
+export const EMPTY_CAPITAL_FUND_AUXILIARY_INPUTS: CapitalFundAuxiliaryInputs = {
+  annualBudgets: {
+    capitalDues: 0,
+    initiationFees: 0,
+    investmentIncome: 0,
+    transferFromOps: null,
+    replacements: 0,
+    improvements: 0,
+    enhancements: 0,
+    debtService: 0,
+  },
+  deployedYtd: { replacements: 0, improvements: 0, enhancements: 0 },
+  totalAssetReplacementCost: 0,
+  deferredCapitalLiability: 0,
+  contribution: { annual: 0, ytdTarget: 0, ytdActual: 0 },
+  labels: { facBenchmark: "", threeYearGoal: "" },
+  stressTest: { initiationFeeDeclinePct: 0 },
+  inlineCommentary: { initiationFees: "" },
+};
+
 // ---------------------------------------------------------------------------
 // Dual-read entry point
 // ---------------------------------------------------------------------------
@@ -124,7 +148,8 @@ export async function getCapitalFundForClub(args: {
   clubName: string;
   period: ReportingPeriod;
   ledger: ReportingLedger & ReportingLedgerWriter;
-  auxiliaryInputs: CapitalFundAuxiliaryInputs;
+  // TB-HIST-2 (2026-10-01) — optional on tenants with real data.
+  auxiliaryInputs?: CapitalFundAuxiliaryInputs;
   demoFallback: () => CapitalFundStatement;
 }): Promise<CapitalFundLedgerBundle> {
   const snapshots = await resolveBsAndIs({
@@ -146,7 +171,7 @@ export async function getCapitalFundForClub(args: {
       period: args.period,
       bs: snapshots.bs,
       is: snapshots.is,
-      auxiliaryInputs: args.auxiliaryInputs,
+      auxiliaryInputs: args.auxiliaryInputs ?? EMPTY_CAPITAL_FUND_AUXILIARY_INPUTS,
     }),
     dataSource: "live",
   };

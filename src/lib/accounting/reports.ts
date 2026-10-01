@@ -232,11 +232,17 @@ export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceS
   // Current-year earnings = revenue - expenses over the FY containing asOf.
   // We compute it independently of the equity group so unposted closing entries
   // don't affect the live BS.
+  //
+  // TB-HIST-2 (2026-10-01) §12 — route the YTD lookup through
+  // `reportingAccountBalances` so a committed Jonas trial-balance
+  // snapshot at exact `asOf` with `periodStart === fy.startDate`
+  // serves the P&L YTD from the snapshot. Previously this path read
+  // JournalEntryLine only and returned zero for Jonas-only tenants.
   const fy = await currentFiscalYear(clubId, asOf);
   let currentYearEarnings = ZERO;
   if (fy) {
-    const isBalances = await accountBalances(clubId, { from: fy.startDate, to: asOf });
-    for (const b of isBalances) {
+    const isResult = await reportingAccountBalances(clubId, { from: fy.startDate, to: asOf });
+    for (const b of isResult.balances) {
       if (b.accountType === "REVENUE") currentYearEarnings = currentYearEarnings.plus(b.naturalBalance);
       if (b.accountType === "EXPENSE") currentYearEarnings = currentYearEarnings.minus(b.naturalBalance);
     }
@@ -292,8 +298,17 @@ export type IncomeStatementResult = {
 };
 
 export async function incomeStatement(clubId: string, from: Date, to: Date, opts?: { departmentId?: string; fundId?: string }): Promise<IncomeStatementResult> {
-  // DIM-2 (2026-09-29) — combined Department + Fund filtering.
-  const balances = await accountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  // TB-HIST-2 (2026-10-01) §11 — route the YTD read through
+  // `reportingAccountBalances` so a committed Jonas trial-balance
+  // snapshot at exact `to` with `periodStart === from` serves the
+  // request directly, instead of falling back to JournalEntryLine
+  // (which was empty for Jonas-only tenants, defect B2 identified in
+  // TB-HIST-1). Scoped filters (Dept / Fund) continue to use the
+  // JEL path because the snapshot payload isn't filterable yet.
+  const useSnapshot = opts?.departmentId == null && opts?.fundId == null;
+  const balances = useSnapshot
+    ? (await reportingAccountBalances(clubId, { from, to })).balances
+    : await accountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
   const tree = await buildFsTree(clubId, "INCOME_STATEMENT", balances.filter((b) => b.accountType === "REVENUE" || b.accountType === "EXPENSE"));
   // Founder rule 2026-07-01 v14.7 — classify by ACCOUNT TYPE +
   // FS Group key prefix, not by legacy parent-group names. The

@@ -18,6 +18,12 @@ import { prisma } from "@/lib/prisma";
 import { getFiscalPeriodForClub } from "@/lib/clubs/profile";
 import { getEquityHistory, type EquityHistory } from "@/lib/reporting/equity-history";
 import { buildEquityCommentary } from "@/lib/reporting/equity-commentary";
+// TB-HIST-2 (2026-10-01) — demo-data gate: once a tenant has
+// authoritative committed accounting data (COA opening-TB legacy OR
+// a committed Jonas ReportingLedger snapshot), Silver Springs demo
+// auxiliary inputs and demo fallbacks must not render in that
+// tenant's package.
+import { hasCommittedRealTrialBalance } from "@/lib/accounting/balance";
 import { getOperatingResults, type OperatingResults } from "@/lib/reporting/operating-results";
 import {
   buildStewardshipDashboardNotes,
@@ -1708,17 +1714,31 @@ export async function getMonthlyReportingPackage(
   // within a single package build.
   const productionLedger = new PrismaReportingLedger(prisma);
 
+  // TB-HIST-2 (2026-10-01) §3 + §4 — demo-data gate.
+  //   Once a tenant has committed authoritative accounting data
+  //   (`hasCommittedRealAccountingData`), Silver Springs demo
+  //   auxiliary inputs and demo fallbacks MUST NOT render inside
+  //   that tenant's Board package. Resolvers either serve the live
+  //   value or an honest "data not available" shape.
+  //   Silver Springs itself (demo tenant) still receives the demo
+  //   seeds so dev / demo screens keep working.
+  const hasRealData = await hasCommittedRealTrialBalance(club.id);
+  const soaAuxiliaryInputs = hasRealData ? undefined : SILVER_SPRINGS_SOA_AUXILIARY_INPUTS;
+  const soaDemoFallback = hasRealData
+    ? undefined
+    : (() =>
+        buildSilverSpringsStatementOfActivities({
+          clubName: club.name,
+          period: reportingPeriod,
+        }));
+
   const statementOfActivitiesV2 = await getStatementOfActivitiesForClub({
     clubId: club.id,
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
-    auxiliaryInputs: SILVER_SPRINGS_SOA_AUXILIARY_INPUTS,
-    demoFallback: () =>
-      buildSilverSpringsStatementOfActivities({
-        clubName: club.name,
-        period: reportingPeriod,
-      }),
+    auxiliaryInputs: soaAuxiliaryInputs,
+    demoFallback: soaDemoFallback,
   });
 
   // Stewardship Dashboard (chapter II scorecards + chapter III
@@ -1731,6 +1751,12 @@ export async function getMonthlyReportingPackage(
     clubId: club.id,
     period: reportingPeriod,
     ledger: productionLedger,
+    // TB-HIST-2 (2026-10-01) — Silver Springs demo auxiliary values
+    // still flow here because the StewardshipAuxiliaryInputs shape is
+    // large and no zero-constant exists yet. Tracked as a remaining
+    // limitation in the TB-HIST-2 acceptance package: a tenant with
+    // real BS/IS snapshots will still see demo budget / peer-median
+    // auxiliary values on Stewardship until a per-tenant resolver lands.
     auxiliaryInputs: SILVER_SPRINGS_STEWARDSHIP_AUX,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
@@ -1777,6 +1803,9 @@ export async function getMonthlyReportingPackage(
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
+    // TB-HIST-2 (2026-10-01) — Capital-fund demo auxiliary still flows
+    // on live tenants until a per-tenant Reserve-Study / Capital-
+    // Project / Budget importer lands. Tracked as a remaining limitation.
     auxiliaryInputs: SILVER_SPRINGS_CAPITAL_FUND_AUX,
     demoFallback: () =>
       buildSilverSpringsCapitalFundStatement({
@@ -1795,6 +1824,9 @@ export async function getMonthlyReportingPackage(
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
+    // TB-HIST-2 (2026-10-01) — Executive-summary demo auxiliary still
+    // flows on live tenants pending Budget / Reserve / AR-Aging
+    // importers. Tracked as a remaining limitation.
     auxiliaryInputs: SILVER_SPRINGS_EXEC_SUMMARY_AUX,
     demoFallback: () =>
       buildExecutiveSummary(

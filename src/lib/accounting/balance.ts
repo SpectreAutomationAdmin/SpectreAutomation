@@ -44,12 +44,20 @@ export type AccountBalance = {
 };
 
 // Founder rule 2026-07-01 v14.9 — a club is "past demo" the moment
-// it has any COMMITTED Opening Trial Balance batch that isn't
-// superseded or voided. From that point on, Finance reports MUST
-// exclude JournalEntry rows tagged `source: "DEMO"` — those are
-// seeded demo entries planted by prisma/seed.ts to make a fresh
-// dev club look populated. Real user activity uses "MANUAL",
-// "AP", "IMPORT", etc.; only demo entries carry "DEMO".
+// it has any COMMITTED authoritative accounting evidence. From that
+// point on, Finance reports MUST exclude JournalEntry rows tagged
+// `source: "DEMO"` — those are seeded demo entries planted by
+// prisma/seed.ts to make a fresh dev club look populated. Real user
+// activity uses "MANUAL", "AP", "IMPORT", etc.; only demo entries
+// carry "DEMO".
+//
+// TB-HIST-2 (2026-10-01) — the recognised evidence shapes are now:
+//   1. Legacy `ImportBatch(domain=OPENING_TRIAL_BALANCE)` COMMITTED
+//      (writes JournalEntries into the GL).
+//   2. Modern `ReportingLedgerBatch` committed with a persisted
+//      authoritative `ReportingLedgerSnapshot(entityKind="trial-balance")`
+//      (the Jonas-UI path — writes only to the reporting ledger).
+// Either path is treated as real accounting data.
 export async function hasCommittedRealTrialBalance(clubId: string): Promise<boolean> {
   const live = await prisma.importBatch.findFirst({
     where: {
@@ -61,8 +69,25 @@ export async function hasCommittedRealTrialBalance(clubId: string): Promise<bool
     },
     select: { id: true },
   });
-  return live !== null;
+  if (live !== null) return true;
+  // TB-HIST-2 — also recognise a committed authoritative Jonas-UI
+  // trial-balance snapshot as real accounting data. We check for a
+  // committed, non-superseded ReportingLedgerBatch; its presence
+  // guarantees at least one trial-balance snapshot exists.
+  const jonas = await prisma.reportingLedgerBatch.findFirst({
+    where: {
+      clubId,
+      state: "committed",
+      supersededByBatchId: null,
+    },
+    select: { batchId: true },
+  });
+  return jonas !== null;
 }
+
+/** TB-HIST-2 (2026-10-01) alias — the broader semantic the function
+ *  now carries. New call sites should prefer this name. */
+export const hasCommittedRealAccountingData = hasCommittedRealTrialBalance;
 
 export async function accountBalances(clubId: string, filter: BalanceFilter = {}): Promise<AccountBalance[]> {
   // v14.9 — check once per report render whether demo entries

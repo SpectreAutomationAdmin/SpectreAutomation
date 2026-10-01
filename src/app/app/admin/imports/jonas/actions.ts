@@ -72,6 +72,14 @@ export type JonasImportPreviewRow = {
   spectreAccountId: string | null;
   debit: number;
   credit: number;
+  // TB-HIST-2 (2026-10-01) — dimensional preview fields. `department`
+  // is the raw Jonas department code (empty string normalised to null);
+  // `departmentStatus` reports whether it resolves to a tenant
+  // Department record, is missing against a REQUIRED-policy account,
+  // or is unused. `fund` is the account-level mapped fund.
+  department: string | null;
+  departmentStatus: "ok" | "missing-required" | "unknown-dept" | "n/a";
+  fund: string | null;
   mappingStatus: "mapped" | "unmapped" | "description-conflict" | "duplicate";
 };
 
@@ -184,7 +192,10 @@ export type JonasImportCommitResult =
         | "DUPLICATE_SOURCE_FILE"
         | "DUPLICATE_PERIOD"
         | "ENTITY_MISMATCH_UNACKNOWLEDGED"
-        | "REPLACE_TARGET_INVALID";
+        | "REPLACE_TARGET_INVALID"
+        // TB-HIST-2 (2026-10-01) — dimensional validation gates.
+        | "UNKNOWN_DEPARTMENT"
+        | "MISSING_REQUIRED_DEPARTMENT";
       details?: unknown;
     }
   | { error: string };
@@ -369,23 +380,43 @@ export async function previewJonasImport(
   let mappedCount = 0;
   let unmappedCount = 0;
   let descriptionConflicts = 0;
-  const seenCodes = new Set<string>();
-  const duplicateCodes = new Set<string>();
+  // TB-HIST-2 (2026-10-01) — dimensional duplicate detection. The row
+  // identity for a historical TB snapshot is (accountCode, department,
+  // fund). Two rows that share only accountCode but differ on
+  // department are legitimate (e.g. 6098/F&B and 6098/Admin — one
+  // natural account, two departmental allocations). Only an exact
+  // (code, dept, fund) duplicate is rejected.
+  const seenKeys = new Set<string>();
+  const duplicateKeys = new Set<string>();
 
-  // Preload every ACTIVE Spectre account for the club — one query,
-  // resolves both mapping (by accountNumber) and description conflict
-  // (comparing Jonas description vs Spectre name).
+  // Preload every ACTIVE Spectre account for the club.
   const spectreAccounts = await prisma.account.findMany({
     where: { clubId, isActive: true, archivedAt: null, isHeader: false },
-    select: { id: true, accountNumber: true, name: true },
+    select: {
+      id: true,
+      accountNumber: true,
+      name: true,
+      // TB-HIST-2 — expose policy so the preview can flag
+      // missing-required and classify unknown-department.
+      departmentPolicy: true,
+    },
   });
   const spectreByCode = new Map(spectreAccounts.map((a) => [a.accountNumber, a]));
+  // Preload Department codes to validate per-row department tags.
+  const departments = await prisma.department.findMany({
+    where: { clubId },
+    select: { code: true },
+  });
+  const tenantDepartmentCodes = new Set(departments.map((d) => d.code.trim().toUpperCase()));
 
   for (const r of parseResult.rows) {
     const code = r.accountNumber;
-    const isDup = seenCodes.has(code);
-    if (isDup) duplicateCodes.add(code);
-    seenCodes.add(code);
+    const rawDept = r.department && r.department.trim().length > 0 ? r.department.trim() : null;
+    // Dimensional dup-key — case-insensitive on department.
+    const dimKey = `${code}\u0000${rawDept ? rawDept.toUpperCase() : ""}`;
+    const isDup = seenKeys.has(dimKey);
+    if (isDup) duplicateKeys.add(dimKey);
+    seenKeys.add(dimKey);
 
     const spectre = spectreByCode.get(code) ?? null;
     const jonasCategory = mapJonasAccount(
@@ -407,21 +438,29 @@ export async function previewJonasImport(
       spectre.name.trim().toLowerCase() !== r.accountDescription.trim().toLowerCase() &&
       !descriptionsMatchNormalised(spectre.name, r.accountDescription)
     ) {
-      // Description conflict: Spectre's ACTIVE name differs from the
-      // Jonas description under the approved normalisation rules
-      // (matches on abbreviation-normalised form as well as verbatim).
       status = "description-conflict";
       descriptionConflicts++;
-      mappedCount++; // still counts as mapped for coverage stats
+      mappedCount++;
     } else {
       status = "mapped";
       mappedCount++;
     }
-    // If jonasCategory returned null AND the Spectre account exists,
-    // the mapping helper's own coverage would say unmapped — but for
-    // the founder's UI, having the account in the Spectre COA is
-    // sufficient for the mapping-status column.
     void jonasCategory;
+
+    // TB-HIST-2 — classify the row's Department against the tenant
+    // catalog + the account's departmentPolicy.
+    let departmentStatus: JonasImportPreviewRow["departmentStatus"];
+    if (!spectre) {
+      departmentStatus = "n/a";
+    } else if (spectre.departmentPolicy === "NOT_APPLICABLE") {
+      departmentStatus = "n/a";
+    } else if (rawDept === null) {
+      departmentStatus = spectre.departmentPolicy === "REQUIRED" ? "missing-required" : "n/a";
+    } else if (!tenantDepartmentCodes.has(rawDept.toUpperCase())) {
+      departmentStatus = "unknown-dept";
+    } else {
+      departmentStatus = "ok";
+    }
 
     rows.push({
       lineNumber: r.lineNumber,
@@ -431,9 +470,15 @@ export async function previewJonasImport(
       spectreAccountId: spectre?.id ?? null,
       debit: r.debit ?? 0,
       credit: Math.abs(r.credit ?? 0),
+      department: rawDept,
+      departmentStatus,
+      fund: jonasCategory?.fund ?? null,
       mappingStatus: status,
     });
   }
+  // Legacy identifier for the mappingCoverage summary — stays the
+  // count of DIMENSIONAL duplicates.
+  const duplicateCodes = duplicateKeys;
 
   // ------------- Reconciliation -------------
   const reconciliation = tallyJonasReconciliation(parseResult.rows, mapping);
@@ -643,20 +688,45 @@ export async function commitJonasImport(
     };
   }
 
-  // COA mapping / duplicate-account gates
-  const spectreAccounts = await prisma.account.findMany({
+  // COA mapping / duplicate-key gates — dimensional per TB-HIST-2 §6.
+  const spectreAccountsForCommit = await prisma.account.findMany({
     where: { clubId, isActive: true, archivedAt: null, isHeader: false },
-    select: { accountNumber: true },
+    select: { accountNumber: true, departmentPolicy: true },
   });
-  const spectreCodes = new Set(spectreAccounts.map((a) => a.accountNumber));
-  const seenCodes = new Set<string>();
-  const duplicateCodes = new Set<string>();
+  const spectreCodes = new Set(spectreAccountsForCommit.map((a) => a.accountNumber));
+  const spectrePolicyByCode = new Map(
+    spectreAccountsForCommit.map((a) => [a.accountNumber, a.departmentPolicy as string]),
+  );
+  const commitDepartments = await prisma.department.findMany({
+    where: { clubId },
+    select: { code: true },
+  });
+  const commitTenantDeptCodes = new Set(commitDepartments.map((d) => d.code.trim().toUpperCase()));
+
+  const seenCommitKeys = new Set<string>();
+  const duplicateCommitKeys: string[] = [];
   const unknownCodes = new Set<string>();
+  const unknownDepartments = new Set<string>();
+  const missingRequiredDept: string[] = [];
+
   for (const r of parseResult.rows) {
-    if (seenCodes.has(r.accountNumber)) duplicateCodes.add(r.accountNumber);
-    seenCodes.add(r.accountNumber);
     if (!spectreCodes.has(r.accountNumber)) unknownCodes.add(r.accountNumber);
+    const rawDept = r.department && r.department.trim().length > 0 ? r.department.trim() : null;
+    const dimKey = `${r.accountNumber}\u0000${rawDept ? rawDept.toUpperCase() : ""}`;
+    if (seenCommitKeys.has(dimKey)) {
+      duplicateCommitKeys.push(rawDept ? `${r.accountNumber}/${rawDept}` : r.accountNumber);
+    }
+    seenCommitKeys.add(dimKey);
+
+    const policy = spectrePolicyByCode.get(r.accountNumber);
+    if (rawDept && !commitTenantDeptCodes.has(rawDept.toUpperCase())) {
+      unknownDepartments.add(rawDept);
+    }
+    if (policy === "REQUIRED" && rawDept === null) {
+      missingRequiredDept.push(r.accountNumber);
+    }
   }
+
   if (unknownCodes.size > 0) {
     return {
       status: "blocked",
@@ -665,12 +735,34 @@ export async function commitJonasImport(
       details: { unknown: Array.from(unknownCodes) },
     };
   }
-  if (duplicateCodes.size > 0) {
+  if (duplicateCommitKeys.length > 0) {
     return {
       status: "blocked",
       code: "DUPLICATE_ACCOUNT",
-      reason: `${duplicateCodes.size} duplicate account code(s) in the source file. Each account must appear at most once.`,
-      details: { duplicates: Array.from(duplicateCodes) },
+      reason:
+        `${duplicateCommitKeys.length} duplicate (account, department) key(s) in the source file. ` +
+        `Each (account, department) combination must appear at most once per snapshot.`,
+      details: { duplicates: duplicateCommitKeys },
+    };
+  }
+  if (unknownDepartments.size > 0) {
+    return {
+      status: "blocked",
+      code: "UNKNOWN_DEPARTMENT",
+      reason:
+        `${unknownDepartments.size} unknown Department code(s) in the source file. ` +
+        `Add the Department to the club before importing or correct the source.`,
+      details: { unknown: Array.from(unknownDepartments) },
+    };
+  }
+  if (missingRequiredDept.length > 0) {
+    return {
+      status: "blocked",
+      code: "MISSING_REQUIRED_DEPARTMENT",
+      reason:
+        `${missingRequiredDept.length} source row(s) target an account whose departmentPolicy is REQUIRED but ` +
+        `carry no Department tag. Add a Department column to each row or revise the account's policy.`,
+      details: { accounts: missingRequiredDept },
     };
   }
 

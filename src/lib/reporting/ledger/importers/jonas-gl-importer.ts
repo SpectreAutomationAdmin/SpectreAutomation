@@ -600,6 +600,16 @@ function buildTrialBalanceLine(
   row: JonasGlCsvRow,
   mapped: MappedAccount,
 ): TrialBalanceLine {
+  // TB-HIST-2 (2026-10-01) — preserve the per-row Department tag so
+  // the snapshot carries Account × Department × Fund grain. The Jonas
+  // CSV `department` cell was previously parsed and dropped; now it
+  // flows into the snapshot payload. The `fund` tag comes from the
+  // account mapping (per-account via the numeric-range table) because
+  // Jonas does not surface a per-row Fund column.
+  const department = row.department && row.department.trim().length > 0
+    ? row.department.trim()
+    : null;
+  const fund = mapped.fund ?? null;
   if (row.debit !== null || row.credit !== null) {
     const debit = row.debit ?? 0;
     const credit = row.credit ?? 0;
@@ -608,6 +618,8 @@ function buildTrialBalanceLine(
       debit,
       credit,
       endingBalance: debit - credit,
+      department,
+      fund,
     };
   }
   // Derive from YTD balance + account natural side.
@@ -620,25 +632,27 @@ function buildTrialBalanceLine(
         debit: row.ytdBalance,
         credit: 0,
         endingBalance: row.ytdBalance,
+        department,
+        fund,
       };
     }
-    // Negative — a contra balance (e.g. accumulated depreciation
-    // stored as a positive number in a contra-asset, or a refund
-    // posted to an expense). Flip side.
     return {
       accountCode: mapped.accountCode,
       debit: 0,
       credit: -row.ytdBalance,
       endingBalance: row.ytdBalance,
+      department,
+      fund,
     };
   } else {
-    // Natural credit side.
     if (row.ytdBalance >= 0) {
       return {
         accountCode: mapped.accountCode,
         debit: 0,
         credit: row.ytdBalance,
         endingBalance: row.ytdBalance,
+        department,
+        fund,
       };
     }
     return {
@@ -646,6 +660,8 @@ function buildTrialBalanceLine(
       debit: -row.ytdBalance,
       credit: 0,
       endingBalance: row.ytdBalance,
+      department,
+      fund,
     };
   }
 }
@@ -662,7 +678,14 @@ function reconcile(lines: TrialBalanceLine[]): ReconciliationResult {
     totalDebits,
     totalCredits,
     delta,
-    isBalanced: Math.abs(delta) < 1,
+    // TB-HIST-2 (2026-10-01) §16 — unify the balance tolerance with
+    // the Jonas-UI commit gate (BALANCE_TOLERANCE = $0.01 in
+    // `src/app/app/admin/imports/jonas/actions.ts`). Previously this
+    // reconcile() used `< $1`, letting a snapshot persist with
+    // `isBalanced=true` while still being blocked at the commit gate.
+    // One accounting tolerance across preview, commit, and the
+    // persisted reconciliation metadata.
+    isBalanced: Math.abs(delta) <= 0.01,
   };
 }
 

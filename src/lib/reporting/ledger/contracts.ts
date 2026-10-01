@@ -186,6 +186,21 @@ export type TrialBalanceLine = {
   debit: number;
   credit: number;
   endingBalance: number;
+  // TB-HIST-2 (2026-10-01) — dimensional snapshot support.
+  //
+  // Historical Jonas files may include per-row Department and Fund
+  // tags so one natural account (e.g. 6098 Licenses) can carry
+  // separate balances across Grounds / Golf Shop / Clubhouse / F&B /
+  // Administration without inflating the Spectre COA.
+  //
+  // These fields are OPTIONAL to preserve the prior single-row
+  // snapshot shape. A snapshot that does not carry dimensional
+  // detail reads as one aggregated line per account (`department`
+  // and `fund` are `null`). Reporters MUST aggregate by accountCode
+  // across any dimensional rows that share a code — the row identity
+  // for duplicate detection is `(accountCode, department, fund)`.
+  department?: string | null;
+  fund?: string | null;
 };
 
 export type TrialBalanceSnapshot = LedgerSnapshotMetadata & {

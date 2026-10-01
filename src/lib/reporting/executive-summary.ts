@@ -892,6 +892,20 @@ export type ExecutiveSummaryAuxiliaryInputs = {
   fbSubsidy: FbSubsidyInput | null;
 };
 
+/** TB-HIST-2 (2026-10-01) — honest zeroed shape for tenants
+ *  without downstream Budget / Reserve / AR aging importers wired. */
+export const EMPTY_EXECUTIVE_SUMMARY_AUXILIARY_INPUTS: ExecutiveSummaryAuxiliaryInputs = {
+  budget: {
+    ytdRevenue: null,
+    ytdNoiBeforeDepreciation: null,
+    ytdCapitalIncome: null,
+    workingCapitalFloor: null,
+  },
+  reserveCoverage: { actual: null, floor: null },
+  arAging: { actualCurrentPct: null, over90Pct: null, watchThreshold: 0.08 },
+  fbSubsidy: null,
+};
+
 /**
  * Build an `ExecutiveSummaryInput` from BS + IS snapshots plus the
  * auxiliary inputs. Pure function; same inputs → same output.
@@ -971,7 +985,8 @@ export async function getExecutiveSummaryForClub(args: {
   clubName: string;
   period: ReportingPeriod;
   ledger: ReportingLedger & ReportingLedgerWriter;
-  auxiliaryInputs: ExecutiveSummaryAuxiliaryInputs;
+  // TB-HIST-2 (2026-10-01) — optional on tenants with real data.
+  auxiliaryInputs?: ExecutiveSummaryAuxiliaryInputs;
   demoFallback?: () => ExecutiveSummaryOutput;
 }): Promise<ExecutiveSummaryOutput> {
   const snapshots = await resolveSnapshotsForExecutiveSummary({
@@ -987,7 +1002,7 @@ export async function getExecutiveSummaryForClub(args: {
         clubName: args.clubName,
         ytdIncomeStatement: snapshots.is,
         balanceSheet: snapshots.bs,
-        auxiliaryInputs: args.auxiliaryInputs,
+        auxiliaryInputs: args.auxiliaryInputs ?? EMPTY_EXECUTIVE_SUMMARY_AUXILIARY_INPUTS,
       }),
     );
   }
