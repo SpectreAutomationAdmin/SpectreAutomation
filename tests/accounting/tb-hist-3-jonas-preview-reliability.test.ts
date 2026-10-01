@@ -53,6 +53,15 @@ describe("TB-HIST-3 §C — double-submit guard", () => {
   });
 });
 
+describe("TB-HIST-3 — validation-failed branch now renders (second silent-fail path closed)", () => {
+  it("the form renders a `jonas-validation-failed` card when preview.status === 'validation-failed'", () => {
+    expect(FORM).toMatch(/preview\?\.status === "validation-failed"/);
+    expect(FORM).toMatch(/data-testid="jonas-validation-failed"/);
+    expect(FORM).toMatch(/File errors/);
+    expect(FORM).toMatch(/Row errors/);
+  });
+});
+
 describe("TB-HIST-3 §E-F — error visibility", () => {
   it("onPreview wraps the server-action call in try/catch and surfaces the error", () => {
     expect(FORM).toMatch(/try \{[\s\S]*?const result = await previewJonasImport/);

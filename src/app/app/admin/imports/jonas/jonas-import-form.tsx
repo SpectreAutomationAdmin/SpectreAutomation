@@ -299,6 +299,55 @@ export function JonasImportForm() {
         </div>
       )}
 
+      {/* TB-HIST-3 (2026-10-01) — render validation-failed results so
+          the Preview never silently absorbs a parsable-but-invalid
+          source file. Previously the UI only matched `status === "ok"`
+          and the `{ error }` wrapper; a `status === "validation-failed"`
+          response — the server's shape for XLSX structural failures
+          (missing required column, broken header row, etc.) — rendered
+          nothing. */}
+      {preview?.status === "validation-failed" && (
+        <div className="card card-body border-red-200 bg-red-50" data-testid="jonas-validation-failed">
+          <h3 className="section-title text-base text-red-800">Preview failed validation</h3>
+          <p className="mt-1 text-xs text-red-700">
+            The source file was parsed but did not pass structural validation. Correct the issues below and re-upload.
+          </p>
+          {preview.fileErrors.length > 0 && (
+            <div className="mt-3">
+              <h4 className="text-xs font-semibold uppercase text-red-700">File errors</h4>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-red-800">
+                {preview.fileErrors.map((e, i) => (
+                  <li key={`fe-${i}`}><span className="font-mono">{e.kind}</span> — {e.message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {preview.rowErrors.length > 0 && (
+            <div className="mt-3">
+              <h4 className="text-xs font-semibold uppercase text-red-700">
+                Row errors ({preview.rowErrors.length})
+              </h4>
+              <ul className="mt-1 max-h-48 list-disc space-y-0.5 overflow-y-auto pl-5 text-xs text-red-800">
+                {preview.rowErrors.slice(0, 50).map((e, i) => (
+                  <li key={`re-${i}`}>
+                    row {e.lineNumber}
+                    {e.column ? ` · column ${e.column}` : ""} — {e.message}
+                  </li>
+                ))}
+                {preview.rowErrors.length > 50 && (
+                  <li className="italic">… and {preview.rowErrors.length - 50} more.</li>
+                )}
+              </ul>
+            </div>
+          )}
+          {preview.fileErrors.length === 0 && preview.rowErrors.length === 0 && (
+            <p className="mt-2 text-xs text-red-800">
+              Preview returned a validation-failed result with no error details. Try the source file again or contact support.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* ---- Preview panel ---- */}
       {previewOk && (
         <div className="card card-body space-y-4" data-testid="jonas-preview">
