@@ -374,6 +374,48 @@ export function JonasImportForm() {
             </div>
           )}
 
+          {/* TB-HIST-2b (2026-10-01) §4 — continuity review card. */}
+          {previewOk.continuity && (
+            <div className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3" data-testid="preview-continuity">
+              <h3 className="text-sm font-semibold">Continuity vs prior committed snapshot</h3>
+              <div className="mt-1 text-xs text-stone-600">
+                <div>
+                  Prior snapshot: <span className="font-mono">{previewOk.continuity.priorSnapshot?.asOf.slice(0, 10) ?? "—"}</span>
+                  {previewOk.continuity.priorSnapshot?.fiscalYearLabel && (
+                    <> · {previewOk.continuity.priorSnapshot.fiscalYearLabel}</>
+                  )}
+                </div>
+                {previewOk.continuity.isFiscalYearBoundary && (
+                  <div className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-800">
+                    Fiscal year boundary — current month equals current fiscal-YTD (no subtraction from prior fiscal year).
+                  </div>
+                )}
+                {previewOk.continuity.notes.map((n, i) => (
+                  <div key={i} className="mt-1 text-stone-700">{n}</div>
+                ))}
+                {previewOk.continuity.divergences.length > 0 && (
+                  <div className="mt-2">
+                    <div className="font-semibold text-stone-700">Top P&amp;L YTD divergences (review aid, non-blocking):</div>
+                    <table className="mt-1 w-full text-[11px]">
+                      <thead><tr className="text-left"><th>Code</th><th>Name</th><th className="text-right">Prior YTD</th><th className="text-right">Current YTD</th><th className="text-right">Delta</th></tr></thead>
+                      <tbody>
+                        {previewOk.continuity.divergences.slice(0, 10).map((d) => (
+                          <tr key={d.accountCode}>
+                            <td className="font-mono">{d.accountCode}</td>
+                            <td>{d.accountName ?? ""}</td>
+                            <td className="text-right tabular-nums">{money(d.priorYtd)}</td>
+                            <td className="text-right tabular-nums">{money(d.currentYtd)}</td>
+                            <td className={"text-right tabular-nums " + (d.delta >= 0 ? "text-emerald-700" : "text-red-700")}>{money(d.delta)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Full account-level preview table */}
           <div>
             <h3 className="text-sm font-semibold mt-4">Account preview ({previewOk.rows.length} rows)</h3>
@@ -384,6 +426,8 @@ export function JonasImportForm() {
                     <th className="w-24 text-left">Account</th>
                     <th className="text-left">Jonas description</th>
                     <th className="text-left">Spectre account</th>
+                    <th className="w-28 text-left">Department</th>
+                    <th className="w-20 text-left">Fund</th>
                     <th className="text-right w-28">Debit</th>
                     <th className="text-right w-28">Credit</th>
                     <th className="text-left w-24">Status</th>
@@ -467,11 +511,22 @@ function PreviewRow({ row }: { row: JonasImportPreviewRow }) {
     : status === "description-conflict" ? "text-amber-700"
     : status === "unmapped" ? "text-red-700"
     : "text-red-700";
+  // TB-HIST-2b (2026-10-01) §6 — surface Department / Fund per row.
+  const deptColor =
+    row.departmentStatus === "ok" ? "text-emerald-700"
+    : row.departmentStatus === "n/a" ? "text-stone-400"
+    : "text-red-700";
+  const deptLabel =
+    row.departmentStatus === "missing-required" ? "missing (REQUIRED)"
+    : row.departmentStatus === "unknown-dept" ? `unknown: ${row.department ?? ""}`
+    : (row.department ?? "—");
   return (
     <tr data-testid={`row-${row.accountCode}`}>
       <td className="font-mono">{row.accountCode}</td>
       <td>{row.jonasDescription}</td>
       <td>{row.spectreAccountName ?? <em className="text-red-700">no match</em>}</td>
+      <td className={deptColor} title={`Department status: ${row.departmentStatus}`}>{deptLabel}</td>
+      <td className="text-stone-700">{row.fund ?? "—"}</td>
       <td className="text-right tabular-nums">{row.debit ? money(row.debit) : ""}</td>
       <td className="text-right tabular-nums">{row.credit ? money(row.credit) : ""}</td>
       <td className={statusColor}>{status}</td>

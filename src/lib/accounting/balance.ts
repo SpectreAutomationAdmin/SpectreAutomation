@@ -89,6 +89,23 @@ export async function hasCommittedRealTrialBalance(clubId: string): Promise<bool
  *  now carries. New call sites should prefer this name. */
 export const hasCommittedRealAccountingData = hasCommittedRealTrialBalance;
 
+/**
+ * TB-HIST-2b (2026-10-01) — is this the Silver Springs demo tenant?
+ *
+ * Identified by its stable slug "silver-springs" (set in prisma/seed.ts).
+ * Any OTHER tenant is a real (non-demo) tenant, and Silver Springs
+ * demo fixture values MUST NOT appear in that tenant's reporting
+ * surfaces. See `getMonthlyReportingPackage` for the redactor that
+ * enforces this at the package level.
+ */
+export async function isDemoTenant(clubId: string): Promise<boolean> {
+  const club = await prisma.club.findUnique({
+    where: { id: clubId },
+    select: { slug: true },
+  });
+  return club?.slug === "silver-springs";
+}
+
 export async function accountBalances(clubId: string, filter: BalanceFilter = {}): Promise<AccountBalance[]> {
   // v14.9 — check once per report render whether demo entries
   // should be filtered. `hasCommittedRealTrialBalance` is a

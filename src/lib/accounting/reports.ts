@@ -299,16 +299,14 @@ export type IncomeStatementResult = {
 
 export async function incomeStatement(clubId: string, from: Date, to: Date, opts?: { departmentId?: string; fundId?: string }): Promise<IncomeStatementResult> {
   // TB-HIST-2 (2026-10-01) §11 — route the YTD read through
-  // `reportingAccountBalances` so a committed Jonas trial-balance
-  // snapshot at exact `to` with `periodStart === from` serves the
-  // request directly, instead of falling back to JournalEntryLine
-  // (which was empty for Jonas-only tenants, defect B2 identified in
-  // TB-HIST-1). Scoped filters (Dept / Fund) continue to use the
-  // JEL path because the snapshot payload isn't filterable yet.
-  const useSnapshot = opts?.departmentId == null && opts?.fundId == null;
-  const balances = useSnapshot
-    ? (await reportingAccountBalances(clubId, { from, to })).balances
-    : await accountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  // `reportingAccountBalances` so a committed trial-balance snapshot
+  // at exact `to` with `periodStart === from` serves the request
+  // directly. TB-HIST-2b (2026-10-01) §2 — scoped Dept / Fund filters
+  // now also flow through the snapshot path; the snapshot payload is
+  // dimensional and `reportingAccountBalances` applies the dimension
+  // filter before per-account aggregation. The JEL fallback inside
+  // `reportingAccountBalances` fires only when no snapshot matches.
+  const { balances } = await reportingAccountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
   const tree = await buildFsTree(clubId, "INCOME_STATEMENT", balances.filter((b) => b.accountType === "REVENUE" || b.accountType === "EXPENSE"));
   // Founder rule 2026-07-01 v14.7 — classify by ACCOUNT TYPE +
   // FS Group key prefix, not by legacy parent-group names. The

@@ -83,9 +83,35 @@ export type JonasImportPreviewRow = {
   mappingStatus: "mapped" | "unmapped" | "description-conflict" | "duplicate";
 };
 
+export type JonasPreviewContinuity = {
+  /** The matching prior-period committed snapshot (same fiscal year),
+   *  if any. When null, no continuity check could be run. */
+  priorSnapshot: {
+    asOf: string;
+    fiscalYearLabel: string | null;
+    fiscalPeriodSequence: number | null;
+  } | null;
+  /** `true` when the current source's periodEnd belongs to a different
+   *  fiscal year than the prior snapshot — the operator should treat
+   *  monthly figures as "FYTD = current" (no subtraction). */
+  isFiscalYearBoundary: boolean;
+  /** Per-account P&L YTD comparison. Only the first few divergent lines
+   *  are surfaced in the UI — this is a review aid, not a blocking
+   *  gate. All amounts in natural-side magnitude. */
+  divergences: Array<{
+    accountCode: string;
+    accountName: string | null;
+    priorYtd: number;
+    currentYtd: number;
+    delta: number;
+  }>;
+  notes: string[];
+};
+
 export type JonasImportPreview =
   | {
       status: "ok";
+      continuity: JonasPreviewContinuity | null;
       /** Total source rows encountered. */
       rowCount: number;
       warnings: ReadonlyArray<{ lineNumber: number; column: string | null; message: string }>;
@@ -598,8 +624,88 @@ export async function previewJonasImport(
 
   const requiresEffectiveDateSelection = dateResolution == null;
 
+  // TB-HIST-2b (2026-10-01) §4 — cross-month continuity preview.
+  // When the resolved period has a prior committed snapshot in the SAME
+  // fiscal year, surface a per-P&L-account comparison so the operator
+  // can see where YTD figures moved relative to the prior close. A
+  // large delta is NOT necessarily wrong (restatement / reclass is
+  // legitimate); the preview surfaces the information without
+  // blocking the commit.
+  let continuity: JonasPreviewContinuity | null = null;
+  if (dateResolution) {
+    // Fetch the newest committed TB snapshot whose asOf is BEFORE the
+    // current periodEnd. (Not necessarily the immediate prior month —
+    // just the most recent committed snapshot earlier than this one.)
+    const prior = await prisma.reportingLedgerSnapshot.findFirst({
+      where: {
+        clubId,
+        entityKind: "trial-balance",
+        batchState: "committed",
+        asOf: { lt: dateResolution.periodEnd },
+      },
+      orderBy: [{ asOf: "desc" }],
+      select: {
+        asOf: true,
+        fiscalYearLabel: true,
+        payloadJson: true,
+      },
+    });
+    if (prior) {
+      const priorFyLabel = prior.fiscalYearLabel ?? null;
+      const isFyBoundary = priorFyLabel != null && priorFyLabel !== dateResolution.fiscalYearLabel;
+      const notes: string[] = [];
+      if (isFyBoundary) {
+        notes.push(`Fiscal year boundary — current month equals current fiscal-YTD (prior snapshot belongs to ${priorFyLabel}).`);
+      }
+      const priorPayload = (() => { try { return JSON.parse(prior.payloadJson) as { lines?: Array<{ accountCode: string; endingBalance: number; department?: string | null }>; accounts?: Array<{ accountCode: string; accountName?: string; category?: string }> }; } catch { return { lines: [], accounts: [] }; } })();
+      const priorAccounts = new Map((priorPayload.accounts ?? []).map((a) => [a.accountCode, a]));
+      // Aggregate prior YTD per accountCode across any dimensional rows.
+      const priorYtdByCode = new Map<string, number>();
+      for (const l of priorPayload.lines ?? []) {
+        priorYtdByCode.set(l.accountCode, (priorYtdByCode.get(l.accountCode) ?? 0) + l.endingBalance);
+      }
+      // Current YTD per accountCode (from the source rows).
+      const currentYtdByCode = new Map<string, number>();
+      for (const r of parseResult.rows) {
+        currentYtdByCode.set(r.accountNumber, (currentYtdByCode.get(r.accountNumber) ?? 0) + r.ytdBalance);
+      }
+      // Pick the first N divergent P&L lines where |delta| > $1 so the
+      // founder can scan the material movements.
+      const divergences: JonasPreviewContinuity["divergences"] = [];
+      const union = new Set<string>([...priorYtdByCode.keys(), ...currentYtdByCode.keys()]);
+      for (const code of union) {
+        const priorYtd = priorYtdByCode.get(code) ?? 0;
+        const currentYtd = currentYtdByCode.get(code) ?? 0;
+        const delta = currentYtd - priorYtd;
+        if (Math.abs(delta) <= 1) continue; // ignore floor noise
+        // Only P&L accounts (4xxx revenue, 5xxx-9xxx expense in Jonas conventions).
+        const payloadAcct = priorAccounts.get(code);
+        if (payloadAcct?.category && payloadAcct.category !== "revenue" && payloadAcct.category !== "expense") continue;
+        divergences.push({
+          accountCode: code,
+          accountName: payloadAcct?.accountName ?? null,
+          priorYtd,
+          currentYtd,
+          delta,
+        });
+      }
+      divergences.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+      continuity = {
+        priorSnapshot: {
+          asOf: (prior.asOf ?? new Date(0)).toISOString(),
+          fiscalYearLabel: priorFyLabel,
+          fiscalPeriodSequence: null,
+        },
+        isFiscalYearBoundary: isFyBoundary,
+        divergences: divergences.slice(0, 25),
+        notes,
+      };
+    }
+  }
+
   return {
     status: "ok",
+    continuity,
     rowCount: parseResult.rows.length,
     warnings: parseResult.warnings.map((w) => ({
       lineNumber: w.lineNumber, column: w.column, message: w.message,

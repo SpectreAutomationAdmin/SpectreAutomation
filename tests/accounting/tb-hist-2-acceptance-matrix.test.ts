@@ -265,15 +265,14 @@ describe("TB-HIST-2 §L — Monthly Reporting Package suppresses demo Silver Spr
 });
 
 describe("TB-HIST-2 §M — Finance Income Statement reads from reporting ledger when snapshots exist", () => {
-  it("incomeStatement() routes through reportingAccountBalances when no Dept / Fund filter", () => {
+  it("incomeStatement() routes through reportingAccountBalances (TB-HIST-2b §2 — scoped filters stay on the snapshot path too)", () => {
     const fs = require("node:fs");
     const path = require("node:path");
     const src = fs.readFileSync(
       path.join(process.cwd(), "src", "lib", "accounting", "reports.ts"),
       "utf8",
     );
-    expect(src).toMatch(/useSnapshot = opts\?\.departmentId == null && opts\?\.fundId == null/);
-    expect(src).toMatch(/reportingAccountBalances\(clubId, \{ from, to \}\)/);
+    expect(src).toMatch(/reportingAccountBalances\(clubId, \{ from, to, departmentId: opts\?\.departmentId, fundId: opts\?\.fundId \}\)/);
   });
 });
 

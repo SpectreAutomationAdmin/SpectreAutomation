@@ -398,20 +398,18 @@ describe("TB-RESET-1c · TrialBalanceResult + BalanceSheetResult surface contrac
 describe("TB-HIST-2 · Income Statement now routes YTD reads through the snapshot path (per §11)", () => {
   const reportsSource = readFileSync("src/lib/accounting/reports.ts", "utf8");
 
-  it("incomeStatement() reads via reportingAccountBalances when no Dept / Fund filter is applied (TB-HIST-2 §11)", () => {
-    // TB-HIST-2 (2026-10-01) — §11 explicitly brings this report onto
-    // the reporting-ledger architecture. For periods backed by an
-    // exact-date trial-balance snapshot the YTD read is served from
-    // the snapshot payload; scoped filters (Dept / Fund) still use
-    // the operational ledger because the snapshot payload isn't yet
-    // filterable.
+  it("incomeStatement() reads via reportingAccountBalances for every call (TB-HIST-2b §2 — dimensional snapshot reads)", () => {
+    // TB-HIST-2 (2026-10-01) brought this report onto the reporting-
+    // ledger architecture. TB-HIST-2b (2026-10-01) §2 removed the
+    // JournalEntryLine detour for scoped Dept / Fund filters — the
+    // snapshot path now carries dimensional data and
+    // `reportingAccountBalances` applies the dimension filter before
+    // per-account aggregation.
     const startIdx = reportsSource.indexOf("export async function incomeStatement(");
     expect(startIdx).toBeGreaterThan(0);
     const bodyEnd = reportsSource.indexOf("\n}\n", startIdx);
     const body = reportsSource.slice(startIdx, bodyEnd);
-    expect(body).toContain("reportingAccountBalances(clubId, { from, to })");
-    // The JEL fallback is still present for scoped reads.
-    expect(body).toContain("accountBalances(clubId, { from, to, departmentId");
+    expect(body).toContain("reportingAccountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId }");
   });
 
   it("incomeStatementByDepartment() still consumes accountBalances directly (same deferred rationale)", () => {

@@ -23,6 +23,7 @@ import {
   checkClassificationCoherence,
   type ClassificationViolationCode,
 } from "@/lib/imports/classification-hierarchy";
+import { ensureFiscalYear } from "@/lib/accounting/periods";
 
 function hasClubAccess(p: Principal, clubId: string): boolean {
   if (isSuperAdmin(p)) return true;
@@ -71,7 +72,7 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const [rows, categories, clubAccountCount, clubJournalEntryCount, clubReportingLedgerBatchCount, clubReportingLedgerSnapshotCount] = await Promise.all([
+  const [rows, categories, clubAccountCount, clubJournalEntryCount, clubReportingLedgerBatchCount, clubReportingLedgerSnapshotCount, fiscalYears] = await Promise.all([
     prisma.importRow.findMany({
       where: { batchId },
       select: { id: true, rawJson: true },
@@ -88,6 +89,13 @@ export async function GET(
     prisma.journalEntry.count({ where: { clubId: batch.clubId } }),
     prisma.reportingLedgerBatch.count({ where: { clubId: batch.clubId } }),
     prisma.reportingLedgerSnapshot.count({ where: { clubId: batch.clubId } }),
+    // TB-HIST-2b (2026-10-01) §5 — fiscal calendar state. Required
+    // before the founder's first historical TB commit.
+    prisma.fiscalYear.findMany({
+      where: { clubId: batch.clubId },
+      select: { label: true, startDate: true, endDate: true, _count: { select: { periods: true } } },
+      orderBy: { startDate: "asc" },
+    }),
   ]);
   const catalog = categories.map((c) => ({ key: c.key, accountType: c.type }));
 
@@ -153,5 +161,49 @@ export async function GET(
       reportingLedgerBatch: clubReportingLedgerBatchCount,
       reportingLedgerSnapshot: clubReportingLedgerSnapshotCount,
     },
+    fiscalCalendar: {
+      years: fiscalYears.map((fy) => ({
+        label: fy.label,
+        startDate: fy.startDate.toISOString().slice(0, 10),
+        endDate: fy.endDate.toISOString().slice(0, 10),
+        periodCount: fy._count.periods,
+      })),
+    },
   });
+}
+
+// TB-HIST-2b (2026-10-01) §5 — fiscal-calendar bootstrap. POST idempotently
+// creates FY2025 + FY2026 + 12 FiscalPeriod records each via the normal
+// `ensureFiscalYear` helper. No balances, no transactions, no snapshots
+// are created. Rejected in production + requires SUPER_ADMIN.
+export async function POST(req: NextRequest, context: { params: { batchId: string } }): Promise<NextResponse> {
+  if (!isStaging()) {
+    return NextResponse.json({ error: "Not available in production." }, { status: 404 });
+  }
+  const principal = await requirePrincipal();
+  if (!isSuperAdmin(principal)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  const { batchId } = context.params;
+  const batch = await prisma.importBatch.findUnique({
+    where: { id: batchId },
+    select: { clubId: true },
+  });
+  if (!batch) return NextResponse.json({ error: "Batch not found." }, { status: 404 });
+
+  const body = await req.json().catch(() => ({})) as { action?: string; years?: number[] };
+  if (body.action !== "ensureFiscalYears") {
+    return NextResponse.json({ error: `Unsupported action '${body.action ?? ""}'. Expected 'ensureFiscalYears'.` }, { status: 400 });
+  }
+  const years = Array.isArray(body.years) && body.years.every((y) => Number.isInteger(y))
+    ? body.years
+    : [2025, 2026];
+
+  const created: Array<{ year: number; label: string; periods: number }> = [];
+  for (const year of years) {
+    const fy = await ensureFiscalYear(batch.clubId, { startYear: year, startMonth: 1, label: `FY${year}` });
+    const periods = await prisma.fiscalPeriod.count({ where: { clubId: batch.clubId, fiscalYearId: fy.id } });
+    created.push({ year, label: fy.label, periods });
+  }
+  return NextResponse.json({ ok: true, created });
 }

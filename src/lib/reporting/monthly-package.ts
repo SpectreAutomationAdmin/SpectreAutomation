@@ -23,7 +23,10 @@ import { buildEquityCommentary } from "@/lib/reporting/equity-commentary";
 // a committed Jonas ReportingLedger snapshot), Silver Springs demo
 // auxiliary inputs and demo fallbacks must not render in that
 // tenant's package.
-import { hasCommittedRealTrialBalance } from "@/lib/accounting/balance";
+import { hasCommittedRealTrialBalance, isDemoTenant } from "@/lib/accounting/balance";
+
+/** TB-HIST-2b (2026-10-01) §1 — canonical unavailable sentinel. */
+const UNAVAILABLE_TEXT = "Data not available for this reporting period.";
 import { getOperatingResults, type OperatingResults } from "@/lib/reporting/operating-results";
 import {
   buildStewardshipDashboardNotes,
@@ -1859,7 +1862,7 @@ export async function getMonthlyReportingPackage(
       }),
   });
 
-  return {
+  const pkg: MonthlyReportingPackage = {
     club: {
       id: club.id,
       name: club.name,
@@ -2793,6 +2796,130 @@ export async function getMonthlyReportingPackage(
       },
     ],
   };
+
+  // TB-HIST-2b (2026-10-01) §1 — redact Silver Springs demo literals
+  // for every non-demo tenant. The assembled package carries many
+  // inline Silver Springs demo narratives and values that would
+  // otherwise appear verbatim inside a Coulee / production tenant's
+  // Board package. We replace them with the canonical unavailable
+  // sentinel (strings) / empty arrays (series + rows).
+  const demoTenant = await isDemoTenant(club.id);
+  if (demoTenant) return pkg;
+  return redactMonthlyPackageForLiveTenant(pkg);
+}
+
+// ---------------------------------------------------------------------------
+// TB-HIST-2b (2026-10-01) §1 — redactor: wipe Silver Springs literals.
+// Returns a NEW package whose demo-sourced fields carry explicit
+// "data unavailable" sentinels. Live-ledger-sourced chapters
+// (Statement of Activities, Statement of Financial Position, Capital
+// Fund, Executive Summary) are kept intact — those come from the
+// production ReportingLedger when snapshots exist, or carry empty
+// shapes when they don't; neither surfaces Silver Springs values.
+// ---------------------------------------------------------------------------
+function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): MonthlyReportingPackage {
+  const emptyChips: KpiCard[] = [];
+  const emptyMetrics: Array<{ key: string; label: string; value: string; sub: string }> = [];
+  const emptySeries: ChartSeriesPoint[] = [];
+  const u = UNAVAILABLE_TEXT;
+  const redacted: MonthlyReportingPackage = {
+    ...pkg,
+    boardBriefing: {
+      operations: {
+        ...pkg.boardBriefing.operations,
+        narrative: u,
+        chips: emptyChips,
+        coverNarrative: u,
+        coverMetrics: emptyMetrics,
+      },
+      financialHealth: {
+        ...pkg.boardBriefing.financialHealth,
+        narrative: u,
+        chips: emptyChips,
+        coverNarrative: u,
+        coverMetrics: emptyMetrics,
+      },
+      capitalProgram: {
+        ...pkg.boardBriefing.capitalProgram,
+        narrative: u,
+        chips: emptyChips,
+        coverNarrative: u,
+        coverMetrics: emptyMetrics,
+      },
+    },
+    visualSummary: {
+      dataSource: "demo",
+      intro: u,
+      equityTrend: emptySeries,
+      noiTrend: emptySeries,
+      duesSubsidyTrend: emptySeries,
+      departmentSummary: [],
+    },
+    // The following demo-only chapter outputs are opaque to this redactor
+    // (their types are chapter-specific). Rather than reach into each
+    // nested shape, we overwrite with a minimal "unavailable" marker that
+    // satisfies the structural type via `unknown` cast; the UI renders
+    // these chapters as "— Data not available for this reporting period —".
+    stewardshipDashboard: makeUnavailable(pkg.stewardshipDashboard, u),
+    stewardshipKpiDashboard: makeUnavailable(pkg.stewardshipKpiDashboard, u),
+    operatingKPIs: { dataSource: "demo", cards: [] },
+    capitalKPIs: { dataSource: "demo", cards: [] },
+    capitalProjectTracker: makeUnavailable(pkg.capitalProjectTracker, u),
+    accountsReceivableAging: makeUnavailable(pkg.accountsReceivableAging, u),
+    operatingStatistics: makeUnavailable(pkg.operatingStatistics, u),
+    departmentalPLSummary: makeUnavailable(pkg.departmentalPLSummary, u),
+    departmentalPayrollAnalysis: makeUnavailable(pkg.departmentalPayrollAnalysis, u),
+    foodBeverageStatistics: makeUnavailable(pkg.foodBeverageStatistics, u),
+    inventoryAnalysis: makeUnavailable(pkg.inventoryAnalysis, u),
+    monthlyWeatherSummary: makeUnavailable(pkg.monthlyWeatherSummary, u),
+  };
+  return redacted;
+}
+
+/** TB-HIST-2b (2026-10-01) — chapter-level unavailable marker.
+ *  Walks the chapter object and replaces every string value with the
+ *  provided sentinel + every array with []. The returned object keeps
+ *  the chapter's TypeScript structure so downstream consumers that
+ *  type-check against the Monthly Reporting Package type continue to
+ *  compile; the rendered values are the explicit unavailable sentinel. */
+function makeUnavailable<T>(chapter: T, sentinel: string): T {
+  if (chapter === null || chapter === undefined) return chapter;
+  const cloned = JSON.parse(JSON.stringify(chapter));
+  walkRedact(cloned, sentinel);
+  return cloned as T;
+}
+
+function walkRedact(node: unknown, sentinel: string): void {
+  if (node === null || node === undefined) return;
+  if (Array.isArray(node)) {
+    node.length = 0;
+    return;
+  }
+  if (typeof node === "object") {
+    for (const key of Object.keys(node as Record<string, unknown>)) {
+      const val = (node as Record<string, unknown>)[key];
+      if (typeof val === "string") {
+        // Preserve a handful of discriminators the UI uses to pick
+        // which branch to render (data-source tags, status enum
+        // values) — these are not demo literals.
+        if (
+          key === "dataSource" ||
+          key === "status" ||
+          key === "statusLabel" ||
+          key === "consideration" ||
+          key === "tone" ||
+          key === "varianceTone" ||
+          key === "key" ||
+          key === "kind"
+        ) continue;
+        (node as Record<string, unknown>)[key] = sentinel;
+      } else if (typeof val === "number") {
+        (node as Record<string, unknown>)[key] = 0;
+      } else if (val && typeof val === "object") {
+        walkRedact(val, sentinel);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

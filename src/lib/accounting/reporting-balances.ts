@@ -177,6 +177,12 @@ async function normalizeSnapshotToBalances(
   clubId: string,
   asOf: Date,
   snapshot: { snapshotId: string; sourceSystem: string; sourceFile: string | null; capturedAt: Date; importedAt: Date; dataSource: string; batchState: string; importBatchId: string | null; reportingPeriod: string | null; fiscalYearLabel: string | null; payloadJson: string },
+  dimensionFilter?: {
+    /** Department CODE (not id) to keep. Dropped when null/undefined. */
+    departmentCode?: string | null;
+    /** Fund KEY to keep. Dropped when null/undefined. */
+    fundKey?: string | null;
+  },
 ): Promise<ReportingBalancesResult> {
   // Payload is the entity-specific TrialBalanceSnapshot serialized as
   // JSON. Rehydrate just the fields we need; we don't need to
@@ -189,8 +195,27 @@ async function normalizeSnapshotToBalances(
     totalCredits?: number;
     isBalanced?: boolean;
   };
-  const payloadLines = payload.lines ?? [];
+  const allLines = payload.lines ?? [];
   const payloadAccounts = payload.accounts ?? [];
+  // TB-HIST-2b (2026-10-01) §2 — dimensional filtering at the snapshot
+  // read. Dept filter: keep only lines whose stored `department` CODE
+  // matches (case-insensitive). Fund filter: keep only lines whose
+  // stored `fund` KEY matches. Both filters apply BEFORE per-account
+  // aggregation so a Dept-filtered Income Statement correctly excludes
+  // other departments' balances on multi-dept accounts.
+  const payloadLines = allLines.filter((l) => {
+    if (dimensionFilter?.departmentCode) {
+      const want = dimensionFilter.departmentCode.toUpperCase();
+      const have = (l.department ?? "").toUpperCase();
+      if (have !== want) return false;
+    }
+    if (dimensionFilter?.fundKey) {
+      const want = dimensionFilter.fundKey.toUpperCase();
+      const have = (l.fund ?? "").toUpperCase();
+      if (have !== want) return false;
+    }
+    return true;
+  });
 
   // Resolve each accountCode → Spectre Account. Account numbers are
   // STRINGS end-to-end. If any code doesn't resolve, we surface it in
@@ -340,25 +365,56 @@ export async function reportingAccountBalances(
   filter: BalanceFilter = {},
 ): Promise<ReportingAccountBalancesResult> {
   const asOf = filter.asOf ?? filter.to ?? new Date();
+  // TB-HIST-2b (2026-10-01) §2 — Department / Fund filters now stay
+  // on the snapshot path (dimensional reads). The costCenter filter
+  // still forces the operational-ledger path because snapshots don't
+  // carry a cost-center dimension yet.
   const hasAsOfOnly =
     filter.asOf != null &&
     filter.from == null &&
     filter.to == null &&
-    filter.departmentId == null &&
-    filter.fundId == null &&
     filter.costCenterId == null;
   const hasYtdSliceShape =
     filter.from != null &&
     filter.to != null &&
     filter.asOf == null &&
-    filter.departmentId == null &&
-    filter.fundId == null &&
     filter.costCenterId == null;
 
+  // Resolve Department.id → code and Fund.id → key for the snapshot
+  // filter (snapshots carry CODES, not IDs). Returns null for an id
+  // that doesn't resolve — the caller then falls through to the JEL
+  // path because the snapshot cannot answer the query.
+  async function resolveDimensionFilter(): Promise<
+    | { departmentCode: string | null; fundKey: string | null; resolved: true }
+    | { resolved: false }
+  > {
+    let departmentCode: string | null = null;
+    let fundKey: string | null = null;
+    if (filter.departmentId) {
+      const d = await prisma.department.findUnique({ where: { id: filter.departmentId }, select: { code: true } });
+      if (!d) return { resolved: false };
+      departmentCode = d.code;
+    }
+    if (filter.fundId) {
+      const f = await prisma.fund.findUnique({ where: { id: filter.fundId }, select: { key: true } });
+      if (!f) return { resolved: false };
+      fundKey = f.key;
+    }
+    return { departmentCode, fundKey, resolved: true };
+  }
+
   if (hasAsOfOnly) {
+    const dim = await resolveDimensionFilter();
+    if (!dim.resolved) {
+      const balances = await accountBalances(clubId, filter);
+      return { balances, source: "OPERATIONAL_LEDGER", provenance: null };
+    }
     const snapshot = await findExactCommittedTbSnapshot(clubId, asOf);
     if (snapshot) {
-      const result = await normalizeSnapshotToBalances(clubId, asOf, snapshot);
+      const result = await normalizeSnapshotToBalances(clubId, asOf, snapshot, {
+        departmentCode: dim.departmentCode,
+        fundKey: dim.fundKey,
+      });
       const balances: AccountBalance[] = result.rows
         .filter((r) => r.accountId != null && r.accountType != null && r.normalBalance != null)
         .map((r) => ({
@@ -385,13 +441,21 @@ export async function reportingAccountBalances(
   // YTD figure the caller wants. We can serve the P&L YTD and the
   // ending BS from the same snapshot payload.
   if (hasYtdSliceShape) {
+    const dim = await resolveDimensionFilter();
+    if (!dim.resolved) {
+      const balances = await accountBalances(clubId, filter);
+      return { balances, source: "OPERATIONAL_LEDGER", provenance: null };
+    }
     const snapshot = await findExactCommittedTbSnapshot(clubId, filter.to as Date);
     if (snapshot) {
       // Snapshot's periodStart lives on the ReportingLedgerSnapshot
       // row (not inside payloadJson), so grab it from the record.
       const periodStart = snapshot.periodStart;
       if (periodStart !== null && sameDay(periodStart, filter.from as Date)) {
-        const result = await normalizeSnapshotToBalances(clubId, filter.to as Date, snapshot);
+        const result = await normalizeSnapshotToBalances(clubId, filter.to as Date, snapshot, {
+          departmentCode: dim.departmentCode,
+          fundKey: dim.fundKey,
+        });
         const balances: AccountBalance[] = result.rows
           .filter((r) => r.accountId != null && r.accountType != null && r.normalBalance != null)
           .map((r) => ({
