@@ -71,7 +71,7 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const [rows, categories] = await Promise.all([
+  const [rows, categories, clubAccountCount, clubJournalEntryCount, clubReportingLedgerBatchCount, clubReportingLedgerSnapshotCount] = await Promise.all([
     prisma.importRow.findMany({
       where: { batchId },
       select: { id: true, rawJson: true },
@@ -80,6 +80,14 @@ export async function GET(
       where: { clubId: batch.clubId },
       select: { key: true, type: true },
     }),
+    // COA-UX-3 (2026-09-30) — §19 data-invariant surface. SSH is
+    // unavailable from the operator's machine; this read-only count
+    // lets authenticated Playwright assert Coulee's post-import
+    // state without reaching the DB directly.
+    prisma.account.count({ where: { clubId: batch.clubId } }),
+    prisma.journalEntry.count({ where: { clubId: batch.clubId } }),
+    prisma.reportingLedgerBatch.count({ where: { clubId: batch.clubId } }),
+    prisma.reportingLedgerSnapshot.count({ where: { clubId: batch.clubId } }),
   ]);
   const catalog = categories.map((c) => ({ key: c.key, accountType: c.type }));
 
@@ -139,5 +147,11 @@ export async function GET(
     totalViolations: Object.values(violationCounts).reduce((a, b) => a + b, 0),
     offenders,
     specificAccount,
+    club: {
+      account: clubAccountCount,
+      journalEntry: clubJournalEntryCount,
+      reportingLedgerBatch: clubReportingLedgerBatchCount,
+      reportingLedgerSnapshot: clubReportingLedgerSnapshotCount,
+    },
   });
 }
