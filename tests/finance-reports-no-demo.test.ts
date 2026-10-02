@@ -502,8 +502,16 @@ describe("v14.8 — source-contract: Finance report pages + services import ZERO
     const { balanceService, reportsService } = readAll();
     // balance.ts — accountBalances filters by entry.status = POSTED.
     expect(balanceService).toMatch(/status:\s*"POSTED"/);
-    // reports.ts — every JE query goes through accountBalances or its own POSTED filter.
-    expect(reportsService).toMatch(/accountBalances\(clubId/);
+    // reports.ts — every JE query goes through accountBalances
+    // (operational-ledger path) or reportingAccountBalances (which
+    // internally delegates to accountBalances for the OPERATIONAL
+    // branch and to the committed Jonas snapshot otherwise — both
+    // code paths enforce the POSTED filter). TB-HIST-2 (2026-10-01)
+    // introduced the `reportingAccountBalances` indirection to let
+    // the historical Jonas snapshot serve as an authoritative
+    // source alongside the live GL; this assertion accepts either
+    // call shape.
+    expect(reportsService).toMatch(/(?:reporting)?[Aa]ccountBalances\(clubId/);
     // Neither service has a "no-data fallback" that returns
     // synthetic rows.
     expect(balanceService).not.toMatch(/return\s+DEMO_ROWS/);
