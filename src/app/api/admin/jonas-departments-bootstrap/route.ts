@@ -32,12 +32,17 @@ import { isSuperAdmin, type Principal } from "@/lib/rbac";
 // MUST stay in lockstep with
 // `DEFAULT_JONAS_DEPARTMENT_MAPPING` in jonas-department-mapping.ts.
 // Order is sort-order for the tenant table.
+// Target Spectre Department rows the Jonas resolver maps to.
+// `GROUNDS` ships pre-populated on Coulee staging (as "Course &
+// Grounds" — code match, name drift accepted). `F&B` and `ADMIN`
+// also pre-exist with the exact names the mapping needs, so they
+// are intentionally OMITTED from this list — directive §1 forbids
+// creating duplicates and the mapping was adjusted to reuse the
+// existing Coulee codes.
 const TB_HIST_6_DEPARTMENTS: ReadonlyArray<{ code: string; name: string; sortOrder: number }> = [
   { code: "GROUNDS",           name: "Grounds",                      sortOrder: 10 },
   { code: "GOLF_SHOP",         name: "Golf Shop",                    sortOrder: 20 },
   { code: "CLUBHOUSE",         name: "Clubhouse",                    sortOrder: 30 },
-  { code: "FOOD_BEVERAGE",     name: "Food & Beverage",              sortOrder: 40 },
-  { code: "ADMINISTRATION",    name: "Administration",               sortOrder: 50 },
   { code: "DUES_AND_CHARGES",  name: "Dues & Charges",               sortOrder: 60 },
   { code: "LONG_RANGE_PLAN",   name: "Long Range Plan & Renovation", sortOrder: 70 },
   { code: "MENS_SECTION",      name: "Mens Section",                 sortOrder: 80 },
@@ -75,16 +80,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (!hasClubAccess(principal, clubIdParam)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const current = await captureState(clubIdParam);
-  const plan = TB_HIST_6_DEPARTMENTS.map((want) => {
-    const byCode = current.find((d) => d.code.toUpperCase() === want.code.toUpperCase());
-    const byName = current.find((d) => d.name.trim().toLowerCase() === want.name.trim().toLowerCase());
-    if (byCode && byName && byCode.id === byName.id) return { want, action: "skip-exists", existing: byCode };
-    if (byCode && !byName) return { want, action: "conflict-code-different-name", existing: byCode };
-    if (!byCode && byName) return { want, action: "conflict-name-different-code", existing: byName };
-    if (byCode && byName && byCode.id !== byName.id) return { want, action: "conflict-split", existingByCode: byCode, existingByName: byName };
-    return { want, action: "create" as const };
-  });
+  const plan = TB_HIST_6_DEPARTMENTS.map((want) => classify(want, current));
   return NextResponse.json({ clubId: clubIdParam, current, plan });
+}
+
+/**
+ * TB-HIST-6 (post-conflict adjustment) — a Department with a matching
+ * CODE is always considered the same record (name drift is
+ * informational — the resolver's `descriptionDrift` flag already
+ * surfaces it to the operator). The only conflict is a NAME match
+ * under a DIFFERENT code, because that would create accidental
+ * duplicates. The founder-authorised 11-dept list in
+ * TB_HIST_6_DEPARTMENTS has been pre-trimmed to omit F&B / ADMIN
+ * which already exist with the exact names the mapping targets, so
+ * this classifier generally returns `skip-exists` or `create`.
+ */
+function classify(
+  want: typeof TB_HIST_6_DEPARTMENTS[number],
+  current: DeptState[],
+): { want: typeof TB_HIST_6_DEPARTMENTS[number]; action: string; existing?: DeptState | DeptState[] } {
+  const byCode = current.find((d) => d.code.toUpperCase() === want.code.toUpperCase());
+  const byName = current.find((d) => d.name.trim().toLowerCase() === want.name.trim().toLowerCase());
+  if (byCode) {
+    // Code match wins — the mapping targets this code. If the name
+    // happens to drift (e.g. "Course & Grounds" for the GROUNDS code),
+    // leave the tenant's name intact.
+    return { want, action: "skip-exists", existing: byCode };
+  }
+  if (byName) {
+    // Name exists under a different code — this is a genuine conflict.
+    return { want, action: "conflict-name-different-code", existing: byName };
+  }
+  return { want, action: "create" };
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -104,13 +131,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const skipped: Array<{ want: typeof TB_HIST_6_DEPARTMENTS[number]; existing: DeptState }> = [];
 
   for (const want of TB_HIST_6_DEPARTMENTS) {
-    const byCode = before.find((d) => d.code.toUpperCase() === want.code.toUpperCase());
-    const byName = before.find((d) => d.name.trim().toLowerCase() === want.name.trim().toLowerCase());
-    if (byCode && byName && byCode.id === byName.id) { skipped.push({ want, existing: byCode }); continue; }
-    if (byCode && !byName) { conflicts.push({ want, reason: `Department code '${want.code}' exists but with name '${byCode.name}' (want '${want.name}').`, existing: byCode }); continue; }
-    if (!byCode && byName) { conflicts.push({ want, reason: `Department name '${want.name}' exists but with code '${byName.code}' (want '${want.code}').`, existing: byName }); continue; }
-    if (byCode && byName && byCode.id !== byName.id) { conflicts.push({ want, reason: `Two Departments: one with code '${want.code}' (name '${byCode.name}') and another with name '${want.name}' (code '${byName.code}').`, existing: [byCode, byName] }); continue; }
-    toCreate.push(want);
+    const result = classify(want, before);
+    if (result.action === "skip-exists") {
+      skipped.push({ want, existing: result.existing as DeptState });
+    } else if (result.action === "conflict-name-different-code") {
+      const existing = result.existing as DeptState;
+      conflicts.push({
+        want,
+        reason: `Department name '${want.name}' exists but with code '${existing.code}' (want '${want.code}'). Update the Jonas→Spectre mapping to reuse the existing code rather than creating a duplicate.`,
+        existing,
+      });
+    } else {
+      toCreate.push(want);
+    }
   }
 
   if (conflicts.length > 0) {

@@ -55,11 +55,17 @@ export type JonasDepartmentResolution =
  */
 export const DEFAULT_JONAS_DEPARTMENT_MAPPING: Readonly<Record<string, string | null>> = {
   "000000": null,                     // Balance Sheet — nondepartmental
-  "000001": "GROUNDS",                // Grounds
+  "000001": "GROUNDS",                // Grounds              → Coulee "Course & Grounds" (code match, name drift)
   "000002": "GOLF_SHOP",              // Golf Shop
   "000003": "CLUBHOUSE",              // Clubhouse
-  "000004": "FOOD_BEVERAGE",          // Food & Beverage
-  "000005": "ADMINISTRATION",         // Administration
+  // TB-HIST-6 (post-conflict adjustment, 2026-10-01) — Coulee's
+  // existing Department catalog already carries "Food & Beverage"
+  // under the code `F&B` and "Administration" under `ADMIN`. Per
+  // directive §1 we must NOT create a duplicate; the mapping is
+  // adapted to reuse the existing Coulee codes rather than inventing
+  // `FOOD_BEVERAGE` / `ADMINISTRATION` siblings.
+  "000004": "F&B",                    // Food & Beverage      → existing Coulee code
+  "000005": "ADMIN",                  // Administration       → existing Coulee code
   "000006": "DUES_AND_CHARGES",       // Dues & Charges
   "000007": "LONG_RANGE_PLAN",        // Long Range Plan & Renovation
   "000011": "MENS_SECTION",           // Mens Section

@@ -62,13 +62,16 @@ const PREAMBLE = [
 
 // Coulee's expected tenant Department codes for the 12 Jonas codes
 // in the real workbook. Keep in sync with
-// DEFAULT_JONAS_DEPARTMENT_MAPPING.
+// DEFAULT_JONAS_DEPARTMENT_MAPPING. TB-HIST-6 post-conflict
+// adjustment: F&B and ADMIN are the pre-existing Coulee codes; the
+// mapping reuses them rather than creating FOOD_BEVERAGE /
+// ADMINISTRATION duplicates.
 const COULEE_TENANT_DEPTS = [
-  { code: "GROUNDS", name: "Grounds" },
+  { code: "GROUNDS", name: "Course & Grounds" },
   { code: "GOLF_SHOP", name: "Golf Shop" },
   { code: "CLUBHOUSE", name: "Clubhouse" },
-  { code: "FOOD_BEVERAGE", name: "Food & Beverage" },
-  { code: "ADMINISTRATION", name: "Administration" },
+  { code: "F&B", name: "Food & Beverage" },
+  { code: "ADMIN", name: "Administration" },
   { code: "DUES_AND_CHARGES", name: "Dues & Charges" },
   { code: "LONG_RANGE_PLAN", name: "Long Range Plan & Renovation" },
   { code: "MENS_SECTION", name: "Men's Section" },
@@ -200,10 +203,27 @@ describe("TB-HIST-5 · Department resolver — Jonas → Spectre", () => {
     }
   });
 
-  it("000001 Grounds → GROUNDS (configured)", () => {
+  it("000001 Grounds → GROUNDS (configured, name drift OK)", () => {
     const res = resolveJonasDepartment("000001", "Grounds", COULEE_TENANT_DEPTS);
     expect(res.status).toBe("ok");
-    if (res.status === "ok") expect(res.spectreCode).toBe("GROUNDS");
+    if (res.status === "ok") {
+      expect(res.spectreCode).toBe("GROUNDS");
+      // Coulee's name is "Course & Grounds"; source says "Grounds" —
+      // informational drift flag.
+      expect(res.descriptionDrift).toBe(true);
+    }
+  });
+
+  it("000004 Food & Beverage → F&B (post-conflict mapping)", () => {
+    const res = resolveJonasDepartment("000004", "Food & Beverage", COULEE_TENANT_DEPTS);
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") expect(res.spectreCode).toBe("F&B");
+  });
+
+  it("000005 Administration → ADMIN (post-conflict mapping)", () => {
+    const res = resolveJonasDepartment("000005", "Administration", COULEE_TENANT_DEPTS);
+    expect(res.status).toBe("ok");
+    if (res.status === "ok") expect(res.spectreCode).toBe("ADMIN");
   });
 
   it("unknown Jonas code → status=unknown", () => {
@@ -221,11 +241,17 @@ describe("TB-HIST-5 · Department resolver — Jonas → Spectre", () => {
   });
 
   it("description drift is informational, not a resolution failure", () => {
-    const res = resolveJonasDepartment("000001", "Grounds Dept", COULEE_TENANT_DEPTS);
-    expect(res.status).toBe("ok");
-    if (res.status === "ok") {
-      expect(res.spectreCode).toBe("GROUNDS");
-      expect(res.descriptionDrift).toBe(true);
+    // 000003 Clubhouse → CLUBHOUSE (exact match) — contrast with
+    // the GROUNDS test which has intentional drift.
+    const exact = resolveJonasDepartment("000003", "Clubhouse", COULEE_TENANT_DEPTS);
+    expect(exact.status).toBe("ok");
+    if (exact.status === "ok") expect(exact.descriptionDrift).toBe(false);
+    // Varying the source description still resolves OK with drift=true.
+    const drift = resolveJonasDepartment("000003", "Clubhouse Dept", COULEE_TENANT_DEPTS);
+    expect(drift.status).toBe("ok");
+    if (drift.status === "ok") {
+      expect(drift.spectreCode).toBe("CLUBHOUSE");
+      expect(drift.descriptionDrift).toBe(true);
     }
   });
 
@@ -241,7 +267,10 @@ describe("TB-HIST-5 · Department resolver — Jonas → Spectre", () => {
 // Dimensional identity
 // --------------------------------------------------------
 describe("TB-HIST-5 · dimensional identity (Account × Department × Fund)", () => {
-  it("same account appearing in two Jonas depts → both rows preserved", async () => {
+  it("same account appearing in two Jonas depts → both rows preserved (RAW Jonas codes on JonasGlCsvRow)", async () => {
+    // JonasGlCsvRow is the parser-level row shape — carries the
+    // RAW Jonas 6-digit code in `department`. Only the normalized
+    // row (jonas-normalize.ts) carries the resolved Spectre code.
     const buf = await buildDepartmentalWorkbook([
       ...PREAMBLE,
       DEPT_HEADER,

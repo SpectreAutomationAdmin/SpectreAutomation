@@ -34,12 +34,17 @@ const PREAMBLE = [
 ];
 
 // Coulee's TB-HIST-6 Department catalog AFTER the bootstrap route runs.
+// TB-HIST-6 post-conflict adjustment: Coulee's pre-existing dept table
+// uses `F&B` and `ADMIN` (not `FOOD_BEVERAGE`/`ADMINISTRATION`); the
+// mapping was updated to reuse those codes rather than create
+// duplicates. "GROUNDS" code already exists under the Coulee name
+// "Course & Grounds" (name drift is informational, not a conflict).
 const COULEE_DEPTS = [
-  { code: "GROUNDS",           name: "Grounds" },
+  { code: "GROUNDS",           name: "Course & Grounds" },
   { code: "GOLF_SHOP",         name: "Golf Shop" },
   { code: "CLUBHOUSE",         name: "Clubhouse" },
-  { code: "FOOD_BEVERAGE",     name: "Food & Beverage" },
-  { code: "ADMINISTRATION",    name: "Administration" },
+  { code: "F&B",               name: "Food & Beverage" },
+  { code: "ADMIN",             name: "Administration" },
   { code: "DUES_AND_CHARGES",  name: "Dues & Charges" },
   { code: "LONG_RANGE_PLAN",   name: "Long Range Plan & Renovation" },
   { code: "MENS_SECTION",      name: "Mens Section" },
@@ -121,9 +126,11 @@ describe("TB-HIST-6 §11.C — commit CSV carries Spectre codes only", () => {
     for (const jonasCode of ["000000","000001","000002","000003","000004","000005","000006","000007","000011","000012","000013","000020"]) {
       expect(csv).not.toMatch(new RegExp(`,${jonasCode}(?:\\r|\\n|$)`));
     }
-    // The CSV MUST contain the resolved Spectre codes.
+    // The CSV MUST contain the resolved Spectre codes
+    // (mapping targets Coulee's existing codes — F&B / ADMIN — not
+    // hypothetical FOOD_BEVERAGE / ADMINISTRATION).
     expect(csv).toContain(",GROUNDS");
-    expect(csv).toContain(",ADMINISTRATION");
+    expect(csv).toContain(",ADMIN");
     // 000000 → empty Department column (last cell on the line).
     // Row shape: AccountNumber,AccountDescription,PeriodBalance,YTDBalance,
     //            FiscalYear,FiscalPeriod,Debit,Credit,Department
@@ -146,7 +153,7 @@ describe("TB-HIST-6 §11.D — same account across departments → separate rows
     ]);
     expect(n.rows).toHaveLength(2);
     expect(n.rows[0].department).toBe("GROUNDS");
-    expect(n.rows[1].department).toBe("ADMINISTRATION");
+    expect(n.rows[1].department).toBe("ADMIN");
     expect(n.counts.duplicates).toBe(0);
     expect(n.blockers.some((b) => b.code === "DUPLICATE_ACCOUNT")).toBe(false);
   });

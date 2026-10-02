@@ -104,9 +104,15 @@ runAt("TB-HIST-6 · bootstrap Coulee Depts → real Preview → dry-run commit p
     page.request,
     `${BASE}/api/admin/jonas-departments-bootstrap?clubId=${clubId}`,
   );
-  const JONAS_11 = ["GROUNDS","GOLF_SHOP","CLUBHOUSE","FOOD_BEVERAGE","ADMINISTRATION","DUES_AND_CHARGES","LONG_RANGE_PLAN","MENS_SECTION","LADIES_SECTION","TOURNAMENTS","CORPORATE"];
+  // TB-HIST-6 post-conflict adjustment: Coulee already carries
+  // F&B (not FOOD_BEVERAGE) and ADMIN (not ADMINISTRATION); the
+  // mapping reuses those existing codes. The 11 codes the Jonas
+  // resolver names (and the 11 the operator sees in the preview
+  // row chain) are:
+  const JONAS_11 = ["GROUNDS","GOLF_SHOP","CLUBHOUSE","F&B","ADMIN","DUES_AND_CHARGES","LONG_RANGE_PLAN","MENS_SECTION","LADIES_SECTION","TOURNAMENTS","CORPORATE"];
+  const afterCodes = afterPlan.body.current.map((d) => d.code.toUpperCase());
   for (const code of JONAS_11) {
-    expect(afterPlan.body.current.map((d) => d.code.toUpperCase())).toContain(code);
+    expect(afterCodes).toContain(code);
   }
 
   // --- 4. Coulee invariant check — Dept delta is exactly the created rows ---
