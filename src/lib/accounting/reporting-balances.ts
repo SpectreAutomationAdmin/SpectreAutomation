@@ -181,6 +181,38 @@ async function findExactCommittedTbSnapshot(clubId: string, asOf: Date) {
   });
 }
 
+/**
+ * TB-HIST-8 (2026-10-02) — latest committed authoritative snapshot
+ * at-or-before the requested date. The Balance Sheet is an AS-OF
+ * financial position report: if no exact-date snapshot exists for
+ * the requested date, the correct answer is the latest-known
+ * committed close (= query-time carry-forward).
+ *
+ * This function is used ONLY by callers opting into carry-forward
+ * (currently just `balanceSheet` via `reportingAccountBalances`'s
+ * `allowCarryForward: true` option). Trial Balance and Income
+ * Statement callers keep exact-date semantics — a historical TB
+ * must be read verbatim at its imported period end, and a YTD IS
+ * must match the snapshot's exact period window.
+ *
+ * Never returns a future snapshot:
+ *   where.asOf: { lte: endOfDay(requestedDate) }
+ *   order:     [{ asOf: 'desc' }, { capturedAt: 'desc' }, { createdAt: 'desc' }]
+ *   limit:     1
+ */
+async function findLatestCommittedTbSnapshotOnOrBefore(clubId: string, asOf: Date) {
+  const range = sameDayRange(asOf);
+  return prisma.reportingLedgerSnapshot.findFirst({
+    where: {
+      clubId,
+      entityKind: "trial-balance",
+      batchState: "committed",
+      asOf: { lte: range.lte },
+    },
+    orderBy: [{ asOf: "desc" }, { capturedAt: "desc" }, { createdAt: "desc" }],
+  });
+}
+
 async function normalizeSnapshotToBalances(
   clubId: string,
   asOf: Date,
@@ -378,6 +410,16 @@ export type ReportingAccountBalancesResult = {
 export async function reportingAccountBalances(
   clubId: string,
   filter: BalanceFilter = {},
+  // TB-HIST-8 (2026-10-02) — opt-in Balance-Sheet-style carry-forward.
+  // When the caller is a Balance Sheet (an AS-OF financial position
+  // report), and the exact-date snapshot miss should fall back to the
+  // latest committed snapshot where `asOf <= requested`, pass
+  // `allowCarryForward: true`. Trial Balance and Income Statement
+  // callers DO NOT set this flag — their semantics are exact-period:
+  //   • TB: "the imported period-end TB verbatim at the requested date".
+  //   • IS: "activity for the requested [from, to] window — the
+  //     snapshot's YTD slice is used ONLY on an exact period match."
+  opts: { allowCarryForward?: boolean } = {},
 ): Promise<ReportingAccountBalancesResult> {
   const asOf = filter.asOf ?? filter.to ?? new Date();
   // TB-HIST-2b (2026-10-01) §2 — Department / Fund filters now stay
@@ -424,9 +466,23 @@ export async function reportingAccountBalances(
       const balances = await accountBalances(clubId, filter);
       return { balances, source: "OPERATIONAL_LEDGER", provenance: null };
     }
-    const snapshot = await findExactCommittedTbSnapshot(clubId, asOf);
+    const exact = await findExactCommittedTbSnapshot(clubId, asOf);
+    // TB-HIST-8 — Balance-Sheet-style carry-forward. If the exact
+    // match misses AND the caller opted into carry-forward, consult
+    // the latest committed snapshot where asOf <= requested. Never
+    // consults a future snapshot (`findLatestCommittedTbSnapshotOnOrBefore`
+    // uses `asOf: { lte: endOfRequestedDay }`).
+    const snapshot = exact ?? (opts.allowCarryForward
+      ? await findLatestCommittedTbSnapshotOnOrBefore(clubId, asOf)
+      : null);
     if (snapshot) {
-      const result = await normalizeSnapshotToBalances(clubId, asOf, snapshot, {
+      // When carry-forward served the row, pin the normalisation to
+      // the snapshot's own asOf (so provenance shows the real close
+      // date). The caller's requested `asOf` is still returned to the
+      // UI via the standalone balance-sheet result's `asOf` field; the
+      // snapshot provenance carries the "financial data through" date.
+      const normaliseAsOf = snapshot.asOf ?? asOf;
+      const result = await normalizeSnapshotToBalances(clubId, normaliseAsOf, snapshot, {
         departmentCode: dim.departmentCode,
         fundKey: dim.fundKey,
       });
@@ -466,13 +522,24 @@ export async function reportingAccountBalances(
   // matches `asOf` within the same calendar day, the snapshot IS the
   // YTD figure the caller wants. We can serve the P&L YTD and the
   // ending BS from the same snapshot payload.
+  //
+  // TB-HIST-8 (2026-10-02) — when the Balance Sheet's current-year-
+  // earnings call carries forward (requested `to` beyond the latest
+  // committed snapshot), accept the latest committed snapshot where
+  // `periodStart === fy.startDate` AND `snapshot.asOf <= to`. The
+  // caller must opt in via `allowCarryForward`. The IS report itself
+  // DOES NOT opt in — a historical IS must match the snapshot's
+  // exact period window verbatim.
   if (hasYtdSliceShape) {
     const dim = await resolveDimensionFilter();
     if (!dim.resolved) {
       const balances = await accountBalances(clubId, filter);
       return { balances, source: "OPERATIONAL_LEDGER", provenance: null };
     }
-    const snapshot = await findExactCommittedTbSnapshot(clubId, filter.to as Date);
+    const exact = await findExactCommittedTbSnapshot(clubId, filter.to as Date);
+    const snapshot = exact ?? (opts.allowCarryForward
+      ? await findLatestCommittedTbSnapshotOnOrBefore(clubId, filter.to as Date)
+      : null);
     if (snapshot) {
       // Snapshot's periodStart lives on the ReportingLedgerSnapshot
       // row (not inside payloadJson), so grab it from the record.

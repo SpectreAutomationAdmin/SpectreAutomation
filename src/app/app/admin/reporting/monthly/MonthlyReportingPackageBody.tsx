@@ -520,27 +520,30 @@ function PackageHeader({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyRepor
             order). */}
         <div className="mt-4 grid grid-cols-1 gap-6 [@media(min-height:880px)]:mt-6 [@media(min-height:880px)]:gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-12">
 
-          {/* ----- LEFT COLUMN — identity stack ----------------------- */}
-          <div data-testid="monthly-cover-identity">
-            {/* L1 — Club name. text-5xl (48px) — 65% reduction from the
-                previous text-7xl ceremonial size. Single line at the
-                left-column width; one-line vertical footprint shrinks
-                from ~155px to ~52px.
-
-                `text-balance` (CSS `text-wrap: balance`) tells the
-                browser to distribute wrapped lines evenly when the
-                name DOES wrap, so an orphan word — e.g. "Club"
-                stranded on a second line — gets pushed up to balance
-                with its neighbour. Works for any club name, not just
-                Silver Springs: a three-word name like "Pebble Beach
-                Club" still single-lines; a five-word name like
-                "Silver Springs Golf & Country Club" wraps as
-                "Silver Springs Golf &" / "Country Club" instead of
-                "… Country" / "Club". Pure CSS rule, no JS, no
-                hard-coded breaks. */}
+          {/* ----- LEFT COLUMN — identity stack -----------------------
+              TB-HIST-8 (2026-10-02) — right-side padding reserved for
+              realistic private-club names. "Coulee Ridge Golf &
+              Country Club" (32 chars) at text-5xl / 1.15 would
+              otherwise push into the gutter at 1440 px because
+              `text-balance` only balances the wrap points — it does
+              NOT force wrap earlier than the column edge. Add `pr-6
+              lg:pr-10` so wrapped lines keep a comfortable right
+              gutter, preserving the visual separation from the
+              Executive Briefing column without reducing title size. */}
+          <div data-testid="monthly-cover-identity" className="pr-0 lg:pr-10 xl:pr-14">
+            {/* L1 — Club name.
+                TB-HIST-8 — responsive clamp so a realistic private-
+                club name stays visually dominant without colliding
+                with the Executive Briefing column. The 3xl → 4xl →
+                5xl step keeps the heading prestige while giving
+                `text-balance` room to produce two short, elegant
+                lines at the 1440 px desktop viewport the founder
+                uses. `break-words` is a defensive final-resort —
+                a 40+ char brand (which should still wrap at word
+                boundaries) can't push past the column. */}
             <h1
               data-testid="monthly-cover-club-name"
-              className="font-serif text-4xl/[1.15] tracking-tight text-balance text-club-green-900 sm:text-5xl/[1.15]"
+              className="font-serif text-3xl/[1.15] tracking-tight text-balance break-words text-club-green-900 sm:text-4xl/[1.15] lg:text-5xl/[1.15]"
             >
               {pkg.club.name}
             </h1>
@@ -3219,8 +3222,16 @@ function StewardshipDashboard({ data }: {
 function ChairsDashboard({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyReportingPackage>> }) {
   return (
     <div data-testid="financial-performance">
+      {/* TB-HIST-8 (2026-10-02) — the eyebrow was previously hard-coded
+          to "Silver Springs Golf & Country Club · Visual Summary",
+          which leaked the source-tenant brand onto every tenant's
+          Board package (Coulee's October 2026 package rendered this
+          verbatim). The club name is now resolved from the active
+          tenant's `pkg.club.name` so each tenant sees its own brand.
+          Source provenance remains available on import/audit records;
+          this is a user-facing display surface. */}
       <SectionHeading
-        eyebrow="Silver Springs Golf & Country Club · Visual Summary"
+        eyebrow={`${pkg.club.name} · Visual Summary`}
         title="Financial Performance, Illustrated"
         rightChip={<VisualSummaryChip />}
       />
@@ -4029,8 +4040,10 @@ function StewardshipKpiDashboard({
   const m = pkg.membershipStewardship;
   return (
     <div data-testid="stewardship-kpi-dashboard">
+      {/* TB-HIST-8 — resolve the eyebrow from the active tenant,
+          not a hard-coded source-tenant brand. */}
       <SectionHeading
-        eyebrow="Silver Springs Golf & Country Club · KPI Dashboard"
+        eyebrow={`${pkg.club.name} · KPI Dashboard`}
         title="Stewardship KPI Dashboard"
       />
 

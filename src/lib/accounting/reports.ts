@@ -225,7 +225,11 @@ export type BalanceSheetResult = {
 export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceSheetResult> {
   // Asset/Liability/Equity activity up to asOf.
   // TB-RESET-1c — authoritative-snapshot precedence for exact asOf.
-  const { balances: rawBalances, source, provenance } = await reportingAccountBalances(clubId, { asOf });
+  // TB-HIST-8 (2026-10-02) — Balance Sheet is an AS-OF financial
+  // position; when the exact-date snapshot misses, carry forward the
+  // latest committed snapshot where asOf <= requested. Never a future
+  // snapshot. Trial Balance keeps exact-date semantics (directive §4).
+  const { balances: rawBalances, source, provenance } = await reportingAccountBalances(clubId, { asOf }, { allowCarryForward: true });
   // TB-HIST-7 — consolidate per natural account before FS-tree
   // placement. The Balance Sheet should never render two
   // "1514 Golf Course - Maintenance Bldg" lines because the snapshot
@@ -255,7 +259,18 @@ export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceS
   const fy = await currentFiscalYear(clubId, asOf);
   let currentYearEarnings = ZERO;
   if (fy) {
-    const isResult = await reportingAccountBalances(clubId, { from: fy.startDate, to: asOf });
+    // TB-HIST-8 — the BS's current-year-earnings read uses carry-
+    // forward too. If the requested `asOf` is beyond the latest
+    // committed snapshot (e.g. Oct 2 2026 against a Jan 31 2026
+    // close), the YTD-slice path returns the latest-known close's
+    // YTD P&L (= January P&L for the Jan 31 example). The IS report
+    // itself does NOT opt in — a standalone IS still requires an
+    // exact period match.
+    const isResult = await reportingAccountBalances(
+      clubId,
+      { from: fy.startDate, to: asOf },
+      { allowCarryForward: true },
+    );
     // TB-HIST-7 — consolidate before summing so an account's
     // dimensional splits don't double-count. The sum is
     // mathematically unchanged (addition is associative) but the

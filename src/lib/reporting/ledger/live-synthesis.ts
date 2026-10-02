@@ -36,7 +36,8 @@ import {
   balanceSheet,
   incomeStatementByDepartment,
 } from "@/lib/accounting/reports";
-import { accountBalances, hasCommittedRealTrialBalance } from "@/lib/accounting/balance";
+import { accountBalances, consolidateAccountBalances, hasCommittedRealTrialBalance } from "@/lib/accounting/balance";
+import { reportingAccountBalances } from "@/lib/accounting/reporting-balances";
 import { hasFund } from "@/lib/accounting/fund-applicability";
 import type {
   BalanceSheetCategory,
@@ -424,10 +425,31 @@ export async function synthesizeIncomeStatementSnapshot(
   // creep in. It's restricted to OPERATING-tagged depreciation
   // accounts so capital-side write-downs land in
   // `totalCapitalExpense`, not the NOI-before-dep denominator.
-  const balances = await accountBalances(clubId, {
-    from: periodStart,
-    to: periodEnd,
-  });
+  // TB-HIST-8 (2026-10-02) — route through `reportingAccountBalances`
+  // so a Jonas Trial Balance snapshot with `periodStart === from` AND
+  // `asOf === to` (an exact YTD-slice match) serves the Monthly
+  // Board Reporting Package's live-synth path. Previously this used
+  // `accountBalances` directly, which only reads POSTED
+  // `JournalEntryLine` rows — Jonas-only tenants (Coulee) have no
+  // posted JEs, so every Executive Summary numerator was $0 even
+  // though the standalone Income Statement served the same period
+  // correctly via the YTD-slice resolver. The Board package now
+  // shares that same resolver.
+  //
+  // Also carry-forward-aware: when the caller is operating in a
+  // "latest-known financials" mode (e.g. the Executive Summary
+  // chapter viewed beyond the newest snapshot), the resolver
+  // returns the latest-prior snapshot's YTD slice. The opt-in flag
+  // mirrors the Balance Sheet contract (TB-HIST-8 §4).
+  const { balances: rawBalances } = await reportingAccountBalances(
+    clubId,
+    { from: periodStart, to: periodEnd },
+    { allowCarryForward: true },
+  );
+  // TB-HIST-7 — consolidate so one natural account contributes
+  // exactly once to the Executive Summary totals, regardless of how
+  // many dimensional lines the snapshot carries for it.
+  const balances = consolidateAccountBalances(rawBalances);
 
   const lines: IncomeStatementLine[] = [];
   let totalOperatingRevenue = 0;

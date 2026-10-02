@@ -1757,9 +1757,12 @@ export async function getMonthlyReportingPackage(
     // TB-HIST-2 (2026-10-01) — Silver Springs demo auxiliary values
     // still flow here because the StewardshipAuxiliaryInputs shape is
     // large and no zero-constant exists yet. Tracked as a remaining
-    // limitation in the TB-HIST-2 acceptance package: a tenant with
-    // real BS/IS snapshots will still see demo budget / peer-median
-    // auxiliary values on Stewardship until a per-tenant resolver lands.
+    // TB-HIST-8 (2026-10-02) — Stewardship auxiliary still seeded on
+    // live tenants pending a per-tenant resolver (follow-up slice).
+    // The resolver's API is seed-required (non-optional) so a
+    // neutral-state refactor is deferred to TB-HIST-9+. The
+    // Executive-Summary and SOA auxiliaries ARE guarded by hasRealData
+    // in this slice because their APIs already accept `undefined`.
     auxiliaryInputs: SILVER_SPRINGS_STEWARDSHIP_AUX,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
@@ -1806,9 +1809,11 @@ export async function getMonthlyReportingPackage(
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
-    // TB-HIST-2 (2026-10-01) — Capital-fund demo auxiliary still flows
-    // on live tenants until a per-tenant Reserve-Study / Capital-
-    // Project / Budget importer lands. Tracked as a remaining limitation.
+    // TB-HIST-8 (2026-10-02) — Capital-fund auxiliary still seeded on
+    // live tenants pending a per-tenant Reserve-Study / Capital-
+    // Project resolver (follow-up slice). The resolver's API is
+    // seed-required; a neutral-state refactor is deferred to
+    // TB-HIST-9+.
     auxiliaryInputs: SILVER_SPRINGS_CAPITAL_FUND_AUX,
     demoFallback: () =>
       buildSilverSpringsCapitalFundStatement({
@@ -1822,22 +1827,34 @@ export async function getMonthlyReportingPackage(
   // snapshots; falls back to the Silver Springs demo input. The
   // KPI cards, the reactive headline, and the consideration block
   // all derive from snapshot values when a TB exists for the period.
+  // TB-HIST-8 (2026-10-02) — guard the Executive-Summary auxiliary
+  // the same way `soaAuxiliaryInputs` is guarded above. Live tenants
+  // (ones with a committed TB) must NOT receive the Silver Springs
+  // seed, otherwise the KPI cards render fabricated budget numbers
+  // (e.g. $14.1M revenue budget, $2.84M NOI budget) on every tenant.
+  // Live tenants get `undefined`, which `getExecutiveSummaryForClub`
+  // treats as `EMPTY_EXECUTIVE_SUMMARY_AUXILIARY_INPUTS` and so the
+  // downstream variance ribbons collapse to a "no-budget" state
+  // instead of a false "100% below plan". Silver Springs itself (the
+  // demo tenant) still receives the seed so dev / demo screens keep
+  // working.
+  const execAuxiliaryInputs = hasRealData ? undefined : SILVER_SPRINGS_EXEC_SUMMARY_AUX;
+  const execDemoFallback = hasRealData
+    ? undefined
+    : () =>
+        buildExecutiveSummary(
+          buildDemoExecutiveSummaryInput({
+            period: reportingPeriod,
+            clubName: club.name,
+          }),
+        );
   const executiveSummary = await getExecutiveSummaryForClub({
     clubId: club.id,
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
-    // TB-HIST-2 (2026-10-01) — Executive-summary demo auxiliary still
-    // flows on live tenants pending Budget / Reserve / AR-Aging
-    // importers. Tracked as a remaining limitation.
-    auxiliaryInputs: SILVER_SPRINGS_EXEC_SUMMARY_AUX,
-    demoFallback: () =>
-      buildExecutiveSummary(
-        buildDemoExecutiveSummaryInput({
-          period: reportingPeriod,
-          clubName: club.name,
-        }),
-      ),
+    auxiliaryInputs: execAuxiliaryInputs,
+    demoFallback: execDemoFallback,
   });
   const viewerCanDrillDown = opts?.viewerCanDrillDown === true;
   const statementOfFinancialPositionV2 = await getStatementOfFinancialPositionForClub({

@@ -4475,7 +4475,16 @@ describe("Monthly Reporting Package — board-package shell", () => {
     // direction to frame the chapter as a club-branded "Visual
     // Summary" rather than as a pillar-management Chair's Dashboard).
     expect(MONTHLY_PAGE).toMatch(/<section id="financial-performance"/);
-    expect(MONTHLY_PAGE).toMatch(/eyebrow="Silver Springs Golf & Country Club · Visual Summary"/);
+    // TB-HIST-8 (2026-10-02) — the eyebrow was previously locked to the
+    // hard-coded "Silver Springs Golf & Country Club · Visual Summary"
+    // literal, which caused the source-tenant brand to leak into every
+    // tenant's Board package. Branding now resolves from
+    // `pkg.club.name` so each tenant sees its own identity on this
+    // surface. The assertion is updated to prove the template reads
+    // from the pkg.club.name field rather than a tenant-specific
+    // literal; the previous literal has been removed from the source.
+    expect(MONTHLY_PAGE).not.toMatch(/eyebrow="Silver Springs Golf & Country Club · Visual Summary"/);
+    expect(MONTHLY_PAGE).toMatch(/eyebrow=\{`\$\{pkg\.club\.name\}\s*·\s*Visual Summary`\}/);
     expect(MONTHLY_PAGE).toMatch(/title="Financial Performance, Illustrated"/);
     // Long-form lead paragraph REMOVED — replaced with the visual
     // StewardshipDashboard (two equal-width chart cards immediately
