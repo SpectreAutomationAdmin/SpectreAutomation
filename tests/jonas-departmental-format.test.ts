@@ -320,6 +320,47 @@ describe("TB-HIST-5 · reconciliation on departmental file", () => {
 });
 
 // --------------------------------------------------------
+// Entity-row detection — merged header rows
+// --------------------------------------------------------
+describe("TB-HIST-5 · XLSX entity-row detection (merged rows)", () => {
+  it("merged first row (same value across all 8 cols) → detected as entity", async () => {
+    // ExcelJS surfaces merged-cell values in every spanned column.
+    // Build a workbook where row 1 is a merged "01 - Silver Springs ..."
+    // across all 8 columns (same text in every cell).
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Sheet1");
+    ws.addRow([
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+      "01 - Silver Springs Golf & Country Club",
+    ]);
+    ws.addRow(["Trial Balance for Dec, 2025", "", "", "", "", "", "", ""]);
+    ws.addRow(["Closing Period Balances", "", "", "", "", "", "", ""]);
+    ws.addRow(DEPT_HEADER);
+    ws.addRow(["1000", "Petty Cash", "000000", "Balance Sheet", "", "", 940.90, 0]);
+    const ab = await wb.xlsx.writeBuffer();
+    const result = await parseJonasXlsxBuffer(Buffer.from(ab as ArrayBuffer));
+    expect(result.detectedEntity).toBe("01 - Silver Springs Golf & Country Club");
+    expect(result.hasJonasHeading).toBe(true);
+  });
+
+  it("non-merged multi-value row is NOT treated as entity (data row)", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Sheet1");
+    // Row with multiple DIFFERENT values — a real data row, not a merged entity.
+    ws.addRow(["1000", "Petty Cash", "000000", "Balance Sheet", "", "", 940.90, 0]);
+    const ab = await wb.xlsx.writeBuffer();
+    const result = await parseJonasXlsxBuffer(Buffer.from(ab as ArrayBuffer));
+    expect(result.detectedEntity).toBeNull();
+  });
+});
+
+// --------------------------------------------------------
 // Parser purity
 // --------------------------------------------------------
 describe("TB-HIST-5 · parser remains pure (no I/O)", () => {

@@ -85,9 +85,13 @@ function cellToString(v: unknown): string {
 
 /** Test whether a string looks like a Jonas-native club-name row
  *  (row 1 of Sheet1 when a monthly export has heading metadata).
- *  The heuristic is "the string is a non-numeric non-header word
- *  sequence at least 3 characters long, and not the column
- *  header." */
+ *  The heuristic accepts two shapes:
+ *    (a) a single non-empty cell (`isNativeEntityRow`)
+ *    (b) a MERGED row where ExcelJS surfaces the same value in every
+ *        cell (`isMergedEntityRow`) — this is what the real Jonas
+ *        departmental export produces (TB-HIST-5).
+ *  Both shapes must share: value length ≥ 3, non-numeric, and NOT a
+ *  column-header sentinel. */
 function isPlausibleEntityRow(row: string[]): string | null {
   if (row.length === 0) return null;
   const first = (row[0] ?? "").trim();
@@ -97,10 +101,17 @@ function isPlausibleEntityRow(row: string[]): string | null {
   if (HEADER_MARKERS.some((m) => first.startsWith(m))) return null;
   // A pure numeric first cell is a data row (account code).
   if (/^-?\d+(\.\d+)?$/.test(first)) return null;
-  // Row has more than one non-empty cell → almost certainly a data row.
-  const nonEmpty = row.filter((c) => c && c.trim().length > 0).length;
-  if (nonEmpty > 1) return null;
-  return first;
+  const nonEmpty = row.filter((c) => c && c.trim().length > 0);
+  if (nonEmpty.length === 1) {
+    // Classic native shape: one cell, rest empty.
+    return first;
+  }
+  // TB-HIST-5 — ExcelJS surfaces merged-cell values in every column
+  // the merge spans. If every non-empty cell in the row carries the
+  // SAME trimmed value, treat it as a merged entity row.
+  const unique = new Set(nonEmpty.map((c) => c.trim()));
+  if (unique.size === 1) return first;
+  return null;
 }
 
 export async function parseJonasXlsxBuffer(buffer: Buffer): Promise<JonasXlsxAdapterResult> {
