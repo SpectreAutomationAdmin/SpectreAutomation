@@ -74,6 +74,14 @@ export type ReportingBalanceRow = {
   naturalBalance: Prisma.Decimal;
   fundApplicability: string | null;
   fsGroupKey: string | null;
+  /** TB-HIST-7 (2026-10-01) — the source dimensional tuple for this
+   *  row. Snapshots carry one payload line per (account, department,
+   *  fund) combination; the resolver preserves the department / fund
+   *  code verbatim so consolidation can retain the full drill-down
+   *  under `AccountBalance.dimensional[]`. Null when the snapshot
+   *  line had no dimension (e.g. Jonas 000000 Balance Sheet). */
+  sourceDepartment: string | null;
+  sourceFund: string | null;
 };
 
 export type ReportingBalancesProvenance = {
@@ -258,6 +266,9 @@ async function normalizeSnapshotToBalances(
       naturalBalance: natural,
       fundApplicability: (acct as unknown as { fundApplicability?: string | null })?.fundApplicability ?? null,
       fsGroupKey: acct?.fsGroup?.key ?? null,
+      // TB-HIST-7 — preserve the dimensional provenance verbatim.
+      sourceDepartment: (line.department ?? null) || null,
+      sourceFund: (line.fund ?? null) || null,
     });
 
     // Trial-balance total convention: DR when signed >= 0, CR when signed < 0.
@@ -314,6 +325,10 @@ function operationalLedgerResult(clubId: string, asOf: Date, balances: AccountBa
       naturalBalance: b.naturalBalance,
       fundApplicability: b.fundApplicability,
       fsGroupKey: b.fsGroupKey,
+      // TB-HIST-7 — operational ledger has already aggregated per
+      // account, so no per-dimension provenance survives this path.
+      sourceDepartment: null,
+      sourceFund: null,
     };
   });
   const debitCents = totalDebit.toDecimalPlaces(2);
@@ -429,6 +444,17 @@ export async function reportingAccountBalances(
           naturalBalance: r.naturalBalance,
           fundApplicability: r.fundApplicability,
           fsGroupKey: r.fsGroupKey,
+          // TB-HIST-7 — seed a single-element dimensional array so
+          // consolidation can concatenate the per-line provenance
+          // into the drill-down list on the aggregated row.
+          dimensional: [{
+            department: r.sourceDepartment,
+            fund: r.sourceFund,
+            debit: r.debitTotal,
+            credit: r.creditTotal,
+            signedBalance: r.signedBalance,
+            naturalBalance: r.naturalBalance,
+          }],
         }));
       return { balances, source: "AUTHORITATIVE_SNAPSHOT", provenance: result.provenance };
     }
@@ -470,6 +496,16 @@ export async function reportingAccountBalances(
             naturalBalance: r.naturalBalance,
             fundApplicability: r.fundApplicability,
             fsGroupKey: r.fsGroupKey,
+            // TB-HIST-7 — single-element dimensional seed; consolidation
+            // merges across sibling rows.
+            dimensional: [{
+              department: r.sourceDepartment,
+              fund: r.sourceFund,
+              debit: r.debitTotal,
+              credit: r.creditTotal,
+              signedBalance: r.signedBalance,
+              naturalBalance: r.naturalBalance,
+            }],
           }));
         return { balances, source: "AUTHORITATIVE_SNAPSHOT", provenance: result.provenance };
       }

@@ -30,6 +30,21 @@ export type AccountBalance = {
   signedBalance: Prisma.Decimal; // debit - credit
   // "Natural" balance: positive when this is a normal-side balance.
   naturalBalance: Prisma.Decimal;
+  // TB-HIST-7 (2026-10-01) — dimensional provenance preserved alongside
+  // the natural-account balance. Populated when the balance comes from
+  // the dimensional ReportingLedgerSnapshot payload (one entry per
+  // (account, department, fund) tuple); null for operational-ledger
+  // reads. Consumers that need a drill-down build a map keyed on
+  // accountId; the consolidated reports read only the aggregated row
+  // and ignore this list.
+  dimensional?: ReadonlyArray<{
+    department: string | null;
+    fund: string | null;
+    debit: Prisma.Decimal;
+    credit: Prisma.Decimal;
+    signedBalance: Prisma.Decimal;
+    naturalBalance: Prisma.Decimal;
+  }>;
   // Founder rule 2026-07-02 v15.4 — Fund Applicability + FS Group
   // travel with every account balance so the live Income
   // Statement synthesiser can partition Revenue / Expense into
@@ -288,4 +303,104 @@ export async function accountActivity(
     totalCredit: sumMoney(activity.map((a) => a.credit)),
     activity,
   };
+}
+
+// ---------------------------------------------------------------------------
+// TB-HIST-7 (2026-10-01) — presentation-time dimensional consolidation.
+//
+// The historical `ReportingLedgerSnapshot` persists one payload line per
+// (Account × Department × Fund) tuple — the authoritative dimensional
+// grain required for departmental / fund reporting. When
+// `reportingAccountBalances` lifts those lines into AccountBalance rows,
+// a natural account that spans N departments / funds becomes N
+// AccountBalance entries with the same `accountId`. Rendering those as
+// separate rows in a CONSOLIDATED Trial Balance / Balance Sheet / Income
+// Statement produces duplicate-looking lines like
+//   "6104 Consultant & Professional Services ... $12,000.00"
+//   "6104 Consultant & Professional Services ... $4,500.00"
+// which is correct underlying data but poor consolidated-statement
+// presentation.
+//
+// `consolidateAccountBalances` collapses the array to one row per
+// natural account. The returned row preserves the dimensional source
+// detail under `.dimensional[]` so a future drill-down UI can expand
+// the aggregate without an extra round-trip to the resolver.
+//
+// Netting semantics (TB-HIST-7 §3):
+//   • debitTotal/creditTotal are summed across the dimensional lines
+//     (gross dimensional debit/credit — unchanged from the operational-
+//     ledger convention).
+//   • signedBalance / naturalBalance are summed across the lines, so
+//     offsetting dimensional entries (dept A +247,875.94, dept B
+//     −247,875.94) correctly net to zero at the account level.
+//   • The CALLER renders debit/credit per account using the classic
+//     "net on the natural side" rule: debit = max(0, signedBalance),
+//     credit = max(0, −signedBalance). The displayed totals are the
+//     consolidated per-account net values, NOT the pre-consolidation
+//     gross sums. This is the §8 distinction the directive calls out.
+//
+// Pure function. No Prisma. Deterministic ordering (input order is
+// preserved; two lines of the same account merge at the first line's
+// position).
+export function consolidateAccountBalances(
+  balances: ReadonlyArray<AccountBalance>,
+): AccountBalance[] {
+  const byAccount = new Map<string, {
+    first: AccountBalance;
+    position: number;
+    debitTotal: Prisma.Decimal;
+    creditTotal: Prisma.Decimal;
+    signedBalance: Prisma.Decimal;
+    naturalBalance: Prisma.Decimal;
+    dimensional: Array<NonNullable<AccountBalance["dimensional"]>[number]>;
+  }>();
+  balances.forEach((b, idx) => {
+    const key = b.accountId;
+    // If the input row already carries its own dimensional seed
+    // (TB-HIST-7 — populated by the snapshot resolver with the
+    // actual (department, fund) tuple), carry those entries forward;
+    // otherwise synthesise a single-entry with null dimensions so a
+    // caller can still iterate `.dimensional[]` safely.
+    const incomingDim = b.dimensional && b.dimensional.length > 0
+      ? b.dimensional.map((d) => ({ ...d }))
+      : [{
+          department: null, fund: null,
+          debit: b.debitTotal, credit: b.creditTotal,
+          signedBalance: b.signedBalance, naturalBalance: b.naturalBalance,
+        }];
+    const existing = byAccount.get(key);
+    if (!existing) {
+      byAccount.set(key, {
+        first: b,
+        position: idx,
+        debitTotal: b.debitTotal,
+        creditTotal: b.creditTotal,
+        signedBalance: b.signedBalance,
+        naturalBalance: b.naturalBalance,
+        dimensional: incomingDim,
+      });
+    } else {
+      existing.debitTotal = existing.debitTotal.plus(b.debitTotal);
+      existing.creditTotal = existing.creditTotal.plus(b.creditTotal);
+      existing.signedBalance = existing.signedBalance.plus(b.signedBalance);
+      existing.naturalBalance = existing.naturalBalance.plus(b.naturalBalance);
+      for (const d of incomingDim) existing.dimensional.push(d);
+    }
+  });
+  return Array.from(byAccount.values())
+    .sort((a, b) => a.position - b.position)
+    .map((entry) => ({
+      accountId: entry.first.accountId,
+      accountNumber: entry.first.accountNumber,
+      accountName: entry.first.accountName,
+      accountType: entry.first.accountType,
+      normalBalance: entry.first.normalBalance,
+      debitTotal: entry.debitTotal,
+      creditTotal: entry.creditTotal,
+      signedBalance: entry.signedBalance,
+      naturalBalance: entry.naturalBalance,
+      fundApplicability: entry.first.fundApplicability,
+      fsGroupKey: entry.first.fsGroupKey,
+      dimensional: entry.dimensional,
+    }));
 }

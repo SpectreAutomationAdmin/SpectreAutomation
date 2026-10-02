@@ -5,7 +5,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
-import { accountBalances, hasCommittedRealTrialBalance, type AccountBalance } from "./balance";
+import { accountBalances, consolidateAccountBalances, hasCommittedRealTrialBalance, type AccountBalance } from "./balance";
 import { sumMoney, toMoney, ZERO } from "./decimal";
 import type { AccountType, FSStatement } from "./types";
 // TB-RESET-1c (2026-09-29) — controller-grade Trial Balance +
@@ -43,7 +43,16 @@ export type TrialBalanceResult = {
 
 export async function trialBalance(clubId: string, asOf: Date, opts?: { departmentId?: string; fundId?: string }): Promise<TrialBalanceResult> {
   // DIM-2 (2026-09-29) — combined Department + Fund filtering.
-  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  const { balances: rawBalances, source, provenance } = await reportingAccountBalances(clubId, { asOf, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  // TB-HIST-7 (2026-10-01) — the dimensional snapshot payload emits one
+  // AccountBalance per (account, department, fund) tuple. Consolidate
+  // to one row per natural account so the Trial Balance renders a
+  // single line per account; offsetting dimensional balances net at
+  // the account level before the classic debit/credit presentation
+  // rule applies. Department / Fund slice reads still show one row
+  // per account (within that slice) — consolidation is a no-op when
+  // every account already appears once.
+  const balances = consolidateAccountBalances(rawBalances);
   const rows: TrialBalanceRow[] = balances
     .filter((b) => !b.debitTotal.equals(b.creditTotal) || !b.debitTotal.isZero())
     .map((b) => {
@@ -216,7 +225,12 @@ export type BalanceSheetResult = {
 export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceSheetResult> {
   // Asset/Liability/Equity activity up to asOf.
   // TB-RESET-1c — authoritative-snapshot precedence for exact asOf.
-  const { balances, source, provenance } = await reportingAccountBalances(clubId, { asOf });
+  const { balances: rawBalances, source, provenance } = await reportingAccountBalances(clubId, { asOf });
+  // TB-HIST-7 — consolidate per natural account before FS-tree
+  // placement. The Balance Sheet should never render two
+  // "1514 Golf Course - Maintenance Bldg" lines because the snapshot
+  // has that account split across dimensional lines.
+  const balances = consolidateAccountBalances(rawBalances);
   const balancesNonZero = balances.filter((b) => !b.signedBalance.isZero());
 
   const tree = await buildFsTree(clubId, "BALANCE_SHEET", balancesNonZero.filter((b) => ["ASSET", "LIABILITY", "EQUITY"].includes(b.accountType)));
@@ -242,7 +256,11 @@ export async function balanceSheet(clubId: string, asOf: Date): Promise<BalanceS
   let currentYearEarnings = ZERO;
   if (fy) {
     const isResult = await reportingAccountBalances(clubId, { from: fy.startDate, to: asOf });
-    for (const b of isResult.balances) {
+    // TB-HIST-7 — consolidate before summing so an account's
+    // dimensional splits don't double-count. The sum is
+    // mathematically unchanged (addition is associative) but the
+    // intermediate state is now one row per natural account.
+    for (const b of consolidateAccountBalances(isResult.balances)) {
       if (b.accountType === "REVENUE") currentYearEarnings = currentYearEarnings.plus(b.naturalBalance);
       if (b.accountType === "EXPENSE") currentYearEarnings = currentYearEarnings.minus(b.naturalBalance);
     }
@@ -306,7 +324,11 @@ export async function incomeStatement(clubId: string, from: Date, to: Date, opts
   // dimensional and `reportingAccountBalances` applies the dimension
   // filter before per-account aggregation. The JEL fallback inside
   // `reportingAccountBalances` fires only when no snapshot matches.
-  const { balances } = await reportingAccountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  const { balances: rawBalances } = await reportingAccountBalances(clubId, { from, to, departmentId: opts?.departmentId, fundId: opts?.fundId });
+  // TB-HIST-7 — consolidate per natural account before placing in
+  // the FS tree so the Income Statement renders one line per account
+  // regardless of how many dimensional entries the snapshot carries.
+  const balances = consolidateAccountBalances(rawBalances);
   const tree = await buildFsTree(clubId, "INCOME_STATEMENT", balances.filter((b) => b.accountType === "REVENUE" || b.accountType === "EXPENSE"));
   // Founder rule 2026-07-01 v14.7 — classify by ACCOUNT TYPE +
   // FS Group key prefix, not by legacy parent-group names. The
