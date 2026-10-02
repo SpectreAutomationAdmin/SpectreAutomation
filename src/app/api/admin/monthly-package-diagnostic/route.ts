@@ -23,6 +23,14 @@ import { prisma } from "@/lib/prisma";
 import { requirePrincipal } from "@/lib/services/principal";
 import { isSuperAdmin, type Principal } from "@/lib/rbac";
 
+// TB-HIST-9 — force this route to be dynamic. Next.js's build pass
+// otherwise pre-renders routes it can't statically prove are
+// request-dependent, and `requirePrincipal()` + `req.nextUrl.
+// searchParams` evaluated at build time produce a prerendered 404.
+// Our sibling diagnostic routes under /api/admin/ include this
+// marker for the same reason.
+export const dynamic = "force-dynamic";
+
 function isStaging(): boolean {
   const env = (process.env.SPECTRE_ENV ?? process.env.NEXT_PUBLIC_ENVIRONMENT ?? "").toLowerCase();
   if (env === "staging") return true;

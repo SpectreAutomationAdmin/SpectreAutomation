@@ -88,6 +88,9 @@ export type ReportingBalancesProvenance = {
   snapshotId: string;
   sourceSystem: string;
   sourceFile: string | null;
+  /** Import timestamp — when the ledger-batch commit happened. NOT
+   *  the snapshot's effective date. For "financial data through"
+   *  freshness UX, use `snapshotAsOf` instead. */
   capturedAt: Date;
   importedAt: Date;
   dataSource: string;
@@ -95,6 +98,12 @@ export type ReportingBalancesProvenance = {
   importBatchId: string | null;
   reportingPeriod: string | null;
   fiscalYearLabel: string | null;
+  /** TB-HIST-9 (2026-10-02) — the snapshot's own effective date (its
+   *  `asOf` column). This is the "financial data through" date for
+   *  freshness UX. Distinct from `capturedAt` (when the import
+   *  happened) and from the caller's requested asOf (which may be
+   *  later than the snapshot when carry-forward served the row). */
+  snapshotAsOf: Date | null;
   totalDebitsFromPayload: string;
   totalCreditsFromPayload: string;
   isBalancedFromPayload: boolean;
@@ -216,7 +225,12 @@ async function findLatestCommittedTbSnapshotOnOrBefore(clubId: string, asOf: Dat
 async function normalizeSnapshotToBalances(
   clubId: string,
   asOf: Date,
-  snapshot: { snapshotId: string; sourceSystem: string; sourceFile: string | null; capturedAt: Date; importedAt: Date; dataSource: string; batchState: string; importBatchId: string | null; reportingPeriod: string | null; fiscalYearLabel: string | null; payloadJson: string },
+  // TB-HIST-9 — the snapshot's own `asOf` (effective date). Prisma
+  // selects it on `findFirst`/`findUnique` but it was previously
+  // trimmed from this parameter shape. Needed by the freshness UX
+  // so the UI can distinguish "financial data through <snapshot
+  // effective date>" from `capturedAt` (= when the import ran).
+  snapshot: { snapshotId: string; sourceSystem: string; sourceFile: string | null; capturedAt: Date; importedAt: Date; dataSource: string; batchState: string; importBatchId: string | null; reportingPeriod: string | null; fiscalYearLabel: string | null; payloadJson: string; asOf: Date | null },
   dimensionFilter?: {
     /** Department CODE (not id) to keep. Dropped when null/undefined. */
     departmentCode?: string | null;
@@ -331,6 +345,9 @@ async function normalizeSnapshotToBalances(
       importBatchId: snapshot.importBatchId,
       reportingPeriod: snapshot.reportingPeriod,
       fiscalYearLabel: snapshot.fiscalYearLabel,
+      // TB-HIST-9 — the snapshot's own effective date (its asOf
+      // column), surfaced to the UI's freshness pill.
+      snapshotAsOf: snapshot.asOf,
       totalDebitsFromPayload: String(payload.totalDebits ?? 0),
       totalCreditsFromPayload: String(payload.totalCredits ?? 0),
       isBalancedFromPayload: Boolean(payload.isBalanced),

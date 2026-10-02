@@ -34,7 +34,15 @@ export default async function BalanceSheetPage({ searchParams }: { searchParams:
               no-op repetition and we omit it. */}
           {bs.source === "AUTHORITATIVE_SNAPSHOT" && bs.provenance ? (
             (() => {
-              const financialAsOf = bs.provenance.capturedAt.toISOString().slice(0, 10);
+              // TB-HIST-9 — use the snapshot's EFFECTIVE date
+              // (`snapshotAsOf`), not its import timestamp
+              // (`capturedAt`). The pill reads as "Financial data
+              // through <effective date>" — the import time is
+              // metadata, not the data's recency.
+              const snapshotAsOfIso = bs.provenance.snapshotAsOf
+                ? bs.provenance.snapshotAsOf.toISOString().slice(0, 10)
+                : bs.provenance.capturedAt.toISOString().slice(0, 10);
+              const financialAsOf = snapshotAsOfIso;
               const requestedAsOf = asOf.toISOString().slice(0, 10);
               if (financialAsOf === requestedAsOf) {
                 return (
