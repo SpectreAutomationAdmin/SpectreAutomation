@@ -99,25 +99,46 @@ export default async function MonthlyReportingPage({
   // returns its built-in May 31, 2026 baseline (back-compat: the
   // legacy direct URL still loads the same package).
   const period = parsePeriodQuery(searchParams?.period);
-  const pkg = period
-    ? await getMonthlyReportingPackage(clubId, { period, viewerCanDrillDown })
-    : await getMonthlyReportingPackage(clubId, { viewerCanDrillDown });
 
-  // Look up the matching MonthlyPackage archive row for this
-  // period — if the launcher generated a DRAFT (or the operator
-  // previously published/sent it), surface the publish/send action
-  // bar at the top of the document for review-then-act flow.
+  // TB-HIST-9 (2026-10-02) — PUBLISHED-package immutability.
+  //
+  // A published Board package is historical evidence. Prior to this
+  // slice, the admin surface at /app/admin/reporting/monthly?period=
+  // YYYY-MM unconditionally called `getMonthlyReportingPackage(...)`
+  // which rebuilds from today's live data — so a May 2026 package
+  // that was previously published rendered against the current
+  // database state (and today surfaces "Data not available for this
+  // reporting period" cards for every chapter where the live source
+  // is empty).
+  //
+  // The Board-facing route /app/reports/monthly-package/[id] has
+  // ALWAYS read the frozen `MonthlyPackage.packagePayloadJson`
+  // written at publish time (see `getBoardPackageView` in
+  // src/lib/reporting/monthly-package-lifecycle.ts). This slice
+  // teaches the admin surface the same contract:
+  //
+  //   • status == DRAFT or no row    → live-rebuild (prep workflow).
+  //   • status in {PUBLISHED, SENT,  → serve frozen packagePayloadJson
+  //     ARCHIVED} with payload JSON    (immutable historical evidence).
+  //   • status != DRAFT but payload  → fall through to live-rebuild
+  //     JSON is null (legacy row       with a diagnostic console log;
+  //     from before the snapshot       the operator can re-publish
+  //     columns existed)               to re-capture.
   const periodKeyForBar =
     searchParams?.period ??
-    `${pkg.period.endISO.slice(0, 4)}-${pkg.period.endISO.slice(5, 7)}`;
+    // Fallback period key for the row-lookup. Without a period
+    // query the admin URL loads the service's default live package;
+    // the archive row lookup is driven by that default's end-ISO.
+    "";
   const reportingYear = Number(periodKeyForBar.slice(0, 4));
   const reportingMonth = Number(periodKeyForBar.slice(5, 7));
   // Under the new publication model, the unique constraint on
   // (clubId, reportingYear, reportingMonth) guarantees AT MOST ONE
-  // row per period. No more two-row "live vs archived for the same
-  // period" reconciliation — one findUnique resolves it.
+  // row per period. One findUnique resolves it; `packagePayloadJson`
+  // is pulled now so we can decide live-vs-frozen before calling
+  // getMonthlyReportingPackage.
   const monthlyPackageRow =
-    Number.isFinite(reportingYear) && Number.isFinite(reportingMonth)
+    Number.isFinite(reportingYear) && Number.isFinite(reportingMonth) && reportingYear > 0 && reportingMonth > 0
       ? await prismaImport.monthlyPackage.findUnique({
           where: {
             clubId_reportingYear_reportingMonth: {
@@ -133,10 +154,44 @@ export default async function MonthlyReportingPage({
             publishedPayloadHash: true,
             reportingYear: true,
             reportingMonth: true,
+            // TB-HIST-9 — pull the frozen payload JSON. When present
+            // on a non-DRAFT row this is served VERBATIM so a
+            // subsequent ledger change (new accounting import,
+            // demo-seed removal, resolver refactor) cannot alter
+            // the historical artifact.
+            packagePayloadJson: true,
+            publishedAt: true,
           },
         })
       : null;
   const headerRow = monthlyPackageRow;
+
+  // TB-HIST-9 — decide which `pkg` to render.
+  const isFrozen =
+    !!monthlyPackageRow &&
+    ["PUBLISHED", "SENT", "ARCHIVED"].includes(monthlyPackageRow.status) &&
+    typeof monthlyPackageRow.packagePayloadJson === "string" &&
+    monthlyPackageRow.packagePayloadJson.length > 0;
+  let frozenPayload: Awaited<ReturnType<typeof getMonthlyReportingPackage>> | null = null;
+  if (isFrozen && monthlyPackageRow) {
+    try {
+      // The published payload was written as JSON.stringify(packagePayload)
+      // in publishMonthlyPackage (monthly-package-lifecycle.ts:580).
+      // ISO strings for dates — no revival needed — so we cast
+      // directly to the Awaited<ReturnType> shape and render it the
+      // same way the Board surface does.
+      frozenPayload = JSON.parse(monthlyPackageRow.packagePayloadJson!) as Awaited<
+        ReturnType<typeof getMonthlyReportingPackage>
+      >;
+    } catch {
+      frozenPayload = null;
+    }
+  }
+  const pkg =
+    frozenPayload ??
+    (period
+      ? await getMonthlyReportingPackage(clubId, { period, viewerCanDrillDown })
+      : await getMonthlyReportingPackage(clubId, { viewerCanDrillDown }));
 
   // Resolve the club's current Live Package = the newest reporting
   // period at PUBLISHED status (SENT counts as a legacy alias). The

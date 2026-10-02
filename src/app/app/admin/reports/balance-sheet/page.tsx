@@ -22,6 +22,58 @@ export default async function BalanceSheetPage({ searchParams }: { searchParams:
         <div>
           <h1 className="page-title">Balance Sheet</h1>
           <p className="mt-1 text-stone-500">As of {asOf.toISOString().slice(0, 10)}</p>
+          {/* TB-HIST-9 (2026-10-02) — data-freshness surface.
+              When `balanceSheet()` carries forward (requested asOf
+              is beyond the latest committed snapshot — TB-HIST-8),
+              `bs.provenance.capturedAt` identifies the snapshot's
+              close date. Render a restrained pill communicating
+              "Financial data through <date>" so the operator sees
+              the latest-known close without the UI implying the
+              requested asOf is a fresh close. When the asOf
+              matches the snapshot's exact date, this pill is a
+              no-op repetition and we omit it. */}
+          {bs.source === "AUTHORITATIVE_SNAPSHOT" && bs.provenance ? (
+            (() => {
+              const financialAsOf = bs.provenance.capturedAt.toISOString().slice(0, 10);
+              const requestedAsOf = asOf.toISOString().slice(0, 10);
+              if (financialAsOf === requestedAsOf) {
+                return (
+                  <p
+                    className="mt-1 text-xs text-stone-500"
+                    data-testid="bs-report-data-through"
+                  >
+                    Source: {bs.provenance.sourceSystem}
+                    {bs.provenance.sourceFile ? ` · ${bs.provenance.sourceFile}` : ""}
+                    {" · imported "}
+                    {bs.provenance.importedAt.toISOString().slice(0, 10)}
+                  </p>
+                );
+              }
+              return (
+                <p
+                  className="mt-1 inline-flex items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-700"
+                  data-testid="bs-report-data-through"
+                  role="note"
+                >
+                  <span className="font-medium">Financial data through</span>
+                  <time dateTime={financialAsOf} className="font-mono">
+                    {financialAsOf}
+                  </time>
+                  <span className="text-stone-400">·</span>
+                  <span className="text-stone-500">
+                    Latest committed close for this club.
+                  </span>
+                </p>
+              );
+            })()
+          ) : (
+            <p
+              className="mt-1 text-xs text-stone-500"
+              data-testid="bs-report-source-operational"
+            >
+              Source: Operational ledger (Spectre)
+            </p>
+          )}
         </div>
         <form className="flex items-end gap-2 text-sm">
           <div><label className="label">As of</label><input className="input" type="date" name="asOf" defaultValue={asOf.toISOString().slice(0, 10)} /></div>

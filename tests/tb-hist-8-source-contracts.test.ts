@@ -64,7 +64,12 @@ describe("TB-HIST-8 §17.A-D — Balance Sheet carry-forward resolver", () => {
 // -------------------------------------------------------------------
 describe("TB-HIST-8 §17.G-H — Board package reads the shared IS resolver", () => {
   it("live-synthesis's IS path uses reportingAccountBalances (not raw accountBalances) + consolidation", () => {
-    const isSynth = LIVE_SYNTH.match(/export async function synthesizeIncomeStatementSnapshot[\s\S]*?\n\}\n/)?.[0] ?? "";
+    // CRLF-tolerant extractor: match from `export async function
+    // synthesizeIncomeStatementSnapshot` through the first subsequent
+    // export (or the function's own `^}` line in LF). Works on both
+    // Linux (LF) and Windows (CRLF) checkouts.
+    const normalized = LIVE_SYNTH.replace(/\r\n/g, "\n");
+    const isSynth = normalized.match(/export async function synthesizeIncomeStatementSnapshot[\s\S]*?(?=\nexport |\n$)/)?.[0] ?? "";
     expect(isSynth).toMatch(/reportingAccountBalances\(\s*clubId,\s*\{\s*from:\s*periodStart,\s*to:\s*periodEnd\s*\},\s*\{\s*allowCarryForward:\s*true\s*\}/);
     expect(isSynth).toMatch(/consolidateAccountBalances\(rawBalances\)/);
     // The old direct `accountBalances({from, to})` call shape must not reappear here.
