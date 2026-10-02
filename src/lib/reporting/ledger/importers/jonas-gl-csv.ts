@@ -52,8 +52,24 @@ export type JonasGlCsvRow = {
   /** Optional debit/credit splits when the source provides them. */
   debit: number | null;
   credit: number | null;
-  /** Optional department code from the Jonas extract. */
+  /** Optional department code from the Jonas extract. For the
+   *  departmental format this is the 6-digit Jonas Department Code
+   *  (e.g. "000001"); the action layer resolves it to a Spectre
+   *  Department code (or null for the 000000 Balance Sheet marker). */
   department: string | null;
+  /** TB-HIST-5 — optional Jonas Department Description passed
+   *  through from the source for Preview display ("Grounds",
+   *  "Golf Shop", "Balance Sheet", …). Does not drive resolution;
+   *  the Department Code is authoritative. */
+  departmentDescription: string | null;
+  /** TB-HIST-5 — optional Jonas Sub-Account Code from the source.
+   *  Populated when the source workbook's Sub-Account column
+   *  carries a non-empty value for the row. Preview surfaces a
+   *  banner if ANY row has one; the directive requires an explicit
+   *  decision before silently discarding. */
+  subAccountCode: string | null;
+  /** TB-HIST-5 — optional Jonas Sub-Account Description. */
+  subAccountDescription: string | null;
   /** Optional Jonas-side account type ("Asset" / "Liability" / ...).
    *  Used as a fallback hint when no explicit category mapping
    *  exists for the account number. */
@@ -107,6 +123,16 @@ export type JonasSourceFormat =
    *  supplied effective date (`fallbackPeriodEnd`); the workbook
    *  alone cannot name a period. */
   | "closing-balance"
+  /** TB-HIST-5 (2026-10-01) — Jonas DEPARTMENTAL Trial Balance.
+   *  Eight columns with preamble: "G/L Account Code",
+   *  "G/L Account Description", "G/L Department Code",
+   *  "G/L Department Description", "G/L Sub-Account Code",
+   *  "G/L Sub-Account Description", "Closing Bal Debit",
+   *  "Closing Bal Credit". Fiscal year + period come from the
+   *  preamble. The per-row Department code is preserved into the
+   *  spectre-canonical `Department` column so the dimensional
+   *  snapshot grain (Account × Department × Fund) is honoured. */
+  | "jonas-departmental"
   /** Spectre-canonical schema — AccountNumber, AccountDescription,
    *  PeriodBalance, YTDBalance, FiscalYear, FiscalPeriod (+ optional
    *  Debit/Credit/Department/AccountType). Supplied directly by
@@ -206,6 +232,13 @@ const OPTIONAL_COLUMNS = [
   "debit",
   "credit",
   "department",
+  // TB-HIST-5 — departmental workbooks carry a Department Description
+  // + optional Sub-Account Code / Description alongside the Department
+  // Code. These are preserved on the parsed row for Preview display
+  // (DepartmentDescription) and the sub-account non-blank banner.
+  "departmentdescription",
+  "subaccountcode",
+  "subaccountdescription",
   "accounttype",
 ] as const;
 
@@ -434,6 +467,15 @@ type JonasFormatDetection =
       fiscalPeriod: number;
     }
   | {
+      /** TB-HIST-5 — 8-column departmental Jonas Trial Balance. */
+      kind: "jonas-departmental";
+      headerRecordIndex: number;
+      calendarYear: number;
+      calendarMonth: number;
+      fiscalYear: number;
+      fiscalPeriod: number;
+    }
+  | {
       /** Header matches the four-column schema but no preamble is
        *  present AND the caller supplied no fallback. Parser emits
        *  `effective-date-required`. */
@@ -449,12 +491,20 @@ function detectJonasNativeFormat(
 
   // Pass 1 — header row (primary signal).
   let headerRecordIndex = -1;
+  let headerHasDepartmentCol = false;
   for (let i = 0; i < scanDepth; i++) {
     const cells = records[i].map(collapseHeader);
     const hasAccountCol = cells.some((c) => /g\/?l\s*account/.test(c));
     const hasClosingBal = cells.some((c) => /closing\s*bal/.test(c));
     if (hasAccountCol && hasClosingBal) {
       headerRecordIndex = i;
+      // TB-HIST-5 — the real departmental workbook adds a dedicated
+      // "G/L Department Code" + "G/L Department Description" pair to
+      // the same header record. The presence of the department
+      // column promotes detection from `jonas-native` /
+      // `closing-balance` to `jonas-departmental` so the normaliser
+      // emits the per-row Department into the spectre-canonical CSV.
+      headerHasDepartmentCol = cells.some((c) => /g\/?l\s*department\s*code/.test(c));
       break;
     }
   }
@@ -487,9 +537,11 @@ function detectJonasNativeFormat(
     // calendarYear/calendarMonth as the fiscalYear/fiscalPeriod
     // for CSV emission; the action layer re-derives true fiscal
     // labels via the club's fiscal-year-end policy before writing
-    // the ledger snapshot.
+    // the ledger snapshot. When the header also carries the
+    // Department column, promote to `jonas-departmental` so the
+    // normaliser emits per-row dept data (TB-HIST-5).
     return {
-      kind: "jonas-native",
+      kind: headerHasDepartmentCol ? "jonas-departmental" : "jonas-native",
       headerRecordIndex,
       calendarYear,
       calendarMonth,
@@ -504,8 +556,10 @@ function detectJonasNativeFormat(
   // effective-date picker (threaded as `fallback`), or signal the
   // caller to prompt for one.
   if (fallback) {
+    // TB-HIST-5 — a header with Department + no preamble is still
+    // a departmental workbook; the UI-supplied date fills in FY/period.
     return {
-      kind: "closing-balance",
+      kind: headerHasDepartmentCol ? "jonas-departmental" : "closing-balance",
       headerRecordIndex,
       calendarYear: fallback.calendarYear,
       calendarMonth: fallback.calendarMonth,
@@ -573,8 +627,13 @@ function normalizeJonasNativeCsv(
   const descIdx = findIdx(/g\/?l\s*account\s*description|^account\s*description$/);
   const debitIdx = findIdx(/closing\s*bal\s*debit|^debit$/);
   const creditIdx = findIdx(/closing\s*bal\s*credit|^credit$/);
-  // Optional Jonas extras.
-  const deptIdx = findIdx(/^department$/);
+  // TB-HIST-5 — recognise the departmental workbook's dedicated
+  // Department Code / Description columns alongside the legacy
+  // single-column `Department` form.
+  const deptIdx = findIdx(/g\/?l\s*department\s*code|^department$/);
+  const deptDescIdx = findIdx(/g\/?l\s*department\s*description/);
+  const subAcctIdx = findIdx(/g\/?l\s*sub[- ]*account\s*code/);
+  const subAcctDescIdx = findIdx(/g\/?l\s*sub[- ]*account\s*description/);
   const typeIdx = findIdx(/^account\s*type$/);
 
   if (codeIdx < 0 || descIdx < 0 || debitIdx < 0 || creditIdx < 0) {
@@ -593,6 +652,9 @@ function normalizeJonasNativeCsv(
     "Credit",
   ];
   if (deptIdx >= 0) outHeader.push("Department");
+  if (deptDescIdx >= 0) outHeader.push("DepartmentDescription");
+  if (subAcctIdx >= 0) outHeader.push("SubAccountCode");
+  if (subAcctDescIdx >= 0) outHeader.push("SubAccountDescription");
   if (typeIdx >= 0) outHeader.push("AccountType");
   out.push(outHeader);
 
@@ -639,6 +701,9 @@ function normalizeJonasNativeCsv(
       String(creditOut),
     ];
     if (deptIdx >= 0) row.push((record[deptIdx] ?? "").trim());
+    if (deptDescIdx >= 0) row.push((record[deptDescIdx] ?? "").trim());
+    if (subAcctIdx >= 0) row.push((record[subAcctIdx] ?? "").trim());
+    if (subAcctDescIdx >= 0) row.push((record[subAcctDescIdx] ?? "").trim());
     if (typeIdx >= 0) row.push((record[typeIdx] ?? "").trim());
     out.push(row);
   }
@@ -876,6 +941,12 @@ export function parseJonasGlCsv(
       }
 
       const department = getField("department") || null;
+      // TB-HIST-5 — carry through the departmental workbook's extra
+      // fields so the Preview can show "000001 Grounds" and surface
+      // Sub-Account values if any row populates them.
+      const departmentDescription = getField("departmentdescription") || null;
+      const subAccountCode = getField("subaccountcode") || null;
+      const subAccountDescription = getField("subaccountdescription") || null;
       const jonasAccountType = getField("accounttype") || null;
 
       rows.push({
@@ -889,6 +960,9 @@ export function parseJonasGlCsv(
         debit,
         credit,
         department,
+        departmentDescription,
+        subAccountCode,
+        subAccountDescription,
         jonasAccountType,
       });
     } catch (err) {

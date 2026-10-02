@@ -242,6 +242,9 @@ describe("tallyJonasReconciliation — spectre-normalised fallback", () => {
         debit: null,
         credit: null,
         department: null,
+        departmentDescription: null,
+        subAccountCode: null,
+        subAccountDescription: null,
         jonasAccountType: "Asset",
       },
       {
@@ -255,6 +258,9 @@ describe("tallyJonasReconciliation — spectre-normalised fallback", () => {
         debit: null,
         credit: null,
         department: null,
+        departmentDescription: null,
+        subAccountCode: null,
+        subAccountDescription: null,
         jonasAccountType: "Liability",
       },
     ];

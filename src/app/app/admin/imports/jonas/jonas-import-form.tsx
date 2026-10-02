@@ -53,13 +53,14 @@ function money(n: number): string {
   });
 }
 
-// TB-HIST-4 (2026-10-01) — present-tense label for the parser's
-// detected source format. The raw enum values stay in the API; the
-// UI surfaces the operator-friendly phrasing.
+// TB-HIST-4 / TB-HIST-5 (2026-10-01) — present-tense label for the
+// parser's detected source format. The raw enum values stay in the
+// API; the UI surfaces the operator-friendly phrasing.
 function sourceFormatLabel(f: string): string {
   switch (f) {
     case "jonas-native": return "Jonas Native (with period preamble)";
     case "closing-balance": return "Closing Balance Trial Balance";
+    case "jonas-departmental": return "Jonas Departmental Trial Balance";
     case "spectre-normalised": return "Spectre Normalised";
     default: return f;
   }
@@ -415,6 +416,30 @@ export function JonasImportForm() {
               v={String(previewOk.mappingCoverage.unknownDept)}
               testId="sum-unknown-dept"
             />
+            {/* TB-HIST-5 — departmental Jonas workbook dimensional
+                counts. These stay visible for all formats (showing 0
+                when inapplicable) so the operator always has a clear
+                "how many dimensions resolved" picture. */}
+            <SummaryRow
+              k="Unique source departments"
+              v={String(previewOk.mappingCoverage.uniqueJonasDepts)}
+              testId="sum-unique-jonas-depts"
+            />
+            <SummaryRow
+              k="Unknown Jonas departments"
+              v={String(previewOk.mappingCoverage.unknownJonasDept)}
+              testId="sum-unknown-jonas-dept"
+            />
+            <SummaryRow
+              k="Missing Spectre departments"
+              v={String(previewOk.mappingCoverage.missingSpectreDept)}
+              testId="sum-missing-spectre-dept"
+            />
+            <SummaryRow
+              k="Rows with sub-account populated"
+              v={String(previewOk.mappingCoverage.subAccountPopulated)}
+              testId="sum-sub-account"
+            />
             <SummaryRow k="Total Debit" v={money(previewOk.reconciliation.totalDebits)} testId="sum-total-debit" />
             <SummaryRow k="Total Credit" v={money(previewOk.reconciliation.totalCredits)} testId="sum-total-credit" />
             <SummaryRow k="Difference" v={money(Math.abs(previewOk.reconciliation.delta))} testId="sum-delta" />
@@ -429,6 +454,52 @@ export function JonasImportForm() {
           {previewOk.requiresEffectiveDateSelection && !fields.effectiveDateOverride && (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               This file has no reliable effective date. Select one above before committing.
+            </div>
+          )}
+
+          {/* TB-HIST-5 (2026-10-01) — Jonas Departmental workbook with
+              any Sub-Account value present. The dimensional grain
+              Spectre persists is (Account × Department × Fund × Period);
+              Sub-Account is not yet modelled. Surface the row count
+              + sample so the operator can decide the semantic
+              treatment before committing. */}
+          {previewOk.detectedFormat === "jonas-departmental" && previewOk.mappingCoverage.subAccountPopulated > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="sub-account-banner">
+              <p>
+                <strong>Sub-Account values present.</strong>{" "}
+                {previewOk.mappingCoverage.subAccountPopulated} source row(s) carry a non-blank
+                G/L Sub-Account value. Spectre's historical dimensional snapshot does not persist
+                Sub-Account; commit will remain blocked until the semantic handling is decided.
+              </p>
+            </div>
+          )}
+
+          {/* TB-HIST-5 (2026-10-01) — Jonas Departmental workbook with
+              unknown Jonas department code(s). The resolver has no
+              mapping for one or more source dept codes; commit is
+              blocked by UNKNOWN_JONAS_DEPARTMENT. */}
+          {previewOk.detectedFormat === "jonas-departmental" && previewOk.mappingCoverage.unknownJonasDept > 0 && (
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="unknown-jonas-dept-banner">
+              <p>
+                <strong>Unknown Jonas Department code(s).</strong>{" "}
+                {previewOk.mappingCoverage.unknownJonasDept} row(s) target a source Jonas
+                Department Code with no explicit mapping to a Spectre Department. Add the mapping
+                (or revise the source) before importing.
+              </p>
+            </div>
+          )}
+
+          {/* TB-HIST-5 (2026-10-01) — Jonas Departmental workbook where
+              the resolver named a Spectre Department code not yet
+              configured on the tenant. */}
+          {previewOk.detectedFormat === "jonas-departmental" && previewOk.mappingCoverage.missingSpectreDept > 0 && (
+            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="missing-spectre-dept-banner">
+              <p>
+                <strong>Missing Spectre Department(s).</strong>{" "}
+                {previewOk.mappingCoverage.missingSpectreDept} row(s) resolve to a Spectre
+                Department code that is not configured on this tenant. Create the Department
+                record(s) before importing.
+              </p>
             </div>
           )}
 
@@ -645,20 +716,40 @@ function PreviewRow({ row }: { row: JonasImportPreviewRow }) {
     : status === "unmapped" ? "text-red-700"
     : "text-red-700";
   // TB-HIST-2b (2026-10-01) §6 — surface Department / Fund per row.
+  // TB-HIST-5 — expanded status set: unknown-jonas-dept (source
+  // code has no mapping), missing-spectre-dept (mapping names a
+  // Spectre dept the tenant doesn't have).
   const deptColor =
     row.departmentStatus === "ok" ? "text-emerald-700"
     : row.departmentStatus === "n/a" ? "text-stone-400"
     : "text-red-700";
-  const deptLabel =
+  // Base label — the RESOLVED Spectre code (or marker). For the
+  // departmental format, also show the source Jonas code+name in
+  // the cell so the operator sees the full chain in one glance.
+  const spectreLabel =
     row.departmentStatus === "missing-required" ? "missing (REQUIRED)"
     : row.departmentStatus === "unknown-dept" ? `unknown: ${row.department ?? ""}`
+    : row.departmentStatus === "unknown-jonas-dept" ? "unknown Jonas code"
+    : row.departmentStatus === "missing-spectre-dept" ? `missing: ${row.department ?? ""}`
     : (row.department ?? "—");
   return (
     <tr data-testid={`row-${row.accountCode}`}>
       <td className="font-mono">{row.accountCode}</td>
       <td>{row.jonasDescription}</td>
       <td>{row.spectreAccountName ?? <em className="text-red-700">no match</em>}</td>
-      <td className={deptColor} title={`Department status: ${row.departmentStatus}`}>{deptLabel}</td>
+      <td className={deptColor} title={`Department status: ${row.departmentStatus}`}>
+        {row.jonasDepartmentCode ? (
+          <div className="leading-tight">
+            <div className="text-stone-700" title={row.jonasDepartmentDescription ?? ""}>
+              {row.jonasDepartmentCode}
+              {row.jonasDepartmentDescription ? ` · ${row.jonasDepartmentDescription}` : ""}
+            </div>
+            <div className="font-mono text-[10px]">→ {spectreLabel}</div>
+          </div>
+        ) : (
+          spectreLabel
+        )}
+      </td>
       <td className="text-stone-700">{row.fund ?? "—"}</td>
       <td className="text-right tabular-nums">{row.debit ? money(row.debit) : ""}</td>
       <td className="text-right tabular-nums">{row.credit ? money(row.credit) : ""}</td>
