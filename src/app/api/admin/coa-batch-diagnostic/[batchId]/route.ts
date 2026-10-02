@@ -147,6 +147,10 @@ export async function GET(
 
   return NextResponse.json({
     batchId,
+    // TB-HIST-6 — expose the tenant clubId so the departmental
+    // bootstrap acceptance can call /api/admin/jonas-departments-
+    // bootstrap without hardcoding Coulee's STAGING id.
+    clubId: batch.clubId,
     status: batch.status,
     total,
     reviewed,
