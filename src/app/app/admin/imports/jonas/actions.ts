@@ -56,6 +56,11 @@ import {
   DEFAULT_JONAS_DEPARTMENT_MAPPING,
   resolveJonasDepartment,
 } from "@/lib/reporting/ledger/importers/jonas-department-mapping";
+import {
+  buildCommitCsvFromNormalized,
+  normalizeJonasImport,
+  type NormalizedJonasRow,
+} from "@/lib/reporting/ledger/importers/jonas-normalize";
 import { tallyJonasReconciliation } from "@/lib/reporting/ledger/importers/jonas-reconciliation";
 import {
   computeCsvSourceHash,
@@ -491,175 +496,38 @@ export async function previewJonasImport(
     };
   }
 
-  // ------------- Per-row COA mapping + description conflict + duplicate detection -------------
-  const mapping = DEFAULT_JONAS_ACCOUNT_MAPPING;
-  const rows: JonasImportPreviewRow[] = [];
-  let mappedCount = 0;
-  let unmappedCount = 0;
-  let descriptionConflicts = 0;
-  // TB-HIST-4 — rolled-up dimensional counts for the preview summary.
-  let missingRequiredDeptCount = 0;
-  let unknownDeptCount = 0;
-  // TB-HIST-5 — rolled-up departmental counts for the departmental
-  // workbook. `unknownJonasDept` counts source dept codes with NO
-  // Spectre mapping at all. `missingSpectreDept` counts Jonas codes
-  // whose Spectre mapping names a department the tenant hasn't
-  // configured. `subAccountPopulated` counts rows carrying a non-blank
-  // Jonas Sub-Account Code so the Preview can surface the banner
-  // required by directive §8.
-  let unknownJonasDeptCount = 0;
-  let missingSpectreDeptCount = 0;
-  let subAccountPopulatedCount = 0;
-  const uniqueJonasDepts = new Set<string>();
-  // TB-HIST-2 (2026-10-01) — dimensional duplicate detection. The row
-  // identity for a historical TB snapshot is (accountCode, department,
-  // fund). Two rows that share only accountCode but differ on
-  // department are legitimate (e.g. 6098/F&B and 6098/Admin — one
-  // natural account, two departmental allocations). Only an exact
-  // (code, dept, fund) duplicate is rejected.
+  // ------------- TB-HIST-6 — SINGLE RESOLUTION PIPELINE -------------
   //
-  // TB-HIST-5 — the dim-key now keys on the RESOLVED Spectre code
-  // (null-safe), so two Jonas codes that both resolve to the same
-  // Spectre dept (or both to null) for the same account are flagged.
-  const seenKeys = new Set<string>();
-  const duplicateKeys = new Set<string>();
+  // Both Preview and Commit go through `normalizeJonasImport` so the
+  // rendered Preview and the persisted snapshot share one source of
+  // truth. The normalizer:
+  //   • resolves Jonas Department codes → Spectre codes (null for
+  //     000000 Balance Sheet),
+  //   • computes the dimensional (account, resolved-dept) dup-key,
+  //   • classifies mapping / department status per row,
+  //   • rolls up every count the Preview summary exposes,
+  //   • assembles an ordered list of blockers Commit replays verbatim.
+  const mapping = DEFAULT_JONAS_ACCOUNT_MAPPING;
 
-  // Preload every ACTIVE Spectre account for the club.
-  const spectreAccounts = await prisma.account.findMany({
+  const spectreAccountsRaw = await prisma.account.findMany({
     where: { clubId, isActive: true, archivedAt: null, isHeader: false },
-    select: {
-      id: true,
-      accountNumber: true,
-      name: true,
-      // TB-HIST-2 — expose policy so the preview can flag
-      // missing-required and classify unknown-department.
-      departmentPolicy: true,
-    },
+    select: { id: true, accountNumber: true, name: true, departmentPolicy: true },
   });
-  const spectreByCode = new Map(spectreAccounts.map((a) => [a.accountNumber, a]));
-  // Preload Department records to validate per-row department tags +
-  // feed the TB-HIST-5 Jonas-code resolver.
   const departments = await prisma.department.findMany({
     where: { clubId },
     select: { code: true, name: true },
   });
-  const tenantDepartmentCodes = new Set(departments.map((d) => d.code.trim().toUpperCase()));
 
-  // TB-HIST-5 — the detected format decides how a row's raw
-  // `department` field is interpreted. For `jonas-departmental` the
-  // raw value is a 6-digit Jonas Department Code that must be
-  // resolved through the mapping. For every other format the raw
-  // value (if any) is already a Spectre Department code.
-  const isDepartmentalFormat = parseResult.detectedFormat === "jonas-departmental";
+  const normalized = normalizeJonasImport({
+    parseResult,
+    spectreAccounts: spectreAccountsRaw,
+    tenantDepartments: departments,
+    jonasAccountMapping: mapping,
+    departmentMapping: DEFAULT_JONAS_DEPARTMENT_MAPPING,
+  });
 
-  for (const r of parseResult.rows) {
-    const code = r.accountNumber;
-    const rawDept = r.department && r.department.trim().length > 0 ? r.department.trim() : null;
-    const rawDeptDesc = r.departmentDescription;
-    if (rawDept) uniqueJonasDepts.add(rawDept);
-    if (r.subAccountCode && r.subAccountCode.trim().length > 0) subAccountPopulatedCount++;
-
-    // Resolve Jonas Department → Spectre Department ONLY for the
-    // departmental format. Resolution for non-departmental formats
-    // is identity (raw value is already a Spectre code or null).
-    let spectreDeptCode: string | null = rawDept;
-    let resolutionStatus: "ok" | "unknown-jonas-dept" | "missing-spectre-dept" = "ok";
-    if (isDepartmentalFormat && rawDept !== null) {
-      const resolved = resolveJonasDepartment(
-        rawDept, rawDeptDesc, departments, DEFAULT_JONAS_DEPARTMENT_MAPPING,
-      );
-      if (resolved.status === "ok") {
-        spectreDeptCode = resolved.spectreCode;
-      } else if (resolved.status === "unknown") {
-        spectreDeptCode = null;
-        resolutionStatus = "unknown-jonas-dept";
-        unknownJonasDeptCount++;
-      } else {
-        // missing-spectre-dept — the mapping targets a Spectre dept
-        // the tenant doesn't have configured.
-        spectreDeptCode = resolved.spectreCode;
-        resolutionStatus = "missing-spectre-dept";
-        missingSpectreDeptCount++;
-      }
-    }
-
-    // Dimensional dup-key — keyed on the RESOLVED Spectre code
-    // (null-safe) so two Jonas codes that collapse to the same
-    // Spectre dept (or both to null) on the same account are flagged.
-    const dimKey = `${code}\u0000${spectreDeptCode ? spectreDeptCode.toUpperCase() : ""}`;
-    const isDup = seenKeys.has(dimKey);
-    if (isDup) duplicateKeys.add(dimKey);
-    seenKeys.add(dimKey);
-
-    const spectre = spectreByCode.get(code) ?? null;
-    const jonasCategory = mapJonasAccount(
-      {
-        accountNumber: code,
-        accountDescription: r.accountDescription,
-        jonasAccountType: r.jonasAccountType,
-      },
-      mapping,
-    );
-
-    let status: JonasImportPreviewRow["mappingStatus"];
-    if (isDup) {
-      status = "duplicate";
-    } else if (!spectre) {
-      status = "unmapped";
-      unmappedCount++;
-    } else if (
-      spectre.name.trim().toLowerCase() !== r.accountDescription.trim().toLowerCase() &&
-      !descriptionsMatchNormalised(spectre.name, r.accountDescription)
-    ) {
-      status = "description-conflict";
-      descriptionConflicts++;
-      mappedCount++;
-    } else {
-      status = "mapped";
-      mappedCount++;
-    }
-    void jonasCategory;
-
-    // TB-HIST-2 — classify the (resolved) Spectre Department against
-    // the tenant catalog + the account's departmentPolicy.
-    let departmentStatus: JonasImportPreviewRow["departmentStatus"];
-    if (resolutionStatus === "unknown-jonas-dept") {
-      departmentStatus = "unknown-jonas-dept";
-    } else if (resolutionStatus === "missing-spectre-dept") {
-      departmentStatus = "missing-spectre-dept";
-    } else if (!spectre) {
-      departmentStatus = "n/a";
-    } else if (spectre.departmentPolicy === "NOT_APPLICABLE") {
-      departmentStatus = "n/a";
-    } else if (spectreDeptCode === null) {
-      departmentStatus = spectre.departmentPolicy === "REQUIRED" ? "missing-required" : "n/a";
-    } else if (!tenantDepartmentCodes.has(spectreDeptCode.toUpperCase())) {
-      departmentStatus = "unknown-dept";
-    } else {
-      departmentStatus = "ok";
-    }
-    if (departmentStatus === "missing-required") missingRequiredDeptCount++;
-    if (departmentStatus === "unknown-dept") unknownDeptCount++;
-
-    rows.push({
-      lineNumber: r.lineNumber,
-      accountCode: code,
-      jonasDescription: r.accountDescription,
-      spectreAccountName: spectre?.name ?? null,
-      spectreAccountId: spectre?.id ?? null,
-      debit: r.debit ?? 0,
-      credit: Math.abs(r.credit ?? 0),
-      department: spectreDeptCode,
-      departmentStatus,
-      jonasDepartmentCode: isDepartmentalFormat ? rawDept : null,
-      jonasDepartmentDescription: isDepartmentalFormat ? rawDeptDesc : null,
-      fund: jonasCategory?.fund ?? null,
-      mappingStatus: status,
-    });
-  }
-  // Legacy identifier for the mappingCoverage summary — stays the
-  // count of DIMENSIONAL duplicates.
-  const duplicateCodes = duplicateKeys;
+  // Project the normalized rows into the Preview response shape.
+  const rows: JonasImportPreviewRow[] = normalized.rows.map(normalizedRowToPreview);
 
   // ------------- Reconciliation -------------
   const reconciliation = tallyJonasReconciliation(parseResult.rows, mapping);
@@ -867,16 +735,16 @@ export async function previewJonasImport(
     })),
     rows,
     mappingCoverage: {
-      mapped: mappedCount,
-      unmapped: unmappedCount,
-      descriptionConflicts,
-      duplicates: duplicateCodes.size,
-      missingRequiredDept: missingRequiredDeptCount,
-      unknownDept: unknownDeptCount,
-      unknownJonasDept: unknownJonasDeptCount,
-      missingSpectreDept: missingSpectreDeptCount,
-      uniqueJonasDepts: uniqueJonasDepts.size,
-      subAccountPopulated: subAccountPopulatedCount,
+      mapped: normalized.counts.mapped,
+      unmapped: normalized.counts.unmapped,
+      descriptionConflicts: normalized.counts.descriptionConflicts,
+      duplicates: normalized.counts.duplicates,
+      missingRequiredDept: normalized.counts.missingRequiredDept,
+      unknownDept: normalized.counts.unknownDept,
+      unknownJonasDept: normalized.counts.unknownJonasDept,
+      missingSpectreDept: normalized.counts.missingSpectreDept,
+      uniqueJonasDepts: normalized.counts.uniqueJonasDepts,
+      subAccountPopulated: normalized.counts.subAccountPopulated,
     },
     reconciliation: {
       totalDebits: reconciliation.totalDebits,
@@ -964,139 +832,44 @@ export async function commitJonasImport(
     };
   }
 
-  // COA mapping / duplicate-key gates — dimensional per TB-HIST-2 §6
-  // + TB-HIST-5 Jonas-dept resolution.
+  // TB-HIST-6 — Commit replays the SAME normalizer Preview used, so
+  // what the operator approved is what the snapshot persists.
   const spectreAccountsForCommit = await prisma.account.findMany({
     where: { clubId, isActive: true, archivedAt: null, isHeader: false },
-    select: { accountNumber: true, departmentPolicy: true },
+    select: { id: true, accountNumber: true, name: true, departmentPolicy: true },
   });
-  const spectreCodes = new Set(spectreAccountsForCommit.map((a) => a.accountNumber));
-  const spectrePolicyByCode = new Map(
-    spectreAccountsForCommit.map((a) => [a.accountNumber, a.departmentPolicy as string]),
-  );
   const commitDepartments = await prisma.department.findMany({
     where: { clubId },
     select: { code: true, name: true },
   });
-  const commitTenantDeptCodes = new Set(commitDepartments.map((d) => d.code.trim().toUpperCase()));
-  const isDepartmentalFormatForCommit = parseResult.detectedFormat === "jonas-departmental";
+  const commitNormalized = normalizeJonasImport({
+    parseResult,
+    spectreAccounts: spectreAccountsForCommit,
+    tenantDepartments: commitDepartments,
+    jonasAccountMapping: DEFAULT_JONAS_ACCOUNT_MAPPING,
+    departmentMapping: DEFAULT_JONAS_DEPARTMENT_MAPPING,
+  });
 
-  const seenCommitKeys = new Set<string>();
-  const duplicateCommitKeys: string[] = [];
-  const unknownCodes = new Set<string>();
-  const unknownDepartments = new Set<string>();
-  const missingRequiredDept: string[] = [];
-  // TB-HIST-5 commit-level dimensional gates.
-  const unknownJonasDepts = new Set<string>();
-  const missingSpectreDepts = new Set<string>();
-  const subAcctRows: string[] = [];
-
-  for (const r of parseResult.rows) {
-    if (!spectreCodes.has(r.accountNumber)) unknownCodes.add(r.accountNumber);
-    const rawDept = r.department && r.department.trim().length > 0 ? r.department.trim() : null;
-
-    // TB-HIST-5 — resolve Jonas → Spectre for departmental format.
-    let resolvedDept: string | null = rawDept;
-    if (isDepartmentalFormatForCommit && rawDept !== null) {
-      const res = resolveJonasDepartment(
-        rawDept, r.departmentDescription, commitDepartments, DEFAULT_JONAS_DEPARTMENT_MAPPING,
-      );
-      if (res.status === "unknown") { unknownJonasDepts.add(rawDept); resolvedDept = null; }
-      else if (res.status === "missing-spectre-dept") { missingSpectreDepts.add(res.spectreCode); resolvedDept = res.spectreCode; }
-      else resolvedDept = res.spectreCode;
+  // Replay the normalizer's blocker list; map each code → the
+  // existing JonasImportCommitResult shape.
+  const firstBlocker = commitNormalized.blockers[0];
+  if (firstBlocker) {
+    switch (firstBlocker.code) {
+      case "UNKNOWN_JONAS_DEPARTMENT":
+        return { status: "blocked", code: "UNKNOWN_JONAS_DEPARTMENT", reason: firstBlocker.reason, details: { unknown: firstBlocker.details } };
+      case "MISSING_SPECTRE_DEPARTMENT":
+        return { status: "blocked", code: "MISSING_SPECTRE_DEPARTMENT", reason: firstBlocker.reason, details: { missing: firstBlocker.details } };
+      case "SUB_ACCOUNT_POPULATED":
+        return { status: "blocked", code: "SUB_ACCOUNT_POPULATED", reason: firstBlocker.reason, details: { rows: firstBlocker.details } };
+      case "UNKNOWN_ACCOUNT":
+        return { status: "blocked", code: "UNKNOWN_ACCOUNT", reason: firstBlocker.reason, details: { unknown: firstBlocker.details } };
+      case "DUPLICATE_ACCOUNT":
+        return { status: "blocked", code: "DUPLICATE_ACCOUNT", reason: firstBlocker.reason, details: { duplicates: firstBlocker.details } };
+      case "UNKNOWN_DEPARTMENT":
+        return { status: "blocked", code: "UNKNOWN_DEPARTMENT", reason: firstBlocker.reason, details: { unknown: firstBlocker.details } };
+      case "MISSING_REQUIRED_DEPARTMENT":
+        return { status: "blocked", code: "MISSING_REQUIRED_DEPARTMENT", reason: firstBlocker.reason, details: { accounts: firstBlocker.details } };
     }
-
-    if (r.subAccountCode && r.subAccountCode.trim().length > 0) {
-      subAcctRows.push(`${r.accountNumber}/${rawDept ?? ""}/${r.subAccountCode}`);
-    }
-
-    const dimKey = `${r.accountNumber}\u0000${resolvedDept ? resolvedDept.toUpperCase() : ""}`;
-    if (seenCommitKeys.has(dimKey)) {
-      duplicateCommitKeys.push(resolvedDept ? `${r.accountNumber}/${resolvedDept}` : r.accountNumber);
-    }
-    seenCommitKeys.add(dimKey);
-
-    const policy = spectrePolicyByCode.get(r.accountNumber);
-    if (resolvedDept && !commitTenantDeptCodes.has(resolvedDept.toUpperCase())) {
-      unknownDepartments.add(resolvedDept);
-    }
-    if (policy === "REQUIRED" && resolvedDept === null) {
-      missingRequiredDept.push(r.accountNumber);
-    }
-  }
-
-  // TB-HIST-5 — Jonas-dept gates come BEFORE the generic department
-  // gates so the operator sees the actionable Jonas-mapping error
-  // first.
-  if (unknownJonasDepts.size > 0) {
-    return {
-      status: "blocked",
-      code: "UNKNOWN_JONAS_DEPARTMENT",
-      reason:
-        `${unknownJonasDepts.size} source Jonas Department code(s) have no explicit mapping to a Spectre Department. ` +
-        `Add the mapping (or revise the source) before importing.`,
-      details: { unknown: Array.from(unknownJonasDepts) },
-    };
-  }
-  if (missingSpectreDepts.size > 0) {
-    return {
-      status: "blocked",
-      code: "MISSING_SPECTRE_DEPARTMENT",
-      reason:
-        `${missingSpectreDepts.size} Spectre Department(s) named by the Jonas mapping are not configured on the tenant. ` +
-        `Create the Department record(s) before importing.`,
-      details: { missing: Array.from(missingSpectreDepts) },
-    };
-  }
-  if (subAcctRows.length > 0) {
-    return {
-      status: "blocked",
-      code: "SUB_ACCOUNT_POPULATED",
-      reason:
-        `${subAcctRows.length} source row(s) carry a non-blank G/L Sub-Account value. ` +
-        `Spectre's historical dimensional snapshot does not yet persist Sub-Account; ` +
-        `commit is blocked until the semantic handling is decided.`,
-      details: { rows: subAcctRows.slice(0, 20) },
-    };
-  }
-
-  if (unknownCodes.size > 0) {
-    return {
-      status: "blocked",
-      code: "UNKNOWN_ACCOUNT",
-      reason: `${unknownCodes.size} source account(s) do not resolve to the Spectre Chart of Accounts. Resolve or update the COA before importing.`,
-      details: { unknown: Array.from(unknownCodes) },
-    };
-  }
-  if (duplicateCommitKeys.length > 0) {
-    return {
-      status: "blocked",
-      code: "DUPLICATE_ACCOUNT",
-      reason:
-        `${duplicateCommitKeys.length} duplicate (account, department) key(s) in the source file. ` +
-        `Each (account, department) combination must appear at most once per snapshot.`,
-      details: { duplicates: duplicateCommitKeys },
-    };
-  }
-  if (unknownDepartments.size > 0) {
-    return {
-      status: "blocked",
-      code: "UNKNOWN_DEPARTMENT",
-      reason:
-        `${unknownDepartments.size} unknown Department code(s) in the source file. ` +
-        `Add the Department to the club before importing or correct the source.`,
-      details: { unknown: Array.from(unknownDepartments) },
-    };
-  }
-  if (missingRequiredDept.length > 0) {
-    return {
-      status: "blocked",
-      code: "MISSING_REQUIRED_DEPARTMENT",
-      reason:
-        `${missingRequiredDept.length} source row(s) target an account whose departmentPolicy is REQUIRED but ` +
-        `carry no Department tag. Add a Department column to each row or revise the account's policy.`,
-      details: { accounts: missingRequiredDept },
-    };
   }
 
   // Entity-mismatch gate
@@ -1169,6 +942,15 @@ export async function commitJonasImport(
   }
 
   // ---------- Commit path ----------
+  //
+  // TB-HIST-6 — the importer is handed a CSV REGENERATED from the
+  // shared normalizer's resolved rows. Its Department column carries
+  // the Spectre dept code (null → empty), NOT the raw Jonas 6-digit
+  // code. This is the architectural fix for the TB-HIST-5-identified
+  // defect where Preview resolved 000001 → GROUNDS but the ledger
+  // snapshot persisted 000001.
+  const commitCsv = buildCommitCsvFromNormalized(commitNormalized.rows);
+
   const now = new Date();
   const ledger = new PrismaReportingLedger(prisma);
   const importer = new JonasGlImporter({
@@ -1181,7 +963,7 @@ export async function commitJonasImport(
     result = await importer.importJonasExtract({
       clubId,
       extract: {
-        csv: decoded.csv,
+        csv: commitCsv,
         filename: decoded.filename,
         periodStart: dateResolution.periodStart,
         periodEnd: dateResolution.periodEnd,
@@ -1191,7 +973,8 @@ export async function commitJonasImport(
       notes:
         `Jonas GL import via admin UI (${decoded.filename})` +
         (dateResolution.inferred ? " · dates inferred from CSV heading" : " · effective date confirmed by controller") +
-        (decoded.replaceExistingBatchId ? ` · replaces batch ${decoded.replaceExistingBatchId}` : ""),
+        (decoded.replaceExistingBatchId ? ` · replaces batch ${decoded.replaceExistingBatchId}` : "") +
+        (parseResult.detectedFormat === "jonas-departmental" ? " · departmental; Jonas→Spectre resolution applied" : ""),
     });
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Unknown import error" };
@@ -1328,6 +1111,35 @@ export async function listJonasImports(): Promise<JonasImportHistoryEntryView[]>
 // "same text, different case/whitespace" case that shouldn't be
 // flagged.
 // ---------------------------------------------------------------------------
+// TB-HIST-6 — thin projection from the shared normalizer's row to
+// the Preview response row. Keeps the Preview wire shape stable
+// while letting the authoritative dimensional logic live in one
+// place.
+function normalizedRowToPreview(r: NormalizedJonasRow): JonasImportPreviewRow {
+  return {
+    lineNumber: r.lineNumber,
+    accountCode: r.accountCode,
+    jonasDescription: r.accountDescription,
+    spectreAccountName: r.spectreAccountName,
+    spectreAccountId: r.spectreAccountId,
+    debit: r.debit,
+    credit: r.credit,
+    department: r.department,
+    departmentStatus: r.departmentStatus === "ok" ||
+                      r.departmentStatus === "n/a" ||
+                      r.departmentStatus === "missing-required" ||
+                      r.departmentStatus === "unknown-dept" ||
+                      r.departmentStatus === "unknown-jonas-dept" ||
+                      r.departmentStatus === "missing-spectre-dept"
+                        ? r.departmentStatus
+                        : "n/a",
+    jonasDepartmentCode: r.jonasDepartmentCode,
+    jonasDepartmentDescription: r.jonasDepartmentDescription,
+    fund: r.fund,
+    mappingStatus: r.mappingStatus,
+  };
+}
+
 function descriptionsMatchNormalised(a: string, b: string): boolean {
   const normalise = (s: string): string =>
     s
