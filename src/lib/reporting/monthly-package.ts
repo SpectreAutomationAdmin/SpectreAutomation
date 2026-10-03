@@ -1367,47 +1367,91 @@ export function formatOperatingDashboard(
 function buildOperationsBriefing(
   executiveSummary: Awaited<ReturnType<typeof getExecutiveSummaryForClub>>,
   hasRealData: boolean,
+  partial?: import("./january-partial-availability").OperationsPartialAvailability,
 ): MonthlyReportingPackage["boardBriefing"]["operations"] {
-  // TB-HIST-12 §1 — Executive status provenance. On live tenants
-  // (hasRealData === true) with no legitimate derived or persisted
-  // manual source, the Operations status is "Unavailable". There
-  // is currently no derived rule binding Operations status to
-  // accounting data; the Silver Springs demo literal only applies
-  // on demo tenants.
+  // TB-HIST-12A §3 — KPI-level partial availability. On live tenants
+  // each KPI reports its own provenance; the status verdict stays
+  // UNAVAILABLE (needs a budget / policy source), but Revenue, NOI,
+  // and Dues-to-Revenue render their DERIVED values when the January
+  // TB covers the period. Dies with "Unavailable" per-KPI, never
+  // suppressing the whole tile.
   if (hasRealData) {
-    const revenueKpi = executiveSummary.kpis.find((k) => k.key === "ytd-revenue");
-    const noiKpi = executiveSummary.kpis.find((k) => k.key === "noi");
+    const fmtDecimal = (
+      d: import("@prisma/client").Prisma.Decimal | null | undefined,
+    ): string => {
+      if (d == null) return "Unavailable";
+      const n = Number(d.toString());
+      if (!Number.isFinite(n)) return "Unavailable";
+      const abs = Math.abs(n);
+      if (abs >= 1_000_000) return `${n < 0 ? "−" : ""}$${(abs / 1_000_000).toFixed(2)}M`;
+      if (abs >= 1_000) return `${n < 0 ? "−" : ""}$${(abs / 1_000).toFixed(0)}K`;
+      return `${n < 0 ? "−" : ""}$${abs.toFixed(0)}`;
+    };
+    const revVal = partial?.revenue.value ? fmtDecimal(partial.revenue.value) : "Unavailable";
+    const noiVal = partial?.noi.value ? fmtDecimal(partial.noi.value) : "Unavailable";
+    const duesPct = partial?.duesToRevenuePct.value;
+    const duesVal = duesPct != null ? `${duesPct.toFixed(1)}%` : "Unavailable";
+
+    const anyDerived =
+      partial?.revenue.provenance.availability === "DERIVED" ||
+      partial?.noi.provenance.availability === "DERIVED" ||
+      partial?.duesToRevenuePct.provenance.availability === "DERIVED";
+
+    // Factual narrative — no evaluative verdict. States what the TB
+    // shows and names the comparison that remains unavailable.
+    const narrativeParts: string[] = [];
+    if (partial?.revenue.value) {
+      narrativeParts.push(`Revenue over the period totals ${revVal}.`);
+    }
+    if (partial?.noi.value) {
+      const n = Number(partial.noi.value.toString());
+      if (n >= 0) narrativeParts.push(`NOI before depreciation is ${noiVal}.`);
+      else narrativeParts.push(`NOI before depreciation is a loss of ${noiVal.replace("−", "")}.`);
+    }
+    if (duesPct != null) {
+      narrativeParts.push(`Dues account for ${duesPct.toFixed(1)}% of operating revenue.`);
+    }
+    narrativeParts.push("Budget comparison is unavailable — no budget source has been loaded for this tenant.");
+    const narrative = narrativeParts.join(" ");
+
     return {
+      // Neutral tone — no "On Plan" verdict without budget.
       status: "neutral",
-      statusLabel: "Unavailable",
+      statusLabel: anyDerived ? "Financial operating position" : "Unavailable",
       consideration: "no-action",
-      narrative:
-        "Operations status is unavailable for this reporting period: no derived or persisted " +
-        "manual operations status source has been wired for this tenant. Required rounds, F&B " +
-        "covers, and service-hour feeds are not yet connected.",
+      narrative,
       chips: [
-        { key: "rounds-ytd",   label: "Rounds YTD",     value: "Unavailable", tone: "neutral" },
-        { key: "fb-covers",    label: "F&B Covers",     value: "Unavailable", tone: "neutral" },
-        { key: "service-hours", label: "Service Hours", value: "Unavailable", tone: "neutral" },
+        { key: "rounds-ytd",    label: "Rounds YTD",     value: "Unavailable", subtitle: "Rounds feed not connected", tone: "neutral" },
+        { key: "fb-covers",     label: "F&B Covers",     value: "Unavailable", subtitle: "POS feed not connected",    tone: "neutral" },
+        { key: "service-hours", label: "Service Hours",  value: "Unavailable", subtitle: "Timeclock feed not connected", tone: "neutral" },
       ],
       question: "Are we operating successfully?",
-      coverNarrative:
-        "Operations status for this reporting period is not available: operational feeds " +
-        "(rounds, covers, service hours, labour ratio) have not been connected to the reporting service.",
+      coverNarrative: narrative,
       coverMetrics: [
         {
           key: "revenue",
           label: "Revenue",
-          value: revenueKpi?.value ?? "Unavailable",
-          sub: revenueKpi?.comparison?.variance ?? "",
+          value: revVal,
+          sub: partial?.revenue.provenance.availability === "DERIVED"
+            ? "Jan 2026 Jonas TB"
+            : "Not available",
         },
         {
           key: "noi",
           label: "NOI before dep.",
-          value: noiKpi?.value ?? "Unavailable",
-          sub: noiKpi?.comparison?.variance ?? "",
+          value: noiVal,
+          sub: partial?.noi.provenance.availability === "DERIVED"
+            ? "Rev − COGS − OpEx"
+            : "Not available",
         },
-        { key: "dues-rev", label: "Dues-to-Revenue", value: "Unavailable", sub: "Not derived" },
+        {
+          key: "dues-rev",
+          label: "Dues-to-Revenue",
+          value: duesVal,
+          sub: partial?.duesToRevenuePct.provenance.availability === "DERIVED"
+            ? "DUES_AND_CHARGES ÷ Revenue"
+            : "Not available",
+        },
       ],
     };
   }
@@ -1460,30 +1504,56 @@ function buildOperationsBriefing(
  *  on demo tenants. */
 function buildFinancialHealthBriefing(
   hasRealData: boolean,
+  partial?: import("./january-partial-availability").FinancialHealthPartialAvailability,
 ): MonthlyReportingPackage["boardBriefing"]["financialHealth"] {
   if (hasRealData) {
+    const fmtDecimal = (
+      d: import("@prisma/client").Prisma.Decimal | null | undefined,
+    ): string => {
+      if (d == null) return "Unavailable";
+      const n = Number(d.toString());
+      if (!Number.isFinite(n)) return "Unavailable";
+      const abs = Math.abs(n);
+      if (abs >= 1_000_000) return `${n < 0 ? "−" : ""}$${(abs / 1_000_000).toFixed(2)}M`;
+      if (abs >= 1_000) return `${n < 0 ? "−" : ""}$${(abs / 1_000).toFixed(0)}K`;
+      return `${n < 0 ? "−" : ""}$${abs.toFixed(0)}`;
+    };
+    const wcVal = partial?.workingCapital.value ? fmtDecimal(partial.workingCapital.value) : "Unavailable";
+    const crVal = partial?.currentRatio.value != null ? `${partial.currentRatio.value.toFixed(2)}x` : "Unavailable";
+    const anyDerived =
+      partial?.workingCapital.provenance.availability === "DERIVED" ||
+      partial?.currentRatio.provenance.availability === "DERIVED";
+
+    // TB-HIST-12A §4 — factual narrative with no evaluative verdict.
+    const narrativeParts: string[] = [];
+    if (partial?.currentAssets.value && partial?.currentLiabilities.value) {
+      const diff = partial.currentAssets.value.minus(partial.currentLiabilities.value);
+      if (diff.gt(0)) narrativeParts.push(`Current assets exceed current liabilities by ${fmtDecimal(diff)}.`);
+      else if (diff.lt(0)) narrativeParts.push(`Current liabilities exceed current assets by ${fmtDecimal(diff.abs())}.`);
+    }
+    if (partial?.currentRatio.value != null) {
+      narrativeParts.push(`Current ratio is ${partial.currentRatio.value.toFixed(2)}x.`);
+    }
+    narrativeParts.push("Reserve coverage ratio and AR Current % remain unavailable — reserve history and AR aging source are not yet loaded.");
+    const narrative = narrativeParts.join(" ");
+
     return {
       status: "neutral",
-      statusLabel: "Unavailable",
+      statusLabel: anyDerived ? "Financial position" : "Unavailable",
       consideration: "no-action",
-      narrative:
-        "Financial Health status is unavailable for this reporting period: working-capital, " +
-        "reserve-coverage, current-ratio, and AR-current derived rules have not been wired to " +
-        "the reporting service for this tenant.",
+      narrative,
       chips: [
-        { key: "working-capital", label: "Working Capital", value: "Unavailable", tone: "neutral" },
-        { key: "dues-ratio",      label: "Dues / Revenue",  value: "Unavailable", tone: "neutral" },
-        { key: "current-ratio",   label: "Current Ratio",   value: "Unavailable", tone: "neutral" },
+        { key: "working-capital", label: "Working Capital", value: wcVal,         subtitle: anyDerived ? "From Jan BS" : "Not derived", tone: "neutral" },
+        { key: "current-ratio",   label: "Current Ratio",   value: crVal,         subtitle: anyDerived ? "CA ÷ CL"       : "Not derived", tone: "neutral" },
+        { key: "ar-current",      label: "AR Current",      value: "Unavailable", subtitle: "AR aging not imported", tone: "neutral" },
       ],
       question: "Is the Club financially healthy?",
-      coverNarrative:
-        "Financial Health status for this reporting period is not available: supporting " +
-        "balance-sheet ratios have not been connected to the reporting service.",
+      coverNarrative: narrative,
       coverMetrics: [
-        { key: "working-capital",  label: "Working Capital",  value: "Unavailable", sub: "Not derived" },
-        { key: "reserve-coverage", label: "Reserve Coverage", value: "Unavailable", sub: "Not derived" },
-        { key: "current-ratio",    label: "Current Ratio",    value: "Unavailable", sub: "Not derived" },
-        { key: "ar-current",       label: "AR Current",       value: "Unavailable", sub: "Not derived" },
+        { key: "working-capital",  label: "Working Capital",  value: wcVal,         sub: anyDerived ? "From Jan BS" : "Not derived" },
+        { key: "reserve-coverage", label: "Reserve Coverage", value: "Unavailable", sub: "Needs 3-yr capex history" },
+        { key: "current-ratio",    label: "Current Ratio",    value: crVal,         sub: anyDerived ? "CA ÷ CL" : "Not derived" },
+        { key: "ar-current",       label: "AR Current",       value: "Unavailable", sub: "AR aging not imported" },
       ],
     };
   }
@@ -1927,6 +1997,38 @@ export async function getMonthlyReportingPackage(
   // import avoids a top-level cycle between reporting-balances
   // and monthly-package. Falls through to null (demo tenants
   // + fresh live tenants without any committed TB).
+  // TB-HIST-12A §3-4 — resolve per-KPI partial availability for the
+  // Executive Opening cards. Only invoked on live tenants; demo
+  // tenants keep Silver Springs literals via the else branch inside
+  // each briefing builder.
+  let operationsPartial:
+    | import("./january-partial-availability").OperationsPartialAvailability
+    | undefined = undefined;
+  let financialHealthPartial:
+    | import("./january-partial-availability").FinancialHealthPartialAvailability
+    | undefined = undefined;
+  if (hasRealData) {
+    try {
+      const partialMod = await import("./january-partial-availability");
+      operationsPartial = await partialMod.computeOperationsPartialAvailability({
+        clubId: club.id,
+        periodStart: reportingPeriod.periodStart,
+        periodEnd: reportingPeriod.periodEnd,
+      });
+      financialHealthPartial = await partialMod.computeFinancialHealthPartialAvailability({
+        clubId: club.id,
+        periodEnd: reportingPeriod.periodEnd,
+      });
+    } catch {
+      // Partial-availability resolution is best-effort — if it throws
+      // (eg. unexpected COA shape), both briefings fall back to the
+      // "no derivable KPI → fully Unavailable" branch in the builder
+      // helpers, matching TB-HIST-12 behavior.
+      operationsPartial = undefined;
+      financialHealthPartial = undefined;
+    }
+  }
+
   let reportingDataAsOfIso: string | null = null;
   if (hasRealData) {
     try {
@@ -2203,13 +2305,15 @@ export async function getMonthlyReportingPackage(
     executiveSummary,
 
     boardBriefing: {
-      // TB-HIST-12 §1 — Executive status provenance. All three
-      // briefings now branch on `hasRealData`: live tenants render
-      // UNAVAILABLE because no derived or persisted-manual status
-      // source has been wired yet; demo tenants retain the Silver
-      // Springs demo literals.
-      operations: buildOperationsBriefing(executiveSummary, hasRealData),
-      financialHealth: buildFinancialHealthBriefing(hasRealData),
+      // TB-HIST-12A §3-4 — per-KPI partial availability. On live
+      // tenants each KPI reports its own provenance; cards render the
+      // derivable KPIs and mark only the missing ones Unavailable.
+      operations: buildOperationsBriefing(executiveSummary, hasRealData, operationsPartial),
+      financialHealth: buildFinancialHealthBriefing(hasRealData, financialHealthPartial),
+      // Capital Program partial-availability deferred to TB-HIST-12B —
+      // Capital IS classifications (IS_CAPITAL_INCOME, IS_CAPEX) not
+      // yet first-class in Coulee's COA mapping, and no project
+      // tracker source exists.
       capitalProgram: buildCapitalProgramBriefing(hasRealData),
     },
 

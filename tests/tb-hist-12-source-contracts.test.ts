@@ -31,14 +31,17 @@ const MONTHLY_PAGE_BODY = readFileSync(
 // §1 — Executive status provenance
 // --------------------------------------------------------------
 describe("TB-HIST-12 §1 — Executive status provenance (operations / financialHealth / capitalProgram)", () => {
-  it("buildOperationsBriefing takes hasRealData and renders Unavailable on the live branch", () => {
-    expect(MONTHLY_PKG).toMatch(/function buildOperationsBriefing\([\s\S]{0,400}hasRealData:\s*boolean/);
-    expect(MONTHLY_PKG).toMatch(/function buildOperationsBriefing[\s\S]{0,2000}if\s*\(hasRealData\)\s*\{[\s\S]{0,400}statusLabel:\s*"Unavailable"/);
+  it("buildOperationsBriefing takes hasRealData (TB-HIST-12A: + partial-availability input)", () => {
+    expect(MONTHLY_PKG).toMatch(/function buildOperationsBriefing\([\s\S]{0,600}hasRealData:\s*boolean/);
+    // TB-HIST-12A §3 — Unavailable is still a possible statusLabel
+    // (when nothing is derivable) but no longer the ONLY one — the
+    // live branch now also emits "Financial operating position".
+    expect(MONTHLY_PKG).toMatch(/statusLabel:\s*anyDerived\s*\?\s*"Financial operating position"\s*:\s*"Unavailable"/);
   });
 
-  it("buildFinancialHealthBriefing exists, takes hasRealData, and renders Unavailable on live", () => {
+  it("buildFinancialHealthBriefing exists, takes hasRealData (TB-HIST-12A: + partial input)", () => {
     expect(MONTHLY_PKG).toMatch(/function buildFinancialHealthBriefing\(\s*hasRealData:\s*boolean/);
-    expect(MONTHLY_PKG).toMatch(/function buildFinancialHealthBriefing[\s\S]{0,2000}if\s*\(hasRealData\)\s*\{[\s\S]{0,400}statusLabel:\s*"Unavailable"/);
+    expect(MONTHLY_PKG).toMatch(/statusLabel:\s*anyDerived\s*\?\s*"Financial position"\s*:\s*"Unavailable"/);
   });
 
   it("buildCapitalProgramBriefing exists, takes hasRealData, and renders Unavailable on live", () => {
@@ -46,9 +49,9 @@ describe("TB-HIST-12 §1 — Executive status provenance (operations / financial
     expect(MONTHLY_PKG).toMatch(/function buildCapitalProgramBriefing[\s\S]{0,2000}if\s*\(hasRealData\)\s*\{[\s\S]{0,400}statusLabel:\s*"Unavailable"/);
   });
 
-  it("the pkg literal wires all three briefings through the hasRealData-aware builders", () => {
-    expect(MONTHLY_PKG).toMatch(/operations:\s*buildOperationsBriefing\(executiveSummary,\s*hasRealData\)/);
-    expect(MONTHLY_PKG).toMatch(/financialHealth:\s*buildFinancialHealthBriefing\(hasRealData\)/);
+  it("the pkg literal wires all three briefings through the hasRealData-aware builders (TB-HIST-12A: ops + fh carry partial)", () => {
+    expect(MONTHLY_PKG).toMatch(/operations:\s*buildOperationsBriefing\(executiveSummary,\s*hasRealData,\s*operationsPartial\)/);
+    expect(MONTHLY_PKG).toMatch(/financialHealth:\s*buildFinancialHealthBriefing\(hasRealData,\s*financialHealthPartial\)/);
     expect(MONTHLY_PKG).toMatch(/capitalProgram:\s*buildCapitalProgramBriefing\(hasRealData\)/);
   });
 });
@@ -63,7 +66,10 @@ describe("TB-HIST-12 §2 — Board package reportingDataAsOfIso + freshness pill
 
   it("getMonthlyReportingPackage resolves reportingDataAsOfIso from the latest committed TB snapshot", () => {
     expect(MONTHLY_PKG).toMatch(/let\s+reportingDataAsOfIso:\s*string\s*\|\s*null\s*=\s*null/);
-    expect(MONTHLY_PKG).toMatch(/entityKind:\s*"trial-balance"[\s\S]{0,200}batchState:\s*"committed"[\s\S]{0,200}asOf:\s*\{\s*lte:\s*reportingPeriod\.periodEnd/);
+    // TB-HIST-12 fix (end-of-day): the `lte` compare now uses
+    // `periodEndEOD` so a snapshot committed at 23:59:59.999 UTC
+    // for the same day matches.
+    expect(MONTHLY_PKG).toMatch(/entityKind:\s*"trial-balance"[\s\S]{0,200}batchState:\s*"committed"[\s\S]{0,200}asOf:\s*\{\s*lte:\s*periodEndEOD/);
   });
 
   it("the pkg literal emits reportingDataAsOfIso", () => {

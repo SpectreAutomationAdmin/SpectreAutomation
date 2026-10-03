@@ -38,6 +38,18 @@ test-results/
 playwright-report/
 playwright/.cache/
 
+# --- TB-HIST-12A: AR aging real-identity source files --------------------
+# The founder-supplied "Jan 31, 2026 Aged AR listing.xlsx" (and any other
+# real-member-identity AR workbook) MUST NEVER enter source control. Only
+# sanitized workbooks with synthetic identities (CR-NNNN / Member NNNN)
+# may live in tests/fixtures/ar-aging/.
+tests/fixtures/ar-aging/*.real.*
+tests/fixtures/ar-aging/sources/
+tests/fixtures/ar-aging/*-REAL.*
+# Repository-wide safety net — the founder's exact file name.
+**/Jan*31*2026*Aged*AR*listing*.xlsx
+**/Aged*AR*listing*.xlsx
+
 # --- Local deploy scratch (Neon schema snapshots, pg-validate scratch) ----
 .neondeploy/
 .pgvalidate/
