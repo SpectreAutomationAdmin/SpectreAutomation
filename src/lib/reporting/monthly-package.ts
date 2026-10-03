@@ -3167,30 +3167,52 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
   const emptyMetrics: Array<{ key: string; label: string; value: string; sub: string }> = [];
   const emptySeries: ChartSeriesPoint[] = [];
   const u = UNAVAILABLE_TEXT;
+  // TB-HIST-12A §16 — live-tenant partial availability. When the
+  // Operations / Financial Health builders emitted the TB-HIST-12A
+  // live-branch labels ("Financial operating position" / "Financial
+  // position" / plain "Unavailable"), they already produced
+  // per-KPI output that the redactor must NOT overwrite. Only
+  // Silver Springs demo verdict labels ("On Plan" / "Strong
+  // Position" / "Executing") get wiped — those indicate the demo
+  // path produced output that would leak Silver Springs values.
+  const LIVE_PARTIAL_LABELS = new Set([
+    "Financial operating position",
+    "Financial position",
+    "Unavailable",
+  ]);
+  const opsIsLivePartial = LIVE_PARTIAL_LABELS.has(pkg.boardBriefing.operations.statusLabel);
+  const fhIsLivePartial = LIVE_PARTIAL_LABELS.has(pkg.boardBriefing.financialHealth.statusLabel);
+  const capIsLivePartial = LIVE_PARTIAL_LABELS.has(pkg.boardBriefing.capitalProgram.statusLabel);
   const redacted: MonthlyReportingPackage = {
     ...pkg,
     boardBriefing: {
-      operations: {
-        ...pkg.boardBriefing.operations,
-        narrative: u,
-        chips: emptyChips,
-        coverNarrative: u,
-        coverMetrics: emptyMetrics,
-      },
-      financialHealth: {
-        ...pkg.boardBriefing.financialHealth,
-        narrative: u,
-        chips: emptyChips,
-        coverNarrative: u,
-        coverMetrics: emptyMetrics,
-      },
-      capitalProgram: {
-        ...pkg.boardBriefing.capitalProgram,
-        narrative: u,
-        chips: emptyChips,
-        coverNarrative: u,
-        coverMetrics: emptyMetrics,
-      },
+      operations: opsIsLivePartial
+        ? pkg.boardBriefing.operations
+        : {
+            ...pkg.boardBriefing.operations,
+            narrative: u,
+            chips: emptyChips,
+            coverNarrative: u,
+            coverMetrics: emptyMetrics,
+          },
+      financialHealth: fhIsLivePartial
+        ? pkg.boardBriefing.financialHealth
+        : {
+            ...pkg.boardBriefing.financialHealth,
+            narrative: u,
+            chips: emptyChips,
+            coverNarrative: u,
+            coverMetrics: emptyMetrics,
+          },
+      capitalProgram: capIsLivePartial
+        ? pkg.boardBriefing.capitalProgram
+        : {
+            ...pkg.boardBriefing.capitalProgram,
+            narrative: u,
+            chips: emptyChips,
+            coverNarrative: u,
+            coverMetrics: emptyMetrics,
+          },
     },
     visualSummary: {
       dataSource: "demo",
