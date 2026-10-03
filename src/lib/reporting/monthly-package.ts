@@ -481,6 +481,17 @@ export type MonthlyReportingPackage = {
   preparedAt: string;
   dataSourcesPresent: ReportingDataSource[];
 
+  /** TB-HIST-12 §2 — Board package freshness provenance.
+   *  The effective `asOf` of the latest committed TB snapshot on
+   *  or before the reporting period end. Drives the Chair's
+   *  Dashboard "Financial data through <date>" pill so a Board
+   *  member sees the recency of the underlying accounting data
+   *  before reading any card. Null when no committed TB snapshot
+   *  exists for this tenant (demo tenants + fresh live tenants).
+   *  Optional for backward-compat on frozen packagePayloadJson
+   *  rows published before TB-HIST-12. */
+  reportingDataAsOfIso?: string | null;
+
   executiveSummary: {
     dataSource: ReportingDataSource;
     kpis: KpiCard[];
@@ -1355,7 +1366,51 @@ export function formatOperatingDashboard(
 // the two cards can never disagree.
 function buildOperationsBriefing(
   executiveSummary: Awaited<ReturnType<typeof getExecutiveSummaryForClub>>,
+  hasRealData: boolean,
 ): MonthlyReportingPackage["boardBriefing"]["operations"] {
+  // TB-HIST-12 §1 — Executive status provenance. On live tenants
+  // (hasRealData === true) with no legitimate derived or persisted
+  // manual source, the Operations status is "Unavailable". There
+  // is currently no derived rule binding Operations status to
+  // accounting data; the Silver Springs demo literal only applies
+  // on demo tenants.
+  if (hasRealData) {
+    const revenueKpi = executiveSummary.kpis.find((k) => k.key === "ytd-revenue");
+    const noiKpi = executiveSummary.kpis.find((k) => k.key === "noi");
+    return {
+      status: "neutral",
+      statusLabel: "Unavailable",
+      consideration: "no-action",
+      narrative:
+        "Operations status is unavailable for this reporting period: no derived or persisted " +
+        "manual operations status source has been wired for this tenant. Required rounds, F&B " +
+        "covers, and service-hour feeds are not yet connected.",
+      chips: [
+        { key: "rounds-ytd",   label: "Rounds YTD",     value: "Unavailable", tone: "neutral" },
+        { key: "fb-covers",    label: "F&B Covers",     value: "Unavailable", tone: "neutral" },
+        { key: "service-hours", label: "Service Hours", value: "Unavailable", tone: "neutral" },
+      ],
+      question: "Are we operating successfully?",
+      coverNarrative:
+        "Operations status for this reporting period is not available: operational feeds " +
+        "(rounds, covers, service hours, labour ratio) have not been connected to the reporting service.",
+      coverMetrics: [
+        {
+          key: "revenue",
+          label: "Revenue",
+          value: revenueKpi?.value ?? "Unavailable",
+          sub: revenueKpi?.comparison?.variance ?? "",
+        },
+        {
+          key: "noi",
+          label: "NOI before dep.",
+          value: noiKpi?.value ?? "Unavailable",
+          sub: noiKpi?.comparison?.variance ?? "",
+        },
+        { key: "dues-rev", label: "Dues-to-Revenue", value: "Unavailable", sub: "Not derived" },
+      ],
+    };
+  }
   const revenueKpi = executiveSummary.kpis.find((k) => k.key === "ytd-revenue");
   const noiKpi = executiveSummary.kpis.find((k) => k.key === "noi");
   return {
@@ -1394,6 +1449,138 @@ function buildOperationsBriefing(
         sub: noiKpi?.comparison?.variance ?? "",
       },
       { key: "dues-rev", label: "Dues-to-Revenue", value: "41.8%", sub: "Policy 38–44%" },
+    ],
+  };
+}
+
+/** TB-HIST-12 §1 — Financial Health briefing with executive status
+ *  provenance. On live tenants (hasRealData === true) with no
+ *  derived rule binding chip/narrative values to accounting data,
+ *  renders Unavailable. The Silver Springs demo literals apply only
+ *  on demo tenants. */
+function buildFinancialHealthBriefing(
+  hasRealData: boolean,
+): MonthlyReportingPackage["boardBriefing"]["financialHealth"] {
+  if (hasRealData) {
+    return {
+      status: "neutral",
+      statusLabel: "Unavailable",
+      consideration: "no-action",
+      narrative:
+        "Financial Health status is unavailable for this reporting period: working-capital, " +
+        "reserve-coverage, current-ratio, and AR-current derived rules have not been wired to " +
+        "the reporting service for this tenant.",
+      chips: [
+        { key: "working-capital", label: "Working Capital", value: "Unavailable", tone: "neutral" },
+        { key: "dues-ratio",      label: "Dues / Revenue",  value: "Unavailable", tone: "neutral" },
+        { key: "current-ratio",   label: "Current Ratio",   value: "Unavailable", tone: "neutral" },
+      ],
+      question: "Is the Club financially healthy?",
+      coverNarrative:
+        "Financial Health status for this reporting period is not available: supporting " +
+        "balance-sheet ratios have not been connected to the reporting service.",
+      coverMetrics: [
+        { key: "working-capital",  label: "Working Capital",  value: "Unavailable", sub: "Not derived" },
+        { key: "reserve-coverage", label: "Reserve Coverage", value: "Unavailable", sub: "Not derived" },
+        { key: "current-ratio",    label: "Current Ratio",    value: "Unavailable", sub: "Not derived" },
+        { key: "ar-current",       label: "AR Current",       value: "Unavailable", sub: "Not derived" },
+      ],
+    };
+  }
+  return {
+    status: "green",
+    // Four-state cover headline cascade per the user's spec:
+    // "Strong Position" / "Stable" / "Watch" / "Concern". The
+    // current demo state is "green" mapping to "Strong Position".
+    statusLabel: "Strong Position",
+    consideration: "no-action",
+    narrative:
+      `Working capital of $4.71M sits $1.21M above the $3.50M policy floor — a 34% cushion. ` +
+      `The dues-to-revenue ratio is 41.8%, inside the 38–44% policy band and indicating that ` +
+      `the operation is funded by stable recurring revenue rather than volatile activity income. ` +
+      `Current ratio holds at 2.18; debt-to-equity at 0.08x. The Pillar 3 Balance Sheet ` +
+      `Stewardship position is intact. At current pace the operating reserve will close FY26 ` +
+      `above target. No Board action is required this period.`,
+    chips: [
+      { key: "working-capital", label: "Working Capital", value: "$ 4.71M", tone: "green" },
+      { key: "dues-ratio",      label: "Dues / Revenue",  value: "41.8%",   subtitle: "Policy 38–44%", tone: "green" },
+      { key: "current-ratio",   label: "Current Ratio",   value: "2.18",    subtitle: "Healthy", tone: "green" },
+    ],
+    question: "Is the Club financially healthy?",
+    coverNarrative:
+      "Working capital $4.71M sits $1.21M above the $3.50M policy floor and reserve coverage holds " +
+      "at 1.42x, above the 1.25x floor. Current ratio 2.18 is healthy; AR Current 78.4% trails the 80% target.",
+    coverMetrics: [
+      { key: "working-capital",  label: "Working Capital",  value: "$4.71M", sub: "$1.21M above floor" },
+      { key: "reserve-coverage", label: "Reserve Coverage", value: "1.42x",  sub: "Policy ≥ 1.25x"     },
+      { key: "current-ratio",    label: "Current Ratio",    value: "2.18",   sub: "Healthy"            },
+      { key: "ar-current",       label: "AR Current",       value: "78.4%",  sub: "Target ≥ 80%"       },
+    ],
+  };
+}
+
+/** TB-HIST-12 §1 — Capital Program briefing with executive status
+ *  provenance. On live tenants (hasRealData === true) with no
+ *  derived rule binding capital project / reserve data to this card,
+ *  renders Unavailable. The Silver Springs demo literals apply only
+ *  on demo tenants. */
+function buildCapitalProgramBriefing(
+  hasRealData: boolean,
+): MonthlyReportingPackage["boardBriefing"]["capitalProgram"] {
+  if (hasRealData) {
+    return {
+      status: "neutral",
+      statusLabel: "Unavailable",
+      consideration: "no-action",
+      narrative:
+        "Capital Program status is unavailable for this reporting period: capital project tracker, " +
+        "reserve-coverage, and capex spend derived rules have not been wired to the reporting " +
+        "service for this tenant.",
+      chips: [
+        { key: "capex-spent",     label: "Capex YTD",       value: "Unavailable", tone: "neutral" },
+        { key: "projects-active", label: "Active Projects", value: "Unavailable", tone: "neutral" },
+        { key: "reserve-funded",  label: "Reserve Funded",  value: "Unavailable", tone: "neutral" },
+      ],
+      question: "Are capital projects and reserve investments being executed properly?",
+      coverNarrative:
+        "Capital Program status for this reporting period is not available: capital project " +
+        "and reserve data have not been connected to the reporting service.",
+      coverMetrics: [
+        { key: "active-projects",       label: "Active Projects",       value: "Unavailable", sub: "Not derived" },
+        { key: "capital-spend-ytd",     label: "Capital Spend YTD",     value: "Unavailable", sub: "Not derived" },
+        { key: "reserve-contributions", label: "Reserve Contributions", value: "Unavailable", sub: "Not derived" },
+        { key: "reserve-funded",        label: "Reserve Funded",        value: "Unavailable", sub: "Not derived" },
+      ],
+    };
+  }
+  return {
+    status: "green",
+    statusLabel: "Executing",
+    consideration: "committee-review",
+    narrative:
+      `Of seven board-approved FY26 capital projects, five are on track to close at or under ` +
+      `budget, one (Pro Shop Refresh) is complete, and one (Irrigation Pump Replacement) has ` +
+      `been deferred to FY27 pending engineering review of the revised scope. The deferral ` +
+      `released $315K of FY26 capital authority back to the Reserve, raising reserve coverage ` +
+      `from 1.36x to 1.42x against the 1.25x policy floor adopted in the FY24 Reserve Study. ` +
+      `The clubhouse HVAC replacement is tracking $42K favorable to budget. The Capital ` +
+      `Committee will review the engineering proposal at its July meeting and recommends ` +
+      `Board approval of the revised irrigation scope at the September 2026 meeting.`,
+    chips: [
+      { key: "capex-spent",     label: "Capex YTD",       value: "$ 1.62M", subtitle: "Plan $ 1.94M", tone: "amber" },
+      { key: "projects-active", label: "Active Projects", value: "7",       tone: "neutral" },
+      { key: "reserve-funded",  label: "Reserve Funded",  value: "100%",    subtitle: "On policy", tone: "green" },
+    ],
+    // Capital cascade: Executing / Monitor / Delayed / Critical.
+    question: "Are capital projects and reserve investments being executed properly?",
+    coverNarrative:
+      "Five of seven FY26 projects on track; the irrigation-pump deferral released $315K of FY26 capital " +
+      "authority back to the Reserve. Capex YTD $1.62M runs under the $1.94M plan, net reserve contribution +$242K, and funding holds at 100% of policy.",
+    coverMetrics: [
+      { key: "active-projects",       label: "Active Projects",       value: "7",       sub: "5 on track · 1 deferred" },
+      { key: "capital-spend-ytd",     label: "Capital Spend YTD",     value: "$1.62M",  sub: "Plan $1.94M"             },
+      { key: "reserve-contributions", label: "Reserve Contributions", value: "+$242K",  sub: "$410K favorable swing"   },
+      { key: "reserve-funded",        label: "Reserve Funded",        value: "100%",    sub: "On policy"               },
     ],
   };
 }
@@ -1732,6 +1919,36 @@ export async function getMonthlyReportingPackage(
   //   Silver Springs itself (demo tenant) still receives the demo
   //   seeds so dev / demo screens keep working.
   const hasRealData = await hasCommittedRealTrialBalance(club.id);
+
+  // TB-HIST-12 §2 — Board package freshness provenance.
+  // Resolve the latest committed TB snapshot on or before the
+  // reporting period end so the Chair's Dashboard header can
+  // render a "Financial data through <date>" pill. Dynamic
+  // import avoids a top-level cycle between reporting-balances
+  // and monthly-package. Falls through to null (demo tenants
+  // + fresh live tenants without any committed TB).
+  let reportingDataAsOfIso: string | null = null;
+  if (hasRealData) {
+    try {
+      const { prisma: prismaForFreshness } = await import("@/lib/prisma");
+      const snap = await prismaForFreshness.reportingLedgerSnapshot.findFirst({
+        where: {
+          clubId: club.id,
+          entityKind: "trial-balance",
+          batchState: "committed",
+          asOf: { lte: reportingPeriod.periodEnd },
+        },
+        orderBy: [{ asOf: "desc" }, { capturedAt: "desc" }, { createdAt: "desc" }],
+        select: { asOf: true },
+      });
+      if (snap?.asOf) {
+        reportingDataAsOfIso = snap.asOf.toISOString().slice(0, 10);
+      }
+    } catch {
+      reportingDataAsOfIso = null;
+    }
+  }
+
   const soaAuxiliaryInputs = hasRealData ? undefined : SILVER_SPRINGS_SOA_AUXILIARY_INPUTS;
   const soaDemoFallback = hasRealData
     ? undefined
@@ -1951,6 +2168,9 @@ export async function getMonthlyReportingPackage(
     preparedFor: "Finance Committee · Board of Directors",
     preparedAt: periodEnd.toISOString().slice(0, 10),
     dataSourcesPresent: dataSources,
+    // TB-HIST-12 §2 — freshness provenance for the Chair's
+    // Dashboard header pill.
+    reportingDataAsOfIso,
 
     // Executive Summary — 6 At-a-Glance KPI cards + reactive
     // headline narrative. Per the Jonas-readiness audit (Tier 1,
@@ -1973,79 +2193,14 @@ export async function getMonthlyReportingPackage(
     executiveSummary,
 
     boardBriefing: {
-      operations: buildOperationsBriefing(executiveSummary),
-      financialHealth: {
-        status: "green",
-        // Four-state cover headline cascade per the user's spec:
-        // "Strong Position" / "Stable" / "Watch" / "Concern". The
-        // current demo state is "green" mapping to "Strong Position".
-        statusLabel: "Strong Position",
-        consideration: "no-action",
-        narrative:
-          `Working capital of $4.71M sits $1.21M above the $3.50M policy floor — a 34% cushion. ` +
-          `The dues-to-revenue ratio is 41.8%, inside the 38–44% policy band and indicating that ` +
-          `the operation is funded by stable recurring revenue rather than volatile activity income. ` +
-          `Current ratio holds at 2.18; debt-to-equity at 0.08x. The Pillar 3 Balance Sheet ` +
-          `Stewardship position is intact. At current pace the operating reserve will close FY26 ` +
-          `above target. No Board action is required this period.`,
-        chips: [
-          { key: "working-capital", label: "Working Capital", value: "$ 4.71M", tone: "green" },
-          { key: "dues-ratio",      label: "Dues / Revenue",  value: "41.8%",   subtitle: "Policy 38–44%", tone: "green" },
-          { key: "current-ratio",   label: "Current Ratio",   value: "2.18",    subtitle: "Healthy", tone: "green" },
-        ],
-        // Cover Executive Briefing — the briefing question this card
-        // answers, the max-2-sentence headline narrative, and the four
-        // Financial Health metrics from the first-scroll standard
-        // (Working Capital, Reserve Coverage, Current Ratio, AR Current %).
-        question: "Is the Club financially healthy?",
-        coverNarrative:
-          "Working capital $4.71M sits $1.21M above the $3.50M policy floor and reserve coverage holds " +
-          "at 1.42x, above the 1.25x floor. Current ratio 2.18 is healthy; AR Current 78.4% trails the 80% target.",
-        coverMetrics: [
-          { key: "working-capital",  label: "Working Capital",  value: "$4.71M", sub: "$1.21M above floor" },
-          { key: "reserve-coverage", label: "Reserve Coverage", value: "1.42x",  sub: "Policy ≥ 1.25x"     },
-          { key: "current-ratio",    label: "Current Ratio",    value: "2.18",   sub: "Healthy"            },
-          { key: "ar-current",       label: "AR Current",       value: "78.4%",  sub: "Target ≥ 80%"       },
-        ],
-      },
-      capitalProgram: {
-        status: "green",
-        statusLabel: "Executing",
-        consideration: "committee-review",
-        narrative:
-          `Of seven board-approved FY26 capital projects, five are on track to close at or under ` +
-          `budget, one (Pro Shop Refresh) is complete, and one (Irrigation Pump Replacement) has ` +
-          `been deferred to FY27 pending engineering review of the revised scope. The deferral ` +
-          `released $315K of FY26 capital authority back to the Reserve, raising reserve coverage ` +
-          `from 1.36x to 1.42x against the 1.25x policy floor adopted in the FY24 Reserve Study. ` +
-          `The clubhouse HVAC replacement is tracking $42K favorable to budget. The Capital ` +
-          `Committee will review the engineering proposal at its July meeting and recommends ` +
-          `Board approval of the revised irrigation scope at the September 2026 meeting.`,
-        chips: [
-          { key: "capex-spent",     label: "Capex YTD",       value: "$ 1.62M", subtitle: "Plan $ 1.94M", tone: "amber" },
-          { key: "projects-active", label: "Active Projects", value: "7",       tone: "neutral" },
-          { key: "reserve-funded",  label: "Reserve Funded",  value: "100%",    subtitle: "On policy", tone: "green" },
-        ],
-        // Cover Executive Briefing — the briefing question this card
-        // answers, the max-2-sentence headline narrative, and the four
-        // Capital Health metrics from the first-scroll standard
-        // (Active Projects, Capital Spend YTD, Reserve Contributions,
-        // Reserve Funded %). The demo ships GREEN / "Executing" — the
-        // program is broadly on track (five of seven projects on
-        // schedule; the irrigation deferral was an engineering choice
-        // that raised reserve coverage, not a schedule slip). Capital
-        // cascade: Executing / Monitor / Delayed / Critical.
-        question: "Are capital projects and reserve investments being executed properly?",
-        coverNarrative:
-          "Five of seven FY26 projects on track; the irrigation-pump deferral released $315K of FY26 capital " +
-          "authority back to the Reserve. Capex YTD $1.62M runs under the $1.94M plan, net reserve contribution +$242K, and funding holds at 100% of policy.",
-        coverMetrics: [
-          { key: "active-projects",       label: "Active Projects",       value: "7",       sub: "5 on track · 1 deferred" },
-          { key: "capital-spend-ytd",     label: "Capital Spend YTD",     value: "$1.62M",  sub: "Plan $1.94M"             },
-          { key: "reserve-contributions", label: "Reserve Contributions", value: "+$242K",  sub: "$410K favorable swing"   },
-          { key: "reserve-funded",        label: "Reserve Funded",        value: "100%",    sub: "On policy"               },
-        ],
-      },
+      // TB-HIST-12 §1 — Executive status provenance. All three
+      // briefings now branch on `hasRealData`: live tenants render
+      // UNAVAILABLE because no derived or persisted-manual status
+      // source has been wired yet; demo tenants retain the Silver
+      // Springs demo literals.
+      operations: buildOperationsBriefing(executiveSummary, hasRealData),
+      financialHealth: buildFinancialHealthBriefing(hasRealData),
+      capitalProgram: buildCapitalProgramBriefing(hasRealData),
     },
 
     visualSummary: {
@@ -2127,54 +2282,64 @@ export async function getMonthlyReportingPackage(
           bestInClassCagrLabel: equityDashboard.bestInClassCagrLabel,
         }),
       },
-      // Two supplemental cards rendered in the third row of the
-      // Stewardship Dashboard. Department actuals/budgets and dues-
-      // allocation percentages are seeded through dedicated services;
-      // no row literals exist in monthly-package.ts or page.tsx.
-      departmentPerformance: buildDepartmentNetPerformanceData(
-        SILVER_SPRINGS_DEPARTMENT_INPUTS,
-        SILVER_SPRINGS_DEPARTMENT_COMMENTARY,
-      ),
-      duesSubsidy: buildDuesSubsidyData(
-        SILVER_SPRINGS_DUES_TOTAL,
-        SILVER_SPRINGS_MEMBER_COUNT,
-        SILVER_SPRINGS_DUES_CATEGORIES,
-      ),
-      // Fourth row — Payroll Analysis pair. Computed from typed
-      // numeric inputs in scorecard-metrics' sibling service
-      // (payroll-analysis.ts); no inline literals reach React.
-      payrollDepartment: buildPayrollDepartmentData({
-        departments: SILVER_SPRINGS_PAYROLL_DEPTS,
-        revenueDollars: SILVER_SPRINGS_PAYROLL_REVENUE,
-        duesDollars: SILVER_SPRINGS_OPERATING_DUES,
-        // Reporting year drives the "${YEAR} Actual" chart legend
-        // label. Derived from the package's periodEnd so the legend
-        // text follows the reporting period automatically — no
-        // hardcoded year string in React.
-        reportingYear: periodEnd.getUTCFullYear(),
-      }),
-      payrollRatioTrend: buildPayrollRatioTrendData({
-        monthlyActual:    SILVER_SPRINGS_PAYROLL_ACTUAL_MONTHLY,
-        monthlyBudget:    SILVER_SPRINGS_PAYROLL_BUDGET_MONTHLY,
-        monthlyPriorYear: SILVER_SPRINGS_PAYROLL_PRIOR_MONTHLY,
-        benchmarkPct:     SILVER_SPRINGS_PAYROLL_BENCHMARK_PCT,
-        // Dues ratio derived from the same dues + revenue figures the
-        // payroll department card uses so the two narratives stay
-        // numerically consistent.
-        duesRatioPct: (SILVER_SPRINGS_OPERATING_DUES / SILVER_SPRINGS_PAYROLL_REVENUE) * 100,
-        // Golf rounds — passed through so the "member utilisation
-        // up X%" figure in the commentary is COMPUTED, not hardcoded.
-        // Same counts the Operating Stewardship scorecard uses.
-        golfRoundsActual:    SILVER_SPRINGS_GOLF_ROUNDS_ACTUAL,
-        golfRoundsPriorYear: SILVER_SPRINGS_GOLF_ROUNDS_PRIOR_YEAR,
-        // Reporting period — drives BOTH the "${YEAR} Actual" line
-        // legend label AND the x-axis window. For a May 2026 package
-        // (month index 4 → reportingMonth 5) the chart plots Jan-May
-        // only; Jun-Dec future months are NOT plotted because their
-        // accounting records don't exist yet.
-        reportingYear:  periodEnd.getUTCFullYear(),
-        reportingMonth: periodEnd.getUTCMonth() + 1,
-      }),
+      // TB-HIST-12 §3 — Chapter II/III supplemental cards. On live
+      // tenants (hasRealData === true), the Silver Springs seed
+      // constants are NOT consulted: each builder receives empty
+      // seeds so no demo-tenant numeric computation runs on a live
+      // tenant's package build. The downstream redactor still wipes
+      // the stewardship dashboard shape so the rendered output is
+      // "Unavailable" — this guard eliminates the computation, not
+      // merely the render. Demo tenants continue to consume the
+      // Silver Springs seeds unchanged.
+      departmentPerformance: hasRealData
+        ? buildDepartmentNetPerformanceData([], "Unavailable")
+        : buildDepartmentNetPerformanceData(
+            SILVER_SPRINGS_DEPARTMENT_INPUTS,
+            SILVER_SPRINGS_DEPARTMENT_COMMENTARY,
+          ),
+      duesSubsidy: hasRealData
+        ? buildDuesSubsidyData(0, 0, [])
+        : buildDuesSubsidyData(
+            SILVER_SPRINGS_DUES_TOTAL,
+            SILVER_SPRINGS_MEMBER_COUNT,
+            SILVER_SPRINGS_DUES_CATEGORIES,
+          ),
+      payrollDepartment: hasRealData
+        ? buildPayrollDepartmentData({
+            departments: [],
+            revenueDollars: 0,
+            duesDollars: 0,
+            reportingYear: periodEnd.getUTCFullYear(),
+          })
+        : buildPayrollDepartmentData({
+            departments: SILVER_SPRINGS_PAYROLL_DEPTS,
+            revenueDollars: SILVER_SPRINGS_PAYROLL_REVENUE,
+            duesDollars: SILVER_SPRINGS_OPERATING_DUES,
+            reportingYear: periodEnd.getUTCFullYear(),
+          }),
+      payrollRatioTrend: hasRealData
+        ? buildPayrollRatioTrendData({
+            monthlyActual: [],
+            monthlyBudget: [],
+            monthlyPriorYear: [],
+            benchmarkPct: 0,
+            duesRatioPct: 0,
+            golfRoundsActual: 0,
+            golfRoundsPriorYear: 0,
+            reportingYear: periodEnd.getUTCFullYear(),
+            reportingMonth: periodEnd.getUTCMonth() + 1,
+          })
+        : buildPayrollRatioTrendData({
+            monthlyActual:    SILVER_SPRINGS_PAYROLL_ACTUAL_MONTHLY,
+            monthlyBudget:    SILVER_SPRINGS_PAYROLL_BUDGET_MONTHLY,
+            monthlyPriorYear: SILVER_SPRINGS_PAYROLL_PRIOR_MONTHLY,
+            benchmarkPct:     SILVER_SPRINGS_PAYROLL_BENCHMARK_PCT,
+            duesRatioPct: (SILVER_SPRINGS_OPERATING_DUES / SILVER_SPRINGS_PAYROLL_REVENUE) * 100,
+            golfRoundsActual:    SILVER_SPRINGS_GOLF_ROUNDS_ACTUAL,
+            golfRoundsPriorYear: SILVER_SPRINGS_GOLF_ROUNDS_PRIOR_YEAR,
+            reportingYear:  periodEnd.getUTCFullYear(),
+            reportingMonth: periodEnd.getUTCMonth() + 1,
+          }),
     },
 
     operatingKPIs: {

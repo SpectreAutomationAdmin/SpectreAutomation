@@ -3250,6 +3250,32 @@ function ChairsDashboard({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyRep
         <span>Year to Date</span>
       </div>
 
+      {/* TB-HIST-12 §2 — Board package freshness pill. Reads
+          `pkg.reportingDataAsOfIso` (the effective asOf of the
+          latest committed TB snapshot on or before the reporting
+          period end) and renders a visible "Financial data through
+          <date>" chip so a Board member sees the recency of the
+          underlying accounting data before reading any card. When
+          the field is null (demo tenants / fresh live tenants),
+          the pill is omitted — the chapter-meta line already
+          declares the reporting period. */}
+      {pkg.reportingDataAsOfIso ? (
+        <p
+          className="mt-3 inline-flex items-center gap-2 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-xs text-stone-700"
+          data-testid="board-package-data-through"
+          role="note"
+        >
+          <span className="font-medium">Financial data through</span>
+          <time dateTime={pkg.reportingDataAsOfIso} className="font-mono">
+            {pkg.reportingDataAsOfIso}
+          </time>
+          <span className="text-stone-400">·</span>
+          <span className="text-stone-500">
+            Latest committed close for this club.
+          </span>
+        </p>
+      ) : null}
+
       {/* Chapter description — single editorial sentence mirroring
           Saguaro p03's `.sec-note` one-liner. Italicized per the
           Saguaro reference. Item #5 in the structural list. */}
