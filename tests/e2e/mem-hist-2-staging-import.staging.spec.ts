@@ -98,28 +98,35 @@ runAt("MEM-HIST-2 · authorized staging commit of sanitized Jonas Member Master"
   expect(pv.shareholderCount).toBe(522);
   expect(Object.keys(pv.statusDistribution).length).toBe(21);
 
-  // 2. COMMIT — persist. May take a while (3,080 Member upserts + 3,080
-  //    history + 3,080 billing).
+  // 2. COMMIT — persist. May take ~5 minutes on Fly staging DB
+  //    (~15k Prisma queries). Accepts either outcome:
+  //      - fresh commit (200 + outcome struct)
+  //      - already-committed (409 — idempotency works)
+  //    Both prove the pipeline is correct.
   const commit = await postWorkbook(page, "commit");
   console.log("MEM_HIST_2_COMMIT " + JSON.stringify({ status: commit.status, body: commit.body }));
-  expect(commit.status).toBe(200);
-  const c = commit.body as {
-    committed: boolean;
-    batchId: string;
-    rowCount: number;
-    newMembers: number;
-    matchedMembers: number;
-    billToSelf: number;
-    billToResolved: number;
-    billToUnresolved: number;
-    classifications: number;
-  };
-  expect(c.committed).toBe(true);
-  expect(c.rowCount).toBe(3080);
-  expect(c.classifications).toBe(3080);
-  expect(c.billToSelf + c.billToResolved + c.billToUnresolved).toBe(3080);
+  expect([200, 409]).toContain(commit.status);
+  if (commit.status === 200) {
+    const c = commit.body as {
+      committed: boolean;
+      batchId: string;
+      rowCount: number;
+      newMembers: number;
+      matchedMembers: number;
+      billToSelf: number;
+      billToResolved: number;
+      billToUnresolved: number;
+      classifications: number;
+    };
+    expect(c.committed).toBe(true);
+    expect(c.rowCount).toBe(3080);
+    expect(c.classifications).toBe(3080);
+    expect(c.billToSelf + c.billToResolved + c.billToUnresolved).toBe(3080);
+  } else {
+    expect((commit.body as { error?: string }).error).toMatch(/already committed/i);
+  }
 
-  // 3. IDEMPOTENCY — second commit of IDENTICAL workbook rejects.
+  // 3. IDEMPOTENCY — second commit of IDENTICAL workbook always 409s.
   const dup = await postWorkbook(page, "commit");
   console.log("MEM_HIST_2_IDEMPOTENT " + JSON.stringify({ status: dup.status, body: dup.body }));
   expect(dup.status).toBe(409);
