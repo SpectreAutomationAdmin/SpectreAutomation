@@ -3276,6 +3276,67 @@ function ChairsDashboard({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyRep
         </p>
       ) : null}
 
+      {/* TB-HIST-12B §4-5 — tile-level Stewardship Dashboard driven
+          by the ratio registry. Only renders on live tenants with a
+          resolved metric set. Each tile is independent: a metric
+          availability of "AVAILABLE" renders the value; anything
+          else renders a one-line reason. Policy targets render on
+          their own line and are not required for the metric to
+          display. */}
+      {pkg.stewardshipTiles && pkg.stewardshipTiles.tiles.length > 0 ? (
+        <section
+          data-testid="stewardship-tiles"
+          className="mt-6 border-t border-club-green-800/25 pt-5"
+        >
+          <h3 className="text-[13px] uppercase tracking-[0.18em] font-semibold text-club-green-900">
+            Stewardship — Tile-Level Availability
+          </h3>
+          <p className="mt-2 max-w-[760px] font-serif italic text-[14px] leading-snug text-club-green-800/85">
+            {pkg.stewardshipTiles.footerNote}
+          </p>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {pkg.stewardshipTiles.tiles.map((t) => (
+              <article
+                key={t.key}
+                data-testid={`stewardship-tile-${t.key}`}
+                data-availability={t.metricAvailability}
+                className="rounded border border-stone-200 bg-white px-3 py-2.5"
+              >
+                <div className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">
+                  {t.name}
+                </div>
+                <div
+                  data-testid={`stewardship-tile-${t.key}-metric`}
+                  className="mt-1 font-serif text-[20px] leading-none tabular-nums text-club-green-900"
+                >
+                  {t.metricDisplay}
+                </div>
+                <div className="mt-1 text-[11px] text-stone-500">
+                  {t.formula}
+                </div>
+                {t.metricAvailability !== "AVAILABLE" ? (
+                  <div
+                    data-testid={`stewardship-tile-${t.key}-reason`}
+                    className="mt-1 text-[11px] italic text-stone-500"
+                  >
+                    {t.metricReason}
+                  </div>
+                ) : null}
+                <div className="mt-2 flex items-baseline gap-2 border-t border-stone-100 pt-1.5 text-[11px]">
+                  <span className="uppercase tracking-[0.15em] text-stone-400">Target</span>
+                  <span
+                    data-testid={`stewardship-tile-${t.key}-target`}
+                    className="tabular-nums text-stone-600"
+                  >
+                    {t.targetDisplay}
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {/* Chapter description — single editorial sentence mirroring
           Saguaro p03's `.sec-note` one-liner. Italicized per the
           Saguaro reference. Item #5 in the structural list. */}

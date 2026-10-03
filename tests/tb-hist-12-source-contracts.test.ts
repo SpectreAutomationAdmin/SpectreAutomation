@@ -44,15 +44,18 @@ describe("TB-HIST-12 §1 — Executive status provenance (operations / financial
     expect(MONTHLY_PKG).toMatch(/statusLabel:\s*anyDerived\s*\?\s*"Financial position"\s*:\s*"Unavailable"/);
   });
 
-  it("buildCapitalProgramBriefing exists, takes hasRealData, and renders Unavailable on live", () => {
+  it("buildCapitalProgramBriefing exists, takes hasRealData (TB-HIST-12B: + metrics; renders Capital financial position or Unavailable)", () => {
     expect(MONTHLY_PKG).toMatch(/function buildCapitalProgramBriefing\(\s*hasRealData:\s*boolean/);
-    expect(MONTHLY_PKG).toMatch(/function buildCapitalProgramBriefing[\s\S]{0,2000}if\s*\(hasRealData\)\s*\{[\s\S]{0,400}statusLabel:\s*"Unavailable"/);
+    // TB-HIST-12B §3 — statusLabel is now "Capital financial position"
+    // when metrics are AVAILABLE, else "Unavailable". Either label
+    // qualifies the live branch.
+    expect(MONTHLY_PKG).toMatch(/statusLabel:\s*anyDerived\s*\?\s*"Capital financial position"\s*:\s*"Unavailable"/);
   });
 
-  it("the pkg literal wires all three briefings through the hasRealData-aware builders (TB-HIST-12A: ops + fh carry partial)", () => {
+  it("the pkg literal wires all three briefings through the hasRealData-aware builders (TB-HIST-12A: ops + fh carry partial; TB-HIST-12B: cap carries metrics)", () => {
     expect(MONTHLY_PKG).toMatch(/operations:\s*buildOperationsBriefing\(executiveSummary,\s*hasRealData,\s*operationsPartial\)/);
     expect(MONTHLY_PKG).toMatch(/financialHealth:\s*buildFinancialHealthBriefing\(hasRealData,\s*financialHealthPartial\)/);
-    expect(MONTHLY_PKG).toMatch(/capitalProgram:\s*buildCapitalProgramBriefing\(hasRealData\)/);
+    expect(MONTHLY_PKG).toMatch(/capitalProgram:\s*buildCapitalProgramBriefing\(hasRealData,\s*januaryMetricSet\)/);
   });
 });
 

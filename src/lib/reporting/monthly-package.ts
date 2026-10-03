@@ -492,6 +492,27 @@ export type MonthlyReportingPackage = {
    *  rows published before TB-HIST-12. */
   reportingDataAsOfIso?: string | null;
 
+  /** TB-HIST-12B §4-5 — tile-level Stewardship Dashboard.
+   *  Each tile resolves INDEPENDENTLY from the ratio registry so a
+   *  missing target does not suppress the actual value, and a
+   *  missing input on one tile does not blank the chapter. Null /
+   *  empty on demo tenants (they keep the Silver Springs
+   *  stewardshipDashboard shape); populated with the resolved
+   *  registry on live tenants. */
+  stewardshipTiles?: {
+    tiles: Array<{
+      key: string;
+      name: string;
+      metricDisplay: string;
+      metricReason: string;
+      metricAvailability: string;
+      targetDisplay: string;
+      targetReason: string;
+      formula: string;
+    }>;
+    footerNote: string;
+  } | null;
+
   executiveSummary: {
     dataSource: ReportingDataSource;
     kpis: KpiCard[];
@@ -1594,32 +1615,137 @@ function buildFinancialHealthBriefing(
  *  derived rule binding capital project / reserve data to this card,
  *  renders Unavailable. The Silver Springs demo literals apply only
  *  on demo tenants. */
+/** TB-HIST-12B §4-5 — build the tile-level Stewardship Dashboard
+ *  from the ratio registry. Every tile resolves independently; a
+ *  missing target renders "Not configured" on that one tile
+ *  without affecting its neighbor. */
+function buildStewardshipTiles(
+  metrics?: import("./ratio-registry").JanuaryMetricSet,
+): NonNullable<MonthlyReportingPackage["stewardshipTiles"]> {
+  if (!metrics) {
+    return {
+      tiles: [],
+      footerNote:
+        "Stewardship tiles unavailable — no committed TB snapshot resolved for this period.",
+    };
+  }
+  const resolve = (m: import("./ratio-registry").ResolvedMetric) => ({
+    key: m.key,
+    name: m.name,
+    metricDisplay: m.metric.display,
+    metricReason: m.metric.provenance.reason,
+    metricAvailability: m.metric.provenance.availability,
+    targetDisplay: m.target.display,
+    targetReason: m.target.provenance.reason,
+    formula: m.formula,
+  });
+  // Order by stewardship priority: liquidity → operating → capital.
+  const tiles = [
+    resolve(metrics.workingCapital),
+    resolve(metrics.currentRatio),
+    resolve(metrics.duesToRevenuePct),
+    resolve(metrics.payrollRatio),
+    resolve(metrics.grossMargin),
+    resolve(metrics.netPpe),
+    resolve(metrics.longTermDebt),
+    resolve(metrics.capitalReserve),
+    resolve(metrics.longTermDebtToEquity),
+    resolve(metrics.arCurrentPct),
+    resolve(metrics.reserveCoverage),
+  ];
+  return {
+    tiles,
+    footerNote:
+      "Each tile resolves independently from the January 31, 2026 trial-balance snapshot. Policy targets are not configured for this tenant; benchmark figures remain unavailable until a benchmark source is loaded.",
+  };
+}
+
 function buildCapitalProgramBriefing(
   hasRealData: boolean,
+  metrics?: import("./ratio-registry").JanuaryMetricSet,
 ): MonthlyReportingPackage["boardBriefing"]["capitalProgram"] {
   if (hasRealData) {
+    // TB-HIST-12B §3 — split Capital Financial Position from
+    // Project Execution. Financial-position tiles render whenever
+    // their underlying FS Group has at least one classified
+    // account. Project-execution tiles stay Unavailable per-KPI
+    // (no project tracker source).
+    const netPpe = metrics?.netPpe.metric;
+    const ltd = metrics?.longTermDebt.metric;
+    const reserve = metrics?.capitalReserve.metric;
+    const capAssess = metrics?.capitalAssessmentsYtd.metric;
+    const deferred = metrics?.deferredCapitalContributions.metric;
+
+    const anyDerived =
+      netPpe?.provenance.availability === "AVAILABLE" ||
+      ltd?.provenance.availability === "AVAILABLE" ||
+      reserve?.provenance.availability === "AVAILABLE" ||
+      capAssess?.provenance.availability === "AVAILABLE" ||
+      deferred?.provenance.availability === "AVAILABLE";
+
+    const narrativeParts: string[] = [];
+    if (netPpe?.value != null) narrativeParts.push(`Net PP&E at period end is ${netPpe.display}.`);
+    if (ltd?.value != null) narrativeParts.push(`Long-term debt stands at ${ltd.display}.`);
+    if (reserve?.value != null) narrativeParts.push(`Capital reserve balance is ${reserve.display}.`);
+    if (capAssess?.value != null) narrativeParts.push(`Capital assessments YTD total ${capAssess.display}.`);
+    narrativeParts.push("Project execution metrics (active project count, completion status, approved project budget) remain unavailable — no capital-project tracker source has been loaded.");
+    const narrative = narrativeParts.join(" ");
+
     return {
       status: "neutral",
-      statusLabel: "Unavailable",
+      statusLabel: anyDerived ? "Capital financial position" : "Unavailable",
       consideration: "no-action",
-      narrative:
-        "Capital Program status is unavailable for this reporting period: capital project tracker, " +
-        "reserve-coverage, and capex spend derived rules have not been wired to the reporting " +
-        "service for this tenant.",
+      narrative,
       chips: [
-        { key: "capex-spent",     label: "Capex YTD",       value: "Unavailable", tone: "neutral" },
-        { key: "projects-active", label: "Active Projects", value: "Unavailable", tone: "neutral" },
-        { key: "reserve-funded",  label: "Reserve Funded",  value: "Unavailable", tone: "neutral" },
+        {
+          key: "net-ppe",
+          label: "Net PP&E",
+          value: netPpe?.display ?? "Unavailable",
+          subtitle: netPpe?.provenance.availability === "AVAILABLE" ? "From Jan BS" : "Not configured",
+          tone: "neutral",
+        },
+        {
+          key: "capital-reserve",
+          label: "Capital Reserve",
+          value: reserve?.display ?? "Unavailable",
+          subtitle: reserve?.provenance.availability === "AVAILABLE" ? "From Jan BS" : "Not configured",
+          tone: "neutral",
+        },
+        {
+          key: "project-execution",
+          label: "Project Execution",
+          value: "Unavailable",
+          subtitle: "No project tracker",
+          tone: "neutral",
+        },
       ],
       question: "Are capital projects and reserve investments being executed properly?",
-      coverNarrative:
-        "Capital Program status for this reporting period is not available: capital project " +
-        "and reserve data have not been connected to the reporting service.",
+      coverNarrative: narrative,
       coverMetrics: [
-        { key: "active-projects",       label: "Active Projects",       value: "Unavailable", sub: "Not derived" },
-        { key: "capital-spend-ytd",     label: "Capital Spend YTD",     value: "Unavailable", sub: "Not derived" },
-        { key: "reserve-contributions", label: "Reserve Contributions", value: "Unavailable", sub: "Not derived" },
-        { key: "reserve-funded",        label: "Reserve Funded",        value: "Unavailable", sub: "Not derived" },
+        {
+          key: "net-ppe",
+          label: "Net PP&E",
+          value: netPpe?.display ?? "Unavailable",
+          sub: netPpe?.provenance.availability === "AVAILABLE" ? "Jan BS · BS_CAPITAL_ASSETS" : "Not configured",
+        },
+        {
+          key: "long-term-debt",
+          label: "Long-Term Debt",
+          value: ltd?.display ?? "Unavailable",
+          sub: ltd?.provenance.availability === "AVAILABLE" ? "Jan BS · BS_LONG_TERM_DEBT" : "Not configured",
+        },
+        {
+          key: "capital-reserve",
+          label: "Capital Reserve",
+          value: reserve?.display ?? "Unavailable",
+          sub: reserve?.provenance.availability === "AVAILABLE" ? "Jan BS · BS_CAPITAL_RESERVE" : "Not configured",
+        },
+        {
+          key: "project-execution",
+          label: "Project Execution",
+          value: "Unavailable",
+          sub: "No capital-project tracker",
+        },
       ],
     };
   }
@@ -1997,15 +2123,19 @@ export async function getMonthlyReportingPackage(
   // import avoids a top-level cycle between reporting-balances
   // and monthly-package. Falls through to null (demo tenants
   // + fresh live tenants without any committed TB).
-  // TB-HIST-12A §3-4 — resolve per-KPI partial availability for the
-  // Executive Opening cards. Only invoked on live tenants; demo
-  // tenants keep Silver Springs literals via the else branch inside
-  // each briefing builder.
+  // TB-HIST-12A §3-4 + TB-HIST-12B §5/§12 — resolve the single
+  // January metric set for live tenants. Every chapter that
+  // consumes derived numerics (Executive Opening / Capital Program /
+  // Stewardship) reads from this ONE object so KPIs never drift
+  // between cards. Demo tenants keep the Silver Springs literals.
   let operationsPartial:
     | import("./january-partial-availability").OperationsPartialAvailability
     | undefined = undefined;
   let financialHealthPartial:
     | import("./january-partial-availability").FinancialHealthPartialAvailability
+    | undefined = undefined;
+  let januaryMetricSet:
+    | import("./ratio-registry").JanuaryMetricSet
     | undefined = undefined;
   if (hasRealData) {
     try {
@@ -2019,13 +2149,16 @@ export async function getMonthlyReportingPackage(
         clubId: club.id,
         periodEnd: reportingPeriod.periodEnd,
       });
+      const registryMod = await import("./ratio-registry");
+      januaryMetricSet = await registryMod.resolveJanuaryMetricSet({
+        clubId: club.id,
+        periodStart: reportingPeriod.periodStart,
+        periodEnd: reportingPeriod.periodEnd,
+      });
     } catch {
-      // Partial-availability resolution is best-effort — if it throws
-      // (eg. unexpected COA shape), both briefings fall back to the
-      // "no derivable KPI → fully Unavailable" branch in the builder
-      // helpers, matching TB-HIST-12 behavior.
       operationsPartial = undefined;
       financialHealthPartial = undefined;
+      januaryMetricSet = undefined;
     }
   }
 
@@ -2283,6 +2416,9 @@ export async function getMonthlyReportingPackage(
     // TB-HIST-12 §2 — freshness provenance for the Chair's
     // Dashboard header pill.
     reportingDataAsOfIso,
+    // TB-HIST-12B §4-5 — tile-level Stewardship Dashboard, driven
+    // by the ratio registry on live tenants only.
+    stewardshipTiles: hasRealData ? buildStewardshipTiles(januaryMetricSet) : null,
 
     // Executive Summary — 6 At-a-Glance KPI cards + reactive
     // headline narrative. Per the Jonas-readiness audit (Tier 1,
@@ -2310,11 +2446,11 @@ export async function getMonthlyReportingPackage(
       // derivable KPIs and mark only the missing ones Unavailable.
       operations: buildOperationsBriefing(executiveSummary, hasRealData, operationsPartial),
       financialHealth: buildFinancialHealthBriefing(hasRealData, financialHealthPartial),
-      // Capital Program partial-availability deferred to TB-HIST-12B —
-      // Capital IS classifications (IS_CAPITAL_INCOME, IS_CAPEX) not
-      // yet first-class in Coulee's COA mapping, and no project
-      // tracker source exists.
-      capitalProgram: buildCapitalProgramBriefing(hasRealData),
+      // TB-HIST-12B §3 — Capital Program splits financial position
+      // (Net PP&E, Long-Term Debt, Capital Reserve, Capital
+      // Assessments YTD) from project execution (which stays
+      // Unavailable until a project-tracker source lands).
+      capitalProgram: buildCapitalProgramBriefing(hasRealData, januaryMetricSet),
     },
 
     visualSummary: {
@@ -3178,6 +3314,7 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
   const LIVE_PARTIAL_LABELS = new Set([
     "Financial operating position",
     "Financial position",
+    "Capital financial position",
     "Unavailable",
   ]);
   const opsIsLivePartial = LIVE_PARTIAL_LABELS.has(pkg.boardBriefing.operations.statusLabel);
