@@ -100,7 +100,7 @@ export default async function MemberProfilePage({ searchParams }: { searchParams
       <form action={profile} className="mt-6 card card-body space-y-4">
         <h2 className="section-title text-lg">Contact</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><label className="label">Email</label><input className="input" type="email" name="email" defaultValue={member.email} maxLength={254} /></div>
+          <div><label className="label">Email</label><input className="input" type="email" name="email" defaultValue={member.email ?? ""} maxLength={254} /></div>
           <div><label className="label">Phone</label><input className="input" name="phone" defaultValue={member.phone ?? ""} maxLength={40} /></div>
         </div>
         <div className="flex justify-end"><button className="btn btn-primary">Save contact</button></div>

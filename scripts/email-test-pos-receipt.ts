@@ -114,6 +114,8 @@ async function loadFixtures() {
   if (!member.email || !member.email.includes("@")) {
     throw new Error(`Test member ${member.firstName} has no email on file — update the profile first.`);
   }
+  // Narrow Member.email to non-null for the rest of the fixture.
+  const memberWithEmail = { ...member, email: member.email };
   const adminRole = await prisma.userClubRole.findFirst({
     where: { clubId: member.clubId, roleKey: "CLUB_ADMIN" },
     include: { user: { select: { id: true } } },
@@ -137,7 +139,7 @@ async function loadFixtures() {
   });
   if (!item) throw new Error(`No active taxable menu item available in ${loc.name}`);
 
-  return { member, principal, item };
+  return { member: memberWithEmail, principal, item };
 }
 
 // -----------------------------------------------------------------

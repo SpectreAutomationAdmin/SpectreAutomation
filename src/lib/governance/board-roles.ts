@@ -307,7 +307,9 @@ export type BoardRosterRow = {
   memberId: string;
   memberName: string;
   memberNumber: string;
-  email: string;
+  // MEM-HIST-2A §2 — Member.email is nullable; roster rows carry
+  // null when the Member has no email on file.
+  email: string | null;
   roleTitle: string;
   committeeName: string | null;
   termStartDate: Date;

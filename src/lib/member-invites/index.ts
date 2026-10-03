@@ -48,8 +48,16 @@ export async function createInvite(principal: Principal, raw: unknown) {
   ensureWrite(principal, parsed.data.clubId);
   const member = await prisma.member.findUnique({ where: { id: parsed.data.memberId } });
   if (!member || member.clubId !== parsed.data.clubId) throw new NotFoundError("Member", parsed.data.memberId);
-  const email = (parsed.data.email ?? member.email).trim().toLowerCase();
-  if (!email || !email.includes("@")) throw new ValidationError([{ path: "email", message: "Valid email is required" }]);
+  // MEM-HIST-2A §2 — Member.email is nullable. The invite flow
+  // enforces validated email presence SEPARATELY: either the caller
+  // supplies `parsed.data.email` or the Member row carries one.
+  // When neither is present, reject with a clear validation error
+  // (NEVER proceed with a null / placeholder email).
+  const emailCandidate = parsed.data.email ?? member.email ?? "";
+  const email = emailCandidate.trim().toLowerCase();
+  if (!email || !email.includes("@") || email.endsWith("@placeholder.invalid")) {
+    throw new ValidationError([{ path: "email", message: "Valid email is required" }]);
+  }
   // Phase 14D — never send to a suppressed address.
   const { isSuppressed } = await import("../email-delivery");
   const suppressed = await isSuppressed(email, parsed.data.clubId);

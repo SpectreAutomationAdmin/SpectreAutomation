@@ -179,25 +179,17 @@ export async function commitJonasMemberMasterBatch(opts: {
           },
         });
       } else {
-        // Create a new Member. Required Member fields:
-        //   clubId / memberNumber / firstName / lastName / email /
-        //   status / createdAt — status defaults ONBOARDING in the
-        //   schema, which we override to reflect the import source.
-        // The schema today requires `email` (non-null). The directive
-        // prohibits email import. We satisfy the constraint with a
-        // deterministic placeholder that is NOT a valid routable
-        // address: `no-email+<externalIdentifier>@placeholder.invalid`.
-        // The `.invalid` TLD is RFC 2606 reserved — guaranteed not
-        // to resolve. The regression test asserts no `@` emission
-        // outside this placeholder shape.
-        const emailPlaceholder = `no-email+${row.memberNumber.toLowerCase()}@placeholder.invalid`;
+        // Create a new Member. MEM-HIST-2A §2 — Member.email is now
+        // nullable; the import NEVER fabricates email. If the
+        // founder's workflow later wants portal access, the invite
+        // flow collects a validated email independently.
         const created = await prisma.member.create({
           data: {
             clubId,
             memberNumber: row.memberNumber,
             firstName: row.firstName || "Member",
             lastName: row.lastName,
-            email: emailPlaceholder,
+            email: null,
             status: row.interpretedStatus === "ACTIVE" ? "ACTIVE" : row.interpretedStatus,
             joinDate: row.joinedDate,
           },

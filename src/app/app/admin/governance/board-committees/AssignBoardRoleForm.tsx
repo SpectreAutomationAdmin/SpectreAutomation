@@ -21,7 +21,8 @@ export type MemberOption = {
   id: string;
   memberNumber: string;
   name: string;
-  email: string;
+  // MEM-HIST-2A §2 — Member.email is nullable.
+  email: string | null;
 };
 
 type Props = {
@@ -46,7 +47,7 @@ export function AssignBoardRoleForm({
     return members
       .filter((m) =>
         [m.name, m.memberNumber, m.email]
-          .filter(Boolean)
+          .filter((s): s is string => Boolean(s))
           .some((s) => s.toLowerCase().includes(q)),
       )
       .slice(0, 30);

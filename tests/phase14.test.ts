@@ -233,8 +233,11 @@ describe("Phase 14D — Email bounce handling", () => {
     const p = await adminPrincipal(club.id);
     const member = await makeMember(club.id);
     const { invite } = await createInvite(p, { clubId: club.id, memberId: member.id });
-    await recordEvent({ clubId: club.id, email: member.email, kind: "HARD_BOUNCE", inviteId: invite.id, provider: "ses", reason: "no such mailbox" });
-    expect((await isSuppressed(member.email, club.id)).suppressed).toBe(true);
+    // MEM-HIST-2A §2 — Member.email is nullable; makeMember() seeds a
+    // real address so this guard is defensive.
+    const memberEmail = member.email ?? "";
+    await recordEvent({ clubId: club.id, email: memberEmail, kind: "HARD_BOUNCE", inviteId: invite.id, provider: "ses", reason: "no such mailbox" });
+    expect((await isSuppressed(memberEmail, club.id)).suppressed).toBe(true);
     const refreshed = await db().memberPortalInvite.findUnique({ where: { id: invite.id } });
     expect(refreshed?.status).toBe("FAILED");
   });
@@ -244,8 +247,9 @@ describe("Phase 14D — Email bounce handling", () => {
     const p = await adminPrincipal(club.id);
     const member = await makeMember(club.id);
     const { invite } = await createInvite(p, { clubId: club.id, memberId: member.id });
-    await recordEvent({ clubId: club.id, email: member.email, kind: "SOFT_BOUNCE", inviteId: invite.id, reason: "temp" });
-    expect((await isSuppressed(member.email, club.id)).suppressed).toBe(false);
+    const memberEmail2 = member.email ?? "";
+    await recordEvent({ clubId: club.id, email: memberEmail2, kind: "SOFT_BOUNCE", inviteId: invite.id, reason: "temp" });
+    expect((await isSuppressed(memberEmail2, club.id)).suppressed).toBe(false);
   });
 
   it("createInvite refuses to send to a suppressed address", async () => {

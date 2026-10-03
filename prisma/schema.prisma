@@ -1200,7 +1200,11 @@ model Member {
   memberNumber          String
   firstName             String
   lastName              String
-  email                 String
+  // MEM-HIST-2A §2 — Member.email is nullable. A Member can exist
+  // without an email (member-master imports do not fabricate email).
+  // Portal invite flow enforces email presence SEPARATELY when a
+  // Member is actually invited.
+  email                 String?
   phone                 String?
   // Phase 18 — admin-editable contact / personal info on the primary member.
   // Address is single-line free text fields rather than a normalized table:

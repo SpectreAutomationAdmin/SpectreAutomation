@@ -237,15 +237,17 @@ describe("MEM-HIST-2 §27 — PRIVACY: no PII in source contract", () => {
     expect(typeBlock).not.toMatch(/\bbankAccount\b/i);
   });
 
-  it("commit service only writes synthetic names + placeholder email (no real PII)", () => {
+  it("commit service writes synthetic names + null email (MEM-HIST-2A: no placeholder email)", () => {
     const src = readFileSync(COMMIT, "utf8");
-    // Commit service places a placeholder email at a reserved domain.
-    expect(src).toMatch(/@placeholder\.invalid/);
+    // MEM-HIST-2A §2 — commit service NEVER writes a placeholder
+    // email. Member.email is now nullable; the import passes null.
+    expect(src).not.toMatch(/@placeholder\.invalid/);
     // Guard against anyone wiring a real address field later.
     const createData = src.match(/prisma\.member\.create\(\{[\s\S]*?\}\)/)?.[0] ?? "";
     expect(createData).not.toMatch(/\baddressLine1:/);
     expect(createData).not.toMatch(/\bdateOfBirth:/);
     expect(createData).not.toMatch(/\bphone:/);
+    expect(createData).toMatch(/email:\s*null/);
   });
 
   it(".gitignore blocks the real workbook filename pattern", () => {
