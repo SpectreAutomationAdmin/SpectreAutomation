@@ -67,6 +67,10 @@ model Club {
   applicants                       Applicant[]
   members                          Member[]
   memberAccounts                   MemberAccount[]
+  memberExternalIdentities         MemberExternalIdentity[]
+  memberMasterImportBatches        MemberMasterImportBatch[]
+  membershipHistoryEntries         MembershipHistoryEntry[]
+  memberBillingRelationships       MemberBillingRelationship[]
   charges                          Charge[]
   payments                         Payment[]
   paymentMethods                   PaymentMethod[]
@@ -1286,6 +1290,13 @@ model Member {
   groupAssignments             MemberGroupAssignment[]
   customFieldValues            MemberCustomFieldValue[]
 
+  // MEM-HIST-2 (2026-10-03) — external identity + membership history +
+  // billing-relationship back-references.
+  externalIdentities             MemberExternalIdentity[]
+  membershipHistoryEntries       MembershipHistoryEntry[]
+  billingRelationships           MemberBillingRelationship[]      @relation("BillingRelationshipMember")
+  billingRelationshipsAsBilledBy MemberBillingRelationship[]      @relation("BillingRelationshipBilledBy")
+
   // Step 16 — member numbers are unique INSIDE a club. Two different
   // clubs can both have memberNumber "1432"; tenant-scoped lookup
   // resolves them independently. Prior schema had no constraint at
@@ -1823,6 +1834,170 @@ model MemberHouseholdMember {
   updatedAt       DateTime  @updatedAt
 
   @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// MEM-HIST-2 (2026-10-03) — Member Master architecture foundation
+// ---------------------------------------------------------------------------
+//
+// External identity, source provenance, effective-dated classification
+// history, and billing-relationship edges. Introduced in MEM-HIST-2 to
+// carry the first authorized Jonas Member Master import (the
+// sanitized "Membership Master - Sanitized for Spectre.xlsx" with
+// 3,080 synthetic members whose Jonas Member Number is preserved
+// verbatim per directive §2 / §3).
+//
+// NOTHING in this block touches accounting tables.
+
+model MemberExternalIdentity {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  memberId           String
+  member             Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  // Source-system name (e.g. "JONAS"). Normalized uppercase.
+  sourceSystem       String
+
+  // The external identifier verbatim. For Jonas this is the Member
+  // Number — leading zeros + alphabetic suffixes preserved as string
+  // (per MEM-HIST-2 §2). Never parsed as a number.
+  externalIdentifier String
+
+  // Half-open validity window — effectiveFrom = when this identity
+  // was observed from the source; effectiveTo = null means currently
+  // in effect.
+  effectiveFrom      DateTime @default(now())
+  effectiveTo        DateTime?
+
+  importBatchId      String?
+  importBatch        MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // §12 uniqueness contract — within a tenant, a given (sourceSystem,
+  // externalIdentifier) resolves to at most one Member. Duplicates
+  // across the import are detected before commit.
+  @@unique([clubId, sourceSystem, externalIdentifier])
+  @@index([clubId, memberId])
+}
+
+model MemberMasterImportBatch {
+  id                  String   @id @default(cuid())
+  clubId              String
+  club                Club     @relation(fields: [clubId], references: [id])
+
+  // Workflow status: PREVIEW (parsed but not committed), COMMITTED
+  // (upserts applied), VOIDED (operator rolled back).
+  status              String   @default("PREVIEW")
+
+  sourceSystem        String   // "JONAS"
+  sourceFileName      String?
+  sourceFileHash      String   // SHA-256 of the uploaded workbook bytes
+  sourceEffectiveDate DateTime // the as-of date carried on the file
+
+  // Row-level roll-ups computed at parse time.
+  rowCount            Int      @default(0)
+  validCount          Int      @default(0)
+  invalidCount        Int      @default(0)
+  warningCount        Int      @default(0)
+
+  // Commit outcome roll-ups.
+  newMemberCount      Int      @default(0)
+  matchedMemberCount  Int      @default(0)
+  billToSelfCount     Int      @default(0)
+  billToResolvedCount Int      @default(0)
+  billToUnresolvedCount Int    @default(0)
+  classificationCount Int      @default(0)
+
+  uploadedByUserId    String?
+  uploadedAt          DateTime @default(now())
+  committedAt         DateTime?
+  committedByUserId   String?
+
+  // Idempotency key (§J MEM-HIST-1): identical bytes + source +
+  // effective-date re-upload is rejected.
+  externalIdentities  MemberExternalIdentity[]
+  historyEntries      MembershipHistoryEntry[]
+  billingRelationships MemberBillingRelationship[]
+
+  @@unique([clubId, sourceSystem, sourceFileHash, sourceEffectiveDate])
+  @@index([clubId, status])
+}
+
+model MembershipHistoryEntry {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  memberId             String
+  member               Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  // Raw source values preserved verbatim per §6 / §15 (no business-
+  // meaning invention from a label; semantic mapping stays in code).
+  sourceStatus              String   // e.g. "S/HOLDER", "RESIGNED", "SPOUSE"
+  sourceMembershipDescription String? // e.g. "Shareholder", "Spouse - Female"
+  sourceCategory1              String? // raw Category#1 code
+  sourceCategory1Description   String? // raw Category#1 description
+  sourceCategory2              String? // raw Category#2 code
+  sourceGolfClassification     String? // raw Golf Classification
+
+  // Interpreted lifecycle status derived deterministically from
+  // sourceStatus (ACTIVE / RESIGNED / INACTIVE / APPLICANT /
+  // UNKNOWN). "UNKNOWN" when the mapping is not deterministic.
+  interpretedStatus  String
+
+  // Shareholder flag — true only when the sourceStatus is one of the
+  // SHAREHOLDER_SOURCE_STATUSES set in code; false otherwise. See
+  // mem-master-semantics.ts for the mapping.
+  isShareholder      Boolean @default(false)
+
+  // Half-open window.
+  effectiveFrom      DateTime
+  effectiveTo        DateTime?
+
+  // Provenance — binds this record to its source batch.
+  sourceSystem         String
+  sourceEffectiveDate  DateTime
+  importBatchId        String?
+  importBatch          MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt            DateTime @default(now())
+
+  @@index([clubId, memberId, effectiveFrom])
+  @@index([clubId, effectiveFrom, effectiveTo])
+}
+
+model MemberBillingRelationship {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+
+  // The member whose bills land on this relationship.
+  memberId           String
+  member             Member   @relation("BillingRelationshipMember", fields: [memberId], references: [id], onDelete: Cascade)
+
+  // The member who PAYS. When the source Member # to Bill resolves
+  // to a known Member in the same import, this is that Member's id.
+  // When the source is SELF (bill-to == memberNumber) → equals
+  // memberId. When unresolved → null, and sourceUnresolvedBillTo
+  // carries the raw value for operator review.
+  billedByMemberId   String?
+  billedByMember     Member?  @relation("BillingRelationshipBilledBy", fields: [billedByMemberId], references: [id])
+
+  // Outcome tag — SELF / RESOLVED / UNRESOLVED / INVALID.
+  outcome            String
+
+  // Preserved from the source for forensic review.
+  sourceBillToExternalIdentifier String?
+
+  importBatchId      String?
+  importBatch        MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt          DateTime @default(now())
+
+  @@unique([clubId, memberId])
+  @@index([clubId, billedByMemberId])
 }
 
 // ---------------------------------------------------------------------------

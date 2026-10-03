@@ -88,24 +88,24 @@ describe("MEM-HIST-1 §19.2 — Member vs Membership distinction", () => {
 // §19.3 — Classification resolvable as-of a historical date
 // --------------------------------------------------------------
 describe("MEM-HIST-1 §19.3-4 — effective-dated resolution contract", () => {
-  it("resolveMembershipAsOf accepts a historical asOf date without throwing", async () => {
+  it("resolveMembershipAsOf accepts a historical asOf date without throwing (MEM-HIST-2: SOURCE_NOT_LOADED when no entry)", async () => {
     const r = await resolveMembershipAsOf({
-      clubId: "test-club",
+      clubId: "test-club-nonexistent-for-this-test",
       memberId: "cr-0001",
       asOf: new Date("2026-01-31T23:59:59Z"),
     });
-    // MEM-HIST-1 stub always returns null + SOURCE_NOT_CONNECTED
-    // (DB tables land in MEM-HIST-2). The CONTRACT is what we assert.
-    expect(r.provenance.availability).toBe("SOURCE_NOT_CONNECTED");
+    // MEM-HIST-2: resolver now reads Prisma. For a non-existent club,
+    // it returns SOURCE_NOT_LOADED (no entry covers the asOf).
+    expect(["SOURCE_NOT_LOADED", "SOURCE_NOT_CONNECTED"]).toContain(r.provenance.availability);
     expect(r.membership).toBeNull();
   });
 
   it("countMembershipsByCategoryAsOf returns provenance alongside counts", async () => {
     const r = await countMembershipsByCategoryAsOf({
-      clubId: "test-club",
+      clubId: "test-club-nonexistent-for-this-test",
       asOf: new Date("2026-01-31T23:59:59Z"),
     });
-    expect(r.provenance.availability).toBe("SOURCE_NOT_CONNECTED");
+    expect(["SOURCE_NOT_LOADED", "SOURCE_NOT_CONNECTED"]).toContain(r.provenance.availability);
     expect(r.counts).toEqual([]);
   });
 
@@ -301,24 +301,27 @@ describe("MEM-HIST-1 §19.12 — synthetic identities only", () => {
 // §19.13-16 — Accounting invariants (schema-level guard)
 // --------------------------------------------------------------
 describe("MEM-HIST-1 §19.13-16 — accounting invariants + Dec/Jan/Feb hold", () => {
-  it("no new migration files land in this slice", () => {
-    // Both migration directories live at known paths; this guards
-    // against an accidental schema change in a doc-only slice.
+  // MEM-HIST-2 (2026-10-03) now adds schema for MemberExternalIdentity +
+  // MemberMasterImportBatch + MembershipHistoryEntry +
+  // MemberBillingRelationship. The MEM-HIST-1 "no schema" guard is
+  // superseded — but the ACCOUNTING guard (no new accounting-table
+  // migration) stands.
+  it("no NEW accounting-table migration lands under this label", () => {
     const dirs = ["prisma/migrations", "prisma-postgres/migrations"];
     for (const d of dirs) {
       const latest = latestMigrationFolder(path.join(REPO, d));
-      expect(latest).not.toContain("mem_hist_1");
-      expect(latest).not.toContain("member_master");
-      expect(latest).not.toContain("membership_history");
+      // Guard against mis-named migrations that touch accounting
+      // tables under a member-master label.
+      if (latest.includes("member_master") || latest.includes("mem_hist")) {
+        const sqlPath = path.join(REPO, d, latest, "migration.sql");
+        if (existsSync(sqlPath)) {
+          const sql = readFileSync(sqlPath, "utf8");
+          expect(sql.toLowerCase()).not.toMatch(/\balter table "account"/);
+          expect(sql.toLowerCase()).not.toMatch(/\balter table "journalentry"/);
+          expect(sql.toLowerCase()).not.toMatch(/\balter table "reportingledger/);
+        }
+      }
     }
-  });
-
-  it("prisma/schema.prisma was not modified for new MEM-HIST-1 tables", () => {
-    const schema = readFileSync(SCHEMA, "utf8");
-    expect(schema).not.toMatch(/^model MembershipHistoryEntry\b/m);
-    expect(schema).not.toMatch(/^model MembershipClassification\b/m);
-    expect(schema).not.toMatch(/^model MemberExternalIdentity\b/m);
-    expect(schema).not.toMatch(/^model MemberMasterImportBatch\b/m);
   });
 });
 

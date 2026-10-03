@@ -50,11 +50,12 @@ tests/fixtures/ar-aging/*-REAL.*
 **/Jan*31*2026*Aged*AR*listing*.xlsx
 **/Aged*AR*listing*.xlsx
 
-# --- MEM-HIST-1: Member Master real-identity source files ----------------
+# --- MEM-HIST-1 / MEM-HIST-2: Member Master real-identity source files ---
 # The real Jonas Member Master export MUST NEVER enter source control.
-# Only sanitized workbooks with synthetic external identifiers (CR-XXXXXXX)
-# and synthetic display names (Member XXXX) may live under
-# tests/fixtures/member-master/.
+# Only sanitized workbooks (per MEM-HIST-2 §1 — "Membership Master -
+# Sanitized for Spectre.xlsx" with synthetic human names + preserved
+# Jonas Member Numbers) may be used, and even those stay on the
+# founder's workstation outside the repo.
 tests/fixtures/member-master/*.real.*
 tests/fixtures/member-master/sources/
 tests/fixtures/member-master/*-REAL.*
@@ -62,6 +63,8 @@ tests/fixtures/member-master/*-REAL.*
 **/Member*Master*.xlsx
 **/Member*List*.xlsx
 **/Members*Export*.xlsx
+**/Membership*Master*.xlsx
+**/Membership Master - Sanitized for Spectre.xlsx
 # Founder's local sanitization salt — never commit.
 .sanitize-salt
 .sanitize-salt.*

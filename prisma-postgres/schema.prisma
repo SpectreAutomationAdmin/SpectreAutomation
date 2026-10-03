@@ -67,6 +67,10 @@ model Club {
   applicants                       Applicant[]
   members                          Member[]
   memberAccounts                   MemberAccount[]
+  memberExternalIdentities         MemberExternalIdentity[]
+  memberMasterImportBatches        MemberMasterImportBatch[]
+  membershipHistoryEntries         MembershipHistoryEntry[]
+  memberBillingRelationships       MemberBillingRelationship[]
   charges                          Charge[]
   payments                         Payment[]
   paymentMethods                   PaymentMethod[]
@@ -1266,6 +1270,13 @@ model Member {
   groupAssignments             MemberGroupAssignment[]
   customFieldValues            MemberCustomFieldValue[]
 
+  // MEM-HIST-2 (2026-10-03) — external identity + membership history +
+  // billing-relationship back-references.
+  externalIdentities             MemberExternalIdentity[]
+  membershipHistoryEntries       MembershipHistoryEntry[]
+  billingRelationships           MemberBillingRelationship[]      @relation("BillingRelationshipMember")
+  billingRelationshipsAsBilledBy MemberBillingRelationship[]      @relation("BillingRelationshipBilledBy")
+
   // Step 16 — member numbers are unique INSIDE a club. Two different
   // clubs can both have memberNumber "1432"; tenant-scoped lookup
   // resolves them independently. Prior schema had no constraint at
@@ -1803,6 +1814,125 @@ model MemberHouseholdMember {
   updatedAt       DateTime  @updatedAt
 
   @@index([memberId])
+}
+
+// ---------------------------------------------------------------------------
+// MEM-HIST-2 (2026-10-03) — Member Master architecture foundation
+// ---------------------------------------------------------------------------
+
+model MemberExternalIdentity {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+  memberId           String
+  member             Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  sourceSystem       String
+  externalIdentifier String
+
+  effectiveFrom      DateTime @default(now())
+  effectiveTo        DateTime?
+
+  importBatchId      String?
+  importBatch        MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([clubId, sourceSystem, externalIdentifier])
+  @@index([clubId, memberId])
+}
+
+model MemberMasterImportBatch {
+  id                  String   @id @default(cuid())
+  clubId              String
+  club                Club     @relation(fields: [clubId], references: [id])
+
+  status              String   @default("PREVIEW")
+
+  sourceSystem        String
+  sourceFileName      String?
+  sourceFileHash      String
+  sourceEffectiveDate DateTime
+
+  rowCount            Int      @default(0)
+  validCount          Int      @default(0)
+  invalidCount        Int      @default(0)
+  warningCount        Int      @default(0)
+
+  newMemberCount      Int      @default(0)
+  matchedMemberCount  Int      @default(0)
+  billToSelfCount     Int      @default(0)
+  billToResolvedCount Int      @default(0)
+  billToUnresolvedCount Int    @default(0)
+  classificationCount Int      @default(0)
+
+  uploadedByUserId    String?
+  uploadedAt          DateTime @default(now())
+  committedAt         DateTime?
+  committedByUserId   String?
+
+  externalIdentities  MemberExternalIdentity[]
+  historyEntries      MembershipHistoryEntry[]
+  billingRelationships MemberBillingRelationship[]
+
+  @@unique([clubId, sourceSystem, sourceFileHash, sourceEffectiveDate])
+  @@index([clubId, status])
+}
+
+model MembershipHistoryEntry {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+  memberId             String
+  member               Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  sourceStatus                 String
+  sourceMembershipDescription  String?
+  sourceCategory1              String?
+  sourceCategory1Description   String?
+  sourceCategory2              String?
+  sourceGolfClassification     String?
+
+  interpretedStatus    String
+  isShareholder        Boolean @default(false)
+
+  effectiveFrom        DateTime
+  effectiveTo          DateTime?
+
+  sourceSystem         String
+  sourceEffectiveDate  DateTime
+  importBatchId        String?
+  importBatch          MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt            DateTime @default(now())
+
+  @@index([clubId, memberId, effectiveFrom])
+  @@index([clubId, effectiveFrom, effectiveTo])
+}
+
+model MemberBillingRelationship {
+  id                 String   @id @default(cuid())
+  clubId             String
+  club               Club     @relation(fields: [clubId], references: [id])
+
+  memberId           String
+  member             Member   @relation("BillingRelationshipMember", fields: [memberId], references: [id], onDelete: Cascade)
+
+  billedByMemberId   String?
+  billedByMember     Member?  @relation("BillingRelationshipBilledBy", fields: [billedByMemberId], references: [id])
+
+  outcome            String
+
+  sourceBillToExternalIdentifier String?
+
+  importBatchId      String?
+  importBatch        MemberMasterImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt          DateTime @default(now())
+
+  @@unique([clubId, memberId])
+  @@index([clubId, billedByMemberId])
 }
 
 // ---------------------------------------------------------------------------
