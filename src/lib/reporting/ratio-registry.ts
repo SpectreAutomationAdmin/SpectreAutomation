@@ -575,14 +575,32 @@ export async function resolveJanuaryMetricSet(opts: {
       denominator: membersEquity,
     }),
 
-    arCurrentPct: metric({
-      key: "ar-current-pct",
-      name: "AR Current %",
-      formula: "AR Current bucket ÷ Total AR",
-      value: null,
-      display: "Unavailable",
-      provenance: sourceNotConnected("AR aging source not imported — TB-HIST-12A parser architecture awaits sanitized workbook"),
-    }),
+    arCurrentPct: await (async () => {
+      // AR-HIST-1 §19 — swap SOURCE_NOT_CONNECTED for an AR snapshot
+      // read when a committed snapshot exists for the periodEnd.
+      const { resolveArAgingAsOf } = await import("./ar-aging-resolver");
+      const r = await resolveArAgingAsOf({ clubId, asOf: periodEnd });
+      if (r.provenance.availability === "AVAILABLE" && r.snapshot) {
+        return metric({
+          key: "ar-current-pct",
+          name: "AR Current %",
+          formula: "AR Current bucket ÷ Total AR",
+          value: r.snapshot.currentPct,
+          display: fmtPct(r.snapshot.currentPct),
+          provenance: AVAILABLE_REASON(`AR snapshot batch=${r.snapshot.batchId} effective=${r.snapshot.sourceEffectiveDate.toISOString().slice(0, 10)}`),
+          numerator: r.snapshot.current,
+          denominator: r.snapshot.totalAR,
+        });
+      }
+      return metric({
+        key: "ar-current-pct",
+        name: "AR Current %",
+        formula: "AR Current bucket ÷ Total AR",
+        value: null,
+        display: "Unavailable",
+        provenance: sourceNotConnected(`AR aging source not imported for ${periodEnd.toISOString().slice(0, 10)}`),
+      });
+    })(),
     reserveCoverage: metric({
       key: "reserve-coverage",
       name: "Reserve Coverage",

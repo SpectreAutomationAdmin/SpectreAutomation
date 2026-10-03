@@ -71,6 +71,8 @@ model Club {
   memberMasterImportBatches        MemberMasterImportBatch[]
   membershipHistoryEntries         MembershipHistoryEntry[]
   memberBillingRelationships       MemberBillingRelationship[]
+  arAgingImportBatches             ArAgingImportBatch[]
+  arAgingSnapshotRows              ArAgingSnapshotRow[]
   charges                          Charge[]
   payments                         Payment[]
   paymentMethods                   PaymentMethod[]
@@ -1300,6 +1302,8 @@ model Member {
   membershipHistoryEntries       MembershipHistoryEntry[]
   billingRelationships           MemberBillingRelationship[]      @relation("BillingRelationshipMember")
   billingRelationshipsAsBilledBy MemberBillingRelationship[]      @relation("BillingRelationshipBilledBy")
+  // AR-HIST-1 (2026-10-03) — AR aging snapshot rows per Member.
+  arAgingSnapshotRows            ArAgingSnapshotRow[]             @relation("ArAgingSnapshotRowMember")
 
   // Step 16 — member numbers are unique INSIDE a club. Two different
   // clubs can both have memberNumber "1432"; tenant-scoped lookup
@@ -1339,6 +1343,9 @@ model MemberAccount {
   charges     Charge[]
   payments    Payment[]
   adjustments AccountAdjustment[]
+  // AR-HIST-1 (2026-10-03) — AR aging snapshot rows link here when
+  // the Member has an AR account.
+  arAgingSnapshotRows ArAgingSnapshotRow[]
 }
 
 // -------------------------------------------------------------------
@@ -2002,6 +2009,100 @@ model MemberBillingRelationship {
 
   @@unique([clubId, memberId])
   @@index([clubId, billedByMemberId])
+}
+
+// ---------------------------------------------------------------------------
+// AR-HIST-1 (2026-10-03) — Historical AR aging subledger snapshots
+// ---------------------------------------------------------------------------
+//
+// Non-additive snapshot architecture. Each committed Jonas AR aging
+// workbook writes one ArAgingImportBatch + N ArAgingSnapshotRow rows
+// (one per member AR). NEVER writes Charge / Payment / Statement /
+// JournalEntry.
+
+model ArAgingImportBatch {
+  id                   String   @id @default(cuid())
+  clubId               String
+  club                 Club     @relation(fields: [clubId], references: [id])
+
+  status               String   @default("PREVIEW") // PREVIEW / COMMITTED / VOIDED
+
+  sourceSystem         String   // "JONAS"
+  sourceFileName       String?
+  sourceFileHash       String
+  sourceEffectiveDate  DateTime // the AR aging as-of date
+
+  rowCount             Int      @default(0)
+  invalidCount         Int      @default(0)
+  warningCount         Int      @default(0)
+
+  totalNet             Decimal  @default(0)
+  totalCurrent         Decimal  @default(0)
+  totalOneMonth        Decimal  @default(0)
+  totalTwoMonths       Decimal  @default(0)
+  totalThreeMonths     Decimal  @default(0)
+  totalOverFourMonths  Decimal  @default(0)
+
+  // Member resolution outcomes (counts).
+  matchedMembers       Int      @default(0)
+  unmatchedMembers     Int      @default(0)
+  ambiguousMembers     Int      @default(0)
+  invalidMembers       Int      @default(0)
+
+  // GL reconciliation.
+  glControlAccountNumber String?
+  glControlAccountName   String?
+  glControlBalance     Decimal?
+  reconciliationDifference Decimal?
+  reconciliationStatus String?   // "RECONCILED" / "OUT_OF_BALANCE"
+
+  uploadedByUserId     String?
+  uploadedAt           DateTime @default(now())
+  committedAt          DateTime?
+  committedByUserId    String?
+
+  snapshotRows         ArAgingSnapshotRow[]
+
+  @@unique([clubId, sourceSystem, sourceFileHash, sourceEffectiveDate])
+  @@index([clubId, status])
+  @@index([clubId, sourceEffectiveDate])
+}
+
+model ArAgingSnapshotRow {
+  id                        String   @id @default(cuid())
+  clubId                    String
+  club                      Club     @relation(fields: [clubId], references: [id])
+
+  importBatchId             String
+  importBatch               ArAgingImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  // Member resolution — always required at commit time (commit gate
+  // refuses rows that fail to resolve).
+  memberId                  String
+  member                    Member   @relation("ArAgingSnapshotRowMember", fields: [memberId], references: [id], onDelete: Cascade)
+  memberAccountId           String?
+  memberAccount             MemberAccount? @relation(fields: [memberAccountId], references: [id])
+
+  // Source Member Code preserved verbatim.
+  sourceMemberCode          String
+  sourceMemberName          String?
+
+  netAmount                 Decimal
+  current                   Decimal
+  oneMonth                  Decimal
+  twoMonths                 Decimal
+  threeMonths               Decimal
+  overFourMonths            Decimal
+
+  // Provenance.
+  sourceSystem              String
+  sourceEffectiveDate       DateTime
+
+  createdAt                 DateTime @default(now())
+
+  @@index([clubId, sourceEffectiveDate])
+  @@index([clubId, memberId])
+  @@index([importBatchId])
 }
 
 // ---------------------------------------------------------------------------

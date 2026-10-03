@@ -46,9 +46,13 @@ playwright/.cache/
 tests/fixtures/ar-aging/*.real.*
 tests/fixtures/ar-aging/sources/
 tests/fixtures/ar-aging/*-REAL.*
-# Repository-wide safety net — the founder's exact file name.
+# Repository-wide safety net — the founder's exact file names.
 **/Jan*31*2026*Aged*AR*listing*.xlsx
 **/Aged*AR*listing*.xlsx
+# AR-HIST-1 (2026-10-03) — sanitized AR workbook stays on the founder's
+# workstation; only committed snapshots live in Spectre.
+**/Jan*31*2026*Aged*AR*-*Sanitized*for*Spectre*.xlsx
+**/*Aged*AR*Sanitized*.xlsx
 
 # --- MEM-HIST-1 / MEM-HIST-2: Member Master real-identity source files ---
 # The real Jonas Member Master export MUST NEVER enter source control.
