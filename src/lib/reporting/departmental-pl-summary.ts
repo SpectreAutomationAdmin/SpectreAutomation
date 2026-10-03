@@ -231,3 +231,111 @@ export function buildSilverSpringsDepartmentalPLSummary(opts: {
     notes,
   };
 }
+
+// =============================================================================
+// TB-HIST-11 (2026-10-02) — Coulee / live-tenant Departmental P&L builder.
+//
+// Consumes the TB-HIST-10 snapshot-dimensional resolver's output
+// (`incomeStatementByDepartmentFromSnapshot`) and renders ONE card
+// per real Spectre Department. No Silver Springs seeds, no
+// hardcoded presentational strings, no fabricated budget/trend
+// values.
+//
+// Each card exposes the four reconciled measures from the resolver:
+//   • Revenue
+//   • Cost of Sales
+//   • Operating Expenses
+//   • Net Income (color-toned by sign)
+// plus — when the real-data source doesn't carry a budget — an
+// elegant "unavailable" row for Budget / Variance (directive §2
+// forbids suppressing Actual just because Budget is absent).
+//
+// The output's `dataSource` is "live" so the monthly-package.ts
+// redactor can distinguish real-data chapters from seeded demo
+// chapters and leave them alone.
+// =============================================================================
+
+type DeptRow = {
+  departmentCode: string | null;
+  departmentName: string;
+  revenue: { toString: () => string };
+  cogs: { toString: () => string };
+  opex: { toString: () => string };
+  netIncome: { toString: () => string };
+};
+
+function fmtMoney(n: { toString: () => string }): string {
+  const raw = Number(n.toString());
+  if (!Number.isFinite(raw)) return "—";
+  const sign = raw < 0 ? "-" : "";
+  const abs = Math.abs(raw);
+  return `${sign}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function toneForSigned(n: { toString: () => string }, debitSide: boolean): DepartmentalTone {
+  const v = Number(n.toString());
+  if (!Number.isFinite(v) || v === 0) return "neutral";
+  // Revenue + NetIncome: positive = favorable, negative = risk.
+  // Expenses: positive magnitude = neutral (expected spend); not toned.
+  if (debitSide) return "neutral";
+  return v > 0 ? "favorable" : "risk";
+}
+
+export function buildCouleeDepartmentalPLSummary(opts: {
+  clubName: string;
+  period: ReportingPeriod;
+  rows: ReadonlyArray<DeptRow>;
+}): DepartmentalPLSummary {
+  const { period, clubName, rows } = opts;
+
+  // Build one card per real Spectre Department. Nondepartmental (null
+  // departmentCode) rolls up here as its own card too — this surface
+  // is for Management, not the Board, so transparency into the
+  // Balance-Sheet-marker bucket is useful.
+  const cards: DepartmentCard[] = rows.map((r) => {
+    const netTone = toneForSigned(r.netIncome, false);
+    const netVal = Number(r.netIncome.toString());
+    const pillLabel = netVal >= 0
+      ? `+${fmtMoney(r.netIncome)} YTD`
+      : `${fmtMoney(r.netIncome)} YTD`;
+    return {
+      key: (r.departmentCode ?? "nondepartmental").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      name: r.departmentName,
+      pill: { label: pillLabel, tone: netTone },
+      rows: [
+        { key: "revenue",      label: "Revenue",              value: fmtMoney(r.revenue),  tone: toneForSigned(r.revenue, false) },
+        { key: "cost-of-sales", label: "Cost of Sales",       value: fmtMoney(r.cogs) },
+        { key: "operating-expenses", label: "Operating Expenses", value: fmtMoney(r.opex) },
+        { key: "net-income",   label: "Net Income",           value: fmtMoney(r.netIncome), tone: netTone },
+        // TB-HIST-11 §2 — Budget / Variance explicitly unavailable
+        // (Coulee has no committed budget source yet). Rows render
+        // the "—" sentinel + neutral tone so the eye reads them as
+        // "data not available", not as $0 budget.
+        { key: "budget-ytd",   label: "Budget YTD",           value: "Unavailable" },
+        { key: "variance-vs-budget", label: "Variance vs. Budget", value: "Unavailable" },
+      ],
+    };
+  });
+
+  return {
+    dataSource: "live" as ReportingDataSource,
+    eyebrow: `${clubName} · Departmental Detail`,
+    title: "Departmental P&L Summary",
+    periodLabel: period.statementHeaderLabel,
+    introNote:
+      "How each department is performing in the current period. Values are sourced directly from the committed historical trial balance; budget comparisons are shown as unavailable until a budget source is loaded.",
+    statementNumber: "Statement 08 of 14",
+    documentChip: "Departmental Detail",
+    preparedFor: "Management Level",
+    managementNotice: {
+      eyebrow: "Management Document",
+      body:
+        "This statement renders real department-level activity from the committed Jonas Trial Balance snapshot. The Board sees the combined Income Statement; this surface decomposes it by Spectre Department. Budget comparisons are omitted until a tenant budget importer lands.",
+    },
+    cards,
+    notes: {
+      eyebrow: "Department Notes",
+      items: [],
+    },
+  };
+}

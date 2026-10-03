@@ -24,6 +24,8 @@ import { buildEquityCommentary } from "@/lib/reporting/equity-commentary";
 // auxiliary inputs and demo fallbacks must not render in that
 // tenant's package.
 import { hasCommittedRealTrialBalance, isDemoTenant } from "@/lib/accounting/balance";
+// TB-HIST-11 (2026-10-02) — Chapter X real-data resolver.
+import { incomeStatementByDepartmentFromSnapshot } from "@/lib/accounting/dept-pl-from-snapshot";
 
 /** TB-HIST-2b (2026-10-01) §1 — canonical unavailable sentinel. */
 const UNAVAILABLE_TEXT = "Data not available for this reporting period.";
@@ -62,6 +64,8 @@ import {
 } from "@/lib/reporting/operating-statistics";
 import {
   buildSilverSpringsDepartmentalPLSummary,
+  // TB-HIST-11 (2026-10-02) — real-data Chapter X builder.
+  buildCouleeDepartmentalPLSummary,
   type DepartmentalPLSummary,
 } from "@/lib/reporting/departmental-pl-summary";
 import {
@@ -93,6 +97,8 @@ import { buildDemoCapitalScorecardSnapshot } from "@/lib/reporting/capital-score
 import {
   getStewardshipForClub,
   SILVER_SPRINGS_STEWARDSHIP_AUX,
+  // TB-HIST-11 (2026-10-02) — unavailable-shape sibling for live tenants.
+  UNAVAILABLE_STEWARDSHIP_AUX,
 } from "@/lib/reporting/stewardship-dashboard-adapter";
 import {
   getCapitalFundForClub,
@@ -1757,13 +1763,13 @@ export async function getMonthlyReportingPackage(
     // TB-HIST-2 (2026-10-01) — Silver Springs demo auxiliary values
     // still flow here because the StewardshipAuxiliaryInputs shape is
     // large and no zero-constant exists yet. Tracked as a remaining
-    // TB-HIST-8 (2026-10-02) — Stewardship auxiliary still seeded on
-    // live tenants pending a per-tenant resolver (follow-up slice).
-    // The resolver's API is seed-required (non-optional) so a
-    // neutral-state refactor is deferred to TB-HIST-9+. The
-    // Executive-Summary and SOA auxiliaries ARE guarded by hasRealData
-    // in this slice because their APIs already accept `undefined`.
-    auxiliaryInputs: SILVER_SPRINGS_STEWARDSHIP_AUX,
+    // TB-HIST-11 (2026-10-02) — Stewardship auxiliary now guarded.
+    // Live tenants consume `UNAVAILABLE_STEWARDSHIP_AUX` (zeros +
+    // "Unavailable" labels) rather than the Silver Springs seed, so
+    // no Silver Springs numerics flow into the dual-read output.
+    // The redactor still sweeps the chapter to UNAVAILABLE for live
+    // tenants as defence-in-depth per directive §7.
+    auxiliaryInputs: hasRealData ? UNAVAILABLE_STEWARDSHIP_AUX : SILVER_SPRINGS_STEWARDSHIP_AUX,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
       capitalScorecard: buildDemoCapitalScorecardSnapshot(),
@@ -1809,17 +1815,30 @@ export async function getMonthlyReportingPackage(
     clubName: club.name,
     period: reportingPeriod,
     ledger: productionLedger,
-    // TB-HIST-8 (2026-10-02) — Capital-fund auxiliary still seeded on
-    // live tenants pending a per-tenant Reserve-Study / Capital-
-    // Project resolver (follow-up slice). The resolver's API is
-    // seed-required; a neutral-state refactor is deferred to
-    // TB-HIST-9+.
-    auxiliaryInputs: SILVER_SPRINGS_CAPITAL_FUND_AUX,
-    demoFallback: () =>
-      buildSilverSpringsCapitalFundStatement({
-        clubName: club.name,
-        period: reportingPeriod,
-      }),
+    // TB-HIST-11 (2026-10-02) — Capital Fund auxiliary + demoFallback
+    // guarded by `hasRealData` (mirrors the TB-HIST-8 Executive
+    // Summary + SOA pattern). Live tenants pass `undefined` for
+    // auxiliaryInputs — the adapter falls back internally to
+    // `EMPTY_CAPITAL_FUND_AUXILIARY_INPUTS`, so no `SILVER_SPRINGS_*`
+    // reference reaches the live Coulee path. The demoFallback is
+    // only invoked when `resolveBsAndIs` can't produce snapshots —
+    // which cannot happen for Coulee (committed TB exists), so the
+    // live branch's thunk is a never-called stub that returns a
+    // minimal unavailable-marker shape. The redactor still sweeps
+    // Chapter V's output to UNAVAILABLE for live tenants if the
+    // dataSource comes back "demo"; this change ensures that even
+    // if the redactor were disabled, no Silver Springs numbers can
+    // flow through on live tenants.
+    auxiliaryInputs: hasRealData ? undefined : SILVER_SPRINGS_CAPITAL_FUND_AUX,
+    demoFallback: hasRealData
+      ? () => {
+          throw new Error("Capital Fund demoFallback invoked on a live tenant — resolveBsAndIs should always return a snapshot when hasRealData is true. This is a bug.");
+        }
+      : () =>
+          buildSilverSpringsCapitalFundStatement({
+            clubName: club.name,
+            period: reportingPeriod,
+          }),
   });
 
   // Cover — Executive Summary (At-a-Glance KPIs + headline narrative
@@ -1878,6 +1897,35 @@ export async function getMonthlyReportingPackage(
         viewerCanDrillDown,
       }),
   });
+
+  // TB-HIST-11 (2026-10-02) — Chapter X real-data preload. When the
+  // tenant has committed Jonas Trial Balance snapshots the chapter
+  // consumes the TB-HIST-10 snapshot-dimensional resolver's output
+  // via `buildCouleeDepartmentalPLSummary`; otherwise it falls back
+  // to the Silver Springs demo factory. The resolver call reads the
+  // same YTD-slice path the consolidated Income Statement uses, so
+  // its totals reconcile to Chapter IV by construction. Reconciliation
+  // hard-gate (`result.reconciliation.isBalanced`) is proven in
+  // src/lib/accounting/dept-pl-from-snapshot.ts and in the staging
+  // acceptance; this call site does not need to re-prove it.
+  let departmentalPLSummary: ReturnType<typeof buildSilverSpringsDepartmentalPLSummary>;
+  if (hasRealData) {
+    const deptPL = await incomeStatementByDepartmentFromSnapshot(
+      club.id,
+      reportingPeriod.periodStart,
+      reportingPeriod.periodEnd,
+    );
+    departmentalPLSummary = buildCouleeDepartmentalPLSummary({
+      clubName: club.name,
+      period: reportingPeriod,
+      rows: deptPL.rows,
+    });
+  } else {
+    departmentalPLSummary = buildSilverSpringsDepartmentalPLSummary({
+      clubName: club.name,
+      period: reportingPeriod,
+    });
+  }
 
   const pkg: MonthlyReportingPackage = {
     club: {
@@ -2232,11 +2280,12 @@ export async function getMonthlyReportingPackage(
     }),
 
     // Chapter X — Departmental P&L Summary.
-    // Owned end-to-end by src/lib/reporting/departmental-pl-summary.ts.
-    departmentalPLSummary: buildSilverSpringsDepartmentalPLSummary({
-      clubName: club.name,
-      period: reportingPeriod,
-    }),
+    // TB-HIST-11 (2026-10-02) — resolved above into
+    // `departmentalPLSummary`. For live tenants (committed TB) the
+    // value comes from `buildCouleeDepartmentalPLSummary` fed by
+    // the TB-HIST-10 snapshot-dimensional resolver; for demo
+    // tenants it comes from the Silver Springs factory.
+    departmentalPLSummary,
 
     // Chapter XI — Monthly Weather Summary.
     // Owned end-to-end by src/lib/reporting/monthly-weather-summary.ts.
@@ -2884,7 +2933,14 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
     capitalProjectTracker: makeUnavailable(pkg.capitalProjectTracker, u),
     accountsReceivableAging: makeUnavailable(pkg.accountsReceivableAging, u),
     operatingStatistics: makeUnavailable(pkg.operatingStatistics, u),
-    departmentalPLSummary: makeUnavailable(pkg.departmentalPLSummary, u),
+    // TB-HIST-11 (2026-10-02) — Chapter X now has a real-data path
+    // (buildCouleeDepartmentalPLSummary emits dataSource: "live").
+    // Leave real-data chapters alone — the redactor only wipes
+    // chapters whose dataSource remains "demo".
+    departmentalPLSummary:
+      pkg.departmentalPLSummary.dataSource === "live"
+        ? pkg.departmentalPLSummary
+        : makeUnavailable(pkg.departmentalPLSummary, u),
     departmentalPayrollAnalysis: makeUnavailable(pkg.departmentalPayrollAnalysis, u),
     foodBeverageStatistics: makeUnavailable(pkg.foodBeverageStatistics, u),
     inventoryAnalysis: makeUnavailable(pkg.inventoryAnalysis, u),

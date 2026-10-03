@@ -703,6 +703,78 @@ export const SILVER_SPRINGS_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
   },
 };
 
+// TB-HIST-11 (2026-10-02) — the live-tenant counterpart. A tenant
+// with real committed accounting data (`hasCommittedRealTrialBalance`
+// true) passes THIS auxiliary — NOT the Silver Springs seed — into
+// `getStewardshipForClub`. Every budget / policy / peer-median
+// numeric is zero / null so the dual-read output is numerically
+// empty; the redactor still sweeps the chapter to UNAVAILABLE for
+// live tenants, but even without the sweep, zero Silver Springs
+// values would ever reach a live Coulee screen.
+//
+// Why this + the redactor BOTH: the directive (§7) requires that
+// live tenants NOT consume demo data in the first place. The
+// redactor remains as defence-in-depth; this constant is the
+// primary mechanism.
+export const UNAVAILABLE_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
+  budget: {
+    duesRevenueYtd: 0,
+    totalOperatingRevenueYtd: 0,
+    initiationFeeSubsidyYtd: 0,
+    payrollBenefitsYtd: 0,
+    totalCapitalIncomeYtd: 0,
+  },
+  policies: {
+    equityToAssetsGoal: 0,
+    capitalReserveGoal: 0,
+    netAvailableCapitalGoal: 0,
+    netPPEGoal: 0,
+    breakEvenLowerPct: 0,
+    breakEvenUpperPct: 0,
+  },
+  operational: {
+    golfRoundsActual: 0,
+    golfRoundsBudget: 0,
+    fbCoversActual: 0,
+    fbCoversBudget: 0,
+    fbSubsidy: null,
+  },
+  capitalSupporting: {
+    capitalReserveBalance: 0,
+    netAvailableCapital: 0,
+    netCapital: 0,
+    depreciation: 0,
+    longTermDebt: null,
+    netPPE: 0,
+    grossPPE: 0,
+  },
+  equity: {
+    actualCagrBps: 0,
+    bestInClassCagrBps: 0,
+    minimumRequiredCagrBps: 0,
+  },
+  reserveCoverage: {
+    actualPct: 0,
+    facBenchmarkPct: 0,
+    balanceLabel: "Unavailable",
+  },
+  kpiThresholds: {
+    duesRevenuePolicyLo: 0,
+    duesRevenuePolicyHi: 0,
+    duesRevenuePeerMedianLabel: "Unavailable",
+    payrollPlan: 0,
+    payrollPeerMedianLabel: "Unavailable",
+    noiMarginPlan: 0,
+    noiMarginPeerMedianLabel: "Unavailable",
+    debtEquityCeiling: 0,
+    debtEquityPeerMedianLabel: "Unavailable",
+    ppeReinvestmentCautionFloor: 0,
+    ppeReinvestmentPeerMedianLabel: "Unavailable",
+    workingCapitalPolicyFloor: 0,
+  },
+  auxiliaryKpiCards: SILVER_SPRINGS_STEWARDSHIP_AUX.auxiliaryKpiCards,
+};
+
 // =============================================================================
 // KPI card builders — derive each row from snapshot data + thresholds
 // =============================================================================
