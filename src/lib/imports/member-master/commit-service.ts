@@ -61,6 +61,9 @@ export async function commitJonasMemberMasterBatch(opts: {
 
   // Idempotency check — reject if a prior COMMITTED batch has the
   // same hash + date. We do NOT silently update it.
+  // If a PREVIEW batch exists for the same key, RESUME it (same
+  // batchId) — this makes the pipeline safe against client-side
+  // disconnects mid-way through the 3,080-row commit.
   const existing = await prisma.memberMasterImportBatch.findUnique({
     where: {
       clubId_sourceSystem_sourceFileHash_sourceEffectiveDate: {
@@ -94,23 +97,27 @@ export async function commitJonasMemberMasterBatch(opts: {
   ).catch(() => null))?.[0]?.id ?? undefined;
   // Fallback to cuid-ish via Prisma default if the inline cuid gen
   // fails on SQLite dev. Prisma's @default(cuid()) covers both.
-  const createdBatch = await prisma.memberMasterImportBatch.create({
-    data: {
-      ...(batchId ? { id: batchId } : {}),
-      clubId,
-      status: "PREVIEW",
-      sourceSystem: JONAS,
-      sourceFileName: parsed.sourceFileName,
-      sourceFileHash: parsed.sourceFileHash,
-      sourceEffectiveDate: parsed.sourceEffectiveDate,
-      rowCount: parsed.rows.length,
-      validCount: parsed.rows.length,
-      invalidCount: parsed.invalidRows.length,
-      warningCount: parsed.warnings.length,
-      uploadedByUserId: uploadedByUserId ?? undefined,
-      uploadedAt: now,
-    },
-  });
+  // Resume-safe: if a PREVIEW batch exists for the same idempotency
+  // key, reuse it. Otherwise create a new one.
+  const createdBatch = existing && existing.status === "PREVIEW"
+    ? existing
+    : await prisma.memberMasterImportBatch.create({
+        data: {
+          ...(batchId ? { id: batchId } : {}),
+          clubId,
+          status: "PREVIEW",
+          sourceSystem: JONAS,
+          sourceFileName: parsed.sourceFileName,
+          sourceFileHash: parsed.sourceFileHash,
+          sourceEffectiveDate: parsed.sourceEffectiveDate,
+          rowCount: parsed.rows.length,
+          validCount: parsed.rows.length,
+          invalidCount: parsed.invalidRows.length,
+          warningCount: parsed.warnings.length,
+          uploadedByUserId: uploadedByUserId ?? undefined,
+          uploadedAt: now,
+        },
+      });
 
   let newMembers = 0;
   let matchedMembers = 0;
@@ -213,25 +220,37 @@ export async function commitJonasMemberMasterBatch(opts: {
 
     memberIdByMemberNo.set(row.memberNumber, memberId);
 
-    // Phase 2 — Membership history entry.
-    await prisma.membershipHistoryEntry.create({
-      data: {
+    // Phase 2 — Membership history entry. Idempotent: skip if an
+    // entry already exists for (clubId, memberId, importBatchId)
+    // (set when a prior interrupted run already wrote it).
+    const existingHistory = await prisma.membershipHistoryEntry.findFirst({
+      where: {
         clubId,
         memberId,
-        sourceStatus: row.sourceStatus,
-        sourceMembershipDescription: row.sourceMembershipDescription,
-        sourceCategory1: row.sourceCategory1,
-        sourceCategory1Description: row.sourceCategory1Description,
-        sourceCategory2: row.sourceCategory2,
-        sourceGolfClassification: row.sourceGolfClassification,
-        interpretedStatus: row.interpretedStatus,
-        isShareholder: row.isShareholder,
-        effectiveFrom: parsed.sourceEffectiveDate,
-        sourceSystem: JONAS,
-        sourceEffectiveDate: parsed.sourceEffectiveDate,
         importBatchId: createdBatch.id,
       },
+      select: { id: true },
     });
+    if (!existingHistory) {
+      await prisma.membershipHistoryEntry.create({
+        data: {
+          clubId,
+          memberId,
+          sourceStatus: row.sourceStatus,
+          sourceMembershipDescription: row.sourceMembershipDescription,
+          sourceCategory1: row.sourceCategory1,
+          sourceCategory1Description: row.sourceCategory1Description,
+          sourceCategory2: row.sourceCategory2,
+          sourceGolfClassification: row.sourceGolfClassification,
+          interpretedStatus: row.interpretedStatus,
+          isShareholder: row.isShareholder,
+          effectiveFrom: parsed.sourceEffectiveDate,
+          sourceSystem: JONAS,
+          sourceEffectiveDate: parsed.sourceEffectiveDate,
+          importBatchId: createdBatch.id,
+        },
+      });
+    }
     classifications++;
   }
 

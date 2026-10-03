@@ -288,7 +288,11 @@ describe("MEM-HIST-2 §27 — IMPORT: preview is pure; idempotency key defined",
 describe("MEM-HIST-2 §27 — REPORTING: October source does not pollute January", () => {
   it("MembershipHistoryEntry effectiveFrom equals sourceEffectiveDate (not NOW)", () => {
     const src = readFileSync(COMMIT, "utf8");
-    expect(src).toMatch(/membershipHistoryEntry\.create[\s\S]{0,500}effectiveFrom:\s*parsed\.sourceEffectiveDate/);
+    // The resume-safe refactor splits the create behind an existence
+    // check. Grep looser for the key invariant:
+    //   `effectiveFrom: parsed.sourceEffectiveDate`
+    // appears inside a `prisma.membershipHistoryEntry.create` call.
+    expect(src).toMatch(/membershipHistoryEntry\.create[\s\S]{0,1000}effectiveFrom:\s*parsed\.sourceEffectiveDate/);
   });
 
   it("resolver's as-of filter uses half-open window (lte effectiveFrom + gt effectiveTo)", () => {
