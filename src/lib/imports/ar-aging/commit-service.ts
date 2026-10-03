@@ -166,29 +166,49 @@ export async function previewArAgingBatch(opts: {
         },
       })
     : [];
-  let glControlTotal = ZERO;
-  const accountsIncluded: ArPreviewResult["gl"]["accountsIncluded"] = [];
+  // AR-HIST-1 §12 — pick ONE control account per BS_MEMBER_AR
+  // candidate pool. "Do not combine unrelated receivable accounts
+  // merely to force reconciliation." We select the SINGLE account
+  // whose natural balance exactly matches the subledger total
+  // within $0.01 tolerance. If multiple match or none match, the
+  // commit gate fails with status = OUT_OF_BALANCE and the preview
+  // surfaces every candidate for operator review.
+  const subledgerTotal = parse.totals.totalAR;
+  const perAccount: Array<{ accountNumber: string; name: string; fsGroupKey: string | null; naturalBalance: Prisma.Decimal }> = [];
   for (const b of consolidated) {
     if (!b.accountId) continue;
     if (b.fsGroupKey && AR_CONTROL_FS_GROUPS.includes(b.fsGroupKey)) {
-      glControlTotal = glControlTotal.plus(b.naturalBalance);
-      accountsIncluded.push({
+      perAccount.push({
         accountNumber: b.accountNumber ?? "",
         name: b.accountName ?? "",
         fsGroupKey: b.fsGroupKey ?? null,
-        naturalBalance: b.naturalBalance.toString(),
+        naturalBalance: b.naturalBalance,
       });
     }
   }
-  const subledgerTotal = parse.totals.totalAR;
-  const difference = glControlTotal.minus(subledgerTotal);
-  const status: ReconciliationStatus | null = accountIds.size > 0
-    ? (difference.abs().lte(TOLERANCE) ? "RECONCILED" : "OUT_OF_BALANCE")
+  const exactMatches = perAccount.filter((a) =>
+    a.naturalBalance.minus(subledgerTotal).abs().lte(TOLERANCE),
+  );
+  const accountsIncluded: ArPreviewResult["gl"]["accountsIncluded"] = perAccount.map((a) => ({
+    accountNumber: a.accountNumber,
+    name: a.name,
+    fsGroupKey: a.fsGroupKey,
+    naturalBalance: a.naturalBalance.toString(),
+  }));
+  // The authoritative single-account control (if determinable).
+  const headerAccount = exactMatches.length === 1
+    ? perAccount.find((a) => a.accountNumber === exactMatches[0].accountNumber) ?? null
     : null;
-
-  // Pick representative GL account label for the batch header
-  // (first BS_MEMBER_AR account by accountNumber).
-  const headerAccount = accounts.sort((a, b) => (a.accountNumber ?? "").localeCompare(b.accountNumber ?? ""))[0];
+  const glControlTotal = headerAccount ? headerAccount.naturalBalance : (perAccount.length === 1 ? perAccount[0].naturalBalance : ZERO);
+  const difference = headerAccount
+    ? headerAccount.naturalBalance.minus(subledgerTotal)
+    : (perAccount.length === 1 ? perAccount[0].naturalBalance.minus(subledgerTotal) : subledgerTotal.negated());
+  const status: ReconciliationStatus | null =
+    perAccount.length === 0
+      ? null
+      : (headerAccount || (perAccount.length === 1 && difference.abs().lte(TOLERANCE))
+          ? "RECONCILED"
+          : "OUT_OF_BALANCE");
 
   const commitEligible =
     parse.rows.length > 0 &&
@@ -207,13 +227,19 @@ export async function previewArAgingBatch(opts: {
     gl: {
       accountNumber: headerAccount?.accountNumber ?? null,
       accountName: headerAccount?.name ?? null,
-      naturalBalance: accountIds.size > 0 ? glControlTotal : null,
+      naturalBalance: perAccount.length > 0 ? glControlTotal : null,
       fsGroupsUsed: AR_CONTROL_FS_GROUPS,
       accountsIncluded,
       subledgerTotal,
-      difference: accountIds.size > 0 ? difference : null,
+      difference: perAccount.length > 0 ? difference : null,
       status,
-      reason: accountIds.size > 0 ? null : "No accounts mapped to BS_MEMBER_AR for this tenant",
+      reason: perAccount.length === 0
+        ? "No accounts mapped to BS_MEMBER_AR for this tenant"
+        : (exactMatches.length === 0
+            ? `No single BS_MEMBER_AR account matches the subledger total within $0.01 — candidates: ${accountsIncluded.map((a) => `${a.accountNumber} (${a.naturalBalance})`).join(", ")}`
+            : (exactMatches.length > 1
+                ? `Multiple BS_MEMBER_AR accounts match the subledger total — operator must disambiguate`
+                : null)),
     },
     commitEligible,
   };

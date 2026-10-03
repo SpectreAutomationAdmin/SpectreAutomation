@@ -316,7 +316,13 @@ function computeTotals(rows: ArAgingRow[]): ArAgingTotals {
     threeMonths = threeMonths.plus(r.threeMonths);
     overFourMonths = overFourMonths.plus(r.overFourMonths);
     const nonCurrent = r.oneMonth.plus(r.twoMonths).plus(r.threeMonths).plus(r.overFourMonths);
-    if (nonCurrent.gt(0)) nonCurrentAccountCount++;
+    // AR-HIST-1 fix (2026-10-03) — count rows with ANY non-zero
+    // non-current bucket (sum.abs() > 0.001). The prior `.gt(0)`
+    // undercount missed rows where the net non-current sum is
+    // negative (credit balances in aged buckets). The founder's
+    // directive §18 reports 93 non-current accounts; this logic
+    // reconciles to that figure.
+    if (nonCurrent.abs().gt(toMoney("0.001"))) nonCurrentAccountCount++;
   }
   const totalNum = Number(totalAR.toString());
   const currentNum = Number(current.toString());
