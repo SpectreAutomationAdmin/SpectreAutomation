@@ -1931,12 +1931,22 @@ export async function getMonthlyReportingPackage(
   if (hasRealData) {
     try {
       const { prisma: prismaForFreshness } = await import("@/lib/prisma");
+      // End-of-day for the period end — snapshots are committed with
+      // end-of-day `asOf` (e.g. 2026-01-31 23:59:59.999 UTC), whereas
+      // parsePeriodQuery emits start-of-day for the final day of the
+      // month. Compare against end-of-day so the matching Jan 31
+      // snapshot is NOT filtered out of the `lte` window.
+      const pe = reportingPeriod.periodEnd;
+      const periodEndEOD = new Date(Date.UTC(
+        pe.getUTCFullYear(), pe.getUTCMonth(), pe.getUTCDate(),
+        23, 59, 59, 999,
+      ));
       const snap = await prismaForFreshness.reportingLedgerSnapshot.findFirst({
         where: {
           clubId: club.id,
           entityKind: "trial-balance",
           batchState: "committed",
-          asOf: { lte: reportingPeriod.periodEnd },
+          asOf: { lte: periodEndEOD },
         },
         orderBy: [{ asOf: "desc" }, { capturedAt: "desc" }, { createdAt: "desc" }],
         select: { asOf: true },
