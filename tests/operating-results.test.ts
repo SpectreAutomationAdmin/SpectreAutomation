@@ -147,53 +147,70 @@ describe("operating-results reporting service", () => {
 
   it("formatOperatingDashboard emits monthly chart series mirrored from accounting columns", async () => {
     const r = await getOperatingResults(clubAId, asOf);
-    const d = formatOperatingDashboard(r, { periodLabel: "Year-end" });
+    // REPORT-CHART-1A — formatter needs `periodEnd` to anchor the
+    // 12-slot x-axis; pass the test's asOf.
+    const d = formatOperatingDashboard(r, { periodLabel: "Year-end", periodEnd: asOf });
     expect(d.series.length).toBe(12);
-    // First chart bar (May 2025) is the SAME value the FiscalPeriod
-    // carried, scaled dollars → $K (here: $60,000 → 60 on chart).
-    expect(d.series[0].label).toBe("May");
-    expect(d.series[0].value).toBe(60);
-    // Last bar (Apr 2026): seeded at $5,000 → chart 5.
-    expect(d.series[11].label).toBe("Apr");
-    expect(d.series[11].value).toBe(5);
-    // Budget series mirrors budget column (May 2025 budgeted $50K → 50).
-    expect(d.budget[0].value).toBe(50);
+    // First chart bar (May 2025) — label now includes the year so
+    // the chart x-axis disambiguates May 2025 from May 2026.
+    expect(d.series[0].label).toBe("May 2025");
+    // REPORT-CHART-1A §4 — values are RAW DOLLARS (not $K), so the
+    // chart primitive's `dollars-compact` formatY renders $500K / $1M
+    // automatically. First month seeded $60,000 → raw 60000.
+    expect(d.series[0].value).toBe(60_000);
+    // Last bar (Apr 2026): seeded at $5,000 → raw 5000.
+    expect(d.series[11].label).toBe("Apr 2026");
+    expect(d.series[11].value).toBe(5_000);
+    // Budget series mirrors budget column (May 2025 budgeted $50K →
+    // raw 50000).
+    expect(d.budget[0].value).toBe(50_000);
     // Prior-year series carries the matched 12 months' actual NOI.
     expect(d.priorYear.length).toBe(12);
   });
 
   it("formatOperatingDashboard emits a priorYearYtd CUMULATIVE series whose last point equals the Prior Year KPI", async () => {
     const r = await getOperatingResults(clubAId, asOf);
-    const d = formatOperatingDashboard(r, { periodLabel: "Year-end" });
+    const d = formatOperatingDashboard(r, { periodLabel: "Year-end", periodEnd: asOf });
     expect(d.priorYearYtd.length).toBe(12);
-    // Step-by-step running sum of priorYear → priorYearYtd.
+    // Step-by-step running sum of priorYear → priorYearYtd. Null
+    // slots are skipped (REPORT-CHART-1A §6).
     let running = 0;
+    let anyPrior = false;
     for (let i = 0; i < 12; i++) {
-      running += d.priorYear[i].value;
-      expect(d.priorYearYtd[i].value).toBe(running);
+      const pv = d.priorYear[i].value;
+      if (pv != null) {
+        running += pv;
+        anyPrior = true;
+      }
+      if (anyPrior) {
+        expect(d.priorYearYtd[i].value).toBe(running);
+      } else {
+        expect(d.priorYearYtd[i].value).toBeNull();
+      }
       expect(d.priorYearYtd[i].label).toBe(d.priorYear[i].label);
     }
-    // Endpoint reconciles to the Prior Year KPI tile.
-    expect(d.priorYearYtd[11].value).toBe(-193);  // matches "($193K)" KPI
+    // Endpoint reconciles to the Prior Year KPI tile — raw dollars
+    // on the series + compact "($193K)" KPI label.
+    expect(d.priorYearYtd[11].value).toBe(-193_000);
     expect(d.priorYearLabel).toBe("($193K)");
   });
 
   it("RECONCILIATION: chart series sums to the YTD NOI / Budget / Prior Year KPI values", async () => {
     const r = await getOperatingResults(clubAId, asOf);
-    const d = formatOperatingDashboard(r, { periodLabel: "Year-end" });
-    // The bars sum to the YTD NOI KPI value.
-    const actualSum = d.series.reduce((s, p) => s + p.value, 0);
-    expect(actualSum).toBe(45);
+    const d = formatOperatingDashboard(r, { periodLabel: "Year-end", periodEnd: asOf });
+    // Null-safe sum helper — REPORT-CHART-1A null-aware series.
+    const sum = (xs: Array<{ value: number | null }>) =>
+      xs.reduce<number>((s, p) => s + (p.value ?? 0), 0);
+    // The bars sum to the YTD NOI KPI value (raw dollars).
+    expect(sum(d.series)).toBe(45_000);
     expect(d.ytdNoiLabel).toBe("$45K");
     // The budget bars sum to the Budget Goal KPI value.
-    const budgetSum = d.budget.reduce((s, p) => s + p.value, 0);
-    expect(budgetSum).toBe(0);
+    expect(sum(d.budget)).toBe(0);
     expect(d.budgetGoalLabel).toBe("$0");
     // The prior-year monthly values sum to the Prior Year KPI.
-    const priorMonthlySum = d.priorYear.reduce((s, p) => s + p.value, 0);
-    expect(priorMonthlySum).toBe(-193);
-    // AND the cumulative line's endpoint equals that same value (this
-    // is the VISUAL anchor the chart now exposes to the eye).
+    const priorMonthlySum = sum(d.priorYear);
+    expect(priorMonthlySum).toBe(-193_000);
+    // AND the cumulative line's endpoint equals that same value.
     expect(d.priorYearYtd[11].value).toBe(priorMonthlySum);
     expect(d.priorYearLabel).toBe("($193K)");
   });

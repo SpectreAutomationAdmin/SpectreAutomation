@@ -104,12 +104,17 @@ function applyFormatY(spec: FormatYSpec | undefined, v: number): string {
 
 export type EditorialBarChartProps = {
   xLabels: string[];
-  /** Primary monthly values — drawn as the dominant diverging bars. */
-  primary: { values: number[]; positiveFill: string; negativeFill: string };
-  /** Optional secondary series — drawn as narrower bars behind. */
-  secondary?: { values: number[]; fill: string; opacity?: number };
-  /** Optional dotted overlay line — Saguaro uses this for prior year. */
-  overlay?: { values: number[]; stroke: string; width: number; dasharray: string; opacity?: number };
+  /** Primary monthly values — drawn as the dominant diverging bars.
+   *  REPORT-CHART-1A (2026-10-03) — a `null` value at a slot renders
+   *  NO bar at that slot, never a zero-height bar. Used by Operating
+   *  Results so a balance-sheet-only month leaves the slot blank. */
+  primary: { values: Array<number | null>; positiveFill: string; negativeFill: string };
+  /** Optional secondary series — drawn as narrower bars behind. Same
+   *  null-skip semantics as `primary`. */
+  secondary?: { values: Array<number | null>; fill: string; opacity?: number };
+  /** Optional dotted overlay line. A null value breaks the line path
+   *  so no segment crosses the missing slot. */
+  overlay?: { values: Array<number | null>; stroke: string; width: number; dasharray: string; opacity?: number };
   height: number;
   yTicks?: number;
   formatY?: FormatYSpec;
@@ -166,7 +171,8 @@ export function EditorialBarChart({
   if (yDomain) {
     [yLo, yHi] = yDomain;
   } else {
-    const all = [...primary.values, ...(secondary?.values ?? []), ...(overlay?.values ?? [])];
+    const all = [...primary.values, ...(secondary?.values ?? []), ...(overlay?.values ?? [])]
+      .filter((v): v is number => v != null);
     const yMin = Math.min(...all, 0);
     const yMax = Math.max(...all, 0);
     const span = yMax - yMin || 1;
@@ -185,10 +191,25 @@ export function EditorialBarChart({
   const barW = slotW * 0.55;
   const secW = slotW * 0.3;
 
+  // REPORT-CHART-1A (2026-10-03) — overlay path breaks at null values:
+  // a `null` ends the current line segment so the dashed overlay never
+  // bridges a missing month. The next non-null value starts a new "M"
+  // move command, producing a visually discontinuous dashed line.
   const overlayPath = overlay
-    ? overlay.values
-        .map((v, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(2)} ${yAt(v).toFixed(2)}`)
-        .join(" ")
+    ? (() => {
+        let d = "";
+        let needMove = true;
+        for (let i = 0; i < overlay.values.length; i++) {
+          const v = overlay.values[i];
+          if (v == null) {
+            needMove = true;
+            continue;
+          }
+          d += `${needMove ? "M" : "L"} ${xAt(i).toFixed(2)} ${yAt(v).toFixed(2)} `;
+          needMove = false;
+        }
+        return d.trim();
+      })()
     : null;
 
   return (
@@ -240,6 +261,8 @@ export function EditorialBarChart({
             top). See globals.css for the shared keyframes. */}
         {secondary
           ? secondary.values.map((v, i) => {
+              // REPORT-CHART-1A — null means "no bar at this slot".
+              if (v == null) return null;
               const top = Math.min(yAt(v), y0);
               const h = Math.abs(yAt(v) - y0);
               const animClass = v >= 0 ? "chart-anim-bar-up" : "chart-anim-bar-down";
@@ -259,6 +282,10 @@ export function EditorialBarChart({
 
         {/* Primary bars — diverging colour by sign. */}
         {primary.values.map((v, i) => {
+          // REPORT-CHART-1A — null means "no bar at this slot". A
+          // balance-sheet-only month, or a month without a committed
+          // TB snapshot, renders no bar — never a $0 bar.
+          if (v == null) return null;
           const top = Math.min(yAt(v), y0);
           const h = Math.abs(yAt(v) - y0);
           const fill = v >= 0 ? primary.positiveFill : primary.negativeFill;

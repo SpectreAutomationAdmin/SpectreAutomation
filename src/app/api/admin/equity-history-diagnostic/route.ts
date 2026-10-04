@@ -40,6 +40,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       perYearOrigin: eq.source.perYear,
     },
     operating: {
+      // REPORT-CHART-1A — resolver output only. Months without an
+      // authoritative monthly IS observation (e.g. a BS-only snapshot)
+      // are OMITTED here, not represented as $0.
       monthsLength: op.months.length,
       months: op.months.map((m) => ({
         monthLabel: m.monthLabel,

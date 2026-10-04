@@ -1712,6 +1712,11 @@ function BoardRisks({ risks }: { risks: BoardRisk[] }) {
 // a SaaS-analytics aesthetic by a heavy dependency.
 
 type DashSeries = { label: string; value: number };
+/** REPORT-CHART-1A (2026-10-03) — nullable chart point used by the
+ *  Operating Results card: `null` means "no authoritative monthly
+ *  observation at this slot" so the chart renders no bar at that
+ *  index (never a zero-height bar from a BS-only snapshot). */
+type OpSeries = { label: string; value: number | null };
 
 // EditorialLineChart lives in its own client component module so it can
 // track its container width with ResizeObserver — without this, the
@@ -2156,19 +2161,19 @@ function EquityValueCard({ data }: {
 // Card 2 — Operating Results 12-Month Rolling.
 function OperatingResultsCard({ data }: {
   data: {
-    series: DashSeries[];
-    budget: DashSeries[];
-    /** Monthly prior-year NOI ($K) — retained on the data shape for
-     *  any downstream consumer; the chart itself plots the cumulative
-     *  series below so the line reconciles visually to the KPI tile. */
-    priorYear: DashSeries[];
-    /** Prior-year YTD CUMULATIVE NOI ($K) — running sum of priorYear.
-     *  Endpoint always equals the Prior Year KPI value, so the
-     *  chart's overlay line ANCHORS visually at the KPI tile value
-     *  by construction (no React-side literal is involved). */
-    priorYearYtd: DashSeries[];
+    series: OpSeries[];
+    budget: OpSeries[];
+    priorYear: OpSeries[];
+    priorYearYtd: OpSeries[];
     breakEven: number;
     breakEvenCorridor: { lower: number; upper: number };
+    /** REPORT-CHART-1A §4 + §9 — y-axis domain + major tick count
+     *  computed by the formatter's nice-tick algorithm. Raw dollars. */
+    yDomain: [number, number];
+    yTicks: number;
+    /** REPORT-CHART-1A §7 — authoritative monthly observations
+     *  available for this reporting period. Drives the chart subtitle. */
+    availableObservations: number;
     ytdNoiLabel: string;
     noiPctRevenueLabel: string;
     budgetGoalLabel: string;
@@ -2177,69 +2182,34 @@ function OperatingResultsCard({ data }: {
   };
 }) {
   const xLabels = data.series.map((p) => p.label);
-  // Y-axis domain is COMPUTED from the actual plotted data, NEVER
-  // hardcoded. Inputs:
-  //   - data.series         (monthly NOI bars)
-  //   - data.budget         (monthly budget bars)
-  //   - data.priorYearYtd   (CUMULATIVE prior-year line, ending at
-  //                          the Prior Year KPI value)
-  // Rounded to the nearest $50K so the y-tick labels stay in
-  // board-readable increments. Using the CUMULATIVE prior-year series
-  // (not monthly) means the y-axis naturally reaches the depth of the
-  // YTD loss displayed in the KPI tile — fixing the prior visual
-  // mismatch where the y-axis stopped at ~($125K) even though the
-  // Prior Year KPI was ($193K).
-  const ROUND_INC_K = 50;
-  const allYs = [
-    ...data.series.map((p) => p.value),
-    ...data.budget.map((p) => p.value),
-    ...data.priorYearYtd.map((p) => p.value),
-  ];
-  const rawMin = Math.min(...allYs, 0);
-  const rawMax = Math.max(...allYs, 0);
-  const yLo = Math.floor(rawMin / ROUND_INC_K) * ROUND_INC_K;
-  const yHi = Math.ceil(rawMax / ROUND_INC_K) * ROUND_INC_K;
-  const yTickCount = Math.max(2, Math.round((yHi - yLo) / ROUND_INC_K));
+  // REPORT-CHART-1A §4 + §9 — y-axis domain + tick count come from
+  // the formatter's shared nice-tick algorithm. Raw-dollar scale means
+  // the chart uses `formatY="dollars-compact"` to pick $K / $M labels
+  // automatically ("$500K", "$1M", "$2M").
 
   const chart = (
     <EditorialChartReveal testid="stewardship-operating-reveal">
     <EditorialBarChart
       xLabels={xLabels}
-      // Match the Equity card's chart-dominant chart-band height so
-      // the two cards share a visual baseline at the same row.
       height={245}
-      formatY="dollars-thousands"
-      yDomain={[yLo, yHi]}
-      yTicks={yTickCount}
-      // Y-axis label column → YTD NOI tile LEFT edge alignment.
-      // Default padL=48 left labels ~20 px right of the tile edge.
-      // padLeft=44 lands them within ~1 px of the KPI tile edge,
-      // matching the equity card's alignment invariant.
+      formatY="dollars-compact"
+      yDomain={data.yDomain}
+      yTicks={data.yTicks}
       padLeft={44}
-      // Rightmost bar slot → Prior Year tile RIGHT edge alignment.
-      // Default padR=16 left the right column short. padRight=14
-      // pushes the last bar slot's centre to within ~1 px of the
-      // Prior Year tile right edge.
       padRight={14}
-      // Primary diverging bars: favourable green for ≥ 0, Saguaro-
-      // matched clay for < 0.
+      // REPORT-CHART-1A §6 — primary values carry nulls at months
+      // without an authoritative observation. Chart renders no bar
+      // for null slots (never a $0 bar from a BS-only snapshot).
       primary={{
         values: data.series.map((p) => p.value),
         positiveFill: "fill-club-green-500",
         negativeFill: "fill-[#8b3520]",
       }}
-      // Budget as narrower tan bars behind the primary.
       secondary={{
         values: data.budget.map((p) => p.value),
         fill: "fill-club-gold",
         opacity: 0.55,
       }}
-      // Prior-year YTD CUMULATIVE — the running sum of prior-year
-      // monthly NOI. The line's right-edge endpoint equals the Prior
-      // Year KPI tile value by construction, so the chart visually
-      // reconciles to the KPI strip above. (Previously this used
-      // data.priorYear monthly values, which never reached the depth
-      // of the YTD loss — the chart and KPI told different stories.)
       overlay={{
         values: data.priorYearYtd.map((p) => p.value),
         stroke: "stroke-club-green-800",

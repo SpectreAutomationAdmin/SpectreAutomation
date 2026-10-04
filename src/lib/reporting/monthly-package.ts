@@ -653,21 +653,37 @@ export type MonthlyReportingPackage = {
       yAxisTicks: number;
     };
     operating: {
-      /** Trailing 12 months of NOI in $K. */
-      series: ChartSeriesPoint[];
-      /** 12 months of board-approved budget NOI ($K). */
-      budget: ChartSeriesPoint[];
-      /** 12 months of prior-year NOI for YoY context ($K). */
-      priorYear: ChartSeriesPoint[];
-      /** 12 months of prior-year YTD CUMULATIVE NOI ($K) — running
-       *  sum of `priorYear`. Drives the chart's overlay line so the
-       *  visual reconciles to the Prior Year KPI tile: the line's
-       *  last point ALWAYS equals the Prior Year KPI value. */
-      priorYearYtd: ChartSeriesPoint[];
-      /** Break-even value in $K — drawn as a horizontal reference. */
+      /** REPORT-CHART-1A (2026-10-03) — 12-slot x-axis skeleton ending
+       *  at the reporting period. Each point's `value` carries the
+       *  RAW-DOLLAR NOI for the month, or `null` when no authoritative
+       *  observation exists (missing committed TB snapshot, or a
+       *  balance-sheet-only snapshot with no IS activity). Null slots
+       *  are rendered as NO bar — never a $0 bar. */
+      series: OperatingSeriesPoint[];
+      /** 12 slots of board-approved budget NOI (raw dollars); null
+       *  when the budget line has no data for that month. */
+      budget: OperatingSeriesPoint[];
+      /** 12 slots of prior-year monthly NOI (raw dollars); null when
+       *  no prior-year observation exists. */
+      priorYear: OperatingSeriesPoint[];
+      /** 12 slots of prior-year YTD CUMULATIVE NOI (raw dollars) —
+       *  running sum of `priorYear` across non-null months. Null
+       *  before the first available prior-year observation. */
+      priorYearYtd: OperatingSeriesPoint[];
+      /** Break-even value in raw dollars — drawn as a horizontal
+       *  reference line when configured. */
       breakEven: number;
       /** Break-even tolerance corridor in $K (drawn as a tinted band). */
       breakEvenCorridor: { lower: number; upper: number };
+      /** REPORT-CHART-1A §4 + §9 — y-axis domain + major tick count
+       *  computed by the nice-tick algorithm. Chart does not need to
+       *  recompute. Raw dollars. */
+      yDomain: [number, number];
+      yTicks: number;
+      /** REPORT-CHART-1A §7 — number of monthly slots whose `series`
+       *  value is non-null. Drives the chart's dynamic subtitle
+       *  ("1 committed operating period available"). */
+      availableObservations: number;
       /** KPI ribbon values, pre-formatted for display. */
       ytdNoiLabel: string;        // e.g. "$3.18M"
       noiPctRevenueLabel: string; // e.g. "21.7%"
@@ -1309,63 +1325,109 @@ export function formatEquityDashboard(h: EquityHistory) {
 // ---------------------------------------------------------------------------
 export function formatOperatingDashboard(
   r: OperatingResults,
-  opts: { periodLabel?: string } = {},
+  opts: { periodLabel?: string; periodEnd?: Date } = {},
 ) {
-  const dollarsToK = (d: number): string => {
-    const k = Math.round(d / 1000);
-    // Drop the "K" suffix for clean-zero values so the budget tile
-    // reads "$0" rather than "$0K" when the trailing-12 budget sums
-    // to exactly zero. Saguaro-style "no value" presentation.
-    if (k === 0) return "$0";
-    return d < 0 ? `($${Math.abs(k)}K)` : `$${k}K`;
+  // REPORT-CHART-1A §4 (2026-10-03) — compact finance labels. We
+  // emit raw-dollar values so the chart primitive's `dollars-compact`
+  // formatY descriptor can pick $K vs $M automatically ($500K /
+  // $1.2M), replacing the "$1000K/$2000K/$3800K" readout that
+  // formatY=dollars-thousands produced.
+  const dollarsCompact = (d: number): string => {
+    const abs = Math.abs(Math.round(d));
+    if (abs === 0) return "$0";
+    const sign = d < 0 ? "(" : "";
+    const close = d < 0 ? ")" : "";
+    if (abs >= 1_000_000) {
+      const m = (abs / 1_000_000).toFixed(1).replace(/\.0$/, "");
+      return `${sign}$${m}M${close}`;
+    }
+    return `${sign}$${Math.round(abs / 1_000)}K${close}`;
   };
   const pctOfRev = (n: number, rev: number): string => {
     if (rev <= 0) return "0.0%";
     return `${((n / rev) * 100).toFixed(1)}%`;
   };
 
-  // Chart series — convert dollars to $K so the chart's y-axis stays
-  // in board-readable units and the bar heights match Saguaro's NOI
-  // chart visually. Months with no posted data fold to 0 (a missing
-  // month draws as a zero-height bar — the chart never breaks).
-  const series: ChartSeriesPoint[] = r.months.map((m) => ({
-    label: m.monthLabel,
-    value: (m.noi ?? 0) / 1000,
-  }));
-  const budget: ChartSeriesPoint[] = r.months.map((m) => ({
-    label: m.monthLabel,
-    value: (m.budgetNoi ?? 0) / 1000,
-  }));
-  const priorYear: ChartSeriesPoint[] = r.priorYearMonths.length === r.months.length
-    ? r.priorYearMonths.map((m) => ({
-        label: m.monthLabel,
-        value: (m.noi ?? 0) / 1000,
-      }))
-    // If prior-year window doesn't align (e.g. first-year club), emit
-    // zero overlay aligned to current-year labels so the chart can
-    // still render a clean dashed line at the baseline.
-    : r.months.map((m) => ({ label: m.monthLabel, value: 0 }));
+  // REPORT-CHART-1A §6 (2026-10-03) — the chart x-axis ALWAYS has 12
+  // monthly slots ending at the LAST plotted month. Anchor on the
+  // resolver's last authoritative month when present (so the demo
+  // May-2026-reporting fixture's trailing window still ends in Apr
+  // 2026, not May 2026); fall back to the explicit `periodEnd` when
+  // the resolver returned nothing (fresh tenant); fall back to `new
+  // Date()` only in testing edge cases.
+  const anchorMonth: Date =
+    r.months.length > 0
+      ? r.months[r.months.length - 1].endDate
+      : (opts.periodEnd ?? new Date());
+  const periodEndMonth = anchorMonth;
+  const skeleton: Array<{ label: string; endDate: Date }> = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(Date.UTC(
+      periodEndMonth.getUTCFullYear(),
+      periodEndMonth.getUTCMonth() - i,
+      1,
+    ));
+    skeleton.push({ label: operatingMonthLabel(d), endDate: d });
+  }
+  // Match resolver output by YYYY-MM key.
+  const monthKey = (d: Date) => `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+  const monthByKey = new Map(r.months.map((m) => [monthKey(m.endDate), m] as const));
+  const priorByKey = new Map(
+    r.priorYearMonths.map((m) => [monthKey(m.endDate), m] as const),
+  );
 
-  // Prior-year YTD CUMULATIVE — running sum of `priorYear` monthly
-  // values, scaled in the same $K units. Drives the chart's overlay
-  // line so the visual reconciles to the Prior Year KPI tile: the
-  // line's last point ALWAYS equals (priorYearLabel) by construction
-  // (`Math.round(r.priorYearNoi / 1000)` === priorYearYtd[11].value).
-  //
-  // This is the key visual reconciliation between the chart and the
-  // KPI strip. The bars below show month-by-month performance; the
-  // line shows the YoY cumulative trajectory and ANCHORS at the KPI
-  // value at the right edge.
-  let runningPrior = 0;
-  const priorYearYtd: ChartSeriesPoint[] = priorYear.map((p) => {
-    runningPrior += p.value;
-    return { label: p.label, value: runningPrior };
+  const series: OperatingSeriesPoint[] = skeleton.map((s) => {
+    const m = monthByKey.get(monthKey(s.endDate));
+    return { label: s.label, value: m?.noi ?? null };
+  });
+  const budget: OperatingSeriesPoint[] = skeleton.map((s) => {
+    const m = monthByKey.get(monthKey(s.endDate));
+    return { label: s.label, value: m?.budgetNoi ?? null };
+  });
+  const priorYear: OperatingSeriesPoint[] = skeleton.map((s) => {
+    const priorEnd = new Date(Date.UTC(
+      s.endDate.getUTCFullYear() - 1,
+      s.endDate.getUTCMonth(),
+      1,
+    ));
+    const m = priorByKey.get(monthKey(priorEnd));
+    return { label: s.label, value: m?.noi ?? null };
   });
 
-  const ytdNoiLabel = dollarsToK(r.ytdNoi);
+  // Prior-year YTD cumulative — same semantics as before but on the
+  // 12-slot skeleton; null prior-year values contribute nothing but
+  // leave the running sum unchanged so the overlay line emits null
+  // (chart draws no segment at those slots).
+  let runningPrior = 0;
+  let anyPrior = false;
+  const priorYearYtd: OperatingSeriesPoint[] = priorYear.map((p) => {
+    if (p.value != null) {
+      runningPrior += p.value;
+      anyPrior = true;
+    }
+    return { label: p.label, value: anyPrior ? runningPrior : null };
+  });
+
+  // Count how many months actually hold an authoritative observation.
+  const availableObservations = series.filter((p) => p.value != null).length;
+
+  const ytdNoiLabel = dollarsCompact(r.ytdNoi);
   const noiPctRevenueLabel = pctOfRev(r.ytdNoi, r.ytdRevenue);
-  const budgetGoalLabel = dollarsToK(r.ytdBudgetNoi);
-  const priorYearLabel = dollarsToK(r.priorYearNoi);
+  const budgetGoalLabel = dollarsCompact(r.ytdBudgetNoi);
+  const priorYearLabel = dollarsCompact(r.priorYearNoi);
+
+  // REPORT-CHART-1A §4 + §9 (2026-10-03) — nice-tick algorithm. The
+  // old `ROUND_INC_K = 50` constant produced 76 ticks across the
+  // $0 → $3.8M January range. We now compute a 4–6-major-tick domain
+  // directly from the plotted RAW-DOLLAR range using the standard
+  // "nice step" (1 / 2 / 5 × 10ⁿ) finance-chart heuristic.
+  const seriesValues: number[] = [];
+  for (const p of series)       if (p.value != null) seriesValues.push(p.value);
+  for (const p of budget)       if (p.value != null) seriesValues.push(p.value);
+  for (const p of priorYearYtd) if (p.value != null) seriesValues.push(p.value);
+  const rawMin = Math.min(...seriesValues, 0);
+  const rawMax = Math.max(...seriesValues, 0);
+  const { domainMin, domainMax, tickCount } = chooseNiceDollarTicks(rawMin, rawMax);
 
   // Corridor — ClubBenchmarking's published "−2.8 % to +3.3 %"
   // break-even policy zone. This is the board-recognised reference
@@ -1392,14 +1454,60 @@ export function formatOperatingDashboard(
     budget,
     priorYear,
     priorYearYtd,
-    breakEven: r.breakEven / 1000,
+    breakEven: r.breakEven,
     breakEvenCorridor: r.breakEvenCorridor,
+    yDomain: [domainMin, domainMax] as [number, number],
+    yTicks: tickCount,
+    availableObservations,
     ytdNoiLabel,
     noiPctRevenueLabel,
     budgetGoalLabel,
     priorYearLabel,
     interpretation,
   };
+}
+
+/** REPORT-CHART-1A §4 (2026-10-03) — nullable chart point used by
+ *  the Operating Results dashboard. `null` means "no authoritative
+ *  observation for this slot"; the chart draws no bar / no overlay
+ *  segment at that index. */
+export type OperatingSeriesPoint = { label: string; value: number | null };
+
+function operatingMonthLabel(d: Date): string {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** REPORT-CHART-1A §4 + §9 (2026-10-03) — compute a nice y-axis
+ *  domain for a finance chart. Returns [min, max, tickCount] such
+ *  that:
+ *    • Step is 1 / 2 / 5 × 10ⁿ (standard "nice" interval heuristic).
+ *    • Major tick count sits in [4, 6] for typical ranges.
+ *    • Step divides (max − min) exactly so tick labels are clean.
+ *    • Zero stays visible when min ≥ 0 (common Operating case).
+ */
+export function chooseNiceDollarTicks(
+  rawMin: number,
+  rawMax: number,
+  targetCount = 5,
+): { domainMin: number; domainMax: number; step: number; tickCount: number } {
+  const safeMin = Number.isFinite(rawMin) ? rawMin : 0;
+  const safeMax = Number.isFinite(rawMax) ? rawMax : 0;
+  const lo = Math.min(safeMin, 0);
+  const hi = Math.max(safeMax, 0, lo + 1);
+  const range = hi - lo;
+  const roughStep = range / targetCount;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(1, roughStep))));
+  const normalized = roughStep / magnitude;
+  let niceStep: number;
+  if (normalized < 1.5) niceStep = 1 * magnitude;
+  else if (normalized < 3) niceStep = 2 * magnitude;
+  else if (normalized < 7) niceStep = 5 * magnitude;
+  else niceStep = 10 * magnitude;
+  const domainMin = Math.floor(lo / niceStep) * niceStep;
+  const domainMax = Math.ceil(hi / niceStep) * niceStep;
+  const tickCount = Math.max(2, Math.round((domainMax - domainMin) / niceStep));
+  return { domainMin, domainMax, step: niceStep, tickCount };
 }
 
 // Founder rule 2026-07-01 v14.14 — single canonical source for the
@@ -1923,6 +2031,10 @@ export async function getMonthlyReportingPackage(
   const operatingResults = await getOperatingResults(clubId, periodEnd);
   const operatingDashboard = formatOperatingDashboard(operatingResults, {
     periodLabel: "Year-end",
+    // REPORT-CHART-1A §6 — thread the reporting period's month-end
+    // through so the 12-slot x-axis anchors on the correct terminal
+    // month (Jan 2026 for the Jan 2026 package).
+    periodEnd,
   });
 
   // The only LIVE data point that's reliable across deployments today

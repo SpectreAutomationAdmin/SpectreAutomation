@@ -248,14 +248,28 @@ async function getOperatingMonthsFromCommittedSnapshots(
       let revenue = 0;
       let cogs = 0;
       let opex = 0;
+      let hasRevenueAccount = false;
+      let hasExpenseAccount = false;
       for (const b of consolidated) {
-        if (b.accountType === "REVENUE") revenue += Number(b.naturalBalance.toString());
+        if (b.accountType === "REVENUE") {
+          revenue += Number(b.naturalBalance.toString());
+          if (Number(b.naturalBalance.toString()) !== 0) hasRevenueAccount = true;
+        }
         else if (b.accountType === "EXPENSE") {
           const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
-          if (isCogs) cogs += Number(b.naturalBalance.toString());
-          else opex += Number(b.naturalBalance.toString());
+          const v = Number(b.naturalBalance.toString());
+          if (isCogs) cogs += v;
+          else opex += v;
+          if (v !== 0) hasExpenseAccount = true;
         }
       }
+      // REPORT-CHART-1A §1-2 (2026-10-03) — a committed TB snapshot
+      // can be balance-sheet-only (TB-HIST-11 opening-balance import
+      // for Dec 2025). Treat "no non-zero IS activity in the period"
+      // as SOURCE_NOT_LOADED and OMIT the month — the chart must not
+      // plot a $0 bar from a BS-only snapshot and must not imply the
+      // Club produced exactly zero revenue + zero expenses.
+      if (!hasRevenueAccount && !hasExpenseAccount) continue;
       const noi = revenue - cogs - opex;
       points.push({
         endDate: asOfDate,
