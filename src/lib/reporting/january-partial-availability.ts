@@ -61,7 +61,11 @@ export type FinancialHealthPartialAvailability = {
   currentAssets: DerivedKpi<Prisma.Decimal>;
   currentLiabilities: DerivedKpi<Prisma.Decimal>;
   reserveCoverage: KpiProvenance;
-  arCurrentPct: KpiProvenance;
+  // EXEC-AR-1 (2026-10-03) — arCurrentPct now carries a value when a
+  // committed AR snapshot exists for the period. Was `KpiProvenance`
+  // only; now `DerivedKpi<number>` so the Executive Opening card can
+  // render the authoritative %.
+  arCurrentPct: DerivedKpi<number>;
   statusVerdict: KpiProvenance;
 };
 
@@ -217,6 +221,27 @@ export async function computeFinancialHealthPartialAvailability(opts: {
 }): Promise<FinancialHealthPartialAvailability> {
   const { clubId, periodEnd } = opts;
 
+  // EXEC-AR-1 (2026-10-03) — resolve AR snapshot FIRST so even a
+  // period without an authoritative BS still produces the AR
+  // Current % correctly when the AR source IS loaded.
+  const { resolveArAgingAsOf } = await import("./ar-aging-resolver");
+  const arResult = await resolveArAgingAsOf({ clubId, asOf: periodEnd });
+  const arKpi: DerivedKpi<number> = arResult.provenance.availability === "AVAILABLE" && arResult.snapshot?.currentPct != null
+    ? {
+        value: arResult.snapshot.currentPct,
+        provenance: {
+          availability: "DERIVED",
+          source: `Jan 2026 AR Aging · batch=${arResult.snapshot.batchId.slice(0, 10)}…`,
+        },
+      }
+    : {
+        value: null,
+        provenance: {
+          availability: "UNAVAILABLE",
+          source: arResult.provenance.reason,
+        },
+      };
+
   const bs = await balanceSheet(clubId, periodEnd);
   if (bs.source !== "AUTHORITATIVE_SNAPSHOT") {
     const miss: KpiProvenance = {
@@ -229,7 +254,7 @@ export async function computeFinancialHealthPartialAvailability(opts: {
       currentAssets: { value: null, provenance: miss },
       currentLiabilities: { value: null, provenance: miss },
       reserveCoverage: { availability: "UNAVAILABLE", source: "Reserve coverage needs 3-yr capex history" },
-      arCurrentPct: { availability: "UNAVAILABLE", source: "AR aging source not imported" },
+      arCurrentPct: arKpi,
       statusVerdict: { availability: "UNAVAILABLE", source: "Status verdict requires policy / benchmark configuration" },
     };
   }
@@ -324,10 +349,7 @@ export async function computeFinancialHealthPartialAvailability(opts: {
       availability: "UNAVAILABLE",
       source: "Reserve coverage ratio requires 3-year average capex history (not yet derivable from a single committed snapshot)",
     },
-    arCurrentPct: {
-      availability: "UNAVAILABLE",
-      source: "AR aging source not yet imported — ratio requires the Chapter VIII subledger import to land",
-    },
+    arCurrentPct: arKpi,
     statusVerdict: {
       availability: "UNAVAILABLE",
       source: "Status verdict (Strong Position / Stable / Watch / Concern) requires policy thresholds / benchmark configuration",

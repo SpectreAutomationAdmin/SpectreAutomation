@@ -71,11 +71,19 @@ describe("TB-HIST-12A §4 — Financial Health card renders Working Capital / Cu
   it("live-branch narrative is factual (no 'Strong Position' verdict) when ratios are derivable", () => {
     expect(MONTHLY_PKG).toMatch(/statusLabel:\s*anyDerived\s*\?\s*"Financial position"\s*:\s*"Unavailable"/);
     expect(MONTHLY_PKG).toMatch(/Current assets exceed current liabilities by/);
-    expect(MONTHLY_PKG).toMatch(/Reserve coverage ratio and AR Current %? remain unavailable/);
+    // EXEC-AR-1 (2026-10-03) — the lumped "Reserve coverage and AR
+    // Current remain unavailable" clause is gone. Replaced by
+    // metric-level availability clauses that describe each
+    // unavailable input SEPARATELY.
+    expect(MONTHLY_PKG).toMatch(/reserve coverage remains unavailable/i);
+    expect(MONTHLY_PKG).toMatch(/AR Current % remains unavailable because the AR aging source is not loaded/);
   });
 
-  it("AR Current chip stays Unavailable even when Working Capital is derivable", () => {
-    expect(MONTHLY_PKG).toMatch(/key:\s*"ar-current",[\s\S]{0,100}value:\s*"Unavailable"[\s\S]{0,80}subtitle:\s*"AR aging not imported"/);
+  it("AR Current chip renders the derived value when snapshot is loaded; Unavailable otherwise", () => {
+    // EXEC-AR-1 §4 — the AR Current chip no longer hardcodes
+    // "Unavailable". It consumes the partial-availability resolver
+    // which reads the committed AR snapshot via resolveArAgingAsOf.
+    expect(MONTHLY_PKG).toMatch(/key:\s*"ar-current",[\s\S]{0,120}value:\s*arVal[\s\S]{0,120}subtitle:\s*arAvailable \?\s*"Jan 2026 AR Aging"\s*:\s*"AR aging not imported"/);
   });
 });
 

@@ -1541,11 +1541,23 @@ function buildFinancialHealthBriefing(
     };
     const wcVal = partial?.workingCapital.value ? fmtDecimal(partial.workingCapital.value) : "Unavailable";
     const crVal = partial?.currentRatio.value != null ? `${partial.currentRatio.value.toFixed(2)}x` : "Unavailable";
+    // EXEC-AR-1 (2026-10-03) — Executive Opening AR Current now
+    // resolves from the committed AR snapshot (via
+    // computeFinancialHealthPartialAvailability → resolveArAgingAsOf).
+    // When AVAILABLE, render e.g. "99.3%"; otherwise fall back to
+    // "Unavailable". Reserve Coverage remains independently
+    // unavailable until its own source lands.
+    const arPct = partial?.arCurrentPct.value;
+    const arVal = arPct != null ? `${arPct.toFixed(1)}%` : "Unavailable";
+    const arAvailable = partial?.arCurrentPct.provenance.availability === "DERIVED";
     const anyDerived =
       partial?.workingCapital.provenance.availability === "DERIVED" ||
-      partial?.currentRatio.provenance.availability === "DERIVED";
+      partial?.currentRatio.provenance.availability === "DERIVED" ||
+      arAvailable;
 
-    // TB-HIST-12A §4 — factual narrative with no evaluative verdict.
+    // TB-HIST-12A §4 + EXEC-AR-1 §5 — metric-level availability
+    // narrative. Reserve Coverage and AR Current are DISTINCT inputs;
+    // one being unavailable must not misdescribe the other.
     const narrativeParts: string[] = [];
     if (partial?.currentAssets.value && partial?.currentLiabilities.value) {
       const diff = partial.currentAssets.value.minus(partial.currentLiabilities.value);
@@ -1555,7 +1567,21 @@ function buildFinancialHealthBriefing(
     if (partial?.currentRatio.value != null) {
       narrativeParts.push(`Current ratio is ${partial.currentRatio.value.toFixed(2)}x.`);
     }
-    narrativeParts.push("Reserve coverage ratio and AR Current % remain unavailable — reserve history and AR aging source are not yet loaded.");
+    if (arAvailable && arPct != null) {
+      narrativeParts.push(`AR is ${arPct.toFixed(1)}% current.`);
+    }
+    // Trailing unavailable-source clause names ONLY what is actually
+    // unavailable this period.
+    const unavailableClauses: string[] = [];
+    if (partial?.reserveCoverage.availability !== "DERIVED") {
+      unavailableClauses.push("reserve coverage remains unavailable because sufficient reserve history has not been loaded");
+    }
+    if (!arAvailable) {
+      unavailableClauses.push("AR Current % remains unavailable because the AR aging source is not loaded for this period");
+    }
+    if (unavailableClauses.length > 0) {
+      narrativeParts.push(unavailableClauses.join("; ") + ".");
+    }
     const narrative = narrativeParts.join(" ");
 
     return {
@@ -1564,9 +1590,9 @@ function buildFinancialHealthBriefing(
       consideration: "no-action",
       narrative,
       chips: [
-        { key: "working-capital", label: "Working Capital", value: wcVal,         subtitle: anyDerived ? "From Jan BS" : "Not derived", tone: "neutral" },
-        { key: "current-ratio",   label: "Current Ratio",   value: crVal,         subtitle: anyDerived ? "CA ÷ CL"       : "Not derived", tone: "neutral" },
-        { key: "ar-current",      label: "AR Current",      value: "Unavailable", subtitle: "AR aging not imported", tone: "neutral" },
+        { key: "working-capital", label: "Working Capital", value: wcVal, subtitle: anyDerived ? "From Jan BS" : "Not derived", tone: "neutral" },
+        { key: "current-ratio",   label: "Current Ratio",   value: crVal, subtitle: anyDerived ? "CA ÷ CL"       : "Not derived", tone: "neutral" },
+        { key: "ar-current",      label: "AR Current",      value: arVal, subtitle: arAvailable ? "Jan 2026 AR Aging" : "AR aging not imported", tone: "neutral" },
       ],
       question: "Is the Club financially healthy?",
       coverNarrative: narrative,
@@ -1574,7 +1600,7 @@ function buildFinancialHealthBriefing(
         { key: "working-capital",  label: "Working Capital",  value: wcVal,         sub: anyDerived ? "From Jan BS" : "Not derived" },
         { key: "reserve-coverage", label: "Reserve Coverage", value: "Unavailable", sub: "Needs 3-yr capex history" },
         { key: "current-ratio",    label: "Current Ratio",    value: crVal,         sub: anyDerived ? "CA ÷ CL" : "Not derived" },
-        { key: "ar-current",       label: "AR Current",       value: "Unavailable", sub: "AR aging not imported" },
+        { key: "ar-current",       label: "AR Current",       value: arVal,         sub: arAvailable ? "Jan 2026 AR Aging" : "AR aging not imported" },
       ],
     };
   }
