@@ -449,11 +449,26 @@ function buildSummaryCards(
       value: formatMoneyShort(is.totalCapitalIncome),
       subtext: "Initiation fees, capital dues & investment income",
     },
-    reserveCoverage: {
-      value: `${(aux.reserveCoverage.actualPct * 100).toFixed(0)}%`,
-      balance: aux.reserveCoverage.balanceLabel,
-      benchmark: `FAC benchmark ≥${(aux.reserveCoverage.facBenchmarkPct * 100).toFixed(0)}%`,
-    },
+    // STEWARDSHIP-LIVE-1 §11 (2026-10-04) — Reserve Coverage Ratio.
+    // When the Reserve Study source is not connected (live tenant
+    // passes UNAVAILABLE_STEWARDSHIP_AUX: actualPct = 0,
+    // facBenchmarkPct = 0, balanceLabel = "Unavailable"), emit
+    // precise unavailable text — never a nonsensical "0% / FAC
+    // benchmark ≥0%". One unavailable card must NOT suppress the
+    // three live cards or the section itself (directive §7).
+    reserveCoverage:
+      aux.reserveCoverage.balanceLabel === "Unavailable"
+        && aux.reserveCoverage.facBenchmarkPct === 0
+        ? {
+            value: "—",
+            balance: "Reserve Study not connected",
+            benchmark: "Source unavailable",
+          }
+        : {
+            value: `${(aux.reserveCoverage.actualPct * 100).toFixed(0)}%`,
+            balance: aux.reserveCoverage.balanceLabel,
+            benchmark: `FAC benchmark ≥${(aux.reserveCoverage.facBenchmarkPct * 100).toFixed(0)}%`,
+          },
   };
 }
 
@@ -703,6 +718,123 @@ export const SILVER_SPRINGS_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
   },
 };
 
+// STEWARDSHIP-LIVE-1 §12-16 (2026-10-04) — precise per-card
+// unavailable sentinels used by live tenants whose auxiliary sources
+// (POS, F&B subledger, AR aging projection, Reserve Study, Capital
+// Project tracker) are not yet connected. Each row keeps the real
+// `whatIsIt` / `whyItMatters` explanatory text (those are not
+// data-dependent) and renders a precise "Source not connected"
+// assessment in place of a Silver Springs demo numeric.
+//
+// Previously `UNAVAILABLE_STEWARDSHIP_AUX.auxiliaryKpiCards` reused
+// `SILVER_SPRINGS_STEWARDSHIP_AUX.auxiliaryKpiCards` which would
+// leak Silver Springs demo numerics into live tenants' chapter III
+// panels — the reason the redactor had to blanket-wipe Section III.
+// With these precise unavailable rows the redactor can now PRESERVE
+// the live-sourced bundle (headline cards + live financial-derivable
+// cards + precisely-unavailable auxiliary cards) safely.
+export const UNAVAILABLE_AUXILIARY_KPI_CARDS: {
+  operating: {
+    fbSubsidy: StewardshipKpi;
+    rounds: StewardshipKpi;
+    covers: StewardshipKpi;
+    arCurrent: StewardshipKpi;
+    initFeeSubsidy: StewardshipKpi;
+  };
+  capital: {
+    reserveCoverage: StewardshipKpi;
+    capitalSpend: StewardshipKpi;
+    reserveSufficiency: StewardshipKpi;
+    projectCompletion: StewardshipKpi;
+  };
+} = {
+  operating: {
+    fbSubsidy: {
+      key: "fb-subsidy",
+      name: "F&B Subsidy",
+      whatIsIt: "Share of dues revenue absorbed by F&B operating losses.",
+      whyItMatters: "F&B almost always runs at a loss at a private club; the subsidy size signals whether it is contained or growing.",
+      assessment: "Source not connected — F&B subledger not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+    rounds: {
+      key: "rounds-vs-plan",
+      name: "Rounds vs Plan",
+      whatIsIt: "Year-to-date rounds played against the rounds budget.",
+      whyItMatters: "Rounds drive cart, range, and pro-shop revenue; under-run is the earliest signal that activity is weakening.",
+      assessment: "Source not connected — tee-sheet / POS not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+    covers: {
+      key: "covers-vs-plan",
+      name: "Covers vs Plan",
+      whatIsIt: "Year-to-date F&B covers against the covers budget.",
+      whyItMatters: "Covers below plan with check averages holding means traffic is weak even when revenue looks fine.",
+      assessment: "Source not connected — POS covers not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+    arCurrent: {
+      key: "ar-current",
+      name: "AR Current %",
+      whatIsIt: "Share of member receivables aged 30 days or less.",
+      whyItMatters: "Members carrying old balances eventually become bad debt; a falling current % is the earliest collections signal.",
+      assessment: "Source not connected — AR Aging projection pending.",
+      actual: "—",
+      tone: "neutral",
+    },
+    initFeeSubsidy: {
+      key: "init-fee-subsidy",
+      name: "Initiation Fee Operating Subsidy",
+      whatIsIt: "Share of operating expense covered by initiation fees rather than dues and activity revenue.",
+      whyItMatters: "Operating on the back of initiation fees masks a structurally under-priced membership; the lower the better.",
+      assessment: "Source not connected — init-fee split not yet derived.",
+      actual: "—",
+      tone: "neutral",
+    },
+  },
+  capital: {
+    reserveCoverage: {
+      key: "reserve-coverage",
+      name: "Reserve Coverage",
+      whatIsIt: "Capital reserve balance relative to three-year average capital spend.",
+      whyItMatters: "Tells the committee whether the club can fund the next ~year of capital work from reserves without new debt or special assessment.",
+      assessment: "Source not connected — Reserve Study not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+    capitalSpend: {
+      key: "capital-spend-vs-plan",
+      name: "Capital Spend vs Plan",
+      whatIsIt: "Year-to-date capital project spending against the approved capital plan.",
+      whyItMatters: "Under-spend may mean deferred maintenance accumulating; over-spend signals scope/cost discipline issues.",
+      assessment: "Source not connected — Capital Projects tracker not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+    reserveSufficiency: {
+      key: "reserve-sufficiency",
+      name: "Reserve Sufficiency",
+      whatIsIt: "Capital reserve balance relative to annual depreciation expense.",
+      whyItMatters: "Indicates whether reserves replenish at least as quickly as the asset base is depreciating.",
+      assessment: "Source not connected — Reserve Study + Capital tracker required.",
+      actual: "—",
+      tone: "neutral",
+    },
+    projectCompletion: {
+      key: "project-completion",
+      name: "Capital Project Completion",
+      whatIsIt: "Approved capital projects on track, substantially complete, or complete at period close.",
+      whyItMatters: "Execution discipline against board-approved plans is how the club proves it can deploy capital reliably.",
+      assessment: "Source not connected — Capital Projects tracker not yet integrated.",
+      actual: "—",
+      tone: "neutral",
+    },
+  },
+};
+
 // TB-HIST-11 (2026-10-02) — the live-tenant counterpart. A tenant
 // with real committed accounting data (`hasCommittedRealTrialBalance`
 // true) passes THIS auxiliary — NOT the Silver Springs seed — into
@@ -772,7 +904,11 @@ export const UNAVAILABLE_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
     ppeReinvestmentPeerMedianLabel: "Unavailable",
     workingCapitalPolicyFloor: 0,
   },
-  auxiliaryKpiCards: SILVER_SPRINGS_STEWARDSHIP_AUX.auxiliaryKpiCards,
+  // STEWARDSHIP-LIVE-1 §12-16 (2026-10-04) — per-card unavailable
+  // rows for live tenants. See UNAVAILABLE_AUXILIARY_KPI_CARDS above
+  // for the full rationale (precise unavailable sentinels replace
+  // the Silver Springs demo cards previously reused here).
+  auxiliaryKpiCards: UNAVAILABLE_AUXILIARY_KPI_CARDS,
 };
 
 // =============================================================================

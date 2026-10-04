@@ -3773,9 +3773,34 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       duesSubsidy:       makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
       payrollRatioTrend: makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
     },
-    stewardshipKpiDashboard: makeUnavailable(pkg.stewardshipKpiDashboard, u),
-    operatingKPIs: { dataSource: "demo", cards: [] },
-    capitalKPIs: { dataSource: "demo", cards: [] },
+    // STEWARDSHIP-LIVE-1 §7-18 (2026-10-04) — Section III
+    // "Operating vs. Capital Stewardship". Previously this redactor
+    // blanket-wiped `stewardshipKpiDashboard` with `makeUnavailable`
+    // and set `operatingKPIs` / `capitalKPIs` to empty arrays, which
+    // suppressed the LIVE headline cards (Operating Revenue, NOI
+    // before dep, Capital Fund Income) and the LIVE financial-
+    // derivable KPI cards (dues-rev, payroll-ratio, noi-margin,
+    // capital-income-vs-plan, debt-equity, ppe-reinvestment,
+    // working-capital).
+    //
+    // The stewardship-dashboard-adapter now produces per-card
+    // unavailable sentinels for auxiliary cards whose source isn't
+    // connected (UNAVAILABLE_AUXILIARY_KPI_CARDS), so preserving the
+    // live bundle no longer leaks Silver Springs demo numerics into
+    // live tenants. Field-level availability — not section-wide
+    // suppression (directive §7, §18).
+    stewardshipKpiDashboard:
+      pkg.stewardshipKpiDashboard.dataSource === "live"
+        ? pkg.stewardshipKpiDashboard
+        : makeUnavailable(pkg.stewardshipKpiDashboard, u),
+    operatingKPIs:
+      pkg.operatingKPIs.dataSource === "live"
+        ? pkg.operatingKPIs
+        : { dataSource: "demo", cards: [] },
+    capitalKPIs:
+      pkg.capitalKPIs.dataSource === "live"
+        ? pkg.capitalKPIs
+        : { dataSource: "demo", cards: [] },
     capitalProjectTracker: makeUnavailable(pkg.capitalProjectTracker, u),
     // REPORT-LIVE-1 §3 (2026-10-03) — AR Aging chapter now has a
     // real-data path (buildCouleeAccountsReceivableAging emits
