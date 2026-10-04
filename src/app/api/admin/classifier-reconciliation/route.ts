@@ -143,7 +143,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       revenueAccountCount: rows.filter((r) => r.pathA_includedInOpRevenue).length,
       expenseAccountCount: rows.filter((r) => r.pathA_includedInOpExpense).length,
     },
-    pathB_ratioRegistry: {
+    // DEPRECATED — this bucket was my pre-fix standalone classifier
+    // that intentionally did NOT apply the operating-fund filter, used
+    // to prove the delta. Kept for the reconciliation bridge below.
+    pathB_ratioRegistry_UNFILTERED: {
       revenue_display: bRevenue.toFixed(2),
       cogs: bCogs.toFixed(2),
       opex: bOpex.toFixed(2),
@@ -151,6 +154,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       revenueAccountCount: rows.filter((r) => r.pathB_isRevenue).length,
       expenseAccountCount: rows.filter((r) => r.type === "EXPENSE").length,
     },
+    // The ACTUAL resolveJanuaryMetricSet output (post-REPORT-WIRING-1A
+    // filter) — this is what every live Operating/Scorecard consumer
+    // now sees. After the fix this MUST equal Path A (Executive IS
+    // projection operating-only) within $0.01.
+    pathB_ratioRegistry_REAL: metrics
+      ? {
+          revenue_display: metrics.revenue?.metric?.display ?? null,
+          revenue_value: metrics.revenue?.metric?.value?.toString?.() ?? null,
+          noi_value: metrics.noi?.metric?.value?.toString?.() ?? null,
+          cogs_value: metrics.cogs?.metric?.value?.toString?.() ?? null,
+          opex_value: metrics.opex?.metric?.value?.toString?.() ?? null,
+          availability: metrics.revenue?.metric?.provenance?.availability ?? null,
+        }
+      : null,
     pathC_departmentSnapshot: dept
       ? {
           totalRevenue: dept.totals.revenue.toString(),
