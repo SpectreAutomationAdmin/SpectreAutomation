@@ -164,9 +164,12 @@ describe("REPORT-LIVE-3 §28 — redactor preserves newly-live cards", () => {
     expect(src).toMatch(/departmentPerformance:\s*pkg\.stewardshipDashboard\.departmentPerformance/);
   });
 
-  it("scorecards + duesSubsidy + payrollRatioTrend still carry precise unavailable reasons", () => {
+  it("duesSubsidy + payrollRatioTrend still carry precise unavailable reasons (SCORECARD-PARTIAL-1 moved scorecards to live preservation)", () => {
     const src = readFileSync(PACKAGE, "utf8");
-    expect(src).toMatch(/scorecards:\s*makeUnavailable\([^,]+,\s*UNAVAIL_SCORECARDS\)/);
+    // SCORECARD-PARTIAL-1 §24 — scorecards are now preserved verbatim
+    // on live tenants (buildOperatingScorecardLive/buildCapitalScorecardLive
+    // already emit metric-level nullable rows).
+    expect(src).toMatch(/scorecards:\s*pkg\.stewardshipDashboard\.scorecards/);
     expect(src).toMatch(/duesSubsidy:\s*makeUnavailable\([^,]+,\s*UNAVAIL_DUES_SUBSIDY\)/);
     expect(src).toMatch(/payrollRatioTrend:\s*makeUnavailable\([^,]+,\s*UNAVAIL_PAYROLL_TREND\)/);
   });

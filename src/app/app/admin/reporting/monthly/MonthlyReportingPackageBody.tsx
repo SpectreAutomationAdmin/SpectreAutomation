@@ -2329,6 +2329,12 @@ function scorecardDotClass(status: ScorecardData["rows"][number]["status"]): str
     case "on-track": return "bg-[#3f7042]"; // brand green (= club-green-500 hex)
     case "monitor":  return "bg-[#b08a4a]"; // brand gold  (= club-gold hex)
     case "action":   return "bg-[#8b3520]"; // brand clay  (Saguaro negatives)
+    // SCORECARD-PARTIAL-1 §6 — null status: no verdict configured.
+    // Render an open-ring neutral dot so the row is visually
+    // distinguishable from an unavailable dot but carries no colour
+    // judgment.
+    case null:
+    default:         return "bg-transparent border border-club-green-800/30";
   }
 }
 
@@ -2336,8 +2342,10 @@ function scorecardDotClass(status: ScorecardData["rows"][number]["status"]): str
  *  default the arrow direction follows the status (on-track ↑,
  *  monitor →, action ↓) — but a row can override this via an
  *  explicit `trend` field when status and direction don't agree
- *  (e.g. a Monitor-status row that is still trending DOWN). */
-function scorecardStatusGlyph(row: ScorecardData["rows"][number]): string {
+ *  (e.g. a Monitor-status row that is still trending DOWN).
+ *  SCORECARD-PARTIAL-1 §6 — returns null when status + trend are
+ *  both absent; the React layer then renders no glyph. */
+function scorecardStatusGlyph(row: ScorecardData["rows"][number]): string | null {
   if (row.trend) {
     switch (row.trend) {
       case "up":   return "↑";
@@ -2349,6 +2357,8 @@ function scorecardStatusGlyph(row: ScorecardData["rows"][number]): string {
     case "on-track": return "↑";
     case "monitor":  return "→";
     case "action":   return "↓";
+    case null:
+    default:         return null;
   }
 }
 
@@ -2437,73 +2447,97 @@ function StewardshipScorecardCard({
       </div>
 
       {/* Band 4 — KPI rows. Alternating row tint per Saguaro. */}
+      {/* SCORECARD-PARTIAL-1 §6-17 (2026-10-04) — null-safe row.
+          A row's three value cells (actual / budget / benchmark) each
+          render independently:
+            null actual     → "—" muted
+            null budget     → "—" muted
+            null benchmark  → "Not configured" italic muted
+            null status     → no colored dot, no glyph (no verdict)
+          This lets a row surface its live Actual + Budget while the
+          Target column stays "Not configured" — directive §11 + §17. */}
       <div data-testid={`${testid}-rows`}>
-        {data.rows.map((row, i) => (
-          <div
-            key={row.key}
-            data-testid={`${testid}-row-${row.key}`}
-            data-status={row.status}
-            className={`grid items-center px-4 py-3 ${
-              i % 2 === 1 ? "bg-club-sand/30" : "bg-club-cream"
-            } ${i < data.rows.length - 1 ? "border-b border-club-sand/40" : ""}`}
-            style={{
-              gridTemplateColumns: "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem",
-              columnGap: "0.75rem",
-            }}
-          >
-            {/* Metric column — status dot + name + italic description. */}
-            <div className="min-w-0 flex items-start gap-2.5">
-              <span
-                aria-hidden="true"
-                className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${scorecardDotClass(row.status)}`}
-              />
-              <div className="min-w-0">
-                <div
-                  className="font-serif text-club-green-900"
-                  style={{ fontSize: "13px", fontWeight: 500, lineHeight: 1.3 }}
-                >
-                  {row.metric}
-                </div>
-                <div
-                  className="mt-0.5 italic text-club-green-800/70"
-                  style={{ fontSize: "11.5px", lineHeight: 1.35 }}
-                >
-                  {row.description}
+        {data.rows.map((row, i) => {
+          const glyph = scorecardStatusGlyph(row);
+          const glyphColor =
+            row.status === "action" ? "#8b3520" :
+            row.status === "monitor" ? "#a07a2e" :
+            row.status === "on-track" ? "rgb(63, 112, 66)" :
+            "rgba(63, 112, 66, 0.4)";
+          return (
+            <div
+              key={row.key}
+              data-testid={`${testid}-row-${row.key}`}
+              data-status={row.status ?? "unavailable"}
+              className={`grid items-center px-4 py-3 ${
+                i % 2 === 1 ? "bg-club-sand/30" : "bg-club-cream"
+              } ${i < data.rows.length - 1 ? "border-b border-club-sand/40" : ""}`}
+              style={{
+                gridTemplateColumns: "minmax(0, 1fr) 4.4rem 4.4rem 5.2rem 1.4rem",
+                columnGap: "0.75rem",
+              }}
+            >
+              <div className="min-w-0 flex items-start gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className={`mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full ${scorecardDotClass(row.status)}`}
+                />
+                <div className="min-w-0">
+                  <div
+                    className="font-serif text-club-green-900"
+                    style={{ fontSize: "13px", fontWeight: 500, lineHeight: 1.3 }}
+                  >
+                    {row.metric}
+                  </div>
+                  <div
+                    className="mt-0.5 italic text-club-green-800/70"
+                    style={{ fontSize: "11.5px", lineHeight: 1.35 }}
+                  >
+                    {row.description}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Three value columns — centered, tabular-nums for clean
-                column alignment. */}
-            <div
-              className="text-center font-serif tabular-nums text-club-green-900"
-              style={{ fontSize: "13px", fontWeight: 600 }}
-            >
-              {row.actual}
-            </div>
-            <div
-              className="text-center font-serif tabular-nums text-club-green-800/85"
-              style={{ fontSize: "12.5px" }}
-            >
-              {row.budget}
-            </div>
-            <div
-              className="text-center font-serif tabular-nums text-club-green-800/85"
-              style={{ fontSize: "12.5px" }}
-            >
-              {row.benchmark}
-            </div>
+              <div
+                className="text-center font-serif tabular-nums"
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  color: row.actual == null ? "rgba(63, 112, 66, 0.4)" : "rgb(21, 51, 24)",
+                }}
+              >
+                {row.actual ?? "—"}
+              </div>
+              <div
+                className="text-center font-serif tabular-nums"
+                style={{
+                  fontSize: "12.5px",
+                  color: row.budget == null ? "rgba(63, 112, 66, 0.4)" : "rgba(21, 51, 24, 0.85)",
+                }}
+              >
+                {row.budget ?? "—"}
+              </div>
+              <div
+                className="text-center font-serif tabular-nums"
+                style={{
+                  fontSize: row.benchmark == null ? "10px" : "12.5px",
+                  fontStyle: row.benchmark == null ? "italic" : "normal",
+                  color: row.benchmark == null ? "rgba(63, 112, 66, 0.5)" : "rgba(21, 51, 24, 0.85)",
+                }}
+              >
+                {row.benchmark ?? "Not configured"}
+              </div>
 
-            {/* Status glyph column — arrow indicates direction. */}
-            <div
-              className="text-center"
-              style={{ fontSize: "12px", lineHeight: 1, color: row.status === "action" ? "#8b3520" : row.status === "monitor" ? "#a07a2e" : "rgb(63, 112, 66)" }}
-              aria-label={`status: ${row.status}`}
-            >
-              {scorecardStatusGlyph(row)}
+              <div
+                className="text-center"
+                style={{ fontSize: "12px", lineHeight: 1, color: glyphColor }}
+                aria-label={`status: ${row.status ?? "unavailable"}`}
+              >
+                {glyph ?? ""}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </article>
   );

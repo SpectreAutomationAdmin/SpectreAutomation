@@ -52,10 +52,14 @@ export type OperatingResults = {
    *  the %-of-revenue KPI denominator. */
   ytdRevenue: number;
   /** Sum of budget NOI across the trailing 12 months (dollars).
-   *  Drives the Budget Goal KPI. */
-  ytdBudgetNoi: number;
-  /** Sum of prior-year NOI across the matched 12 months (dollars). */
-  priorYearNoi: number;
+   *  Null when the Budget source is not connected on this tenant. */
+  ytdBudgetNoi: number | null;
+  /** Sum of prior-year NOI across the matched 12 months (dollars).
+   *  SCORECARD-PARTIAL-1 §2 (2026-10-04): null when the prior-year
+   *  source is not loaded. Downstream formatters render "—" (never
+   *  "$0") so missing prior-year is visually distinct from a real
+   *  zero result. */
+  priorYearNoi: number | null;
   /** Break-even policy line — currently the configured ClubBenchmarking
    *  zone midpoint, but defaults to 0 if no club profile exists. */
   breakEven: number;
@@ -152,8 +156,17 @@ export async function getOperatingResults(
   const sum = (xs: (number | null)[]) => xs.reduce<number>((s, v) => s + (v ?? 0), 0);
   const ytdNoi = sum(months.map((m) => m.noi));
   const ytdRevenue = sum(months.map((m) => m.revenue));
-  const ytdBudgetNoi = sum(months.map((m) => m.budgetNoi));
-  const priorYearNoi = sum(priorYearMonths.map((m) => m.noi));
+  // SCORECARD-PARTIAL-1 §2 — on the FP path, when EVERY month's
+  // budget / prior-year value is null the sum is a false zero. Null
+  // the aggregate so the KPI tile renders "—" (never fabricated $0).
+  const anyBudgetMonth = months.some((m) => m.budgetNoi != null);
+  const anyPriorYearMonth = priorYearMonths.some((m) => m.noi != null);
+  const ytdBudgetNoi: number | null = anyBudgetMonth
+    ? sum(months.map((m) => m.budgetNoi))
+    : null;
+  const priorYearNoi: number | null = anyPriorYearMonth
+    ? sum(priorYearMonths.map((m) => m.noi))
+    : null;
 
   // REPORT-CHART-1 §7 (2026-10-03) — snapshot fallback. The FY-period
   // path may return 12 rows that are all null (Jonas-only tenant whose
@@ -199,8 +212,13 @@ export async function getOperatingResults(
         priorYearMonths: [],
         ytdNoi: sYtdNoi,
         ytdRevenue: sYtdRevenue,
-        ytdBudgetNoi: sYtdBudgetNoi,
-        priorYearNoi: 0,
+        // SCORECARD-PARTIAL-1 §2 — Budget may be null when the Budget
+        // resolver returned nothing (tenant without a Budget import yet).
+        ytdBudgetNoi: monthlyBudgetNoi ? sYtdBudgetNoi : null,
+        // SCORECARD-PARTIAL-1 §2 — Prior Year source NOT loaded on
+        // live tenant → null (never fabricated $0 so the KPI tile can
+        // honestly render "—" instead of a fake zero).
+        priorYearNoi: null,
         breakEven: 0,
         breakEvenCorridor: { ...DEFAULT_BREAK_EVEN_CORRIDOR_K },
       };

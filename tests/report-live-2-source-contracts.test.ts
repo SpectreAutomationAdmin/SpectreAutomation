@@ -98,9 +98,10 @@ describe("REPORT-LIVE-2 §20 — precise per-card unavailable reasons", () => {
     }
   });
 
-  it("redactor applies each per-card reason to the correct still-redacted sub-chapter (REPORT-LIVE-3 moved payrollDepartment to the preserved group)", () => {
+  it("redactor applies per-card reasons to still-redacted sub-chapters (SCORECARD-PARTIAL-1 moved scorecards + REPORT-LIVE-3 moved payrollDepartment to the preserved group)", () => {
     const src = readFileSync(PKG, "utf8");
-    expect(src).toMatch(/scorecards:\s*makeUnavailable\(pkg\.stewardshipDashboard\.scorecards,\s*UNAVAIL_SCORECARDS\)/);
+    // scorecards now preserved verbatim (live metric-level nullable rows).
+    expect(src).toMatch(/scorecards:\s*pkg\.stewardshipDashboard\.scorecards/);
     expect(src).toMatch(/duesSubsidy:\s*makeUnavailable\(pkg\.stewardshipDashboard\.duesSubsidy,\s*UNAVAIL_DUES_SUBSIDY\)/);
     expect(src).toMatch(/payrollRatioTrend:\s*makeUnavailable\(pkg\.stewardshipDashboard\.payrollRatioTrend,\s*UNAVAIL_PAYROLL_TREND\)/);
   });

@@ -103,6 +103,10 @@ import {
   buildOperatingScorecardData,
   buildCapitalScorecardData,
 } from "@/lib/reporting/scorecard-metrics";
+import {
+  buildOperatingScorecardLive,
+  buildCapitalScorecardLive,
+} from "@/lib/reporting/scorecard-live-builder";
 import { buildDemoOperatingScorecardSnapshot } from "@/lib/reporting/operating-scorecard-service";
 import { buildDemoCapitalScorecardSnapshot } from "@/lib/reporting/capital-scorecard-service";
 import {
@@ -224,31 +228,41 @@ export type ScorecardStatus = "on-track" | "monitor" | "action";
 
 /** One row in a Stewardship — KPI Scorecard. Mirrors the
  *  ClubBenchmarking-style table that Saguaro renders beneath the
- *  Chair's Dashboard chart pair. */
+ *  Chair's Dashboard chart pair.
+ *
+ *  SCORECARD-PARTIAL-1 §6-8 (2026-10-04) — every value cell is
+ *  nullable so a row can render Actual while leaving Budget / Target
+ *  / Status independently unavailable. The React layer renders:
+ *    actual   = null → "—"
+ *    budget   = null → "—"
+ *    benchmark = null → "Not configured"   (distinguishes "no policy"
+ *                                            from "no data loaded")
+ *    status   = null → no colored dot, no right-side glyph
+ *  Classifier functions must NOT run when any required input is null;
+ *  the builder sets `status` to null in that case. */
 export type StewardshipScorecardRow = {
   key: string;
   /** Row label (left column, "Metric"). */
   metric: string;
   /** Short italic explanation rendered under the metric name. */
   description: string;
-  /** Center column — actual / current value, pre-formatted. */
-  actual: string;
-  /** Center column — budget or goal value. The label varies per card
-   *  (Operating uses "Budget"; Capital uses "Budget/Goal"). */
-  budget: string;
-  /** Right column — best-in-class / benchmark threshold. */
-  benchmark: string;
+  /** Center column — actual / current value, pre-formatted. Null when
+   *  the Actual source for this row is not loaded / not connected. */
+  actual: string | null;
+  /** Center column — budget or goal value. Null when the comparator
+   *  source is not loaded / not connected. */
+  budget: string | null;
+  /** Right column — target / benchmark threshold string. Null when
+   *  the policy target or benchmark is not configured. */
+  benchmark: string | null;
   /** Status dot — drives the colored circle on the left + the
-   *  default trend/status glyph on the right when no explicit `trend`
-   *  is set (on-track → ↑, monitor → →, action → ↓). */
-  status: ScorecardStatus;
-  /** Optional explicit trend direction for the right-side glyph,
-   *  overriding the default mapping from `status`. Use this when the
-   *  metric is, say, Monitor-status but trending DOWN (e.g. Total
-   *  Capital Income vs. Budget — short of plan but not yet Action). */
+   *  default trend/status glyph on the right. Null means NO verdict
+   *  (missing policy / missing comparison) — the React layer MUST
+   *  then omit both the dot colour and the glyph. */
+  status: ScorecardStatus | null;
+  /** Optional explicit trend direction for the right-side glyph. */
   trend?: "up" | "down" | "flat";
-  /** Per-row data provenance. When the row's three values come from
-   *  a service computation we mark "live"; otherwise "demo". */
+  /** Per-row data provenance. */
   dataSource: ReportingDataSource;
 };
 
@@ -1425,8 +1439,10 @@ export function formatOperatingDashboard(
 
   const ytdNoiLabel = dollarsCompact(r.ytdNoi);
   const noiPctRevenueLabel = pctOfRev(r.ytdNoi, r.ytdRevenue);
-  const budgetGoalLabel = dollarsCompact(r.ytdBudgetNoi);
-  const priorYearLabel = dollarsCompact(r.priorYearNoi);
+  // SCORECARD-PARTIAL-1 §2 — null Budget / Prior Year render as "—"
+  // so the KPI tiles are never fooled by a fabricated $0 roll-up.
+  const budgetGoalLabel = r.ytdBudgetNoi == null ? "—" : dollarsCompact(r.ytdBudgetNoi);
+  const priorYearLabel = r.priorYearNoi == null ? "—" : dollarsCompact(r.priorYearNoi);
 
   // REPORT-CHART-1A §4 + §9 (2026-10-03) — nice-tick algorithm. The
   // old `ROUND_INC_K = 50` constant produced 76 ticks across the
@@ -1468,14 +1484,14 @@ export function formatOperatingDashboard(
     ? buildFactualOperatingNarrative({
         ytdNoiDollars: r.ytdNoi,
         ytdRevenueDollars: r.ytdRevenue,
-        ytdBudgetNoiDollars: r.ytdBudgetNoi,
+        ytdBudgetNoiDollars: r.ytdBudgetNoi ?? 0,
         periodLabel: opts.periodLabel ?? "Year-end",
       })
     : buildOperatingCommentary({
         ytdNoiDollars: r.ytdNoi,
         ytdRevenueDollars: r.ytdRevenue,
-        ytdBudgetNoiDollars: r.ytdBudgetNoi,
-        priorYearNoiDollars: r.priorYearNoi,
+        ytdBudgetNoiDollars: r.ytdBudgetNoi ?? 0,
+        priorYearNoiDollars: r.priorYearNoi ?? 0,
         corridorPct,
         periodLabel: opts.periodLabel ?? "Year-end",
       });
@@ -2104,8 +2120,21 @@ export async function getMonthlyReportingPackage(
   // get an empty 12-month structure (zeros), which the formatter
   // shapes into a clean "no data" state rather than crashing.
   const operatingResults = await getOperatingResults(clubId, periodEnd);
+  // SCORECARD-PARTIAL-1 §3 (2026-10-04) — period-aware narrative
+  // label. The call site now derives the label from `periodEnd` so
+  // the Jan 2026 report says "January YTD" (never "Year-end"), the
+  // Feb report says "February YTD", etc. The December report
+  // continues to resolve to "December YTD" (which equals fiscal
+  // year-end for a Dec-close club); any wording that depends on
+  // actual year-end semantics lives in the dedicated year-end
+  // package, not here.
+  const PERIOD_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  const periodLabelForNarrative = `${PERIOD_MONTH_NAMES[periodEnd.getUTCMonth()]} YTD`;
   const operatingDashboard = formatOperatingDashboard(operatingResults, {
-    periodLabel: "Year-end",
+    periodLabel: periodLabelForNarrative,
     // REPORT-CHART-1A §6 — thread the reporting period's month-end
     // through so the 12-slot x-axis anchors on the correct terminal
     // month (Jan 2026 for the Jan 2026 package).
@@ -2809,41 +2838,40 @@ export async function getMonthlyReportingPackage(
       dataSource: stewardshipBundle.dataSource,
       equity: equityDashboard,
       operating: operatingDashboard,
-      scorecards: {
-        // Operating Stewardship scorecard — consumes the typed
-        // accounting-backed snapshot rather than the legacy raw
-        // operating-inputs constant. Today the
-        // snapshot is supplied by the demo factory (preserves the
-        // historical Silver Springs seed values + visual layout);
-        // Phase 1 wiring will replace `buildDemoOperatingScorecardSnapshot()`
-        // with `buildOperatingScorecardSnapshotFromAccounting(...)`
-        // reading from `getGLAccountTotals` + `getOperatingResults`.
-        // Per the Jonas-readiness audit, the two NOI rows derive
-        // their status from the snapshot's NOI numerics (was
-        // hardcoded `"on-track"`).
-        operating: buildOperatingScorecardData(stewardshipBundle.operatingScorecard, {
-          ytdNoiLabel:        operatingDashboard.ytdNoiLabel,
-          budgetGoalLabel:    operatingDashboard.budgetGoalLabel,
-          noiPctRevenueLabel: operatingDashboard.noiPctRevenueLabel,
-        }),
-        // Capital Stewardship scorecard — consumes the typed
-        // accounting-backed snapshot rather than the legacy raw
-        // capital-inputs constant. Today the snapshot is supplied
-        // by the demo factory (preserves the historical Silver
-        // Springs seed values + visual layout); Phase 1 wiring
-        // will replace `buildDemoCapitalScorecardSnapshot()` with
-        // `buildCapitalScorecardSnapshotFromAccounting(...)` reading
-        // from `getBalanceSheet` + `getCapitalIncomeYTD` +
-        // `getDepreciationSchedule` + `getEquityHistory`. Per the
-        // Jonas-readiness audit, the Equity Growth CAGR row + the
-        // Long-Term Debt-to-Equity row now derive their status
-        // from the snapshot's numerics (both were hardcoded
-        // `"on-track"` placeholder verdicts before this pass).
-        capital: buildCapitalScorecardData(stewardshipBundle.capitalScorecard, {
-          actualCagrLabel:      equityDashboard.actualCagrLabel,
-          bestInClassCagrLabel: equityDashboard.bestInClassCagrLabel,
-        }),
-      },
+      // SCORECARD-PARTIAL-1 §6-24 (2026-10-04) — live tenants now go
+      // through the dedicated `buildOperatingScorecardLive` +
+      // `buildCapitalScorecardLive` composers (see
+      // src/lib/reporting/scorecard-live-builder.ts). Those builders
+      // read directly from `resolveJanuaryMetricSet` + `resolveBudget`
+      // + `resolveBudgetIncomeStatement` and emit NULL cells for
+      // every row whose required input is missing — never a demo
+      // seed, never a fabricated $0 / 0%. Demo tenants continue to
+      // consume the Silver Springs scorecards built by
+      // `buildOperatingScorecardData` / `buildCapitalScorecardData`.
+      scorecards: hasRealData
+        ? {
+            operating: await buildOperatingScorecardLive(clubId, {
+              periodStart,
+              periodEnd,
+              label: periodLabelForNarrative,
+            }),
+            capital: await buildCapitalScorecardLive(clubId, {
+              periodStart,
+              periodEnd,
+              label: periodLabelForNarrative,
+            }),
+          }
+        : {
+            operating: buildOperatingScorecardData(stewardshipBundle.operatingScorecard, {
+              ytdNoiLabel:        operatingDashboard.ytdNoiLabel,
+              budgetGoalLabel:    operatingDashboard.budgetGoalLabel ?? "—",
+              noiPctRevenueLabel: operatingDashboard.noiPctRevenueLabel,
+            }),
+            capital: buildCapitalScorecardData(stewardshipBundle.capitalScorecard, {
+              actualCagrLabel:      equityDashboard.actualCagrLabel,
+              bestInClassCagrLabel: equityDashboard.bestInClassCagrLabel,
+            }),
+          },
       // TB-HIST-12 §3 — Chapter II/III supplemental cards. On live
       // tenants (hasRealData === true), the Silver Springs seed
       // constants are NOT consulted: each builder receives empty
@@ -3691,8 +3719,15 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       departmentPerformance: pkg.stewardshipDashboard.departmentPerformance,
       // REPORT-LIVE-3 §21-25 — live (Jan 2026 per-dept Actual + Budget payroll)
       payrollDepartment: pkg.stewardshipDashboard.payrollDepartment,
-      // §20 — unavailable, with precise per-card reasons
-      scorecards:        makeUnavailable(pkg.stewardshipDashboard.scorecards, UNAVAIL_SCORECARDS),
+      // SCORECARD-PARTIAL-1 §24 — preserve the scorecards verbatim.
+      // The live-tenant builders (buildOperatingScorecardLive +
+      // buildCapitalScorecardLive) already emit metric-level nullable
+      // rows: live rows carry real values, SOURCE_NOT_CONNECTED rows
+      // carry nulls. Field-level availability already applied — no
+      // demo values can reach here, and the redactor's blanket
+      // `makeUnavailable` would wipe the live Actual + Budget rows.
+      scorecards: pkg.stewardshipDashboard.scorecards,
+      // Dues Subsidy + Payroll Ratio Trend remain unchanged.
       duesSubsidy:       makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
       payrollRatioTrend: makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
     },
