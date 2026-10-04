@@ -150,29 +150,23 @@ export async function getMonthlyFinancialContract(
     }
     const currentIdx = throughMonth - 1;
     const sumThrough = (arr: number[]) => arr.slice(0, throughMonth).reduce((s, v) => s + v, 0);
-    // Depreciation subset: pull IS_DEPRECIATION monthly from bFull.
-    const deprMonthly = Array(12).fill(0);
-    if (bFull) {
-      for (const a of bFull.byAccount) {
-        if (a.fsGroupKey === "IS_DEPRECIATION") {
-          for (let m = 0; m < 12; m++) deprMonthly[m] += a.monthlyTotals[m] ?? 0;
-        }
-      }
-    }
+    // REPORT-WIRING-1B — bMonthly.monthlyOpex now EXCLUDES
+    // depreciation (canonical NOI-before-dep). bMonthly surfaces
+    // monthlyDepreciation separately. SoA uses them directly.
     return {
       totalOperatingRevenue: {
         currentMonth: bMonthly.monthlyRevenue[currentIdx] ?? 0,
         ytd: sumThrough(bMonthly.monthlyRevenue),
       },
       totalOperatingExpense: {
-        // SoA treats "operating expense" as cogs + opex (depreciation
-        // reported separately on its own row).
-        currentMonth: (bMonthly.monthlyCogs[currentIdx] ?? 0) + (bMonthly.monthlyOpex[currentIdx] ?? 0) - (deprMonthly[currentIdx] ?? 0),
-        ytd: sumThrough(bMonthly.monthlyCogs) + sumThrough(bMonthly.monthlyOpex) - sumThrough(deprMonthly),
+        // SoA's "operating expense" row = cogs + opex-ex-dep; the
+        // depreciation row below is reported separately.
+        currentMonth: (bMonthly.monthlyCogs[currentIdx] ?? 0) + (bMonthly.monthlyOpex[currentIdx] ?? 0),
+        ytd: sumThrough(bMonthly.monthlyCogs) + sumThrough(bMonthly.monthlyOpex),
       },
       depreciation: {
-        currentMonth: deprMonthly[currentIdx] ?? 0,
-        ytd: sumThrough(deprMonthly),
+        currentMonth: bMonthly.monthlyDepreciation[currentIdx] ?? 0,
+        ytd: sumThrough(bMonthly.monthlyDepreciation),
       },
       totalCapitalIncome: empty,  // operating budget only
       totalCapitalExpense: empty, // operating budget only

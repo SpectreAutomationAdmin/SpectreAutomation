@@ -215,6 +215,7 @@ export async function resolveJanuaryMetricSet(opts: {
   let revenue = ZERO;
   let cogs = ZERO;
   let opex = ZERO;
+  let depreciation = ZERO;
   let payroll = ZERO;
   let capitalAssessments = ZERO;
   let dues = ZERO;
@@ -248,7 +249,9 @@ export async function resolveJanuaryMetricSet(opts: {
     } else if (b.accountType === "EXPENSE") {
       if (operating) {
         const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+        const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
         if (isCogs) cogs = cogs.plus(b.naturalBalance);
+        else if (isDepreciation) depreciation = depreciation.plus(b.naturalBalance);
         else opex = opex.plus(b.naturalBalance);
         if (b.fsGroupKey === "IS_PAYROLL") payroll = payroll.plus(b.naturalBalance);
       }

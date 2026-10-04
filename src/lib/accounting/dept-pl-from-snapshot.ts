@@ -102,6 +102,12 @@ export async function incomeStatementByDepartmentFromSnapshot(
     // Capital Improvement Dues, Initiation Fee, etc.) belong on the
     // capital-side statement — never on operating NOI.
     if (!isOperatingFundTag(b.fundApplicability)) continue;
+    // REPORT-WIRING-1B §20-23 (2026-10-04) — canonical NOI before
+    // depreciation. The department-level netIncome returned here is
+    // "NOI before depreciation" so the aggregate matches the IS
+    // projection's `noiBeforeDepreciation`. Depreciation accounts
+    // are excluded entirely from the per-dept rows.
+    if (b.fsGroupKey === "IS_DEPRECIATION") continue;
     const isCogs =
       b.fsGroupKey != null &&
       (b.fsGroupKey.startsWith("IS_COGS_") || b.fsGroupKey === "IS_COGS");
@@ -183,6 +189,8 @@ export async function incomeStatementByDepartmentFromSnapshot(
     // REPORT-WIRING-1A §12 — same fund filter at the consolidated
     // reconciliation level so Σ departments === consolidated holds.
     if (!isOperatingFundTag(b.fundApplicability)) continue;
+    // REPORT-WIRING-1B §20-23 — same depreciation carve-out.
+    if (b.fsGroupKey === "IS_DEPRECIATION") continue;
     if (b.accountType === "REVENUE") {
       consolidatedRevenue = consolidatedRevenue.plus(b.naturalBalance);
     } else if (b.accountType === "EXPENSE") {

@@ -276,9 +276,10 @@ export async function getOperatingResults(
  *  snapshot's YTD slice. Returns `OperatingMonth[]` without
  *  zero-filling months that have no snapshot.
  *
- *  NOI metric: Revenue − COGS − OpEx (NOI before depreciation),
- *  consistent with TB-HIST-12B JanuaryMetricSet.noi and the Executive
- *  Opening cover-metric NOI.
+ *  NOI metric (REPORT-WIRING-1B): Revenue − COGS − OpEx-excluding-
+ *  depreciation. The depreciation carve-out matches the IS projection's
+ *  `noiBeforeDepreciation` definition and the ratio-registry +
+ *  budget-resolver canonical. Operating-fund filter per REPORT-WIRING-1A.
  */
 async function getOperatingMonthsFromCommittedSnapshots(
   clubId: string,
@@ -328,6 +329,11 @@ async function getOperatingMonthsFromCommittedSnapshots(
         }
         else if (b.accountType === "EXPENSE") {
           const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+          // REPORT-WIRING-1B §20-23 — carve depreciation out of opex
+          // so the chart's "NOI" label matches the canonical
+          // "NOI before depreciation" definition.
+          const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
+          if (isDepreciation) continue;
           const v = Number(b.naturalBalance.toString());
           if (isCogs) cogs += v;
           else opex += v;

@@ -295,6 +295,9 @@ export async function buildPayrollDepartmentLive(
   const { resolveBudgetPayrollByDepartment, resolveBudgetIncomeStatement } = await import(
     "@/lib/reporting/budget-resolver"
   );
+  const { resolvePayrollDepartments } = await import(
+    "@/lib/reporting/payroll-departments-resolver"
+  );
   const fyStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
   const eod = new Date(Date.UTC(
     periodEnd.getUTCFullYear(),
@@ -304,7 +307,7 @@ export async function buildPayrollDepartmentLive(
   ));
   const throughMonth = periodEnd.getUTCMonth() + 1;
 
-  const [actualDept, budgetPayrollMap, budgetIs] = await Promise.all([
+  const [actualDept, budgetPayrollMap, budgetIs, payrollDepts] = await Promise.all([
     incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
     resolveBudgetPayrollByDepartment({
       clubId,
@@ -316,12 +319,31 @@ export async function buildPayrollDepartmentLive(
       fiscalYear: periodEnd.getUTCFullYear(),
       throughMonth,
     }).catch(() => null),
+    resolvePayrollDepartments(clubId).catch(() => ({
+      departmentCodes: new Set<string>(),
+      hasEmployeeRecords: false,
+      employeeCountByDepartment: new Map<string, number>(),
+    })),
   ]);
 
-  // Build dept-rows for departments that have real IS activity (so
-  // nondepartmental rows with zero payroll don't clutter the chart).
+  // REPORT-WIRING-1B §2-10 (2026-10-04) — Payroll Department roster
+  // comes from the Payroll module (Employee → Department links), NOT
+  // from the financial-reporting department set. Departments like
+  // CORPORATE (Corporate Income & Expenses) that have GL activity but
+  // no Employee records must NOT appear in the Payroll chart.
+  //
+  // Fallback for tenants without any Employee records (e.g. a
+  // historical TB-import club where HR hasn't been seeded yet): the
+  // chart renders empty and the consolidated-GL-vs-roster
+  // reconciliation note surfaces in the Dues-Cover-Payroll panel.
+  const payrollDeptFilter = (code: string | null): boolean => {
+    if (code == null) return false;
+    if (!payrollDepts.hasEmployeeRecords) return false;
+    return payrollDepts.departmentCodes.has(code);
+  };
+
   const deptRows = actualDept.rows
-    .filter((r) => r.departmentCode !== null)
+    .filter((r) => payrollDeptFilter(r.departmentCode))
     .map((r) => ({
       key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name: r.departmentName,

@@ -303,7 +303,11 @@ export async function resolveBudgetMonthlyIncomeStatement(
 ): Promise<{
   monthlyRevenue: number[];
   monthlyCogs: number[];
+  /** REPORT-WIRING-1B — opex EXCLUDES depreciation (NOI before dep). */
   monthlyOpex: number[];
+  /** REPORT-WIRING-1B — depreciation surfaced separately so the NOI
+   *  computation is Revenue − COGS − OpEx-ex-depreciation. */
+  monthlyDepreciation: number[];
   monthlyPayroll: number[];
   monthlyNoi: number[];
   budget: ResolveBudgetResult["budget"];
@@ -312,6 +316,7 @@ export async function resolveBudgetMonthlyIncomeStatement(
   const rev = Array(12).fill(0);
   const cogs = Array(12).fill(0);
   const opex = Array(12).fill(0);
+  const depreciation = Array(12).fill(0);
   const payroll = Array(12).fill(0);
   for (const a of r.byAccount) {
     // REPORT-WIRING-1A §7-10 (2026-10-04) — Operating IS filter.
@@ -322,6 +327,10 @@ export async function resolveBudgetMonthlyIncomeStatement(
       else if (a.accountType === "EXPENSE") {
         const key = a.fsGroupKey ?? "";
         if (key.startsWith("IS_COGS")) cogs[m] += v;
+        // REPORT-WIRING-1B §20-23 (2026-10-04) — canonical NOI before
+        // depreciation. Carve IS_DEPRECIATION out of opex so NOI
+        // computation matches the IS projection + live-synth path.
+        else if (key === "IS_DEPRECIATION") depreciation[m] += v;
         else opex[m] += v;
         if (key === "IS_PAYROLL") payroll[m] += v;
       }
@@ -334,6 +343,7 @@ export async function resolveBudgetMonthlyIncomeStatement(
     monthlyRevenue,
     monthlyCogs: cogs,
     monthlyOpex: opex,
+    monthlyDepreciation: depreciation,
     monthlyPayroll: payroll,
     monthlyNoi,
     budget: r.budget,
@@ -394,24 +404,25 @@ export async function resolveBudgetIncomeStatement(
 ): Promise<{
   revenue: number;
   cogs: number;
+  /** OpEx EXCLUDES depreciation per REPORT-WIRING-1B §22. */
   opex: number;
+  /** Depreciation surfaced separately so consumers can present
+   *  NOI-before-dep (default) and NOI-after-dep where needed. */
+  depreciation: number;
   payroll: number;
+  /** NOI BEFORE depreciation = Revenue − COGS − OpEx-ex-dep.
+   *  Matches the IncomeStatementProjection + live-synth definition. */
   noi: number;
   ytdWindow: { from: number; through: number };
   budget: ResolveBudgetResult["budget"];
 }> {
   const r = await resolveBudget(args);
-  // We lean on the Account.type + Account.fsGroup.key classifier that
-  // powers the Actual Income Statement so the Budget projection is
-  // apples-to-apples with Actual (REPORT-CHART-1A §3 confirmed the
-  // IS resolver uses `type === "REVENUE" | "EXPENSE"` and the
-  // fsGroupKey "IS_COGS*" split).
   let revenue = 0;
   let cogs = 0;
   let opex = 0;
+  let depreciation = 0;
   let payroll = 0;
   for (const a of r.byAccount) {
-    // REPORT-WIRING-1A §7-10 — Operating IS filter.
     if (!isOperatingFundTag(a.fundApplicability)) continue;
     const ytd = a.monthlyTotals.slice(0, args.throughMonth).reduce((s, v) => s + v, 0);
     if (a.accountType === "REVENUE") {
@@ -419,27 +430,20 @@ export async function resolveBudgetIncomeStatement(
     } else if (a.accountType === "EXPENSE") {
       const key = a.fsGroupKey ?? "";
       if (key.startsWith("IS_COGS")) cogs += ytd;
+      // REPORT-WIRING-1B §20-23 — carve depreciation out of opex.
+      else if (key === "IS_DEPRECIATION") depreciation += ytd;
       else opex += ytd;
       if (key === "IS_PAYROLL") payroll += ytd;
     }
   }
-  // Operating ERPs often store Revenue as a negative natural balance
-  // (credit) and Expenses as positive (debit). The Spectre Actual
-  // projection converts natural balance → DISPLAY sign at render
-  // time. Budget source signs mirror this convention for Coulee
-  // (REVENUE accounts carry negative amounts). We invert REVENUE
-  // signs here so the returned numbers are DISPLAY-sign-aligned
-  // (positive revenue, positive expense, positive NOI when revenue
-  // exceeds expense), matching the Actual projection consumers
-  // expect. If a tenant's source signs ever diverge from this, this
-  // conversion is the ONE place to override — never in a React
-  // component.
   const displayRevenue = -revenue;
+  // NOI before depreciation (canonical).
   const displayNoi = displayRevenue - cogs - opex;
   return {
     revenue: displayRevenue,
     cogs,
     opex,
+    depreciation,
     payroll,
     noi: displayNoi,
     ytdWindow: { from: 1, through: args.throughMonth },
