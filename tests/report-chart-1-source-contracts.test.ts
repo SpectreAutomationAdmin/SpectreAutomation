@@ -41,7 +41,8 @@ describe("REPORT-CHART-1 §3-4 — Equity history falls through to committed TB 
   it("snapshot path never fabricates a future equity point beyond asOf", () => {
     const src = readFileSync(EQUITY, "utf8");
     const resolver = src.match(/async function getEquityPointsFromCommittedSnapshots[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(resolver).toMatch(/asOf:\s*\{\s*lte:\s*asOf\s*\}/);
+    // End-of-day asOf used in the lte filter (same TB-HIST-12 pattern).
+    expect(resolver).toMatch(/asOf:\s*\{\s*lte:\s*asOfEod\s*\}/);
     expect(resolver).not.toMatch(/fakeTrend|interpolate|forwardFill/i);
   });
 });
@@ -80,7 +81,7 @@ describe("REPORT-CHART-1 §7-9 — Operating Results falls through to committed 
   it("§14 snapshot resolver never fabricates a future month beyond asOf", () => {
     const src = readFileSync(OPRES, "utf8");
     const resolver = src.match(/async function getOperatingMonthsFromCommittedSnapshots[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(resolver).toMatch(/asOf:\s*\{\s*lte:\s*asOf\s*\}/);
+    expect(resolver).toMatch(/asOf:\s*\{\s*lte:\s*asOfEod\s*\}/);
     expect(resolver).not.toMatch(/fakeTrend|interpolate|forwardFill/i);
   });
 });

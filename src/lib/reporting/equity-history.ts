@@ -253,12 +253,20 @@ async function getEquityPointsFromCommittedSnapshots(
   clubId: string,
   asOf: Date,
 ): Promise<Array<{ fiscalYear: string; clubEquityCents: bigint }>> {
+  // End-of-day asOf — committed snapshots are stored at 23:59:59.999
+  // of their effective date, so a start-of-day period end filter
+  // would miss the same-day snapshot (same bug as TB-HIST-12
+  // freshness pill).
+  const asOfEod = new Date(Date.UTC(
+    asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(),
+    23, 59, 59, 999,
+  ));
   const snapshots = await prisma.reportingLedgerSnapshot.findMany({
     where: {
       clubId,
       entityKind: "trial-balance",
       batchState: "committed",
-      asOf: { lte: asOf },
+      asOf: { lte: asOfEod },
     },
     orderBy: { asOf: "asc" },
     select: { asOf: true },

@@ -216,12 +216,17 @@ async function getOperatingMonthsFromCommittedSnapshots(
 ): Promise<OperatingMonth[]> {
   const { reportingAccountBalances } = await import("@/lib/accounting/reporting-balances");
   const { consolidateAccountBalances } = await import("@/lib/accounting/balance");
+  // End-of-day asOf (same reason as the equity resolver).
+  const asOfEod = new Date(Date.UTC(
+    asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(),
+    23, 59, 59, 999,
+  ));
   const snapshots = await prisma.reportingLedgerSnapshot.findMany({
     where: {
       clubId,
       entityKind: "trial-balance",
       batchState: "committed",
-      asOf: { lte: asOf },
+      asOf: { lte: asOfEod },
     },
     orderBy: { asOf: "asc" },
     select: { asOf: true },
