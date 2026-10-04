@@ -165,6 +165,7 @@ export async function buildDepartmentNetPerformanceLive(
   const { incomeStatementByDepartmentFromSnapshot } = await import(
     "@/lib/accounting/dept-pl-from-snapshot"
   );
+  const { resolveBudget } = await import("@/lib/reporting/budget-resolver");
   // YTD window — Jan 2026 reporting period = Jan 1 → Jan 31.
   const fyStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
   const eod = new Date(Date.UTC(
@@ -173,7 +174,28 @@ export async function buildDepartmentNetPerformanceLive(
     periodEnd.getUTCDate(),
     23, 59, 59, 999,
   ));
-  const result = await incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod);
+  const [result, budget] = await Promise.all([
+    incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
+    resolveBudget({
+      clubId,
+      fiscalYear: periodEnd.getUTCFullYear(),
+      throughMonth: periodEnd.getUTCMonth() + 1,
+    }).catch(() => null),
+  ]);
+
+  // REPORT-LIVE-3 §10-11 (2026-10-04) — per-department Budget NOI
+  // (display sign). resolveBudget returns raw-sign monthly totals;
+  // flip for display convention so sum(dept Budget) matches
+  // consolidated Budget NOI.
+  const budgetByDeptCode = new Map<string | null, number>();
+  if (budget?.budget) {
+    for (const d of budget.byDepartment) {
+      const ytdRaw = d.monthlyTotals
+        .slice(0, periodEnd.getUTCMonth() + 1)
+        .reduce((s, v) => s + v, 0);
+      budgetByDeptCode.set(d.departmentCode, -ytdRaw);
+    }
+  }
 
   // Sort: largest absolute net result first so the biggest Board-level
   // signal is on top. Nondepartmental sinks to the bottom.
@@ -184,23 +206,28 @@ export async function buildDepartmentNetPerformanceLive(
     return Math.abs(Number(b.netIncome.toString())) - Math.abs(Number(a.netIncome.toString()));
   });
 
-  const inputs: DepartmentRowInput[] = sorted.map((r) => ({
-    key:
-      (r.departmentCode ?? "nondepartmental").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-    name: r.departmentName,
-    ytdActual: Number(r.netIncome.toString()),
-    // §8 — Budget source not connected; render Actual column only.
-    ytdBudget: null,
-  }));
+  const inputs: DepartmentRowInput[] = sorted.map((r) => {
+    const ytdBudget = budgetByDeptCode.has(r.departmentCode)
+      ? (budgetByDeptCode.get(r.departmentCode) as number)
+      : null;
+    return {
+      key: (r.departmentCode ?? "nondepartmental")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-"),
+      name: r.departmentName,
+      ytdActual: Number(r.netIncome.toString()),
+      ytdBudget,
+    };
+  });
 
-  // §28 — board narrative must not fabricate "ahead of budget" /
-  // "favourable" language without a comparison. State factual values
-  // only when a comparison is unavailable.
+  // §13 + §28 — factual commentary, no favorable/unfavorable language.
   const commentary =
     inputs.length === 0
       ? "No committed accounting activity for this reporting period."
-      : `Live Jan 2026 departmental net result from the committed trial balance (${inputs.length} departments). ` +
-        "Budget comparison not connected — variance and trend indicators are suppressed until a Coulee budget import lands.";
+      : budget?.budget
+        ? `Live Jan 2026 departmental net result + canonical Budget comparison (${inputs.length} departments). Variances are mathematical only — no favourable/unfavourable judgment applied.`
+        : `Live Jan 2026 departmental net result from the committed trial balance (${inputs.length} departments). ` +
+          "Budget comparison not connected — variance and trend indicators are suppressed until a Coulee budget import lands.";
 
   return buildDepartmentNetPerformanceData(inputs, commentary, { dataSource: "live" });
 }

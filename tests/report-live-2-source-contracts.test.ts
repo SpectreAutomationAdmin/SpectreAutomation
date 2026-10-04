@@ -40,11 +40,14 @@ describe("REPORT-LIVE-2 §6-8 — Department Performance live wiring", () => {
     expect(src).toMatch(/incomeStatementByDepartmentFromSnapshot/);
   });
 
-  it("live builder sets ytdBudget: null (never 0) — directive §8", () => {
+  it("live builder NEVER sets ytdBudget: 0 — directive §8 (REPORT-LIVE-3 now sources real Budget via resolveBudget; null fallback is still the explicit missing-source sentinel)", () => {
     const src = readFileSync(DEPT, "utf8");
-    const fn = src.match(/export async function buildDepartmentNetPerformanceLive[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(fn).toMatch(/ytdBudget:\s*null/);
-    expect(fn).not.toMatch(/ytdBudget:\s*0/);
+    const fn = src.match(/export async function buildDepartmentNetPerformanceLive[\s\S]*?^\}/m)?.[0] ?? "";
+    // No ytdBudget: 0 literal anywhere — directive §32 (null vs 0).
+    expect(fn).not.toMatch(/ytdBudget:\s*0\b/);
+    // The null fallback remains present for departments not in the
+    // Budget map (missing from CSV).
+    expect(fn).toMatch(/ytdBudget[\s\S]{0,200}:\s*null/);
   });
 
   it("live builder emits dataSource: 'live'", () => {
@@ -95,11 +98,10 @@ describe("REPORT-LIVE-2 §20 — precise per-card unavailable reasons", () => {
     }
   });
 
-  it("redactor applies each per-card reason to the correct sub-chapter", () => {
+  it("redactor applies each per-card reason to the correct still-redacted sub-chapter (REPORT-LIVE-3 moved payrollDepartment to the preserved group)", () => {
     const src = readFileSync(PKG, "utf8");
     expect(src).toMatch(/scorecards:\s*makeUnavailable\(pkg\.stewardshipDashboard\.scorecards,\s*UNAVAIL_SCORECARDS\)/);
     expect(src).toMatch(/duesSubsidy:\s*makeUnavailable\(pkg\.stewardshipDashboard\.duesSubsidy,\s*UNAVAIL_DUES_SUBSIDY\)/);
-    expect(src).toMatch(/payrollDepartment:\s*makeUnavailable\(pkg\.stewardshipDashboard\.payrollDepartment,\s*UNAVAIL_PAYROLL_DEPT\)/);
     expect(src).toMatch(/payrollRatioTrend:\s*makeUnavailable\(pkg\.stewardshipDashboard\.payrollRatioTrend,\s*UNAVAIL_PAYROLL_TREND\)/);
   });
 });

@@ -24,17 +24,22 @@ import { SILVER_SPRINGS_OPERATING_DUES as CANONICAL_OPERATING_DUES } from "./due
 export type PayrollDeptRowInput = {
   key: string;
   name: string;
-  actual: number;       // dollars
-  budget: number;
-  priorYear: number;
+  actual: number;              // dollars
+  /** REPORT-LIVE-3 §19 (2026-10-04) — nullable so a live tenant can
+   *  render Actual without fabricating a $0 Budget. */
+  budget: number | null;
+  /** REPORT-LIVE-3 §26 — nullable so a live tenant can render current-
+   *  year Actual without fabricating a $0 Prior Year. The React card
+   *  omits the Prior Year series when every row is null. */
+  priorYear: number | null;
 };
 
 export type FormattedPayrollDeptRow = {
   key: string;
   name: string;
-  actualK: number;     // chart-ready (dollars / 1000)
-  budgetK: number;
-  priorYearK: number;
+  actualK: number;             // chart-ready (dollars / 1000)
+  budgetK: number | null;
+  priorYearK: number | null;
 };
 
 export type PayrollDepartmentData = {
@@ -44,18 +49,20 @@ export type PayrollDepartmentData = {
   /** "Actual" series label for the grouped-bar chart legend (e.g.
    *  "2026 Actual"). Derived from `reportingYear`. */
   actualSeriesLabel: string;
-  /** Pre-formatted KPI tile values. */
+  /** Pre-formatted KPI tile values. REPORT-LIVE-3 — vsBudget +
+   *  vsPriorYear are nullable so a live tenant without a Prior Year
+   *  source renders "—" instead of a fabricated $0 variance. */
   kpis: {
-    totalYtdLabel:        string;  // "$9.87M"
-    vsBudgetLabel:        string;  // "$122K"
-    vsPriorYearLabel:     string;  // "$613K"
-    payrollRatioLabel:    string;  // "59.2%"
+    totalYtdLabel:        string;         // "$9.87M"
+    vsBudgetLabel:        string | null;  // "$122K" or null → "—"
+    vsPriorYearLabel:     string | null;  // "$613K" or null → "—"
+    payrollRatioLabel:    string;         // "59.2%"
   };
   /** Raw numeric inputs preserved for assertions / downstream calc. */
   totals: {
     actualDollars:    number;
-    budgetDollars:    number;
-    priorYearDollars: number;
+    budgetDollars:    number | null;
+    priorYearDollars: number | null;
     revenueDollars:   number;
     duesDollars:      number;
     payrollRatioPct:  number;
@@ -180,13 +187,24 @@ function pct1(num: number, den: number): string {
 
 export function buildPayrollDepartmentData(
   inputs: PayrollDepartmentInputs,
+  opts: { dataSource?: ReportingDataSource; subtitleOverride?: string } = {},
 ): PayrollDepartmentData {
-  const actualDollars    = inputs.departments.reduce((s, d) => s + d.actual, 0);
-  const budgetDollars    = inputs.departments.reduce((s, d) => s + d.budget, 0);
-  const priorYearDollars = inputs.departments.reduce((s, d) => s + d.priorYear, 0);
+  const actualDollars = inputs.departments.reduce((s, d) => s + d.actual, 0);
+  // REPORT-LIVE-3 §19/§26 — null-safe reductions. If every row's
+  // Budget is null, budgetDollars is null (not 0) — so the KPI tile
+  // reads "—" and the chart omits the Budget series. Same for
+  // priorYear.
+  const anyBudget = inputs.departments.some((d) => d.budget != null);
+  const anyPriorYear = inputs.departments.some((d) => d.priorYear != null);
+  const budgetDollars: number | null = anyBudget
+    ? inputs.departments.reduce((s, d) => s + (d.budget ?? 0), 0)
+    : null;
+  const priorYearDollars: number | null = anyPriorYear
+    ? inputs.departments.reduce((s, d) => s + (d.priorYear ?? 0), 0)
+    : null;
 
-  const vsBudget    = actualDollars - budgetDollars;
-  const vsPriorYear = actualDollars - priorYearDollars;
+  const vsBudget = budgetDollars != null ? actualDollars - budgetDollars : null;
+  const vsPriorYear = priorYearDollars != null ? actualDollars - priorYearDollars : null;
   const payrollRatioPct = inputs.revenueDollars > 0
     ? (actualDollars / inputs.revenueDollars) * 100
     : 0;
@@ -207,15 +225,26 @@ export function buildPayrollDepartmentData(
     `(**${payrollRatioPct.toFixed(1)}%**). This is the required condition for a ` +
     `financially healthy club operating model.`;
 
+  // Subtitle depends on availability of comparators (directive §25):
+  // "January financial payroll reporting only. No employee-level
+  // inference." The default demo subtitle names Actual/Budget/Prior-
+  // Year; the live subtitle names only what's available.
+  const defaultSubtitle =
+    anyBudget && anyPriorYear
+      ? "ACTUAL VS. BUDGET VS. PRIOR YEAR · ALL DEPARTMENTS"
+      : anyBudget
+        ? "ACTUAL VS. BUDGET · ALL DEPARTMENTS (prior-year not loaded)"
+        : "ACTUAL · ALL DEPARTMENTS (budget + prior-year not loaded)";
+
   return {
     title: "Payroll Analysis — Department Breakdown",
-    subtitle: "ACTUAL VS. BUDGET VS. PRIOR YEAR · ALL DEPARTMENTS",
+    subtitle: opts.subtitleOverride ?? defaultSubtitle,
     pillLabel: "LABOR REPORT",
     actualSeriesLabel: `${inputs.reportingYear} Actual`,
     kpis: {
       totalYtdLabel:     fmtDollarsM(actualDollars),
-      vsBudgetLabel:     fmtDollarsK(vsBudget),
-      vsPriorYearLabel:  fmtDollarsK(vsPriorYear),
+      vsBudgetLabel:     vsBudget != null ? fmtDollarsK(vsBudget) : null,
+      vsPriorYearLabel:  vsPriorYear != null ? fmtDollarsK(vsPriorYear) : null,
       payrollRatioLabel: pct1(actualDollars, inputs.revenueDollars),
     },
     totals: {
@@ -231,8 +260,8 @@ export function buildPayrollDepartmentData(
       key: d.key,
       name: d.name,
       actualK:    d.actual / 1000,
-      budgetK:    d.budget / 1000,
-      priorYearK: d.priorYear / 1000,
+      budgetK:    d.budget != null ? d.budget / 1000 : null,
+      priorYearK: d.priorYear != null ? d.priorYear / 1000 : null,
     })),
     xLabels: inputs.departments.map((d) => d.name),
     seriesColors: {
@@ -245,8 +274,90 @@ export function buildPayrollDepartmentData(
       bodySentence,
       decision,
     },
-    dataSource: "demo",
+    dataSource: opts.dataSource ?? "demo",
   };
+}
+
+// ---------------------------------------------------------------------------
+// REPORT-LIVE-3 §21-25 (2026-10-04) — live Payroll Department builder.
+// Resolves Jan 2026 payroll per department from the committed TB
+// (fsGroupKey = IS_PAYROLL, dimensional.department) and the canonical
+// Budget resolver (same classifier). Prior Year is null — only Jan
+// 2026 committed, no 2025 payroll monthly history.
+// ---------------------------------------------------------------------------
+export async function buildPayrollDepartmentLive(
+  clubId: string,
+  periodEnd: Date,
+): Promise<PayrollDepartmentData> {
+  const { incomeStatementByDepartmentFromSnapshot } = await import(
+    "@/lib/accounting/dept-pl-from-snapshot"
+  );
+  const { resolveBudgetPayrollByDepartment, resolveBudgetIncomeStatement } = await import(
+    "@/lib/reporting/budget-resolver"
+  );
+  const fyStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
+  const eod = new Date(Date.UTC(
+    periodEnd.getUTCFullYear(),
+    periodEnd.getUTCMonth(),
+    periodEnd.getUTCDate(),
+    23, 59, 59, 999,
+  ));
+  const throughMonth = periodEnd.getUTCMonth() + 1;
+
+  const [actualDept, budgetPayrollMap, budgetIs] = await Promise.all([
+    incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
+    resolveBudgetPayrollByDepartment({
+      clubId,
+      fiscalYear: periodEnd.getUTCFullYear(),
+      throughMonth,
+    }).catch(() => new Map<string | null, number>()),
+    resolveBudgetIncomeStatement({
+      clubId,
+      fiscalYear: periodEnd.getUTCFullYear(),
+      throughMonth,
+    }).catch(() => null),
+  ]);
+
+  // Build dept-rows for departments that have real IS activity (so
+  // nondepartmental rows with zero payroll don't clutter the chart).
+  const deptRows = actualDept.rows
+    .filter((r) => r.departmentCode !== null)
+    .map((r) => ({
+      key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      name: r.departmentName,
+      actual: Number(r.payroll.toString()),
+      budget: (() => {
+        const b = budgetPayrollMap.get(r.departmentCode);
+        return b != null ? b : null;
+      })(),
+      // §26 — only Jan 2026 Actual exists; no 2025 monthly history is
+      // currently loaded. Prior Year stays null (never fabricated $0).
+      priorYear: null as number | null,
+    }));
+
+  // Revenue + dues for the Dues-Cover-Payroll check — pulled from the
+  // Actual departmental sum (revenue sign-flipped to display) because
+  // this card renders Actual-period semantics.
+  const totalRevenue = -actualDept.rows.reduce((s, r) => s + Number(r.revenue.toString()), 0);
+  // Dues approximation: dept with code "DUES_AND_CHARGES". If absent
+  // (legacy tenant), fall back to the whole-tenant total revenue.
+  const duesRow = actualDept.rows.find((r) => r.departmentCode === "DUES_AND_CHARGES");
+  const duesDollars = duesRow ? -Number(duesRow.revenue.toString()) : totalRevenue;
+
+  return buildPayrollDepartmentData(
+    {
+      departments: deptRows,
+      revenueDollars: totalRevenue,
+      duesDollars,
+      reportingYear: periodEnd.getUTCFullYear(),
+    },
+    {
+      dataSource: "live",
+      subtitleOverride: budgetIs?.budget
+        ? "JANUARY ACTUAL VS BUDGET · ALL FINANCIAL-ACTIVITY DEPARTMENTS (prior-year not loaded)"
+        : "JANUARY ACTUAL · ALL FINANCIAL-ACTIVITY DEPARTMENTS (budget + prior-year not loaded)",
+    },
+  );
 }
 
 // -- Card 2 builder -----------------------------------------------------------

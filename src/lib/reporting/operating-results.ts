@@ -166,20 +166,40 @@ export async function getOperatingResults(
   if (!hasPlottableFpData) {
     const snapshotMonths = await getOperatingMonthsFromCommittedSnapshots(clubId, asOf);
     if (snapshotMonths.length > 0) {
-      const sMonths = snapshotMonths;
-      const sYtdNoi = sum(sMonths.map((m) => m.noi));
-      const sYtdRevenue = sum(sMonths.map((m) => m.revenue));
+      // REPORT-LIVE-3 §6-8 (2026-10-04) — Budget source is now
+      // available via the canonical Budget resolver. Inject per-month
+      // Budget NOI (display sign, from `resolveBudgetMonthlyIncomeStatement`)
+      // ONLY for months that have a committed snapshot. Future months
+      // keep budgetNoi null even though Feb-Dec Budget is legitimately
+      // known — the historical Operating chart answers "how did we
+      // compare through this reporting period", not "what does the
+      // full year plan look like" (directive §8).
+      const { resolveBudgetMonthlyIncomeStatement } = await import("@/lib/reporting/budget-resolver");
+      let monthlyBudgetNoi: number[] | null = null;
+      try {
+        const b = await resolveBudgetMonthlyIncomeStatement({
+          clubId,
+          fiscalYear: asOf.getUTCFullYear(),
+          throughMonth: 12,
+        });
+        if (b.budget) monthlyBudgetNoi = b.monthlyNoi;
+      } catch { /* budget not imported yet → leave null */ }
+      const enriched = snapshotMonths.map((m) => {
+        if (!monthlyBudgetNoi) return m;
+        const monthIndex = m.endDate.getUTCMonth();
+        return { ...m, budgetNoi: monthlyBudgetNoi[monthIndex] };
+      });
+      const sYtdNoi = sum(enriched.map((m) => m.noi));
+      const sYtdRevenue = sum(enriched.map((m) => m.revenue));
+      const sYtdBudgetNoi = sum(enriched.map((m) => m.budgetNoi));
       return {
-        months: sMonths,
+        months: enriched,
         // §11 — Prior-Year series is SOURCE_NOT_LOADED on live tenant;
         // emit an empty array (not zero-filled).
         priorYearMonths: [],
         ytdNoi: sYtdNoi,
         ytdRevenue: sYtdRevenue,
-        // §10 — Budget series is SOURCE_NOT_CONNECTED on live tenant;
-        // zero YTD budget here is a scalar-only roll-up, not a plotted
-        // monthly series. The chart's budget LINE still omits.
-        ytdBudgetNoi: 0,
+        ytdBudgetNoi: sYtdBudgetNoi,
         priorYearNoi: 0,
         breakEven: 0,
         breakEvenCorridor: { ...DEFAULT_BREAK_EVEN_CORRIDOR_K },

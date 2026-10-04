@@ -269,6 +269,100 @@ export async function resolveBudget(
   };
 }
 
+/** REPORT-LIVE-3 §6-7 (2026-10-04) — per-month Income Statement
+ *  projection of the Budget. Returns 12 monthly series in DISPLAY
+ *  sign (revenue flipped positive, expenses already positive, NOI =
+ *  revenue − cogs − opex). Used by the Operating Results chart to
+ *  render a Budget bar alongside Actual for each month that has a
+ *  committed TB snapshot. Future-month Budget values are still
+ *  returned (they're legitimately known) — the chart decides whether
+ *  to plot them per directive §8. */
+export async function resolveBudgetMonthlyIncomeStatement(
+  args: ResolveBudgetArgs,
+): Promise<{
+  monthlyRevenue: number[];
+  monthlyCogs: number[];
+  monthlyOpex: number[];
+  monthlyPayroll: number[];
+  monthlyNoi: number[];
+  budget: ResolveBudgetResult["budget"];
+}> {
+  const r = await resolveBudget(args);
+  const rev = Array(12).fill(0);
+  const cogs = Array(12).fill(0);
+  const opex = Array(12).fill(0);
+  const payroll = Array(12).fill(0);
+  for (const a of r.byAccount) {
+    for (let m = 0; m < 12; m++) {
+      const v = a.monthlyTotals[m] ?? 0;
+      if (a.accountType === "REVENUE") rev[m] += v;
+      else if (a.accountType === "EXPENSE") {
+        const key = a.fsGroupKey ?? "";
+        if (key.startsWith("IS_COGS")) cogs[m] += v;
+        else opex[m] += v;
+        if (key === "IS_PAYROLL") payroll[m] += v;
+      }
+    }
+  }
+  // Display sign: revenue natural is negative, flip to positive.
+  const monthlyRevenue = rev.map((v) => -v);
+  const monthlyNoi = monthlyRevenue.map((rv, i) => rv - cogs[i] - opex[i]);
+  return {
+    monthlyRevenue,
+    monthlyCogs: cogs,
+    monthlyOpex: opex,
+    monthlyPayroll: payroll,
+    monthlyNoi,
+    budget: r.budget,
+  };
+}
+
+/** REPORT-LIVE-3 §21-24 (2026-10-04) — per-department payroll Budget
+ *  (IS_PAYROLL fsGroupKey only), YTD through the selected month.
+ *  Returns a flat `{ departmentCode -> payrollBudget }` map. */
+export async function resolveBudgetPayrollByDepartment(
+  args: ResolveBudgetArgs,
+): Promise<Map<string | null, number>> {
+  const r = await resolveBudget(args);
+  const out = new Map<string | null, number>();
+  for (const d of r.byDepartment) {
+    // We need to re-aggregate at the dept × IS_PAYROLL cross because
+    // byDepartment carries all accounts. Pull the raw byAccount set
+    // and sum only IS_PAYROLL rows for this department.
+  }
+  // Easier: do the aggregation directly from BudgetLine via a bulk
+  // read. Avoid duplicate math — reuse resolveBudget's byAccount +
+  // byDepartment semantics via a second lightweight query.
+  const payrollLines = await import("@/lib/prisma").then(({ prisma }) =>
+    prisma.budgetLine.findMany({
+      where: {
+        clubId: args.clubId,
+        budgetId: r.budget?.id,
+        account: {
+          clubId: args.clubId,
+          fsGroup: { key: "IS_PAYROLL" },
+        },
+      },
+      select: {
+        monthlyAmounts: true,
+        department: { select: { code: true } },
+      },
+    }),
+  );
+  const through = Math.max(1, Math.min(12, args.throughMonth));
+  for (const l of payrollLines) {
+    const code = l.department?.code ?? null;
+    try {
+      const arr = JSON.parse(l.monthlyAmounts) as unknown;
+      if (Array.isArray(arr)) {
+        const ytd = arr.slice(0, through).reduce<number>((s, v) => s + Number(v), 0);
+        out.set(code, (out.get(code) ?? 0) + ytd);
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
 /** Convenience: just the Income-Statement roll-up for the Operating
  *  dashboard. Returns dollars (not cents). Positive = favorable to
  *  the respective line (callers must apply sign convention). */

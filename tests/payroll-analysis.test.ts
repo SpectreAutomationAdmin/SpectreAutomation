@@ -233,10 +233,10 @@ describe("Financial Reporting Data Integrity — payroll surface", () => {
 
   it("Rule 3: 'vs. Budget' KPI reconciles to (Σ chart actual bars) − (Σ chart budget bars)", () => {
     const chartActualSumK = deptCard.rows.reduce((s, r) => s + r.actualK, 0);
-    const chartBudgetSumK = deptCard.rows.reduce((s, r) => s + r.budgetK, 0);
+    const chartBudgetSumK = deptCard.rows.reduce((s, r) => s + (r.budgetK ?? 0), 0);
     const deltaDollars = (chartActualSumK - chartBudgetSumK) * 1000;
     expect(deltaDollars).toBe(
-      deptCard.totals.actualDollars - deptCard.totals.budgetDollars,
+      deptCard.totals.actualDollars - (deptCard.totals.budgetDollars ?? 0),
     );
     expect(deltaDollars).toBe(122_000);
     expect(deptCard.kpis.vsBudgetLabel).toBe("$122K");
@@ -244,10 +244,10 @@ describe("Financial Reporting Data Integrity — payroll surface", () => {
 
   it("Rule 3: 'vs. Prior Year' KPI reconciles to (Σ chart actual bars) − (Σ chart prior-year bars)", () => {
     const chartActualSumK = deptCard.rows.reduce((s, r) => s + r.actualK, 0);
-    const chartPriorSumK = deptCard.rows.reduce((s, r) => s + r.priorYearK, 0);
+    const chartPriorSumK = deptCard.rows.reduce((s, r) => s + (r.priorYearK ?? 0), 0);
     const deltaDollars = (chartActualSumK - chartPriorSumK) * 1000;
     expect(deltaDollars).toBe(
-      deptCard.totals.actualDollars - deptCard.totals.priorYearDollars,
+      deptCard.totals.actualDollars - (deptCard.totals.priorYearDollars ?? 0),
     );
     expect(deltaDollars).toBe(613_000);
     expect(deptCard.kpis.vsPriorYearLabel).toBe("$613K");

@@ -43,6 +43,13 @@ export type DepartmentPLSnapshotRow = {
   revenue: Prisma.Decimal;
   cogs: Prisma.Decimal;
   opex: Prisma.Decimal;
+  /** REPORT-LIVE-3 §21-22 (2026-10-04) — additive derived subset of
+   *  `opex`. Sum of balances where Account.fsGroup.key === "IS_PAYROLL"
+   *  for the department. Does NOT change the `netIncome = revenue -
+   *  cogs - opex` identity — payroll remains inside opex. Consumers
+   *  that want payroll separately read this field; consumers that
+   *  want "total expense ex-COGS" keep reading opex. */
+  payroll: Prisma.Decimal;
   netIncome: Prisma.Decimal;
 };
 
@@ -84,7 +91,7 @@ export async function incomeStatementByDepartmentFromSnapshot(
   // Group per-dim by Spectre dept code (null for nondepartmental).
   const perDept = new Map<
     string | null,
-    { revenue: Prisma.Decimal; cogs: Prisma.Decimal; opex: Prisma.Decimal }
+    { revenue: Prisma.Decimal; cogs: Prisma.Decimal; opex: Prisma.Decimal; payroll: Prisma.Decimal }
   >();
 
   for (const b of rawBalances) {
@@ -92,6 +99,10 @@ export async function incomeStatementByDepartmentFromSnapshot(
     const isCogs =
       b.fsGroupKey != null &&
       (b.fsGroupKey.startsWith("IS_COGS_") || b.fsGroupKey === "IS_COGS");
+    // REPORT-LIVE-3 §22 — classify payroll via first-class COA
+    // taxonomy (fsGroupKey === "IS_PAYROLL"), never account-name
+    // substring matching.
+    const isPayroll = b.fsGroupKey === "IS_PAYROLL";
 
     const dims =
       b.dimensional && b.dimensional.length > 0
@@ -109,14 +120,19 @@ export async function incomeStatementByDepartmentFromSnapshot(
 
     for (const d of dims) {
       const key = d.department && d.department.trim().length > 0 ? d.department.trim() : null;
-      const bucket = perDept.get(key) ?? { revenue: ZERO, cogs: ZERO, opex: ZERO };
+      const bucket = perDept.get(key) ?? { revenue: ZERO, cogs: ZERO, opex: ZERO, payroll: ZERO };
       const amount = d.naturalBalance;
       if (b.accountType === "REVENUE") {
         bucket.revenue = bucket.revenue.plus(amount);
       } else if (isCogs) {
         bucket.cogs = bucket.cogs.plus(amount);
       } else {
+        // REPORT-LIVE-3 §21 — opex continues to include payroll so
+        // netIncome = revenue - cogs - opex stays an identity. The
+        // additive `payroll` subset is tracked for Payroll Department
+        // card consumption only.
         bucket.opex = bucket.opex.plus(amount);
+        if (isPayroll) bucket.payroll = bucket.payroll.plus(amount);
       }
       perDept.set(key, bucket);
     }
@@ -134,6 +150,7 @@ export async function incomeStatementByDepartmentFromSnapshot(
       revenue: v.revenue,
       cogs: v.cogs,
       opex: v.opex,
+      payroll: v.payroll,
       netIncome: v.revenue.minus(v.cogs).minus(v.opex),
     };
   });

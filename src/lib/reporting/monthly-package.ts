@@ -131,6 +131,7 @@ import {
 } from "@/lib/reporting/dues-subsidy";
 import {
   buildPayrollDepartmentData,
+  buildPayrollDepartmentLive,
   buildPayrollRatioTrendData,
   SILVER_SPRINGS_PAYROLL_DEPTS,
   SILVER_SPRINGS_PAYROLL_REVENUE,
@@ -1451,14 +1452,33 @@ export function formatOperatingDashboard(
   // percentages.
   const corridorPct = { lower: -2.8, upper: 3.3 };
 
-  const interpretation = buildOperatingCommentary({
-    ytdNoiDollars: r.ytdNoi,
-    ytdRevenueDollars: r.ytdRevenue,
-    ytdBudgetNoiDollars: r.ytdBudgetNoi,
-    priorYearNoiDollars: r.priorYearNoi,
-    corridorPct,
-    periodLabel: opts.periodLabel ?? "Year-end",
-  });
+  // REPORT-LIVE-3 §3 + §31 (2026-10-04) — on live tenants where the
+  // reporting policy corridor is NOT configured (default placeholder
+  // {-25,+25} $K), the existing buildOperatingCommentary emits
+  // evaluative wording ("comfortably ahead of policy", "excess NOI
+  // should be directed to capital reserves", etc.) keyed off a
+  // corridor that is not authoritative on this tenant. Override with
+  // a FACTUAL-ONLY narrative so the Board report states the real
+  // Actual + Budget + variance without judgment language. Demo
+  // tenants continue to render the full corridor commentary.
+  const corridorIsDefault =
+    r.breakEvenCorridor.lower === DEFAULT_OPERATING_CORRIDOR_LOWER &&
+    r.breakEvenCorridor.upper === DEFAULT_OPERATING_CORRIDOR_UPPER;
+  const interpretation = corridorIsDefault
+    ? buildFactualOperatingNarrative({
+        ytdNoiDollars: r.ytdNoi,
+        ytdRevenueDollars: r.ytdRevenue,
+        ytdBudgetNoiDollars: r.ytdBudgetNoi,
+        periodLabel: opts.periodLabel ?? "Year-end",
+      })
+    : buildOperatingCommentary({
+        ytdNoiDollars: r.ytdNoi,
+        ytdRevenueDollars: r.ytdRevenue,
+        ytdBudgetNoiDollars: r.ytdBudgetNoi,
+        priorYearNoiDollars: r.priorYearNoi,
+        corridorPct,
+        periodLabel: opts.periodLabel ?? "Year-end",
+      });
 
   return {
     series,
@@ -1483,6 +1503,50 @@ export function formatOperatingDashboard(
  *  observation for this slot"; the chart draws no bar / no overlay
  *  segment at that index. */
 export type OperatingSeriesPoint = { label: string; value: number | null };
+
+/** REPORT-LIVE-3 §3 + §31 — sentinels that identify the live-tenant
+ *  "no authorized break-even corridor" state. Must match the
+ *  DEFAULT_BREAK_EVEN_CORRIDOR_K constants in operating-results.ts. */
+const DEFAULT_OPERATING_CORRIDOR_LOWER = -25;
+const DEFAULT_OPERATING_CORRIDOR_UPPER = 25;
+
+/** REPORT-LIVE-3 §3 + §31 (2026-10-04) — factual-only narrative for
+ *  live tenants without an authorised break-even corridor. States
+ *  Actual + Budget + mathematical variance without evaluative
+ *  language ("favourable", "ahead of policy", etc. all suppressed). */
+function buildFactualOperatingNarrative(args: {
+  ytdNoiDollars: number;
+  ytdRevenueDollars: number;
+  ytdBudgetNoiDollars: number;
+  periodLabel: string;
+}): string {
+  const fmt = (d: number): string => {
+    const abs = Math.abs(d);
+    const sign = d < 0 ? "(" : "";
+    const close = d < 0 ? ")" : "";
+    if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M${close}`;
+    return `${sign}$${Math.round(abs / 1_000).toLocaleString("en-US")}K${close}`;
+  };
+  const variance = args.ytdNoiDollars - args.ytdBudgetNoiDollars;
+  const noiPctRev = args.ytdRevenueDollars > 0
+    ? (args.ytdNoiDollars / args.ytdRevenueDollars) * 100
+    : 0;
+  if (args.ytdBudgetNoiDollars === 0) {
+    return (
+      `${args.periodLabel} NOI of **${fmt(args.ytdNoiDollars)}** (${noiPctRev.toFixed(1)}% of revenue). ` +
+      "Budget comparison not connected — mathematical variance only once Budget is loaded."
+    );
+  }
+  const varPct = Math.abs((variance / args.ytdBudgetNoiDollars) * 100).toFixed(1) + "%";
+  const direction = variance >= 0 ? "above" : "below";
+  const sign = variance >= 0 ? "+" : "";
+  return (
+    `${args.periodLabel} NOI of **${fmt(args.ytdNoiDollars)}** vs Budget of ` +
+    `**${fmt(args.ytdBudgetNoiDollars)}**: mathematical variance ` +
+    `**${sign}${fmt(variance)}** (${varPct} ${direction} Budget). ` +
+    "Policy corridor + benchmarks not configured — no favourable/unfavourable judgment applied."
+  );
+}
 
 function operatingMonthLabel(d: Date): string {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -2807,13 +2871,12 @@ export async function getMonthlyReportingPackage(
             SILVER_SPRINGS_MEMBER_COUNT,
             SILVER_SPRINGS_DUES_CATEGORIES,
           ),
+      // REPORT-LIVE-3 §21-25 (2026-10-04) — live-tenant Payroll
+      // Department now reads per-dept IS_PAYROLL from the committed
+      // Jan 2026 TB + canonical Budget resolver. Prior Year stays
+      // null (no 2025 monthly history loaded).
       payrollDepartment: hasRealData
-        ? buildPayrollDepartmentData({
-            departments: [],
-            revenueDollars: 0,
-            duesDollars: 0,
-            reportingYear: periodEnd.getUTCFullYear(),
-          })
+        ? await buildPayrollDepartmentLive(clubId, periodEnd)
         : buildPayrollDepartmentData({
             departments: SILVER_SPRINGS_PAYROLL_DEPTS,
             revenueDollars: SILVER_SPRINGS_PAYROLL_REVENUE,
@@ -3624,12 +3687,13 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       // §4-9 — live
       equity:                pkg.stewardshipDashboard.equity,
       operating:             pkg.stewardshipDashboard.operating,
-      // §6 — live (Jan 2026 departmental P&L from committed TB)
+      // §6 — live (Jan 2026 departmental P&L + Budget from committed TB)
       departmentPerformance: pkg.stewardshipDashboard.departmentPerformance,
+      // REPORT-LIVE-3 §21-25 — live (Jan 2026 per-dept Actual + Budget payroll)
+      payrollDepartment: pkg.stewardshipDashboard.payrollDepartment,
       // §20 — unavailable, with precise per-card reasons
       scorecards:        makeUnavailable(pkg.stewardshipDashboard.scorecards, UNAVAIL_SCORECARDS),
       duesSubsidy:       makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
-      payrollDepartment: makeUnavailable(pkg.stewardshipDashboard.payrollDepartment, UNAVAIL_PAYROLL_DEPT),
       payrollRatioTrend: makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
     },
     stewardshipKpiDashboard: makeUnavailable(pkg.stewardshipKpiDashboard, u),

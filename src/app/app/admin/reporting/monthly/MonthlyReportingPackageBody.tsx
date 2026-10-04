@@ -2883,14 +2883,14 @@ type PayrollDeptData = Awaited<
   ReturnType<typeof getMonthlyReportingPackage>
 >["stewardshipDashboard"]["payrollDepartment"];
 
-function PayrollKpiTile({ value, label }: { value: string; label: string }) {
+function PayrollKpiTile({ value, label }: { value: string | null; label: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center rounded border border-club-green-800/15 bg-club-cream px-2">
       <span
         className="font-serif font-bold tabular-nums leading-none tracking-tight text-club-green-900"
         style={{ fontSize: "21px" }}
       >
-        {value}
+        {value ?? "—"}
       </span>
       <span
         className="mt-1.5 uppercase font-medium text-club-green-800/60"
@@ -2930,17 +2930,35 @@ function PayrollDepartmentCard({ data }: { data: PayrollDeptData }) {
       {/* Grouped bar chart */}
       <div className="bg-club-cream" style={{ height: 240, marginTop: 10 }}>
         <EditorialChartReveal testid="payroll-department-breakdown-reveal">
+        {/* REPORT-LIVE-3 §19/§26 (2026-10-04) — the chart only
+            plots series that have at least one non-null value, so a
+            live tenant without a Prior Year source renders Actual +
+            Budget cleanly rather than a hollow $0 Prior Year series.
+            Within a plotted series, individual null values fold to 0
+            (chart primitive expects numeric arrays) — this is
+            acceptable because the series is explicitly chosen to have
+            data; the KPI tile + subtitle already name the series as
+            comparable at the aggregate level. */}
         <EditorialGroupedBarChart
           xLabels={data.xLabels}
           height={240}
           formatY="dollars-thousands"
           padLeft={48}
           padRight={14}
-          series={[
-            { name: data.actualSeriesLabel, values: data.rows.map((r) => r.actualK),    color: data.seriesColors.actual    },
-            { name: "Budget",      values: data.rows.map((r) => r.budgetK),    color: data.seriesColors.budget    },
-            { name: "Prior Year",  values: data.rows.map((r) => r.priorYearK), color: data.seriesColors.priorYear },
-          ]}
+          series={(() => {
+            const base: Array<{ name: string; values: Array<number | null>; color: string }> = [
+              { name: data.actualSeriesLabel, values: data.rows.map((r) => r.actualK),    color: data.seriesColors.actual },
+              { name: "Budget",      values: data.rows.map((r) => r.budgetK),    color: data.seriesColors.budget },
+              { name: "Prior Year",  values: data.rows.map((r) => r.priorYearK), color: data.seriesColors.priorYear },
+            ];
+            return base
+              .filter((s) => s.values.some((v) => v != null))
+              .map((s) => ({
+                name: s.name,
+                values: s.values.map((v) => v ?? 0),
+                color: s.color,
+              }));
+          })()}
         />
         </EditorialChartReveal>
       </div>
