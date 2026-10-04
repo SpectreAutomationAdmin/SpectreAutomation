@@ -202,6 +202,39 @@ export async function getEquityHistory(
   const years = Math.max(0, actualCents.length - 1);
   const actualCagrBps = computeCagrBps(baseCents, currentEquityCents, years);
 
+  // REPORT-CHART-1 §4 (2026-10-03) — if the FiscalYear-driven series
+  // is empty (Jonas-only tenant with no FiscalYear rows), fall through
+  // to committed TB snapshots. This renders Dec 2025 + Jan 2026
+  // authoritative points from the committed BS at each snapshot asOf.
+  if (series.length === 0) {
+    const snapshotPoints = await getEquityPointsFromCommittedSnapshots(clubId, asOf);
+    if (snapshotPoints.length > 0) {
+      const sp = snapshotPoints;
+      const base = sp[0].clubEquityCents;
+      const current = sp[sp.length - 1].clubEquityCents;
+      const yrs = Math.max(0, sp.length - 1);
+      return {
+        currentEquityCents: current,
+        actualCagrBps: computeCagrBps(base, current, yrs),
+        // §5 — benchmark projections are suppressed on the snapshot
+        // path. Two points do not constitute a long-term benchmark
+        // base; projecting a demo CAGR off a 2-point series would
+        // misrepresent the data.
+        bestInClassCagrBps: 0,
+        minimumRequiredCagrBps: 0,
+        series: sp.map((p) => ({
+          fiscalYear: p.fiscalYear,
+          clubEquityCents: p.clubEquityCents,
+          bestInClassBenchmarkCents: 0n,
+          minimumRequiredBenchmarkCents: 0n,
+        })),
+        source: {
+          perYear: sp.map((p) => ({ fiscalYear: p.fiscalYear, origin: "live-bs" as const })),
+        },
+      };
+    }
+  }
+
   return {
     currentEquityCents,
     actualCagrBps,
@@ -210,6 +243,45 @@ export async function getEquityHistory(
     series,
     source: { perYear: perYearOrigin },
   };
+}
+
+/** REPORT-CHART-1 §4 (2026-10-03) — enumerate committed TB snapshots
+ *  on-or-before `asOf` and resolve equity at each via `balanceSheet`.
+ *  Emits points labeled "<Mon YYYY>" (e.g. "Dec 2025", "Jan 2026")
+ *  since there is no FiscalYear row to pull a label from. */
+async function getEquityPointsFromCommittedSnapshots(
+  clubId: string,
+  asOf: Date,
+): Promise<Array<{ fiscalYear: string; clubEquityCents: bigint }>> {
+  const snapshots = await prisma.reportingLedgerSnapshot.findMany({
+    where: {
+      clubId,
+      entityKind: "trial-balance",
+      batchState: "committed",
+      asOf: { lte: asOf },
+    },
+    orderBy: { asOf: "asc" },
+    select: { asOf: true },
+  });
+  if (snapshots.length === 0) return [];
+  const points: Array<{ fiscalYear: string; clubEquityCents: bigint }> = [];
+  for (const s of snapshots) {
+    if (!s.asOf) continue;
+    try {
+      const bs = await balanceSheet(clubId, s.asOf);
+      const label = labelFromDate(s.asOf);
+      points.push({ fiscalYear: label, clubEquityCents: decimalToCents(bs.totalEquity) });
+    } catch {
+      // Snapshot read failed — skip rather than fabricate zero.
+      continue;
+    }
+  }
+  return points;
+}
+
+function labelFromDate(d: Date): string {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
 // ---------------------------------------------------------------------------

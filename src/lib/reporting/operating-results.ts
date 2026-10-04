@@ -155,6 +155,36 @@ export async function getOperatingResults(
   const ytdBudgetNoi = sum(months.map((m) => m.budgetNoi));
   const priorYearNoi = sum(priorYearMonths.map((m) => m.noi));
 
+  // REPORT-CHART-1 §7 (2026-10-03) — snapshot fallback. If
+  // FiscalPeriod is empty (Jonas-only tenant), enumerate committed
+  // monthly TB snapshots on-or-before `asOf` and build operating
+  // points directly from each snapshot's YTD slice. One snapshot →
+  // one real point; missing months are OMITTED (never zero-filled)
+  // so the chart renders a partial Actual series.
+  if (months.length === 0) {
+    const snapshotMonths = await getOperatingMonthsFromCommittedSnapshots(clubId, asOf);
+    if (snapshotMonths.length > 0) {
+      const sMonths = snapshotMonths;
+      const sYtdNoi = sum(sMonths.map((m) => m.noi));
+      const sYtdRevenue = sum(sMonths.map((m) => m.revenue));
+      return {
+        months: sMonths,
+        // §11 — Prior-Year series is SOURCE_NOT_LOADED on live tenant;
+        // emit an empty array (not zero-filled).
+        priorYearMonths: [],
+        ytdNoi: sYtdNoi,
+        ytdRevenue: sYtdRevenue,
+        // §10 — Budget series is SOURCE_NOT_CONNECTED on live tenant;
+        // zero YTD budget here is a scalar-only roll-up, not a plotted
+        // monthly series. The chart's budget LINE still omits.
+        ytdBudgetNoi: 0,
+        priorYearNoi: 0,
+        breakEven: 0,
+        breakEvenCorridor: { ...DEFAULT_BREAK_EVEN_CORRIDOR_K },
+      };
+    }
+  }
+
   // Break-even corridor — currently a constant; will become a
   // ClubProfile assumption when the board policy fields land
   // (parallel to ClubProfile.equityBenchmark*CagrBps).
@@ -168,4 +198,74 @@ export async function getOperatingResults(
     breakEven: 0,
     breakEvenCorridor: { ...DEFAULT_BREAK_EVEN_CORRIDOR_K },
   };
+}
+
+/** REPORT-CHART-1 §7-9 (2026-10-03) — committed-snapshot fallback
+ *  for the Operating Results chart. Reads each committed TB snapshot
+ *  on-or-before `asOf` and derives per-month NOI + Revenue from the
+ *  snapshot's YTD slice. Returns `OperatingMonth[]` without
+ *  zero-filling months that have no snapshot.
+ *
+ *  NOI metric: Revenue − COGS − OpEx (NOI before depreciation),
+ *  consistent with TB-HIST-12B JanuaryMetricSet.noi and the Executive
+ *  Opening cover-metric NOI.
+ */
+async function getOperatingMonthsFromCommittedSnapshots(
+  clubId: string,
+  asOf: Date,
+): Promise<OperatingMonth[]> {
+  const { reportingAccountBalances } = await import("@/lib/accounting/reporting-balances");
+  const { consolidateAccountBalances } = await import("@/lib/accounting/balance");
+  const snapshots = await prisma.reportingLedgerSnapshot.findMany({
+    where: {
+      clubId,
+      entityKind: "trial-balance",
+      batchState: "committed",
+      asOf: { lte: asOf },
+    },
+    orderBy: { asOf: "asc" },
+    select: { asOf: true },
+  });
+  if (snapshots.length === 0) return [];
+  // Period start = calendar-month-start of the snapshot's month.
+  const points: OperatingMonth[] = [];
+  for (let i = 0; i < snapshots.length; i++) {
+    const s = snapshots[i];
+    if (!s.asOf) continue;
+    const asOfDate = s.asOf;
+    const periodStart = new Date(Date.UTC(asOfDate.getUTCFullYear(), asOfDate.getUTCMonth(), 1, 0, 0, 0, 0));
+    try {
+      const result = await reportingAccountBalances(clubId, { from: periodStart, to: asOfDate });
+      if (result.balances.length === 0) continue;
+      const consolidated = consolidateAccountBalances(result.balances);
+      let revenue = 0;
+      let cogs = 0;
+      let opex = 0;
+      for (const b of consolidated) {
+        if (b.accountType === "REVENUE") revenue += Number(b.naturalBalance.toString());
+        else if (b.accountType === "EXPENSE") {
+          const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+          if (isCogs) cogs += Number(b.naturalBalance.toString());
+          else opex += Number(b.naturalBalance.toString());
+        }
+      }
+      const noi = revenue - cogs - opex;
+      points.push({
+        endDate: asOfDate,
+        monthLabel: monthLabelFromDate(asOfDate),
+        sequence: i + 1,
+        noi,
+        revenue,
+        budgetNoi: null,
+      });
+    } catch {
+      continue;
+    }
+  }
+  return points;
+}
+
+function monthLabelFromDate(d: Date): string {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
