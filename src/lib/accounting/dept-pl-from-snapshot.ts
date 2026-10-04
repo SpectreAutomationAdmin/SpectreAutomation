@@ -94,8 +94,14 @@ export async function incomeStatementByDepartmentFromSnapshot(
     { revenue: Prisma.Decimal; cogs: Prisma.Decimal; opex: Prisma.Decimal; payroll: Prisma.Decimal }
   >();
 
+  const { isOperatingFundTag } = await import("@/lib/reporting/budget-resolver");
   for (const b of rawBalances) {
     if (b.accountType !== "REVENUE" && b.accountType !== "EXPENSE") continue;
+    // REPORT-WIRING-1A §7-10 (2026-10-04) — Operating departmental P&L
+    // must respect fund applicability. CAPITAL-fund accounts (LRP
+    // Capital Improvement Dues, Initiation Fee, etc.) belong on the
+    // capital-side statement — never on operating NOI.
+    if (!isOperatingFundTag(b.fundApplicability)) continue;
     const isCogs =
       b.fsGroupKey != null &&
       (b.fsGroupKey.startsWith("IS_COGS_") || b.fsGroupKey === "IS_COGS");
@@ -174,6 +180,9 @@ export async function incomeStatementByDepartmentFromSnapshot(
   let consolidatedCogs = ZERO;
   let consolidatedOpex = ZERO;
   for (const b of consolidatedBalances) {
+    // REPORT-WIRING-1A §12 — same fund filter at the consolidated
+    // reconciliation level so Σ departments === consolidated holds.
+    if (!isOperatingFundTag(b.fundApplicability)) continue;
     if (b.accountType === "REVENUE") {
       consolidatedRevenue = consolidatedRevenue.plus(b.naturalBalance);
     } else if (b.accountType === "EXPENSE") {

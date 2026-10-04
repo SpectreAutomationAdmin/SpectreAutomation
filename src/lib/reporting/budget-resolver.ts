@@ -34,6 +34,18 @@ export type ResolveBudgetArgs = {
   budgetName?: string;      // default: "Coulee 2026 Operating Budget"
 };
 
+/** REPORT-WIRING-1A §7 (2026-10-04) — Operating Revenue / OpEx / NOI
+ *  must respect `Account.fundApplicability` so Operating Statement of
+ *  Activities + Executive At-a-Glance + Operating Results + ratio
+ *  registry all use the same account universe. Accounts tagged only
+ *  CAPITAL (initiation fees, LRP capital improvement dues, etc.) are
+ *  reported on the capital side — never folded into operating totals. */
+export function isOperatingFundTag(fund: string | null | undefined): boolean {
+  if (!fund) return false;
+  const parts = fund.split(",").map((s) => s.trim().toUpperCase());
+  return parts.includes("OPERATING");
+}
+
 export type ResolveBudgetResult = {
   budget: {
     id: string;
@@ -64,6 +76,11 @@ export type ResolveBudgetResult = {
     accountName: string;
     accountType: string;
     fsGroupKey: string | null;
+    /** REPORT-WIRING-1A §7 — account's fundApplicability tag (comma-
+     *  separated: OPERATING / CAPITAL / OPERATING,CAPITAL). Null when
+     *  unset. Consumers filter by this to respect the operating-vs-
+     *  capital accounting boundary. */
+    fundApplicability: string | null;
     monthlyTotals: number[];
     ytdTotal: number;
     annualTotal: number;
@@ -141,6 +158,7 @@ export async function resolveBudget(
           accountNumber: true,
           name: true,
           type: true,
+          fundApplicability: true,
           fsGroup: { select: { key: true } },
         },
       },
@@ -159,6 +177,7 @@ export async function resolveBudget(
     accountName: string;
     accountType: string;
     fsGroupKey: string | null;
+    fundApplicability: string | null;
     departmentId: string | null;
     departmentCode: string | null;
     departmentName: string | null;
@@ -181,6 +200,7 @@ export async function resolveBudget(
       accountName: l.account.name,
       accountType: l.account.type,
       fsGroupKey: l.account.fsGroup?.key ?? null,
+      fundApplicability: l.account.fundApplicability ?? null,
       departmentId: l.department?.id ?? null,
       departmentCode: l.department?.code ?? null,
       departmentName: l.department?.name ?? null,
@@ -231,6 +251,7 @@ export async function resolveBudget(
     accountName: v.row.accountName,
     accountType: v.row.accountType,
     fsGroupKey: v.row.fsGroupKey,
+    fundApplicability: v.row.fundApplicability,
     monthlyTotals: v.monthlyTotals,
     ytdTotal: v.monthlyTotals.slice(0, throughMonth).reduce((s, x) => s + x, 0),
     annualTotal: v.annualTotal,
@@ -293,6 +314,8 @@ export async function resolveBudgetMonthlyIncomeStatement(
   const opex = Array(12).fill(0);
   const payroll = Array(12).fill(0);
   for (const a of r.byAccount) {
+    // REPORT-WIRING-1A §7-10 (2026-10-04) — Operating IS filter.
+    if (!isOperatingFundTag(a.fundApplicability)) continue;
     for (let m = 0; m < 12; m++) {
       const v = a.monthlyTotals[m] ?? 0;
       if (a.accountType === "REVENUE") rev[m] += v;
@@ -388,6 +411,8 @@ export async function resolveBudgetIncomeStatement(
   let opex = 0;
   let payroll = 0;
   for (const a of r.byAccount) {
+    // REPORT-WIRING-1A §7-10 — Operating IS filter.
+    if (!isOperatingFundTag(a.fundApplicability)) continue;
     const ytd = a.monthlyTotals.slice(0, args.throughMonth).reduce((s, v) => s + v, 0);
     if (a.accountType === "REVENUE") {
       revenue += ytd;

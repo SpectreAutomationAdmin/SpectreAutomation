@@ -219,20 +219,43 @@ export async function resolveJanuaryMetricSet(opts: {
   let capitalAssessments = ZERO;
   let dues = ZERO;
 
+  // REPORT-WIRING-1A §7 + §10 (2026-10-04) — Operating Revenue /
+  // COGS / OpEx / NOI must ONLY include accounts tagged OPERATING
+  // in `Account.fundApplicability`. Accounts tagged solely CAPITAL
+  // (LRP Capital Improvement Dues, Initiation Fee, Facility
+  // Improvement Fee, Share Redemption Brokerage Fee, Interest Income
+  // on capital fund, etc.) are CAPITAL-fund revenue and belong on
+  // the capital reporting side — never on operating NOI. This
+  // matches the IS projection's `mapIncomeStatementAccount` contract
+  // and the Spectre accounting architecture:
+  //   • fundApplicability includes "OPERATING" → counted
+  //   • null / empty / only "CAPITAL" → excluded (capital-side)
+  const isOperatingFund = (fund: string | null): boolean => {
+    if (!fund) return false;
+    const parts = fund.split(",").map((s) => s.trim().toUpperCase());
+    return parts.includes("OPERATING");
+  };
+
   for (const b of isBalances) {
+    const operating = isOperatingFund(b.fundApplicability);
     if (b.accountType === "REVENUE") {
-      revenue = revenue.plus(b.naturalBalance);
+      if (operating) revenue = revenue.plus(b.naturalBalance);
+      // IS_CAPITAL_ASSESSMENTS is reported separately (capital side),
+      // not folded into operating revenue — track regardless of fund.
       if (b.fsGroupKey === "IS_CAPITAL_ASSESSMENTS") {
         capitalAssessments = capitalAssessments.plus(b.naturalBalance);
       }
     } else if (b.accountType === "EXPENSE") {
-      const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
-      if (isCogs) cogs = cogs.plus(b.naturalBalance);
-      else opex = opex.plus(b.naturalBalance);
-      if (b.fsGroupKey === "IS_PAYROLL") payroll = payroll.plus(b.naturalBalance);
+      if (operating) {
+        const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
+        if (isCogs) cogs = cogs.plus(b.naturalBalance);
+        else opex = opex.plus(b.naturalBalance);
+        if (b.fsGroupKey === "IS_PAYROLL") payroll = payroll.plus(b.naturalBalance);
+      }
     }
-    // Dues through dimensional (DUES_AND_CHARGES department)
-    if (b.accountType === "REVENUE" && b.dimensional && b.dimensional.length > 0) {
+    // Dues through dimensional (DUES_AND_CHARGES department) — only
+    // operating dues count toward dues-to-operating-revenue.
+    if (b.accountType === "REVENUE" && operating && b.dimensional && b.dimensional.length > 0) {
       for (const d of b.dimensional) {
         if (d.department === "DUES_AND_CHARGES") dues = dues.plus(d.naturalBalance);
       }

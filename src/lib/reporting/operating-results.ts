@@ -313,12 +313,15 @@ async function getOperatingMonthsFromCommittedSnapshots(
       const result = await reportingAccountBalances(clubId, { from: periodStart, to: asOfDate });
       if (result.balances.length === 0) continue;
       const consolidated = consolidateAccountBalances(result.balances);
+      const { isOperatingFundTag } = await import("@/lib/reporting/budget-resolver");
       let revenue = 0;
       let cogs = 0;
       let opex = 0;
       let hasRevenueAccount = false;
       let hasExpenseAccount = false;
       for (const b of consolidated) {
+        // REPORT-WIRING-1A §7-10 — Operating IS filter.
+        if (!isOperatingFundTag(b.fundApplicability)) continue;
         if (b.accountType === "REVENUE") {
           revenue += Number(b.naturalBalance.toString());
           if (Number(b.naturalBalance.toString()) !== 0) hasRevenueAccount = true;

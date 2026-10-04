@@ -1,0 +1,22 @@
+import { test } from "@playwright/test";
+import { loginAsFounder, stagingCredsAvailable } from "./_lib/staging-auth";
+const creds = stagingCredsAvailable();
+const runAt = creds.ready ? test : test.skip;
+runAt("classifier reconciliation diagnostic", async ({ browser }) => {
+  test.setTimeout(60_000);
+  const ctx = await browser.newContext();
+  const page = await loginAsFounder(ctx);
+  const r = await page.request.get("https://staging.spectreautomation.com/api/admin/classifier-reconciliation?clubId=cmrvdeny7000144372ktmmg9c");
+  const j = await r.json();
+  console.log("PATHA " + JSON.stringify(j.pathA_operating_only_estimate));
+  console.log("PATHB " + JSON.stringify(j.pathB_ratioRegistry));
+  console.log("PATHC " + JSON.stringify(j.pathC_departmentSnapshot));
+  console.log("PATHD " + JSON.stringify(j.pathD_budget));
+  console.log("BRIDGE " + JSON.stringify(j.bridge));
+  console.log("REV_ONLY_IN_B_COUNT " + (j.revenueOnlyInRatioRegistry?.length ?? 0));
+  console.log("REV_ONLY_IN_B " + JSON.stringify(j.revenueOnlyInRatioRegistry?.slice(0, 30)));
+  console.log("EXP_ONLY_IN_B_COUNT " + (j.expenseOnlyInRatioRegistry?.length ?? 0));
+  console.log("EXP_ONLY_IN_B " + JSON.stringify(j.expenseOnlyInRatioRegistry?.slice(0, 30)));
+  console.log("ACCOUNT_TOTAL " + j.accountTotal);
+  await ctx.close();
+});
