@@ -72,6 +72,16 @@ export type EditorialGroupedBarChartProps = {
   yDomain?: [number, number];
   padLeft?: number;
   padRight?: number;
+  /** PAYROLL-HIST-1 §19-21 (2026-10-04) — cap on individual bar
+   *  pixel width. When fewer departments render, each bar's
+   *  computed `barW` (currently `slotW * 0.74 * 0.78 / seriesCount`)
+   *  can balloon well past the Editorial canonical width (~18 px per
+   *  bar). This clamp preserves the accepted bar geometry when
+   *  category count shrinks (2-, 4-, 6-, 8-dept all legible), while
+   *  the slot-fraction math still shrinks bars when category count
+   *  grows past the "no overflow" point. Default 24 px matches the
+   *  original EditorialBarChart standard. */
+  maxBarWidth?: number;
 };
 
 const SSR_DEFAULT_WIDTH = 552;
@@ -80,6 +90,7 @@ export function EditorialGroupedBarChart({
   xLabels, series, height,
   yTicks = 4, formatY, yDomain,
   padLeft, padRight,
+  maxBarWidth = 24,
 }: EditorialGroupedBarChartProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number>(SSR_DEFAULT_WIDTH);
@@ -131,9 +142,13 @@ export function EditorialGroupedBarChart({
 
   // Sub-slot allocation — 3 bars across roughly 70 % of the slot width
   // so the slot still reads as a group.
+  // PAYROLL-HIST-1 §19-21 — clamp per-bar width to `maxBarWidth`
+  // (default 24 px). Prevents giant bars when category count is
+  // small; shrinks naturally when category count grows.
   const groupWidth = slotW * 0.74;
   const subSlotW = groupWidth / series.length;
-  const barW = subSlotW * 0.78;
+  const barWRaw = subSlotW * 0.78;
+  const barW = Math.min(barWRaw, maxBarWidth);
 
   return (
     <div ref={containerRef} className="block h-full w-full">

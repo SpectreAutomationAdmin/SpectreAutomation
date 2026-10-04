@@ -96,6 +96,14 @@ export type PayrollDepartmentInputs = {
    *  legend text follows automatically — no hardcoded "2025 Actual"
    *  or "2026 Actual" literal anywhere in React. */
   reportingYear: number;
+  /** PAYROLL-HIST-1 §14-15 (2026-10-04) — optional overrides for the
+   *  consolidated-payroll KPI tiles. When supplied, Total YTD Payroll
+   *  + vs Budget use these canonical values instead of summing the
+   *  per-department rows. Required when the chart shows a filtered
+   *  subset of departments (so the headline matches ratio-registry
+   *  consolidated payroll, not just the visible bars). */
+  consolidatedActualOverride?: number | null;
+  consolidatedBudgetOverride?: number | null;
 };
 
 // -- Card 2 types -------------------------------------------------------------
@@ -189,19 +197,28 @@ export function buildPayrollDepartmentData(
   inputs: PayrollDepartmentInputs,
   opts: { dataSource?: ReportingDataSource; subtitleOverride?: string } = {},
 ): PayrollDepartmentData {
-  const actualDollars = inputs.departments.reduce((s, d) => s + d.actual, 0);
+  const chartActualDollars = inputs.departments.reduce((s, d) => s + d.actual, 0);
   // REPORT-LIVE-3 §19/§26 — null-safe reductions. If every row's
   // Budget is null, budgetDollars is null (not 0) — so the KPI tile
   // reads "—" and the chart omits the Budget series. Same for
   // priorYear.
   const anyBudget = inputs.departments.some((d) => d.budget != null);
   const anyPriorYear = inputs.departments.some((d) => d.priorYear != null);
-  const budgetDollars: number | null = anyBudget
+  const chartBudgetDollars: number | null = anyBudget
     ? inputs.departments.reduce((s, d) => s + (d.budget ?? 0), 0)
     : null;
   const priorYearDollars: number | null = anyPriorYear
     ? inputs.departments.reduce((s, d) => s + (d.priorYear ?? 0), 0)
     : null;
+
+  // PAYROLL-HIST-1 §14-15 — headline KPIs use the CANONICAL
+  // CONSOLIDATED payroll (from overrides) rather than the sum of
+  // visible department rows. For demo tenants without overrides this
+  // falls back to the chart sum (unchanged behavior).
+  const actualDollars = inputs.consolidatedActualOverride ?? chartActualDollars;
+  const budgetDollars: number | null = inputs.consolidatedBudgetOverride !== undefined
+    ? inputs.consolidatedBudgetOverride
+    : chartBudgetDollars;
 
   const vsBudget = budgetDollars != null ? actualDollars - budgetDollars : null;
   const vsPriorYear = priorYearDollars != null ? actualDollars - priorYearDollars : null;
@@ -289,15 +306,16 @@ export async function buildPayrollDepartmentLive(
   clubId: string,
   periodEnd: Date,
 ): Promise<PayrollDepartmentData> {
+  const { resolveBudgetIncomeStatement } = await import(
+    "@/lib/reporting/budget-resolver"
+  );
+  const { resolveHistoricalPayrollByDepartment } = await import(
+    "@/lib/reporting/historical-payroll-by-department"
+  );
   const { incomeStatementByDepartmentFromSnapshot } = await import(
     "@/lib/accounting/dept-pl-from-snapshot"
   );
-  const { resolveBudgetPayrollByDepartment, resolveBudgetIncomeStatement } = await import(
-    "@/lib/reporting/budget-resolver"
-  );
-  const { resolvePayrollDepartments } = await import(
-    "@/lib/reporting/payroll-departments-resolver"
-  );
+  const { resolveJanuaryMetricSet } = await import("@/lib/reporting/ratio-registry");
   const fyStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
   const eod = new Date(Date.UTC(
     periodEnd.getUTCFullYear(),
@@ -307,77 +325,72 @@ export async function buildPayrollDepartmentLive(
   ));
   const throughMonth = periodEnd.getUTCMonth() + 1;
 
-  const [actualDept, budgetPayrollMap, budgetIs, payrollDepts] = await Promise.all([
-    incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
-    resolveBudgetPayrollByDepartment({
-      clubId,
-      fiscalYear: periodEnd.getUTCFullYear(),
-      throughMonth,
-    }).catch(() => new Map<string | null, number>()),
+  // PAYROLL-HIST-1 §1 (2026-10-04) — Section II Payroll Analysis is
+  // a HISTORICAL FINANCIAL REPORT. Chart departments come from
+  // committed TB IS_PAYROLL activity + Budget IS_PAYROLL (UNION) —
+  // NOT from the current Payroll operational roster. The operational
+  // roster is diagnostic metadata only (per-row employeeCount).
+  const [historical, budgetIs, metrics, actualDept] = await Promise.all([
+    resolveHistoricalPayrollByDepartment(clubId, fyStart, eod),
     resolveBudgetIncomeStatement({
       clubId,
       fiscalYear: periodEnd.getUTCFullYear(),
       throughMonth,
     }).catch(() => null),
-    resolvePayrollDepartments(clubId).catch(() => ({
-      departmentCodes: new Set<string>(),
-      hasEmployeeRecords: false,
-      employeeCountByDepartment: new Map<string, number>(),
-    })),
+    resolveJanuaryMetricSet({ clubId, periodStart: fyStart, periodEnd: eod }).catch(() => null),
+    incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod),
   ]);
 
-  // REPORT-WIRING-1B §2-10 (2026-10-04) — Payroll Department roster
-  // comes from the Payroll module (Employee → Department links), NOT
-  // from the financial-reporting department set. Departments like
-  // CORPORATE (Corporate Income & Expenses) that have GL activity but
-  // no Employee records must NOT appear in the Payroll chart.
-  //
-  // Fallback for tenants without any Employee records (e.g. a
-  // historical TB-import club where HR hasn't been seeded yet): the
-  // chart renders empty and the consolidated-GL-vs-roster
-  // reconciliation note surfaces in the Dues-Cover-Payroll panel.
-  const payrollDeptFilter = (code: string | null): boolean => {
-    if (code == null) return false;
-    if (!payrollDepts.hasEmployeeRecords) return false;
-    return payrollDepts.departmentCodes.has(code);
-  };
+  const deptRows = historical.rows.map((r) => ({
+    key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name: r.departmentName,
+    actual: r.actual,
+    budget: r.budget,
+    // §18 — only Jan 2026 Actual exists; no 2025 monthly history
+    // is currently loaded. Prior Year stays null.
+    priorYear: null as number | null,
+  }));
 
-  const deptRows = actualDept.rows
-    .filter((r) => payrollDeptFilter(r.departmentCode))
-    .map((r) => ({
-      key: (r.departmentCode as string).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
-      name: r.departmentName,
-      actual: Number(r.payroll.toString()),
-      budget: (() => {
-        const b = budgetPayrollMap.get(r.departmentCode);
-        return b != null ? b : null;
-      })(),
-      // §26 — only Jan 2026 Actual exists; no 2025 monthly history is
-      // currently loaded. Prior Year stays null (never fabricated $0).
-      priorYear: null as number | null,
-    }));
+  // PAYROLL-HIST-1 §14-15 — canonical consolidated payroll Actual +
+  // Budget for the headline KPI ribbon. These are the GL totals
+  // (every operating-fund IS_PAYROLL account), not the sum of
+  // department bars. Guarantees headline matches ratio-registry +
+  // Statement of Activities everywhere Payroll appears.
+  const canonicalPayrollActual =
+    metrics?.payrollRatio?.numerator != null
+      ? Math.abs(Number(metrics.payrollRatio.numerator.toString()))
+      : historical.consolidatedActualAll;
+  const canonicalPayrollBudget =
+    budgetIs?.payroll != null ? budgetIs.payroll : historical.consolidatedBudgetAll;
 
-  // Revenue + dues for the Dues-Cover-Payroll check — pulled from the
-  // Actual departmental sum (revenue sign-flipped to display) because
-  // this card renders Actual-period semantics.
-  const totalRevenue = -actualDept.rows.reduce((s, r) => s + Number(r.revenue.toString()), 0);
-  // Dues approximation: dept with code "DUES_AND_CHARGES". If absent
-  // (legacy tenant), fall back to the whole-tenant total revenue.
+  // PAYROLL-HIST-1 §16 — Payroll Ratio from the ratio-registry
+  // canonical (consolidated payroll / operating revenue). The Payroll
+  // Dept card is a current-period KPI, not a trend — availability is
+  // independent of the multi-month trend card.
+  const canonicalRevenue =
+    metrics?.revenue?.metric?.value != null
+      ? Math.abs(Number(metrics.revenue.metric.value.toString()))
+      : -actualDept.rows.reduce((s, r) => s + Number(r.revenue.toString()), 0);
   const duesRow = actualDept.rows.find((r) => r.departmentCode === "DUES_AND_CHARGES");
-  const duesDollars = duesRow ? -Number(duesRow.revenue.toString()) : totalRevenue;
+  const duesDollars = duesRow ? -Number(duesRow.revenue.toString()) : canonicalRevenue;
 
   return buildPayrollDepartmentData(
     {
       departments: deptRows,
-      revenueDollars: totalRevenue,
+      revenueDollars: canonicalRevenue,
       duesDollars,
       reportingYear: periodEnd.getUTCFullYear(),
+      // PAYROLL-HIST-1 §14-15 — override the headline-aggregate
+      // numbers (otherwise buildPayrollDepartmentData sums only the
+      // chart rows, which still omits any nondepartmental payroll).
+      consolidatedActualOverride: canonicalPayrollActual,
+      consolidatedBudgetOverride: canonicalPayrollBudget,
     },
     {
       dataSource: "live",
-      subtitleOverride: budgetIs?.budget
-        ? "JANUARY ACTUAL VS BUDGET · ALL FINANCIAL-ACTIVITY DEPARTMENTS (prior-year not loaded)"
-        : "JANUARY ACTUAL · ALL FINANCIAL-ACTIVITY DEPARTMENTS (budget + prior-year not loaded)",
+      subtitleOverride: historical.consolidatedBudgetAll != null
+        ? "JANUARY ACTUAL VS BUDGET · HISTORICAL PAYROLL BY DEPARTMENT (prior-year not loaded)"
+        : "JANUARY ACTUAL · HISTORICAL PAYROLL BY DEPARTMENT (budget + prior-year not loaded)",
     },
   );
 }

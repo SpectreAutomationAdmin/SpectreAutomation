@@ -32,18 +32,21 @@ describe("REPORT-WIRING-1B §2-10 — Payroll Department roster from the Payroll
     expect(src).toMatch(/hasEmployeeRecords/);
   });
 
-  it("buildPayrollDepartmentLive filters by resolvePayrollDepartments output", () => {
-    const src = readFileSync(PAYROLL_ANALYSIS, "utf8");
-    expect(src).toMatch(/resolvePayrollDepartments/);
-    expect(src).toMatch(/payrollDeptFilter/);
-    // The filter returns false for codes NOT in the Payroll roster.
-    expect(src).toMatch(/payrollDepts\.departmentCodes\.has\(code\)/);
+  it("resolvePayrollDepartments remains available as the OPERATIONAL roster (PAYROLL-HIST-1 moved the historical chart off it)", () => {
+    const src = readFileSync(PAYROLL_RESOLVER, "utf8");
+    expect(src).toMatch(/export async function resolvePayrollDepartments/);
+    // Still backed by prisma.employee — operational-roster purpose unchanged.
+    expect(src).toMatch(/prisma\.employee\.findMany/);
   });
 
-  it("empty-Employee tenant → chart renders empty (no financial-dept fallback)", () => {
+  it("the HISTORICAL payroll chart no longer uses the operational roster as a filter (PAYROLL-HIST-1 §1)", () => {
     const src = readFileSync(PAYROLL_ANALYSIS, "utf8");
-    // When hasEmployeeRecords is false the filter rejects every row.
-    expect(src).toMatch(/if \(!payrollDepts\.hasEmployeeRecords\) return false/);
+    const live = src.match(/export async function buildPayrollDepartmentLive[\s\S]*?return buildPayrollDepartmentData/)?.[0] ?? "";
+    // Operational roster must NOT drive the chart filter.
+    expect(live).not.toMatch(/payrollDeptFilter/);
+    expect(live).not.toMatch(/if \(!payrollDepts\.hasEmployeeRecords\) return false/);
+    // Historical resolver IS used.
+    expect(live).toMatch(/resolveHistoricalPayrollByDepartment/);
   });
 
   it("no name-based special-case for Corporate Income & Expenses in the Payroll filter path", () => {
