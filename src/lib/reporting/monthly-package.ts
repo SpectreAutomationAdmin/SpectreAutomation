@@ -3483,12 +3483,24 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       duesSubsidyTrend: emptySeries,
       departmentSummary: [],
     },
-    // The following demo-only chapter outputs are opaque to this redactor
-    // (their types are chapter-specific). Rather than reach into each
-    // nested shape, we overwrite with a minimal "unavailable" marker that
-    // satisfies the structural type via `unknown` cast; the UI renders
-    // these chapters as "— Data not available for this reporting period —".
-    stewardshipDashboard: makeUnavailable(pkg.stewardshipDashboard, u),
+    // REPORT-CHART-1 §4-9 (2026-10-03) — the stewardship dashboard
+    // now carries LIVE equity + operating data for Jonas-only tenants
+    // (committed-TB-snapshot fallback inside getEquityHistory /
+    // getOperatingResults). Preserving those two sub-chapters is the
+    // whole point of REPORT-CHART-1 — redacting the chapter wholesale
+    // throws away the data the resolver just produced. The remaining
+    // sub-chapters (scorecards + the TB-HIST-12 §3 supplements) are
+    // still demo-sourced and continue to be wiped.
+    stewardshipDashboard: {
+      ...pkg.stewardshipDashboard,
+      equity:    pkg.stewardshipDashboard.equity,
+      operating: pkg.stewardshipDashboard.operating,
+      scorecards:          makeUnavailable(pkg.stewardshipDashboard.scorecards,          u),
+      departmentPerformance: makeUnavailable(pkg.stewardshipDashboard.departmentPerformance, u),
+      duesSubsidy:         makeUnavailable(pkg.stewardshipDashboard.duesSubsidy,         u),
+      payrollDepartment:   makeUnavailable(pkg.stewardshipDashboard.payrollDepartment,   u),
+      payrollRatioTrend:   makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend,   u),
+    },
     stewardshipKpiDashboard: makeUnavailable(pkg.stewardshipKpiDashboard, u),
     operatingKPIs: { dataSource: "demo", cards: [] },
     capitalKPIs: { dataSource: "demo", cards: [] },
