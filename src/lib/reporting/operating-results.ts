@@ -179,14 +179,13 @@ export async function getOperatingResults(
   if (!hasPlottableFpData) {
     const snapshotMonths = await getOperatingMonthsFromCommittedSnapshots(clubId, asOf);
     if (snapshotMonths.length > 0) {
-      // REPORT-LIVE-3 §6-8 (2026-10-04) — Budget source is now
-      // available via the canonical Budget resolver. Inject per-month
-      // Budget NOI (display sign, from `resolveBudgetMonthlyIncomeStatement`)
-      // ONLY for months that have a committed snapshot. Future months
-      // keep budgetNoi null even though Feb-Dec Budget is legitimately
-      // known — the historical Operating chart answers "how did we
-      // compare through this reporting period", not "what does the
-      // full year plan look like" (directive §8).
+      // REPORT-WIRING-1 §13-16 (2026-10-04) — the Operating Results
+      // chart renders a Budget bar for EVERY month FY2026 Budget
+      // covers (not just months with a committed Actual snapshot).
+      // Builds a 12-slot month skeleton Jan..Dec; populates Actual
+      // from committed snapshots and Budget from the canonical
+      // monthly Budget resolver. Future-month Actual stays null;
+      // Budget populates independently.
       const { resolveBudgetMonthlyIncomeStatement } = await import("@/lib/reporting/budget-resolver");
       let monthlyBudgetNoi: number[] | null = null;
       try {
@@ -197,14 +196,45 @@ export async function getOperatingResults(
         });
         if (b.budget) monthlyBudgetNoi = b.monthlyNoi;
       } catch { /* budget not imported yet → leave null */ }
-      const enriched = snapshotMonths.map((m) => {
-        if (!monthlyBudgetNoi) return m;
-        const monthIndex = m.endDate.getUTCMonth();
-        return { ...m, budgetNoi: monthlyBudgetNoi[monthIndex] };
-      });
+
+      // Build a 12-slot skeleton anchored on FY2026 (Jan..Dec).
+      const anchorYear = asOf.getUTCFullYear();
+      const actualByMonth = new Map<number, OperatingMonth>();
+      for (const m of snapshotMonths) actualByMonth.set(m.endDate.getUTCMonth(), m);
+      const monthLabels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const enriched: OperatingMonth[] = [];
+      for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
+        const existing = actualByMonth.get(monthIndex);
+        const endDate = new Date(Date.UTC(anchorYear, monthIndex + 1, 0, 23, 59, 59, 999));
+        const budgetForMonth = monthlyBudgetNoi
+          ? monthlyBudgetNoi[monthIndex] ?? null
+          : null;
+        if (existing) {
+          // Snapshot-backed Actual + Budget overlay.
+          enriched.push({ ...existing, budgetNoi: budgetForMonth ?? existing.budgetNoi });
+        } else {
+          // Future / unloaded Actual — Budget still plots.
+          enriched.push({
+            endDate,
+            monthLabel: `${monthLabels[monthIndex]} ${anchorYear}`,
+            sequence: monthIndex + 1,
+            noi: null,
+            revenue: null,
+            budgetNoi: budgetForMonth,
+          });
+        }
+      }
+
       const sYtdNoi = sum(enriched.map((m) => m.noi));
       const sYtdRevenue = sum(enriched.map((m) => m.revenue));
-      const sYtdBudgetNoi = sum(enriched.map((m) => m.budgetNoi));
+      // YTD Budget rolls through `throughMonth` only — the chart
+      // shows the full 12-month plan, but the KPI tile sums only
+      // up to the reporting period.
+      const throughMonth = asOf.getUTCMonth() + 1;
+      const sYtdBudgetNoi = enriched
+        .slice(0, throughMonth)
+        .map((m) => m.budgetNoi)
+        .reduce<number>((s, v) => s + (v ?? 0), 0);
       return {
         months: enriched,
         // §11 — Prior-Year series is SOURCE_NOT_LOADED on live tenant;

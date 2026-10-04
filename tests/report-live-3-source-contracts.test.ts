@@ -14,18 +14,20 @@ const DEPTPL = path.join(REPO, "src/lib/accounting/dept-pl-from-snapshot.ts");
 const RESOLVER = path.join(REPO, "src/lib/reporting/budget-resolver.ts");
 const PACKAGE = path.join(REPO, "src/lib/reporting/monthly-package.ts");
 
-describe("REPORT-LIVE-3 §6-8 — Operating Results Budget wiring", () => {
+describe("REPORT-LIVE-3 §6-8 + REPORT-WIRING-1 §13-16 — Operating Results Budget wiring", () => {
   it("snapshot-fallback branch pulls Budget per month via resolveBudgetMonthlyIncomeStatement", () => {
     const src = readFileSync(OPRES, "utf8");
     expect(src).toMatch(/resolveBudgetMonthlyIncomeStatement/);
-    expect(src).toMatch(/monthIndex = m\.endDate\.getUTCMonth\(\)/);
-    expect(src).toMatch(/budgetNoi: monthlyBudgetNoi\[monthIndex\]/);
+    // REPORT-WIRING-1 — now populates all 12 months, not just
+    // committed-snapshot months.
+    expect(src).toMatch(/for \(let monthIndex = 0; monthIndex < 12; monthIndex\+\+\)/);
+    expect(src).toMatch(/budgetForMonth = monthlyBudgetNoi/);
   });
 
   it("snapshot-fallback branch pins Budget NOI into ytdBudgetNoi (not hardcoded 0)", () => {
     const src = readFileSync(OPRES, "utf8");
     const branch = src.match(/if \(!hasPlottableFpData\)[\s\S]*?\n  \}/)?.[0] ?? "";
-    expect(branch).toMatch(/sYtdBudgetNoi = sum\(enriched\.map/);
+    expect(branch).toMatch(/sYtdBudgetNoi = enriched\s*\n\s*\.slice/);
     expect(branch).not.toMatch(/ytdBudgetNoi: 0,/);
   });
 });

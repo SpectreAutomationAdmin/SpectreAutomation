@@ -107,6 +107,7 @@ import {
   buildOperatingScorecardLive,
   buildCapitalScorecardLive,
 } from "@/lib/reporting/scorecard-live-builder";
+import { getMonthlyFinancialContract } from "@/lib/reporting/monthly-financial-contract";
 import { buildDemoOperatingScorecardSnapshot } from "@/lib/reporting/operating-scorecard-service";
 import { buildDemoCapitalScorecardSnapshot } from "@/lib/reporting/capital-scorecard-service";
 import {
@@ -2460,7 +2461,27 @@ export async function getMonthlyReportingPackage(
     }
   }
 
-  const soaAuxiliaryInputs = hasRealData ? undefined : SILVER_SPRINGS_SOA_AUXILIARY_INPUTS;
+  // REPORT-WIRING-1 (2026-10-04) — central Monthly Financial
+  // Contract. Resolves Budget ONCE per package build and produces
+  // the exact aux.budget.* objects every Budget-aware adapter already
+  // knows how to consume (executive-summary, statement-of-activities,
+  // stewardship-dashboard-adapter). Before this slice each adapter
+  // got EMPTY/UNAVAILABLE zeros on live tenants so no Budget columns
+  // populated — see src/lib/reporting/monthly-financial-contract.ts.
+  const monthlyFinancialContract = hasRealData
+    ? await getMonthlyFinancialContract(club.id, periodEnd)
+    : null;
+
+  // Live-tenant SoA aux is now backed by the central contract's
+  // byAccount + rollups shape. Demo tenants keep the Silver Springs
+  // auxiliary input (demo numeric literals).
+  const soaAuxiliaryInputs = hasRealData
+    ? ({
+        memberRoundsYoyPct: 0,
+        initiationFeesAnnualForecast: 0,
+        budget: monthlyFinancialContract!.statementOfActivitiesAuxBudget,
+      } satisfies NonNullable<typeof SILVER_SPRINGS_SOA_AUXILIARY_INPUTS>)
+    : SILVER_SPRINGS_SOA_AUXILIARY_INPUTS;
   const soaDemoFallback = hasRealData
     ? undefined
     : (() =>
@@ -2497,7 +2518,16 @@ export async function getMonthlyReportingPackage(
     // no Silver Springs numerics flow into the dual-read output.
     // The redactor still sweeps the chapter to UNAVAILABLE for live
     // tenants as defence-in-depth per directive §7.
-    auxiliaryInputs: hasRealData ? UNAVAILABLE_STEWARDSHIP_AUX : SILVER_SPRINGS_STEWARDSHIP_AUX,
+    auxiliaryInputs: hasRealData
+      ? {
+          // REPORT-WIRING-1 §25 — central contract feeds live Budget
+          // comparators to the stewardship adapter so the demo-fallback
+          // KPI card path receives real dues / revenue / payroll /
+          // capital-income figures instead of UNAVAILABLE zeros.
+          ...UNAVAILABLE_STEWARDSHIP_AUX,
+          budget: monthlyFinancialContract!.stewardshipAuxBudget,
+        }
+      : SILVER_SPRINGS_STEWARDSHIP_AUX,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
       capitalScorecard: buildDemoCapitalScorecardSnapshot(),
@@ -2585,7 +2615,19 @@ export async function getMonthlyReportingPackage(
   // instead of a false "100% below plan". Silver Springs itself (the
   // demo tenant) still receives the seed so dev / demo screens keep
   // working.
-  const execAuxiliaryInputs = hasRealData ? undefined : SILVER_SPRINGS_EXEC_SUMMARY_AUX;
+  // REPORT-WIRING-1 §9-10 — Executive At-a-Glance Budget comparators
+  // flow from the central contract. Each KPI card's +/- % plan string
+  // computes from the real Budget YTD numbers; cards whose Budget
+  // source doesn't exist (capital income on operating-only budget)
+  // keep rendering "comparative not available" per existing adapter.
+  const execAuxiliaryInputs = hasRealData
+    ? ({
+        budget: monthlyFinancialContract!.executiveSummaryAuxBudget,
+        reserveCoverage: { actual: null, floor: null },
+        arAging: { actualCurrentPct: null, over90Pct: null, watchThreshold: 0.08 },
+        fbSubsidy: null,
+      })
+    : SILVER_SPRINGS_EXEC_SUMMARY_AUX;
   const execDemoFallback = hasRealData
     ? undefined
     : () =>
