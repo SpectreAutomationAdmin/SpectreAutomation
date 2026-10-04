@@ -155,13 +155,15 @@ export async function getOperatingResults(
   const ytdBudgetNoi = sum(months.map((m) => m.budgetNoi));
   const priorYearNoi = sum(priorYearMonths.map((m) => m.noi));
 
-  // REPORT-CHART-1 §7 (2026-10-03) — snapshot fallback. If
-  // FiscalPeriod is empty (Jonas-only tenant), enumerate committed
-  // monthly TB snapshots on-or-before `asOf` and build operating
-  // points directly from each snapshot's YTD slice. One snapshot →
-  // one real point; missing months are OMITTED (never zero-filled)
-  // so the chart renders a partial Actual series.
-  if (months.length === 0) {
+  // REPORT-CHART-1 §7 (2026-10-03) — snapshot fallback. The FY-period
+  // path may return 12 rows that are all null (Jonas-only tenant whose
+  // FiscalPeriod shells were seeded without closingNoi / closingRevenue
+  // / budgetNoi). Treat "all null, zero plottable points" the same as
+  // "empty list" and fall through to committed TB snapshots.
+  const hasPlottableFpData =
+    months.length > 0 &&
+    months.some((m) => m.noi !== null || m.revenue !== null || m.budgetNoi !== null);
+  if (!hasPlottableFpData) {
     const snapshotMonths = await getOperatingMonthsFromCommittedSnapshots(clubId, asOf);
     if (snapshotMonths.length > 0) {
       const sMonths = snapshotMonths;

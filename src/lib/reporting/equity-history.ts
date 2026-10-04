@@ -202,13 +202,14 @@ export async function getEquityHistory(
   const years = Math.max(0, actualCents.length - 1);
   const actualCagrBps = computeCagrBps(baseCents, currentEquityCents, years);
 
-  // REPORT-CHART-1 §4 (2026-10-03) — if the FiscalYear-driven series
-  // is empty (Jonas-only tenant with no FiscalYear rows), fall through
-  // to committed TB snapshots. This renders Dec 2025 + Jan 2026
-  // authoritative points from the committed BS at each snapshot asOf.
-  if (series.length === 0) {
-    const snapshotPoints = await getEquityPointsFromCommittedSnapshots(clubId, asOf);
-    if (snapshotPoints.length > 0) {
+  // REPORT-CHART-1 §4 (2026-10-03) — if the committed-snapshot path
+  // has MORE plottable points than the FiscalYear-driven series,
+  // prefer it. This covers the Jonas-only tenant where a single FY
+  // row produces 1 live-bs point but 2 committed TB snapshots
+  // (Dec 2025 + Jan 2026) exist and should both plot.
+  const snapshotPoints = await getEquityPointsFromCommittedSnapshots(clubId, asOf);
+  if (snapshotPoints.length > series.length) {
+    {
       const sp = snapshotPoints;
       const base = sp[0].clubEquityCents;
       const current = sp[sp.length - 1].clubEquityCents;

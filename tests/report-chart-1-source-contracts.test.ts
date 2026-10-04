@@ -12,9 +12,9 @@ const OPRES = path.join(REPO, "src/lib/reporting/operating-results.ts");
 // §3-4 — Equity committed-snapshot fallback
 // --------------------------------------------------------------
 describe("REPORT-CHART-1 §3-4 — Equity history falls through to committed TB snapshots", () => {
-  it("getEquityHistory delegates to getEquityPointsFromCommittedSnapshots when FY series is empty", () => {
+  it("getEquityHistory prefers the committed-snapshot path when it has more plottable points than the FY series", () => {
     const src = readFileSync(EQUITY, "utf8");
-    expect(src).toMatch(/if \(series\.length === 0\)/);
+    expect(src).toMatch(/snapshotPoints\.length > series\.length/);
     expect(src).toMatch(/getEquityPointsFromCommittedSnapshots/);
   });
 
@@ -31,7 +31,7 @@ describe("REPORT-CHART-1 §3-4 — Equity history falls through to committed TB 
 
   it("§5 benchmark projections (best-in-class / minimum-required) are suppressed on the snapshot path", () => {
     const src = readFileSync(EQUITY, "utf8");
-    const block = src.match(/if \(series\.length === 0\)\s*\{[\s\S]*?\n\s{2}\}/)?.[0] ?? "";
+    const block = src.match(/snapshotPoints\.length > series\.length[\s\S]*?\n\s{2}\}/)?.[0] ?? "";
     expect(block).toMatch(/bestInClassCagrBps:\s*0/);
     expect(block).toMatch(/minimumRequiredCagrBps:\s*0/);
     expect(block).toMatch(/bestInClassBenchmarkCents:\s*0n/);
@@ -51,9 +51,10 @@ describe("REPORT-CHART-1 §3-4 — Equity history falls through to committed TB 
 // §7-9 — Operating results committed-snapshot fallback
 // --------------------------------------------------------------
 describe("REPORT-CHART-1 §7-9 — Operating Results falls through to committed TB snapshots", () => {
-  it("getOperatingResults delegates to getOperatingMonthsFromCommittedSnapshots when FiscalPeriod is empty", () => {
+  it("getOperatingResults falls through to committed snapshots when FP has no plottable data", () => {
     const src = readFileSync(OPRES, "utf8");
-    expect(src).toMatch(/if \(months\.length === 0\)/);
+    expect(src).toMatch(/hasPlottableFpData/);
+    expect(src).toMatch(/if \(!hasPlottableFpData\)/);
     expect(src).toMatch(/getOperatingMonthsFromCommittedSnapshots/);
   });
 
@@ -74,7 +75,7 @@ describe("REPORT-CHART-1 §7-9 — Operating Results falls through to committed 
 
   it("§11 Prior-Year series is empty-array on the snapshot path (not zero-filled)", () => {
     const src = readFileSync(OPRES, "utf8");
-    const block = src.match(/if \(months\.length === 0\)[\s\S]*?\n\s{2}\}/)?.[0] ?? "";
+    const block = src.match(/if \(!hasPlottableFpData\)[\s\S]*?\n\s{2}\}/)?.[0] ?? "";
     expect(block).toMatch(/priorYearMonths:\s*\[\]/);
   });
 
