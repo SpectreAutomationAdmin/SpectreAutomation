@@ -20,28 +20,39 @@
 
 import type { ReportingDataSource } from "./monthly-package";
 
-/** Raw input for one department row — dollars, signed. */
+/** Raw input for one department row — dollars, signed. REPORT-LIVE-2
+ *  §19 (2026-10-04): `ytdBudget` is nullable so the card can render
+ *  the Actual column from live accounting while leaving Budget +
+ *  variance + trend-bar unavailable until a budget importer lands.
+ *  Null means SOURCE_NOT_CONNECTED, never "zero budget". */
 export type DepartmentRowInput = {
   key: string;
   name: string;
   ytdActual: number;
-  ytdBudget: number;
+  ytdBudget: number | null;
 };
 
-/** Formatted row the React card consumes. */
+/** Formatted row the React card consumes. REPORT-LIVE-2: every field
+ *  derived from the budget column is nullable because the budget
+ *  source may be unavailable. The React card renders "—" (not "$0")
+ *  for every null field. */
 export type FormattedDepartmentRow = {
   key: string;
   name: string;
   actualLabel: string;     // "($77K)"
-  budgetLabel: string;
-  varianceLabel: string;   // "+$50K" or "($48K)"
-  /** Signed variance in dollars. Drives the trend-bar width + color. */
-  variance: number;
-  /** True iff variance > 0 (department beat budget). */
-  isFavorable: boolean;
+  budgetLabel: string | null;
+  varianceLabel: string | null;
+  /** Signed variance in dollars. Drives the trend-bar width + color.
+   *  Null when `ytdBudget` is unavailable. */
+  variance: number | null;
+  /** True iff variance > 0 (department beat budget). Null when the
+   *  variance itself is unavailable — the card must NOT infer a
+   *  favourability colour from the Actual sign alone. */
+  isFavorable: boolean | null;
   /** Trend-bar width as a percent of the widest row in the card.
-   *  Computed by the service so React stays a pure consumer. */
-  trendBarPct: number;
+   *  Null when variance is unavailable; the card omits the trend bar
+   *  entirely so a 0% bar never fakes a "beat budget by $0" result. */
+  trendBarPct: number | null;
 };
 
 export type DepartmentNetPerformanceData = {
@@ -67,23 +78,33 @@ function fmtDollarsK(d: number, opts: { signFavorable?: boolean } = {}): string 
 export function buildDepartmentNetPerformanceData(
   inputs: DepartmentRowInput[],
   commentary: string,
+  opts: { dataSource?: ReportingDataSource } = {},
 ): DepartmentNetPerformanceData {
-  // Variances + max absolute variance for trend-bar scaling.
-  const variances = inputs.map((r) => r.ytdActual - r.ytdBudget);
-  const maxAbs = Math.max(...variances.map((v) => Math.abs(v)), 1);
+  // Variances + max absolute variance for trend-bar scaling. REPORT-
+  // LIVE-2: a row whose ytdBudget is null has no variance. The scale
+  // denominator must only consider rows where variance is defined.
+  const variances = inputs.map((r) =>
+    r.ytdBudget == null ? null : r.ytdActual - r.ytdBudget,
+  );
+  const definedVariances = variances.filter((v): v is number => v != null);
+  const maxAbs = definedVariances.length > 0
+    ? Math.max(...definedVariances.map((v) => Math.abs(v)), 1)
+    : 1;
 
   const rows: FormattedDepartmentRow[] = inputs.map((r, i) => {
     const variance = variances[i];
-    const isFavorable = variance > 0;
+    const isFavorable = variance == null ? null : variance > 0;
     return {
       key: r.key,
       name: r.name,
       actualLabel: fmtDollarsK(r.ytdActual),
-      budgetLabel: fmtDollarsK(r.ytdBudget),
-      varianceLabel: fmtDollarsK(variance, { signFavorable: true }),
+      budgetLabel: r.ytdBudget == null ? null : fmtDollarsK(r.ytdBudget),
+      varianceLabel: variance == null ? null : fmtDollarsK(variance, { signFavorable: true }),
       variance,
       isFavorable,
-      trendBarPct: Math.round((Math.abs(variance) / maxAbs) * 100),
+      trendBarPct: variance == null
+        ? null
+        : Math.round((Math.abs(variance) / maxAbs) * 100),
     };
   });
 
@@ -93,7 +114,7 @@ export function buildDepartmentNetPerformanceData(
     pillLabel: "DEPT SUMMARY",
     rows,
     commentary,
-    dataSource: "demo",
+    dataSource: opts.dataSource ?? "demo",
   };
 }
 
@@ -119,3 +140,67 @@ export const SILVER_SPRINGS_DEPARTMENT_COMMENTARY =
   "Golf Operations and Equestrian both beat budget. F&B subsidy of $1.89M (−18% of dues) sits within the " +
   "healthy (12%–21%) range — lower is not better. Golf Course Maintenance is the club's largest single " +
   "cost center at $2.88M.";
+
+// ---------------------------------------------------------------------------
+// REPORT-LIVE-2 §6-8 (2026-10-04) — live builder for committed-TB
+// tenants. Reads the authoritative Jan 2026 departmental P&L via
+// `incomeStatementByDepartmentFromSnapshot` and shapes it for the
+// Department Net Performance card.
+//
+// Per directive §8: no fabricated Budget / variance / trend. Every
+// row's ytdBudget stays null → the formatter renders only the YTD
+// Actual column, and the card's React layer blanks the Budget +
+// Variance + Trend cells per row.
+//
+// Per directive §7: reconciles to consolidated — the sum of per-dept
+// netIncome equals the consolidated NOI by construction of
+// `incomeStatementByDepartmentFromSnapshot` (the resolver aggregates
+// the same AccountBalance rows twice: once by department, once
+// consolidated).
+// ---------------------------------------------------------------------------
+export async function buildDepartmentNetPerformanceLive(
+  clubId: string,
+  periodEnd: Date,
+): Promise<DepartmentNetPerformanceData> {
+  const { incomeStatementByDepartmentFromSnapshot } = await import(
+    "@/lib/accounting/dept-pl-from-snapshot"
+  );
+  // YTD window — Jan 2026 reporting period = Jan 1 → Jan 31.
+  const fyStart = new Date(Date.UTC(periodEnd.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
+  const eod = new Date(Date.UTC(
+    periodEnd.getUTCFullYear(),
+    periodEnd.getUTCMonth(),
+    periodEnd.getUTCDate(),
+    23, 59, 59, 999,
+  ));
+  const result = await incomeStatementByDepartmentFromSnapshot(clubId, fyStart, eod);
+
+  // Sort: largest absolute net result first so the biggest Board-level
+  // signal is on top. Nondepartmental sinks to the bottom.
+  const sorted = [...result.rows].sort((a, b) => {
+    const an = a.departmentCode == null ? 1 : 0;
+    const bn = b.departmentCode == null ? 1 : 0;
+    if (an !== bn) return an - bn;
+    return Math.abs(Number(b.netIncome.toString())) - Math.abs(Number(a.netIncome.toString()));
+  });
+
+  const inputs: DepartmentRowInput[] = sorted.map((r) => ({
+    key:
+      (r.departmentCode ?? "nondepartmental").toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+    name: r.departmentName,
+    ytdActual: Number(r.netIncome.toString()),
+    // §8 — Budget source not connected; render Actual column only.
+    ytdBudget: null,
+  }));
+
+  // §28 — board narrative must not fabricate "ahead of budget" /
+  // "favourable" language without a comparison. State factual values
+  // only when a comparison is unavailable.
+  const commentary =
+    inputs.length === 0
+      ? "No committed accounting activity for this reporting period."
+      : `Live Jan 2026 departmental net result from the committed trial balance (${inputs.length} departments). ` +
+        "Budget comparison not connected — variance and trend indicators are suppressed until a Coulee budget import lands.";
+
+  return buildDepartmentNetPerformanceData(inputs, commentary, { dataSource: "live" });
+}

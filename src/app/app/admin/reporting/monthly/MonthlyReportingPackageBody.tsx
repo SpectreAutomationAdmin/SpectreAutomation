@@ -2582,13 +2582,18 @@ function DepartmentNetPerformanceCard({ data }: { data: DepartmentData }) {
         <span className="text-center">Trend</span>
       </div>
 
-      {/* Rows */}
+      {/* Rows — REPORT-LIVE-2 §8 (2026-10-04): a row whose Budget is
+          SOURCE_NOT_CONNECTED renders only its Actual column. The
+          Budget / Variance / Trend cells show "—" and the trend bar
+          is omitted entirely so a 0 % bar never fakes a "beat budget
+          by $0" result. The React layer is a PURE consumer — all
+          null-handling is derived from the formatter. */}
       <div data-testid="department-net-performance-rows">
         {data.rows.map((row, i) => (
           <div
             key={row.key}
             data-testid={`department-row-${row.key}`}
-            data-favorable={row.isFavorable ? "true" : "false"}
+            data-favorable={row.isFavorable == null ? "unavailable" : row.isFavorable ? "true" : "false"}
             className={`grid items-center px-4 py-2.5 ${
               i % 2 === 1 ? "bg-club-sand/30" : "bg-club-cream"
             } ${i < data.rows.length - 1 ? "border-b border-club-sand/40" : ""}`}
@@ -2610,38 +2615,49 @@ function DepartmentNetPerformanceCard({ data }: { data: DepartmentData }) {
               {row.actualLabel}
             </div>
             <div
-              className="text-right font-serif tabular-nums text-club-green-800/85"
+              className="text-right font-serif tabular-nums text-club-green-800/55"
               style={{ fontSize: "12.5px" }}
             >
-              {row.budgetLabel}
+              {row.budgetLabel ?? "—"}
             </div>
             <div
               className="text-right font-serif tabular-nums"
               style={{
                 fontSize: "12.5px",
-                fontWeight: 600,
-                color: row.isFavorable ? "rgb(63, 112, 66)" : "#8b3520",
+                fontWeight: row.varianceLabel == null ? 400 : 600,
+                color:
+                  row.varianceLabel == null
+                    ? "rgba(63, 112, 66, 0.55)"
+                    : row.isFavorable
+                      ? "rgb(63, 112, 66)"
+                      : "#8b3520",
               }}
             >
-              {row.varianceLabel}
+              {row.varianceLabel ?? "—"}
             </div>
-            {/* Trend bar — muted horizontal track with a proportional
-                fill. Saguaro understated convention: no rounded
-                progress-bar styling. */}
-            <div
-              className="relative w-full"
-              style={{ height: "6px", backgroundColor: "rgba(63, 112, 66, 0.08)" }}
-              aria-label={`Trend: ${row.varianceLabel}`}
-            >
+            {row.trendBarPct == null ? (
               <div
-                style={{
-                  width: `${row.trendBarPct}%`,
-                  height: "100%",
-                  backgroundColor: row.isFavorable ? "rgb(63, 112, 66)" : "#8b3520",
-                  opacity: 0.7,
-                }}
-              />
-            </div>
+                className="flex items-center justify-center font-serif text-club-green-800/55"
+                style={{ fontSize: "11px" }}
+              >
+                —
+              </div>
+            ) : (
+              <div
+                className="relative w-full"
+                style={{ height: "6px", backgroundColor: "rgba(63, 112, 66, 0.08)" }}
+                aria-label={`Trend: ${row.varianceLabel ?? ""}`}
+              >
+                <div
+                  style={{
+                    width: `${row.trendBarPct}%`,
+                    height: "100%",
+                    backgroundColor: row.isFavorable ? "rgb(63, 112, 66)" : "#8b3520",
+                    opacity: 0.7,
+                  }}
+                />
+              </div>
+            )}
           </div>
         ))}
       </div>

@@ -29,6 +29,16 @@ import { incomeStatementByDepartmentFromSnapshot } from "@/lib/accounting/dept-p
 
 /** TB-HIST-2b (2026-10-01) §1 — canonical unavailable sentinel. */
 const UNAVAILABLE_TEXT = "Data not available for this reporting period.";
+
+// REPORT-LIVE-2 §20 (2026-10-04) — precise per-card unavailable
+// reasons. Replaces the generic UNAVAILABLE_TEXT placeholder with
+// language that EXPLAINS which source is missing, so the Board
+// report reads as "report explains what is missing" rather than
+// "report looks broken".
+const UNAVAIL_SCORECARDS      = "Scorecard targets + benchmarks not configured — policy thresholds required before status verdicts can render.";
+const UNAVAIL_DUES_SUBSIDY    = "Dues allocation donut needs a Coulee-specific expense-allocation classifier (semantics ambiguous).";
+const UNAVAIL_PAYROLL_DEPT    = "Per-department payroll breakdown not yet exposed by the departmental P&L resolver.";
+const UNAVAIL_PAYROLL_TREND   = "Multi-month payroll ratio history not connected — only Jan 2026 committed; one point is not a trend.";
 import { getOperatingResults, type OperatingResults } from "@/lib/reporting/operating-results";
 import {
   buildStewardshipDashboardNotes,
@@ -107,6 +117,7 @@ import {
 } from "@/lib/reporting/capital-fund-adapter";
 import {
   buildDepartmentNetPerformanceData,
+  buildDepartmentNetPerformanceLive,
   SILVER_SPRINGS_DEPARTMENT_INPUTS,
   SILVER_SPRINGS_DEPARTMENT_COMMENTARY,
   type DepartmentNetPerformanceData,
@@ -2778,8 +2789,13 @@ export async function getMonthlyReportingPackage(
       // "Unavailable" — this guard eliminates the computation, not
       // merely the render. Demo tenants continue to consume the
       // Silver Springs seeds unchanged.
+      // REPORT-LIVE-2 §6 (2026-10-04) — live-tenant Department Net
+      // Performance now reads from the authoritative committed TB
+      // via `incomeStatementByDepartmentFromSnapshot`. Actual column
+      // is live; Budget + variance stay null (SOURCE_NOT_CONNECTED)
+      // until a Coulee budget importer lands.
       departmentPerformance: hasRealData
-        ? buildDepartmentNetPerformanceData([], "Unavailable")
+        ? await buildDepartmentNetPerformanceLive(clubId, periodEnd)
         : buildDepartmentNetPerformanceData(
             SILVER_SPRINGS_DEPARTMENT_INPUTS,
             SILVER_SPRINGS_DEPARTMENT_COMMENTARY,
@@ -3595,23 +3611,26 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
       duesSubsidyTrend: emptySeries,
       departmentSummary: [],
     },
-    // REPORT-CHART-1 §4-9 (2026-10-03) — the stewardship dashboard
-    // now carries LIVE equity + operating data for Jonas-only tenants
-    // (committed-TB-snapshot fallback inside getEquityHistory /
-    // getOperatingResults). Preserving those two sub-chapters is the
-    // whole point of REPORT-CHART-1 — redacting the chapter wholesale
-    // throws away the data the resolver just produced. The remaining
-    // sub-chapters (scorecards + the TB-HIST-12 §3 supplements) are
-    // still demo-sourced and continue to be wiped.
+    // REPORT-CHART-1 §4-9 + REPORT-LIVE-2 §20-21 (2026-10-04) — the
+    // stewardship dashboard carries LIVE equity, operating, and now
+    // Department Net Performance data on Jonas-only tenants. Live
+    // sub-chapters are preserved; demo-sourced sub-chapters are
+    // wiped with per-card PRECISE reason text (§20) instead of the
+    // generic "Data not available for this reporting period"
+    // placeholder, so the Board report EXPLAINS what's missing
+    // rather than looking broken.
     stewardshipDashboard: {
       ...pkg.stewardshipDashboard,
-      equity:    pkg.stewardshipDashboard.equity,
-      operating: pkg.stewardshipDashboard.operating,
-      scorecards:          makeUnavailable(pkg.stewardshipDashboard.scorecards,          u),
-      departmentPerformance: makeUnavailable(pkg.stewardshipDashboard.departmentPerformance, u),
-      duesSubsidy:         makeUnavailable(pkg.stewardshipDashboard.duesSubsidy,         u),
-      payrollDepartment:   makeUnavailable(pkg.stewardshipDashboard.payrollDepartment,   u),
-      payrollRatioTrend:   makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend,   u),
+      // §4-9 — live
+      equity:                pkg.stewardshipDashboard.equity,
+      operating:             pkg.stewardshipDashboard.operating,
+      // §6 — live (Jan 2026 departmental P&L from committed TB)
+      departmentPerformance: pkg.stewardshipDashboard.departmentPerformance,
+      // §20 — unavailable, with precise per-card reasons
+      scorecards:        makeUnavailable(pkg.stewardshipDashboard.scorecards, UNAVAIL_SCORECARDS),
+      duesSubsidy:       makeUnavailable(pkg.stewardshipDashboard.duesSubsidy, UNAVAIL_DUES_SUBSIDY),
+      payrollDepartment: makeUnavailable(pkg.stewardshipDashboard.payrollDepartment, UNAVAIL_PAYROLL_DEPT),
+      payrollRatioTrend: makeUnavailable(pkg.stewardshipDashboard.payrollRatioTrend, UNAVAIL_PAYROLL_TREND),
     },
     stewardshipKpiDashboard: makeUnavailable(pkg.stewardshipKpiDashboard, u),
     operatingKPIs: { dataSource: "demo", cards: [] },
