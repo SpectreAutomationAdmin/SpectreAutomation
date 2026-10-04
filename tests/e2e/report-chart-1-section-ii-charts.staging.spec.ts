@@ -45,7 +45,10 @@ runAt("REPORT-CHART-1 · Section II charts render authoritative snapshot data", 
   // We count visible markers inside the Equity card.
   const equityCard = page.locator('[data-testid="stewardship-card-equity"], article:has-text("Equity Value Over Time")').first();
   const equityMarkerCount = await equityCard.locator("svg circle").count().catch(() => 0);
-  const equityXLabels = await equityCard.locator("svg text").allInnerTexts().catch(() => [] as string[]);
+  // SVG <text> nodes read via allTextContents (allInnerTexts returns
+  // empty strings for SVG where the host element has no CSS-rendered
+  // inline text box).
+  const equityXLabels = await equityCard.locator("svg text").allTextContents().catch(() => [] as string[]);
   console.log("REPORT_CHART_1_EQUITY " + JSON.stringify({
     equityMarkerCount,
     xLabelsSample: equityXLabels.filter((t) => /\b20\d{2}\b|\bDec\b|\bJan\b/.test(t)).slice(0, 8),
@@ -59,15 +62,23 @@ runAt("REPORT-CHART-1 · Section II charts render authoritative snapshot data", 
   expect(hasDec2025 || hasJan2026).toBe(true);
 
   // ---- Operating Results (SVG inspection) ----
+  // OperatingResultsCard uses an EditorialBarChart — data points are
+  // RECT bars, not circles. We require >= 1 bar rendered inside the
+  // chart's SVG, which proves the Jan 2026 committed-snapshot NOI
+  // reached the plot area.
   const opCard = page.locator('article:has-text("Operating Results")').first();
-  const opMarkerCount = await opCard.locator("svg circle").count().catch(() => 0);
-  const opXLabels = await opCard.locator("svg text").allInnerTexts().catch(() => [] as string[]);
+  const opBarCount = await opCard.locator("svg rect").count().catch(() => 0);
+  const opXLabels = await opCard.locator("svg text").allTextContents().catch(() => [] as string[]);
   console.log("REPORT_CHART_1_OPERATING " + JSON.stringify({
-    opMarkerCount,
+    opBarCount,
     xLabelsSample: opXLabels.filter((t) => /\bJan\b|\bFeb\b|\bMar\b|\bApr\b|\bMay\b|\bJun\b|\bJul\b|\bAug\b|\bSep\b|\bOct\b|\bNov\b|\bDec\b/.test(t)).slice(0, 15),
   }));
-  // Expect >= 1 real plotted Actual point (Jan 2026).
-  expect(opMarkerCount).toBeGreaterThanOrEqual(1);
+  const hasOpDec2025 = opXLabels.some((t) => /Dec\s*2025/.test(t));
+  const hasOpJan2026 = opXLabels.some((t) => /Jan\s*2026/.test(t));
+  console.log("REPORT_CHART_1_OPERATING_LABELS " + JSON.stringify({ hasOpDec2025, hasOpJan2026 }));
+  // Expect >= 1 real plotted Actual bar (Jan 2026).
+  expect(opBarCount).toBeGreaterThanOrEqual(1);
+  expect(hasOpDec2025 || hasOpJan2026).toBe(true);
 
   // ---- Baseline hold ----
   const after = await invariant(page);
