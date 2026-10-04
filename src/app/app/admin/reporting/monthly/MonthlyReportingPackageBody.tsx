@@ -3283,6 +3283,77 @@ function ChairsDashboard({ pkg }: { pkg: Awaited<ReturnType<typeof getMonthlyRep
           else renders a one-line reason. Policy targets render on
           their own line and are not required for the metric to
           display. */}
+
+      {/* REPORT-LIVE-1 §9-19 (2026-10-03) — Section II (Financial
+          Performance) authoritative source panel. Renders only on
+          live tenants with a committed Jan TB. Cites Revenue /
+          COGS / OpEx / Net Income directly from the January source
+          with explicit per-series availability (Actual AVAILABLE,
+          Budget SOURCE_NOT_CONNECTED, Prior Year SOURCE_NOT_LOADED).
+          No fabricated time series. */}
+      {pkg.financialPerformanceAuthoritative ? (
+        <section
+          data-testid="financial-performance-source-panel"
+          className="mt-6 border-t border-club-green-800/25 pt-5"
+        >
+          <h3 className="text-[13px] uppercase tracking-[0.18em] font-semibold text-club-green-900">
+            Financial Performance — Authoritative Source
+          </h3>
+          <p className="mt-1 font-serif italic text-[13px] text-club-green-800/85">
+            {pkg.financialPerformanceAuthoritative.sourceLabel} · as of{" "}
+            <time dateTime={pkg.financialPerformanceAuthoritative.sourceEffectiveDateIso} className="font-mono">
+              {pkg.financialPerformanceAuthoritative.sourceEffectiveDateIso}
+            </time>
+          </p>
+          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 border-t border-club-sand/40 pt-3">
+            <div data-testid="fp-source-revenue" className="flex flex-col">
+              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Revenue</dt>
+              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
+                {pkg.financialPerformanceAuthoritative.revenueDisplay}
+              </dd>
+            </div>
+            <div data-testid="fp-source-cogs" className="flex flex-col">
+              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Cost of Sales</dt>
+              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
+                {pkg.financialPerformanceAuthoritative.cogsDisplay}
+              </dd>
+            </div>
+            <div data-testid="fp-source-opex" className="flex flex-col">
+              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Operating Expenses</dt>
+              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
+                {pkg.financialPerformanceAuthoritative.opexDisplay}
+              </dd>
+            </div>
+            <div data-testid="fp-source-net-income" className="flex flex-col">
+              <dt className="text-[11px] uppercase tracking-[0.15em] text-club-green-800/70">Net Income</dt>
+              <dd className="font-serif text-[18px] tabular-nums text-club-green-900">
+                {pkg.financialPerformanceAuthoritative.netIncomeDisplay}
+              </dd>
+            </div>
+          </dl>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-1 text-[11px] text-stone-600">
+            <div data-testid="fp-source-actual">
+              <span className="uppercase tracking-[0.15em] text-stone-400">Actual</span>{" "}
+              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.actual}</span>
+            </div>
+            <div data-testid="fp-source-budget">
+              <span className="uppercase tracking-[0.15em] text-stone-400">Budget</span>{" "}
+              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.budget}</span>
+            </div>
+            <div data-testid="fp-source-prior-year">
+              <span className="uppercase tracking-[0.15em] text-stone-400">Prior Year</span>{" "}
+              <span className="font-mono">{pkg.financialPerformanceAuthoritative.availability.priorYear}</span>
+            </div>
+          </div>
+          <p data-testid="fp-source-note" className="mt-3 font-serif italic text-[13px] leading-snug text-club-green-800/80">
+            {pkg.financialPerformanceAuthoritative.note}
+          </p>
+          <p data-testid="fp-source-dept-count" className="mt-1 text-[11px] text-stone-500">
+            Departmental P&L reconciled: {pkg.financialPerformanceAuthoritative.departmentCount} / 8 departments.
+          </p>
+        </section>
+      ) : null}
+
       {pkg.stewardshipTiles && pkg.stewardshipTiles.tiles.length > 0 ? (
         <section
           data-testid="stewardship-tiles"

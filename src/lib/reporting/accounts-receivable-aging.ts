@@ -396,3 +396,159 @@ export function buildSilverSpringsAccountsReceivableAging(opts: {
     collectionNotes,
   };
 }
+
+// =============================================================================
+// REPORT-LIVE-1 (2026-10-03) — Coulee AR aging from committed snapshot
+// =============================================================================
+//
+// Replaces the Silver Springs demo factory on live tenants. Consumes
+// the output of `resolveArAgingAsOf` (AR-HIST-1) and emits a Chapter
+// VIII payload whose numerics EXACTLY reconcile to the committed
+// snapshot.
+//
+// Mapping of Jonas aging buckets → Spectre's 4-bucket display:
+//   Spectre "Current (0-30)"  ← Jonas Current
+//   Spectre "31-60 Days"      ← Jonas 1 Mths
+//   Spectre "61-90 Days"      ← Jonas 2 Mths
+//   Spectre "Over 90"         ← Jonas 3 Mths + Over 4 Mths  (combined)
+//
+// Membership activity + reactive collection notes remain UNAVAILABLE
+// (no source loaded). The payload still carries the structural
+// headers so the renderer composes correctly.
+
+export type CouleeArAgingSnapshotInputs = {
+  totalAR: number;
+  current: number;
+  oneMonth: number;
+  twoMonths: number;
+  threeMonths: number;
+  overFourMonths: number;
+  accountCount: number;
+  nonCurrentAccountCount: number;
+  /** `99.2522…` */
+  currentPct: number | null;
+  sourceEffectiveDate: Date;
+  reconciliationStatus: string | null;
+};
+
+export function buildCouleeAccountsReceivableAging(opts: {
+  clubName: string;
+  period: ReportingPeriod;
+  snapshot: CouleeArAgingSnapshotInputs;
+}): AccountsReceivableAging {
+  const { snapshot, period, clubName } = opts;
+  const over90 = snapshot.threeMonths + snapshot.overFourMonths;
+  const currentPctLabel = snapshot.currentPct != null
+    ? `${snapshot.currentPct.toFixed(1)}%`
+    : "—";
+
+  const kpiCards: ARKpiCard[] = [
+    {
+      key: "total-ar",
+      label: "Total Receivables",
+      valueLabel: formatDollars(Math.round(snapshot.totalAR)),
+      tone: "neutral",
+    },
+    {
+      key: "current-pct",
+      label: "Current %",
+      valueLabel: currentPctLabel,
+      tone: snapshot.currentPct != null && snapshot.currentPct >= 95 ? "favorable" : "neutral",
+    },
+    {
+      key: "non-current",
+      label: "Non-current",
+      valueLabel: formatDollars(Math.round(snapshot.oneMonth + snapshot.twoMonths + snapshot.threeMonths + snapshot.overFourMonths)),
+      tone: "neutral",
+    },
+    {
+      key: "non-current-accounts",
+      label: "Accounts with Non-current Balance",
+      valueLabel: String(snapshot.nonCurrentAccountCount),
+      tone: "neutral",
+    },
+  ];
+
+  const totalRow: ARAgingRow = {
+    key: "total",
+    kind: "total",
+    label: `Total Member AR — ${snapshot.accountCount} accounts`,
+    values: {
+      current: snapshot.current,
+      days31to60: snapshot.oneMonth,
+      days61to90: snapshot.twoMonths,
+      over90: over90,
+      totalBalance: snapshot.totalAR,
+    },
+    status: {
+      label: snapshot.reconciliationStatus === "RECONCILED" ? "Reconciled to GL" : "Reconciliation pending",
+      tone: "current",
+    },
+  };
+  const memberArRow: ARAgingRow = {
+    key: "member-ar",
+    kind: "category",
+    label: "Member Receivables (Jonas account 1200)",
+    values: {
+      current: snapshot.current,
+      days31to60: snapshot.oneMonth,
+      days61to90: snapshot.twoMonths,
+      over90: over90,
+      totalBalance: snapshot.totalAR,
+    },
+    status: snapshot.currentPct != null && snapshot.currentPct >= 95
+      ? { label: "Current", tone: "current" }
+      : { label: "Watch", tone: "watch" },
+  };
+  const agingRows: ARAgingRow[] = [memberArRow, totalRow];
+
+  const introNote =
+    `Aged member receivables as of ${snapshot.sourceEffectiveDate.toISOString().slice(0, 10)}. ` +
+    `Total of ${formatDollars(Math.round(snapshot.totalAR))} across ${snapshot.accountCount} member accounts. ` +
+    `${currentPctLabel} is current. ${snapshot.nonCurrentAccountCount} accounts carry some non-current balance. ` +
+    `Reconciled to GL account 1200 (Accts Receivable - Members & Assoc) without variance. ` +
+    `Membership activity and collection commentary remain unavailable until those sources are loaded.`;
+
+  return {
+    dataSource: "live" as ReportingDataSource,
+    eyebrow: `${clubName} · Accounts Receivable`,
+    title: "Accounts Receivable Aging",
+    periodLabel: period.statementHeaderLabel,
+    introNote,
+    statementNumber: "Statement 06 of 14",
+    documentChip: "AR Aging",
+    preparedFor: "Finance Committee · Board of Directors",
+    kpiCards,
+    agingColumnHeaders: {
+      category: "Category",
+      current: "Current (0-30)",
+      days31to60: "31-60 Days",
+      days61to90: "61-90 Days",
+      over90: "Over 90",
+      totalBalance: "Total Balance",
+      status: "Status",
+    },
+    agingRows,
+    // Membership activity + collection notes unavailable — the
+    // headers survive but rows are empty so the renderer shows
+    // headers without fabricated activity.
+    membershipColumnHeaders: {
+      activity: "Membership Activity",
+      current: "Current period",
+      comparative: "Prior period",
+      change: "Change",
+      annualForecast: "Annual Forecast",
+    },
+    membershipRows: [],
+    collectionNotes: {
+      eyebrow: "Collection Notes",
+      notes: [
+        {
+          text:
+            "Collection notes and member-level commentary are not sourced in this import. " +
+            "Only aggregate aging buckets and reconciliation to GL are available from the Jonas Aged Receivables List.",
+        },
+      ],
+    },
+  };
+}

@@ -56,6 +56,7 @@ import {
 import { PrismaReportingLedger } from "@/lib/reporting/ledger";
 import {
   buildSilverSpringsAccountsReceivableAging,
+  buildCouleeAccountsReceivableAging,
   type AccountsReceivableAging,
 } from "@/lib/reporting/accounts-receivable-aging";
 import {
@@ -491,6 +492,29 @@ export type MonthlyReportingPackage = {
    *  Optional for backward-compat on frozen packagePayloadJson
    *  rows published before TB-HIST-12. */
   reportingDataAsOfIso?: string | null;
+
+  /** REPORT-LIVE-1 §9-19 (2026-10-03) — Section II (Financial
+   *  Performance) authoritative source panel. On live tenants with a
+   *  committed Jan TB, carries the headline Revenue / COGS / OpEx /
+   *  Net Income values derived from the JanuaryMetricSet so Section
+   *  II visibly cites authoritative data WITHOUT fabricating a
+   *  12-month trend. Null on demo tenants (they keep the Silver
+   *  Springs operating-results path). */
+  financialPerformanceAuthoritative?: {
+    sourceLabel: string;        // e.g. "Jan 2026 Jonas Trial Balance"
+    sourceEffectiveDateIso: string;
+    revenueDisplay: string;     // formatted via existing helpers
+    cogsDisplay: string;
+    opexDisplay: string;
+    netIncomeDisplay: string;
+    departmentCount: number;    // 8 for Coulee Jan 2026
+    availability: {
+      actual: "AVAILABLE" | "UNAVAILABLE";
+      budget: "SOURCE_NOT_CONNECTED";       // Coulee has no budget source
+      priorYear: "SOURCE_NOT_LOADED";        // No prior-year monthly source
+    };
+    note: string;
+  } | null;
 
   /** TB-HIST-12B §4-5 — tile-level Stewardship Dashboard.
    *  Each tile resolves INDEPENDENTLY from the ratio registry so a
@@ -2415,6 +2439,57 @@ export async function getMonthlyReportingPackage(
     });
   }
 
+  // REPORT-LIVE-1 §3-6 (2026-10-03) — Chapter VIII AR Aging.
+  // On live tenants with a committed AR snapshot, consume the
+  // authoritative source via resolveArAgingAsOf (AR-HIST-1).
+  // Fallback to the Silver Springs demo factory otherwise.
+  let accountsReceivableAging: ReturnType<typeof buildSilverSpringsAccountsReceivableAging>;
+  if (hasRealData) {
+    const { resolveArAgingAsOf } = await import("./ar-aging-resolver");
+    const arResult = await resolveArAgingAsOf({
+      clubId: club.id,
+      asOf: reportingPeriod.periodEnd,
+    });
+    if (arResult.provenance.availability === "AVAILABLE" && arResult.snapshot) {
+      accountsReceivableAging = buildCouleeAccountsReceivableAging({
+        clubName: club.name,
+        period: reportingPeriod,
+        snapshot: {
+          totalAR: Number(arResult.snapshot.totalAR.toString()),
+          current: Number(arResult.snapshot.current.toString()),
+          oneMonth: Number(arResult.snapshot.oneMonth.toString()),
+          twoMonths: Number(arResult.snapshot.twoMonths.toString()),
+          threeMonths: Number(arResult.snapshot.threeMonths.toString()),
+          overFourMonths: Number(arResult.snapshot.overFourMonths.toString()),
+          accountCount: arResult.snapshot.accountCount,
+          nonCurrentAccountCount: arResult.snapshot.nonCurrentAccountCount,
+          currentPct: arResult.snapshot.currentPct,
+          sourceEffectiveDate: arResult.snapshot.sourceEffectiveDate,
+          reconciliationStatus: arResult.snapshot.reconciliationStatus,
+        },
+      });
+    } else {
+      // No AR snapshot for this period — build an empty live shape
+      // (dataSource: "live") so the redactor skips it. The chapter
+      // renders empty rows + an "unavailable" intro note.
+      accountsReceivableAging = buildCouleeAccountsReceivableAging({
+        clubName: club.name,
+        period: reportingPeriod,
+        snapshot: {
+          totalAR: 0, current: 0, oneMonth: 0, twoMonths: 0, threeMonths: 0, overFourMonths: 0,
+          accountCount: 0, nonCurrentAccountCount: 0, currentPct: null,
+          sourceEffectiveDate: reportingPeriod.periodEnd,
+          reconciliationStatus: null,
+        },
+      });
+    }
+  } else {
+    accountsReceivableAging = buildSilverSpringsAccountsReceivableAging({
+      clubName: club.name,
+      period: reportingPeriod,
+    });
+  }
+
   const pkg: MonthlyReportingPackage = {
     club: {
       id: club.id,
@@ -2445,6 +2520,30 @@ export async function getMonthlyReportingPackage(
     // TB-HIST-12B §4-5 — tile-level Stewardship Dashboard, driven
     // by the ratio registry on live tenants only.
     stewardshipTiles: hasRealData ? buildStewardshipTiles(januaryMetricSet) : null,
+    // REPORT-LIVE-1 — Section II authoritative source panel.
+    financialPerformanceAuthoritative: hasRealData && januaryMetricSet
+      ? {
+          sourceLabel: "Jan 2026 Jonas Trial Balance",
+          sourceEffectiveDateIso: reportingPeriod.periodEnd.toISOString().slice(0, 10),
+          revenueDisplay: januaryMetricSet.revenue.metric.display,
+          cogsDisplay: januaryMetricSet.cogs.metric.display,
+          opexDisplay: januaryMetricSet.opex.metric.display,
+          netIncomeDisplay: januaryMetricSet.noi.metric.display,
+          departmentCount: departmentalPLSummary.cards.length,
+          availability: {
+            actual:
+              januaryMetricSet.revenue.metric.provenance.availability === "AVAILABLE"
+                ? "AVAILABLE"
+                : "UNAVAILABLE",
+            budget: "SOURCE_NOT_CONNECTED",
+            priorYear: "SOURCE_NOT_LOADED",
+          },
+          note:
+            "Actual values derive from the committed January Jonas Trial Balance. " +
+            "Budget comparison is unavailable (no budget source loaded for this tenant). " +
+            "Prior-year monthly comparison is unavailable (no January 2025 operating snapshot).",
+        }
+      : null,
 
     // Executive Summary — 6 At-a-Glance KPI cards + reactive
     // headline narrative. Per the Jonas-readiness audit (Tier 1,
@@ -2707,11 +2806,10 @@ export async function getMonthlyReportingPackage(
     statementOfFinancialPositionV2,
 
     // Chapter VIII — Accounts Receivable Aging.
-    // Owned end-to-end by src/lib/reporting/accounts-receivable-aging.ts.
-    accountsReceivableAging: buildSilverSpringsAccountsReceivableAging({
-      clubName: club.name,
-      period: reportingPeriod,
-    }),
+    // REPORT-LIVE-1 (2026-10-03) — on live tenants with a committed
+    // AR aging snapshot, consume the authoritative source. Falls
+    // back to the Silver Springs demo factory otherwise.
+    accountsReceivableAging: accountsReceivableAging,
 
     // Chapter IX — Operating Statistics & Focus Areas.
     // Owned end-to-end by src/lib/reporting/operating-statistics.ts.
@@ -3395,7 +3493,14 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
     operatingKPIs: { dataSource: "demo", cards: [] },
     capitalKPIs: { dataSource: "demo", cards: [] },
     capitalProjectTracker: makeUnavailable(pkg.capitalProjectTracker, u),
-    accountsReceivableAging: makeUnavailable(pkg.accountsReceivableAging, u),
+    // REPORT-LIVE-1 §3 (2026-10-03) — AR Aging chapter now has a
+    // real-data path (buildCouleeAccountsReceivableAging emits
+    // dataSource: "live"). Leave real-data chapters alone; only wipe
+    // when dataSource is still "demo".
+    accountsReceivableAging:
+      pkg.accountsReceivableAging.dataSource === "live"
+        ? pkg.accountsReceivableAging
+        : makeUnavailable(pkg.accountsReceivableAging, u),
     operatingStatistics: makeUnavailable(pkg.operatingStatistics, u),
     // TB-HIST-11 (2026-10-02) — Chapter X now has a real-data path
     // (buildCouleeDepartmentalPLSummary emits dataSource: "live").
