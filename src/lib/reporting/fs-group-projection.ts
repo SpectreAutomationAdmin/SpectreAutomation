@@ -57,6 +57,11 @@ import { prisma } from "@/lib/prisma";
 import { reportingAccountBalances } from "@/lib/accounting/reporting-balances";
 import { resolveBudget } from "@/lib/reporting/budget-resolver";
 import type { ReportingPeriod } from "@/lib/reporting/reporting-period";
+import {
+  classifyFsGroupPresentation,
+  presentationCategoryFor,
+  type PresentationCategoryKey,
+} from "@/lib/reporting/fs-group-presentation-categories";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -84,6 +89,14 @@ export type FsGroupProjectionRow = {
   /** Sort order from FinancialStatementGroup.sortOrder (0 when null
    *  key, so the unassigned bucket surfaces at the top for review). */
   sortOrder: number;
+  // REPORT-PRESENTATION-1A §3 (2026-10-05) — Board presentation
+  // category this FS Group belongs to. Deterministic lookup via
+  // `classifyFsGroupPresentation(fsGroupKey, section)`. Enables
+  // Section → Category → FS Group → Account hierarchy without
+  // duplicating classification logic across the builder.
+  presentationCategoryKey: PresentationCategoryKey;
+  presentationCategoryName: string;
+  presentationCategorySortOrder: number;
   cmActual: number;
   cmBudget: number;
   ytdActual: number;
@@ -304,7 +317,10 @@ export async function resolveFsGroupProjection(args: {
   }
 
   // -- Group each partition by fsGroupKey → emit FsGroupProjectionRow. --
-  const makeGroups = (accts: AcctAgg[]): FsGroupProjectionRow[] => {
+  const makeGroups = (
+    accts: AcctAgg[],
+    projectionSection: "OPERATING_REVENUE" | "OPERATING_EXPENSE" | "DEPRECIATION" | "CAPITAL_REVENUE" | "CAPITAL_EXPENSE",
+  ): FsGroupProjectionRow[] => {
     const byGroup = new Map<string, { meta: AcctAgg; accts: AcctAgg[] }>();
     for (const a of accts) {
       const k = a.fsGroupKey ?? `__UNASSIGNED__${a.accountNumber}`;
@@ -335,27 +351,44 @@ export async function resolveFsGroupProjection(args: {
         });
       }
       const isUnassigned = k.startsWith("__UNASSIGNED__");
+      // Resolve Board presentation category using the deterministic
+      // fs-group-presentation-categories lookup.
+      const presentationCategoryKey = classifyFsGroupPresentation({
+        fsGroupKey: isUnassigned ? null : g.meta.fsGroupKey,
+        section: projectionSection,
+      });
+      const presentationCategory = presentationCategoryFor(presentationCategoryKey);
       rows.push({
         fsGroupKey: isUnassigned ? null : g.meta.fsGroupKey,
         fsGroupName: isUnassigned
           ? `(Unassigned — ${g.meta.accountNumber} ${g.meta.accountName})`
           : g.meta.fsGroupName,
         sortOrder: isUnassigned ? -1 : g.meta.fsGroupSortOrder,
+        presentationCategoryKey,
+        presentationCategoryName: presentationCategory.displayName,
+        presentationCategorySortOrder: presentationCategory.sortOrder,
         cmActual, cmBudget, ytdActual, ytdBudget,
         accounts: children,
       });
     }
     return rows.sort((a, b) => {
+      // Primary sort: presentation category sort order (groups within
+      // the same category stay adjacent for category-subtotal math).
+      if (a.presentationCategorySortOrder !== b.presentationCategorySortOrder) {
+        return a.presentationCategorySortOrder - b.presentationCategorySortOrder;
+      }
+      // Secondary: FS Group sortOrder.
       if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      // Tertiary: fsGroupKey alpha for stable ordering.
       return (a.fsGroupKey ?? "").localeCompare(b.fsGroupKey ?? "");
     });
   };
 
-  const operatingRevenue = makeGroups(operatingRevenueAccts);
-  const operatingExpense = makeGroups(operatingExpenseAccts);
-  const depreciation     = makeGroups(depreciationAccts);
-  const capitalRevenue   = makeGroups(capitalRevenueAccts);
-  const capitalExpense   = makeGroups(capitalExpenseAccts);
+  const operatingRevenue = makeGroups(operatingRevenueAccts, "OPERATING_REVENUE");
+  const operatingExpense = makeGroups(operatingExpenseAccts, "OPERATING_EXPENSE");
+  const depreciation     = makeGroups(depreciationAccts, "DEPRECIATION");
+  const capitalRevenue   = makeGroups(capitalRevenueAccts, "CAPITAL_REVENUE");
+  const capitalExpense   = makeGroups(capitalExpenseAccts, "CAPITAL_EXPENSE");
 
   const sectionTotals = (rows: FsGroupProjectionRow[]): FsGroupProjectionSectionTotals => ({
     cmActual: rows.reduce((s, r) => s + r.cmActual, 0),

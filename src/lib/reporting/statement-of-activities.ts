@@ -88,7 +88,27 @@ export type StatementOfActivitiesV2RowKind =
   // builder emits BOTH the parent row AND every child row; the UI
   // filters children by expanded `groupKey` set.
   | "fs-group"
-  | "fs-group-child";
+  | "fs-group-child"
+  // REPORT-PRESENTATION-1A §3-5 (2026-10-05) — Board presentation
+  // category rows. The hierarchy is:
+  //   section-band (e.g. "OPERATING REVENUE")
+  //     category-heading ("Dues & Member Revenue")
+  //       fs-group (chevron, expandable)
+  //         fs-group-child (indented, hidden until expanded)
+  //       fs-group
+  //       ...
+  //     category-subtotal ("Total Dues & Member Revenue")
+  //     category-heading ("Golf Operations")
+  //       ...
+  //     category-subtotal
+  //     ...
+  //   total ("Total Operating Revenue")
+  //
+  // The category rows carry their own 7-column aggregates summed
+  // from constituent FS Groups — proven to reconcile to the section
+  // total within $0.01 (directive §15).
+  | "category-heading"
+  | "category-subtotal";
 
 /** Numeric value cells for any row that ships them. `null` reads
  *  as the em-dash neutral display ("—") at render time. */
@@ -1389,19 +1409,18 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
 }): StatementOfActivitiesV2 {
   const { projection } = args;
 
-  // -- Operating revenue section --
+  // -- Operating revenue section (Section → Category → FS Group → Account) --
   const operatingRows: StatementOfActivitiesV2Row[] = [];
   operatingRows.push({
     key: "band-operating-revenue",
     kind: "section-band",
     label: "Operating Revenue",
   });
-  for (const g of projection.operatingRevenue) {
-    operatingRows.push(buildFsGroupRow({ g, isRevenue: true, isCapital: false }));
-    for (const a of g.accounts) {
-      operatingRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: true }));
-    }
-  }
+  emitByCategory({
+    rows: operatingRows,
+    groups: projection.operatingRevenue,
+    isRevenue: true,
+  });
   // Total Operating Revenue
   operatingRows.push({
     key: "total-operating-revenue",
@@ -1420,18 +1439,17 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
     },
   });
 
-  // -- Operating expense section (depreciation carved out) --
+  // -- Operating expense section (depreciation carved out; category hierarchy) --
   operatingRows.push({
     key: "band-operating-expense",
     kind: "section-band",
     label: "Operating Expenses",
   });
-  for (const g of projection.operatingExpense) {
-    operatingRows.push(buildFsGroupRow({ g, isRevenue: false, isCapital: false }));
-    for (const a of g.accounts) {
-      operatingRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: false }));
-    }
-  }
+  emitByCategory({
+    rows: operatingRows,
+    groups: projection.operatingExpense,
+    isRevenue: false,
+  });
 
   // -- NOI Before Depreciation band --
   const noiBefore = projection.totals.noiBeforeDep;
@@ -1510,34 +1528,35 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
 
   if (projection.capitalRevenue.length > 0) {
     capitalRows.push({ key: "band-capital-rev", kind: "capital-band", label: "Capital Revenue" });
-    for (const g of projection.capitalRevenue) {
-      capitalRows.push(buildFsGroupRow({ g, isRevenue: true, isCapital: true }));
-      for (const a of g.accounts) {
-        capitalRows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue: true }));
-      }
-    }
+    emitByCategory({
+      rows: capitalRows,
+      groups: projection.capitalRevenue,
+      isRevenue: true,
+    });
   }
   if (projection.capitalExpense.length > 0) {
     capitalRows.push({ key: "band-capital-exp", kind: "capital-band", label: "Capital Fund Expenses" });
-    for (const g of projection.capitalExpense) {
-      // Capital expense rows render as negative amounts (consistent
-      // with the demo-era SoA convention).
-      const negatedParent: FsGroupProjectionRow = {
-        ...g,
-        cmActual: -g.cmActual,
-        cmBudget: -g.cmBudget,
-        ytdActual: -g.ytdActual,
-        ytdBudget: -g.ytdBudget,
-      };
-      capitalRows.push(buildFsGroupRow({ g: negatedParent, isRevenue: true, isCapital: true }));
-      for (const a of g.accounts) {
-        capitalRows.push(buildFsGroupChildRow({
-          parent: g,
-          acct: { ...a, cmActual: -a.cmActual, cmBudget: -a.cmBudget, ytdActual: -a.ytdActual, ytdBudget: -a.ytdBudget },
-          isRevenue: true,
-        }));
-      }
-    }
+    // Capital expense rows render as negative amounts (consistent
+    // with the demo-era SoA convention).
+    const negatedCapExp: FsGroupProjectionRow[] = projection.capitalExpense.map((g) => ({
+      ...g,
+      cmActual: -g.cmActual,
+      cmBudget: -g.cmBudget,
+      ytdActual: -g.ytdActual,
+      ytdBudget: -g.ytdBudget,
+      accounts: g.accounts.map((a) => ({
+        ...a,
+        cmActual: -a.cmActual,
+        cmBudget: -a.cmBudget,
+        ytdActual: -a.ytdActual,
+        ytdBudget: -a.ytdBudget,
+      })),
+    }));
+    emitByCategory({
+      rows: capitalRows,
+      groups: negatedCapExp,
+      isRevenue: true, // negated → variance convention same as revenue
+    });
   }
 
   // Total Capital Fund Activity (Net) — capital revenue minus capital expense.
@@ -1635,6 +1654,88 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
     capitalRows,
     cfoCommentary: cfo,
   };
+}
+
+// REPORT-PRESENTATION-1A §3-5, §15 (2026-10-05) — category hierarchy
+// emission.
+//
+// Groups within a single projection section (operatingRevenue /
+// operatingExpense / capitalRevenue / capitalExpense) already arrive
+// sorted by `presentationCategorySortOrder` from the projection, so a
+// linear sweep is all that's required to detect category boundaries.
+// For each contiguous run of groups sharing the same
+// `presentationCategoryKey` we emit:
+//   1. A `category-heading` row
+//   2. One `fs-group` + its `fs-group-child` rows per constituent group
+//   3. A `category-subtotal` row carrying the summed category aggregates
+//
+// Parent/child reconciliation (natural accounts → FS Group) and
+// group-to-category reconciliation (FS Groups → Category) and
+// category-to-section-total reconciliation are all preserved by this
+// emission pattern — the category subtotal is literally a sum over
+// the FS Group rows the Board sees between the heading and subtotal.
+
+function emitByCategory(args: {
+  rows: StatementOfActivitiesV2Row[];
+  groups: ReadonlyArray<FsGroupProjectionRow>;
+  isRevenue: boolean;
+}): void {
+  const { rows, groups, isRevenue } = args;
+  if (groups.length === 0) return;
+
+  type Bucket = {
+    categoryKey: string;
+    categoryName: string;
+    groups: FsGroupProjectionRow[];
+  };
+  const buckets: Bucket[] = [];
+  for (const g of groups) {
+    const last = buckets[buckets.length - 1];
+    if (last && last.categoryKey === g.presentationCategoryKey) {
+      last.groups.push(g);
+    } else {
+      buckets.push({
+        categoryKey: g.presentationCategoryKey,
+        categoryName: g.presentationCategoryName,
+        groups: [g],
+      });
+    }
+  }
+
+  for (const bucket of buckets) {
+    rows.push({
+      key: `cat-heading-${bucket.categoryKey}`,
+      kind: "category-heading",
+      label: bucket.categoryName,
+    });
+    let cmActualSum = 0, cmBudgetSum = 0, ytdActualSum = 0, ytdBudgetSum = 0;
+    for (const g of bucket.groups) {
+      rows.push(buildFsGroupRow({ g, isRevenue, isCapital: false }));
+      for (const a of g.accounts) {
+        rows.push(buildFsGroupChildRow({ parent: g, acct: a, isRevenue }));
+      }
+      cmActualSum += g.cmActual;
+      cmBudgetSum += g.cmBudget;
+      ytdActualSum += g.ytdActual;
+      ytdBudgetSum += g.ytdBudget;
+    }
+    const cmVariance = isRevenue ? (cmActualSum - cmBudgetSum) : (cmBudgetSum - cmActualSum);
+    const ytdVariance = isRevenue ? (ytdActualSum - ytdBudgetSum) : (ytdBudgetSum - ytdActualSum);
+    rows.push({
+      key: `cat-subtotal-${bucket.categoryKey}`,
+      kind: "category-subtotal",
+      label: `Total ${bucket.categoryName}`,
+      values: {
+        currentBudget: cmBudgetSum,
+        currentActual: cmActualSum,
+        currentVariance: cmVariance,
+        ytdBudget: ytdBudgetSum,
+        ytdActual: ytdActualSum,
+        ytdVariance: ytdVariance,
+        variancePct: ytdBudgetSum !== 0 ? ytdVariance / Math.abs(ytdBudgetSum) : null,
+      },
+    });
+  }
 }
 
 /** Build a parent FS-Group row (collapsible). The 7-column values are

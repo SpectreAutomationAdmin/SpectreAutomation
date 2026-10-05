@@ -196,6 +196,37 @@ function StatementRow({
       // Only render children whose parent is currently expanded.
       if (!row.groupKey || !expandedGroups.has(row.groupKey)) return null;
       return <FsGroupChildRow row={row} />;
+    case "category-heading":
+      // REPORT-PRESENTATION-1A §3-5 — Board presentation category
+      // heading. Small-caps gold, lighter than the section-band so
+      // the Section → Category → Group hierarchy reads correctly.
+      return (
+        <div
+          data-testid={`soa-row-${row.key}`}
+          data-kind="category-heading"
+          className="px-4 py-1.5 uppercase tracking-[0.18em] text-[10px] text-[#a08850]/90 bg-club-cream/50 border-b border-club-sand/35"
+          style={{ gridColumn: "1 / -1" }}
+        >
+          {row.label}
+        </div>
+      );
+    case "category-subtotal": {
+      if (!row.values) return null;
+      return (
+        <div
+          data-testid={`soa-row-${row.key}`}
+          data-kind="category-subtotal"
+          className="grid items-center px-4 py-1.5 bg-[#e8dfc8]/40 border-y border-club-sand/40 font-serif italic"
+          style={{ gridTemplateColumns: STATEMENT_GRID, columnGap: STATEMENT_GRID_GAP }}
+        >
+          <span className="font-semibold text-[12.5px] text-club-green-900/90">{row.label}</span>
+          <StatementValueCells
+            values={row.values}
+            baseClass="text-[12.5px] text-club-green-900 font-semibold"
+          />
+        </div>
+      );
+    }
     case "section-band":
       return (
         <div
