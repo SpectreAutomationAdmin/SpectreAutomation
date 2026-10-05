@@ -123,13 +123,29 @@ export default async function WorkIntakePage() {
   });
 
   // WI-2C — live weather via the canonical shared weather service.
-  // Coulee Ridge → Drumheller already resolved by the existing
-  // `resolveClubLocation` fingerprint in
-  // src/lib/reporting/weather/club-location.ts. Failure never
+  // WEATHER-HIST-1 (2026-10-05) — Coulee's authoritative location
+  // (Drumheller, Alberta) is now resolved from ClubProfile.latitude /
+  // .longitude / .city / .provinceState, NOT from a hardcoded tenant
+  // fingerprint. Pass the profile backref so the canonical resolver
+  // (`resolveClubLocation`) can see the coordinates. Failure never
   // blocks the page (§16).
   const club = await prisma.club.findUnique({
     where: { id: clubId },
-    select: { name: true, slug: true, address: true, region: true },
+    select: {
+      name: true,
+      slug: true,
+      address: true,
+      region: true,
+      profile: {
+        select: {
+          latitude: true,
+          longitude: true,
+          city: true,
+          provinceState: true,
+          physicalAddress: true,
+        },
+      },
+    },
   });
   const weatherResult = club
     ? await getCurrentWeather({
@@ -138,6 +154,7 @@ export default async function WorkIntakePage() {
           slug: club.slug,
           address: club.address,
           region: club.region,
+          profile: club.profile,
         },
       }).catch(() => null)
     : null;

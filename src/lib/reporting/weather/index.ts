@@ -3,15 +3,24 @@
 // Provider selection precedence:
 //   1. Explicit override passed via `getWeatherProvider({ providerId })`.
 //   2. `WEATHER_PROVIDER` env var (e.g. "open-meteo", "seed").
-//   3. Default: the seed provider — keeps dev / test deterministic
-//      and avoids external HTTP unless explicitly opted in.
+//   3. Default: the Open-Meteo provider — the canonical approved
+//      historical weather source. Seed is only ever used as the
+//      downstream fallback when coordinates are absent OR Open-Meteo
+//      fails.
 //
 // `fetchObservation` is the high-level entry point the reporting
-// service uses: it asks the selected provider, then falls back to
-// the seed provider if the primary returns null (e.g. Open-Meteo
-// failed or the location lacks coordinates). The returned
-// observation always carries a `provenance` block describing the
-// effective source.
+// service uses:
+//   1. Resolve location from the ClubProfile fields on the Club.
+//   2. Hit the persistent `WeatherObservationCache` for a prior
+//      observation at those coordinates + that reporting period.
+//   3. If miss, ask the selected provider; on success persist it to
+//      the cache for future reads.
+//   4. Fall back to seed when the primary returns null (e.g. the
+//      club has no coordinates stored yet, or Open-Meteo failed).
+//
+// The returned observation always carries a `provenance` block
+// describing the effective source. Cache invalidation on tenant
+// location change lives in `observation-cache.ts`.
 
 import type {
   CurrentWeatherObservation,
@@ -22,6 +31,10 @@ import type {
 import { seedWeatherProvider } from "./seed-provider";
 import { createOpenMeteoProvider } from "./open-meteo-provider";
 import { resolveClubLocation, type ClubLike } from "./club-location";
+import {
+  readWeatherCache,
+  writeWeatherCache,
+} from "./observation-cache";
 
 export type {
   CurrentWeatherCondition,
@@ -33,10 +46,17 @@ export type {
   NormalisedWeatherEventKind,
   WeatherProvenance,
 } from "./types";
-export type { ClubLike } from "./club-location";
+export type { ClubLike, ClubProfileLike } from "./club-location";
 export { resolveClubLocation, temperatureUnitForRegion } from "./club-location";
 export { seedWeatherProvider } from "./seed-provider";
 export { createOpenMeteoProvider } from "./open-meteo-provider";
+export {
+  readWeatherCache,
+  writeWeatherCache,
+  invalidateWeatherCacheForClub,
+  roundCoordinate,
+} from "./observation-cache";
+export { geocodeClubProfileAddress } from "./geocode";
 
 export type WeatherProviderId = "seed" | "open-meteo";
 
@@ -46,7 +66,7 @@ export function getWeatherProvider(opts?: {
   const id =
     opts?.providerId ??
     (process.env.WEATHER_PROVIDER as WeatherProviderId | undefined) ??
-    "seed";
+    "open-meteo";
   switch (id) {
     case "open-meteo": return createOpenMeteoProvider();
     case "seed":       return seedWeatherProvider;
@@ -55,9 +75,13 @@ export function getWeatherProvider(opts?: {
 
 /**
  * High-level entry point used by the Monthly Weather Summary service.
- * Resolves location → calls the primary provider → falls back to seed
- * when the primary returns null. The result always carries a
- * `provenance` block so the panel + audit log can identify the source.
+ *
+ * Flow: resolve → cache read → provider → cache write → seed fallback.
+ *
+ * `clubId` is REQUIRED when the caller wants cache participation; omit
+ * it for callers that lack a Prisma Club row (e.g. one-off tests). The
+ * returned observation always carries a `provenance` block so the
+ * panel + audit log can identify the source.
  */
 export async function fetchObservation(input: {
   club: ClubLike;
@@ -65,14 +89,56 @@ export async function fetchObservation(input: {
   providerId?: WeatherProviderId;
   /** Test seam — when supplied, used instead of the factory choice. */
   provider?: WeatherProvider;
+  /** Enables persistent cache participation. */
+  clubId?: string | null;
+  /** Test seam — bypass the DB cache without affecting other callers. */
+  bypassCache?: boolean;
 }): Promise<{ location: WeatherLocation; observation: MonthlyWeatherObservation }> {
   const location = resolveClubLocation(input.club);
+
+  // -- 1. Cache lookup when we have both a clubId and coordinates. --
+  const yearMonth = `${input.period.year}-${String(input.period.month).padStart(2, "0")}`;
+  if (
+    !input.bypassCache &&
+    input.clubId &&
+    location.latitude != null &&
+    location.longitude != null
+  ) {
+    const cached = await readWeatherCache({
+      clubId: input.clubId,
+      yearMonth,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    });
+    if (cached) {
+      return { location, observation: cached };
+    }
+  }
+
+  // -- 2. Primary provider. --
   const primary = input.provider ?? getWeatherProvider({ providerId: input.providerId });
   const primaryResult = await primary.fetchMonthly({ location, period: input.period });
   if (primaryResult) {
+    // Persist for future reads. Fire-and-forget — a cache failure
+    // (e.g. SQLite write contention) must not break the current
+    // response.
+    if (
+      input.clubId &&
+      location.latitude != null &&
+      location.longitude != null
+    ) {
+      void writeWeatherCache({
+        clubId: input.clubId,
+        yearMonth,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        observation: primaryResult,
+      }).catch(() => undefined);
+    }
     return { location, observation: primaryResult };
   }
-  // Primary returned null — fall back to seed.
+
+  // -- 3. Seed fallback — when coordinates are absent or provider failed. --
   const fallback = await seedWeatherProvider.fetchMonthly({ location, period: input.period });
   if (!fallback) {
     throw new Error("seed weather provider returned null — unreachable for any supported month");
@@ -111,15 +177,7 @@ function currentCacheKey(location: WeatherLocation): string {
  * Employee Portal hero (desktop + mobile), the Member portal weather
  * widget, and any future "current-conditions" reporting tile.
  *
- * The flow is the same as `fetchObservation`:
- *   coordinates → primary provider → seed fallback → cached result.
- *
- * On uncached miss + primary failure the seed provider produces a
- * deterministic observation so the portal is never empty. Callers
- * receive `null` only when the location cannot be resolved AT ALL
- * (which is unreachable today because `resolveClubLocation` always
- * returns a location object; it may however carry null coordinates,
- * in which case Open-Meteo is skipped and the seed provider fires).
+ * Flow: resolve → primary provider → seed fallback → cached result.
  */
 export async function getCurrentWeather(input: {
   club: ClubLike;

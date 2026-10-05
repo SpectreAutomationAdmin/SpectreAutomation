@@ -558,3 +558,183 @@ export async function buildSilverSpringsMonthlyWeatherSummary(opts: {
     location,
   };
 }
+
+// =============================================================================
+// WEATHER-HIST-1 (2026-10-05) — Live tenant builder.
+// =============================================================================
+//
+// Partial-availability contract:
+//   - KPI cards (Sunny Days, Rain Days, Avg High Temp, Avg Wind) → LIVE
+//     from the configured provider (Open-Meteo when coordinates are
+//     stored in ClubProfile).
+//   - Pattern donut → LIVE.
+//   - Rounds-by-weather bar chart → UNAVAILABLE sentinel: bars render
+//     at 0 with a clear "Tee Sheet not connected" callout.
+//   - Notable Weather Events table → EMPTY rows + sentinel heading
+//     ("Weather Events — Operational Impact") so the table reads as
+//     a known-empty state rather than a defect.
+//   - Correlation cards (Golf / Racquet / Dining) → three UNAVAILABLE
+//     cards that name which integration is pending.
+//
+// `dataSource: "live"` marks the chapter so the monthly-package
+// redactor leaves it alone (same contract Chapter X + Chapter XII +
+// AR Aging already use).
+
+const UNAVAILABLE_SOURCE_SENTINEL =
+  "Source not connected for this reporting period.";
+
+export async function buildCouleeMonthlyWeatherSummary(opts: {
+  clubId: string;
+  clubName: string;
+  period: ReportingPeriod;
+  club: ClubLike;
+  /** Test seam — bypass the factory + env var. */
+  provider?: WeatherProvider;
+}): Promise<MonthlyWeatherSummary> {
+  const { period, club, clubId, clubName } = opts;
+  const monthLong = period.monthLong;
+  const monthShort = period.monthShort;
+  const year = period.year;
+
+  // Provider observation. Threads clubId so the persistent weather
+  // cache participates (immutable archive observations are reused
+  // across report renders).
+  const { location, observation } = await fetchObservation({
+    club,
+    period: { year, month: period.month, monthShort },
+    provider: opts.provider,
+    clubId,
+  });
+
+  const sunnyDays        = observation.daysSunny;
+  const partlyCloudyDays = observation.daysPartlyCloudy;
+  const rainDays         = observation.daysRain;
+  const highWindDays     = observation.daysHighWind;
+  const totalDays        = sunnyDays + partlyCloudyDays + rainDays + highWindDays;
+
+  const avgHighTempF    = observation.avgHighTempF;
+  const avgWindMph      = observation.avgWindMph;
+
+  const avgHighTempC = Math.round(((avgHighTempF - 32) * 5) / 9);
+  const avgHighTempLabel =
+    location.temperatureUnit === "C" ? `${avgHighTempC}°C` : `${avgHighTempF}°F`;
+
+  // -- KPI cards: LIVE. ------------------------------------------------
+  const kpiCards: ReadonlyArray<WeatherKpiCard> = [
+    { key: "sunny-days",      icon: "sun",         valueLabel: `${sunnyDays}`,       label: `Sunny Days ${monthShort}`, tone: "favorable" },
+    { key: "rain-days",       icon: "rain-cloud",  valueLabel: `${rainDays}`,        label: `Rain Days ${monthShort}`,  tone: "neutral"   },
+    { key: "avg-high-temp",   icon: "thermometer", valueLabel: avgHighTempLabel,     label: "Avg High Temp",            tone: "neutral"   },
+    { key: "avg-wind-speed",  icon: "wind",        valueLabel: `${avgWindMph} mph`,  label: "Avg Wind Speed",           tone: "neutral"   },
+  ];
+
+  // -- Pattern donut: LIVE. --------------------------------------------
+  const patternCard = {
+    title: `${monthLong} Weather Pattern`,
+    subtitle: `${monthLong} ${year} · ${location.label}`,
+    slices: [
+      { key: "sunny-clear",   label: "Sunny / Clear",   days: sunnyDays,        fillHex: FILL_OPERATING_BEIGE },
+      { key: "partly-cloudy", label: "Partly Cloudy",   days: partlyCloudyDays, fillHex: FILL_PALE_CREAM },
+      { key: "rain-storms",   label: "Rain / Storms",   days: rainDays,         fillHex: FILL_SLATE_BLUE },
+      { key: "high-wind",     label: "High Wind",       days: highWindDays,     fillHex: FILL_GOLD_DEEP },
+    ],
+    totalDays,
+  };
+
+  // -- Rounds-by-weather bar chart: UNAVAILABLE. -----------------------
+  // Bars render with averageRounds = 0 so the chart primitive renders
+  // the x-axis without crashing, but the KPI ribbon + commentary make
+  // the unavailable state unambiguous.
+  const roundsCard = {
+    title: "Weather vs. Golf Rounds",
+    subtitle: "Average Daily Rounds by Weather Condition",
+    bars: [
+      { key: "sunny-clear",   label: "Sunny/Clear",    averageRounds: 0, fillHex: FILL_OPERATING_BEIGE },
+      { key: "partly-cloudy", label: "Partly Cloudy",  averageRounds: 0, fillHex: FILL_PALE_CREAM },
+      { key: "high-wind",     label: "High Wind",      averageRounds: 0, fillHex: FILL_GOLD_DEEP },
+      { key: "rain-storm",    label: "Rain/Storm",     averageRounds: 0, fillHex: FILL_SLATE_BLUE },
+    ],
+    insight:
+      "Rounds-by-weather analysis unavailable — Tee Sheet integration not yet connected. " +
+      "Weather observations above are live from the Open-Meteo historical archive.",
+  };
+
+  // -- Notable weather events table: EMPTY (requires operational
+  //    integration to render impact labels). ------------------------
+  const eventsTable = {
+    eyebrow: "Notable Weather Events & Operational Impact",
+    columnHeaders: {
+      date: "Date",
+      event: "Event",
+      description: "Description",
+      golfImpact: "Golf Impact",
+      fbImpact: "F&B Impact",
+      followUp: "Follow-Up",
+    },
+    rows: [] as ReadonlyArray<WeatherEventRow>,
+  };
+
+  // -- Correlation cards: three UNAVAILABLE cards, each naming the
+  //    specific integration that is pending. -----------------------
+  const correlationSummary: WeatherCorrelationSummary = {
+    eyebrow: "Weather–Utilization Correlation Summary",
+    cards: [
+      {
+        key: "golf-rounds",
+        icon: "golf-flag",
+        title: "Golf Rounds",
+        accent: "green",
+        narrative:
+          `Correlation analysis unavailable — Tee Sheet integration not yet ` +
+          `connected. Weather observations for ${period.periodLabel} are live ` +
+          `from the Open-Meteo historical archive; rounds-by-weather correlation ` +
+          `will activate once daily tee-time utilization lands.`,
+        dataPoint: { label: "Weather correlation:", value: "—" },
+      },
+      {
+        key: "tennis-racquet",
+        icon: "tennis",
+        title: "Racquet & Court Utilization",
+        accent: "slate",
+        narrative:
+          `Court-utilization correlation unavailable — Racquet booking source ` +
+          `not yet connected. Weather observations above still track playable ` +
+          `vs. non-playable day counts, but court-hour attribution awaits the ` +
+          `booking integration.`,
+        dataPoint: {
+          label: `Playable days: — of ${totalDays}`,
+          value: UNAVAILABLE_SOURCE_SENTINEL,
+        },
+      },
+      {
+        key: "dining-fb",
+        icon: "dining",
+        title: "Dining & F&B",
+        accent: "rust",
+        narrative:
+          `F&B impact correlation unavailable — POS source not yet connected. ` +
+          `Rain and wind-day counts above are live; indoor-shift F&B lift ` +
+          `requires daily cover + spend attribution from the POS integration.`,
+        dataPoint: { label: "Indoor-shift F&B lift:", value: "—" },
+      },
+    ],
+  };
+
+  return {
+    dataSource: "live",
+    eyebrow: `${clubName} · Weather & Utilization`,
+    title: "Monthly Weather Summary",
+    periodLabel: period.statementHeaderLabel,
+    introNote:
+      "Weather-adjusted utilization analysis — how conditions correlate with member activity across golf, racquet, and dining.",
+    statementNumber: "Statement 11 of 14",
+    documentChip: "Weather & Utilization",
+    preparedFor: "Operations & GM Level",
+    kpiCards,
+    patternCard,
+    roundsCard,
+    eventsTable,
+    correlationSummary,
+    provenance: observation.provenance,
+    location,
+  };
+}

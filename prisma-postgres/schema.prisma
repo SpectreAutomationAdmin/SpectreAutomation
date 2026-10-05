@@ -426,6 +426,10 @@ model Club {
   // accounting-default configuration per tenant. See ClubProfile.
   profile                          ClubProfile?
 
+  // WEATHER-HIST-1 (2026-10-05) — persistent cache of monthly historical
+  // weather observations (keyed by period + coordinates).
+  weatherObservationCache          WeatherObservationCache[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -598,6 +602,16 @@ model ClubProfile {
   primaryContactTitle String?
   primaryContactEmail String?
   primaryContactPhone String?
+
+  // --- Geographic coordinates ------------------------------------------
+  // WEATHER-HIST-1 (2026-10-05) — canonical tenant geographic resolution.
+  // Decimal degrees, WGS-84. Positive latitude = north, positive
+  // longitude = east. Single source of truth for a club's physical
+  // location consumed by src/lib/reporting/weather/club-location.ts.
+  // See the SQLite schema for the full rules.
+  latitude            Decimal? @db.Decimal(9, 6)
+  longitude           Decimal? @db.Decimal(9, 6)
+  locationGeocodedAt  DateTime?
 
   // --- Tax registration -------------------------------------------------
   // REGISTERED | NOT_REGISTERED | SMALL_SUPPLIER
@@ -14664,4 +14678,22 @@ model PaymentProviderCertification {
   reason               String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+}
+
+// WEATHER-HIST-1 (2026-10-05) — persistent cache of monthly historical
+// weather observations fetched from the Open-Meteo archive API.
+model WeatherObservationCache {
+  id              String   @id @default(cuid())
+  clubId          String
+  club            Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  yearMonth       String
+  latitude        Decimal  @db.Decimal(9, 6)
+  longitude       Decimal  @db.Decimal(9, 6)
+  observationJson String
+  source          String
+  fetchedAt       DateTime @default(now())
+
+  @@unique([clubId, yearMonth, latitude, longitude])
+  @@index([clubId, yearMonth])
+  @@index([clubId])
 }

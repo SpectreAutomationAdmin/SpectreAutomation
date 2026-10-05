@@ -1,77 +1,86 @@
-// Resolve a `WeatherLocation` from a Club's stored settings.
+// Resolve a `WeatherLocation` from a Club + its ClubProfile.
 //
-// The Prisma `Club` model carries `address` (free-text street),
-// `region` (province/state name), and `name`. There is no dedicated
-// `latitude`/`longitude` column yet, so this resolver maintains a
-// small known-club index for the seeded clubs the founder demos
-// against (today: Silver Springs in NW Calgary). For an unknown
-// club, the resolver returns a city-precision location parsed from
-// `address` + `region`; the upstream provider then falls back to
-// the seed lookup when coordinates are missing.
+// WEATHER-HIST-1 (2026-10-05) — canonical tenant-geographic resolution.
+// The SINGLE SOURCE OF TRUTH for a club's physical location is the
+// `ClubProfile` row (fields: `latitude`, `longitude`, `city`,
+// `provinceState`, `physicalAddress`). This resolver NEVER contains
+// per-tenant fingerprints, per-tenant coordinates, or
+// `clubName === "..."` / `city === "..."` branches. All tenants —
+// including the staging Coulee Ridge tenant — flow through the same
+// path: operator-configured ClubProfile fields → canonical resolver.
+//
+// Precedence:
+//   1. `profile.latitude` + `profile.longitude` (both non-null) →
+//      coordinate-precision location. Open-Meteo archive queries use
+//      these dynamically. This is the authoritative path.
+//   2. `profile.city` + `profile.provinceState` (both non-null) →
+//      city-precision location with `latitude = longitude = null`.
+//      The provider upstream then falls back to the seed observation.
+//      Operators can bump a tenant to coordinate-precision via the
+//      setup-time `geocodeClubProfileAddress()` helper.
+//   3. Legacy `club.address` + `club.region` → best-effort city/region
+//      parsing (preserved so existing Employee Portal + Work Intake
+//      hero callers that pass only the Club row continue to render a
+//      city label, albeit with null coordinates).
+//   4. Nothing resolvable → `city = "—"`, `region = "—"`, label = club
+//      name; coordinates null; provider falls back to seed.
+//
+// Open-Meteo receives the coordinates DYNAMICALLY from whatever
+// ClubProfile row the caller supplies. Changing a tenant's lat/lng in
+// ClubProfile changes the Section XI data the next time it renders
+// (minus the cache; cache invalidation lives in `observation-cache.ts`).
 
 import type { WeatherLocation } from "./types";
 
-type KnownClubFingerprint = {
-  /** Substring match against `club.slug` OR `club.name` (case-insensitive). */
-  pattern: RegExp;
-  resolve: (club: ClubLike) => WeatherLocation;
+/**
+ * Structural shape for a Prisma `Decimal` value — accepted alongside
+ * plain JS numbers / strings so callers can pass the raw Prisma row
+ * without converting first. Decimals from `prisma.clubProfile.findX`
+ * arrive as `Decimal` instances (decimal.js); the resolver calls
+ * `Number(v)` after a `v.toString()` round-trip.
+ */
+export type DecimalLike = { toString(): string };
+
+/**
+ * Subset of the Prisma ClubProfile fields this resolver consumes.
+ * Supplied by the caller — the resolver itself NEVER queries Prisma
+ * (keeps it a pure function, easy to test, and lets the caller control
+ * tenant-scope on the fetch).
+ */
+export type ClubProfileLike = {
+  latitude?: number | string | DecimalLike | null;
+  longitude?: number | string | DecimalLike | null;
+  city?: string | null;
+  provinceState?: string | null;
+  physicalAddress?: string | null;
 };
 
-/** Subset of the Prisma Club fields this resolver consumes. The
- *  reporting service passes the live Prisma object; tests pass a
- *  literal that satisfies this shape. */
+/**
+ * Subset of the Prisma Club fields this resolver consumes. The
+ * reporting service passes the live Prisma object plus its
+ * `profile` back-ref; the Employee Portal + Work Intake callers pass
+ * only the top-level Club fields and the resolver falls back to
+ * address parsing.
+ */
 export type ClubLike = {
   name: string;
   slug?: string | null;
+  /** Legacy free-text street — used only when ClubProfile fields
+   *  are empty. */
   address?: string | null;
+  /** Legacy region string — used only when ClubProfile fields are
+   *  empty. */
   region?: string | null;
+  /** The authoritative source of tenant geographic data. When
+   *  supplied + populated, overrides the legacy `address`/`region`
+   *  parsing. */
+  profile?: ClubProfileLike | null;
 };
-
-const KNOWN_CLUBS: ReadonlyArray<KnownClubFingerprint> = [
-  {
-    // Silver Springs Golf & Country Club — the seed demo club. The
-    // real club sits in the Silver Springs neighborhood of NW
-    // Calgary on the north bank of the Bow River.
-    pattern: /silver[\s-]?springs/i,
-    resolve: () => ({
-      latitude: 51.1078,
-      longitude: -114.1815,
-      city: "Calgary",
-      region: "Alberta",
-      label: "NW Calgary, Alberta",
-      street: "1 Fairway Lane, Calgary, AB",
-      temperatureUnit: "C",
-    }),
-  },
-  {
-    // Coulee Ridge Golf & Country Club — the founder-review staging
-    // tenant. Fictional course, canonically located in Drumheller,
-    // Alberta (Canadian badlands — coulees are the region's defining
-    // landscape feature). Coordinates below are central Drumheller,
-    // AB. Only tenant data lives here; this fingerprint pattern will
-    // be replaced by a proper `Club.latitude` / `Club.longitude`
-    // migration in a future pass.
-    pattern: /coulee[\s-]?ridge/i,
-    resolve: () => ({
-      latitude: 51.4636,
-      longitude: -112.7208,
-      city: "Drumheller",
-      region: "Alberta",
-      label: "Drumheller, Alberta",
-      street: null,
-      temperatureUnit: "C",
-    }),
-  },
-];
 
 /**
  * Canadian provinces / territories — full names AND their two-letter
  * postal codes (case-insensitive). Used to pick the presentation
  * temperature unit (°C for Canada, °F otherwise).
- *
- * NOTE: the two-letter `BC` lives outside the list because it overlaps
- * with the postal-code shorthand for British Columbia and could be
- * intentionally meant as such; matching is exact / boundary-anchored.
  */
 const CANADIAN_REGION_TOKENS = new Set<string>([
   // Full names
@@ -95,50 +104,80 @@ const CANADIAN_REGION_TOKENS = new Set<string>([
 
 /** Resolve the presentation temperature unit for a region string.
  *  Canada → °C; everywhere else (today: US, default) → °F. */
-function temperatureUnitForRegion(region: string | null | undefined): "C" | "F" {
+export function temperatureUnitForRegion(region: string | null | undefined): "C" | "F" {
   if (!region) return "F";
   const norm = region.trim().toLowerCase();
   if (CANADIAN_REGION_TOKENS.has(norm)) return "C";
-  // Country tokens — useful when a club's `region` carries the country.
   if (norm === "canada") return "C";
   return "F";
 }
 
 /**
- * Parse a "Street, City, Province" address into city + region facets.
- * Falls back to the supplied `region` for the province if the address
- * tail does not contain a recognisable region token.
+ * Parse a "Street, City, Province" address into the city facet.
  */
 function parseAddressCity(address: string | null | undefined): string | null {
   if (!address) return null;
   const parts = address.split(",").map((s) => s.trim()).filter(Boolean);
-  // Conventional Canadian format: "1 Fairway Lane, Calgary, AB" →
-  // city is the second-to-last comma-separated segment.
   if (parts.length >= 3) return parts[parts.length - 2];
   if (parts.length === 2) return parts[0];
   return null;
 }
 
 /**
+ * Coerce a `number | string | Decimal | null | undefined` lat/lng
+ * value to a finite JS `number`, or `null` when the input is absent /
+ * malformed. Guards against Prisma `Decimal` arriving as an object
+ * instance with `.toString()`, OR as a bare string on SQLite dev.
+ */
+function toFiniteNumber(v: number | string | DecimalLike | null | undefined): number | null {
+  if (v == null) return null;
+  const n =
+    typeof v === "number"
+      ? v
+      : typeof v === "string"
+      ? Number(v)
+      : Number(v.toString());
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Resolve the best `WeatherLocation` we know how to produce for the
- * supplied club. Coordinates are returned when the club matches one
- * of the known fingerprints; otherwise the city + region come from
- * `address`/`region` and lat/long are null (the provider then knows
- * to fall back to the seed lookup).
+ * supplied club. Reads from `club.profile` first; falls back to
+ * `club.address`/`club.region` only when the profile fields are
+ * absent / empty.
  */
 export function resolveClubLocation(club: ClubLike): WeatherLocation {
-  for (const fp of KNOWN_CLUBS) {
-    if (fp.pattern.test(club.name) || (club.slug && fp.pattern.test(club.slug))) {
-      return fp.resolve(club);
-    }
+  const profile = club.profile ?? null;
+  const lat = toFiniteNumber(profile?.latitude ?? null);
+  const lng = toFiniteNumber(profile?.longitude ?? null);
+  const profileCity = profile?.city?.trim() || null;
+  const profileRegion = profile?.provinceState?.trim() || null;
+  const profileAddress = profile?.physicalAddress?.trim() || null;
+
+  // --- Primary: ClubProfile fields --------------------------------------
+  if (profileCity || profileRegion || lat != null || lng != null) {
+    const city = profileCity ?? "—";
+    const region = profileRegion ?? "—";
+    const label =
+      profileCity && profileRegion
+        ? `${profileCity}, ${profileRegion}`
+        : profileCity ?? profileRegion ?? club.name;
+    return {
+      latitude: lat,
+      longitude: lng,
+      city,
+      region,
+      label,
+      street: profileAddress ?? club.address ?? null,
+      temperatureUnit: temperatureUnitForRegion(profileRegion),
+    };
   }
+
+  // --- Legacy: parse Club.address + Club.region (city-precision only) ---
   const parsedCity = parseAddressCity(club.address);
   const parsedRegion = club.region ?? null;
   const city = parsedCity ?? "—";
   const region = parsedRegion ?? "—";
-  // Only build a "City, Region" label when we have real values for
-  // both — otherwise fall back to the club name so the panel never
-  // displays "—, —" placeholder noise.
   const label =
     parsedCity && parsedRegion ? `${parsedCity}, ${parsedRegion}` : club.name;
   return {
@@ -148,13 +187,6 @@ export function resolveClubLocation(club: ClubLike): WeatherLocation {
     region,
     label,
     street: club.address ?? null,
-    // Pick °C / °F from the parsed region. Fingerprinted clubs in
-    // KNOWN_CLUBS override this with their own explicit unit.
     temperatureUnit: temperatureUnitForRegion(parsedRegion),
   };
 }
-
-// Re-export for tests + downstream services that need the rule in
-// isolation (e.g. the migration that backfills a `temperatureUnit`
-// column on Club once the founder approves it).
-export { temperatureUnitForRegion };

@@ -128,6 +128,50 @@ const optionalDecimalString = z.preprocess(
   z.string().regex(/^\d{1,3}(\.\d{1,2})?$/, "Use a percentage like 5 or 12.50").optional(),
 );
 
+// WEATHER-HIST-1 (2026-10-05) — geographic coordinate strings for the
+// ClubProfile.latitude / longitude fields. Accepts a numeric string or a
+// JS number; narrows to Prisma Decimal on write via the service. The
+// range checks catch common data-entry mistakes (swapping lat and lng,
+// decimal-separator typos). Resolver-side, the canonical weather code
+// treats null coordinates as "fall back to seed observation".
+const optionalLatitudeString = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === "number") return v.toString();
+    if (typeof v === "string") {
+      const t = v.trim();
+      return t === "" ? undefined : t;
+    }
+    return v;
+  },
+  z.string()
+    .regex(/^-?\d{1,2}(\.\d{1,8})?$/, "Latitude must be a decimal between -90 and 90.")
+    .refine((s) => {
+      const n = Number(s);
+      return Number.isFinite(n) && n >= -90 && n <= 90;
+    }, "Latitude must be between -90 and 90.")
+    .optional(),
+);
+
+const optionalLongitudeString = z.preprocess(
+  (v) => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === "number") return v.toString();
+    if (typeof v === "string") {
+      const t = v.trim();
+      return t === "" ? undefined : t;
+    }
+    return v;
+  },
+  z.string()
+    .regex(/^-?\d{1,3}(\.\d{1,8})?$/, "Longitude must be a decimal between -180 and 180.")
+    .refine((s) => {
+      const n = Number(s);
+      return Number.isFinite(n) && n >= -180 && n <= 180;
+    }, "Longitude must be between -180 and 180.")
+    .optional(),
+);
+
 // Currency code — 3 uppercase ISO 4217 letters.
 const optionalCurrency = z.preprocess(
   (v) => (typeof v === "string" ? v.trim().toUpperCase() : v),
@@ -172,6 +216,13 @@ export const clubProfileInputSchema = z.object({
   primaryContactTitle: optionalTrimmedString(255),
   primaryContactEmail: optionalEmail,
   primaryContactPhone: optionalTrimmedString(40),
+
+  // Geographic coordinates — WEATHER-HIST-1 (2026-10-05).
+  // Decimal degrees WGS-84. Operators enter these directly OR leave
+  // them blank and let the setup-time geocoder resolve them from
+  // city + provinceState.
+  latitude: optionalLatitudeString,
+  longitude: optionalLongitudeString,
 
   // Tax registration
   gstStatus: optionalEnum(GST_STATUS_VALUES),

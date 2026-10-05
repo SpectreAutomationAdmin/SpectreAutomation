@@ -426,6 +426,10 @@ model Club {
   // accounting-default configuration per tenant. See ClubProfile.
   profile                          ClubProfile?
 
+  // WEATHER-HIST-1 (2026-10-05) — persistent cache of monthly historical
+  // weather observations (keyed by period + coordinates).
+  weatherObservationCache          WeatherObservationCache[]
+
   // Sprint 2 — Outlook / Work Intake reverse relations.
   workIntakeItems          WorkIntakeItem[]
   mailboxConnections       MailboxConnection[]
@@ -598,6 +602,35 @@ model ClubProfile {
   primaryContactTitle String?
   primaryContactEmail String?
   primaryContactPhone String?
+
+  // --- Geographic coordinates ------------------------------------------
+  // WEATHER-HIST-1 (2026-10-05) — canonical tenant geographic resolution.
+  // These fields are the SINGLE SOURCE OF TRUTH for a club's physical
+  // location, consumed by:
+  //   - src/lib/reporting/weather/club-location.ts   (resolveClubLocation)
+  //   - src/lib/reporting/weather/open-meteo-provider (archive fetch)
+  //   - src/lib/reporting/weather/geocode             (setup-time fallback)
+  // Decimal degrees, WGS-84. Positive latitude = north, positive
+  // longitude = east. Null coordinates are allowed; in that case the
+  // weather provider falls back to the seed observation and the
+  // Section XI chapter renders UNAVAILABLE.
+  //
+  // Operators set these via Admin → Club Settings. If `city` +
+  // `provinceState` are populated but coordinates are null, the
+  // setup-time geocoder (Open-Meteo /v1/search) can backfill them
+  // on save — never per-report. See `geocodeClubProfileAddress()`.
+  //
+  // Changes to latitude or longitude MUST invalidate any
+  // WeatherObservationCache rows for this clubId — see
+  // src/lib/reporting/weather/observation-cache.ts.
+  latitude            Decimal?
+  longitude           Decimal?
+  // Timestamp of the last successful geocode. Null means "coordinates
+  // were set manually or have never been resolved"; a non-null value
+  // means `geocodeClubProfileAddress()` populated lat/lng from city +
+  // provinceState (so the setup-time geocoder knows not to re-call
+  // Open-Meteo's /v1/search).
+  locationGeocodedAt  DateTime?
 
   // --- Tax registration -------------------------------------------------
   // REGISTERED | NOT_REGISTERED | SMALL_SUPPLIER
@@ -15052,4 +15085,42 @@ model PaymentProviderCertification {
   reason               String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+}
+
+// -------------------------------------------------------------------
+// WeatherObservationCache — WEATHER-HIST-1 (2026-10-05)
+// -------------------------------------------------------------------
+// Persistent cache of monthly historical weather observations fetched
+// from the Open-Meteo archive API. Keyed by (clubId, yearMonth, lat,
+// lng) so a club's observations are segregated from other clubs' AND
+// so a tenant moving its location invalidates its own prior rows
+// without poisoning others. Historical observations are IMMUTABLE
+// (Open-Meteo archive data does not revise), so cache rows persist
+// forever once written — only overwritten if the row is explicitly
+// invalidated via `invalidateWeatherCacheForClub(clubId)` after a
+// location change, OR if the operator forces a refresh.
+//
+// The lat/lng are stored at 4-decimal precision (~11 metre resolution)
+// to balance key stability vs. floating-point drift. See
+// src/lib/reporting/weather/observation-cache.ts.
+model WeatherObservationCache {
+  id        String   @id @default(cuid())
+  clubId    String
+  club      Club     @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  // Period the observation applies to — ISO year-month, e.g. "2026-01".
+  yearMonth String
+  // Coordinates the observation was fetched for, rounded to 4 d.p.
+  latitude  Decimal
+  longitude Decimal
+  // Normalised MonthlyWeatherObservation serialized to JSON. See
+  // src/lib/reporting/weather/types.ts for the shape.
+  observationJson String
+  // Provider identifier (e.g. "open-meteo-archive") and timestamp of
+  // the upstream fetch — surfaced for provenance + staleness audits.
+  source    String
+  fetchedAt DateTime @default(now())
+
+  @@unique([clubId, yearMonth, latitude, longitude])
+  @@index([clubId, yearMonth])
+  @@index([clubId])
 }

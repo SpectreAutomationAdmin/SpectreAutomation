@@ -83,6 +83,8 @@ import {
 } from "@/lib/reporting/departmental-pl-summary";
 import {
   buildSilverSpringsMonthlyWeatherSummary,
+  // WEATHER-HIST-1 (2026-10-05) — canonical live-tenant builder.
+  buildCouleeMonthlyWeatherSummary,
   type MonthlyWeatherSummary,
 } from "@/lib/reporting/monthly-weather-summary";
 import {
@@ -2056,7 +2058,28 @@ export async function getMonthlyReportingPackage(
 ): Promise<MonthlyReportingPackage> {
   const club = await prisma.club.findUnique({
     where: { id: clubId },
-    select: { id: true, name: true },
+    // WEATHER-HIST-1 (2026-10-05) — Section XI reads tenant lat/lng
+    // + city + physicalAddress from the ClubProfile backref. The
+    // canonical weather resolver (src/lib/reporting/weather/
+    // club-location.ts) prefers the ClubProfile coordinates over any
+    // legacy address parsing.
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      address: true,
+      region: true,
+      profile: {
+        select: {
+          latitude: true,
+          longitude: true,
+          city: true,
+          provinceState: true,
+          physicalAddress: true,
+          locationGeocodedAt: true,
+        },
+      },
+    },
   });
   if (!club) {
     throw new Error(`Club ${clubId} not found`);
@@ -3193,13 +3216,36 @@ export async function getMonthlyReportingPackage(
     // Chapter XI — Monthly Weather Summary.
     // Owned end-to-end by src/lib/reporting/monthly-weather-summary.ts.
     // Builder is async (it asks the configured weather provider for
-    // a monthly observation); the await happens in the surrounding
-    // builder via the resolved-promise field below.
-    monthlyWeatherSummary: await buildSilverSpringsMonthlyWeatherSummary({
-      clubName: club.name,
-      period: reportingPeriod,
-      club,
-    }),
+    // a monthly observation); the await happens inline below.
+    //
+    // WEATHER-HIST-1 (2026-10-05) — live tenants (hasRealData === true)
+    // consume `buildCouleeMonthlyWeatherSummary` which:
+    //   - resolves the club's coordinates from ClubProfile
+    //     (via `resolveClubLocation`),
+    //   - asks the configured provider (default Open-Meteo) for the
+    //     monthly archive observation,
+    //   - participates in the persistent `WeatherObservationCache`
+    //     keyed on (clubId, yearMonth, lat, lng),
+    //   - emits `dataSource: "live"` for the KPI cards + donut, and
+    //     explicit "unavailable" sentinels on the utilization-
+    //     dependent cards (rounds-by-weather bars, correlation
+    //     cards, events table) until Tee Sheet / POS / Racquet
+    //     integrations land.
+    // Demo tenants keep the Silver Springs seed emitting
+    // `dataSource: "demo"` — the redactor wipes those surfaces when
+    // training mode is active.
+    monthlyWeatherSummary: hasRealData
+      ? await buildCouleeMonthlyWeatherSummary({
+          clubId: club.id,
+          clubName: club.name,
+          period: reportingPeriod,
+          club,
+        })
+      : await buildSilverSpringsMonthlyWeatherSummary({
+          clubName: club.name,
+          period: reportingPeriod,
+          club,
+        }),
 
     // Chapter XII — Departmental Payroll Analysis.
     // Owned end-to-end by src/lib/reporting/departmental-payroll-analysis.ts.
@@ -3945,7 +3991,14 @@ function redactMonthlyPackageForLiveTenant(pkg: MonthlyReportingPackage): Monthl
         : makeUnavailable(pkg.departmentalPayrollAnalysis, u),
     foodBeverageStatistics: makeUnavailable(pkg.foodBeverageStatistics, u),
     inventoryAnalysis: makeUnavailable(pkg.inventoryAnalysis, u),
-    monthlyWeatherSummary: makeUnavailable(pkg.monthlyWeatherSummary, u),
+    // WEATHER-HIST-1 (2026-10-05) — Chapter XI emits dataSource:"live"
+    // for real-data tenants resolved via ClubProfile coordinates.
+    // Preserve those; wipe demo-tenant seeds. Same contract Chapter X,
+    // Chapter XII, and AR Aging already use.
+    monthlyWeatherSummary:
+      pkg.monthlyWeatherSummary.dataSource === "live"
+        ? pkg.monthlyWeatherSummary
+        : makeUnavailable(pkg.monthlyWeatherSummary, u),
   };
   return redacted;
 }

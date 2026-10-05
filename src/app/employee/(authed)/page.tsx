@@ -205,6 +205,9 @@ export default async function EmployeePortalHome() {
       // HR mobile-hotfix (2026-08-26) — added name / slug / address /
       // region so `getCurrentWeather` can resolve tenant coordinates
       // through the canonical `resolveClubLocation` helper.
+      // WEATHER-HIST-1 (2026-10-05) — authoritative coordinates now
+      // live on ClubProfile; include the backref so the resolver uses
+      // them instead of parsing the legacy address string.
       select: {
         name: true,
         slug: true,
@@ -212,6 +215,15 @@ export default async function EmployeePortalHome() {
         region: true,
         primaryColor: true,
         timezone: true,
+        profile: {
+          select: {
+            latitude: true,
+            longitude: true,
+            city: true,
+            provinceState: true,
+            physicalAddress: true,
+          },
+        },
       },
     }),
     buildHomeNotifications(principal),
@@ -256,6 +268,7 @@ export default async function EmployeePortalHome() {
           slug: club.slug,
           address: club.address,
           region: club.region,
+          profile: club.profile,
         },
       }).catch(() => null)
     : null;

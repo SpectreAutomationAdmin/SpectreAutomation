@@ -10,6 +10,7 @@
 // page's server action so the same rules apply on form submit and
 // in API/test paths.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/rbac";
 import type { Principal } from "@/lib/rbac";
@@ -17,6 +18,8 @@ import { audit } from "@/lib/audit";
 import { ForbiddenError, ValidationError } from "@/lib/errors";
 import { computeFiscalPeriod, type FiscalPeriodResult } from "./fiscal-period";
 import { clubProfileInputSchema, type ClubProfileInput } from "./profile-validation";
+import { geocodeClubProfileAddress } from "@/lib/reporting/weather/geocode";
+import { invalidateWeatherCacheForClub } from "@/lib/reporting/weather/observation-cache";
 
 // ---------------------------------------------------------------------
 // Read
@@ -79,18 +82,45 @@ export async function upsertClubProfile(
 
   const before = await prisma.clubProfile.findUnique({ where: { clubId } });
 
+  // WEATHER-HIST-1 (2026-10-05) — resolve geographic coordinates.
+  // Precedence:
+  //   1. Operator supplied lat/lng in the form → use those verbatim.
+  //   2. Operator supplied city + provinceState but NO lat/lng → call
+  //      the setup-time geocoder (`geocodeClubProfileAddress`) ONCE and
+  //      persist the resolved coordinates + locationGeocodedAt.
+  //   3. Operator cleared city/provinceState → clear lat/lng too.
+  // This runs only on upsert, never per-report render.
+  const { geoData, geoAudit } = await resolveGeoCoordinatesOnSave({
+    before,
+    input: data,
+  });
+
   const saved = await prisma.clubProfile.upsert({
     where: { clubId },
     create: {
       clubId,
       ...data,
+      ...geoData.create,
       updatedByUserId: principal.id,
     },
     update: {
       ...data,
+      ...geoData.update,
       updatedByUserId: principal.id,
     },
   });
+
+  // WEATHER-HIST-1 — if latitude or longitude moved, invalidate the
+  // persistent weather observation cache for the tenant. Historical
+  // Open-Meteo observations are keyed by (clubId, yearMonth, lat, lng);
+  // moving the tenant means prior rows no longer describe its
+  // location.
+  const locationChanged =
+    decimalChanged(before?.latitude, saved.latitude) ||
+    decimalChanged(before?.longitude, saved.longitude);
+  if (locationChanged) {
+    await invalidateWeatherCacheForClub(clubId);
+  }
 
   await audit(principal, {
     action: before ? "club-profile.update" : "club-profile.create",
@@ -98,10 +128,101 @@ export async function upsertClubProfile(
     entityId: saved.id,
     clubId,
     before: before ?? undefined,
-    after: saved,
+    after: { ...saved, _geoResolution: geoAudit, _weatherCacheInvalidated: locationChanged },
   });
 
   return saved;
+}
+
+/**
+ * Resolve geographic coordinates on save.
+ *
+ * Returns the fields to merge into the Prisma `create`/`update`
+ * payload for ClubProfile, plus an audit descriptor summarising the
+ * decision taken.
+ */
+async function resolveGeoCoordinatesOnSave(opts: {
+  before: Awaited<ReturnType<typeof prisma.clubProfile.findUnique>>;
+  input: ClubProfileInput;
+}): Promise<{
+  geoData: {
+    create: { latitude?: Prisma.Decimal | null; longitude?: Prisma.Decimal | null; locationGeocodedAt?: Date | null };
+    update: { latitude?: Prisma.Decimal | null; longitude?: Prisma.Decimal | null; locationGeocodedAt?: Date | null };
+  };
+  geoAudit: string;
+}> {
+  const { before, input } = opts;
+  const inputLat = input.latitude;
+  const inputLng = input.longitude;
+  const inputCity = input.city;
+  const inputProvince = input.provinceState;
+
+  // Case 1 — operator supplied coordinates directly.
+  if (inputLat && inputLng) {
+    const lat = new Prisma.Decimal(inputLat);
+    const lng = new Prisma.Decimal(inputLng);
+    return {
+      geoData: {
+        create: { latitude: lat, longitude: lng, locationGeocodedAt: null },
+        update: { latitude: lat, longitude: lng, locationGeocodedAt: null },
+      },
+      geoAudit: "operator-supplied-coordinates",
+    };
+  }
+
+  // Case 2 — operator cleared city/provinceState → clear lat/lng too.
+  if (!inputCity && !inputProvince && before && (before.city || before.provinceState)) {
+    return {
+      geoData: {
+        create: { latitude: null, longitude: null, locationGeocodedAt: null },
+        update: { latitude: null, longitude: null, locationGeocodedAt: null },
+      },
+      geoAudit: "address-cleared-coordinates-cleared",
+    };
+  }
+
+  // Case 3 — city+provinceState supplied + no stored lat/lng → geocode.
+  const addressChanged =
+    (inputCity ?? null) !== (before?.city ?? null) ||
+    (inputProvince ?? null) !== (before?.provinceState ?? null);
+  const noStoredCoords =
+    !before?.latitude && !before?.longitude;
+  if (inputCity && addressChanged && (noStoredCoords || !before)) {
+    const result = await geocodeClubProfileAddress({
+      city: inputCity,
+      provinceState: inputProvince ?? null,
+    });
+    if (result) {
+      const lat = new Prisma.Decimal(result.latitude);
+      const lng = new Prisma.Decimal(result.longitude);
+      return {
+        geoData: {
+          create: { latitude: lat, longitude: lng, locationGeocodedAt: new Date() },
+          update: { latitude: lat, longitude: lng, locationGeocodedAt: new Date() },
+        },
+        geoAudit: `geocoded:${result.resolvedCity}${result.resolvedProvinceState ? "," + result.resolvedProvinceState : ""}:${result.resolvedCountryCode}`,
+      };
+    }
+    return { geoData: { create: {}, update: {} }, geoAudit: "geocode-no-match" };
+  }
+
+  // Case 4 — nothing to do.
+  return { geoData: { create: {}, update: {} }, geoAudit: "coordinates-unchanged" };
+}
+
+/** Compare two optional Prisma Decimal | null values. Treats both
+ *  numeric and string representations as equivalent. */
+function decimalChanged(
+  a: Prisma.Decimal | string | number | null | undefined,
+  b: Prisma.Decimal | string | number | null | undefined,
+): boolean {
+  const toStr = (v: Prisma.Decimal | string | number | null | undefined): string | null => {
+    if (v == null) return null;
+    if (typeof v === "string") return Number.isFinite(Number(v)) ? Number(v).toString() : v;
+    if (typeof v === "number") return Number.isFinite(v) ? v.toString() : null;
+    return v.toString();
+  };
+  return toStr(a) !== toStr(b);
 }
 
 // ---------------------------------------------------------------------
