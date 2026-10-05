@@ -132,7 +132,9 @@ function FsGroupRow({
             data-testid={`soa-row-${row.key}-toggle`}
             aria-expanded={expanded}
             aria-label={expanded ? `Collapse ${row.label}` : `Expand ${row.label}`}
-            className="flex h-4 w-4 shrink-0 items-center justify-center text-[9px] leading-none text-club-green-800/70 hover:text-club-green-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-club-green-700/50 rounded-sm"
+            // STEWARDSHIP-LIVE-2 §10 — hide chevron in print/PDF so
+            // the Board PDF reads as a clean static statement.
+            className="flex h-4 w-4 shrink-0 items-center justify-center text-[9px] leading-none text-club-green-800/70 hover:text-club-green-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-club-green-700/50 rounded-sm print:hidden"
           >
             {expanded ? "⌄" : "›"}
           </button>

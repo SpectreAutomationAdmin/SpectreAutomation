@@ -37,6 +37,14 @@ import {
   type AccountingOperatingScorecardAtoms,
   type OperatingScorecardSnapshot,
 } from "@/lib/reporting/operating-scorecard-service";
+// STEWARDSHIP-LIVE-2 §1-5 (2026-10-05) — Section III is now a consumer
+// of the canonical period-aware FS-Group projection. Dues / Payroll /
+// Revenue / NOI / Capital-Income numerators resolve from the shared
+// contract instead of parallel regex classifiers.
+import {
+  findFsGroupRow,
+  type FsGroupProjection,
+} from "@/lib/reporting/fs-group-projection";
 
 // ---------------------------------------------------------------------------
 // Auxiliary inputs — typed and documented as awaiting their own services
@@ -219,6 +227,14 @@ export async function getStewardshipForClub(args: {
   period: ReportingPeriod;
   ledger: ReportingLedger & ReportingLedgerWriter;
   auxiliaryInputs: StewardshipAuxiliaryInputs;
+  /** STEWARDSHIP-LIVE-2 §1-3 (2026-10-05) — canonical period-aware
+   *  FS-Group projection. When provided (live tenants), the adapter
+   *  consumes Dues / Payroll / Revenue / NOI / Capital-Income from
+   *  this authoritative source so Section III matches Section IV
+   *  and Section II to the penny. When null (demo tenants with no
+   *  COA / Budget), the adapter falls back to the IS-snapshot +
+   *  name-regex path for Silver Springs demo continuity. */
+  projection: FsGroupProjection | null;
   demoFallback: () => Pick<
     StewardshipLedgerBundle,
     "operatingScorecard" | "capitalScorecard" | "summaryCards" | "operatingKpiCards" | "capitalKpiCards"
@@ -245,20 +261,21 @@ export async function getStewardshipForClub(args: {
 
   return {
     operatingScorecard: buildOperatingScorecardSnapshotFromAccounting(
-      buildOperatingAtomsFromSnapshots(is, args.auxiliaryInputs, provenance),
+      buildOperatingAtomsFromSnapshots(is, args.projection, args.auxiliaryInputs, provenance),
     ),
     capitalScorecard: buildCapitalScorecardSnapshotFromAccounting(
       buildCapitalAtomsFromSnapshots(
         bs,
         is,
+        args.projection,
         args.auxiliaryInputs,
         provenance,
         derivedProvenance,
       ),
     ),
-    summaryCards: buildSummaryCards(bs, is, args.auxiliaryInputs),
-    operatingKpiCards: buildOperatingKpiCards(is, args.auxiliaryInputs),
-    capitalKpiCards: buildCapitalKpiCards(bs, is, args.auxiliaryInputs),
+    summaryCards: buildSummaryCards(bs, is, args.projection, args.auxiliaryInputs),
+    operatingKpiCards: buildOperatingKpiCards(is, args.projection, args.auxiliaryInputs),
+    capitalKpiCards: buildCapitalKpiCards(bs, is, args.projection, args.auxiliaryInputs),
     dataSource: "live",
   };
 }
@@ -269,17 +286,38 @@ export async function getStewardshipForClub(args: {
 
 function buildOperatingAtomsFromSnapshots(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
   provenance: MonthlyAccountingDataSource,
 ): AccountingOperatingScorecardAtoms {
-  // Operating dues = sum of operating revenue lines with no
-  // departmentCode (the "general / membership" bucket). Falls back to
-  // the first revenue line's amount if the chart of accounts is
-  // sparse (e.g. the Jonas test datasets have only 4010 + 4020).
-  const duesLines = is.lines.filter(
-    (l) => l.category === "revenue" && l.fund === "operating" && !l.departmentCode,
-  );
-  const dues = duesLines.reduce((s, l) => s + l.amount, 0);
+  // STEWARDSHIP-LIVE-2 §4-5 (2026-10-05) — canonical fsGroupKey
+  // numerators when the FS-Group projection is available (live
+  // tenants). Falls back to the IS-snapshot name-regex path only for
+  // demo tenants (projection === null) so Silver Springs test data
+  // keeps rendering.
+  const duesRow = projection ? findFsGroupRow(projection, "IS_MEMBERSHIP_DUES") : undefined;
+  const payrollRow = projection ? findFsGroupRow(projection, "IS_PAYROLL") : undefined;
+  const dues = duesRow
+    ? duesRow.ytdActual
+    : is.lines
+        .filter((l) => l.category === "revenue" && l.fund === "operating" && !l.departmentCode)
+        .reduce((s, l) => s + l.amount, 0);
+  const payrollBenefits = payrollRow
+    ? payrollRow.ytdActual
+    : is.lines
+        .filter(
+          (l) =>
+            l.category === "expense" &&
+            l.fund === "operating" &&
+            /payroll|benefit|wages/i.test(l.accountName),
+        )
+        .reduce((s, l) => s + l.amount, 0);
+  const totalOperatingRevenue = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
+  const noiActual = projection
+    ? projection.totals.noiBeforeDep.ytdActual
+    : is.noiBeforeDepreciation;
 
   return {
     dues: {
@@ -288,7 +326,7 @@ function buildOperatingAtomsFromSnapshots(
       dataSource: provenance,
     },
     totalOperatingRevenue: {
-      actual: is.totalOperatingRevenue,
+      actual: totalOperatingRevenue,
       budget: aux.budget.totalOperatingRevenueYtd,
       dataSource: provenance,
     },
@@ -296,6 +334,9 @@ function buildOperatingAtomsFromSnapshots(
       // Operating-fund initiation fees — none in the standard chart
       // of accounts (initiation fees are capital-fund). Treat as 0
       // unless an operating-revenue line is named "initiation".
+      // (Account-name scan retained for the demo-tenant fallback;
+      // Coulee IS_ENTRANCE_FEES is CAPITAL so this returns 0 for
+      // Coulee's canonical path.)
       actual: is.lines
         .filter(
           (l) =>
@@ -308,16 +349,7 @@ function buildOperatingAtomsFromSnapshots(
       dataSource: provenance,
     },
     payrollBenefits: {
-      // Payroll + benefits roll-up — any expense line whose name
-      // contains "payroll" or "benefit" or "wages".
-      actual: is.lines
-        .filter(
-          (l) =>
-            l.category === "expense" &&
-            l.fund === "operating" &&
-            /payroll|benefit|wages/i.test(l.accountName),
-        )
-        .reduce((s, l) => s + l.amount, 0),
+      actual: payrollBenefits,
       budget: aux.budget.payrollBenefitsYtd,
       dataSource: provenance,
     },
@@ -339,9 +371,9 @@ function buildOperatingAtomsFromSnapshots(
       dataSource: "operational",
     },
     noi: {
-      ytdNoi: is.noiBeforeDepreciation,
+      ytdNoi: noiActual,
       ytdBudgetNoi: aux.budget.totalOperatingRevenueYtd - aux.budget.payrollBenefitsYtd, // rough budget NOI
-      ytdRevenue: is.totalOperatingRevenue,
+      ytdRevenue: totalOperatingRevenue,
       breakEvenLowerPct: aux.policies.breakEvenLowerPct,
       breakEvenUpperPct: aux.policies.breakEvenUpperPct,
       dataSource: provenance,
@@ -352,10 +384,20 @@ function buildOperatingAtomsFromSnapshots(
 function buildCapitalAtomsFromSnapshots(
   bs: BalanceSheetSnapshot,
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
   isProvenance: MonthlyAccountingDataSource,
   bsProvenance: MonthlyAccountingDataSource,
 ): AccountingCapitalScorecardAtoms {
+  // STEWARDSHIP-LIVE-2 §3 — canonical operating revenue + capital income
+  // when the FS-Group projection is available.
+  const operatingRevenue = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
+  const totalCapitalIncome = projection
+    ? projection.totals.capitalRevenue.ytdActual
+    : is.totalCapitalIncome;
+
   return {
     totalEquity: { value: bs.totalEquity, dataSource: bsProvenance },
     totalAssets: { value: bs.totalAssets, dataSource: bsProvenance },
@@ -368,7 +410,7 @@ function buildCapitalAtomsFromSnapshots(
       dataSource: "demo",
     },
     operatingRevenueForCapital: {
-      value: is.totalOperatingRevenue,
+      value: operatingRevenue,
       dataSource: isProvenance,
     },
     netCapital: {
@@ -392,7 +434,7 @@ function buildCapitalAtomsFromSnapshots(
       dataSource: "demo",
     },
     totalCapitalIncome: {
-      actual: is.totalCapitalIncome,
+      actual: totalCapitalIncome,
       budget: aux.budget.totalCapitalIncomeYtd,
       dataSource: isProvenance,
     },
@@ -418,15 +460,31 @@ function buildCapitalAtomsFromSnapshots(
 function buildSummaryCards(
   bs: BalanceSheetSnapshot,
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipLedgerBundle["summaryCards"] {
-  const revenueActual = is.totalOperatingRevenue;
-  const revenueBudget = aux.budget.totalOperatingRevenueYtd;
+  // STEWARDSHIP-LIVE-2 §3 (2026-10-05) — canonical period-aware
+  // reporting projection drives every headline card for live tenants.
+  // Demo tenants (projection === null) fall back to the IS snapshot
+  // so Silver Springs demo rendering is preserved.
+  const revenueActual = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
+  const revenueBudget = projection
+    ? projection.totals.operatingRevenue.ytdBudget
+    : aux.budget.totalOperatingRevenueYtd;
   const revenueVariance = revenueActual - revenueBudget;
-  const noiActual = is.noiBeforeDepreciation;
-  const noiBudget = revenueBudget - aux.budget.payrollBenefitsYtd;
+  const noiActual = projection
+    ? projection.totals.noiBeforeDep.ytdActual
+    : is.noiBeforeDepreciation;
+  const noiBudget = projection
+    ? projection.totals.noiBeforeDep.ytdBudget
+    : revenueBudget - aux.budget.payrollBenefitsYtd;
   const noiVariance = noiActual - noiBudget;
   const noiMarginPct = revenueActual !== 0 ? noiActual / revenueActual : 0;
+  const capitalIncomeActual = projection
+    ? projection.totals.capitalRevenue.ytdActual
+    : is.totalCapitalIncome;
   // Suppress BS reference lint while the field stays unused by the
   // summary cards (it's already consumed elsewhere in the bundle).
   void bs;
@@ -446,7 +504,7 @@ function buildSummaryCards(
       marginPct: `${(noiMarginPct * 100).toFixed(1)}% margin`,
     },
     capitalFundIncome: {
-      value: formatMoneyShort(is.totalCapitalIncome),
+      value: formatMoneyShort(capitalIncomeActual),
       subtext: "Initiation fees, capital dues & investment income",
     },
     // STEWARDSHIP-LIVE-1 §11 (2026-10-04) — Reserve Coverage Ratio.
@@ -917,12 +975,13 @@ export const UNAVAILABLE_STEWARDSHIP_AUX: StewardshipAuxiliaryInputs = {
 
 function buildOperatingKpiCards(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi[] {
   return [
-    buildDuesRevenueCard(is, aux),
-    buildPayrollRatioCard(is, aux),
-    buildNoiMarginCard(is, aux),
+    buildDuesRevenueCard(is, projection, aux),
+    buildPayrollRatioCard(is, projection, aux),
+    buildNoiMarginCard(is, projection, aux),
     aux.auxiliaryKpiCards.operating.fbSubsidy,
     aux.auxiliaryKpiCards.operating.rounds,
     aux.auxiliaryKpiCards.operating.covers,
@@ -934,11 +993,12 @@ function buildOperatingKpiCards(
 function buildCapitalKpiCards(
   bs: BalanceSheetSnapshot,
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi[] {
   return [
     aux.auxiliaryKpiCards.capital.reserveCoverage,
-    buildCapitalIncomeVsPlanCard(is, aux),
+    buildCapitalIncomeVsPlanCard(is, projection, aux),
     aux.auxiliaryKpiCards.capital.capitalSpend,
     buildDebtEquityCard(bs, aux),
     buildPpeReinvestmentCard(bs, aux),
@@ -954,21 +1014,29 @@ function buildCapitalKpiCards(
 
 function buildDuesRevenueCard(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi {
-  // Dues = revenue lines whose accountName mentions "membership" /
-  // "dues" / "service assessment" — same heuristic the SoA dues
-  // bucket uses.
-  const duesActual = is.lines
-    .filter(
-      (l) =>
-        l.category === "revenue" &&
-        l.fund === "operating" &&
-        /membership|dues|service assessment/i.test(l.accountName),
-    )
-    .reduce((s, l) => s + l.amount, 0);
+  // STEWARDSHIP-LIVE-2 §4 (2026-10-05) — canonical Dues numerator from
+  // the IS_MEMBERSHIP_DUES FS Group (same source Section IV renders).
+  // Demo fallback uses the account-name regex Silver Springs' seed
+  // dues accounts already satisfy.
+  const duesRow = projection ? findFsGroupRow(projection, "IS_MEMBERSHIP_DUES") : undefined;
+  const duesActual = duesRow
+    ? duesRow.ytdActual
+    : is.lines
+        .filter(
+          (l) =>
+            l.category === "revenue" &&
+            l.fund === "operating" &&
+            /membership|dues|service assessment/i.test(l.accountName),
+        )
+        .reduce((s, l) => s + l.amount, 0);
+  const totalOperatingRevenue = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
   const ratio =
-    is.totalOperatingRevenue > 0 ? duesActual / is.totalOperatingRevenue : 0;
+    totalOperatingRevenue > 0 ? duesActual / totalOperatingRevenue : 0;
   const { tone, assessment } = classifyBand({
     actual: ratio,
     lo: aux.kpiThresholds.duesRevenuePolicyLo,
@@ -989,18 +1057,28 @@ function buildDuesRevenueCard(
 
 function buildPayrollRatioCard(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi {
-  const payrollActual = is.lines
-    .filter(
-      (l) =>
-        l.category === "expense" &&
-        l.fund === "operating" &&
-        /payroll|benefit|wages/i.test(l.accountName),
-    )
-    .reduce((s, l) => s + l.amount, 0);
+  // STEWARDSHIP-LIVE-2 §5 (2026-10-05) — canonical Payroll numerator
+  // from the IS_PAYROLL FS Group (same source Payroll Analysis uses).
+  // Demo fallback uses the historical regex path.
+  const payrollRow = projection ? findFsGroupRow(projection, "IS_PAYROLL") : undefined;
+  const payrollActual = payrollRow
+    ? payrollRow.ytdActual
+    : is.lines
+        .filter(
+          (l) =>
+            l.category === "expense" &&
+            l.fund === "operating" &&
+            /payroll|benefit|wages/i.test(l.accountName),
+        )
+        .reduce((s, l) => s + l.amount, 0);
+  const totalOperatingRevenue = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
   const ratio =
-    is.totalOperatingRevenue > 0 ? payrollActual / is.totalOperatingRevenue : 0;
+    totalOperatingRevenue > 0 ? payrollActual / totalOperatingRevenue : 0;
   const plan = aux.kpiThresholds.payrollPlan;
   // Lower = better for payroll ratio.
   const tone: KpiTone =
@@ -1026,12 +1104,18 @@ function buildPayrollRatioCard(
 
 function buildNoiMarginCard(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi {
-  const margin =
-    is.totalOperatingRevenue > 0
-      ? is.noiBeforeDepreciation / is.totalOperatingRevenue
-      : 0;
+  // STEWARDSHIP-LIVE-2 §3 — canonical NOI margin from the FS-Group
+  // projection (so this reconciles to Section IV + Section II).
+  const revenue = projection
+    ? projection.totals.operatingRevenue.ytdActual
+    : is.totalOperatingRevenue;
+  const noi = projection
+    ? projection.totals.noiBeforeDep.ytdActual
+    : is.noiBeforeDepreciation;
+  const margin = revenue > 0 ? noi / revenue : 0;
   const plan = aux.kpiThresholds.noiMarginPlan;
   // Higher = better for NOI margin.
   const tone: KpiTone =
@@ -1061,9 +1145,15 @@ function buildNoiMarginCard(
 
 function buildCapitalIncomeVsPlanCard(
   is: IncomeStatementSnapshot,
+  projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
 ): StewardshipKpi {
-  const actual = is.totalCapitalIncome;
+  // STEWARDSHIP-LIVE-2 §3 — canonical Capital Fund Income from the
+  // FS-Group projection's capitalRevenue total (same source Section
+  // IV renders). Demo fallback uses the IS snapshot.
+  const actual = projection
+    ? projection.totals.capitalRevenue.ytdActual
+    : is.totalCapitalIncome;
   const budget = aux.budget.totalCapitalIncomeYtd;
   const pct = budget > 0 ? (actual - budget) / budget : 0;
   const tone: KpiTone = pct >= 0 ? "green" : pct >= -0.05 ? "amber" : "red";
