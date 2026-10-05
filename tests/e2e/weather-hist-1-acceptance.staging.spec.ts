@@ -59,12 +59,16 @@ runAt("WEATHER-HIST-1 · Section XI live weather + partial availability", async 
   await expect(kpiGrid).toBeVisible();
   const kpiText = await kpiGrid.innerText();
   console.log("WEATHER_HIST_1_KPI " + JSON.stringify(kpiText));
-  expect(kpiText).toMatch(/Sunny Days/);
-  expect(kpiText).toMatch(/Rain Days/);
-  expect(kpiText).toMatch(/Avg High Temp/);
-  expect(kpiText).toMatch(/Avg Wind Speed/);
-  // °C temperature unit (Alberta tenant) — not °F.
-  expect(kpiText).toMatch(/\d+°C/);
+  // KPI labels render with CSS text-transform: uppercase, so innerText
+  // returns them in all caps.
+  expect(kpiText).toMatch(/sunny days/i);
+  expect(kpiText).toMatch(/rain days/i);
+  expect(kpiText).toMatch(/avg high temp/i);
+  expect(kpiText).toMatch(/avg wind speed/i);
+  // °C temperature unit (Alberta tenant) — not °F. Open-Meteo historical
+  // January in Drumheller may well be sub-zero so the match allows for
+  // negative values.
+  expect(kpiText).toMatch(/-?\d+°C/);
   expect(kpiText).not.toMatch(/\d+°F/);
   // Wind speed should be a numeric mph value.
   expect(kpiText).toMatch(/\d+\s*mph/);
