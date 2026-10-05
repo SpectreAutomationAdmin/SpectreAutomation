@@ -94,14 +94,25 @@ runAt("STEWARDSHIP-LIVE-1 · Section III live headline + KPI cards + precise una
   const anyCapitalRendered = [capIncomeVs, debtEquity, workingCap].some((v) => v && v !== "—" && !/^Source not/i.test(v));
   expect(anyCapitalRendered).toBe(true);
 
-  // ---- No Silver Springs demo values leak ----
-  //   fb-subsidy "5.1%", rounds "+6.0%", covers "-1.4%", ar-current "78.4%",
-  //   init-fee-subsidy "6.4%", capital reserve-coverage "1.42x",
-  //   capital-spend "-16.5%", reserve-sufficiency "2.49x",
-  //   project-completion "6 of 7"
-  const dashboardText = await page.locator('[data-testid="stewardship-kpi-dashboard"]').innerText();
-  for (const demoNeedle of ["5.1%", "+6.0%", "-1.4%", "78.4%", "6.4%", "1.42x", "-16.5%", "2.49x", "6 of 7"]) {
-    expect(dashboardText).not.toContain(demoNeedle);
+  // ---- No Silver Springs demo values leak into the per-card
+  //      assessments / actual values ----
+  // Scope the check to the auxiliary cards specifically — the dashboard
+  // text contains legitimate live labels (e.g. "Peer median 6.0%
+  // (CMAA)" peer-median labels, Membership category mix percentages
+  // like "16.4%") that would false-positive a top-level substring
+  // scan. Each Silver Springs demo value previously surfaced as the
+  // `actual` field of ONE of the five operating + four capital
+  // auxiliary cards; the preserved-live redactor path replaces each
+  // one with "—".
+  for (const key of [
+    "fb-subsidy", "rounds-vs-plan", "covers-vs-plan", "ar-current",
+    "init-fee-subsidy", "reserve-coverage", "capital-spend-vs-plan",
+    "reserve-sufficiency", "project-completion",
+  ]) {
+    const actual = await page.locator(`[data-testid="stewardship-${key}-actual"]`).innerText().catch(() => "");
+    const assessment = await page.locator(`[data-testid="stewardship-${key}-assessment"]`).innerText().catch(() => "");
+    expect(actual, `${key} actual must be em-dash (unavailable)`).toBe("—");
+    expect(assessment, `${key} assessment must be precise 'Source not connected'`).toMatch(/^Source not connected/i);
   }
 
   const after = await invariant(page);
