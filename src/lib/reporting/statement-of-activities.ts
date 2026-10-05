@@ -1511,6 +1511,46 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
     },
   });
 
+  // -- REPORT-PRESENTATION-1A.1 (2026-10-05) — Financing & Other
+  //    section (interest expense + any future non-operating financing
+  //    costs). Reports BELOW NOI-after-depreciation; not part of NOI
+  //    math per the Board semantic. Emits only when the projection
+  //    carries at least one financing group. --
+  const finTotal = projection.totals.financing;
+  if (projection.financing.length > 0) {
+    operatingRows.push({
+      key: "band-financing",
+      kind: "section-band",
+      label: "Financing & Other",
+    });
+    emitByCategory({
+      rows: operatingRows,
+      groups: projection.financing,
+      isRevenue: false,
+    });
+    // Net Result Before Capital Fund = NOI After Dep − Financing.
+    const netBeforeCapCmActual  = noiAfterCmActual  - finTotal.cmActual;
+    const netBeforeCapCmBudget  = noiAfterCmBudget  - finTotal.cmBudget;
+    const netBeforeCapYtdActual = noiAfterYtdActual - finTotal.ytdActual;
+    const netBeforeCapYtdBudget = noiAfterYtdBudget - finTotal.ytdBudget;
+    operatingRows.push({
+      key: "net-before-capital",
+      kind: "noi-after", // same beige band + bold italic as NOI After Dep
+      label: "Net Result Before Capital Fund",
+      values: {
+        currentBudget: netBeforeCapCmBudget,
+        currentActual: netBeforeCapCmActual,
+        currentVariance: netBeforeCapCmActual - netBeforeCapCmBudget,
+        ytdBudget: netBeforeCapYtdBudget,
+        ytdActual: netBeforeCapYtdActual,
+        ytdVariance: netBeforeCapYtdActual - netBeforeCapYtdBudget,
+        variancePct: netBeforeCapYtdBudget !== 0
+          ? (netBeforeCapYtdActual - netBeforeCapYtdBudget) / Math.abs(netBeforeCapYtdBudget)
+          : null,
+      },
+    });
+  }
+
   // -- Capital section --
   const capitalRows: StatementOfActivitiesV2Row[] = [
     {
@@ -1583,20 +1623,28 @@ export function buildStatementOfActivitiesFromFsGroupProjection(args: {
     },
   });
 
-  // Net Income Combined — NOI After Dep + Capital Net.
+  // Net Income Combined — Net Result Before Capital Fund + Capital Net.
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — Net Result Before Capital
+  // Fund is NOI After Dep MINUS Financing. If there are no financing
+  // rows, financing totals are zero and this equals NOI After Dep +
+  // Capital Net (back-compat for tenants with no financing lines).
+  const netBeforeCapitalCmActual  = noiAfterCmActual  - finTotal.cmActual;
+  const netBeforeCapitalCmBudget  = noiAfterCmBudget  - finTotal.cmBudget;
+  const netBeforeCapitalYtdActual = noiAfterYtdActual - finTotal.ytdActual;
+  const netBeforeCapitalYtdBudget = noiAfterYtdBudget - finTotal.ytdBudget;
   capitalRows.push({
     key: "net-combined",
     kind: "net-combined",
     label: "Net Income (Loss) — Combined",
     values: {
-      currentBudget: noiAfterCmBudget + capNetCmBudget,
-      currentActual: noiAfterCmActual + capNetCmActual,
-      currentVariance: (noiAfterCmActual + capNetCmActual) - (noiAfterCmBudget + capNetCmBudget),
-      ytdBudget: noiAfterYtdBudget + capNetYtdBudget,
-      ytdActual: noiAfterYtdActual + capNetYtdActual,
-      ytdVariance: (noiAfterYtdActual + capNetYtdActual) - (noiAfterYtdBudget + capNetYtdBudget),
-      variancePct: (noiAfterYtdBudget + capNetYtdBudget) !== 0
-        ? ((noiAfterYtdActual + capNetYtdActual) - (noiAfterYtdBudget + capNetYtdBudget)) / Math.abs(noiAfterYtdBudget + capNetYtdBudget)
+      currentBudget: netBeforeCapitalCmBudget + capNetCmBudget,
+      currentActual: netBeforeCapitalCmActual + capNetCmActual,
+      currentVariance: (netBeforeCapitalCmActual + capNetCmActual) - (netBeforeCapitalCmBudget + capNetCmBudget),
+      ytdBudget: netBeforeCapitalYtdBudget + capNetYtdBudget,
+      ytdActual: netBeforeCapitalYtdActual + capNetYtdActual,
+      ytdVariance: (netBeforeCapitalYtdActual + capNetYtdActual) - (netBeforeCapitalYtdBudget + capNetYtdBudget),
+      variancePct: (netBeforeCapitalYtdBudget + capNetYtdBudget) !== 0
+        ? ((netBeforeCapitalYtdActual + capNetYtdActual) - (netBeforeCapitalYtdBudget + capNetYtdBudget)) / Math.abs(netBeforeCapitalYtdBudget + capNetYtdBudget)
         : null,
     },
   });

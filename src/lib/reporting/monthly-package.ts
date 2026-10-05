@@ -52,6 +52,19 @@ import {
   type StatementOfActivitiesV2,
 } from "@/lib/reporting/statement-of-activities";
 import { resolveFsGroupProjection } from "@/lib/reporting/fs-group-projection";
+
+/** REPORT-PRESENTATION-1A.1 (2026-10-05) — canonical money short
+ *  formatter for Section III stewardship card overrides. Mirrors the
+ *  stewardship-dashboard-adapter's internal `formatMoneyShort` so the
+ *  override values use identical rendering. Kept here (not re-exported
+ *  from the adapter) because this is a cross-section coordination
+ *  concern and belongs in the orchestration layer. */
+function formatCanonicalMoneyShort(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs >= 1_000_000) return `${amount < 0 ? "-" : ""}$${(abs / 1_000_000).toFixed(3)}M`;
+  if (abs >= 1_000) return `${amount < 0 ? "-" : ""}$${Math.round(abs / 1_000)}K`;
+  return `${amount < 0 ? "-" : ""}$${Math.round(abs)}`;
+}
 import {
   buildSilverSpringsCapitalFundStatement,
   type CapitalFundStatement,
@@ -2498,12 +2511,18 @@ export async function getMonthlyReportingPackage(
   // rows (e.g. ONE "Membership Dues" row aggregating 54 member-tier
   // accounts). Demo tenants (Silver Springs) continue to render the
   // seeded natural-account layout for historical continuity.
+  //
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — projection resolved ONCE
+  // and reused by Section III stewardship override to guarantee one
+  // canonical NOI definition across every surface.
+  const fsGroupProjection = hasRealData
+    ? await resolveFsGroupProjection({
+        clubId: club.id,
+        period: reportingPeriod,
+      })
+    : null;
   let statementOfActivitiesV2: StatementOfActivitiesV2;
-  if (hasRealData) {
-    const fsGroupProjection = await resolveFsGroupProjection({
-      clubId: club.id,
-      period: reportingPeriod,
-    });
+  if (hasRealData && fsGroupProjection) {
     statementOfActivitiesV2 = buildStatementOfActivitiesFromFsGroupProjection({
       clubName: club.name,
       period: reportingPeriod,
@@ -3040,7 +3059,31 @@ export async function getMonthlyReportingPackage(
       // Resolved above via dual-read pattern. Values derive from the
       // production BS + IS snapshots when a TB exists; fall back to
       // the demo literals otherwise.
-      summaryCards: stewardshipBundle.summaryCards,
+      //
+      // REPORT-PRESENTATION-1A.1 (2026-10-05) — override Section III
+      // Operating Revenue + NOI Before Depreciation summary card
+      // values with the canonical FS-Group projection totals for
+      // live tenants. Guarantees ONE NOI definition across Section II
+      // Executive (ratio-registry), Section III Stewardship, Section
+      // IV Statement of Activities, and the Operating Results chart.
+      // Demo tenants keep the Silver Springs seed values.
+      summaryCards: fsGroupProjection
+        ? {
+            ...stewardshipBundle.summaryCards,
+            revenue: {
+              ...stewardshipBundle.summaryCards.revenue,
+              value: formatCanonicalMoneyShort(
+                fsGroupProjection.totals.operatingRevenue.ytdActual,
+              ),
+            },
+            noiBeforeDep: {
+              ...stewardshipBundle.summaryCards.noiBeforeDep,
+              value: formatCanonicalMoneyShort(
+                fsGroupProjection.totals.noiBeforeDep.ytdActual,
+              ),
+            },
+          }
+        : stewardshipBundle.summaryCards,
       // Reactive Dashboard Notes — generated from the SAME operating
       // + capital KPI rows the cards above render, so when a KPI
       // tone changes the bullets change in lockstep. Reserve coverage

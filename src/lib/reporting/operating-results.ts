@@ -334,6 +334,12 @@ async function getOperatingMonthsFromCommittedSnapshots(
           // "NOI before depreciation" definition.
           const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
           if (isDepreciation) continue;
+          // REPORT-PRESENTATION-1A.1 (2026-10-05) — IS_INTEREST_EXPENSE
+          // is financing, not operating. The Operating Results chart's
+          // "NOI" line must exclude financing so it reconciles to the
+          // Section IV + ratio-registry canonical NOI.
+          const isFinancing = b.fsGroupKey === "IS_INTEREST_EXPENSE";
+          if (isFinancing) continue;
           const v = Number(b.naturalBalance.toString());
           if (isCogs) cogs += v;
           else opex += v;

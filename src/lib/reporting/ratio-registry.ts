@@ -216,6 +216,10 @@ export async function resolveJanuaryMetricSet(opts: {
   let cogs = ZERO;
   let opex = ZERO;
   let depreciation = ZERO;
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — financing (currently
+  // IS_INTEREST_EXPENSE) is excluded from NOI per the Board semantic.
+  // Reported separately below NOI-after-depreciation.
+  let financing = ZERO;
   let payroll = ZERO;
   let capitalAssessments = ZERO;
   let dues = ZERO;
@@ -250,8 +254,13 @@ export async function resolveJanuaryMetricSet(opts: {
       if (operating) {
         const isCogs = b.fsGroupKey?.startsWith("IS_COGS") ?? false;
         const isDepreciation = b.fsGroupKey === "IS_DEPRECIATION";
+        // REPORT-PRESENTATION-1A.1 (2026-10-05) — IS_INTEREST_EXPENSE
+        // is financing, not operating. Carved out of opex so NOI
+        // reconciles to the Section IV Board semantic.
+        const isFinancing = b.fsGroupKey === "IS_INTEREST_EXPENSE";
         if (isCogs) cogs = cogs.plus(b.naturalBalance);
         else if (isDepreciation) depreciation = depreciation.plus(b.naturalBalance);
+        else if (isFinancing) financing = financing.plus(b.naturalBalance);
         else opex = opex.plus(b.naturalBalance);
         if (b.fsGroupKey === "IS_PAYROLL") payroll = payroll.plus(b.naturalBalance);
       }

@@ -303,11 +303,16 @@ export async function resolveBudgetMonthlyIncomeStatement(
 ): Promise<{
   monthlyRevenue: number[];
   monthlyCogs: number[];
-  /** REPORT-WIRING-1B — opex EXCLUDES depreciation (NOI before dep). */
+  /** REPORT-WIRING-1B — opex EXCLUDES depreciation.
+   *  REPORT-PRESENTATION-1A.1 — opex also EXCLUDES financing
+   *  (IS_INTEREST_EXPENSE) per the Board semantic. */
   monthlyOpex: number[];
   /** REPORT-WIRING-1B — depreciation surfaced separately so the NOI
    *  computation is Revenue − COGS − OpEx-ex-depreciation. */
   monthlyDepreciation: number[];
+  /** REPORT-PRESENTATION-1A.1 (2026-10-05) — financing surfaced
+   *  separately. Not part of NOI math. */
+  monthlyFinancing: number[];
   monthlyPayroll: number[];
   monthlyNoi: number[];
   budget: ResolveBudgetResult["budget"];
@@ -317,6 +322,7 @@ export async function resolveBudgetMonthlyIncomeStatement(
   const cogs = Array(12).fill(0);
   const opex = Array(12).fill(0);
   const depreciation = Array(12).fill(0);
+  const financing = Array(12).fill(0);
   const payroll = Array(12).fill(0);
   for (const a of r.byAccount) {
     // REPORT-WIRING-1A §7-10 (2026-10-04) — Operating IS filter.
@@ -331,6 +337,10 @@ export async function resolveBudgetMonthlyIncomeStatement(
         // depreciation. Carve IS_DEPRECIATION out of opex so NOI
         // computation matches the IS projection + live-synth path.
         else if (key === "IS_DEPRECIATION") depreciation[m] += v;
+        // REPORT-PRESENTATION-1A.1 (2026-10-05) — IS_INTEREST_EXPENSE
+        // is financing, not operating. Carved out of opex so Budget
+        // NOI reconciles to the Actual NOI definition.
+        else if (key === "IS_INTEREST_EXPENSE") financing[m] += v;
         else opex[m] += v;
         if (key === "IS_PAYROLL") payroll[m] += v;
       }
@@ -344,6 +354,7 @@ export async function resolveBudgetMonthlyIncomeStatement(
     monthlyCogs: cogs,
     monthlyOpex: opex,
     monthlyDepreciation: depreciation,
+    monthlyFinancing: financing,
     monthlyPayroll: payroll,
     monthlyNoi,
     budget: r.budget,
@@ -404,14 +415,18 @@ export async function resolveBudgetIncomeStatement(
 ): Promise<{
   revenue: number;
   cogs: number;
-  /** OpEx EXCLUDES depreciation per REPORT-WIRING-1B §22. */
+  /** OpEx EXCLUDES depreciation per REPORT-WIRING-1B §22 AND
+   *  EXCLUDES financing per REPORT-PRESENTATION-1A.1. */
   opex: number;
   /** Depreciation surfaced separately so consumers can present
    *  NOI-before-dep (default) and NOI-after-dep where needed. */
   depreciation: number;
+  /** REPORT-PRESENTATION-1A.1 (2026-10-05) — financing surfaced
+   *  separately. Not part of NOI math. */
+  financing: number;
   payroll: number;
-  /** NOI BEFORE depreciation = Revenue − COGS − OpEx-ex-dep.
-   *  Matches the IncomeStatementProjection + live-synth definition. */
+  /** NOI BEFORE depreciation = Revenue − COGS − OpEx-ex-dep-ex-financing.
+   *  Reconciles to the Section IV Financial Statement + ratio-registry. */
   noi: number;
   ytdWindow: { from: number; through: number };
   budget: ResolveBudgetResult["budget"];
@@ -421,6 +436,7 @@ export async function resolveBudgetIncomeStatement(
   let cogs = 0;
   let opex = 0;
   let depreciation = 0;
+  let financing = 0;
   let payroll = 0;
   for (const a of r.byAccount) {
     if (!isOperatingFundTag(a.fundApplicability)) continue;
@@ -432,18 +448,21 @@ export async function resolveBudgetIncomeStatement(
       if (key.startsWith("IS_COGS")) cogs += ytd;
       // REPORT-WIRING-1B §20-23 — carve depreciation out of opex.
       else if (key === "IS_DEPRECIATION") depreciation += ytd;
+      // REPORT-PRESENTATION-1A.1 (2026-10-05) — carve financing out of opex.
+      else if (key === "IS_INTEREST_EXPENSE") financing += ytd;
       else opex += ytd;
       if (key === "IS_PAYROLL") payroll += ytd;
     }
   }
   const displayRevenue = -revenue;
-  // NOI before depreciation (canonical).
+  // NOI before depreciation (canonical, excludes financing).
   const displayNoi = displayRevenue - cogs - opex;
   return {
     revenue: displayRevenue,
     cogs,
     opex,
     depreciation,
+    financing,
     payroll,
     noi: displayNoi,
     ytdWindow: { from: 1, through: args.throughMonth },

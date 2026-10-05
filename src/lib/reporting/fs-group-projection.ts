@@ -117,14 +117,19 @@ export type FsGroupProjection = {
   /** Operating-fund revenue groups (fundApplicability includes
    *  OPERATING). Sorted by FS Group sortOrder, then key. */
   operatingRevenue: FsGroupProjectionRow[];
-  /** Operating-fund expense groups, excluding depreciation
-   *  (IS_DEPRECIATION is pulled out so the SoA can render it in its
-   *  own band). */
+  /** Operating-fund expense groups, excluding depreciation AND
+   *  financing (IS_DEPRECIATION pulled out so the SoA can render it
+   *  in its own band; IS_INTEREST_EXPENSE pulled out per
+   *  REPORT-PRESENTATION-1A.1 so NOI excludes financing). */
   operatingExpense: FsGroupProjectionRow[];
   /** Depreciation only (IS_DEPRECIATION fsGroup). Separate from
    *  operating expense so the canonical NOI-before-dep math stays
    *  identical to REPORT-WIRING-1B. */
   depreciation: FsGroupProjectionRow[];
+  /** REPORT-PRESENTATION-1A.1 (2026-10-05) — financing & other
+   *  (currently IS_INTEREST_EXPENSE). Reports below NOI-after-dep.
+   *  Not part of NOI math per the Board semantic. */
+  financing: FsGroupProjectionRow[];
   /** Capital-fund revenue groups (fundApplicability excludes
    *  OPERATING and includes CAPITAL). */
   capitalRevenue: FsGroupProjectionRow[];
@@ -133,12 +138,20 @@ export type FsGroupProjection = {
   /** Pre-computed section totals so consumers never re-aggregate. */
   totals: {
     operatingRevenue: FsGroupProjectionSectionTotals;
+    /** Operating expense EXCLUDING depreciation + financing (the
+     *  denominator of NOI-before-dep per the Board semantic). */
     operatingExpense: FsGroupProjectionSectionTotals;
     depreciation: FsGroupProjectionSectionTotals;
+    /** Financing total (interest expense + any future non-operating
+     *  financing costs). */
+    financing: FsGroupProjectionSectionTotals;
     capitalRevenue: FsGroupProjectionSectionTotals;
     capitalExpense: FsGroupProjectionSectionTotals;
-    /** Operating Revenue − Operating COGS/Opex (ex-depreciation).
-     *  Reconciles to the ratio-registry's `noi` metric. */
+    /** Operating Revenue − Operating COGS/Opex (ex-depreciation AND
+     *  ex-financing). This is the CANONICAL NOI-before-depreciation
+     *  (REPORT-PRESENTATION-1A.1 Board semantic). Reconciles across
+     *  Section II Executive, Section III Stewardship headline, and
+     *  Section IV. */
     noiBeforeDep: FsGroupProjectionSectionTotals;
   };
   /** Accounts whose balances we read but whose fsGroup is unassigned
@@ -287,6 +300,7 @@ export async function resolveFsGroupProjection(args: {
   const operatingRevenueAccts: AcctAgg[] = [];
   const operatingExpenseAccts: AcctAgg[] = [];
   const depreciationAccts: AcctAgg[] = [];
+  const financingAccts: AcctAgg[] = [];
   const capitalRevenueAccts: AcctAgg[] = [];
   const capitalExpenseAccts: AcctAgg[] = [];
   let unassignedCount = 0;
@@ -309,6 +323,11 @@ export async function resolveFsGroupProjection(args: {
     } else if (a.accountType === "EXPENSE") {
       if (isOperatingFund(a.fundApplicability)) {
         if (a.fsGroupKey === "IS_DEPRECIATION") depreciationAccts.push(a);
+        // REPORT-PRESENTATION-1A.1 (2026-10-05) — IS_INTEREST_EXPENSE
+        // is a financing cost, not an operating expense for NOI
+        // purposes. Carved out of operatingExpenseAccts so
+        // totals.operatingExpense (the NOI denominator) excludes it.
+        else if (a.fsGroupKey === "IS_INTEREST_EXPENSE") financingAccts.push(a);
         else operatingExpenseAccts.push(a);
       } else if (isCapitalOnly(a.fundApplicability)) {
         capitalExpenseAccts.push(a);
@@ -387,6 +406,10 @@ export async function resolveFsGroupProjection(args: {
   const operatingRevenue = makeGroups(operatingRevenueAccts, "OPERATING_REVENUE");
   const operatingExpense = makeGroups(operatingExpenseAccts, "OPERATING_EXPENSE");
   const depreciation     = makeGroups(depreciationAccts, "DEPRECIATION");
+  // Financing uses OPERATING_EXPENSE as the projection-section input
+  // to classifyFsGroupPresentation; the classifier itself returns
+  // FINANCING_AND_OTHER for IS_INTEREST_EXPENSE regardless.
+  const financing        = makeGroups(financingAccts, "OPERATING_EXPENSE");
   const capitalRevenue   = makeGroups(capitalRevenueAccts, "CAPITAL_REVENUE");
   const capitalExpense   = makeGroups(capitalExpenseAccts, "CAPITAL_EXPENSE");
 
@@ -400,9 +423,14 @@ export async function resolveFsGroupProjection(args: {
   const totOpRev  = sectionTotals(operatingRevenue);
   const totOpExp  = sectionTotals(operatingExpense);
   const totDep    = sectionTotals(depreciation);
+  const totFin    = sectionTotals(financing);
   const totCapRev = sectionTotals(capitalRevenue);
   const totCapExp = sectionTotals(capitalExpense);
-  // NOI-before-dep = Revenue − OpEx (which already excludes depreciation).
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — NOI-before-dep now
+  // excludes both depreciation AND financing per the Board semantic.
+  // operatingExpense already excludes both (financingAccts carved
+  // out above), so the arithmetic is unchanged but the SET of
+  // accounts flowing through operatingExpense is smaller than before.
   const noiBeforeDep: FsGroupProjectionSectionTotals = {
     cmActual: totOpRev.cmActual - totOpExp.cmActual,
     cmBudget: totOpRev.cmBudget - totOpExp.cmBudget,
@@ -414,12 +442,14 @@ export async function resolveFsGroupProjection(args: {
     operatingRevenue,
     operatingExpense,
     depreciation,
+    financing,
     capitalRevenue,
     capitalExpense,
     totals: {
       operatingRevenue: totOpRev,
       operatingExpense: totOpExp,
       depreciation: totDep,
+      financing: totFin,
       capitalRevenue: totCapRev,
       capitalExpense: totCapExp,
       noiBeforeDep,
@@ -440,6 +470,7 @@ export function findFsGroupRow(
     ...projection.operatingRevenue,
     ...projection.operatingExpense,
     ...projection.depreciation,
+    ...projection.financing,
     ...projection.capitalRevenue,
     ...projection.capitalExpense,
   ];

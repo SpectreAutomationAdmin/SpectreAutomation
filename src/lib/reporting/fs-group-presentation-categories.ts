@@ -34,11 +34,16 @@ export type PresentationCategoryKey =
   | "GOLF_OPERATIONS_REVENUE"
   | "FOOD_AND_BEVERAGE_REVENUE"
   | "OTHER_OPERATING_REVENUE"
-  // Operating Expense categories
+  // Operating Expense categories (NOI-driving, exclude financing)
   | "COST_OF_SALES"
   | "PAYROLL_AND_RELATED"
   | "OPERATING_AND_ADMINISTRATIVE_EXPENSES"
   | "DEPRECIATION"
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — Financing & Other reports
+  // below NOI-after-depreciation. Interest expense and other non-
+  // operating financing costs are excluded from NOI per the founder's
+  // intended Board semantics.
+  | "FINANCING_AND_OTHER"
   // Capital categories
   | "CAPITAL_REVENUE"
   | "CAPITAL_EXPENSES"
@@ -51,11 +56,16 @@ export type PresentationCategory = {
    *  heading row; natural case on the subtotal row). */
   displayName: string;
   /** Section the category belongs to. Drives placement above/below
-   *  the NOI line and above/below the capital divider. */
+   *  the NOI line and above/below the capital divider.
+   *
+   *  FINANCING section (REPORT-PRESENTATION-1A.1): placed after
+   *  NOI-after-depreciation and before the capital divider. Not
+   *  part of operating-expense totals or NOI math. */
   section:
     | "OPERATING_REVENUE"
     | "OPERATING_EXPENSE"
     | "DEPRECIATION"
+    | "FINANCING"
     | "CAPITAL_REVENUE"
     | "CAPITAL_EXPENSE";
   /** Sort order within its section (lower first). */
@@ -117,6 +127,19 @@ export const PRESENTATION_CATEGORIES: readonly PresentationCategory[] = [
     key: "DEPRECIATION",
     displayName: "Depreciation",
     section: "DEPRECIATION",
+    sortOrder: 10,
+  },
+  // ---- Financing & Other ----
+  // REPORT-PRESENTATION-1A.1 — financing costs report BELOW
+  // NOI-after-depreciation. Not part of operating NOI math per the
+  // founder-approved Board semantic. One canonical NOI definition
+  // across every reporting surface (Executive, Operating Results,
+  // Operating Scorecard, Section III Stewardship, Section IV
+  // Statement of Activities).
+  {
+    key: "FINANCING_AND_OTHER",
+    displayName: "Financing & Other",
+    section: "FINANCING",
     sortOrder: 10,
   },
   // ---- Capital Revenue ----
@@ -207,7 +230,13 @@ const FS_GROUP_PRESENTATION_MAP: Record<string, PresentationCategoryKey> = {
   IS_TRAVEL_MEALS: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
   IS_MEMBERSHIPS_SUBS: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
   IS_LICENCES_PERMITS: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
-  IS_INTEREST_EXPENSE: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
+  // REPORT-PRESENTATION-1A.1 (2026-10-05) — interest expense is a
+  // financing cost, NOT an operating expense for Board NOI purposes.
+  // Moved from OPERATING_AND_ADMINISTRATIVE_EXPENSES to
+  // FINANCING_AND_OTHER so Section IV reports it below NOI-after-dep.
+  // The canonical NOI definition in ratio-registry + fs-group-
+  // projection excludes financing accordingly.
+  IS_INTEREST_EXPENSE: "FINANCING_AND_OTHER",
   // IS_OTHER_EXPENSES is split by fundApplicability like IS_OTHER_REVENUE.
   IS_OTHER_EXPENSES: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
 
@@ -238,10 +267,10 @@ export const AMBIGUITIES_DOCUMENTED: ReadonlyArray<{
   },
   {
     fsGroupKey: "IS_INTEREST_EXPENSE",
-    assignedTo: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
+    assignedTo: "FINANCING_AND_OTHER",
     rationale:
-      "The directive's named category list contains no separate Financial Expenses bucket, so interest expense flows through Operating & Administrative. A dedicated FINANCIAL_EXPENSES category can be added if the Board prefers interest reported separately.",
-    alternativeIfChallenged: "NEW_CATEGORY",
+      "REPORT-PRESENTATION-1A.1 (2026-10-05) resolution: interest expense is a financing cost, not an operating expense for Board NOI purposes. Moved to the dedicated FINANCING_AND_OTHER category reporting below NOI-after-depreciation.",
+    alternativeIfChallenged: "OPERATING_AND_ADMINISTRATIVE_EXPENSES",
   },
   {
     fsGroupKey: "IS_PROPERTY_TAX",
@@ -281,7 +310,14 @@ export function classifyFsGroupPresentation(args: {
   fsGroupKey: string | null;
   /** The section the projection already placed this group in,
    *  derived from the account's fundApplicability + type. Used to
-   *  disambiguate the two mixed-fund FS Groups. */
+   *  disambiguate the two mixed-fund FS Groups.
+   *
+   *  Note: a FINANCING section does not appear here as a projection
+   *  input — financing is derived post-partition from fsGroupKey
+   *  (IS_INTEREST_EXPENSE), so projection-layer section-partitioning
+   *  places it in OPERATING_EXPENSE first and the classifier moves
+   *  it to FINANCING_AND_OTHER (which the projection then uses to
+   *  move the row into its own `financing` partition). */
   section: "OPERATING_REVENUE" | "OPERATING_EXPENSE" | "DEPRECIATION" | "CAPITAL_REVENUE" | "CAPITAL_EXPENSE";
 }): PresentationCategoryKey {
   const { fsGroupKey, section } = args;
