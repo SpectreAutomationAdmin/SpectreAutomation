@@ -45,6 +45,34 @@ import {
   findFsGroupRow,
   type FsGroupProjection,
 } from "@/lib/reporting/fs-group-projection";
+import type { ResolvedMetric } from "@/lib/reporting/ratio-registry";
+
+/** STEWARDSHIP-LIVE-2A (2026-10-05) — availability inputs sourced from
+ *  resolvers monthly-package already consumes. Section III adapter
+ *  reads these to render precise availability states instead of
+ *  treating missing data as zero. */
+export type StewardshipAvailabilityInputs = {
+  /** Canonical AR Current % — from ratio-registry's `arCurrentPct`
+   *  which internally reads `resolveArAgingAsOf({ clubId, asOf })`.
+   *  When provided + AVAILABLE, Section III AR Current card renders
+   *  the live value and reconciles to Executive + Section VIII to the
+   *  penny. When null OR not AVAILABLE, the card stays precisely
+   *  unavailable. */
+  arCurrentPct: ResolvedMetric | null;
+  /** True when the loaded Budget source carries capital-fund revenue
+   *  budget lines. False (current Coulee state — operating-only CSV)
+   *  → Capital Income vs Plan renders without a Plan comparator
+   *  (SOURCE_NOT_CONNECTED). Prevents the "+0.0% / Ahead of plan"
+   *  nonsense that comes from dividing by a zero that means "not
+   *  connected" rather than "real zero". */
+  capitalBudgetConnected: boolean;
+  /** True when the club's COA tags Initiation / Entrance fees as
+   *  OPERATING (so the Initiation Fee Operating Subsidy ratio is
+   *  structurally measurable). False when Entrance Fees are CAPITAL
+   *  (Coulee's accepted classification) — the KPI is then N/A for
+   *  this tenant's accounting model, NOT source-not-connected. */
+  entranceFeesAreOperating: boolean;
+};
 
 // ---------------------------------------------------------------------------
 // Auxiliary inputs — typed and documented as awaiting their own services
@@ -235,6 +263,11 @@ export async function getStewardshipForClub(args: {
    *  COA / Budget), the adapter falls back to the IS-snapshot +
    *  name-regex path for Silver Springs demo continuity. */
   projection: FsGroupProjection | null;
+  /** STEWARDSHIP-LIVE-2A (2026-10-05) — availability signals for
+   *  the three Section III cards that previously conflated null with
+   *  zero. Null overall for demo tenants (adapter uses auxiliary
+   *  unavailable cards). */
+  availability: StewardshipAvailabilityInputs | null;
   demoFallback: () => Pick<
     StewardshipLedgerBundle,
     "operatingScorecard" | "capitalScorecard" | "summaryCards" | "operatingKpiCards" | "capitalKpiCards"
@@ -274,8 +307,8 @@ export async function getStewardshipForClub(args: {
       ),
     ),
     summaryCards: buildSummaryCards(bs, is, args.projection, args.auxiliaryInputs),
-    operatingKpiCards: buildOperatingKpiCards(is, args.projection, args.auxiliaryInputs),
-    capitalKpiCards: buildCapitalKpiCards(bs, is, args.projection, args.auxiliaryInputs),
+    operatingKpiCards: buildOperatingKpiCards(is, args.projection, args.auxiliaryInputs, args.availability),
+    capitalKpiCards: buildCapitalKpiCards(bs, is, args.projection, args.auxiliaryInputs, args.availability),
     dataSource: "live",
   };
 }
@@ -977,6 +1010,7 @@ function buildOperatingKpiCards(
   is: IncomeStatementSnapshot,
   projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi[] {
   return [
     buildDuesRevenueCard(is, projection, aux),
@@ -985,8 +1019,16 @@ function buildOperatingKpiCards(
     aux.auxiliaryKpiCards.operating.fbSubsidy,
     aux.auxiliaryKpiCards.operating.rounds,
     aux.auxiliaryKpiCards.operating.covers,
-    aux.auxiliaryKpiCards.operating.arCurrent,
-    aux.auxiliaryKpiCards.operating.initFeeSubsidy,
+    // STEWARDSHIP-LIVE-2A §1 — AR Current % from the canonical
+    // ratio-registry source. Falls back to the UNAVAILABLE auxiliary
+    // sentinel when no AR snapshot is available.
+    buildArCurrentCard(aux, availability),
+    // STEWARDSHIP-LIVE-2A §3 — Initiation Fee Operating Subsidy is
+    // N/A when the club's COA tags Entrance / Initiation Fees as
+    // CAPITAL (Coulee's accepted classification). Keeps the auxiliary
+    // SOURCE_NOT_CONNECTED sentinel only when the subsidy COULD be
+    // measurable but no init-fee split source is connected.
+    buildInitFeeSubsidyCard(aux, availability),
   ];
 }
 
@@ -995,10 +1037,11 @@ function buildCapitalKpiCards(
   is: IncomeStatementSnapshot,
   projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi[] {
   return [
     aux.auxiliaryKpiCards.capital.reserveCoverage,
-    buildCapitalIncomeVsPlanCard(is, projection, aux),
+    buildCapitalIncomeVsPlanCard(is, projection, aux, availability),
     aux.auxiliaryKpiCards.capital.capitalSpend,
     buildDebtEquityCard(bs, aux),
     buildPpeReinvestmentCard(bs, aux),
@@ -1006,6 +1049,74 @@ function buildCapitalKpiCards(
     buildWorkingCapitalCard(bs, aux),
     aux.auxiliaryKpiCards.capital.projectCompletion,
   ];
+}
+
+// STEWARDSHIP-LIVE-2A §1 — AR Current %. Reads the canonical
+// ratio-registry metric (which itself reads resolveArAgingAsOf). On
+// a live tenant with a committed AR snapshot, renders the live value
+// matching Executive + Section VIII exactly.
+function buildArCurrentCard(
+  aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
+): StewardshipKpi {
+  const ar = availability?.arCurrentPct;
+  if (!ar || ar.metric.provenance.availability !== "AVAILABLE" || ar.metric.value == null) {
+    // Fall back to the UNAVAILABLE sentinel (Source not connected).
+    return aux.auxiliaryKpiCards.operating.arCurrent;
+  }
+  const valueNum = typeof ar.metric.value === "number"
+    ? ar.metric.value
+    : Number(ar.metric.value.toString());
+  // Metric value is already in percent (e.g. 99.3 means 99.3%).
+  const ratio = valueNum / 100;
+  // Target ≥ 80% policy convention — same as the demo auxiliary card.
+  const target = 0.80;
+  const tone: KpiTone =
+    ratio >= target ? "green" : ratio >= target * 0.95 ? "amber" : "red";
+  const assessment =
+    ratio >= target
+      ? "Above target; collections healthy"
+      : ratio >= target * 0.95
+        ? "Near target; monitor"
+        : "Below target; collections review recommended";
+  return {
+    key: "ar-current",
+    name: "AR Current %",
+    whatIsIt: "Share of member receivables aged 30 days or less.",
+    whyItMatters: "Members carrying old balances eventually become bad debt; a falling current % is the earliest collections signal.",
+    assessment,
+    actual: ar.metric.display,
+    budget: "Target ≥ 80%",
+    benchmark: aux.auxiliaryKpiCards.operating.arCurrent.benchmark,
+    tone,
+  };
+}
+
+// STEWARDSHIP-LIVE-2A §3 — Initiation Fee Operating Subsidy. The ratio
+// measures what share of OPERATING expense is covered by initiation
+// fees. When a club's COA tags initiation / entrance fees as CAPITAL
+// (industry-standard private-club accounting; Coulee's choice), the
+// ratio is STRUCTURALLY N/A — no amount of integration would make it
+// applicable, so "SOURCE_NOT_CONNECTED" is the wrong availability
+// state.
+function buildInitFeeSubsidyCard(
+  aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
+): StewardshipKpi {
+  if (availability && availability.entranceFeesAreOperating === false) {
+    return {
+      key: "init-fee-subsidy",
+      name: "Initiation Fee Operating Subsidy",
+      whatIsIt: "Share of operating expense covered by initiation fees rather than dues and activity revenue.",
+      whyItMatters: "Operating on the back of initiation fees masks a structurally under-priced membership; the lower the better.",
+      assessment: "N/A — Entrance fees classified to Capital Fund.",
+      actual: "N/A",
+      tone: "neutral",
+    };
+  }
+  // When entrance fees ARE operating (or availability not known), fall
+  // back to the auxiliary SOURCE_NOT_CONNECTED sentinel.
+  return aux.auxiliaryKpiCards.operating.initFeeSubsidy;
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1258,7 @@ function buildCapitalIncomeVsPlanCard(
   is: IncomeStatementSnapshot,
   projection: FsGroupProjection | null,
   aux: StewardshipAuxiliaryInputs,
+  availability: StewardshipAvailabilityInputs | null,
 ): StewardshipKpi {
   // STEWARDSHIP-LIVE-2 §3 — canonical Capital Fund Income from the
   // FS-Group projection's capitalRevenue total (same source Section
@@ -1154,6 +1266,27 @@ function buildCapitalIncomeVsPlanCard(
   const actual = projection
     ? projection.totals.capitalRevenue.ytdActual
     : is.totalCapitalIncome;
+
+  // STEWARDSHIP-LIVE-2A §2 (2026-10-05) — when the Budget source has
+  // no capital-fund lines (Coulee's current operating-only CSV),
+  // Capital Budget is NULL (not zero) and the vs-plan percentage is
+  // not calculable. Render as SOURCE_NOT_CONNECTED with the live
+  // Actual still shown so the Board sees the dollar activity but
+  // never a nonsensical "+100% / Ahead of plan" assessment.
+  if (availability && availability.capitalBudgetConnected === false) {
+    return {
+      key: "capital-income-vs-plan",
+      name: "Capital Income vs Plan",
+      whatIsIt: "Initiation, capital dues, and transfer fees actual versus budget.",
+      whyItMatters: "Capital income is the long-term funding engine; persistent shortfall reduces what the club can reinvest in its asset base.",
+      assessment: "Capital budget not connected — vs-plan unavailable.",
+      actual: formatMoneyShort(actual),
+      budget: "Plan not connected",
+      benchmark: aux.kpiThresholds.capitalIncomeVsPlanPeerMedianLabel,
+      tone: "neutral",
+    };
+  }
+
   const budget = aux.budget.totalCapitalIncomeYtd;
   const pct = budget > 0 ? (actual - budget) / budget : 0;
   const tone: KpiTone = pct >= 0 ? "green" : pct >= -0.05 ? "amber" : "red";

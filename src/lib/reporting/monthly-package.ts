@@ -2561,6 +2561,36 @@ export async function getMonthlyReportingPackage(
     // Section IV uses. Null for demo tenants (no committed TB / FS
     // Groups) — the adapter then falls back to the IS-snapshot path.
     projection: fsGroupProjection,
+    // STEWARDSHIP-LIVE-2A (2026-10-05) — three availability inputs so
+    // Section III never conflates "no data" with "real zero":
+    //   • arCurrentPct — canonical ratio-registry (which itself reads
+    //     resolveArAgingAsOf); Executive + Section III + Section VIII
+    //     all reconcile to this one source.
+    //   • capitalBudgetConnected — false for the current operating-
+    //     only Budget CSV (Coulee FY2026). When true (future tenant
+    //     with capital budget), Capital Income vs Plan renders a
+    //     vs-plan percentage normally.
+    //   • entranceFeesAreOperating — false for Coulee (IS_ENTRANCE_FEES
+    //     is CAPITAL fundApplicability in the accepted COA). Marks
+    //     the Initiation Fee Operating Subsidy card as structurally
+    //     N/A rather than source-not-connected.
+    availability: hasRealData
+      ? {
+          arCurrentPct: januaryMetricSet?.arCurrentPct ?? null,
+          // No live tenant currently loads a capital-fund budget. When
+          // monthly-financial-contract learns to split operating vs
+          // capital budget sources, this should become
+          // `monthlyFinancialContract!.capitalBudgetConnected`.
+          capitalBudgetConnected: false,
+          // Coulee's IS_ENTRANCE_FEES fsGroup has 1 account (4085
+          // Initiation Fee) tagged fundApplicability = "CAPITAL".
+          // Hardcoded false until a tenant ships an operating-fund
+          // entrance fee classification (which would be non-standard
+          // for private clubs). Flip to a per-tenant lookup when a
+          // tenant disagrees.
+          entranceFeesAreOperating: false,
+        }
+      : null,
     demoFallback: () => ({
       operatingScorecard: buildDemoOperatingScorecardSnapshot(),
       capitalScorecard: buildDemoCapitalScorecardSnapshot(),
