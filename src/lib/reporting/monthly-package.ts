@@ -2577,11 +2577,14 @@ export async function getMonthlyReportingPackage(
     availability: hasRealData
       ? {
           arCurrentPct: januaryMetricSet?.arCurrentPct ?? null,
-          // No live tenant currently loads a capital-fund budget. When
-          // monthly-financial-contract learns to split operating vs
-          // capital budget sources, this should become
-          // `monthlyFinancialContract!.capitalBudgetConnected`.
-          capitalBudgetConnected: false,
+          // CAPITAL-LIVE-1 §2 (2026-10-05) — staging audit of the
+          // committed Budget confirmed 6 CAPITAL BudgetLines totaling
+          // FY2026 $1.585M (Initiation Fee, Facility Improvement Fee,
+          // LRP Capital Improvement Dues, etc. — see the acceptance
+          // package). STEWARDSHIP-LIVE-2A hardcoded false; flipping
+          // to true so Section III Capital Income vs Plan can
+          // reconcile Actual vs Budget normally.
+          capitalBudgetConnected: true,
           // Coulee's IS_ENTRANCE_FEES fsGroup has 1 account (4085
           // Initiation Fee) tagged fundApplicability = "CAPITAL".
           // Hardcoded false until a tenant ships an operating-fund
@@ -2651,6 +2654,33 @@ export async function getMonthlyReportingPackage(
     // if the redactor were disabled, no Silver Springs numbers can
     // flow through on live tenants.
     auxiliaryInputs: hasRealData ? undefined : SILVER_SPRINGS_CAPITAL_FUND_AUX,
+    // CAPITAL-LIVE-1 §3 — pass the canonical projection so Section V
+    // Capital Revenue = Section IV Capital Revenue to the penny.
+    projection: fsGroupProjection,
+    // CAPITAL-LIVE-1 §2, §4-9 — availability signals. The staging
+    // audit confirmed:
+    //   capitalBudgetConnected = true  (6 CAPITAL BudgetLines in the
+    //                                   committed FY2026 Budget)
+    //   reserveStudyConnected  = false (no Reserve Study importer)
+    //   capitalProjectsConnected = false (no Capital Projects tracker)
+    //   ppeSplitAvailable      = false (BS_CAPITAL_ASSETS mixes gross
+    //                                   + accumulated depreciation)
+    //   debtServiceSourceConnected = false (no dedicated debt-service
+    //                                   source; the $-10,445 capital
+    //                                   expense is a classification
+    //                                   anomaly, not debt service)
+    //   transferFromOpsSourceConnected = false (no authoritative
+    //                                   fund-transfer classification)
+    availability: hasRealData
+      ? {
+          capitalBudgetConnected: true,
+          reserveStudyConnected: false,
+          capitalProjectsConnected: false,
+          ppeSplitAvailable: false,
+          debtServiceSourceConnected: false,
+          transferFromOpsSourceConnected: false,
+        }
+      : null,
     demoFallback: hasRealData
       ? () => {
           throw new Error("Capital Fund demoFallback invoked on a live tenant — resolveBsAndIs should always return a snapshot when hasRealData is true. This is a bug.");

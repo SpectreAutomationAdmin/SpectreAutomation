@@ -1287,7 +1287,13 @@ function buildCapitalIncomeVsPlanCard(
     };
   }
 
-  const budget = aux.budget.totalCapitalIncomeYtd;
+  // CAPITAL-LIVE-1 (2026-10-05) — read Budget from the canonical
+  // projection when available. Previously fell back to
+  // `aux.budget.totalCapitalIncomeYtd` which was hardcoded 0 in
+  // monthly-financial-contract.ts and produced bogus +0.0% ratios.
+  const budget = projection
+    ? projection.totals.capitalRevenue.ytdBudget
+    : aux.budget.totalCapitalIncomeYtd;
   const pct = budget > 0 ? (actual - budget) / budget : 0;
   const tone: KpiTone = pct >= 0 ? "green" : pct >= -0.05 ? "amber" : "red";
   const assessment =

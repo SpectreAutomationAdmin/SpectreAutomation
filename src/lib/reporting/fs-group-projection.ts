@@ -77,6 +77,12 @@ export type FsGroupAccountRow = {
   cmBudget: number;
   ytdActual: number;
   ytdBudget: number;
+  /** CAPITAL-LIVE-1 (2026-10-05) — full-year Budget total (sum of 12
+   *  monthlyTotals). Section V consumes this for the Annual Budget
+   *  column; other sections only need YTD. 0 when no Budget source
+   *  carries this account (caller treats 0 as unavailable via the
+   *  availability signal). */
+  annualBudget: number;
 };
 
 export type FsGroupProjectionRow = {
@@ -101,6 +107,9 @@ export type FsGroupProjectionRow = {
   cmBudget: number;
   ytdActual: number;
   ytdBudget: number;
+  /** CAPITAL-LIVE-1 (2026-10-05) — full-year Budget total. 0 when
+   *  the Budget source has no lines for this group. */
+  annualBudget: number;
   /** Child natural-account breakdown. Rendered when the UI expands
    *  the group row. May be a single account for 1-account groups. */
   accounts: FsGroupAccountRow[];
@@ -244,6 +253,7 @@ export async function resolveFsGroupProjection(args: {
     cmBudget: number;
     ytdActual: number;
     ytdBudget: number;
+    annualBudget: number;
   };
   const acctAgg = new Map<string, AcctAgg>();
 
@@ -265,6 +275,7 @@ export async function resolveFsGroupProjection(args: {
       cmBudget: 0,
       ytdActual: 0,
       ytdBudget: 0,
+      annualBudget: 0,
     };
     acctAgg.set(accountNumber, agg);
     return agg;
@@ -294,6 +305,8 @@ export async function resolveFsGroupProjection(args: {
     const monthIdx = throughMonth - 1;
     a.cmBudget += sign * (b.monthlyTotals[monthIdx] ?? 0);
     a.ytdBudget += sign * b.monthlyTotals.slice(0, throughMonth).reduce((s, v) => s + v, 0);
+    // CAPITAL-LIVE-1 — full-year Budget total (12-month sum).
+    a.annualBudget += sign * b.monthlyTotals.reduce((s, v) => s + v, 0);
   }
 
   // -- Partition accounts into sections based on fund + type + fsGroup. --
@@ -352,13 +365,14 @@ export async function resolveFsGroupProjection(args: {
     }
     const rows: FsGroupProjectionRow[] = [];
     for (const [k, g] of byGroup) {
-      let cmActual = 0, cmBudget = 0, ytdActual = 0, ytdBudget = 0;
+      let cmActual = 0, cmBudget = 0, ytdActual = 0, ytdBudget = 0, annualBudget = 0;
       const children: FsGroupAccountRow[] = [];
       for (const a of g.accts.sort((x, y) => x.accountNumber.localeCompare(y.accountNumber))) {
         cmActual += a.cmActual;
         cmBudget += a.cmBudget;
         ytdActual += a.ytdActual;
         ytdBudget += a.ytdBudget;
+        annualBudget += a.annualBudget;
         children.push({
           accountNumber: a.accountNumber,
           accountName: a.accountName,
@@ -367,6 +381,7 @@ export async function resolveFsGroupProjection(args: {
           cmBudget: a.cmBudget,
           ytdActual: a.ytdActual,
           ytdBudget: a.ytdBudget,
+          annualBudget: a.annualBudget,
         });
       }
       const isUnassigned = k.startsWith("__UNASSIGNED__");
@@ -386,7 +401,7 @@ export async function resolveFsGroupProjection(args: {
         presentationCategoryKey,
         presentationCategoryName: presentationCategory.displayName,
         presentationCategorySortOrder: presentationCategory.sortOrder,
-        cmActual, cmBudget, ytdActual, ytdBudget,
+        cmActual, cmBudget, ytdActual, ytdBudget, annualBudget,
         accounts: children,
       });
     }
