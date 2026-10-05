@@ -334,6 +334,17 @@ export function classifyFsGroupPresentation(args: {
     if (section === "CAPITAL_EXPENSE") return "CAPITAL_EXPENSES";
     return "OPERATING_AND_ADMINISTRATIVE_EXPENSES";
   }
+  // CAPITAL-LIVE-1A (2026-10-05) — IS_INTEREST_INCOME is a mixed-fund
+  // FS Group: operating-fund interest-income accounts render under
+  // Other Operating Revenue; capital-fund interest-income accounts
+  // (e.g. Coulee's 7100 Interest Income on Reserve Fund) render under
+  // CAPITAL_REVENUE so Section IV's single "Capital Revenue" category
+  // subtotal reconciles to Section V's Total Capital Sources + Section
+  // III's Capital Fund Income to the penny.
+  if (fsGroupKey === "IS_INTEREST_INCOME") {
+    if (section === "CAPITAL_REVENUE") return "CAPITAL_REVENUE";
+    return "OTHER_OPERATING_REVENUE";
+  }
 
   const mapped = FS_GROUP_PRESENTATION_MAP[fsGroupKey];
   if (!mapped) return "REVIEW_NEEDED";
